@@ -59,6 +59,7 @@ namespace SDVRadiance
             helper.Events.GameLoop.GameLaunched += OnGameLaunched;
             helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
             helper.Events.Input.ButtonsChanged += OnButtonsChanged;
+            helper.Events.Display.RenderingWorld += OnRenderingWorld;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
             helper.Events.Display.RenderingStep += OnRenderingStep;
 
@@ -121,6 +122,19 @@ namespace SDVRadiance
             if (!EffectsActive)
                 return;
             Pipeline.Apply(e.SpriteBatch, _config);
+        }
+
+        /// <summary>
+        /// Bake the player's silhouette to an offscreen target before the world batches open
+        /// (a render-target swap is only safe here, not mid-batch).
+        /// </summary>
+        private void OnRenderingWorld(object? sender, RenderingWorldEventArgs e)
+        {
+            if (!_config.Enabled || !_config.DirectionalShadowsEnabled)
+                return;
+            _shadows ??= new ShadowRenderer();
+            ShadowRenderer.Diag = _config.DebugLogging ? this.Monitor : null;
+            _shadows.PreparePlayer(Game1_GraphicsDevice, _config);
         }
 
         /// <summary>
