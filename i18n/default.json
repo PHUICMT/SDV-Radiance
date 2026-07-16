@@ -167,6 +167,14 @@
   "config.shadows.enabled.name": "Enable directional shadows",
   "config.shadows.enabled.tooltip": "Cast a soft, sheared silhouette of each character away from the sun, leaning by time of day (outdoors, daytime, clear weather only). Experimental.",
   "config.shadows.strength.name": "Shadow strength",
+  "config.shadows.length.name": "Shadow length",
+  "config.shadows.blur.name": "Edge softness",
+
+  "tuner.section.shadows": "Directional shadows",
+  "tuner.shadows": "Directional shadows",
+  "tuner.shadowstrength": "Strength",
+  "tuner.shadowlength": "Length",
+  "tuner.shadowblur": "Edge softness",
 
   "config.section.camera": "Camera",
   "config.camera.mode.name": "Camera mode",

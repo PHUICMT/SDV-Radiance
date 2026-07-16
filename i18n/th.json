@@ -174,6 +174,14 @@
   "config.shadows.enabled.name": "เปิดเงาทอดตามแสง",
   "config.shadows.enabled.tooltip": "ทอดเงาเงาตัวละครแบบนุ่ม เอียงตามมุมดวงอาทิตย์ตามเวลา (เฉพาะกลางแจ้ง กลางวัน อากาศแจ่มใส) — ทดลอง",
   "config.shadows.strength.name": "ความเข้มเงา",
+  "config.shadows.length.name": "ความยาวเงา",
+  "config.shadows.blur.name": "ความฟุ้งของขอบ",
+
+  "tuner.section.shadows": "เงาทอดตามแสง",
+  "tuner.shadows": "เงาทอดตามแสง",
+  "tuner.shadowstrength": "ความเข้ม",
+  "tuner.shadowlength": "ความยาว",
+  "tuner.shadowblur": "ความฟุ้งของขอบ",
 
   "config.section.camera": "กล้อง",
   "config.camera.mode.name": "โหมดกล้อง",

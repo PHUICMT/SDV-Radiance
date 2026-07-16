@@ -71,13 +71,15 @@ namespace SDVRadiance
             alpha *= MathHelper.Clamp(config.DirectionalShadowStrength, 0f, 1f);
             if (alpha <= 0.01f)
                 return;
+            stretch *= Math.Max(0.1f, config.DirectionalShadowLength);
+            float blur = Math.Max(0f, config.DirectionalShadowBlur);
 
             GameLocation loc = Game1.currentLocation;
 
             if (Diag != null && _diagFrames < 3)
             {
                 _diagFrames++;
-                Diag.Log($"[shadow] World_Sorted inject: npcs={loc.characters.Count}, time={Game1.timeOfDay}, rot={rot:0.00}, stretch={stretch:0.00}, alpha={alpha:0.00}", LogLevel.Debug);
+                Diag.Log($"[shadow] World_Sorted inject: npcs={loc.characters.Count}, time={Game1.timeOfDay}, rot={rot:0.00}, stretch={stretch:0.00}, alpha={alpha:0.00}, blur={blur:0.0}", LogLevel.Debug);
             }
 
             try
@@ -86,10 +88,10 @@ namespace SDVRadiance
                 {
                     if (npc == null || npc.IsInvisible || npc.HideShadow || npc.swimming.Value || npc.Sprite?.Texture == null)
                         continue;
-                    DrawNpcShadow(b, npc, rot, stretch, alpha);
+                    DrawNpcShadow(b, npc, rot, stretch, alpha, blur);
                 }
 
-                DrawPlayerShadow(b, rot, stretch, alpha);
+                DrawPlayerShadow(b, rot, stretch, alpha, blur);
             }
             catch (Exception ex)
             {
@@ -97,19 +99,19 @@ namespace SDVRadiance
             }
         }
 
-        private void DrawNpcShadow(SpriteBatch b, NPC npc, float rot, float stretch, float alpha)
+        private void DrawNpcShadow(SpriteBatch b, NPC npc, float rot, float stretch, float alpha, float blur)
         {
             Rectangle src = npc.Sprite.SourceRect;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom));
-            // Origin at the bottom-centre so rotation + length stretch pivot at the feet.
-            Vector2 origin = new Vector2(src.Width / 2f, src.Height);
             float depth = MathHelper.Clamp(npc.GetBoundingBox().Bottom / 10000f - ShadowDepthBias, 0f, 1f);
-            DrawSoft(b, npc.Sprite.Texture, src, feet, Color.Black, alpha, rot, origin,
-                new Vector2(4f, 4f * stretch), depth, SpriteEffects.None);
+            // NPCs are single-texture sprites, so the feet→head opacity gradient is faked with
+            // horizontal bands (no per-NPC render target needed), each softened at the edges.
+            DrawBandedGradient(b, npc.Sprite.Texture, src, feet, alpha, rot,
+                new Vector2(4f, 4f * stretch), depth, blur);
         }
 
-        private void DrawPlayerShadow(SpriteBatch b, float rot, float stretch, float alpha)
+        private void DrawPlayerShadow(SpriteBatch b, float rot, float stretch, float alpha, float blur)
         {
             if (!_playerReady || _playerRT == null)
                 return;
@@ -121,8 +123,8 @@ namespace SDVRadiance
 
             // The baked silhouette is one cohesive image — flatten it vertically and lean it
             // about the feet as a single unit (no per-layer fragmenting), softened at the edges.
-            DrawSoft(b, _playerRT, null, feet, Color.White, alpha, rot, _playerFeetInRT,
-                new Vector2(1f, stretch), depth, SpriteEffects.None);
+            DrawSoft(b, Taps9, _playerRT, null, feet, Color.White, alpha, rot, _playerFeetInRT,
+                new Vector2(1f, stretch), depth, SpriteEffects.None, blur);
         }
 
         /// <summary>
@@ -194,24 +196,53 @@ namespace SDVRadiance
             return tex;
         }
 
-        // Small disc of taps → cheap soft edge. Weighted so overlapping translucent copies
-        // reach the target opacity at the core while feathering the rim.
-        private static readonly Vector2[] Taps =
+        // Discs of offset taps → cheap soft edge. Weighted so overlapping translucent copies
+        // reach the target opacity at the core while feathering the rim. The player (one RT
+        // draw) can afford 9 taps; NPC bands use the lighter 5 to keep the draw count sane.
+        private static readonly Vector2[] Taps9 =
         {
             new(0f, 0f), new(1f, 0f), new(-1f, 0f), new(0f, 1f), new(0f, -1f),
             new(1f, 1f), new(-1f, 1f), new(1f, -1f), new(-1f, -1f),
         };
-        private const float BlurPixels = 2f;
+        private static readonly Vector2[] Taps5 =
+        {
+            new(0f, 0f), new(1f, 0f), new(-1f, 0f), new(0f, 1f), new(0f, -1f),
+        };
 
-        private static void DrawSoft(SpriteBatch b, Texture2D tex, Rectangle? src, Vector2 pos,
+        private static void DrawSoft(SpriteBatch b, Vector2[] taps, Texture2D tex, Rectangle? src, Vector2 pos,
             Color baseColor, float alpha, float rot, Vector2 origin, Vector2 scale, float depth,
-            SpriteEffects effects)
+            SpriteEffects effects, float blur)
         {
             // Per-tap alpha so 1-(1-a)^N ≈ target alpha at the fully-covered core.
-            float a = 1f - (float)Math.Pow(1f - MathHelper.Clamp(alpha, 0f, 1f), 1f / Taps.Length);
+            float a = 1f - (float)Math.Pow(1f - MathHelper.Clamp(alpha, 0f, 1f), 1f / taps.Length);
             Color c = baseColor * a;
-            foreach (Vector2 t in Taps)
-                b.Draw(tex, pos + t * BlurPixels, src, c, rot, origin, scale, effects, depth);
+            foreach (Vector2 t in taps)
+                b.Draw(tex, pos + t * blur, src, c, rot, origin, scale, effects, depth);
+        }
+
+        /// <summary>Number of horizontal bands used to fake the NPC opacity gradient.</summary>
+        private const int NpcBands = 7;
+
+        /// <summary>
+        /// Draw a single-texture sprite as a shadow with a feet→head opacity gradient, by
+        /// slicing it into horizontal bands (each drawn about the shared feet anchor so they
+        /// stay aligned under rotation + stretch) and fading each band's alpha toward the tip.
+        /// </summary>
+        private static void DrawBandedGradient(SpriteBatch b, Texture2D tex, Rectangle src, Vector2 feet,
+            float alpha, float rot, Vector2 scale, float depth, float blur)
+        {
+            for (int i = 0; i < NpcBands; i++)
+            {
+                int y0 = src.Height * i / NpcBands;
+                int y1 = src.Height * (i + 1) / NpcBands;
+                var band = new Rectangle(src.X, src.Y + y0, src.Width, y1 - y0);
+                // Origin so the (virtual) full-sprite feet row still maps to the feet position.
+                var origin = new Vector2(src.Width / 2f, src.Height - y0);
+                float tBottom = (i + 0.5f) / NpcBands;           // 0 at the head band, 1 at the feet band
+                float ga = HeadFade + (1f - HeadFade) * (float)Math.Pow(tBottom, 1.8);
+                DrawSoft(b, Taps5, tex, band, feet, Color.Black, alpha * ga, rot, origin, scale, depth,
+                    SpriteEffects.None, blur);
+            }
         }
 
         /// <summary>How far under the caster (in sort depth) the shadow sits. ~1px of Y equivalent.</summary>

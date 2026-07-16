@@ -179,6 +179,13 @@ namespace SDVRadiance
             y += 44;
             _sliders.Add(new Slider(_t("tuner.lightshadowstrength"), x, y, innerW, 0f, 1f, () => _config.LightingShadowStrength, v => _config.LightingShadowStrength = v)); y += 50;
 
+            y += 30; _sectionTitles.Add((_t("tuner.section.shadows"), y - 28));
+            _toggles.Add(new Toggle(_t("tuner.shadows"), new Rectangle(x, y, innerW, 38), () => _config.DirectionalShadowsEnabled, v => _config.DirectionalShadowsEnabled = v));
+            y += 44;
+            _sliders.Add(new Slider(_t("tuner.shadowstrength"), x, y, innerW, 0f, 1f, () => _config.DirectionalShadowStrength, v => _config.DirectionalShadowStrength = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.shadowlength"), x, y, innerW, 0.2f, 2f, () => _config.DirectionalShadowLength, v => _config.DirectionalShadowLength = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.shadowblur"), x, y, innerW, 0f, 5f, () => _config.DirectionalShadowBlur, v => _config.DirectionalShadowBlur = v)); y += 50;
+
             y += 30; _sectionTitles.Add((_t("tuner.section.finishing"), y - 28));
             _toggles.Add(new Toggle(_t("tuner.vignette"), new Rectangle(x, y, innerW, 38), () => _config.VignetteEnabled, v => _config.VignetteEnabled = v));
             y += 44;

@@ -140,6 +140,10 @@ namespace SDVRadiance
         public bool DirectionalShadowsEnabled { get; set; } = false;
         /// <summary>Opacity of the directional shadows. 0 = none, 1 = full.</summary>
         public float DirectionalShadowStrength { get; set; } = 1.0f;
+        /// <summary>Length multiplier for the cast shadow (1 = default sun-driven length).</summary>
+        public float DirectionalShadowLength { get; set; } = 1.0f;
+        /// <summary>Edge softness of the shadow, in pixels (0 = crisp).</summary>
+        public float DirectionalShadowBlur { get; set; } = 2.0f;
 
         // --- Camera (independent of the post-processing pipeline) ---
         /// <summary>Which camera behaviour to use. Off = vanilla snap.</summary>
