@@ -88,10 +88,12 @@ namespace SDVRadiance
                 {
                     if (npc == null || npc.IsInvisible || npc.HideShadow || npc.swimming.Value || npc.Sprite?.Texture == null)
                         continue;
+                    if (OnWater(loc, npc.TilePoint))   // don't lay a shadow on the water surface
+                        continue;
                     DrawNpcShadow(b, npc, rot, stretch, alpha, blur);
                 }
 
-                DrawPlayerShadow(b, rot, stretch, alpha, blur);
+                DrawPlayerShadow(b, loc, rot, stretch, alpha, blur);
             }
             catch (Exception ex)
             {
@@ -111,12 +113,14 @@ namespace SDVRadiance
                 new Vector2(4f, 4f * stretch), depth, blur);
         }
 
-        private void DrawPlayerShadow(SpriteBatch b, float rot, float stretch, float alpha, float blur)
+        private void DrawPlayerShadow(SpriteBatch b, GameLocation loc, float rot, float stretch, float alpha, float blur)
         {
             if (!_playerReady || _playerRT == null)
                 return;
 
             Farmer who = Game1.player;
+            if (OnWater(loc, who.TilePoint))
+                return;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom));
             float depth = MathHelper.Clamp(who.GetBoundingBox().Bottom / 10000f - ShadowDepthBias, 0f, 1f);
@@ -248,6 +252,13 @@ namespace SDVRadiance
         /// <summary>How far under the caster (in sort depth) the shadow sits. ~1px of Y equivalent.</summary>
         private const float ShadowDepthBias = 1e-4f;
 
+        /// <summary>True if the caster stands on a water tile (avoid laying a shadow on the water surface).</summary>
+        private static bool OnWater(GameLocation loc, Point tile)
+        {
+            try { return loc.isWaterTile(tile.X, tile.Y); }
+            catch { return false; }
+        }
+
         /// <summary>Sun angle → shadow lean (radians), length stretch, and base opacity.</summary>
         private static void ComputeSun(out float rot, out float stretch, out float alpha)
         {
@@ -255,7 +266,16 @@ namespace SDVRadiance
             float d = MathHelper.Clamp((Game1.timeOfDay - 1200) / 600f, -1f, 1f);
             rot = 0.8f * d;                                      // <0 morning lean, >0 evening lean
             stretch = MathHelper.Lerp(0.3f, 1.2f, Math.Abs(d));  // stretched LONG when the sun is low
-            alpha = 0.55f;                                       // opacity at the feet (fades toward the tip)
+            alpha = 0.55f * TimeFade();                          // opacity at the feet (fades toward the tip)
+        }
+
+        /// <summary>Ease the shadow in/out near dawn (06:00–07:00) and dusk (18:00–19:00) so it doesn't pop.</summary>
+        private static float TimeFade()
+        {
+            int t = Game1.timeOfDay;
+            if (t < 700) return MathHelper.Clamp((t - 600) / 100f, 0f, 1f);
+            if (t >= 1800) return MathHelper.Clamp((1900 - t) / 100f, 0f, 1f);
+            return 1f;
         }
     }
 }
