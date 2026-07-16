@@ -48,6 +48,11 @@ namespace SDVRadiance
         private Color[]? _waterMaskBuf;
         private Vector2 _waterTilesPerScreen, _waterWorldTileOffset, _waterMaskSize;
 
+        private Texture2D? _occluderMask;      // per-tile occluder mask (walls/structures) for shadows
+        private Color[]? _occluderMaskBuf;
+        private Vector2 _occTilesPerScreen, _occWorldTileOffset, _occMaskSize;
+        private bool _shadowsReady;            // true when an occluder mask was built this frame
+
         private bool _loggedOnce;
         private int _frames, _applied, _skipNoTarget, _sizeChanges;
         private int _lastW = -1, _lastH = -1;
@@ -183,7 +188,11 @@ namespace SDVRadiance
                 // Dynamic lighting first: darken flat/unlit areas and pool light around
                 // real light sources, so everything downstream (bloom/god rays/grade)
                 // sees the lit result. Only when there's actually something to light.
-                if (config.LightingEnabled && _lighting != null && BuildLightList(w, h, config)) stages.Add(RenderLighting);
+                if (config.LightingEnabled && _lighting != null && BuildLightList(w, h, config))
+                {
+                    _shadowsReady = config.LightingShadows && BuildOccluderMask(w, h);
+                    stages.Add(RenderLighting);
+                }
                 // Water ripple first (only if the current location actually has visible
                 // water tiles), so everything downstream sees the refracted result.
                 if (config.WaterEnabled && _water != null && BuildWaterMask(w, h)) stages.Add(RenderWater);
@@ -450,10 +459,21 @@ namespace SDVRadiance
             fx.Parameters["LightData"]?.SetValue(_lightData);
             // Allow pools to slightly exceed 1 so lamps glow a touch; keep it modest.
             fx.Parameters["Overbright"]?.SetValue(1.0f + 0.4f * MathHelper.Clamp(config.LightingBoost, 0f, 2f));
-            // Occluder shadows are wired in a later step; keep the sampler bound to a
-            // valid texture and disabled (ShadowStrength 0) so nothing samples garbage.
-            fx.Parameters["ShadowStrength"]?.SetValue(0f);
-            fx.Parameters["OccluderTexture"]?.SetValue(source);
+            // Occluder shadows: only when enabled AND a mask was built this frame.
+            if (_shadowsReady && _occluderMask != null)
+            {
+                fx.Parameters["ShadowStrength"]?.SetValue(MathHelper.Clamp(config.LightingShadowStrength, 0f, 1f));
+                fx.Parameters["OccluderTexture"]?.SetValue(_occluderMask);
+                fx.Parameters["OccTilesPerScreen"]?.SetValue(_occTilesPerScreen);
+                fx.Parameters["OccWorldTileOffset"]?.SetValue(_occWorldTileOffset);
+                fx.Parameters["OccMaskSize"]?.SetValue(_occMaskSize);
+            }
+            else
+            {
+                // Disabled: bind a valid texture and 0 strength so nothing samples garbage.
+                fx.Parameters["ShadowStrength"]?.SetValue(0f);
+                fx.Parameters["OccluderTexture"]?.SetValue(source);
+            }
             fx.CurrentTechnique = fx.Techniques["Lighting"];
             DrawFull(sb, source, dest, fx);
         }
@@ -539,6 +559,59 @@ namespace SDVRadiance
             // Cool moonlight-ish tint for the darkened room.
             Vector3 darkTint = new(0.45f, 0.48f, 0.62f);
             return Vector3.Lerp(Vector3.One, darkTint, dark);
+        }
+
+        /// <summary>
+        /// Build a per-tile occluder mask for the visible area: a tile blocks light if
+        /// the map's "Buildings" layer has a tile there (walls / built structures).
+        /// Aligned to the viewport exactly like the water mask. Returns false (skipping
+        /// shadows) when there are no occluders on screen.
+        /// </summary>
+        private bool BuildOccluderMask(int w, int h)
+        {
+            GameLocation? loc = Game1.currentLocation;
+            var layer = loc?.map?.GetLayer("Buildings");
+            if (loc == null || layer == null)
+                return false;
+
+            int vx = Game1.viewport.X;
+            int vy = Game1.viewport.Y;
+            int startTileX = (int)Math.Floor(vx / 64f);
+            int startTileY = (int)Math.Floor(vy / 64f);
+            int tilesW = Math.Max(1, w / 64 + 2);
+            int tilesH = Math.Max(1, h / 64 + 2);
+            int count = tilesW * tilesH;
+            int lw = layer.LayerWidth, lh = layer.LayerHeight;
+
+            if (_occluderMaskBuf == null || _occluderMaskBuf.Length < count)
+                _occluderMaskBuf = new Color[count];
+
+            bool any = false;
+            for (int j = 0; j < tilesH; j++)
+            {
+                for (int i = 0; i < tilesW; i++)
+                {
+                    int tx = startTileX + i, ty = startTileY + j;
+                    bool occ = tx >= 0 && ty >= 0 && tx < lw && ty < lh && layer.Tiles[tx, ty] != null;
+                    if (occ) any = true;
+                    _occluderMaskBuf[j * tilesW + i] = occ ? Color.White : Color.Transparent;
+                }
+            }
+
+            if (!any)
+                return false;
+
+            if (_occluderMask == null || _occluderMask.Width != tilesW || _occluderMask.Height != tilesH)
+            {
+                _occluderMask?.Dispose();
+                _occluderMask = new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color);
+            }
+            _occluderMask.SetData(_occluderMaskBuf, 0, count);
+
+            _occTilesPerScreen = new Vector2(w / 64f, h / 64f);
+            _occWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
+            _occMaskSize = new Vector2(tilesW, tilesH);
+            return true;
         }
 
         /// <summary>
@@ -735,11 +808,11 @@ namespace SDVRadiance
 
         public void Dispose()
         {
-            _sceneRT?.Dispose(); _fullA?.Dispose(); _fullB?.Dispose(); _rtA?.Dispose(); _rtB?.Dispose(); _waterMask?.Dispose(); _lumRT?.Dispose();
+            _sceneRT?.Dispose(); _fullA?.Dispose(); _fullB?.Dispose(); _rtA?.Dispose(); _rtB?.Dispose(); _waterMask?.Dispose(); _occluderMask?.Dispose(); _lumRT?.Dispose();
             _bloom?.Dispose(); _colorGrade?.Dispose(); _godRays?.Dispose(); _fog?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
             _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose();
             _sceneRT = _fullA = _fullB = _rtA = _rtB = null;
-            _waterMask = null; _lumRT = null;
+            _waterMask = null; _occluderMask = null; _lumRT = null;
             _bloom = _colorGrade = _godRays = _fog = _cloudShadow = _tiltShift = _water = _finishing = _lighting = null;
         }
     }

@@ -280,6 +280,10 @@ namespace SDVRadiance
                 () => I18n("config.lighting.boost.name"), null, 0f, 2f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.LightingRadiusScale, v => _config.LightingRadiusScale = v,
                 () => I18n("config.lighting.radius.name"), null, 0.2f, 3f, 0.1f);
+            api.AddBoolOption(this.ModManifest, () => _config.LightingShadows, v => _config.LightingShadows = v,
+                () => I18n("config.lighting.shadows.name"), () => I18n("config.lighting.shadows.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.LightingShadowStrength, v => _config.LightingShadowStrength = v,
+                () => I18n("config.lighting.shadowstrength.name"), null, 0f, 1f, 0.05f);
 
             // --- Camera (implemented) ---
             api.AddSectionTitle(this.ModManifest, () => I18n("config.section.camera"));

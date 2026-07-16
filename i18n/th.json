@@ -152,6 +152,9 @@
   "config.lighting.warmth.name": "ความอุ่นของแสง",
   "config.lighting.boost.name": "ความสว่างของแสง",
   "config.lighting.radius.name": "ขนาดวงแสง",
+  "config.lighting.shadows.name": "ทอดเงา",
+  "config.lighting.shadows.tooltip": "ให้กำแพง/สิ่งทึบบังแสงแล้วทอดเงานุ่มๆ ออกจากแหล่งไฟ (ทดลอง)",
+  "config.lighting.shadowstrength.name": "ความเข้มเงา",
 
   "config.section.camera": "กล้อง",
   "config.camera.mode.name": "โหมดกล้อง",

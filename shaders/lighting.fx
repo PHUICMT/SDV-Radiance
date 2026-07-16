@@ -26,13 +26,14 @@
 
 sampler2D SourceSampler : register(s0);
 
-// Screen-space occluder mask (r = 1 where a tall/solid tile blocks light).
-// Point-sampled so the tile grid stays crisp. Only consulted when ShadowStrength > 0.
+// Per-tile occluder mask (r = 1 where a tall/solid tile blocks light), aligned
+// to the viewport like the water mask. LINEAR-sampled so the tile grid melts
+// into soft penumbra edges. Only consulted when ShadowStrength > 0.
 texture OccluderTexture;
 sampler2D OccluderSampler = sampler_state
 {
     Texture = <OccluderTexture>;
-    MinFilter = Point; MagFilter = Point; MipFilter = None;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
     AddressU = Clamp; AddressV = Clamp;
 };
 
@@ -41,8 +42,20 @@ float  Aspect;                // width / height, so light pools are round not ov
 int    LightCount;            // number of active lights (<= MAX_LIGHTS)
 float2 LightPos[MAX_LIGHTS];  // light centre in screen UV (0..1)
 float4 LightData[MAX_LIGHTS]; // xyz = light colour * boost, w = radius (UV, height units)
-float  ShadowStrength;        // 0 = no shadows; 1 = full hard occluder shadows
+float  ShadowStrength;        // 0 = no shadows; 1 = full occluder shadows
 float  Overbright;            // max light accumulation (>1 allows glow near lamps)
+float2 OccTilesPerScreen;     // world tiles spanning the buffer (w/64, h/64)
+float2 OccWorldTileOffset;    // viewport origin in world tiles (continuous)
+float2 OccMaskSize;           // occluder mask size in texels (tiles)
+
+// Map a screen-UV point to the occluder mask's UV (continuous, so LINEAR
+// filtering gives smooth gradients across the tile grid).
+float2 OccUV(float2 p)
+{
+    float2 worldTile = p * OccTilesPerScreen + OccWorldTileOffset;
+    float2 startTile = floor(OccWorldTileOffset);
+    return (worldTile - startTile) / OccMaskSize;
+}
 
 struct PixelInput
 {
@@ -51,26 +64,26 @@ struct PixelInput
     float2 UV       : TEXCOORD0;
 };
 
-// March from the pixel toward the light; if any step hits an occluder, the
-// pixel is in shadow. Cheap fixed step count — good enough for soft-ish 2D.
+// March from the pixel toward the light through the occluder mask. The closest
+// occluder along the ray (max) sets how shadowed the pixel is. Samples very
+// near the light are faded out so a light mounted ON an occluder tile (sconce,
+// window) doesn't shadow its own glow.
 float ShadowFactor(float2 uv, float2 lightUv)
 {
     if (ShadowStrength <= 0.001)
         return 1.0;
 
-    const int STEPS = 12;
+    const int STEPS = 14;
     float2 delta = (lightUv - uv) / STEPS;
-    float2 p = uv;
     float occ = 0.0;
     [unroll]
-    for (int s = 0; s < STEPS; s++)
+    for (int s = 2; s <= STEPS; s++)   // start past the pixel to avoid self-shadow
     {
-        p += delta;
-        occ += tex2D(OccluderSampler, p).r;
+        float2 p = uv + delta * s;
+        float nearLight = smoothstep(0.0, 0.07, distance(p, lightUv)); // 0 at the light
+        occ = max(occ, tex2D(OccluderSampler, OccUV(p)).r * nearLight);
     }
-    // Any hit along the ray darkens; scale by ShadowStrength so it's tunable.
-    float shadowed = saturate(occ) * ShadowStrength;
-    return 1.0 - shadowed;
+    return 1.0 - occ * ShadowStrength;
 }
 
 float4 LightingPS(PixelInput input) : SV_TARGET
