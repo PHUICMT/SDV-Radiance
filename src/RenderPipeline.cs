@@ -39,7 +39,7 @@ namespace SDVRadiance
 
         private Texture2D? _waterMask;         // per-tile water mask, aligned to the viewport
         private Color[]? _waterMaskBuf;
-        private Vector2 _waterTilesPerScreen, _waterViewFrac, _waterMaskSize;
+        private Vector2 _waterTilesPerScreen, _waterWorldTileOffset, _waterMaskSize;
 
         private bool _loggedOnce;
         private int _frames, _applied, _skipNoTarget, _sizeChanges;
@@ -209,13 +209,32 @@ namespace SDVRadiance
         private void RenderCloudShadow(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var fx = _cloudShadow!;
+            var rtA = _rtA!;
+            var rtB = _rtB!;
+
+            // Pass 1: generate the cloud-density mask at half-res (WorldOffset uses
+            // the full-res dest so the anchor matches the composite step).
             fx.Parameters["Time"]?.SetValue(Time());
             fx.Parameters["Speed"]?.SetValue(config.CloudShadowSpeed);
             fx.Parameters["Scale"]?.SetValue(config.CloudShadowScale);
-            fx.Parameters["Opacity"]?.SetValue(config.CloudShadowOpacity);
             fx.Parameters["Coverage"]?.SetValue(config.CloudShadowCoverage);
             fx.Parameters["WorldOffset"]?.SetValue(WorldOffset(dest.Width, dest.Height));
-            fx.CurrentTechnique = fx.Techniques["CloudShadow"];
+            fx.CurrentTechnique = fx.Techniques["Mask"];
+            Pass(sb, source, rtA, fx);
+
+            // Pass 2/3: separable Gaussian blur -> soft, feathered penumbra edges.
+            fx.Parameters["TexelSize"]?.SetValue(new Vector2(1f / rtA.Width, 0f));
+            fx.CurrentTechnique = fx.Techniques["BlurH"];
+            Pass(sb, rtA, rtB, fx);
+
+            fx.Parameters["TexelSize"]?.SetValue(new Vector2(0f, 1f / rtB.Height));
+            fx.CurrentTechnique = fx.Techniques["BlurV"];
+            Pass(sb, rtB, rtA, fx);
+
+            // Pass 4: composite the blurred shadow onto the scene.
+            fx.Parameters["Opacity"]?.SetValue(config.CloudShadowOpacity);
+            fx.Parameters["ShadowTexture"]?.SetValue(rtA);
+            fx.CurrentTechnique = fx.Techniques["Composite"];
             DrawFull(sb, source, dest, fx);
         }
 
@@ -337,12 +356,16 @@ namespace SDVRadiance
         private void RenderWater(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var fx = _water!;
+            // Weather/season drive how agitated the water is: choppier & faster in
+            // rain/storm, sluggish in winter; sparkle fades when there's no sun.
+            ComputeWaterDynamics(out float strengthMul, out float speedMul, out float sparkleMul);
             fx.Parameters["Time"]?.SetValue(Time());
-            fx.Parameters["Strength"]?.SetValue(config.WaterStrength);
-            fx.Parameters["Speed"]?.SetValue(config.WaterSpeed);
-            fx.Parameters["Sparkle"]?.SetValue(config.WaterSparkle);
+            fx.Parameters["Strength"]?.SetValue(config.WaterStrength * strengthMul);
+            fx.Parameters["Speed"]?.SetValue(config.WaterSpeed * speedMul);
+            fx.Parameters["Sparkle"]?.SetValue(config.WaterSparkle * sparkleMul);
+            fx.Parameters["WaterKind"]?.SetValue(WaterKind());
             fx.Parameters["TilesPerScreen"]?.SetValue(_waterTilesPerScreen);
-            fx.Parameters["ViewFrac"]?.SetValue(_waterViewFrac);
+            fx.Parameters["WorldTileOffset"]?.SetValue(_waterWorldTileOffset);
             fx.Parameters["MaskSize"]?.SetValue(_waterMaskSize);
             fx.Parameters["MaskTexture"]?.SetValue(_waterMask);
             fx.CurrentTechnique = fx.Techniques["Water"];
@@ -403,7 +426,7 @@ namespace SDVRadiance
             _waterMask.SetData(_waterMaskBuf, 0, count);
 
             _waterTilesPerScreen = new Vector2(w / 64f, h / 64f);
-            _waterViewFrac = new Vector2(vx / 64f - startTileX, vy / 64f - startTileY);
+            _waterWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
             _waterMaskSize = new Vector2(tilesW, tilesH);
             return true;
         }
@@ -467,6 +490,28 @@ namespace SDVRadiance
             if (Game1.isSnowing) { temp -= 0.15f; satMul *= 0.90f; }
             if (Game1.season == Season.Winter) temp -= 0.08f;
             else if (Game1.season == Season.Summer) temp += 0.05f;
+        }
+
+        /// <summary>0 = still water (pond/river/farm), 1 = ocean/beach (big directional swell).</summary>
+        private static float WaterKind()
+        {
+            string n = Game1.currentLocation?.Name ?? "";
+            if (n.Contains("Beach") || n.Contains("Island") || n == "Docks")
+                return 1f;
+            return 0f;
+        }
+
+        /// <summary>Weather/season multipliers for ripple strength, speed, and sparkle.</summary>
+        private static void ComputeWaterDynamics(out float strength, out float speed, out float sparkle)
+        {
+            strength = 1f; speed = 1f; sparkle = 1f;
+
+            if (Game1.isLightning) { strength *= 2.0f; speed *= 1.7f; sparkle *= 0.25f; }   // storm
+            else if (Game1.isRaining) { strength *= 1.5f; speed *= 1.4f; sparkle *= 0.4f; } // rain: choppy, no sun glints
+            if (Game1.isSnowing) { strength *= 0.8f; speed *= 0.7f; sparkle *= 0.5f; }       // sluggish, overcast
+
+            if (Game1.season == Season.Winter) { speed *= 0.8f; sparkle *= 0.8f; }           // cold, calmer
+            else if (Game1.season == Season.Summer) sparkle *= 1.2f;                          // bright sun, more glint
         }
 
         private void Pass(SpriteBatch sb, Texture2D source, RenderTarget2D dest, Effect effect)
