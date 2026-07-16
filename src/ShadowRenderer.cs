@@ -66,8 +66,23 @@ namespace SDVRadiance
             return Game1.timeOfDay < 1900 && Game1.timeOfDay >= 600 && !Game1.isRaining && !Game1.isSnowing;
         }
 
-        /// <summary>True when the outdoor sun shadow is active (also drives vanilla-blob suppression).</summary>
+        /// <summary>True when the outdoor sun shadow is active.</summary>
         internal static bool SunShadowActive(ModConfig config) => ShouldCast(config) && SunCasts();
+
+        /// <summary>
+        /// True when our shadows are actually being drawn this frame (sun outdoors, or at least
+        /// one light indoors/at night) — drives suppression of the vanilla blob shadow so it
+        /// isn't drawn on top of our directional ones.
+        /// </summary>
+        internal static bool ShadowsActiveNow(ModConfig config)
+        {
+            if (!ShouldCast(config))
+                return false;
+            if (SunCasts())
+                return true;
+            var lights = Game1.currentLightSources;
+            return lights != null && lights.Count > 0;
+        }
 
         /// <summary>Draw all caster shadows into the game's open World_Sorted batch.</summary>
         public void DrawInto(SpriteBatch b, ModConfig config)
