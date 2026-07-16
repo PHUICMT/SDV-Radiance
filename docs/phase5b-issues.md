@@ -2,6 +2,15 @@
 
 ไล่แก้ทีละตัว. สถานะ: ✅ เสร็จ · 🔧 แก้แล้วรอ confirm · ⏳ ยังไม่ทำ (ทำได้) · 🚧 ต้องตัดสินใจ/ลงแรง · ⛔ limit (ทำไม่ได้จริง)
 
+> **อัปเดต batch ที่ 2 (build-verified, ยังไม่เทสในเกม):**
+> - 🔧 A1/A2: เอียงข้างขึ้น (1.15) ลดทับตัว + depth bias 1.2e-3
+> - 🔧 เงาเข้มกระทันหันตอน ~7:10: แก้ TimeFade ใช้นาทีจริง (เนียนข้ามชั่วโมง)
+> - ✅ C1 ResourceClump (ตอไม้/ท่อนไม้/ก้อนหิน)
+> - ✅ C2 FarmAnimal (สัตว์ฟาร์ม); Pet/แมว คุ้มอยู่แล้ว (เป็น NPC)
+> - 🔧 E1: ใส่ diag log (`[light] ... NOT darkening`) — รอบเทสหน้าจะบอกว่าเตาไม่มีแสงเพราะห้องไม่ถูกหรี่จริงไหม
+> - **ยัง defer (ต้องมี test cycle ทีละอัน เพราะ API ซับซ้อน/เสี่ยงถ้าทำ blind):** C3 (bigCraftable+Furniture), C4 (Building), B1 (transpiler ปิด vanilla tree shadow)
+> - **กำลัง research (background):** height/depth framework (แยก mod)
+
 ---
 
 ## A. เงาตัวละคร (sun, กลางแจ้ง)
