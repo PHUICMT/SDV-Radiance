@@ -13,9 +13,9 @@ obj/
 obj/Debug/
 obj/Release/
 
-# Compiled shaders are build artifacts unless you choose to commit them.
-# Keep sources in shaders/; compiled .mgfxo can be regenerated.
-build/*.mgfxo
+# Shader build scratch dir. The shipped copies live in assets/ and ARE committed
+# (so the mod works without users installing mgfxc).
+build/
 
 # OS
 .DS_Store

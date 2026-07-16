@@ -20,6 +20,13 @@
     <PackageReference Include="Pathoschild.Stardew.ModBuildConfig" Version="4.3.2" />
   </ItemGroup>
 
+  <!-- Ship compiled shaders (.mgfxo) with the mod. -->
+  <ItemGroup>
+    <None Include="assets\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
   <!-- If the game folder is not auto-detected, uncomment and set your path:
   <PropertyGroup>
     <GamePath>C:\Program Files (x86)\Steam\steamapps\common\Stardew Valley</GamePath>

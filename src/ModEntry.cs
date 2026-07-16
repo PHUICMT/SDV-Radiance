@@ -31,7 +31,7 @@ namespace SDVRadiance
         {
             get
             {
-                _pipeline ??= new RenderPipeline(Game1_GraphicsDevice, this.Monitor);
+                _pipeline ??= new RenderPipeline(Game1_GraphicsDevice, this.Monitor, this.Helper.DirectoryPath);
                 return _pipeline;
             }
         }
@@ -53,7 +53,7 @@ namespace SDVRadiance
         {
             if (!_config.Enabled)
                 return;
-            Pipeline.EndCaptureAndPresent();
+            Pipeline.EndCaptureAndPresent(_config);
         }
 
         private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
