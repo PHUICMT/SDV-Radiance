@@ -280,6 +280,35 @@ namespace SDVRadiance
                     DrawBushShadow(b, bush, rot, stretch, alpha, blur);
                 }
             }
+
+            foreach (ResourceClump clump in loc.resourceClumps)
+            {
+                if (clump == null)
+                    continue;
+                Vector2 tile = clump.Tile;
+                if (tile.X < tx0 || tile.X > tx1 || tile.Y < ty0 || tile.Y > ty1)
+                    continue;
+                DrawResourceClumpShadow(b, clump, rot, stretch, alpha, blur);
+            }
+        }
+
+        private void DrawResourceClumpShadow(SpriteBatch b, ResourceClump clump, float rot, float stretch, float alpha, float blur)
+        {
+            Texture2D tex = clump.textureName.Value != null
+                ? Game1.content.Load<Texture2D>(clump.textureName.Value)
+                : Game1.objectSpriteSheet;
+            if (tex == null)
+                return;
+            Rectangle src = Game1.getSourceRectForStandardTileSheet(tex, clump.parentSheetIndex.Value, 16, 16);
+            src.Width = clump.width.Value * 16;
+            src.Height = clump.height.Value * 16;
+            Vector2 tile = clump.Tile;
+            // Clump draws top-left at tile*64, origin zero, scale 4 → base = bottom-centre of the sprite.
+            var worldFeet = new Vector2(tile.X * 64f + src.Width * 2f, tile.Y * 64f + src.Height * 4f);
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, worldFeet);
+            var baseOrigin = new Vector2(src.Width / 2f, src.Height);
+            float depth = MathHelper.Clamp((tile.Y + 1f) * 64f / 10000f + tile.X / 100000f - ShadowDepthBias, 0f, 1f);
+            DrawBandedGradient(b, tex, src, feet, baseOrigin, alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
         }
 
         private void DrawTreeShadow(SpriteBatch b, Tree tree, Vector2 tile, float rot, float stretch, float alpha, float blur)
@@ -465,7 +494,10 @@ namespace SDVRadiance
         {
             // Low sun (dawn/dusk) → long, far-leaning shadow; high sun (noon) → short & upright.
             float d = MathHelper.Clamp((Game1.timeOfDay - 1200) / 600f, -1f, 1f);
-            rot = 0.8f * d;                                      // <0 morning lean, >0 evening lean
+            // Lean more sideways (was 0.8) so the shadow lies to the side of the body instead of
+            // straight up over it — reduces the "shadow on the sprite" overlap while staying
+            // upright (not the rejected upside-down flip).
+            rot = 1.15f * d;                                     // <0 morning lean-left, >0 evening lean-right
             stretch = MathHelper.Lerp(0.3f, 1.2f, Math.Abs(d));  // stretched LONG when the sun is low
             alpha = 0.9f * TimeFade();                           // opacity at the feet (× strength; fades toward the tip)
         }
@@ -473,9 +505,12 @@ namespace SDVRadiance
         /// <summary>Ease the shadow in/out near dawn (06:00–07:00) and dusk (18:00–19:00) so it doesn't pop.</summary>
         private static float TimeFade()
         {
+            // Convert HHMM to real minutes so the fade is smooth across the :50→:00 hour rollover
+            // (raw timeOfDay/100 jumped, e.g. 06:50→07:00 = 0.5→1.0, a sudden darkening).
             int t = Game1.timeOfDay;
-            if (t < 700) return MathHelper.Clamp((t - 600) / 100f, 0f, 1f);
-            if (t >= 1800) return MathHelper.Clamp((1900 - t) / 100f, 0f, 1f);
+            int mins = (t / 100) * 60 + (t % 100);
+            if (mins < 420) return MathHelper.Clamp((mins - 360) / 60f, 0f, 1f);   // 06:00 → 07:00
+            if (mins >= 1080) return MathHelper.Clamp((1140 - mins) / 60f, 0f, 1f); // 18:00 → 19:00
             return 1f;
         }
     }
