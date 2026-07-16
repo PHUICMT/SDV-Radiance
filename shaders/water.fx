@@ -49,6 +49,15 @@ float hash(float2 p)
     return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
 }
 
+// Point-sample the per-tile water mask at any screen-UV point.
+float WaterAt(float2 p)
+{
+    float2 wt = p * TilesPerScreen + WorldTileOffset;
+    float2 st = floor(WorldTileOffset);
+    float2 muv = (floor(wt) - st + 0.5) / MaskSize;
+    return tex2D(MaskSampler, muv).r;
+}
+
 float4 WaterPS(PixelInput input) : SV_TARGET
 {
     float2 uv = input.UV;
@@ -91,14 +100,26 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float3 tint = col.rgb * float3(0.90, 0.97, 1.12);
     col.rgb = lerp(col.rgb, tint, 0.35 * water);
 
-    // Screen-space reflection: faintly mirror the scene just ABOVE the surface
-    // (smaller v) down onto the water, wobbled by the ripple. Deliberately subtle
-    // and gated to water pixels — a wet, reflective sheen, not a true mirror.
+    // Screen-space reflection: a true vertical mirror. March UP the water mask to
+    // find the shoreline (where water ends), then reflect the scene above that edge
+    // down onto the water — so shore, trees, buildings and a character standing at
+    // the water's edge appear mirrored, rippled, strongest near the edge and fading
+    // with depth. Gated to water pixels.
     if (ReflectStrength > 0.001)
     {
-        float2 reflUv = float2(uv.x + ripple.x * 3.0, uv.y - 0.025 + ripple.y * 3.0);
-        float3 refl = tex2D(SourceSampler, reflUv).rgb;
-        col.rgb = lerp(col.rgb, refl, saturate(ReflectStrength) * water);
+        float edgeV = uv.y;
+        [unroll]
+        for (int k = 1; k <= 24; k++)
+        {
+            float vy = uv.y - k * 0.014;
+            float wm = (vy > 0.0) ? WaterAt(float2(uv.x, vy)) : 0.0;
+            edgeV = (wm > 0.5) ? vy : edgeV;   // keep the highest still-water row
+        }
+        float2 reflUv = float2(uv.x + ripple.x * 3.0, 2.0 * edgeV - uv.y + abs(ripple.y) * 2.0);
+        float3 refl = tex2D(SourceSampler, saturate(reflUv)).rgb;
+        float depth = uv.y - edgeV;                 // how far below the shoreline
+        float fade = saturate(1.0 - depth * 3.5);   // reflection concentrates near the edge
+        col.rgb = lerp(col.rgb, refl * 0.85, saturate(ReflectStrength) * water * fade);
     }
 
     // Random drifting glints: one soft glint per cell at a random spot that

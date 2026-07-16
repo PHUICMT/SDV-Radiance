@@ -113,9 +113,13 @@ float4 LightingPS(PixelInput input) : SV_TARGET
         accum += LightData[i].xyz * atten;
     }
 
-    accum = min(accum, Overbright.xxx);
-    float3 lit = src.rgb * accum;
-    return float4(saturate(lit), src.a);
+    // Light only LIFTS a pixel toward full brightness (1.0), never past it: outdoors
+    // ambient is already 1 so pools can't out-glow daylight, and indoors a lit spot
+    // just reaches normal brightness instead of blowing out. (Overbright kept as a
+    // small optional headroom for lamp cores feeding bloom.)
+    accum = min(accum, max(1.0, Overbright));
+    float3 lit = src.rgb * saturate(accum);
+    return float4(lit, src.a);
 }
 
 technique Lighting { pass P0 { PixelShader = compile PS_SHADERMODEL LightingPS(); } }

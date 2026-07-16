@@ -163,6 +163,21 @@ namespace SDVRadiance
             _sliders.Add(new Slider(_t("tuner.waterstrength"), x, y, innerW, 0f, 2f, () => _config.WaterStrength, v => _config.WaterStrength = v)); y += 50;
             _sliders.Add(new Slider(_t("tuner.waterspeed"), x, y, innerW, 0f, 3f, () => _config.WaterSpeed, v => _config.WaterSpeed = v)); y += 50;
             _sliders.Add(new Slider(_t("tuner.watersparkle"), x, y, innerW, 0f, 1f, () => _config.WaterSparkle, v => _config.WaterSparkle = v)); y += 50;
+            _toggles.Add(new Toggle(_t("tuner.waterreflection"), new Rectangle(x, y, innerW, 38), () => _config.WaterReflection, v => _config.WaterReflection = v));
+            y += 44;
+            _sliders.Add(new Slider(_t("tuner.waterreflectstrength"), x, y, innerW, 0f, 1f, () => _config.WaterReflectStrength, v => _config.WaterReflectStrength = v)); y += 50;
+
+            y += 30; _sectionTitles.Add((_t("tuner.section.lighting"), y - 28));
+            _toggles.Add(new Toggle(_t("tuner.lighting"), new Rectangle(x, y, innerW, 38), () => _config.LightingEnabled, v => _config.LightingEnabled = v));
+            y += 44;
+            _sliders.Add(new Slider(_t("tuner.lightindoor"), x, y, innerW, 0f, 0.95f, () => _config.LightingIndoorDarkness, v => _config.LightingIndoorDarkness = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.lightnight"), x, y, innerW, 0f, 0.95f, () => _config.LightingNightDarkness, v => _config.LightingNightDarkness = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.lightwarmth"), x, y, innerW, 0f, 1f, () => _config.LightingWarmth, v => _config.LightingWarmth = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.lightboost"), x, y, innerW, 0f, 2f, () => _config.LightingBoost, v => _config.LightingBoost = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.lightradius"), x, y, innerW, 0.2f, 3f, () => _config.LightingRadiusScale, v => _config.LightingRadiusScale = v)); y += 50;
+            _toggles.Add(new Toggle(_t("tuner.lightshadows"), new Rectangle(x, y, innerW, 38), () => _config.LightingShadows, v => _config.LightingShadows = v));
+            y += 44;
+            _sliders.Add(new Slider(_t("tuner.lightshadowstrength"), x, y, innerW, 0f, 1f, () => _config.LightingShadowStrength, v => _config.LightingShadowStrength = v)); y += 50;
 
             y += 30; _sectionTitles.Add((_t("tuner.section.finishing"), y - 28));
             _toggles.Add(new Toggle(_t("tuner.vignette"), new Rectangle(x, y, innerW, 38), () => _config.VignetteEnabled, v => _config.VignetteEnabled = v));
