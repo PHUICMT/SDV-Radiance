@@ -36,6 +36,10 @@ namespace SDVRadiance
         public float ColorGradeSaturation { get; set; }
         public float ColorGradeTemperature { get; set; }
         public float ColorGradeBrightness { get; set; }
+        public bool GodRaysEnabled { get; set; }
+        public float GodRaysIntensity { get; set; }
+        public bool FogEnabled { get; set; }
+        public float FogDensity { get; set; }
     }
 
     /// <summary>
@@ -50,8 +54,8 @@ namespace SDVRadiance
 
         // --- Phase 1: Bloom ---
         public bool BloomEnabled { get; set; } = false;
-        public float BloomThreshold { get; set; } = 0.75f;
-        public float BloomIntensity { get; set; } = 0.5f;
+        public float BloomThreshold { get; set; } = 0.82f;
+        public float BloomIntensity { get; set; } = 0.3f;
 
         // --- Phase 2: Color grade ---
         public bool ColorGradeEnabled { get; set; } = false;
@@ -64,9 +68,19 @@ namespace SDVRadiance
         /// <summary>Auto-shift temperature/saturation by time of day, weather, and season.</summary>
         public bool ColorGradeAuto { get; set; } = true;
 
-        // --- Phase 2b: Fog (not implemented yet) ---
+        // --- Phase 2b: God rays ---
+        public bool GodRaysEnabled { get; set; } = false;
+        public float GodRaysIntensity { get; set; } = 0.4f;
+        public float GodRaysThreshold { get; set; } = 0.7f;
+        public float GodRaysDensity { get; set; } = 0.6f;
+        public float GodRaysDecay { get; set; } = 0.96f;
+
+        // --- Phase 2b: Volumetric fog ---
         public bool FogEnabled { get; set; } = false;
-        public float FogDensity { get; set; } = 0.3f;
+        public float FogDensity { get; set; } = 0.18f;
+        public float FogScale { get; set; } = 2.5f;
+        public float FogSpeed { get; set; } = 0.02f;
+        public float FogTopBias { get; set; } = 0.5f;
 
         // --- Phase 3: DynamicShader parity ---
         public bool CloudShadowEnabled { get; set; } = false;
@@ -117,7 +131,11 @@ namespace SDVRadiance
             ColorGradeContrast = ColorGradeContrast,
             ColorGradeSaturation = ColorGradeSaturation,
             ColorGradeTemperature = ColorGradeTemperature,
-            ColorGradeBrightness = ColorGradeBrightness
+            ColorGradeBrightness = ColorGradeBrightness,
+            GodRaysEnabled = GodRaysEnabled,
+            GodRaysIntensity = GodRaysIntensity,
+            FogEnabled = FogEnabled,
+            FogDensity = FogDensity
         };
 
         /// <summary>Load a saved profile's settings into the live config.</summary>
@@ -134,6 +152,10 @@ namespace SDVRadiance
             ColorGradeSaturation = p.ColorGradeSaturation;
             ColorGradeTemperature = p.ColorGradeTemperature;
             ColorGradeBrightness = p.ColorGradeBrightness;
+            GodRaysEnabled = p.GodRaysEnabled;
+            GodRaysIntensity = p.GodRaysIntensity;
+            FogEnabled = p.FogEnabled;
+            FogDensity = p.FogDensity;
         }
 
         /// <summary>Apply a quick look preset by overwriting the effect fields.</summary>

@@ -57,6 +57,27 @@
   "config.colorgrade.tonemap.name": "Filmic tone mapping (ACES)",
   "config.colorgrade.tonemap.tooltip": "Off by default. The frame is already low-dynamic-range, so this mainly helps when Brightness is pushed above 1 — otherwise it can look muddy.",
 
+  "config.section.godrays": "God rays (light shafts)",
+  "config.godrays.enabled.name": "Enable god rays",
+  "config.godrays.enabled.tooltip": "Light shafts streaking from bright areas toward the sun (position follows the time of day).",
+  "config.godrays.intensity.name": "Intensity",
+  "config.godrays.threshold.name": "Light threshold",
+  "config.godrays.density.name": "Ray length",
+
+  "config.section.fog": "Volumetric fog",
+  "config.fog.enabled.name": "Enable fog",
+  "config.fog.enabled.tooltip": "Drifting screen-space mist, tinted by time of day.",
+  "config.fog.density.name": "Density",
+  "config.fog.scale.name": "Mist scale",
+  "config.fog.speed.name": "Drift speed",
+
+  "tuner.section.godrays": "God rays",
+  "tuner.godrays": "God rays",
+  "tuner.godraysintensity": "Intensity",
+  "tuner.section.fog": "Fog",
+  "tuner.fog": "Fog",
+  "tuner.fogdensity": "Density",
+
   "config.section.camera": "Camera",
   "config.camera.mode.name": "Camera mode",
   "config.camera.mode.tooltip": "Off = vanilla snap. Smooth = ease toward the player while moving, snap crisply when you stop.",
@@ -70,5 +91,5 @@
   "config.debug.tooltip": "Log render-pipeline info to the SMAPI console to help troubleshoot.",
 
   "config.section.wip": "Coming soon (in development)",
-  "config.wip.text": "These effects are planned but not implemented yet, so they have no settings here:\n- Fog / god rays\n- Cloud shadows & tilt-shift (DynamicShader parity)\n- Water enhancement, vignette, chromatic aberration, depth of field\n- Dynamic 2D lighting with soft shadows\n- High-quality texture upscaling\nEach effect will get its own options as it lands."
+  "config.wip.text": "These effects are planned but not implemented yet, so they have no settings here:\n- Cloud shadows & tilt-shift (DynamicShader parity)\n- Water enhancement, vignette, chromatic aberration, depth of field\n- Dynamic 2D lighting with soft shadows\n- High-quality texture upscaling\nEach effect will get its own options as it lands."
 }

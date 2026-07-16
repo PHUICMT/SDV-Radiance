@@ -27,7 +27,8 @@ namespace SDVRadiance
         internal static bool ForceBufferDraw;
 
         /// <summary>True only when the mod is on AND at least one implemented effect is switched on.</summary>
-        private bool EffectsActive => _config.Enabled && (_config.BloomEnabled || _config.ColorGradeEnabled);
+        private bool EffectsActive => _config.Enabled &&
+            (_config.BloomEnabled || _config.ColorGradeEnabled || _config.GodRaysEnabled || _config.FogEnabled);
 
         public override void Entry(IModHelper helper)
         {
@@ -160,6 +161,28 @@ namespace SDVRadiance
                 () => I18n("config.colorgrade.brightness.name"), null, 0.5f, 1.5f, 0.05f);
             api.AddBoolOption(this.ModManifest, () => _config.ColorGradeToneMap, v => _config.ColorGradeToneMap = v,
                 () => I18n("config.colorgrade.tonemap.name"), () => I18n("config.colorgrade.tonemap.tooltip"));
+
+            // --- God rays (implemented) ---
+            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.godrays"));
+            api.AddBoolOption(this.ModManifest, () => _config.GodRaysEnabled, v => _config.GodRaysEnabled = v,
+                () => I18n("config.godrays.enabled.name"), () => I18n("config.godrays.enabled.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.GodRaysIntensity, v => _config.GodRaysIntensity = v,
+                () => I18n("config.godrays.intensity.name"), null, 0f, 1.5f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.GodRaysThreshold, v => _config.GodRaysThreshold = v,
+                () => I18n("config.godrays.threshold.name"), null, 0f, 1f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.GodRaysDensity, v => _config.GodRaysDensity = v,
+                () => I18n("config.godrays.density.name"), null, 0.1f, 1f, 0.05f);
+
+            // --- Volumetric fog (implemented) ---
+            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.fog"));
+            api.AddBoolOption(this.ModManifest, () => _config.FogEnabled, v => _config.FogEnabled = v,
+                () => I18n("config.fog.enabled.name"), () => I18n("config.fog.enabled.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.FogDensity, v => _config.FogDensity = v,
+                () => I18n("config.fog.density.name"), null, 0f, 1f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.FogScale, v => _config.FogScale = v,
+                () => I18n("config.fog.scale.name"), null, 1f, 8f, 0.5f);
+            api.AddNumberOption(this.ModManifest, () => _config.FogSpeed, v => _config.FogSpeed = v,
+                () => I18n("config.fog.speed.name"), null, 0f, 0.1f, 0.005f);
 
             // --- Camera (implemented) ---
             api.AddSectionTitle(this.ModManifest, () => I18n("config.section.camera"));

@@ -1,0 +1,81 @@
+//=============================================================================
+// godrays.fx  —  SDV-Radiance Phase 2b
+// Screen-space crepuscular rays (light shafts): bright-pass, then a radial
+// blur marching toward the light position, composited additively.
+// Target: MonoGame OpenGL (Shader Model 3.0), used as a SpriteBatch effect.
+//=============================================================================
+
+#if OPENGL
+    #define SV_POSITION POSITION
+    #define VS_SHADERMODEL vs_3_0
+    #define PS_SHADERMODEL ps_3_0
+#else
+    #define VS_SHADERMODEL vs_4_0_level_9_1
+    #define PS_SHADERMODEL ps_4_0_level_9_1
+#endif
+
+sampler2D SourceSampler : register(s0);
+
+texture RaysTexture;
+sampler2D RaysSampler = sampler_state
+{
+    Texture = <RaysTexture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+
+float Threshold;    // brightness cutoff for the light source
+float2 LightPos;    // light position in screen UV (may be off-screen)
+float Density;      // how far along the ray to march (0..1)
+float Decay;        // per-step falloff
+float Weight;       // per-step weight
+float Intensity;    // final additive strength
+
+static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
+static const int SAMPLES = 16;
+
+struct PixelInput
+{
+    float4 Position : SV_POSITION;
+    float4 Color    : COLOR0;
+    float2 UV       : TEXCOORD0;
+};
+
+// Keep only bright areas (the "light") — these are what streak.
+float4 BrightPS(PixelInput input) : SV_TARGET
+{
+    float3 c = tex2D(SourceSampler, input.UV).rgb;
+    float lum = dot(c, LUMA);
+    float mask = smoothstep(Threshold, Threshold + 0.1, lum);
+    return float4(c * mask, 1.0);
+}
+
+// Radial blur toward LightPos over the bright buffer.
+float4 RaysPS(PixelInput input) : SV_TARGET
+{
+    float2 delta = (input.UV - LightPos) * (Density / SAMPLES);
+    float2 uv = input.UV;
+    float3 col = tex2D(SourceSampler, uv).rgb;
+    float illum = 1.0;
+
+    [unroll]
+    for (int i = 0; i < SAMPLES; i++)
+    {
+        uv -= delta;
+        illum *= Decay;
+        col += tex2D(SourceSampler, uv).rgb * illum * Weight;
+    }
+    return float4(col / SAMPLES, 1.0);
+}
+
+// scene + rays * Intensity.
+float4 CompositePS(PixelInput input) : SV_TARGET
+{
+    float4 scene = tex2D(SourceSampler, input.UV);
+    float3 rays = tex2D(RaysSampler, input.UV).rgb;
+    return float4(scene.rgb + rays * Intensity, scene.a);
+}
+
+technique Bright    { pass P0 { PixelShader = compile PS_SHADERMODEL BrightPS(); } }
+technique Rays      { pass P0 { PixelShader = compile PS_SHADERMODEL RaysPS(); } }
+technique Composite { pass P0 { PixelShader = compile PS_SHADERMODEL CompositePS(); } }

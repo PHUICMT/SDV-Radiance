@@ -128,6 +128,16 @@ namespace SDVRadiance
             _sliders.Add(new Slider(_t("tuner.temperature"), x, y, innerW, -1f, 1f, () => _config.ColorGradeTemperature, v => _config.ColorGradeTemperature = v)); y += 50;
             _sliders.Add(new Slider(_t("tuner.brightness"), x, y, innerW, 0.5f, 1.5f, () => _config.ColorGradeBrightness, v => _config.ColorGradeBrightness = v)); y += 50;
 
+            y += 30; _sectionTitles.Add((_t("tuner.section.godrays"), y - 28));
+            _toggles.Add(new Toggle(_t("tuner.godrays"), new Rectangle(x, y, innerW, 38), () => _config.GodRaysEnabled, v => _config.GodRaysEnabled = v));
+            y += 44;
+            _sliders.Add(new Slider(_t("tuner.godraysintensity"), x, y, innerW, 0f, 1.5f, () => _config.GodRaysIntensity, v => _config.GodRaysIntensity = v)); y += 50;
+
+            y += 30; _sectionTitles.Add((_t("tuner.section.fog"), y - 28));
+            _toggles.Add(new Toggle(_t("tuner.fog"), new Rectangle(x, y, innerW, 38), () => _config.FogEnabled, v => _config.FogEnabled = v));
+            y += 44;
+            _sliders.Add(new Slider(_t("tuner.fogdensity"), x, y, innerW, 0f, 1f, () => _config.FogDensity, v => _config.FogDensity = v)); y += 50;
+
             int contentHeight = y - cy0;
             int maxH = vh - 40;
             height = Math.Min(HeaderH + contentHeight + FooterH, maxH);
