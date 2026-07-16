@@ -43,18 +43,12 @@
   "config.bloom.threshold.name": "ระดับเริ่มเรืองแสง",
   "config.bloom.intensity.name": "ความเข้มแสงเรือง",
 
-  "config.section.colorfog": "โทนสีและหมอก",
   "config.colorgrade.enabled.name": "เปิดการปรับโทนสี",
   "config.colorgrade.enabled.tooltip": "ปรับโทนสีตามช่วงเวลา ฤดูกาล และสภาพอากาศ",
   "config.colorgrade.strength.name": "ความเข้มการปรับโทนสี",
-  "config.fog.enabled.name": "เปิดหมอก / ลำแสง",
-  "config.fog.enabled.tooltip": "หมอกและลำแสงแบบ screen-space",
-  "config.fog.density.name": "ความหนาแน่นหมอก",
 
-  "config.section.shadows": "เงาและ tilt-shift",
   "config.cloudshadow.enabled.name": "เปิดเงาเมฆ",
   "config.cloudshadow.enabled.tooltip": "เงาเมฆเคลื่อนไหวลอยผ่านพื้นที่ในเกม",
-  "config.cloudshadow.count.name": "จำนวนเงาเมฆ",
   "config.cloudshadow.opacity.name": "ความทึบเงาเมฆ",
   "config.tiltshift.enabled.name": "เปิด tilt-shift",
   "config.tiltshift.enabled.tooltip": "เบลอระยะชัด (DoF) ที่ขอบบนและล่างของจอ",
