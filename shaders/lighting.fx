@@ -39,7 +39,6 @@ sampler2D OccluderSampler = sampler_state
 
 float3 AmbientColor;          // per-pixel multiplier for unlit areas (1,1,1 = no darkening)
 float  Aspect;                // width / height, so light pools are round not oval
-int    LightCount;            // number of active lights (<= MAX_LIGHTS)
 float2 LightPos[MAX_LIGHTS];  // light centre in screen UV (0..1)
 float4 LightData[MAX_LIGHTS]; // xyz = light colour * boost, w = radius (UV, height units)
 float  ShadowStrength;        // 0 = no shadows; 1 = full occluder shadows

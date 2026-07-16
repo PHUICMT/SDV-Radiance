@@ -77,6 +77,17 @@ namespace SDVRadiance
             _box.Selected = false;
         }
 
+        /// <summary>
+        /// If the menu is closed externally (an event starts, another mod swaps
+        /// activeClickableMenu), release the keyboard — otherwise the TextBox keeps
+        /// swallowing every keystroke for the rest of the session.
+        /// </summary>
+        protected override void cleanupBeforeExit()
+        {
+            Unsubscribe();
+            base.cleanupBeforeExit();
+        }
+
         public override void receiveLeftClick(int x, int y, bool playSound = true)
         {
             if (_okButton.containsPoint(x, y)) { Game1.playSound("smallSelect"); Done(); return; }

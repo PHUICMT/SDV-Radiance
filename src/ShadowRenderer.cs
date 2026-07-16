@@ -31,10 +31,6 @@ namespace SDVRadiance
         // The player's silhouette is rendered to this offscreen target during RenderingWorld,
         // then drawn back (flattened + leaned) into the World_Sorted batch. FarmerRenderer only
         // supports a uniform scale, so the RT is the only way to squash the player vertically.
-        // Sun shadows mirror DOWN (matching the game's own baked shadows: light from upper-left,
-        // shadow to lower-right) so they don't fight the art or overlap the sprite. Point-light
-        // shadows instead rotate to point away from each light, so they stay unmirrored.
-        private SpriteEffects _fx = SpriteEffects.None;
         private RenderTarget2D? _playerRT;
         private SpriteBatch? _rtBatch;
         private Texture2D? _gradTex;
@@ -119,7 +115,6 @@ namespace SDVRadiance
         /// <summary>One long shadow per caster, leaning away from the sun (outdoors, daytime).</summary>
         private void DrawSunShadows(SpriteBatch b, GameLocation loc, ModConfig config, float strength, float blur)
         {
-            _fx = SpriteEffects.None;             // upright silhouette (the look the user preferred)
             ComputeSun(out float rot, out float stretch, out float alpha);
             alpha *= strength;
             if (alpha <= 0.01f)
@@ -171,7 +166,6 @@ namespace SDVRadiance
         /// </summary>
         private void DrawLightShadows(SpriteBatch b, GameLocation loc, ModConfig config, float strength, float blur)
         {
-            _fx = SpriteEffects.None;              // point-light shadows rotate to point away from the light
             var lights = Game1.currentLightSources;
             if (lights == null || lights.Count == 0)
                 return;
@@ -210,6 +204,8 @@ namespace SDVRadiance
             {
                 if (npc == null || npc.IsInvisible || npc.HideShadow || npc.swimming.Value || npc.Sprite?.Texture == null)
                     continue;
+                if (OnWater(loc, npc.TilePoint))   // same guard as the sun path (bathhouse, night beach)
+                    continue;
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                     new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom));
                 foreach (var (lpos, reach) in _lightBuf)
@@ -231,7 +227,8 @@ namespace SDVRadiance
             if (_playerReady && _playerRT != null)
             {
                 Farmer who = Game1.player;
-                if (who != null && who.currentLocation == loc && !who.swimming.Value && !who.isRidingHorse() && !who.IsSitting())
+                if (who != null && who.currentLocation == loc && !who.swimming.Value && !who.isRidingHorse() && !who.IsSitting()
+                    && !OnWater(loc, who.TilePoint))
                 {
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                         new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom));
@@ -408,11 +405,26 @@ namespace SDVRadiance
                 alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
         }
 
+        // ContentManager.Load is cached but still does per-call path normalization + a
+        // dictionary lookup — too much for every clump every frame. Cache per texture name.
+        private readonly System.Collections.Generic.Dictionary<string, Texture2D> _texCache = new();
+
+        private Texture2D? LoadCached(string? name)
+        {
+            if (name == null)
+                return Game1.objectSpriteSheet;
+            if (!_texCache.TryGetValue(name, out Texture2D? tex))
+            {
+                try { tex = Game1.content.Load<Texture2D>(name); }
+                catch { tex = null!; }
+                _texCache[name] = tex!;
+            }
+            return tex;
+        }
+
         private void DrawResourceClumpShadow(SpriteBatch b, ResourceClump clump, float rot, float stretch, float alpha, float blur)
         {
-            Texture2D tex = clump.textureName.Value != null
-                ? Game1.content.Load<Texture2D>(clump.textureName.Value)
-                : Game1.objectSpriteSheet;
+            Texture2D? tex = LoadCached(clump.textureName.Value);
             if (tex == null)
                 return;
             Rectangle src = Game1.getSourceRectForStandardTileSheet(tex, clump.parentSheetIndex.Value, 16, 16);
@@ -467,7 +479,7 @@ namespace SDVRadiance
             // The baked silhouette is one cohesive image — flatten it vertically and lean it
             // about the feet as a single unit (no per-layer fragmenting), softened at the edges.
             DrawSoft(b, Taps9, _playerRT, null, feet, Color.White, alpha, rot, _playerFeetInRT,
-                new Vector2(1f, stretch), depth, _fx, blur);
+                new Vector2(1f, stretch), depth, SpriteEffects.None, blur);
         }
 
         /// <summary>
@@ -556,6 +568,14 @@ namespace SDVRadiance
             Color baseColor, float alpha, float rot, Vector2 origin, Vector2 scale, float depth,
             SpriteEffects effects, float blur)
         {
+            // No blur → one draw at full alpha (the tap disc would just stack N identical
+            // copies on the same pixel, costing N× the draw calls for nothing).
+            if (blur <= 0f)
+            {
+                b.Draw(tex, pos, src, baseColor * MathHelper.Clamp(alpha, 0f, 1f), rot, origin, scale, effects, depth);
+                return;
+            }
+
             // Per-tap alpha so 1-(1-a)^N ≈ target alpha at the fully-covered core.
             float a = 1f - (float)Math.Pow(1f - MathHelper.Clamp(alpha, 0f, 1f), 1f / taps.Length);
             Color c = baseColor * a;
@@ -587,7 +607,7 @@ namespace SDVRadiance
                 float tBottom = (i + 0.5f) / bands;              // 0 at the head band, 1 at the feet band
                 float ga = HeadFade + (1f - HeadFade) * (float)Math.Pow(tBottom, 1.8);
                 DrawSoft(b, Taps5, tex, band, feet, Color.Black, alpha * ga, rot, origin, scale, depth,
-                    _fx, blur);
+                    SpriteEffects.None, blur);
             }
         }
 

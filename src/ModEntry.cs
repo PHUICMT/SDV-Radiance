@@ -89,6 +89,7 @@ namespace SDVRadiance
         public override void Entry(IModHelper helper)
         {
             _config = helper.ReadConfig<ModConfig>();
+            _config.Clamp();
             SMonitor = this.Monitor;
             ForceBufferDraw = EffectsActive;
             FreezeGameWater = _config.Enabled && _config.WaterEnabled;
@@ -246,6 +247,7 @@ namespace SDVRadiance
 
             void Save()
             {
+                _config.Clamp();
                 ForceBufferDraw = EffectsActive;
                 this.Helper.WriteConfig(_config);
             }

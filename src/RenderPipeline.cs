@@ -62,6 +62,11 @@ namespace SDVRadiance
         private float _godRayAmount; // 0..1 eased presence so rays fade in/out instead of popping
         private float _masterFade;              // 0..1 ease-in of the whole stack when it turns on
 
+        // Reused per-frame stage list + cached stage delegates (see Apply).
+        private readonly List<Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>> _stages = new();
+        private Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>?
+            _dLighting, _dWater, _dCloud, _dGodRays, _dBloom, _dFog, _dGrade, _dTilt, _dFinish;
+
         // Metered auto-exposure: average the scene each frame (downsampled to a
         // tiny RT, read back a frame late so there's no GPU stall) and ease the
         // exposure toward a target so bright scenes (sand/snow/rooms) dim smoothly.
@@ -105,8 +110,6 @@ namespace SDVRadiance
             }
             return null;
         }
-
-        public bool BloomAvailable => _bloom != null;
 
         private bool AnyEffectActive(ModConfig c) =>
             (c.LightingEnabled && _lighting != null)
@@ -185,21 +188,27 @@ namespace SDVRadiance
                 // the last stage writes straight back into the game's target.
                 bool outdoors = Game1.currentLocation?.IsOutdoors ?? false;
 
-                var stages = new List<Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>>();
+                // Reused list + cached delegates: method-group conversion allocates a new
+                // delegate per call, which at 60fps × up to 9 stages is constant GC churn.
+                var stages = _stages;
+                stages.Clear();
+                _dLighting ??= RenderLighting; _dWater ??= RenderWater; _dCloud ??= RenderCloudShadow;
+                _dGodRays ??= RenderGodRays; _dBloom ??= RenderBloom; _dFog ??= RenderFog;
+                _dGrade ??= ColorGrade; _dTilt ??= RenderTiltShift; _dFinish ??= RenderFinishing;
                 // Dynamic lighting first: darken flat/unlit areas and pool light around
                 // real light sources, so everything downstream (bloom/god rays/grade)
                 // sees the lit result. Only when there's actually something to light.
                 if (config.LightingEnabled && _lighting != null && BuildLightList(w, h, config))
                 {
                     _shadowsReady = config.LightingShadows && BuildOccluderMask(w, h);
-                    stages.Add(RenderLighting);
+                    stages.Add(_dLighting);
                 }
                 // Water ripple first (only if the current location actually has visible
                 // water tiles), so everything downstream sees the refracted result.
-                if (config.WaterEnabled && _water != null && BuildWaterMask(w, h)) stages.Add(RenderWater);
+                if (config.WaterEnabled && _water != null && BuildWaterMask(w, h)) stages.Add(_dWater);
                 // Cloud shadows drift over the ground — outdoors only, and first so later
                 // effects (bloom/grade) see the shadowed scene.
-                if (config.CloudShadowEnabled && _cloudShadow != null && outdoors) stages.Add(RenderCloudShadow);
+                if (config.CloudShadowEnabled && _cloudShadow != null && outdoors) stages.Add(_dCloud);
                 // God rays only when there's a real light source on screen (lamp/torch/fire).
                 // Fade in/out (and glide the origin) so they never pop instantly when a
                 // light scrolls on/off screen.
@@ -212,16 +221,16 @@ namespace SDVRadiance
                         _godRayRadiusUV = _godRayAmount < 0.02f ? lr : MathHelper.Lerp(_godRayRadiusUV, lr, 0.1f);
                     }
                     _godRayAmount += ((hasLight ? 1f : 0f) - _godRayAmount) * 0.05f; // ~0.5s fade
-                    if (_godRayAmount > 0.01f) { _lightUV = _godRayUV; stages.Add(RenderGodRays); }
+                    if (_godRayAmount > 0.01f) { _lightUV = _godRayUV; stages.Add(_dGodRays); }
                 }
-                if (config.BloomEnabled && _bloom != null) stages.Add(RenderBloom);
+                if (config.BloomEnabled && _bloom != null) stages.Add(_dBloom);
                 // Fog is a weak, patchy effect indoors (and covers the black border), so outdoors only.
-                if (config.FogEnabled && _fog != null && outdoors) stages.Add(RenderFog);
-                if (config.ColorGradeEnabled && _colorGrade != null) stages.Add(ColorGrade);
+                if (config.FogEnabled && _fog != null && outdoors) stages.Add(_dFog);
+                if (config.ColorGradeEnabled && _colorGrade != null) stages.Add(_dGrade);
                 // Tilt-shift (depth-of-field) after grading, so it blurs the graded image.
-                if (config.TiltShiftEnabled && _tiltShift != null) stages.Add(RenderTiltShift);
+                if (config.TiltShiftEnabled && _tiltShift != null) stages.Add(_dTilt);
                 // Finishing (vignette + chromatic aberration): true camera-lens pass, last.
-                if ((config.VignetteEnabled || config.ChromaticAberrationEnabled) && _finishing != null) stages.Add(RenderFinishing);
+                if ((config.VignetteEnabled || config.ChromaticAberrationEnabled) && _finishing != null) stages.Add(_dFinish);
 
                 Texture2D current = _sceneRT!;
                 for (int i = 0; i < stages.Count; i++)
@@ -232,6 +241,13 @@ namespace SDVRadiance
                     stages[i](sb, current, dest, config);
                     current = dest;
                 }
+
+                // Every config-enabled stage can still bail at runtime (indoors, no water,
+                // no lights, rays faded out). If none ran, the device is still on _sceneRT
+                // from the capture — restore the game's target or everything drawn after
+                // us this frame lands in our scratch buffer.
+                if (stages.Count == 0)
+                    _device.SetRenderTarget(target);
 
                 // Ease the whole stack in: blend the untouched scene back over the
                 // result and let it fade out, so effects don't pop on when enabled
@@ -248,6 +264,9 @@ namespace SDVRadiance
             catch (Exception ex)
             {
                 _monitor.Log($"Post-process failed, leaving frame unmodified this frame: {ex.Message}", LogLevel.Warn);
+                // A stage may have thrown between a Begin and its End — close the batch
+                // first, or the recovery Begin below throws too (and would escape).
+                try { sb.End(); } catch { }
                 try
                 {
                     _device.SetRenderTarget(target);
@@ -257,8 +276,28 @@ namespace SDVRadiance
                 }
                 catch { /* give up this frame */ }
             }
+            finally
+            {
+                // Whatever happened above, the game's own target must be bound before we
+                // hand the (reopened) batch back to SMAPI.
+                try
+                {
+                    var bound = _device.GetRenderTargets();
+                    if (bound.Length == 0 || !ReferenceEquals(bound[0].RenderTarget, target))
+                        _device.SetRenderTarget(target);
+                }
+                catch { }
+            }
 
-            sb.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+            try
+            {
+                sb.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+            }
+            catch (InvalidOperationException)
+            {
+                // Batch already open (an exotic failure path left it running) — that's the
+                // state SMAPI expects anyway, so continue.
+            }
         }
 
         private void MaybeLogDiag(ModConfig config)
@@ -466,7 +505,6 @@ namespace SDVRadiance
             var fx = _lighting!;
             fx.Parameters["AmbientColor"]?.SetValue(ComputeLightingAmbient(config));
             fx.Parameters["Aspect"]?.SetValue(dest.Height > 0 ? dest.Width / (float)dest.Height : 1f);
-            fx.Parameters["LightCount"]?.SetValue(_lightCount);
             fx.Parameters["LightPos"]?.SetValue(_lightPos);
             fx.Parameters["LightData"]?.SetValue(_lightData);
             // Allow pools to slightly exceed 1 so lamps glow a touch; keep it modest.

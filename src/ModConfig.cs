@@ -1,10 +1,11 @@
+using System;
 using System.Collections.Generic;
 using StardewModdingAPI;
 using StardewModdingAPI.Utilities;
 
 namespace SDVRadiance
 {
-    /// <summary>Camera behaviour. Supersample2x is reserved for a future phase.</summary>
+    /// <summary>Camera behaviour.</summary>
     public enum CameraMode
     {
         Off,
@@ -146,6 +147,57 @@ namespace SDVRadiance
         public float DirectionalShadowBlur { get; set; } = 2.0f;
         /// <summary>Also cast directional shadows from trees and bushes (not just characters).</summary>
         public bool DirectionalShadowObjects { get; set; } = true;
+
+        /// <summary>
+        /// Normalize every numeric field to its supported range. GMCM sliders only protect
+        /// values entered through the UI — hand-edited config.json flows straight into the
+        /// shaders (e.g. GodRaysDecay > 1 grows exponentially into an additive white-out).
+        /// Called after ReadConfig and on every GMCM save.
+        /// </summary>
+        public void Clamp()
+        {
+            static float C(float v, float lo, float hi) => float.IsNaN(v) ? lo : Math.Clamp(v, lo, hi);
+
+            BloomThreshold = C(BloomThreshold, 0f, 1f);
+            BloomIntensity = C(BloomIntensity, 0f, 2f);
+            ColorGradeStrength = C(ColorGradeStrength, 0f, 1f);
+            ColorGradeContrast = C(ColorGradeContrast, 0.5f, 1.5f);
+            ColorGradeSaturation = C(ColorGradeSaturation, 0f, 2f);
+            ColorGradeTemperature = C(ColorGradeTemperature, -1f, 1f);
+            ColorGradeBrightness = C(ColorGradeBrightness, 0.5f, 1.5f);
+            GodRaysIntensity = C(GodRaysIntensity, 0f, 1.5f);
+            GodRaysThreshold = C(GodRaysThreshold, 0f, 1f);
+            GodRaysDensity = C(GodRaysDensity, 0.1f, 1f);
+            GodRaysDecay = C(GodRaysDecay, 0.5f, 0.99f);
+            FogDensity = C(FogDensity, 0f, 1f);
+            FogScale = C(FogScale, 1f, 8f);
+            FogSpeed = C(FogSpeed, 0f, 0.1f);
+            FogTopBias = C(FogTopBias, 0f, 1f);
+            CloudShadowOpacity = C(CloudShadowOpacity, 0f, 0.7f);
+            CloudShadowCoverage = C(CloudShadowCoverage, 0.1f, 0.9f);
+            CloudShadowScale = C(CloudShadowScale, 1f, 5f);
+            CloudShadowSpeed = C(CloudShadowSpeed, 0f, 0.1f);
+            TiltShiftStrength = C(TiltShiftStrength, 0f, 1f);
+            TiltShiftRadius = C(TiltShiftRadius, 0.05f, 0.9f);
+            TiltShiftTopRatio = C(TiltShiftTopRatio, 0f, 1f);
+            TiltShiftBottomRatio = C(TiltShiftBottomRatio, 0f, 1f);
+            WaterStrength = C(WaterStrength, 0f, 2f);
+            WaterSpeed = C(WaterSpeed, 0f, 3f);
+            WaterSparkle = C(WaterSparkle, 0f, 1f);
+            WaterReflectStrength = C(WaterReflectStrength, 0f, 1f);
+            VignetteStrength = C(VignetteStrength, 0f, 1f);
+            ChromaticAberrationStrength = C(ChromaticAberrationStrength, 0f, 1f);
+            LightingIndoorDarkness = C(LightingIndoorDarkness, 0f, 0.95f);
+            LightingNightDarkness = C(LightingNightDarkness, 0f, 0.95f);
+            LightingWarmth = C(LightingWarmth, 0f, 1f);
+            LightingBoost = C(LightingBoost, 0f, 2f);
+            LightingRadiusScale = C(LightingRadiusScale, 0.2f, 3f);
+            LightingShadowStrength = C(LightingShadowStrength, 0f, 1f);
+            DirectionalShadowStrength = C(DirectionalShadowStrength, 0f, 1f);
+            DirectionalShadowLength = C(DirectionalShadowLength, 0.2f, 2f);
+            DirectionalShadowBlur = C(DirectionalShadowBlur, 0f, 5f);
+            CameraFollowSpeed = C(CameraFollowSpeed, 0.05f, 1f);
+        }
 
         // --- Camera (independent of the post-processing pipeline) ---
         /// <summary>Which camera behaviour to use. Off = vanilla snap.</summary>

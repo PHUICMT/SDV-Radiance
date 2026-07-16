@@ -232,6 +232,12 @@ namespace SDVRadiance
             return bottom > _bodyTop && top < _bodyBottom;
         }
 
+        public override void gameWindowSizeChanged(Rectangle oldBounds, Rectangle newBounds)
+        {
+            base.gameWindowSizeChanged(oldBounds, newBounds);
+            Reflow(); // keep the panel pinned to the (new) right edge
+        }
+
         public override void receiveScrollWheelAction(int direction)
         {
             if (_maxScroll > 0)
