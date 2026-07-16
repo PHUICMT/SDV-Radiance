@@ -28,6 +28,10 @@ namespace SDVRadiance
         // The player's silhouette is rendered to this offscreen target during RenderingWorld,
         // then drawn back (flattened + leaned) into the World_Sorted batch. FarmerRenderer only
         // supports a uniform scale, so the RT is the only way to squash the player vertically.
+        // Sun shadows mirror DOWN (matching the game's own baked shadows: light from upper-left,
+        // shadow to lower-right) so they don't fight the art or overlap the sprite. Point-light
+        // shadows instead rotate to point away from each light, so they stay unmirrored.
+        private SpriteEffects _fx = SpriteEffects.None;
         private RenderTarget2D? _playerRT;
         private SpriteBatch? _rtBatch;
         private Texture2D? _gradTex;
@@ -112,6 +116,7 @@ namespace SDVRadiance
         /// <summary>One long shadow per caster, leaning away from the sun (outdoors, daytime).</summary>
         private void DrawSunShadows(SpriteBatch b, GameLocation loc, ModConfig config, float strength, float blur)
         {
+            _fx = SpriteEffects.FlipVertically;   // sun shadow mirrors DOWN to match the game's art
             ComputeSun(out float rot, out float stretch, out float alpha);
             alpha *= strength;
             if (alpha <= 0.01f)
@@ -146,6 +151,7 @@ namespace SDVRadiance
         /// </summary>
         private void DrawLightShadows(SpriteBatch b, GameLocation loc, ModConfig config, float strength, float blur)
         {
+            _fx = SpriteEffects.None;              // point-light shadows rotate to point away from the light
             var lights = Game1.currentLightSources;
             if (lights == null || lights.Count == 0)
                 return;
@@ -315,7 +321,7 @@ namespace SDVRadiance
             // The baked silhouette is one cohesive image — flatten it vertically and lean it
             // about the feet as a single unit (no per-layer fragmenting), softened at the edges.
             DrawSoft(b, Taps9, _playerRT, null, feet, Color.White, alpha, rot, _playerFeetInRT,
-                new Vector2(1f, stretch), depth, SpriteEffects.None, blur);
+                new Vector2(1f, stretch), depth, _fx, blur);
         }
 
         /// <summary>
@@ -419,7 +425,7 @@ namespace SDVRadiance
         /// slicing it into horizontal bands (each drawn about the shared feet anchor so they
         /// stay aligned under rotation + stretch) and fading each band's alpha toward the tip.
         /// </summary>
-        private static void DrawBandedGradient(SpriteBatch b, Texture2D tex, Rectangle src, Vector2 feet,
+        private void DrawBandedGradient(SpriteBatch b, Texture2D tex, Rectangle src, Vector2 feet,
             Vector2 baseOrigin, float alpha, float rot, Vector2 scale, float depth, float blur)
         {
             // More bands for taller sprites so the gradient stays smooth (a 96px tree would
@@ -435,7 +441,7 @@ namespace SDVRadiance
                 float tBottom = (i + 0.5f) / bands;              // 0 at the head band, 1 at the feet band
                 float ga = HeadFade + (1f - HeadFade) * (float)Math.Pow(tBottom, 1.8);
                 DrawSoft(b, Taps5, tex, band, feet, Color.Black, alpha * ga, rot, origin, scale, depth,
-                    SpriteEffects.None, blur);
+                    _fx, blur);
             }
         }
 
