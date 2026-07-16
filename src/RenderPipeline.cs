@@ -430,6 +430,7 @@ namespace SDVRadiance
             fx.Parameters["Strength"]?.SetValue(config.WaterStrength * strengthMul);
             fx.Parameters["Speed"]?.SetValue(config.WaterSpeed * speedMul);
             fx.Parameters["Sparkle"]?.SetValue(config.WaterSparkle * sparkleMul);
+            fx.Parameters["ReflectStrength"]?.SetValue(config.WaterReflection ? config.WaterReflectStrength : 0f);
             fx.Parameters["WaterKind"]?.SetValue(WaterKind());
             fx.Parameters["TilesPerScreen"]?.SetValue(_waterTilesPerScreen);
             fx.Parameters["WorldTileOffset"]?.SetValue(_waterWorldTileOffset);

@@ -108,6 +108,8 @@ namespace SDVRadiance
         public float WaterStrength { get; set; } = 0.5f;   // ripple amplitude
         public float WaterSpeed { get; set; } = 1.0f;      // ripple animation speed
         public float WaterSparkle { get; set; } = 0.25f;   // specular glint intensity
+        public bool WaterReflection { get; set; } = false; // screen-space reflection on water
+        public float WaterReflectStrength { get; set; } = 0.3f;
 
         public bool VignetteEnabled { get; set; } = false;
         public float VignetteStrength { get; set; } = 0.25f;

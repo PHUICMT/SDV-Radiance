@@ -102,11 +102,12 @@ are active.
 - [x] Vignette — smooth radial edge darkening
 - [x] Chromatic aberration — subtle radial R/B split (kept small so pixel art stays crisp)
 
-**Phase 5 — Dynamic 2D lighting** ✅ *(core; soft shadows + water reflection in progress)*
+**Phase 5 — Dynamic 2D lighting** ✅
 - [x] darken flat/unlit interiors that the game leaves fully bright, with a cool ambient tint that deepens at night
 - [x] warm light pools with soft falloff around real light sources (`Game1.currentLightSources`), sized from each light's radius, with adjustable warmth / brightness / radius
 - [x] context-aware: outdoors, mines, and scripted-dark rooms keep vanilla lighting so nothing double-darkens
-- [ ] soft occluder shadows and screen-space water reflection *(in progress)*
+- [x] soft occluder shadows — tall/solid tiles (from the map's "Buildings" layer) block light and cast feathered shadows away from each source
+- [x] screen-space water reflection — faintly mirrors the scene above the surface onto water for a wet sheen
 
 **Phase 6 — Texture upscaling** *(final; do when time allows)*
 - [ ] high-quality sprite resampling

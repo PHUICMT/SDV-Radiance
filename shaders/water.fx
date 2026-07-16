@@ -35,6 +35,7 @@ float2 TilesPerScreen;  // how many world tiles span the buffer (w/64, h/64)
 float2 WorldTileOffset; // viewport origin in world tiles (viewport.XY / 64), continuous
 float2 MaskSize;        // mask texture size in texels (tiles)
 float WaterKind;        // 0 = still (pond/river), 1 = ocean/beach (big directional swell)
+float ReflectStrength;  // 0 = off; screen-space reflection of the scene above the surface
 
 struct PixelInput
 {
@@ -89,6 +90,16 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // Depth tint: cool + deepen for a wetter, more 3D surface.
     float3 tint = col.rgb * float3(0.90, 0.97, 1.12);
     col.rgb = lerp(col.rgb, tint, 0.35 * water);
+
+    // Screen-space reflection: faintly mirror the scene just ABOVE the surface
+    // (smaller v) down onto the water, wobbled by the ripple. Deliberately subtle
+    // and gated to water pixels — a wet, reflective sheen, not a true mirror.
+    if (ReflectStrength > 0.001)
+    {
+        float2 reflUv = float2(uv.x + ripple.x * 3.0, uv.y - 0.025 + ripple.y * 3.0);
+        float3 refl = tex2D(SourceSampler, reflUv).rgb;
+        col.rgb = lerp(col.rgb, refl, saturate(ReflectStrength) * water);
+    }
 
     // Random drifting glints: one soft glint per cell at a random spot that
     // wanders slowly and pulses smoothly (no hard twinkle). Ocean glints are
