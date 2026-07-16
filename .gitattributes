@@ -1,0 +1,11 @@
+# Normalize line endings across platforms
+* text=auto eol=lf
+
+# Windows-specific scripts keep CRLF
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Binary assets
+*.png  binary
+*.mgfxo binary
+*.zip  binary

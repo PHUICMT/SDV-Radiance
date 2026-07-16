@@ -1,0 +1,26 @@
+# .NET build output
+bin/
+obj/
+*.user
+*.suo
+
+# Rider / VS
+.idea/
+.vs/
+
+# MonoGame content build intermediates
+*.mgcontent
+obj/Debug/
+obj/Release/
+
+# Compiled shaders are build artifacts unless you choose to commit them.
+# Keep sources in shaders/; compiled .mgfxo can be regenerated.
+build/*.mgfxo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local machine config overrides
+stardewvalley.targets
+*.local.props

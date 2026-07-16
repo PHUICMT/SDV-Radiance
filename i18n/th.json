@@ -1,0 +1,37 @@
+{
+  "config.enabled.name": "เปิดใช้งาน SDV-Radiance",
+  "config.enabled.tooltip": "สวิตช์หลักสำหรับระบบ post-processing ทั้งหมด",
+
+  "config.section.bloom": "แสงเรือง (Bloom)",
+  "config.bloom.enabled.name": "เปิดแสงเรือง",
+  "config.bloom.enabled.tooltip": "แสงเรืองรอบบริเวณที่สว่าง เช่น โคมไฟและแสงอาทิตย์",
+  "config.bloom.threshold.name": "ระดับเริ่มเรืองแสง",
+  "config.bloom.intensity.name": "ความเข้มแสงเรือง",
+
+  "config.section.colorfog": "โทนสีและหมอก",
+  "config.colorgrade.enabled.name": "เปิดการปรับโทนสี",
+  "config.colorgrade.enabled.tooltip": "ปรับโทนสีตามช่วงเวลา ฤดูกาล และสภาพอากาศ",
+  "config.colorgrade.strength.name": "ความเข้มการปรับโทนสี",
+  "config.fog.enabled.name": "เปิดหมอก / ลำแสง",
+  "config.fog.enabled.tooltip": "หมอกและลำแสงแบบ screen-space",
+  "config.fog.density.name": "ความหนาแน่นหมอก",
+
+  "config.section.shadows": "เงาและ tilt-shift",
+  "config.cloudshadow.enabled.name": "เปิดเงาเมฆ",
+  "config.cloudshadow.enabled.tooltip": "เงาเมฆเคลื่อนไหวลอยผ่านพื้นที่ในเกม",
+  "config.cloudshadow.count.name": "จำนวนเงาเมฆ",
+  "config.cloudshadow.opacity.name": "ความทึบเงาเมฆ",
+  "config.tiltshift.enabled.name": "เปิด tilt-shift",
+  "config.tiltshift.enabled.tooltip": "เบลอระยะชัด (DoF) ที่ขอบบนและล่างของจอ",
+
+  "config.section.finishing": "น้ำและรายละเอียดเสริม",
+  "config.water.enabled.name": "เปิดการปรับปรุงน้ำ",
+  "config.water.enabled.tooltip": "คลื่นและการบิดเบือนบนช่องน้ำ",
+  "config.vignette.enabled.name": "เปิด vignette",
+  "config.vignette.enabled.tooltip": "หรี่ขอบจอให้ได้อารมณ์แบบภาพยนตร์",
+  "config.vignette.strength.name": "ความเข้ม vignette",
+
+  "config.section.debug": "การวินิจฉัย",
+  "config.debug.name": "บันทึก log สำหรับดีบัก",
+  "config.debug.tooltip": "บันทึกข้อมูล render pipeline ลงคอนโซล SMAPI เพื่อช่วยแก้ปัญหา"
+}

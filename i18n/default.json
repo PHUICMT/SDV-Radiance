@@ -1,0 +1,37 @@
+{
+  "config.enabled.name": "Enable SDV-Radiance",
+  "config.enabled.tooltip": "Master switch for the whole post-processing pipeline.",
+
+  "config.section.bloom": "Bloom",
+  "config.bloom.enabled.name": "Enable bloom",
+  "config.bloom.enabled.tooltip": "Glow around bright areas such as lamps and sunlight.",
+  "config.bloom.threshold.name": "Bloom threshold",
+  "config.bloom.intensity.name": "Bloom intensity",
+
+  "config.section.colorfog": "Color grading & fog",
+  "config.colorgrade.enabled.name": "Enable color grading",
+  "config.colorgrade.enabled.tooltip": "Shift the palette by time of day, season, and weather.",
+  "config.colorgrade.strength.name": "Color grading strength",
+  "config.fog.enabled.name": "Enable fog / god rays",
+  "config.fog.enabled.tooltip": "Screen-space volumetric fog and light shafts.",
+  "config.fog.density.name": "Fog density",
+
+  "config.section.shadows": "Shadows & tilt-shift",
+  "config.cloudshadow.enabled.name": "Enable cloud shadows",
+  "config.cloudshadow.enabled.tooltip": "Animated cloud shadows drifting across the world.",
+  "config.cloudshadow.count.name": "Cloud shadow count",
+  "config.cloudshadow.opacity.name": "Cloud shadow opacity",
+  "config.tiltshift.enabled.name": "Enable tilt-shift",
+  "config.tiltshift.enabled.tooltip": "Depth-of-field blur at the top and bottom of the screen.",
+
+  "config.section.finishing": "Water & finishing",
+  "config.water.enabled.name": "Enable water enhancement",
+  "config.water.enabled.tooltip": "Ripple and distortion on water tiles.",
+  "config.vignette.enabled.name": "Enable vignette",
+  "config.vignette.enabled.tooltip": "Darken the screen edges for a cinematic look.",
+  "config.vignette.strength.name": "Vignette strength",
+
+  "config.section.debug": "Diagnostics",
+  "config.debug.name": "Debug logging",
+  "config.debug.tooltip": "Log render-pipeline info to the SMAPI console to help troubleshoot."
+}

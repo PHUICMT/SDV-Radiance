@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>SDV-Radiance</AssemblyName>
+    <RootNamespace>SDVRadiance</RootNamespace>
+    <Version>0.0.1</Version>
+
+    <!-- SMAPI mod packaging: auto-detects the game folder and deploys to Mods/.
+         Enables the bundled Harmony reference for the deeper _draw hook path. -->
+    <EnableHarmony>true</EnableHarmony>
+    <EnableModDeploy>true</EnableModDeploy>
+    <EnableModZip>true</EnableModZip>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Pathoschild.Stardew.ModBuildConfig" Version="4.3.2" />
+  </ItemGroup>
+
+  <!-- If the game folder is not auto-detected, uncomment and set your path:
+  <PropertyGroup>
+    <GamePath>C:\Program Files (x86)\Steam\steamapps\common\Stardew Valley</GamePath>
+  </PropertyGroup>
+  -->
+
+</Project>
