@@ -1,75 +1,72 @@
-# Phase 5b — Issue punch list (จากรอบเทส 2026-07-16)
+# Phase 5b — Issue punch list (from 2026-07-16 test round)
 
-ไล่แก้ทีละตัว. สถานะ: ✅ เสร็จ · 🔧 แก้แล้วรอ confirm · ⏳ ยังไม่ทำ (ทำได้) · 🚧 ต้องตัดสินใจ/ลงแรง · ⛔ limit (ทำไม่ได้จริง)
+Work through these one at a time. Status: ✅ done · 🔧 fixed, awaiting in-game confirm · ⏳ not started (feasible) · 🚧 needs decision/effort · ⛔ hard limit (not fixable)
 
-> **อัปเดต batch ที่ 2 (build-verified, ยังไม่เทสในเกม):**
-> - 🔧 A1/A2: เอียงข้างขึ้น (1.15) ลดทับตัว + depth bias 1.2e-3
-> - 🔧 เงาเข้มกระทันหันตอน ~7:10: แก้ TimeFade ใช้นาทีจริง (เนียนข้ามชั่วโมง)
-> - ✅ C1 ResourceClump (ตอไม้/ท่อนไม้/ก้อนหิน)
-> - ✅ C2 FarmAnimal (สัตว์ฟาร์ม); Pet/แมว คุ้มอยู่แล้ว (เป็น NPC)
-> - 🔧 E1: ใส่ diag log (`[light] ... NOT darkening`) — รอบเทสหน้าจะบอกว่าเตาไม่มีแสงเพราะห้องไม่ถูกหรี่จริงไหม
-> - **ยัง defer (ต้องมี test cycle ทีละอัน เพราะ API ซับซ้อน/เสี่ยงถ้าทำ blind):** C3 (bigCraftable+Furniture), C4 (Building), B1 (transpiler ปิด vanilla tree shadow)
-> - **กำลัง research (background):** height/depth framework (แยก mod)
+> **Batch-2 + batch-3 update (build-verified, not yet game-tested):**
+> - 🔧 A1/A2: sideways lean (rot 1.15) to reduce body overlap + depth bias 1.2e-3
+> - 🔧 Sudden darkening at ~7:10: TimeFade now minute-accurate across hour rollover
+> - ✅ C1 ResourceClump (stumps/logs/boulders) · ✅ C2 FarmAnimal (pets were already covered as NPCs)
+> - ✅ C3 bigCraftable + floor Furniture · ✅ C4 farm Buildings
+> - ✅ B1 vanilla tree/bush blob suppressed via Draw-shim transpiler (depth==1E-06 gate)
+> - 🔧 E1: diag log added (`[light] ... NOT darkening`) — next test run will show whether the fireplace pool is missing because the room isn't being darkened
+> - Height/depth framework: research done, plan in `height-framework-plan.md` (will live in a **separate repo**)
 
 ---
 
-## A. เงาตัวละคร (sun, กลางแจ้ง)
+## A. Character shadows (sun, outdoors)
 
-- 🚧 **A1 · ทิศเง ยังไม่ลงตัว** — เงาเราชี้ **ขึ้น** (up-lean) แต่เงาของเกม (ต้นไม้/พุ่ม/blob) ทอด **ลง-ขวา**. ลอง flip ลงแล้ว = "กลับหัว" (reject) → กลับมา up. ค้าง tradeoff:
-  - up = สวยตามที่ชอบ แต่ผิดทิศเกม + ทับตัวบางส่วน
-  - down (flip) = ตรงเกม + ไม่ทับ แต่กลับหัว
-  - *ทางเลือกยังไม่ได้ลอง:* ทอดไป**ด้านข้าง (ซ้าย/ขวา)** ล้วน (rotate 90°) = ไม่กลับหัว + ไม่ทับตัว + ดูเป็นเงานอน
-- 🔧 **A2 · เงาทับตัว** — ดัน depth bias เป็น 1.2e-3 แล้ว (เงาอยู่หลัง sprite ชัดขึ้น) — รอ confirm ว่าหายกับ up-lean
-- ✅ A3 · gradient ปลายจาง, ขอบฟุ้ง, เป็นชิ้นเดียว, รองรับ mod ชุด/ผม (RT)
-- ✅ A4 · ความเข้มปรับได้ถึง ~0.9 (slider), fade เข้า/ออกเช้า-เย็น, ไม่วาดบน tile น้ำ
+- 🚧 **A1 · Direction not settled** — our shadow leans UP-screen; the game's own baked shadows (trees/bushes/blobs) fall DOWN-RIGHT. Vertical flip read as "upside-down" (rejected). Current compromise: upright with a stronger sideways lean (1.15 rad). Untried alternative: pure sideways projection (rotate ~90°) = lying-down shadow, no overlap, not upside-down.
+- 🔧 **A2 · Shadow overlapping the sprite** — depth bias raised to 1.2e-3 (clears the farmer's sub-layer depth range) — awaiting confirm.
+- ✅ A3 · tip-fade gradient, soft edges, single cohesive silhouette, includes hat/hair/Fashion-Sense layers (player RT bake)
+- ✅ A4 · strength up to ~0.9 via slider, dawn/dusk ease-in/out, skipped on water tiles
 
-## B. เงาต้นไม้/พุ่มไม้
+## B. Tree / bush shadows
 
-- 🚧 **B1 · vanilla tree shadow ซ้อน** — อยากปิดเงาเดิมของต้นไม้เมื่อเปิดของเรา. ปิดยาก: วาดฝังใน `Tree.draw` (ไม่ใช่ method แยกเหมือน `Character.DrawShadow`) → ต้อง Harmony transpiler (เสี่ยง/version-specific)
-- 🚧 **B2 · เงาต้นไม้ดูขาดจากโคน** — canopy/ลำต้นวาดทับฐานเงาตัวเอง (depth สูงกว่า). inherent กับ sprite ใหญ่ — ลดได้ด้วยการขยับ anchor/ถ่างฐาน แต่ไม่ 100%
-- 🔧 **B3 · ไล่สีไม่เนียน (banding)** — ทำ band ปรับตามความสูง (6–18) แล้ว รอ confirm ว่าต้นไม้เนียนขึ้น
-- ⏳ **B4 · toggle** "เงาต้นไม้/พุ่มไม้" มีใน F8/GMCM แล้ว (ปิดได้ถ้ายังไม่พอใจ)
+- ✅ **B1 · Vanilla blob overlap** — suppressed via Harmony transpiler on `Tree.draw` + `Bush.draw`: all their `SpriteBatch.Draw` calls route through a shim that drops draws at `layerDepth == 1E-06f` (every vanilla tree/bush shadow uses exactly that depth) while our object shadows are active. *Risk note: depends on that depth constant; re-verify on game updates.*
+- 🚧 **B2 · Shadow looks detached from the trunk** — the canopy/trunk paints over the shadow's base (higher depth). Inherent to large sprites; can be reduced by shifting the anchor/widening the base, not 100% fixable.
+- 🔧 **B3 · Gradient banding** — band count now scales with sprite height (6–18) — awaiting confirm.
+- ✅ B4 · "Trees & bushes" toggle in F8 tuner + GMCM.
 
-## C. เงาวัตถุอื่น (ยังไม่ทำ — ทำได้ทั้งหมด เป็น entity)
+## C. Other entity shadows
 
-- ⏳ **C1 · ResourceClump** (ตอไม้/ท่อนไม้/ก้อนหิน) — ไม่มี vanilla shadow, upright, เพิ่มง่าย
-- ⏳ **C2 · สัตว์เลี้ยง (Pet/แมว) + สัตว์ฟาร์ม (FarmAnimal)** — แมวยังไม่มีเงา; ต้องเช็ค Pet อยู่ใน characters ไหม + วน `loc.animals`
-- ⏳ **C3 · เครื่องจักร/เฟอร์นิเจอร์** (bigCraftable / Furniture)
-- ⏳ **C4 · ตึกฟาร์ม (Building)** — เป็น entity ทอดเงาได้ (เล้า/โรงนา/กระท่อม)
+- ✅ C1 · ResourceClump (stump/log/boulder) — no vanilla shadow, upright, easy win
+- ✅ C2 · FarmAnimal (`loc.animals`); Pet/cat already covered (Pets are NPCs in `loc.characters`)
+- ✅ C3 · bigCraftable objects (machines/kegs/scarecrows; flat 16×16 floor items skipped) + floor Furniture (rugs type 12 and wall types 6/13/17 skipped)
+- ✅ C4 · Farm Buildings (coop/barn/cabin; under-construction skipped)
 
-## D. เงาในบ้าน / กลางคืน (per-light)
+## D. Indoor / night shadows (per light source)
 
-- ✅ D1 · เงาทอดออกจากไฟแต่ละดวง, หลายไฟ = หลายเงา, จางตามระยะ, คลุมทั้งห้อง
-- 🔧 **D2 · เข้มไป/climb ผนังในห้องสว่าง** — ปรับจางลง+สั้นลงแล้ว (base 0.5) รอ confirm
-- ⛔ **D3 · เงาปีนผนัง** — ผนังในบ้าน = map tile ไม่มี height → แก้ 100% ไม่ได้ (จาง/สั้นช่วยได้)
+- ✅ D1 · one shadow per (caster, light) pointing away from each light; multiple lights = multiple shadows; opacity/length by proximity; whole-room reach
+- 🔧 **D2 · Too dark / climbs walls in bright rooms** — softened + shortened (base 0.5, stretch ≤0.85) — awaiting confirm
+- ⛔ **D3 · Shadows climbing walls** — indoor walls are map tiles with no height data → not fully fixable (softening/shortening mitigates; the height framework may help later)
 
-## E. Dynamic Lighting (Phase 5 — คนละระบบกับเงา)
+## E. Dynamic lighting (Phase 5 — separate system from shadows)
 
-- 🚧 **E1 · เตาผิง/ตะเกียงไม่เปล่ง light pool** — สงสัย: pool ขึ้นเฉพาะห้องที่ถูกหรี่ (`ambientLight==White`); บ้านนี้อาจไม่เข้าเงื่อนไข → ต้องใส่ diag เช็ค + อาจ relax เงื่อนไขหรี่
-- 🚧 **E2 · หน้าต่างจ้าไป** — bloom ขยาย glow หน้าต่างของเกม → ลด bloom หรือเพิ่ม option กันหน้าต่าง bloom
-- 🔧 **E3 · ห้องสว่างไป** — ปรับ "Indoor darkness" ใน F8 ได้ (ผู้ใช้ทดสอบ)
-- ℹ️ E4 · หน้าต่างจางตามเวลา = พฤติกรรมของเกม (WindowLight fade) ไม่ใช่บั๊ก
+- 🚧 **E1 · Fireplace/lamp emits no light pool** — hypothesis: our pools only render when the room is being darkened (`ambientLight == White` gate in `ComputeLightingAmbient`); this room may not qualify. Diag log added; may need to relax the gate.
+- 🚧 **E2 · Window glow too bright** — our bloom amplifies the game's window glow → lower bloom, or add an option to exclude window light from bloom
+- 🔧 **E3 · Rooms too bright** — user-tunable via "Indoor darkness" in F8
+- ℹ️ E4 · Window light fading over the day is vanilla behavior (WindowLight fade), not a bug
 
 ## F. God rays
 
-- 🔧 **F1 · mask เฉพาะแหล่งแสงจริง** — gate bright pass รอบไฟจริงแล้ว (ดอกไม้/ผมขาวไม่ควรมี ray) รอ confirm ใกล้โคมไฟ
+- 🔧 **F1 · Masked to real light sources** — bright pass now gated to a disk around a real light (flowers/pale hair should no longer streak) — awaiting confirm near a lamp
 
-## G. Feature ใหม่ (idea, ยังไม่เริ่ม)
+## G. New feature ideas (not started)
 
-- ⏳ **G1 · window light shaft** — แสงลอดหน้าต่างเป็น ray เอียงตามเวลา เข้ามาในห้อง
-- ⏳ **G2 · god rays ให้เนียน/สวยกว่านี้** (volumetric, ตามเวลา/อากาศ)
-- ⏳ **G3 · per-pixel clip เงาไม่ให้พาดผิวน้ำ** (ตอนนี้ skip แค่ per-tile ที่ยืน)
+- ⏳ **G1 · Window light shafts** — rays through windows, angled by time of day, into the room
+- ⏳ **G2 · Prettier god rays** (volumetric, time/weather driven)
+- ⏳ **G3 · Per-pixel water clip for shadows** (currently only per-tile skip at the caster's feet)
 
-## ⛔ Limits (ยอมรับแล้ว — ไม่มีมอดไหนทำได้ถ้าไม่แก้แผนที่)
+## ⛔ Accepted limits (no mod can fix these without editing maps)
 
-- ต้นไม้ตกแต่งในเมือง / พื้น / ผนังเมือง = วาดฝังใน map tilesheet ไม่ใช่ entity → ทอดเงารายชิ้นไม่ได้
-- เงาไม่หัก/สั้นตามต่างระดับ (ขอบน้ำ, หลังคา, ตลิ่ง) = เกมไม่มีข้อมูลความสูง/depth ของ tile
+- Decorative town trees / paths / town walls are baked into map tilesheets, not entities → cannot cast per-object shadows
+- Shadows don't bend/shorten across elevation changes (water edges, roofs, cliffs) — the game has no per-tile height data. → This is the motivation for the **height/depth framework** (separate repo, see `height-framework-plan.md`)
 
 ---
 
-### ลำดับแนะนำ (ค่อยๆไล่)
-1. ยืนยัน A1/A2 (ทิศ+ทับตัว) ให้ลงตัว — ลองแบบทอดข้างดู
-2. B1 ปิด vanilla tree shadow (ถ้าเอาต้นไม้ต่อ) หรือปิด toggle ไปก่อน
-3. C1–C4 เพิ่ม entity ที่เหลือ (ตอไม้ → สัตว์ → เฟอร์นิเจอร์ → ตึก)
-4. E1 lighting เตาผิง (diag + relax เงื่อนไข)
-5. G1 window shaft, G2 god rays polish
+### Suggested order
+1. Confirm A1/A2 (direction + overlap) in-game; try the pure-sideways variant if still unsatisfying
+2. Confirm B1/B3 (blob suppressed, smooth gradient) and the new C3/C4 shadows
+3. E1 fireplace lighting (read diag → relax gate)
+4. G1 window shafts, G2 god-ray polish
+5. Height framework P0 (separate repo)

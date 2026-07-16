@@ -1,44 +1,46 @@
-# Height & Depth Framework — แผน + research (2026-07-16)
+# Height & Depth Framework — plan + research (2026-07-16)
 
-เป้าหมาย: framework mod แยก (หรือ module แยกใน Radiance ระยะแรก) ที่ให้ mod อื่น query
-**ความสูง/occlusion ต่อ tile** ได้ — แก้ปัญหาที่เงา/เอฟเฟกต์ไม่รู้ว่า tile ไหนคือกำแพง/หลังคา/
-สะพาน/ผิวน้ำ (เงาปีนผนัง, ไม่ตกขอบตลิ่ง, พาดผิวน้ำ).
+Goal: a standalone framework mod (**separate repo**; Radiance becomes its first consumer)
+that lets any mod query **per-tile height / occlusion** — fixing the class of bugs where
+effects don't know which tile is a wall/roof/pier/water surface (shadows climbing walls,
+not dropping off ledges, spilling across water).
 
-> สถานะ: research เสร็จทั้ง 2 ฝั่ง — design/prior-art + SDV data inventory (ทั้งคู่สรุปในไฟล์นี้).
-> พร้อมเริ่ม P0 เมื่อ user ไฟเขียว.
+> Status: research complete on both tracks — design/prior-art survey + verified SDV data
+> inventory (both summarized below). Ready to start P0 on user go-ahead.
 
 ---
 
-## ปัญหาที่ตั้งต้น
+## Problem statement
 
-SDV เป็น 2.5D painter's-algorithm: sprite เรียงด้วย screen-Y (`depth ≈ Y/10000`) **ไม่มีแกน Z
-ในข้อมูลแผนที่เลย** — ไม่มีอะไรบอกว่า "tile นี้คือสะพานยกสูงเหนือน้ำ" หรือ "หลังคาสูง 3 tiles".
-ทางแก้ = สร้าง data layer แยกที่เติม Z ที่หายไป (authored หรือ inferred) แล้วเปิดเป็น API.
+SDV is a 2.5D painter's-algorithm renderer: sprites sort by screen-Y (`depth ≈ Y/10000`),
+and **the map data has no Z axis at all** — nothing says "this tile is a pier raised over
+water" or "this roof is 3 tiles up". The fix is a separate data layer that supplies the
+missing Z (authored or inferred), exposed through a public API.
 
-## Data model ที่แนะนำ (ต่อ location, lazy-build + cache, invalidate ตอน warp/map edit)
+## Recommended data model (per location; lazy-built, cached, invalidated on warp/map edit)
 
 ```
 struct TileHeight {
-    sbyte  height;        // 0 = พื้น, >0 ยกสูง (กำแพง/หลังคา/หน้าผา), <0 ต่ำลง (น้ำ/บ่อ)
-    byte   occluderTop;   // ความสูงของ occluder ที่ตั้งบน tile นี้ (0 = ไม่มี) — ใช้คำนวณความยาวเงา
-    EdgeFlags edges;      // ต่อด้าน: Rise/Drop N/E/S/W (ขอบขึ้น/ตลิ่งลง) เทียบเพื่อนบ้าน
+    sbyte  height;        // 0 = ground, >0 raised (wall/roof/cliff-top), <0 sunken (water/pit)
+    byte   occluderTop;   // vertical extent of an occluder standing on this tile (0 = none) — drives shadow length
+    EdgeFlags edges;      // per side: Rise/Drop N/E/S/W (upward step / ledge) vs neighbor
     HeightClass surface;  // Ground | Water | Wall | Roof | Bridge/Pier | Void
-    HeightSource source;  // Inferred | TilesheetTag | Authored (ไว้ debug)
+    HeightSource source;  // Inferred | TilesheetTag | Authored (debugging/trust)
 }
 ```
-เก็บเป็น flat array (`w*h`) ไม่ใช่ dictionary → sweep เร็ว/cache-friendly. edges precompute.
+Stored as a flat array (`w*h`), not a dictionary → fast, cache-friendly sweeps. Edges precomputed.
 
-## Pipeline หา height (priority สูง→ต่ำ, ตัวล่างเป็น fallback เสมอ)
+## Height resolution pipeline (highest priority wins; lowest is always-on fallback)
 
-1. **Authored JSON override ต่อแผนที่** (โหลดผ่าน Content Patcher ได้) — แม่นสุด, ทำเฉพาะจุดที่ heuristic พลาด
-2. **Tilesheet-index tag DB** — tag ครั้งเดียวต่อ tile index ในชีท ใช้ได้กับทุกแผนที่ที่ใช้ชีทนั้น
-   (**คุ้มสุดสำหรับ SDV** เพราะ tile เดิมซ้ำเป็นร้อยแผนที่; รองรับ modded sheets ผ่าน pack)
-3. **Heuristic inference จากข้อมูลที่มีอยู่แล้ว** — ใช้ได้ทุกแผนที่ทันทีรวม SVE:
-   - Buildings layer (collision) = กำแพง/solid occluder
-   - Front / AlwaysFront layer = ของสูง (พุ่มบน, ผนังบน, หลังคา) → height > 0
-   - Tile properties: `Water` → ต่ำกว่าพื้น (จุด detect ตลิ่ง/สะพาน), `Passable`, `Type`
-   - Building.tilesHigh / terrain-feature bounding boxes → occluder height
-   - ทำ height-delta ระหว่างเพื่อนบ้าน → mark Rise/Drop edges
+1. **Authored JSON override per map** (Content Patcher–loadable) — most accurate; only for spots heuristics miss
+2. **Tilesheet-index tag DB** — tag a tile index once per sheet, applies to every map using that sheet
+   (**highest-leverage option for SDV** — the same tiles recur across hundreds of maps; modded sheets covered via packs)
+3. **Heuristic inference from existing data** — works on every map immediately, including SVE:
+   - Buildings-layer tile that blocks = wall/solid occluder
+   - Front / AlwaysFront layer = tall geometry (canopy, upper wall, roof) → height > 0
+   - Tile properties: `Water` → below-ground plane (ledge/pier detection), `Passable`, `Type`
+   - `Building.tilesHigh` / terrain-feature bounding boxes → occluder heights
+   - Neighbor height deltas → Rise/Drop edge flags
 
 ## Public API (`IHeightFrameworkApi` via `Helper.ModRegistry.GetApi<T>`)
 
@@ -47,72 +49,76 @@ int   GetHeightAt(GameLocation loc, int tileX, int tileY);
 bool  IsOccluder(GameLocation loc, int x, int y, out int topHeight);
 bool  IsLedge(GameLocation loc, int fromX, int fromY, int toX, int toY);
 HeightClass GetSurface(GameLocation loc, int x, int y);
-// helper สำเร็จรูป — คืน shadow polyline ที่ clip/หักตาม heightfield แล้ว:
+// done-for-you helper — returns a shadow polyline already clipped/bent over the heightfield:
 IReadOnlyList<ShadowSegment> ProjectShadow(loc, casterTile, casterHeight, lightDir2D, lightElevationRad);
-event HeightMapChanged;               // warp / map edit
-void RegisterProvider(IHeightProvider); // mod อื่น/height pack contribute ข้อมูลได้ (โมเดลเดียวกับ CP)
+event HeightMapChanged;                 // warp / map edit
+void RegisterProvider(IHeightProvider); // other mods / height packs contribute data (CP-style)
 ```
-+ **debug overlay** (สไตล์ Data Layers mod) วาด height grid เป็นสี — จำเป็นทั้งตอน validate
-heuristic และเป็นเครื่องมือ author.
+Plus a **debug overlay** (Data Layers–style) rendering the height grid as colors — essential
+both for validating inference and as an authoring tool.
 
-## คณิตเงาบน heightfield (ให้ `ProjectShadow` ทำแทน consumer)
+## Shadow math on the heightfield (lives inside `ProjectShadow`, not in consumers)
 
-- **ความยาวเงา** = `heightDiff / tan(sunElevation)` ตาม azimuth ดวงอาทิตย์
-- **Clip/หักเงา** ด้วย horizon-march / line-sweep (Sean Barrett, O(N) ต่อ sweep — เร็วพอทำทุกเฟรม
-  ในขนาด viewport): เงาไต่ขึ้นหา terrain ที่สูงกว่า, หยุดเมื่อชน occluder สูงกว่า,
-  **ตัดจบตรง Drop edge** (ตลิ่ง/ขอบสะพาน) แทนที่จะไหลต่อบนผิวล่าง
-- ผิว `Water`/`Void` → ไม่วาดเงา (หรือวาดเป็น reflection แทน)
-- แนวคิดยืนยันจาก prior art: Pixel-Height-Map shadows (arXiv 2207.05385), horizon mapping,
-  RPG Maker shadow-pen / LDtk IntGrid (โมเดล authoring), Dynamic Shader (Nexus 40775 —
-  เจอกำแพงเดียวกับเรา = ยืนยัน gap; **ยังไม่มี SMAPI framework ไหนให้ per-tile height เลย**
-  = whitespace ของเรา)
+- **Shadow length** = `heightDiff / tan(sunElevation)` along the sun azimuth
+- **Clip/bend** via horizon-march / line-sweep (Sean Barrett, O(N) per sweep — cheap enough
+  per frame at viewport size): the shadow climbs toward higher terrain, stops at a taller
+  occluder, and **terminates at a Drop edge** (ledge/pier rim) instead of continuing on the
+  lower surface
+- `Water`/`Void` surfaces → no shadow (or a displaced reflection instead)
+- Prior art confirming the approach: Pixel-Height-Map shadows (arXiv 2207.05385), horizon
+  mapping, RPG Maker shadow-pen / LDtk IntGrid (authoring models), Dynamic Shader (Nexus
+  40775 — hits the same wall we do, confirming the gap; **no SMAPI framework provides
+  per-tile height today** — that's our whitespace)
+
+## SDV data inventory (verified from decompiled 1.6 — what actually exists to infer from)
+
+**Confirmed: the game has NO numeric per-tile Z anywhere** — all "height" is emergent from
+Y-depth + a layer trick. Depth scale = `/10000`, 1 tile row = `0.0064`. What we can read:
+
+- **Layer bucketing** (`GameLocation.SortLayers`, by layer-Id prefix — modded layers included):
+  `Back*` → behind everything (depth 0) · `Buildings*` → drawn behind all sprites (deferred, ~0) ·
+  `Front*` → **sort bias +64 (= +1 tile row) → draws over sprites standing on that row = the
+  game's own "tall things" mechanism** · `AlwaysFront*` → on top of everything · `Paths` = data-only, never drawn
+- **Key tile properties** (read raw `Layer.Tiles[x,y].Properties` + `.TileIndexProperties`;
+  do **NOT** call `doesTileHaveProperty` in the inner loop — it iterates all buildings+furniture per call):
+  - Buildings tile that blocks (no `Passable`/`Shadow`) = **wall base / solid occluder** ← primary signal
+  - `Passable` on Buildings = **raised walkable deck (bridge/pier!)** — vanilla uses this in
+    `shouldShadowBeDrawnAboveBuildingsLayer` to promote blob shadows (exactly the logic we need)
+  - `Passable` on Back (TileIndexProperties) = gap/void (inverse ledge marker)
+  - `Water` (Back) = below-ground plane; `Type=Wood` over Water = pier decking, a strong signal
+  - `Diggable` / `Type` Dirt|Grass|Stone with no Buildings tile = flat ground, height 0 (good negative signal)
+  - `Shadow` (Buildings) = decorative baked-shadow tile — must be excluded from occluders
+  - No `Bridge`/`Height`/`Elevation` property exists in vanilla; the only first-class raised-deck
+    flag is `SuspensionBridge` / `Farmer.onBridge` (one special case)
+- **Buildings**: `tileX/Y/tilesWide/tilesHigh` = footprint (occluder base);
+  visual height = `getSourceRect().Height*4 − tilesHigh*64` (upward overhang); `SortTileOffset` from BuildingData
+- **Precompute cost**: largest maps ~120×120 ≈ 14k tiles × ~4 lookups = a few ms, once per
+  LocationChanged; invalidate on building constructed/demolished/moved + map reload
+
+**Inference ruleset (mirrors what the vanilla renderer itself relies on → our shadows will
+agree with the game's own layering):**
+1. Buildings-blocking tile → occluder height ≥ 1; contiguous Front tiles above it → count rows = wall height
+2. Passable-on-Buildings / Wood-over-Water / onBridge → raised deck
+3. Water → below ground; Diggable/ground Type → height 0
+4. Building footprint stamp + overhang height
 
 ## Phased build plan
 
-- **P0 — Spike/validate:** heuristic inference อย่างเดียว + debug overlay; พิสูจน์ grid ถูกบน
-  Farm / Town / Beach (สะพาน!) / หน้าผา. ยังไม่เปิด API.
+- **P0 — Spike/validate:** heuristic inference only + debug overlay; prove the grid looks right
+  on Farm / Town / Beach (the pier!) / a cliff map. No public API yet.
 - **P1 — MVP:** data model + inference + read-only API (`GetHeightAt`/`IsOccluder`/`GetSurface`).
-  Radiance ใช้แก้ 2 บั๊กแรงสุดก่อน: เงาพาดน้ำ + ไม่ตกขอบ.
-- **P2 — ProjectShadow helper:** pixel-height projection + horizon clip; เงาแดดของ Radiance
-  ย้ายมาใช้.
-- **P3 — Authoring:** authored JSON per-map + tilesheet tag DB; overlay กลายเป็นเครื่องมือ
-  paint/export.
+  Radiance consumes it to fix the two worst bugs first: shadows on water + no ledge drop-off.
+- **P2 — ProjectShadow helper:** pixel-height projection + horizon clipping; Radiance's sun
+  shadow migrates onto it.
+- **P3 — Authoring:** per-map authored JSON + tilesheet tag DB; the overlay becomes a
+  paint/export authoring aid.
 - **P4 — Ecosystem:** RegisterProvider + community height packs (vanilla/SVE/Ridgeside) + docs.
 
-## SDV data inventory (verified จาก decompiled 1.6 — สิ่งที่มีจริงให้ infer)
+## Key decisions
 
-**ยืนยัน: เกมไม่มี numeric per-tile Z เลย** — "ความสูง" ทั้งหมด emergent จาก Y-depth + layer trick.
-Depth scale = `/10000`, 1 tile row = `0.0064`. สิ่งที่อ่านได้:
-
-- **Layer bucketing** (`GameLocation.SortLayers`, จัดตาม prefix ของ Id — modded layer ก็เข้า):
-  `Back*` → หลังสุด (depth 0) · `Buildings*` → วาดหลัง sprite ทุกตัว (deferred, ~0) ·
-  `Front*` → **sort bias +64 (= +1 tile row) → วาดทับ sprite ที่ยืนแถวเดียวกัน = กลไก "ของสูง" ของเกม** ·
-  `AlwaysFront*` → ทับทุกอย่าง · `Paths` = data-only ไม่วาด
-- **Tile properties สำคัญ** (อ่าน raw `Layer.Tiles[x,y].Properties` + `.TileIndexProperties`;
-  **ห้าม**ใช้ `doesTileHaveProperty` ใน inner loop — มัน iterate buildings+furniture ทุก call):
-  - `Buildings` tile ที่ block (ไม่มี `Passable`/`Shadow`) = **wall base / solid occluder** ← สัญญาณหลัก
-  - `Passable` บน Buildings = **raised walkable deck (สะพาน/ท่าเรือ!)** — vanilla ใช้ตัวนี้ใน
-    `shouldShadowBeDrawnAboveBuildingsLayer` เพื่อยกเงา blob ขึ้น layer บน (ตรรกะเดียวกับที่เราต้องทำ)
-  - `Passable` บน Back (TileIndexProperties) = ช่องว่าง/หุบ (ledge marker กลับด้าน)
-  - `Water` (Back) = ระนาบต่ำกว่าพื้น; `Type`=`Wood` เหนือ Water = pier decking ชัดเจน
-  - `Diggable`/`Type` Dirt|Grass|Stone (ไม่มี Buildings tile) = พื้นราบ height 0 (negative signal ดี)
-  - `Shadow` (Buildings) = tile เงา baked ตกแต่ง — ต้อง exclude จาก occluders
-  - ไม่มี `Bridge`/`Height`/`Elevation` property ใน vanilla; มีแค่ `SuspensionBridge`/`Farmer.onBridge` เคสเดียว
-- **Building**: `tileX/Y/tilesWide/tilesHigh` = footprint (ฐาน occluder);
-  ความสูงภาพ = `getSourceRect().Height*4 − tilesHigh*64` (overhang ขึ้นบน); `SortTileOffset` จาก BuildingData
-- **Perf precompute**: แผนที่ใหญ่สุด ~120×120 ≈ 14k tiles × ~4 lookups = ไม่กี่ ms, ทำครั้งเดียวตอน
-  LocationChanged; invalidate ตอน building constructed/demolished/moved + map reload
-
-**Inference ruleset (ตรงกับที่ vanilla renderer ใช้เอง → เงาจะ agree กับ layering ของเกม):**
-1. Buildings-block → occluder สูง ≥1; มี Front tile ต่อเนื่องด้านบน → นับจำนวนแถวเป็นความสูงกำแพง
-2. Passable-on-Buildings / Wood-over-Water / onBridge → raised deck
-3. Water → ต่ำกว่าพื้น; Diggable/ground Type → height 0
-4. Building footprint stamp + overhang height
-
-## การตัดสินใจสำคัญ
-
-- height เป็น **signed** (น้ำ/บ่อเป็น first-class ไม่ใช่ hack)
-- inference **เปิดตลอด** → ทุกแผนที่มีข้อมูลตั้งแต่วันแรก ไม่มีแผนที่ "ไม่รองรับ"
-- tilesheet tagging คือตัวคูณความแม่นที่คุ้มสุด
-- เอาคณิตยากไว้ที่เดียว (`ProjectShadow`) — consumer ไม่ต้อง reimplement
-- วางเป็น **shared infrastructure** แบบเดียวกับ Content Patcher/SpaceCore ไม่ใช่ helper เฉพาะ Radiance
+- **Separate repo** from SDV-Radiance — positioned as shared infrastructure (like Content
+  Patcher/SpaceCore), not a Radiance-only helper; Radiance is consumer #1
+- Height is **signed** (water/pits are first-class, not a hack)
+- Inference is **always on** → every map has data from day one; no "unsupported map"
+- Tilesheet tagging is the accuracy multiplier with the best effort/coverage ratio
+- The hard math lives in one place (`ProjectShadow`) — consumers never reimplement it
