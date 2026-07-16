@@ -3,7 +3,10 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
 using StardewValley;
+using StardewValley.Buildings;
+using StardewValley.Objects;
 using StardewValley.TerrainFeatures;
+using SObject = StardewValley.Object;
 
 namespace SDVRadiance
 {
@@ -318,6 +321,91 @@ namespace SDVRadiance
                     continue;
                 DrawResourceClumpShadow(b, clump, rot, stretch, alpha, blur);
             }
+
+            foreach (var kv in loc.objects.Pairs)
+            {
+                Vector2 tile = kv.Key;
+                if (tile.X < tx0 || tile.X > tx1 || tile.Y < ty0 || tile.Y > ty1)
+                    continue;
+                SObject o = kv.Value;
+                // Only upright machines/craftables cast; flat 16x16 floor items don't.
+                if (o == null || !o.bigCraftable.Value || o.Fragility == 2 || o.isTemporarilyInvisible)
+                    continue;
+                DrawBigCraftableShadow(b, o, tile, rot, stretch, alpha, blur);
+            }
+
+            foreach (Furniture f in loc.furniture)
+            {
+                if (f == null || f.isTemporarilyInvisible)
+                    continue;
+                int type = f.furniture_type.Value;
+                // Skip rugs (12) and wall-mounted furniture (6 window, 13 wall, 17 painting).
+                if (type == 12 || type == 6 || type == 13 || type == 17)
+                    continue;
+                Vector2 tile = f.TileLocation;
+                if (tile.X < tx0 || tile.X > tx1 || tile.Y < ty0 || tile.Y > ty1)
+                    continue;
+                DrawFurnitureShadow(b, f, rot, stretch, alpha, blur);
+            }
+
+            foreach (Building building in loc.buildings)
+            {
+                if (building == null || building.daysOfConstructionLeft.Value > 0 || building.texture?.Value == null)
+                    continue;
+                int bx = building.tileX.Value, by = building.tileY.Value;
+                int bw = building.tilesWide.Value, bh = building.tilesHigh.Value;
+                if (bx + bw < tx0 || bx > tx1 || by + bh < ty0 || by > ty1)
+                    continue;
+                DrawBuildingShadow(b, building, rot, stretch, alpha, blur);
+            }
+        }
+
+        private void DrawBigCraftableShadow(SpriteBatch b, SObject o, Vector2 tile, float rot, float stretch, float alpha, float blur)
+        {
+            var data = ItemRegistry.GetDataOrErrorItem(o.QualifiedItemId);
+            Texture2D tex = data.GetTexture();
+            if (tex == null)
+                return;
+            Rectangle src = data.GetSourceRect();
+            // Big craftables draw a 64x128 box anchored at (x*64, y*64-64) → feet at tile bottom-centre.
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f));
+            float depth = MathHelper.Clamp(Math.Max(0f, ((tile.Y + 1f) * 64f - 24f) / 10000f) + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
+            DrawBandedGradient(b, tex, src, feet, new Vector2(src.Width / 2f, src.Height),
+                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
+        }
+
+        private void DrawFurnitureShadow(SpriteBatch b, Furniture f, float rot, float stretch, float alpha, float blur)
+        {
+            Rectangle src = f.sourceRect.Value;
+            if (src.IsEmpty)
+                return;
+            var data = ItemRegistry.GetDataOrErrorItem(f.QualifiedItemId);
+            Texture2D tex = data.GetTexture();
+            if (tex == null)
+                return;
+            // Anchor at the footprint's bottom-centre (drawPosition is protected; the bounding
+            // box bottom matches the sprite's ground line for floor furniture).
+            Rectangle box = f.boundingBox.Value;
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, box.Bottom));
+            float depth = MathHelper.Clamp((box.Bottom - 8f) / 10000f - ShadowDepthBias, 0f, 1f);
+            DrawBandedGradient(b, tex, src, feet, new Vector2(src.Width / 2f, src.Height),
+                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
+        }
+
+        private void DrawBuildingShadow(SpriteBatch b, Building building, float rot, float stretch, float alpha, float blur)
+        {
+            Texture2D tex = building.texture.Value;
+            Rectangle src = building.getSourceRect();
+            if (src.IsEmpty)
+                return;
+            // Buildings anchor at (tileX*64, (tileY+tilesHigh)*64) with origin (0, src.Height):
+            // base line = bottom edge of the footprint; shear about its centre.
+            float baseY = (building.tileY.Value + building.tilesHigh.Value) * 64f;
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
+                new Vector2(building.tileX.Value * 64f + building.tilesWide.Value * 32f, baseY));
+            float depth = MathHelper.Clamp(baseY / 10000f - ShadowDepthBias, 0f, 1f);
+            DrawBandedGradient(b, tex, src, feet, new Vector2(src.Width / 2f, src.Height),
+                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
         }
 
         private void DrawResourceClumpShadow(SpriteBatch b, ResourceClump clump, float rot, float stretch, float alpha, float blur)

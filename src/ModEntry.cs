@@ -1,5 +1,6 @@
 using System;
 using HarmonyLib;
+using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using SDVRadiance.Integrations;
 using StardewModdingAPI;
@@ -36,11 +37,47 @@ namespace SDVRadiance
 
         /// <summary>When true, the vanilla blob shadow is skipped (we draw a directional one instead).</summary>
         internal static bool SuppressVanillaShadows;
+
+        /// <summary>When true, vanilla tree/bush baked blob shadows are skipped (our object shadows replace them).</summary>
+        internal static bool SuppressVanillaObjectShadows;
         private static IMonitor? SMonitor;
         private static bool _loggedFreeze;
 
         /// <summary>Skip the game's blob shadow while our directional shadow is active.</summary>
         private static bool DrawShadow_Prefix() => !SuppressVanillaShadows;
+
+        /// <summary>
+        /// Transpiler shim for Tree.draw / Bush.draw: every vanilla tree/bush blob shadow is
+        /// drawn at layerDepth exactly 1E-06f (nothing else in those methods uses it), so we
+        /// swallow just those draws while our object shadows are active and forward the rest.
+        /// </summary>
+        public static void Draw_SkipVanillaShadow(SpriteBatch sb, Texture2D tex, Vector2 pos,
+            Rectangle? src, Color color, float rotation, Vector2 origin, float scale,
+            SpriteEffects effects, float layerDepth)
+        {
+            if (layerDepth == 1E-06f && SuppressVanillaObjectShadows)
+                return;
+            sb.Draw(tex, pos, src, color, rotation, origin, scale, effects, layerDepth);
+        }
+
+        /// <summary>Redirect a method's SpriteBatch.Draw calls through <see cref="Draw_SkipVanillaShadow"/>.</summary>
+        private static System.Collections.Generic.IEnumerable<CodeInstruction> DrawShadow_Transpiler(
+            System.Collections.Generic.IEnumerable<CodeInstruction> instructions)
+        {
+            var drawMethod = AccessTools.Method(typeof(SpriteBatch), nameof(SpriteBatch.Draw), new[]
+            {
+                typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color),
+                typeof(float), typeof(Vector2), typeof(float), typeof(SpriteEffects), typeof(float)
+            });
+            var shim = AccessTools.Method(typeof(ModEntry), nameof(Draw_SkipVanillaShadow));
+            foreach (var ins in instructions)
+            {
+                if (ins.Calls(drawMethod))
+                    yield return new CodeInstruction(System.Reflection.Emit.OpCodes.Call, shim) { labels = ins.labels, blocks = ins.blocks };
+                else
+                    yield return ins;
+            }
+        }
 
         /// <summary>True only when the mod is on AND at least one implemented effect is switched on.</summary>
         private bool EffectsActive => _config.Enabled &&
@@ -78,6 +115,14 @@ namespace SDVRadiance
             harmony.Patch(
                 original: AccessTools.Method(typeof(Farmer), nameof(Farmer.DrawShadow)),
                 prefix: new HarmonyMethod(typeof(ModEntry), nameof(DrawShadow_Prefix)));
+            // Trees/bushes bake their blob shadow inline in draw(); route their Draw calls
+            // through a shim that drops only the depth==1E-06 (shadow) draws.
+            harmony.Patch(
+                original: AccessTools.Method(typeof(StardewValley.TerrainFeatures.Tree), nameof(StardewValley.TerrainFeatures.Tree.draw)),
+                transpiler: new HarmonyMethod(typeof(ModEntry), nameof(DrawShadow_Transpiler)));
+            harmony.Patch(
+                original: AccessTools.Method(typeof(StardewValley.TerrainFeatures.Bush), nameof(StardewValley.TerrainFeatures.Bush.draw), new[] { typeof(SpriteBatch) }),
+                transpiler: new HarmonyMethod(typeof(ModEntry), nameof(DrawShadow_Transpiler)));
 
             this.Monitor.Log("SDV-Radiance loaded (world post-processing via RenderedWorld).", LogLevel.Info);
         }
@@ -156,6 +201,7 @@ namespace SDVRadiance
         {
             _camera.Update(_config);
             SuppressVanillaShadows = ShadowRenderer.ShadowsActiveNow(_config);
+            SuppressVanillaObjectShadows = _config.DirectionalShadowObjects && ShadowRenderer.SunShadowActive(_config);
         }
 
         private void OnButtonsChanged(object? sender, ButtonsChangedEventArgs e)
