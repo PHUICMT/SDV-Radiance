@@ -139,10 +139,12 @@ namespace SDVRadiance
             foreach (var kv in lights.Values)
             {
                 LightSource ls = kv;
-                if (ls.lightContext.Value != LightSource.LightContext.None)
-                    continue;                               // skip window/map ambient lights
+                // Cast from real point lights AND window/map lights (a window still throws a
+                // believable shadow across the room). Player-attached lights sit on the player
+                // so they self-cancel in LightCast (dist≈0). Skip nothing by context.
                 Vector2 screen = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
-                float reach = Math.Max(64f, ls.radius.Value * 64f * 3f);
+                // Shadows reach further than the glow; keep a room-crossing minimum.
+                float reach = Math.Max(384f, ls.radius.Value * 64f * 4f);
                 if (screen.X < -reach || screen.X > Game1.viewport.Width + reach ||
                     screen.Y < -reach || screen.Y > Game1.viewport.Height + reach)
                     continue;
@@ -150,6 +152,13 @@ namespace SDVRadiance
                 if (_lightBuf.Count >= 6)
                     break;
             }
+
+            if (Diag != null && _diagFrames < 3)
+            {
+                _diagFrames++;
+                Diag.Log($"[shadow] light path: lights on-screen={_lightBuf.Count} (of {lights.Count} total)", LogLevel.Debug);
+            }
+
             if (_lightBuf.Count == 0)
                 return;
 
@@ -194,7 +203,8 @@ namespace SDVRadiance
             if (dist < 1f || dist > reach)
                 return false;
             float prox = 1f - dist / reach;                 // 1 next to the light, 0 at its edge
-            alpha = 0.5f * prox * strength;
+            // Keep it readable across the lit area (0.45 floor) and strong near the light.
+            alpha = 0.85f * (0.45f + 0.55f * prox) * strength;
             if (alpha <= 0.02f)
                 return false;
             rot = (float)Math.Atan2(away.X, -away.Y);        // point the silhouette away from the light
