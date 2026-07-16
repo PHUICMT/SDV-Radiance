@@ -143,8 +143,9 @@ namespace SDVRadiance
                 // believable shadow across the room). Player-attached lights sit on the player
                 // so they self-cancel in LightCast (dist≈0). Skip nothing by context.
                 Vector2 screen = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
-                // Shadows reach further than the glow; keep a room-crossing minimum.
-                float reach = Math.Max(384f, ls.radius.Value * 64f * 4f);
+                // Shadows reach much further than the glow; keep a whole-room-crossing minimum
+                // so a single small window still shadows the far corner.
+                float reach = Math.Max(640f, ls.radius.Value * 64f * 4f);
                 if (screen.X < -reach || screen.X > Game1.viewport.Width + reach ||
                     screen.Y < -reach || screen.Y > Game1.viewport.Height + reach)
                     continue;
@@ -203,8 +204,8 @@ namespace SDVRadiance
             if (dist < 1f || dist > reach)
                 return false;
             float prox = 1f - dist / reach;                 // 1 next to the light, 0 at its edge
-            // Keep it readable across the lit area (0.45 floor) and strong near the light.
-            alpha = 0.85f * (0.45f + 0.55f * prox) * strength;
+            // Keep it readable across the whole lit area (0.55 floor) and strong near the light.
+            alpha = 0.85f * (0.55f + 0.45f * prox) * strength;
             if (alpha <= 0.02f)
                 return false;
             rot = (float)Math.Atan2(away.X, -away.Y);        // point the silhouette away from the light
