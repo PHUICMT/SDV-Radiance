@@ -53,6 +53,7 @@ namespace SDVRadiance
             helper.Events.GameLoop.GameLaunched += OnGameLaunched;
             helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
             helper.Events.Input.ButtonsChanged += OnButtonsChanged;
+            helper.Events.Display.RenderingWorld += OnRenderingWorld;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
 
             var harmony = new Harmony(this.ModManifest.UniqueID);
@@ -96,6 +97,18 @@ namespace SDVRadiance
                 return;
             __instance.waterAnimationIndex = 0;
             if (!_loggedFreeze) { SMonitor?.Log("Water frame-cycle frozen (shader ripple active); vertical scroll left running.", LogLevel.Info); _loggedFreeze = true; }
+        }
+
+        /// <summary>
+        /// Draw sprite shadows before the world layer, so they sit UNDER the sprites
+        /// that cast them. Independent of the post-processing pipeline (like the camera).
+        /// </summary>
+        private void OnRenderingWorld(object? sender, RenderingWorldEventArgs e)
+        {
+            if (!_config.Enabled || !_config.DirectionalShadowsEnabled)
+                return;
+            _shadows ??= new ShadowRenderer(Game1_GraphicsDevice);
+            _shadows.Draw(_config);
         }
 
         /// <summary>Apply the effect chain to the world layer after the game has drawn it.</summary>
@@ -289,6 +302,13 @@ namespace SDVRadiance
                 () => I18n("config.lighting.shadows.name"), () => I18n("config.lighting.shadows.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.LightingShadowStrength, v => _config.LightingShadowStrength = v,
                 () => I18n("config.lighting.shadowstrength.name"), null, 0f, 1f, 0.05f);
+
+            // --- Directional sprite shadows (Phase 5b) ---
+            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.shadows"));
+            api.AddBoolOption(this.ModManifest, () => _config.DirectionalShadowsEnabled, v => _config.DirectionalShadowsEnabled = v,
+                () => I18n("config.shadows.enabled.name"), () => I18n("config.shadows.enabled.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.DirectionalShadowStrength, v => _config.DirectionalShadowStrength = v,
+                () => I18n("config.shadows.strength.name"), null, 0f, 1f, 0.05f);
 
             // --- Camera (implemented) ---
             api.AddSectionTitle(this.ModManifest, () => I18n("config.section.camera"));

@@ -130,10 +130,11 @@ float4 CompositePS(PixelInput input) : SV_TARGET
     float4 c = tex2D(SourceSampler, input.UV);
     float cloud = tex2D(ShadowSampler, input.UV).r;
 
-    // Bright / emissive areas (fire, lamps, highlights) resist the shadow —
-    // a passing cloud shouldn't dim a light source.
+    // Only near-white emissive cores (fire, lamps) resist the shadow — a passing
+    // cloud shouldn't dim a light source. Kept high so merely-bright surfaces
+    // (beach sand, snow) still receive shadow instead of being wrongly protected.
     float lum = dot(c.rgb, LUMA);
-    float protect = smoothstep(0.62, 0.92, lum);
+    float protect = smoothstep(0.86, 0.99, lum);
     float shade = 1.0 - cloud * Opacity * (1.0 - protect);
 
     return float4(c.rgb * shade, c.a);

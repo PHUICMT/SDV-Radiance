@@ -170,6 +170,11 @@
   "config.lighting.shadows.tooltip": "ให้กำแพง/สิ่งทึบบังแสงแล้วทอดเงานุ่มๆ ออกจากแหล่งไฟ (ทดลอง)",
   "config.lighting.shadowstrength.name": "ความเข้มเงา",
 
+  "config.section.shadows": "เงาทอดตามแสง",
+  "config.shadows.enabled.name": "เปิดเงาทอดตามแสง",
+  "config.shadows.enabled.tooltip": "ทอดเงาเงาตัวละครแบบนุ่ม เอียงตามมุมดวงอาทิตย์ตามเวลา (เฉพาะกลางแจ้ง กลางวัน อากาศแจ่มใส) — ทดลอง",
+  "config.shadows.strength.name": "ความเข้มเงา",
+
   "config.section.camera": "กล้อง",
   "config.camera.mode.name": "โหมดกล้อง",
   "config.camera.mode.tooltip": "Off = แบบเดิม (snap). Smooth = ไถลตามตอนเดิน แล้วเข้าที่เร็วตอนหยุด",

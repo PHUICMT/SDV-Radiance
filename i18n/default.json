@@ -163,6 +163,11 @@
   "config.lighting.shadows.tooltip": "Tall/solid tiles (walls, structures) block light and cast soft shadows away from each light source. Experimental.",
   "config.lighting.shadowstrength.name": "Shadow strength",
 
+  "config.section.shadows": "Directional shadows",
+  "config.shadows.enabled.name": "Enable directional shadows",
+  "config.shadows.enabled.tooltip": "Cast a soft, sheared silhouette of each character away from the sun, leaning by time of day (outdoors, daytime, clear weather only). Experimental.",
+  "config.shadows.strength.name": "Shadow strength",
+
   "config.section.camera": "Camera",
   "config.camera.mode.name": "Camera mode",
   "config.camera.mode.tooltip": "Off = vanilla snap. Smooth = ease toward the player while moving, snap crisply when you stop.",
