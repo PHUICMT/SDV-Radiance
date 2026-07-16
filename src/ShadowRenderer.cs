@@ -49,18 +49,25 @@ namespace SDVRadiance
             ColorDestinationBlend = Blend.One,
         };
 
-        /// <summary>Would a directional shadow be cast right now? (outdoors, daytime, clear, enabled)</summary>
+        /// <summary>Master gate: shadows enabled and we're in a normal (non-cutscene) location.</summary>
         internal static bool ShouldCast(ModConfig config)
         {
             if (!config.Enabled || !config.DirectionalShadowsEnabled)
                 return false;
-            GameLocation? loc = Game1.currentLocation;
-            if (loc == null || !loc.IsOutdoors || Game1.eventUp)
-                return false;
-            if (Game1.timeOfDay >= 1900 || Game1.timeOfDay < 600 || Game1.isRaining || Game1.isSnowing)
-                return false;
-            return true;
+            return Game1.currentLocation != null && !Game1.eventUp;
         }
+
+        /// <summary>Sun conditions: outdoors, daytime, clear weather → one long sun-cast shadow.</summary>
+        private static bool SunCasts()
+        {
+            GameLocation? loc = Game1.currentLocation;
+            if (loc == null || !loc.IsOutdoors)
+                return false;
+            return Game1.timeOfDay < 1900 && Game1.timeOfDay >= 600 && !Game1.isRaining && !Game1.isSnowing;
+        }
+
+        /// <summary>True when the outdoor sun shadow is active (also drives vanilla-blob suppression).</summary>
+        internal static bool SunShadowActive(ModConfig config) => ShouldCast(config) && SunCasts();
 
         /// <summary>Draw all caster shadows into the game's open World_Sorted batch.</summary>
         public void DrawInto(SpriteBatch b, ModConfig config)
@@ -68,41 +75,131 @@ namespace SDVRadiance
             if (!ShouldCast(config))
                 return;
 
-            ComputeSun(out float rot, out float stretch, out float alpha);
-            alpha *= MathHelper.Clamp(config.DirectionalShadowStrength, 0f, 1f);
-            if (alpha <= 0.01f)
-                return;
-            stretch *= Math.Max(0.1f, config.DirectionalShadowLength);
-            float blur = Math.Max(0f, config.DirectionalShadowBlur);
-
             GameLocation loc = Game1.currentLocation;
-
-            if (Diag != null && _diagFrames < 3)
-            {
-                _diagFrames++;
-                Diag.Log($"[shadow] World_Sorted inject: npcs={loc.characters.Count}, time={Game1.timeOfDay}, rot={rot:0.00}, stretch={stretch:0.00}, alpha={alpha:0.00}, blur={blur:0.0}", LogLevel.Debug);
-            }
+            float strength = MathHelper.Clamp(config.DirectionalShadowStrength, 0f, 1f);
+            float blur = Math.Max(0f, config.DirectionalShadowBlur);
+            if (strength <= 0.01f)
+                return;
 
             try
             {
-                foreach (NPC npc in loc.characters)
-                {
-                    if (npc == null || npc.IsInvisible || npc.HideShadow || npc.swimming.Value || npc.Sprite?.Texture == null)
-                        continue;
-                    if (OnWater(loc, npc.TilePoint))   // don't lay a shadow on the water surface
-                        continue;
-                    DrawNpcShadow(b, npc, rot, stretch, alpha, blur);
-                }
-
-                DrawPlayerShadow(b, loc, rot, stretch, alpha, blur);
-
-                if (config.DirectionalShadowObjects)
-                    DrawObjectShadows(b, loc, rot, stretch, alpha, blur);
+                if (SunCasts())
+                    DrawSunShadows(b, loc, config, strength, blur);
+                else
+                    DrawLightShadows(b, loc, config, strength, blur);   // indoors / night → per light source
             }
             catch (Exception ex)
             {
                 if (Diag != null && !_errLogged) { _errLogged = true; Diag.Log($"[shadow] draw threw: {ex}", LogLevel.Warn); }
             }
+        }
+
+        /// <summary>One long shadow per caster, leaning away from the sun (outdoors, daytime).</summary>
+        private void DrawSunShadows(SpriteBatch b, GameLocation loc, ModConfig config, float strength, float blur)
+        {
+            ComputeSun(out float rot, out float stretch, out float alpha);
+            alpha *= strength;
+            if (alpha <= 0.01f)
+                return;
+            stretch *= Math.Max(0.1f, config.DirectionalShadowLength);
+
+            if (Diag != null && _diagFrames < 3)
+            {
+                _diagFrames++;
+                Diag.Log($"[shadow] sun: npcs={loc.characters.Count}, time={Game1.timeOfDay}, rot={rot:0.00}, stretch={stretch:0.00}, alpha={alpha:0.00}, blur={blur:0.0}", LogLevel.Debug);
+            }
+
+            foreach (NPC npc in loc.characters)
+            {
+                if (npc == null || npc.IsInvisible || npc.HideShadow || npc.swimming.Value || npc.Sprite?.Texture == null)
+                    continue;
+                if (OnWater(loc, npc.TilePoint))   // don't lay a shadow on the water surface
+                    continue;
+                DrawNpcShadow(b, npc, rot, stretch, alpha, blur);
+            }
+
+            DrawPlayerShadow(b, loc, rot, stretch, alpha, blur);
+
+            if (config.DirectionalShadowObjects)
+                DrawObjectShadows(b, loc, rot, stretch, alpha, blur);
+        }
+
+        /// <summary>
+        /// Indoors / at night: each real point light (torch, lamp, fire, fireplace) casts its
+        /// own shadow of every caster, radiating AWAY from that light and fading with distance.
+        /// Multiple lights → multiple overlapping shadows, as in real multi-light rooms.
+        /// </summary>
+        private void DrawLightShadows(SpriteBatch b, GameLocation loc, ModConfig config, float strength, float blur)
+        {
+            var lights = Game1.currentLightSources;
+            if (lights == null || lights.Count == 0)
+                return;
+
+            _lightBuf.Clear();
+            foreach (var kv in lights.Values)
+            {
+                LightSource ls = kv;
+                if (ls.lightContext.Value != LightSource.LightContext.None)
+                    continue;                               // skip window/map ambient lights
+                Vector2 screen = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
+                float reach = Math.Max(64f, ls.radius.Value * 64f * 3f);
+                if (screen.X < -reach || screen.X > Game1.viewport.Width + reach ||
+                    screen.Y < -reach || screen.Y > Game1.viewport.Height + reach)
+                    continue;
+                _lightBuf.Add((screen, reach));
+                if (_lightBuf.Count >= 6)
+                    break;
+            }
+            if (_lightBuf.Count == 0)
+                return;
+
+            float lenCfg = Math.Max(0.1f, config.DirectionalShadowLength);
+
+            foreach (NPC npc in loc.characters)
+            {
+                if (npc == null || npc.IsInvisible || npc.HideShadow || npc.swimming.Value || npc.Sprite?.Texture == null)
+                    continue;
+                Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
+                    new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom));
+                foreach (var (lpos, reach) in _lightBuf)
+                    if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
+                        DrawNpcShadow(b, npc, rot, st, a, blur);
+            }
+
+            if (_playerReady && _playerRT != null)
+            {
+                Farmer who = Game1.player;
+                if (who != null && who.currentLocation == loc && !who.swimming.Value && !who.isRidingHorse() && !who.IsSitting())
+                {
+                    Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
+                        new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom));
+                    float depth = MathHelper.Clamp(who.GetBoundingBox().Bottom / 10000f - ShadowDepthBias, 0f, 1f);
+                    foreach (var (lpos, reach) in _lightBuf)
+                        if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
+                            DrawSoft(b, Taps9, _playerRT, null, feet, Color.White, a, rot, _playerFeetInRT,
+                                new Vector2(1f, st), depth, SpriteEffects.None, blur);
+                }
+            }
+        }
+
+        private readonly System.Collections.Generic.List<(Vector2 pos, float reach)> _lightBuf = new();
+
+        /// <summary>Shadow direction/length/opacity for a caster lit by one point light. False if out of reach.</summary>
+        private static bool LightCast(Vector2 feet, Vector2 lightPos, float reach, float strength, float lenCfg,
+            out float rot, out float stretch, out float alpha)
+        {
+            rot = 0f; stretch = 0f; alpha = 0f;
+            Vector2 away = feet - lightPos;
+            float dist = away.Length();
+            if (dist < 1f || dist > reach)
+                return false;
+            float prox = 1f - dist / reach;                 // 1 next to the light, 0 at its edge
+            alpha = 0.5f * prox * strength;
+            if (alpha <= 0.02f)
+                return false;
+            rot = (float)Math.Atan2(away.X, -away.Y);        // point the silhouette away from the light
+            stretch = MathHelper.Lerp(0.5f, 1.3f, prox) * lenCfg;
+            return true;
         }
 
         private void DrawNpcShadow(SpriteBatch b, NPC npc, float rot, float stretch, float alpha, float blur)

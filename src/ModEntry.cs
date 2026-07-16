@@ -155,7 +155,7 @@ namespace SDVRadiance
         private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
         {
             _camera.Update(_config);
-            SuppressVanillaShadows = ShadowRenderer.ShouldCast(_config);
+            SuppressVanillaShadows = ShadowRenderer.SunShadowActive(_config);
         }
 
         private void OnButtonsChanged(object? sender, ButtonsChangedEventArgs e)
