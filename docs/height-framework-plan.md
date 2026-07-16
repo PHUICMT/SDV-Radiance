@@ -4,8 +4,8 @@
 **ความสูง/occlusion ต่อ tile** ได้ — แก้ปัญหาที่เงา/เอฟเฟกต์ไม่รู้ว่า tile ไหนคือกำแพง/หลังคา/
 สะพาน/ผิวน้ำ (เงาปีนผนัง, ไม่ตกขอบตลิ่ง, พาดผิวน้ำ).
 
-> สถานะ: research ฝั่ง design/prior-art เสร็จ (สรุปด้านล่าง). ฝั่งข้อมูลในเกม (SDV tile/layer
-> inventory) กำลัง research เพิ่ม — จะเติมท้ายไฟล์นี้.
+> สถานะ: research เสร็จทั้ง 2 ฝั่ง — design/prior-art + SDV data inventory (ทั้งคู่สรุปในไฟล์นี้).
+> พร้อมเริ่ม P0 เมื่อ user ไฟเขียว.
 
 ---
 
@@ -78,6 +78,36 @@ heuristic และเป็นเครื่องมือ author.
 - **P3 — Authoring:** authored JSON per-map + tilesheet tag DB; overlay กลายเป็นเครื่องมือ
   paint/export.
 - **P4 — Ecosystem:** RegisterProvider + community height packs (vanilla/SVE/Ridgeside) + docs.
+
+## SDV data inventory (verified จาก decompiled 1.6 — สิ่งที่มีจริงให้ infer)
+
+**ยืนยัน: เกมไม่มี numeric per-tile Z เลย** — "ความสูง" ทั้งหมด emergent จาก Y-depth + layer trick.
+Depth scale = `/10000`, 1 tile row = `0.0064`. สิ่งที่อ่านได้:
+
+- **Layer bucketing** (`GameLocation.SortLayers`, จัดตาม prefix ของ Id — modded layer ก็เข้า):
+  `Back*` → หลังสุด (depth 0) · `Buildings*` → วาดหลัง sprite ทุกตัว (deferred, ~0) ·
+  `Front*` → **sort bias +64 (= +1 tile row) → วาดทับ sprite ที่ยืนแถวเดียวกัน = กลไก "ของสูง" ของเกม** ·
+  `AlwaysFront*` → ทับทุกอย่าง · `Paths` = data-only ไม่วาด
+- **Tile properties สำคัญ** (อ่าน raw `Layer.Tiles[x,y].Properties` + `.TileIndexProperties`;
+  **ห้าม**ใช้ `doesTileHaveProperty` ใน inner loop — มัน iterate buildings+furniture ทุก call):
+  - `Buildings` tile ที่ block (ไม่มี `Passable`/`Shadow`) = **wall base / solid occluder** ← สัญญาณหลัก
+  - `Passable` บน Buildings = **raised walkable deck (สะพาน/ท่าเรือ!)** — vanilla ใช้ตัวนี้ใน
+    `shouldShadowBeDrawnAboveBuildingsLayer` เพื่อยกเงา blob ขึ้น layer บน (ตรรกะเดียวกับที่เราต้องทำ)
+  - `Passable` บน Back (TileIndexProperties) = ช่องว่าง/หุบ (ledge marker กลับด้าน)
+  - `Water` (Back) = ระนาบต่ำกว่าพื้น; `Type`=`Wood` เหนือ Water = pier decking ชัดเจน
+  - `Diggable`/`Type` Dirt|Grass|Stone (ไม่มี Buildings tile) = พื้นราบ height 0 (negative signal ดี)
+  - `Shadow` (Buildings) = tile เงา baked ตกแต่ง — ต้อง exclude จาก occluders
+  - ไม่มี `Bridge`/`Height`/`Elevation` property ใน vanilla; มีแค่ `SuspensionBridge`/`Farmer.onBridge` เคสเดียว
+- **Building**: `tileX/Y/tilesWide/tilesHigh` = footprint (ฐาน occluder);
+  ความสูงภาพ = `getSourceRect().Height*4 − tilesHigh*64` (overhang ขึ้นบน); `SortTileOffset` จาก BuildingData
+- **Perf precompute**: แผนที่ใหญ่สุด ~120×120 ≈ 14k tiles × ~4 lookups = ไม่กี่ ms, ทำครั้งเดียวตอน
+  LocationChanged; invalidate ตอน building constructed/demolished/moved + map reload
+
+**Inference ruleset (ตรงกับที่ vanilla renderer ใช้เอง → เงาจะ agree กับ layering ของเกม):**
+1. Buildings-block → occluder สูง ≥1; มี Front tile ต่อเนื่องด้านบน → นับจำนวนแถวเป็นความสูงกำแพง
+2. Passable-on-Buildings / Wood-over-Water / onBridge → raised deck
+3. Water → ต่ำกว่าพื้น; Diggable/ground Type → height 0
+4. Building footprint stamp + overhang height
 
 ## การตัดสินใจสำคัญ
 
