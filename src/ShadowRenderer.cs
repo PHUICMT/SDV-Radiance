@@ -225,12 +225,13 @@ namespace SDVRadiance
             if (dist < 1f || dist > reach)
                 return false;
             float prox = 1f - dist / reach;                 // 1 next to the light, 0 at its edge
-            // Keep it readable across the whole lit area (0.55 floor) and strong near the light.
-            alpha = 0.85f * (0.55f + 0.45f * prox) * strength;
+            // Indoor shadows stay SUBTLE (bright rooms) and shorter, so they read softly and
+            // climb the (map-baked) walls less than the bold outdoor sun shadow.
+            alpha = 0.5f * (0.5f + 0.5f * prox) * strength;
             if (alpha <= 0.02f)
                 return false;
             rot = (float)Math.Atan2(away.X, -away.Y);        // point the silhouette away from the light
-            stretch = MathHelper.Lerp(0.5f, 1.3f, prox) * lenCfg;
+            stretch = MathHelper.Lerp(0.35f, 0.85f, prox) * lenCfg;
             return true;
         }
 
