@@ -545,8 +545,22 @@ namespace SDVRadiance
             // Run the stage if we have lights, or if we're darkening a flat interior
             // (so the room actually gets darker even with no lamps in view).
             bool darkening = ComputeLightingAmbient(config) != Vector3.One;
+
+            // Diagnose the "fireplace/lamp casts a shadow but emits no visible light pool" report:
+            // our pools only lift a DARKENED base, so if a room has lights yet isn't being
+            // darkened (non-white ambient), the pools are invisible. Log that case once.
+            if (config.DebugLogging && !_loggedLightDiag && _lightCount > 0)
+            {
+                _loggedLightDiag = true;
+                _monitor.Log($"[light] loc={Game1.currentLocation?.Name} outdoors={Game1.currentLocation?.IsOutdoors} " +
+                             $"ambient={Game1.ambientLight} darkening={darkening} lights={_lightCount} " +
+                             (darkening ? "(pools should show)" : "-> NOT darkening, so light pools won't be visible"), LogLevel.Debug);
+            }
+
             return _lightCount > 0 || darkening;
         }
+
+        private bool _loggedLightDiag;
 
         /// <summary>
         /// The per-pixel ambient multiplier for unlit areas. We only darken flat-bright
