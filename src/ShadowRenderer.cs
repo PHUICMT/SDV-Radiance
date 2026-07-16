@@ -427,7 +427,7 @@ namespace SDVRadiance
             float d = MathHelper.Clamp((Game1.timeOfDay - 1200) / 600f, -1f, 1f);
             rot = 0.8f * d;                                      // <0 morning lean, >0 evening lean
             stretch = MathHelper.Lerp(0.3f, 1.2f, Math.Abs(d));  // stretched LONG when the sun is low
-            alpha = 0.55f * TimeFade();                          // opacity at the feet (fades toward the tip)
+            alpha = 0.9f * TimeFade();                           // opacity at the feet (× strength; fades toward the tip)
         }
 
         /// <summary>Ease the shadow in/out near dawn (06:00–07:00) and dusk (18:00–19:00) so it doesn't pop.</summary>
