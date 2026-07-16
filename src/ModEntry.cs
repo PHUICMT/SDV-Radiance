@@ -231,8 +231,16 @@ namespace SDVRadiance
             api.AddSectionTitle(this.ModManifest, () => I18n("config.section.tiltshift"));
             api.AddBoolOption(this.ModManifest, () => _config.TiltShiftEnabled, v => _config.TiltShiftEnabled = v,
                 () => I18n("config.tiltshift.enabled.name"), () => I18n("config.tiltshift.enabled.tooltip"));
+            api.AddTextOption(this.ModManifest,
+                () => _config.TiltShiftMode.ToString(),
+                v => _config.TiltShiftMode = Enum.TryParse<TiltShiftFocus>(v, out var m) ? m : TiltShiftFocus.Bands,
+                () => I18n("config.tiltshift.mode.name"), () => I18n("config.tiltshift.mode.tooltip"),
+                new[] { nameof(TiltShiftFocus.Bands), nameof(TiltShiftFocus.Radial) },
+                v => I18n($"config.tiltshift.mode.{v.ToLowerInvariant()}"));
             api.AddNumberOption(this.ModManifest, () => _config.TiltShiftStrength, v => _config.TiltShiftStrength = v,
                 () => I18n("config.tiltshift.strength.name"), null, 0f, 1f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.TiltShiftRadius, v => _config.TiltShiftRadius = v,
+                () => I18n("config.tiltshift.radius.name"), () => I18n("config.tiltshift.radius.tooltip"), 0.05f, 0.9f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.TiltShiftTopRatio, v => _config.TiltShiftTopRatio = v,
                 () => I18n("config.tiltshift.top.name"), null, 0f, 1f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.TiltShiftBottomRatio, v => _config.TiltShiftBottomRatio = v,

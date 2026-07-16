@@ -11,6 +11,13 @@ namespace SDVRadiance
         Smooth
     }
 
+    /// <summary>Tilt-shift focus shape.</summary>
+    public enum TiltShiftFocus
+    {
+        Bands,   // sharp middle band, blur top & bottom
+        Radial   // sharp circle around the player, blur outward
+    }
+
     /// <summary>Quick look presets applied to the whole effect stack.</summary>
     public enum LookPreset
     {
@@ -90,9 +97,11 @@ namespace SDVRadiance
         public float CloudShadowCoverage { get; set; } = 0.45f;
 
         public bool TiltShiftEnabled { get; set; } = false;
+        public TiltShiftFocus TiltShiftMode { get; set; } = TiltShiftFocus.Bands;
         public float TiltShiftTopRatio { get; set; } = 0.7f;    // top blur amount (0 = none … 1 = up to middle)
         public float TiltShiftBottomRatio { get; set; } = 0.7f; // bottom blur amount (0 = none … 1 = up to middle)
         public float TiltShiftStrength { get; set; } = 1f;
+        public float TiltShiftRadius { get; set; } = 0.3f;      // radial mode: size of the sharp circle around the player
 
         // --- Phase 4: Water + finishing ---
         public bool WaterEnabled { get; set; } = false;

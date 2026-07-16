@@ -365,6 +365,10 @@ namespace SDVRadiance
             fx.Parameters["TopEdge"]?.SetValue(MathHelper.Clamp(config.TiltShiftTopRatio, 0f, 1f) * 0.5f);
             fx.Parameters["BottomEdge"]?.SetValue(1f - MathHelper.Clamp(config.TiltShiftBottomRatio, 0f, 1f) * 0.5f);
             fx.Parameters["Strength"]?.SetValue(config.TiltShiftStrength);
+            fx.Parameters["Mode"]?.SetValue(config.TiltShiftMode == TiltShiftFocus.Radial ? 1f : 0f);
+            fx.Parameters["Center"]?.SetValue(PlayerScreenUV());
+            fx.Parameters["Aspect"]?.SetValue(dest.Height > 0 ? dest.Width / (float)dest.Height : 1f);
+            fx.Parameters["RadRadius"]?.SetValue(MathHelper.Clamp(config.TiltShiftRadius, 0.05f, 0.9f));
             fx.Parameters["BlurTexture"]?.SetValue(rtB);
             fx.CurrentTechnique = fx.Techniques["Composite"];
             DrawFull(sb, source, dest, fx);
@@ -505,6 +509,18 @@ namespace SDVRadiance
 
         private static Vector2 WorldOffset(int w, int h) =>
             new(Game1.viewport.X / (float)Math.Max(1, w), Game1.viewport.Y / (float)Math.Max(1, h));
+
+        /// <summary>The player's position in screen UV (0..1), for the radial tilt-shift focus.</summary>
+        private static Vector2 PlayerScreenUV()
+        {
+            if (Game1.player == null)
+                return new Vector2(0.5f, 0.5f);
+            Vector2 world = Game1.player.Position + new Vector2(32f, 32f); // sprite centre-ish
+            Vector2 local = Game1.GlobalToLocal(Game1.viewport, world);
+            int vw = Math.Max(1, Game1.viewport.Width);
+            int vh = Math.Max(1, Game1.viewport.Height);
+            return new Vector2(local.X / vw, local.Y / vh);
+        }
 
         /// <summary>Fog tint by time of day: neutral haze by day, warm at dusk, blue at night.</summary>
         private static Vector3 FogColor()
