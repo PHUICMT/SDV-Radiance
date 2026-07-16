@@ -422,22 +422,29 @@ namespace SDVRadiance
         private static void DrawBandedGradient(SpriteBatch b, Texture2D tex, Rectangle src, Vector2 feet,
             Vector2 baseOrigin, float alpha, float rot, Vector2 scale, float depth, float blur)
         {
-            for (int i = 0; i < NpcBands; i++)
+            // More bands for taller sprites so the gradient stays smooth (a 96px tree would
+            // show hard steps with only a handful of bands); fewer for small NPC sprites.
+            int bands = (int)MathHelper.Clamp(src.Height / 6f, 6f, 18f);
+            for (int i = 0; i < bands; i++)
             {
-                int y0 = src.Height * i / NpcBands;
-                int y1 = src.Height * (i + 1) / NpcBands;
+                int y0 = src.Height * i / bands;
+                int y1 = src.Height * (i + 1) / bands;
                 var band = new Rectangle(src.X, src.Y + y0, src.Width, y1 - y0);
                 // Origin so the (virtual) full-sprite ground-anchor row still maps to the feet position.
                 var origin = new Vector2(baseOrigin.X, baseOrigin.Y - y0);
-                float tBottom = (i + 0.5f) / NpcBands;           // 0 at the head band, 1 at the feet band
+                float tBottom = (i + 0.5f) / bands;              // 0 at the head band, 1 at the feet band
                 float ga = HeadFade + (1f - HeadFade) * (float)Math.Pow(tBottom, 1.8);
                 DrawSoft(b, Taps5, tex, band, feet, Color.Black, alpha * ga, rot, origin, scale, depth,
                     SpriteEffects.None, blur);
             }
         }
 
-        /// <summary>How far under the caster (in sort depth) the shadow sits. ~1px of Y equivalent.</summary>
-        private const float ShadowDepthBias = 1e-4f;
+        /// <summary>
+        /// How far under the caster (in sort depth) the shadow sits. The farmer draws many
+        /// sub-layers spanning a small depth range, so this must clear that whole range to keep
+        /// the shadow strictly BEHIND the sprite (else it shows over opaque body pixels).
+        /// </summary>
+        private const float ShadowDepthBias = 1.2e-3f;
 
         /// <summary>True if the caster stands on a water tile (avoid laying a shadow on the water surface).</summary>
         private static bool OnWater(GameLocation loc, Point tile)
