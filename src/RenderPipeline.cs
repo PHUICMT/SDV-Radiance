@@ -45,6 +45,17 @@ namespace SDVRadiance
         private int _frames, _applied, _skipNoTarget, _sizeChanges;
         private int _lastW = -1, _lastH = -1;
         private Vector2 _lightUV; // screen-UV of the light source god rays emanate from (set per frame)
+        private Vector2 _godRayUV; // eased light position so rays glide, not jump
+        private float _godRayAmount; // 0..1 eased presence so rays fade in/out instead of popping
+        private float _masterFade;              // 0..1 ease-in of the whole stack when it turns on
+
+        // Metered auto-exposure: average the scene each frame (downsampled to a
+        // tiny RT, read back a frame late so there's no GPU stall) and ease the
+        // exposure toward a target so bright scenes (sand/snow/rooms) dim smoothly.
+        private RenderTarget2D? _lumRT;
+        private Color[]? _lumBuf;
+        private bool _lumPrimed;
+        private float _meteredExposure = 1f;
 
         public RenderPipeline(GraphicsDevice device, IMonitor monitor, string modDir)
         {
@@ -116,7 +127,10 @@ namespace SDVRadiance
         public void Apply(SpriteBatch sb, ModConfig config)
         {
             if (!AnyEffectActive(config))
+            {
+                _masterFade = 0f; // reset so the stack fades back in next time it's enabled
                 return;
+            }
 
             if (config.DebugLogging) _frames++;
 
@@ -148,6 +162,10 @@ namespace SDVRadiance
                 sb.Draw(target, new Rectangle(0, 0, w, h), Color.White);
                 sb.End();
 
+                // Auto-exposure meters the captured scene and eases the exposure.
+                if (config.ColorGradeEnabled && config.ColorGradeAuto)
+                    UpdateAutoExposure(sb);
+
                 // Build the active stage list (fixed order), then run them ping-pong so
                 // the last stage writes straight back into the game's target.
                 bool outdoors = Game1.currentLocation?.IsOutdoors ?? false;
@@ -160,8 +178,16 @@ namespace SDVRadiance
                 // effects (bloom/grade) see the shadowed scene.
                 if (config.CloudShadowEnabled && _cloudShadow != null && outdoors) stages.Add(RenderCloudShadow);
                 // God rays only when there's a real light source on screen (lamp/torch/fire).
-                // Otherwise they'd just streak the player toward an imaginary sun.
-                if (config.GodRaysEnabled && _godRays != null && TryGetLightUV(out _lightUV)) stages.Add(RenderGodRays);
+                // Fade in/out (and glide the origin) so they never pop instantly when a
+                // light scrolls on/off screen.
+                if (config.GodRaysEnabled && _godRays != null)
+                {
+                    bool hasLight = TryGetLightUV(out Vector2 luv);
+                    if (hasLight)
+                        _godRayUV = _godRayAmount < 0.02f ? luv : Vector2.Lerp(_godRayUV, luv, 0.1f);
+                    _godRayAmount += ((hasLight ? 1f : 0f) - _godRayAmount) * 0.05f; // ~0.5s fade
+                    if (_godRayAmount > 0.01f) { _lightUV = _godRayUV; stages.Add(RenderGodRays); }
+                }
                 if (config.BloomEnabled && _bloom != null) stages.Add(RenderBloom);
                 // Fog is a weak, patchy effect indoors (and covers the black border), so outdoors only.
                 if (config.FogEnabled && _fog != null && outdoors) stages.Add(RenderFog);
@@ -179,6 +205,18 @@ namespace SDVRadiance
                         : (ReferenceEquals(current, _fullA) ? _fullB! : _fullA!);
                     stages[i](sb, current, dest, config);
                     current = dest;
+                }
+
+                // Ease the whole stack in: blend the untouched scene back over the
+                // result and let it fade out, so effects don't pop on when enabled
+                // or after a load. `current` is the game's target at this point.
+                _masterFade = Math.Min(1f, _masterFade + 0.045f);
+                if (_masterFade < 1f && stages.Count > 0)
+                {
+                    _device.SetRenderTarget(target);
+                    sb.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+                    sb.Draw(_sceneRT, new Rectangle(0, 0, w, h), Color.White * (1f - _masterFade));
+                    sb.End();
                 }
             }
             catch (Exception ex)
@@ -259,7 +297,7 @@ namespace SDVRadiance
             fx.CurrentTechnique = fx.Techniques["Rays"];
             Pass(sb, rtA, rtB, fx);
 
-            fx.Parameters["Intensity"]?.SetValue(config.GodRaysIntensity);
+            fx.Parameters["Intensity"]?.SetValue(config.GodRaysIntensity * _godRayAmount);
             fx.Parameters["RaysTexture"]?.SetValue(rtB);
             fx.CurrentTechnique = fx.Techniques["Composite"];
             DrawFull(sb, source, dest, fx);
@@ -343,11 +381,14 @@ namespace SDVRadiance
                 temp += autoTemp;
                 sat *= autoSatMul;
             }
+
+            // _meteredExposure is measured & eased per frame in UpdateAutoExposure
+            // (1.0 when auto is off), so bright scenes dim smoothly with no pop.
             fx.Parameters["Strength"]?.SetValue(MathHelper.Clamp(config.ColorGradeStrength, 0f, 1f));
             fx.Parameters["Contrast"]?.SetValue(config.ColorGradeContrast);
             fx.Parameters["Saturation"]?.SetValue(sat);
             fx.Parameters["Temperature"]?.SetValue(MathHelper.Clamp(temp, -1f, 1f));
-            fx.Parameters["Brightness"]?.SetValue(config.ColorGradeBrightness);
+            fx.Parameters["Brightness"]?.SetValue(config.ColorGradeBrightness * _meteredExposure);
             fx.Parameters["ToneMap"]?.SetValue(config.ColorGradeToneMap ? 1f : 0f);
             fx.CurrentTechnique = fx.Techniques["ColorGrade"];
             DrawFull(sb, source, dest, fx);
@@ -492,6 +533,38 @@ namespace SDVRadiance
             else if (Game1.season == Season.Summer) temp += 0.05f;
         }
 
+        /// <summary>
+        /// Measure the average scene luminance (downsampled to a tiny RT, read a
+        /// frame late to avoid a GPU stall) and ease the exposure toward a target
+        /// so bright scenes dim smoothly instead of popping. No-op unless auto is on.
+        /// </summary>
+        private void UpdateAutoExposure(SpriteBatch sb)
+        {
+            _lumRT ??= new RenderTarget2D(_device, 32, 32, false, SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
+            _lumBuf ??= new Color[32 * 32];
+
+            if (_lumPrimed)
+            {
+                _lumRT.GetData(_lumBuf);
+                float sum = 0f;
+                for (int i = 0; i < _lumBuf.Length; i++)
+                {
+                    Color c = _lumBuf[i];
+                    sum += (0.2126f * c.R + 0.7152f * c.G + 0.0722f * c.B) / 255f;
+                }
+                float lum = sum / _lumBuf.Length;
+                // key/lum > 1 brightens, < 1 dims; clamp so it only gently corrects.
+                float target = MathHelper.Clamp(0.5f / Math.Max(lum, 0.05f), 0.7f, 1.15f);
+                _meteredExposure += (target - _meteredExposure) * 0.04f; // ~0.7s ease
+            }
+
+            _device.SetRenderTarget(_lumRT);
+            sb.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp);
+            sb.Draw(_sceneRT, new Rectangle(0, 0, 32, 32), Color.White);
+            sb.End();
+            _lumPrimed = true;
+        }
+
         /// <summary>0 = still water (pond/river/farm), 1 = ocean/beach (big directional swell).</summary>
         private static float WaterKind()
         {
@@ -532,11 +605,11 @@ namespace SDVRadiance
 
         public void Dispose()
         {
-            _sceneRT?.Dispose(); _fullA?.Dispose(); _fullB?.Dispose(); _rtA?.Dispose(); _rtB?.Dispose(); _waterMask?.Dispose();
+            _sceneRT?.Dispose(); _fullA?.Dispose(); _fullB?.Dispose(); _rtA?.Dispose(); _rtB?.Dispose(); _waterMask?.Dispose(); _lumRT?.Dispose();
             _bloom?.Dispose(); _colorGrade?.Dispose(); _godRays?.Dispose(); _fog?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
             _water?.Dispose(); _finishing?.Dispose();
             _sceneRT = _fullA = _fullB = _rtA = _rtB = null;
-            _waterMask = null;
+            _waterMask = null; _lumRT = null;
             _bloom = _colorGrade = _godRays = _fog = _cloudShadow = _tiltShift = _water = _finishing = null;
         }
     }

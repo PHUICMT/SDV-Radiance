@@ -1,10 +1,10 @@
 //=============================================================================
 // water.fx  —  SDV-Radiance Phase 4
-// Gentle refraction ripple + specular sparkle applied ONLY to water tiles.
-// A per-tile mask (built on the CPU from GameLocation.isWaterTile and aligned
-// to the viewport) tells the shader which pixels are water, so nothing else in
-// the frame is distorted. The game already animates the water texture, so this
-// is deliberately subtle and layers on top.
+// Ripple + specular sparkle applied ONLY to water tiles. A per-tile mask (built
+// on the CPU from GameLocation.isWaterTile and aligned to the viewport) tells
+// the shader which pixels are water, refined by a blue-dominance test so banks
+// and rocks inside a water tile stay untouched. The game keeps driving the
+// water's own vertical scroll; this layers smooth surface detail on top.
 // Target: MonoGame OpenGL (Shader Model 3.0), used as a SpriteBatch effect.
 //=============================================================================
 
@@ -52,8 +52,8 @@ float4 WaterPS(PixelInput input) : SV_TARGET
 {
     float2 uv = input.UV;
 
-    // Continuous world-tile coordinate of this pixel (locks the shimmer to the
-    // water surface as the camera pans, instead of swimming across the screen).
+    // Continuous world-tile coordinate (locks the shimmer to the water surface
+    // as the camera pans, instead of swimming across the screen).
     float2 worldTile = uv * TilesPerScreen + WorldTileOffset;
 
     // Point-sample the per-tile mask so the tile grid never bleeds onto land.
@@ -66,17 +66,15 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         return src;
 
     // Refine to the ACTUAL water pixels: the game draws curved banks / rocks
-    // inside the square water tiles, so gate on blue-dominant color. This fades
-    // the effect off the dirt & rock edges so only the real water ripples.
+    // inside the square water tiles, so gate on blue-dominant color.
     float blueness = saturate((src.b - src.r) * 3.0) * saturate((src.b - src.g) * 3.0 + 0.35);
     float water = tileWater * blueness;
     if (water <= 0.002)
         return src;
 
-    // Refraction in WORLD space so the ripple travels with the water. Two
-    // profiles blended by WaterKind:
+    // Refraction in WORLD space so the ripple travels with the water:
     //  - pond: fine crossing ripples, small & quick (still surface).
-    //  - ocean: long directional swell rolling toward shore, big & slow.
+    //  - ocean: long directional swell, bigger & slower.
     float t = Time * Speed;
     float pwx = sin(worldTile.y * 6.3 + t * 6.0) + 0.5 * sin(worldTile.x * 4.1 - t * 4.0);
     float pwy = cos(worldTile.x * 5.7 - t * 5.0) + 0.5 * cos(worldTile.y * 4.7 + t * 3.5);
@@ -86,16 +84,15 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float2 oceanRipple = float2(swell * 0.25, swell) * (Strength * 0.006);
 
     float2 ripple = lerp(pondRipple, oceanRipple, WaterKind) * water;
-
     float4 col = tex2D(SourceSampler, uv + ripple);
 
-    // Depth tint: cool + deepen the water for a wetter, more 3D surface.
+    // Depth tint: cool + deepen for a wetter, more 3D surface.
     float3 tint = col.rgb * float3(0.90, 0.97, 1.12);
     col.rgb = lerp(col.rgb, tint, 0.35 * water);
 
-    // Random drifting glints: split the water into cells with ONE soft glint
-    // each, at a random spot that wanders slowly, gliding across the surface and
-    // fading gently in/out. Ocean glints are sparser, slower and drift more.
+    // Random drifting glints: one soft glint per cell at a random spot that
+    // wanders slowly and pulses smoothly (no hard twinkle). Ocean glints are
+    // sparser, slower and drift more.
     float sdens = lerp(5.0, 3.0, WaterKind);
     float spulse = lerp(1.1, 0.55, WaterKind);
     float sdrift = lerp(0.05, 0.12, WaterKind);
@@ -107,7 +104,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float2 center = float2(r1, r2) + 0.18 * float2(sin(t * 0.7 + r1 * 6.2831853),
                                                    cos(t * 0.6 + r2 * 6.2831853));
     float d = length(f - center);
-    float pulse = 0.5 + 0.5 * sin(t * spulse + r1 * 6.2831853); // 0..1, no hard edges
+    float pulse = 0.5 + 0.5 * sin(t * spulse + r1 * 6.2831853);
     float glint = smoothstep(0.24, 0.0, d) * pulse;
     col.rgb += glint * Sparkle * water;
 

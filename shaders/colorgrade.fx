@@ -55,6 +55,12 @@ float4 GradePS(PixelInput input) : SV_TARGET
     // Temperature: warm boosts red / cuts blue (channel gains, in linear).
     lin *= float3(1.0 + Temperature * 0.15, 1.0 + Temperature * 0.03, 1.0 - Temperature * 0.15);
 
+    // Highlight rolloff: gently compress only the values above a knee so bright
+    // areas (sand, snow, bloom) keep detail instead of clipping to flat white.
+    // Shadows and midtones are untouched, so it tames blowout without going muddy.
+    float3 over = max(lin - 0.65, 0.0);
+    lin = min(lin, 0.65) + over / (1.0 + over * 0.9);
+
     // Optional filmic tone map — only useful once exposure pushes values >1.
     // (The SDV frame is already LDR, so this is off by default to avoid a muddy
     // double tone-map.)

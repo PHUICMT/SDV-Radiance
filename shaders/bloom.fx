@@ -101,13 +101,16 @@ float4 BlurVerticalPS(PixelInput input) : SV_TARGET
 }
 
 //-----------------------------------------------------------------------------
-// Composite: original scene + Intensity * blurred bloom.
+// Composite: screen-blend the blurred bloom over the scene. Screen (rather than
+// plain additive) asymptotes toward white instead of piling past it, so bright
+// areas glow without blowing out into a flat white blob (e.g. indoors).
 //-----------------------------------------------------------------------------
 float4 CompositePS(PixelInput input) : SV_TARGET
 {
     float4 scene = tex2D(SourceSampler, input.UV);
-    float3 bloom = tex2D(BloomSampler, input.UV).rgb;
-    return float4(scene.rgb + bloom * Intensity, scene.a);
+    float3 bloom = saturate(tex2D(BloomSampler, input.UV).rgb * Intensity);
+    float3 result = 1.0 - (1.0 - scene.rgb) * (1.0 - bloom);
+    return float4(result, scene.a);
 }
 
 technique BrightPass    { pass P0 { PixelShader = compile PS_SHADERMODEL BrightPassPS(); } }

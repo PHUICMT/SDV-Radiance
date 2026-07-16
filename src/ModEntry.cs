@@ -26,6 +26,15 @@ namespace SDVRadiance
         /// </summary>
         internal static bool ForceBufferDraw;
 
+        /// <summary>
+        /// When true, the game's jerky water FRAME-cycle (waterAnimationIndex, a
+        /// ~5fps 10-frame gif) is pinned so our shader ripple supplies the surface
+        /// motion. The smooth 1px vertical scroll (waterPosition) is left running.
+        /// </summary>
+        internal static bool FreezeGameWater;
+        private static IMonitor? SMonitor;
+        private static bool _loggedFreeze;
+
         /// <summary>True only when the mod is on AND at least one implemented effect is switched on.</summary>
         private bool EffectsActive => _config.Enabled &&
             (_config.BloomEnabled || _config.ColorGradeEnabled || _config.GodRaysEnabled
@@ -35,7 +44,9 @@ namespace SDVRadiance
         public override void Entry(IModHelper helper)
         {
             _config = helper.ReadConfig<ModConfig>();
+            SMonitor = this.Monitor;
             ForceBufferDraw = EffectsActive;
+            FreezeGameWater = _config.Enabled && _config.WaterEnabled;
 
             helper.Events.GameLoop.GameLaunched += OnGameLaunched;
             helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
@@ -46,6 +57,9 @@ namespace SDVRadiance
             harmony.Patch(
                 original: AccessTools.Method(typeof(Game1), nameof(Game1.ShouldDrawOnBuffer)),
                 postfix: new HarmonyMethod(typeof(ModEntry), nameof(ShouldDrawOnBuffer_Postfix)));
+            harmony.Patch(
+                original: AccessTools.Method(typeof(GameLocation), nameof(GameLocation.updateWater)),
+                postfix: new HarmonyMethod(typeof(ModEntry), nameof(UpdateWater_Postfix)));
 
             this.Monitor.Log("SDV-Radiance loaded (world post-processing via RenderedWorld).", LogLevel.Info);
         }
@@ -69,10 +83,24 @@ namespace SDVRadiance
                 __result = true;
         }
 
+        /// <summary>
+        /// Pin the game's jerky water frame-cycle (waterAnimationIndex) while our
+        /// ripple is active. waterPosition (the smooth 1px vertical scroll) is left
+        /// running so the water still gently rises and falls.
+        /// </summary>
+        private static void UpdateWater_Postfix(GameLocation __instance)
+        {
+            if (!FreezeGameWater)
+                return;
+            __instance.waterAnimationIndex = 0;
+            if (!_loggedFreeze) { SMonitor?.Log("Water frame-cycle frozen (shader ripple active); vertical scroll left running.", LogLevel.Info); _loggedFreeze = true; }
+        }
+
         /// <summary>Apply the effect chain to the world layer after the game has drawn it.</summary>
         private void OnRenderedWorld(object? sender, RenderedWorldEventArgs e)
         {
             ForceBufferDraw = EffectsActive; // self-heal: keep the postfix in sync with live config
+            FreezeGameWater = _config.Enabled && _config.WaterEnabled;
             if (!EffectsActive)
                 return;
             Pipeline.Apply(e.SpriteBatch, _config);
