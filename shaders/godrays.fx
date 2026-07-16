@@ -26,6 +26,8 @@ sampler2D RaysSampler = sampler_state
 
 float Threshold;    // brightness cutoff for the light source
 float2 LightPos;    // light position in screen UV (may be off-screen)
+float LightRadius;  // UV radius around LightPos within which bright pixels may streak
+float Aspect;       // viewport w/h, to make the radius circular in UV space
 float Density;      // how far along the ray to march (0..1)
 float Decay;        // per-step falloff
 float Weight;       // per-step weight
@@ -41,12 +43,20 @@ struct PixelInput
     float2 UV       : TEXCOORD0;
 };
 
-// Keep only bright areas (the "light") — these are what streak.
+// Keep only bright areas NEAR the real light source — these are what streak. Gating
+// to a disk around LightPos stops distant bright scenery (flowers, pale hair, snow)
+// from smearing rays toward the light.
 float4 BrightPS(PixelInput input) : SV_TARGET
 {
     float3 c = tex2D(SourceSampler, input.UV).rgb;
     float lum = dot(c, LUMA);
     float mask = smoothstep(Threshold, Threshold + 0.1, lum);
+
+    float2 d = input.UV - LightPos;
+    d.x *= Aspect;                                   // circular in pixel space
+    float within = 1.0 - smoothstep(LightRadius * 0.65, LightRadius, length(d));
+    mask *= within;
+
     return float4(c * mask, 1.0);
 }
 

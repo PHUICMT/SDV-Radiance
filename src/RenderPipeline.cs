@@ -58,6 +58,7 @@ namespace SDVRadiance
         private int _lastW = -1, _lastH = -1;
         private Vector2 _lightUV; // screen-UV of the light source god rays emanate from (set per frame)
         private Vector2 _godRayUV; // eased light position so rays glide, not jump
+        private float _godRayRadiusUV = 0.25f; // eased light radius (UV) — rays only form near the real light
         private float _godRayAmount; // 0..1 eased presence so rays fade in/out instead of popping
         private float _masterFade;              // 0..1 ease-in of the whole stack when it turns on
 
@@ -204,9 +205,12 @@ namespace SDVRadiance
                 // light scrolls on/off screen.
                 if (config.GodRaysEnabled && _godRays != null)
                 {
-                    bool hasLight = TryGetLightUV(out Vector2 luv);
+                    bool hasLight = TryGetLightUV(out Vector2 luv, out float lr);
                     if (hasLight)
+                    {
                         _godRayUV = _godRayAmount < 0.02f ? luv : Vector2.Lerp(_godRayUV, luv, 0.1f);
+                        _godRayRadiusUV = _godRayAmount < 0.02f ? lr : MathHelper.Lerp(_godRayRadiusUV, lr, 0.1f);
+                    }
                     _godRayAmount += ((hasLight ? 1f : 0f) - _godRayAmount) * 0.05f; // ~0.5s fade
                     if (_godRayAmount > 0.01f) { _lightUV = _godRayUV; stages.Add(RenderGodRays); }
                 }
@@ -308,7 +312,14 @@ namespace SDVRadiance
             // so they stay anchored to the scene as the camera pans).
             var lightPos = _lightUV;
 
+            float aspect = Game1.viewport.Width / (float)Math.Max(1, Game1.viewport.Height);
+
+            // Bright pass is GATED to a disk around the real light, so only pixels near THIS
+            // light streak into rays — distant bright scenery (flowers, white hair) no longer does.
             fx.Parameters["Threshold"]?.SetValue(config.GodRaysThreshold);
+            fx.Parameters["LightPos"]?.SetValue(lightPos);
+            fx.Parameters["LightRadius"]?.SetValue(_godRayRadiusUV);
+            fx.Parameters["Aspect"]?.SetValue(aspect);
             fx.CurrentTechnique = fx.Techniques["Bright"];
             Pass(sb, source, rtA, fx);
 
@@ -668,10 +679,11 @@ namespace SDVRadiance
 
         private static float Time() => Game1.ticks / 60f;
 
-        /// <summary>Screen-UV of the largest-radius light source currently on screen, if any.</summary>
-        private static bool TryGetLightUV(out Vector2 uv)
+        /// <summary>Screen-UV + UV-radius of the largest-radius real light source currently on screen, if any.</summary>
+        private static bool TryGetLightUV(out Vector2 uv, out float radiusUV)
         {
             uv = Vector2.Zero;
+            radiusUV = 0.25f;
             var lights = Game1.currentLightSources;
             if (lights == null || lights.Count == 0)
                 return false;
@@ -690,7 +702,15 @@ namespace SDVRadiance
                     continue; // off-screen
 
                 float r = ls.radius.Value;
-                if (r > best) { best = r; uv = new Vector2(u, v); }
+                if (r > best)
+                {
+                    best = r;
+                    uv = new Vector2(u, v);
+                    // radius.Value is ~tiles; on-screen glow ≈ radius*64px. Give the rays a little
+                    // more reach than the glow, so only pixels near THIS light streak (not distant
+                    // bright scenery like flowers/white hair).
+                    radiusUV = MathHelper.Clamp(r * 64f * 2.2f / vh, 0.12f, 0.6f);
+                }
             }
             return best > 0f;
         }
