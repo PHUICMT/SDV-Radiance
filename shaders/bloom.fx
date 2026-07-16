@@ -43,15 +43,34 @@ struct PixelInput
 static const int   TAPS = 5;
 static const float W[5] = { 0.227027, 0.194595, 0.121622, 0.054054, 0.016216 };
 
+static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
+
 //-----------------------------------------------------------------------------
-// Bright pass: keep only pixels brighter than Threshold (soft knee).
+// Bright pass (also downsamples full-res -> half-res).
+//
+// Uses a 4-tap bilinear box with a Karis average (weight each tap by
+// 1/(1+luma)) so a lone very-bright pixel can't dominate its output texel.
+// This is what stops bloom "fireflies" from pulsing as the camera scrolls
+// and bright pixel-art highlights cross texel boundaries. TexelSize is set to
+// the SOURCE (full-res) texel size by the pipeline before this pass runs.
 //-----------------------------------------------------------------------------
 float4 BrightPassPS(PixelInput input) : SV_TARGET
 {
-    float4 c = tex2D(SourceSampler, input.UV);
-    float lum = dot(c.rgb, float3(0.2126, 0.7152, 0.0722));
-    float knee = smoothstep(Threshold, Threshold + 0.15, lum);
-    return float4(c.rgb * knee, 1.0);
+    float2 t = TexelSize;
+    float3 s0 = tex2D(SourceSampler, input.UV + float2(-t.x, -t.y)).rgb;
+    float3 s1 = tex2D(SourceSampler, input.UV + float2( t.x, -t.y)).rgb;
+    float3 s2 = tex2D(SourceSampler, input.UV + float2(-t.x,  t.y)).rgb;
+    float3 s3 = tex2D(SourceSampler, input.UV + float2( t.x,  t.y)).rgb;
+
+    float w0 = 1.0 / (1.0 + dot(s0, LUMA));
+    float w1 = 1.0 / (1.0 + dot(s1, LUMA));
+    float w2 = 1.0 / (1.0 + dot(s2, LUMA));
+    float w3 = 1.0 / (1.0 + dot(s3, LUMA));
+    float3 c = (s0 * w0 + s1 * w1 + s2 * w2 + s3 * w3) / (w0 + w1 + w2 + w3);
+
+    float lum = dot(c, LUMA);
+    float knee = smoothstep(Threshold, Threshold + 0.25, lum);
+    return float4(c * knee, 1.0);
 }
 
 //-----------------------------------------------------------------------------

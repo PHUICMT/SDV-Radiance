@@ -31,7 +31,18 @@
   "config.vignette.enabled.tooltip": "หรี่ขอบจอให้ได้อารมณ์แบบภาพยนตร์",
   "config.vignette.strength.name": "ความเข้ม vignette",
 
+  "config.section.camera": "กล้อง",
+  "config.camera.mode.name": "โหมดกล้อง",
+  "config.camera.mode.tooltip": "Off = แบบเดิม (snap). Smooth = ไถลตามตอนเดิน แล้วเข้าที่เร็วตอนหยุด",
+  "config.camera.mode.off": "ปิด (แบบเดิม)",
+  "config.camera.mode.smooth": "กล้องนุ่ม",
+  "config.smoothcam.speed.name": "ความเร็วตามกล้อง",
+  "config.smoothcam.speed.tooltip": "ใช้กับโหมดนุ่มเท่านั้น กล้องไล่ตามตอนเดินเร็วแค่ไหน ยิ่งต่ำ = ยิ่งนุ่ม/หน่วงตาม; 1.0 = ทันที",
+
   "config.section.debug": "การวินิจฉัย",
   "config.debug.name": "บันทึก log สำหรับดีบัก",
-  "config.debug.tooltip": "บันทึกข้อมูล render pipeline ลงคอนโซล SMAPI เพื่อช่วยแก้ปัญหา"
+  "config.debug.tooltip": "บันทึกข้อมูล render pipeline ลงคอนโซล SMAPI เพื่อช่วยแก้ปัญหา",
+
+  "config.section.wip": "เร็วๆ นี้ (กำลังพัฒนา)",
+  "config.wip.text": "เอฟเฟกต์เหล่านี้วางแผนไว้แล้วแต่ยังไม่ได้ทำ จึงยังไม่มีตัวตั้งค่าที่นี่:\n- ปรับโทนสีและหมอก / ลำแสง\n- เงาเมฆและ tilt-shift (เทียบเท่า DynamicShader)\n- ปรับปรุงน้ำ, vignette, chromatic aberration, depth of field\n- แสงไดนามิก 2D พร้อมเงานุ่ม\n- อัปสเกลเท็กซ์เจอร์คุณภาพสูง\nแต่ละเอฟเฟกต์จะมีตัวเลือกของตัวเองเมื่อพร้อมใช้งาน"
 }

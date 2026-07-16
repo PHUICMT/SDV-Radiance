@@ -7,10 +7,18 @@ using StardewModdingAPI;
 namespace SDVRadiance
 {
     /// <summary>
-    /// Owns the offscreen render targets and the effect chain. Captures the whole
-    /// frame into <see cref="_sceneRT"/>, runs the enabled post-processing passes,
-    /// then blits the result to the back buffer. If no effect is active (or the
-    /// shader failed to load) it falls back to a straight passthrough blit.
+    /// Runs the post-processing effect chain on the game's own render target.
+    ///
+    /// Unlike a naive "bind my own RenderTarget in Display.Rendering" approach
+    /// (which clobbers Stardew's internal layer buffers — Game1.screen / the
+    /// lightmap — and renders the world black), this captures whatever target
+    /// the game currently has bound (<c>GraphicsDevice.GetRenderTargets()[0]</c>),
+    /// copies it into a scratch buffer, then draws it back into that SAME target
+    /// through the effect. Nothing the game owns is rebound or cleared.
+    ///
+    /// Called from <see cref="StardewModdingAPI.Events.IDisplayEvents.RenderedWorld"/>,
+    /// so effects apply to the world layer only (the HUD is drawn afterwards and
+    /// is left untouched — you don't want bloom on the UI).
     /// </summary>
     internal sealed class RenderPipeline : IDisposable
     {
@@ -18,21 +26,22 @@ namespace SDVRadiance
         private readonly GraphicsDevice _device;
         private readonly string _modDir;
 
-        private SpriteBatch _batch;
-        private RenderTarget2D? _sceneRT;   // full-res captured frame
+        private RenderTarget2D? _sceneRT;   // full-res copy of the captured frame
         private RenderTarget2D? _rtA;       // half-res scratch
         private RenderTarget2D? _rtB;       // half-res scratch
         private Effect? _bloom;
 
-        private bool _capturing;
         private bool _loggedOnce;
+
+        // Diagnostics (only touched when DebugLogging is on).
+        private int _frames, _applied, _skipNoTarget, _sizeChanges;
+        private int _lastW = -1, _lastH = -1;
 
         public RenderPipeline(GraphicsDevice device, IMonitor monitor, string modDir)
         {
             _device = device;
             _monitor = monitor;
             _modDir = modDir;
-            _batch = new SpriteBatch(device);
             LoadEffects();
         }
 
@@ -60,111 +69,158 @@ namespace SDVRadiance
 
         public bool BloomAvailable => _bloom != null;
 
-        private void EnsureTargets()
+        /// <summary>True when at least one implemented effect is switched on.</summary>
+        private static bool AnyEffectActive(ModConfig config) =>
+            config.BloomEnabled;
+
+        private void EnsureTargets(int w, int h, SurfaceFormat format)
         {
-            PresentationParameters pp = _device.PresentationParameters;
-            int w = Math.Max(1, pp.BackBufferWidth);
-            int h = Math.Max(1, pp.BackBufferHeight);
+            w = Math.Max(1, w);
+            h = Math.Max(1, h);
 
-            if (_sceneRT == null || _sceneRT.Width != w || _sceneRT.Height != h)
-            {
-                _sceneRT?.Dispose();
-                _rtA?.Dispose();
-                _rtB?.Dispose();
+            if (_sceneRT != null && _sceneRT.Width == w && _sceneRT.Height == h && _sceneRT.Format == format)
+                return;
 
-                _sceneRT = new RenderTarget2D(_device, w, h, false,
-                    pp.BackBufferFormat, pp.DepthStencilFormat, 0, RenderTargetUsage.PreserveContents);
+            _sceneRT?.Dispose();
+            _rtA?.Dispose();
+            _rtB?.Dispose();
 
-                int hw = Math.Max(1, w / 2), hh = Math.Max(1, h / 2);
-                _rtA = new RenderTarget2D(_device, hw, hh, false, pp.BackBufferFormat, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
-                _rtB = new RenderTarget2D(_device, hw, hh, false, pp.BackBufferFormat, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
-            }
+            _sceneRT = new RenderTarget2D(_device, w, h, false, format, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
+
+            int hw = Math.Max(1, w / 2), hh = Math.Max(1, h / 2);
+            _rtA = new RenderTarget2D(_device, hw, hh, false, format, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
+            _rtB = new RenderTarget2D(_device, hw, hh, false, format, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
         }
 
-        /// <summary>Redirect the game's rendering into our offscreen scene target.</summary>
-        public void BeginCapture(bool debugLog)
+        /// <summary>
+        /// Post-process the current world layer in place.
+        /// <paramref name="sb"/> is SMAPI's open sprite batch for the event; we flush it,
+        /// run our passes, then reopen it with SMAPI's own parameters so SMAPI's trailing
+        /// <c>End()</c> stays balanced.
+        /// </summary>
+        public void Apply(SpriteBatch sb, ModConfig config)
         {
-            try
-            {
-                EnsureTargets();
-                _device.SetRenderTarget(_sceneRT);
-                _device.Clear(Color.Black);
-                _capturing = true;
+            if (!AnyEffectActive(config) || _bloom == null)
+                return;
 
-                if (debugLog && !_loggedOnce)
+            if (config.DebugLogging)
+                _frames++;
+
+            RenderTargetBinding[] bindings = _device.GetRenderTargets();
+            if (bindings.Length == 0 || bindings[0].RenderTarget is not RenderTarget2D target)
+            {
+                if (config.DebugLogging)
                 {
-                    _monitor.Log($"Capture {_sceneRT!.Width}x{_sceneRT.Height}, bloom={(_bloom != null ? "loaded" : "off")}.", LogLevel.Debug);
+                    _skipNoTarget++;
+                    MaybeLogDiag(config);
+                }
+                return; // drawing straight to the back buffer — nothing safe to capture this frame
+            }
+
+            int w = target.Width, h = target.Height;
+            EnsureTargets(w, h, target.Format);
+
+            if (config.DebugLogging)
+            {
+                _applied++;
+                if (w != _lastW || h != _lastH)
+                {
+                    if (_lastW != -1) _sizeChanges++;
+                    _lastW = w; _lastH = h;
+                }
+                if (!_loggedOnce)
+                {
+                    _monitor.Log($"Post-process {w}x{h} on world target, format={target.Format}.", LogLevel.Debug);
                     _loggedOnce = true;
                 }
+                MaybeLogDiag(config);
             }
-            catch (Exception ex)
-            {
-                _capturing = false;
-                _monitor.Log($"BeginCapture failed, skipping post-processing this frame: {ex.Message}", LogLevel.Warn);
-            }
-        }
 
-        /// <summary>Run the enabled effects and present to the back buffer.</summary>
-        public void EndCaptureAndPresent(ModConfig config)
-        {
-            if (!_capturing || _sceneRT == null)
-                return;
-            _capturing = false;
+            // Flush SMAPI's pending world draws into `target`.
+            sb.End();
 
             try
             {
-                bool doBloom = config.BloomEnabled && _bloom != null && _rtA != null && _rtB != null;
+                // 1) Copy the live world (target) into _sceneRT so we can sample it while
+                //    `target` is unbound.
+                _device.SetRenderTarget(_sceneRT);
+                sb.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
+                sb.Draw(target, new Rectangle(0, 0, w, h), Color.White);
+                sb.End();
 
-                if (doBloom)
-                    RenderBloom(config);
-                else
-                    Blit(_sceneRT, null, BlendState.Opaque, SamplerState.PointClamp, null);
+                if (config.BloomEnabled)
+                    RenderBloom(sb, target, config);
             }
             catch (Exception ex)
             {
-                _monitor.Log($"Present failed, falling back to passthrough: {ex.Message}", LogLevel.Warn);
-                try { Blit(_sceneRT, null, BlendState.Opaque, SamplerState.PointClamp, null); } catch { /* give up this frame */ }
+                _monitor.Log($"Post-process failed, leaving frame unmodified this frame: {ex.Message}", LogLevel.Warn);
+                // Best effort: make sure `target` still holds the original world.
+                try
+                {
+                    _device.SetRenderTarget(target);
+                    sb.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
+                    if (_sceneRT != null)
+                        sb.Draw(_sceneRT, new Rectangle(0, 0, w, h), Color.White);
+                    sb.End();
+                }
+                catch { /* give up on this frame */ }
             }
+
+            // Reopen the batch exactly as SMAPI had it, so its trailing End() is balanced.
+            sb.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
         }
 
-        private void RenderBloom(ModConfig config)
+        /// <summary>Every ~120 frames, log how consistently the effect actually applied (flicker diagnosis).</summary>
+        private void MaybeLogDiag(ModConfig config)
+        {
+            if (_frames < 120)
+                return;
+            _monitor.Log($"[diag] over {_frames} frames: applied={_applied}, skipped(no target)={_skipNoTarget}, sizeChanges={_sizeChanges}, lastSize={_lastW}x{_lastH}.", LogLevel.Debug);
+            _frames = _applied = _skipNoTarget = _sizeChanges = 0;
+        }
+
+        /// <summary>bright pass → H blur → V blur → additive composite back into <paramref name="target"/>.</summary>
+        private void RenderBloom(SpriteBatch sb, RenderTarget2D target, ModConfig config)
         {
             var bloom = _bloom!;
             var rtA = _rtA!;
             var rtB = _rtB!;
+            int w = target.Width, h = target.Height;
 
-            // 1) bright pass: scene (full) -> rtA (half)
+            // 1) bright pass + Karis downsample: scene (full) -> rtA (half).
+            //    TexelSize here is the SOURCE (full-res) texel, for the 4-tap box offsets.
             bloom.Parameters["Threshold"]?.SetValue(config.BloomThreshold);
+            bloom.Parameters["TexelSize"]?.SetValue(new Vector2(1f / w, 1f / h));
             bloom.CurrentTechnique = bloom.Techniques["BrightPass"];
-            Blit(_sceneRT!, rtA, BlendState.Opaque, SamplerState.LinearClamp, bloom);
+            Pass(sb, _sceneRT!, rtA, bloom);
 
             // 2) horizontal blur: rtA -> rtB
             bloom.Parameters["TexelSize"]?.SetValue(new Vector2(1f / rtA.Width, 0f));
             bloom.CurrentTechnique = bloom.Techniques["BlurHorizontal"];
-            Blit(rtA, rtB, BlendState.Opaque, SamplerState.LinearClamp, bloom);
+            Pass(sb, rtA, rtB, bloom);
 
             // 3) vertical blur: rtB -> rtA
             bloom.Parameters["TexelSize"]?.SetValue(new Vector2(0f, 1f / rtB.Height));
             bloom.CurrentTechnique = bloom.Techniques["BlurVertical"];
-            Blit(rtB, rtA, BlendState.Opaque, SamplerState.LinearClamp, bloom);
+            Pass(sb, rtB, rtA, bloom);
 
-            // 4) composite: scene + Intensity * blur(rtA) -> back buffer
+            // 4) composite: scene + Intensity * blur(rtA) -> back into the game's world target
             bloom.Parameters["Intensity"]?.SetValue(config.BloomIntensity);
             bloom.Parameters["BloomTexture"]?.SetValue(rtA);
             bloom.CurrentTechnique = bloom.Techniques["Composite"];
-            Blit(_sceneRT!, null, BlendState.Opaque, SamplerState.LinearClamp, bloom);
+            _device.SetRenderTarget(target);
+            sb.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone, bloom);
+            sb.Draw(_sceneRT!, new Rectangle(0, 0, w, h), Color.White);
+            sb.End();
         }
 
-        /// <summary>Draw <paramref name="source"/> onto <paramref name="dest"/> (null = back buffer) through an optional effect.</summary>
-        private void Blit(Texture2D source, RenderTarget2D? dest, BlendState blend, SamplerState sampler, Effect? effect)
+        /// <summary>Draw <paramref name="source"/> into <paramref name="dest"/> through <paramref name="effect"/>.</summary>
+        private void Pass(SpriteBatch sb, Texture2D source, RenderTarget2D dest, Effect effect)
         {
             _device.SetRenderTarget(dest);
-            int w = dest?.Width ?? _device.PresentationParameters.BackBufferWidth;
-            int h = dest?.Height ?? _device.PresentationParameters.BackBufferHeight;
-
-            _batch.Begin(SpriteSortMode.Immediate, blend, sampler, DepthStencilState.None, RasterizerState.CullNone, effect);
-            _batch.Draw(source, new Rectangle(0, 0, w, h), Color.White);
-            _batch.End();
+            sb.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone, effect);
+            sb.Draw(source, new Rectangle(0, 0, dest.Width, dest.Height), Color.White);
+            sb.End();
         }
 
         public void Dispose()
@@ -173,10 +229,8 @@ namespace SDVRadiance
             _rtA?.Dispose();
             _rtB?.Dispose();
             _bloom?.Dispose();
-            _batch?.Dispose();
             _sceneRT = _rtA = _rtB = null;
             _bloom = null;
-            _batch = null!;
         }
     }
 }

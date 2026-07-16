@@ -1,30 +1,49 @@
 using System;
+using HarmonyLib;
 using Microsoft.Xna.Framework.Graphics;
 using SDVRadiance.Integrations;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
+using StardewValley;
 
 namespace SDVRadiance
 {
     /// <summary>
-    /// Entry point. Phase 0: hooks the render pipeline and does a passthrough
-    /// capture/present to validate the flow, and registers a GMCM config that
-    /// exposes the (not-yet-implemented) effect toggles as scaffolding.
+    /// Entry point. Post-processes the world layer via SMAPI's RenderedWorld event,
+    /// capturing the game's own active render target (never binding our own), and
+    /// registers a GMCM config for the implemented effects.
     /// </summary>
     public sealed class ModEntry : Mod
     {
         private ModConfig _config = new();
         private RenderPipeline? _pipeline;
+        private readonly CameraSmoother _camera = new();
+
+        /// <summary>
+        /// Mirrors <see cref="ModConfig.Enabled"/> for the static Harmony postfix.
+        /// When true, the game is forced to render the world into its buffer
+        /// (Game1.screen) so we always have a target to capture during RenderedWorld.
+        /// </summary>
+        internal static bool ForceBufferDraw;
+
+        /// <summary>True only when the mod is on AND at least one implemented effect is switched on.</summary>
+        private bool EffectsActive => _config.Enabled && _config.BloomEnabled;
 
         public override void Entry(IModHelper helper)
         {
             _config = helper.ReadConfig<ModConfig>();
+            ForceBufferDraw = EffectsActive;
 
             helper.Events.GameLoop.GameLaunched += OnGameLaunched;
-            helper.Events.Display.Rendering += OnRendering;
-            helper.Events.Display.Rendered += OnRendered;
+            helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
+            helper.Events.Display.RenderedWorld += OnRenderedWorld;
 
-            this.Monitor.Log("SDV-Radiance loaded (Phase 0: pipeline skeleton, passthrough).", LogLevel.Info);
+            var harmony = new Harmony(this.ModManifest.UniqueID);
+            harmony.Patch(
+                original: AccessTools.Method(typeof(Game1), nameof(Game1.ShouldDrawOnBuffer)),
+                postfix: new HarmonyMethod(typeof(ModEntry), nameof(ShouldDrawOnBuffer_Postfix)));
+
+            this.Monitor.Log("SDV-Radiance loaded (world post-processing via RenderedWorld).", LogLevel.Info);
         }
 
         private RenderPipeline Pipeline
@@ -36,24 +55,28 @@ namespace SDVRadiance
             }
         }
 
-        // Convenience accessor; kept as a property so the null-forgiving stays local.
         private static GraphicsDevice Game1_GraphicsDevice =>
-            StardewValley.Game1.graphics.GraphicsDevice;
+            Game1.graphics.GraphicsDevice;
 
-        /// <summary>Redirect the frame into our offscreen target (before the game draws).</summary>
-        private void OnRendering(object? sender, RenderingEventArgs e)
+        /// <summary>Force the game to draw the world into its buffer so a render target is bound during graphics events.</summary>
+        private static void ShouldDrawOnBuffer_Postfix(ref bool __result)
         {
-            if (!_config.Enabled)
-                return;
-            Pipeline.BeginCapture(_config.DebugLogging);
+            if (ForceBufferDraw && Game1.gameMode == Game1.playingGameMode)
+                __result = true;
         }
 
-        /// <summary>Resolve the offscreen target back to the screen (after the game drew).</summary>
-        private void OnRendered(object? sender, RenderedEventArgs e)
+        /// <summary>Apply the effect chain to the world layer after the game has drawn it.</summary>
+        private void OnRenderedWorld(object? sender, RenderedWorldEventArgs e)
         {
-            if (!_config.Enabled)
+            ForceBufferDraw = EffectsActive; // self-heal: keep the postfix in sync with live config
+            if (!EffectsActive)
                 return;
-            Pipeline.EndCaptureAndPresent(_config);
+            Pipeline.Apply(e.SpriteBatch, _config);
+        }
+
+        private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
+        {
+            _camera.Update(_config);
         }
 
         private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
@@ -70,14 +93,18 @@ namespace SDVRadiance
                 return;
             }
 
-            void Save() => this.Helper.WriteConfig(_config);
+            void Save()
+            {
+                ForceBufferDraw = EffectsActive;
+                this.Helper.WriteConfig(_config);
+            }
 
-            api.Register(this.ModManifest, () => _config = new ModConfig(), Save);
+            api.Register(this.ModManifest, () => { _config = new ModConfig(); ForceBufferDraw = EffectsActive; }, Save);
 
             api.AddBoolOption(this.ModManifest, () => _config.Enabled, v => _config.Enabled = v,
                 () => I18n("config.enabled.name"), () => I18n("config.enabled.tooltip"));
 
-            // --- Bloom ---
+            // --- Bloom (implemented) ---
             api.AddSectionTitle(this.ModManifest, () => I18n("config.section.bloom"));
             api.AddBoolOption(this.ModManifest, () => _config.BloomEnabled, v => _config.BloomEnabled = v,
                 () => I18n("config.bloom.enabled.name"), () => I18n("config.bloom.enabled.tooltip"));
@@ -86,41 +113,25 @@ namespace SDVRadiance
             api.AddNumberOption(this.ModManifest, () => _config.BloomIntensity, v => _config.BloomIntensity = v,
                 () => I18n("config.bloom.intensity.name"), null, 0f, 2f, 0.05f);
 
-            // --- Color grade + fog ---
-            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.colorfog"));
-            api.AddBoolOption(this.ModManifest, () => _config.ColorGradeEnabled, v => _config.ColorGradeEnabled = v,
-                () => I18n("config.colorgrade.enabled.name"), () => I18n("config.colorgrade.enabled.tooltip"));
-            api.AddNumberOption(this.ModManifest, () => _config.ColorGradeStrength, v => _config.ColorGradeStrength = v,
-                () => I18n("config.colorgrade.strength.name"), null, 0f, 1f, 0.05f);
-            api.AddBoolOption(this.ModManifest, () => _config.FogEnabled, v => _config.FogEnabled = v,
-                () => I18n("config.fog.enabled.name"), () => I18n("config.fog.enabled.tooltip"));
-            api.AddNumberOption(this.ModManifest, () => _config.FogDensity, v => _config.FogDensity = v,
-                () => I18n("config.fog.density.name"), null, 0f, 1f, 0.05f);
-
-            // --- DynamicShader parity ---
-            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.shadows"));
-            api.AddBoolOption(this.ModManifest, () => _config.CloudShadowEnabled, v => _config.CloudShadowEnabled = v,
-                () => I18n("config.cloudshadow.enabled.name"), () => I18n("config.cloudshadow.enabled.tooltip"));
-            api.AddNumberOption(this.ModManifest, () => _config.CloudShadowCount, v => _config.CloudShadowCount = v,
-                () => I18n("config.cloudshadow.count.name"), null, 1, 8, 1);
-            api.AddNumberOption(this.ModManifest, () => _config.CloudShadowOpacity, v => _config.CloudShadowOpacity = v,
-                () => I18n("config.cloudshadow.opacity.name"), null, 0f, 1f, 0.05f);
-            api.AddBoolOption(this.ModManifest, () => _config.TiltShiftEnabled, v => _config.TiltShiftEnabled = v,
-                () => I18n("config.tiltshift.enabled.name"), () => I18n("config.tiltshift.enabled.tooltip"));
-
-            // --- Water + finishing ---
-            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.finishing"));
-            api.AddBoolOption(this.ModManifest, () => _config.WaterEnabled, v => _config.WaterEnabled = v,
-                () => I18n("config.water.enabled.name"), () => I18n("config.water.enabled.tooltip"));
-            api.AddBoolOption(this.ModManifest, () => _config.VignetteEnabled, v => _config.VignetteEnabled = v,
-                () => I18n("config.vignette.enabled.name"), () => I18n("config.vignette.enabled.tooltip"));
-            api.AddNumberOption(this.ModManifest, () => _config.VignetteStrength, v => _config.VignetteStrength = v,
-                () => I18n("config.vignette.strength.name"), null, 0f, 1f, 0.05f);
+            // --- Camera (implemented) ---
+            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.camera"));
+            api.AddTextOption(this.ModManifest,
+                () => _config.CameraMode.ToString(),
+                v => _config.CameraMode = Enum.TryParse<CameraMode>(v, out var m) ? m : CameraMode.Off,
+                () => I18n("config.camera.mode.name"), () => I18n("config.camera.mode.tooltip"),
+                new[] { nameof(CameraMode.Off), nameof(CameraMode.Smooth) },
+                v => I18n($"config.camera.mode.{v.ToLowerInvariant()}"));
+            api.AddNumberOption(this.ModManifest, () => _config.CameraFollowSpeed, v => _config.CameraFollowSpeed = v,
+                () => I18n("config.smoothcam.speed.name"), () => I18n("config.smoothcam.speed.tooltip"), 0.05f, 1f, 0.05f);
 
             // --- Diagnostics ---
             api.AddSectionTitle(this.ModManifest, () => I18n("config.section.debug"));
             api.AddBoolOption(this.ModManifest, () => _config.DebugLogging, v => _config.DebugLogging = v,
                 () => I18n("config.debug.name"), () => I18n("config.debug.tooltip"));
+
+            // --- Not yet implemented: shown as a roadmap so options don't imply working features ---
+            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.wip"));
+            api.AddParagraph(this.ModManifest, () => I18n("config.wip.text"));
         }
 
         private string I18n(string key) => this.Helper.Translation.Get(key);

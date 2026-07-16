@@ -1,5 +1,12 @@
 namespace SDVRadiance
 {
+    /// <summary>Camera behaviour. Supersample2x is reserved for a future phase.</summary>
+    public enum CameraMode
+    {
+        Off,
+        Smooth
+    }
+
     /// <summary>
     /// User-facing configuration. Serialized to config.json and edited via GMCM.
     /// Phase 0 only wires up the master switch + the effect toggles as scaffolding;
@@ -36,6 +43,12 @@ namespace SDVRadiance
         public bool WaterEnabled { get; set; } = false;
         public bool VignetteEnabled { get; set; } = false;
         public float VignetteStrength { get; set; } = 0.25f;
+
+        // --- Camera (independent of the post-processing pipeline) ---
+        /// <summary>Which camera behaviour to use. Off = vanilla snap.</summary>
+        public CameraMode CameraMode { get; set; } = CameraMode.Off;
+        /// <summary>Per-tick follow factor while moving (0.05 = very smooth/laggy, 1.0 = instant). Smooth mode only.</summary>
+        public float CameraFollowSpeed { get; set; } = 0.3f;
 
         // --- Diagnostics ---
         /// <summary>Log per-frame pipeline info once, to help debug the render hook.</summary>

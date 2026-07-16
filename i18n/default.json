@@ -31,7 +31,18 @@
   "config.vignette.enabled.tooltip": "Darken the screen edges for a cinematic look.",
   "config.vignette.strength.name": "Vignette strength",
 
+  "config.section.camera": "Camera",
+  "config.camera.mode.name": "Camera mode",
+  "config.camera.mode.tooltip": "Off = vanilla snap. Smooth = ease toward the player while moving, snap crisply when you stop.",
+  "config.camera.mode.off": "Off (vanilla)",
+  "config.camera.mode.smooth": "Smooth follow",
+  "config.smoothcam.speed.name": "Follow speed",
+  "config.smoothcam.speed.tooltip": "Smooth mode only. How quickly the camera catches up while moving. Lower = smoother/more trailing; 1.0 = instant.",
+
   "config.section.debug": "Diagnostics",
   "config.debug.name": "Debug logging",
-  "config.debug.tooltip": "Log render-pipeline info to the SMAPI console to help troubleshoot."
+  "config.debug.tooltip": "Log render-pipeline info to the SMAPI console to help troubleshoot.",
+
+  "config.section.wip": "Coming soon (in development)",
+  "config.wip.text": "These effects are planned but not implemented yet, so they have no settings here:\n- Color grading & fog / god rays\n- Cloud shadows & tilt-shift (DynamicShader parity)\n- Water enhancement, vignette, chromatic aberration, depth of field\n- Dynamic 2D lighting with soft shadows\n- High-quality texture upscaling\nEach effect will get its own options as it lands."
 }
