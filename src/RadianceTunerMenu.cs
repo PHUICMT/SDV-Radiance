@@ -138,6 +138,20 @@ namespace SDVRadiance
             y += 44;
             _sliders.Add(new Slider(_t("tuner.fogdensity"), x, y, innerW, 0f, 1f, () => _config.FogDensity, v => _config.FogDensity = v)); y += 50;
 
+            y += 30; _sectionTitles.Add((_t("tuner.section.cloudshadow"), y - 28));
+            _toggles.Add(new Toggle(_t("tuner.cloudshadow"), new Rectangle(x, y, innerW, 38), () => _config.CloudShadowEnabled, v => _config.CloudShadowEnabled = v));
+            y += 44;
+            _sliders.Add(new Slider(_t("tuner.cloudopacity"), x, y, innerW, 0f, 0.7f, () => _config.CloudShadowOpacity, v => _config.CloudShadowOpacity = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.cloudcoverage"), x, y, innerW, 0.1f, 0.9f, () => _config.CloudShadowCoverage, v => _config.CloudShadowCoverage = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.cloudspeed"), x, y, innerW, 0f, 0.06f, () => _config.CloudShadowSpeed, v => _config.CloudShadowSpeed = v)); y += 50;
+
+            y += 30; _sectionTitles.Add((_t("tuner.section.tiltshift"), y - 28));
+            _toggles.Add(new Toggle(_t("tuner.tiltshift"), new Rectangle(x, y, innerW, 38), () => _config.TiltShiftEnabled, v => _config.TiltShiftEnabled = v));
+            y += 44;
+            _sliders.Add(new Slider(_t("tuner.tiltstrength"), x, y, innerW, 0f, 1f, () => _config.TiltShiftStrength, v => _config.TiltShiftStrength = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.tilttop"), x, y, innerW, 0f, 1f, () => _config.TiltShiftTopRatio, v => _config.TiltShiftTopRatio = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.tiltbottom"), x, y, innerW, 0f, 1f, () => _config.TiltShiftBottomRatio, v => _config.TiltShiftBottomRatio = v)); y += 50;
+
             int contentHeight = y - cy0;
             int maxH = vh - 40;
             height = Math.Min(HeaderH + contentHeight + FooterH, maxH);

@@ -37,7 +37,7 @@ float vnoise(float2 p)
 {
     float2 i = floor(p);
     float2 f = frac(p);
-    f = f * f * (3.0 - 2.0 * f);
+    f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0); // quintic smootherstep (C2)
     float a = hash(i);
     float b = hash(i + float2(1.0, 0.0));
     float c = hash(i + float2(0.0, 1.0));
@@ -45,15 +45,17 @@ float vnoise(float2 p)
     return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
 }
 
+static const float2x2 M = float2x2(0.80, 0.60, -0.60, 0.80);
+
 float fbm(float2 p)
 {
     float v = 0.0;
     float amp = 0.5;
     [unroll]
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < 5; i++)
     {
         v += amp * vnoise(p);
-        p *= 2.0;
+        p = mul(M, p) * 2.0;
         amp *= 0.5;
     }
     return v;

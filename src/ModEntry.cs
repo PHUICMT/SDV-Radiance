@@ -28,7 +28,8 @@ namespace SDVRadiance
 
         /// <summary>True only when the mod is on AND at least one implemented effect is switched on.</summary>
         private bool EffectsActive => _config.Enabled &&
-            (_config.BloomEnabled || _config.ColorGradeEnabled || _config.GodRaysEnabled || _config.FogEnabled);
+            (_config.BloomEnabled || _config.ColorGradeEnabled || _config.GodRaysEnabled
+             || _config.FogEnabled || _config.CloudShadowEnabled || _config.TiltShiftEnabled);
 
         public override void Entry(IModHelper helper)
         {
@@ -183,6 +184,30 @@ namespace SDVRadiance
                 () => I18n("config.fog.scale.name"), null, 1f, 8f, 0.5f);
             api.AddNumberOption(this.ModManifest, () => _config.FogSpeed, v => _config.FogSpeed = v,
                 () => I18n("config.fog.speed.name"), null, 0f, 0.1f, 0.005f);
+
+            // --- Cloud shadows (implemented) ---
+            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.cloudshadow"));
+            api.AddBoolOption(this.ModManifest, () => _config.CloudShadowEnabled, v => _config.CloudShadowEnabled = v,
+                () => I18n("config.cloudshadow.enabled.name"), () => I18n("config.cloudshadow.enabled.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.CloudShadowOpacity, v => _config.CloudShadowOpacity = v,
+                () => I18n("config.cloudshadow.opacity.name"), null, 0f, 0.7f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.CloudShadowCoverage, v => _config.CloudShadowCoverage = v,
+                () => I18n("config.cloudshadow.coverage.name"), null, 0.1f, 0.9f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.CloudShadowScale, v => _config.CloudShadowScale = v,
+                () => I18n("config.cloudshadow.scale.name"), null, 1f, 5f, 0.5f);
+            api.AddNumberOption(this.ModManifest, () => _config.CloudShadowSpeed, v => _config.CloudShadowSpeed = v,
+                () => I18n("config.cloudshadow.speed.name"), null, 0f, 0.1f, 0.005f);
+
+            // --- Tilt-shift (implemented) ---
+            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.tiltshift"));
+            api.AddBoolOption(this.ModManifest, () => _config.TiltShiftEnabled, v => _config.TiltShiftEnabled = v,
+                () => I18n("config.tiltshift.enabled.name"), () => I18n("config.tiltshift.enabled.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.TiltShiftStrength, v => _config.TiltShiftStrength = v,
+                () => I18n("config.tiltshift.strength.name"), null, 0f, 1f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.TiltShiftTopRatio, v => _config.TiltShiftTopRatio = v,
+                () => I18n("config.tiltshift.top.name"), null, 0f, 1f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.TiltShiftBottomRatio, v => _config.TiltShiftBottomRatio = v,
+                () => I18n("config.tiltshift.bottom.name"), null, 0f, 1f, 0.05f);
 
             // --- Camera (implemented) ---
             api.AddSectionTitle(this.ModManifest, () => I18n("config.section.camera"));

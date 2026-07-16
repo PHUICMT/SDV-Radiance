@@ -77,6 +77,31 @@
   "tuner.section.fog": "Fog",
   "tuner.fog": "Fog",
   "tuner.fogdensity": "Density",
+  "tuner.section.cloudshadow": "Cloud shadows",
+  "tuner.cloudshadow": "Cloud shadows",
+  "tuner.cloudopacity": "Opacity",
+  "tuner.cloudcoverage": "Coverage",
+  "tuner.cloudspeed": "Drift speed",
+  "tuner.section.tiltshift": "Tilt-shift",
+  "tuner.tiltshift": "Tilt-shift",
+  "tuner.tiltstrength": "Blur strength",
+  "tuner.tilttop": "Top blur",
+  "tuner.tiltbottom": "Bottom blur",
+
+  "config.section.tiltshift": "Tilt-shift (depth blur)",
+  "config.tiltshift.enabled.name": "Enable tilt-shift",
+  "config.tiltshift.enabled.tooltip": "Keep a sharp band across the middle and blur the top and bottom (fake miniature / depth-of-field look).",
+  "config.tiltshift.strength.name": "Blur strength",
+  "config.tiltshift.top.name": "Top blur amount",
+  "config.tiltshift.bottom.name": "Bottom blur amount",
+
+  "config.section.cloudshadow": "Cloud shadows",
+  "config.cloudshadow.enabled.name": "Enable cloud shadows",
+  "config.cloudshadow.enabled.tooltip": "Soft shadows of drifting clouds moving across the ground (outdoors only).",
+  "config.cloudshadow.opacity.name": "Opacity",
+  "config.cloudshadow.coverage.name": "Coverage",
+  "config.cloudshadow.scale.name": "Cloud size",
+  "config.cloudshadow.speed.name": "Drift speed",
 
   "config.section.camera": "Camera",
   "config.camera.mode.name": "Camera mode",
@@ -91,5 +116,5 @@
   "config.debug.tooltip": "Log render-pipeline info to the SMAPI console to help troubleshoot.",
 
   "config.section.wip": "Coming soon (in development)",
-  "config.wip.text": "These effects are planned but not implemented yet, so they have no settings here:\n- Cloud shadows & tilt-shift (DynamicShader parity)\n- Water enhancement, vignette, chromatic aberration, depth of field\n- Dynamic 2D lighting with soft shadows\n- High-quality texture upscaling\nEach effect will get its own options as it lands."
+  "config.wip.text": "These effects are planned but not implemented yet, so they have no settings here:\n- Water enhancement, vignette, chromatic aberration\n- Dynamic 2D lighting with soft shadows\n- High-quality texture upscaling\nEach effect will get its own options as it lands."
 }

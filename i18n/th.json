@@ -97,6 +97,26 @@
   "tuner.section.fog": "หมอก",
   "tuner.fog": "หมอก",
   "tuner.fogdensity": "ความหนาแน่น",
+  "tuner.section.cloudshadow": "เงาเมฆ",
+  "tuner.cloudshadow": "เงาเมฆ",
+  "tuner.cloudopacity": "ความทึบ",
+  "tuner.cloudcoverage": "ความครอบคลุม",
+  "tuner.cloudspeed": "ความเร็วลอย",
+  "tuner.section.tiltshift": "Tilt-shift",
+  "tuner.tiltshift": "Tilt-shift",
+  "tuner.tiltstrength": "ความแรงเบลอ",
+  "tuner.tilttop": "เบลอด้านบน",
+  "tuner.tiltbottom": "เบลอด้านล่าง",
+
+  "config.section.cloudshadow": "เงาเมฆ",
+  "config.cloudshadow.coverage.name": "ความครอบคลุม",
+  "config.cloudshadow.scale.name": "ขนาดเมฆ",
+  "config.cloudshadow.speed.name": "ความเร็วลอย",
+
+  "config.section.tiltshift": "Tilt-shift (เบลอระยะชัด)",
+  "config.tiltshift.strength.name": "ความแรงเบลอ",
+  "config.tiltshift.top.name": "ปริมาณเบลอด้านบน",
+  "config.tiltshift.bottom.name": "ปริมาณเบลอด้านล่าง",
 
   "config.section.camera": "กล้อง",
   "config.camera.mode.name": "โหมดกล้อง",
@@ -111,5 +131,5 @@
   "config.debug.tooltip": "บันทึกข้อมูล render pipeline ลงคอนโซล SMAPI เพื่อช่วยแก้ปัญหา",
 
   "config.section.wip": "เร็วๆ นี้ (กำลังพัฒนา)",
-  "config.wip.text": "เอฟเฟกต์เหล่านี้วางแผนไว้แล้วแต่ยังไม่ได้ทำ จึงยังไม่มีตัวตั้งค่าที่นี่:\n- เงาเมฆและ tilt-shift (เทียบเท่า DynamicShader)\n- ปรับปรุงน้ำ, vignette, chromatic aberration, depth of field\n- แสงไดนามิก 2D พร้อมเงานุ่ม\n- อัปสเกลเท็กซ์เจอร์คุณภาพสูง\nแต่ละเอฟเฟกต์จะมีตัวเลือกของตัวเองเมื่อพร้อมใช้งาน"
+  "config.wip.text": "เอฟเฟกต์เหล่านี้วางแผนไว้แล้วแต่ยังไม่ได้ทำ จึงยังไม่มีตัวตั้งค่าที่นี่:\n- ปรับปรุงน้ำ, vignette, chromatic aberration\n- แสงไดนามิก 2D พร้อมเงานุ่ม\n- อัปสเกลเท็กซ์เจอร์คุณภาพสูง\nแต่ละเอฟเฟกต์จะมีตัวเลือกของตัวเองเมื่อพร้อมใช้งาน"
 }

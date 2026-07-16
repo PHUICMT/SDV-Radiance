@@ -32,6 +32,8 @@ namespace SDVRadiance
         private Effect? _colorGrade;
         private Effect? _godRays;
         private Effect? _fog;
+        private Effect? _cloudShadow;
+        private Effect? _tiltShift;
 
         private bool _loggedOnce;
         private int _frames, _applied, _skipNoTarget, _sizeChanges;
@@ -47,6 +49,8 @@ namespace SDVRadiance
             _colorGrade = LoadEffect("colorgrade.mgfxo");
             _godRays = LoadEffect("godrays.mgfxo");
             _fog = LoadEffect("fog.mgfxo");
+            _cloudShadow = LoadEffect("cloudshadow.mgfxo");
+            _tiltShift = LoadEffect("tiltshift.mgfxo");
         }
 
         private Effect? LoadEffect(string file)
@@ -72,10 +76,12 @@ namespace SDVRadiance
         public bool BloomAvailable => _bloom != null;
 
         private bool AnyEffectActive(ModConfig c) =>
-            (c.GodRaysEnabled && _godRays != null)
+            (c.CloudShadowEnabled && _cloudShadow != null)
+            || (c.GodRaysEnabled && _godRays != null)
             || (c.BloomEnabled && _bloom != null)
             || (c.FogEnabled && _fog != null)
-            || (c.ColorGradeEnabled && _colorGrade != null);
+            || (c.ColorGradeEnabled && _colorGrade != null)
+            || (c.TiltShiftEnabled && _tiltShift != null);
 
         private void EnsureTargets(int w, int h, SurfaceFormat format)
         {
@@ -137,6 +143,9 @@ namespace SDVRadiance
                 bool outdoors = Game1.currentLocation?.IsOutdoors ?? false;
 
                 var stages = new List<Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>>();
+                // Cloud shadows drift over the ground — outdoors only, and first so later
+                // effects (bloom/grade) see the shadowed scene.
+                if (config.CloudShadowEnabled && _cloudShadow != null && outdoors) stages.Add(RenderCloudShadow);
                 // God rays only when there's a real light source on screen (lamp/torch/fire).
                 // Otherwise they'd just streak the player toward an imaginary sun.
                 if (config.GodRaysEnabled && _godRays != null && TryGetLightUV(out _lightUV)) stages.Add(RenderGodRays);
@@ -144,6 +153,8 @@ namespace SDVRadiance
                 // Fog is a weak, patchy effect indoors (and covers the black border), so outdoors only.
                 if (config.FogEnabled && _fog != null && outdoors) stages.Add(RenderFog);
                 if (config.ColorGradeEnabled && _colorGrade != null) stages.Add(ColorGrade);
+                // Tilt-shift (depth-of-field) last, so it blurs the final graded image.
+                if (config.TiltShiftEnabled && _tiltShift != null) stages.Add(RenderTiltShift);
 
                 Texture2D current = _sceneRT!;
                 for (int i = 0; i < stages.Count; i++)
@@ -179,6 +190,19 @@ namespace SDVRadiance
         }
 
         // ---- stages --------------------------------------------------------
+
+        private void RenderCloudShadow(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
+        {
+            var fx = _cloudShadow!;
+            fx.Parameters["Time"]?.SetValue(Time());
+            fx.Parameters["Speed"]?.SetValue(config.CloudShadowSpeed);
+            fx.Parameters["Scale"]?.SetValue(config.CloudShadowScale);
+            fx.Parameters["Opacity"]?.SetValue(config.CloudShadowOpacity);
+            fx.Parameters["Coverage"]?.SetValue(config.CloudShadowCoverage);
+            fx.Parameters["WorldOffset"]?.SetValue(WorldOffset(dest.Width, dest.Height));
+            fx.CurrentTechnique = fx.Techniques["CloudShadow"];
+            DrawFull(sb, source, dest, fx);
+        }
 
         private void RenderGodRays(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
@@ -244,6 +268,33 @@ namespace SDVRadiance
             fx.Parameters["FogColor"]?.SetValue(FogColor());
             fx.Parameters["WorldOffset"]?.SetValue(WorldOffset(dest.Width, dest.Height));
             fx.CurrentTechnique = fx.Techniques["Fog"];
+            DrawFull(sb, source, dest, fx);
+        }
+
+        private void RenderTiltShift(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
+        {
+            var fx = _tiltShift!;
+            var rtA = _rtA!;
+            var rtB = _rtB!;
+
+            // blur at half-res: source(full) -> rtA (H) -> rtB (V)
+            fx.Parameters["TexelSize"]?.SetValue(new Vector2(1f / rtA.Width, 0f));
+            fx.CurrentTechnique = fx.Techniques["BlurH"];
+            Pass(sb, source, rtA, fx);
+
+            fx.Parameters["TexelSize"]?.SetValue(new Vector2(0f, 1f / rtB.Height));
+            fx.CurrentTechnique = fx.Techniques["BlurV"];
+            Pass(sb, rtA, rtB, fx);
+
+            // composite sharp + blurred by vertical position.
+            // Config stores intuitive "blur amount" (higher = more blur from that edge);
+            // convert to sharp-band edges: more top blur pushes TopEdge down, more
+            // bottom blur pulls BottomEdge up.
+            fx.Parameters["TopEdge"]?.SetValue(MathHelper.Clamp(config.TiltShiftTopRatio, 0f, 1f) * 0.5f);
+            fx.Parameters["BottomEdge"]?.SetValue(1f - MathHelper.Clamp(config.TiltShiftBottomRatio, 0f, 1f) * 0.5f);
+            fx.Parameters["Strength"]?.SetValue(config.TiltShiftStrength);
+            fx.Parameters["BlurTexture"]?.SetValue(rtB);
+            fx.CurrentTechnique = fx.Techniques["Composite"];
             DrawFull(sb, source, dest, fx);
         }
 
@@ -348,9 +399,9 @@ namespace SDVRadiance
         public void Dispose()
         {
             _sceneRT?.Dispose(); _fullA?.Dispose(); _fullB?.Dispose(); _rtA?.Dispose(); _rtB?.Dispose();
-            _bloom?.Dispose(); _colorGrade?.Dispose(); _godRays?.Dispose(); _fog?.Dispose();
+            _bloom?.Dispose(); _colorGrade?.Dispose(); _godRays?.Dispose(); _fog?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
             _sceneRT = _fullA = _fullB = _rtA = _rtB = null;
-            _bloom = _colorGrade = _godRays = _fog = null;
+            _bloom = _colorGrade = _godRays = _fog = _cloudShadow = _tiltShift = null;
         }
     }
 }

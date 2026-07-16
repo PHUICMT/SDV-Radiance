@@ -84,14 +84,15 @@ namespace SDVRadiance
 
         // --- Phase 3: DynamicShader parity ---
         public bool CloudShadowEnabled { get; set; } = false;
-        public int CloudShadowCount { get; set; } = 3;
-        public float CloudShadowScale { get; set; } = 1.0f;
-        public float CloudShadowSpeed { get; set; } = 0.5f;
+        public float CloudShadowScale { get; set; } = 2.0f;
+        public float CloudShadowSpeed { get; set; } = 0.01f;
         public float CloudShadowOpacity { get; set; } = 0.3f;
+        public float CloudShadowCoverage { get; set; } = 0.45f;
 
         public bool TiltShiftEnabled { get; set; } = false;
-        public float TiltShiftTopRatio { get; set; } = 0.5f;
-        public float TiltShiftBottomRatio { get; set; } = 0.5f;
+        public float TiltShiftTopRatio { get; set; } = 0.7f;    // top blur amount (0 = none … 1 = up to middle)
+        public float TiltShiftBottomRatio { get; set; } = 0.7f; // bottom blur amount (0 = none … 1 = up to middle)
+        public float TiltShiftStrength { get; set; } = 1f;
 
         // --- Phase 4: Water + finishing ---
         public bool WaterEnabled { get; set; } = false;
