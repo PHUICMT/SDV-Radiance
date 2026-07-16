@@ -176,12 +176,15 @@
   "config.shadows.strength.name": "ความเข้มเงา",
   "config.shadows.length.name": "ความยาวเงา",
   "config.shadows.blur.name": "ความฟุ้งของขอบ",
+  "config.shadows.objects.name": "เงาต้นไม้และพุ่มไม้",
+  "config.shadows.objects.tooltip": "ทอดเงาให้ต้นไม้และพุ่มไม้ด้วย ไม่ใช่แค่ตัวละคร",
 
   "tuner.section.shadows": "เงาทอดตามแสง",
   "tuner.shadows": "เงาทอดตามแสง",
   "tuner.shadowstrength": "ความเข้ม",
   "tuner.shadowlength": "ความยาว",
   "tuner.shadowblur": "ความฟุ้งของขอบ",
+  "tuner.shadowobjects": "รวมต้นไม้/พุ่มไม้",
 
   "config.section.camera": "กล้อง",
   "config.camera.mode.name": "โหมดกล้อง",

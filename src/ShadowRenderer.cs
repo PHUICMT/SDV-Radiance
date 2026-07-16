@@ -3,6 +3,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
 using StardewValley;
+using StardewValley.TerrainFeatures;
 
 namespace SDVRadiance
 {
@@ -94,6 +95,9 @@ namespace SDVRadiance
                 }
 
                 DrawPlayerShadow(b, loc, rot, stretch, alpha, blur);
+
+                if (config.DirectionalShadowObjects)
+                    DrawObjectShadows(b, loc, rot, stretch, alpha, blur);
             }
             catch (Exception ex)
             {
@@ -109,8 +113,68 @@ namespace SDVRadiance
             float depth = MathHelper.Clamp(npc.GetBoundingBox().Bottom / 10000f - ShadowDepthBias, 0f, 1f);
             // NPCs are single-texture sprites, so the feet→head opacity gradient is faked with
             // horizontal bands (no per-NPC render target needed), each softened at the edges.
-            DrawBandedGradient(b, npc.Sprite.Texture, src, feet, alpha, rot,
-                new Vector2(4f, 4f * stretch), depth, blur);
+            DrawBandedGradient(b, npc.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, src.Height),
+                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
+        }
+
+        /// <summary>Trees and bushes cast the same kind of leaning, fading silhouette as characters.</summary>
+        private void DrawObjectShadows(SpriteBatch b, GameLocation loc, float rot, float stretch, float alpha, float blur)
+        {
+            var vp = Game1.viewport;
+            int tx0 = vp.X / 64 - 3, tx1 = (vp.X + vp.Width) / 64 + 3;
+            int ty0 = vp.Y / 64 - 3, ty1 = (vp.Y + vp.Height) / 64 + 8; // extra bottom margin for tall trees
+
+            foreach (var kv in loc.terrainFeatures.Pairs)
+            {
+                Vector2 tile = kv.Key;
+                if (tile.X < tx0 || tile.X > tx1 || tile.Y < ty0 || tile.Y > ty1)
+                    continue;
+                switch (kv.Value)
+                {
+                    case Tree tree when tree.growthStage.Value >= 5 && !tree.stump.Value && tree.texture?.Value != null:
+                        DrawTreeShadow(b, tree, tile, rot, stretch, alpha, blur);
+                        break;
+                    case Bush bush:
+                        DrawBushShadow(b, bush, rot, stretch, alpha, blur);
+                        break;
+                }
+            }
+
+            foreach (var ltf in loc.largeTerrainFeatures)
+            {
+                if (ltf is Bush bush)
+                {
+                    Vector2 tile = bush.Tile;
+                    if (tile.X < tx0 || tile.X > tx1 || tile.Y < ty0 || tile.Y > ty1)
+                        continue;
+                    DrawBushShadow(b, bush, rot, stretch, alpha, blur);
+                }
+            }
+        }
+
+        private void DrawTreeShadow(SpriteBatch b, Tree tree, Vector2 tile, float rot, float stretch, float alpha, float blur)
+        {
+            Rectangle src = Tree.treeTopSourceRect;                 // (0,0,48,96) standard canopy
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f));
+            float depth = MathHelper.Clamp((tree.getBoundingBox().Bottom + 2f) / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
+            // Tree canopy draws with origin (24, 96); shear/fade about the trunk base.
+            DrawBandedGradient(b, tree.texture.Value, src, feet, new Vector2(24f, 96f),
+                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
+        }
+
+        private void DrawBushShadow(SpriteBatch b, Bush bush, float rot, float stretch, float alpha, float blur)
+        {
+            Rectangle src = bush.sourceRect.Value;
+            if (src.IsEmpty)
+                return;
+            Vector2 tile = bush.Tile;
+            // Bush.draw position = tile*64 + (size+1)*64/2 == tile*64 + src.Width*2; origin (width/2, 32).
+            var worldFeet = new Vector2(tile.X * 64f + src.Width * 2f, (tile.Y + 1) * 64f);
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, worldFeet);
+            var baseOrigin = new Vector2(src.Width / 2f, 32f);
+            float depth = MathHelper.Clamp((bush.getBoundingBox().Center.Y + 48f) / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
+            DrawBandedGradient(b, Bush.texture.Value, src, feet, baseOrigin,
+                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
         }
 
         private void DrawPlayerShadow(SpriteBatch b, GameLocation loc, float rot, float stretch, float alpha, float blur)
@@ -233,15 +297,15 @@ namespace SDVRadiance
         /// stay aligned under rotation + stretch) and fading each band's alpha toward the tip.
         /// </summary>
         private static void DrawBandedGradient(SpriteBatch b, Texture2D tex, Rectangle src, Vector2 feet,
-            float alpha, float rot, Vector2 scale, float depth, float blur)
+            Vector2 baseOrigin, float alpha, float rot, Vector2 scale, float depth, float blur)
         {
             for (int i = 0; i < NpcBands; i++)
             {
                 int y0 = src.Height * i / NpcBands;
                 int y1 = src.Height * (i + 1) / NpcBands;
                 var band = new Rectangle(src.X, src.Y + y0, src.Width, y1 - y0);
-                // Origin so the (virtual) full-sprite feet row still maps to the feet position.
-                var origin = new Vector2(src.Width / 2f, src.Height - y0);
+                // Origin so the (virtual) full-sprite ground-anchor row still maps to the feet position.
+                var origin = new Vector2(baseOrigin.X, baseOrigin.Y - y0);
                 float tBottom = (i + 0.5f) / NpcBands;           // 0 at the head band, 1 at the feet band
                 float ga = HeadFade + (1f - HeadFade) * (float)Math.Pow(tBottom, 1.8);
                 DrawSoft(b, Taps5, tex, band, feet, Color.Black, alpha * ga, rot, origin, scale, depth,

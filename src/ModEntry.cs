@@ -345,6 +345,8 @@ namespace SDVRadiance
                 () => I18n("config.shadows.length.name"), null, 0.2f, 2f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.DirectionalShadowBlur, v => _config.DirectionalShadowBlur = v,
                 () => I18n("config.shadows.blur.name"), null, 0f, 5f, 0.5f);
+            api.AddBoolOption(this.ModManifest, () => _config.DirectionalShadowObjects, v => _config.DirectionalShadowObjects = v,
+                () => I18n("config.shadows.objects.name"), () => I18n("config.shadows.objects.tooltip"));
 
             // --- Camera (implemented) ---
             api.AddSectionTitle(this.ModManifest, () => I18n("config.section.camera"));

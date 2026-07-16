@@ -169,12 +169,15 @@
   "config.shadows.strength.name": "Shadow strength",
   "config.shadows.length.name": "Shadow length",
   "config.shadows.blur.name": "Edge softness",
+  "config.shadows.objects.name": "Shadows for trees & bushes",
+  "config.shadows.objects.tooltip": "Also cast leaning shadows from trees and bushes, not just characters.",
 
   "tuner.section.shadows": "Directional shadows",
   "tuner.shadows": "Directional shadows",
   "tuner.shadowstrength": "Strength",
   "tuner.shadowlength": "Length",
   "tuner.shadowblur": "Edge softness",
+  "tuner.shadowobjects": "Trees & bushes too",
 
   "config.section.camera": "Camera",
   "config.camera.mode.name": "Camera mode",

@@ -144,6 +144,8 @@ namespace SDVRadiance
         public float DirectionalShadowLength { get; set; } = 1.0f;
         /// <summary>Edge softness of the shadow, in pixels (0 = crisp).</summary>
         public float DirectionalShadowBlur { get; set; } = 2.0f;
+        /// <summary>Also cast directional shadows from trees and bushes (not just characters).</summary>
+        public bool DirectionalShadowObjects { get; set; } = true;
 
         // --- Camera (independent of the post-processing pipeline) ---
         /// <summary>Which camera behaviour to use. Off = vanilla snap.</summary>
