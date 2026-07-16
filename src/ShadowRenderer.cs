@@ -1,6 +1,7 @@
 using System;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using StardewModdingAPI;
 using StardewValley;
 
 namespace SDVRadiance
@@ -17,6 +18,11 @@ namespace SDVRadiance
     {
         private readonly GraphicsDevice _device;
         private SpriteBatch? _sb;
+
+        /// <summary>Optional diagnostics sink; when set (config.DebugLogging), the first few draws + any error are logged once.</summary>
+        internal static IMonitor? Diag;
+        private int _diagFrames;
+        private bool _errLogged;
 
         public ShadowRenderer(GraphicsDevice device) => _device = device;
 
@@ -39,6 +45,12 @@ namespace SDVRadiance
 
             _sb ??= new SpriteBatch(_device);
 
+            if (Diag != null && _diagFrames < 3)
+            {
+                _diagFrames++;
+                Diag.Log($"[shadow] draw path reached: npcs={loc.characters.Count}, time={Game1.timeOfDay}, skew={skew:0.00}, squash={squash:0.00}, alpha={alpha:0.00}", LogLevel.Debug);
+            }
+
             try
             {
                 foreach (NPC npc in loc.characters)
@@ -49,12 +61,41 @@ namespace SDVRadiance
                         npc.Position, npc.GetSpriteWidthForPositioning(), npc.GetBoundingBox().Bottom,
                         skew, squash, alpha);
                 }
+
+                DrawPlayerShadow(loc, skew, squash, alpha);
             }
-            catch
+            catch (Exception ex)
             {
                 // A shadow must never crash the game or leave a batch open.
                 try { _sb.End(); } catch { }
+                if (Diag != null && !_errLogged) { _errLogged = true; Diag.Log($"[shadow] draw threw (shadows disabled for now): {ex}", LogLevel.Warn); }
             }
+        }
+
+        /// <summary>
+        /// The local farmer's own silhouette. Redraws every farmer layer through the
+        /// full <see cref="FarmerRenderer"/> with a black <c>overrideColor</c>, all
+        /// sheared as one batch — so hair, hat and clothes are part of the shape.
+        /// </summary>
+        private void DrawPlayerShadow(GameLocation loc, float skew, float squash, float alpha)
+        {
+            Farmer who = Game1.player;
+            if (who == null || who.currentLocation != loc || who.swimming.Value || who.isRidingHorse())
+                return;
+
+            float feetY = Game1.GlobalToLocal(Game1.viewport,
+                new Vector2(0f, who.GetBoundingBox().Bottom)).Y;
+            Matrix m = BuildShearMatrix(feetY, skew, squash);
+
+            // Same origin the game uses in Farmer.draw so the layers line up before shearing.
+            Vector2 origin = new Vector2(who.xOffset,
+                (who.yOffset + 128f - who.GetBoundingBox().Height / 2f) / 4f + 4f);
+
+            _sb!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp,
+                DepthStencilState.None, RasterizerState.CullNone, null, m);
+            who.FarmerRenderer.draw(_sb, who.FarmerSprite, who.FarmerSprite.SourceRect,
+                who.getLocalPosition(Game1.viewport), origin, 0f, Color.Black * alpha, 0f, who);
+            _sb.End();
         }
 
         private void DrawCasterShadow(Texture2D tex, Rectangle src, Vector2 worldPos,
@@ -63,15 +104,7 @@ namespace SDVRadiance
             // Feet = bottom-centre of the sprite, world → screen (same anchor the game uses).
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(worldPos.X + spriteWidth * 4 / 2f, worldFootY));
-            float feetY = feet.Y;
-
-            // Shear about the feet: x' = x - skew*(y - feetY); y flattened toward the feet
-            // by `squash`. Pinning at feetY keeps the base glued to the caster.
-            Matrix m = new Matrix(
-                1f, 0f, 0f, 0f,
-                -skew, squash, 0f, 0f,
-                0f, 0f, 1f, 0f,
-                skew * feetY, feetY * (1f - squash), 0f, 1f);
+            Matrix m = BuildShearMatrix(feet.Y, skew, squash);
 
             _sb!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp,
                 DepthStencilState.None, RasterizerState.CullNone, null, m);
@@ -79,6 +112,16 @@ namespace SDVRadiance
                 new Vector2(src.Width / 2f, src.Height), 4f, SpriteEffects.None, 0f);
             _sb.End();
         }
+
+        /// <summary>
+        /// Shear about the feet: x' = x - skew*(y - feetY); y flattened toward the feet
+        /// by <paramref name="squash"/>. Pinning at feetY keeps the base glued to the caster.
+        /// </summary>
+        private static Matrix BuildShearMatrix(float feetY, float skew, float squash) => new Matrix(
+            1f, 0f, 0f, 0f,
+            -skew, squash, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            skew * feetY, feetY * (1f - squash), 0f, 1f);
 
         /// <summary>Sun angle → shadow skew (lean), squash (flatten), and base opacity.</summary>
         private static void ComputeSun(out float skew, out float squash, out float alpha)

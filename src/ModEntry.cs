@@ -53,7 +53,6 @@ namespace SDVRadiance
             helper.Events.GameLoop.GameLaunched += OnGameLaunched;
             helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
             helper.Events.Input.ButtonsChanged += OnButtonsChanged;
-            helper.Events.Display.RenderingWorld += OnRenderingWorld;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
 
             var harmony = new Harmony(this.ModManifest.UniqueID);
@@ -99,23 +98,22 @@ namespace SDVRadiance
             if (!_loggedFreeze) { SMonitor?.Log("Water frame-cycle frozen (shader ripple active); vertical scroll left running.", LogLevel.Info); _loggedFreeze = true; }
         }
 
-        /// <summary>
-        /// Draw sprite shadows before the world layer, so they sit UNDER the sprites
-        /// that cast them. Independent of the post-processing pipeline (like the camera).
-        /// </summary>
-        private void OnRenderingWorld(object? sender, RenderingWorldEventArgs e)
-        {
-            if (!_config.Enabled || !_config.DirectionalShadowsEnabled)
-                return;
-            _shadows ??= new ShadowRenderer(Game1_GraphicsDevice);
-            _shadows.Draw(_config);
-        }
-
         /// <summary>Apply the effect chain to the world layer after the game has drawn it.</summary>
         private void OnRenderedWorld(object? sender, RenderedWorldEventArgs e)
         {
             ForceBufferDraw = EffectsActive; // self-heal: keep the postfix in sync with live config
             FreezeGameWater = _config.Enabled && _config.WaterEnabled;
+
+            // Sprite shadows draw here (after the world) so the opaque ground doesn't paint
+            // over them; done before Pipeline.Apply so they're graded with the scene.
+            // Independent of the post-processing effects (like the camera).
+            if (_config.Enabled && _config.DirectionalShadowsEnabled)
+            {
+                _shadows ??= new ShadowRenderer(Game1_GraphicsDevice);
+                ShadowRenderer.Diag = _config.DebugLogging ? this.Monitor : null;
+                _shadows.Draw(_config);
+            }
+
             if (!EffectsActive)
                 return;
             Pipeline.Apply(e.SpriteBatch, _config);
