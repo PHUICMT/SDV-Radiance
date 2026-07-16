@@ -116,10 +116,14 @@ float4 WaterPS(PixelInput input) : SV_TARGET
             edgeV = (wm > 0.5) ? vy : edgeV;   // keep the highest still-water row
         }
         float2 reflUv = float2(uv.x + ripple.x * 3.0, 2.0 * edgeV - uv.y + abs(ripple.y) * 2.0);
-        float3 refl = tex2D(SourceSampler, saturate(reflUv)).rgb;
+        float3 refl = tex2D(SourceSampler, clamp(reflUv, float2(0.0, 0.0), float2(1.0, 1.0))).rgb;
         float depth = uv.y - edgeV;                 // how far below the shoreline
         float fade = saturate(1.0 - depth * 3.5);   // reflection concentrates near the edge
-        col.rgb = lerp(col.rgb, refl * 0.85, saturate(ReflectStrength) * water * fade);
+        // Fade the reflection out where the mirrored sample would fall OFF-screen, instead of
+        // clamping (which smears the edge row/column across the water near the screen border).
+        float2 dborder = min(reflUv, float2(1.0, 1.0) - reflUv);
+        float onScreen = saturate(min(dborder.x, dborder.y) / 0.06);
+        col.rgb = lerp(col.rgb, refl * 0.85, saturate(ReflectStrength) * water * fade * onScreen);
     }
 
     // Random drifting glints: one soft glint per cell at a random spot that
