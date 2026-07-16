@@ -106,7 +106,7 @@ namespace SDVRadiance
             Vector2 origin = new Vector2(src.Width / 2f, src.Height);
             float depth = MathHelper.Clamp(npc.GetBoundingBox().Bottom / 10000f - ShadowDepthBias, 0f, 1f);
             DrawSoft(b, npc.Sprite.Texture, src, feet, Color.Black, alpha, rot, origin,
-                new Vector2(4f, 4f * stretch), depth, SpriteEffects.FlipVertically);
+                new Vector2(4f, 4f * stretch), depth, SpriteEffects.None);
         }
 
         private void DrawPlayerShadow(SpriteBatch b, float rot, float stretch, float alpha)
@@ -122,7 +122,7 @@ namespace SDVRadiance
             // The baked silhouette is one cohesive image — flatten it vertically and lean it
             // about the feet as a single unit (no per-layer fragmenting), softened at the edges.
             DrawSoft(b, _playerRT, null, feet, Color.White, alpha, rot, _playerFeetInRT,
-                new Vector2(1f, stretch), depth, SpriteEffects.FlipVertically);
+                new Vector2(1f, stretch), depth, SpriteEffects.None);
         }
 
         /// <summary>
@@ -222,8 +222,8 @@ namespace SDVRadiance
         {
             // Low sun (dawn/dusk) → long, far-leaning shadow; high sun (noon) → short & upright.
             float d = MathHelper.Clamp((Game1.timeOfDay - 1200) / 600f, -1f, 1f);
-            rot = 0.5f * d;                                      // sideways lean by time; stays pointing generally south
-            stretch = MathHelper.Lerp(0.35f, 1.5f, Math.Abs(d)); // stretched LONG when the sun is low
+            rot = 0.8f * d;                                      // <0 morning lean, >0 evening lean
+            stretch = MathHelper.Lerp(0.3f, 1.2f, Math.Abs(d));  // stretched LONG when the sun is low
             alpha = 0.55f;                                       // opacity at the feet (fades toward the tip)
         }
     }
