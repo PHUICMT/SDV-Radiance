@@ -152,6 +152,21 @@ namespace SDVRadiance
             _sliders.Add(new Slider(_t("tuner.tilttop"), x, y, innerW, 0f, 1f, () => _config.TiltShiftTopRatio, v => _config.TiltShiftTopRatio = v)); y += 50;
             _sliders.Add(new Slider(_t("tuner.tiltbottom"), x, y, innerW, 0f, 1f, () => _config.TiltShiftBottomRatio, v => _config.TiltShiftBottomRatio = v)); y += 50;
 
+            y += 30; _sectionTitles.Add((_t("tuner.section.water"), y - 28));
+            _toggles.Add(new Toggle(_t("tuner.water"), new Rectangle(x, y, innerW, 38), () => _config.WaterEnabled, v => _config.WaterEnabled = v));
+            y += 44;
+            _sliders.Add(new Slider(_t("tuner.waterstrength"), x, y, innerW, 0f, 2f, () => _config.WaterStrength, v => _config.WaterStrength = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.waterspeed"), x, y, innerW, 0f, 3f, () => _config.WaterSpeed, v => _config.WaterSpeed = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.watersparkle"), x, y, innerW, 0f, 1f, () => _config.WaterSparkle, v => _config.WaterSparkle = v)); y += 50;
+
+            y += 30; _sectionTitles.Add((_t("tuner.section.finishing"), y - 28));
+            _toggles.Add(new Toggle(_t("tuner.vignette"), new Rectangle(x, y, innerW, 38), () => _config.VignetteEnabled, v => _config.VignetteEnabled = v));
+            y += 44;
+            _sliders.Add(new Slider(_t("tuner.vignettestrength"), x, y, innerW, 0f, 1f, () => _config.VignetteStrength, v => _config.VignetteStrength = v)); y += 50;
+            _toggles.Add(new Toggle(_t("tuner.ca"), new Rectangle(x, y, innerW, 38), () => _config.ChromaticAberrationEnabled, v => _config.ChromaticAberrationEnabled = v));
+            y += 44;
+            _sliders.Add(new Slider(_t("tuner.castrength"), x, y, innerW, 0f, 1f, () => _config.ChromaticAberrationStrength, v => _config.ChromaticAberrationStrength = v)); y += 50;
+
             int contentHeight = y - cy0;
             int maxH = vh - 40;
             height = Math.Min(HeaderH + contentHeight + FooterH, maxH);

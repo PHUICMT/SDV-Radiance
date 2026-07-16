@@ -29,7 +29,8 @@ namespace SDVRadiance
         /// <summary>True only when the mod is on AND at least one implemented effect is switched on.</summary>
         private bool EffectsActive => _config.Enabled &&
             (_config.BloomEnabled || _config.ColorGradeEnabled || _config.GodRaysEnabled
-             || _config.FogEnabled || _config.CloudShadowEnabled || _config.TiltShiftEnabled);
+             || _config.FogEnabled || _config.CloudShadowEnabled || _config.TiltShiftEnabled
+             || _config.WaterEnabled || _config.VignetteEnabled || _config.ChromaticAberrationEnabled);
 
         public override void Entry(IModHelper helper)
         {
@@ -208,6 +209,25 @@ namespace SDVRadiance
                 () => I18n("config.tiltshift.top.name"), null, 0f, 1f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.TiltShiftBottomRatio, v => _config.TiltShiftBottomRatio = v,
                 () => I18n("config.tiltshift.bottom.name"), null, 0f, 1f, 0.05f);
+
+            // --- Water + finishing (implemented) ---
+            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.finishing"));
+            api.AddBoolOption(this.ModManifest, () => _config.WaterEnabled, v => _config.WaterEnabled = v,
+                () => I18n("config.water.enabled.name"), () => I18n("config.water.enabled.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.WaterStrength, v => _config.WaterStrength = v,
+                () => I18n("config.water.strength.name"), null, 0f, 2f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.WaterSpeed, v => _config.WaterSpeed = v,
+                () => I18n("config.water.speed.name"), null, 0f, 3f, 0.1f);
+            api.AddNumberOption(this.ModManifest, () => _config.WaterSparkle, v => _config.WaterSparkle = v,
+                () => I18n("config.water.sparkle.name"), null, 0f, 1f, 0.05f);
+            api.AddBoolOption(this.ModManifest, () => _config.VignetteEnabled, v => _config.VignetteEnabled = v,
+                () => I18n("config.vignette.enabled.name"), () => I18n("config.vignette.enabled.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.VignetteStrength, v => _config.VignetteStrength = v,
+                () => I18n("config.vignette.strength.name"), null, 0f, 1f, 0.05f);
+            api.AddBoolOption(this.ModManifest, () => _config.ChromaticAberrationEnabled, v => _config.ChromaticAberrationEnabled = v,
+                () => I18n("config.ca.enabled.name"), () => I18n("config.ca.enabled.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.ChromaticAberrationStrength, v => _config.ChromaticAberrationStrength = v,
+                () => I18n("config.ca.strength.name"), null, 0f, 1f, 0.05f);
 
             // --- Camera (implemented) ---
             api.AddSectionTitle(this.ModManifest, () => I18n("config.section.camera"));

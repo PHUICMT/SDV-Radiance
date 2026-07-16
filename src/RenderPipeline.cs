@@ -34,6 +34,12 @@ namespace SDVRadiance
         private Effect? _fog;
         private Effect? _cloudShadow;
         private Effect? _tiltShift;
+        private Effect? _water;
+        private Effect? _finishing;
+
+        private Texture2D? _waterMask;         // per-tile water mask, aligned to the viewport
+        private Color[]? _waterMaskBuf;
+        private Vector2 _waterTilesPerScreen, _waterViewFrac, _waterMaskSize;
 
         private bool _loggedOnce;
         private int _frames, _applied, _skipNoTarget, _sizeChanges;
@@ -51,6 +57,8 @@ namespace SDVRadiance
             _fog = LoadEffect("fog.mgfxo");
             _cloudShadow = LoadEffect("cloudshadow.mgfxo");
             _tiltShift = LoadEffect("tiltshift.mgfxo");
+            _water = LoadEffect("water.mgfxo");
+            _finishing = LoadEffect("finishing.mgfxo");
         }
 
         private Effect? LoadEffect(string file)
@@ -81,7 +89,9 @@ namespace SDVRadiance
             || (c.BloomEnabled && _bloom != null)
             || (c.FogEnabled && _fog != null)
             || (c.ColorGradeEnabled && _colorGrade != null)
-            || (c.TiltShiftEnabled && _tiltShift != null);
+            || (c.TiltShiftEnabled && _tiltShift != null)
+            || (c.WaterEnabled && _water != null)
+            || ((c.VignetteEnabled || c.ChromaticAberrationEnabled) && _finishing != null);
 
         private void EnsureTargets(int w, int h, SurfaceFormat format)
         {
@@ -143,6 +153,9 @@ namespace SDVRadiance
                 bool outdoors = Game1.currentLocation?.IsOutdoors ?? false;
 
                 var stages = new List<Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>>();
+                // Water ripple first (only if the current location actually has visible
+                // water tiles), so everything downstream sees the refracted result.
+                if (config.WaterEnabled && _water != null && BuildWaterMask(w, h)) stages.Add(RenderWater);
                 // Cloud shadows drift over the ground — outdoors only, and first so later
                 // effects (bloom/grade) see the shadowed scene.
                 if (config.CloudShadowEnabled && _cloudShadow != null && outdoors) stages.Add(RenderCloudShadow);
@@ -153,8 +166,10 @@ namespace SDVRadiance
                 // Fog is a weak, patchy effect indoors (and covers the black border), so outdoors only.
                 if (config.FogEnabled && _fog != null && outdoors) stages.Add(RenderFog);
                 if (config.ColorGradeEnabled && _colorGrade != null) stages.Add(ColorGrade);
-                // Tilt-shift (depth-of-field) last, so it blurs the final graded image.
+                // Tilt-shift (depth-of-field) after grading, so it blurs the graded image.
                 if (config.TiltShiftEnabled && _tiltShift != null) stages.Add(RenderTiltShift);
+                // Finishing (vignette + chromatic aberration): true camera-lens pass, last.
+                if ((config.VignetteEnabled || config.ChromaticAberrationEnabled) && _finishing != null) stages.Add(RenderFinishing);
 
                 Texture2D current = _sceneRT!;
                 for (int i = 0; i < stages.Count; i++)
@@ -319,6 +334,80 @@ namespace SDVRadiance
             DrawFull(sb, source, dest, fx);
         }
 
+        private void RenderWater(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
+        {
+            var fx = _water!;
+            fx.Parameters["Time"]?.SetValue(Time());
+            fx.Parameters["Strength"]?.SetValue(config.WaterStrength);
+            fx.Parameters["Speed"]?.SetValue(config.WaterSpeed);
+            fx.Parameters["Sparkle"]?.SetValue(config.WaterSparkle);
+            fx.Parameters["TilesPerScreen"]?.SetValue(_waterTilesPerScreen);
+            fx.Parameters["ViewFrac"]?.SetValue(_waterViewFrac);
+            fx.Parameters["MaskSize"]?.SetValue(_waterMaskSize);
+            fx.Parameters["MaskTexture"]?.SetValue(_waterMask);
+            fx.CurrentTechnique = fx.Techniques["Water"];
+            DrawFull(sb, source, dest, fx);
+        }
+
+        private void RenderFinishing(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
+        {
+            var fx = _finishing!;
+            fx.Parameters["VignetteStrength"]?.SetValue(config.VignetteEnabled ? config.VignetteStrength : 0f);
+            // Map the 0..1 UI value to a tiny UV offset so it stays subtle on pixel art.
+            fx.Parameters["CAStrength"]?.SetValue(config.ChromaticAberrationEnabled ? config.ChromaticAberrationStrength * 0.03f : 0f);
+            fx.CurrentTechnique = fx.Techniques["Finishing"];
+            DrawFull(sb, source, dest, fx);
+        }
+
+        /// <summary>
+        /// Build a per-tile water mask for the visible area from the current location,
+        /// aligned to the viewport. Returns false (and skips the water stage) when the
+        /// location has no water on screen, so we never distort a waterless frame.
+        /// </summary>
+        private bool BuildWaterMask(int w, int h)
+        {
+            GameLocation? loc = Game1.currentLocation;
+            if (loc == null)
+                return false;
+
+            int vx = Game1.viewport.X;
+            int vy = Game1.viewport.Y;
+            int startTileX = (int)Math.Floor(vx / 64f);
+            int startTileY = (int)Math.Floor(vy / 64f);
+            int tilesW = Math.Max(1, w / 64 + 2);
+            int tilesH = Math.Max(1, h / 64 + 2);
+            int count = tilesW * tilesH;
+
+            if (_waterMaskBuf == null || _waterMaskBuf.Length < count)
+                _waterMaskBuf = new Color[count];
+
+            bool any = false;
+            for (int j = 0; j < tilesH; j++)
+            {
+                for (int i = 0; i < tilesW; i++)
+                {
+                    bool water = loc.isWaterTile(startTileX + i, startTileY + j);
+                    if (water) any = true;
+                    _waterMaskBuf[j * tilesW + i] = water ? Color.White : Color.Transparent;
+                }
+            }
+
+            if (!any)
+                return false;
+
+            if (_waterMask == null || _waterMask.Width != tilesW || _waterMask.Height != tilesH)
+            {
+                _waterMask?.Dispose();
+                _waterMask = new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color);
+            }
+            _waterMask.SetData(_waterMaskBuf, 0, count);
+
+            _waterTilesPerScreen = new Vector2(w / 64f, h / 64f);
+            _waterViewFrac = new Vector2(vx / 64f - startTileX, vy / 64f - startTileY);
+            _waterMaskSize = new Vector2(tilesW, tilesH);
+            return true;
+        }
+
         // ---- helpers -------------------------------------------------------
 
         private static float Time() => Game1.ticks / 60f;
@@ -398,10 +487,12 @@ namespace SDVRadiance
 
         public void Dispose()
         {
-            _sceneRT?.Dispose(); _fullA?.Dispose(); _fullB?.Dispose(); _rtA?.Dispose(); _rtB?.Dispose();
+            _sceneRT?.Dispose(); _fullA?.Dispose(); _fullB?.Dispose(); _rtA?.Dispose(); _rtB?.Dispose(); _waterMask?.Dispose();
             _bloom?.Dispose(); _colorGrade?.Dispose(); _godRays?.Dispose(); _fog?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
+            _water?.Dispose(); _finishing?.Dispose();
             _sceneRT = _fullA = _fullB = _rtA = _rtB = null;
-            _bloom = _colorGrade = _godRays = _fog = _cloudShadow = _tiltShift = null;
+            _waterMask = null;
+            _bloom = _colorGrade = _godRays = _fog = _cloudShadow = _tiltShift = _water = _finishing = null;
         }
     }
 }

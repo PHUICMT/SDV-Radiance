@@ -87,6 +87,16 @@
   "tuner.tiltstrength": "Blur strength",
   "tuner.tilttop": "Top blur",
   "tuner.tiltbottom": "Bottom blur",
+  "tuner.section.water": "Water",
+  "tuner.water": "Water shimmer",
+  "tuner.waterstrength": "Ripple strength",
+  "tuner.waterspeed": "Ripple speed",
+  "tuner.watersparkle": "Sparkle",
+  "tuner.section.finishing": "Finishing",
+  "tuner.vignette": "Vignette",
+  "tuner.vignettestrength": "Vignette strength",
+  "tuner.ca": "Chromatic aberration",
+  "tuner.castrength": "Aberration strength",
 
   "config.section.tiltshift": "Tilt-shift (depth blur)",
   "config.tiltshift.enabled.name": "Enable tilt-shift",
@@ -103,6 +113,19 @@
   "config.cloudshadow.scale.name": "Cloud size",
   "config.cloudshadow.speed.name": "Drift speed",
 
+  "config.section.finishing": "Water & finishing",
+  "config.water.enabled.name": "Enable water shimmer",
+  "config.water.enabled.tooltip": "Gentle refraction ripple and sparkle applied only to water tiles (the game already animates the water, so this is subtle). Experimental.",
+  "config.water.strength.name": "Ripple strength",
+  "config.water.speed.name": "Ripple speed",
+  "config.water.sparkle.name": "Sparkle",
+  "config.vignette.enabled.name": "Enable vignette",
+  "config.vignette.enabled.tooltip": "Darken the screen edges for a cinematic frame.",
+  "config.vignette.strength.name": "Vignette strength",
+  "config.ca.enabled.name": "Enable chromatic aberration",
+  "config.ca.enabled.tooltip": "Subtle color fringing toward the edges, like a camera lens. Keep it low on pixel art.",
+  "config.ca.strength.name": "Aberration strength",
+
   "config.section.camera": "Camera",
   "config.camera.mode.name": "Camera mode",
   "config.camera.mode.tooltip": "Off = vanilla snap. Smooth = ease toward the player while moving, snap crisply when you stop.",
@@ -116,5 +139,5 @@
   "config.debug.tooltip": "Log render-pipeline info to the SMAPI console to help troubleshoot.",
 
   "config.section.wip": "Coming soon (in development)",
-  "config.wip.text": "These effects are planned but not implemented yet, so they have no settings here:\n- Water enhancement, vignette, chromatic aberration\n- Dynamic 2D lighting with soft shadows\n- High-quality texture upscaling\nEach effect will get its own options as it lands."
+  "config.wip.text": "These effects are planned but not implemented yet, so they have no settings here:\n- Dynamic 2D lighting with soft shadows\n- High-quality texture upscaling\nEach effect will get its own options as it lands."
 }

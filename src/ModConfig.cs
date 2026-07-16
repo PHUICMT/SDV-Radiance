@@ -96,8 +96,15 @@ namespace SDVRadiance
 
         // --- Phase 4: Water + finishing ---
         public bool WaterEnabled { get; set; } = false;
+        public float WaterStrength { get; set; } = 0.5f;   // ripple amplitude
+        public float WaterSpeed { get; set; } = 1.0f;      // ripple animation speed
+        public float WaterSparkle { get; set; } = 0.25f;   // specular glint intensity
+
         public bool VignetteEnabled { get; set; } = false;
         public float VignetteStrength { get; set; } = 0.25f;
+
+        public bool ChromaticAberrationEnabled { get; set; } = false;
+        public float ChromaticAberrationStrength { get; set; } = 0.3f; // 0..1 UI scale (scaled to a tiny UV offset)
 
         // --- Camera (independent of the post-processing pipeline) ---
         /// <summary>Which camera behaviour to use. Off = vanilla snap.</summary>

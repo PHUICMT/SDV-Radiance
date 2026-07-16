@@ -65,6 +65,12 @@
   "config.vignette.enabled.name": "เปิด vignette",
   "config.vignette.enabled.tooltip": "หรี่ขอบจอให้ได้อารมณ์แบบภาพยนตร์",
   "config.vignette.strength.name": "ความเข้ม vignette",
+  "config.water.strength.name": "ความแรงระลอกคลื่น",
+  "config.water.speed.name": "ความเร็วระลอก",
+  "config.water.sparkle.name": "ประกายวิบวับ",
+  "config.ca.enabled.name": "ใช้งานการเหลื่อมสี",
+  "config.ca.enabled.tooltip": "แถบสีเหลื่อมบางๆ ที่ขอบจอ คล้ายเลนส์กล้อง แนะนำใช้ค่าน้อยกับภาพพิกเซล",
+  "config.ca.strength.name": "ความแรงการเหลื่อมสี",
 
   "config.section.colorgrade": "การปรับโทนสี",
   "config.colorgrade.auto.name": "โหมดอัตโนมัติ (เวลา/อากาศ/ฤดู)",
@@ -107,6 +113,16 @@
   "tuner.tiltstrength": "ความแรงเบลอ",
   "tuner.tilttop": "เบลอด้านบน",
   "tuner.tiltbottom": "เบลอด้านล่าง",
+  "tuner.section.water": "น้ำ",
+  "tuner.water": "ประกายน้ำ",
+  "tuner.waterstrength": "ความแรงระลอก",
+  "tuner.waterspeed": "ความเร็วระลอก",
+  "tuner.watersparkle": "ประกายวิบวับ",
+  "tuner.section.finishing": "ปรับแต่งขั้นสุดท้าย",
+  "tuner.vignette": "ขอบมืด (Vignette)",
+  "tuner.vignettestrength": "ความเข้มขอบมืด",
+  "tuner.ca": "เหลื่อมสี (CA)",
+  "tuner.castrength": "ความแรงเหลื่อมสี",
 
   "config.section.cloudshadow": "เงาเมฆ",
   "config.cloudshadow.coverage.name": "ความครอบคลุม",
@@ -131,5 +147,5 @@
   "config.debug.tooltip": "บันทึกข้อมูล render pipeline ลงคอนโซล SMAPI เพื่อช่วยแก้ปัญหา",
 
   "config.section.wip": "เร็วๆ นี้ (กำลังพัฒนา)",
-  "config.wip.text": "เอฟเฟกต์เหล่านี้วางแผนไว้แล้วแต่ยังไม่ได้ทำ จึงยังไม่มีตัวตั้งค่าที่นี่:\n- ปรับปรุงน้ำ, vignette, chromatic aberration\n- แสงไดนามิก 2D พร้อมเงานุ่ม\n- อัปสเกลเท็กซ์เจอร์คุณภาพสูง\nแต่ละเอฟเฟกต์จะมีตัวเลือกของตัวเองเมื่อพร้อมใช้งาน"
+  "config.wip.text": "เอฟเฟกต์เหล่านี้วางแผนไว้แล้วแต่ยังไม่ได้ทำ จึงยังไม่มีตัวตั้งค่าที่นี่:\n- แสงไดนามิก 2D พร้อมเงานุ่ม\n- อัปสเกลเท็กซ์เจอร์คุณภาพสูง\nแต่ละเอฟเฟกต์จะมีตัวเลือกของตัวเองเมื่อพร้อมใช้งาน"
 }
