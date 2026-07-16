@@ -138,10 +138,27 @@ namespace SDVRadiance
                 DrawNpcShadow(b, npc, rot, stretch, alpha, blur);
             }
 
+            foreach (FarmAnimal a in loc.animals.Values)
+            {
+                if (a?.Sprite?.Texture == null || OnWater(loc, a.TilePoint))
+                    continue;
+                DrawAnimalShadow(b, a, rot, stretch, alpha, blur);
+            }
+
             DrawPlayerShadow(b, loc, rot, stretch, alpha, blur);
 
             if (config.DirectionalShadowObjects)
                 DrawObjectShadows(b, loc, rot, stretch, alpha, blur);
+        }
+
+        private void DrawAnimalShadow(SpriteBatch b, FarmAnimal a, float rot, float stretch, float alpha, float blur)
+        {
+            Rectangle src = a.Sprite.SourceRect;
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
+                new Vector2(a.Position.X + a.Sprite.SpriteWidth * 4 / 2f, a.GetBoundingBox().Bottom));
+            float depth = MathHelper.Clamp(a.GetBoundingBox().Bottom / 10000f - ShadowDepthBias, 0f, 1f);
+            DrawBandedGradient(b, a.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, src.Height),
+                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
         }
 
         /// <summary>
@@ -195,6 +212,17 @@ namespace SDVRadiance
                 foreach (var (lpos, reach) in _lightBuf)
                     if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
                         DrawNpcShadow(b, npc, rot, st, a, blur);
+            }
+
+            foreach (FarmAnimal animal in loc.animals.Values)
+            {
+                if (animal?.Sprite?.Texture == null)
+                    continue;
+                Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
+                    new Vector2(animal.Position.X + animal.Sprite.SpriteWidth * 4 / 2f, animal.GetBoundingBox().Bottom));
+                foreach (var (lpos, reach) in _lightBuf)
+                    if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
+                        DrawAnimalShadow(b, animal, rot, st, a, blur);
             }
 
             if (_playerReady && _playerRT != null)
