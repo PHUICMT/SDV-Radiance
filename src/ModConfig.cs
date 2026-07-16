@@ -135,6 +135,12 @@ namespace SDVRadiance
         /// <summary>How dark occluder shadows are. 0 = none, 1 = full.</summary>
         public float LightingShadowStrength { get; set; } = 0.5f;
 
+        // --- Phase 5b: directional sprite shadows (sun-cast, sheared silhouettes) ---
+        /// <summary>Cast directional shadows from sprites (NPCs, later player/objects), by sun angle.</summary>
+        public bool DirectionalShadowsEnabled { get; set; } = false;
+        /// <summary>Opacity of the directional shadows. 0 = none, 1 = full.</summary>
+        public float DirectionalShadowStrength { get; set; } = 1.0f;
+
         // --- Camera (independent of the post-processing pipeline) ---
         /// <summary>Which camera behaviour to use. Off = vanilla snap.</summary>
         public CameraMode CameraMode { get; set; } = CameraMode.Off;

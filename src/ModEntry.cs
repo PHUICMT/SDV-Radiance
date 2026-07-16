@@ -17,6 +17,7 @@ namespace SDVRadiance
     {
         private ModConfig _config = new();
         private RenderPipeline? _pipeline;
+        private ShadowRenderer? _shadows;
         private readonly CameraSmoother _camera = new();
 
         /// <summary>
