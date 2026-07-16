@@ -27,7 +27,7 @@ namespace SDVRadiance
         internal static bool ForceBufferDraw;
 
         /// <summary>True only when the mod is on AND at least one implemented effect is switched on.</summary>
-        private bool EffectsActive => _config.Enabled && _config.BloomEnabled;
+        private bool EffectsActive => _config.Enabled && (_config.BloomEnabled || _config.ColorGradeEnabled);
 
         public override void Entry(IModHelper helper)
         {
@@ -36,6 +36,7 @@ namespace SDVRadiance
 
             helper.Events.GameLoop.GameLaunched += OnGameLaunched;
             helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
+            helper.Events.Input.ButtonsChanged += OnButtonsChanged;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
 
             var harmony = new Harmony(this.ModManifest.UniqueID);
@@ -79,6 +80,32 @@ namespace SDVRadiance
             _camera.Update(_config);
         }
 
+        private void OnButtonsChanged(object? sender, ButtonsChangedEventArgs e)
+        {
+            if (!Context.IsWorldReady)
+                return;
+
+            if (_config.ToggleKey.JustPressed())
+            {
+                _config.Enabled = !_config.Enabled;
+                ForceBufferDraw = EffectsActive;
+                this.Helper.WriteConfig(_config);
+                Game1.addHUDMessage(HUDMessage.ForCornerTextbox($"SDV-Radiance: {(_config.Enabled ? "ON" : "OFF")}"));
+            }
+
+            if (_config.TunerKey.JustPressed())
+            {
+                if (Game1.activeClickableMenu is RadianceTunerMenu tuner)
+                    tuner.exitThisMenu();
+                else if (Context.IsPlayerFree)
+                    Game1.activeClickableMenu = new RadianceTunerMenu(
+                        _config,
+                        translate: this.I18n,
+                        onChange: () => ForceBufferDraw = EffectsActive,
+                        onSave: () => this.Helper.WriteConfig(_config));
+            }
+        }
+
         private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
         {
             RegisterGmcm();
@@ -104,6 +131,8 @@ namespace SDVRadiance
             api.AddBoolOption(this.ModManifest, () => _config.Enabled, v => _config.Enabled = v,
                 () => I18n("config.enabled.name"), () => I18n("config.enabled.tooltip"));
 
+            api.AddParagraph(this.ModManifest, () => I18n("config.preset.hint"));
+
             // --- Bloom (implemented) ---
             api.AddSectionTitle(this.ModManifest, () => I18n("config.section.bloom"));
             api.AddBoolOption(this.ModManifest, () => _config.BloomEnabled, v => _config.BloomEnabled = v,
@@ -112,6 +141,25 @@ namespace SDVRadiance
                 () => I18n("config.bloom.threshold.name"), null, 0f, 1f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.BloomIntensity, v => _config.BloomIntensity = v,
                 () => I18n("config.bloom.intensity.name"), null, 0f, 2f, 0.05f);
+
+            // --- Color grading (implemented) ---
+            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.colorgrade"));
+            api.AddBoolOption(this.ModManifest, () => _config.ColorGradeEnabled, v => _config.ColorGradeEnabled = v,
+                () => I18n("config.colorgrade.enabled.name"), () => I18n("config.colorgrade.enabled.tooltip"));
+            api.AddBoolOption(this.ModManifest, () => _config.ColorGradeAuto, v => _config.ColorGradeAuto = v,
+                () => I18n("config.colorgrade.auto.name"), () => I18n("config.colorgrade.auto.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.ColorGradeStrength, v => _config.ColorGradeStrength = v,
+                () => I18n("config.colorgrade.strength.name"), null, 0f, 1f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.ColorGradeContrast, v => _config.ColorGradeContrast = v,
+                () => I18n("config.colorgrade.contrast.name"), null, 0.5f, 1.5f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.ColorGradeSaturation, v => _config.ColorGradeSaturation = v,
+                () => I18n("config.colorgrade.saturation.name"), null, 0f, 2f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.ColorGradeTemperature, v => _config.ColorGradeTemperature = v,
+                () => I18n("config.colorgrade.temperature.name"), () => I18n("config.colorgrade.temperature.tooltip"), -1f, 1f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.ColorGradeBrightness, v => _config.ColorGradeBrightness = v,
+                () => I18n("config.colorgrade.brightness.name"), null, 0.5f, 1.5f, 0.05f);
+            api.AddBoolOption(this.ModManifest, () => _config.ColorGradeToneMap, v => _config.ColorGradeToneMap = v,
+                () => I18n("config.colorgrade.tonemap.name"), () => I18n("config.colorgrade.tonemap.tooltip"));
 
             // --- Camera (implemented) ---
             api.AddSectionTitle(this.ModManifest, () => I18n("config.section.camera"));
@@ -123,6 +171,13 @@ namespace SDVRadiance
                 v => I18n($"config.camera.mode.{v.ToLowerInvariant()}"));
             api.AddNumberOption(this.ModManifest, () => _config.CameraFollowSpeed, v => _config.CameraFollowSpeed = v,
                 () => I18n("config.smoothcam.speed.name"), () => I18n("config.smoothcam.speed.tooltip"), 0.05f, 1f, 0.05f);
+
+            // --- Hotkeys ---
+            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.hotkeys"));
+            api.AddKeybindList(this.ModManifest, () => _config.ToggleKey, v => _config.ToggleKey = v,
+                () => I18n("config.togglekey.name"), () => I18n("config.togglekey.tooltip"));
+            api.AddKeybindList(this.ModManifest, () => _config.TunerKey, v => _config.TunerKey = v,
+                () => I18n("config.tunerkey.name"), () => I18n("config.tunerkey.tooltip"));
 
             // --- Diagnostics ---
             api.AddSectionTitle(this.ModManifest, () => I18n("config.section.debug"));

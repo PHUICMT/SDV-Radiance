@@ -2,6 +2,41 @@
   "config.enabled.name": "เปิดใช้งาน SDV-Radiance",
   "config.enabled.tooltip": "สวิตช์หลักสำหรับระบบ post-processing ทั้งหมด",
 
+  "config.preset.hint": "เคล็ดลับ: พรีเซ็ตและลุคที่บันทึกเองอยู่ในตัวปรับบนจอ (เปิดด้วยปุ่มลัด tuner ค่าเริ่มต้น F8) พรีวิวสดและ sync ตรงเสมอ",
+  "config.preset.name": "พรีเซ็ตสำเร็จรูป",
+  "config.preset.tooltip": "เลือกลุคสำเร็จรูป จะเขียนทับค่า bloom และการปรับโทนสีด้านล่าง เปิดเมนูใหม่เพื่อเห็นค่าที่อัปเดต",
+  "config.preset.custom": "— (กำหนดเอง)",
+  "config.preset.off": "ปิดหมด",
+  "config.preset.subtle": "นุ่มนวล",
+  "config.preset.cinematic": "ภาพยนตร์",
+  "config.preset.vibrant": "สดใส",
+
+  "config.section.hotkeys": "ปุ่มลัด",
+  "config.togglekey.name": "สลับเปิด/ปิดเอฟเฟกต์",
+  "config.togglekey.tooltip": "สลับเปิด/ปิดระบบ post-processing ทั้งหมดทันที (เทียบ A/B เร็วๆ ตอนเล่น)",
+  "config.tunerkey.name": "เปิดตัวปรับสด",
+  "config.tunerkey.tooltip": "เปิดแผงปรับบนจอ เพื่อปรับลุคพร้อมเห็นฉากสดๆ",
+
+  "tuner.title": "ตัวปรับ SDV-Radiance",
+  "tuner.mylooks": "ลุคของฉัน",
+  "tuner.save": "+ บันทึก",
+  "tuner.master": "ใช้งานหลัก",
+  "tuner.section.bloom": "แสงเรือง",
+  "tuner.bloom": "แสงเรือง",
+  "tuner.intensity": "ความเข้ม",
+  "tuner.section.colorgrade": "ปรับโทนสี",
+  "tuner.colorgrade": "ปรับโทนสี",
+  "tuner.automood": "โหมดอัตโนมัติ (เวลา/อากาศ)",
+  "tuner.strength": "ความแรง",
+  "tuner.contrast": "คอนทราสต์",
+  "tuner.saturation": "ความอิ่มสี",
+  "tuner.temperature": "อุณหภูมิสี",
+  "tuner.brightness": "ความสว่าง",
+  "tuner.hint": "ลาก = พรีวิว • ล้อ = เลื่อน • ปุ่ม X = ลบลุค • Esc = บันทึก",
+  "tuner.naming": "ตั้งชื่อลุคนี้",
+  "tuner.ok": "ตกลง",
+  "tuner.cancel": "ยกเลิก",
+
   "config.section.bloom": "แสงเรือง (Bloom)",
   "config.bloom.enabled.name": "เปิดแสงเรือง",
   "config.bloom.enabled.tooltip": "แสงเรืองรอบบริเวณที่สว่าง เช่น โคมไฟและแสงอาทิตย์",
@@ -31,6 +66,17 @@
   "config.vignette.enabled.tooltip": "หรี่ขอบจอให้ได้อารมณ์แบบภาพยนตร์",
   "config.vignette.strength.name": "ความเข้ม vignette",
 
+  "config.section.colorgrade": "การปรับโทนสี",
+  "config.colorgrade.auto.name": "โหมดอัตโนมัติ (เวลา/อากาศ/ฤดู)",
+  "config.colorgrade.auto.tooltip": "ปรับความอุ่นและความอิ่มสีให้เอง: อุ่นตอนพระอาทิตย์ตก เย็นตอนกลางคืน หม่นลงตอนฝน/หิมะ และเอนตามฤดูกาล",
+  "config.colorgrade.contrast.name": "คอนทราสต์",
+  "config.colorgrade.saturation.name": "ความอิ่มสี",
+  "config.colorgrade.temperature.name": "อุณหภูมิสี (อุ่น/เย็น)",
+  "config.colorgrade.temperature.tooltip": "ค่าลบ = เย็น/ฟ้า, ค่าบวก = อุ่น/ส้ม เพิ่มทับบนโหมดอัตโนมัติ",
+  "config.colorgrade.brightness.name": "ความสว่าง",
+  "config.colorgrade.tonemap.name": "โทนแบบฟิล์ม (ACES)",
+  "config.colorgrade.tonemap.tooltip": "ค่าเริ่มต้นไม่ใช้ เพราะภาพเป็น LDR อยู่แล้ว จะช่วยเฉพาะตอนดันความสว่างเกิน 1 ไม่งั้นภาพจะหม่น",
+
   "config.section.camera": "กล้อง",
   "config.camera.mode.name": "โหมดกล้อง",
   "config.camera.mode.tooltip": "Off = แบบเดิม (snap). Smooth = ไถลตามตอนเดิน แล้วเข้าที่เร็วตอนหยุด",
@@ -44,5 +90,5 @@
   "config.debug.tooltip": "บันทึกข้อมูล render pipeline ลงคอนโซล SMAPI เพื่อช่วยแก้ปัญหา",
 
   "config.section.wip": "เร็วๆ นี้ (กำลังพัฒนา)",
-  "config.wip.text": "เอฟเฟกต์เหล่านี้วางแผนไว้แล้วแต่ยังไม่ได้ทำ จึงยังไม่มีตัวตั้งค่าที่นี่:\n- ปรับโทนสีและหมอก / ลำแสง\n- เงาเมฆและ tilt-shift (เทียบเท่า DynamicShader)\n- ปรับปรุงน้ำ, vignette, chromatic aberration, depth of field\n- แสงไดนามิก 2D พร้อมเงานุ่ม\n- อัปสเกลเท็กซ์เจอร์คุณภาพสูง\nแต่ละเอฟเฟกต์จะมีตัวเลือกของตัวเองเมื่อพร้อมใช้งาน"
+  "config.wip.text": "เอฟเฟกต์เหล่านี้วางแผนไว้แล้วแต่ยังไม่ได้ทำ จึงยังไม่มีตัวตั้งค่าที่นี่:\n- หมอก / ลำแสง\n- เงาเมฆและ tilt-shift (เทียบเท่า DynamicShader)\n- ปรับปรุงน้ำ, vignette, chromatic aberration, depth of field\n- แสงไดนามิก 2D พร้อมเงานุ่ม\n- อัปสเกลเท็กซ์เจอร์คุณภาพสูง\nแต่ละเอฟเฟกต์จะมีตัวเลือกของตัวเองเมื่อพร้อมใช้งาน"
 }

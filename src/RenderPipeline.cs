@@ -3,6 +3,7 @@ using System.IO;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
+using StardewValley;
 
 namespace SDVRadiance
 {
@@ -27,9 +28,11 @@ namespace SDVRadiance
         private readonly string _modDir;
 
         private RenderTarget2D? _sceneRT;   // full-res copy of the captured frame
+        private RenderTarget2D? _fullRT;    // full-res scratch for chaining stages
         private RenderTarget2D? _rtA;       // half-res scratch
         private RenderTarget2D? _rtB;       // half-res scratch
         private Effect? _bloom;
+        private Effect? _colorGrade;
 
         private bool _loggedOnce;
 
@@ -47,31 +50,36 @@ namespace SDVRadiance
 
         private void LoadEffects()
         {
+            _bloom = LoadEffect("bloom.mgfxo");
+            _colorGrade = LoadEffect("colorgrade.mgfxo");
+        }
+
+        private Effect? LoadEffect(string file)
+        {
             try
             {
-                string path = Path.Combine(_modDir, "assets", "bloom.mgfxo");
+                string path = Path.Combine(_modDir, "assets", file);
                 if (File.Exists(path))
                 {
-                    _bloom = new Effect(_device, File.ReadAllBytes(path));
-                    _monitor.Log("Loaded bloom.mgfxo.", LogLevel.Trace);
+                    var fx = new Effect(_device, File.ReadAllBytes(path));
+                    _monitor.Log($"Loaded {file}.", LogLevel.Trace);
+                    return fx;
                 }
-                else
-                {
-                    _monitor.Log($"bloom.mgfxo not found at {path}; bloom disabled.", LogLevel.Warn);
-                }
+                _monitor.Log($"{file} not found at {path}; that effect is disabled.", LogLevel.Warn);
             }
             catch (Exception ex)
             {
-                _bloom = null;
-                _monitor.Log($"Failed to load bloom shader (bloom disabled): {ex.Message}", LogLevel.Warn);
+                _monitor.Log($"Failed to load {file} (that effect is disabled): {ex.Message}", LogLevel.Warn);
             }
+            return null;
         }
 
         public bool BloomAvailable => _bloom != null;
 
-        /// <summary>True when at least one implemented effect is switched on.</summary>
-        private static bool AnyEffectActive(ModConfig config) =>
-            config.BloomEnabled;
+        /// <summary>True when at least one implemented effect is switched on and loaded.</summary>
+        private bool AnyEffectActive(ModConfig config) =>
+            (config.BloomEnabled && _bloom != null)
+            || (config.ColorGradeEnabled && _colorGrade != null);
 
         private void EnsureTargets(int w, int h, SurfaceFormat format)
         {
@@ -82,10 +90,12 @@ namespace SDVRadiance
                 return;
 
             _sceneRT?.Dispose();
+            _fullRT?.Dispose();
             _rtA?.Dispose();
             _rtB?.Dispose();
 
             _sceneRT = new RenderTarget2D(_device, w, h, false, format, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
+            _fullRT = new RenderTarget2D(_device, w, h, false, format, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
 
             int hw = Math.Max(1, w / 2), hh = Math.Max(1, h / 2);
             _rtA = new RenderTarget2D(_device, hw, hh, false, format, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
@@ -100,7 +110,7 @@ namespace SDVRadiance
         /// </summary>
         public void Apply(SpriteBatch sb, ModConfig config)
         {
-            if (!AnyEffectActive(config) || _bloom == null)
+            if (!AnyEffectActive(config))
                 return;
 
             if (config.DebugLogging)
@@ -148,8 +158,20 @@ namespace SDVRadiance
                 sb.Draw(target, new Rectangle(0, 0, w, h), Color.White);
                 sb.End();
 
-                if (config.BloomEnabled)
-                    RenderBloom(sb, target, config);
+                // 2) Effect chain. Each stage reads `current` and writes the next buffer;
+                //    the final active stage writes straight back into `target`.
+                bool doBloom = config.BloomEnabled && _bloom != null;
+                bool doGrade = config.ColorGradeEnabled && _colorGrade != null;
+
+                Texture2D current = _sceneRT!;
+                if (doBloom)
+                {
+                    RenderTarget2D dest = doGrade ? _fullRT! : target;
+                    RenderBloom(sb, current, dest, config);
+                    current = dest;
+                }
+                if (doGrade)
+                    ColorGrade(sb, current, target, config);
             }
             catch (Exception ex)
             {
@@ -179,20 +201,20 @@ namespace SDVRadiance
             _frames = _applied = _skipNoTarget = _sizeChanges = 0;
         }
 
-        /// <summary>bright pass → H blur → V blur → additive composite back into <paramref name="target"/>.</summary>
-        private void RenderBloom(SpriteBatch sb, RenderTarget2D target, ModConfig config)
+        /// <summary>bright pass → H blur → V blur → additive composite of <paramref name="source"/> into <paramref name="dest"/>.</summary>
+        private void RenderBloom(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var bloom = _bloom!;
             var rtA = _rtA!;
             var rtB = _rtB!;
-            int w = target.Width, h = target.Height;
+            int w = dest.Width, h = dest.Height;
 
-            // 1) bright pass + Karis downsample: scene (full) -> rtA (half).
+            // 1) bright pass + Karis downsample: source (full) -> rtA (half).
             //    TexelSize here is the SOURCE (full-res) texel, for the 4-tap box offsets.
             bloom.Parameters["Threshold"]?.SetValue(config.BloomThreshold);
             bloom.Parameters["TexelSize"]?.SetValue(new Vector2(1f / w, 1f / h));
             bloom.CurrentTechnique = bloom.Techniques["BrightPass"];
-            Pass(sb, _sceneRT!, rtA, bloom);
+            Pass(sb, source, rtA, bloom);
 
             // 2) horizontal blur: rtA -> rtB
             bloom.Parameters["TexelSize"]?.SetValue(new Vector2(1f / rtA.Width, 0f));
@@ -204,14 +226,63 @@ namespace SDVRadiance
             bloom.CurrentTechnique = bloom.Techniques["BlurVertical"];
             Pass(sb, rtB, rtA, bloom);
 
-            // 4) composite: scene + Intensity * blur(rtA) -> back into the game's world target
+            // 4) composite: source + Intensity * blur(rtA) -> dest
             bloom.Parameters["Intensity"]?.SetValue(config.BloomIntensity);
             bloom.Parameters["BloomTexture"]?.SetValue(rtA);
             bloom.CurrentTechnique = bloom.Techniques["Composite"];
-            _device.SetRenderTarget(target);
+            _device.SetRenderTarget(dest);
             sb.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone, bloom);
-            sb.Draw(_sceneRT!, new Rectangle(0, 0, w, h), Color.White);
+            sb.Draw(source, new Rectangle(0, 0, w, h), Color.White);
             sb.End();
+        }
+
+        /// <summary>Single-pass parametric color grade of <paramref name="source"/> into <paramref name="dest"/>.</summary>
+        private void ColorGrade(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
+        {
+            var fx = _colorGrade!;
+
+            float temp = config.ColorGradeTemperature;
+            float sat = config.ColorGradeSaturation;
+            if (config.ColorGradeAuto)
+            {
+                ComputeAuto(out float autoTemp, out float autoSatMul);
+                temp += autoTemp;
+                sat *= autoSatMul;
+            }
+
+            fx.Parameters["Strength"]?.SetValue(MathHelper.Clamp(config.ColorGradeStrength, 0f, 1f));
+            fx.Parameters["Contrast"]?.SetValue(config.ColorGradeContrast);
+            fx.Parameters["Saturation"]?.SetValue(sat);
+            fx.Parameters["Temperature"]?.SetValue(MathHelper.Clamp(temp, -1f, 1f));
+            fx.Parameters["Brightness"]?.SetValue(config.ColorGradeBrightness);
+            fx.Parameters["ToneMap"]?.SetValue(config.ColorGradeToneMap ? 1f : 0f);
+            fx.CurrentTechnique = fx.Techniques["ColorGrade"];
+
+            _device.SetRenderTarget(dest);
+            sb.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp, DepthStencilState.None, RasterizerState.CullNone, fx);
+            sb.Draw(source, new Rectangle(0, 0, dest.Width, dest.Height), Color.White);
+            sb.End();
+        }
+
+        /// <summary>Auto mood grade: warm at sunset, cool at night, cooler/desaturated in rain/snow, seasonal bias.</summary>
+        private static void ComputeAuto(out float temp, out float satMul)
+        {
+            temp = 0f;
+            satMul = 1f;
+
+            int t = Game1.timeOfDay; // 600 = 6am … 2600 = 2am
+            if (t >= 1700 && t < 1930)
+                temp += 0.25f * ((t - 1700) / 230f);              // dusk: ramp warm
+            else if (t >= 1930 && t < 2100)
+                temp += 0.25f - 0.55f * ((t - 1930) / 170f);      // warm → cool
+            else if (t >= 2100 || t < 600)
+                temp -= 0.30f;                                    // night: cool/blue
+
+            if (Game1.isRaining) { temp -= 0.12f; satMul *= 0.85f; }
+            if (Game1.isSnowing) { temp -= 0.15f; satMul *= 0.90f; }
+
+            if (Game1.season == Season.Winter) temp -= 0.08f;
+            else if (Game1.season == Season.Summer) temp += 0.05f;
         }
 
         /// <summary>Draw <paramref name="source"/> into <paramref name="dest"/> through <paramref name="effect"/>.</summary>
@@ -226,11 +297,13 @@ namespace SDVRadiance
         public void Dispose()
         {
             _sceneRT?.Dispose();
+            _fullRT?.Dispose();
             _rtA?.Dispose();
             _rtB?.Dispose();
             _bloom?.Dispose();
-            _sceneRT = _rtA = _rtB = null;
-            _bloom = null;
+            _colorGrade?.Dispose();
+            _sceneRT = _fullRT = _rtA = _rtB = null;
+            _bloom = _colorGrade = null;
         }
     }
 }
