@@ -29,10 +29,24 @@ namespace SDVRadiance
         // supports a uniform scale, so the RT is the only way to squash the player vertically.
         private RenderTarget2D? _playerRT;
         private SpriteBatch? _rtBatch;
+        private Texture2D? _gradTex;
         private Vector2 _playerFeetInRT;
         private bool _playerReady;
         private const int PlayerRtW = 96;
         private const int PlayerRtH = 176;
+        /// <summary>Opacity at the far tip (head end) relative to the feet, for the gradient fade.</summary>
+        private const float HeadFade = 0.15f;
+
+        // Multiply only the destination ALPHA by the source alpha (RGB untouched): dst.a *= src.a.
+        // Used to bake the feet→head opacity gradient onto the silhouette.
+        private static readonly BlendState MultiplyAlpha = new()
+        {
+            ColorWriteChannels = ColorWriteChannels.Alpha,
+            AlphaSourceBlend = Blend.Zero,
+            AlphaDestinationBlend = Blend.SourceAlpha,
+            ColorSourceBlend = Blend.Zero,
+            ColorDestinationBlend = Blend.One,
+        };
 
         /// <summary>Would a directional shadow be cast right now? (outdoors, daytime, clear, enabled)</summary>
         internal static bool ShouldCast(ModConfig config)
@@ -144,6 +158,13 @@ namespace SDVRadiance
                 who.FarmerRenderer.draw(_rtBatch, who.FarmerSprite.CurrentAnimationFrame, who.FarmerSprite.CurrentFrame,
                     src, pos, Vector2.Zero, 0f, who.FacingDirection, Color.Black, 0f, 1f, who);
                 _rtBatch.End();
+
+                // Fade the silhouette's opacity from the feet (full) to the head/far tip (faint),
+                // so the stretched far end reads as a soft penumbra rather than a hard clone.
+                _gradTex ??= BuildGradient(gd);
+                _rtBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
+                _rtBatch.Draw(_gradTex, new Rectangle(0, 0, PlayerRtW, PlayerRtH), Color.White);
+                _rtBatch.End();
                 _playerReady = true;
             }
             catch (Exception ex)
@@ -155,6 +176,21 @@ namespace SDVRadiance
             {
                 gd.SetRenderTargets(prev);
             }
+        }
+
+        /// <summary>1×H alpha ramp: 1.0 at the bottom (feet) fading to <see cref="HeadFade"/> at the top (far tip).</summary>
+        private static Texture2D BuildGradient(GraphicsDevice gd)
+        {
+            var tex = new Texture2D(gd, 1, PlayerRtH);
+            var data = new Color[PlayerRtH];
+            for (int y = 0; y < PlayerRtH; y++)
+            {
+                float tBottom = (float)y / (PlayerRtH - 1);      // 0 at top, 1 at bottom
+                float a = MathHelper.Lerp(HeadFade, 1f, tBottom);
+                data[y] = new Color(255, 255, 255, (int)(a * 255f));
+            }
+            tex.SetData(data);
+            return tex;
         }
 
         // Small disc of taps → cheap soft edge. Weighted so overlapping translucent copies
@@ -184,8 +220,8 @@ namespace SDVRadiance
         {
             // Low sun (dawn/dusk) → long, far-leaning shadow; high sun (noon) → short & upright.
             float d = MathHelper.Clamp((Game1.timeOfDay - 1200) / 600f, -1f, 1f);
-            rot = 0.9f * d;                                      // <0 morning lean, >0 evening lean
-            stretch = MathHelper.Lerp(0.4f, 2.2f, Math.Abs(d));  // stretched LONG when the sun is low
+            rot = 0.8f * d;                                      // <0 morning lean, >0 evening lean
+            stretch = MathHelper.Lerp(0.35f, 1.5f, Math.Abs(d)); // stretched LONG when the sun is low
             alpha = 0.4f;
         }
     }
