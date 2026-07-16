@@ -33,8 +33,14 @@ namespace SDVRadiance
         /// motion. The smooth 1px vertical scroll (waterPosition) is left running.
         /// </summary>
         internal static bool FreezeGameWater;
+
+        /// <summary>When true, the vanilla blob shadow is skipped (we draw a directional one instead).</summary>
+        internal static bool SuppressVanillaShadows;
         private static IMonitor? SMonitor;
         private static bool _loggedFreeze;
+
+        /// <summary>Skip the game's blob shadow while our directional shadow is active.</summary>
+        private static bool DrawShadow_Prefix() => !SuppressVanillaShadows;
 
         /// <summary>True only when the mod is on AND at least one implemented effect is switched on.</summary>
         private bool EffectsActive => _config.Enabled &&
@@ -54,6 +60,7 @@ namespace SDVRadiance
             helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
             helper.Events.Input.ButtonsChanged += OnButtonsChanged;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
+            helper.Events.Display.RenderingStep += OnRenderingStep;
 
             var harmony = new Harmony(this.ModManifest.UniqueID);
             harmony.Patch(
@@ -62,6 +69,14 @@ namespace SDVRadiance
             harmony.Patch(
                 original: AccessTools.Method(typeof(GameLocation), nameof(GameLocation.updateWater)),
                 postfix: new HarmonyMethod(typeof(ModEntry), nameof(UpdateWater_Postfix)));
+            // Suppress the vanilla blob shadow while our directional shadow is casting,
+            // so casters don't show both. Farmer overrides DrawShadow, so patch both.
+            harmony.Patch(
+                original: AccessTools.Method(typeof(Character), nameof(Character.DrawShadow)),
+                prefix: new HarmonyMethod(typeof(ModEntry), nameof(DrawShadow_Prefix)));
+            harmony.Patch(
+                original: AccessTools.Method(typeof(Farmer), nameof(Farmer.DrawShadow)),
+                prefix: new HarmonyMethod(typeof(ModEntry), nameof(DrawShadow_Prefix)));
 
             this.Monitor.Log("SDV-Radiance loaded (world post-processing via RenderedWorld).", LogLevel.Info);
         }
@@ -103,25 +118,30 @@ namespace SDVRadiance
         {
             ForceBufferDraw = EffectsActive; // self-heal: keep the postfix in sync with live config
             FreezeGameWater = _config.Enabled && _config.WaterEnabled;
-
-            // Sprite shadows draw here (after the world) so the opaque ground doesn't paint
-            // over them; done before Pipeline.Apply so they're graded with the scene.
-            // Independent of the post-processing effects (like the camera).
-            if (_config.Enabled && _config.DirectionalShadowsEnabled)
-            {
-                _shadows ??= new ShadowRenderer(Game1_GraphicsDevice);
-                ShadowRenderer.Diag = _config.DebugLogging ? this.Monitor : null;
-                _shadows.Draw(_config);
-            }
-
             if (!EffectsActive)
                 return;
             Pipeline.Apply(e.SpriteBatch, _config);
         }
 
+        /// <summary>
+        /// Inject sprite shadows into the game's own World_Sorted pass (FrontToBack), so
+        /// they depth-sort correctly: over the ground, under trees/objects/sprites.
+        /// </summary>
+        private void OnRenderingStep(object? sender, RenderingStepEventArgs e)
+        {
+            if (e.Step != StardewValley.Mods.RenderSteps.World_Sorted)
+                return;
+            if (!_config.Enabled || !_config.DirectionalShadowsEnabled)
+                return;
+            _shadows ??= new ShadowRenderer();
+            ShadowRenderer.Diag = _config.DebugLogging ? this.Monitor : null;
+            _shadows.DrawInto(e.SpriteBatch, _config);
+        }
+
         private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
         {
             _camera.Update(_config);
+            SuppressVanillaShadows = ShadowRenderer.ShouldCast(_config);
         }
 
         private void OnButtonsChanged(object? sender, ButtonsChangedEventArgs e)
