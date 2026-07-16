@@ -116,7 +116,7 @@ namespace SDVRadiance
         /// <summary>One long shadow per caster, leaning away from the sun (outdoors, daytime).</summary>
         private void DrawSunShadows(SpriteBatch b, GameLocation loc, ModConfig config, float strength, float blur)
         {
-            _fx = SpriteEffects.FlipVertically;   // sun shadow mirrors DOWN to match the game's art
+            _fx = SpriteEffects.None;             // upright silhouette (the look the user preferred)
             ComputeSun(out float rot, out float stretch, out float alpha);
             alpha *= strength;
             if (alpha <= 0.01f)
