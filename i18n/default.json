@@ -134,6 +134,17 @@
   "config.ca.enabled.tooltip": "Subtle color fringing toward the edges, like a camera lens. Keep it low on pixel art.",
   "config.ca.strength.name": "Aberration strength",
 
+  "config.section.lighting": "Dynamic lighting",
+  "config.lighting.enabled.name": "Enable dynamic lighting",
+  "config.lighting.enabled.tooltip": "Darken flat/unlit areas and pool warm light around real light sources (lamps, torches, fireplaces). Makes dark places read dark and lit places read bright, with soft falloff.",
+  "config.lighting.indoor.name": "Indoor darkness",
+  "config.lighting.indoor.tooltip": "How much to darken interiors. The game leaves most rooms flat and fully bright; this brings back shadow so lamps actually matter. 0 = off.",
+  "config.lighting.night.name": "Extra night darkness",
+  "config.lighting.night.tooltip": "Additional darkening after nightfall in rooms we light ourselves.",
+  "config.lighting.warmth.name": "Light warmth",
+  "config.lighting.boost.name": "Light brightness",
+  "config.lighting.radius.name": "Light radius scale",
+
   "config.section.camera": "Camera",
   "config.camera.mode.name": "Camera mode",
   "config.camera.mode.tooltip": "Off = vanilla snap. Smooth = ease toward the player while moving, snap crisply when you stop.",
@@ -147,5 +158,5 @@
   "config.debug.tooltip": "Log render-pipeline info to the SMAPI console to help troubleshoot.",
 
   "config.section.wip": "Coming soon (in development)",
-  "config.wip.text": "These effects are planned but not implemented yet, so they have no settings here:\n- Dynamic 2D lighting with soft shadows\n- High-quality texture upscaling\nEach effect will get its own options as it lands."
+  "config.wip.text": "These effects are planned but not implemented yet, so they have no settings here:\n- High-quality texture upscaling\nEach effect will get its own options as it lands."
 }

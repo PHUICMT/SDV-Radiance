@@ -36,6 +36,13 @@ namespace SDVRadiance
         private Effect? _tiltShift;
         private Effect? _water;
         private Effect? _finishing;
+        private Effect? _lighting;
+
+        // Phase 5 dynamic lighting: per-frame light list read from Game1.currentLightSources.
+        private const int MaxLights = 16;
+        private readonly Vector2[] _lightPos = new Vector2[MaxLights];
+        private readonly Vector4[] _lightData = new Vector4[MaxLights]; // xyz = colour*boost, w = radiusUV
+        private int _lightCount;
 
         private Texture2D? _waterMask;         // per-tile water mask, aligned to the viewport
         private Color[]? _waterMaskBuf;
@@ -70,6 +77,7 @@ namespace SDVRadiance
             _tiltShift = LoadEffect("tiltshift.mgfxo");
             _water = LoadEffect("water.mgfxo");
             _finishing = LoadEffect("finishing.mgfxo");
+            _lighting = LoadEffect("lighting.mgfxo");
         }
 
         private Effect? LoadEffect(string file)
@@ -95,7 +103,8 @@ namespace SDVRadiance
         public bool BloomAvailable => _bloom != null;
 
         private bool AnyEffectActive(ModConfig c) =>
-            (c.CloudShadowEnabled && _cloudShadow != null)
+            (c.LightingEnabled && _lighting != null)
+            || (c.CloudShadowEnabled && _cloudShadow != null)
             || (c.GodRaysEnabled && _godRays != null)
             || (c.BloomEnabled && _bloom != null)
             || (c.FogEnabled && _fog != null)
@@ -171,6 +180,10 @@ namespace SDVRadiance
                 bool outdoors = Game1.currentLocation?.IsOutdoors ?? false;
 
                 var stages = new List<Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>>();
+                // Dynamic lighting first: darken flat/unlit areas and pool light around
+                // real light sources, so everything downstream (bloom/god rays/grade)
+                // sees the lit result. Only when there's actually something to light.
+                if (config.LightingEnabled && _lighting != null && BuildLightList(w, h, config)) stages.Add(RenderLighting);
                 // Water ripple first (only if the current location actually has visible
                 // water tiles), so everything downstream sees the refracted result.
                 if (config.WaterEnabled && _water != null && BuildWaterMask(w, h)) stages.Add(RenderWater);
@@ -427,6 +440,107 @@ namespace SDVRadiance
             DrawFull(sb, source, dest, fx);
         }
 
+        private void RenderLighting(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
+        {
+            var fx = _lighting!;
+            fx.Parameters["AmbientColor"]?.SetValue(ComputeLightingAmbient(config));
+            fx.Parameters["Aspect"]?.SetValue(dest.Height > 0 ? dest.Width / (float)dest.Height : 1f);
+            fx.Parameters["LightCount"]?.SetValue(_lightCount);
+            fx.Parameters["LightPos"]?.SetValue(_lightPos);
+            fx.Parameters["LightData"]?.SetValue(_lightData);
+            // Allow pools to slightly exceed 1 so lamps glow a touch; keep it modest.
+            fx.Parameters["Overbright"]?.SetValue(1.0f + 0.4f * MathHelper.Clamp(config.LightingBoost, 0f, 2f));
+            // Occluder shadows are wired in a later step; keep the sampler bound to a
+            // valid texture and disabled (ShadowStrength 0) so nothing samples garbage.
+            fx.Parameters["ShadowStrength"]?.SetValue(0f);
+            fx.Parameters["OccluderTexture"]?.SetValue(source);
+            fx.CurrentTechnique = fx.Techniques["Lighting"];
+            DrawFull(sb, source, dest, fx);
+        }
+
+        /// <summary>
+        /// Read the on-screen light sources into the shader arrays. Returns false
+        /// (skipping the lighting stage) only when there's nothing to do — i.e. no
+        /// lights AND no ambient darkening to apply this frame.
+        /// </summary>
+        private bool BuildLightList(int w, int h, ModConfig config)
+        {
+            _lightCount = 0;
+            for (int i = 0; i < MaxLights; i++) { _lightPos[i] = Vector2.Zero; _lightData[i] = Vector4.Zero; }
+
+            int vw = Math.Max(1, Game1.viewport.Width);
+            int vh = Math.Max(1, Game1.viewport.Height);
+
+            // Warm tint for the light pools (candle-orange at Warmth=1).
+            float warmth = MathHelper.Clamp(config.LightingWarmth, 0f, 1f);
+            Vector3 warm = Vector3.Lerp(Vector3.One, new Vector3(1.0f, 0.78f, 0.5f), warmth);
+            float boost = MathHelper.Clamp(config.LightingBoost, 0f, 2f);
+            float radiusScale = MathHelper.Clamp(config.LightingRadiusScale, 0.2f, 3f);
+
+            var lights = Game1.currentLightSources;
+            if (lights != null && lights.Count > 0)
+            {
+                foreach (var kv in lights)
+                {
+                    if (_lightCount >= MaxLights)
+                        break;
+
+                    LightSource ls = kv.Value;
+                    Vector2 local = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
+                    float u = local.X / vw;
+                    float v = local.Y / vh;
+
+                    // Light reach ≈ radius*256 world px (matches the game's own cull box);
+                    // convert to UV height units so the shader draws a round pool.
+                    float radiusUv = ls.radius.Value * 256f / vh * radiusScale;
+                    if (u < -radiusUv * 2f || u > 1f + radiusUv * 2f || v < -radiusUv * 2f || v > 1f + radiusUv * 2f)
+                        continue; // fully off-screen
+
+                    // Vanilla stores light colour as the INVERSE (Black = full bright
+                    // white light), so invert to get the visible glow colour.
+                    Color c = ls.color.Value;
+                    Vector3 glow = new(1f - c.R / 255f, 1f - c.G / 255f, 1f - c.B / 255f);
+                    if (glow.LengthSquared() < 0.01f)
+                        glow = Vector3.One; // pure-white source stored as black-ish
+                    glow *= warm * boost;
+
+                    _lightPos[_lightCount] = new Vector2(u, v);
+                    _lightData[_lightCount] = new Vector4(glow, Math.Max(0.02f, radiusUv));
+                    _lightCount++;
+                }
+            }
+
+            // Run the stage if we have lights, or if we're darkening a flat interior
+            // (so the room actually gets darker even with no lamps in view).
+            bool darkening = ComputeLightingAmbient(config) != Vector3.One;
+            return _lightCount > 0 || darkening;
+        }
+
+        /// <summary>
+        /// The per-pixel ambient multiplier for unlit areas. We only darken flat-bright
+        /// interiors that the game leaves unlit (its own lightmap isn't drawn there);
+        /// outdoors, mines, and scripted-dark rooms already get vanilla lighting, so we
+        /// return white there to avoid double-darkening.
+        /// </summary>
+        private static Vector3 ComputeLightingAmbient(ModConfig config)
+        {
+            bool outdoors = Game1.currentLocation?.IsOutdoors ?? false;
+            bool vanillaLit = outdoors
+                || Game1.currentLocation is StardewValley.Locations.MineShaft
+                || !Game1.ambientLight.Equals(Color.White);
+            if (vanillaLit)
+                return Vector3.One;
+
+            float dark = MathHelper.Clamp(config.LightingIndoorDarkness, 0f, 0.95f);
+            int t = Game1.timeOfDay;
+            if (t >= 1900 || t < 600)
+                dark = MathHelper.Clamp(dark + config.LightingNightDarkness, 0f, 0.95f);
+
+            // Cool moonlight-ish tint for the darkened room.
+            Vector3 darkTint = new(0.45f, 0.48f, 0.62f);
+            return Vector3.Lerp(Vector3.One, darkTint, dark);
+        }
+
         /// <summary>
         /// Build a per-tile water mask for the visible area from the current location,
         /// aligned to the viewport. Returns false (and skips the water stage) when the
@@ -623,10 +737,10 @@ namespace SDVRadiance
         {
             _sceneRT?.Dispose(); _fullA?.Dispose(); _fullB?.Dispose(); _rtA?.Dispose(); _rtB?.Dispose(); _waterMask?.Dispose(); _lumRT?.Dispose();
             _bloom?.Dispose(); _colorGrade?.Dispose(); _godRays?.Dispose(); _fog?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
-            _water?.Dispose(); _finishing?.Dispose();
+            _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose();
             _sceneRT = _fullA = _fullB = _rtA = _rtB = null;
             _waterMask = null; _lumRT = null;
-            _bloom = _colorGrade = _godRays = _fog = _cloudShadow = _tiltShift = _water = _finishing = null;
+            _bloom = _colorGrade = _godRays = _fog = _cloudShadow = _tiltShift = _water = _finishing = _lighting = null;
         }
     }
 }

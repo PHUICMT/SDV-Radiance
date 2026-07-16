@@ -115,6 +115,24 @@ namespace SDVRadiance
         public bool ChromaticAberrationEnabled { get; set; } = false;
         public float ChromaticAberrationStrength { get; set; } = 0.3f; // 0..1 UI scale (scaled to a tiny UV offset)
 
+        // --- Phase 5: Dynamic 2D lighting ---
+        /// <summary>Darken flat/unlit areas and pool light around real light sources.</summary>
+        public bool LightingEnabled { get; set; } = false;
+        /// <summary>How dark interiors get (vanilla leaves them flat-bright). 0 = none, 1 = very dark.</summary>
+        public float LightingIndoorDarkness { get; set; } = 0.5f;
+        /// <summary>Extra darkening at night where we own the lighting. 0 = none.</summary>
+        public float LightingNightDarkness { get; set; } = 0.35f;
+        /// <summary>Warmth of the light pools (0 = neutral white, 1 = candle-orange).</summary>
+        public float LightingWarmth { get; set; } = 0.35f;
+        /// <summary>Scale the on-screen radius of every light pool.</summary>
+        public float LightingRadiusScale { get; set; } = 1.0f;
+        /// <summary>Brightness of the light pools added back over the darkened scene.</summary>
+        public float LightingBoost { get; set; } = 1.0f;
+        /// <summary>Cast hard-edge shadows from tall/solid tiles that block light.</summary>
+        public bool LightingShadows { get; set; } = false;
+        /// <summary>How dark occluder shadows are. 0 = none, 1 = full.</summary>
+        public float LightingShadowStrength { get; set; } = 0.5f;
+
         // --- Camera (independent of the post-processing pipeline) ---
         /// <summary>Which camera behaviour to use. Off = vanilla snap.</summary>
         public CameraMode CameraMode { get; set; } = CameraMode.Off;

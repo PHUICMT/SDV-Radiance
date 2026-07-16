@@ -142,6 +142,17 @@
   "config.tiltshift.top.name": "ปริมาณเบลอด้านบน",
   "config.tiltshift.bottom.name": "ปริมาณเบลอด้านล่าง",
 
+  "config.section.lighting": "แสงไดนามิก",
+  "config.lighting.enabled.name": "เปิดแสงไดนามิก",
+  "config.lighting.enabled.tooltip": "ทำให้ที่มืด/ไม่มีไฟมืดลงจริง และเกิดวงแสงอุ่นรอบแหล่งไฟจริง (โคมไฟ คบเพลิง เตาผิง) — ที่มืดควรมืด ที่สว่างควรสว่าง ขอบวงแสงนุ่มเนียน",
+  "config.lighting.indoor.name": "ความมืดในอาคาร",
+  "config.lighting.indoor.tooltip": "จะทำให้ในห้องมืดลงแค่ไหน ปกติเกมปล่อยห้องให้สว่างแบนหมด ตัวนี้เอาเงากลับมาให้ไฟมีความหมาย 0 = ปิด",
+  "config.lighting.night.name": "มืดเพิ่มตอนกลางคืน",
+  "config.lighting.night.tooltip": "เพิ่มความมืดหลังพระอาทิตย์ตกในห้องที่เราคุมแสงเอง",
+  "config.lighting.warmth.name": "ความอุ่นของแสง",
+  "config.lighting.boost.name": "ความสว่างของแสง",
+  "config.lighting.radius.name": "ขนาดวงแสง",
+
   "config.section.camera": "กล้อง",
   "config.camera.mode.name": "โหมดกล้อง",
   "config.camera.mode.tooltip": "Off = แบบเดิม (snap). Smooth = ไถลตามตอนเดิน แล้วเข้าที่เร็วตอนหยุด",
@@ -155,5 +166,5 @@
   "config.debug.tooltip": "บันทึกข้อมูล render pipeline ลงคอนโซล SMAPI เพื่อช่วยแก้ปัญหา",
 
   "config.section.wip": "เร็วๆ นี้ (กำลังพัฒนา)",
-  "config.wip.text": "เอฟเฟกต์เหล่านี้วางแผนไว้แล้วแต่ยังไม่ได้ทำ จึงยังไม่มีตัวตั้งค่าที่นี่:\n- แสงไดนามิก 2D พร้อมเงานุ่ม\n- อัปสเกลเท็กซ์เจอร์คุณภาพสูง\nแต่ละเอฟเฟกต์จะมีตัวเลือกของตัวเองเมื่อพร้อมใช้งาน"
+  "config.wip.text": "เอฟเฟกต์เหล่านี้วางแผนไว้แล้วแต่ยังไม่ได้ทำ จึงยังไม่มีตัวตั้งค่าที่นี่:\n- อัปสเกลเท็กซ์เจอร์คุณภาพสูง\nแต่ละเอฟเฟกต์จะมีตัวเลือกของตัวเองเมื่อพร้อมใช้งาน"
 }

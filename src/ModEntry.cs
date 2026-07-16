@@ -39,7 +39,8 @@ namespace SDVRadiance
         private bool EffectsActive => _config.Enabled &&
             (_config.BloomEnabled || _config.ColorGradeEnabled || _config.GodRaysEnabled
              || _config.FogEnabled || _config.CloudShadowEnabled || _config.TiltShiftEnabled
-             || _config.WaterEnabled || _config.VignetteEnabled || _config.ChromaticAberrationEnabled);
+             || _config.WaterEnabled || _config.VignetteEnabled || _config.ChromaticAberrationEnabled
+             || _config.LightingEnabled);
 
         public override void Entry(IModHelper helper)
         {
@@ -264,6 +265,21 @@ namespace SDVRadiance
                 () => I18n("config.ca.enabled.name"), () => I18n("config.ca.enabled.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.ChromaticAberrationStrength, v => _config.ChromaticAberrationStrength = v,
                 () => I18n("config.ca.strength.name"), null, 0f, 1f, 0.05f);
+
+            // --- Dynamic lighting (implemented) ---
+            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.lighting"));
+            api.AddBoolOption(this.ModManifest, () => _config.LightingEnabled, v => _config.LightingEnabled = v,
+                () => I18n("config.lighting.enabled.name"), () => I18n("config.lighting.enabled.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.LightingIndoorDarkness, v => _config.LightingIndoorDarkness = v,
+                () => I18n("config.lighting.indoor.name"), () => I18n("config.lighting.indoor.tooltip"), 0f, 0.95f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.LightingNightDarkness, v => _config.LightingNightDarkness = v,
+                () => I18n("config.lighting.night.name"), () => I18n("config.lighting.night.tooltip"), 0f, 0.95f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.LightingWarmth, v => _config.LightingWarmth = v,
+                () => I18n("config.lighting.warmth.name"), null, 0f, 1f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.LightingBoost, v => _config.LightingBoost = v,
+                () => I18n("config.lighting.boost.name"), null, 0f, 2f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.LightingRadiusScale, v => _config.LightingRadiusScale = v,
+                () => I18n("config.lighting.radius.name"), null, 0.2f, 3f, 0.1f);
 
             // --- Camera (implemented) ---
             api.AddSectionTitle(this.ModManifest, () => I18n("config.section.camera"));
