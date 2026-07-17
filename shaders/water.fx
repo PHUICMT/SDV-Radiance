@@ -54,6 +54,11 @@ float2 MaskSize;        // mask texture size in texels (tiles)
 float WaterKind;        // 0 = still (pond/river), 1 = ocean/beach (big directional swell)
 float ReflectStrength;  // 0 = off; screen-space reflection of the scene above the surface
 float SparkleDensity;   // ~0.2–2: glint count per area; glint size follows inversely
+float SunWarm;          // 0–1 golden-hour factor: sparkle + sheen turn warm at low sun
+float NightGlow;        // 0–1 after dusk: star reflections + lamp glimmer fade in
+float RainAmt;          // 0–1 raining: expanding drop rings on the surface
+float4 Lights[8];       // xy = screen UV, z = radius (unused), w = intensity
+float LightCount;       // how many entries of Lights are live
 float4 PlayerRect;      // player silhouette bounds in screen UV (x0,y0,x1,y1)
 texture PlayerMaskTexture;   // the player's baked silhouette — its alpha marks the
                              // player's ACTUAL pixels (not a box) to exclude from
@@ -279,7 +284,52 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float d = length(f - center);
     float pulse = 0.5 + 0.5 * sin(t * spulse + r1 * 6.2831853);
     float glint = smoothstep(0.24, 0.0, d) * pulse;
-    col.rgb += glint * Sparkle * water;
+    // Golden hour: the glints warm up with the low sun instead of staying white.
+    float3 glintCol = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.82, 0.5), SunWarm);
+    col.rgb += glint * Sparkle * water * glintCol;
+
+    // ---- Night: starlight on the surface (clear nights only) ----
+    if (NightGlow > 0.001)
+    {
+        float2 sgrid = worldTile * 7.0;
+        float2 scell = floor(sgrid);
+        float sr1 = hash(scell);
+        float sr2 = hash(scell + 41.7);
+        float has = step(0.82, sr1);                     // sparse cells hold a star
+        float2 sc = float2(frac(sr1 * 13.7), frac(sr2 * 7.3)) * 0.6 + 0.2;
+        float sd = length(frac(sgrid) - sc);
+        float tw = 0.55 + 0.45 * sin(t * 0.9 + sr2 * 6.2831853);   // slow twinkle
+        float star = smoothstep(0.12, 0.0, sd) * has * tw;
+        col.rgb += star * NightGlow * (1.0 - RainAmt) * water * float3(0.75, 0.85, 1.0) * 0.9;
+    }
+
+    // ---- Night: warm lamp light shimmering down the water below each light ----
+    if (NightGlow > 0.001 && LightCount > 0.5)
+    {
+        [unroll]
+        for (int li = 0; li < 8; li++)
+        {
+            float on = step((float)li + 0.5, LightCount);
+            float4 L = Lights[li];
+            float2 dl = uv - L.xy;
+            float band = exp(-abs(dl.x + ripple.x * 2.0) * 90.0);          // narrow column
+            float below = smoothstep(-0.01, 0.03, dl.y) * exp(-dl.y * 6.0); // fades with distance below
+            float flick = 0.75 + 0.25 * sin(t * 3.1 + (float)li * 2.4 + worldTile.y * 9.0);
+            col.rgb += on * L.w * band * below * flick * water * NightGlow * float3(1.0, 0.74, 0.42) * 0.45;
+        }
+    }
+
+    // ---- Rain: expanding drop rings, one per cell, staggered by a random phase ----
+    if (RainAmt > 0.001)
+    {
+        float2 rg = worldTile * 2.2;
+        float2 rc = floor(rg);
+        float rr = hash(rc + 7.7);
+        float ph = frac(t * 0.7 + rr);
+        float2 dropAt = (float2(rr, frac(rr * 9.3)) - 0.5) * 0.35;
+        float ring = smoothstep(0.035, 0.0, abs(length(frac(rg) - 0.5 + dropAt) - ph * 0.42));
+        col.rgb += ring * (1.0 - ph) * RainAmt * water * 0.10;
+    }
 
     return col;
 }

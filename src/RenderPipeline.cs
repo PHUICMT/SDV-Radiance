@@ -50,6 +50,7 @@ namespace SDVRadiance
         private Color[]? _waterMaskCoreBuf;
         private bool[]? _waterBoolBuf;         // pre-dilation water flags (see BuildWaterMask)
         private bool[]? _waterBool2Buf;        // scratch for the second dilation pass
+        private readonly Vector4[] _lightArr = new Vector4[8];   // on-screen lights → water glimmer
         private Vector2 _waterTilesPerScreen, _waterWorldTileOffset, _waterMaskSize;
 
         private Texture2D? _occluderMask;      // per-tile occluder mask (walls/structures) for shadows
@@ -517,6 +518,38 @@ namespace SDVRadiance
             }
             fx.Parameters["PlayerRect"]?.SetValue(playerRect);
             fx.Parameters["PlayerMaskTexture"]?.SetValue(pmask);
+
+            // Time-of-day / weather dressing: golden-hour sparkle, star reflections and
+            // lamp glimmer after dusk, raindrop rings while raining.
+            int tnow = Game1.timeOfDay;
+            int mins = (tnow / 100) * 60 + tnow % 100;
+            float sunWarm = 0f;
+            if (!Game1.isRaining && tnow < 1900)
+            {
+                float dd = MathHelper.Clamp((tnow - 1200) / 600f, -1f, 1f);
+                sunWarm = MathHelper.Clamp((Math.Abs(dd) - 0.55f) / 0.45f, 0f, 1f);
+            }
+            float nightGlow = MathHelper.Clamp((mins - 1140) / 90f, 0f, 1f);   // 19:00 → 20:30
+            fx.Parameters["SunWarm"]?.SetValue(sunWarm);
+            fx.Parameters["NightGlow"]?.SetValue(nightGlow);
+            fx.Parameters["RainAmt"]?.SetValue(Game1.isRaining ? 1f : 0f);
+
+            int lc = 0;
+            if (nightGlow > 0f && Game1.currentLightSources != null)
+            {
+                foreach (var kv in Game1.currentLightSources.Values)
+                {
+                    if (lc >= 8)
+                        break;
+                    Vector2 sp = Game1.GlobalToLocal(Game1.viewport, kv.position.Value);
+                    if (sp.X < -160 || sp.X > dest.Width + 160 || sp.Y < -160 || sp.Y > dest.Height + 160)
+                        continue;
+                    _lightArr[lc++] = new Vector4(sp.X / dest.Width, sp.Y / dest.Height, kv.radius.Value, 0.9f);
+                }
+            }
+            fx.Parameters["LightCount"]?.SetValue((float)lc);
+            fx.Parameters["Lights"]?.SetValue(_lightArr);
+
             fx.CurrentTechnique = fx.Techniques["Water"];
             DrawFull(sb, source, dest, fx);
         }
