@@ -114,6 +114,7 @@ namespace SDVRadiance
         public float WaterStrength { get; set; } = 0.5f;   // ripple amplitude
         public float WaterSpeed { get; set; } = 1.0f;      // ripple animation speed
         public float WaterSparkle { get; set; } = 0.25f;   // specular glint intensity
+        public float WaterSparkleDensity { get; set; } = 0.7f; // glint count/size (1 = old look)
         public bool WaterReflection { get; set; } = false; // screen-space reflection on water
         public float WaterReflectStrength { get; set; } = 0.3f;
 
@@ -197,6 +198,7 @@ namespace SDVRadiance
             WaterStrength = C(WaterStrength, 0f, 2f);
             WaterSpeed = C(WaterSpeed, 0f, 3f);
             WaterSparkle = C(WaterSparkle, 0f, 1f);
+            WaterSparkleDensity = C(WaterSparkleDensity, 0.2f, 2f);
             WaterReflectStrength = C(WaterReflectStrength, 0f, 1f);
             VignetteStrength = C(VignetteStrength, 0f, 1f);
             ChromaticAberrationStrength = C(ChromaticAberrationStrength, 0f, 1f);

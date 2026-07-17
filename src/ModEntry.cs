@@ -485,6 +485,8 @@ namespace SDVRadiance
                 () => I18n("config.water.speed.name"), null, 0f, 3f, 0.1f);
             api.AddNumberOption(this.ModManifest, () => _config.WaterSparkle, v => _config.WaterSparkle = v,
                 () => I18n("config.water.sparkle.name"), null, 0f, 1f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.WaterSparkleDensity, v => _config.WaterSparkleDensity = v,
+                () => I18n("config.water.sparkledensity.name"), () => I18n("config.water.sparkledensity.tooltip"), 0.2f, 2f, 0.05f);
             api.AddBoolOption(this.ModManifest, () => _config.WaterReflection, v => _config.WaterReflection = v,
                 () => I18n("config.water.reflection.name"), () => I18n("config.water.reflection.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.WaterReflectStrength, v => _config.WaterReflectStrength = v,

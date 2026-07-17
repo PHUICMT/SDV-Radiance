@@ -44,8 +44,12 @@ namespace SDVRadiance
         private readonly Vector4[] _lightData = new Vector4[MaxLights]; // xyz = colour*boost, w = radiusUV
         private int _lightCount;
 
-        private Texture2D? _waterMask;         // per-tile water mask, aligned to the viewport
+        private Texture2D? _waterMask;         // per-tile water mask, aligned to the viewport (DILATED — effect coverage)
+        private Texture2D? _waterMaskCore;     // undilated mask — true water bodies, used for the reflection's shoreline search
         private Color[]? _waterMaskBuf;
+        private Color[]? _waterMaskCoreBuf;
+        private bool[]? _waterBoolBuf;         // pre-dilation water flags (see BuildWaterMask)
+        private bool[]? _waterBool2Buf;        // scratch for the second dilation pass
         private Vector2 _waterTilesPerScreen, _waterWorldTileOffset, _waterMaskSize;
 
         private Texture2D? _occluderMask;      // per-tile occluder mask (walls/structures) for shadows
@@ -495,6 +499,24 @@ namespace SDVRadiance
             fx.Parameters["WorldTileOffset"]?.SetValue(_waterWorldTileOffset);
             fx.Parameters["MaskSize"]?.SetValue(_waterMaskSize);
             fx.Parameters["MaskTexture"]?.SetValue(_waterMask);
+            fx.Parameters["MaskCoreTexture"]?.SetValue(_waterMaskCore);
+            fx.Parameters["SparkleDensity"]?.SetValue(config.WaterSparkleDensity);
+            // Player SILHOUETTE mask (the shadow system's per-frame bake) in buffer UV —
+            // ring-tile water effects skip exactly the player's own pixels, so a blue outfit
+            // on a pier never ripples while the water right beside them stays animated.
+            var who = Game1.player;
+            var pmask = ShadowRenderer.PlayerMask;
+            var playerRect = new Vector4(2f, 2f, -1f, -1f);   // empty box (never matches)
+            if (who != null && pmask != null)
+            {
+                Rectangle box = who.GetBoundingBox();
+                Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, box.Bottom - 10f));
+                Vector2 tl = feet - new Vector2(ShadowRenderer.PlayerRtW / 2f, ShadowRenderer.PlayerRtH - 8f);
+                playerRect = new Vector4(tl.X / dest.Width, tl.Y / dest.Height,
+                    (tl.X + ShadowRenderer.PlayerRtW) / dest.Width, (tl.Y + ShadowRenderer.PlayerRtH) / dest.Height);
+            }
+            fx.Parameters["PlayerRect"]?.SetValue(playerRect);
+            fx.Parameters["PlayerMaskTexture"]?.SetValue(pmask);
             fx.CurrentTechnique = fx.Techniques["Water"];
             DrawFull(sb, source, dest, fx);
         }
@@ -687,6 +709,24 @@ namespace SDVRadiance
             return true;
         }
 
+        /// <summary>8-way one-tile dilation of a tile flag grid (src → dst).</summary>
+        private static void Dilate8(bool[] src, bool[] dst, int tilesW, int tilesH)
+        {
+            for (int j = 0; j < tilesH; j++)
+            {
+                for (int i = 0; i < tilesW; i++)
+                {
+                    int idx = j * tilesW + i;
+                    bool l = i > 0, r = i < tilesW - 1, u = j > 0, d = j < tilesH - 1;
+                    dst[idx] = src[idx]
+                        || (l && src[idx - 1]) || (r && src[idx + 1])
+                        || (u && src[idx - tilesW]) || (d && src[idx + tilesW])
+                        || (l && u && src[idx - tilesW - 1]) || (r && u && src[idx - tilesW + 1])
+                        || (l && d && src[idx + tilesW - 1]) || (r && d && src[idx + tilesW + 1]);
+                }
+            }
+        }
+
         /// <summary>
         /// Build a per-tile water mask for the visible area from the current location,
         /// aligned to the viewport. Returns false (and skips the water stage) when the
@@ -709,16 +749,48 @@ namespace SDVRadiance
             if (_waterMaskBuf == null || _waterMaskBuf.Length < count)
                 _waterMaskBuf = new Color[count];
 
+            // Height Framework (when present) classifies the actual water SURFACE: ponds and
+            // beach tide pools count as water (they reflect too), while pier/bridge DECKS over
+            // water do not (no reflection painted onto planks). Fall back to isWaterTile.
+            var hf = ShadowRenderer.Height;
+            if (_waterBoolBuf == null || _waterBoolBuf.Length < count)
+                _waterBoolBuf = new bool[count];
             bool any = false;
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)
                 {
-                    bool water = loc.isWaterTile(startTileX + i, startTileY + j);
+                    int tx = startTileX + i, ty = startTileY + j;
+                    bool water;
+                    try { water = hf != null ? hf.IsWaterSurface(loc, tx, ty) : loc.isWaterTile(tx, ty); }
+                    catch { hf = null; water = loc.isWaterTile(tx, ty); }
                     if (water) any = true;
-                    _waterMaskBuf[j * tilesW + i] = water ? Color.White : Color.Transparent;
+                    _waterBoolBuf[j * tilesW + i] = water;
                 }
             }
+
+            // CORE mask first (undilated): the reflection's shoreline search must see bridges,
+            // piers and banks as land — the dilated mask swallowed any land strip ≤4 tiles
+            // wide (a bridge between two water bodies), which killed their reflections.
+            if (_waterMaskCoreBuf == null || _waterMaskCoreBuf.Length < count)
+                _waterMaskCoreBuf = new Color[count];
+            for (int idx = 0; idx < count; idx++)
+                _waterMaskCoreBuf[idx] = _waterBoolBuf[idx] ? Color.White : Color.Transparent;
+
+            // Dilate by TWO tiles (8-way, two passes) for the EFFECT-COVERAGE mask: pond/river
+            // SHORE tiles are marked "land" but their art is half water (the bank ring — corner
+            // tips sit two tiles from true water), so ripple + reflection stopped short of the
+            // real waterline. The shader's per-pixel color gate keeps sand/rock in those tiles
+            // untouched — only the actual water pixels pick up the effect.
+            if (_waterBool2Buf == null || _waterBool2Buf.Length < count)
+                _waterBool2Buf = new bool[count];
+            Dilate8(_waterBoolBuf, _waterBool2Buf, tilesW, tilesH);
+            Dilate8(_waterBool2Buf, _waterBoolBuf, tilesW, tilesH);
+            // Third pass: the beach SURF zone (animated foam lapping the wet sand) sits up to
+            // three tiles from the nearest true-water tile and must ripple with the sea.
+            Dilate8(_waterBoolBuf, _waterBool2Buf, tilesW, tilesH);
+            for (int idx = 0; idx < count; idx++)
+                _waterMaskBuf[idx] = _waterBool2Buf[idx] ? Color.White : Color.Transparent;
 
             if (!any)
                 return false;
@@ -729,6 +801,12 @@ namespace SDVRadiance
                 _waterMask = new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color);
             }
             _waterMask.SetData(_waterMaskBuf, 0, count);
+            if (_waterMaskCore == null || _waterMaskCore.Width != tilesW || _waterMaskCore.Height != tilesH)
+            {
+                _waterMaskCore?.Dispose();
+                _waterMaskCore = new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color);
+            }
+            _waterMaskCore.SetData(_waterMaskCoreBuf, 0, count);
 
             _waterTilesPerScreen = new Vector2(w / 64f, h / 64f);
             _waterWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
@@ -890,11 +968,11 @@ namespace SDVRadiance
 
         public void Dispose()
         {
-            _sceneRT?.Dispose(); _fullA?.Dispose(); _fullB?.Dispose(); _rtA?.Dispose(); _rtB?.Dispose(); _waterMask?.Dispose(); _occluderMask?.Dispose(); _lumRT?.Dispose();
+            _sceneRT?.Dispose(); _fullA?.Dispose(); _fullB?.Dispose(); _rtA?.Dispose(); _rtB?.Dispose(); _waterMask?.Dispose(); _waterMaskCore?.Dispose(); _occluderMask?.Dispose(); _lumRT?.Dispose();
             _bloom?.Dispose(); _colorGrade?.Dispose(); _godRays?.Dispose(); _fog?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
             _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose();
             _sceneRT = _fullA = _fullB = _rtA = _rtB = null;
-            _waterMask = null; _occluderMask = null; _lumRT = null;
+            _waterMask = null; _waterMaskCore = null; _occluderMask = null; _lumRT = null;
             _bloom = _colorGrade = _godRays = _fog = _cloudShadow = _tiltShift = _water = _finishing = _lighting = null;
         }
     }

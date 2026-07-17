@@ -48,8 +48,13 @@ namespace SDVRadiance
         private Texture2D? _propGradTex;
         private Vector2 _playerFeetInRT;
         private bool _playerReady;
-        private const int PlayerRtW = 96;
-        private const int PlayerRtH = 176;
+        internal const int PlayerRtW = 96;
+        internal const int PlayerRtH = 176;
+
+        /// <summary>The player's baked silhouette RT for THIS frame (null when not baked) —
+        /// the water shader uses it to exclude exactly the player's own pixels (not a box)
+        /// from ring-tile water effects.</summary>
+        internal static Texture2D? PlayerMask;
         /// <summary>Opacity at the far tip (head end) relative to the feet, for the gradient fade.</summary>
         private const float HeadFade = 0.05f;
 
@@ -651,6 +656,11 @@ namespace SDVRadiance
                     if (!_objBaking && ca <= 0.02f)
                         continue;
                     Vector2 wpos = c.position;
+                    // Squirrel.draw sits a full tile LOWER than the base Critter convention
+                    // (sprite offset −64 vs −128; its vanilla blob is at position+60) — match
+                    // it or the shadow floats a tile above the squirrel.
+                    if (c is StardewValley.BellsAndWhistles.Squirrel)
+                        wpos.Y += 60f;
                     int ctx = (int)(wpos.X / 64f), cty = (int)(wpos.Y / 64f);
                     if (ctx < tx0 || ctx > tx1 || cty < ty0 || cty > ty1 || OnWater(loc, new Point(ctx, cty)))
                         continue;
@@ -1279,6 +1289,7 @@ namespace SDVRadiance
         public void PreparePlayer(GraphicsDevice gd, ModConfig config)
         {
             _playerReady = false;
+            PlayerMask = null;
             _bakedMap.Clear();
             _bldMap.Clear();
             _bakedObjMap.Clear();
@@ -1349,6 +1360,7 @@ namespace SDVRadiance
                 _rtBatch.Draw(_gradTex, new Rectangle(0, 0, PlayerRtW, PlayerRtH), Color.White);
                 _rtBatch.End();
                 _playerReady = true;
+                PlayerMask = _playerRT;
             }
             catch (Exception ex)
             {

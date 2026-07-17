@@ -26,6 +26,23 @@ sampler2D MaskSampler = sampler_state
     MinFilter = Point; MagFilter = Point; MipFilter = None; // point = crisp per-tile, no bleed onto land
     AddressU = Clamp; AddressV = Clamp;
 };
+// UNDILATED mask — true water bodies only. The effect-coverage mask above is dilated
+// two tiles (bank rings), which swallows bridges/piers; anything that reasons about
+// WHERE WATER REALLY IS (shoreline search, water-on-water damping, the grey-pool
+// pixel gate) must use this one.
+texture MaskCoreTexture;
+sampler2D MaskCoreSampler = sampler_state
+{
+    Texture = <MaskCoreTexture>;
+    MinFilter = Point; MagFilter = Point; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+sampler2D MaskCoreLinearSampler = sampler_state
+{
+    Texture = <MaskCoreTexture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
 
 float Time;             // seconds
 float Strength;         // ripple amplitude (UV units are scaled inside)
@@ -36,6 +53,17 @@ float2 WorldTileOffset; // viewport origin in world tiles (viewport.XY / 64), co
 float2 MaskSize;        // mask texture size in texels (tiles)
 float WaterKind;        // 0 = still (pond/river), 1 = ocean/beach (big directional swell)
 float ReflectStrength;  // 0 = off; screen-space reflection of the scene above the surface
+float SparkleDensity;   // ~0.2–2: glint count per area; glint size follows inversely
+float4 PlayerRect;      // player silhouette bounds in screen UV (x0,y0,x1,y1)
+texture PlayerMaskTexture;   // the player's baked silhouette — its alpha marks the
+                             // player's ACTUAL pixels (not a box) to exclude from
+                             // ring-tile effects, so water beside them keeps animating
+sampler2D PlayerMaskSampler = sampler_state
+{
+    Texture = <PlayerMaskTexture>;
+    MinFilter = Point; MagFilter = Point; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
 
 struct PixelInput
 {
@@ -49,13 +77,21 @@ float hash(float2 p)
     return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
 }
 
-// Point-sample the per-tile water mask at any screen-UV point.
+// Point-sample the CORE (true-water) mask at any screen-UV point.
 float WaterAt(float2 p)
 {
     float2 wt = p * TilesPerScreen + WorldTileOffset;
     float2 st = floor(WorldTileOffset);
     float2 muv = (floor(wt) - st + 0.5) / MaskSize;
-    return tex2D(MaskSampler, muv).r;
+    return tex2D(MaskCoreSampler, muv).r;
+}
+
+// Smooth (bilinear) CORE mask sample — soft gradient near true shorelines.
+float WaterAtSmooth(float2 p)
+{
+    float2 wt = p * TilesPerScreen + WorldTileOffset;
+    float2 muv = (wt - floor(WorldTileOffset)) / MaskSize;
+    return tex2D(MaskCoreLinearSampler, muv).r;
 }
 
 float4 WaterPS(PixelInput input) : SV_TARGET
@@ -76,9 +112,34 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         return src;
 
     // Refine to the ACTUAL water pixels: the game draws curved banks / rocks
-    // inside the square water tiles, so gate on blue-dominant color.
+    // inside the square water tiles, so gate on blue-dominant color — PLUS nearly
+    // unsaturated pixels (grey tide pools are water too; warm sand stays excluded
+    // because it is saturated and red-dominant).
     float blueness = saturate((src.b - src.r) * 3.0) * saturate((src.b - src.g) * 3.0 + 0.35);
-    float water = tileWater * blueness;
+    float maxc = max(src.r, max(src.g, src.b));
+    float minc = min(src.r, min(src.g, src.b));
+    // The grey gate only holds INSIDE true water tiles (grey tide pools) — in the dilated
+    // bank ring it caught grey/white land art (trailer roofs, stones) and rippled it.
+    float coreTile = tex2D(MaskCoreSampler, maskUV).r;
+    float greyness = saturate(1.0 - (maxc - minc) * 6.0) * step(src.r, src.b + 0.02) * coreTile;
+    // Teal/green-tinted water (shallow foam zones along banks, the greenish ring around
+    // lily pads) — g and b together dominate r, with b not far under g. Lily-pad leaf
+    // green itself (b well below g) stays excluded: a pad floats ON the water and must
+    // occlude the reflection, but the water around it must not lose it.
+    float cyan = saturate((min(src.g, src.b) - src.r) * 3.0) * saturate((src.b - src.g) * 4.0 + 0.8);
+    // In the dilated bank ring (outside TRUE water tiles) also require water-typical
+    // BRIGHTNESS: shore water is light, but a navy-haired character standing on a pier
+    // or bank is not — without this, blue-ish sprites in ring tiles rippled + sparkled.
+    float srcLum = dot(src.rgb, float3(0.299, 0.587, 0.114));
+    // The player's own PIXELS never ripple in ring tiles (a light-blue outfit on a pier
+    // passed every colour test). Sampled from the baked silhouette so only the sprite is
+    // excluded, not a whole box — true water tiles are unaffected either way.
+    float2 pmSpan = max(PlayerRect.zw - PlayerRect.xy, float2(1e-4, 1e-4));
+    float2 pmuv = (uv - PlayerRect.xy) / pmSpan;
+    float pmIn = step(0.0, pmuv.x) * step(pmuv.x, 1.0) * step(0.0, pmuv.y) * step(pmuv.y, 1.0);
+    float inPlayer = step(0.02, tex2D(PlayerMaskSampler, saturate(pmuv)).a) * pmIn;
+    float ringGate = lerp(smoothstep(0.30, 0.45, srcLum) * (1.0 - inPlayer), 1.0, coreTile);
+    float water = tileWater * max(max(blueness, greyness * 0.7), cyan) * ringGate;
     if (water <= 0.002)
         return src;
 
@@ -107,29 +168,105 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // with depth. Gated to water pixels.
     if (ReflectStrength > 0.001)
     {
-        float edgeV = uv.y;
+        // The reflection sways with the surface — computed FIRST because the same jitter
+        // feeds the shoreline search below (dithers the per-tile-column edge steps into
+        // organic wavy seams instead of hard 64px vertical banding).
+        float rowY = floor(worldTile.y * 16.0) / 16.0;
+        float wave = sin(rowY * 34.0 + t * 2.6)
+                   + 0.45 * sin(rowY * 61.0 - t * 3.9 + worldTile.x * 0.9);
+        float waveAmp = Strength * 0.0035 + 0.0012;
+        // Static per-16px-block dither on the march column: a diagonal shoreline otherwise
+        // quantises the mirror into 64px staircase bands; this breaks the steps into ragged
+        // pixel-scale water distortion (hash of the WORLD position → stable, no shimmer).
+        // Kept SMALL: a wide dither shoved edge pixels onto the land column beside them,
+        // stripping the mirror off the left/right rim of pools and pier inlets.
+        float dith = (hash(floor(worldTile * 4.0) / 4.0) - 0.5) * (0.18 / TilesPerScreen.x);
+        float mx = uv.x + wave * waveAmp + dith;   // jittered column for the march + mirror
+
+        // Bank-ring columns (the strip of drawn water inside shore tiles) have NO core water
+        // above them — their march found land instantly, leaving the mirror short of the
+        // left/right waterline. If this column isn't over core water, borrow the neighbour
+        // column on whichever side the real water is.
+        float tileW = 1.0 / TilesPerScreen.x;
+        float coreC = WaterAt(float2(mx, uv.y));
+        float coreL = WaterAt(float2(mx - tileW, uv.y));
+        float coreR = WaterAt(float2(mx + tileW, uv.y));
+        mx += (1.0 - coreC) * (coreR - coreL) * tileW;
+
+        // Shoreline = this pixel's own CONTIGUOUS water edge (stopping at the first land row
+        // keeps a second water body beyond a pier from hijacking the mirror). Two-phase and
+        // branchless: a coarse march with a LONG reach (a short reach left the lower half of
+        // ponds with no shoreline in range → torn, partial mirrors), then a fine refine.
+        // POINT mask only: the bilinear one under-read near side banks (bare edge strips).
+        float found = 0.0;
+        float landOff = 0.9;                       // offset of the first non-water row above
         [unroll]
-        for (int k = 1; k <= 24; k++)
+        for (int k = 1; k <= 28; k++)
         {
-            float vy = uv.y - k * 0.014;
-            float wm = (vy > 0.0) ? WaterAt(float2(uv.x, vy)) : 0.0;
-            edgeV = (wm > 0.5) ? vy : edgeV;   // keep the highest still-water row
+            float off = k * 0.03;
+            float vy = uv.y - off;
+            float wm = (vy > 0.0) ? WaterAt(float2(mx, vy)) : 0.0;
+            float miss = 1.0 - step(0.5, wm);
+            landOff = lerp(landOff, off, (1.0 - found) * miss);
+            found = max(found, miss);
         }
-        float2 reflUv = float2(uv.x + ripple.x * 3.0, 2.0 * edgeV - uv.y + abs(ripple.y) * 2.0);
-        float3 refl = tex2D(SourceSampler, clamp(reflUv, float2(0.0, 0.0), float2(1.0, 1.0))).rgb;
+        // No shoreline in reach (open lake centre) → no mirror there (found gates amt);
+        // still substitute a sane offset so the sampling below stays well-behaved.
+        landOff = lerp(0.38, landOff, found);
+
+        float waterOff = max(landOff - 0.03, 0.0); // last coarse row that was still water
+        float open = 1.0;
+        [unroll]
+        for (int m = 1; m <= 6; m++)
+        {
+            float off = waterOff + m * 0.005;
+            float vy = uv.y - off;
+            float wm = (vy > 0.0) ? WaterAt(float2(mx, vy)) : 0.0;
+            float isw = step(0.5, wm);
+            waterOff = lerp(waterOff, off, open * isw);
+            open *= isw;
+        }
+        float edgeV = uv.y - waterOff;
+
+        // Oblique-view mirror: the world is drawn at a slant, so a reflection must be
+        // COMPRESSED vertically (×1/0.8 source distance per unit of depth) — this pulls each
+        // reflection up against the object casting it instead of floating a gap below it.
+        // The extra 0.6-tile source bias skips the mostly-transparent bottom sliver of shore
+        // art (pier post rows, rim edges) so the SOLID body of the object meets the waterline.
         float depth = uv.y - edgeV;                 // how far below the shoreline
-        float fade = saturate(1.0 - depth * 3.5);   // reflection concentrates near the edge
+        float2 reflUv = float2(mx + ripple.x * 3.0,
+                               edgeV - depth * 1.25 - 0.6 / TilesPerScreen.y + abs(ripple.y) * 2.0);
+        reflUv = clamp(reflUv, float2(0.0, 0.0), float2(1.0, 1.0));
+        float3 refl = tex2D(SourceSampler, reflUv).rgb;
+
+        float srcWater = WaterAtSmooth(reflUv);
+
+        // Distance fade: defined near the shoreline, gone by ~0.6 screen below it. (An
+        // always-on base mirrored far-upstream cliffs down entire rivers as dark streaks.)
+        float fade = saturate(1.0 - depth * 1.6);
         // Fade the reflection out where the mirrored sample would fall OFF-screen, instead of
         // clamping (which smears the edge row/column across the water near the screen border).
         float2 dborder = min(reflUv, float2(1.0, 1.0) - reflUv);
         float onScreen = saturate(min(dborder.x, dborder.y) / 0.06);
-        col.rgb = lerp(col.rgb, refl * 0.85, saturate(ReflectStrength) * water * fade * onScreen);
+        // A TRUE mirror only exists when a shoreline was found, the mirrored source is not
+        // itself water, and this column actually had water above it (bank-fringe columns
+        // don't). Everywhere else, blend to a soft sky-glaze SHEEN instead of cutting to
+        // nothing — the hard rectangles between mirrored and unmirrored water came from
+        // those cuts, not from the mirror itself.
+        float3 mirrorCol = refl * float3(0.66, 0.76, 0.92);   // cool + darken: reads as "in the water"
+        float3 sheenCol = col.rgb * float3(1.06, 1.10, 1.18) + 0.015;
+        float nearSelf = 1.0 - smoothstep(0.004, 0.02, waterOff);
+        float mirrorness = found * (1.0 - srcWater) * (1.0 - nearSelf);
+        float3 reflCol = lerp(sheenCol, mirrorCol, mirrorness);
+        float amt = saturate(ReflectStrength) * water * fade * onScreen
+                  * saturate(srcLum * 3.2) * lerp(0.5, 1.0, mirrorness);
+        col.rgb = lerp(col.rgb, reflCol, amt);
     }
 
     // Random drifting glints: one soft glint per cell at a random spot that
     // wanders slowly and pulses smoothly (no hard twinkle). Ocean glints are
     // sparser, slower and drift more.
-    float sdens = lerp(5.0, 3.0, WaterKind);
+    float sdens = lerp(5.0, 3.0, WaterKind) * max(SparkleDensity, 0.05);
     float spulse = lerp(1.1, 0.55, WaterKind);
     float sdrift = lerp(0.05, 0.12, WaterKind);
     float2 sg = (worldTile + float2(t * sdrift, t * sdrift * 0.6)) * sdens;

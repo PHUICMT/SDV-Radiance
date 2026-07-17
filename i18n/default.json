@@ -142,6 +142,8 @@
   "config.water.strength.name": "Ripple strength",
   "config.water.speed.name": "Ripple speed",
   "config.water.sparkle.name": "Sparkle",
+  "config.water.sparkledensity.name": "Sparkle amount",
+  "config.water.sparkledensity.tooltip": "How many glints dot the water (their size follows along). 1.0 = the original dense look; lower = calmer surface.",
   "config.water.reflection.name": "Water reflection",
   "config.water.reflection.tooltip": "Faintly mirror the scene just above the surface down onto the water for a wet, reflective sheen. Subtle by design. Experimental.",
   "config.water.reflectstrength.name": "Reflection strength",

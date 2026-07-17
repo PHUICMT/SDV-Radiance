@@ -65,6 +65,8 @@
   "config.water.strength.name": "ความแรงระลอกคลื่น",
   "config.water.speed.name": "ความเร็วระลอก",
   "config.water.sparkle.name": "ประกายวิบวับ",
+  "config.water.sparkledensity.name": "ปริมาณประกาย",
+  "config.water.sparkledensity.tooltip": "จำนวนจุดประกายบนผิวน้ำ (ขนาดปรับตามไปด้วย) — 1.0 = แบบเดิมที่หนาแน่น ลดลง = ผิวน้ำสงบขึ้น",
   "config.water.reflection.name": "เงาสะท้อนบนน้ำ",
   "config.water.reflection.tooltip": "สะท้อนฉากเหนือผิวน้ำลงบนน้ำจางๆ ให้ดูเปียกและมันวาว เนียนบางโดยตั้งใจ (ทดลอง)",
   "config.water.reflectstrength.name": "ความเข้มเงาสะท้อน",
