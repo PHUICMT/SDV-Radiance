@@ -3,7 +3,6 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
 using StardewValley;
-using StardewValley.Buildings;
 using StardewValley.Objects;
 using StardewValley.TerrainFeatures;
 using SObject = StardewValley.Object;
@@ -333,7 +332,9 @@ namespace SDVRadiance
                 // Only upright machines/craftables cast; flat 16x16 floor items don't.
                 if (o == null || !o.bigCraftable.Value || o.Fragility == 2 || o.isTemporarilyInvisible)
                     continue;
-                DrawBigCraftableShadow(b, o, tile, rot, stretch, alpha, blur);
+                // Damp the lean (like tall sprites) so a craftable placed against a wall doesn't
+                // climb it as badly.
+                DrawBigCraftableShadow(b, o, tile, rot * TallLeanScale, stretch, alpha, blur);
             }
 
             foreach (Furniture f in loc.furniture)
@@ -350,26 +351,15 @@ namespace SDVRadiance
                 DrawFurnitureShadow(b, f, rot, stretch, alpha, blur);
             }
 
-            foreach (Building building in loc.buildings)
-            {
-                if (building == null || building.daysOfConstructionLeft.Value > 0 || building.texture?.Value == null)
-                    continue;
-                int bx = building.tileX.Value, by = building.tileY.Value;
-                int bw = building.tilesWide.Value, bh = building.tilesHigh.Value;
-                if (bx + bw < tx0 || bx > tx1 || by + bh < ty0 || by > ty1)
-                    continue;
-                // Whole-building sprites are huge — at full lean/length they read as a giant
-                // diagonal sheet ("searchlight"), so keep building shadows short and gentle.
-                DrawBuildingShadow(b, building, rot * BuildingLeanScale,
-                    Math.Min(stretch * BuildingStretchScale, 0.55f), alpha * 0.85f, blur);
-            }
+            // Building shadows are DISABLED: leaning a whole-building sprite projects it up over
+            // itself and its neighbours (a building's real shadow is a ground projection from its
+            // footprint on the sun-opposite side — exactly what the height framework will provide).
         }
 
-        /// <summary>Lean damping for tall sprites (trees/bushes) so the shadow stays rooted at the base.</summary>
+        /// <summary>Lean damping for tall sprites (trees/bushes/craftables) so the shadow stays rooted at the base.</summary>
         private const float TallLeanScale = 0.6f;
-        /// <summary>Buildings lean and stretch far less than characters (huge sprites).</summary>
-        private const float BuildingLeanScale = 0.4f;
-        private const float BuildingStretchScale = 0.5f;
+        /// <summary>Objects read more grounded with a gentler tip fade than characters do.</summary>
+        private const float ObjectHeadFade = 0.5f;
 
         private void DrawBigCraftableShadow(SpriteBatch b, SObject o, Vector2 tile, float rot, float stretch, float alpha, float blur)
         {
@@ -399,22 +389,6 @@ namespace SDVRadiance
             Rectangle box = f.boundingBox.Value;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, box.Bottom));
             float depth = MathHelper.Clamp((box.Bottom - 8f) / 10000f - ShadowDepthBias, 0f, 1f);
-            DrawBandedGradient(b, tex, src, feet, new Vector2(src.Width / 2f, src.Height),
-                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
-        }
-
-        private void DrawBuildingShadow(SpriteBatch b, Building building, float rot, float stretch, float alpha, float blur)
-        {
-            Texture2D tex = building.texture.Value;
-            Rectangle src = building.getSourceRect();
-            if (src.IsEmpty)
-                return;
-            // Buildings anchor at (tileX*64, (tileY+tilesHigh)*64) with origin (0, src.Height):
-            // base line = bottom edge of the footprint; shear about its centre.
-            float baseY = (building.tileY.Value + building.tilesHigh.Value) * 64f;
-            Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
-                new Vector2(building.tileX.Value * 64f + building.tilesWide.Value * 32f, baseY));
-            float depth = MathHelper.Clamp(baseY / 10000f - ShadowDepthBias, 0f, 1f);
             DrawBandedGradient(b, tex, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
         }
@@ -450,7 +424,7 @@ namespace SDVRadiance
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, worldFeet);
             var baseOrigin = new Vector2(src.Width / 2f, src.Height);
             float depth = MathHelper.Clamp((tile.Y + 1f) * 64f / 10000f + tile.X / 100000f - ShadowDepthBias, 0f, 1f);
-            DrawBandedGradient(b, tex, src, feet, baseOrigin, alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
+            DrawBandedGradient(b, tex, src, feet, baseOrigin, alpha, rot, new Vector2(4f, 4f * stretch), depth, blur, ObjectHeadFade);
         }
 
         private void DrawTreeShadow(SpriteBatch b, Tree tree, Vector2 tile, float rot, float stretch, float alpha, float blur)
@@ -460,7 +434,7 @@ namespace SDVRadiance
             float depth = MathHelper.Clamp((tree.getBoundingBox().Bottom + 2f) / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
             // Tree canopy draws with origin (24, 96); shear/fade about the trunk base.
             DrawBandedGradient(b, tree.texture.Value, src, feet, new Vector2(24f, 96f),
-                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
+                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur, ObjectHeadFade);
         }
 
         private void DrawBushShadow(SpriteBatch b, Bush bush, float rot, float stretch, float alpha, float blur)
@@ -475,7 +449,7 @@ namespace SDVRadiance
             var baseOrigin = new Vector2(src.Width / 2f, 32f);
             float depth = MathHelper.Clamp((bush.getBoundingBox().Center.Y + 48f) / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
             DrawBandedGradient(b, Bush.texture.Value, src, feet, baseOrigin,
-                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
+                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur, ObjectHeadFade);
         }
 
         private void DrawPlayerShadow(SpriteBatch b, GameLocation loc, float rot, float stretch, float alpha, float blur)
@@ -606,7 +580,8 @@ namespace SDVRadiance
         /// stay aligned under rotation + stretch) and fading each band's alpha toward the tip.
         /// </summary>
         private void DrawBandedGradient(SpriteBatch b, Texture2D tex, Rectangle src, Vector2 feet,
-            Vector2 baseOrigin, float alpha, float rot, Vector2 scale, float depth, float blur)
+            Vector2 baseOrigin, float alpha, float rot, Vector2 scale, float depth, float blur,
+            float headFade = HeadFade)
         {
             // More bands for taller sprites so the gradient stays smooth (a 96px tree would
             // show hard steps with only a handful of bands); fewer for small NPC sprites.
@@ -619,7 +594,7 @@ namespace SDVRadiance
                 // Origin so the (virtual) full-sprite ground-anchor row still maps to the feet position.
                 var origin = new Vector2(baseOrigin.X, baseOrigin.Y - y0);
                 float tBottom = (i + 0.5f) / bands;              // 0 at the head band, 1 at the feet band
-                float ga = HeadFade + (1f - HeadFade) * (float)Math.Pow(tBottom, 1.8);
+                float ga = headFade + (1f - headFade) * (float)Math.Pow(tBottom, 1.8);
                 DrawSoft(b, Taps5, tex, band, feet, Color.Black, alpha * ga, rot, origin, scale, depth,
                     SpriteEffects.None, blur);
             }

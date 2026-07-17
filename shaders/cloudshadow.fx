@@ -94,8 +94,9 @@ float4 MaskPS(PixelInput input) : SV_TARGET
                           fbm(p + 3.5 * warp1 + float2(2.3, 7.4)));
     float n = fbm(p + 3.5 * warp2);
 
+    // Wide density ramp so cloud edges are a gentle gradient, not a hard/faceted contour.
     float edge = 1.0 - Coverage;
-    float cloud = smoothstep(edge - 0.35, edge + 0.35, n);
+    float cloud = smoothstep(edge - 0.5, edge + 0.5, n);
     return float4(cloud, cloud, cloud, 1.0);
 }
 
@@ -105,7 +106,7 @@ float4 BlurHPS(PixelInput input) : SV_TARGET
     float s = tex2D(SourceSampler, input.UV).r * W[0];
     [unroll] for (int i = 1; i < TAPS; i++)
     {
-        float2 o = float2(TexelSize.x * i * 2.0, 0.0);
+        float2 o = float2(TexelSize.x * i * 3.5, 0.0);
         s += tex2D(SourceSampler, input.UV + o).r * W[i];
         s += tex2D(SourceSampler, input.UV - o).r * W[i];
     }
@@ -117,7 +118,7 @@ float4 BlurVPS(PixelInput input) : SV_TARGET
     float s = tex2D(SourceSampler, input.UV).r * W[0];
     [unroll] for (int i = 1; i < TAPS; i++)
     {
-        float2 o = float2(0.0, TexelSize.y * i * 2.0);
+        float2 o = float2(0.0, TexelSize.y * i * 3.5);
         s += tex2D(SourceSampler, input.UV + o).r * W[i];
         s += tex2D(SourceSampler, input.UV - o).r * W[i];
     }
