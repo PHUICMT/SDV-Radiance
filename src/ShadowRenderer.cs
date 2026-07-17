@@ -153,7 +153,7 @@ namespace SDVRadiance
         {
             Rectangle src = a.Sprite.SourceRect;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
-                new Vector2(a.Position.X + a.Sprite.SpriteWidth * 4 / 2f, a.GetBoundingBox().Bottom));
+                new Vector2(a.Position.X + a.Sprite.SpriteWidth * 4 / 2f, a.GetBoundingBox().Bottom - FeetLift));
             float depth = MathHelper.Clamp(a.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
             DrawBandedGradient(b, a.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
@@ -207,7 +207,7 @@ namespace SDVRadiance
                 if (OnWater(loc, npc.TilePoint))   // same guard as the sun path (bathhouse, night beach)
                     continue;
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
-                    new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom));
+                    new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom - FeetLift));
                 foreach (var (lpos, reach) in _lightBuf)
                     if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
                         DrawNpcShadow(b, npc, rot, st, a, blur);
@@ -231,7 +231,7 @@ namespace SDVRadiance
                     && !OnWater(loc, who.TilePoint))
                 {
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
-                        new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom));
+                        new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
                     float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                     foreach (var (lpos, reach) in _lightBuf)
                         if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
@@ -267,7 +267,7 @@ namespace SDVRadiance
         {
             Rectangle src = npc.Sprite.SourceRect;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
-                new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom));
+                new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom - FeetLift));
             float depth = MathHelper.Clamp(npc.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
             // NPCs are single-texture sprites, so the feet→head opacity gradient is faked with
             // horizontal bands (no per-NPC render target needed), each softened at the edges.
@@ -295,7 +295,7 @@ namespace SDVRadiance
                     // trunk (its vanilla contact blob is kept to fill the base). Bushes are
                     // short → full lean, matching the character direction, blob suppressed.
                     case Tree tree when tree.growthStage.Value >= 5 && !tree.stump.Value && tree.texture?.Value != null:
-                        DrawTreeShadow(b, tree, tile, rot * TallLeanScale, stretch, alpha, blur);
+                        DrawTreeShadow(b, tree, tile, rot * TreeLeanScale, Math.Min(stretch, TreeStretchMax), alpha, blur);
                         break;
                     case Bush bush:
                         DrawBushShadow(b, bush, rot, stretch, alpha, blur);
@@ -358,8 +358,15 @@ namespace SDVRadiance
             // footprint on the sun-opposite side — exactly what the height framework will provide).
         }
 
-        /// <summary>Lean damping for tall sprites (trees/bushes/craftables) so the shadow stays rooted at the base.</summary>
+        /// <summary>Lean damping for tall sprites (bushes/craftables) so the shadow stays rooted at the base.</summary>
         private const float TallLeanScale = 0.6f;
+        /// <summary>Trees lean/stretch the least: the long canopy cast otherwise detaches from the
+        /// trunk (and its contact blob), reading as two separate shadows.</summary>
+        private const float TreeLeanScale = 0.38f;
+        private const float TreeStretchMax = 0.6f;
+        /// <summary>Lift the character/animal feet anchor a touch so the shadow base sits at the
+        /// visual feet rather than a few px below (the bounding-box bottom overshoots).</summary>
+        private const float FeetLift = 10f;
         /// <summary>
         /// Objects use the same strong feet→tip fade as characters: a DARK base grounds the
         /// shadow (the earlier gentle/uniform fade read as floaty — the fix was a darker base,
@@ -468,7 +475,7 @@ namespace SDVRadiance
             if (OnWater(loc, who.TilePoint))
                 return;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
-                new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom));
+                new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
             float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
 
             // The baked silhouette is one cohesive image — flatten it vertically and lean it
@@ -645,11 +652,11 @@ namespace SDVRadiance
         /// <summary>Ease the shadow in/out near dawn (06:00–07:00) and dusk (18:00–19:00) so it doesn't pop.</summary>
         private static float TimeFade()
         {
-            // Convert HHMM to real minutes so the fade is smooth across the :50→:00 hour rollover
-            // (raw timeOfDay/100 jumped, e.g. 06:50→07:00 = 0.5→1.0, a sudden darkening).
+            // The day starts at 06:00 with the player active immediately, so the shadow is full
+            // from the start (no dawn ramp — that left the morning shadowless until ~07:00).
+            // Only ease OUT toward dusk. Minutes so the fade is smooth across the hour rollover.
             int t = Game1.timeOfDay;
             int mins = (t / 100) * 60 + (t % 100);
-            if (mins < 420) return MathHelper.Clamp((mins - 360) / 60f, 0f, 1f);   // 06:00 → 07:00
             if (mins >= 1080) return MathHelper.Clamp((1140 - mins) / 60f, 0f, 1f); // 18:00 → 19:00
             return 1f;
         }
