@@ -404,7 +404,7 @@ namespace SDVRadiance
             // Anchor at the footprint's bottom-centre (drawPosition is protected; the bounding
             // box bottom matches the sprite's ground line for floor furniture).
             Rectangle box = f.boundingBox.Value;
-            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, box.Bottom));
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, box.Bottom - 20f));
             float depth = MathHelper.Clamp((box.Bottom - 8f) / 10000f - ShadowDepthBias, 0f, 1f);
             DrawBandedGradient(b, tex, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
