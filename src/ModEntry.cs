@@ -116,10 +116,12 @@ namespace SDVRadiance
             harmony.Patch(
                 original: AccessTools.Method(typeof(Farmer), nameof(Farmer.DrawShadow)),
                 prefix: new HarmonyMethod(typeof(ModEntry), nameof(DrawShadow_Prefix)));
-            // Bushes bake their blob shadow inline in draw() at a FIXED direction that fights
-            // our directional cast; route their Draw calls through a shim that drops just the
-            // depth==1E-06 (shadow) draws. Trees are NOT patched — their contact blob is kept
-            // deliberately to root the base the canopy hides.
+            // Trees and bushes bake their blob shadow inline in draw() at a FIXED direction that
+            // fights our directional cast; route their Draw calls through a shim that drops just
+            // the depth==1E-06 (shadow) draws while our object shadows are active.
+            harmony.Patch(
+                original: AccessTools.Method(typeof(StardewValley.TerrainFeatures.Tree), nameof(StardewValley.TerrainFeatures.Tree.draw)),
+                transpiler: new HarmonyMethod(typeof(ModEntry), nameof(DrawShadow_Transpiler)));
             harmony.Patch(
                 original: AccessTools.Method(typeof(StardewValley.TerrainFeatures.Bush), nameof(StardewValley.TerrainFeatures.Bush.draw), new[] { typeof(SpriteBatch) }),
                 transpiler: new HarmonyMethod(typeof(ModEntry), nameof(DrawShadow_Transpiler)));
