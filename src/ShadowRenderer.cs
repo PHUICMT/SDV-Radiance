@@ -297,6 +297,9 @@ namespace SDVRadiance
                     case Tree tree when tree.growthStage.Value >= 5 && !tree.stump.Value && tree.texture?.Value != null:
                         DrawTreeShadow(b, tree, tile, rot * TreeLeanScale, Math.Min(stretch, TreeStretchMax), alpha, blur);
                         break;
+                    case FruitTree ft when ft.growthStage.Value >= 4 && !ft.stump.Value && ft.texture != null:
+                        DrawFruitTreeShadow(b, ft, tile, rot * TreeLeanScale, Math.Min(stretch, TreeStretchMax), alpha, blur);
+                        break;
                     case Bush bush:
                         DrawBushShadow(b, bush, rot, stretch, alpha, blur);
                         break;
@@ -435,7 +438,7 @@ namespace SDVRadiance
             Vector2 tile = clump.Tile;
             // Clump draws top-left at tile*64, origin zero, scale 4 → sprite bottom = tile*64 +
             // src.Height*4; the stump/boulder visually rests a bit above that, so lift the anchor.
-            var worldFeet = new Vector2(tile.X * 64f + src.Width * 2f, tile.Y * 64f + src.Height * 4f - 24f);
+            var worldFeet = new Vector2(tile.X * 64f + src.Width * 2f, tile.Y * 64f + src.Height * 4f - 40f);
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, worldFeet);
             var baseOrigin = new Vector2(src.Width / 2f, src.Height);
             float depth = MathHelper.Clamp((tile.Y + 1f) * 64f / 10000f + tile.X / 100000f - ShadowDepthBias, 0f, 1f);
@@ -452,14 +455,30 @@ namespace SDVRadiance
                 alpha, rot, new Vector2(4f, 4f * stretch), depth, blur, ObjectHeadFade);
         }
 
+        private void DrawFruitTreeShadow(SpriteBatch b, FruitTree ft, Vector2 tile, float rot, float stretch, float alpha, float blur)
+        {
+            // Mature fruit-tree canopy (FruitTree.draw): 48x64 foliage rect, drawn at
+            // (tile*64 + 32, tile*64 + 64) with origin (24, 80).
+            int season = Game1.GetSeasonIndexForLocation(ft.Location);
+            int row = ft.GetSpriteRowNumber();
+            var src = new Rectangle((12 + season * 3) * 16, row * 5 * 16, 48, 64);
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f));
+            float depth = MathHelper.Clamp(ft.getBoundingBox().Bottom / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
+            DrawBandedGradient(b, ft.texture, src, feet, new Vector2(24f, 80f),
+                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur, ObjectHeadFade);
+        }
+
         private void DrawBushShadow(SpriteBatch b, Bush bush, float rot, float stretch, float alpha, float blur)
         {
             Rectangle src = bush.sourceRect.Value;
             if (src.IsEmpty)
                 return;
             Vector2 tile = bush.Tile;
-            // Bush.draw position = tile*64 + (size+1)*64/2 == tile*64 + src.Width*2; origin (width/2, 32).
-            var worldFeet = new Vector2(tile.X * 64f + src.Width * 2f, (tile.Y + 1) * 64f);
+            // Bush.draw pins the sprite (origin y=32) at (tile.Y+1)*64, MINUS 64 for larger bushes
+            // — matching that -64 keeps big town bushes' shadow at the base instead of a tile below.
+            int sz = bush.size.Value;
+            float yOff = (sz > 0 && (!bush.townBush.Value || sz != 1) && sz != 4) ? 64f : 0f;
+            var worldFeet = new Vector2(tile.X * 64f + src.Width * 2f, (tile.Y + 1) * 64f - yOff);
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, worldFeet);
             var baseOrigin = new Vector2(src.Width / 2f, 32f);
             float depth = MathHelper.Clamp((bush.getBoundingBox().Center.Y + 48f) / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
