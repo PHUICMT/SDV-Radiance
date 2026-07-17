@@ -50,6 +50,12 @@ namespace SDVRadiance
         /// <summary>Skip the game's blob shadow while our directional shadow is active.</summary>
         private static bool DrawShadow_Prefix() => !SuppressVanillaShadows;
 
+        /// <summary>When true, the vanilla drifting Cloud critter shadow is hidden.</summary>
+        internal static bool SuppressVanillaClouds;
+
+        /// <summary>Skip the vanilla <c>Cloud</c> critter's drifting shadow draw.</summary>
+        private static bool Cloud_Draw_Prefix() => !SuppressVanillaClouds;
+
         /// <summary>
         /// Transpiler shim for Tree.draw / Bush.draw: every vanilla tree/bush blob shadow is
         /// drawn at layerDepth exactly 1E-06f (nothing else in those methods uses it), so we
@@ -155,6 +161,11 @@ namespace SDVRadiance
             harmony.Patch(
                 original: AccessTools.Method(typeof(StardewValley.Object), nameof(StardewValley.Object.draw), new[] { typeof(SpriteBatch), typeof(int), typeof(int), typeof(float) }),
                 transpiler: new HarmonyMethod(typeof(ModEntry), nameof(BlobShadow_Transpiler)));
+            // The vanilla drifting cloud shadow is a Cloud critter drawn in drawAboveFrontLayer;
+            // skip it (opt-out) so it doesn't compete with our own cloud-shadow effect.
+            harmony.Patch(
+                original: AccessTools.Method(typeof(StardewValley.BellsAndWhistles.Cloud), nameof(StardewValley.BellsAndWhistles.Cloud.drawAboveFrontLayer), new[] { typeof(SpriteBatch) }),
+                prefix: new HarmonyMethod(typeof(ModEntry), nameof(Cloud_Draw_Prefix)));
 
             this.Monitor.Log("SDV-Radiance loaded (world post-processing via RenderedWorld).", LogLevel.Info);
         }
@@ -235,6 +246,7 @@ namespace SDVRadiance
             SuppressVanillaShadows = ShadowRenderer.ShadowsActiveNow(_config);
             // Suppress the BUSH blob (fixed-direction, fights our cast); the TREE blob is kept
             // (not patched) as a base anchor under the canopy.
+            SuppressVanillaClouds = _config.Enabled && _config.SuppressVanillaCloudShadow;
             SuppressVanillaObjectShadows = _config.DirectionalShadowObjects && ShadowRenderer.SunShadowActive(_config);
             // Big-craftable blobs are replaced in BOTH paths (sun directional + indoor/night contact),
             // so gate on ShadowsActiveNow, not just the sun path.
@@ -384,6 +396,8 @@ namespace SDVRadiance
 
             // --- Cloud shadows (implemented) ---
             api.AddPage(this.ModManifest, "cloudshadow", () => I18n("config.section.cloudshadow"));
+            api.AddBoolOption(this.ModManifest, () => _config.SuppressVanillaCloudShadow, v => _config.SuppressVanillaCloudShadow = v,
+                () => I18n("config.cloudshadow.hidevanilla.name"), () => I18n("config.cloudshadow.hidevanilla.tooltip"));
             api.AddBoolOption(this.ModManifest, () => _config.CloudShadowEnabled, v => _config.CloudShadowEnabled = v,
                 () => I18n("config.cloudshadow.enabled.name"), () => I18n("config.cloudshadow.enabled.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.CloudShadowOpacity, v => _config.CloudShadowOpacity = v,

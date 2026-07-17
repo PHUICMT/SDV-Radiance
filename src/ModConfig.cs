@@ -95,6 +95,8 @@ namespace SDVRadiance
 
         // --- Phase 3: DynamicShader parity ---
         public bool CloudShadowEnabled { get; set; } = false;
+        /// <summary>Hide the vanilla drifting <c>Cloud</c> critter shadow (so only our cloud shadow shows).</summary>
+        public bool SuppressVanillaCloudShadow { get; set; } = true;
         public float CloudShadowScale { get; set; } = 2.0f;
         public float CloudShadowSpeed { get; set; } = 0.01f;
         public float CloudShadowOpacity { get; set; } = 0.3f;

@@ -836,10 +836,11 @@ namespace SDVRadiance
             _bldGradTex ??= BuildGradient(gd, 0.35f);
             _blobTex ??= BuildBlob(gd);
 
-            // Buildings get a SHEARED silhouette baked here (sun path only) so they cast a real
-            // shape-accurate shadow that lies beside the footprint instead of a grounding pool.
-            if (SunCasts() && config.DirectionalShadowObjects)
-                BakeBuildings(gd, Game1.currentLocation, config);
+            // Buildings: the shear-down cast conflicted with the upright character/object lean
+            // (looked "เพี้ยน"), so buildings fall back to a neutral grounding CONTACT POOL — no
+            // direction to clash with the up-lean. (BakeBuildings kept for a future opt-in.)
+            // if (SunCasts() && config.DirectionalShadowObjects)
+            //     BakeBuildings(gd, Game1.currentLocation, config);
 
             // Bake NPC + animal silhouettes (single-sprite casters) to pooled targets so their
             // shadows match the player's smooth, cohesive fade instead of stepped bands.
@@ -1182,9 +1183,10 @@ namespace SDVRadiance
             Vector2 baseOrigin, float alpha, float rot, Vector2 scale, float depth, float blur,
             float headFade = HeadFade, SpriteEffects effects = SpriteEffects.None)
         {
-            // More bands for taller sprites so the gradient stays smooth (a 96px tree would
-            // show hard steps with only a handful of bands); fewer for small NPC sprites.
-            int bands = (int)MathHelper.Clamp(src.Height / 6f, 6f, 18f);
+            // Band count set by the sprite's SOURCE height (it's drawn ~4× on screen, so a short
+            // stump at height/6 showed coarse steps). Finer division → the per-band alpha gradient
+            // reads as a smooth ramp, not layers. Capped so tall sprites don't explode the draw count.
+            int bands = (int)MathHelper.Clamp(src.Height / 2f, 12f, 28f);
             for (int i = 0; i < bands; i++)
             {
                 int y0 = src.Height * i / bands;

@@ -48,6 +48,8 @@
   "config.colorgrade.enabled.tooltip": "ปรับโทนสีตามช่วงเวลา ฤดูกาล และสภาพอากาศ",
   "config.colorgrade.strength.name": "ความเข้มการปรับโทนสี",
 
+  "config.cloudshadow.hidevanilla.name": "ซ่อนเงาเมฆของเกม",
+  "config.cloudshadow.hidevanilla.tooltip": "เอาเงาเมฆลอย (Cloud critter) ของเกมตัวเปล่าออก (ให้เหลือแต่เงาเมฆของมอดนี้)",
   "config.cloudshadow.enabled.name": "เปิดเงาเมฆ",
   "config.cloudshadow.enabled.tooltip": "เงาเมฆเคลื่อนไหวลอยผ่านพื้นที่ในเกม",
   "config.cloudshadow.opacity.name": "ความทึบเงาเมฆ",

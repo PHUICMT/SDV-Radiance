@@ -127,6 +127,8 @@
   "config.tiltshift.bottom.name": "Bottom blur amount",
 
   "config.section.cloudshadow": "Cloud shadows",
+  "config.cloudshadow.hidevanilla.name": "Hide vanilla cloud shadows",
+  "config.cloudshadow.hidevanilla.tooltip": "Remove the base game's drifting Cloud-critter shadows (so only this mod's cloud shadows show).",
   "config.cloudshadow.enabled.name": "Enable cloud shadows",
   "config.cloudshadow.enabled.tooltip": "Soft shadows of drifting clouds moving across the ground (outdoors only).",
   "config.cloudshadow.opacity.name": "Opacity",
