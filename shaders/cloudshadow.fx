@@ -109,9 +109,17 @@ float4 MaskPS(PixelInput input) : SV_TARGET
     float detail = fbm(p * 2.37 + float2(11.3, 5.9));
     n = n * 0.68 + detail * 0.32;
 
-    // Very wide ramp → density is a gradual gradient everywhere, never an on/off contour.
+    // Coverage must read as AREA (more/fewer cloud patches), not a global dimmer. A narrow ramp
+    // keeps genuinely clear sky (cloud=0) next to genuinely shadowed patches (cloud=1); the
+    // separable Gaussian blur below is what softens the edges, so this can stay tight without
+    // bringing back a hard contour. Raising Coverage lowers the threshold → more area crosses it.
     float edge = 1.0 - Coverage;
-    float cloud = smoothstep(edge - 0.62, edge + 0.62, n);
+    float cloud = smoothstep(edge - 0.22, edge + 0.22, n);
+    // Roll the low end smoothly toward 0 so open sky reads clear (no faint all-over tint) WITHOUT
+    // a hard clip — a sharp cutoff makes the low tail pop on/off at the half-res grid as the mask
+    // drifts, which reads as flicker. A gamma curve clears the baseline yet stays continuous, so
+    // motion is smooth; cloud cores stay strong (raise Opacity if you want them darker).
+    cloud = cloud * cloud;
     return float4(cloud, cloud, cloud, 1.0);
 }
 

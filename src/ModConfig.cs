@@ -60,6 +60,9 @@ namespace SDVRadiance
         /// <summary>Master switch for the whole post-processing pipeline.</summary>
         public bool Enabled { get; set; } = true;
 
+        /// <summary>The quick-look preset last chosen from the menu's top dropdown (Custom = hand-tuned).</summary>
+        public LookPreset ActivePreset { get; set; } = LookPreset.Custom;
+
         // --- Phase 1: Bloom ---
         public bool BloomEnabled { get; set; } = false;
         public float BloomThreshold { get; set; } = 0.82f;
@@ -147,6 +150,14 @@ namespace SDVRadiance
         public float DirectionalShadowBlur { get; set; } = 2.0f;
         /// <summary>Also cast directional shadows from trees and bushes (not just characters).</summary>
         public bool DirectionalShadowObjects { get; set; } = true;
+        /// <summary>
+        /// Cast ground drop-off shadows from walls / buildings / ledges using Height Framework
+        /// data (only active when that mod is installed). This is the durable replacement for the
+        /// disabled per-building sprite lean — shadows are projected onto the ground by real height.
+        /// </summary>
+        public bool HeightDropShadows { get; set; } = true;
+        /// <summary>Length multiplier for the height drop-off shadows (× the sun-driven length).</summary>
+        public float HeightShadowLength { get; set; } = 1.0f;
 
         /// <summary>
         /// Normalize every numeric field to its supported range. GMCM sliders only protect
@@ -196,6 +207,7 @@ namespace SDVRadiance
             DirectionalShadowStrength = C(DirectionalShadowStrength, 0f, 1f);
             DirectionalShadowLength = C(DirectionalShadowLength, 0.2f, 2f);
             DirectionalShadowBlur = C(DirectionalShadowBlur, 0f, 5f);
+            HeightShadowLength = C(HeightShadowLength, 0.2f, 2f);
             CameraFollowSpeed = C(CameraFollowSpeed, 0.05f, 1f);
         }
 

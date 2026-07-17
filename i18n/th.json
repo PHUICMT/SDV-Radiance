@@ -11,6 +11,7 @@
   "config.preset.cinematic": "ภาพยนตร์",
   "config.preset.vibrant": "สดใส",
 
+  "config.section.misc": "ปุ่มลัดและการวินิจฉัย",
   "config.section.hotkeys": "ปุ่มลัด",
   "config.togglekey.name": "สลับเปิด/ปิดเอฟเฟกต์",
   "config.togglekey.tooltip": "สลับเปิด/ปิดระบบ post-processing ทั้งหมดทันที (เทียบ A/B เร็วๆ ตอนเล่น)",
@@ -172,6 +173,9 @@
   "config.shadows.blur.name": "ความฟุ้งของขอบ",
   "config.shadows.objects.name": "เงาต้นไม้และพุ่มไม้",
   "config.shadows.objects.tooltip": "ทอดเงาให้ต้นไม้และพุ่มไม้ด้วย ไม่ใช่แค่ตัวละคร",
+  "config.shadows.heightdrop.name": "เงาอาคารและขอบต่างระดับ",
+  "config.shadows.heightdrop.tooltip": "ทอดเงาลงพื้นจากกำแพง อาคาร และขอบต่างระดับ (ต้องมีมอด Height Framework)",
+  "config.shadows.heightlength.name": "ความยาวเงาอาคาร",
 
   "tuner.section.shadows": "เงาทอดตามแสง",
   "tuner.shadows": "เงาทอดตามแสง",

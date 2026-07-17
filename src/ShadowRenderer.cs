@@ -38,6 +38,8 @@ namespace SDVRadiance
         private RenderTarget2D? _playerRT;
         private SpriteBatch? _rtBatch;
         private Texture2D? _gradTex;
+        /// <summary>Soft radial disc for indoor/ambient CONTACT shadows (a grounding pool under a caster).</summary>
+        private Texture2D? _blobTex;
         private Vector2 _playerFeetInRT;
         private bool _playerReady;
         private const int PlayerRtW = 96;
@@ -93,12 +95,10 @@ namespace SDVRadiance
         /// </summary>
         internal static bool ShadowsActiveNow(ModConfig config)
         {
-            if (!ShouldCast(config))
-                return false;
-            if (SunCasts())
-                return true;
-            var lights = Game1.currentLightSources;
-            return lights != null && lights.Count > 0;
+            // Both draw paths always produce a shadow now: the sun path outdoors, and the light
+            // path everywhere else (an ambient contact pool even in a lightless room). So whenever
+            // we're allowed to cast, suppress the vanilla blob to avoid a doubled shadow.
+            return ShouldCast(config);
         }
 
         /// <summary>Draw all caster shadows into the game's open World_Sorted batch.</summary>
@@ -161,6 +161,11 @@ namespace SDVRadiance
 
             if (config.DirectionalShadowObjects)
                 DrawObjectShadows(b, loc, rot, stretch, alpha, blur);
+
+            // Height-data ground shadows for walls/buildings/ledges (the durable replacement for
+            // the disabled per-building sprite lean). Only when Height Framework is installed.
+            if (config.HeightDropShadows && Height != null)
+                DrawHeightShadows(b, loc, config, alpha, blur);
         }
 
         private void DrawAnimalShadow(SpriteBatch b, FarmAnimal a, float rot, float stretch, float alpha, float blur)
@@ -186,39 +191,40 @@ namespace SDVRadiance
         /// </summary>
         private void DrawLightShadows(SpriteBatch b, GameLocation loc, ModConfig config, float strength, float blur)
         {
-            var lights = Game1.currentLightSources;
-            if (lights == null || lights.Count == 0)
-                return;
-
+            // Build the on-screen light list — may be EMPTY (a room with no lamps/windows). We no
+            // longer bail on empty: an always-present ambient CONTACT pool grounds every caster
+            // even in a lightless room, and point lights ADD their directional shadow on top.
             _lightBuf.Clear();
-            foreach (var kv in lights.Values)
+            var lights = Game1.currentLightSources;
+            if (lights != null)
             {
-                LightSource ls = kv;
-                // Cast from real point lights AND window/map lights (a window still throws a
-                // believable shadow across the room). Player-attached lights sit on the player
-                // so they self-cancel in LightCast (dist≈0). Skip nothing by context.
-                Vector2 screen = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
-                // Shadows reach much further than the glow; keep a whole-room-crossing minimum
-                // so a single small window still shadows the far corner.
-                float reach = Math.Max(640f, ls.radius.Value * 64f * 4f);
-                if (screen.X < -reach || screen.X > Game1.viewport.Width + reach ||
-                    screen.Y < -reach || screen.Y > Game1.viewport.Height + reach)
-                    continue;
-                _lightBuf.Add((screen, reach));
-                if (_lightBuf.Count >= 6)
-                    break;
+                foreach (var kv in lights.Values)
+                {
+                    LightSource ls = kv;
+                    // Cast from real point lights AND window/map lights (a window still throws a
+                    // believable shadow across the room). Player-attached lights sit on the player
+                    // so they self-cancel in LightCast (dist≈0). Skip nothing by context.
+                    Vector2 screen = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
+                    // Shadows reach much further than the glow; keep a whole-room-crossing minimum
+                    // so a single small window still shadows the far corner.
+                    float reach = Math.Max(640f, ls.radius.Value * 64f * 4f);
+                    if (screen.X < -reach || screen.X > Game1.viewport.Width + reach ||
+                        screen.Y < -reach || screen.Y > Game1.viewport.Height + reach)
+                        continue;
+                    _lightBuf.Add((screen, reach));
+                    if (_lightBuf.Count >= 6)
+                        break;
+                }
             }
 
             if (Diag != null && _diagFrames < 3)
             {
                 _diagFrames++;
-                Diag.Log($"[shadow] light path: lights on-screen={_lightBuf.Count} (of {lights.Count} total)", LogLevel.Debug);
+                Diag.Log($"[shadow] light path: lights on-screen={_lightBuf.Count}, ambient contact on", LogLevel.Debug);
             }
 
-            if (_lightBuf.Count == 0)
-                return;
-
             float lenCfg = Math.Max(0.1f, config.DirectionalShadowLength);
+            float ambAlpha = strength * 0.4f;   // soft grounding pool; directional cast adds on top
 
             foreach (NPC npc in loc.characters)
             {
@@ -228,6 +234,9 @@ namespace SDVRadiance
                     continue;
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                     new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom - FeetLift));
+                float depth = MathHelper.Clamp(npc.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
+                float halfW = npc.GetSpriteWidthForPositioning() * 4f * 0.36f;
+                DrawContactBlob(b, feet, halfW, halfW * 0.5f, ambAlpha, depth, blur);
                 foreach (var (lpos, reach) in _lightBuf)
                     if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
                         DrawNpcShadow(b, npc, rot, st, a, blur);
@@ -239,6 +248,9 @@ namespace SDVRadiance
                     continue;
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                     new Vector2(animal.Position.X + animal.Sprite.SpriteWidth * 4 / 2f, animal.GetBoundingBox().Bottom));
+                float depth = MathHelper.Clamp(animal.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
+                float halfW = animal.Sprite.SpriteWidth * 4f * 0.36f;
+                DrawContactBlob(b, feet, halfW, halfW * 0.5f, ambAlpha, depth, blur);
                 foreach (var (lpos, reach) in _lightBuf)
                     if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
                         DrawAnimalShadow(b, animal, rot, st, a, blur);
@@ -253,10 +265,73 @@ namespace SDVRadiance
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                         new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
                     float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
+                    DrawContactBlob(b, feet, 22f, 11f, ambAlpha, depth, blur);
                     foreach (var (lpos, reach) in _lightBuf)
                         if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
                             DrawSoft(b, Taps9, _playerRT, null, feet, Color.White, a, rot, _playerFeetInRT,
                                 new Vector2(1f, st), depth, SpriteEffects.None, blur);
+                }
+            }
+
+            // Furniture / big craftables / forage get a light ambient contact pool too (no per-light
+            // silhouette — a room full of overlapping cast copies reads as clutter).
+            if (config.DirectionalShadowObjects)
+                DrawObjectContactShadows(b, loc, ambAlpha * 0.85f, blur);
+        }
+
+        /// <summary>Draw a soft dark contact pool (grounding shadow) centred at a screen point.</summary>
+        private void DrawContactBlob(SpriteBatch b, Vector2 feet, float halfW, float halfH, float alpha, float depth, float blur)
+        {
+            if (_blobTex == null || alpha <= 0.01f)
+                return;
+            var origin = new Vector2(32f, 32f);
+            var scale = new Vector2(Math.Max(0.01f, halfW * 2f / 64f), Math.Max(0.01f, halfH * 2f / 64f));
+            DrawSoft(b, Taps5, _blobTex, null, feet, Color.Black, alpha, 0f, origin, scale, depth, SpriteEffects.None, blur);
+        }
+
+        /// <summary>Ambient contact pools under furniture / craftables / forage (indoor & night path).</summary>
+        private void DrawObjectContactShadows(SpriteBatch b, GameLocation loc, float alpha, float blur)
+        {
+            var vp = Game1.viewport;
+            int tx0 = vp.X / 64 - 2, tx1 = (vp.X + vp.Width) / 64 + 2;
+            int ty0 = vp.Y / 64 - 2, ty1 = (vp.Y + vp.Height) / 64 + 2;
+
+            foreach (Furniture f in loc.furniture)
+            {
+                if (f == null || f.isTemporarilyInvisible)
+                    continue;
+                int type = f.furniture_type.Value;
+                if (type == 12 || type == 6 || type == 13 || type == 17)   // rugs / wall-mounted
+                    continue;
+                Vector2 tile = f.TileLocation;
+                if (tile.X < tx0 || tile.X > tx1 || tile.Y < ty0 || tile.Y > ty1)
+                    continue;
+                Rectangle box = f.boundingBox.Value;
+                Vector2 feet = Game1.GlobalToLocal(vp, new Vector2(box.Center.X, box.Bottom - 6f));
+                float depth = MathHelper.Clamp((box.Bottom - 4f) / 10000f - ShadowDepthBias, 0f, 1f);
+                DrawContactBlob(b, feet, box.Width * 0.5f * 0.8f, 12f, alpha, depth, blur);
+            }
+
+            foreach (var kv in loc.objects.Pairs)
+            {
+                Vector2 tile = kv.Key;
+                if (tile.X < tx0 || tile.X > tx1 || tile.Y < ty0 || tile.Y > ty1)
+                    continue;
+                SObject o = kv.Value;
+                if (o == null || o.isTemporarilyInvisible)
+                    continue;
+                float depth = MathHelper.Clamp(((tile.Y + 1f) * 64f) / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
+                if (o.bigCraftable.Value)
+                {
+                    if (o.Fragility == 2)
+                        continue;
+                    Vector2 feet = Game1.GlobalToLocal(vp, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 8f));
+                    DrawContactBlob(b, feet, 26f, 12f, alpha, depth, blur);
+                }
+                else if (o.IsSpawnedObject)
+                {
+                    Vector2 feet = Game1.GlobalToLocal(vp, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 6f));
+                    DrawContactBlob(b, feet, 14f, 8f, alpha, depth, blur);
                 }
             }
         }
@@ -362,13 +437,31 @@ namespace SDVRadiance
                 if (tile.X < tx0 || tile.X > tx1 || tile.Y < ty0 || tile.Y > ty1)
                     continue;
                 SObject o = kv.Value;
-                // Only upright machines/craftables cast; flat 16x16 floor items don't.
-                if (o == null || !o.bigCraftable.Value || o.Fragility == 2 || o.isTemporarilyInvisible)
+                if (o == null || o.isTemporarilyInvisible)
                     continue;
-                // Damp the lean (like tall sprites) so a craftable against a wall climbs it less,
-                // and cap the length so a small keg/machine's shadow stays near its own footprint
-                // instead of stretching a full character-length away.
-                DrawBigCraftableShadow(b, o, tile, rot * TallLeanScale, Math.Min(stretch, 0.55f), alpha, blur);
+                if (o.bigCraftable.Value)
+                {
+                    if (o.Fragility == 2)
+                        continue;
+                    // Damp the lean (like tall sprites) so a craftable against a wall climbs it less,
+                    // and cap the length so a small keg/machine's shadow stays near its own footprint
+                    // instead of stretching a full character-length away.
+                    DrawBigCraftableShadow(b, o, tile, rot * TallLeanScale, Math.Min(stretch, 0.55f), alpha, blur);
+                }
+                else if (o.IsSpawnedObject)
+                {
+                    // Small forage lying on the ground (beach shells, mushrooms, coral…). Short,
+                    // strongly-damped shadow.
+                    DrawSmallObjectShadow(b, o, tile, rot * TallLeanScale, Math.Min(stretch, 0.4f), alpha, blur);
+                }
+                else if (!o.isPassable() && o.QualifiedItemId != "(O)590" && o.QualifiedItemId != "(O)SeedSpot")
+                {
+                    // Everything else that stands on its tile (fences, signs, torches, kegs-as-object,
+                    // decor…) gets a real leaning silhouette too — drawn generically from the item's
+                    // own sprite via ItemRegistry, so no per-type method is needed. Skip flat passable
+                    // items and the ground-mark spots (artifact / seed) that shouldn't cast.
+                    DrawGenericObjectShadow(b, o, tile, rot * TallLeanScale, Math.Min(stretch, 0.5f), alpha, blur);
+                }
             }
 
             foreach (Furniture f in loc.furniture)
@@ -385,9 +478,121 @@ namespace SDVRadiance
                 DrawFurnitureShadow(b, f, rot, stretch, alpha, blur);
             }
 
-            // Building shadows are DISABLED: leaning a whole-building sprite projects it up over
-            // itself and its neighbours (a building's real shadow is a ground projection from its
-            // footprint on the sun-opposite side — exactly what the height framework will provide).
+            // Building shadows via the sprite-lean path stay DISABLED (leaning a whole-building
+            // sprite projects it up over itself). Their real ground projection is done separately
+            // in DrawHeightShadows using Height Framework data — see DrawSunShadows.
+        }
+
+        /// <summary>
+        /// Generic silhouette for ANY tile-placed object, drawn from the item's own sprite
+        /// (ItemRegistry) — the type-agnostic caster that means we don't hand-write a method per
+        /// object kind. Anchored bottom-centre at the tile's ground line; height comes from the
+        /// sprite itself, so a 16- or 32-tall item both sit right.
+        /// </summary>
+        private void DrawGenericObjectShadow(SpriteBatch b, SObject o, Vector2 tile, float rot, float stretch, float alpha, float blur)
+        {
+            var data = ItemRegistry.GetDataOrErrorItem(o.QualifiedItemId);
+            Texture2D tex = data.GetTexture();
+            if (tex == null)
+                return;
+            Rectangle src = data.GetSourceRect();
+            if (src.IsEmpty)
+                return;
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 6f));
+            float depth = MathHelper.Clamp(((tile.Y + 1f) * 64f) / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
+            DrawBandedGradient(b, tex, src, feet, new Vector2(src.Width / 2f, src.Height),
+                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur, ObjectHeadFade);
+        }
+
+        /// <summary>Small forage lying on the ground (16x16) — a short leaning silhouette to ground it.</summary>
+        private void DrawSmallObjectShadow(SpriteBatch b, SObject o, Vector2 tile, float rot, float stretch, float alpha, float blur)
+        {
+            var data = ItemRegistry.GetDataOrErrorItem(o.QualifiedItemId);
+            Texture2D tex = data.GetTexture();
+            if (tex == null)
+                return;
+            Rectangle src = data.GetSourceRect();
+            // Forage rests near the tile's bottom edge; small lift so the shadow base meets the item.
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 12f));
+            float depth = MathHelper.Clamp(((tile.Y + 1f) * 64f) / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
+            DrawBandedGradient(b, tex, src, feet, new Vector2(src.Width / 2f, src.Height),
+                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur, ObjectHeadFade);
+        }
+
+        /// <summary>
+        /// Project ground shadows for walls / buildings / ledges from Height Framework data.
+        ///
+        /// Standard heightfield self-shadowing (a "gather" horizon march): for each visible
+        /// ground tile, step toward the sun; if a taller tile rises above the sun ray at that
+        /// distance, the ground tile is occluded → shaded. This casts a building's shadow onto
+        /// the ground on the sun-opposite side at a length set by the sun height — the durable,
+        /// generic replacement for per-building sprite leaning (works for cliffs/piers too).
+        /// </summary>
+        private void DrawHeightShadows(SpriteBatch b, GameLocation loc, ModConfig config, float baseAlpha, float blur)
+        {
+            var api = Height;
+            if (api == null)
+                return;
+
+            // Match the character silhouette's lean EXACTLY so the two systems agree in direction.
+            // The character shadow leans by rot = 1.15*d (ComputeSun); the far end of an upright
+            // sprite rotated by rot points (-sin rot, -cos rot). Use that same vector as the ground
+            // shadow direction, and march the opposite way (toward the sun) to find the occluder.
+            float d = MathHelper.Clamp((Game1.timeOfDay - 1200) / 600f, -1f, 1f);
+            float low = Math.Abs(d);
+            float rot = 1.15f * d;
+            var shadowDir = new Vector2(-(float)Math.Sin(rot), -(float)Math.Cos(rot));
+            Vector2 sunDir = -shadowDir;
+
+            float maxLen = MathHelper.Lerp(1.5f, 5.5f, low) * Math.Max(0.2f, config.HeightShadowLength); // tiles
+            int steps = Math.Max(1, (int)Math.Ceiling(maxLen));
+            float slope = 1f / Math.Max(0.6f, maxLen);     // sun-ray height gained per tile of distance
+            float alpha = baseAlpha * 0.5f;                // ground shadows read lighter than sprite ones
+            if (alpha <= 0.02f)
+                return;
+
+            var vp = Game1.viewport;
+            int tx0 = vp.X / 64 - 1, tx1 = (vp.X + vp.Width) / 64 + 1;
+            int ty0 = vp.Y / 64 - 1, ty1 = (vp.Y + vp.Height) / 64 + 1;
+
+            for (int ty = ty0; ty <= ty1; ty++)
+            {
+                for (int tx = tx0; tx <= tx1; tx++)
+                {
+                    // Only cast ONTO flat ground: skip occluder tops (h>0), water, and decks.
+                    if (api.GetHeightAt(loc, tx, ty) > 0 || api.GetSurfaceAt(loc, tx, ty) != 0)
+                        continue;
+
+                    float shade = 0f;
+                    for (int s = 1; s <= steps; s++)
+                    {
+                        int sx = tx + (int)Math.Round(sunDir.X * s);
+                        int sy = ty + (int)Math.Round(sunDir.Y * s);
+                        // Only GENUINELY tall occluders cast (buildings are stamped height 2). Map
+                        // Front-layer art, pond rims, walls and pier decks are height ≤1 — casting
+                        // from those littered flat sand with spurious shadows, so require ≥2.
+                        int h = api.GetHeightAt(loc, sx, sy);
+                        if (h < 2)
+                            continue;
+                        float rayH = s * slope;             // how high the sun ray is above the ground here
+                        float over = h - rayH;              // occluder pokes above the ray ⇒ shadow
+                        if (over > 0f)
+                        {
+                            // Fade with distance so the shadow tip is soft, and clamp the near core.
+                            float k = MathHelper.Clamp(over, 0f, 1f) * (1f - (s - 1) / (float)steps);
+                            if (k > shade) shade = k;
+                        }
+                    }
+                    if (shade <= 0.02f)
+                        continue;
+
+                    // Draw a SOFT radial pool centred on the tile, ~1.4 tiles wide so neighbouring
+                    // shadowed tiles overlap and blend — this is what dissolves the hard 64px grid.
+                    Vector2 center = Game1.GlobalToLocal(vp, new Vector2(tx * 64f + 32f, ty * 64f + 32f));
+                    float depth = MathHelper.Clamp(((ty + 1f) * 64f) / 10000f - ShadowDepthBias, 0f, 1f);
+                    DrawContactBlob(b, center, 46f, 46f, alpha * shade, depth, blur);
+                }
+            }
         }
 
         /// <summary>Lean damping for tall sprites (bushes/craftables) so the shadow stays rooted at the base.</summary>
@@ -435,9 +640,11 @@ namespace SDVRadiance
             Texture2D tex = crop.DrawnCropTexture;
             if (tex == null || crop.sourceRect.IsEmpty)
                 return;
-            // The game draws origin (8,24) at drawPosition; the cell bottom (y=32) therefore sits
-            // at drawPosition.Y + (32-24)*4 = +32, ≈ the tile's bottom edge — our ground line.
-            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(crop.drawPosition.X, crop.drawPosition.Y + 32f));
+            // The game draws origin (8,24) at drawPosition; the cell bottom (y=32) sits at
+            // drawPosition.Y + 32 ≈ the tile's bottom edge. Lift the anchor ~12px so the shadow
+            // base meets the plant where it roots on the soil mound (sitting at the raw tile
+            // bottom read as "too low" and left young sprouts looking detached).
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(crop.drawPosition.X, crop.drawPosition.Y + 20f));
             float depth = MathHelper.Clamp((tile.Y * 64f + 64f) / 10000f + tile.X / 100000f - ShadowDepthBias, 0f, 1f);
             // Crops are randomly mirrored (Crop.flip); match it so an asymmetric sprite's shadow
             // leans the same way its plant does instead of pointing the opposite direction.
@@ -574,6 +781,7 @@ namespace SDVRadiance
 
             _rtBatch ??= new SpriteBatch(gd);
             _gradTex ??= BuildGradient(gd);
+            _blobTex ??= BuildBlob(gd);
 
             // Bake NPC + animal silhouettes (single-sprite casters) to pooled targets so their
             // shadows match the player's smooth, cohesive fade instead of stepped bands.
@@ -716,6 +924,28 @@ namespace SDVRadiance
             _casterPool.Add(rt);
             _casterUsed++;
             return rt;
+        }
+
+        /// <summary>A 64×64 soft radial disc (white, radial alpha) for ambient contact pools.</summary>
+        private static Texture2D BuildBlob(GraphicsDevice gd)
+        {
+            const int N = 64;
+            var tex = new Texture2D(gd, N, N);
+            var data = new Color[N * N];
+            float r = N / 2f;
+            for (int y = 0; y < N; y++)
+            {
+                for (int x = 0; x < N; x++)
+                {
+                    float dx = (x + 0.5f - r) / r, dy = (y + 0.5f - r) / r;
+                    float dist = (float)Math.Sqrt(dx * dx + dy * dy);
+                    float a = MathHelper.Clamp(1f - dist, 0f, 1f);
+                    a *= a;   // soft falloff toward the rim
+                    data[y * N + x] = new Color((byte)255, (byte)255, (byte)255, (byte)(a * 255f));
+                }
+            }
+            tex.SetData(data);
+            return tex;
         }
 
         /// <summary>1×H alpha ramp: 1.0 at the bottom (feet) fading to <see cref="HeadFade"/> at the top (far tip).</summary>

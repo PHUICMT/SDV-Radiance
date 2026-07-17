@@ -40,6 +40,10 @@ namespace SDVRadiance
 
         /// <summary>When true, vanilla tree/bush baked blob shadows are skipped (our object shadows replace them).</summary>
         internal static bool SuppressVanillaObjectShadows;
+
+        /// <summary>When true, vanilla <see cref="Game1.shadowTexture"/> blob shadows (big craftables) are
+        /// skipped. Gated on ShadowsActiveNow so it also covers the indoor/night ambient path.</summary>
+        internal static bool SuppressVanillaBlobShadows;
         private static IMonitor? SMonitor;
         private static bool _loggedFreeze;
 
@@ -60,16 +64,27 @@ namespace SDVRadiance
             sb.Draw(tex, pos, src, color, rotation, origin, scale, effects, layerDepth);
         }
 
-        /// <summary>Redirect a method's SpriteBatch.Draw calls through <see cref="Draw_SkipVanillaShadow"/>.</summary>
-        private static System.Collections.Generic.IEnumerable<CodeInstruction> DrawShadow_Transpiler(
-            System.Collections.Generic.IEnumerable<CodeInstruction> instructions)
+        /// <summary>Shim for Object.draw: drop the vanilla <see cref="Game1.shadowTexture"/> blob (big
+        /// craftables draw it at an object-specific depth, so we key on the texture, not layerDepth).</summary>
+        public static void Draw_SkipBlobShadow(SpriteBatch sb, Texture2D tex, Vector2 pos,
+            Rectangle? src, Color color, float rotation, Vector2 origin, float scale,
+            SpriteEffects effects, float layerDepth)
+        {
+            if (SuppressVanillaBlobShadows && ReferenceEquals(tex, Game1.shadowTexture))
+                return;
+            sb.Draw(tex, pos, src, color, rotation, origin, scale, effects, layerDepth);
+        }
+
+        /// <summary>Redirect a method's 9-arg SpriteBatch.Draw calls through <paramref name="shimName"/>.</summary>
+        private static System.Collections.Generic.IEnumerable<CodeInstruction> RedirectDraws(
+            System.Collections.Generic.IEnumerable<CodeInstruction> instructions, string shimName)
         {
             var drawMethod = AccessTools.Method(typeof(SpriteBatch), nameof(SpriteBatch.Draw), new[]
             {
                 typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color),
                 typeof(float), typeof(Vector2), typeof(float), typeof(SpriteEffects), typeof(float)
             });
-            var shim = AccessTools.Method(typeof(ModEntry), nameof(Draw_SkipVanillaShadow));
+            var shim = AccessTools.Method(typeof(ModEntry), shimName);
             foreach (var ins in instructions)
             {
                 if (ins.Calls(drawMethod))
@@ -78,6 +93,16 @@ namespace SDVRadiance
                     yield return ins;
             }
         }
+
+        /// <summary>Tree/Bush: drop the depth==1E-06 blob draws.</summary>
+        private static System.Collections.Generic.IEnumerable<CodeInstruction> DrawShadow_Transpiler(
+            System.Collections.Generic.IEnumerable<CodeInstruction> instructions)
+            => RedirectDraws(instructions, nameof(Draw_SkipVanillaShadow));
+
+        /// <summary>Object.draw: drop the Game1.shadowTexture blob draws.</summary>
+        private static System.Collections.Generic.IEnumerable<CodeInstruction> BlobShadow_Transpiler(
+            System.Collections.Generic.IEnumerable<CodeInstruction> instructions)
+            => RedirectDraws(instructions, nameof(Draw_SkipBlobShadow));
 
         /// <summary>True only when the mod is on AND at least one implemented effect is switched on.</summary>
         private bool EffectsActive => _config.Enabled &&
@@ -125,6 +150,11 @@ namespace SDVRadiance
             harmony.Patch(
                 original: AccessTools.Method(typeof(StardewValley.TerrainFeatures.Bush), nameof(StardewValley.TerrainFeatures.Bush.draw), new[] { typeof(SpriteBatch) }),
                 transpiler: new HarmonyMethod(typeof(ModEntry), nameof(DrawShadow_Transpiler)));
+            // Big craftables draw a vanilla Game1.shadowTexture blob in Object.draw(b,x,y,alpha);
+            // drop it while our object shadows are active so it doesn't double up.
+            harmony.Patch(
+                original: AccessTools.Method(typeof(StardewValley.Object), nameof(StardewValley.Object.draw), new[] { typeof(SpriteBatch), typeof(int), typeof(int), typeof(float) }),
+                transpiler: new HarmonyMethod(typeof(ModEntry), nameof(BlobShadow_Transpiler)));
 
             this.Monitor.Log("SDV-Radiance loaded (world post-processing via RenderedWorld).", LogLevel.Info);
         }
@@ -206,6 +236,9 @@ namespace SDVRadiance
             // Suppress the BUSH blob (fixed-direction, fights our cast); the TREE blob is kept
             // (not patched) as a base anchor under the canopy.
             SuppressVanillaObjectShadows = _config.DirectionalShadowObjects && ShadowRenderer.SunShadowActive(_config);
+            // Big-craftable blobs are replaced in BOTH paths (sun directional + indoor/night contact),
+            // so gate on ShadowsActiveNow, not just the sun path.
+            SuppressVanillaBlobShadows = _config.DirectionalShadowObjects && ShadowRenderer.ShadowsActiveNow(_config);
         }
 
         private void OnButtonsChanged(object? sender, ButtonsChangedEventArgs e)
@@ -265,13 +298,42 @@ namespace SDVRadiance
 
             api.Register(this.ModManifest, () => { _config = new ModConfig(); ForceBufferDraw = EffectsActive; }, Save);
 
+            // --- Landing page: master switch, a one-click look preset, and links to each
+            // effect's own page so the top level stays short instead of one giant scroll. ---
             api.AddBoolOption(this.ModManifest, () => _config.Enabled, v => _config.Enabled = v,
                 () => I18n("config.enabled.name"), () => I18n("config.enabled.tooltip"));
 
+            api.AddTextOption(this.ModManifest,
+                () => _config.ActivePreset.ToString(),
+                v =>
+                {
+                    if (Enum.TryParse<LookPreset>(v, out var p))
+                    {
+                        _config.ActivePreset = p;
+                        if (p != LookPreset.Custom) _config.ApplyPreset(p);
+                        ForceBufferDraw = EffectsActive;
+                    }
+                },
+                () => I18n("config.preset.name"), () => I18n("config.preset.tooltip"),
+                new[] { nameof(LookPreset.Custom), nameof(LookPreset.Subtle), nameof(LookPreset.Cinematic), nameof(LookPreset.Vibrant), nameof(LookPreset.Off) },
+                v => I18n($"config.preset.{v.ToLowerInvariant()}"));
+
             api.AddParagraph(this.ModManifest, () => I18n("config.preset.hint"));
 
+            api.AddPageLink(this.ModManifest, "bloom", () => I18n("config.section.bloom"));
+            api.AddPageLink(this.ModManifest, "colorgrade", () => I18n("config.section.colorgrade"));
+            api.AddPageLink(this.ModManifest, "godrays", () => I18n("config.section.godrays"));
+            api.AddPageLink(this.ModManifest, "fog", () => I18n("config.section.fog"));
+            api.AddPageLink(this.ModManifest, "cloudshadow", () => I18n("config.section.cloudshadow"));
+            api.AddPageLink(this.ModManifest, "tiltshift", () => I18n("config.section.tiltshift"));
+            api.AddPageLink(this.ModManifest, "finishing", () => I18n("config.section.finishing"));
+            api.AddPageLink(this.ModManifest, "lighting", () => I18n("config.section.lighting"));
+            api.AddPageLink(this.ModManifest, "shadows", () => I18n("config.section.shadows"));
+            api.AddPageLink(this.ModManifest, "camera", () => I18n("config.section.camera"));
+            api.AddPageLink(this.ModManifest, "misc", () => I18n("config.section.misc"));
+
             // --- Bloom (implemented) ---
-            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.bloom"));
+            api.AddPage(this.ModManifest, "bloom", () => I18n("config.section.bloom"));
             api.AddBoolOption(this.ModManifest, () => _config.BloomEnabled, v => _config.BloomEnabled = v,
                 () => I18n("config.bloom.enabled.name"), () => I18n("config.bloom.enabled.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.BloomThreshold, v => _config.BloomThreshold = v,
@@ -280,7 +342,7 @@ namespace SDVRadiance
                 () => I18n("config.bloom.intensity.name"), null, 0f, 2f, 0.05f);
 
             // --- Color grading (implemented) ---
-            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.colorgrade"));
+            api.AddPage(this.ModManifest, "colorgrade", () => I18n("config.section.colorgrade"));
             api.AddBoolOption(this.ModManifest, () => _config.ColorGradeEnabled, v => _config.ColorGradeEnabled = v,
                 () => I18n("config.colorgrade.enabled.name"), () => I18n("config.colorgrade.enabled.tooltip"));
             api.AddBoolOption(this.ModManifest, () => _config.ColorGradeAuto, v => _config.ColorGradeAuto = v,
@@ -299,7 +361,7 @@ namespace SDVRadiance
                 () => I18n("config.colorgrade.tonemap.name"), () => I18n("config.colorgrade.tonemap.tooltip"));
 
             // --- God rays (implemented) ---
-            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.godrays"));
+            api.AddPage(this.ModManifest, "godrays", () => I18n("config.section.godrays"));
             api.AddBoolOption(this.ModManifest, () => _config.GodRaysEnabled, v => _config.GodRaysEnabled = v,
                 () => I18n("config.godrays.enabled.name"), () => I18n("config.godrays.enabled.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.GodRaysIntensity, v => _config.GodRaysIntensity = v,
@@ -310,7 +372,7 @@ namespace SDVRadiance
                 () => I18n("config.godrays.density.name"), null, 0.1f, 1f, 0.05f);
 
             // --- Volumetric fog (implemented) ---
-            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.fog"));
+            api.AddPage(this.ModManifest, "fog", () => I18n("config.section.fog"));
             api.AddBoolOption(this.ModManifest, () => _config.FogEnabled, v => _config.FogEnabled = v,
                 () => I18n("config.fog.enabled.name"), () => I18n("config.fog.enabled.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.FogDensity, v => _config.FogDensity = v,
@@ -321,7 +383,7 @@ namespace SDVRadiance
                 () => I18n("config.fog.speed.name"), null, 0f, 0.1f, 0.005f);
 
             // --- Cloud shadows (implemented) ---
-            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.cloudshadow"));
+            api.AddPage(this.ModManifest, "cloudshadow", () => I18n("config.section.cloudshadow"));
             api.AddBoolOption(this.ModManifest, () => _config.CloudShadowEnabled, v => _config.CloudShadowEnabled = v,
                 () => I18n("config.cloudshadow.enabled.name"), () => I18n("config.cloudshadow.enabled.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.CloudShadowOpacity, v => _config.CloudShadowOpacity = v,
@@ -334,7 +396,7 @@ namespace SDVRadiance
                 () => I18n("config.cloudshadow.speed.name"), null, 0f, 0.1f, 0.005f);
 
             // --- Tilt-shift (implemented) ---
-            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.tiltshift"));
+            api.AddPage(this.ModManifest, "tiltshift", () => I18n("config.section.tiltshift"));
             api.AddBoolOption(this.ModManifest, () => _config.TiltShiftEnabled, v => _config.TiltShiftEnabled = v,
                 () => I18n("config.tiltshift.enabled.name"), () => I18n("config.tiltshift.enabled.tooltip"));
             api.AddTextOption(this.ModManifest,
@@ -353,7 +415,7 @@ namespace SDVRadiance
                 () => I18n("config.tiltshift.bottom.name"), null, 0f, 1f, 0.05f);
 
             // --- Water + finishing (implemented) ---
-            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.finishing"));
+            api.AddPage(this.ModManifest, "finishing", () => I18n("config.section.finishing"));
             api.AddBoolOption(this.ModManifest, () => _config.WaterEnabled, v => _config.WaterEnabled = v,
                 () => I18n("config.water.enabled.name"), () => I18n("config.water.enabled.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.WaterStrength, v => _config.WaterStrength = v,
@@ -376,7 +438,7 @@ namespace SDVRadiance
                 () => I18n("config.ca.strength.name"), null, 0f, 1f, 0.05f);
 
             // --- Dynamic lighting (implemented) ---
-            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.lighting"));
+            api.AddPage(this.ModManifest, "lighting", () => I18n("config.section.lighting"));
             api.AddBoolOption(this.ModManifest, () => _config.LightingEnabled, v => _config.LightingEnabled = v,
                 () => I18n("config.lighting.enabled.name"), () => I18n("config.lighting.enabled.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.LightingIndoorDarkness, v => _config.LightingIndoorDarkness = v,
@@ -395,7 +457,7 @@ namespace SDVRadiance
                 () => I18n("config.lighting.shadowstrength.name"), null, 0f, 1f, 0.05f);
 
             // --- Directional sprite shadows (Phase 5b) ---
-            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.shadows"));
+            api.AddPage(this.ModManifest, "shadows", () => I18n("config.section.shadows"));
             api.AddBoolOption(this.ModManifest, () => _config.DirectionalShadowsEnabled, v => _config.DirectionalShadowsEnabled = v,
                 () => I18n("config.shadows.enabled.name"), () => I18n("config.shadows.enabled.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.DirectionalShadowStrength, v => _config.DirectionalShadowStrength = v,
@@ -406,9 +468,13 @@ namespace SDVRadiance
                 () => I18n("config.shadows.blur.name"), null, 0f, 5f, 0.5f);
             api.AddBoolOption(this.ModManifest, () => _config.DirectionalShadowObjects, v => _config.DirectionalShadowObjects = v,
                 () => I18n("config.shadows.objects.name"), () => I18n("config.shadows.objects.tooltip"));
+            api.AddBoolOption(this.ModManifest, () => _config.HeightDropShadows, v => _config.HeightDropShadows = v,
+                () => I18n("config.shadows.heightdrop.name"), () => I18n("config.shadows.heightdrop.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.HeightShadowLength, v => _config.HeightShadowLength = v,
+                () => I18n("config.shadows.heightlength.name"), null, 0.2f, 2f, 0.05f);
 
             // --- Camera (implemented) ---
-            api.AddSectionTitle(this.ModManifest, () => I18n("config.section.camera"));
+            api.AddPage(this.ModManifest, "camera", () => I18n("config.section.camera"));
             api.AddTextOption(this.ModManifest,
                 () => _config.CameraMode.ToString(),
                 v => _config.CameraMode = Enum.TryParse<CameraMode>(v, out var m) ? m : CameraMode.Off,
@@ -418,7 +484,8 @@ namespace SDVRadiance
             api.AddNumberOption(this.ModManifest, () => _config.CameraFollowSpeed, v => _config.CameraFollowSpeed = v,
                 () => I18n("config.smoothcam.speed.name"), () => I18n("config.smoothcam.speed.tooltip"), 0.05f, 1f, 0.05f);
 
-            // --- Hotkeys ---
+            // --- Misc page: hotkeys + diagnostics + roadmap ---
+            api.AddPage(this.ModManifest, "misc", () => I18n("config.section.misc"));
             api.AddSectionTitle(this.ModManifest, () => I18n("config.section.hotkeys"));
             api.AddKeybindList(this.ModManifest, () => _config.ToggleKey, v => _config.ToggleKey = v,
                 () => I18n("config.togglekey.name"), () => I18n("config.togglekey.tooltip"));

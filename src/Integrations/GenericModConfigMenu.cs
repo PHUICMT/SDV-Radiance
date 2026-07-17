@@ -23,5 +23,11 @@ namespace SDVRadiance.Integrations
         void AddNumberOption(StardewModdingAPI.IManifest mod, Func<int> getValue, Action<int> setValue, Func<string> name, Func<string>? tooltip = null, int? min = null, int? max = null, int? interval = null, Func<int, string>? formatValue = null, string? fieldId = null);
 
         void AddNumberOption(StardewModdingAPI.IManifest mod, Func<float> getValue, Action<float> setValue, Func<string> name, Func<string>? tooltip = null, float? min = null, float? max = null, float? interval = null, Func<float, string>? formatValue = null, string? fieldId = null);
+
+        /// <summary>Start a new page. Options added after this call live on that page until the next AddPage.</summary>
+        void AddPage(StardewModdingAPI.IManifest mod, string pageId, Func<string>? pageTitle = null);
+
+        /// <summary>Add a clickable link (on the current page) that opens another page.</summary>
+        void AddPageLink(StardewModdingAPI.IManifest mod, string pageId, Func<string> text, Func<string>? tooltip = null);
     }
 }

@@ -11,6 +11,7 @@
   "config.preset.cinematic": "Cinematic",
   "config.preset.vibrant": "Vibrant",
 
+  "config.section.misc": "Hotkeys & diagnostics",
   "config.section.hotkeys": "Hotkeys",
   "config.togglekey.name": "Toggle effects on/off",
   "config.togglekey.tooltip": "Instantly turn the whole post-processing stack on or off (quick A/B compare while playing).",
@@ -171,6 +172,9 @@
   "config.shadows.blur.name": "Edge softness",
   "config.shadows.objects.name": "Shadows for trees & bushes",
   "config.shadows.objects.tooltip": "Also cast leaning shadows from trees and bushes, not just characters.",
+  "config.shadows.heightdrop.name": "Building & ledge shadows",
+  "config.shadows.heightdrop.tooltip": "Project ground shadows from walls, buildings, and ledges (requires the Height Framework mod).",
+  "config.shadows.heightlength.name": "Building shadow length",
 
   "tuner.section.shadows": "Directional shadows",
   "tuner.shadows": "Directional shadows",
