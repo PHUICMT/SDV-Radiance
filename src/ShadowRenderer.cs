@@ -154,7 +154,7 @@ namespace SDVRadiance
             Rectangle src = a.Sprite.SourceRect;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(a.Position.X + a.Sprite.SpriteWidth * 4 / 2f, a.GetBoundingBox().Bottom));
-            float depth = MathHelper.Clamp(a.GetBoundingBox().Bottom / 10000f - ShadowDepthBias, 0f, 1f);
+            float depth = MathHelper.Clamp(a.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
             DrawBandedGradient(b, a.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
         }
@@ -232,7 +232,7 @@ namespace SDVRadiance
                 {
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                         new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom));
-                    float depth = MathHelper.Clamp(who.GetBoundingBox().Bottom / 10000f - ShadowDepthBias, 0f, 1f);
+                    float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                     foreach (var (lpos, reach) in _lightBuf)
                         if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
                             DrawSoft(b, Taps9, _playerRT, null, feet, Color.White, a, rot, _playerFeetInRT,
@@ -268,7 +268,7 @@ namespace SDVRadiance
             Rectangle src = npc.Sprite.SourceRect;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom));
-            float depth = MathHelper.Clamp(npc.GetBoundingBox().Bottom / 10000f - ShadowDepthBias, 0f, 1f);
+            float depth = MathHelper.Clamp(npc.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
             // NPCs are single-texture sprites, so the feet→head opacity gradient is faked with
             // horizontal bands (no per-NPC render target needed), each softened at the edges.
             DrawBandedGradient(b, npc.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, src.Height),
@@ -289,11 +289,13 @@ namespace SDVRadiance
                     continue;
                 switch (kv.Value)
                 {
+                    // Tall sprites swing away from their base under the full character lean
+                    // (the canopy shadow detaches from the trunk) — damp the lean for them.
                     case Tree tree when tree.growthStage.Value >= 5 && !tree.stump.Value && tree.texture?.Value != null:
-                        DrawTreeShadow(b, tree, tile, rot, stretch, alpha, blur);
+                        DrawTreeShadow(b, tree, tile, rot * TallLeanScale, stretch, alpha, blur);
                         break;
                     case Bush bush:
-                        DrawBushShadow(b, bush, rot, stretch, alpha, blur);
+                        DrawBushShadow(b, bush, rot * TallLeanScale, stretch, alpha, blur);
                         break;
                 }
             }
@@ -353,9 +355,18 @@ namespace SDVRadiance
                 int bw = building.tilesWide.Value, bh = building.tilesHigh.Value;
                 if (bx + bw < tx0 || bx > tx1 || by + bh < ty0 || by > ty1)
                     continue;
-                DrawBuildingShadow(b, building, rot, stretch, alpha, blur);
+                // Whole-building sprites are huge — at full lean/length they read as a giant
+                // diagonal sheet ("searchlight"), so keep building shadows short and gentle.
+                DrawBuildingShadow(b, building, rot * BuildingLeanScale,
+                    Math.Min(stretch * BuildingStretchScale, 0.55f), alpha * 0.85f, blur);
             }
         }
+
+        /// <summary>Lean damping for tall sprites (trees/bushes) so the shadow stays rooted at the base.</summary>
+        private const float TallLeanScale = 0.6f;
+        /// <summary>Buildings lean and stretch far less than characters (huge sprites).</summary>
+        private const float BuildingLeanScale = 0.4f;
+        private const float BuildingStretchScale = 0.5f;
 
         private void DrawBigCraftableShadow(SpriteBatch b, SObject o, Vector2 tile, float rot, float stretch, float alpha, float blur)
         {
@@ -474,7 +485,7 @@ namespace SDVRadiance
                 return;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom));
-            float depth = MathHelper.Clamp(who.GetBoundingBox().Bottom / 10000f - ShadowDepthBias, 0f, 1f);
+            float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
 
             // The baked silhouette is one cohesive image — flatten it vertically and lean it
             // about the feet as a single unit (no per-layer fragmenting), softened at the edges.
@@ -618,10 +629,18 @@ namespace SDVRadiance
         /// </summary>
         private const float ShadowDepthBias = 1.2e-3f;
 
-        /// <summary>True if the caster stands on a water tile (avoid laying a shadow on the water surface).</summary>
+        /// <summary>
+        /// True if the caster stands on open water (avoid laying a shadow on the surface).
+        /// Pier/bridge decks sit on Buildings-layer tiles OVER water tiles — standing on a
+        /// deck is not standing on water, so require the tile to have no Buildings tile.
+        /// </summary>
         private static bool OnWater(GameLocation loc, Point tile)
         {
-            try { return loc.isWaterTile(tile.X, tile.Y); }
+            try
+            {
+                return loc.isWaterTile(tile.X, tile.Y)
+                    && !loc.hasTileAt(tile.X, tile.Y, "Buildings");
+            }
             catch { return false; }
         }
 
