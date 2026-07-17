@@ -94,9 +94,15 @@ float4 MaskPS(PixelInput input) : SV_TARGET
                           fbm(p + 3.5 * warp1 + float2(2.3, 7.4)));
     float n = fbm(p + 3.5 * warp2);
 
-    // Wide density ramp so cloud edges are a gentle gradient, not a hard/faceted contour.
+    // Blend a second, finer octave at a different scale so no single density contour ever
+    // runs straight — the sustainable fix for the "hard straight edge" is to never let the
+    // threshold cross one clean ridge line.
+    float detail = fbm(p * 2.37 + float2(11.3, 5.9));
+    n = n * 0.68 + detail * 0.32;
+
+    // Very wide ramp → density is a gradual gradient everywhere, never an on/off contour.
     float edge = 1.0 - Coverage;
-    float cloud = smoothstep(edge - 0.5, edge + 0.5, n);
+    float cloud = smoothstep(edge - 0.62, edge + 0.62, n);
     return float4(cloud, cloud, cloud, 1.0);
 }
 

@@ -3,6 +3,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
 using StardewValley;
+using StardewValley.Characters;
 using StardewValley.Objects;
 using StardewValley.TerrainFeatures;
 using SObject = StardewValley.Object;
@@ -128,7 +129,7 @@ namespace SDVRadiance
 
             foreach (NPC npc in loc.characters)
             {
-                if (npc == null || npc.IsInvisible || npc.HideShadow || npc.swimming.Value || npc.Sprite?.Texture == null)
+                if (npc == null || npc.IsInvisible || (npc.HideShadow && !(npc is Pet)) || npc.swimming.Value || npc.Sprite?.Texture == null)
                     continue;
                 if (OnWater(loc, npc.TilePoint))   // don't lay a shadow on the water surface
                     continue;
@@ -201,7 +202,7 @@ namespace SDVRadiance
 
             foreach (NPC npc in loc.characters)
             {
-                if (npc == null || npc.IsInvisible || npc.HideShadow || npc.swimming.Value || npc.Sprite?.Texture == null)
+                if (npc == null || npc.IsInvisible || (npc.HideShadow && !(npc is Pet)) || npc.swimming.Value || npc.Sprite?.Texture == null)
                     continue;
                 if (OnWater(loc, npc.TilePoint))   // same guard as the sun path (bathhouse, night beach)
                     continue;
@@ -332,9 +333,10 @@ namespace SDVRadiance
                 // Only upright machines/craftables cast; flat 16x16 floor items don't.
                 if (o == null || !o.bigCraftable.Value || o.Fragility == 2 || o.isTemporarilyInvisible)
                     continue;
-                // Damp the lean (like tall sprites) so a craftable placed against a wall doesn't
-                // climb it as badly.
-                DrawBigCraftableShadow(b, o, tile, rot * TallLeanScale, stretch, alpha, blur);
+                // Damp the lean (like tall sprites) so a craftable against a wall climbs it less,
+                // and cap the length so a small keg/machine's shadow stays near its own footprint
+                // instead of stretching a full character-length away.
+                DrawBigCraftableShadow(b, o, tile, rot * TallLeanScale, Math.Min(stretch, 0.55f), alpha, blur);
             }
 
             foreach (Furniture f in loc.furniture)
@@ -358,8 +360,12 @@ namespace SDVRadiance
 
         /// <summary>Lean damping for tall sprites (trees/bushes/craftables) so the shadow stays rooted at the base.</summary>
         private const float TallLeanScale = 0.6f;
-        /// <summary>Objects read more grounded with a gentler tip fade than characters do.</summary>
-        private const float ObjectHeadFade = 0.5f;
+        /// <summary>
+        /// Objects use the same strong feet→tip fade as characters: a DARK base grounds the
+        /// shadow (the earlier gentle/uniform fade read as floaty — the fix was a darker base,
+        /// not a flatter gradient).
+        /// </summary>
+        private const float ObjectHeadFade = HeadFade;
 
         private void DrawBigCraftableShadow(SpriteBatch b, SObject o, Vector2 tile, float rot, float stretch, float alpha, float blur)
         {
@@ -368,8 +374,9 @@ namespace SDVRadiance
             if (tex == null)
                 return;
             Rectangle src = data.GetSourceRect();
-            // Big craftables draw a 64x128 box anchored at (x*64, y*64-64) → feet at tile bottom-centre.
-            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f));
+            // Big craftables sit ON their tile; the barrel/machine visually rests a bit above the
+            // tile's bottom edge, so anchor the shadow's dark base slightly up from (tile.Y+1)*64.
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 20f));
             float depth = MathHelper.Clamp(Math.Max(0f, ((tile.Y + 1f) * 64f - 24f) / 10000f) + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
             DrawBandedGradient(b, tex, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
