@@ -81,6 +81,20 @@ namespace SDVRadiance
             sb.Draw(tex, pos, src, color, rotation, origin, scale, effects, layerDepth);
         }
 
+        /// <summary>When true, critters' vanilla blob shadows are skipped (our directional critter
+        /// shadows replace them — sun path only, so rainy days keep the vanilla blob).</summary>
+        internal static bool SuppressVanillaCritterShadows;
+
+        /// <summary>Shim for Critter draw methods: drop only their Game1.shadowTexture blob.</summary>
+        public static void Draw_SkipCritterShadow(SpriteBatch sb, Texture2D tex, Vector2 pos,
+            Rectangle? src, Color color, float rotation, Vector2 origin, float scale,
+            SpriteEffects effects, float layerDepth)
+        {
+            if (SuppressVanillaCritterShadows && ReferenceEquals(tex, Game1.shadowTexture))
+                return;
+            sb.Draw(tex, pos, src, color, rotation, origin, scale, effects, layerDepth);
+        }
+
         /// <summary>Redirect a method's 9-arg SpriteBatch.Draw calls through <paramref name="shimName"/>.</summary>
         private static System.Collections.Generic.IEnumerable<CodeInstruction> RedirectDraws(
             System.Collections.Generic.IEnumerable<CodeInstruction> instructions, string shimName)
@@ -109,6 +123,11 @@ namespace SDVRadiance
         private static System.Collections.Generic.IEnumerable<CodeInstruction> BlobShadow_Transpiler(
             System.Collections.Generic.IEnumerable<CodeInstruction> instructions)
             => RedirectDraws(instructions, nameof(Draw_SkipBlobShadow));
+
+        /// <summary>Critter draw methods: drop the Game1.shadowTexture blob draws.</summary>
+        private static System.Collections.Generic.IEnumerable<CodeInstruction> CritterShadow_Transpiler(
+            System.Collections.Generic.IEnumerable<CodeInstruction> instructions)
+            => RedirectDraws(instructions, nameof(Draw_SkipCritterShadow));
 
         /// <summary>True only when the mod is on AND at least one implemented effect is switched on.</summary>
         private bool EffectsActive => _config.Enabled &&
@@ -166,6 +185,31 @@ namespace SDVRadiance
             harmony.Patch(
                 original: AccessTools.Method(typeof(StardewValley.BellsAndWhistles.Cloud), nameof(StardewValley.BellsAndWhistles.Cloud.drawAboveFrontLayer), new[] { typeof(SpriteBatch) }),
                 prefix: new HarmonyMethod(typeof(ModEntry), nameof(Cloud_Draw_Prefix)));
+            // Critters draw their own Game1.shadowTexture blob inside draw()/drawAboveFrontLayer()
+            // (base class + several overrides). Route every Critter subclass's declared draw
+            // methods through a shim that drops just those blob draws while ours are casting.
+            foreach (var t in typeof(StardewValley.BellsAndWhistles.Critter).Assembly.GetTypes())
+            {
+                if (!typeof(StardewValley.BellsAndWhistles.Critter).IsAssignableFrom(t)
+                    || t == typeof(StardewValley.BellsAndWhistles.Cloud))
+                    continue;
+                foreach (string name in new[] { "draw", "drawAboveFrontLayer" })
+                {
+                    var mi = t.GetMethod(name,
+                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly,
+                        null, new[] { typeof(SpriteBatch) }, null);
+                    if (mi == null || mi.IsAbstract)
+                        continue;
+                    try
+                    {
+                        harmony.Patch(mi, transpiler: new HarmonyMethod(typeof(ModEntry), nameof(CritterShadow_Transpiler)));
+                    }
+                    catch (Exception ex)
+                    {
+                        this.Monitor.Log($"Critter shadow patch skipped for {t.Name}.{name}: {ex.Message}", LogLevel.Trace);
+                    }
+                }
+            }
 
             this.Monitor.Log("SDV-Radiance loaded (world post-processing via RenderedWorld).", LogLevel.Info);
         }
@@ -251,6 +295,9 @@ namespace SDVRadiance
             // Big-craftable blobs are replaced in BOTH paths (sun directional + indoor/night contact),
             // so gate on ShadowsActiveNow, not just the sun path.
             SuppressVanillaBlobShadows = _config.DirectionalShadowObjects && ShadowRenderer.ShadowsActiveNow(_config);
+            // Sun path only: our critter silhouettes draw only under the sun, so on rainy days the
+            // vanilla critter blob stays (better a blob than no shadow at all).
+            SuppressVanillaCritterShadows = _config.DirectionalShadowObjects && ShadowRenderer.SunShadowActive(_config);
         }
 
         private void OnButtonsChanged(object? sender, ButtonsChangedEventArgs e)

@@ -43,6 +43,9 @@ namespace SDVRadiance
         private Texture2D? _blobTex;
         /// <summary>Gentler feet→tip fade for the big building shadows (their tip should stay visible, not vanish).</summary>
         private Texture2D? _bldGradTex;
+        /// <summary>Feet→tip fade that reaches EXACTLY zero, for map-tile props: their art often has
+        /// a long straight top edge (fence rails), and any residual tip alpha reads as a hard line.</summary>
+        private Texture2D? _propGradTex;
         private Vector2 _playerFeetInRT;
         private bool _playerReady;
         private const int PlayerRtW = 96;
@@ -106,6 +109,17 @@ namespace SDVRadiance
             if (!config.Enabled || !config.DirectionalShadowsEnabled)
                 return false;
             return Game1.currentLocation != null && !Game1.eventUp;
+        }
+
+        /// <summary>All farm animals in a location — including Marnie's paddock cows, which live in
+        /// Forest.marniesLivestock rather than location.animals (they had no shadow otherwise).</summary>
+        private static System.Collections.Generic.IEnumerable<FarmAnimal> AnimalsIn(GameLocation loc)
+        {
+            foreach (FarmAnimal a in loc.animals.Values)
+                yield return a;
+            if (loc is StardewValley.Locations.Forest forest)
+                foreach (FarmAnimal a in forest.marniesLivestock)
+                    yield return a;
         }
 
         /// <summary>Sun conditions: outdoors, daytime, clear weather → one long sun-cast shadow.</summary>
@@ -182,7 +196,7 @@ namespace SDVRadiance
                 DrawNpcShadow(b, npc, rot, stretch, alpha, blur);
             }
 
-            foreach (FarmAnimal a in loc.animals.Values)
+            foreach (FarmAnimal a in AnimalsIn(loc))
             {
                 if (a?.Sprite?.Texture == null || OnWater(loc, a.TilePoint))
                     continue;
@@ -294,7 +308,7 @@ namespace SDVRadiance
                         DrawNpcShadow(b, npc, rot, st, a, blur);
             }
 
-            foreach (FarmAnimal animal in loc.animals.Values)
+            foreach (FarmAnimal animal in AnimalsIn(loc))
             {
                 if (animal?.Sprite?.Texture == null)
                     continue;
@@ -622,6 +636,33 @@ namespace SDVRadiance
                 DrawFurnitureShadow(b, f, rot, stretch, alpha, blur);
             }
 
+            // Critters (birds, squirrels, butterflies, bunnies…) — replace their vanilla blob with
+            // the same leaning silhouette as everything else, faded out with flight height exactly
+            // like the vanilla blob so airborne critters keep a faint grounded shadow.
+            var critters = loc.critters;
+            if (critters != null)
+            {
+                foreach (var c in critters)
+                {
+                    if (c == null || c is StardewValley.BellsAndWhistles.Cloud || c.sprite?.Texture == null)
+                        continue;
+                    float fly = Math.Min(1f, Math.Abs((c.yJumpOffset + c.yOffset) / 64f));
+                    float ca = alpha * (1f - fly);
+                    if (!_objBaking && ca <= 0.02f)
+                        continue;
+                    Vector2 wpos = c.position;
+                    int ctx = (int)(wpos.X / 64f), cty = (int)(wpos.Y / 64f);
+                    if (ctx < tx0 || ctx > tx1 || cty < ty0 || cty > ty1 || OnWater(loc, new Point(ctx, cty)))
+                        continue;
+                    Rectangle src = c.sprite.SourceRect;
+                    Vector2 feet = Game1.GlobalToLocal(Game1.viewport, wpos + new Vector2(0f, -2f));
+                    float depth = MathHelper.Clamp((wpos.Y - 1f) / 10000f, 0f, 1f);
+                    EmitObj(b, c.sprite.Texture, src, feet, new Vector2(src.Width / 2f, src.Height),
+                        ca, rot * TallLeanScale, Math.Min(stretch, 0.45f), depth, blur, ObjectHeadFade,
+                        c.flip ? SpriteEffects.FlipHorizontally : SpriteEffects.None);
+                }
+            }
+
             // Map-drawn props (street lamps, signs, poles…) aren't entities at all — they're tile
             // columns painted on the map. Cast their shadow from the actual tile art.
             DrawTilePropShadows(b, loc, rot, stretch, alpha, blur, tx0, tx1, ty0, ty1);
@@ -664,15 +705,32 @@ namespace SDVRadiance
             float shear = -(float)Math.Sin(rotD) * stD;
             float sy = Math.Max(0.15f, stD * (float)Math.Cos(rotD));
 
+            // Near-player prop diagnostics (DebugLogging): every ~3s log why Buildings tiles within
+            // 4 tiles of the player do or don't cast — the quick way to see why a fence stays bare.
+            bool pdiag = Diag != null && !_objBaking && Game1.ticks % 600 == 0;
+            Point ppt = Game1.player?.TilePoint ?? default;
+            void PD(int xx, int yy, string why)
+            {
+                if (pdiag && Math.Abs(xx - ppt.X) <= 4 && Math.Abs(yy - ppt.Y) <= 4)
+                    Diag!.Log($"[shadow] prop({xx},{yy}) {why}", LogLevel.Debug);
+            }
+
             for (int y = ty0; y <= ty1; y++)
             {
                 for (int x = tx0; x <= tx1; x++)
                 {
                     var bt = bldg.Tiles[x, y];
-                    // A prop base is a Buildings tile with no Front art on its own row. Animated
-                    // tiles (fountains, flags) are skipped — a frozen frame would cast a lie.
-                    if (bt == null || bt is xTile.Tiles.AnimatedTile || bt.TileSheet == null || Ft(x, y) != null)
+                    if (bt == null)
                         continue;
+                    // A prop base is a Buildings tile. Front art on the SAME row is normal for
+                    // fences (their upper half is painted there so the player walks behind it) —
+                    // it joins the silhouette as a level-0 overlay rather than disqualifying the
+                    // cell. Animated tiles are skipped — a frozen frame would cast a lie.
+                    if (bt is xTile.Tiles.AnimatedTile || bt.TileSheet == null)
+                    {
+                        PD(x, y, bt is xTile.Tiles.AnimatedTile ? "skip: animated tile" : "skip: no tilesheet");
+                        continue;
+                    }
                     Texture2D? tex = LoadCached(bt.TileSheet.ImageSource);
                     if (tex == null)
                         continue;
@@ -680,14 +738,46 @@ namespace SDVRadiance
                     var baseSrc = new Rectangle(ibB.X, ibB.Y, ibB.Width, ibB.Height);
                     float cov = TileCoverage(tex, baseSrc);
 
+                    // Fences paint their upper half on Front at the SAME row (so the player can
+                    // walk behind them). Fold that art into the prop: classification uses the
+                    // union coverage, and the silhouette gets it as a level-0 overlay. When the
+                    // Buildings tile is a bare INVISIBLE collision tile (cov≈0) under Front-drawn
+                    // art on another sheet, the Front art IS the prop — adopt its sheet instead.
+                    Rectangle? sameSrc = null;
+                    int sameIdx = 0, baseIdx = bt.TileIndex;
+                    {
+                        var st = Ft(x, y);
+                        if (st != null && st is not xTile.Tiles.AnimatedTile && st.TileSheet != null
+                            && LoadCached(st.TileSheet.ImageSource) is { } stex)
+                        {
+                            var ibS = st.TileSheet.GetTileImageBounds(st.TileIndex);
+                            var srcS = new Rectangle(ibS.X, ibS.Y, ibS.Width, ibS.Height);
+                            if (ReferenceEquals(stex, tex))
+                            {
+                                sameSrc = srcS;
+                                sameIdx = st.TileIndex;
+                                cov = Math.Max(cov, TileCoverage(tex, srcS));
+                            }
+                            else if (cov < 0.04f)
+                            {
+                                tex = stex;
+                                baseSrc = srcS;
+                                baseIdx = st.TileIndex;
+                                cov = TileCoverage(stex, srcS);
+                            }
+                        }
+                    }
+
                     // Read the ART itself: partially transparent art = a free-standing prop (fence,
                     // post, sign, lamp base) → casts. Fully opaque art = terrain/wall (cliff faces,
                     // house walls, path edging) → never casts, EXCEPT the boxed-prop case: an opaque
                     // bottom standing directly on walkable ground with Front art stacked above
                     // (planters, crates) — and only in runs ≤2 tiles so house walls stay excluded.
-                    bool aProp = cov >= 0.04f && cov <= 0.90f;
+                    // Cast bound is looser (0.95) than the wall bound (0.90): dense picket-fence
+                    // tiles read ~0.9x coverage while real walls sit at ~1.0.
+                    bool aProp = cov >= 0.04f && cov <= 0.95f;
                     bool bProp = false;
-                    if (!aProp && cov > 0.90f && (y + 1 >= H || bldg.Tiles[x, y + 1] == null) && Ft(x, y - 1) != null)
+                    if (!aProp && cov > 0.90f && sameSrc == null && (y + 1 >= H || bldg.Tiles[x, y + 1] == null) && Ft(x, y - 1) != null)
                     {
                         bool BCell(int xx) => xx >= 0 && xx < W && bldg.Tiles[xx, y] != null && Ft(xx, y) == null
                             && Ft(xx, y - 1) != null && (y + 1 >= H || bldg.Tiles[xx, y + 1] == null);
@@ -697,24 +787,72 @@ namespace SDVRadiance
                         bProp = run <= 2;
                     }
                     if (!aProp && !bProp)
+                    {
+                        PD(x, y, $"skip: cov={cov:0.00} → not a prop");
                         continue;
-                    // Water-adjacent Buildings art is bridge/dock/pond trim — skip it.
-                    if (NearWater(loc, x, y))
+                    }
+                    // A "prop" sitting ON opaque art below is wall decor — a window halfway up a
+                    // house wall must not cast.
+                    if (OpaqueMapTile(bldg, x, y + 1, H))
+                    {
+                        PD(x, y, "skip: sits on opaque art (wall decor)");
                         continue;
+                    }
+                    // A transparent tile BESIDE opaque art is the fringe of a big structure (the
+                    // truck's edge tiles, awning ends…), not a free-standing prop — its lone-column
+                    // cast reads as a stray dark line. Real fences/posts never hug opaque art.
+                    if (aProp && (OpaqueMapTile(bldg, x - 1, y, H) || OpaqueMapTile(bldg, x + 1, y, H)))
+                    {
+                        PD(x, y, "skip: opaque neighbour beside (structure fringe)");
+                        continue;
+                    }
+                    // Skip only when the prop itself (or the tile its lean lands on) is open WATER
+                    // SURFACE — pier decks over water are solid ground (Height Framework separates
+                    // deck from water), so dock ropes / mooring posts / lanterns cast onto the pier.
+                    if (OnWater(loc, new Point(x, y)) || OnWater(loc, new Point(x, y - 1)))
+                    {
+                        PD(x, y, "skip: on/over open water");
+                        continue;
+                    }
 
-                    // Gather the column bottom→top: the base tile, then any Front stack above it.
+                    // Gather the column bottom→top: the base tile, its same-row Front overlay
+                    // (level 0 too), then any Front stack above (level = tiles above the base).
                     _colSrcBuf[0] = baseSrc;
-                    int count = 1, keyHash = 17 * 31 + bt.TileIndex;
-                    for (int i = 1; i < _colSrcBuf.Length && y - i >= 0; i++)
+                    _colLvlBuf[0] = 0;
+                    int count = 1, levels = 1, keyHash = 17 * 31 + baseIdx;
+                    if (sameSrc is Rectangle sr)
+                    {
+                        _colSrcBuf[count] = sr;
+                        _colLvlBuf[count++] = 0;
+                        keyHash = keyHash * 31 + sameIdx;
+                    }
+                    for (int i = 1; count < _colSrcBuf.Length && y - i >= 0; i++)
                     {
                         var t = Ft(x, y - i);
                         if (t == null || t is xTile.Tiles.AnimatedTile || t.TileSheet == null
                             || !ReferenceEquals(LoadCached(t.TileSheet.ImageSource), tex))
                             break;
                         var ib = t.TileSheet.GetTileImageBounds(t.TileIndex);
-                        _colSrcBuf[count++] = new Rectangle(ib.X, ib.Y, ib.Width, ib.Height);
+                        _colSrcBuf[count] = new Rectangle(ib.X, ib.Y, ib.Width, ib.Height);
+                        _colLvlBuf[count++] = i;
+                        levels = i + 1;
                         keyHash = keyHash * 31 + t.TileIndex;
                     }
+
+                    // Wall guard, scaled to the prop's height: the up-lean cast occupies the tiles
+                    // north of the base (and one column toward the lean side) — if any of those is
+                    // opaque wall art, the shadow would paint onto the wall ("through the house").
+                    int leanDir = shear > 0.01f ? -1 : (shear < -0.01f ? 1 : 0);
+                    bool blocked = false;
+                    for (int i = 1; i <= levels && !blocked; i++)
+                        blocked = OpaqueMapTile(bldg, x, y - i, H)
+                               || (leanDir != 0 && OpaqueMapTile(bldg, x + leanDir, y - i, H));
+                    if (blocked)
+                    {
+                        PD(x, y, "skip: wall to the north (lean would paint onto it)");
+                        continue;
+                    }
+                    PD(x, y, $"cast: col={count} cov={cov:0.00}");
 
                     // Synthetic sprite key: width −1 can never collide with a real source rect.
                     var key = (tex, new Rectangle(keyHash, count, -1, -1), SpriteEffects.None);
@@ -741,15 +879,25 @@ namespace SDVRadiance
             }
         }
 
-        /// <summary>True when the tile or a 4-neighbour is open water (bridge/dock/pond trim).</summary>
-        private static bool NearWater(GameLocation loc, int x, int y)
+        /// <summary>True when a Buildings tile exists at (x,y) and its art is essentially opaque
+        /// (terrain/wall art, not a see-through prop). Out-of-range or empty → false.</summary>
+        private bool OpaqueMapTile(xTile.Layers.Layer bldg, int x, int y, int H)
         {
-            try
-            {
-                return loc.isWaterTile(x, y) || loc.isWaterTile(x - 1, y) || loc.isWaterTile(x + 1, y)
-                    || loc.isWaterTile(x, y - 1) || loc.isWaterTile(x, y + 1);
-            }
-            catch { return false; }
+            if (y < 0 || y >= H || x < 0 || x >= bldg.LayerWidth)
+                return false;
+            var t = bldg.Tiles[x, y];
+            if (t == null || t.TileSheet == null)
+                return false;
+            if (t is xTile.Tiles.AnimatedTile)
+                return true;   // animated map art next to a prop → treat as solid, don't cast
+            Texture2D? tex = LoadCached(t.TileSheet.ImageSource);
+            if (tex == null)
+                return true;
+            var ib = t.TileSheet.GetTileImageBounds(t.TileIndex);
+            // Same bound as the aProp cast test (0.95). With a LOWER bound here, dense fence
+            // tiles at cov 0.91–0.95 counted as "walls" and poisoned their own neighbours —
+            // every tile of the row skipped as "structure fringe" and no fence ever cast.
+            return TileCoverage(tex, new Rectangle(ib.X, ib.Y, ib.Width, ib.Height)) > 0.95f;
         }
 
         /// <summary>Fraction of a tile's art that is opaque (alpha &gt; 48). Sampled once per
@@ -774,17 +922,23 @@ namespace SDVRadiance
             return _tileCovCache[(tex, src)] = (float)solid / len;
         }
 
-        /// <summary>Per-column tile source rects (bottom→top), filled by the scan then baked.</summary>
+        /// <summary>Per-column tile source rects, filled by the scan then baked.</summary>
         private readonly Rectangle[] _colSrcBuf = new Rectangle[7];
+        /// <summary>Height level (tiles above the base row) for each entry of <see cref="_colSrcBuf"/> —
+        /// a same-row Front overlay shares level 0 with the base tile.</summary>
+        private readonly int[] _colLvlBuf = new int[7];
 
         /// <summary>Bake a stacked tile column (black + feet→tip gradient, sun lean pre-baked as a
         /// shear about the feet row) into a pooled object RT.
-        /// Reads the sources from <see cref="_colSrcBuf"/> — index 0 is the ground tile.</summary>
+        /// Reads the sources/levels from <see cref="_colSrcBuf"/>/<see cref="_colLvlBuf"/>.</summary>
         private bool BakeTileColumn(GraphicsDevice gd, Texture2D tex, int count, float shear, out RenderTarget2D rt, out Vector2 feetInRT)
         {
             rt = null!;
             feetInRT = default;
-            float h = count * 64f;
+            int levels = 0;
+            for (int i = 0; i < count; i++)
+                levels = Math.Max(levels, _colLvlBuf[i] + 1);
+            float h = levels * 64f;
             if (count <= 0 || h > ObjRtH - 8f || 64f + Math.Abs(shear) * h > ObjRtW)
                 return false;
             rt = RentObjRT(gd);
@@ -796,11 +950,11 @@ namespace SDVRadiance
                 gd.Clear(Color.Transparent);
                 _rtBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, RasterizerState.CullNone, null, lean);
                 for (int i = 0; i < count; i++)
-                    _rtBatch.Draw(tex, new Vector2(feetInRT.X - 32f, feetInRT.Y - 64f * (i + 1)),
+                    _rtBatch.Draw(tex, new Vector2(feetInRT.X - 32f, feetInRT.Y - 64f * (_colLvlBuf[i] + 1)),
                         _colSrcBuf[i], Color.Black, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
                 _rtBatch.End();
                 _rtBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
-                _rtBatch.Draw(_gradTex!, new Rectangle(0, (int)(feetInRT.Y - h), ObjRtW, (int)h), Color.White);
+                _rtBatch.Draw(_propGradTex!, new Rectangle(0, (int)(feetInRT.Y - h), ObjRtW, (int)h), Color.White);
                 _rtBatch.End();
                 return true;
             }
@@ -1044,8 +1198,10 @@ namespace SDVRadiance
             src.Height = clump.height.Value * 16;
             Vector2 tile = clump.Tile;
             // Clump draws top-left at tile*64, origin zero, scale 4 → sprite bottom = tile*64 +
-            // src.Height*4; the stump/boulder visually rests a bit above that, so lift the anchor.
-            var worldFeet = new Vector2(tile.X * 64f + src.Width * 2f, tile.Y * 64f + src.Height * 4f - 40f);
+            // src.Height*4; anchor a touch above that (ground contact of the art). The old −40
+            // lift was compensation for the rotation-era corner dip — with the shear lean it just
+            // sank the shadow's base behind the sprite, so the stump's cast looked partial.
+            var worldFeet = new Vector2(tile.X * 64f + src.Width * 2f, tile.Y * 64f + src.Height * 4f - 14f);
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, worldFeet);
             var baseOrigin = new Vector2(src.Width / 2f, src.Height);
             float depth = MathHelper.Clamp((tile.Y + 1f) * 64f / 10000f + tile.X / 100000f - ShadowDepthBias, 0f, 1f);
@@ -1135,6 +1291,7 @@ namespace SDVRadiance
             _rtBatch ??= new SpriteBatch(gd);
             _gradTex ??= BuildGradient(gd);
             _bldGradTex ??= BuildGradient(gd, 0.35f);
+            _propGradTex ??= BuildGradient(gd, 0f);
             _blobTex ??= BuildBlob(gd);
 
             // Buildings: the shear-down cast conflicted with the upright character/object lean
@@ -1231,7 +1388,7 @@ namespace SDVRadiance
                     if (BakeSprite(gd, npc.Sprite.Texture, npc.Sprite.SourceRect, out RenderTarget2D rt, out Vector2 feet))
                         _bakedMap[npc] = (rt, feet);
                 }
-                foreach (FarmAnimal a in loc.animals.Values)
+                foreach (FarmAnimal a in AnimalsIn(loc))
                 {
                     if (a?.Sprite?.Texture == null)
                         continue;
