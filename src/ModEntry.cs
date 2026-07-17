@@ -116,11 +116,10 @@ namespace SDVRadiance
             harmony.Patch(
                 original: AccessTools.Method(typeof(Farmer), nameof(Farmer.DrawShadow)),
                 prefix: new HarmonyMethod(typeof(ModEntry), nameof(DrawShadow_Prefix)));
-            // Trees/bushes bake their blob shadow inline in draw(); route their Draw calls
-            // through a shim that drops only the depth==1E-06 (shadow) draws.
-            harmony.Patch(
-                original: AccessTools.Method(typeof(StardewValley.TerrainFeatures.Tree), nameof(StardewValley.TerrainFeatures.Tree.draw)),
-                transpiler: new HarmonyMethod(typeof(ModEntry), nameof(DrawShadow_Transpiler)));
+            // Bushes bake their blob shadow inline in draw() at a FIXED direction that fights
+            // our directional cast; route their Draw calls through a shim that drops just the
+            // depth==1E-06 (shadow) draws. Trees are NOT patched — their contact blob is kept
+            // deliberately to root the base the canopy hides.
             harmony.Patch(
                 original: AccessTools.Method(typeof(StardewValley.TerrainFeatures.Bush), nameof(StardewValley.TerrainFeatures.Bush.draw), new[] { typeof(SpriteBatch) }),
                 transpiler: new HarmonyMethod(typeof(ModEntry), nameof(DrawShadow_Transpiler)));
@@ -202,9 +201,9 @@ namespace SDVRadiance
         {
             _camera.Update(_config);
             SuppressVanillaShadows = ShadowRenderer.ShadowsActiveNow(_config);
-            // Keep the vanilla tree/bush CONTACT blob: it roots the base that the canopy hides,
-            // so our directional cast reads as connected instead of floating off the trunk.
-            SuppressVanillaObjectShadows = false;
+            // Suppress the BUSH blob (fixed-direction, fights our cast); the TREE blob is kept
+            // (not patched) as a base anchor under the canopy.
+            SuppressVanillaObjectShadows = _config.DirectionalShadowObjects && ShadowRenderer.SunShadowActive(_config);
         }
 
         private void OnButtonsChanged(object? sender, ButtonsChangedEventArgs e)

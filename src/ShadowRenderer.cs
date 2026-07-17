@@ -291,11 +291,14 @@ namespace SDVRadiance
                 {
                     // Tall sprites swing away from their base under the full character lean
                     // (the canopy shadow detaches from the trunk) — damp the lean for them.
+                    // Trees are tall → damp the lean so the canopy shadow stays rooted at the
+                    // trunk (its vanilla contact blob is kept to fill the base). Bushes are
+                    // short → full lean, matching the character direction, blob suppressed.
                     case Tree tree when tree.growthStage.Value >= 5 && !tree.stump.Value && tree.texture?.Value != null:
                         DrawTreeShadow(b, tree, tile, rot * TallLeanScale, stretch, alpha, blur);
                         break;
                     case Bush bush:
-                        DrawBushShadow(b, bush, rot * TallLeanScale, stretch, alpha, blur);
+                        DrawBushShadow(b, bush, rot, stretch, alpha, blur);
                         break;
                 }
             }
