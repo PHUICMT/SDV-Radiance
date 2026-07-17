@@ -3,6 +3,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
 using StardewValley;
+using StardewValley.Buildings;
 using StardewValley.Characters;
 using StardewValley.Objects;
 using StardewValley.TerrainFeatures;
@@ -40,6 +41,8 @@ namespace SDVRadiance
         private Texture2D? _gradTex;
         /// <summary>Soft radial disc for indoor/ambient CONTACT shadows (a grounding pool under a caster).</summary>
         private Texture2D? _blobTex;
+        /// <summary>Gentler feet→tip fade for the big building shadows (their tip should stay visible, not vanish).</summary>
+        private Texture2D? _bldGradTex;
         private Vector2 _playerFeetInRT;
         private bool _playerReady;
         private const int PlayerRtW = 96;
@@ -56,6 +59,17 @@ namespace SDVRadiance
         private readonly System.Collections.Generic.List<RenderTarget2D> _casterPool = new();
         private int _casterUsed;
         private readonly System.Collections.Generic.Dictionary<object, (RenderTarget2D rt, Vector2 feetInRT)> _bakedMap = new();
+
+        // Buildings are too tall to LEAN by rotation (the roof swings over the building). The correct
+        // transform is a SHEAR about the base — but transformMatrix is per-batch, so we bake the
+        // sheared+flattened silhouette into a pooled RT here (our own batch CAN set a matrix) and
+        // then composite it as a plain draw. Bigger slots than characters (buildings are large).
+        private const int BldRtW = 1280;
+        private const int BldRtH = 640;
+        private readonly System.Collections.Generic.List<RenderTarget2D> _bldPool = new();
+        private int _bldUsed;
+        private readonly System.Collections.Generic.Dictionary<Building, (RenderTarget2D rt, Vector2 feetInRT)> _bldMap = new();
+        private bool _bldDumped;
 
         // Multiply only the destination ALPHA by the source alpha (RGB untouched): dst.a *= src.a.
         // Used to bake the feet→head opacity gradient onto the silhouette.
@@ -160,12 +174,32 @@ namespace SDVRadiance
             DrawPlayerShadow(b, loc, rot, stretch, alpha, blur);
 
             if (config.DirectionalShadowObjects)
+            {
                 DrawObjectShadows(b, loc, rot, stretch, alpha, blur);
 
-            // Height-data ground shadows for walls/buildings/ledges (the durable replacement for
-            // the disabled per-building sprite lean). Only when Height Framework is installed.
-            if (config.HeightDropShadows && Height != null)
-                DrawHeightShadows(b, loc, config, alpha, blur);
+                // Farm building ENTITIES (coop/barn/house) cast a shape-accurate silhouette from
+                // their own texture, anchored at the footprint base — heavily damped/flattened so a
+                // tall building's shadow lies beside it instead of swinging up over itself.
+                var vp = Game1.viewport;
+                int btx0 = vp.X / 64 - 12, btx1 = (vp.X + vp.Width) / 64 + 4;
+                int bty0 = vp.Y / 64 - 12, bty1 = (vp.Y + vp.Height) / 64 + 4;
+                foreach (Building bld in loc.buildings)
+                {
+                    if (bld == null || bld.tileX.Value > btx1 || bld.tileX.Value + bld.tilesWide.Value < btx0
+                        || bld.tileY.Value > bty1 || bld.tileY.Value + bld.tilesHigh.Value < bty0)
+                        continue;
+                    float baseX = (bld.tileX.Value + bld.tilesWide.Value / 2f) * 64f;
+                    float baseY = (bld.tileY.Value + bld.tilesHigh.Value) * 64f;
+                    Vector2 feet = Game1.GlobalToLocal(vp, new Vector2(baseX, baseY));
+                    float bdepth = MathHelper.Clamp(baseY / 10000f - ShadowDepthBias, 0f, 1f);
+                    if (_bldMap.TryGetValue(bld, out var bk))
+                        // Sheared silhouette already baked → plain composite (no rotation/scale).
+                        DrawSoft(b, Taps9, bk.rt, null, feet, Color.White, alpha * 0.62f, 0f, bk.feetInRT,
+                            new Vector2(1f, 1f), bdepth, SpriteEffects.None, blur);
+                    else
+                        DrawBuildingShadow(b, bld, alpha * 0.7f, blur);   // too big to bake → grounding pool
+                }
+            }
         }
 
         private void DrawAnimalShadow(SpriteBatch b, FarmAnimal a, float rot, float stretch, float alpha, float blur)
@@ -504,6 +538,22 @@ namespace SDVRadiance
                 alpha, rot, new Vector2(4f, 4f * stretch), depth, blur, ObjectHeadFade);
         }
 
+        /// <summary>
+        /// Buildings are too tall for an upright silhouette (it juts up over the building itself),
+        /// so they get a soft contact POOL at the footprint base instead — grounds the building
+        /// without overlapping it or ghosting. Shape-accurate isn't achievable for tall map/entity
+        /// structures with these 2D techniques; a grounding pool is the clean compromise.
+        /// </summary>
+        private void DrawBuildingShadow(SpriteBatch b, Building bld, float alpha, float blur)
+        {
+            float w = bld.tilesWide.Value * 64f;
+            float baseX = (bld.tileX.Value + bld.tilesWide.Value / 2f) * 64f;
+            float baseY = (bld.tileY.Value + bld.tilesHigh.Value) * 64f;   // footprint bottom = ground line
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(baseX, baseY - 10f));
+            float depth = MathHelper.Clamp(baseY / 10000f - ShadowDepthBias, 0f, 1f);
+            DrawContactBlob(b, feet, w * 0.5f * 0.85f, 24f, alpha, depth, blur);
+        }
+
         /// <summary>Small forage lying on the ground (16x16) — a short leaning silhouette to ground it.</summary>
         private void DrawSmallObjectShadow(SpriteBatch b, SObject o, Vector2 tile, float rot, float stretch, float alpha, float blur)
         {
@@ -775,13 +825,21 @@ namespace SDVRadiance
         {
             _playerReady = false;
             _bakedMap.Clear();
+            _bldMap.Clear();
             _casterUsed = 0;
+            _bldUsed = 0;
             if (!ShouldCast(config))
                 return;
 
             _rtBatch ??= new SpriteBatch(gd);
             _gradTex ??= BuildGradient(gd);
+            _bldGradTex ??= BuildGradient(gd, 0.35f);
             _blobTex ??= BuildBlob(gd);
+
+            // Buildings get a SHEARED silhouette baked here (sun path only) so they cast a real
+            // shape-accurate shadow that lies beside the footprint instead of a grounding pool.
+            if (SunCasts() && config.DirectionalShadowObjects)
+                BakeBuildings(gd, Game1.currentLocation, config);
 
             // Bake NPC + animal silhouettes (single-sprite casters) to pooled targets so their
             // shadows match the player's smooth, cohesive fade instead of stepped bands.
@@ -926,6 +984,122 @@ namespace SDVRadiance
             return rt;
         }
 
+        /// <summary>
+        /// Bake each visible building's silhouette SHEARED about its base into a pooled target, so
+        /// the composite is a plain draw and the shadow lies flat beside the building (no roof-over-
+        /// self). Shear = horizontal lean by height, squash = flatten to the ground; both from the
+        /// sun angle. Runs during RenderingWorld where render-target swaps + a matrix batch are safe.
+        /// </summary>
+        private void BakeBuildings(GraphicsDevice gd, GameLocation loc, ModConfig config)
+        {
+            if (loc == null || loc.buildings.Count == 0)
+                return;
+            float d = MathHelper.Clamp((Game1.timeOfDay - 1200) / 600f, -1f, 1f);
+            // A building silhouette projected UPWARD always overlaps the building (that's where the
+            // building is). A cast shadow falls onto the GROUND — down-and-to-the-side toward the
+            // camera. So map each row's height above the base to a DOWNWARD + sideways offset:
+            //   horizontal (lean) = shearX·height   (sign follows the sun, morning→left like chars)
+            //   vertical  (toward camera) = downSquash·height  (fullness / how far it lies out)
+            float shearX = MathHelper.Clamp(0.6f * d * Math.Max(0.2f, config.HeightShadowLength), -0.9f, 0.9f);
+            const float downSquash = 0.55f;
+
+            var vp = Game1.viewport;
+            int tx0 = vp.X / 64 - 16, tx1 = (vp.X + vp.Width) / 64 + 4;
+            int ty0 = vp.Y / 64 - 16, ty1 = (vp.Y + vp.Height) / 64 + 4;
+
+            RenderTargetBinding[] prev = gd.GetRenderTargets();
+            try
+            {
+                foreach (Building bld in loc.buildings)
+                {
+                    if (bld == null || bld.tileX.Value > tx1 || bld.tileX.Value + bld.tilesWide.Value < tx0
+                        || bld.tileY.Value > ty1 || bld.tileY.Value + bld.tilesHigh.Value < ty0)
+                        continue;
+                    if (BakeBuilding(gd, bld, shearX, downSquash, out RenderTarget2D rt, out Vector2 feet))
+                        _bldMap[bld] = (rt, feet);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (Diag != null && !_errLogged) { _errLogged = true; Diag.Log($"[shadow] building bake threw: {ex}", LogLevel.Warn); }
+            }
+            finally
+            {
+                gd.SetRenderTargets(prev);
+            }
+        }
+
+        /// <summary>Bake one building's black silhouette projected DOWN onto the ground (base pinned,
+        /// rows above the base pushed down+sideways) so it lies in front of the building, never over
+        /// it. Returns false (→ contact-pool fallback) when it wouldn't fit a slot.</summary>
+        private bool BakeBuilding(GraphicsDevice gd, Building bld, float shearX, float downSquash, out RenderTarget2D rt, out Vector2 feetInRT)
+        {
+            rt = null!;
+            feetInRT = default;
+            Texture2D? tex = bld.texture?.Value;
+            if (tex == null)
+                return false;
+            Rectangle src = bld.getSourceRect();
+            float hpx = src.Height * 4f * downSquash;          // how far the shadow reaches toward camera
+            if (src.IsEmpty || src.Width * 4f > BldRtW || hpx > BldRtH - 32f)
+                return false;
+
+            rt = RentBldRT(gd);
+            var feet = new Vector2(BldRtW / 2f, 24f);          // base-centre near the slot TOP; shadow drops below
+            feetInRT = feet;
+            // About the feet: x' = x − shearX·(y−feetY), y' = feetY − downSquash·(y−feetY). A row at
+            // height h above the base (y−feetY = −h) lands at (+shearX·h sideways, +downSquash·h down)
+            // — i.e. projected down and out onto the ground, so a tall building never covers itself.
+            Matrix shear = Matrix.CreateTranslation(-feet.X, -feet.Y, 0f)
+                         * new Matrix(1f, 0f, 0f, 0f, -shearX, -downSquash, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 1f)
+                         * Matrix.CreateTranslation(feet.X, feet.Y, 0f);
+            try
+            {
+                gd.SetRenderTarget(rt);
+                gd.Clear(Color.Transparent);
+                // CullNone is REQUIRED: downSquash makes the matrix determinant negative (a vertical
+                // flip), which reverses triangle winding — the default cull would drop every pixel.
+                _rtBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, RasterizerState.CullNone, null, shear);
+                _rtBatch.Draw(tex, feet, src, Color.Black, 0f, new Vector2(src.Width / 2f, src.Height), 4f, SpriteEffects.None, 0f);
+                _rtBatch.End();
+
+                // Fade base(full, at feet)→tip(faint, further down). The shadow region is [feetY, feetY+hpx];
+                // the gradient is full at its bottom, so flip it vertically to keep full at the feet end.
+                _rtBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
+                _rtBatch.Draw(_bldGradTex!, new Rectangle(0, (int)feet.Y, BldRtW, (int)hpx), null, Color.White, 0f, Vector2.Zero, SpriteEffects.FlipVertically, 0f);
+                _rtBatch.End();
+
+                if (Diag != null && !_bldDumped && src.Width > 40)
+                {
+                    _bldDumped = true;
+                    try
+                    {
+                        string p = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "radiance_bld.png");
+                        using var fs = System.IO.File.Create(p);
+                        rt.SaveAsPng(fs, BldRtW, BldRtH);
+                        Diag.Log($"[shadow] bld dump {p} | src={src.Width}x{src.Height} shearX={shearX:0.00} hpx={hpx:0} feet={feet}", LogLevel.Info);
+                    }
+                    catch (Exception dex) { Diag.Log($"[shadow] bld dump failed: {dex.Message}", LogLevel.Warn); }
+                }
+                return true;
+            }
+            catch
+            {
+                try { _rtBatch!.End(); } catch { }
+                return false;
+            }
+        }
+
+        private RenderTarget2D RentBldRT(GraphicsDevice gd)
+        {
+            if (_bldUsed < _bldPool.Count)
+                return _bldPool[_bldUsed++];
+            var rt = new RenderTarget2D(gd, BldRtW, BldRtH);
+            _bldPool.Add(rt);
+            _bldUsed++;
+            return rt;
+        }
+
         /// <summary>A 64×64 soft radial disc (white, radial alpha) for ambient contact pools.</summary>
         private static Texture2D BuildBlob(GraphicsDevice gd)
         {
@@ -948,16 +1122,16 @@ namespace SDVRadiance
             return tex;
         }
 
-        /// <summary>1×H alpha ramp: 1.0 at the bottom (feet) fading to <see cref="HeadFade"/> at the top (far tip).</summary>
-        private static Texture2D BuildGradient(GraphicsDevice gd)
+        /// <summary>1×H alpha ramp: 1.0 at the bottom (feet) fading to <paramref name="headFade"/> at the top (far tip).</summary>
+        private static Texture2D BuildGradient(GraphicsDevice gd, float headFade = HeadFade)
         {
             var tex = new Texture2D(gd, 1, PlayerRtH);
             var data = new Color[PlayerRtH];
             for (int y = 0; y < PlayerRtH; y++)
             {
                 float tBottom = (float)y / (PlayerRtH - 1);      // 0 at top, 1 at bottom
-                // Non-linear: stays dark near the feet, fades fast toward the far tip.
-                float a = HeadFade + (1f - HeadFade) * (float)Math.Pow(tBottom, 1.8);
+                // Non-linear: stays dark near the feet, fades toward the far tip.
+                float a = headFade + (1f - headFade) * (float)Math.Pow(tBottom, 1.8);
                 data[y] = new Color(255, 255, 255, (int)(a * 255f));
             }
             tex.SetData(data);
