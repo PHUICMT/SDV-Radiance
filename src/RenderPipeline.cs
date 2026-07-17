@@ -315,9 +315,18 @@ namespace SDVRadiance
             var rtA = _rtA!;
             var rtB = _rtB!;
 
+            // The hard straight seam reported after long sessions was a float-precision cliff:
+            // Time (and so drift = Time*Speed) grows without bound as the session runs, and once
+            // the sin()-hash's input gets large enough, frac()/floor() lose precision at one x
+            // line and one y line — reading as a hard "L" seam. Wrap ticks into a bounded range
+            // (a multiple of 60 so seconds stay whole) so Time never grows large enough to hit it;
+            // the wrap period is long enough (100 minutes) that the one-frame pattern jump at the
+            // seam is imperceptible during actual play.
+            float wrappedTime = (Game1.ticks % 360000) / 60f;
+
             // Pass 1: generate the cloud-density mask at half-res (WorldOffset uses
             // the full-res dest so the anchor matches the composite step).
-            fx.Parameters["Time"]?.SetValue(Time());
+            fx.Parameters["Time"]?.SetValue(wrappedTime);
             fx.Parameters["Speed"]?.SetValue(config.CloudShadowSpeed);
             fx.Parameters["Scale"]?.SetValue(config.CloudShadowScale);
             fx.Parameters["Coverage"]?.SetValue(config.CloudShadowCoverage);

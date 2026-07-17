@@ -1,11 +1,20 @@
 //=============================================================================
-// cloudshadow.fx  —  SDV-Radiance Phase 3 (Phase 4 overhaul)
+// cloudshadow.fx  —  SDV-Radiance Phase 3 (Phase 4/5c overhaul)
 // Soft drifting cloud shadows. The cloud density is generated into a low-res
 // buffer, Gaussian-blurred, then composited onto the scene as a gentle multiply.
 // The blur is what gives real, feathered penumbra edges instead of the faceted
 // hard contour you get from thresholding noise at full resolution.
 // World-anchored so the shadows slide across the map, not the screen.
 // Target: MonoGame OpenGL (Shader Model 3.0), used as a SpriteBatch effect.
+//
+// A hard, perfectly axis-aligned seam ("L" shape) could appear after long play
+// sessions: it was NOT the noise shape, it was float precision — `Time` (and
+// so `drift`) grows without bound as the session runs, and once the input to
+// sin()-hash gets large enough, frac()/floor() lose precision at exactly one
+// x line and one y line, reading as a straight seam. The CPU now wraps Time
+// into a bounded range before it ever reaches the shader (see RenderPipeline.
+// RenderCloudShadow), so the hash's input never grows large enough to hit that
+// cliff — the original hash-based fbm (the good, fluffy look) is unchanged.
 //=============================================================================
 
 #if OPENGL
@@ -27,7 +36,7 @@ sampler2D ShadowSampler = sampler_state
     AddressU = Clamp; AddressV = Clamp;
 };
 
-float Time;          // seconds, for drift
+float Time;          // seconds, WRAPPED into a bounded range by the CPU (precision safety)
 float Speed;         // drift speed
 float Scale;         // cloud size (bigger = smaller/denser clouds)
 float Opacity;       // how dark the shadows get (0..1)

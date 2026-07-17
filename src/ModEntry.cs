@@ -237,6 +237,14 @@ namespace SDVRadiance
         private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
         {
             RegisterGmcm();
+
+            // Optional Height Framework integration: robust per-tile water/deck/wall classification.
+            // Null when that mod isn't installed — the shadow code falls back to its own heuristics.
+            var height = this.Helper.ModRegistry.GetApi<Integrations.IHeightFrameworkApi>("phuicmt.HeightFramework");
+            ShadowRenderer.Height = height;
+            this.Monitor.Log(height != null
+                ? "Height Framework detected — using it for water/ledge shadow suppression."
+                : "Height Framework not installed — using built-in tile heuristics for shadows.", LogLevel.Info);
         }
 
         private void RegisterGmcm()

@@ -25,6 +25,10 @@ namespace SDVRadiance
     {
         /// <summary>Optional diagnostics sink; when set (config.DebugLogging), the first few draws + any error are logged once.</summary>
         internal static IMonitor? Diag;
+
+        /// <summary>Optional Height Framework API (null if that mod isn't installed); when present it
+        /// gives robust per-tile water/deck classification instead of our own tile heuristics.</summary>
+        internal static Integrations.IHeightFrameworkApi? Height;
         private int _diagFrames;
         private bool _errLogged;
 
@@ -40,6 +44,16 @@ namespace SDVRadiance
         private const int PlayerRtH = 176;
         /// <summary>Opacity at the far tip (head end) relative to the feet, for the gradient fade.</summary>
         private const float HeadFade = 0.05f;
+
+        // NPCs and animals are baked to pooled offscreen targets too (same as the player), so
+        // their shadow is one cohesive silhouette with a smooth feet→head fade — no stepped
+        // horizontal bands. A fixed slot size fits any character/animal sprite at 4× scale;
+        // sprites bigger than a slot fall back to the banded path.
+        private const int CasterRtW = 160;
+        private const int CasterRtH = 224;
+        private readonly System.Collections.Generic.List<RenderTarget2D> _casterPool = new();
+        private int _casterUsed;
+        private readonly System.Collections.Generic.Dictionary<object, (RenderTarget2D rt, Vector2 feetInRT)> _bakedMap = new();
 
         // Multiply only the destination ALPHA by the source alpha (RGB untouched): dst.a *= src.a.
         // Used to bake the feet→head opacity gradient onto the silhouette.
@@ -151,10 +165,16 @@ namespace SDVRadiance
 
         private void DrawAnimalShadow(SpriteBatch b, FarmAnimal a, float rot, float stretch, float alpha, float blur)
         {
-            Rectangle src = a.Sprite.SourceRect;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(a.Position.X + a.Sprite.SpriteWidth * 4 / 2f, a.GetBoundingBox().Bottom - FeetLift));
             float depth = MathHelper.Clamp(a.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
+            if (_bakedMap.TryGetValue(a, out var baked))
+            {
+                DrawSoft(b, Taps9, baked.rt, null, feet, Color.White, alpha, rot, baked.feetInRT,
+                    new Vector2(1f, stretch), depth, SpriteEffects.None, blur);
+                return;
+            }
+            Rectangle src = a.Sprite.SourceRect;
             DrawBandedGradient(b, a.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
         }
@@ -265,12 +285,18 @@ namespace SDVRadiance
 
         private void DrawNpcShadow(SpriteBatch b, NPC npc, float rot, float stretch, float alpha, float blur)
         {
-            Rectangle src = npc.Sprite.SourceRect;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom - FeetLift));
             float depth = MathHelper.Clamp(npc.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
-            // NPCs are single-texture sprites, so the feet→head opacity gradient is faked with
-            // horizontal bands (no per-NPC render target needed), each softened at the edges.
+            // Prefer the baked silhouette (one cohesive image, smoothly faded — same as the
+            // player). Bands are the fallback only when the sprite is too big for a slot.
+            if (_bakedMap.TryGetValue(npc, out var baked))
+            {
+                DrawSoft(b, Taps9, baked.rt, null, feet, Color.White, alpha, rot, baked.feetInRT,
+                    new Vector2(1f, stretch), depth, SpriteEffects.None, blur);
+                return;
+            }
+            Rectangle src = npc.Sprite.SourceRect;
             DrawBandedGradient(b, npc.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
         }
@@ -302,6 +328,9 @@ namespace SDVRadiance
                         break;
                     case Bush bush:
                         DrawBushShadow(b, bush, rot, stretch, alpha, blur);
+                        break;
+                    case HoeDirt { crop: { } crop } hd when !crop.dead.Value && !crop.forageCrop.Value && !crop.IsErrorCrop():
+                        DrawCropShadow(b, crop, tile, rot * TallLeanScale, Math.Min(stretch, 0.55f), alpha, blur);
                         break;
                 }
             }
@@ -390,6 +419,31 @@ namespace SDVRadiance
             float depth = MathHelper.Clamp(Math.Max(0f, ((tile.Y + 1f) * 64f - 24f) / 10000f) + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
             DrawBandedGradient(b, tex, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
+        }
+
+        /// <summary>
+        /// Crop.draw uses a 16x32 source cell drawn at scale 4 with the game's draw-origin (8,24).
+        /// For a SHADOW we pivot/anchor at the cell BOTTOM (8,32) instead — the plant's ground
+        /// contact — so the lean swings the plant from its base (not its mid-stem, which read as a
+        /// weird direction) and no cell rows fall below the feet (which read as "too low"). The
+        /// transparent padding above young growth stages means the shadow shrinks with the plant.
+        /// </summary>
+        private static readonly Vector2 CropOrigin = new(8f, 32f);
+
+        private void DrawCropShadow(SpriteBatch b, Crop crop, Vector2 tile, float rot, float stretch, float alpha, float blur)
+        {
+            Texture2D tex = crop.DrawnCropTexture;
+            if (tex == null || crop.sourceRect.IsEmpty)
+                return;
+            // The game draws origin (8,24) at drawPosition; the cell bottom (y=32) therefore sits
+            // at drawPosition.Y + (32-24)*4 = +32, ≈ the tile's bottom edge — our ground line.
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(crop.drawPosition.X, crop.drawPosition.Y + 32f));
+            float depth = MathHelper.Clamp((tile.Y * 64f + 64f) / 10000f + tile.X / 100000f - ShadowDepthBias, 0f, 1f);
+            // Crops are randomly mirrored (Crop.flip); match it so an asymmetric sprite's shadow
+            // leans the same way its plant does instead of pointing the opposite direction.
+            SpriteEffects fx = crop.flip.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
+            DrawBandedGradient(b, tex, crop.sourceRect, feet, CropOrigin,
+                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur, ObjectHeadFade, fx);
         }
 
         private void DrawFurnitureShadow(SpriteBatch b, Furniture f, float rot, float stretch, float alpha, float blur)
@@ -513,15 +567,24 @@ namespace SDVRadiance
         public void PreparePlayer(GraphicsDevice gd, ModConfig config)
         {
             _playerReady = false;
+            _bakedMap.Clear();
+            _casterUsed = 0;
             if (!ShouldCast(config))
                 return;
+
+            _rtBatch ??= new SpriteBatch(gd);
+            _gradTex ??= BuildGradient(gd);
+
+            // Bake NPC + animal silhouettes (single-sprite casters) to pooled targets so their
+            // shadows match the player's smooth, cohesive fade instead of stepped bands.
+            BakeCasters(gd, Game1.currentLocation);
+
             Farmer who = Game1.player;
             if (who == null || who.currentLocation != Game1.currentLocation
                 || who.swimming.Value || who.isRidingHorse() || who.IsSitting())
                 return;
 
             _playerRT ??= new RenderTarget2D(gd, PlayerRtW, PlayerRtH);
-            _rtBatch ??= new SpriteBatch(gd);
 
             Rectangle src = who.FarmerSprite.SourceRect;
             float w = src.Width * 4f, h = src.Height * 4f;
@@ -555,6 +618,104 @@ namespace SDVRadiance
             {
                 gd.SetRenderTargets(prev);
             }
+        }
+
+        /// <summary>
+        /// Bake every on-screen NPC and animal to its own pooled offscreen target (black
+        /// silhouette + feet→head alpha gradient), so <see cref="DrawNpcShadow"/> /
+        /// <see cref="DrawAnimalShadow"/> can composite one smooth image instead of banding.
+        /// Runs during RenderingWorld, where a render-target swap is safe.
+        /// </summary>
+        private void BakeCasters(GraphicsDevice gd, GameLocation loc)
+        {
+            if (loc == null)
+                return;
+            var vp = Game1.viewport;
+            int tx0 = vp.X / 64 - 3, tx1 = (vp.X + vp.Width) / 64 + 3;
+            int ty0 = vp.Y / 64 - 3, ty1 = (vp.Y + vp.Height) / 64 + 3;
+
+            RenderTargetBinding[] prev = gd.GetRenderTargets();
+            try
+            {
+                foreach (NPC npc in loc.characters)
+                {
+                    if (npc == null || npc.IsInvisible || (npc.HideShadow && !(npc is Pet)) || npc.swimming.Value || npc.Sprite?.Texture == null)
+                        continue;
+                    Point t = npc.TilePoint;
+                    if (t.X < tx0 || t.X > tx1 || t.Y < ty0 || t.Y > ty1)
+                        continue;
+                    if (BakeSprite(gd, npc.Sprite.Texture, npc.Sprite.SourceRect, out RenderTarget2D rt, out Vector2 feet))
+                        _bakedMap[npc] = (rt, feet);
+                }
+                foreach (FarmAnimal a in loc.animals.Values)
+                {
+                    if (a?.Sprite?.Texture == null)
+                        continue;
+                    Point t = a.TilePoint;
+                    if (t.X < tx0 || t.X > tx1 || t.Y < ty0 || t.Y > ty1)
+                        continue;
+                    if (BakeSprite(gd, a.Sprite.Texture, a.Sprite.SourceRect, out RenderTarget2D rt, out Vector2 feet))
+                        _bakedMap[a] = (rt, feet);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (Diag != null && !_errLogged) { _errLogged = true; Diag.Log($"[shadow] caster bake threw: {ex}", LogLevel.Warn); }
+            }
+            finally
+            {
+                gd.SetRenderTargets(prev);
+            }
+        }
+
+        /// <summary>
+        /// Bake a single sprite to a pooled slot: black silhouette at 4×, pinned bottom-centre,
+        /// then a feet→head alpha ramp multiplied on. Returns false (→ banding fallback) if the
+        /// sprite is larger than a slot. The caller owns the surrounding render-target swap.
+        /// </summary>
+        private bool BakeSprite(GraphicsDevice gd, Texture2D tex, Rectangle src, out RenderTarget2D rt, out Vector2 feetInRT)
+        {
+            rt = null!;
+            feetInRT = default;
+            if (tex == null || src.IsEmpty)
+                return false;
+            float w = src.Width * 4f, h = src.Height * 4f;
+            if (w > CasterRtW || h > CasterRtH - 8f)
+                return false;
+
+            rt = RentCasterRT(gd);
+            var pos = new Vector2((CasterRtW - w) / 2f, CasterRtH - h - 8f);
+            feetInRT = new Vector2(CasterRtW / 2f, CasterRtH - 8f);
+            try
+            {
+                gd.SetRenderTarget(rt);
+                gd.Clear(Color.Transparent);
+                _rtBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+                _rtBatch.Draw(tex, pos, src, Color.Black, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
+                _rtBatch.End();
+
+                // Fade only the sprite's vertical extent (full at the feet, faint at the head).
+                _rtBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
+                _rtBatch.Draw(_gradTex!, new Rectangle(0, (int)pos.Y, CasterRtW, (int)h), Color.White);
+                _rtBatch.End();
+                return true;
+            }
+            catch
+            {
+                try { _rtBatch!.End(); } catch { }
+                return false;
+            }
+        }
+
+        /// <summary>Lease the next pooled caster target for this frame (grows the pool on demand).</summary>
+        private RenderTarget2D RentCasterRT(GraphicsDevice gd)
+        {
+            if (_casterUsed < _casterPool.Count)
+                return _casterPool[_casterUsed++];
+            var rt = new RenderTarget2D(gd, CasterRtW, CasterRtH);
+            _casterPool.Add(rt);
+            _casterUsed++;
+            return rt;
         }
 
         /// <summary>1×H alpha ramp: 1.0 at the bottom (feet) fading to <see cref="HeadFade"/> at the top (far tip).</summary>
@@ -615,7 +776,7 @@ namespace SDVRadiance
         /// </summary>
         private void DrawBandedGradient(SpriteBatch b, Texture2D tex, Rectangle src, Vector2 feet,
             Vector2 baseOrigin, float alpha, float rot, Vector2 scale, float depth, float blur,
-            float headFade = HeadFade)
+            float headFade = HeadFade, SpriteEffects effects = SpriteEffects.None)
         {
             // More bands for taller sprites so the gradient stays smooth (a 96px tree would
             // show hard steps with only a handful of bands); fewer for small NPC sprites.
@@ -630,7 +791,7 @@ namespace SDVRadiance
                 float tBottom = (i + 0.5f) / bands;              // 0 at the head band, 1 at the feet band
                 float ga = headFade + (1f - headFade) * (float)Math.Pow(tBottom, 1.8);
                 DrawSoft(b, Taps5, tex, band, feet, Color.Black, alpha * ga, rot, origin, scale, depth,
-                    SpriteEffects.None, blur);
+                    effects, blur);
             }
         }
 
@@ -650,6 +811,11 @@ namespace SDVRadiance
         {
             try
             {
+                // Height Framework (if installed) already distinguishes open water from pier/bridge
+                // DECKS over water, so its water-surface test is the robust answer. Fall back to the
+                // isWaterTile + no-Buildings-tile heuristic (which approximates the same deck check).
+                if (Height != null)
+                    return Height.IsWaterSurface(loc, tile.X, tile.Y);
                 return loc.isWaterTile(tile.X, tile.Y)
                     && !loc.hasTileAt(tile.X, tile.Y, "Buildings");
             }
