@@ -202,7 +202,9 @@ namespace SDVRadiance
         {
             _camera.Update(_config);
             SuppressVanillaShadows = ShadowRenderer.ShadowsActiveNow(_config);
-            SuppressVanillaObjectShadows = _config.DirectionalShadowObjects && ShadowRenderer.SunShadowActive(_config);
+            // Keep the vanilla tree/bush CONTACT blob: it roots the base that the canopy hides,
+            // so our directional cast reads as connected instead of floating off the trunk.
+            SuppressVanillaObjectShadows = false;
         }
 
         private void OnButtonsChanged(object? sender, ButtonsChangedEventArgs e)
