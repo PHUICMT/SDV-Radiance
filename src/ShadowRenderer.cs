@@ -433,8 +433,9 @@ namespace SDVRadiance
             src.Width = clump.width.Value * 16;
             src.Height = clump.height.Value * 16;
             Vector2 tile = clump.Tile;
-            // Clump draws top-left at tile*64, origin zero, scale 4 → base = bottom-centre of the sprite.
-            var worldFeet = new Vector2(tile.X * 64f + src.Width * 2f, tile.Y * 64f + src.Height * 4f);
+            // Clump draws top-left at tile*64, origin zero, scale 4 → sprite bottom = tile*64 +
+            // src.Height*4; the stump/boulder visually rests a bit above that, so lift the anchor.
+            var worldFeet = new Vector2(tile.X * 64f + src.Width * 2f, tile.Y * 64f + src.Height * 4f - 24f);
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, worldFeet);
             var baseOrigin = new Vector2(src.Width / 2f, src.Height);
             float depth = MathHelper.Clamp((tile.Y + 1f) * 64f / 10000f + tile.X / 100000f - ShadowDepthBias, 0f, 1f);
