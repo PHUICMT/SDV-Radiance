@@ -155,6 +155,10 @@
   "config.ca.strength.name": "Aberration strength",
 
   "config.section.lighting": "Dynamic lighting",
+  "config.lighting.flood.name": "Flood GI lighting (new)",
+  "config.lighting.flood.tooltip": "Occlusion-aware global illumination: real light sources and skylight flood across the map tile-by-tile, so canopies and buildings cast soft shade, lamps pool warm coloured light around corners, and windows spill light at night. Replaces the classic dynamic lighting below when enabled.",
+  "config.lighting.floodstrength.name": "Flood lighting strength",
+  "config.lighting.floodstrength.tooltip": "How strongly the flood lightmap shades the scene. Lower keeps the vanilla look with a hint of shading.",
   "config.lighting.enabled.name": "Enable dynamic lighting",
   "config.lighting.enabled.tooltip": "Darken flat/unlit areas and pool warm light around real light sources (lamps, torches, fireplaces). Makes dark places read dark and lit places read bright, with soft falloff.",
   "config.lighting.indoor.name": "Indoor darkness",

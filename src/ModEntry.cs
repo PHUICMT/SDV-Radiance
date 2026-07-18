@@ -502,6 +502,10 @@ namespace SDVRadiance
 
             // --- Dynamic lighting (implemented) ---
             api.AddPage(this.ModManifest, "lighting", () => I18n("config.section.lighting"));
+            api.AddBoolOption(this.ModManifest, () => _config.FloodLightingEnabled, v => _config.FloodLightingEnabled = v,
+                () => I18n("config.lighting.flood.name"), () => I18n("config.lighting.flood.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.FloodLightingStrength, v => _config.FloodLightingStrength = v,
+                () => I18n("config.lighting.floodstrength.name"), () => I18n("config.lighting.floodstrength.tooltip"), 0f, 1f, 0.05f);
             api.AddBoolOption(this.ModManifest, () => _config.LightingEnabled, v => _config.LightingEnabled = v,
                 () => I18n("config.lighting.enabled.name"), () => I18n("config.lighting.enabled.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.LightingIndoorDarkness, v => _config.LightingIndoorDarkness = v,

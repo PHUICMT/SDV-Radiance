@@ -70,7 +70,11 @@ namespace SDVRadiance
         // Reused per-frame stage list + cached stage delegates (see Apply).
         private readonly List<Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>> _stages = new();
         private Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>?
-            _dLighting, _dWater, _dCloud, _dGodRays, _dBloom, _dFog, _dGrade, _dTilt, _dFinish;
+            _dLighting, _dWater, _dCloud, _dGodRays, _dBloom, _dFog, _dGrade, _dTilt, _dFinish, _dFlood;
+
+        // Phase L1 — flood-propagation GI lightmap (see FloodLightmap.cs).
+        private Effect? _floodFx;
+        private readonly FloodLightmap _flood = new();
 
         // Metered auto-exposure: average the scene each frame (downsampled to a
         // tiny RT, read back a frame late so there's no GPU stall) and ease the
@@ -92,6 +96,7 @@ namespace SDVRadiance
             _cloudShadow = LoadEffect("cloudshadow.mgfxo");
             _tiltShift = LoadEffect("tiltshift.mgfxo");
             _water = LoadEffect("water.mgfxo");
+            _floodFx = LoadEffect("floodlight.mgfxo");
             _finishing = LoadEffect("finishing.mgfxo");
             _lighting = LoadEffect("lighting.mgfxo");
         }
@@ -117,7 +122,8 @@ namespace SDVRadiance
         }
 
         private bool AnyEffectActive(ModConfig c) =>
-            (c.LightingEnabled && _lighting != null)
+            (c.FloodLightingEnabled && _floodFx != null)
+            || (c.LightingEnabled && _lighting != null)
             || (c.CloudShadowEnabled && _cloudShadow != null)
             || (c.GodRaysEnabled && _godRays != null)
             || (c.BloomEnabled && _bloom != null)
@@ -200,10 +206,15 @@ namespace SDVRadiance
                 _dLighting ??= RenderLighting; _dWater ??= RenderWater; _dCloud ??= RenderCloudShadow;
                 _dGodRays ??= RenderGodRays; _dBloom ??= RenderBloom; _dFog ??= RenderFog;
                 _dGrade ??= ColorGrade; _dTilt ??= RenderTiltShift; _dFinish ??= RenderFinishing;
-                // Dynamic lighting first: darken flat/unlit areas and pool light around
-                // real light sources, so everything downstream (bloom/god rays/grade)
-                // sees the lit result. Only when there's actually something to light.
-                if (config.LightingEnabled && _lighting != null && BuildLightList(w, h, config))
+                _dFlood ??= RenderFloodLight;
+                // Lighting first, so everything downstream (bloom/god rays/grade) sees the
+                // lit result. FLOOD lighting (occlusion-aware GI lightmap) supersedes the
+                // old screen-space lighting stage when enabled — they model the same thing.
+                if (config.FloodLightingEnabled && _floodFx != null && _flood.Build(_device, w, h, config))
+                {
+                    stages.Add(_dFlood);
+                }
+                else if (config.LightingEnabled && _lighting != null && BuildLightList(w, h, config))
                 {
                     _shadowsReady = config.LightingShadows && BuildOccluderMask(w, h);
                     stages.Add(_dLighting);
@@ -481,6 +492,20 @@ namespace SDVRadiance
             fx.Parameters["Brightness"]?.SetValue(config.ColorGradeBrightness * _meteredExposure);
             fx.Parameters["ToneMap"]?.SetValue(config.ColorGradeToneMap ? 1f : 0f);
             fx.CurrentTechnique = fx.Techniques["ColorGrade"];
+            DrawFull(sb, source, dest, fx);
+        }
+
+        private void RenderFloodLight(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
+        {
+            var fx = _floodFx!;
+            fx.Parameters["LightMapTexture"]?.SetValue(_flood.Texture);
+            fx.Parameters["TilesPerScreen"]?.SetValue(new Vector2(dest.Width / 64f, dest.Height / 64f));
+            fx.Parameters["WorldTileOffset"]?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
+            fx.Parameters["MapOrigin"]?.SetValue(_flood.Origin);
+            fx.Parameters["MapSize"]?.SetValue(_flood.MapSize);
+            fx.Parameters["Strength"]?.SetValue(MathHelper.Clamp(config.FloodLightingStrength, 0f, 1f));
+            fx.Parameters["AmbientFloor"]?.SetValue(0.10f);
+            fx.CurrentTechnique = fx.Techniques["FloodLight"];
             DrawFull(sb, source, dest, fx);
         }
 
@@ -1003,10 +1028,10 @@ namespace SDVRadiance
         {
             _sceneRT?.Dispose(); _fullA?.Dispose(); _fullB?.Dispose(); _rtA?.Dispose(); _rtB?.Dispose(); _waterMask?.Dispose(); _waterMaskCore?.Dispose(); _occluderMask?.Dispose(); _lumRT?.Dispose();
             _bloom?.Dispose(); _colorGrade?.Dispose(); _godRays?.Dispose(); _fog?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
-            _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose();
+            _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose(); _floodFx?.Dispose(); _flood.Dispose();
             _sceneRT = _fullA = _fullB = _rtA = _rtB = null;
             _waterMask = null; _waterMaskCore = null; _occluderMask = null; _lumRT = null;
-            _bloom = _colorGrade = _godRays = _fog = _cloudShadow = _tiltShift = _water = _finishing = _lighting = null;
+            _bloom = _colorGrade = _godRays = _fog = _cloudShadow = _tiltShift = _water = _finishing = _lighting = _floodFx = null;
         }
     }
 }

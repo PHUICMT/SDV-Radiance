@@ -125,6 +125,11 @@ namespace SDVRadiance
         public float ChromaticAberrationStrength { get; set; } = 0.3f; // 0..1 UI scale (scaled to a tiny UV offset)
 
         // --- Phase 5: Dynamic 2D lighting ---
+        /// <summary>Flood-propagation GI lightmap (occlusion-aware ambient, shade under
+        /// canopies, coloured lamp pools). Supersedes LightingEnabled when on.</summary>
+        public bool FloodLightingEnabled { get; set; } = false;
+        /// <summary>How strongly the flood lightmap modulates the scene (0..1).</summary>
+        public float FloodLightingStrength { get; set; } = 0.65f;
         /// <summary>Darken flat/unlit areas and pool light around real light sources.</summary>
         public bool LightingEnabled { get; set; } = false;
         /// <summary>How dark interiors get (vanilla leaves them flat-bright). 0 = none, 1 = very dark.</summary>
@@ -202,6 +207,7 @@ namespace SDVRadiance
             WaterReflectStrength = C(WaterReflectStrength, 0f, 1f);
             VignetteStrength = C(VignetteStrength, 0f, 1f);
             ChromaticAberrationStrength = C(ChromaticAberrationStrength, 0f, 1f);
+            FloodLightingStrength = C(FloodLightingStrength, 0f, 1f);
             LightingIndoorDarkness = C(LightingIndoorDarkness, 0f, 0.95f);
             LightingNightDarkness = C(LightingNightDarkness, 0f, 0.95f);
             LightingWarmth = C(LightingWarmth, 0f, 1f);
