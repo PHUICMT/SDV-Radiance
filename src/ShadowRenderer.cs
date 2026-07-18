@@ -127,13 +127,18 @@ namespace SDVRadiance
                     yield return a;
         }
 
-        /// <summary>Sun conditions: outdoors, daytime, clear weather → one long sun-cast shadow.</summary>
+        /// <summary>Sun conditions: outdoors, daytime, clear weather → one long sun-cast shadow.
+        /// The dusk cutoff follows the game's own seasonal dark time (summer sun sets late),
+        /// not a fixed hour — shadows stretch long into the evening until true dark.</summary>
         private static bool SunCasts()
         {
             GameLocation? loc = Game1.currentLocation;
             if (loc == null || !loc.IsOutdoors)
                 return false;
-            return Game1.timeOfDay < 1900 && Game1.timeOfDay >= 600 && !Game1.isRaining && !Game1.isSnowing;
+            int trulyDark;
+            try { trulyDark = Game1.getTrulyDarkTime(loc); }
+            catch { trulyDark = 2000; }
+            return Game1.timeOfDay < trulyDark && Game1.timeOfDay >= 600 && !Game1.isRaining && !Game1.isSnowing;
         }
 
         /// <summary>True when the outdoor sun shadow is active.</summary>
@@ -1727,16 +1732,29 @@ namespace SDVRadiance
             alpha = 0.9f * TimeFade();                           // opacity at the feet (× strength; fades toward the tip)
         }
 
-        /// <summary>Ease the shadow in/out near dawn (06:00–07:00) and dusk (18:00–19:00) so it doesn't pop.</summary>
+        /// <summary>Ease the shadow out toward dusk so it doesn't pop. The fade window follows
+        /// the game's SEASONAL dark times (starting-to-get-dark → truly-dark), so summer keeps
+        /// long evening shadows while winter fades early. No dawn ramp — the day starts at
+        /// 06:00 with the player active immediately.</summary>
         private static float TimeFade()
         {
-            // The day starts at 06:00 with the player active immediately, so the shadow is full
-            // from the start (no dawn ramp — that left the morning shadowless until ~07:00).
-            // Only ease OUT toward dusk. Minutes so the fade is smooth across the hour rollover.
             int t = Game1.timeOfDay;
             int mins = (t / 100) * 60 + (t % 100);
-            if (mins >= 1080) return MathHelper.Clamp((1140 - mins) / 60f, 0f, 1f); // 18:00 → 19:00
-            return 1f;
+            int startDark = 1800, trulyDark = 2000;
+            try
+            {
+                GameLocation? loc = Game1.currentLocation;
+                if (loc != null)
+                {
+                    startDark = Game1.getStartingToGetDarkTime(loc);
+                    trulyDark = Game1.getTrulyDarkTime(loc);
+                }
+            }
+            catch { }
+            int m0 = (startDark / 100) * 60 + startDark % 100;
+            int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
+            if (mins <= m0) return 1f;
+            return MathHelper.Clamp((m1 - mins) / (float)Math.Max(1, m1 - m0), 0f, 1f);
         }
     }
 }
