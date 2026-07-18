@@ -90,9 +90,10 @@ namespace SDVRadiance
                     int cj = (int)(ls.position.Value.Y / 64f) - ty0;
                     if (ci < 0 || ci >= tw || cj < 0 || cj >= th)
                         continue;
-                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f);
-                    // Warm lamplight; vanilla LightSource colours are lightmap-specific
-                    // (often inverted/near-black), so a fixed warm tone reads best.
+                    // INDIRECT spill only (~1/3 strength): the crisp direct pool + its per-light
+                    // shadows are computed analytically in floodlight.fx; the flood carries the
+                    // bounce-like glow that bends around corners and through doorways.
+                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * 0.35f;
                     var seed = new Vector3(1.00f, 0.83f, 0.58f) * inten;
                     int idx = cj * tw + ci;
                     _cells[idx] = Vector3.Max(_cells[idx], seed);

@@ -212,6 +212,8 @@ namespace SDVRadiance
                 // old screen-space lighting stage when enabled — they model the same thing.
                 if (config.FloodLightingEnabled && _floodFx != null && _flood.Build(_device, w, h, config))
                 {
+                    BuildLightList(w, h, config);       // direct-light pools (shader term)
+                    _floodOccReady = BuildFloodOccluders(w, h);
                     stages.Add(_dFlood);
                 }
                 else if (config.LightingEnabled && _lighting != null && BuildLightList(w, h, config))
@@ -398,6 +400,18 @@ namespace SDVRadiance
             }
             fx.Parameters["PlayerRect"]?.SetValue(grRect);
             fx.Parameters["PlayerMaskTexture"]?.SetValue(grMask);
+            // With flood GI active, only lit pixels may emit rays (kills rays from bright
+            // sprites in unlit corners; lamp glow zones still stream at night).
+            bool floodGate = config.FloodLightingEnabled && _flood.Texture != null;
+            fx.Parameters["FloodGate"]?.SetValue(floodGate ? 1f : 0f);
+            if (floodGate)
+            {
+                fx.Parameters["FloodMapTexture"]?.SetValue(_flood.Texture);
+                fx.Parameters["FloodTilesPerScreen"]?.SetValue(new Vector2(dest.Width / 64f, dest.Height / 64f));
+                fx.Parameters["FloodWorldTileOffset"]?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
+                fx.Parameters["FloodMapOrigin"]?.SetValue(_flood.Origin);
+                fx.Parameters["FloodMapSize"]?.SetValue(_flood.MapSize);
+            }
             fx.CurrentTechnique = fx.Techniques["Bright"];
             Pass(sb, source, rtA, fx);
 
@@ -509,6 +523,10 @@ namespace SDVRadiance
             DrawFull(sb, source, dest, fx);
         }
 
+        private bool _floodOccReady;
+        private readonly Vector2[] _floodLightPos = new Vector2[8];
+        private readonly Vector4[] _floodLightCol = new Vector4[8];
+
         private void RenderFloodLight(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var fx = _floodFx!;
@@ -519,6 +537,27 @@ namespace SDVRadiance
             fx.Parameters["MapSize"]?.SetValue(_flood.MapSize);
             fx.Parameters["Strength"]?.SetValue(MathHelper.Clamp(config.FloodLightingStrength, 0f, 1f));
             fx.Parameters["AmbientFloor"]?.SetValue(0.10f);
+
+            // Direct pools with per-light shadows: the brightest 8 on-screen lights (from
+            // BuildLightList) + the occluder mask. Direct is scaled DOWN vs the classic
+            // lighting stage because the flood map already carries the indirect spill.
+            int n = 0;
+            for (int i = 0; i < _lightCount && n < 8; i++, n++)
+            {
+                _floodLightPos[n] = _lightPos[i];
+                var d = _lightData[i];
+                _floodLightCol[n] = new Vector4(d.X * 0.55f, d.Y * 0.55f, d.Z * 0.55f, d.W);
+            }
+            for (int i = n; i < 8; i++) { _floodLightPos[i] = Vector2.Zero; _floodLightCol[i] = Vector4.Zero; }
+            fx.Parameters["LightPosArr"]?.SetValue(_floodLightPos);
+            fx.Parameters["LightColArr"]?.SetValue(_floodLightCol);
+            fx.Parameters["DirectCount"]?.SetValue((float)(_floodOccReady ? n : 0));
+            fx.Parameters["Aspect"]?.SetValue(dest.Width / (float)Math.Max(1, dest.Height));
+            fx.Parameters["OccluderTexture"]?.SetValue(_occluderMask);
+            fx.Parameters["OccOrigin"]?.SetValue(new Vector2((float)Math.Floor(Game1.viewport.X / 64f), (float)Math.Floor(Game1.viewport.Y / 64f)));
+            fx.Parameters["OccMapSize"]?.SetValue(_occMaskSize);
+            fx.Parameters["ShadowStrength"]?.SetValue(MathHelper.Clamp(config.FloodShadowStrength, 0f, 1f));
+
             fx.CurrentTechnique = fx.Techniques["FloodLight"];
             DrawFull(sb, source, dest, fx);
         }
@@ -776,6 +815,113 @@ namespace SDVRadiance
             _occluderMask.SetData(_occluderMaskBuf, 0, count);
 
             _occTilesPerScreen = new Vector2(w / 64f, h / 64f);
+            _occWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
+            _occMaskSize = new Vector2(tilesW, tilesH);
+            return true;
+        }
+
+        /// <summary>
+        /// Occluder mask for FLOOD lighting's per-light shadows — richer than the classic
+        /// Buildings-layer mask: Height Framework walls/buildings (fallback: Buildings layer),
+        /// tree trunks, resource clumps, bushes, and characters/animals, each with an occlusion
+        /// WEIGHT in the red channel (entities are partial blockers → softer shadows).
+        /// </summary>
+        private bool BuildFloodOccluders(int w, int h)
+        {
+            GameLocation? loc = Game1.currentLocation;
+            if (loc == null)
+                return false;
+            var layer = loc.map?.GetLayer("Buildings");
+
+            int vx = Game1.viewport.X;
+            int vy = Game1.viewport.Y;
+            int startTileX = (int)Math.Floor(vx / 64f);
+            int startTileY = (int)Math.Floor(vy / 64f);
+            int tilesW = Math.Max(1, w / 64 + 2);
+            int tilesH = Math.Max(1, h / 64 + 2);
+            int count = tilesW * tilesH;
+
+            if (_occluderMaskBuf == null || _occluderMaskBuf.Length < count)
+                _occluderMaskBuf = new Color[count];
+
+            var hf = ShadowRenderer.Height;
+            for (int j = 0; j < tilesH; j++)
+            {
+                for (int i = 0; i < tilesW; i++)
+                {
+                    int tx = startTileX + i, ty = startTileY + j;
+                    bool solid;
+                    if (hf != null)
+                    {
+                        try { solid = hf.GetHeightAt(loc, tx, ty) > 0; }
+                        catch { hf = null; solid = false; }
+                    }
+                    else
+                    {
+                        solid = layer != null && tx >= 0 && ty >= 0 && tx < layer.LayerWidth && ty < layer.LayerHeight
+                            && layer.Tiles[tx, ty] != null;
+                    }
+                    byte v = solid ? (byte)255 : (byte)0;
+                    _occluderMaskBuf[j * tilesW + i] = new Color(v, v, v, (byte)255);
+                }
+            }
+
+            void Stamp(int tx, int ty, byte strength)
+            {
+                int i = tx - startTileX, j = ty - startTileY;
+                if (i < 0 || i >= tilesW || j < 0 || j >= tilesH)
+                    return;
+                int idx = j * tilesW + i;
+                if (_occluderMaskBuf[idx].R < strength)
+                    _occluderMaskBuf[idx] = new Color(strength, strength, strength, (byte)255);
+            }
+
+            foreach (var kv in loc.terrainFeatures.Pairs)
+            {
+                switch (kv.Value)
+                {
+                    case StardewValley.TerrainFeatures.Tree t when t.growthStage.Value >= 5:
+                        Stamp((int)kv.Key.X, (int)kv.Key.Y, 215);
+                        break;
+                    case StardewValley.TerrainFeatures.FruitTree ft when ft.growthStage.Value >= 4:
+                        Stamp((int)kv.Key.X, (int)kv.Key.Y, 215);
+                        break;
+                    case StardewValley.TerrainFeatures.Bush:
+                        Stamp((int)kv.Key.X, (int)kv.Key.Y, 150);
+                        break;
+                }
+            }
+            foreach (var ltf in loc.largeTerrainFeatures)
+            {
+                if (ltf is StardewValley.TerrainFeatures.Bush b)
+                    Stamp((int)b.Tile.X, (int)b.Tile.Y, 150);
+            }
+            foreach (var clump in loc.resourceClumps)
+            {
+                if (clump == null) continue;
+                for (int cy = 0; cy < clump.height.Value; cy++)
+                    for (int cx = 0; cx < clump.width.Value; cx++)
+                        Stamp((int)clump.Tile.X + cx, (int)clump.Tile.Y + cy, 200);
+            }
+            foreach (NPC npc in loc.characters)
+            {
+                if (npc?.IsInvisible == false)
+                    Stamp(npc.TilePoint.X, npc.TilePoint.Y, 140);
+            }
+            foreach (FarmAnimal a in loc.animals.Values)
+            {
+                if (a != null)
+                    Stamp(a.TilePoint.X, a.TilePoint.Y, 140);
+            }
+            if (Game1.player != null && Game1.player.currentLocation == loc)
+                Stamp(Game1.player.TilePoint.X, Game1.player.TilePoint.Y, 140);
+
+            if (_occluderMask == null || _occluderMask.Width != tilesW || _occluderMask.Height != tilesH)
+            {
+                _occluderMask?.Dispose();
+                _occluderMask = new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color);
+            }
+            _occluderMask.SetData(_occluderMaskBuf, 0, count);
             _occWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
             _occMaskSize = new Vector2(tilesW, tilesH);
             return true;

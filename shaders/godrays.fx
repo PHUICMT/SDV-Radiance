@@ -44,6 +44,21 @@ sampler2D PlayerMaskSampler = sampler_state
     AddressU = Clamp; AddressV = Clamp;
 };
 
+// Flood lightmap gate: when the flood GI system is on, only pixels that are actually
+// LIT (per the lightmap) may emit rays — a bright sprite in a dark corner cannot.
+float FloodGate;             // 0 = off, 1 = gate by the flood lightmap
+float2 FloodTilesPerScreen;
+float2 FloodWorldTileOffset;
+float2 FloodMapOrigin;
+float2 FloodMapSize;
+texture FloodMapTexture;
+sampler2D FloodMapSampler = sampler_state
+{
+    Texture = <FloodMapTexture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+
 static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
 static const int SAMPLES = 16;
 
@@ -73,6 +88,16 @@ float4 BrightPS(PixelInput input) : SV_TARGET
     float2 pmuv = (input.UV - PlayerRect.xy) / pmSpan;
     float pmIn = step(0.0, pmuv.x) * step(pmuv.x, 1.0) * step(0.0, pmuv.y) * step(pmuv.y, 1.0);
     mask *= 1.0 - step(0.02, tex2D(PlayerMaskSampler, saturate(pmuv)).a) * pmIn;
+
+    // Only genuinely LIT pixels emit (flood lightmap gate) — daytime open ground is fully
+    // lit so nothing changes; at night rays come from lamp glow zones only.
+    if (FloodGate > 0.5)
+    {
+        float2 wt = input.UV * FloodTilesPerScreen + FloodWorldTileOffset;
+        float3 fl = tex2D(FloodMapSampler, (wt - FloodMapOrigin) / FloodMapSize).rgb * 2.0;
+        float flum = max(fl.r, max(fl.g, fl.b));
+        mask *= saturate((flum - 0.45) * 2.2);
+    }
 
     return float4(c * mask, 1.0);
 }
