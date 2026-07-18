@@ -24,4 +24,3 @@ Thumbs.db
 # Local machine config overrides
 stardewvalley.targets
 *.local.props
-*.local.md

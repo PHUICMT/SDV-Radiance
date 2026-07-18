@@ -330,27 +330,6 @@ namespace SDVRadiance
             float lenCfg = Math.Max(0.1f, config.DirectionalShadowLength);
             float ambAlpha = strength * 0.4f;   // soft grounding pool; directional cast adds on top
 
-            // Per-caster casts: the STRONGEST light keeps full opacity, the others drop to
-            // 40% — a fireplace + morning-window room reads as one main shadow with a soft
-            // secondary, not two equal clones (user saw "two shadows" as a bug).
-            void CollectCasts(Vector2 feet)
-            {
-                _castBuf.Clear();
-                int best = -1;
-                float bestA = 0f;
-                foreach (var (lpos, reach) in _lightBuf)
-                {
-                    if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
-                    {
-                        if (a > bestA) { bestA = a; best = _castBuf.Count; }
-                        _castBuf.Add((rot, st, a));
-                    }
-                }
-                for (int i = 0; i < _castBuf.Count; i++)
-                    if (i != best)
-                        _castBuf[i] = (_castBuf[i].rot, _castBuf[i].st, _castBuf[i].a * 0.4f);
-            }
-
             foreach (NPC npc in loc.characters)
             {
                 if (npc == null || npc.IsInvisible || (npc.HideShadow && !(npc is Pet)) || npc.swimming.Value || npc.Sprite?.Texture == null)
@@ -362,9 +341,9 @@ namespace SDVRadiance
                 float depth = MathHelper.Clamp(npc.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 float halfW = npc.GetSpriteWidthForPositioning() * 4f * 0.36f;
                 DrawContactBlob(b, feet, halfW, halfW * 0.5f, ambAlpha, depth, blur);
-                CollectCasts(feet);
-                foreach (var (rot, st, a) in _castBuf)
-                    DrawNpcShadow(b, npc, rot, st, a, blur);
+                foreach (var (lpos, reach) in _lightBuf)
+                    if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
+                        DrawNpcShadow(b, npc, rot, st, a, blur);
             }
 
             foreach (FarmAnimal animal in AnimalsIn(loc))
@@ -376,9 +355,9 @@ namespace SDVRadiance
                 float depth = MathHelper.Clamp(animal.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 float halfW = animal.Sprite.SpriteWidth * 4f * 0.36f;
                 DrawContactBlob(b, feet, halfW, halfW * 0.5f, ambAlpha, depth, blur);
-                CollectCasts(feet);
-                foreach (var (rot, st, a) in _castBuf)
-                    DrawAnimalShadow(b, animal, rot, st, a, blur);
+                foreach (var (lpos, reach) in _lightBuf)
+                    if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
+                        DrawAnimalShadow(b, animal, rot, st, a, blur);
             }
 
             if (_playerReady && _playerRT != null)
@@ -391,10 +370,10 @@ namespace SDVRadiance
                         new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
                     float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                     DrawContactBlob(b, feet, 22f, 11f, ambAlpha, depth, blur);
-                    CollectCasts(feet);
-                    foreach (var (rot, st, a) in _castBuf)
-                        DrawSoft(b, Taps9, _playerRT, null, feet, Color.White, a, rot, _playerFeetInRT,
-                            new Vector2(1f, st), depth, SpriteEffects.None, blur);
+                    foreach (var (lpos, reach) in _lightBuf)
+                        if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
+                            DrawSoft(b, Taps9, _playerRT, null, feet, Color.White, a, rot, _playerFeetInRT,
+                                new Vector2(1f, st), depth, SpriteEffects.None, blur);
                 }
             }
 
@@ -462,8 +441,6 @@ namespace SDVRadiance
         }
 
         private readonly System.Collections.Generic.List<(Vector2 pos, float reach)> _lightBuf = new();
-        /// <summary>Per-caster cast list for the light path (strongest light full, others faded).</summary>
-        private readonly System.Collections.Generic.List<(float rot, float st, float a)> _castBuf = new();
 
         /// <summary>Shadow direction/length/opacity for a caster lit by one point light. False if out of reach.</summary>
         private static bool LightCast(Vector2 feet, Vector2 lightPos, float reach, float strength, float lenCfg,
