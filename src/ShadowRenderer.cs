@@ -309,13 +309,19 @@ namespace SDVRadiance
                     // believable shadow across the room). Player-attached lights sit on the player
                     // so they self-cancel in LightCast (dist≈0). Skip nothing by context.
                     Vector2 screen = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
-                    // Shadows reach much further than the glow; keep a whole-room-crossing minimum
-                    // so a single small window still shadows the far corner.
-                    float reach = Math.Max(640f, ls.radius.Value * 64f * 4f);
+                    // A light's shadow reach and darkness scale with its GLOW RADIUS — a big warm
+                    // fireplace (radius ~2.5) throws a long strong shadow across the room, while a
+                    // tiny map-baked window glow (radius ~1.0) casts only a short, faint one. This
+                    // is the physical difference: a small light pool can't throw a room-crossing
+                    // hard shadow. (Before: a flat 640px floor made every light — even a 1-tile
+                    // window — shadow the whole room equally, reading as two clone shadows.)
+                    float radius = ls.radius.Value;
+                    float reach = 96f + radius * 64f * 3.5f;
+                    float weight = MathHelper.Clamp((radius - 0.5f) / 2f, 0.25f, 1f);
                     if (screen.X < -reach || screen.X > Game1.viewport.Width + reach ||
                         screen.Y < -reach || screen.Y > Game1.viewport.Height + reach)
                         continue;
-                    _lightBuf.Add((screen, reach));
+                    _lightBuf.Add((screen, reach, weight));
                     if (_lightBuf.Count >= 6)
                         break;
                 }
@@ -341,8 +347,8 @@ namespace SDVRadiance
                 float depth = MathHelper.Clamp(npc.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 float halfW = npc.GetSpriteWidthForPositioning() * 4f * 0.36f;
                 DrawContactBlob(b, feet, halfW, halfW * 0.5f, ambAlpha, depth, blur);
-                foreach (var (lpos, reach) in _lightBuf)
-                    if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
+                foreach (var (lpos, reach, weight) in _lightBuf)
+                    if (LightCast(feet, lpos, reach, weight, strength, lenCfg, out float rot, out float st, out float a))
                         DrawNpcShadow(b, npc, rot, st, a, blur);
             }
 
@@ -355,8 +361,8 @@ namespace SDVRadiance
                 float depth = MathHelper.Clamp(animal.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 float halfW = animal.Sprite.SpriteWidth * 4f * 0.36f;
                 DrawContactBlob(b, feet, halfW, halfW * 0.5f, ambAlpha, depth, blur);
-                foreach (var (lpos, reach) in _lightBuf)
-                    if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
+                foreach (var (lpos, reach, weight) in _lightBuf)
+                    if (LightCast(feet, lpos, reach, weight, strength, lenCfg, out float rot, out float st, out float a))
                         DrawAnimalShadow(b, animal, rot, st, a, blur);
             }
 
@@ -370,8 +376,8 @@ namespace SDVRadiance
                         new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
                     float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                     DrawContactBlob(b, feet, 22f, 11f, ambAlpha, depth, blur);
-                    foreach (var (lpos, reach) in _lightBuf)
-                        if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
+                    foreach (var (lpos, reach, weight) in _lightBuf)
+                        if (LightCast(feet, lpos, reach, weight, strength, lenCfg, out float rot, out float st, out float a))
                             DrawSoft(b, Taps9, _playerRT, null, feet, Color.White, a, rot, _playerFeetInRT,
                                 new Vector2(1f, st), depth, SpriteEffects.None, blur);
                 }
@@ -440,10 +446,12 @@ namespace SDVRadiance
             }
         }
 
-        private readonly System.Collections.Generic.List<(Vector2 pos, float reach)> _lightBuf = new();
+        private readonly System.Collections.Generic.List<(Vector2 pos, float reach, float weight)> _lightBuf = new();
 
-        /// <summary>Shadow direction/length/opacity for a caster lit by one point light. False if out of reach.</summary>
-        private static bool LightCast(Vector2 feet, Vector2 lightPos, float reach, float strength, float lenCfg,
+        /// <summary>Shadow direction/length/opacity for a caster lit by one point light. False if out of reach.
+        /// <paramref name="weight"/> (from the light's glow radius) scales the darkness so a small
+        /// light throws a fainter shadow than a big one.</summary>
+        private static bool LightCast(Vector2 feet, Vector2 lightPos, float reach, float weight, float strength, float lenCfg,
             out float rot, out float stretch, out float alpha)
         {
             rot = 0f; stretch = 0f; alpha = 0f;
@@ -454,7 +462,7 @@ namespace SDVRadiance
             float prox = 1f - dist / reach;                 // 1 next to the light, 0 at its edge
             // Indoor shadows stay SUBTLE (bright rooms) and shorter, so they read softly and
             // climb the (map-baked) walls less than the bold outdoor sun shadow.
-            alpha = 0.5f * (0.5f + 0.5f * prox) * strength;
+            alpha = 0.5f * (0.5f + 0.5f * prox) * strength * weight;
             if (alpha <= 0.02f)
                 return false;
             rot = (float)Math.Atan2(away.X, -away.Y);        // point the silhouette away from the light
