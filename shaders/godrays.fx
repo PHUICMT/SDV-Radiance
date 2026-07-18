@@ -33,6 +33,17 @@ float Decay;        // per-step falloff
 float Weight;       // per-step weight
 float Intensity;    // final additive strength
 
+// Player silhouette exclusion: sprites are NOT light emitters — without this a bright
+// face/hair standing near a lamp streaked rays of its own.
+float4 PlayerRect;           // silhouette bounds in screen UV (x0,y0,x1,y1)
+texture PlayerMaskTexture;
+sampler2D PlayerMaskSampler = sampler_state
+{
+    Texture = <PlayerMaskTexture>;
+    MinFilter = Point; MagFilter = Point; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+
 static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
 static const int SAMPLES = 16;
 
@@ -56,6 +67,12 @@ float4 BrightPS(PixelInput input) : SV_TARGET
     d.x *= Aspect;                                   // circular in pixel space
     float within = 1.0 - smoothstep(LightRadius * 0.65, LightRadius, length(d));
     mask *= within;
+
+    // The player's own pixels never emit rays (bright face/hair beside a lamp).
+    float2 pmSpan = max(PlayerRect.zw - PlayerRect.xy, float2(1e-4, 1e-4));
+    float2 pmuv = (input.UV - PlayerRect.xy) / pmSpan;
+    float pmIn = step(0.0, pmuv.x) * step(pmuv.x, 1.0) * step(0.0, pmuv.y) * step(pmuv.y, 1.0);
+    mask *= 1.0 - step(0.02, tex2D(PlayerMaskSampler, saturate(pmuv)).a) * pmIn;
 
     return float4(c * mask, 1.0);
 }

@@ -384,6 +384,20 @@ namespace SDVRadiance
             fx.Parameters["LightPos"]?.SetValue(lightPos);
             fx.Parameters["LightRadius"]?.SetValue(_godRayRadiusUV);
             fx.Parameters["Aspect"]?.SetValue(aspect);
+            // Player pixels are not light emitters — same silhouette exclusion as the water.
+            var grWho = Game1.player;
+            var grMask = ShadowRenderer.PlayerMask;
+            var grRect = new Vector4(2f, 2f, -1f, -1f);
+            if (grWho != null && grMask != null)
+            {
+                Rectangle box = grWho.GetBoundingBox();
+                Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, box.Bottom - 10f));
+                Vector2 tl = feet - new Vector2(ShadowRenderer.PlayerRtW / 2f, ShadowRenderer.PlayerRtH - 8f);
+                grRect = new Vector4(tl.X / dest.Width, tl.Y / dest.Height,
+                    (tl.X + ShadowRenderer.PlayerRtW) / dest.Width, (tl.Y + ShadowRenderer.PlayerRtH) / dest.Height);
+            }
+            fx.Parameters["PlayerRect"]?.SetValue(grRect);
+            fx.Parameters["PlayerMaskTexture"]?.SetValue(grMask);
             fx.CurrentTechnique = fx.Techniques["Bright"];
             Pass(sb, source, rtA, fx);
 
