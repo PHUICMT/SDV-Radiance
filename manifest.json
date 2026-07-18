@@ -1,8 +1,8 @@
 {
   "Name": "SDV-Radiance",
   "Author": "phuicmt",
-  "Version": "0.0.1",
-  "Description": "Post-processing shader suite (bloom, fog, water, color grading) for Stardew Valley. Phase 0 skeleton.",
+  "Version": "0.5.0",
+  "Description": "Graphics suite for Stardew Valley: bloom, color grading, god rays, fog, cloud & directional shadows, water reflections, and occlusion-aware GI lighting.",
   "UniqueID": "phuicmt.SDVRadiance",
   "EntryDll": "SDV-Radiance.dll",
   "MinimumApiVersion": "4.0.0",
