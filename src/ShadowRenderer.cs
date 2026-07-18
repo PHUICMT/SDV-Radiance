@@ -127,18 +127,46 @@ namespace SDVRadiance
                     yield return a;
         }
 
-        /// <summary>Sun conditions: outdoors, daytime, clear weather → one long sun-cast shadow.
-        /// The dusk cutoff follows the game's own seasonal dark time (summer sun sets late),
-        /// not a fixed hour — shadows stretch long into the evening until true dark.</summary>
+        /// <summary>Seasonal dark time, safe fallback.</summary>
+        private static int TrulyDark()
+        {
+            try { return Game1.currentLocation != null ? Game1.getTrulyDarkTime(Game1.currentLocation) : 2000; }
+            catch { return 2000; }
+        }
+
+        /// <summary>
+        /// Moonlight 0..1 for tonight: SDV's 28-day month maps to one synthetic lunar cycle
+        /// (day 1/28 = new moon, day 14-15 = full), seasons scale clarity (winter's cold
+        /// clear sky is brightest), and any precipitation means overcast → no moon.
+        /// </summary>
+        internal static float MoonStrength()
+        {
+            GameLocation? loc = Game1.currentLocation;
+            if (loc == null || !loc.IsOutdoors || Game1.isRaining || Game1.isSnowing || Game1.isLightning)
+                return 0f;
+            float phase = 1f - Math.Abs(Game1.dayOfMonth - 14.5f) / 13.5f;
+            float season = Game1.season switch
+            {
+                Season.Winter => 1.15f,
+                Season.Fall => 1.0f,
+                Season.Spring => 0.9f,
+                _ => 0.85f,
+            };
+            return MathHelper.Clamp(phase * season, 0f, 1f);
+        }
+
+        /// <summary>Sun conditions: outdoors, clear weather → one long celestial shadow. The
+        /// dusk cutoff follows the game's own seasonal dark time (summer sun sets late); after
+        /// true dark, a bright-enough MOON takes over as the caster (faint shadows).</summary>
         private static bool SunCasts()
         {
             GameLocation? loc = Game1.currentLocation;
-            if (loc == null || !loc.IsOutdoors)
+            if (loc == null || !loc.IsOutdoors || Game1.isRaining || Game1.isSnowing)
                 return false;
-            int trulyDark;
-            try { trulyDark = Game1.getTrulyDarkTime(loc); }
-            catch { trulyDark = 2000; }
-            return Game1.timeOfDay < trulyDark && Game1.timeOfDay >= 600 && !Game1.isRaining && !Game1.isSnowing;
+            int t = Game1.timeOfDay;
+            if (t >= 600 && t < TrulyDark())
+                return true;
+            return MoonStrength() > 0.12f;   // moonlit night: shadows continue, much fainter
         }
 
         /// <summary>True when the outdoor sun shadow is active.</summary>
@@ -1719,11 +1747,28 @@ namespace SDVRadiance
             catch { return false; }
         }
 
-        /// <summary>Sun angle → shadow lean (radians), length stretch, and base opacity.</summary>
+        /// <summary>Sun (or moon, after dark) angle → shadow lean (radians), length stretch,
+        /// and base opacity. The moon crosses the sky over the night like the sun does over
+        /// the day; its shadows are much fainter and scale with the lunar phase.</summary>
         private static void ComputeSun(out float rot, out float stretch, out float alpha)
         {
+            int t = Game1.timeOfDay;
+            int trulyDark = TrulyDark();
+            if (t >= trulyDark)
+            {
+                // MOON: track its transit from true dark to 02:00 (day's end), same geometry
+                // as the sun. Faint, phase-scaled shadows — full moon in winter is clearest.
+                int mins = (t / 100) * 60 + t % 100;
+                int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
+                float dm = MathHelper.Clamp((mins - m1) / (float)Math.Max(1, 1560 - m1), 0f, 1f);
+                float dd = dm * 2f - 1f;
+                rot = 1.15f * dd;
+                stretch = MathHelper.Lerp(0.3f, 1.1f, Math.Abs(dd));
+                alpha = 0.9f * 0.35f * MoonStrength();
+                return;
+            }
             // Low sun (dawn/dusk) → long, far-leaning shadow; high sun (noon) → short & upright.
-            float d = MathHelper.Clamp((Game1.timeOfDay - 1200) / 600f, -1f, 1f);
+            float d = MathHelper.Clamp((t - 1200) / 600f, -1f, 1f);
             // Lean more sideways (was 0.8) so the shadow lies to the side of the body instead of
             // straight up over it — reduces the "shadow on the sprite" overlap while staying
             // upright (not the rejected upside-down flip).
@@ -1732,29 +1777,19 @@ namespace SDVRadiance
             alpha = 0.9f * TimeFade();                           // opacity at the feet (× strength; fades toward the tip)
         }
 
-        /// <summary>Ease the shadow out toward dusk so it doesn't pop. The fade window follows
-        /// the game's SEASONAL dark times (starting-to-get-dark → truly-dark), so summer keeps
-        /// long evening shadows while winter fades early. No dawn ramp — the day starts at
-        /// 06:00 with the player active immediately.</summary>
+        /// <summary>Ease the shadow out toward dusk so it doesn't pop. Shadows stay at FULL
+        /// strength until 40 minutes before the game's seasonal truly-dark time, then fade —
+        /// a slow ramp across the whole evening left them invisible while the sun was still
+        /// clearly up. No dawn ramp — the day starts at 06:00 with the player active.</summary>
         private static float TimeFade()
         {
             int t = Game1.timeOfDay;
             int mins = (t / 100) * 60 + (t % 100);
-            int startDark = 1800, trulyDark = 2000;
-            try
-            {
-                GameLocation? loc = Game1.currentLocation;
-                if (loc != null)
-                {
-                    startDark = Game1.getStartingToGetDarkTime(loc);
-                    trulyDark = Game1.getTrulyDarkTime(loc);
-                }
-            }
-            catch { }
-            int m0 = (startDark / 100) * 60 + startDark % 100;
+            int trulyDark = TrulyDark();
             int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
-            if (mins <= m0) return 1f;
-            return MathHelper.Clamp((m1 - mins) / (float)Math.Max(1, m1 - m0), 0f, 1f);
+            if (mins >= m1)
+                return 0f;
+            return MathHelper.Clamp((m1 - mins) / 40f, 0f, 1f);
         }
     }
 }

@@ -225,8 +225,12 @@ namespace SDVRadiance
                 // water tiles), so everything downstream sees the refracted result.
                 if (config.WaterEnabled && _water != null && BuildWaterMask(w, h)) stages.Add(_dWater);
                 // Cloud shadows drift over the ground — outdoors only, and first so later
-                // effects (bloom/grade) see the shadowed scene.
-                if (config.CloudShadowEnabled && _cloudShadow != null && outdoors) stages.Add(_dCloud);
+                // effects (bloom/grade) see the shadowed scene. They are SUNLIGHT (or moonlight)
+                // being blocked, so they fade with dusk and at night exist only under a bright
+                // moon — never stamped over lamp-lit ground on a dark night.
+                _cloudDayFactor = CloudDayFactor();
+                if (config.CloudShadowEnabled && _cloudShadow != null && outdoors && _cloudDayFactor > 0.02f)
+                    stages.Add(_dCloud);
                 // God rays only when there's a real light source on screen (lamp/torch/fire).
                 // Fade in/out (and glide the origin) so they never pop instantly when a
                 // light scrolls on/off screen.
@@ -327,6 +331,25 @@ namespace SDVRadiance
 
         // ---- stages --------------------------------------------------------
 
+        private float _cloudDayFactor = 1f;
+
+        /// <summary>How strongly celestial light is present (cloud shadows scale by this):
+        /// 1 in daylight, fading over the last ~40 min before the seasonal dark time, then
+        /// moon-phase-scaled at night (a dark night has no light for clouds to block).</summary>
+        private static float CloudDayFactor()
+        {
+            int t = Game1.timeOfDay;
+            int trulyDark;
+            try { trulyDark = Game1.currentLocation != null ? Game1.getTrulyDarkTime(Game1.currentLocation) : 2000; }
+            catch { trulyDark = 2000; }
+            int mins = (t / 100) * 60 + t % 100;
+            int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
+            float moon = 0.35f * ShadowRenderer.MoonStrength();
+            if (mins >= m1)
+                return moon;
+            return Math.Max(moon, MathHelper.Clamp((m1 - mins) / 40f, 0f, 1f));
+        }
+
         private void RenderCloudShadow(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var fx = _cloudShadow!;
@@ -362,7 +385,7 @@ namespace SDVRadiance
             Pass(sb, rtB, rtA, fx);
 
             // Pass 4: composite the blurred shadow onto the scene.
-            fx.Parameters["Opacity"]?.SetValue(config.CloudShadowOpacity);
+            fx.Parameters["Opacity"]?.SetValue(config.CloudShadowOpacity * _cloudDayFactor);
             fx.Parameters["ShadowTexture"]?.SetValue(rtA);
             fx.CurrentTechnique = fx.Techniques["Composite"];
             DrawFull(sb, source, dest, fx);
@@ -610,6 +633,7 @@ namespace SDVRadiance
             float nightGlow = MathHelper.Clamp((mins - 1140) / 90f, 0f, 1f);   // 19:00 → 20:30
             fx.Parameters["SunWarm"]?.SetValue(sunWarm);
             fx.Parameters["NightGlow"]?.SetValue(nightGlow);
+            fx.Parameters["MoonGlow"]?.SetValue(ShadowRenderer.MoonStrength());
             fx.Parameters["RainAmt"]?.SetValue(Game1.isRaining ? 1f : 0f);
 
             int lc = 0;

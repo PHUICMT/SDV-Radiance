@@ -56,6 +56,7 @@ float ReflectStrength;  // 0 = off; screen-space reflection of the scene above t
 float SparkleDensity;   // ~0.2–2: glint count per area; glint size follows inversely
 float SunWarm;          // 0–1 golden-hour factor: sparkle + sheen turn warm at low sun
 float NightGlow;        // 0–1 after dusk: star reflections + lamp glimmer fade in
+float MoonGlow;         // 0–1 lunar phase × season × clouds: moonlit swell shimmer
 float RainAmt;          // 0–1 raining: expanding drop rings on the surface
 float4 Lights[8];       // xy = screen UV, z = radius (unused), w = intensity
 float LightCount;       // how many entries of Lights are live
@@ -301,6 +302,15 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         float tw = 0.55 + 0.45 * sin(t * 0.9 + sr2 * 6.2831853);   // slow twinkle
         float star = smoothstep(0.12, 0.0, sd) * has * tw;
         col.rgb += star * NightGlow * (1.0 - RainAmt) * water * float3(0.75, 0.85, 1.0) * 0.9;
+    }
+
+    // ---- Night: moonlight shimmering across the swell (phase/season/cloud scaled) ----
+    if (NightGlow > 0.001 && MoonGlow > 0.001)
+    {
+        float sw1 = sin(worldTile.y * 1.3 - t * 0.5) * 0.5 + 0.5;
+        float sw2 = sin(worldTile.x * 0.7 + worldTile.y * 0.9 + t * 0.35) * 0.5 + 0.5;
+        float sheenM = sw1 * sw2;
+        col.rgb += (sheenM * sheenM * 0.14 + 0.03) * MoonGlow * NightGlow * water * float3(0.55, 0.68, 0.95);
     }
 
     // ---- Night: warm lamp light shimmering down the water below each light ----

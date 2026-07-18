@@ -196,6 +196,19 @@ namespace SDVRadiance
             Vector3 sky = Vector3.Lerp(new Vector3(1f, 1f, 1f), new Vector3(1.03f, 0.96f, 0.88f), warm);
             if (Game1.isRaining)
                 sky *= 0.93f;   // gentle overcast dimming; vanilla already grays rain out
+
+            // MOONLIGHT: after dark, open ground gets a cool lift scaled by the lunar phase
+            // (SDV's 28-day month = one synthetic cycle) and season — cells under canopies
+            // and buildings receive none, so a full moon paints real moon shade.
+            int t = Game1.timeOfDay;
+            int trulyDark;
+            try { trulyDark = Game1.currentLocation != null ? Game1.getTrulyDarkTime(Game1.currentLocation) : 2000; }
+            catch { trulyDark = 2000; }
+            int mins = (t / 100) * 60 + t % 100;
+            int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
+            float nightT = MathHelper.Clamp((mins - (m1 - 60)) / 60f, 0f, 1f);
+            if (nightT > 0f)
+                sky += new Vector3(0.05f, 0.08f, 0.16f) * (ShadowRenderer.MoonStrength() * nightT);
             return sky;
         }
 
