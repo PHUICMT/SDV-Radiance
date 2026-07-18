@@ -58,7 +58,15 @@ namespace SDVRadiance
             }
 
             // ---- Seed pass: sky exposure + per-cell decay from the occluder grid ----
+            // The flood is RELATIVE lighting: the game's own day/night & scripted darkness
+            // stay in charge of the global level. Locations the game already darkens
+            // (mines, volcano, any non-white ambient) run in ADD-ONLY mode — every cell
+            // seeds at 1.0 so lamps enrich and cast shadows but nothing gets darker than
+            // vanilla (multiplying on top of vanilla dark read as pitch black).
             bool outdoors = loc.IsOutdoors;
+            bool vanillaDark = !outdoors &&
+                (loc is StardewValley.Locations.MineShaft || loc is StardewValley.Locations.VolcanoDungeon
+                 || Game1.ambientLight.R < 245 || Game1.ambientLight.G < 245 || Game1.ambientLight.B < 245);
             Vector3 sky = SkyColor(outdoors, config);
             var hf = ShadowRenderer.Height;
             for (int j = 0; j < th; j++)
@@ -75,7 +83,7 @@ namespace SDVRadiance
                     _decay[idx] = solid ? SolidDecay : AirDecay;
                     // Open cells receive direct sky light; occluded cells only what floods in
                     // from their surroundings → soft shade under trees/buildings for free.
-                    _cells[idx] = solid ? Vector3.Zero : sky;
+                    _cells[idx] = vanillaDark ? Vector3.One : (solid ? Vector3.Zero : sky);
                 }
             }
 
@@ -170,9 +178,10 @@ namespace SDVRadiance
             _cells[idx] = carry;
         }
 
-        /// <summary>Direct-sky seed for open cells — the RELATIVE light level (the game's own
-        /// day/night tinting stays in charge globally): full during the day, warm at golden
-        /// hour, a moon-blue floor at night so lamps become the dominant light.</summary>
+        /// <summary>Direct-sky seed for open cells — RELATIVE only (the game's own day/night
+        /// darkening stays in charge of the global level, so no double-darkening at night):
+        /// ~1.0 with a warm golden-hour tint outdoors; interiors use the indoor-darkness
+        /// slider (vanilla leaves rooms flat-bright — that darkening is the feature).</summary>
         private static Vector3 SkyColor(bool outdoors, ModConfig config)
         {
             if (!outdoors)
@@ -182,17 +191,11 @@ namespace SDVRadiance
                 float amb = MathHelper.Clamp(1f - config.LightingIndoorDarkness * 0.55f, 0.3f, 1f);
                 return new Vector3(amb);
             }
-            int t = Game1.timeOfDay;
-            int mins = (t / 100) * 60 + t % 100;
-            float dd = MathHelper.Clamp((t - 1200) / 600f, -1f, 1f);
+            float dd = MathHelper.Clamp((Game1.timeOfDay - 1200) / 600f, -1f, 1f);
             float warm = MathHelper.Clamp((Math.Abs(dd) - 0.55f) / 0.45f, 0f, 1f);
-            // 18:00 → 20:00 ramp toward the night floor.
-            float nightT = MathHelper.Clamp((mins - 1080) / 120f, 0f, 1f);
-            var day = Vector3.Lerp(new Vector3(1f, 1f, 1f), new Vector3(1.02f, 0.93f, 0.82f), warm);
-            var night = new Vector3(0.30f, 0.36f, 0.50f);
-            Vector3 sky = Vector3.Lerp(day, night, nightT);
+            Vector3 sky = Vector3.Lerp(new Vector3(1f, 1f, 1f), new Vector3(1.03f, 0.96f, 0.88f), warm);
             if (Game1.isRaining)
-                sky *= 0.82f;
+                sky *= 0.93f;   // gentle overcast dimming; vanilla already grays rain out
             return sky;
         }
 
