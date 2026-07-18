@@ -104,6 +104,9 @@
   "tuner.lightradius": "Radius scale",
   "tuner.lightshadows": "Cast shadows",
   "tuner.lightshadowstrength": "Shadow strength",
+  "tuner.floodgi": "Flood GI lighting (new)",
+  "tuner.floodstrength": "GI strength",
+  "tuner.floodshadow": "Per-light shadow strength",
   "tuner.waterreflection": "Reflection",
   "tuner.waterreflectstrength": "Reflection strength",
 

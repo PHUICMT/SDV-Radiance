@@ -178,6 +178,10 @@ namespace SDVRadiance
             _toggles.Add(new Toggle(_t("tuner.lightshadows"), new Rectangle(x, y, innerW, 38), () => _config.LightingShadows, v => _config.LightingShadows = v));
             y += 44;
             _sliders.Add(new Slider(_t("tuner.lightshadowstrength"), x, y, innerW, 0f, 1f, () => _config.LightingShadowStrength, v => _config.LightingShadowStrength = v)); y += 50;
+            _toggles.Add(new Toggle(_t("tuner.floodgi"), new Rectangle(x, y, innerW, 38), () => _config.FloodLightingEnabled, v => _config.FloodLightingEnabled = v));
+            y += 44;
+            _sliders.Add(new Slider(_t("tuner.floodstrength"), x, y, innerW, 0f, 1.5f, () => _config.FloodLightingStrength, v => _config.FloodLightingStrength = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.floodshadow"), x, y, innerW, 0f, 1f, () => _config.FloodShadowStrength, v => _config.FloodShadowStrength = v)); y += 50;
 
             y += 30; _sectionTitles.Add((_t("tuner.section.shadows"), y - 28));
             _toggles.Add(new Toggle(_t("tuner.shadows"), new Rectangle(x, y, innerW, 38), () => _config.DirectionalShadowsEnabled, v => _config.DirectionalShadowsEnabled = v));
