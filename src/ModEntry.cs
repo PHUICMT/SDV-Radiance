@@ -360,6 +360,13 @@ namespace SDVRadiance
                     $"color(raw/subtractive)=({c.R},{c.G},{c.B},{c.A}) dist={distTiles:0.0} tiles " +
                     $"onScreen={onScreen}", LogLevel.Info);
             }
+            if (loc != null)
+            {
+                var glows = loc.lightGlows;
+                this.Monitor.Log($"--- lightGlows ({glows.Count}) — a WindowLight with no glow nearby is stale and won't cast ---", LogLevel.Info);
+                foreach (Vector2 g in glows)
+                    this.Monitor.Log($"    glow at tile ({g.X / 64f:0.0},{g.Y / 64f:0.0})", LogLevel.Info);
+            }
             this.Monitor.Log("note: shadow pass uses up to 6 on-screen lights; each casts one shadow per character.", LogLevel.Info);
         }
 

@@ -307,7 +307,20 @@ namespace SDVRadiance
                     LightSource ls = kv;
                     // Cast from real point lights AND window/map lights (a window still throws a
                     // believable shadow across the room). Player-attached lights sit on the player
-                    // so they self-cancel in LightCast (dist≈0). Skip nothing by context.
+                    // so they self-cancel in LightCast (dist≈0). Skip nothing by context — EXCEPT
+                    // stale window lights: when a window is removed (decor mods) or goes dark
+                    // (night/rain), the game drops its glow sprite from loc.lightGlows immediately
+                    // but leaves the WindowLight in currentLightSources until the location is
+                    // re-entered. A window with no glow isn't emitting — don't let it cast.
+                    if (ls.lightContext.Value == LightSource.LightContext.WindowLight)
+                    {
+                        bool glowing = false;
+                        foreach (Vector2 g in loc.lightGlows)
+                            if (Vector2.DistanceSquared(g, ls.position.Value) < 160f * 160f)
+                            { glowing = true; break; }
+                        if (!glowing)
+                            continue;
+                    }
                     Vector2 screen = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
                     // Shadows reach much further than the glow; keep a whole-room-crossing minimum
                     // so a single small window still shadows the far corner.
