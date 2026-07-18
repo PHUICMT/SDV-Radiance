@@ -147,6 +147,9 @@ namespace SDVRadiance
             helper.Events.GameLoop.GameLaunched += OnGameLaunched;
             helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
             helper.Events.Input.ButtonsChanged += OnButtonsChanged;
+            helper.ConsoleCommands.Add("radiance_lights",
+                "List every active light source in the current location (id, kind, tile, radius, color, distance from player).",
+                (cmd, args) => DumpLights());
             helper.Events.Display.RenderingWorld += OnRenderingWorld;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
             helper.Events.Display.RenderingStep += OnRenderingStep;
@@ -324,6 +327,40 @@ namespace SDVRadiance
                         onChange: () => ForceBufferDraw = EffectsActive,
                         onSave: () => this.Helper.WriteConfig(_config));
             }
+        }
+
+        /// <summary>Console command: dump every light the game currently tracks, so "why does my
+        /// room have N shadows" is answerable — each listed light casts its own shadow.</summary>
+        private void DumpLights()
+        {
+            if (!StardewModdingAPI.Context.IsWorldReady || Game1.player == null)
+            {
+                this.Monitor.Log("Load a save first.", LogLevel.Info);
+                return;
+            }
+            var lights = Game1.currentLightSources;
+            var loc = Game1.currentLocation;
+            this.Monitor.Log($"=== Lights in {loc?.NameOrUniqueName} ({(lights?.Count ?? 0)} total) ===", LogLevel.Info);
+            if (lights == null || lights.Count == 0)
+                return;
+            Vector2 pfeet = Game1.player.Position;
+            int i = 0;
+            foreach (var kv in lights)
+            {
+                var ls = kv.Value;
+                Vector2 tile = ls.position.Value / 64f;
+                float distTiles = Vector2.Distance(ls.position.Value, pfeet) / 64f;
+                Vector2 screen = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
+                bool onScreen = screen.X > -640 && screen.X < Game1.viewport.Width + 640
+                             && screen.Y > -640 && screen.Y < Game1.viewport.Height + 640;
+                var c = ls.color.Value;
+                this.Monitor.Log(
+                    $"[{i++}] id={kv.Key} ctx={ls.lightContext.Value} tex={ls.textureIndex.Value} " +
+                    $"tile=({tile.X:0.0},{tile.Y:0.0}) radius={ls.radius.Value:0.00} " +
+                    $"color(raw/subtractive)=({c.R},{c.G},{c.B},{c.A}) dist={distTiles:0.0} tiles " +
+                    $"onScreen={onScreen}", LogLevel.Info);
+            }
+            this.Monitor.Log("note: shadow pass uses up to 6 on-screen lights; each casts one shadow per character.", LogLevel.Info);
         }
 
         private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
