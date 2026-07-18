@@ -716,12 +716,15 @@ namespace SDVRadiance
             var lights = Game1.currentLightSources;
             if (lights != null && lights.Count > 0)
             {
+                GameLocation? lloc = Game1.currentLocation;
                 foreach (var kv in lights)
                 {
                     if (_lightCount >= MaxLights)
                         break;
 
                     LightSource ls = kv.Value;
+                    if (lloc != null && !ShadowRenderer.WindowGlowing(lloc, ls))
+                        continue;   // stale/dark window light — not emitting
                     Vector2 local = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
                     float u = local.X / vw;
                     float v = local.Y / vh;
@@ -738,7 +741,14 @@ namespace SDVRadiance
                     Vector3 glow = new(1f - c.R / 255f, 1f - c.G / 255f, 1f - c.B / 255f);
                     if (glow.LengthSquared() < 0.01f)
                         glow = Vector3.One; // pure-white source stored as black-ish
-                    glow *= warm * boost;
+                    // Two-tone: indoor windows are daylight (cool) — everything else warm; fire
+                    // lights breathe with a slow flame flicker.
+                    bool coolDaylight = lloc != null && !lloc.IsOutdoors
+                        && ls.lightContext.Value == LightSource.LightContext.WindowLight;
+                    Vector3 tone = coolDaylight
+                        ? Vector3.Lerp(Vector3.One, new Vector3(0.82f, 0.92f, 1.12f), warmth)
+                        : warm;
+                    glow *= tone * boost * ShadowRenderer.FireFlicker(ls.position.Value, ls.textureIndex.Value);
 
                     _lightPos[_lightCount] = new Vector2(u, v);
                     _lightData[_lightCount] = new Vector4(glow, Math.Max(0.02f, radiusUv));

@@ -94,6 +94,8 @@ namespace SDVRadiance
                 foreach (var kv in lights.Values)
                 {
                     var ls = kv;
+                    if (!ShadowRenderer.WindowGlowing(loc, ls))   // stale/dark window: not emitting
+                        continue;
                     int ci = (int)(ls.position.Value.X / 64f) - tx0;
                     int cj = (int)(ls.position.Value.Y / 64f) - ty0;
                     if (ci < 0 || ci >= tw || cj < 0 || cj >= th)
@@ -101,10 +103,33 @@ namespace SDVRadiance
                     // INDIRECT spill only (~1/3 strength): the crisp direct pool + its per-light
                     // shadows are computed analytically in floodlight.fx; the flood carries the
                     // bounce-like glow that bends around corners and through doorways.
-                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * 0.35f;
-                    var seed = new Vector3(1.00f, 0.83f, 0.58f) * inten;
+                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * 0.35f
+                                * ShadowRenderer.FireFlicker(ls.position.Value, ls.textureIndex.Value);
+                    // TWO-TONE rooms: an indoor window is DAYLIGHT (cool, slightly blue) while
+                    // lamps and fires stay warm — the warm-vs-cool split across a room is what
+                    // makes it read as cinematic instead of uniformly orange. Outdoor window
+                    // lights (town houses at night) are lamp-lit from inside, so they stay warm.
+                    bool coolDaylight = !outdoors && ls.lightContext.Value == LightSource.LightContext.WindowLight;
+                    var seed = (coolDaylight ? new Vector3(0.82f, 0.92f, 1.10f) : new Vector3(1.00f, 0.83f, 0.58f)) * inten;
                     int idx = cj * tw + ci;
                     _cells[idx] = Vector3.Max(_cells[idx], seed);
+
+                    // SUN SHAFT: daylight through a window falls onto the floor below it — seed a
+                    // fading column of cool light under the window so (after bilinear + the blur
+                    // bounce) a soft bright patch spills across the floorboards.
+                    if (coolDaylight)
+                    {
+                        var shaft = new Vector3(0.95f, 1.02f, 1.15f);
+                        for (int k = 1; k <= 3; k++)
+                        {
+                            int jj = cj + k;
+                            if (jj >= th)
+                                break;
+                            float f = 1.05f - 0.27f * k;
+                            int sIdx = jj * tw + ci;
+                            _cells[sIdx] = Vector3.Max(_cells[sIdx], shaft * f);
+                        }
+                    }
                 }
             }
 

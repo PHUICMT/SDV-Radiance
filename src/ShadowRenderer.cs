@@ -307,20 +307,10 @@ namespace SDVRadiance
                     LightSource ls = kv;
                     // Cast from real point lights AND window/map lights (a window still throws a
                     // believable shadow across the room). Player-attached lights sit on the player
-                    // so they self-cancel in LightCast (dist≈0). Skip nothing by context — EXCEPT
-                    // stale window lights: when a window is removed (decor mods) or goes dark
-                    // (night/rain), the game drops its glow sprite from loc.lightGlows immediately
-                    // but leaves the WindowLight in currentLightSources until the location is
-                    // re-entered. A window with no glow isn't emitting — don't let it cast.
-                    if (ls.lightContext.Value == LightSource.LightContext.WindowLight)
-                    {
-                        bool glowing = false;
-                        foreach (Vector2 g in loc.lightGlows)
-                            if (Vector2.DistanceSquared(g, ls.position.Value) < 160f * 160f)
-                            { glowing = true; break; }
-                        if (!glowing)
-                            continue;
-                    }
+                    // so they self-cancel in LightCast (dist≈0). Skip nothing by context — except
+                    // stale window lights (window removed/dark: glow gone but source lingers).
+                    if (!WindowGlowing(loc, ls))
+                        continue;
                     Vector2 screen = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
                     // Shadows reach much further than the glow; keep a whole-room-crossing minimum
                     // so a single small window still shadows the far corner.
@@ -328,7 +318,8 @@ namespace SDVRadiance
                     if (screen.X < -reach || screen.X > Game1.viewport.Width + reach ||
                         screen.Y < -reach || screen.Y > Game1.viewport.Height + reach)
                         continue;
-                    _lightBuf.Add((screen, reach));
+                    // Fire-type lights flicker; their cast shadows dance with the flame.
+                    _lightBuf.Add((screen, reach * FireFlicker(ls.position.Value, ls.textureIndex.Value)));
                     if (_lightBuf.Count >= 6)
                         break;
                 }
@@ -454,6 +445,40 @@ namespace SDVRadiance
         }
 
         private readonly System.Collections.Generic.List<(Vector2 pos, float reach)> _lightBuf = new();
+
+        /// <summary>
+        /// False for a STALE indoor window light: when a window is removed (decor mods) or goes
+        /// dark (night/rain) the game drops its glow sprite from loc.lightGlows immediately but
+        /// leaves the WindowLight in currentLightSources until the location is re-entered. A
+        /// window with no glow isn't emitting. Outdoor window lights are left alone (town windows
+        /// at night have no glow sprites).
+        /// </summary>
+        internal static bool WindowGlowing(GameLocation loc, LightSource ls)
+        {
+            if (loc.IsOutdoors || ls.lightContext.Value != LightSource.LightContext.WindowLight)
+                return true;
+            foreach (Vector2 g in loc.lightGlows)
+                if (Vector2.DistanceSquared(g, ls.position.Value) < 160f * 160f)
+                    return true;
+            return false;
+        }
+
+        /// <summary>
+        /// Slow multi-sine flame flicker (~±8%) for fire-type lights (sconce/fireplace/torch = 4,
+        /// cauldron = 5); 1.0 for steady lights. Phase-offset by world position so two fires
+        /// never pulse in sync. Applied to the GI seed, the direct pool and the cast shadows,
+        /// so the whole room breathes with the flame.
+        /// </summary>
+        internal static float FireFlicker(Vector2 worldPos, int texIndex)
+        {
+            if (texIndex != 4 && texIndex != 5)
+                return 1f;
+            double t = Game1.currentGameTime?.TotalGameTime.TotalSeconds ?? 0.0;
+            float phase = (worldPos.X * 0.013f + worldPos.Y * 0.007f) % 6.283f;
+            float s = (float)(Math.Sin(t * 7.3 + phase) * 0.5 + Math.Sin(t * 12.9 + phase * 1.7) * 0.3
+                            + Math.Sin(t * 23.7 + phase * 2.3) * 0.2);
+            return 0.92f + 0.08f * s;
+        }
 
         /// <summary>Shadow direction/length/opacity for a caster lit by one point light. False if out of reach.</summary>
         private static bool LightCast(Vector2 feet, Vector2 lightPos, float reach, float strength, float lenCfg,
