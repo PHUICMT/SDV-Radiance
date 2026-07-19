@@ -142,7 +142,7 @@ namespace SDVRadiance
         /// (a cutscene looked shadowless because we only read the latter).</summary>
         private static System.Collections.Generic.IEnumerable<NPC> CharactersIn(GameLocation loc)
         {
-            foreach (NPC npc in CharactersIn(loc))
+            foreach (NPC npc in loc.characters)
                 yield return npc;
             var ev = Game1.CurrentEvent;
             if (ev?.actors != null)
