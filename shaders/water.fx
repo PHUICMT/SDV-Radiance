@@ -108,9 +108,11 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // as the camera pans, instead of swimming across the screen).
     float2 worldTile = uv * TilesPerScreen + WorldTileOffset;
 
-    // Point-sample the per-tile mask so the tile grid never bleeds onto land.
+    // PIXEL-accurate mask (16 texels per tile): true water tiles + the painted water inside
+    // shore art, holes carved for piers/bridges/pads. Sampled CONTINUOUSLY (no tile floor) —
+    // the effect ends exactly at the painted waterline, never spilling onto land.
     float2 startTile = floor(WorldTileOffset);
-    float2 maskUV = (floor(worldTile) - startTile + 0.5) / MaskSize;
+    float2 maskUV = (worldTile - startTile) / MaskSize;
     float tileWater = tex2D(MaskSampler, maskUV).r;
 
     float4 src = tex2D(SourceSampler, uv);
@@ -133,18 +135,17 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // green itself (b well below g) stays excluded: a pad floats ON the water and must
     // occlude the reflection, but the water around it must not lose it.
     float cyan = saturate((min(src.g, src.b) - src.r) * 3.0) * saturate((src.b - src.g) * 4.0 + 0.8);
-    // In the dilated bank ring (outside TRUE water tiles) also require water-typical
-    // BRIGHTNESS: shore water is light, but a navy-haired character standing on a pier
-    // or bank is not — without this, blue-ish sprites in ring tiles rippled + sparkled.
     float srcLum = dot(src.rgb, float3(0.299, 0.587, 0.114));
-    // The player's own PIXELS never ripple in ring tiles (a light-blue outfit on a pier
-    // passed every colour test). Sampled from the baked silhouette so only the sprite is
-    // excluded, not a whole box — true water tiles are unaffected either way.
+    // The player's own PIXELS never ripple where they overlap painted shore water. Sampled
+    // from the baked silhouette so only the sprite is excluded, not a whole box. (The old
+    // luminance test for ring tiles is retired: the mask itself is pixel-accurate now, so
+    // there are no land pixels inside it to reject — the lum gate only wrongly dimmed dark
+    // painted water at pond rims.)
     float2 pmSpan = max(PlayerRect.zw - PlayerRect.xy, float2(1e-4, 1e-4));
     float2 pmuv = (uv - PlayerRect.xy) / pmSpan;
     float pmIn = step(0.0, pmuv.x) * step(pmuv.x, 1.0) * step(0.0, pmuv.y) * step(pmuv.y, 1.0);
     float inPlayer = step(0.02, tex2D(PlayerMaskSampler, saturate(pmuv)).a) * pmIn;
-    float ringGate = lerp(smoothstep(0.30, 0.45, srcLum) * (1.0 - inPlayer), 1.0, coreTile);
+    float ringGate = lerp(1.0 - inPlayer, 1.0, coreTile);
     // Grey gate near full weight: tide pools are CORE water (coreTile-gated above), and at
     // 0.7 their mirror was so damped it read as "pools don't reflect".
     float water = tileWater * max(max(blueness, greyness * 0.9), cyan) * ringGate;

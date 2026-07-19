@@ -44,12 +44,18 @@ namespace SDVRadiance
         private readonly Vector4[] _lightData = new Vector4[MaxLights]; // xyz = colour*boost, w = radiusUV
         private int _lightCount;
 
-        private Texture2D? _waterMask;         // per-tile water mask, aligned to the viewport (DILATED — effect coverage)
-        private Texture2D? _waterMaskCore;     // undilated mask — true water bodies, used for the reflection's shoreline search
-        private Color[]? _waterMaskBuf;
+        private Texture2D? _waterMask;         // PIXEL-accurate water mask (16 texels/tile): true water tiles + the painted
+                                               // water inside shore-tile art, minus opaque Buildings/Front art (pier posts,
+                                               // bridges, lily pads). Effects end exactly at the real waterline.
+        private Texture2D? _waterMaskCore;     // undilated per-TILE mask — true water bodies, used for the reflection's shoreline search
         private Color[]? _waterMaskCoreBuf;
         private bool[]? _waterBoolBuf;         // pre-dilation water flags (see BuildWaterMask)
-        private bool[]? _waterBool2Buf;        // scratch for the second dilation pass
+        private bool[]? _waterBool2Buf;        // scratch for the dilation passes (candidate ring for art classification)
+        private Color[]? _waterPixBuf;         // pixel-mask upload buffer (tilesW*16 × tilesH*16)
+        private Color[]? _artBuf;              // 16×16 scratch for tile-art reads
+        private readonly System.Collections.Generic.Dictionary<string, Texture2D?> _sheetTexCache = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), bool[]> _waterBitsCache = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), bool[]> _solidBitsCache = new();
         private readonly Vector4[] _lightArr = new Vector4[8];   // on-screen lights → water glimmer
         private Vector2 _waterTilesPerScreen, _waterWorldTileOffset, _waterMaskSize;
 
@@ -963,6 +969,68 @@ namespace SDVRadiance
             return true;
         }
 
+        /// <summary>Resolve the 16×16 source art of a map tile (first frame for animated tiles).</summary>
+        private bool TryTileArt(xTile.Layers.Layer? layer, int tx, int ty, out Texture2D tex, out Rectangle src)
+        {
+            tex = null!;
+            src = default;
+            if (layer == null || tx < 0 || ty < 0 || tx >= layer.LayerWidth || ty >= layer.LayerHeight)
+                return false;
+            var t = layer.Tiles[tx, ty];
+            if (t is xTile.Tiles.AnimatedTile at && at.TileFrames is { Length: > 0 })
+                t = at.TileFrames[0];
+            if (t?.TileSheet == null)
+                return false;
+            if (!_sheetTexCache.TryGetValue(t.TileSheet.ImageSource, out Texture2D? sheet))
+            {
+                try { sheet = Game1.content.Load<Texture2D>(t.TileSheet.ImageSource); }
+                catch { sheet = null; }
+                _sheetTexCache[t.TileSheet.ImageSource] = sheet;
+            }
+            if (sheet == null)
+                return false;
+            var ib = t.TileSheet.GetTileImageBounds(t.TileIndex);
+            if (ib.Width != 16 || ib.Height != 16)
+                return false;
+            tex = sheet;
+            src = new Rectangle(ib.X, ib.Y, 16, 16);
+            return true;
+        }
+
+        /// <summary>Painted-water test for a single art pixel: blue-dominant or teal/foam.
+        /// Matches the shader's colour gates, but runs on the STATIC source art (stable,
+        /// classify once per tile art) instead of the composited frame.</summary>
+        private static bool WaterColor(Color c)
+        {
+            if (c.A < 200)
+                return false;
+            if (c.B > c.R + 14 && c.B + 10 >= c.G) return true;   // blue water
+            if (c.G > c.R + 10 && c.B > c.R + 6) return true;     // teal / foam / shallow edge
+            return false;
+        }
+
+        /// <summary>16×16 per-pixel classification of one tile art, cached per (texture, rect):
+        /// water=true → which pixels are painted water; water=false → which pixels are opaque
+        /// (used to carve piers/bridges/pads out of the water mask).</summary>
+        private bool[] ClassifyBits(Texture2D tex, Rectangle src, bool water)
+        {
+            var cache = water ? _waterBitsCache : _solidBitsCache;
+            var key = (tex, src);
+            if (cache.TryGetValue(key, out bool[]? bits))
+                return bits;
+            bits = new bool[256];
+            _artBuf ??= new Color[256];
+            try
+            {
+                tex.GetData(0, src, _artBuf, 0, 256);
+                for (int p = 0; p < 256; p++)
+                    bits[p] = water ? WaterColor(_artBuf[p]) : _artBuf[p].A >= 128;
+            }
+            catch { /* leave all-false */ }
+            cache[key] = bits;
+            return bits;
+        }
+
         /// <summary>8-way one-tile dilation of a tile flag grid (src → dst).</summary>
         private static void Dilate8(bool[] src, bool[] dst, int tilesW, int tilesH)
         {
@@ -1000,9 +1068,6 @@ namespace SDVRadiance
             int tilesH = Math.Max(1, h / 64 + 2);
             int count = tilesW * tilesH;
 
-            if (_waterMaskBuf == null || _waterMaskBuf.Length < count)
-                _waterMaskBuf = new Color[count];
-
             // Height Framework (when present) classifies the actual water SURFACE: ponds and
             // beach tide pools count as water (they reflect too), while pier/bridge DECKS over
             // water do not (no reflection painted onto planks). Fall back to isWaterTile.
@@ -1031,30 +1096,73 @@ namespace SDVRadiance
             for (int idx = 0; idx < count; idx++)
                 _waterMaskCoreBuf[idx] = _waterBoolBuf[idx] ? Color.White : Color.Transparent;
 
-            // Dilate by TWO tiles (8-way, two passes) for the EFFECT-COVERAGE mask: pond/river
-            // SHORE tiles are marked "land" but their art is half water (the bank ring — corner
-            // tips sit two tiles from true water), so ripple + reflection stopped short of the
-            // real waterline. The shader's per-pixel color gate keeps sand/rock in those tiles
-            // untouched — only the actual water pixels pick up the effect.
+            if (!any)
+                return false;
+
+            // CANDIDATE ring: dilate three tiles (shore art + beach surf zone). These tiles are
+            // NOT marked water — they only nominate their ART for per-pixel classification below,
+            // so the final mask never spills a box past the painted waterline.
             if (_waterBool2Buf == null || _waterBool2Buf.Length < count)
                 _waterBool2Buf = new bool[count];
             Dilate8(_waterBoolBuf, _waterBool2Buf, tilesW, tilesH);
             Dilate8(_waterBool2Buf, _waterBoolBuf, tilesW, tilesH);
-            // Third pass: the beach SURF zone (animated foam lapping the wet sand) sits up to
-            // three tiles from the nearest true-water tile and must ripple with the sea.
             Dilate8(_waterBoolBuf, _waterBool2Buf, tilesW, tilesH);
-            for (int idx = 0; idx < count; idx++)
-                _waterMaskBuf[idx] = _waterBool2Buf[idx] ? Color.White : Color.Transparent;
 
-            if (!any)
-                return false;
-
-            if (_waterMask == null || _waterMask.Width != tilesW || _waterMask.Height != tilesH)
+            // ---- PIXEL-accurate mask (16 texels per tile = the art's own resolution) ----
+            // True water tiles fill solid; candidate shore tiles contribute only the pixels of
+            // their Back-layer art that are painted as water (classified ONCE per tile art and
+            // cached); opaque Buildings/Front art (pier posts, bridges, lily pads, canopies)
+            // carves holes so things standing in the water block the effect.
+            const int Sub = 16;
+            int pw = tilesW * Sub, ph = tilesH * Sub;
+            int pcount = pw * ph;
+            if (_waterPixBuf == null || _waterPixBuf.Length < pcount)
+                _waterPixBuf = new Color[pcount];
+            var back = loc.map?.GetLayer("Back");
+            var bld = loc.map?.GetLayer("Buildings");
+            var front = loc.map?.GetLayer("Front");
+            for (int j = 0; j < tilesH; j++)
+            {
+                for (int i = 0; i < tilesW; i++)
+                {
+                    int idx = j * tilesW + i;
+                    bool isWater = _waterMaskCoreBuf![idx].R > 0;
+                    int tx = startTileX + i, ty = startTileY + j;
+                    bool[]? bits = null;
+                    if (!isWater && _waterBool2Buf[idx] && TryTileArt(back, tx, ty, out var btex, out var bsrc))
+                        bits = ClassifyBits(btex, bsrc, water: true);
+                    if (!isWater && bits == null)
+                    {
+                        for (int py = 0; py < Sub; py++)
+                        {
+                            int row = (j * Sub + py) * pw + i * Sub;
+                            for (int px = 0; px < Sub; px++)
+                                _waterPixBuf[row + px] = Color.Transparent;
+                        }
+                        continue;
+                    }
+                    bool[]? carveB = TryTileArt(bld, tx, ty, out var t1, out var s1) ? ClassifyBits(t1, s1, water: false) : null;
+                    bool[]? carveF = TryTileArt(front, tx, ty, out var t2, out var s2) ? ClassifyBits(t2, s2, water: false) : null;
+                    for (int py = 0; py < Sub; py++)
+                    {
+                        int row = (j * Sub + py) * pw + i * Sub;
+                        int arow = py * Sub;
+                        for (int px = 0; px < Sub; px++)
+                        {
+                            bool wpix = isWater || bits![arow + px];
+                            if (wpix && carveB != null && carveB[arow + px]) wpix = false;
+                            if (wpix && carveF != null && carveF[arow + px]) wpix = false;
+                            _waterPixBuf[row + px] = wpix ? Color.White : Color.Transparent;
+                        }
+                    }
+                }
+            }
+            if (_waterMask == null || _waterMask.Width != pw || _waterMask.Height != ph)
             {
                 _waterMask?.Dispose();
-                _waterMask = new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color);
+                _waterMask = new Texture2D(_device, pw, ph, false, SurfaceFormat.Color);
             }
-            _waterMask.SetData(_waterMaskBuf, 0, count);
+            _waterMask.SetData(_waterPixBuf, 0, pcount);
             if (_waterMaskCore == null || _waterMaskCore.Width != tilesW || _waterMaskCore.Height != tilesH)
             {
                 _waterMaskCore?.Dispose();
