@@ -93,11 +93,14 @@ float hash(float2 p)
 // march runs on this, so a reflection anchors at the PAINTED waterline (the real
 // curved pond edge), not at the tile boundary above it — and carved art (pier posts,
 // bridges) reads as land, hanging its own reflection from its base.
+// G channel = the MARCH mask: like the effect mask but small floating art (lily pads)
+// is NOT carved, so only real shorelines and big structures (bridges, pier decks) stop
+// the shoreline search.
 float WaterAt(float2 p)
 {
     float2 wt = p * TilesPerScreen + WorldTileOffset;
     float2 muv = (wt - floor(WorldTileOffset)) / MaskSize;
-    return tex2D(MaskSampler, muv).r;
+    return tex2D(MaskSampler, muv).g;
 }
 
 // Smooth (bilinear) sample of the same mask — soft gradient near the waterline.
@@ -105,7 +108,7 @@ float WaterAtSmooth(float2 p)
 {
     float2 wt = p * TilesPerScreen + WorldTileOffset;
     float2 muv = (wt - floor(WorldTileOffset)) / MaskSize;
-    return tex2D(MaskLinearSampler, muv).r;
+    return tex2D(MaskLinearSampler, muv).g;
 }
 
 float4 WaterPS(PixelInput input) : SV_TARGET
