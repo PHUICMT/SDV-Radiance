@@ -56,7 +56,10 @@ namespace SDVRadiance
         private Color[]? _artBuf;              // 16×16 scratch for tile-art reads
         private readonly System.Collections.Generic.Dictionary<string, Texture2D?> _sheetTexCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), bool[]> _waterBitsCache = new();
-        private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), bool[]> _solidBitsCache = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), (bool[] bits, int count)> _solidBitsCache = new();
+        private int _lastWaterTx = int.MinValue, _lastWaterTy = int.MinValue, _lastWaterTick = int.MinValue;
+        private GameLocation? _lastWaterLoc;
+        private bool _waterAny;
         private readonly Vector4[] _lightArr = new Vector4[8];   // on-screen lights → water glimmer
         private Vector2 _waterTilesPerScreen, _waterWorldTileOffset, _waterMaskSize;
 
@@ -1010,14 +1013,11 @@ namespace SDVRadiance
             return false;
         }
 
-        /// <summary>16×16 per-pixel classification of one tile art, cached per (texture, rect):
-        /// water=true → which pixels are painted water; water=false → which pixels are opaque
-        /// (used to carve piers/bridges/pads out of the water mask).</summary>
+        /// <summary>16×16 painted-water classification of one tile art, cached per (texture, rect).</summary>
         private bool[] ClassifyBits(Texture2D tex, Rectangle src, bool water)
         {
-            var cache = water ? _waterBitsCache : _solidBitsCache;
             var key = (tex, src);
-            if (cache.TryGetValue(key, out bool[]? bits))
+            if (_waterBitsCache.TryGetValue(key, out bool[]? bits))
                 return bits;
             bits = new bool[256];
             _artBuf ??= new Color[256];
@@ -1025,11 +1025,34 @@ namespace SDVRadiance
             {
                 tex.GetData(0, src, _artBuf, 0, 256);
                 for (int p = 0; p < 256; p++)
-                    bits[p] = water ? WaterColor(_artBuf[p]) : _artBuf[p].A >= 128;
+                    bits[p] = WaterColor(_artBuf[p]);
             }
             catch { /* leave all-false */ }
-            cache[key] = bits;
+            _waterBitsCache[key] = bits;
             return bits;
+        }
+
+        /// <summary>16×16 opacity bits + opaque-pixel count of one tile art, cached — used to
+        /// carve piers/bridges/pads out of the water mask (count decides march-blocking).</summary>
+        private (bool[] bits, int count) SolidBits(Texture2D tex, Rectangle src)
+        {
+            var key = (tex, src);
+            if (_solidBitsCache.TryGetValue(key, out var entry))
+                return entry;
+            var bits = new bool[256];
+            int n = 0;
+            _artBuf ??= new Color[256];
+            try
+            {
+                tex.GetData(0, src, _artBuf, 0, 256);
+                for (int p = 0; p < 256; p++)
+                    if (bits[p] = _artBuf[p].A >= 128)
+                        n++;
+            }
+            catch { /* leave all-false */ }
+            entry = (bits, n);
+            _solidBitsCache[key] = entry;
+            return entry;
         }
 
         /// <summary>8-way one-tile dilation of a tile flag grid (src → dst).</summary>
@@ -1069,6 +1092,22 @@ namespace SDVRadiance
             int tilesH = Math.Max(1, h / 64 + 2);
             int count = tilesW * tilesH;
 
+            // The mask content is TILE-ANCHORED (sub-tile camera scroll is handled by the
+            // WorldTileOffset shader param), so it only changes when the view crosses a tile
+            // boundary — rebuilding the pixel grid every frame was a walking-stutter tax.
+            if (_waterMask != null && loc == _lastWaterLoc && startTileX == _lastWaterTx && startTileY == _lastWaterTy
+                && _waterMask.Width == tilesW * 16 && Game1.ticks - _lastWaterTick < 20)
+            {
+                _waterTilesPerScreen = new Vector2(w / 64f, h / 64f);
+                _waterWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
+                _waterMaskSize = new Vector2(tilesW, tilesH);
+                return _waterAny;
+            }
+            _lastWaterLoc = loc;
+            _lastWaterTx = startTileX;
+            _lastWaterTy = startTileY;
+            _lastWaterTick = Game1.ticks;
+
             // Height Framework (when present) classifies the actual water SURFACE: ponds and
             // beach tide pools count as water (they reflect too), while pier/bridge DECKS over
             // water do not (no reflection painted onto planks). Fall back to isWaterTile.
@@ -1097,6 +1136,7 @@ namespace SDVRadiance
             for (int idx = 0; idx < count; idx++)
                 _waterMaskCoreBuf[idx] = _waterBoolBuf[idx] ? Color.White : Color.Transparent;
 
+            _waterAny = any;
             if (!any)
                 return false;
 
@@ -1160,24 +1200,35 @@ namespace SDVRadiance
                     last = y;
                 }
             }
-            // Pass C — carve opaque Buildings/Front art (posts, bridges, pads, canopy) and emit.
+            // Pass C — carve opaque Buildings/Front art and emit two channels:
+            //   R = EFFECT mask: carve everything opaque (no ripple/mirror ON posts, pads, bridges).
+            //   G = MARCH mask: carve only art covering ≥60% of its tile (bridges, pier decks) —
+            //       small floating things (lily pads, plants) must NOT read as shorelines, or
+            //       every pixel below a pad anchors its reflection to the pad and the river's
+            //       mirror shatters along the pad row.
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)
                 {
                     int tx = startTileX + i, ty = startTileY + j;
-                    bool[]? carveB = TryTileArt(bld, tx, ty, out var t1, out var s1) ? ClassifyBits(t1, s1, water: false) : null;
-                    bool[]? carveF = TryTileArt(front, tx, ty, out var t2, out var s2) ? ClassifyBits(t2, s2, water: false) : null;
+                    (bool[] bits, int count)? carveB = TryTileArt(bld, tx, ty, out var t1, out var s1) ? SolidBits(t1, s1) : null;
+                    (bool[] bits, int count)? carveF = TryTileArt(front, tx, ty, out var t2, out var s2) ? SolidBits(t2, s2) : null;
+                    bool bBig = carveB is { count: >= 154 };
+                    bool fBig = carveF is { count: >= 154 };
                     for (int py = 0; py < Sub; py++)
                     {
                         int row = (j * Sub + py) * pw + i * Sub;
                         int arow = py * Sub;
                         for (int px = 0; px < Sub; px++)
                         {
-                            bool wpix = _waterPixBits[row + px];
-                            if (wpix && carveB != null && carveB[arow + px]) wpix = false;
-                            if (wpix && carveF != null && carveF[arow + px]) wpix = false;
-                            _waterPixBuf[row + px] = wpix ? Color.White : Color.Transparent;
+                            bool basePix = _waterPixBits[row + px];
+                            bool eff = basePix, march = basePix;
+                            if (basePix)
+                            {
+                                if (carveB is { } cb && cb.bits[arow + px]) { eff = false; if (bBig) march = false; }
+                                if (carveF is { } cf && cf.bits[arow + px]) { eff = false; if (fBig) march = false; }
+                            }
+                            _waterPixBuf[row + px] = new Color(eff ? 255 : 0, march ? 255 : 0, 0, 255);
                         }
                     }
                 }

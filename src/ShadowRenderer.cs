@@ -934,7 +934,11 @@ namespace SDVRadiance
                     // Skip only when the prop itself (or the tile its lean lands on) is open WATER
                     // SURFACE — pier decks over water are solid ground (Height Framework separates
                     // deck from water), so dock ropes / mooring posts / lanterns cast onto the pier.
-                    if (OnWater(loc, new Point(x, y)) || OnWater(loc, new Point(x, y - 1)))
+                    // Also check BELOW the base: a pier post's baked shadow pools onto the water
+                    // under the dock, fighting the screen-space mirror (the water already reflects
+                    // the post — a ground-shadow smear on top reads as a ghost double).
+                    if (OnWater(loc, new Point(x, y)) || OnWater(loc, new Point(x, y - 1))
+                        || OnWater(loc, new Point(x, y + 1)))
                     {
                         PD(x, y, "skip: on/over open water");
                         continue;
