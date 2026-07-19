@@ -52,6 +52,7 @@ namespace SDVRadiance
         private bool[]? _waterBoolBuf;         // pre-dilation water flags (see BuildWaterMask)
         private bool[]? _waterBool2Buf;        // scratch for the dilation passes (candidate ring for art classification)
         private Color[]? _waterPixBuf;         // pixel-mask upload buffer (tilesW*16 × tilesH*16)
+        private bool[]? _waterPixBits;         // scratch bits for the close/carve passes
         private Color[]? _artBuf;              // 16×16 scratch for tile-art reads
         private readonly System.Collections.Generic.Dictionary<string, Texture2D?> _sheetTexCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), bool[]> _waterBitsCache = new();
@@ -1121,6 +1122,9 @@ namespace SDVRadiance
             var back = loc.map?.GetLayer("Back");
             var bld = loc.map?.GetLayer("Buildings");
             var front = loc.map?.GetLayer("Front");
+            if (_waterPixBits == null || _waterPixBits.Length < pcount)
+                _waterPixBits = new bool[pcount];
+            // Pass A — raw water pixels (true tiles solid, shore tiles by art classification).
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)
@@ -1131,16 +1135,37 @@ namespace SDVRadiance
                     bool[]? bits = null;
                     if (!isWater && _waterBool2Buf[idx] && TryTileArt(back, tx, ty, out var btex, out var bsrc))
                         bits = ClassifyBits(btex, bsrc, water: true);
-                    if (!isWater && bits == null)
+                    for (int py = 0; py < Sub; py++)
                     {
-                        for (int py = 0; py < Sub; py++)
-                        {
-                            int row = (j * Sub + py) * pw + i * Sub;
-                            for (int px = 0; px < Sub; px++)
-                                _waterPixBuf[row + px] = Color.Transparent;
-                        }
-                        continue;
+                        int row = (j * Sub + py) * pw + i * Sub;
+                        int arow = py * Sub;
+                        for (int px = 0; px < Sub; px++)
+                            _waterPixBits[row + px] = isWater || (bits != null && bits[arow + px]);
                     }
+                }
+            }
+            // Pass B — vertical CLOSE (fill gaps ≤4 texels with water above and below): the
+            // shore art paints a dark shading row along the waterline that fails the colour
+            // test, which left a horizontal slit of dead pixels cutting every reflection.
+            for (int x = 0; x < pw; x++)
+            {
+                int last = -99;
+                for (int y = 0; y < ph; y++)
+                {
+                    if (!_waterPixBits[y * pw + x])
+                        continue;
+                    if (y - last > 1 && y - last <= 5)
+                        for (int k = last + 1; k < y; k++)
+                            _waterPixBits[k * pw + x] = true;
+                    last = y;
+                }
+            }
+            // Pass C — carve opaque Buildings/Front art (posts, bridges, pads, canopy) and emit.
+            for (int j = 0; j < tilesH; j++)
+            {
+                for (int i = 0; i < tilesW; i++)
+                {
+                    int tx = startTileX + i, ty = startTileY + j;
                     bool[]? carveB = TryTileArt(bld, tx, ty, out var t1, out var s1) ? ClassifyBits(t1, s1, water: false) : null;
                     bool[]? carveF = TryTileArt(front, tx, ty, out var t2, out var s2) ? ClassifyBits(t2, s2, water: false) : null;
                     for (int py = 0; py < Sub; py++)
@@ -1149,7 +1174,7 @@ namespace SDVRadiance
                         int arow = py * Sub;
                         for (int px = 0; px < Sub; px++)
                         {
-                            bool wpix = isWater || bits![arow + px];
+                            bool wpix = _waterPixBits[row + px];
                             if (wpix && carveB != null && carveB[arow + px]) wpix = false;
                             if (wpix && carveF != null && carveF[arow + px]) wpix = false;
                             _waterPixBuf[row + px] = wpix ? Color.White : Color.Transparent;
