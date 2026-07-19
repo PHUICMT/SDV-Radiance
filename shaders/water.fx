@@ -269,12 +269,16 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         reflUv = clamp(reflUv, float2(0.0, 0.0), float2(1.0, 1.0));
         float3 refl = tex2D(SourceSampler, reflUv).rgb;
 
-        // Wide 3-tap smoothing: at pixel-mask resolution a single bilinear sample flips
+        // Wide 5-tap smoothing: at pixel-mask resolution a single bilinear sample flips
         // land→water within ~4px, which drew a hard horizontal seam wherever the mirrored
-        // source crossed onto upper water (bridges). Spread the transition over ~0.7 tile.
+        // source crossed onto upper water (bridges). Spread the mirror-to-sheen transition
+        // over ~1.6 tiles so the reflection FADES out instead of ending on a ragged line.
+        float tps = 1.0 / TilesPerScreen.y;
         float srcWater = (WaterAtSmooth(reflUv)
-                        + WaterAtSmooth(reflUv + float2(0.0, -0.35 / TilesPerScreen.y))
-                        + WaterAtSmooth(reflUv + float2(0.0,  0.35 / TilesPerScreen.y))) / 3.0;
+                        + WaterAtSmooth(reflUv + float2(0.0, -0.4 * tps))
+                        + WaterAtSmooth(reflUv + float2(0.0,  0.4 * tps))
+                        + WaterAtSmooth(reflUv + float2(0.0, -0.8 * tps))
+                        + WaterAtSmooth(reflUv + float2(0.0,  0.8 * tps))) * 0.2;
 
         // Distance fade: defined near the shoreline, gone by ~0.75 screen below it. (An
         // always-on base mirrored far-upstream cliffs down entire rivers as dark streaks;
