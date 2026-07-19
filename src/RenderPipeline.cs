@@ -1049,10 +1049,15 @@ namespace SDVRadiance
                     Color c = _artBuf[p];
                     int maxc = Math.Max(c.R, Math.Max(c.G, c.B));
                     int minc = Math.Min(c.R, Math.Min(c.G, c.B));
+                    // Measured from the island dig-site pool art (palette: (163,177,165),
+                    // (144,157,158), (153,163,162), (112,134,141) — grey-GREEN, R always the
+                    // lowest channel, B only +2..+29 over R). Guards against false positives:
+                    // sand/warm stone are R-dominant, grass has B far below G, pure-neutral
+                    // concrete/stone (B==R) fails the +2, dark cave floors fail brightness.
                     bool puddleish = c.A >= 200
-                        && maxc - minc <= 40          // flat / unsaturated
-                        && c.B >= c.R + 3             // cool: blue nudged over red
-                        && c.B >= c.G - 8
+                        && maxc - minc <= 34          // flat / unsaturated
+                        && c.B >= c.R + 2             // cool tint (never true for warm ground)
+                        && c.G >= c.R                 // R is the lowest channel
                         && maxc >= 55 && maxc <= 200; // mid brightness (not shadow, not foam)
                     if (bits[p] = puddleish)
                         n++;
