@@ -417,13 +417,23 @@ namespace SDVRadiance
                 {
                     int idx = j * tilesW + i;
                     int tx = startTileX + i, ty = startTileY + j;
-                    bool big = (TryTileArt(bld, tx, ty, out var t1, out var s1) && SolidBits(t1, s1).count >= 230)
+                    // Height Framework DECK tiles (walkable piers / plank bridges — Back-layer
+                    // wood) block as whole tiles too: the beach plank's art has a painted wet
+                    // stain that classified as water, punching a 2-texel channel through the
+                    // deck — and the ±10 shoreline smoothing then dragged the anchors of a
+                    // full tile around it up above the plank (reflection missing on that side).
+                    bool deck = false;
+                    if (hf != null)
+                        try { deck = hf.GetSurfaceAt(loc, tx, ty) == 4; } catch { hf = null; }
+                    bool big = deck
+                            || (TryTileArt(bld, tx, ty, out var t1, out var s1) && SolidBits(t1, s1).count >= 230)
                             || (TryTileArt(front, tx, ty, out var t2, out var s2) && SolidBits(t2, s2).count >= 230);
                     _bigCarveBuf[idx] = big;
                     bool landNear = i == 0 || i == tilesW - 1 || j == 0 || j == tilesH - 1
                         || !(_waterMaskCoreBuf![idx - 1].R > 0) || !(_waterMaskCoreBuf[idx + 1].R > 0)
                         || !(_waterMaskCoreBuf[idx - tilesW].R > 0) || !(_waterMaskCoreBuf[idx + tilesW].R > 0);
-                    _bigSeedBuf[idx] = big && landNear;
+                    // A deck is walkable — land-connected by definition, no seed test needed.
+                    _bigSeedBuf[idx] = big && (landNear || deck);
                 }
             }
             for (int sweep = 0; sweep < 2; sweep++)
