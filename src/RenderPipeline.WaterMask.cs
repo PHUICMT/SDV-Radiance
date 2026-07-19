@@ -455,17 +455,26 @@ namespace SDVRadiance
             }
 
             // Pass D — WATERLINE HEIGHT-MAP: per column, remember the top row of each
-            // contiguous march-water run (= that pixel's shoreline).
+            // contiguous march-water run (= that pixel's shoreline). Runs shorter than
+            // 6 texels are DROPPED from the march: isolated wet-shading specks in shore
+            // art each became a tiny mirror (dist 0) that painted a dark dash onto the
+            // bank. Runs cut off by the mask bottom are kept — they continue off-screen.
             if (_edgeBuf == null || _edgeBuf.Length < pcount)
                 _edgeBuf = new short[pcount];
             for (int x = 0; x < pw; x++)
             {
                 int top = -1;
-                for (int y = 0; y < ph; y++)
+                for (int y = 0; y <= ph; y++)
                 {
                     int p = y * pw + x;
-                    if (_waterPixBits2![p]) { if (top < 0) top = y; _edgeBuf[p] = (short)top; }
-                    else top = -1;
+                    if (y < ph && _waterPixBits2![p]) { if (top < 0) top = y; _edgeBuf[p] = (short)top; }
+                    else if (top >= 0)
+                    {
+                        if (y < ph && y - top < 6)
+                            for (int k = top; k < y; k++)
+                                _waterPixBits2![k * pw + x] = false;
+                        top = -1;
+                    }
                 }
             }
 

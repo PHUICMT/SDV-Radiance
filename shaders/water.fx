@@ -327,6 +327,18 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         }
     }
 
+    // Shore contact shading: water darkens slightly where it meets ANY edge — banks,
+    // island rims, lily pads, pier posts. The mirror above only reflects what stands
+    // NORTH of the water, so side edges looked bare; this grounds every waterline the
+    // way real shallows darken against their bank. Width ~2 mask texels (bilinear).
+    float2 mt = 2.0 / (MaskSize * 16.0);
+    float rimMin = min(min(tex2D(MaskLinearSampler, maskUV + float2(0.0, -mt.y)).r,
+                           tex2D(MaskLinearSampler, maskUV + float2(0.0,  mt.y)).r),
+                       min(tex2D(MaskLinearSampler, maskUV + float2(-mt.x, 0.0)).r,
+                           tex2D(MaskLinearSampler, maskUV + float2( mt.x, 0.0)).r));
+    float rim = saturate(tileWater - rimMin);
+    col.rgb *= 1.0 - rim * 0.22 * water;
+
     // Random drifting glints: one soft glint per cell at a random spot that
     // wanders slowly and pulses smoothly (no hard twinkle). Ocean glints are
     // sparser, slower and drift more.
