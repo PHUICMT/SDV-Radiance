@@ -41,8 +41,6 @@ namespace SDVRadiance
         private Texture2D? _gradTex;
         /// <summary>Soft radial disc for indoor/ambient CONTACT shadows (a grounding pool under a caster).</summary>
         private Texture2D? _blobTex;
-        /// <summary>Gentler feet→tip fade for the big building shadows (their tip should stay visible, not vanish).</summary>
-        private Texture2D? _bldGradTex;
         /// <summary>Feet→tip fade that reaches EXACTLY zero, for map-tile props: their art often has
         /// a long straight top edge (fence rails), and any residual tip alpha reads as a hard line.</summary>
         private Texture2D? _propGradTex;
@@ -66,18 +64,11 @@ namespace SDVRadiance
         private const int CasterRtH = 224;
         private readonly System.Collections.Generic.List<RenderTarget2D> _casterPool = new();
         private int _casterUsed;
-        private readonly System.Collections.Generic.Dictionary<object, (RenderTarget2D rt, Vector2 feetInRT)> _bakedMap = new();
-
-        // Buildings are too tall to LEAN by rotation (the roof swings over the building). The correct
-        // transform is a SHEAR about the base — but transformMatrix is per-batch, so we bake the
-        // sheared+flattened silhouette into a pooled RT here (our own batch CAN set a matrix) and
-        // then composite it as a plain draw. Bigger slots than characters (buildings are large).
-        private const int BldRtW = 1280;
-        private const int BldRtH = 640;
-        private readonly System.Collections.Generic.List<RenderTarget2D> _bldPool = new();
-        private int _bldUsed;
-        private readonly System.Collections.Generic.Dictionary<Building, (RenderTarget2D rt, Vector2 feetInRT)> _bldMap = new();
-        private bool _bldDumped;
+        // PERSISTENT cache — keyed by (texture, source rect), i.e. the sprite FRAME, so every
+        // NPC/animal sharing a frame shares one bake and warm frames cost a dictionary hit
+        // instead of a render-target switch. Upright silhouettes carry no sun angle, so entries
+        // stay valid indefinitely; the cache is only capped (see PreparePlayer).
+        private readonly System.Collections.Generic.Dictionary<(Texture2D tex, Rectangle src), (RenderTarget2D rt, Vector2 feetInRT)> _casterBakes = new();
 
         // Objects (trees/bushes/clumps/furniture/craftables/crops/…) bake to pooled RTs with a
         // continuous gradient too — same smooth path as characters, no stepped bands. Slots are large
@@ -96,6 +87,11 @@ namespace SDVRadiance
         private readonly System.Collections.Generic.Dictionary<(Texture2D tex, Rectangle src, SpriteEffects fx), (RenderTarget2D rt, Vector2 feetInRT)> _bakedObjMap = new();
         private bool _objBaking;
         private GraphicsDevice? _objGd;
+        /// <summary>Sun angle the object cache was baked at (shear is baked in) — cache clears when it changes.</summary>
+        private long _objShearKey = long.MinValue;
+        private GameLocation? _objBakeLoc;
+        /// <summary>Pose the player RT was last baked with — identical pose skips the re-bake.</summary>
+        private (int frame, int facing, Rectangle src) _playerBakeSig = (-1, -1, default);
 
         // Multiply only the destination ALPHA by the source alpha (RGB untouched): dst.a *= src.a.
         // Used to bake the feet→head opacity gradient onto the silhouette.
@@ -302,16 +298,10 @@ namespace SDVRadiance
                     if (bld == null || bld.tileX.Value > btx1 || bld.tileX.Value + bld.tilesWide.Value < btx0
                         || bld.tileY.Value > bty1 || bld.tileY.Value + bld.tilesHigh.Value < bty0)
                         continue;
-                    float baseX = (bld.tileX.Value + bld.tilesWide.Value / 2f) * 64f;
-                    float baseY = (bld.tileY.Value + bld.tilesHigh.Value) * 64f;
-                    Vector2 feet = Game1.GlobalToLocal(vp, new Vector2(baseX, baseY));
-                    float bdepth = MathHelper.Clamp(baseY / 10000f - ShadowDepthBias, 0f, 1f);
-                    if (_bldMap.TryGetValue(bld, out var bk))
-                        // Sheared silhouette already baked → plain composite (no rotation/scale).
-                        DrawSoft(b, Taps9, bk.rt, null, feet, Color.White, alpha * 0.62f, 0f, bk.feetInRT,
-                            new Vector2(1f, 1f), bdepth, SpriteEffects.None, blur);
-                    else
-                        DrawBuildingShadow(b, bld, alpha * 0.7f, blur);   // too big to bake → grounding pool
+                    // Buildings get a neutral grounding pool: a shape-accurate cast can't lean
+                    // up like everything else without swinging the roof over itself, and the
+                    // sheared-down bake was rejected visually — see the session notes.
+                    DrawBuildingShadow(b, bld, alpha * 0.7f, blur);
                 }
             }
         }
@@ -321,7 +311,7 @@ namespace SDVRadiance
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(a.Position.X + a.Sprite.SpriteWidth * 4 / 2f, a.GetBoundingBox().Bottom - FeetLift));
             float depth = MathHelper.Clamp(a.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
-            if (_bakedMap.TryGetValue(a, out var baked))
+            if (_casterBakes.TryGetValue((a.Sprite.Texture, a.Sprite.SourceRect), out var baked))
             {
                 DrawSoft(b, Taps9, baked.rt, null, feet, Color.White, alpha, rot, baked.feetInRT,
                     new Vector2(1f, stretch), depth, SpriteEffects.None, blur);
@@ -563,7 +553,7 @@ namespace SDVRadiance
             float depth = MathHelper.Clamp(npc.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
             // Prefer the baked silhouette (one cohesive image, smoothly faded — same as the
             // player). Bands are the fallback only when the sprite is too big for a slot.
-            if (_bakedMap.TryGetValue(npc, out var baked))
+            if (_casterBakes.TryGetValue((npc.Sprite.Texture, npc.Sprite.SourceRect), out var baked))
             {
                 DrawSoft(b, Taps9, baked.rt, null, feet, Color.White, alpha, rot, baked.feetInRT,
                     new Vector2(1f, stretch), depth, SpriteEffects.None, blur);
@@ -1158,82 +1148,6 @@ namespace SDVRadiance
                 alpha, rot, stretch, depth, blur, ObjectHeadFade);
         }
 
-        /// <summary>
-        /// Project ground shadows for walls / buildings / ledges from Height Framework data.
-        ///
-        /// Standard heightfield self-shadowing (a "gather" horizon march): for each visible
-        /// ground tile, step toward the sun; if a taller tile rises above the sun ray at that
-        /// distance, the ground tile is occluded → shaded. This casts a building's shadow onto
-        /// the ground on the sun-opposite side at a length set by the sun height — the durable,
-        /// generic replacement for per-building sprite leaning (works for cliffs/piers too).
-        /// </summary>
-        private void DrawHeightShadows(SpriteBatch b, GameLocation loc, ModConfig config, float baseAlpha, float blur)
-        {
-            var api = Height;
-            if (api == null)
-                return;
-
-            // Match the character silhouette's lean EXACTLY so the two systems agree in direction.
-            // The character shadow leans by rot = 1.15*d (ComputeSun); the far end of an upright
-            // sprite rotated by rot points (-sin rot, -cos rot). Use that same vector as the ground
-            // shadow direction, and march the opposite way (toward the sun) to find the occluder.
-            float d = MathHelper.Clamp((Game1.timeOfDay - 1200) / 600f, -1f, 1f);
-            float low = Math.Abs(d);
-            float rot = 1.15f * d;
-            var shadowDir = new Vector2(-(float)Math.Sin(rot), -(float)Math.Cos(rot));
-            Vector2 sunDir = -shadowDir;
-
-            float maxLen = MathHelper.Lerp(1.5f, 5.5f, low) * Math.Max(0.2f, config.HeightShadowLength); // tiles
-            int steps = Math.Max(1, (int)Math.Ceiling(maxLen));
-            float slope = 1f / Math.Max(0.6f, maxLen);     // sun-ray height gained per tile of distance
-            float alpha = baseAlpha * 0.5f;                // ground shadows read lighter than sprite ones
-            if (alpha <= 0.02f)
-                return;
-
-            var vp = Game1.viewport;
-            int tx0 = vp.X / 64 - 1, tx1 = (vp.X + vp.Width) / 64 + 1;
-            int ty0 = vp.Y / 64 - 1, ty1 = (vp.Y + vp.Height) / 64 + 1;
-
-            for (int ty = ty0; ty <= ty1; ty++)
-            {
-                for (int tx = tx0; tx <= tx1; tx++)
-                {
-                    // Only cast ONTO flat ground: skip occluder tops (h>0), water, and decks.
-                    if (api.GetHeightAt(loc, tx, ty) > 0 || api.GetSurfaceAt(loc, tx, ty) != 0)
-                        continue;
-
-                    float shade = 0f;
-                    for (int s = 1; s <= steps; s++)
-                    {
-                        int sx = tx + (int)Math.Round(sunDir.X * s);
-                        int sy = ty + (int)Math.Round(sunDir.Y * s);
-                        // Only GENUINELY tall occluders cast (buildings are stamped height 2). Map
-                        // Front-layer art, pond rims, walls and pier decks are height ≤1 — casting
-                        // from those littered flat sand with spurious shadows, so require ≥2.
-                        int h = api.GetHeightAt(loc, sx, sy);
-                        if (h < 2)
-                            continue;
-                        float rayH = s * slope;             // how high the sun ray is above the ground here
-                        float over = h - rayH;              // occluder pokes above the ray ⇒ shadow
-                        if (over > 0f)
-                        {
-                            // Fade with distance so the shadow tip is soft, and clamp the near core.
-                            float k = MathHelper.Clamp(over, 0f, 1f) * (1f - (s - 1) / (float)steps);
-                            if (k > shade) shade = k;
-                        }
-                    }
-                    if (shade <= 0.02f)
-                        continue;
-
-                    // Draw a SOFT radial pool centred on the tile, ~1.4 tiles wide so neighbouring
-                    // shadowed tiles overlap and blend — this is what dissolves the hard 64px grid.
-                    Vector2 center = Game1.GlobalToLocal(vp, new Vector2(tx * 64f + 32f, ty * 64f + 32f));
-                    float depth = MathHelper.Clamp(((ty + 1f) * 64f) / 10000f - ShadowDepthBias, 0f, 1f);
-                    DrawContactBlob(b, center, 46f, 46f, alpha * shade, depth, blur);
-                }
-            }
-        }
-
         /// <summary>Lean damping for tall sprites (bushes/craftables) so the shadow stays rooted at the base.</summary>
         private const float TallLeanScale = 0.6f;
         /// <summary>Trees lean/stretch the least: the long canopy cast otherwise detaches from the
@@ -1419,16 +1333,12 @@ namespace SDVRadiance
         /// </summary>
         public void PreparePlayer(GraphicsDevice gd, ModConfig config)
         {
-            _playerReady = false;
-            PlayerMask = null;
-            _bakedMap.Clear();
-            _bldMap.Clear();
-            _bakedObjMap.Clear();
-            _casterUsed = 0;
-            _bldUsed = 0;
-            _objUsed = 0;
             if (!ShouldCast(config))
+            {
+                _playerReady = false;
+                PlayerMask = null;
                 return;
+            }
             if (_renderDepth > 0)
             {
                 if (Diag != null && !_errLogged) { _errLogged = true; Diag.Log("[shadow] PreparePlayer re-entered — skipping nested call", LogLevel.Warn); }
@@ -1439,28 +1349,51 @@ namespace SDVRadiance
             {
             _rtBatch ??= new SpriteBatch(gd);
             _gradTex ??= BuildGradient(gd);
-            _bldGradTex ??= BuildGradient(gd, 0.35f);
             _propGradTex ??= BuildGradient(gd, 0f);
             _blobTex ??= BuildBlob(gd);
 
-            // Buildings: the shear-down cast conflicted with the upright character/object lean
-            // (looked "เพี้ยน"), so buildings fall back to a neutral grounding CONTACT POOL — no
-            // direction to clash with the up-lean. (BakeBuildings kept for a future opt-in.)
-            // if (SunCasts() && config.DirectionalShadowObjects)
-            //     BakeBuildings(gd, Game1.currentLocation, config);
+            // ---- Persistent bake caches (the old clear-everything-every-frame here cost
+            // 50-150 render-target switches per frame — the single biggest stutter source) ----
+            // CHARACTER bakes are upright silhouettes keyed by (texture, frame): valid forever,
+            // only capped. OBJECT bakes have the sun lean baked in as a shear: valid until the
+            // sun angle ticks (every 10 game minutes) or the location changes.
+            if (_casterBakes.Count > 192)
+            {
+                _casterBakes.Clear();
+                _casterUsed = 0;
+            }
 
-            // Bake NPC + animal silhouettes (single-sprite casters) to pooled targets so their
-            // shadows match the player's smooth, cohesive fade instead of stepped bands.
+            bool objectsOn = SunCasts() && config.DirectionalShadowObjects;
+            float srot = 0f, sstretch = 0f;
+            if (objectsOn)
+            {
+                ComputeSun(out srot, out sstretch, out _);
+                sstretch *= Math.Max(0.1f, config.DirectionalShadowLength);
+            }
+            long shearKey = objectsOn
+                ? ((long)Math.Round(srot * 512f) << 20) ^ (long)Math.Round(sstretch * 512f)
+                : long.MinValue;
+            bool objCacheInvalid = shearKey != _objShearKey
+                                || Game1.currentLocation != _objBakeLoc
+                                || _bakedObjMap.Count > 128;   // VRAM cap: slots are 400×456 RTs (~0.7 MB each)
+            if (objCacheInvalid)
+            {
+                _bakedObjMap.Clear();
+                _objUsed = 0;
+                _objShearKey = shearKey;
+                _objBakeLoc = Game1.currentLocation;
+            }
+
+            // Bake NPC + animal silhouettes (single-sprite casters) — cheap when warm: cache
+            // hits only, no RT switch. Runs every frame so new animation frames bake instantly.
             BakeCasters(gd, Game1.currentLocation);
 
-            // Bake OBJECT silhouettes (trees/bushes/clumps/furniture/craftables/…) the same way, by
-            // running the object enumeration once in BAKE mode. Composited later in DrawObjectShadows.
-            if (SunCasts() && config.DirectionalShadowObjects)
+            // Bake OBJECT silhouettes (trees/bushes/clumps/furniture/craftables/…) by running the
+            // object enumeration in BAKE mode. Composited later in DrawObjectShadows. Only when
+            // the cache was invalidated, or on a slow heartbeat to pick up sprites that entered
+            // the view (a miss in between falls back to the banded shadow for a few frames).
+            if (objectsOn && (objCacheInvalid || Game1.ticks % 15 == 0))
             {
-                // The bake needs the REAL sun angle: the lean is baked into the RT as a shear,
-                // so bake and composite must agree on rot/stretch (same frame, same values).
-                ComputeSun(out float srot, out float sstretch, out _);
-                sstretch *= Math.Max(0.1f, config.DirectionalShadowLength);
                 _objBaking = true;
                 _objGd = gd;
                 RenderTargetBinding[] objPrev = gd.GetRenderTargets();
@@ -1475,11 +1408,27 @@ namespace SDVRadiance
             Farmer who = Game1.player;
             if (who == null || who.currentLocation != Game1.currentLocation
                 || who.swimming.Value || who.isRidingHorse())
+            {
+                _playerReady = false;
+                PlayerMask = null;
                 return;
+            }
 
             _playerRT ??= new RenderTarget2D(gd, PlayerRtW, PlayerRtH);
 
             Rectangle src = who.FarmerSprite.SourceRect;
+
+            // Same pose as the last bake → the RT is still correct, skip the 3-batch redraw.
+            // The every-8-frames refresh keeps accessory layers that animate independently of
+            // the body frame (Fashion Sense hair sway etc.) fresh without paying every frame.
+            var sig = (who.FarmerSprite.CurrentFrame, (int)who.FacingDirection, src);
+            if (_playerReady && sig == _playerBakeSig && Game1.ticks % 8 != 0)
+            {
+                PlayerMask = _playerRT;
+                return;
+            }
+            _playerBakeSig = sig;
+
             float w = src.Width * 4f, h = src.Height * 4f;
             Vector2 pos = new Vector2((PlayerRtW - w) / 2f, PlayerRtH - h - 8f);
             _playerFeetInRT = new Vector2(PlayerRtW / 2f, PlayerRtH - 8f);
@@ -1528,10 +1477,11 @@ namespace SDVRadiance
         }
 
         /// <summary>
-        /// Bake every on-screen NPC and animal to its own pooled offscreen target (black
-        /// silhouette + feet→head alpha gradient), so <see cref="DrawNpcShadow"/> /
+        /// Ensure every on-screen NPC/animal sprite FRAME has a baked silhouette in the
+        /// persistent cache (black + feet→head alpha gradient), so <see cref="DrawNpcShadow"/> /
         /// <see cref="DrawAnimalShadow"/> can composite one smooth image instead of banding.
-        /// Runs during RenderingWorld, where a render-target swap is safe.
+        /// Runs during RenderingWorld (render-target swaps are safe there). Warm frames are a
+        /// dictionary hit — only frames never seen before actually bake.
         /// </summary>
         private void BakeCasters(GraphicsDevice gd, GameLocation loc)
         {
@@ -1541,7 +1491,7 @@ namespace SDVRadiance
             int tx0 = vp.X / 64 - 3, tx1 = (vp.X + vp.Width) / 64 + 3;
             int ty0 = vp.Y / 64 - 3, ty1 = (vp.Y + vp.Height) / 64 + 3;
 
-            RenderTargetBinding[] prev = gd.GetRenderTargets();
+            RenderTargetBinding[]? prev = null;   // fetched lazily: only a cache MISS pays for it
             try
             {
                 foreach (NPC npc in CharactersIn(loc))
@@ -1551,8 +1501,12 @@ namespace SDVRadiance
                     Point t = npc.TilePoint;
                     if (t.X < tx0 || t.X > tx1 || t.Y < ty0 || t.Y > ty1)
                         continue;
-                    if (BakeSprite(gd, npc.Sprite.Texture, npc.Sprite.SourceRect, out RenderTarget2D rt, out Vector2 feet))
-                        _bakedMap[npc] = (rt, feet);
+                    var key = (npc.Sprite.Texture, npc.Sprite.SourceRect);
+                    if (_casterBakes.ContainsKey(key))
+                        continue;
+                    prev ??= gd.GetRenderTargets();
+                    if (BakeSprite(gd, key.Item1, key.Item2, out RenderTarget2D rt, out Vector2 feet))
+                        _casterBakes[key] = (rt, feet);
                 }
                 foreach (FarmAnimal a in AnimalsIn(loc))
                 {
@@ -1561,8 +1515,12 @@ namespace SDVRadiance
                     Point t = a.TilePoint;
                     if (t.X < tx0 || t.X > tx1 || t.Y < ty0 || t.Y > ty1)
                         continue;
-                    if (BakeSprite(gd, a.Sprite.Texture, a.Sprite.SourceRect, out RenderTarget2D rt, out Vector2 feet))
-                        _bakedMap[a] = (rt, feet);
+                    var key = (a.Sprite.Texture, a.Sprite.SourceRect);
+                    if (_casterBakes.ContainsKey(key))
+                        continue;
+                    prev ??= gd.GetRenderTargets();
+                    if (BakeSprite(gd, key.Item1, key.Item2, out RenderTarget2D rt, out Vector2 feet))
+                        _casterBakes[key] = (rt, feet);
                 }
             }
             catch (Exception ex)
@@ -1571,7 +1529,8 @@ namespace SDVRadiance
             }
             finally
             {
-                gd.SetRenderTargets(prev);
+                if (prev != null)
+                    gd.SetRenderTargets(prev);
             }
         }
 
@@ -1622,122 +1581,6 @@ namespace SDVRadiance
             var rt = new RenderTarget2D(gd, CasterRtW, CasterRtH);
             _casterPool.Add(rt);
             _casterUsed++;
-            return rt;
-        }
-
-        /// <summary>
-        /// Bake each visible building's silhouette SHEARED about its base into a pooled target, so
-        /// the composite is a plain draw and the shadow lies flat beside the building (no roof-over-
-        /// self). Shear = horizontal lean by height, squash = flatten to the ground; both from the
-        /// sun angle. Runs during RenderingWorld where render-target swaps + a matrix batch are safe.
-        /// </summary>
-        private void BakeBuildings(GraphicsDevice gd, GameLocation loc, ModConfig config)
-        {
-            if (loc == null || loc.buildings.Count == 0)
-                return;
-            float d = MathHelper.Clamp((Game1.timeOfDay - 1200) / 600f, -1f, 1f);
-            // A building silhouette projected UPWARD always overlaps the building (that's where the
-            // building is). A cast shadow falls onto the GROUND — down-and-to-the-side toward the
-            // camera. So map each row's height above the base to a DOWNWARD + sideways offset:
-            //   horizontal (lean) = shearX·height   (sign follows the sun, morning→left like chars)
-            //   vertical  (toward camera) = downSquash·height  (fullness / how far it lies out)
-            float shearX = MathHelper.Clamp(0.6f * d * Math.Max(0.2f, config.HeightShadowLength), -0.9f, 0.9f);
-            const float downSquash = 0.55f;
-
-            var vp = Game1.viewport;
-            int tx0 = vp.X / 64 - 16, tx1 = (vp.X + vp.Width) / 64 + 4;
-            int ty0 = vp.Y / 64 - 16, ty1 = (vp.Y + vp.Height) / 64 + 4;
-
-            RenderTargetBinding[] prev = gd.GetRenderTargets();
-            try
-            {
-                foreach (Building bld in loc.buildings)
-                {
-                    if (bld == null || bld.tileX.Value > tx1 || bld.tileX.Value + bld.tilesWide.Value < tx0
-                        || bld.tileY.Value > ty1 || bld.tileY.Value + bld.tilesHigh.Value < ty0)
-                        continue;
-                    if (BakeBuilding(gd, bld, shearX, downSquash, out RenderTarget2D rt, out Vector2 feet))
-                        _bldMap[bld] = (rt, feet);
-                }
-            }
-            catch (Exception ex)
-            {
-                if (Diag != null && !_errLogged) { _errLogged = true; Diag.Log($"[shadow] building bake threw: {ex}", LogLevel.Warn); }
-            }
-            finally
-            {
-                gd.SetRenderTargets(prev);
-            }
-        }
-
-        /// <summary>Bake one building's black silhouette projected DOWN onto the ground (base pinned,
-        /// rows above the base pushed down+sideways) so it lies in front of the building, never over
-        /// it. Returns false (→ contact-pool fallback) when it wouldn't fit a slot.</summary>
-        private bool BakeBuilding(GraphicsDevice gd, Building bld, float shearX, float downSquash, out RenderTarget2D rt, out Vector2 feetInRT)
-        {
-            rt = null!;
-            feetInRT = default;
-            Texture2D? tex = bld.texture?.Value;
-            if (tex == null)
-                return false;
-            Rectangle src = bld.getSourceRect();
-            float hpx = src.Height * 4f * downSquash;          // how far the shadow reaches toward camera
-            if (src.IsEmpty || src.Width * 4f > BldRtW || hpx > BldRtH - 32f)
-                return false;
-
-            rt = RentBldRT(gd);
-            var feet = new Vector2(BldRtW / 2f, 24f);          // base-centre near the slot TOP; shadow drops below
-            feetInRT = feet;
-            // About the feet: x' = x − shearX·(y−feetY), y' = feetY − downSquash·(y−feetY). A row at
-            // height h above the base (y−feetY = −h) lands at (+shearX·h sideways, +downSquash·h down)
-            // — i.e. projected down and out onto the ground, so a tall building never covers itself.
-            Matrix shear = Matrix.CreateTranslation(-feet.X, -feet.Y, 0f)
-                         * new Matrix(1f, 0f, 0f, 0f, -shearX, -downSquash, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 1f)
-                         * Matrix.CreateTranslation(feet.X, feet.Y, 0f);
-            try
-            {
-                gd.SetRenderTarget(rt);
-                gd.Clear(Color.Transparent);
-                // CullNone is REQUIRED: downSquash makes the matrix determinant negative (a vertical
-                // flip), which reverses triangle winding — the default cull would drop every pixel.
-                _rtBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, RasterizerState.CullNone, null, shear);
-                _rtBatch.Draw(tex, feet, src, Color.Black, 0f, new Vector2(src.Width / 2f, src.Height), 4f, SpriteEffects.None, 0f);
-                _rtBatch.End();
-
-                // Fade base(full, at feet)→tip(faint, further down). The shadow region is [feetY, feetY+hpx];
-                // the gradient is full at its bottom, so flip it vertically to keep full at the feet end.
-                _rtBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
-                _rtBatch.Draw(_bldGradTex!, new Rectangle(0, (int)feet.Y, BldRtW, (int)hpx), null, Color.White, 0f, Vector2.Zero, SpriteEffects.FlipVertically, 0f);
-                _rtBatch.End();
-
-                if (Diag != null && !_bldDumped && src.Width > 40)
-                {
-                    _bldDumped = true;
-                    try
-                    {
-                        string p = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "radiance_bld.png");
-                        using var fs = System.IO.File.Create(p);
-                        rt.SaveAsPng(fs, BldRtW, BldRtH);
-                        Diag.Log($"[shadow] bld dump {p} | src={src.Width}x{src.Height} shearX={shearX:0.00} hpx={hpx:0} feet={feet}", LogLevel.Info);
-                    }
-                    catch (Exception dex) { Diag.Log($"[shadow] bld dump failed: {dex.Message}", LogLevel.Warn); }
-                }
-                return true;
-            }
-            catch
-            {
-                try { _rtBatch!.End(); } catch { }
-                return false;
-            }
-        }
-
-        private RenderTarget2D RentBldRT(GraphicsDevice gd)
-        {
-            if (_bldUsed < _bldPool.Count)
-                return _bldPool[_bldUsed++];
-            var rt = new RenderTarget2D(gd, BldRtW, BldRtH);
-            _bldPool.Add(rt);
-            _bldUsed++;
             return rt;
         }
 
