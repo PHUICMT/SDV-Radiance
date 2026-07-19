@@ -315,9 +315,9 @@ float4 WaterPS(PixelInput input) : SV_TARGET
             float inR = step(0.0, dvB) * step(0.0, ruv.x) * step(ruv.x, 1.0)
                       * step(0.0, ruv.y) * step(ruv.y, 1.0);
             float ra = tex2D(PlayerMaskSampler, saturate(ruv)).a * inR;
-            float rfade = saturate(1.0 - dvB * 1.15);
-            col.rgb = lerp(col.rgb, col.rgb * float3(0.52, 0.60, 0.72),
-                           ra * rfade * water * saturate(ReflectStrength) * 0.85);
+            float rfade = saturate(1.0 - dvB * 0.9);
+            col.rgb = lerp(col.rgb, col.rgb * float3(0.34, 0.42, 0.55),
+                           saturate(ra * 1.6) * rfade * water * saturate(ReflectStrength));
         }
     }
 
