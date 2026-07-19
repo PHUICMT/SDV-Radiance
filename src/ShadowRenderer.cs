@@ -378,6 +378,17 @@ namespace SDVRadiance
             float lenCfg = Math.Max(0.1f, config.DirectionalShadowLength);
             float ambAlpha = strength * 0.4f;   // soft grounding pool; directional cast adds on top
 
+            // Gather this caster's directional casts FIRST: when at least one light throws a
+            // real shadow, the grounding pool drops to a hint (0.45×) — a full pool under a
+            // full cast read as two stacked shadows.
+            void GatherCasts(Vector2 feet)
+            {
+                _castBuf.Clear();
+                foreach (var (lpos, reach) in _lightBuf)
+                    if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
+                        _castBuf.Add((rot, st, a));
+            }
+
             foreach (NPC npc in CharactersIn(loc))
             {
                 if (npc == null || npc.IsInvisible || (npc.HideShadow && !(npc is Pet)) || npc.swimming.Value || npc.Sprite?.Texture == null)
@@ -388,10 +399,10 @@ namespace SDVRadiance
                     new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom - FeetLift));
                 float depth = MathHelper.Clamp(npc.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 float halfW = npc.GetSpriteWidthForPositioning() * 4f * 0.36f;
-                DrawContactBlob(b, feet, halfW, halfW * 0.5f, ambAlpha, depth, blur);
-                foreach (var (lpos, reach) in _lightBuf)
-                    if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
-                        DrawNpcShadow(b, npc, rot, st, a, blur);
+                GatherCasts(feet);
+                DrawContactBlob(b, feet, halfW, halfW * 0.5f, ambAlpha * (_castBuf.Count > 0 ? 0.45f : 1f), depth, blur);
+                foreach (var (rot, st, a) in _castBuf)
+                    DrawNpcShadow(b, npc, rot, st, a, blur);
             }
 
             foreach (FarmAnimal animal in AnimalsIn(loc))
@@ -402,10 +413,10 @@ namespace SDVRadiance
                     new Vector2(animal.Position.X + animal.Sprite.SpriteWidth * 4 / 2f, animal.GetBoundingBox().Bottom));
                 float depth = MathHelper.Clamp(animal.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 float halfW = animal.Sprite.SpriteWidth * 4f * 0.36f;
-                DrawContactBlob(b, feet, halfW, halfW * 0.5f, ambAlpha, depth, blur);
-                foreach (var (lpos, reach) in _lightBuf)
-                    if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
-                        DrawAnimalShadow(b, animal, rot, st, a, blur);
+                GatherCasts(feet);
+                DrawContactBlob(b, feet, halfW, halfW * 0.5f, ambAlpha * (_castBuf.Count > 0 ? 0.45f : 1f), depth, blur);
+                foreach (var (rot, st, a) in _castBuf)
+                    DrawAnimalShadow(b, animal, rot, st, a, blur);
             }
 
             if (_playerReady && _playerRT != null)
@@ -417,11 +428,11 @@ namespace SDVRadiance
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                         new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
                     float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
-                    DrawContactBlob(b, feet, 22f, 11f, ambAlpha, depth, blur);
-                    foreach (var (lpos, reach) in _lightBuf)
-                        if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
-                            DrawSoft(b, Taps9, _playerRT, null, feet, Color.White, a, rot, _playerFeetInRT,
-                                new Vector2(1f, st), depth, SpriteEffects.None, blur);
+                    GatherCasts(feet);
+                    DrawContactBlob(b, feet, 22f, 11f, ambAlpha * (_castBuf.Count > 0 ? 0.45f : 1f), depth, blur);
+                    foreach (var (rot, st, a) in _castBuf)
+                        DrawSoft(b, Taps9, _playerRT, null, feet, Color.White, a, rot, _playerFeetInRT,
+                            new Vector2(1f, st), depth, SpriteEffects.None, blur);
                 }
             }
 
@@ -489,6 +500,7 @@ namespace SDVRadiance
         }
 
         private readonly System.Collections.Generic.List<(Vector2 pos, float reach)> _lightBuf = new();
+        private readonly System.Collections.Generic.List<(float rot, float st, float a)> _castBuf = new();
 
         /// <summary>
         /// False for a STALE indoor window light: when a window is removed (decor mods) or goes

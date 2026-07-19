@@ -952,18 +952,9 @@ namespace SDVRadiance
                     for (int cx = 0; cx < clump.width.Value; cx++)
                         Stamp((int)clump.Tile.X + cx, (int)clump.Tile.Y + cy, 200);
             }
-            foreach (NPC npc in loc.characters)
-            {
-                if (npc?.IsInvisible == false)
-                    Stamp(npc.TilePoint.X, npc.TilePoint.Y, 140);
-            }
-            foreach (FarmAnimal a in loc.animals.Values)
-            {
-                if (a != null)
-                    Stamp(a.TilePoint.X, a.TilePoint.Y, 140);
-            }
-            if (Game1.player != null && Game1.player.currentLocation == loc)
-                Stamp(Game1.player.TilePoint.X, Game1.player.TilePoint.Y, 140);
+            // Characters/animals/the player are NOT stamped: their shadows are owned by the
+            // sprite silhouette pass — stamping them here too gave everyone standing near a
+            // lamp a second blurry dark blotch on top of their cast shadow.
 
             if (_occluderMask == null || _occluderMask.Width != tilesW || _occluderMask.Height != tilesH)
             {
