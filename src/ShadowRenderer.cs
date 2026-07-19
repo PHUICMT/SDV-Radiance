@@ -127,8 +127,15 @@ namespace SDVRadiance
         {
             if (!config.Enabled || !config.DirectionalShadowsEnabled)
                 return false;
-            return Game1.currentLocation != null;
+            // IsWorldReady (not the old !eventUp): cutscenes cast, but the half-initialized
+            // frames during save load / return-to-title never enter the shadow paths.
+            return StardewModdingAPI.Context.IsWorldReady && Game1.currentLocation != null;
         }
+
+        // Re-entrancy latch: if a patched draw call ever re-enters our render entry points
+        // (an appearance mod calling back into the game's draw while we're baking), bail and
+        // log ONCE instead of recursing until the stack dies.
+        private static int _renderDepth;
 
         /// <summary>All shadow-casting characters: residents PLUS cutscene/festival actors —
         /// during an event the scripted copies live in CurrentEvent.actors, not loc.characters
@@ -217,6 +224,11 @@ namespace SDVRadiance
         {
             if (!ShouldCast(config))
                 return;
+            if (_renderDepth > 0)
+            {
+                if (Diag != null && !_errLogged) { _errLogged = true; Diag.Log("[shadow] DrawInto re-entered — skipping nested call", LogLevel.Warn); }
+                return;
+            }
 
             GameLocation loc = Game1.currentLocation;
             float strength = MathHelper.Clamp(config.DirectionalShadowStrength, 0f, 1f);
@@ -224,6 +236,7 @@ namespace SDVRadiance
             if (strength <= 0.01f)
                 return;
 
+            _renderDepth++;
             try
             {
                 if (SunCasts())
@@ -234,6 +247,10 @@ namespace SDVRadiance
             catch (Exception ex)
             {
                 if (Diag != null && !_errLogged) { _errLogged = true; Diag.Log($"[shadow] draw threw: {ex}", LogLevel.Warn); }
+            }
+            finally
+            {
+                _renderDepth--;
             }
         }
 
@@ -1396,7 +1413,14 @@ namespace SDVRadiance
             _objUsed = 0;
             if (!ShouldCast(config))
                 return;
-
+            if (_renderDepth > 0)
+            {
+                if (Diag != null && !_errLogged) { _errLogged = true; Diag.Log("[shadow] PreparePlayer re-entered — skipping nested call", LogLevel.Warn); }
+                return;
+            }
+            _renderDepth++;
+            try
+            {
             _rtBatch ??= new SpriteBatch(gd);
             _gradTex ??= BuildGradient(gd);
             _bldGradTex ??= BuildGradient(gd, 0.35f);
@@ -1476,6 +1500,11 @@ namespace SDVRadiance
             finally
             {
                 gd.SetRenderTargets(prev);
+            }
+            }
+            finally
+            {
+                _renderDepth--;
             }
         }
 
