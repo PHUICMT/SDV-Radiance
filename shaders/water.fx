@@ -145,7 +145,9 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float pmIn = step(0.0, pmuv.x) * step(pmuv.x, 1.0) * step(0.0, pmuv.y) * step(pmuv.y, 1.0);
     float inPlayer = step(0.02, tex2D(PlayerMaskSampler, saturate(pmuv)).a) * pmIn;
     float ringGate = lerp(smoothstep(0.30, 0.45, srcLum) * (1.0 - inPlayer), 1.0, coreTile);
-    float water = tileWater * max(max(blueness, greyness * 0.7), cyan) * ringGate;
+    // Grey gate near full weight: tide pools are CORE water (coreTile-gated above), and at
+    // 0.7 their mirror was so damped it read as "pools don't reflect".
+    float water = tileWater * max(max(blueness, greyness * 0.9), cyan) * ringGate;
     if (water <= 0.002)
         return src;
 
@@ -261,7 +263,9 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // those cuts, not from the mirror itself.
         float3 mirrorCol = refl * float3(0.66, 0.76, 0.92);   // cool + darken: reads as "in the water"
         float3 sheenCol = col.rgb * float3(1.06, 1.10, 1.18) + 0.015;
-        float nearSelf = 1.0 - smoothstep(0.004, 0.02, waterOff);
+        // Keep the self-suppression zone TIGHT: small tide pools sit entirely within a couple of
+    // tiles of their own shoreline, so a wide nearSelf band muted their whole mirror.
+    float nearSelf = 1.0 - smoothstep(0.002, 0.01, waterOff);
         float mirrorness = found * (1.0 - srcWater) * (1.0 - nearSelf);
         float3 reflCol = lerp(sheenCol, mirrorCol, mirrorness);
         float amt = saturate(ReflectStrength) * water * fade * onScreen

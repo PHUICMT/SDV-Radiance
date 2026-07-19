@@ -887,7 +887,9 @@ namespace SDVRadiance
                     bool solid;
                     if (hf != null)
                     {
-                        try { solid = hf.GetHeightAt(loc, tx, ty) > 0; }
+                        // Walls/roofs block lamp light; decks (piers/bridges, height 1 but open)
+                        // and water don't.
+                        try { int cls = hf.GetSurfaceAt(loc, tx, ty); solid = cls == 2 || cls == 3; }
                         catch { hf = null; solid = false; }
                     }
                     else

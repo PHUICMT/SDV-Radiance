@@ -77,7 +77,14 @@ namespace SDVRadiance
                     bool solid = false;
                     if (hf != null)
                     {
-                        try { solid = hf.GetHeightAt(loc, tx0 + i, ty0 + j) > 0; }
+                        // Only WALLS and ROOF/canopy block sky light. Decks (piers, bridges) have
+                        // height 1 but are walk-on-top surfaces OPEN to the sky — treating them as
+                        // solid turned the whole beach pier into a giant dark pool. Water is open too.
+                        try
+                        {
+                            int cls = hf.GetSurfaceAt(loc, tx0 + i, ty0 + j);
+                            solid = cls == 2 || cls == 3;   // Wall / Roof
+                        }
                         catch { hf = null; }
                     }
                     _decay[idx] = solid ? SolidDecay : AirDecay;
