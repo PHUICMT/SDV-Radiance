@@ -1436,7 +1436,7 @@ namespace SDVRadiance
                     // Shallow puddles get a SOFTER mask value: every effect (ripple, sparkle,
                     // mirror) scales with it, so a walk-through pool shimmers gently instead of
                     // sparkling like open water.
-                    byte effV = !eff ? (byte)0 : _puddlePixBits![p] ? (byte)185 : (byte)255;
+                    byte effV = !eff ? (byte)0 : _puddlePixBits![p] ? (byte)205 : (byte)255;
                     _waterPixBuf[p] = new Color(effV, march ? 255 : 0, bch, 255);
                 }
             }

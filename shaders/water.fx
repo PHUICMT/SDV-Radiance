@@ -190,7 +190,10 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float swell = sin(worldTile.y * 2.1 + t * 1.6) + 0.35 * sin(worldTile.x * 1.4 - t * 1.0);
     float2 oceanRipple = float2(swell * 0.25, swell) * (Strength * 0.006);
 
-    float2 ripple = lerp(pondRipple, oceanRipple, WaterKind) * water;
+    // Puddle pixels (mask < full) always ripple POND-style: an ocean map's long slow swell
+    // barely moves inside a 3-tile walk-through pool, which read as "no effect up close".
+    float kind = WaterKind * step(0.95, tileWater);
+    float2 ripple = lerp(pondRipple, oceanRipple, kind) * water;
     float4 col = tex2D(SourceSampler, uv + ripple);
 
     // Depth tint: cool + deepen for a wetter, more 3D surface.
@@ -301,9 +304,9 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // Random drifting glints: one soft glint per cell at a random spot that
     // wanders slowly and pulses smoothly (no hard twinkle). Ocean glints are
     // sparser, slower and drift more.
-    float sdens = lerp(5.0, 3.0, WaterKind) * max(SparkleDensity, 0.05);
-    float spulse = lerp(1.1, 0.55, WaterKind);
-    float sdrift = lerp(0.05, 0.12, WaterKind);
+    float sdens = lerp(5.0, 3.0, kind) * max(SparkleDensity, 0.05);
+    float spulse = lerp(1.1, 0.55, kind);
+    float sdrift = lerp(0.05, 0.12, kind);
     float2 sg = (worldTile + float2(t * sdrift, t * sdrift * 0.6)) * sdens;
     float2 cell = floor(sg);
     float2 f = frac(sg);
