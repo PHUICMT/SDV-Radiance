@@ -315,9 +315,15 @@ float4 WaterPS(PixelInput input) : SV_TARGET
             float inR = step(0.0, dvB) * step(0.0, ruv.x) * step(ruv.x, 1.0)
                       * step(0.0, ruv.y) * step(ruv.y, 1.0);
             float ra = tex2D(PlayerMaskSampler, saturate(ruv)).a * inR;
+            // Colour comes from the SCREEN mirrored about the feet line (the player's own
+            // drawn sprite) — outfit colours for free; the silhouette alpha keeps the shape
+            // so nothing beside the player leaks in.
+            float mirrY = feetV - dvB * pmSpan.y;
+            float3 selfCol = tex2D(SourceSampler, float2(saturate(uv.x + ripple.x * 2.5), saturate(mirrY))).rgb
+                           * float3(0.62, 0.72, 0.88);   // cool + darken: "in the water"
             float rfade = saturate(1.0 - dvB * 0.9);
-            col.rgb = lerp(col.rgb, col.rgb * float3(0.34, 0.42, 0.55),
-                           saturate(ra * 1.6) * rfade * water * saturate(ReflectStrength));
+            col.rgb = lerp(col.rgb, selfCol,
+                           saturate(ra * 1.3) * rfade * water * saturate(ReflectStrength) * 0.6);
         }
     }
 
