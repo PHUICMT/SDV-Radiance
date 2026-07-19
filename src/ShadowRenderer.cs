@@ -411,7 +411,7 @@ namespace SDVRadiance
             if (_playerReady && _playerRT != null)
             {
                 Farmer who = Game1.player;
-                if (who != null && who.currentLocation == loc && !who.swimming.Value && !who.isRidingHorse() && !who.IsSitting()
+                if (who != null && who.currentLocation == loc && !who.swimming.Value && !who.isRidingHorse()
                     && !OnWater(loc, who.TilePoint))
                 {
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
@@ -1457,9 +1457,12 @@ namespace SDVRadiance
                 finally { gd.SetRenderTargets(objPrev); _objBaking = false; }
             }
 
+            // Sitting still casts (the bake captures the current SEATED animation frame, so the
+            // silhouette matches the pose); only swimming and horseback skip — the water owns
+            // the swimmer's reflection, and the horse's own shadow covers the rider.
             Farmer who = Game1.player;
             if (who == null || who.currentLocation != Game1.currentLocation
-                || who.swimming.Value || who.isRidingHorse() || who.IsSitting())
+                || who.swimming.Value || who.isRidingHorse())
                 return;
 
             _playerRT ??= new RenderTarget2D(gd, PlayerRtW, PlayerRtH);
