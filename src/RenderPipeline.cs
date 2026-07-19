@@ -1462,8 +1462,8 @@ namespace SDVRadiance
                 {
                     int p = rowBase + x;
                     bool v = _waterPixBits2![p];
-                    _edgeSum[x + 1] = _edgeSum[x] + (v ? _edgeBuf[p] : 0);
-                    _edgeCnt[x + 1] = _edgeCnt[x] + (v ? 1 : 0);
+                    _edgeSum![x + 1] = _edgeSum[x] + (v ? _edgeBuf[p] : 0);
+                    _edgeCnt![x + 1] = _edgeCnt[x] + (v ? 1 : 0);
                 }
                 for (int x = 0; x < pw; x++)
                 {
@@ -1475,7 +1475,7 @@ namespace SDVRadiance
                     {
                         int t0 = _edgeBuf[p];
                         int x0 = Math.Max(0, x - 10), x1 = Math.Min(pw - 1, x + 10);
-                        int n = _edgeCnt[x1 + 1] - _edgeCnt[x0];
+                        int n = _edgeCnt![x1 + 1] - _edgeCnt[x0];
                         float ts = n > 0 ? (float)(_edgeSum[x1 + 1] - _edgeSum[x0]) / n : t0;
                         ts = MathHelper.Clamp(ts, t0 - 24, t0 + 24);
                         bch = (byte)MathHelper.Clamp((float)Math.Round((y - ts) * 2f), 0f, 252f);
