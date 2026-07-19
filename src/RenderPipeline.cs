@@ -1241,6 +1241,32 @@ namespace SDVRadiance
                         _bigSeedBuf[idx] = true;
             }
 
+            // ARCH FILL: a bridge's arch openings sit BETWEEN structure tiles in the same row.
+            // Fill gaps ≤3 tiles between two structure tiles when the gap tile itself carries
+            // Buildings/Front art (arch rims do; open water between two separate piers doesn't)
+            // — the structure becomes ONE solid block with a level base, so every column's
+            // reflection anchors on the same row, like a real bridge mirrored in water.
+            for (int j = 0; j < tilesH; j++)
+            {
+                int lastStruct = -99;
+                for (int i = 0; i < tilesW; i++)
+                {
+                    int idx = j * tilesW + i;
+                    if (!_bigSeedBuf[idx])
+                        continue;
+                    if (i - lastStruct > 1 && i - lastStruct <= 4)
+                    {
+                        for (int k = lastStruct + 1; k < i; k++)
+                        {
+                            int kx = startTileX + k, ky = startTileY + j;
+                            if (TryTileArt(bld, kx, ky, out _, out _) || TryTileArt(front, kx, ky, out _, out _))
+                                _bigSeedBuf[j * tilesW + k] = true;
+                        }
+                    }
+                    lastStruct = i;
+                }
+            }
+
             // Pass C — carve opaque Buildings/Front art and emit two channels:
             //   R = EFFECT mask: carve everything opaque (no ripple/mirror ON posts, pads, bridges).
             //   G = MARCH mask: carve only land-connected structures (see above).
@@ -1252,8 +1278,9 @@ namespace SDVRadiance
                     int tx = startTileX + i, ty = startTileY + j;
                     (bool[] bits, int count)? carveB = TryTileArt(bld, tx, ty, out var t1, out var s1) ? SolidBits(t1, s1) : null;
                     (bool[] bits, int count)? carveF = TryTileArt(front, tx, ty, out var t2, out var s2) ? SolidBits(t2, s2) : null;
-                    bool bBig = _bigSeedBuf[idx];
-                    bool fBig = _bigSeedBuf[idx];
+                    // A structure tile blocks the march as a WHOLE tile (arch openings included):
+                    // per-pixel carving gave each column its own edge and the mirror stepped.
+                    bool structTile = _bigSeedBuf[idx];
                     for (int py = 0; py < Sub; py++)
                     {
                         int row = (j * Sub + py) * pw + i * Sub;
@@ -1261,9 +1288,9 @@ namespace SDVRadiance
                         for (int px = 0; px < Sub; px++)
                         {
                             bool eff = _waterPixBits[row + px];
-                            bool march = _waterPixBits2![row + px];
-                            if (carveB is { } cb && cb.bits[arow + px]) { eff = false; if (bBig) march = false; }
-                            if (carveF is { } cf && cf.bits[arow + px]) { eff = false; if (fBig) march = false; }
+                            bool march = _waterPixBits2![row + px] && !structTile;
+                            if (carveB is { } cb && cb.bits[arow + px]) eff = false;
+                            if (carveF is { } cf && cf.bits[arow + px]) eff = false;
                             _waterPixBuf[row + px] = new Color(eff ? 255 : 0, march ? 255 : 0, 0, 255);
                         }
                     }
