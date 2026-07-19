@@ -56,6 +56,7 @@ namespace SDVRadiance
         private bool[]? _waterPixBits2;        // march-channel bits (wider close: floats never block)
         private bool[]? _bigCarveBuf;          // per-tile: near-solid Buildings/Front art
         private bool[]? _bigSeedBuf;           // per-tile: near-solid AND connected to land (true structures)
+        private short[]? _edgeBuf;             // per-pixel: top row of this column's water run (waterline map)
         private Color[]? _artBuf;              // 16×16 scratch for tile-art reads
         private readonly System.Collections.Generic.Dictionary<string, Texture2D?> _sheetTexCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), bool[]> _waterBitsCache = new();
@@ -1287,13 +1288,57 @@ namespace SDVRadiance
                         int arow = py * Sub;
                         for (int px = 0; px < Sub; px++)
                         {
-                            bool eff = _waterPixBits[row + px];
-                            bool march = _waterPixBits2![row + px] && !structTile;
-                            if (carveB is { } cb && cb.bits[arow + px]) eff = false;
-                            if (carveF is { } cf && cf.bits[arow + px]) eff = false;
-                            _waterPixBuf[row + px] = new Color(eff ? 255 : 0, march ? 255 : 0, 0, 255);
+                            if (structTile)
+                                _waterPixBits2![row + px] = false;
+                            if (carveB is { } cb && cb.bits[arow + px]) _waterPixBits[row + px] = false;
+                            if (carveF is { } cf && cf.bits[arow + px]) _waterPixBits[row + px] = false;
                         }
                     }
+                }
+            }
+
+            // Pass D — WATERLINE HEIGHT-MAP: per column, remember the top row of each
+            // contiguous march-water run (= that pixel's shoreline).
+            if (_edgeBuf == null || _edgeBuf.Length < pcount)
+                _edgeBuf = new short[pcount];
+            for (int x = 0; x < pw; x++)
+            {
+                int top = -1;
+                for (int y = 0; y < ph; y++)
+                {
+                    int p = y * pw + x;
+                    if (_waterPixBits2![p]) { if (top < 0) top = y; _edgeBuf[p] = (short)top; }
+                    else top = -1;
+                }
+            }
+
+            // Pass E — smooth the shoreline HORIZONTALLY (±10 texels, ignoring neighbours whose
+            // edge differs >1.5 tiles = another body/structure) and emit. Stepped diagonal banks
+            // become a continuous slope, so a reflection is no longer sliced into offset blocks —
+            // the shader reads this distance (B, half-texel units) instead of marching.
+            for (int y = 0; y < ph; y++)
+            {
+                int rowBase = y * pw;
+                for (int x = 0; x < pw; x++)
+                {
+                    int p = rowBase + x;
+                    bool eff = _waterPixBits[p];
+                    bool march = _waterPixBits2![p];
+                    byte bch = 255;
+                    if (march)
+                    {
+                        int t0 = _edgeBuf[p];
+                        int acc = 0, n = 0;
+                        int x0 = Math.Max(0, x - 10), x1 = Math.Min(pw - 1, x + 10);
+                        for (int xx = x0; xx <= x1; xx++)
+                        {
+                            int q = rowBase + xx;
+                            if (_waterPixBits2[q] && Math.Abs(_edgeBuf[q] - t0) <= 24) { acc += _edgeBuf[q]; n++; }
+                        }
+                        float ts = n > 0 ? (float)acc / n : t0;
+                        bch = (byte)MathHelper.Clamp((float)Math.Round((y - ts) * 2f), 0f, 252f);
+                    }
+                    _waterPixBuf[p] = new Color(eff ? 255 : 0, march ? 255 : 0, bch, 255);
                 }
             }
             if (_waterMask == null || _waterMask.Width != pw || _waterMask.Height != ph)

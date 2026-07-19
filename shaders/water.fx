@@ -111,6 +111,16 @@ float WaterAtSmooth(float2 p)
     return tex2D(MaskLinearSampler, muv).g;
 }
 
+// B channel = the CPU-precomputed WATERLINE MAP: distance (half-texel units) from this
+// water pixel up to its body's shoreline, smoothed horizontally so stepped banks read
+// as one continuous waterline. 255 = not march-water / edge out of reach.
+float EdgeDistAt(float2 p)
+{
+    float2 wt = p * TilesPerScreen + WorldTileOffset;
+    float2 muv = (wt - floor(WorldTileOffset)) / MaskSize;
+    return tex2D(MaskSampler, muv).b;
+}
+
 float4 WaterPS(PixelInput input) : SV_TARGET
 {
     float2 uv = input.UV;
@@ -221,39 +231,13 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         float coreR = WaterAt(float2(mx + tileW, uv.y));
         mx += (1.0 - coreC) * (coreR - coreL) * tileW;
 
-        // Shoreline = this pixel's own CONTIGUOUS water edge (stopping at the first land row
-        // keeps a second water body beyond a pier from hijacking the mirror). Two-phase and
-        // branchless: a coarse march with a LONG reach (a short reach left the lower half of
-        // ponds with no shoreline in range → torn, partial mirrors), then a fine refine.
-        // POINT mask only: the bilinear one under-read near side banks (bare edge strips).
-        float found = 0.0;
-        float landOff = 0.9;                       // offset of the first non-water row above
-        [unroll]
-        for (int k = 1; k <= 28; k++)
-        {
-            float off = k * 0.03;
-            float vy = uv.y - off;
-            float wm = (vy > 0.0) ? WaterAt(float2(mx, vy)) : 0.0;
-            float miss = 1.0 - step(0.5, wm);
-            landOff = lerp(landOff, off, (1.0 - found) * miss);
-            found = max(found, miss);
-        }
-        // No shoreline in reach (open lake centre) → no mirror there (found gates amt);
-        // still substitute a sane offset so the sampling below stays well-behaved.
-        landOff = lerp(0.38, landOff, found);
-
-        float waterOff = max(landOff - 0.03, 0.0); // last coarse row that was still water
-        float open = 1.0;
-        [unroll]
-        for (int m = 1; m <= 6; m++)
-        {
-            float off = waterOff + m * 0.005;
-            float vy = uv.y - off;
-            float wm = (vy > 0.0) ? WaterAt(float2(mx, vy)) : 0.0;
-            float isw = step(0.5, wm);
-            waterOff = lerp(waterOff, off, open * isw);
-            open *= isw;
-        }
+        // Shoreline from the precomputed WATERLINE MAP (one sample replaces the old 34-tap
+        // march): per-column distance to this water body's edge, already smoothed across
+        // columns on the CPU — stepped tile banks anchor as one continuous line, so the
+        // mirror never slices into offset blocks.
+        float distHalf = EdgeDistAt(float2(mx, uv.y)) * 255.0;
+        float found = WaterAt(float2(mx, uv.y)) * step(distHalf, 252.5);
+        float waterOff = (distHalf * 0.5 / 16.0) / TilesPerScreen.y;
         float edgeV = uv.y - waterOff;
 
         // Oblique-view mirror: the world is drawn at a slant, so a reflection must be
