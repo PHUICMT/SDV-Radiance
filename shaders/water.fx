@@ -338,7 +338,9 @@ float4 WaterPS(PixelInput input) : SV_TARGET
                            tex2D(MaskLinearSampler, maskUV + float2(0.0,  mt.y)).r),
                        min(tex2D(MaskLinearSampler, maskUV + float2(-mt.x, 0.0)).r,
                            tex2D(MaskLinearSampler, maskUV + float2( mt.x, 0.0)).r));
-    float rim = saturate(tileWater - rimMin);
+    // Gated to MARCH water (g): wet-shading fringe kept only in the effect mask must
+    // not get a dark rim painted onto the bank.
+    float rim = saturate(tileWater - rimMin) * tex2D(MaskSampler, maskUV).g;
     col.rgb *= 1.0 - rim * 0.22 * water;
 
     // Random drifting glints: one soft glint per cell at a random spot that

@@ -117,26 +117,36 @@ namespace SDVRadiance
             return entry;
         }
 
-        /// <summary>16×16 solid bits + count of one tile art, cached — used to carve
-        /// piers/bridges/pads out of the water mask (count decides march-blocking).
-        /// "Solid" = opaque AND not painted as water: waterfalls and animated water edges
-        /// live on the Buildings layer too, and counting their opaque blue pixels as
-        /// structure carved whole water tiles out of the mask (a bright untouched patch,
-        /// no ripple, no reflection — and camera-position dependent via edge seeding).</summary>
+        /// <summary>16×16 opacity bits + opaque-pixel count of one tile art, cached — used to
+        /// carve piers/bridges/pads out of the water mask (count decides march-blocking).
+        /// A tile whose opaque art is MOSTLY painted water (a waterfall, an animated water
+        /// edge) is no structure at all — skipped entirely, or it carved whole water tiles
+        /// into bright untouched patches. Below that bar, plain opacity rules: plank art
+        /// keeps its dark blue-ish shadow pixels, so piers/bridges still block the march.</summary>
         private (bool[] bits, int count) SolidBits(Texture2D tex, Rectangle src)
         {
             var key = (tex, src);
             if (_solidBitsCache.TryGetValue(key, out var entry))
                 return entry;
             var bits = new bool[256];
-            int n = 0;
+            int n = 0, w = 0;
             _artBuf ??= new Color[256];
             try
             {
                 tex.GetData(0, src, _artBuf, 0, 256);
                 for (int p = 0; p < 256; p++)
-                    if (bits[p] = _artBuf[p].A >= 128 && !WaterColor(_artBuf[p]))
+                {
+                    if (bits[p] = _artBuf[p].A >= 128)
+                    {
                         n++;
+                        if (WaterColor(_artBuf[p])) w++;
+                    }
+                }
+                if (w * 10 >= n * 6)   // ≥60% of the opaque art is water → water overlay, not structure
+                {
+                    Array.Clear(bits, 0, 256);
+                    n = 0;
+                }
             }
             catch { /* leave all-false */ }
             entry = (bits, n);
@@ -368,7 +378,31 @@ namespace SDVRadiance
                 _waterPixBits2 = new bool[pcount];
             Array.Copy(_waterPixBits, _waterPixBits2, pcount);
             CloseVertical(_waterPixBits, 4);
-            CloseVertical(_waterPixBits2, 12);
+            // March close is SPECK-AWARE: a run shorter than 3 texels only bridges gaps
+            // ≤4 (a rim sliver above its slit), never the full 12 — wet-shading specks on
+            // the bank otherwise chained into the body below, pulling the column's
+            // waterline anchor up onto the bank (the surviving dark dashes).
+            for (int x = 0; x < pw; x++)
+            {
+                int last = -99, runH = 0;
+                for (int y = 0; y < ph; y++)
+                {
+                    if (!_waterPixBits2[y * pw + x])
+                        continue;
+                    int gap = y - last - 1;
+                    if (gap == 0)
+                        runH++;
+                    else if (gap <= 12 && (gap <= 4 || runH >= 3))
+                    {
+                        for (int k = last + 1; k < y; k++)
+                            _waterPixBits2[k * pw + x] = true;
+                        runH += gap + 1;
+                    }
+                    else
+                        runH = 1;
+                    last = y;
+                }
+            }
             // Structure test for the MARCH channel: near-solid art (≥90% opaque) that is
             // CONNECTED TO LAND. A bridge or pier always touches a bank; a clump of lily pads
             // dense enough to fill its tile still floats in open water — opacity alone let pad
