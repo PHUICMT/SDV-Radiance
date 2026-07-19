@@ -57,6 +57,9 @@ float Sparkle;          // specular glint intensity
 float2 TilesPerScreen;  // how many world tiles span the buffer (w/64, h/64)
 float2 WorldTileOffset; // viewport origin in world tiles (viewport.XY / 64), continuous
 float2 MaskSize;        // mask texture size in texels (tiles)
+float2 MaskOrigin;      // mask window origin in world tiles — the window is PADDED past
+                        // the viewport (2 left/right, 4 above), so this is NOT
+                        // floor(WorldTileOffset); the CPU passes the true origin.
 float WaterKind;        // 0 = still (pond/river), 1 = ocean/beach (big directional swell)
 float ReflectStrength;  // 0 = off; screen-space reflection of the scene above the surface
 float SparkleDensity;   // ~0.2–2: glint count per area; glint size follows inversely
@@ -100,7 +103,7 @@ float hash(float2 p)
 float WaterAt(float2 p)
 {
     float2 wt = p * TilesPerScreen + WorldTileOffset;
-    float2 muv = (wt - floor(WorldTileOffset)) / MaskSize;
+    float2 muv = (wt - MaskOrigin) / MaskSize;
     return tex2D(MaskSampler, muv).g;
 }
 
@@ -108,7 +111,7 @@ float WaterAt(float2 p)
 float WaterAtSmooth(float2 p)
 {
     float2 wt = p * TilesPerScreen + WorldTileOffset;
-    float2 muv = (wt - floor(WorldTileOffset)) / MaskSize;
+    float2 muv = (wt - MaskOrigin) / MaskSize;
     return tex2D(MaskLinearSampler, muv).g;
 }
 
@@ -118,7 +121,7 @@ float WaterAtSmooth(float2 p)
 float EdgeDistAt(float2 p)
 {
     float2 wt = p * TilesPerScreen + WorldTileOffset;
-    float2 muv = (wt - floor(WorldTileOffset)) / MaskSize;
+    float2 muv = (wt - MaskOrigin) / MaskSize;
     return tex2D(MaskSampler, muv).b;
 }
 
@@ -133,8 +136,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // PIXEL-accurate mask (16 texels per tile): true water tiles + the painted water inside
     // shore art, holes carved for piers/bridges/pads. Sampled CONTINUOUSLY (no tile floor) —
     // the effect ends exactly at the painted waterline, never spilling onto land.
-    float2 startTile = floor(WorldTileOffset);
-    float2 maskUV = (worldTile - startTile) / MaskSize;
+    float2 maskUV = (worldTile - MaskOrigin) / MaskSize;
     float tileWater = tex2D(MaskSampler, maskUV).r;
 
     float4 src = tex2D(SourceSampler, uv);

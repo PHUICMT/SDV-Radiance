@@ -175,10 +175,15 @@ namespace SDVRadiance
 
             int vx = Game1.viewport.X;
             int vy = Game1.viewport.Y;
-            int startTileX = (int)Math.Floor(vx / 64f);
-            int startTileY = (int)Math.Floor(vy / 64f);
-            int tilesW = Math.Max(1, w / 64 + 2);
-            int tilesH = Math.Max(1, h / 64 + 2);
+            // The window is PADDED past the viewport: 2 tiles left/right, 4 above. A
+            // column's waterline anchor (Pass D run-top) must stay WORLD-anchored while
+            // its shoreline scrolls just past the screen edge — anchored at the mask's
+            // own first row instead, the whole reflection re-based and vanished in ONE
+            // step as the player walked away, rather than fading out.
+            int startTileX = (int)Math.Floor(vx / 64f) - 2;
+            int startTileY = (int)Math.Floor(vy / 64f) - 4;
+            int tilesW = Math.Max(1, w / 64 + 6);
+            int tilesH = Math.Max(1, h / 64 + 6);
             int count = tilesW * tilesH;
 
             // The mask content is TILE-ANCHORED (sub-tile camera scroll is handled by the

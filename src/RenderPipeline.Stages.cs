@@ -283,6 +283,7 @@ namespace SDVRadiance
             P(fx, "TilesPerScreen")?.SetValue(_waterTilesPerScreen);
             P(fx, "WorldTileOffset")?.SetValue(_waterWorldTileOffset);
             P(fx, "MaskSize")?.SetValue(_waterMaskSize);
+            P(fx, "MaskOrigin")?.SetValue(new Vector2(_lastWaterTx, _lastWaterTy));
             P(fx, "MaskTexture")?.SetValue(_waterMask);
             P(fx, "MaskCoreTexture")?.SetValue(_waterMaskCore);
             P(fx, "SparkleDensity")?.SetValue(config.WaterSparkleDensity);
