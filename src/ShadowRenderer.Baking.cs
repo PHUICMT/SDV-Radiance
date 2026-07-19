@@ -82,10 +82,11 @@ namespace SDVRadiance
             BakeCasters(gd, Game1.currentLocation);
 
             // Bake OBJECT silhouettes (trees/bushes/clumps/furniture/craftables/…) by running the
-            // object enumeration in BAKE mode. Composited later in DrawObjectShadows. Only when
-            // the cache was invalidated, or on a slow heartbeat to pick up sprites that entered
-            // the view (a miss in between falls back to the banded shadow for a few frames).
-            if (objectsOn && (objCacheInvalid || Game1.ticks % 15 == 0))
+            // object enumeration in BAKE mode. Composited later in DrawObjectShadows. Runs every
+            // frame so sprites entering the view bake instantly (a 15-tick heartbeat was tried —
+            // its cache-miss frames drew the banded fallback, reading as line artifacts) — but a
+            // WARM frame is dictionary hits only, no RT switches, which is where the cost was.
+            if (objectsOn)
             {
                 _objBaking = true;
                 _objGd = gd;
