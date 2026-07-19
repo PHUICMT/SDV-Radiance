@@ -54,6 +54,8 @@ namespace SDVRadiance
         private Color[]? _waterPixBuf;         // pixel-mask upload buffer (tilesW*16 × tilesH*16)
         private bool[]? _waterPixBits;         // scratch bits for the close/carve passes (effect channel)
         private bool[]? _waterPixBits2;        // march-channel bits (wider close: floats never block)
+        private bool[]? _bigCarveBuf;          // per-tile: near-solid Buildings/Front art
+        private bool[]? _bigSeedBuf;           // per-tile: near-solid AND connected to land (true structures)
         private Color[]? _artBuf;              // 16×16 scratch for tile-art reads
         private readonly System.Collections.Generic.Dictionary<string, Texture2D?> _sheetTexCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), bool[]> _waterBitsCache = new();
@@ -1213,20 +1215,54 @@ namespace SDVRadiance
             Array.Copy(_waterPixBits, _waterPixBits2, pcount);
             CloseVertical(_waterPixBits, 4);
             CloseVertical(_waterPixBits2, 12);
-            // Pass C — carve opaque Buildings/Front art and emit two channels:
-            //   R = EFFECT mask: carve everything opaque (no ripple/mirror ON posts, pads, bridges).
-            //   G = MARCH mask: carve only near-solid tiles (≥90% opaque = bridges, pier decks).
-            //       Floating things must NOT read as shorelines — even a LARGE lily pad (60-70%
-            //       of its tile) re-anchored the mirror below it, shifting the reflection down.
+            // Structure test for the MARCH channel: near-solid art (≥90% opaque) that is
+            // CONNECTED TO LAND. A bridge or pier always touches a bank; a clump of lily pads
+            // dense enough to fill its tile still floats in open water — opacity alone let pad
+            // clusters re-anchor reflections below them. Connectivity: seed near-solid tiles
+            // that touch a non-water tile (or the screen edge — the structure may continue
+            // off-screen), then grow the seed through adjacent near-solid tiles.
+            if (_bigCarveBuf == null || _bigCarveBuf.Length < count) _bigCarveBuf = new bool[count];
+            if (_bigSeedBuf == null || _bigSeedBuf.Length < count) _bigSeedBuf = new bool[count];
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)
                 {
+                    int idx = j * tilesW + i;
+                    int tx = startTileX + i, ty = startTileY + j;
+                    bool big = (TryTileArt(bld, tx, ty, out var t1, out var s1) && SolidBits(t1, s1).count >= 230)
+                            || (TryTileArt(front, tx, ty, out var t2, out var s2) && SolidBits(t2, s2).count >= 230);
+                    _bigCarveBuf[idx] = big;
+                    bool landNear = i == 0 || i == tilesW - 1 || j == 0 || j == tilesH - 1
+                        || !(_waterMaskCoreBuf![idx - 1].R > 0) || !(_waterMaskCoreBuf[idx + 1].R > 0)
+                        || !(_waterMaskCoreBuf[idx - tilesW].R > 0) || !(_waterMaskCoreBuf[idx + tilesW].R > 0);
+                    _bigSeedBuf[idx] = big && landNear;
+                }
+            }
+            for (int sweep = 0; sweep < 2; sweep++)
+            {
+                for (int idx = 0; idx < count; idx++)                       // forward
+                    if (_bigCarveBuf[idx] && !_bigSeedBuf[idx] &&
+                        ((idx % tilesW > 0 && _bigSeedBuf[idx - 1]) || (idx >= tilesW && _bigSeedBuf[idx - tilesW])))
+                        _bigSeedBuf[idx] = true;
+                for (int idx = count - 1; idx >= 0; idx--)                  // backward
+                    if (_bigCarveBuf[idx] && !_bigSeedBuf[idx] &&
+                        ((idx % tilesW < tilesW - 1 && _bigSeedBuf[idx + 1]) || (idx + tilesW < count && _bigSeedBuf[idx + tilesW])))
+                        _bigSeedBuf[idx] = true;
+            }
+
+            // Pass C — carve opaque Buildings/Front art and emit two channels:
+            //   R = EFFECT mask: carve everything opaque (no ripple/mirror ON posts, pads, bridges).
+            //   G = MARCH mask: carve only land-connected structures (see above).
+            for (int j = 0; j < tilesH; j++)
+            {
+                for (int i = 0; i < tilesW; i++)
+                {
+                    int idx = j * tilesW + i;
                     int tx = startTileX + i, ty = startTileY + j;
                     (bool[] bits, int count)? carveB = TryTileArt(bld, tx, ty, out var t1, out var s1) ? SolidBits(t1, s1) : null;
                     (bool[] bits, int count)? carveF = TryTileArt(front, tx, ty, out var t2, out var s2) ? SolidBits(t2, s2) : null;
-                    bool bBig = carveB is { count: >= 230 };
-                    bool fBig = carveF is { count: >= 230 };
+                    bool bBig = _bigSeedBuf[idx];
+                    bool fBig = _bigSeedBuf[idx];
                     for (int py = 0; py < Sub; py++)
                     {
                         int row = (j * Sub + py) * pw + i * Sub;
