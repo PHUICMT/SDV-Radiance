@@ -61,6 +61,8 @@ namespace SDVRadiance
         private readonly System.Collections.Generic.Dictionary<string, Texture2D?> _sheetTexCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), bool[]> _waterBitsCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), (bool[] bits, int count)> _solidBitsCache = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), (bool[] bits, int count)> _puddleBitsCache = new();
+        private bool[]? _puddleTileBuf;        // per-tile: art looks like a shallow puddle (pre neighbour filter)
         private int _lastWaterTx = int.MinValue, _lastWaterTy = int.MinValue, _lastWaterTick = int.MinValue;
         private GameLocation? _lastWaterLoc;
         private bool _waterAny;
@@ -1027,6 +1029,41 @@ namespace SDVRadiance
             return bits;
         }
 
+        /// <summary>16×16 puddle classification of one tile art, cached: flat BLUE-GREY pixels
+        /// (low saturation, blue at least a nudge over red, mid brightness) — the look of the
+        /// walkable shallow pools that are plain ground in map data. Warm-grey stone, sand and
+        /// grass all fail one of the gates.</summary>
+        private (bool[] bits, int count) PuddleBits(Texture2D tex, Rectangle src)
+        {
+            var key = (tex, src);
+            if (_puddleBitsCache.TryGetValue(key, out var entry))
+                return entry;
+            var bits = new bool[256];
+            int n = 0;
+            _artBuf ??= new Color[256];
+            try
+            {
+                tex.GetData(0, src, _artBuf, 0, 256);
+                for (int p = 0; p < 256; p++)
+                {
+                    Color c = _artBuf[p];
+                    int maxc = Math.Max(c.R, Math.Max(c.G, c.B));
+                    int minc = Math.Min(c.R, Math.Min(c.G, c.B));
+                    bool puddleish = c.A >= 200
+                        && maxc - minc <= 40          // flat / unsaturated
+                        && c.B >= c.R + 3             // cool: blue nudged over red
+                        && c.B >= c.G - 8
+                        && maxc >= 55 && maxc <= 200; // mid brightness (not shadow, not foam)
+                    if (bits[p] = puddleish)
+                        n++;
+                }
+            }
+            catch { /* leave all-false */ }
+            entry = (bits, n);
+            _puddleBitsCache[key] = entry;
+            return entry;
+        }
+
         /// <summary>16×16 opacity bits + opaque-pixel count of one tile art, cached — used to
         /// carve piers/bridges/pads out of the water mask (count decides march-blocking).</summary>
         private (bool[] bits, int count) SolidBits(Texture2D tex, Rectangle src)
@@ -1164,6 +1201,8 @@ namespace SDVRadiance
             if (_waterPixBits == null || _waterPixBits.Length < pcount)
                 _waterPixBits = new bool[pcount];
             // Pass A — raw water pixels (true tiles solid, shore tiles by art classification).
+            if (_puddleTileBuf == null || _puddleTileBuf.Length < count)
+                _puddleTileBuf = new bool[count];
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)
@@ -1172,14 +1211,49 @@ namespace SDVRadiance
                     bool isWater = _waterMaskCoreBuf![idx].R > 0;
                     int tx = startTileX + i, ty = startTileY + j;
                     bool[]? bits = null;
-                    if (!isWater && _waterBool2Buf[idx] && TryTileArt(back, tx, ty, out var btex, out var bsrc))
-                        bits = ClassifyBits(btex, bsrc, water: true);
+                    bool puddle = false;
+                    if (!isWater && TryTileArt(back, tx, ty, out var btex, out var bsrc))
+                    {
+                        if (_waterBool2Buf[idx])
+                            bits = ClassifyBits(btex, bsrc, water: true);
+                        // Walkable shallow pools (island dig site) are plain GROUND in map data —
+                        // recognise them by their ART: mostly flat blue-grey pixels.
+                        puddle = PuddleBits(btex, bsrc).count >= 140;
+                    }
+                    _puddleTileBuf[idx] = puddle;
                     for (int py = 0; py < Sub; py++)
                     {
                         int row = (j * Sub + py) * pw + i * Sub;
                         int arow = py * Sub;
                         for (int px = 0; px < Sub; px++)
                             _waterPixBits[row + px] = isWater || (bits != null && bits[arow + px]);
+                    }
+                }
+            }
+            // Puddle merge — a puddle tile must have at least one puddle NEIGHBOUR (pools span
+            // multiple tiles; a lone grey-blue decorative tile somewhere must not turn to water).
+            for (int j = 0; j < tilesH; j++)
+            {
+                for (int i = 0; i < tilesW; i++)
+                {
+                    int idx = j * tilesW + i;
+                    if (!_puddleTileBuf[idx])
+                        continue;
+                    bool buddy = (i > 0 && _puddleTileBuf[idx - 1]) || (i < tilesW - 1 && _puddleTileBuf[idx + 1])
+                              || (j > 0 && _puddleTileBuf[idx - tilesW]) || (j < tilesH - 1 && _puddleTileBuf[idx + tilesW]);
+                    if (!buddy)
+                        continue;
+                    int tx = startTileX + i, ty = startTileY + j;
+                    if (!TryTileArt(back, tx, ty, out var ptex, out var psrc))
+                        continue;
+                    bool[] pbits = PuddleBits(ptex, psrc).bits;
+                    for (int py = 0; py < Sub; py++)
+                    {
+                        int row = (j * Sub + py) * pw + i * Sub;
+                        int arow = py * Sub;
+                        for (int px = 0; px < Sub; px++)
+                            if (pbits[arow + px])
+                                _waterPixBits[row + px] = true;
                     }
                 }
             }
