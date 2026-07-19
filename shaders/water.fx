@@ -161,9 +161,11 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float pmIn = step(0.0, pmuv.x) * step(pmuv.x, 1.0) * step(0.0, pmuv.y) * step(pmuv.y, 1.0);
     float inPlayer = step(0.02, tex2D(PlayerMaskSampler, saturate(pmuv)).a) * pmIn;
     float ringGate = lerp(1.0 - inPlayer, 1.0, coreTile);
-    // Grey gate near full weight: tide pools are CORE water (coreTile-gated above), and at
-    // 0.7 their mirror was so damped it read as "pools don't reflect".
-    float water = tileWater * max(max(blueness, greyness * 0.9), cyan) * ringGate;
+    // The pixel mask is the AUTHORITY on where water is — colour tests only BOOST beyond the
+    // 0.75 floor (murky green lakes failed every colour gate and the effect went patchy).
+    // Their remaining job is grading, not coverage; sprites over water are handled by the
+    // carve pass + the player silhouette gate.
+    float water = tileWater * max(max(max(blueness, greyness * 0.9), cyan), 0.75) * ringGate;
     if (water <= 0.002)
         return src;
 
@@ -301,7 +303,11 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // its whole row, and a full cut left every far bank with a blank unreflective band — the
     // near-shore mirror (bank art, a player standing above the pond) belongs there.
     float nearSelf = 1.0 - smoothstep(0.002, 0.01, waterOff);
-        float mirrorness = found * (1.0 - srcWater) * (1.0 - nearSelf * 0.4);
+        // srcWater only DAMPS (x0.3 floor), never cuts: under a bridge the arch columns see
+        // through the opening onto upper water and used to drop to sheen 1-2 tiles before the
+        // wall columns did — the mirror's bottom edge stepped up and down. With a floor, every
+        // column keeps a faint continuation and the DEPTH fade (uniform) sets the visual end.
+        float mirrorness = found * (1.0 - srcWater * 0.7) * (1.0 - nearSelf * 0.4);
         float3 reflCol = lerp(sheenCol, mirrorCol, mirrorness);
         float amt = saturate(ReflectStrength) * water * fade * onScreen
                   * saturate(srcLum * 3.2) * lerp(0.5, 1.0, mirrorness);
