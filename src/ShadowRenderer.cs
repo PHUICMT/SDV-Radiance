@@ -108,12 +108,39 @@ namespace SDVRadiance
             ColorDestinationBlend = Blend.One,
         };
 
-        /// <summary>Master gate: shadows enabled and we're in a normal (non-cutscene) location.</summary>
+        // Zero every RGB channel, leave alpha as-is: dst.rgb = 0. A silhouette is shape+opacity
+        // only — this scrubs any colour that slipped into the bake (Fashion Sense draws its
+        // clothing layers through its own patches and ignores the black tint we pass, so a
+        // white dress otherwise became a white "shadow").
+        private static readonly BlendState ZeroColor = new()
+        {
+            ColorWriteChannels = ColorWriteChannels.Red | ColorWriteChannels.Green | ColorWriteChannels.Blue,
+            ColorSourceBlend = Blend.Zero,
+            ColorDestinationBlend = Blend.Zero,
+            AlphaSourceBlend = Blend.Zero,
+            AlphaDestinationBlend = Blend.One,
+        };
+
+        /// <summary>Master gate: shadows enabled and a location is loaded. Cutscenes/festivals
+        /// cast too — their actors come from CurrentEvent.actors (see CharactersIn).</summary>
         internal static bool ShouldCast(ModConfig config)
         {
             if (!config.Enabled || !config.DirectionalShadowsEnabled)
                 return false;
-            return Game1.currentLocation != null && !Game1.eventUp;
+            return Game1.currentLocation != null;
+        }
+
+        /// <summary>All shadow-casting characters: residents PLUS cutscene/festival actors —
+        /// during an event the scripted copies live in CurrentEvent.actors, not loc.characters
+        /// (a cutscene looked shadowless because we only read the latter).</summary>
+        private static System.Collections.Generic.IEnumerable<NPC> CharactersIn(GameLocation loc)
+        {
+            foreach (NPC npc in CharactersIn(loc))
+                yield return npc;
+            var ev = Game1.CurrentEvent;
+            if (ev?.actors != null)
+                foreach (NPC npc in ev.actors)
+                    yield return npc;
         }
 
         /// <summary>All farm animals in a location — including Marnie's paddock cows, which live in
@@ -225,7 +252,7 @@ namespace SDVRadiance
                 Diag.Log($"[shadow] sun: npcs={loc.characters.Count}, time={Game1.timeOfDay}, rot={rot:0.00}, stretch={stretch:0.00}, alpha={alpha:0.00}, blur={blur:0.0}", LogLevel.Debug);
             }
 
-            foreach (NPC npc in loc.characters)
+            foreach (NPC npc in CharactersIn(loc))
             {
                 if (npc == null || npc.IsInvisible || (npc.HideShadow && !(npc is Pet)) || npc.swimming.Value || npc.Sprite?.Texture == null)
                     continue;
@@ -334,7 +361,7 @@ namespace SDVRadiance
             float lenCfg = Math.Max(0.1f, config.DirectionalShadowLength);
             float ambAlpha = strength * 0.4f;   // soft grounding pool; directional cast adds on top
 
-            foreach (NPC npc in loc.characters)
+            foreach (NPC npc in CharactersIn(loc))
             {
                 if (npc == null || npc.IsInvisible || (npc.HideShadow && !(npc is Pet)) || npc.swimming.Value || npc.Sprite?.Texture == null)
                     continue;
@@ -1424,9 +1451,17 @@ namespace SDVRadiance
                     src, pos, Vector2.Zero, 0f, who.FacingDirection, Color.Black, 0f, 1f, who);
                 _rtBatch.End();
 
+                // Scrub COLOUR out of the bake (RGB→0, alpha kept): appearance mods (Fashion
+                // Sense etc.) draw through their own patches and ignore the black tint above,
+                // so without this a white dress cast a white shadow. Works for ANY current or
+                // future appearance mod — whatever got drawn, only its shape survives.
+                _gradTex ??= BuildGradient(gd);
+                _rtBatch.Begin(SpriteSortMode.Deferred, ZeroColor, SamplerState.PointClamp);
+                _rtBatch.Draw(_gradTex, new Rectangle(0, 0, PlayerRtW, PlayerRtH), Color.White);
+                _rtBatch.End();
+
                 // Fade the silhouette's opacity from the feet (full) to the head/far tip (faint),
                 // so the stretched far end reads as a soft penumbra rather than a hard clone.
-                _gradTex ??= BuildGradient(gd);
                 _rtBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
                 _rtBatch.Draw(_gradTex, new Rectangle(0, 0, PlayerRtW, PlayerRtH), Color.White);
                 _rtBatch.End();
@@ -1461,7 +1496,7 @@ namespace SDVRadiance
             RenderTargetBinding[] prev = gd.GetRenderTargets();
             try
             {
-                foreach (NPC npc in loc.characters)
+                foreach (NPC npc in CharactersIn(loc))
                 {
                     if (npc == null || npc.IsInvisible || (npc.HideShadow && !(npc is Pet)) || npc.swimming.Value || npc.Sprite?.Texture == null)
                         continue;
