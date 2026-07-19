@@ -43,6 +43,12 @@ sampler2D MaskCoreLinearSampler = sampler_state
     MinFilter = Linear; MagFilter = Linear; MipFilter = None;
     AddressU = Clamp; AddressV = Clamp;
 };
+sampler2D MaskLinearSampler = sampler_state
+{
+    Texture = <MaskTexture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
 
 float Time;             // seconds
 float Strength;         // ripple amplitude (UV units are scaled inside)
@@ -83,21 +89,23 @@ float hash(float2 p)
     return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
 }
 
-// Point-sample the CORE (true-water) mask at any screen-UV point.
+// Point-sample the PIXEL-accurate water mask at any screen-UV point. The shoreline
+// march runs on this, so a reflection anchors at the PAINTED waterline (the real
+// curved pond edge), not at the tile boundary above it — and carved art (pier posts,
+// bridges) reads as land, hanging its own reflection from its base.
 float WaterAt(float2 p)
 {
     float2 wt = p * TilesPerScreen + WorldTileOffset;
-    float2 st = floor(WorldTileOffset);
-    float2 muv = (floor(wt) - st + 0.5) / MaskSize;
-    return tex2D(MaskCoreSampler, muv).r;
+    float2 muv = (wt - floor(WorldTileOffset)) / MaskSize;
+    return tex2D(MaskSampler, muv).r;
 }
 
-// Smooth (bilinear) CORE mask sample — soft gradient near true shorelines.
+// Smooth (bilinear) sample of the same mask — soft gradient near the waterline.
 float WaterAtSmooth(float2 p)
 {
     float2 wt = p * TilesPerScreen + WorldTileOffset;
     float2 muv = (wt - floor(WorldTileOffset)) / MaskSize;
-    return tex2D(MaskCoreLinearSampler, muv).r;
+    return tex2D(MaskLinearSampler, muv).r;
 }
 
 float4 WaterPS(PixelInput input) : SV_TARGET
