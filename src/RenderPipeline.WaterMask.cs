@@ -117,8 +117,12 @@ namespace SDVRadiance
             return entry;
         }
 
-        /// <summary>16×16 opacity bits + opaque-pixel count of one tile art, cached — used to
-        /// carve piers/bridges/pads out of the water mask (count decides march-blocking).</summary>
+        /// <summary>16×16 solid bits + count of one tile art, cached — used to carve
+        /// piers/bridges/pads out of the water mask (count decides march-blocking).
+        /// "Solid" = opaque AND not painted as water: waterfalls and animated water edges
+        /// live on the Buildings layer too, and counting their opaque blue pixels as
+        /// structure carved whole water tiles out of the mask (a bright untouched patch,
+        /// no ripple, no reflection — and camera-position dependent via edge seeding).</summary>
         private (bool[] bits, int count) SolidBits(Texture2D tex, Rectangle src)
         {
             var key = (tex, src);
@@ -131,7 +135,7 @@ namespace SDVRadiance
             {
                 tex.GetData(0, src, _artBuf, 0, 256);
                 for (int p = 0; p < 256; p++)
-                    if (bits[p] = _artBuf[p].A >= 128)
+                    if (bits[p] = _artBuf[p].A >= 128 && !WaterColor(_artBuf[p]))
                         n++;
             }
             catch { /* leave all-false */ }
