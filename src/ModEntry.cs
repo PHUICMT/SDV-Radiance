@@ -407,6 +407,30 @@ namespace SDVRadiance
                 if (tile != null)
                     this.Monitor.Log($"{layerName}: sheet={tile.TileSheet?.Id} index={tile.TileIndex}", LogLevel.Info);
             }
+
+            // Palette of the Back art (top colours by count) — for tuning art classifiers.
+            var back = loc.map?.GetLayer("Back");
+            var bt = back?.Tiles[t.X, t.Y];
+            if (bt is xTile.Tiles.AnimatedTile at && at.TileFrames is { Length: > 0 })
+                bt = at.TileFrames[0];
+            if (bt?.TileSheet != null)
+            {
+                try
+                {
+                    var tex = Game1.content.Load<Texture2D>(bt.TileSheet.ImageSource);
+                    var ib = bt.TileSheet.GetTileImageBounds(bt.TileIndex);
+                    var buf = new Color[ib.Width * ib.Height];
+                    tex.GetData(0, new Rectangle(ib.X, ib.Y, ib.Width, ib.Height), buf, 0, buf.Length);
+                    var groups = new System.Collections.Generic.Dictionary<Color, int>();
+                    foreach (Color c in buf)
+                        groups[c] = groups.TryGetValue(c, out int cn) ? cn + 1 : 1;
+                    this.Monitor.Log("Back art palette (top 10):", LogLevel.Info);
+                    foreach (var kv in System.Linq.Enumerable.Take(
+                        System.Linq.Enumerable.OrderByDescending(groups, g => g.Value), 10))
+                        this.Monitor.Log($"    RGBA({kv.Key.R},{kv.Key.G},{kv.Key.B},{kv.Key.A}) x{kv.Value}", LogLevel.Info);
+                }
+                catch (Exception ex) { this.Monitor.Log("palette read failed: " + ex.Message, LogLevel.Info); }
+            }
         }
 
         private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
