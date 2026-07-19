@@ -52,7 +52,8 @@ namespace SDVRadiance
         private bool[]? _waterBoolBuf;         // pre-dilation water flags (see BuildWaterMask)
         private bool[]? _waterBool2Buf;        // scratch for the dilation passes (candidate ring for art classification)
         private Color[]? _waterPixBuf;         // pixel-mask upload buffer (tilesW*16 × tilesH*16)
-        private bool[]? _waterPixBits;         // scratch bits for the close/carve passes
+        private bool[]? _waterPixBits;         // scratch bits for the close/carve passes (effect channel)
+        private bool[]? _waterPixBits2;        // march-channel bits (wider close: floats never block)
         private Color[]? _artBuf;              // 16×16 scratch for tile-art reads
         private readonly System.Collections.Generic.Dictionary<string, Texture2D?> _sheetTexCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), bool[]> _waterBitsCache = new();
@@ -1184,28 +1185,39 @@ namespace SDVRadiance
                     }
                 }
             }
-            // Pass B — vertical CLOSE (fill gaps ≤4 texels with water above and below): the
-            // shore art paints a dark shading row along the waterline that fails the colour
-            // test, which left a horizontal slit of dead pixels cutting every reflection.
-            for (int x = 0; x < pw; x++)
+            // Pass B — vertical CLOSE (fill gaps that have water above AND below), two widths:
+            //   effect bits: ≤4 texels — heals the dark shading slit the shore art paints
+            //                along the waterline without swallowing real land.
+            //   march bits:  ≤12 texels (~0.75 tile) — anything painted INSIDE a water body
+            //                (surf foam bands, starfish, sand flecks) must not read as a
+            //                shoreline, or reflections re-anchor below it and shift down.
+            //                Bridges/decks are ≥1 tile thick, so they still block.
+            void CloseVertical(bool[] bits, int maxGap)
             {
-                int last = -99;
-                for (int y = 0; y < ph; y++)
+                for (int x = 0; x < pw; x++)
                 {
-                    if (!_waterPixBits[y * pw + x])
-                        continue;
-                    if (y - last > 1 && y - last <= 5)
-                        for (int k = last + 1; k < y; k++)
-                            _waterPixBits[k * pw + x] = true;
-                    last = y;
+                    int last = -99;
+                    for (int y = 0; y < ph; y++)
+                    {
+                        if (!bits[y * pw + x])
+                            continue;
+                        if (y - last > 1 && y - last <= maxGap + 1)
+                            for (int k = last + 1; k < y; k++)
+                                bits[k * pw + x] = true;
+                        last = y;
+                    }
                 }
             }
+            if (_waterPixBits2 == null || _waterPixBits2.Length < pcount)
+                _waterPixBits2 = new bool[pcount];
+            Array.Copy(_waterPixBits, _waterPixBits2, pcount);
+            CloseVertical(_waterPixBits, 4);
+            CloseVertical(_waterPixBits2, 12);
             // Pass C — carve opaque Buildings/Front art and emit two channels:
             //   R = EFFECT mask: carve everything opaque (no ripple/mirror ON posts, pads, bridges).
-            //   G = MARCH mask: carve only art covering ≥60% of its tile (bridges, pier decks) —
-            //       small floating things (lily pads, plants) must NOT read as shorelines, or
-            //       every pixel below a pad anchors its reflection to the pad and the river's
-            //       mirror shatters along the pad row.
+            //   G = MARCH mask: carve only near-solid tiles (≥90% opaque = bridges, pier decks).
+            //       Floating things must NOT read as shorelines — even a LARGE lily pad (60-70%
+            //       of its tile) re-anchored the mirror below it, shifting the reflection down.
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)
@@ -1213,21 +1225,18 @@ namespace SDVRadiance
                     int tx = startTileX + i, ty = startTileY + j;
                     (bool[] bits, int count)? carveB = TryTileArt(bld, tx, ty, out var t1, out var s1) ? SolidBits(t1, s1) : null;
                     (bool[] bits, int count)? carveF = TryTileArt(front, tx, ty, out var t2, out var s2) ? SolidBits(t2, s2) : null;
-                    bool bBig = carveB is { count: >= 154 };
-                    bool fBig = carveF is { count: >= 154 };
+                    bool bBig = carveB is { count: >= 230 };
+                    bool fBig = carveF is { count: >= 230 };
                     for (int py = 0; py < Sub; py++)
                     {
                         int row = (j * Sub + py) * pw + i * Sub;
                         int arow = py * Sub;
                         for (int px = 0; px < Sub; px++)
                         {
-                            bool basePix = _waterPixBits[row + px];
-                            bool eff = basePix, march = basePix;
-                            if (basePix)
-                            {
-                                if (carveB is { } cb && cb.bits[arow + px]) { eff = false; if (bBig) march = false; }
-                                if (carveF is { } cf && cf.bits[arow + px]) { eff = false; if (fBig) march = false; }
-                            }
+                            bool eff = _waterPixBits[row + px];
+                            bool march = _waterPixBits2![row + px];
+                            if (carveB is { } cb && cb.bits[arow + px]) { eff = false; if (bBig) march = false; }
+                            if (carveF is { } cf && cf.bits[arow + px]) { eff = false; if (fBig) march = false; }
                             _waterPixBuf[row + px] = new Color(eff ? 255 : 0, march ? 255 : 0, 0, 255);
                         }
                     }
