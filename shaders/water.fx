@@ -297,7 +297,13 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // through the opening onto upper water and used to drop to sheen 1-2 tiles before the
         // wall columns did — the mirror's bottom edge stepped up and down. With a floor, every
         // column keeps a faint continuation and the DEPTH fade (uniform) sets the visual end.
-        float mirrorness = found * (1.0 - srcWater * 0.7) * (1.0 - nearSelf * 0.4);
+        // srcWater damping is DEPTH-GATED: right under a shoreline/deck the mirrored
+        // source is the structure itself, but a 1-tile plank pier has open water directly
+        // above it and the ±0.8-tile srcWater taps leaked into that water — its whole
+        // reflection washed down to a faint ghost. Only deeper down (source genuinely
+        // upstream water) does the damping engage.
+        float srcDamp = srcWater * smoothstep(0.25, 1.2, depth * TilesPerScreen.y);
+        float mirrorness = found * (1.0 - srcDamp * 0.7) * (1.0 - nearSelf * 0.4);
         float3 reflCol = lerp(sheenCol, mirrorCol, mirrorness);
         float amt = saturate(ReflectStrength) * water * fade * onScreen
                   * saturate(srcLum * 3.2) * lerp(0.5, 1.0, mirrorness);
