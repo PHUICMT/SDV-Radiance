@@ -153,6 +153,9 @@ namespace SDVRadiance
             helper.ConsoleCommands.Add("radiance_tile",
                 "Dump water-related data for the tile under the player (layer properties, HF class, isWaterTile).",
                 (cmd, args) => DumpTile());
+            helper.ConsoleCommands.Add("radiance_maskdump",
+                "Save the water mask textures to PNG in the temp folder (debug).",
+                (cmd, args) => this.Monitor.Log(_pipeline?.DumpMasks(System.IO.Path.GetTempPath()) ?? "pipeline not ready", LogLevel.Info));
             helper.Events.Display.RenderingWorld += OnRenderingWorld;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
             helper.Events.Display.RenderingStep += OnRenderingStep;

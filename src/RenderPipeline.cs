@@ -1611,6 +1611,23 @@ namespace SDVRadiance
             sb.End();
         }
 
+        /// <summary>Debug: save the water masks to PNG (R=effect, G=march, B=edge distance).</summary>
+        public string DumpMasks(string dir)
+        {
+            if (_waterMask == null)
+                return "no water mask built (stand near water first)";
+            string p1 = System.IO.Path.Combine(dir, "radiance-watermask.png");
+            using (var fs = System.IO.File.Create(p1))
+                _waterMask.SaveAsPng(fs, _waterMask.Width, _waterMask.Height);
+            if (_waterMaskCore != null)
+            {
+                string p2 = System.IO.Path.Combine(dir, "radiance-watercore.png");
+                using (var fs = System.IO.File.Create(p2))
+                    _waterMaskCore.SaveAsPng(fs, _waterMaskCore.Width, _waterMaskCore.Height);
+            }
+            return $"saved {p1} (origin tile {_lastWaterTx},{_lastWaterTy}, player tile {Game1.player?.TilePoint})";
+        }
+
         public void Dispose()
         {
             _sceneRT?.Dispose(); _fullA?.Dispose(); _fullB?.Dispose(); _rtA?.Dispose(); _rtB?.Dispose(); _waterMask?.Dispose(); _waterMaskCore?.Dispose(); _occluderMask?.Dispose(); _lumRT?.Dispose();
