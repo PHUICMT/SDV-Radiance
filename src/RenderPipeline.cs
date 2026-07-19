@@ -1118,6 +1118,10 @@ namespace SDVRadiance
                     bool water;
                     try { water = hf != null ? hf.IsWaterSurface(loc, tx, ty) : loc.isWaterTile(tx, ty); }
                     catch { hf = null; water = loc.isWaterTile(tx, ty); }
+                    // Walkable shallow pools (island dig site tide pools) aren't Water tiles,
+                    // but they refill the watering can → "WaterSource" marks them as real water.
+                    if (!water && loc.doesTileHaveProperty(tx, ty, "WaterSource", "Back") != null)
+                        water = true;
                     if (water) any = true;
                     _waterBoolBuf[j * tilesW + i] = water;
                 }

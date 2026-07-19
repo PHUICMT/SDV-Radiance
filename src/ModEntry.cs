@@ -150,6 +150,9 @@ namespace SDVRadiance
             helper.ConsoleCommands.Add("radiance_lights",
                 "List every active light source in the current location (id, kind, tile, radius, color, distance from player).",
                 (cmd, args) => DumpLights());
+            helper.ConsoleCommands.Add("radiance_tile",
+                "Dump water-related data for the tile under the player (layer properties, HF class, isWaterTile).",
+                (cmd, args) => DumpTile());
             helper.Events.Display.RenderingWorld += OnRenderingWorld;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
             helper.Events.Display.RenderingStep += OnRenderingStep;
@@ -368,6 +371,42 @@ namespace SDVRadiance
                     this.Monitor.Log($"    glow at tile ({g.X / 64f:0.0},{g.Y / 64f:0.0})", LogLevel.Info);
             }
             this.Monitor.Log("note: shadow pass uses up to 6 on-screen lights; each casts one shadow per character.", LogLevel.Info);
+        }
+
+        /// <summary>Console command: dump the tile under the player — for diagnosing why a
+        /// spot does or doesn't count as water for the mask.</summary>
+        private void DumpTile()
+        {
+            if (!StardewModdingAPI.Context.IsWorldReady || Game1.player == null)
+            {
+                this.Monitor.Log("Load a save first.", LogLevel.Info);
+                return;
+            }
+            var loc = Game1.currentLocation;
+            var t = Game1.player.TilePoint;
+            this.Monitor.Log($"=== Tile ({t.X},{t.Y}) in {loc?.NameOrUniqueName} ===", LogLevel.Info);
+            if (loc == null) return;
+            this.Monitor.Log($"isWaterTile={loc.isWaterTile(t.X, t.Y)}", LogLevel.Info);
+            foreach (string prop in new[] { "Water", "WaterSource", "Passable", "Type" })
+                foreach (string layer in new[] { "Back", "Buildings" })
+                {
+                    string? v = loc.doesTileHaveProperty(t.X, t.Y, prop, layer);
+                    if (v != null)
+                        this.Monitor.Log($"{layer}.{prop} = '{v}'", LogLevel.Info);
+                }
+            var hf = ShadowRenderer.Height;
+            if (hf != null)
+            {
+                try { this.Monitor.Log($"HF surface={hf.GetSurfaceAt(loc, t.X, t.Y)} (0G 1W 2Wall 3Roof 4Deck 5Void) height={hf.GetHeightAt(loc, t.X, t.Y)}", LogLevel.Info); }
+                catch { this.Monitor.Log("HF API threw", LogLevel.Info); }
+            }
+            foreach (string layerName in new[] { "Back", "Buildings", "Front" })
+            {
+                var layer = loc.map?.GetLayer(layerName);
+                var tile = layer?.Tiles[t.X, t.Y];
+                if (tile != null)
+                    this.Monitor.Log($"{layerName}: sheet={tile.TileSheet?.Id} index={tile.TileIndex}", LogLevel.Info);
+            }
         }
 
         private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
