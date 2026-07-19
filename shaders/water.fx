@@ -137,7 +137,11 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // The grey gate only holds INSIDE true water tiles (grey tide pools) — in the dilated
     // bank ring it caught grey/white land art (trailer roofs, stones) and rippled it.
     float coreTile = tex2D(MaskCoreSampler, maskUV).r;
-    float greyness = saturate(1.0 - (maxc - minc) * 6.0) * step(src.r, src.b + 0.02) * coreTile;
+    // Soft core reaches ~half a tile past true water tiles, so the PAINTED grey rim of a
+    // tide pool keeps its effects — the pixel mask already guarantees these are water pixels,
+    // while roofs/stones outside it never enter this branch at all.
+    float coreSoft = saturate(tex2D(MaskCoreLinearSampler, maskUV).r * 2.0);
+    float greyness = saturate(1.0 - (maxc - minc) * 6.0) * step(src.r, src.b + 0.02) * coreSoft;
     // Teal/green-tinted water (shallow foam zones along banks, the greenish ring around
     // lily pads) — g and b together dominate r, with b not far under g. Lily-pad leaf
     // green itself (b well below g) stays excluded: a pad floats ON the water and must
@@ -197,7 +201,9 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // pixel-scale water distortion (hash of the WORLD position → stable, no shimmer).
         // Kept SMALL: a wide dither shoved edge pixels onto the land column beside them,
         // stripping the mirror off the left/right rim of pools and pier inlets.
-        float dith = (hash(floor(worldTile * 4.0) / 4.0) - 0.5) * (0.18 / TilesPerScreen.x);
+        // Tiny now: the pixel mask draws real curved shorelines, so the old wide dither that
+    // hid tile staircases would only smear the clean edge.
+    float dith = (hash(floor(worldTile * 4.0) / 4.0) - 0.5) * (0.05 / TilesPerScreen.x);
         float mx = uv.x + wave * waveAmp + dith;   // jittered column for the march + mirror
 
         // Bank-ring columns (the strip of drawn water inside shore tiles) have NO core water
@@ -251,10 +257,12 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // The extra 0.6-tile source bias skips the mostly-transparent bottom sliver of shore
         // art (pier post rows, rim edges) so the SOLID body of the object meets the waterline.
         float depth = uv.y - edgeV;                 // how far below the shoreline
-        // Source bias 0.3 tile: enough to skip the transparent bottom sliver of pier posts,
-        // small enough that near-water detail (bridge arches) still appears in the mirror.
+        // Source bias is nearly zero now: it existed to skip pier-post art rows, but posts are
+        // CARVED out of the pixel mask (the march stops at their base), so the mirror can start
+        // right at the painted waterline — bank rims, bridge arches and a player standing at
+        // the pond's edge all appear pressed against the water.
         float2 reflUv = float2(mx + ripple.x * 3.0,
-                               edgeV - depth * 1.25 - 0.3 / TilesPerScreen.y + abs(ripple.y) * 2.0);
+                               edgeV - depth * 1.25 - 0.08 / TilesPerScreen.y + abs(ripple.y) * 2.0);
         reflUv = clamp(reflUv, float2(0.0, 0.0), float2(1.0, 1.0));
         float3 refl = tex2D(SourceSampler, reflUv).rgb;
 
