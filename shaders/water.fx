@@ -267,9 +267,12 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         float3 mirrorCol = refl * float3(0.66, 0.76, 0.92);   // cool + darken: reads as "in the water"
         float3 sheenCol = col.rgb * float3(1.06, 1.10, 1.18) + 0.015;
         // Keep the self-suppression zone TIGHT: small tide pools sit entirely within a couple of
-    // tiles of their own shoreline, so a wide nearSelf band muted their whole mirror.
+    // tiles of their own shoreline, so a wide nearSelf band muted their whole mirror. And only
+    // DAMP it (x0.4), never cut: the water strip inside a TOP shore tile has waterOff~0 across
+    // its whole row, and a full cut left every far bank with a blank unreflective band — the
+    // near-shore mirror (bank art, a player standing above the pond) belongs there.
     float nearSelf = 1.0 - smoothstep(0.002, 0.01, waterOff);
-        float mirrorness = found * (1.0 - srcWater) * (1.0 - nearSelf);
+        float mirrorness = found * (1.0 - srcWater) * (1.0 - nearSelf * 0.4);
         float3 reflCol = lerp(sheenCol, mirrorCol, mirrorness);
         float amt = saturate(ReflectStrength) * water * fade * onScreen
                   * saturate(srcLum * 3.2) * lerp(0.5, 1.0, mirrorness);
