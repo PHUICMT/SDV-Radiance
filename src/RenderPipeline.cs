@@ -57,6 +57,8 @@ namespace SDVRadiance
         private bool[]? _bigCarveBuf;          // per-tile: near-solid Buildings/Front art
         private bool[]? _bigSeedBuf;           // per-tile: near-solid AND connected to land (true structures)
         private short[]? _edgeBuf;             // per-pixel: top row of this column's water run (waterline map)
+        private int[]? _edgeSum;               // per-row prefix sums for the shoreline smoothing window
+        private int[]? _edgeCnt;
         private Color[]? _artBuf;              // 16×16 scratch for tile-art reads
         private readonly System.Collections.Generic.Dictionary<string, Texture2D?> _sheetTexCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), bool[]> _waterBitsCache = new();
@@ -64,6 +66,7 @@ namespace SDVRadiance
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), (bool[] bits, int count)> _puddleBitsCache = new();
         private byte[]? _puddleTileBuf;        // per-tile puddle level: 0 no, 1 weak (rocky variant), 2 strong
         private bool[]? _puddlePixBits;        // per-pixel: came from the puddle classifier (softer effects)
+        private int _occTx = int.MinValue, _occTy = int.MinValue, _occTick = int.MinValue;
         private int _lastWaterTx = int.MinValue, _lastWaterTy = int.MinValue, _lastWaterTick = int.MinValue;
         private GameLocation? _lastWaterLoc;
         private bool _waterAny;
@@ -905,6 +908,20 @@ namespace SDVRadiance
             int tilesH = Math.Max(1, h / 64 + 2);
             int count = tilesW * tilesH;
 
+            // Same throttle as the flood lightmap: ~900 cross-mod tile lookups per build is
+            // real money, and the occluder grid only shifts when the view crosses a tile (the
+            // 3-tick refresh keeps moving NPC stamps fresh enough for a soft shadow).
+            if (_occluderMask != null && startTileX == _occTx && startTileY == _occTy
+                && _occluderMask.Width == tilesW && Game1.ticks - _occTick < 3)
+            {
+                _occWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
+                _occMaskSize = new Vector2(tilesW, tilesH);
+                return true;
+            }
+            _occTx = startTileX;
+            _occTy = startTileY;
+            _occTick = Game1.ticks;
+
             if (_occluderMaskBuf == null || _occluderMaskBuf.Length < count)
                 _occluderMaskBuf = new Color[count];
 
@@ -1146,8 +1163,10 @@ namespace SDVRadiance
             // The mask content is TILE-ANCHORED (sub-tile camera scroll is handled by the
             // WorldTileOffset shader param), so it only changes when the view crosses a tile
             // boundary — rebuilding the pixel grid every frame was a walking-stutter tax.
+            // The 10 s safety refresh only exists to pick up rare map mutations (a bridge
+            // built, ice melting); everything routine invalidates via location/origin keys.
             if (_waterMask != null && loc == _lastWaterLoc && startTileX == _lastWaterTx && startTileY == _lastWaterTy
-                && _waterMask.Width == tilesW * 16 && Game1.ticks - _lastWaterTick < 20)
+                && _waterMask.Width == tilesW * 16 && Game1.ticks - _lastWaterTick < 600)
             {
                 _waterTilesPerScreen = new Vector2(w / 64f, h / 64f);
                 _waterWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
@@ -1429,13 +1448,23 @@ namespace SDVRadiance
                 }
             }
 
-            // Pass E — smooth the shoreline HORIZONTALLY (±10 texels, ignoring neighbours whose
-            // edge differs >1.5 tiles = another body/structure) and emit. Stepped diagonal banks
-            // become a continuous slope, so a reflection is no longer sliced into offset blocks —
-            // the shader reads this distance (B, half-texel units) instead of marching.
+            // Pass E — smooth the shoreline HORIZONTALLY (±10 texels window) and emit. Stepped
+            // diagonal banks become a continuous slope, so a reflection is no longer sliced
+            // into offset blocks — the shader reads this distance (B, half-texel units) instead
+            // of marching. Uses per-row PREFIX SUMS (O(width) per row, was O(width×21)); the
+            // window average is clamped to ±1.5 tiles of the pixel's own edge, which bounds the
+            // pull from a different water body sharing the row (the old per-neighbour reject).
+            if (_edgeSum == null || _edgeSum.Length < pw + 1) { _edgeSum = new int[pw + 1]; _edgeCnt = new int[pw + 1]; }
             for (int y = 0; y < ph; y++)
             {
                 int rowBase = y * pw;
+                for (int x = 0; x < pw; x++)
+                {
+                    int p = rowBase + x;
+                    bool v = _waterPixBits2![p];
+                    _edgeSum[x + 1] = _edgeSum[x] + (v ? _edgeBuf[p] : 0);
+                    _edgeCnt[x + 1] = _edgeCnt[x] + (v ? 1 : 0);
+                }
                 for (int x = 0; x < pw; x++)
                 {
                     int p = rowBase + x;
@@ -1445,14 +1474,10 @@ namespace SDVRadiance
                     if (march)
                     {
                         int t0 = _edgeBuf[p];
-                        int acc = 0, n = 0;
                         int x0 = Math.Max(0, x - 10), x1 = Math.Min(pw - 1, x + 10);
-                        for (int xx = x0; xx <= x1; xx++)
-                        {
-                            int q = rowBase + xx;
-                            if (_waterPixBits2[q] && Math.Abs(_edgeBuf[q] - t0) <= 24) { acc += _edgeBuf[q]; n++; }
-                        }
-                        float ts = n > 0 ? (float)acc / n : t0;
+                        int n = _edgeCnt[x1 + 1] - _edgeCnt[x0];
+                        float ts = n > 0 ? (float)(_edgeSum[x1 + 1] - _edgeSum[x0]) / n : t0;
+                        ts = MathHelper.Clamp(ts, t0 - 24, t0 + 24);
                         bch = (byte)MathHelper.Clamp((float)Math.Round((y - ts) * 2f), 0f, 252f);
                     }
                     // Shallow puddles get a SOFTER mask value: every effect (ripple, sparkle,
@@ -1570,6 +1595,10 @@ namespace SDVRadiance
         /// </summary>
         private void UpdateAutoExposure(SpriteBatch sb)
         {
+            // Scene brightness drifts slowly — metering every 4th frame halves the risk of a
+            // GPU readback sync without changing the (already eased) response visibly.
+            if (Game1.ticks % 4 != 0)
+                return;
             _lumRT ??= new RenderTarget2D(_device, 32, 32, false, SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
             _lumBuf ??= new Color[32 * 32];
 
