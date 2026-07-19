@@ -19,7 +19,7 @@ Status legend: **OK** works together · **PARTIAL** works with settings tweaks �
 | Mod | Status | Notes |
 |-----|--------|-------|
 | Stardew Valley Expanded (1.15.11) | UNTESTED | Custom maps stress tile-art shadow classification, water masks, and flood GI on non-vanilla layouts. |
-| Content Patcher recolors | UNTESTED | Recolored water/terrain stresses the water shader's blueness/greyness color gates. Not yet installed (Nexus download needed). |
+| Content Patcher recolors | UNTESTED | Recolored water/terrain stresses the water shader's blueness/greyness color gates. Deliberately not tested — noted here so the Nexus page can say so; if a recolor shifts water hue far from vanilla, the reflection/ripple gates may miss some tiles. |
 
 ## Cosmetic mods
 
