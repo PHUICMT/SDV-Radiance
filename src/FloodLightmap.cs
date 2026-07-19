@@ -26,6 +26,7 @@ namespace SDVRadiance
         /// <summary>Cell values are stored ×0.5 in the texture so >1 (glow) survives; shader ×2.</summary>
         internal const float TexScale = 0.5f;
 
+        private int _lastTx0 = int.MinValue, _lastTy0 = int.MinValue, _lastTick = int.MinValue;
         private Vector3[] _cells = Array.Empty<Vector3>();
         private Vector3[] _blur = Array.Empty<Vector3>();
         private float[] _decay = Array.Empty<float>();
@@ -48,6 +49,15 @@ namespace SDVRadiance
             int tw = Math.Max(1, w / 64 + 2) + Pad * 2;
             int th = Math.Max(1, h / 64 + 2) + Pad * 2;
             int count = tw * th;
+
+            // Rebuild throttle: the flood changes slowly (time, lights, viewport), but a full
+            // rebuild is ~1k cross-mod HF lookups + CPU sweeps EVERY frame — a walking-stutter
+            // tax. Reuse the last texture unless the view crossed a tile boundary or ~3 frames
+            // passed (GI refreshes at ~20 Hz; the analytic direct light still runs at 60).
+            if (_tex != null && tx0 == _lastTx0 && ty0 == _lastTy0
+                && _tex.Width == tw && _tex.Height == th && Game1.ticks - _lastTick < 3)
+                return true;
+            _lastTx0 = tx0; _lastTy0 = ty0; _lastTick = Game1.ticks;
 
             if (_cells.Length < count)
             {

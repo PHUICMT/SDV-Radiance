@@ -233,8 +233,9 @@ namespace SDVRadiance
         // --- Hotkeys ---
         /// <summary>Toggle the whole post-processing stack on/off (for quick A/B compare).</summary>
         public KeybindList ToggleKey { get; set; } = new(SButton.F7);
-        /// <summary>Open the live tuner overlay.</summary>
-        public KeybindList TunerKey { get; set; } = new(SButton.F8);
+        /// <summary>Open the live tuner overlay. F6: F8/F9 belong to Fashion Sense's outfit
+        /// tools in the wild, and colliding with the most popular cosmetic mod hurts.</summary>
+        public KeybindList TunerKey { get; set; } = new(SButton.F6);
 
         // --- Saved custom looks ---
         public List<NamedProfile> SavedProfiles { get; set; } = new();

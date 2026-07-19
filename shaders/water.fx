@@ -251,9 +251,10 @@ float4 WaterPS(PixelInput input) : SV_TARGET
 
         float srcWater = WaterAtSmooth(reflUv);
 
-        // Distance fade: defined near the shoreline, gone by ~0.6 screen below it. (An
-        // always-on base mirrored far-upstream cliffs down entire rivers as dark streaks.)
-        float fade = saturate(1.0 - depth * 1.6);
+        // Distance fade: defined near the shoreline, gone by ~0.75 screen below it. (An
+        // always-on base mirrored far-upstream cliffs down entire rivers as dark streaks;
+        // 1.6 faded bridges out so fast their reflection looked cut short.)
+        float fade = saturate(1.0 - depth * 1.3);
         // Fade the reflection out where the mirrored sample would fall OFF-screen, instead of
         // clamping (which smears the edge row/column across the water near the screen border).
         float2 dborder = min(reflUv, float2(1.0, 1.0) - reflUv);
