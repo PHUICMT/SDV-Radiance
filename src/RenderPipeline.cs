@@ -387,26 +387,26 @@ namespace SDVRadiance
 
             // Pass 1: generate the cloud-density mask at half-res (WorldOffset uses
             // the full-res dest so the anchor matches the composite step).
-            fx.Parameters["Time"]?.SetValue(wrappedTime);
-            fx.Parameters["Speed"]?.SetValue(config.CloudShadowSpeed);
-            fx.Parameters["Scale"]?.SetValue(config.CloudShadowScale);
-            fx.Parameters["Coverage"]?.SetValue(config.CloudShadowCoverage);
-            fx.Parameters["WorldOffset"]?.SetValue(WorldOffset(dest.Width, dest.Height));
+            P(fx, "Time")?.SetValue(wrappedTime);
+            P(fx, "Speed")?.SetValue(config.CloudShadowSpeed);
+            P(fx, "Scale")?.SetValue(config.CloudShadowScale);
+            P(fx, "Coverage")?.SetValue(config.CloudShadowCoverage);
+            P(fx, "WorldOffset")?.SetValue(WorldOffset(dest.Width, dest.Height));
             fx.CurrentTechnique = fx.Techniques["Mask"];
             Pass(sb, source, rtA, fx);
 
             // Pass 2/3: separable Gaussian blur -> soft, feathered penumbra edges.
-            fx.Parameters["TexelSize"]?.SetValue(new Vector2(1f / rtA.Width, 0f));
+            P(fx, "TexelSize")?.SetValue(new Vector2(1f / rtA.Width, 0f));
             fx.CurrentTechnique = fx.Techniques["BlurH"];
             Pass(sb, rtA, rtB, fx);
 
-            fx.Parameters["TexelSize"]?.SetValue(new Vector2(0f, 1f / rtB.Height));
+            P(fx, "TexelSize")?.SetValue(new Vector2(0f, 1f / rtB.Height));
             fx.CurrentTechnique = fx.Techniques["BlurV"];
             Pass(sb, rtB, rtA, fx);
 
             // Pass 4: composite the blurred shadow onto the scene.
-            fx.Parameters["Opacity"]?.SetValue(config.CloudShadowOpacity * _cloudDayFactor);
-            fx.Parameters["ShadowTexture"]?.SetValue(rtA);
+            P(fx, "Opacity")?.SetValue(config.CloudShadowOpacity * _cloudDayFactor);
+            P(fx, "ShadowTexture")?.SetValue(rtA);
             fx.CurrentTechnique = fx.Techniques["Composite"];
             DrawFull(sb, source, dest, fx);
         }
@@ -425,10 +425,10 @@ namespace SDVRadiance
 
             // Bright pass is GATED to a disk around the real light, so only pixels near THIS
             // light streak into rays — distant bright scenery (flowers, white hair) no longer does.
-            fx.Parameters["Threshold"]?.SetValue(config.GodRaysThreshold);
-            fx.Parameters["LightPos"]?.SetValue(lightPos);
-            fx.Parameters["LightRadius"]?.SetValue(_godRayRadiusUV);
-            fx.Parameters["Aspect"]?.SetValue(aspect);
+            P(fx, "Threshold")?.SetValue(config.GodRaysThreshold);
+            P(fx, "LightPos")?.SetValue(lightPos);
+            P(fx, "LightRadius")?.SetValue(_godRayRadiusUV);
+            P(fx, "Aspect")?.SetValue(aspect);
             // Player pixels are not light emitters — same silhouette exclusion as the water.
             var grWho = Game1.player;
             var grMask = ShadowRenderer.PlayerMask;
@@ -441,32 +441,32 @@ namespace SDVRadiance
                 grRect = new Vector4(tl.X / dest.Width, tl.Y / dest.Height,
                     (tl.X + ShadowRenderer.PlayerRtW) / dest.Width, (tl.Y + ShadowRenderer.PlayerRtH) / dest.Height);
             }
-            fx.Parameters["PlayerRect"]?.SetValue(grRect);
-            fx.Parameters["PlayerMaskTexture"]?.SetValue(grMask);
+            P(fx, "PlayerRect")?.SetValue(grRect);
+            P(fx, "PlayerMaskTexture")?.SetValue(grMask);
             // With flood GI active, only lit pixels may emit rays (kills rays from bright
             // sprites in unlit corners; lamp glow zones still stream at night).
             bool floodGate = config.FloodLightingEnabled && _flood.Texture != null;
-            fx.Parameters["FloodGate"]?.SetValue(floodGate ? 1f : 0f);
+            P(fx, "FloodGate")?.SetValue(floodGate ? 1f : 0f);
             if (floodGate)
             {
-                fx.Parameters["FloodMapTexture"]?.SetValue(_flood.Texture);
-                fx.Parameters["FloodTilesPerScreen"]?.SetValue(new Vector2(dest.Width / 64f, dest.Height / 64f));
-                fx.Parameters["FloodWorldTileOffset"]?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
-                fx.Parameters["FloodMapOrigin"]?.SetValue(_flood.Origin);
-                fx.Parameters["FloodMapSize"]?.SetValue(_flood.MapSize);
+                P(fx, "FloodMapTexture")?.SetValue(_flood.Texture);
+                P(fx, "FloodTilesPerScreen")?.SetValue(new Vector2(dest.Width / 64f, dest.Height / 64f));
+                P(fx, "FloodWorldTileOffset")?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
+                P(fx, "FloodMapOrigin")?.SetValue(_flood.Origin);
+                P(fx, "FloodMapSize")?.SetValue(_flood.MapSize);
             }
             fx.CurrentTechnique = fx.Techniques["Bright"];
             Pass(sb, source, rtA, fx);
 
-            fx.Parameters["LightPos"]?.SetValue(lightPos);
-            fx.Parameters["Density"]?.SetValue(config.GodRaysDensity);
-            fx.Parameters["Decay"]?.SetValue(config.GodRaysDecay);
-            fx.Parameters["Weight"]?.SetValue(0.5f);
+            P(fx, "LightPos")?.SetValue(lightPos);
+            P(fx, "Density")?.SetValue(config.GodRaysDensity);
+            P(fx, "Decay")?.SetValue(config.GodRaysDecay);
+            P(fx, "Weight")?.SetValue(0.5f);
             fx.CurrentTechnique = fx.Techniques["Rays"];
             Pass(sb, rtA, rtB, fx);
 
-            fx.Parameters["Intensity"]?.SetValue(config.GodRaysIntensity * _godRayAmount);
-            fx.Parameters["RaysTexture"]?.SetValue(rtB);
+            P(fx, "Intensity")?.SetValue(config.GodRaysIntensity * _godRayAmount);
+            P(fx, "RaysTexture")?.SetValue(rtB);
             fx.CurrentTechnique = fx.Techniques["Composite"];
             DrawFull(sb, source, dest, fx);
         }
@@ -478,21 +478,21 @@ namespace SDVRadiance
             var rtB = _rtB!;
             int w = dest.Width, h = dest.Height;
 
-            bloom.Parameters["Threshold"]?.SetValue(config.BloomThreshold);
-            bloom.Parameters["TexelSize"]?.SetValue(new Vector2(1f / w, 1f / h));
+            P(bloom, "Threshold")?.SetValue(config.BloomThreshold);
+            P(bloom, "TexelSize")?.SetValue(new Vector2(1f / w, 1f / h));
             bloom.CurrentTechnique = bloom.Techniques["BrightPass"];
             Pass(sb, source, rtA, bloom);
 
-            bloom.Parameters["TexelSize"]?.SetValue(new Vector2(1f / rtA.Width, 0f));
+            P(bloom, "TexelSize")?.SetValue(new Vector2(1f / rtA.Width, 0f));
             bloom.CurrentTechnique = bloom.Techniques["BlurHorizontal"];
             Pass(sb, rtA, rtB, bloom);
 
-            bloom.Parameters["TexelSize"]?.SetValue(new Vector2(0f, 1f / rtB.Height));
+            P(bloom, "TexelSize")?.SetValue(new Vector2(0f, 1f / rtB.Height));
             bloom.CurrentTechnique = bloom.Techniques["BlurVertical"];
             Pass(sb, rtB, rtA, bloom);
 
-            bloom.Parameters["Intensity"]?.SetValue(config.BloomIntensity);
-            bloom.Parameters["BloomTexture"]?.SetValue(rtA);
+            P(bloom, "Intensity")?.SetValue(config.BloomIntensity);
+            P(bloom, "BloomTexture")?.SetValue(rtA);
             bloom.CurrentTechnique = bloom.Techniques["Composite"];
             DrawFull(sb, source, dest, bloom);
         }
@@ -500,13 +500,13 @@ namespace SDVRadiance
         private void RenderFog(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var fx = _fog!;
-            fx.Parameters["Time"]?.SetValue(Time());
-            fx.Parameters["Speed"]?.SetValue(config.FogSpeed);
-            fx.Parameters["Scale"]?.SetValue(config.FogScale);
-            fx.Parameters["Density"]?.SetValue(config.FogDensity);
-            fx.Parameters["TopBias"]?.SetValue(config.FogTopBias);
-            fx.Parameters["FogColor"]?.SetValue(FogColor());
-            fx.Parameters["WorldOffset"]?.SetValue(WorldOffset(dest.Width, dest.Height));
+            P(fx, "Time")?.SetValue(Time());
+            P(fx, "Speed")?.SetValue(config.FogSpeed);
+            P(fx, "Scale")?.SetValue(config.FogScale);
+            P(fx, "Density")?.SetValue(config.FogDensity);
+            P(fx, "TopBias")?.SetValue(config.FogTopBias);
+            P(fx, "FogColor")?.SetValue(FogColor());
+            P(fx, "WorldOffset")?.SetValue(WorldOffset(dest.Width, dest.Height));
             fx.CurrentTechnique = fx.Techniques["Fog"];
             DrawFull(sb, source, dest, fx);
         }
@@ -518,11 +518,11 @@ namespace SDVRadiance
             var rtB = _rtB!;
 
             // blur at half-res: source(full) -> rtA (H) -> rtB (V)
-            fx.Parameters["TexelSize"]?.SetValue(new Vector2(1f / rtA.Width, 0f));
+            P(fx, "TexelSize")?.SetValue(new Vector2(1f / rtA.Width, 0f));
             fx.CurrentTechnique = fx.Techniques["BlurH"];
             Pass(sb, source, rtA, fx);
 
-            fx.Parameters["TexelSize"]?.SetValue(new Vector2(0f, 1f / rtB.Height));
+            P(fx, "TexelSize")?.SetValue(new Vector2(0f, 1f / rtB.Height));
             fx.CurrentTechnique = fx.Techniques["BlurV"];
             Pass(sb, rtA, rtB, fx);
 
@@ -530,14 +530,14 @@ namespace SDVRadiance
             // Config stores intuitive "blur amount" (higher = more blur from that edge);
             // convert to sharp-band edges: more top blur pushes TopEdge down, more
             // bottom blur pulls BottomEdge up.
-            fx.Parameters["TopEdge"]?.SetValue(MathHelper.Clamp(config.TiltShiftTopRatio, 0f, 1f) * 0.5f);
-            fx.Parameters["BottomEdge"]?.SetValue(1f - MathHelper.Clamp(config.TiltShiftBottomRatio, 0f, 1f) * 0.5f);
-            fx.Parameters["Strength"]?.SetValue(config.TiltShiftStrength);
-            fx.Parameters["Mode"]?.SetValue(config.TiltShiftMode == TiltShiftFocus.Radial ? 1f : 0f);
-            fx.Parameters["Center"]?.SetValue(PlayerScreenUV());
-            fx.Parameters["Aspect"]?.SetValue(dest.Height > 0 ? dest.Width / (float)dest.Height : 1f);
-            fx.Parameters["RadRadius"]?.SetValue(MathHelper.Clamp(config.TiltShiftRadius, 0.05f, 0.9f));
-            fx.Parameters["BlurTexture"]?.SetValue(rtB);
+            P(fx, "TopEdge")?.SetValue(MathHelper.Clamp(config.TiltShiftTopRatio, 0f, 1f) * 0.5f);
+            P(fx, "BottomEdge")?.SetValue(1f - MathHelper.Clamp(config.TiltShiftBottomRatio, 0f, 1f) * 0.5f);
+            P(fx, "Strength")?.SetValue(config.TiltShiftStrength);
+            P(fx, "Mode")?.SetValue(config.TiltShiftMode == TiltShiftFocus.Radial ? 1f : 0f);
+            P(fx, "Center")?.SetValue(PlayerScreenUV());
+            P(fx, "Aspect")?.SetValue(dest.Height > 0 ? dest.Width / (float)dest.Height : 1f);
+            P(fx, "RadRadius")?.SetValue(MathHelper.Clamp(config.TiltShiftRadius, 0.05f, 0.9f));
+            P(fx, "BlurTexture")?.SetValue(rtB);
             fx.CurrentTechnique = fx.Techniques["Composite"];
             DrawFull(sb, source, dest, fx);
         }
@@ -556,12 +556,12 @@ namespace SDVRadiance
 
             // _meteredExposure is measured & eased per frame in UpdateAutoExposure
             // (1.0 when auto is off), so bright scenes dim smoothly with no pop.
-            fx.Parameters["Strength"]?.SetValue(MathHelper.Clamp(config.ColorGradeStrength, 0f, 1f));
-            fx.Parameters["Contrast"]?.SetValue(config.ColorGradeContrast);
-            fx.Parameters["Saturation"]?.SetValue(sat);
-            fx.Parameters["Temperature"]?.SetValue(MathHelper.Clamp(temp, -1f, 1f));
-            fx.Parameters["Brightness"]?.SetValue(config.ColorGradeBrightness * _meteredExposure);
-            fx.Parameters["ToneMap"]?.SetValue(config.ColorGradeToneMap ? 1f : 0f);
+            P(fx, "Strength")?.SetValue(MathHelper.Clamp(config.ColorGradeStrength, 0f, 1f));
+            P(fx, "Contrast")?.SetValue(config.ColorGradeContrast);
+            P(fx, "Saturation")?.SetValue(sat);
+            P(fx, "Temperature")?.SetValue(MathHelper.Clamp(temp, -1f, 1f));
+            P(fx, "Brightness")?.SetValue(config.ColorGradeBrightness * _meteredExposure);
+            P(fx, "ToneMap")?.SetValue(config.ColorGradeToneMap ? 1f : 0f);
             fx.CurrentTechnique = fx.Techniques["ColorGrade"];
             DrawFull(sb, source, dest, fx);
         }
@@ -573,13 +573,13 @@ namespace SDVRadiance
         private void RenderFloodLight(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var fx = _floodFx!;
-            fx.Parameters["LightMapTexture"]?.SetValue(_flood.Texture);
-            fx.Parameters["TilesPerScreen"]?.SetValue(new Vector2(dest.Width / 64f, dest.Height / 64f));
-            fx.Parameters["WorldTileOffset"]?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
-            fx.Parameters["MapOrigin"]?.SetValue(_flood.Origin);
-            fx.Parameters["MapSize"]?.SetValue(_flood.MapSize);
-            fx.Parameters["Strength"]?.SetValue(MathHelper.Clamp(config.FloodLightingStrength, 0f, 1f));
-            fx.Parameters["AmbientFloor"]?.SetValue(0.10f);
+            P(fx, "LightMapTexture")?.SetValue(_flood.Texture);
+            P(fx, "TilesPerScreen")?.SetValue(new Vector2(dest.Width / 64f, dest.Height / 64f));
+            P(fx, "WorldTileOffset")?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
+            P(fx, "MapOrigin")?.SetValue(_flood.Origin);
+            P(fx, "MapSize")?.SetValue(_flood.MapSize);
+            P(fx, "Strength")?.SetValue(MathHelper.Clamp(config.FloodLightingStrength, 0f, 1f));
+            P(fx, "AmbientFloor")?.SetValue(0.10f);
 
             // Direct pools with per-light shadows: the brightest 8 on-screen lights (from
             // BuildLightList) + the occluder mask. Direct is scaled DOWN vs the classic
@@ -592,14 +592,14 @@ namespace SDVRadiance
                 _floodLightCol[n] = new Vector4(d.X * 0.55f, d.Y * 0.55f, d.Z * 0.55f, d.W);
             }
             for (int i = n; i < 8; i++) { _floodLightPos[i] = Vector2.Zero; _floodLightCol[i] = Vector4.Zero; }
-            fx.Parameters["LightPosArr"]?.SetValue(_floodLightPos);
-            fx.Parameters["LightColArr"]?.SetValue(_floodLightCol);
-            fx.Parameters["DirectCount"]?.SetValue((float)(_floodOccReady ? n : 0));
-            fx.Parameters["Aspect"]?.SetValue(dest.Width / (float)Math.Max(1, dest.Height));
-            fx.Parameters["OccluderTexture"]?.SetValue(_occluderMask);
-            fx.Parameters["OccOrigin"]?.SetValue(new Vector2((float)Math.Floor(Game1.viewport.X / 64f), (float)Math.Floor(Game1.viewport.Y / 64f)));
-            fx.Parameters["OccMapSize"]?.SetValue(_occMaskSize);
-            fx.Parameters["ShadowStrength"]?.SetValue(MathHelper.Clamp(config.FloodShadowStrength, 0f, 1f));
+            P(fx, "LightPosArr")?.SetValue(_floodLightPos);
+            P(fx, "LightColArr")?.SetValue(_floodLightCol);
+            P(fx, "DirectCount")?.SetValue((float)(_floodOccReady ? n : 0));
+            P(fx, "Aspect")?.SetValue(dest.Width / (float)Math.Max(1, dest.Height));
+            P(fx, "OccluderTexture")?.SetValue(_occluderMask);
+            P(fx, "OccOrigin")?.SetValue(new Vector2((float)Math.Floor(Game1.viewport.X / 64f), (float)Math.Floor(Game1.viewport.Y / 64f)));
+            P(fx, "OccMapSize")?.SetValue(_occMaskSize);
+            P(fx, "ShadowStrength")?.SetValue(MathHelper.Clamp(config.FloodShadowStrength, 0f, 1f));
 
             fx.CurrentTechnique = fx.Techniques["FloodLight"];
             DrawFull(sb, source, dest, fx);
@@ -611,18 +611,18 @@ namespace SDVRadiance
             // Weather/season drive how agitated the water is: choppier & faster in
             // rain/storm, sluggish in winter; sparkle fades when there's no sun.
             ComputeWaterDynamics(out float strengthMul, out float speedMul, out float sparkleMul);
-            fx.Parameters["Time"]?.SetValue(Time());
-            fx.Parameters["Strength"]?.SetValue(config.WaterStrength * strengthMul);
-            fx.Parameters["Speed"]?.SetValue(config.WaterSpeed * speedMul);
-            fx.Parameters["Sparkle"]?.SetValue(config.WaterSparkle * sparkleMul);
-            fx.Parameters["ReflectStrength"]?.SetValue(config.WaterReflection ? config.WaterReflectStrength : 0f);
-            fx.Parameters["WaterKind"]?.SetValue(WaterKind());
-            fx.Parameters["TilesPerScreen"]?.SetValue(_waterTilesPerScreen);
-            fx.Parameters["WorldTileOffset"]?.SetValue(_waterWorldTileOffset);
-            fx.Parameters["MaskSize"]?.SetValue(_waterMaskSize);
-            fx.Parameters["MaskTexture"]?.SetValue(_waterMask);
-            fx.Parameters["MaskCoreTexture"]?.SetValue(_waterMaskCore);
-            fx.Parameters["SparkleDensity"]?.SetValue(config.WaterSparkleDensity);
+            P(fx, "Time")?.SetValue(Time());
+            P(fx, "Strength")?.SetValue(config.WaterStrength * strengthMul);
+            P(fx, "Speed")?.SetValue(config.WaterSpeed * speedMul);
+            P(fx, "Sparkle")?.SetValue(config.WaterSparkle * sparkleMul);
+            P(fx, "ReflectStrength")?.SetValue(config.WaterReflection ? config.WaterReflectStrength : 0f);
+            P(fx, "WaterKind")?.SetValue(WaterKind());
+            P(fx, "TilesPerScreen")?.SetValue(_waterTilesPerScreen);
+            P(fx, "WorldTileOffset")?.SetValue(_waterWorldTileOffset);
+            P(fx, "MaskSize")?.SetValue(_waterMaskSize);
+            P(fx, "MaskTexture")?.SetValue(_waterMask);
+            P(fx, "MaskCoreTexture")?.SetValue(_waterMaskCore);
+            P(fx, "SparkleDensity")?.SetValue(config.WaterSparkleDensity);
             // Player SILHOUETTE mask (the shadow system's per-frame bake) in buffer UV —
             // ring-tile water effects skip exactly the player's own pixels, so a blue outfit
             // on a pier never ripples while the water right beside them stays animated.
@@ -637,8 +637,8 @@ namespace SDVRadiance
                 playerRect = new Vector4(tl.X / dest.Width, tl.Y / dest.Height,
                     (tl.X + ShadowRenderer.PlayerRtW) / dest.Width, (tl.Y + ShadowRenderer.PlayerRtH) / dest.Height);
             }
-            fx.Parameters["PlayerRect"]?.SetValue(playerRect);
-            fx.Parameters["PlayerMaskTexture"]?.SetValue(pmask);
+            P(fx, "PlayerRect")?.SetValue(playerRect);
+            P(fx, "PlayerMaskTexture")?.SetValue(pmask);
 
             // Time-of-day / weather dressing: golden-hour sparkle, star reflections and
             // lamp glimmer after dusk, raindrop rings while raining.
@@ -651,10 +651,10 @@ namespace SDVRadiance
                 sunWarm = MathHelper.Clamp((Math.Abs(dd) - 0.55f) / 0.45f, 0f, 1f);
             }
             float nightGlow = MathHelper.Clamp((mins - 1140) / 90f, 0f, 1f);   // 19:00 → 20:30
-            fx.Parameters["SunWarm"]?.SetValue(sunWarm);
-            fx.Parameters["NightGlow"]?.SetValue(nightGlow);
-            fx.Parameters["MoonGlow"]?.SetValue(ShadowRenderer.MoonStrength());
-            fx.Parameters["RainAmt"]?.SetValue(Game1.isRaining ? 1f : 0f);
+            P(fx, "SunWarm")?.SetValue(sunWarm);
+            P(fx, "NightGlow")?.SetValue(nightGlow);
+            P(fx, "MoonGlow")?.SetValue(ShadowRenderer.MoonStrength());
+            P(fx, "RainAmt")?.SetValue(Game1.isRaining ? 1f : 0f);
 
             int lc = 0;
             if (nightGlow > 0f && Game1.currentLightSources != null)
@@ -669,8 +669,8 @@ namespace SDVRadiance
                     _lightArr[lc++] = new Vector4(sp.X / dest.Width, sp.Y / dest.Height, kv.radius.Value, 0.9f);
                 }
             }
-            fx.Parameters["LightCount"]?.SetValue((float)lc);
-            fx.Parameters["Lights"]?.SetValue(_lightArr);
+            P(fx, "LightCount")?.SetValue((float)lc);
+            P(fx, "Lights")?.SetValue(_lightArr);
 
             // Wading: are the player's feet on water pixels? (mask texel = 4 world px)
             float pin = 0f;
@@ -683,7 +683,7 @@ namespace SDVRadiance
                     && _waterPixBuf[myp * _waterMask.Width + mxp].R > 100)
                     pin = 1f;
             }
-            fx.Parameters["PlayerInWater"]?.SetValue(pin);
+            P(fx, "PlayerInWater")?.SetValue(pin);
 
             fx.CurrentTechnique = fx.Techniques["Water"];
             DrawFull(sb, source, dest, fx);
@@ -692,9 +692,9 @@ namespace SDVRadiance
         private void RenderFinishing(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var fx = _finishing!;
-            fx.Parameters["VignetteStrength"]?.SetValue(config.VignetteEnabled ? config.VignetteStrength : 0f);
+            P(fx, "VignetteStrength")?.SetValue(config.VignetteEnabled ? config.VignetteStrength : 0f);
             // Map the 0..1 UI value to a tiny UV offset so it stays subtle on pixel art.
-            fx.Parameters["CAStrength"]?.SetValue(config.ChromaticAberrationEnabled ? config.ChromaticAberrationStrength * 0.03f : 0f);
+            P(fx, "CAStrength")?.SetValue(config.ChromaticAberrationEnabled ? config.ChromaticAberrationStrength * 0.03f : 0f);
             fx.CurrentTechnique = fx.Techniques["Finishing"];
             DrawFull(sb, source, dest, fx);
         }
@@ -702,26 +702,26 @@ namespace SDVRadiance
         private void RenderLighting(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var fx = _lighting!;
-            fx.Parameters["AmbientColor"]?.SetValue(ComputeLightingAmbient(config));
-            fx.Parameters["Aspect"]?.SetValue(dest.Height > 0 ? dest.Width / (float)dest.Height : 1f);
-            fx.Parameters["LightPos"]?.SetValue(_lightPos);
-            fx.Parameters["LightData"]?.SetValue(_lightData);
+            P(fx, "AmbientColor")?.SetValue(ComputeLightingAmbient(config));
+            P(fx, "Aspect")?.SetValue(dest.Height > 0 ? dest.Width / (float)dest.Height : 1f);
+            P(fx, "LightPos")?.SetValue(_lightPos);
+            P(fx, "LightData")?.SetValue(_lightData);
             // Allow pools to slightly exceed 1 so lamps glow a touch; keep it modest.
-            fx.Parameters["Overbright"]?.SetValue(1.0f + 0.4f * MathHelper.Clamp(config.LightingBoost, 0f, 2f));
+            P(fx, "Overbright")?.SetValue(1.0f + 0.4f * MathHelper.Clamp(config.LightingBoost, 0f, 2f));
             // Occluder shadows: only when enabled AND a mask was built this frame.
             if (_shadowsReady && _occluderMask != null)
             {
-                fx.Parameters["ShadowStrength"]?.SetValue(MathHelper.Clamp(config.LightingShadowStrength, 0f, 1f));
-                fx.Parameters["OccluderTexture"]?.SetValue(_occluderMask);
-                fx.Parameters["OccTilesPerScreen"]?.SetValue(_occTilesPerScreen);
-                fx.Parameters["OccWorldTileOffset"]?.SetValue(_occWorldTileOffset);
-                fx.Parameters["OccMaskSize"]?.SetValue(_occMaskSize);
+                P(fx, "ShadowStrength")?.SetValue(MathHelper.Clamp(config.LightingShadowStrength, 0f, 1f));
+                P(fx, "OccluderTexture")?.SetValue(_occluderMask);
+                P(fx, "OccTilesPerScreen")?.SetValue(_occTilesPerScreen);
+                P(fx, "OccWorldTileOffset")?.SetValue(_occWorldTileOffset);
+                P(fx, "OccMaskSize")?.SetValue(_occMaskSize);
             }
             else
             {
                 // Disabled: bind a valid texture and 0 strength so nothing samples garbage.
-                fx.Parameters["ShadowStrength"]?.SetValue(0f);
-                fx.Parameters["OccluderTexture"]?.SetValue(source);
+                P(fx, "ShadowStrength")?.SetValue(0f);
+                P(fx, "OccluderTexture")?.SetValue(source);
             }
             fx.CurrentTechnique = fx.Techniques["Lighting"];
             DrawFull(sb, source, dest, fx);
@@ -1644,6 +1644,19 @@ namespace SDVRadiance
 
             if (Game1.season == Season.Winter) { speed *= 0.8f; sparkle *= 0.8f; }           // cold, calmer
             else if (Game1.season == Season.Summer) sparkle *= 1.2f;                          // bright sun, more glint
+        }
+
+        // MonoGame's EffectParameterCollection indexer is a LINEAR scan with string compares,
+        // and the stages look parameters up ~100 times per frame — cache the references once
+        // per (effect, name) so a warm frame pays a dictionary hash instead.
+        private readonly System.Collections.Generic.Dictionary<(Effect fx, string name), EffectParameter?> _fxParamCache = new();
+
+        private EffectParameter? P(Effect fx, string name)
+        {
+            var key = (fx, name);
+            if (!_fxParamCache.TryGetValue(key, out EffectParameter? p))
+                _fxParamCache[key] = p = fx.Parameters[name];
+            return p;
         }
 
         private void Pass(SpriteBatch sb, Texture2D source, RenderTarget2D dest, Effect effect)
