@@ -242,8 +242,10 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // The extra 0.6-tile source bias skips the mostly-transparent bottom sliver of shore
         // art (pier post rows, rim edges) so the SOLID body of the object meets the waterline.
         float depth = uv.y - edgeV;                 // how far below the shoreline
+        // Source bias 0.3 tile: enough to skip the transparent bottom sliver of pier posts,
+        // small enough that near-water detail (bridge arches) still appears in the mirror.
         float2 reflUv = float2(mx + ripple.x * 3.0,
-                               edgeV - depth * 1.25 - 0.6 / TilesPerScreen.y + abs(ripple.y) * 2.0);
+                               edgeV - depth * 1.25 - 0.3 / TilesPerScreen.y + abs(ripple.y) * 2.0);
         reflUv = clamp(reflUv, float2(0.0, 0.0), float2(1.0, 1.0));
         float3 refl = tex2D(SourceSampler, reflUv).rgb;
 

@@ -181,9 +181,16 @@ namespace SDVRadiance
                     _blur[j * tw + i] = acc / Math.Max(1, n);
                 }
             }
+            // Walls/roofs are ELEVATED surfaces in a top-down view: the dark cell value models
+            // light blocked at ground level, but the pixels DRAWN there are facades and rooftops
+            // in full daylight — lift them to ambient so buildings never render dimmer than the
+            // ground they stand on (dark cells still attenuate propagation for the spill/shade).
+            Vector3 lift = sky * (outdoors ? 0.92f : 0.85f);
             for (int idx = 0; idx < count; idx++)
             {
                 Vector3 v = _cells[idx] + _blur[idx] * 0.18f;
+                if (_decay[idx] == SolidDecay)
+                    v = Vector3.Max(v, lift);
                 _pix[idx] = new Color(
                     (byte)MathHelper.Clamp(v.X * 255f * TexScale, 0f, 255f),
                     (byte)MathHelper.Clamp(v.Y * 255f * TexScale, 0f, 255f),
