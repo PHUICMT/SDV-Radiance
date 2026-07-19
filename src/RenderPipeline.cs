@@ -1178,9 +1178,9 @@ namespace SDVRadiance
             for (int idx = 0; idx < count; idx++)
                 _waterMaskCoreBuf[idx] = _waterBoolBuf[idx] ? Color.White : Color.Transparent;
 
-            _waterAny = any;
-            if (!any)
-                return false;
+            // NOTE: no early-out on "no real water" here — walk-through puddles (art-classified
+            // below) count as water too; a dig site with the ocean scrolled off-screen used to
+            // shut the whole stage off and every pool went dead at once.
 
             // CANDIDATE ring: dilate three tiles (shore art + beach surf zone). These tiles are
             // NOT marked water — they only nominate their ART for per-pixel classification below,
@@ -1225,9 +1225,13 @@ namespace SDVRadiance
                         // Walkable shallow pools (island dig site) are plain GROUND in map data —
                         // recognise them by their ART: mostly flat blue-grey pixels. Rocky/pebbled
                         // pool variants only reach ~30-55% coverage → "weak" tier, accepted when
-                        // surrounded by enough other pool tiles.
-                        int pc = PuddleBits(btex, bsrc).count;
-                        puddle = pc >= 140 ? (byte)2 : pc >= 80 ? (byte)1 : (byte)0;
+                        // surrounded by enough other pool tiles. OUTDOORS only: grey-blue interior
+                        // floors (mines) must never classify as water.
+                        if (loc.IsOutdoors)
+                        {
+                            int pc = PuddleBits(btex, bsrc).count;
+                            puddle = pc >= 140 ? (byte)2 : pc >= 80 ? (byte)1 : (byte)0;
+                        }
                     }
                     _puddleTileBuf[idx] = puddle;
                     for (int py = 0; py < Sub; py++)
@@ -1244,6 +1248,7 @@ namespace SDVRadiance
             if (_puddlePixBits == null || _puddlePixBits.Length < pcount)
                 _puddlePixBits = new bool[pcount];
             Array.Clear(_puddlePixBits, 0, pcount);
+            bool anyPuddle = false;
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)
@@ -1260,6 +1265,7 @@ namespace SDVRadiance
                     int tx = startTileX + i, ty = startTileY + j;
                     if (!TryTileArt(back, tx, ty, out var ptex, out var psrc))
                         continue;
+                    anyPuddle = true;
                     bool[] pbits = PuddleBits(ptex, psrc).bits;
                     for (int py = 0; py < Sub; py++)
                     {
@@ -1274,6 +1280,9 @@ namespace SDVRadiance
                     }
                 }
             }
+            _waterAny = any || anyPuddle;
+            if (!_waterAny)
+                return false;
             // Pass B — vertical CLOSE (fill gaps that have water above AND below), two widths:
             //   effect bits: ≤4 texels — heals the dark shading slit the shore art paints
             //                along the waterline without swallowing real land.
