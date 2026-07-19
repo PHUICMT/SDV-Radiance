@@ -62,7 +62,8 @@ namespace SDVRadiance
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), bool[]> _waterBitsCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), (bool[] bits, int count)> _solidBitsCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), (bool[] bits, int count)> _puddleBitsCache = new();
-        private bool[]? _puddleTileBuf;        // per-tile: art looks like a shallow puddle (pre neighbour filter)
+        private byte[]? _puddleTileBuf;        // per-tile puddle level: 0 no, 1 weak (rocky variant), 2 strong
+        private bool[]? _puddlePixBits;        // per-pixel: came from the puddle classifier (softer effects)
         private int _lastWaterTx = int.MinValue, _lastWaterTy = int.MinValue, _lastWaterTick = int.MinValue;
         private GameLocation? _lastWaterLoc;
         private bool _waterAny;
@@ -1207,7 +1208,7 @@ namespace SDVRadiance
                 _waterPixBits = new bool[pcount];
             // Pass A — raw water pixels (true tiles solid, shore tiles by art classification).
             if (_puddleTileBuf == null || _puddleTileBuf.Length < count)
-                _puddleTileBuf = new bool[count];
+                _puddleTileBuf = new byte[count];
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)
@@ -1216,14 +1217,17 @@ namespace SDVRadiance
                     bool isWater = _waterMaskCoreBuf![idx].R > 0;
                     int tx = startTileX + i, ty = startTileY + j;
                     bool[]? bits = null;
-                    bool puddle = false;
+                    byte puddle = 0;
                     if (!isWater && TryTileArt(back, tx, ty, out var btex, out var bsrc))
                     {
                         if (_waterBool2Buf[idx])
                             bits = ClassifyBits(btex, bsrc, water: true);
                         // Walkable shallow pools (island dig site) are plain GROUND in map data —
-                        // recognise them by their ART: mostly flat blue-grey pixels.
-                        puddle = PuddleBits(btex, bsrc).count >= 140;
+                        // recognise them by their ART: mostly flat blue-grey pixels. Rocky/pebbled
+                        // pool variants only reach ~30-55% coverage → "weak" tier, accepted when
+                        // surrounded by enough other pool tiles.
+                        int pc = PuddleBits(btex, bsrc).count;
+                        puddle = pc >= 140 ? (byte)2 : pc >= 80 ? (byte)1 : (byte)0;
                     }
                     _puddleTileBuf[idx] = puddle;
                     for (int py = 0; py < Sub; py++)
@@ -1235,18 +1239,23 @@ namespace SDVRadiance
                     }
                 }
             }
-            // Puddle merge — a puddle tile must have at least one puddle NEIGHBOUR (pools span
-            // multiple tiles; a lone grey-blue decorative tile somewhere must not turn to water).
+            // Puddle merge — strong tiles need ≥1 puddle neighbour, weak (rocky-variant) tiles
+            // need ≥2 (pools span multiple tiles; a lone grey-blue tile must not turn to water).
+            if (_puddlePixBits == null || _puddlePixBits.Length < pcount)
+                _puddlePixBits = new bool[pcount];
+            Array.Clear(_puddlePixBits, 0, pcount);
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)
                 {
                     int idx = j * tilesW + i;
-                    if (!_puddleTileBuf[idx])
+                    if (_puddleTileBuf[idx] == 0)
                         continue;
-                    bool buddy = (i > 0 && _puddleTileBuf[idx - 1]) || (i < tilesW - 1 && _puddleTileBuf[idx + 1])
-                              || (j > 0 && _puddleTileBuf[idx - tilesW]) || (j < tilesH - 1 && _puddleTileBuf[idx + tilesW]);
-                    if (!buddy)
+                    int buddies = ((i > 0 && _puddleTileBuf[idx - 1] > 0) ? 1 : 0)
+                                + ((i < tilesW - 1 && _puddleTileBuf[idx + 1] > 0) ? 1 : 0)
+                                + ((j > 0 && _puddleTileBuf[idx - tilesW] > 0) ? 1 : 0)
+                                + ((j < tilesH - 1 && _puddleTileBuf[idx + tilesW] > 0) ? 1 : 0);
+                    if (buddies < (_puddleTileBuf[idx] == 2 ? 1 : 2))
                         continue;
                     int tx = startTileX + i, ty = startTileY + j;
                     if (!TryTileArt(back, tx, ty, out var ptex, out var psrc))
@@ -1258,7 +1267,10 @@ namespace SDVRadiance
                         int arow = py * Sub;
                         for (int px = 0; px < Sub; px++)
                             if (pbits[arow + px])
+                            {
                                 _waterPixBits[row + px] = true;
+                                _puddlePixBits[row + px] = true;
+                            }
                     }
                 }
             }
@@ -1421,7 +1433,11 @@ namespace SDVRadiance
                         float ts = n > 0 ? (float)acc / n : t0;
                         bch = (byte)MathHelper.Clamp((float)Math.Round((y - ts) * 2f), 0f, 252f);
                     }
-                    _waterPixBuf[p] = new Color(eff ? 255 : 0, march ? 255 : 0, bch, 255);
+                    // Shallow puddles get a SOFTER mask value: every effect (ripple, sparkle,
+                    // mirror) scales with it, so a walk-through pool shimmers gently instead of
+                    // sparkling like open water.
+                    byte effV = !eff ? (byte)0 : _puddlePixBits![p] ? (byte)185 : (byte)255;
+                    _waterPixBuf[p] = new Color(effV, march ? 255 : 0, bch, 255);
                 }
             }
             if (_waterMask == null || _waterMask.Width != pw || _waterMask.Height != ph)
