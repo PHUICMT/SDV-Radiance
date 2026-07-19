@@ -106,7 +106,10 @@ namespace SDVRadiance
         {
             if (_objUsed < _objPool.Count)
                 return _objPool[_objUsed++];
-            var rt = new RenderTarget2D(gd, ObjRtW, ObjRtH);
+            // PreserveContents: these slots are CACHED across frames now (see PreparePlayer) —
+            // the default DiscardContents decays into garbage after later target swaps.
+            var rt = new RenderTarget2D(gd, ObjRtW, ObjRtH, false,
+                SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
             _objPool.Add(rt);
             _objUsed++;
             return rt;

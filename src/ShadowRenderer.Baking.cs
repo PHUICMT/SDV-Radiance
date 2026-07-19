@@ -107,7 +107,12 @@ namespace SDVRadiance
                 return;
             }
 
-            _playerRT ??= new RenderTarget2D(gd, PlayerRtW, PlayerRtH);
+            // PreserveContents is REQUIRED for every persistent bake target: the default
+            // DiscardContents only guarantees the pixels until the next target swap/present,
+            // which was fine when everything re-baked per frame — cached across frames, the
+            // content decayed into garbage (grid-line artifacts all over the map).
+            _playerRT ??= new RenderTarget2D(gd, PlayerRtW, PlayerRtH, false,
+                SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
 
             Rectangle src = who.FarmerSprite.SourceRect;
 
@@ -271,7 +276,8 @@ namespace SDVRadiance
         {
             if (_casterUsed < _casterPool.Count)
                 return _casterPool[_casterUsed++];
-            var rt = new RenderTarget2D(gd, CasterRtW, CasterRtH);
+            var rt = new RenderTarget2D(gd, CasterRtW, CasterRtH, false,
+                SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
             _casterPool.Add(rt);
             _casterUsed++;
             return rt;
