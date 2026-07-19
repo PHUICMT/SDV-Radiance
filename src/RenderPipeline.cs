@@ -669,6 +669,19 @@ namespace SDVRadiance
             fx.Parameters["LightCount"]?.SetValue((float)lc);
             fx.Parameters["Lights"]?.SetValue(_lightArr);
 
+            // Wading: are the player's feet on water pixels? (mask texel = 4 world px)
+            float pin = 0f;
+            if (who != null && _waterPixBuf != null && _waterMask != null)
+            {
+                Rectangle bb = who.GetBoundingBox();
+                int mxp = bb.Center.X / 4 - _lastWaterTx * 16;
+                int myp = (bb.Bottom - 4) / 4 - _lastWaterTy * 16;
+                if (mxp >= 0 && myp >= 0 && mxp < _waterMask.Width && myp < _waterMask.Height
+                    && _waterPixBuf[myp * _waterMask.Width + mxp].R > 100)
+                    pin = 1f;
+            }
+            fx.Parameters["PlayerInWater"]?.SetValue(pin);
+
             fx.CurrentTechnique = fx.Techniques["Water"];
             DrawFull(sb, source, dest, fx);
         }

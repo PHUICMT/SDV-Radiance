@@ -66,6 +66,7 @@ float MoonGlow;         // 0–1 lunar phase × season × clouds: moonlit swell 
 float RainAmt;          // 0–1 raining: expanding drop rings on the surface
 float4 Lights[8];       // xy = screen UV, z = radius (unused), w = intensity
 float LightCount;       // how many entries of Lights are live
+float PlayerInWater;    // 1 when the player's feet stand on water pixels (wading in a pool)
 float4 PlayerRect;      // player silhouette bounds in screen UV (x0,y0,x1,y1)
 texture PlayerMaskTexture;   // the player's baked silhouette — its alpha marks the
                              // player's ACTUAL pixels (not a box) to exclude from
@@ -299,6 +300,25 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         float amt = saturate(ReflectStrength) * water * fade * onScreen
                   * saturate(srcLum * 3.2) * lerp(0.5, 1.0, mirrorness);
         col.rgb = lerp(col.rgb, reflCol, amt);
+
+        // SELF-REFLECTION while wading: standing IN the water the player is BELOW the
+        // shoreline, so the main mirror can't see them. Mirror the baked silhouette about
+        // their own feet line instead — a dark rippling figure that follows them through
+        // the pool. Silhouette-based → any outfit/appearance mod works automatically.
+        if (PlayerInWater > 0.5)
+        {
+            float feetFrac = 0.9545;                             // feet row inside the mask RT
+            float feetV = PlayerRect.y + feetFrac * pmSpan.y;
+            float dvB = (uv.y - feetV) / pmSpan.y;               // box units below the feet
+            float2 ruv = float2((uv.x + ripple.x * 2.5 - PlayerRect.x) / pmSpan.x,
+                                feetFrac - dvB);
+            float inR = step(0.0, dvB) * step(0.0, ruv.x) * step(ruv.x, 1.0)
+                      * step(0.0, ruv.y) * step(ruv.y, 1.0);
+            float ra = tex2D(PlayerMaskSampler, saturate(ruv)).a * inR;
+            float rfade = saturate(1.0 - dvB * 1.15);
+            col.rgb = lerp(col.rgb, col.rgb * float3(0.52, 0.60, 0.72),
+                           ra * rfade * water * saturate(ReflectStrength) * 0.85);
+        }
     }
 
     // Random drifting glints: one soft glint per cell at a random spot that
