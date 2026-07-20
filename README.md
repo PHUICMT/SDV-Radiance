@@ -107,6 +107,9 @@ effects are active.
 - Single-player; effects are client-side. Android is not supported.
 - Run only one screen-space/lighting post-processing overlay at a time for a predictable look.
 
+### Known incompatibilities
+- **SpriteMaster** (also distributed as *"Clear Glasses"*, `aurpine.ClearGlasses`) — **not compatible.** SpriteMaster hooks the sprite batch and render targets deeply for its texture upscaling/caching; SDV-Radiance captures and post-processes the game's render target. Running both makes the world render as a solid color (orange/black) on load until a menu forces a redraw. Use one or the other. Native high-quality upscaling is on the SDV-Radiance roadmap so the two are eventually one install.
+
 ## Building
 
 1. Install the .NET SDK (6+; the repo builds against `net6.0`).
@@ -139,7 +142,7 @@ Planned directions (not yet shipped):
 - Building / elevation shadows (via a companion height framework)
 - Normal-mapped sprite lighting
 - Wet-world rain surfaces
-- High-quality texture upscaling
+- High-quality texture upscaling / sprite sharpening built in (so a separate upscaler like SpriteMaster isn't needed, and there's nothing to conflict with)
 
 ## Support / donate
 

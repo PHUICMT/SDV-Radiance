@@ -85,7 +85,12 @@ namespace SDVRadiance
                 {
                     int idx = j * tw + i;
                     bool solid = false;
-                    if (hf != null)
+                    // Sky occlusion only makes sense OUTDOORS. Interiors are already under a roof,
+                    // and every interior tile carries Front-layer art (upper walls), which the
+                    // height classifier reports as Roof — treating those as sky occluders zeroed
+                    // the whole room's lightmap (black scene, then the warm lamp seed flooded it
+                    // orange). Indoors, leave every cell open so ambient + lamps light it normally.
+                    if (hf != null && outdoors)
                     {
                         // Only WALLS and ROOF/canopy block sky light. Decks (piers, bridges) have
                         // height 1 but are walk-on-top surfaces OPEN to the sky — treating them as

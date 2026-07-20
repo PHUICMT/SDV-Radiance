@@ -27,6 +27,16 @@
     </None>
   </ItemGroup>
 
+  <!-- Ship the license and credits with the mod (the Nexus page points to them). -->
+  <ItemGroup>
+    <None Include="LICENSE">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="CREDITS.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
   <!-- If the game folder is not auto-detected, uncomment and set your path:
   <PropertyGroup>
     <GamePath>C:\Program Files (x86)\Steam\steamapps\common\Stardew Valley</GamePath>

@@ -440,13 +440,13 @@ namespace SDVRadiance
         {
             RegisterGmcm();
 
-            // Built-in per-tile water/deck/wall classification (formerly the separate Height
-            // Framework mod, now folded in). Rebuilt lazily per location; drop the cache when
-            // buildings change or a save loads so stamps stay current.
-            var height = new Integrations.HeightProvider();
+            // Optional Height Framework integration: robust per-tile water/deck/wall classification.
+            // Null when that mod isn't installed — the shadow code falls back to its own heuristics.
+            var height = this.Helper.ModRegistry.GetApi<Integrations.IHeightFrameworkApi>("phuicmt.HeightFramework");
             ShadowRenderer.Height = height;
-            this.Helper.Events.GameLoop.SaveLoaded += (_, _) => height.Clear();
-            this.Helper.Events.World.BuildingListChanged += (_, e) => height.Invalidate(e.Location);
+            this.Monitor.Log(height != null
+                ? "Height Framework detected — using it for water/ledge shadow suppression."
+                : "Height Framework not installed — using built-in tile heuristics for shadows.", LogLevel.Info);
         }
 
         private void RegisterGmcm()
