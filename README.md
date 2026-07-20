@@ -8,6 +8,8 @@
 **Framework:** SMAPI 4.x · MonoGame · HLSL
 **License:** MIT
 
+[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/phuicmt)
+
 ---
 
 ## What it is
