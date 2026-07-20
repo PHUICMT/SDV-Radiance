@@ -6,7 +6,7 @@
   "UniqueID": "phuicmt.SDVRadiance",
   "EntryDll": "SDV-Radiance.dll",
   "MinimumApiVersion": "4.0.0",
-  "UpdateKeys": [ "GitHub:PHUICMT/SDV-Radiance" ],
+  "UpdateKeys": [ "Nexus:49397", "GitHub:PHUICMT/SDV-Radiance" ],
   "Dependencies": [
     {
       "UniqueID": "spacechase0.GenericModConfigMenu",

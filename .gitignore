@@ -25,3 +25,4 @@ Thumbs.db
 stardewvalley.targets
 *.local.props
 *.local.md
+*.local.ps1
