@@ -151,7 +151,7 @@ namespace SDVRadiance
             || (c.ColorGradeEnabled && _colorGrade != null)
             || (c.TiltShiftEnabled && _tiltShift != null)
             || (c.WaterEnabled && _water != null)
-            || ((c.VignetteEnabled || c.ChromaticAberrationEnabled) && _finishing != null);
+            || ((c.VignetteEnabled || c.ChromaticAberrationEnabled || c.NightFireflies) && _finishing != null);
 
         private void EnsureTargets(int w, int h, SurfaceFormat format)
         {
@@ -272,7 +272,7 @@ namespace SDVRadiance
                 // Tilt-shift (depth-of-field) after grading, so it blurs the graded image.
                 if (config.TiltShiftEnabled && _tiltShift != null) stages.Add(_dTilt);
                 // Finishing (vignette + chromatic aberration): true camera-lens pass, last.
-                if ((config.VignetteEnabled || config.ChromaticAberrationEnabled) && _finishing != null) stages.Add(_dFinish);
+                if ((config.VignetteEnabled || config.ChromaticAberrationEnabled || config.NightFireflies) && _finishing != null) stages.Add(_dFinish);
 
                 Texture2D current = _sceneRT!;
                 for (int i = 0; i < stages.Count; i++)

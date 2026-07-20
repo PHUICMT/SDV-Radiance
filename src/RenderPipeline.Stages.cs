@@ -359,6 +359,16 @@ namespace SDVRadiance
             P(fx, "VignetteStrength")?.SetValue(config.VignetteEnabled ? config.VignetteStrength : 0f);
             // Map the 0..1 UI value to a tiny UV offset so it stays subtle on pixel art.
             P(fx, "CAStrength")?.SetValue(config.ChromaticAberrationEnabled ? config.ChromaticAberrationStrength * 0.03f : 0f);
+            // Night fireflies: drifting glow motes outdoors after dusk. NightAmt ramps 19:00→21:00
+            // (0 by day). Off indoors — no open ground/grass for them to hover over.
+            int fmins = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
+            float nightAmt = MathHelper.Clamp((fmins - 1140) / 120f, 0f, 1f);
+            bool fireflies = config.NightFireflies && (Game1.currentLocation?.IsOutdoors ?? false) && nightAmt > 0f;
+            P(fx, "Fireflies")?.SetValue(fireflies ? 1f : 0f);
+            P(fx, "NightAmt")?.SetValue(nightAmt);
+            P(fx, "Time")?.SetValue((Game1.ticks % 360000) / 60f);
+            P(fx, "TilesPerScreen")?.SetValue(new Vector2(dest.Width / 64f, dest.Height / 64f));
+            P(fx, "WorldTileOffset")?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
             fx.CurrentTechnique = fx.Techniques["Finishing"];
             DrawFull(sb, source, dest, fx);
         }

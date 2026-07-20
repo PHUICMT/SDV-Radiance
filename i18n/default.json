@@ -156,6 +156,8 @@
   "config.ca.enabled.name": "Enable chromatic aberration",
   "config.ca.enabled.tooltip": "Subtle color fringing toward the edges, like a camera lens. Keep it low on pixel art.",
   "config.ca.strength.name": "Aberration strength",
+  "config.fireflies.enabled.name": "Night fireflies",
+  "config.fireflies.enabled.tooltip": "Drifting warm glow motes over the ground outdoors at night.",
 
   "config.section.lighting": "Dynamic lighting",
   "config.lighting.flood.name": "Flood GI lighting (new)",
