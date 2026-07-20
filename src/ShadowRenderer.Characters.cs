@@ -320,11 +320,11 @@ namespace SDVRadiance
             if (dist < 1f || dist > reach)
                 return false;
             float prox = 1f - dist / reach;                 // 1 next to the light, 0 at its edge
-            // Alpha falls off with prox² so a DISTANT light barely shadows you and the NEAREST
-            // light clearly dominates — several equal overlapping shadows read as a flickering
-            // "which light?" mess. flick (flame wobble) rides the ALPHA only, so a fire's cast
+            // Near a light = bold, far = fainter (linear, with a floor so a medium-distance
+            // shadow is still clearly visible — pure prox² made everything but point-blank
+            // shadows vanish). flick (flame wobble) rides the ALPHA only, so a fire's cast
             // dances in intensity but never blinks in/out (the reach is steady now).
-            alpha = (0.1f + 0.9f * prox * prox) * 0.5f * strength * flick;
+            alpha = (0.3f + 0.7f * prox) * 0.6f * strength * flick;
             if (alpha <= 0.02f)
                 return false;
             rot = (float)Math.Atan2(away.X, -away.Y);        // point the silhouette away from the light
