@@ -117,13 +117,11 @@ namespace SDVRadiance
                     int cj = (int)(ls.position.Value.Y / 64f) - ty0;
                     if (ci < 0 || ci >= tw || cj < 0 || cj >= th)
                         continue;
-                    // INDIRECT spill only (~1/3 strength): the crisp direct pool + its per-light
-                    // shadows are computed analytically in floodlight.fx; the flood carries the
-                    // bounce-like glow that bends around corners and through doorways.
-                    // Outdoors the seed sits a little above 1.0 so it beats the dimmed night ground
-                    // and reads as a wide pool, without blowing out into a flat glaring yellow blob
-                    // (×1.8 did — dialled back to ×1.25). Indoors stays gentle.
-                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * (outdoors ? 1.45f : 0.5f)
+                    // INDIRECT spill (~half strength): the crisp direct pool + its per-light shadows
+                    // are computed analytically in floodlight.fx; the flood carries the bounce-like
+                    // glow that bends around corners and through doorways. Outdoors it sits above 1.0
+                    // so it beats the dimmed night ground; indoors it stays gentle.
+                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * (outdoors ? 1.25f : 0.5f)
                                 * ShadowRenderer.FireFlicker(ls.position.Value, ls.textureIndex.Value);
                     // TWO-TONE rooms: an indoor window is DAYLIGHT (cool, slightly blue) while
                     // lamps and fires stay warm — the warm-vs-cool split across a room is what
@@ -131,47 +129,26 @@ namespace SDVRadiance
                     // lights (town houses at night) are lamp-lit from inside, so they stay warm.
                     bool coolDaylight = !outdoors && ls.lightContext.Value == LightSource.LightContext.WindowLight;
                     Vector3 seedColor = coolDaylight ? new Vector3(0.82f, 0.92f, 1.10f) : new Vector3(1.00f, 0.83f, 0.58f);
-                    // Seed a wide radial DISC (≈3-tile radius, flat core + soft edge), not a single
-                    // cell — almost every map light reports radius 1, so a one-cell (or 3×3) seed
-                    // drew a tiny dot no matter what. A broad base disc + the bilinear upsample +
-                    // the 5×5 bounce spread it into a large, soft pool that lights the ground well
-                    // out around the lamp. (Outdoors inten>1 so the disc beats the ground; indoors
-                    // it stays below the room ambient and barely contributes, as before.)
-                    const int R = 9;
-                    for (int dj = -R; dj <= R; dj++)
-                    {
-                        int jj = cj + dj;
-                        if (jj < 0 || jj >= th) continue;
-                        for (int di = -R; di <= R; di++)
-                        {
-                            int ii = ci + di;
-                            if (ii < 0 || ii >= tw) continue;
-                            float dd = (float)Math.Sqrt(di * di + dj * dj);
-                            // WIDE pool: the lit level stays HIGH (≈core) across a big flat area,
-                            // then drops off near the rim. A slow linear fade doesn't work over the
-                            // dark ground — its faint tail sits barely above the night floor and is
-                            // invisible; only a value clearly ABOVE the floor reads as "lit". So:
-                            // full out to ~6 tiles, soft edge to ~9. Same core brightness, just a
-                            // far bigger lit circle.
-                            float f = MathHelper.Clamp((9f - dd) / 3f, 0f, 1f);
-                            if (f <= 0f) continue;
-                            int sidx = jj * tw + ii;
-                            _cells[sidx] = Vector3.Max(_cells[sidx], seedColor * (inten * f));
-                        }
-                    }
+                    // One seed cell; the bilinear upsample + the 5×5 bounce spread it into a soft
+                    // pool. (A wide radial seed disc was tried to force a bigger pool but never read
+                    // as wider on the coarse grid — reverted to keep it simple.)
+                    int idx = cj * tw + ci;
+                    _cells[idx] = Vector3.Max(_cells[idx], seedColor * inten);
 
                     // SUN SHAFT: daylight through a window falls onto the floor below it — seed a
                     // fading column of cool light under the window so (after bilinear + the blur
                     // bounce) a soft bright patch spills across the floorboards.
                     if (coolDaylight)
                     {
-                        var shaft = new Vector3(0.95f, 1.02f, 1.15f);
+                        // Kept below the bloom threshold so the window doesn't bloom into a
+                        // glaring white patch (it was ~1.15 = over-bright + bloomed).
+                        var shaft = new Vector3(0.60f, 0.66f, 0.76f);
                         for (int k = 1; k <= 3; k++)
                         {
                             int jj = cj + k;
                             if (jj >= th)
                                 break;
-                            float f = 1.05f - 0.27f * k;
+                            float f = 1.0f - 0.28f * k;
                             int sIdx = jj * tw + ci;
                             _cells[sIdx] = Vector3.Max(_cells[sIdx], shaft * f);
                         }
