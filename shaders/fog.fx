@@ -1,5 +1,5 @@
 //=============================================================================
-// fog.fx  —  SDV-Radiance Phase 2b
+// fog.fx  —  SDV-Radiance
 // Screen-space volumetric fog: drifting fbm mist (world-anchored) blended
 // toward a fog colour, with a gentle vertical bias.
 // Target: MonoGame OpenGL (Shader Model 3.0), used as a SpriteBatch effect.

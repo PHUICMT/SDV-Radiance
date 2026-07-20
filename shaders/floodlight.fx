@@ -1,5 +1,5 @@
 //=============================================================================
-// floodlight.fx  —  SDV-Radiance Phase L1
+// floodlight.fx  —  SDV-Radiance
 // Composites the CPU flood lightmap (see FloodLightmap.cs) over the scene:
 // bilinear-upsampled per-tile RGB light, multiplied with an ambient floor and a
 // touch of ordered dither so the low-res map never bands. Light above 1.0 adds

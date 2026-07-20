@@ -1,25 +1,29 @@
 # Shaders
 
 HLSL `.fx` sources live here. They are compiled to MonoGame `.mgfxo` effects
-(into `../build/`) and loaded at runtime.
+and loaded at runtime. The compiled `.mgfxo` files are committed under
+`../assets/` so the mod runs without users installing a shader compiler.
 
-Planned effects (see the roadmap in the main README):
-
-| File | Phase | Purpose |
-|------|-------|---------|
-| `bloom.fx` | 1 | bright-pass + gaussian blur + composite |
-| `colorgrade.fx` | 2 | tone mapping + palette by time/season/weather |
-| `fog.fx` | 2 | screen-space volumetric fog / god rays |
-| `cloudshadow.fx` | 3 | animated cloud shadow overlay |
-| `tiltshift.fx` | 3 | top/bottom depth-of-field blur |
-| `water.fx` | 4 | water ripple / distortion |
-| `finish.fx` | 4 | vignette / chromatic aberration / DoF |
+| File | Purpose |
+|------|---------|
+| `bloom.fx` | bright-pass + gaussian blur + composite |
+| `colorgrade.fx` | tone mapping + palette by time / season / weather |
+| `godrays.fx` | light shafts from real in-world light sources |
+| `fog.fx` | screen-space volumetric fog |
+| `cloudshadow.fx` | animated cloud-shadow overlay |
+| `tiltshift.fx` | top/bottom or radial depth-of-field blur |
+| `water.fx` | water ripple, sparkle, and screen-space reflection |
+| `finishing.fx` | vignette + chromatic aberration |
+| `lighting.fx` | dynamic 2D lighting (darken flat areas, pool light) |
+| `floodlight.fx` | flood-propagation GI lightmap composite |
 
 ## Compiling
 
 ```
-mgfxc bloom.fx ../build/bloom.mgfxo /Profile:OpenGL
+mgfxc bloom.fx ../assets/bloom.mgfxo /Profile:OpenGL
 ```
 
 Target Shader Model `4.0_level_9_x` for broad MonoGame/OpenGL compatibility.
-No compiled `.mgfxo` files are committed (they are build artifacts; see `.gitignore`).
+The `.mgfxo` format must match the game's MonoGame build (3.8.0.1641); a newer
+compiler produces a binary the game rejects. See the main README for the exact
+toolchain.

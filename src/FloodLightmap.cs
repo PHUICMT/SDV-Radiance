@@ -6,7 +6,7 @@ using StardewValley;
 namespace SDVRadiance
 {
     /// <summary>
-    /// Phase L1 — flood-propagation lightmap (the Terraria technique): a small CPU grid over
+    /// Flood-propagation lightmap (the Terraria technique): a small CPU grid over
     /// the visible tiles, seeded with per-tile SKY exposure (occluders from the Height
     /// Framework: tiles under buildings/canopies get no direct sky) and the game's REAL point
     /// lights, then swept directionally so light decays through air and dies quickly inside

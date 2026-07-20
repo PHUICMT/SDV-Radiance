@@ -1,5 +1,5 @@
 //=============================================================================
-// cloudshadow.fx  —  SDV-Radiance Phase 3 (Phase 4/5c overhaul)
+// cloudshadow.fx  —  SDV-Radiance
 // Soft drifting cloud shadows. The cloud density is generated into a low-res
 // buffer, Gaussian-blurred, then composited onto the scene as a gentle multiply.
 // The blur is what gives real, feathered penumbra edges instead of the faceted

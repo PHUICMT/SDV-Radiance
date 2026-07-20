@@ -1,5 +1,5 @@
 //=============================================================================
-// tiltshift.fx  —  SDV-Radiance Phase 3
+// tiltshift.fx  —  SDV-Radiance
 // Tilt-shift depth-of-field: sharp middle band, blurred toward the top and
 // bottom of the screen (fake miniature look). Separable Gaussian blur + a
 // vertical-position composite between sharp and blurred.

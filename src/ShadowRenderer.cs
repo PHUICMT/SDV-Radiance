@@ -12,7 +12,7 @@ using SObject = StardewValley.Object;
 namespace SDVRadiance
 {
     /// <summary>
-    /// Phase 5b — directional sprite shadows. Draws a leaning, flattened, dark copy
+    /// Directional sprite shadows. Draws a leaning, flattened, dark copy
     /// of each caster's sprite (authentic silhouette, not a blob), pinned at the feet
     /// and leaning away from the sun.
     ///

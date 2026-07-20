@@ -12,7 +12,7 @@ listed here with its license.
 ## Reference / inspiration (features reimplemented independently)
 - **DynamicShader** by Nook — cloud shadows and tilt-shift are reimplemented from scratch; no code or assets copied. https://www.nexusmods.com/stardewvalley/mods/40775
 
-## Planned code reuse (Phase 6 — texture upscaling)
+## Planned code reuse (texture upscaling)
 - **Stardew-SpriteMaster** by aurpine, and the original **SpriteMaster** by Ameisen — MIT-licensed. If any of their resampling/caching code is ported, this section will be updated with the specific files and their copyright notice, as required by the MIT license.
   - https://github.com/aurpine/Stardew-SpriteMaster
   - https://github.com/ameisen/SpriteMaster

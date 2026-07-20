@@ -1,5 +1,5 @@
 //=============================================================================
-// water.fx  —  SDV-Radiance Phase 4
+// water.fx  —  SDV-Radiance
 // Ripple + specular sparkle applied ONLY to water tiles. A per-tile mask (built
 // on the CPU from GameLocation.isWaterTile and aligned to the viewport) tells
 // the shader which pixels are water, refined by a blue-dominance test so banks

@@ -1,5 +1,5 @@
 //=============================================================================
-// bloom.fx  —  SDV-Radiance Phase 1
+// bloom.fx  —  SDV-Radiance
 // Bright-pass extraction, separable Gaussian blur, additive composite.
 // Target: MonoGame OpenGL (Shader Model 3.0), used as a SpriteBatch effect.
 //=============================================================================

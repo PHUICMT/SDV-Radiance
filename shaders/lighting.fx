@@ -1,5 +1,5 @@
 //=============================================================================
-// lighting.fx  —  SDV-Radiance Phase 5 (dynamic 2D lighting)
+// lighting.fx  —  SDV-Radiance (dynamic 2D lighting)
 // A parallel lighting pass done in screen space. The scene is multiplied by a
 // per-pixel light accumulation: a dark ambient base plus a smooth radial pool
 // for every real in-world light source (Game1.currentLightSources), so dark

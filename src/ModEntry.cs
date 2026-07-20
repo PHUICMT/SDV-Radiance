@@ -635,7 +635,7 @@ namespace SDVRadiance
             api.AddNumberOption(this.ModManifest, () => _config.LightingShadowStrength, v => _config.LightingShadowStrength = v,
                 () => I18n("config.lighting.shadowstrength.name"), null, 0f, 1f, 0.05f);
 
-            // --- Directional sprite shadows (Phase 5b) ---
+            // --- Directional sprite shadows ---
             api.AddPage(this.ModManifest, "shadows", () => I18n("config.section.shadows"));
             api.AddBoolOption(this.ModManifest, () => _config.DirectionalShadowsEnabled, v => _config.DirectionalShadowsEnabled = v,
                 () => I18n("config.shadows.enabled.name"), () => I18n("config.shadows.enabled.tooltip"));

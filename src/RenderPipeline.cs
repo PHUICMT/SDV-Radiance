@@ -38,7 +38,7 @@ namespace SDVRadiance
         private Effect? _finishing;
         private Effect? _lighting;
 
-        // Phase 5 dynamic lighting: per-frame light list read from Game1.currentLightSources.
+        // Dynamic lighting: per-frame light list read from Game1.currentLightSources.
         private const int MaxLights = 16;
         private readonly Vector2[] _lightPos = new Vector2[MaxLights];
         private readonly Vector4[] _lightData = new Vector4[MaxLights]; // xyz = colour*boost, w = radiusUV
@@ -92,7 +92,7 @@ namespace SDVRadiance
         private Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>?
             _dLighting, _dWater, _dCloud, _dGodRays, _dBloom, _dFog, _dGrade, _dTilt, _dFinish, _dFlood;
 
-        // Phase L1 — flood-propagation GI lightmap (see FloodLightmap.cs).
+        // Flood-propagation GI lightmap (see FloodLightmap.cs).
         private Effect? _floodFx;
         private readonly FloodLightmap _flood = new();
 

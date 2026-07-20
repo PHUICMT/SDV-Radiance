@@ -1,5 +1,5 @@
 //=============================================================================
-// finishing.fx  —  SDV-Radiance Phase 4
+// finishing.fx  —  SDV-Radiance
 // Camera-lens finishing pass: vignette (darkened edges) + chromatic aberration
 // (radial R/B channel split). Runs last, on the fully graded image.
 // Target: MonoGame OpenGL (Shader Model 3.0), used as a SpriteBatch effect.

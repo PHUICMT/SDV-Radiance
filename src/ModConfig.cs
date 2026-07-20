@@ -52,8 +52,7 @@ namespace SDVRadiance
 
     /// <summary>
     /// User-facing configuration. Serialized to config.json and edited via GMCM.
-    /// Phase 0 only wires up the master switch + the effect toggles as scaffolding;
-    /// individual effects are implemented in later phases.
+    /// A master switch plus a per-effect toggle and sliders for each effect.
     /// </summary>
     public sealed class ModConfig
     {
@@ -63,12 +62,12 @@ namespace SDVRadiance
         /// <summary>The quick-look preset last chosen from the menu's top dropdown (Custom = hand-tuned).</summary>
         public LookPreset ActivePreset { get; set; } = LookPreset.Custom;
 
-        // --- Phase 1: Bloom ---
+        // --- Bloom ---
         public bool BloomEnabled { get; set; } = false;
         public float BloomThreshold { get; set; } = 0.82f;
         public float BloomIntensity { get; set; } = 0.3f;
 
-        // --- Phase 2: Color grade ---
+        // --- Color grade ---
         public bool ColorGradeEnabled { get; set; } = false;
         public float ColorGradeStrength { get; set; } = 1f;
         public float ColorGradeContrast { get; set; } = 1.12f;
@@ -79,21 +78,21 @@ namespace SDVRadiance
         /// <summary>Auto-shift temperature/saturation by time of day, weather, and season.</summary>
         public bool ColorGradeAuto { get; set; } = true;
 
-        // --- Phase 2b: God rays ---
+        // --- God rays ---
         public bool GodRaysEnabled { get; set; } = false;
         public float GodRaysIntensity { get; set; } = 0.4f;
         public float GodRaysThreshold { get; set; } = 0.7f;
         public float GodRaysDensity { get; set; } = 0.6f;
         public float GodRaysDecay { get; set; } = 0.96f;
 
-        // --- Phase 2b: Volumetric fog ---
+        // --- Volumetric fog ---
         public bool FogEnabled { get; set; } = false;
         public float FogDensity { get; set; } = 0.18f;
         public float FogScale { get; set; } = 2.5f;
         public float FogSpeed { get; set; } = 0.02f;
         public float FogTopBias { get; set; } = 0.5f;
 
-        // --- Phase 3: DynamicShader parity ---
+        // --- Cloud shadows ---
         public bool CloudShadowEnabled { get; set; } = false;
         /// <summary>Hide the vanilla drifting <c>Cloud</c> critter shadow (so only our cloud shadow shows).</summary>
         public bool SuppressVanillaCloudShadow { get; set; } = true;
@@ -109,7 +108,7 @@ namespace SDVRadiance
         public float TiltShiftStrength { get; set; } = 1f;
         public float TiltShiftRadius { get; set; } = 0.3f;      // radial mode: size of the sharp circle around the player
 
-        // --- Phase 4: Water + finishing ---
+        // --- Water + finishing ---
         public bool WaterEnabled { get; set; } = false;
         public float WaterStrength { get; set; } = 0.5f;   // ripple amplitude
         public float WaterSpeed { get; set; } = 1.0f;      // ripple animation speed
@@ -124,7 +123,7 @@ namespace SDVRadiance
         public bool ChromaticAberrationEnabled { get; set; } = false;
         public float ChromaticAberrationStrength { get; set; } = 0.3f; // 0..1 UI scale (scaled to a tiny UV offset)
 
-        // --- Phase 5: Dynamic 2D lighting ---
+        // --- Dynamic 2D lighting ---
         /// <summary>Flood-propagation GI lightmap (occlusion-aware ambient, shade under
         /// canopies, coloured lamp pools). Supersedes LightingEnabled when on.</summary>
         public bool FloodLightingEnabled { get; set; } = false;
@@ -149,7 +148,7 @@ namespace SDVRadiance
         /// <summary>How dark occluder shadows are. 0 = none, 1 = full.</summary>
         public float LightingShadowStrength { get; set; } = 0.5f;
 
-        // --- Phase 5b: directional sprite shadows (sun-cast, sheared silhouettes) ---
+        // --- Directional sprite shadows (sun-cast, sheared silhouettes) ---
         /// <summary>Cast directional shadows from sprites (NPCs, later player/objects), by sun angle.</summary>
         public bool DirectionalShadowsEnabled { get; set; } = false;
         /// <summary>Opacity of the directional shadows. 0 = none, 1 = full.</summary>

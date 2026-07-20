@@ -1,5 +1,5 @@
 //=============================================================================
-// godrays.fx  —  SDV-Radiance Phase 2b
+// godrays.fx  —  SDV-Radiance
 // Screen-space crepuscular rays (light shafts): bright-pass, then a radial
 // blur marching toward the light position, composited additively.
 // Target: MonoGame OpenGL (Shader Model 3.0), used as a SpriteBatch effect.

@@ -1,5 +1,5 @@
 //=============================================================================
-// colorgrade.fx  —  SDV-Radiance Phase 2
+// colorgrade.fx  —  SDV-Radiance
 // Parametric color grading: temperature, brightness, contrast, saturation,
 // optional ACES filmic tone mapping, blended back by Strength.
 // Target: MonoGame OpenGL (Shader Model 3.0), used as a SpriteBatch effect.
