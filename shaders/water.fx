@@ -374,7 +374,10 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         float2 jit = (float2(h2, frac(h1 * 7.3)) - 0.5) * 0.7;          // wander off-centre
         float rad = lerp(0.09, 0.30, h3 * h3);                          // per-glint size (biased small)
         float d = length(f - jit);
-        float pulse = 0.5 + 0.5 * sin(t * spulse + h1 * 6.2831853);
+        // Twinkle in BRIGHTNESS, never fully off: floor at 0.35 so a glint dims and
+        // brightens instead of blinking out (the surface kept a steady base sparkle,
+        // no more moments where it nearly all disappears).
+        float pulse = 0.675 + 0.325 * sin(t * spulse + h1 * 6.2831853);
         glint += smoothstep(rad, 0.0, d) * pulse * has;
     }
     glint = saturate(glint);
