@@ -237,9 +237,7 @@ namespace SDVRadiance
             // _meteredExposure is measured & eased per frame in UpdateAutoExposure
             // (1.0 when auto is off), so bright scenes dim smoothly with no pop.
             P(fx, "Strength")?.SetValue(MathHelper.Clamp(config.ColorGradeStrength, 0f, 1f));
-            // Ease contrast down at night — high contrast made the warm dirt patches pop hard
-            // against the dark ground (eye-straining); a flatter night curve reads calmer.
-            P(fx, "Contrast")?.SetValue(MathHelper.Clamp(config.ColorGradeContrast - 0.08f * NightFactorNow(), 0.85f, 1.6f));
+            P(fx, "Contrast")?.SetValue(config.ColorGradeContrast);
             P(fx, "Saturation")?.SetValue(sat);
             P(fx, "Temperature")?.SetValue(MathHelper.Clamp(temp, -1f, 1f));
             P(fx, "Brightness")?.SetValue(config.ColorGradeBrightness * _meteredExposure);
@@ -481,11 +479,8 @@ namespace SDVRadiance
             temp = 0f; satMul = 1f;
             int t = Game1.timeOfDay;
             if (t >= 1700 && t < 1930) temp += 0.25f * ((t - 1700) / 230f);
-            else if (t >= 1930 && t < 2100) { float k = (t - 1930) / 170f; temp += 0.25f - 0.59f * k; satMul *= 1f - 0.18f * k; }
-            // Deep night: cool AND desaturated. Full saturation kept the warm reddish
-            // ground/paths glaring against the cool dark — a calmer, bluer, lower-sat night
-            // reads as moonlit rather than eye-straining.
-            else if (t >= 2100 || t < 600) { temp -= 0.45f; satMul *= 0.86f; }
+            else if (t >= 1930 && t < 2100) temp += 0.25f - 0.55f * ((t - 1930) / 170f);
+            else if (t >= 2100 || t < 600) temp -= 0.30f;
 
             if (Game1.isRaining) { temp -= 0.12f; satMul *= 0.85f; }
             if (Game1.isSnowing) { temp -= 0.15f; satMul *= 0.90f; }
