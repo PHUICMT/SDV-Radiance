@@ -131,20 +131,24 @@ namespace SDVRadiance
                     // lights (town houses at night) are lamp-lit from inside, so they stay warm.
                     bool coolDaylight = !outdoors && ls.lightContext.Value == LightSource.LightContext.WindowLight;
                     Vector3 seedColor = coolDaylight ? new Vector3(0.82f, 0.92f, 1.10f) : new Vector3(1.00f, 0.83f, 0.58f);
-                    // Seed a 3×3 CLUSTER (centre full, edges tapered), not a single cell — almost
-                    // every map light reports radius 1, so a one-cell seed drew a tiny dot no
-                    // matter what. A wide base pool + the bilinear upsample + the 5×5 bounce then
-                    // spread it into a broad, soft glow that actually reaches the ground around it.
-                    for (int dj = -1; dj <= 1; dj++)
+                    // Seed a wide radial DISC (≈3-tile radius, flat core + soft edge), not a single
+                    // cell — almost every map light reports radius 1, so a one-cell (or 3×3) seed
+                    // drew a tiny dot no matter what. A broad base disc + the bilinear upsample +
+                    // the 5×5 bounce spread it into a large, soft pool that lights the ground well
+                    // out around the lamp. (Outdoors inten>1 so the disc beats the ground; indoors
+                    // it stays below the room ambient and barely contributes, as before.)
+                    const int R = 3;
+                    for (int dj = -R; dj <= R; dj++)
                     {
                         int jj = cj + dj;
                         if (jj < 0 || jj >= th) continue;
-                        for (int di = -1; di <= 1; di++)
+                        for (int di = -R; di <= R; di++)
                         {
                             int ii = ci + di;
                             if (ii < 0 || ii >= tw) continue;
-                            int m = Math.Abs(di) + Math.Abs(dj);
-                            float f = m == 0 ? 1f : (m == 1 ? 0.7f : 0.5f);
+                            float dd = (float)Math.Sqrt(di * di + dj * dj);
+                            float f = MathHelper.Clamp((R + 0.5f - dd) / 1.6f, 0f, 1f);   // flat core, soft rim
+                            if (f <= 0f) continue;
                             int sidx = jj * tw + ii;
                             _cells[sidx] = Vector3.Max(_cells[sidx], seedColor * (inten * f));
                         }
@@ -293,12 +297,10 @@ namespace SDVRadiance
             int mins = (t / 100) * 60 + t % 100;
             int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
             float nightT = MathHelper.Clamp((mins - (m1 - 60)) / 60f, 0f, 1f);
-            // Our flood DIMS the open night ground so lamp pools stand out and read as WIDE
-            // glows. Before this the outdoor night sky sat at ~1.0, so a lamp seed below 1.0
-            // was discarded by the max() and only vanilla's own small glow showed (widening
-            // our seed did nothing). Moderate — the shader's Strength + AmbientFloor keep the
-            // ground atmospheric, never pitch black.
-            sky *= MathHelper.Lerp(1f, 0.55f, nightT);
+            // Our flood gently DIMS the open night ground so lamp pools stand out. Kept MILD
+            // (×0.82, was ×0.55 which turned a lampless farm nearly pitch black) — lamp seeds
+            // are pushed above 1.0 so they show through the max() without needing a dark ground.
+            sky *= MathHelper.Lerp(1f, 0.82f, nightT);
             // Full moon lifts the night back up (cool) → a full-moon night is clearly brighter
             // and bluer than a new-moon one.
             if (nightT > 0f)
