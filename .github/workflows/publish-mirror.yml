@@ -1,0 +1,118 @@
+name: Publish public mirror
+
+# Runs on the PRIVATE dev repo (PHUICMT/SDV-Radiance-dev).
+# When you push a version tag (v1.0.0, v1.2.3, ...), it builds a CLEAN public tree
+# and force-pushes it to the PUBLIC mirror (PHUICMT/SDV-Radiance) as a single
+# squashed commit, then tags + creates a GitHub Release there so SMAPI's GitHub
+# update key works.
+#
+# "Knows what should/shouldn't go public" = two layers:
+#   1. DENYLIST — strip internal-only paths from the published tree.
+#   2. GUARD    — hard-FAIL the job if anything private slips through (a new
+#                 .local file, a leftover internal doc, dev-phase numbering,
+#                 a redaction token, or an obvious secret). Fail-closed: if the
+#                 guard is unsure, the release does not go out.
+#
+# ONE-TIME SETUP (you do this once, by hand):
+#   Create a fine-grained PAT with Contents: Read and write on the PUBLIC repo
+#   (PHUICMT/SDV-Radiance), then add it to the DEV repo's secrets as MIRROR_TOKEN:
+#     gh secret set MIRROR_TOKEN -R PHUICMT/SDV-Radiance-dev
+#   (it will prompt for the token value — never paste it anywhere else).
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:        # lets you run it manually from the Actions tab to test
+
+concurrency:
+  group: publish-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    env:
+      PUBLIC_REPO: PHUICMT/SDV-Radiance
+      TAG: ${{ github.ref_type == 'tag' && github.ref_name || 'manual' }}
+    steps:
+      - name: Checkout dev repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Build clean public tree (tracked files only, minus denylist)
+        run: |
+          set -euo pipefail
+          rm -rf ../pub && mkdir ../pub
+          # git archive ships ONLY tracked files — untracked/gitignored (.local.*,
+          # .claude/, bin/, scratch) can never appear here by construction.
+          git archive --format=tar HEAD | tar -x -C ../pub
+
+          # DENYLIST — internal-only paths that are tracked but must stay private.
+          rm -rf ../pub/.github/workflows          # this workflow itself
+          rm -f  ../pub/docs/audit-*.md \
+                 ../pub/docs/phase5b-*.md \
+                 ../pub/docs/height-framework-plan.md \
+                 ../pub/docs/visual-techniques-roadmap.md
+          echo "Published tree:"; find ../pub -type f | sort
+
+      - name: Guard — fail if anything private slipped through
+        run: |
+          set -uo pipefail
+          cd ../pub
+          fail=0
+          note() { echo "::error::$1"; fail=1; }
+
+          # 1. no local/personal files
+          if find . -name '*.local.*' | grep -q .; then note "a .local.* file is present"; fi
+          if [ -e .claude ]; then note ".claude/ is present"; fi
+
+          # 2. no leftover internal docs
+          if ls docs/audit-* docs/phase5b-* docs/height-framework-plan.md docs/visual-techniques-roadmap.md 2>/dev/null | grep -q .; then
+            note "an internal design doc survived the denylist"
+          fi
+
+          # 3. no dev-phase numbering or redaction tokens in any text file
+          if grep -rInI 'Phase [0-9]\|Phase L\|เฟท\|\[BLOCKED-TERM:' . ; then
+            note "forbidden text (dev-phase numbering or redaction token) found above"
+          fi
+
+          # 4. crude secret scan (tokens/keys). Tune if it ever false-positives.
+          if grep -rInI 'ghp_[A-Za-z0-9]\{20,\}\|github_pat_\|-----BEGIN [A-Z ]*PRIVATE KEY-----\|AKIA[0-9A-Z]\{16\}' . ; then
+            note "possible secret found above"
+          fi
+
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::Guard failed — nothing was published. Fix the items above and re-tag."
+            exit 1
+          fi
+          echo "Guard passed — tree is clean to publish."
+
+      - name: Push squashed snapshot to the public mirror
+        env:
+          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd ../pub
+          git init -b main
+          git config user.name "PHUICMT"
+          git config user.email "PHUICMT@users.noreply.github.com"
+          git add -A
+          git commit -m "Release ${TAG}"
+          REMOTE="https://x-access-token:${MIRROR_TOKEN}@github.com/${PUBLIC_REPO}.git"
+          git push -f "$REMOTE" main
+          if [ "${TAG}" != "manual" ]; then
+            git tag "${TAG}"
+            git push -f "$REMOTE" "${TAG}"
+          fi
+
+      - name: Create GitHub Release on the mirror (for SMAPI update checks)
+        if: ${{ github.ref_type == 'tag' }}
+        env:
+          GH_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "${TAG}" -R "${PUBLIC_REPO}" \
+            --title "${TAG}" \
+            --notes "Automated mirror of ${TAG}. See the changelog." \
+            --verify-tag || echo "release may already exist; continuing"
