@@ -186,17 +186,18 @@ namespace SDVRadiance
         }
 
         /// <summary>Sun conditions: outdoors, clear weather → one long celestial shadow. The
-        /// dusk cutoff follows the game's own seasonal dark time (summer sun sets late); after
-        /// true dark, a bright-enough MOON takes over as the caster (faint shadows).</summary>
+        /// dusk cutoff follows the game's own seasonal dark time (summer sun sets late). After
+        /// true dark the sun path ENDS and night falls to the per-light path instead — town
+        /// lamps/torches then cast their own crisp shadows (a faint moon-directional shadow was
+        /// invisible on the dark ground AND suppressed the lamp shadows, so nights looked
+        /// shadowless). Moonlight still lifts the ambient/water via MoonStrength elsewhere.</summary>
         private static bool SunCasts()
         {
             GameLocation? loc = Game1.currentLocation;
             if (loc == null || !loc.IsOutdoors || Game1.isRaining || Game1.isSnowing)
                 return false;
             int t = Game1.timeOfDay;
-            if (t >= 600 && t < TrulyDark())
-                return true;
-            return MoonStrength() > 0.12f;   // moonlit night: shadows continue, much fainter
+            return t >= 600 && t < TrulyDark();   // day/dusk = sun cast; after dark → per-light path
         }
 
         /// <summary>True when the outdoor sun shadow is active.</summary>

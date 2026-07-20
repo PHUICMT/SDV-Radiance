@@ -349,22 +349,35 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float rim = saturate(tileWater - rimMin) * tex2D(MaskSampler, maskUV).g;
     col.rgb *= 1.0 - rim * 0.22 * water;
 
-    // Random drifting glints: one soft glint per cell at a random spot that
-    // wanders slowly and pulses smoothly (no hard twinkle). Ocean glints are
-    // sparser, slower and drift more.
-    float sdens = lerp(5.0, 3.0, kind) * max(SparkleDensity, 0.05);
+    // Drifting specular glints — SCATTERED, not a grid. The old "one glint per cell,
+    // all the same size" read as a regular dotted pattern. Now: TWO overlapping layers
+    // at different scales/drift, each cell only SOMETIMES holds a glint (hash gate), and
+    // every glint gets a random SIZE, off-centre wander, and phase — so it reads as
+    // organic sun-glitter. Ocean glints are sparser/slower (kind).
     float spulse = lerp(1.1, 0.55, kind);
     float sdrift = lerp(0.05, 0.12, kind);
-    float2 sg = (worldTile + float2(t * sdrift, t * sdrift * 0.6)) * sdens;
-    float2 cell = floor(sg);
-    float2 f = frac(sg);
-    float r1 = hash(cell);
-    float r2 = hash(cell + float2(19.7, 7.3));
-    float2 center = float2(r1, r2) + 0.18 * float2(sin(t * 0.7 + r1 * 6.2831853),
-                                                   cos(t * 0.6 + r2 * 6.2831853));
-    float d = length(f - center);
-    float pulse = 0.5 + 0.5 * sin(t * spulse + r1 * 6.2831853);
-    float glint = smoothstep(0.24, 0.0, d) * pulse;
+    float baseDens = lerp(5.0, 3.0, kind) * max(SparkleDensity, 0.05);
+    float glint = 0.0;
+    [unroll]
+    for (int gi = 0; gi < 2; gi++)
+    {
+        float dens = baseDens * (gi == 0 ? 1.0 : 1.73);                 // two scales
+        float2 off = (gi == 0) ? float2(0.0, 0.0) : float2(0.37, 0.63);
+        float driftDir = (gi == 0) ? 1.0 : -0.8;                        // layers drift apart
+        float2 sg = (worldTile + off + float2(t * sdrift, t * sdrift * 0.6) * driftDir) * dens;
+        float2 cell = floor(sg);
+        float2 f = frac(sg) - 0.5;                                      // cell-centred
+        float h1 = hash(cell + off);
+        float h2 = hash(cell + off + float2(19.7, 7.3));
+        float h3 = hash(cell + off + float2(41.3, 5.1));
+        float has = step(0.55, h1);                                     // ~45% of cells hold a glint
+        float2 jit = (float2(h2, frac(h1 * 7.3)) - 0.5) * 0.7;          // wander off-centre
+        float rad = lerp(0.09, 0.30, h3 * h3);                          // per-glint size (biased small)
+        float d = length(f - jit);
+        float pulse = 0.5 + 0.5 * sin(t * spulse + h1 * 6.2831853);
+        glint += smoothstep(rad, 0.0, d) * pulse * has;
+    }
+    glint = saturate(glint);
     // Golden hour: the glints warm up with the low sun instead of staying white.
     float3 glintCol = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.82, 0.5), SunWarm);
     col.rgb += glint * Sparkle * water * glintCol;
