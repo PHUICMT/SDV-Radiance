@@ -63,100 +63,100 @@ namespace SDVRadiance
         public LookPreset ActivePreset { get; set; } = LookPreset.Custom;
 
         // --- Bloom ---
-        public bool BloomEnabled { get; set; } = false;
-        public float BloomThreshold { get; set; } = 0.82f;
-        public float BloomIntensity { get; set; } = 0.3f;
+        public bool BloomEnabled { get; set; } = true;
+        public float BloomThreshold { get; set; } = 0.72f;
+        public float BloomIntensity { get; set; } = 0.76f;
 
         // --- Color grade ---
-        public bool ColorGradeEnabled { get; set; } = false;
+        public bool ColorGradeEnabled { get; set; } = true;
         public float ColorGradeStrength { get; set; } = 1f;
-        public float ColorGradeContrast { get; set; } = 1.12f;
-        public float ColorGradeSaturation { get; set; } = 1.2f;
-        public float ColorGradeTemperature { get; set; } = 0f;
+        public float ColorGradeContrast { get; set; } = 1.15f;
+        public float ColorGradeSaturation { get; set; } = 1.05f;
+        public float ColorGradeTemperature { get; set; } = 0.05f;
         public float ColorGradeBrightness { get; set; } = 1f;
         public bool ColorGradeToneMap { get; set; } = false;
         /// <summary>Auto-shift temperature/saturation by time of day, weather, and season.</summary>
         public bool ColorGradeAuto { get; set; } = true;
 
         // --- God rays ---
-        public bool GodRaysEnabled { get; set; } = false;
-        public float GodRaysIntensity { get; set; } = 0.4f;
+        public bool GodRaysEnabled { get; set; } = true;
+        public float GodRaysIntensity { get; set; } = 0.68f;
         public float GodRaysThreshold { get; set; } = 0.7f;
         public float GodRaysDensity { get; set; } = 0.6f;
         public float GodRaysDecay { get; set; } = 0.96f;
 
         // --- Volumetric fog ---
         public bool FogEnabled { get; set; } = false;
-        public float FogDensity { get; set; } = 0.18f;
-        public float FogScale { get; set; } = 2.5f;
+        public float FogDensity { get; set; } = 0.13f;
+        public float FogScale { get; set; } = 3.0f;
         public float FogSpeed { get; set; } = 0.02f;
         public float FogTopBias { get; set; } = 0.5f;
 
         // --- Cloud shadows ---
-        public bool CloudShadowEnabled { get; set; } = false;
+        public bool CloudShadowEnabled { get; set; } = true;
         /// <summary>Hide the vanilla drifting <c>Cloud</c> critter shadow (so only our cloud shadow shows).</summary>
         public bool SuppressVanillaCloudShadow { get; set; } = true;
-        public float CloudShadowScale { get; set; } = 2.0f;
-        public float CloudShadowSpeed { get; set; } = 0.01f;
-        public float CloudShadowOpacity { get; set; } = 0.3f;
-        public float CloudShadowCoverage { get; set; } = 0.45f;
+        public float CloudShadowScale { get; set; } = 1.0f;
+        public float CloudShadowSpeed { get; set; } = 0.04f;
+        public float CloudShadowOpacity { get; set; } = 0.61f;
+        public float CloudShadowCoverage { get; set; } = 0.43f;
 
-        public bool TiltShiftEnabled { get; set; } = false;
+        public bool TiltShiftEnabled { get; set; } = true;
         public TiltShiftFocus TiltShiftMode { get; set; } = TiltShiftFocus.Bands;
-        public float TiltShiftTopRatio { get; set; } = 0.7f;    // top blur amount (0 = none … 1 = up to middle)
-        public float TiltShiftBottomRatio { get; set; } = 0.7f; // bottom blur amount (0 = none … 1 = up to middle)
-        public float TiltShiftStrength { get; set; } = 1f;
-        public float TiltShiftRadius { get; set; } = 0.3f;      // radial mode: size of the sharp circle around the player
+        public float TiltShiftTopRatio { get; set; } = 0.3f;    // top blur amount (0 = none … 1 = up to middle)
+        public float TiltShiftBottomRatio { get; set; } = 0.3f; // bottom blur amount (0 = none … 1 = up to middle)
+        public float TiltShiftStrength { get; set; } = 0.9f;
+        public float TiltShiftRadius { get; set; } = 0.85f;     // radial mode: size of the sharp circle around the player
 
         // --- Water + finishing ---
-        public bool WaterEnabled { get; set; } = false;
-        public float WaterStrength { get; set; } = 0.5f;   // ripple amplitude
-        public float WaterSpeed { get; set; } = 1.0f;      // ripple animation speed
-        public float WaterSparkle { get; set; } = 0.25f;   // specular glint intensity
+        public bool WaterEnabled { get; set; } = true;
+        public float WaterStrength { get; set; } = 0.6f;   // ripple amplitude
+        public float WaterSpeed { get; set; } = 0.78f;     // ripple animation speed
+        public float WaterSparkle { get; set; } = 0.51f;   // specular glint intensity
         public float WaterSparkleDensity { get; set; } = 0.7f; // glint count/size (1 = old look)
-        public bool WaterReflection { get; set; } = false; // screen-space reflection on water
-        public float WaterReflectStrength { get; set; } = 0.3f;
+        public bool WaterReflection { get; set; } = true;  // screen-space reflection on water
+        public float WaterReflectStrength { get; set; } = 0.71f;
 
-        public bool VignetteEnabled { get; set; } = false;
+        public bool VignetteEnabled { get; set; } = true;
         public float VignetteStrength { get; set; } = 0.25f;
 
-        public bool ChromaticAberrationEnabled { get; set; } = false;
+        public bool ChromaticAberrationEnabled { get; set; } = true;
         public float ChromaticAberrationStrength { get; set; } = 0.3f; // 0..1 UI scale (scaled to a tiny UV offset)
 
         // --- Dynamic 2D lighting ---
         /// <summary>Flood-propagation GI lightmap (occlusion-aware ambient, shade under
         /// canopies, coloured lamp pools). Supersedes LightingEnabled when on.</summary>
-        public bool FloodLightingEnabled { get; set; } = false;
+        public bool FloodLightingEnabled { get; set; } = true;
         /// <summary>How strongly the flood lightmap modulates the scene (0..1).</summary>
-        public float FloodLightingStrength { get; set; } = 0.65f;
+        public float FloodLightingStrength { get; set; } = 0.54f;
         /// <summary>How dark a fully occluded per-light ray gets (0 = no shadows, 1 = black).</summary>
-        public float FloodShadowStrength { get; set; } = 0.8f;
+        public float FloodShadowStrength { get; set; } = 0.79f;
         /// <summary>Darken flat/unlit areas and pool light around real light sources.</summary>
-        public bool LightingEnabled { get; set; } = false;
+        public bool LightingEnabled { get; set; } = true;
         /// <summary>How dark interiors get (vanilla leaves them flat-bright). 0 = none, 1 = very dark.</summary>
-        public float LightingIndoorDarkness { get; set; } = 0.5f;
+        public float LightingIndoorDarkness { get; set; } = 0.64f;
         /// <summary>Extra darkening at night where we own the lighting. 0 = none.</summary>
-        public float LightingNightDarkness { get; set; } = 0.35f;
+        public float LightingNightDarkness { get; set; } = 0.68f;
         /// <summary>Warmth of the light pools (0 = neutral white, 1 = candle-orange).</summary>
-        public float LightingWarmth { get; set; } = 0.35f;
+        public float LightingWarmth { get; set; } = 0.62f;
         /// <summary>Scale the on-screen radius of every light pool.</summary>
-        public float LightingRadiusScale { get; set; } = 1.0f;
+        public float LightingRadiusScale { get; set; } = 0.54f;
         /// <summary>Brightness of the light pools added back over the darkened scene.</summary>
-        public float LightingBoost { get; set; } = 1.0f;
+        public float LightingBoost { get; set; } = 0.27f;
         /// <summary>Cast hard-edge shadows from tall/solid tiles that block light.</summary>
-        public bool LightingShadows { get; set; } = false;
+        public bool LightingShadows { get; set; } = true;
         /// <summary>How dark occluder shadows are. 0 = none, 1 = full.</summary>
-        public float LightingShadowStrength { get; set; } = 0.5f;
+        public float LightingShadowStrength { get; set; } = 0.59f;
 
         // --- Directional sprite shadows (sun-cast, sheared silhouettes) ---
         /// <summary>Cast directional shadows from sprites (NPCs, later player/objects), by sun angle.</summary>
-        public bool DirectionalShadowsEnabled { get; set; } = false;
+        public bool DirectionalShadowsEnabled { get; set; } = true;
         /// <summary>Opacity of the directional shadows. 0 = none, 1 = full.</summary>
-        public float DirectionalShadowStrength { get; set; } = 1.0f;
+        public float DirectionalShadowStrength { get; set; } = 0.83f;
         /// <summary>Length multiplier for the cast shadow (1 = default sun-driven length).</summary>
-        public float DirectionalShadowLength { get; set; } = 1.0f;
+        public float DirectionalShadowLength { get; set; } = 1.18f;
         /// <summary>Edge softness of the shadow, in pixels (0 = crisp).</summary>
-        public float DirectionalShadowBlur { get; set; } = 2.0f;
+        public float DirectionalShadowBlur { get; set; } = 4.0f;
         /// <summary>Also cast directional shadows from trees and bushes (not just characters).</summary>
         public bool DirectionalShadowObjects { get; set; } = true;
 
