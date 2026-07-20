@@ -137,7 +137,7 @@ namespace SDVRadiance
                     // the 5×5 bounce spread it into a large, soft pool that lights the ground well
                     // out around the lamp. (Outdoors inten>1 so the disc beats the ground; indoors
                     // it stays below the room ambient and barely contributes, as before.)
-                    const int R = 5;
+                    const int R = 8;
                     for (int dj = -R; dj <= R; dj++)
                     {
                         int jj = cj + dj;
@@ -147,10 +147,10 @@ namespace SDVRadiance
                             int ii = ci + di;
                             if (ii < 0 || ii >= tw) continue;
                             float dd = (float)Math.Sqrt(di * di + dj * dj);
-                            // Near-flat bright core out to ~3 tiles, then a long soft fade to the
-                            // rim — a WIDE pool that still dims gently with distance (the earlier
-                            // squared gradient dropped so fast the visible pool stayed small).
-                            float f = MathHelper.Clamp((R + 1.0f - dd) / 3.0f, 0f, 1f);
+                            // WIDE pool: same core brightness (f=1 at centre), fading gently and
+                            // slowly with distance so the lit circle reaches far out (~6 tiles
+                            // visible) without the centre getting any brighter.
+                            float f = MathHelper.Clamp(1.0f - dd / 12f, 0f, 1f);
                             if (f <= 0f) continue;
                             int sidx = jj * tw + ii;
                             _cells[sidx] = Vector3.Max(_cells[sidx], seedColor * (inten * f));
