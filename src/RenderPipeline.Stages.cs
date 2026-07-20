@@ -464,7 +464,7 @@ namespace SDVRadiance
             // Deep night: cool AND desaturated. Full saturation kept the warm reddish
             // ground/paths glaring against the cool dark — a calmer, bluer, lower-sat night
             // reads as moonlit rather than eye-straining.
-            else if (t >= 2100 || t < 600) { temp -= 0.34f; satMul *= 0.78f; }
+            else if (t >= 2100 || t < 600) { temp -= 0.45f; satMul *= 0.62f; }
 
             if (Game1.isRaining) { temp -= 0.12f; satMul *= 0.85f; }
             if (Game1.isSnowing) { temp -= 0.15f; satMul *= 0.90f; }
