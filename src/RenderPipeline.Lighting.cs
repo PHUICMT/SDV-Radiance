@@ -50,9 +50,11 @@ namespace SDVRadiance
                     float u = local.X / vw;
                     float v = local.Y / vh;
 
-                    // Light reach ≈ radius*256 world px (matches the game's own cull box);
-                    // convert to UV height units so the shader draws a round pool.
-                    float radiusUv = ls.radius.Value * 256f / vh * radiusScale;
+                    // Pool reach in UV height units. Almost every map light reports radius==1,
+                    // which drew a tiny ~2-tile pool that never reached the ground in front of a
+                    // storefront; widened (256→430) so a single lamp lights a believable circle
+                    // and a shop front is actually lit. Still scaled by the user's RadiusScale.
+                    float radiusUv = ls.radius.Value * 430f / vh * radiusScale;
                     if (u < -radiusUv * 2f || u > 1f + radiusUv * 2f || v < -radiusUv * 2f || v > 1f + radiusUv * 2f)
                         continue; // fully off-screen
 

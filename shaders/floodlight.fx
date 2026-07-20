@@ -100,7 +100,9 @@ float4 FloodPS(PixelInput input) : SV_TARGET
         float2 dvec = uv - lp;
         dvec.x *= Aspect;
         float att = saturate(1.0 - length(dvec) / max(lc.w, 0.02));
-        att *= att;
+        // Softer than a pure square: the mid-pool stays brighter so the light reads as a
+        // wide, diffuse glow that fades out gently, instead of a small hot dot.
+        att = att * (0.55 + 0.45 * att);
         [branch]
         if (on * att > 0.004)
         {
