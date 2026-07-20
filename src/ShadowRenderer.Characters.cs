@@ -324,7 +324,11 @@ namespace SDVRadiance
             // shadow is still clearly visible — pure prox² made everything but point-blank
             // shadows vanish). flick (flame wobble) rides the ALPHA only, so a fire's cast
             // dances in intensity but never blinks in/out (the reach is steady now).
-            alpha = (0.3f + 0.7f * prox) * 0.6f * strength * flick;
+            // EDGE TAPER: fade to 0 across the last ~18% of reach so the shadow eases out as
+            // you walk away instead of popping off at the hard cutoff.
+            float edge = MathHelper.Clamp(prox / 0.18f, 0f, 1f);
+            edge = edge * edge * (3f - 2f * edge);
+            alpha = (0.3f + 0.7f * prox) * 0.6f * strength * flick * edge;
             if (alpha <= 0.02f)
                 return false;
             rot = (float)Math.Atan2(away.X, -away.Y);        // point the silhouette away from the light

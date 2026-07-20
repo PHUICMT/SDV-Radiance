@@ -120,16 +120,32 @@ namespace SDVRadiance
                     // INDIRECT spill only (~1/3 strength): the crisp direct pool + its per-light
                     // shadows are computed analytically in floodlight.fx; the flood carries the
                     // bounce-like glow that bends around corners and through doorways.
-                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * 0.35f
+                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * 0.5f
                                 * ShadowRenderer.FireFlicker(ls.position.Value, ls.textureIndex.Value);
                     // TWO-TONE rooms: an indoor window is DAYLIGHT (cool, slightly blue) while
                     // lamps and fires stay warm — the warm-vs-cool split across a room is what
                     // makes it read as cinematic instead of uniformly orange. Outdoor window
                     // lights (town houses at night) are lamp-lit from inside, so they stay warm.
                     bool coolDaylight = !outdoors && ls.lightContext.Value == LightSource.LightContext.WindowLight;
-                    var seed = (coolDaylight ? new Vector3(0.82f, 0.92f, 1.10f) : new Vector3(1.00f, 0.83f, 0.58f)) * inten;
-                    int idx = cj * tw + ci;
-                    _cells[idx] = Vector3.Max(_cells[idx], seed);
+                    Vector3 seedColor = coolDaylight ? new Vector3(0.82f, 0.92f, 1.10f) : new Vector3(1.00f, 0.83f, 0.58f);
+                    // Seed a 3×3 CLUSTER (centre full, edges tapered), not a single cell — almost
+                    // every map light reports radius 1, so a one-cell seed drew a tiny dot no
+                    // matter what. A wide base pool + the bilinear upsample + the 5×5 bounce then
+                    // spread it into a broad, soft glow that actually reaches the ground around it.
+                    for (int dj = -1; dj <= 1; dj++)
+                    {
+                        int jj = cj + dj;
+                        if (jj < 0 || jj >= th) continue;
+                        for (int di = -1; di <= 1; di++)
+                        {
+                            int ii = ci + di;
+                            if (ii < 0 || ii >= tw) continue;
+                            int m = Math.Abs(di) + Math.Abs(dj);
+                            float f = m == 0 ? 1f : (m == 1 ? 0.7f : 0.5f);
+                            int sidx = jj * tw + ii;
+                            _cells[sidx] = Vector3.Max(_cells[sidx], seedColor * (inten * f));
+                        }
+                    }
 
                     // SUN SHAFT: daylight through a window falls onto the floor below it — seed a
                     // fading column of cool light under the window so (after bilinear + the blur
