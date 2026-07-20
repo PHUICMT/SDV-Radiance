@@ -123,7 +123,7 @@ namespace SDVRadiance
                     // Outdoors the seed sits a little above 1.0 so it beats the dimmed night ground
                     // and reads as a wide pool, without blowing out into a flat glaring yellow blob
                     // (×1.8 did — dialled back to ×1.25). Indoors stays gentle.
-                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * (outdoors ? 1.25f : 0.5f)
+                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * (outdoors ? 1.45f : 0.5f)
                                 * ShadowRenderer.FireFlicker(ls.position.Value, ls.textureIndex.Value);
                     // TWO-TONE rooms: an indoor window is DAYLIGHT (cool, slightly blue) while
                     // lamps and fires stay warm — the warm-vs-cool split across a room is what
@@ -137,7 +137,7 @@ namespace SDVRadiance
                     // the 5×5 bounce spread it into a large, soft pool that lights the ground well
                     // out around the lamp. (Outdoors inten>1 so the disc beats the ground; indoors
                     // it stays below the room ambient and barely contributes, as before.)
-                    const int R = 3;
+                    const int R = 5;
                     for (int dj = -R; dj <= R; dj++)
                     {
                         int jj = cj + dj;
@@ -147,9 +147,11 @@ namespace SDVRadiance
                             int ii = ci + di;
                             if (ii < 0 || ii >= tw) continue;
                             float dd = (float)Math.Sqrt(di * di + dj * dj);
-                            // Smooth gradient from the centre out (no flat plateau) so the pool
-                            // fades naturally instead of reading as a hard bright disc.
+                            // Smooth gradient from the centre out (no flat plateau): bright core
+                            // fading gradually with distance, so a wide lamp reads as a natural
+                            // pool that dims the further out you go rather than a hard disc.
                             float f = MathHelper.Clamp((R + 0.8f - dd) / (R + 0.8f), 0f, 1f);
+                            f *= f;   // ease-in: keeps a strong core, longer gentle tail = realistic falloff
                             if (f <= 0f) continue;
                             int sidx = jj * tw + ii;
                             _cells[sidx] = Vector3.Max(_cells[sidx], seedColor * (inten * f));
@@ -302,7 +304,7 @@ namespace SDVRadiance
             // Our flood gently DIMS the open night ground so lamp pools stand out. Kept MILD
             // (×0.82, was ×0.55 which turned a lampless farm nearly pitch black) — lamp seeds
             // are pushed above 1.0 so they show through the max() without needing a dark ground.
-            sky *= MathHelper.Lerp(1f, 0.72f, nightT);
+            sky *= MathHelper.Lerp(1f, 0.62f, nightT);
             // Full moon lifts the night back up (cool) → a full-moon night is clearly brighter
             // and bluer than a new-moon one.
             if (nightT > 0f)
