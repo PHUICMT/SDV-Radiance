@@ -182,7 +182,7 @@ namespace SDVRadiance
             // When fog isn't manually enabled, this stage is running as the automatic blue
             // NIGHT MIST — a subtle drifting haze (FogColor is already blue at night) that fades
             // in after dusk. Manual fog uses the configured density.
-            float density = config.FogEnabled ? config.FogDensity : 0.24f * NightFactorNow();
+            float density = config.FogEnabled ? config.FogDensity : 0.16f * NightFactorNow();
             P(fx, "Density")?.SetValue(density);
             P(fx, "TopBias")?.SetValue(config.FogTopBias);
             P(fx, "FogColor")?.SetValue(FogColor());
@@ -239,7 +239,7 @@ namespace SDVRadiance
             P(fx, "Strength")?.SetValue(MathHelper.Clamp(config.ColorGradeStrength, 0f, 1f));
             // Ease contrast down at night — high contrast made the warm dirt patches pop hard
             // against the dark ground (eye-straining); a flatter night curve reads calmer.
-            P(fx, "Contrast")?.SetValue(MathHelper.Clamp(config.ColorGradeContrast - 0.12f * NightFactorNow(), 0.85f, 1.6f));
+            P(fx, "Contrast")?.SetValue(MathHelper.Clamp(config.ColorGradeContrast - 0.08f * NightFactorNow(), 0.85f, 1.6f));
             P(fx, "Saturation")?.SetValue(sat);
             P(fx, "Temperature")?.SetValue(MathHelper.Clamp(temp, -1f, 1f));
             P(fx, "Brightness")?.SetValue(config.ColorGradeBrightness * _meteredExposure);
@@ -485,7 +485,7 @@ namespace SDVRadiance
             // Deep night: cool AND desaturated. Full saturation kept the warm reddish
             // ground/paths glaring against the cool dark — a calmer, bluer, lower-sat night
             // reads as moonlit rather than eye-straining.
-            else if (t >= 2100 || t < 600) { temp -= 0.45f; satMul *= 0.52f; }
+            else if (t >= 2100 || t < 600) { temp -= 0.45f; satMul *= 0.70f; }
 
             if (Game1.isRaining) { temp -= 0.12f; satMul *= 0.85f; }
             if (Game1.isSnowing) { temp -= 0.15f; satMul *= 0.90f; }
