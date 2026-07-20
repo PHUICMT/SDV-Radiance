@@ -302,7 +302,7 @@ namespace SDVRadiance
             // Our flood gently DIMS the open night ground so lamp pools stand out. Kept MILD
             // (×0.82, was ×0.55 which turned a lampless farm nearly pitch black) — lamp seeds
             // are pushed above 1.0 so they show through the max() without needing a dark ground.
-            sky *= MathHelper.Lerp(1f, 0.80f, nightT);
+            sky *= MathHelper.Lerp(1f, 0.72f, nightT);
             // Full moon lifts the night back up (cool) → a full-moon night is clearly brighter
             // and bluer than a new-moon one.
             if (nightT > 0f)
