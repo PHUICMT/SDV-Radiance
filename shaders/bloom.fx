@@ -31,6 +31,7 @@ sampler2D BloomSampler = sampler_state
 float Threshold;      // luminance cutoff for the bright-pass (0..1)
 float Intensity;      // how strongly bloom is added back (0..2)
 float2 TexelSize;     // (1/width, 1/height) of the blur source, for tap offsets
+float BloomWarm;      // 0 by day .. 1 at night: tint the bloom warm so lamps/windows glow amber
 
 struct PixelInput
 {
@@ -109,6 +110,9 @@ float4 CompositePS(PixelInput input) : SV_TARGET
 {
     float4 scene = tex2D(SourceSampler, input.UV);
     float3 bloom = saturate(tex2D(BloomSampler, input.UV).rgb * Intensity);
+    // At night the bloom turns warm/amber so lamp and window glow reads as a cosy halo
+    // rather than a neutral haze.
+    bloom *= lerp(float3(1.0, 1.0, 1.0), float3(1.18, 1.02, 0.72), BloomWarm);
     float3 result = 1.0 - (1.0 - scene.rgb) * (1.0 - bloom);
     return float4(result, scene.a);
 }

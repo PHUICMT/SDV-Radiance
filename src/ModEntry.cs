@@ -609,8 +609,6 @@ namespace SDVRadiance
                 () => I18n("config.ca.enabled.name"), () => I18n("config.ca.enabled.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.ChromaticAberrationStrength, v => _config.ChromaticAberrationStrength = v,
                 () => I18n("config.ca.strength.name"), null, 0f, 1f, 0.05f);
-            api.AddBoolOption(this.ModManifest, () => _config.NightFireflies, v => _config.NightFireflies = v,
-                () => I18n("config.fireflies.enabled.name"), () => I18n("config.fireflies.enabled.tooltip"));
 
             // --- Dynamic lighting (implemented) ---
             api.AddPage(this.ModManifest, "lighting", () => I18n("config.section.lighting"));

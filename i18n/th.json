@@ -73,8 +73,6 @@
   "config.ca.enabled.name": "ใช้งานการเหลื่อมสี",
   "config.ca.enabled.tooltip": "แถบสีเหลื่อมบางๆ ที่ขอบจอ คล้ายเลนส์กล้อง แนะนำใช้ค่าน้อยกับภาพพิกเซล",
   "config.ca.strength.name": "ความแรงการเหลื่อมสี",
-  "config.fireflies.enabled.name": "หิ่งห้อยกลางคืน",
-  "config.fireflies.enabled.tooltip": "ละอองแสงอุ่นลอยเหนือพื้นกลางแจ้งตอนกลางคืน",
 
   "config.section.colorgrade": "การปรับโทนสี",
   "config.colorgrade.auto.name": "โหมดอัตโนมัติ (เวลา/อากาศ/ฤดู)",

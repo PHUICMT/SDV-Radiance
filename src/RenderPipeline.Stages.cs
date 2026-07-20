@@ -33,6 +33,14 @@ namespace SDVRadiance
             return Math.Max(moon, MathHelper.Clamp((m1 - mins) / 40f, 0f, 1f));
         }
 
+        /// <summary>Night ramp 0→1 over 19:00→21:00 (0 by day). Shared by the night-only
+        /// touches: warmer bloom, a touch more vignette, and the automatic blue night mist.</summary>
+        private static float NightFactorNow()
+        {
+            int m = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
+            return MathHelper.Clamp((m - 1140) / 120f, 0f, 1f);
+        }
+
         private void RenderCloudShadow(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var fx = _cloudShadow!;
@@ -141,7 +149,11 @@ namespace SDVRadiance
             var rtB = _rtB!;
             int w = dest.Width, h = dest.Height;
 
-            P(bloom, "Threshold")?.SetValue(config.BloomThreshold);
+            // At night, bloom blooms more (lower threshold, a bit stronger) and turns warm so
+            // lamps/windows glow amber.
+            float bloomNight = NightFactorNow();
+
+            P(bloom, "Threshold")?.SetValue(MathHelper.Clamp(config.BloomThreshold - 0.15f * bloomNight, 0f, 1f));
             P(bloom, "TexelSize")?.SetValue(new Vector2(1f / w, 1f / h));
             bloom.CurrentTechnique = bloom.Techniques["BrightPass"];
             Pass(sb, source, rtA, bloom);
@@ -154,7 +166,8 @@ namespace SDVRadiance
             bloom.CurrentTechnique = bloom.Techniques["BlurVertical"];
             Pass(sb, rtB, rtA, bloom);
 
-            P(bloom, "Intensity")?.SetValue(config.BloomIntensity);
+            P(bloom, "Intensity")?.SetValue(config.BloomIntensity * (1f + 0.4f * bloomNight));
+            P(bloom, "BloomWarm")?.SetValue(bloomNight);
             P(bloom, "BloomTexture")?.SetValue(rtA);
             bloom.CurrentTechnique = bloom.Techniques["Composite"];
             DrawFull(sb, source, dest, bloom);
@@ -166,7 +179,11 @@ namespace SDVRadiance
             P(fx, "Time")?.SetValue(Time());
             P(fx, "Speed")?.SetValue(config.FogSpeed);
             P(fx, "Scale")?.SetValue(config.FogScale);
-            P(fx, "Density")?.SetValue(config.FogDensity);
+            // When fog isn't manually enabled, this stage is running as the automatic blue
+            // NIGHT MIST — a subtle drifting haze (FogColor is already blue at night) that fades
+            // in after dusk. Manual fog uses the configured density.
+            float density = config.FogEnabled ? config.FogDensity : 0.14f * NightFactorNow();
+            P(fx, "Density")?.SetValue(density);
             P(fx, "TopBias")?.SetValue(config.FogTopBias);
             P(fx, "FogColor")?.SetValue(FogColor());
             P(fx, "WorldOffset")?.SetValue(WorldOffset(dest.Width, dest.Height));
@@ -359,16 +376,8 @@ namespace SDVRadiance
             P(fx, "VignetteStrength")?.SetValue(config.VignetteEnabled ? config.VignetteStrength : 0f);
             // Map the 0..1 UI value to a tiny UV offset so it stays subtle on pixel art.
             P(fx, "CAStrength")?.SetValue(config.ChromaticAberrationEnabled ? config.ChromaticAberrationStrength * 0.03f : 0f);
-            // Night fireflies: drifting glow motes outdoors after dusk. NightAmt ramps 19:00→21:00
-            // (0 by day). Off indoors — no open ground/grass for them to hover over.
-            int fmins = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
-            float nightAmt = MathHelper.Clamp((fmins - 1140) / 120f, 0f, 1f);
-            bool fireflies = config.NightFireflies && (Game1.currentLocation?.IsOutdoors ?? false) && nightAmt > 0f;
-            P(fx, "Fireflies")?.SetValue(fireflies ? 1f : 0f);
-            P(fx, "NightAmt")?.SetValue(nightAmt);
-            P(fx, "Time")?.SetValue((Game1.ticks % 360000) / 60f);
-            P(fx, "TilesPerScreen")?.SetValue(new Vector2(dest.Width / 64f, dest.Height / 64f));
-            P(fx, "WorldTileOffset")?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
+            // A touch more vignette at night.
+            P(fx, "NightAmt")?.SetValue(NightFactorNow());
             fx.CurrentTechnique = fx.Techniques["Finishing"];
             DrawFull(sb, source, dest, fx);
         }

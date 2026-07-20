@@ -123,9 +123,6 @@ namespace SDVRadiance
         public bool ChromaticAberrationEnabled { get; set; } = true;
         public float ChromaticAberrationStrength { get; set; } = 0.3f; // 0..1 UI scale (scaled to a tiny UV offset)
 
-        /// <summary>Drifting warm glow motes (fireflies) outdoors at night.</summary>
-        public bool NightFireflies { get; set; } = true;
-
         // --- Dynamic 2D lighting ---
         /// <summary>Flood-propagation GI lightmap (occlusion-aware ambient, shade under
         /// canopies, coloured lamp pools). Supersedes LightingEnabled when on.</summary>
