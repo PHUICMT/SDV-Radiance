@@ -153,7 +153,7 @@ namespace SDVRadiance
             // lamps/windows glow amber.
             float bloomNight = NightFactorNow();
 
-            P(bloom, "Threshold")?.SetValue(MathHelper.Clamp(config.BloomThreshold - 0.15f * bloomNight, 0f, 1f));
+            P(bloom, "Threshold")?.SetValue(MathHelper.Clamp(config.BloomThreshold - 0.08f * bloomNight, 0f, 1f));
             P(bloom, "TexelSize")?.SetValue(new Vector2(1f / w, 1f / h));
             bloom.CurrentTechnique = bloom.Techniques["BrightPass"];
             Pass(sb, source, rtA, bloom);
@@ -166,7 +166,7 @@ namespace SDVRadiance
             bloom.CurrentTechnique = bloom.Techniques["BlurVertical"];
             Pass(sb, rtB, rtA, bloom);
 
-            P(bloom, "Intensity")?.SetValue(config.BloomIntensity * (1f + 0.4f * bloomNight));
+            P(bloom, "Intensity")?.SetValue(config.BloomIntensity * (1f + 0.2f * bloomNight));
             P(bloom, "BloomWarm")?.SetValue(bloomNight);
             P(bloom, "BloomTexture")?.SetValue(rtA);
             bloom.CurrentTechnique = bloom.Techniques["Composite"];

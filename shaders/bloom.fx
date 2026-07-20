@@ -112,7 +112,7 @@ float4 CompositePS(PixelInput input) : SV_TARGET
     float3 bloom = saturate(tex2D(BloomSampler, input.UV).rgb * Intensity);
     // At night the bloom turns warm/amber so lamp and window glow reads as a cosy halo
     // rather than a neutral haze.
-    bloom *= lerp(float3(1.0, 1.0, 1.0), float3(1.18, 1.02, 0.72), BloomWarm);
+    bloom *= lerp(float3(1.0, 1.0, 1.0), float3(1.10, 1.02, 0.82), BloomWarm);
     float3 result = 1.0 - (1.0 - scene.rgb) * (1.0 - bloom);
     return float4(result, scene.a);
 }

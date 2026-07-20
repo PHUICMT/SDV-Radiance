@@ -120,10 +120,10 @@ namespace SDVRadiance
                     // INDIRECT spill only (~1/3 strength): the crisp direct pool + its per-light
                     // shadows are computed analytically in floodlight.fx; the flood carries the
                     // bounce-like glow that bends around corners and through doorways.
-                    // Outdoors the seed is pushed WELL above 1.0 so it (a) clearly beats the dimmed
-                    // night ground and (b) crosses the shader's >1.0 glow threshold → a bright, wide
-                    // pool with a warm bloom, not a faint ~17%-brighter patch. Indoors stays gentle.
-                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * (outdoors ? 1.8f : 0.5f)
+                    // Outdoors the seed sits a little above 1.0 so it beats the dimmed night ground
+                    // and reads as a wide pool, without blowing out into a flat glaring yellow blob
+                    // (×1.8 did — dialled back to ×1.25). Indoors stays gentle.
+                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * (outdoors ? 1.25f : 0.5f)
                                 * ShadowRenderer.FireFlicker(ls.position.Value, ls.textureIndex.Value);
                     // TWO-TONE rooms: an indoor window is DAYLIGHT (cool, slightly blue) while
                     // lamps and fires stay warm — the warm-vs-cool split across a room is what
@@ -147,7 +147,9 @@ namespace SDVRadiance
                             int ii = ci + di;
                             if (ii < 0 || ii >= tw) continue;
                             float dd = (float)Math.Sqrt(di * di + dj * dj);
-                            float f = MathHelper.Clamp((R + 0.5f - dd) / 1.6f, 0f, 1f);   // flat core, soft rim
+                            // Smooth gradient from the centre out (no flat plateau) so the pool
+                            // fades naturally instead of reading as a hard bright disc.
+                            float f = MathHelper.Clamp((R + 0.8f - dd) / (R + 0.8f), 0f, 1f);
                             if (f <= 0f) continue;
                             int sidx = jj * tw + ii;
                             _cells[sidx] = Vector3.Max(_cells[sidx], seedColor * (inten * f));
