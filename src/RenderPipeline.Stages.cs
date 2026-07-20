@@ -460,8 +460,11 @@ namespace SDVRadiance
             temp = 0f; satMul = 1f;
             int t = Game1.timeOfDay;
             if (t >= 1700 && t < 1930) temp += 0.25f * ((t - 1700) / 230f);
-            else if (t >= 1930 && t < 2100) temp += 0.25f - 0.55f * ((t - 1930) / 170f);
-            else if (t >= 2100 || t < 600) temp -= 0.30f;
+            else if (t >= 1930 && t < 2100) { float k = (t - 1930) / 170f; temp += 0.25f - 0.59f * k; satMul *= 1f - 0.18f * k; }
+            // Deep night: cool AND desaturated. Full saturation kept the warm reddish
+            // ground/paths glaring against the cool dark — a calmer, bluer, lower-sat night
+            // reads as moonlit rather than eye-straining.
+            else if (t >= 2100 || t < 600) { temp -= 0.34f; satMul *= 0.78f; }
 
             if (Game1.isRaining) { temp -= 0.12f; satMul *= 0.85f; }
             if (Game1.isSnowing) { temp -= 0.15f; satMul *= 0.90f; }

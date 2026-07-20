@@ -120,7 +120,9 @@ namespace SDVRadiance
                     // INDIRECT spill only (~1/3 strength): the crisp direct pool + its per-light
                     // shadows are computed analytically in floodlight.fx; the flood carries the
                     // bounce-like glow that bends around corners and through doorways.
-                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * 0.5f
+                    // Outdoors the seed must EXCEED the (now dimmed) night sky to show through the
+                    // max() — so lamps read as bright wide pools; indoors stays gentle (0.5).
+                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * (outdoors ? 0.95f : 0.5f)
                                 * ShadowRenderer.FireFlicker(ls.position.Value, ls.textureIndex.Value);
                     // TWO-TONE rooms: an indoor window is DAYLIGHT (cool, slightly blue) while
                     // lamps and fires stay warm — the warm-vs-cool split across a room is what
@@ -290,8 +292,16 @@ namespace SDVRadiance
             int mins = (t / 100) * 60 + t % 100;
             int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
             float nightT = MathHelper.Clamp((mins - (m1 - 60)) / 60f, 0f, 1f);
+            // Our flood DIMS the open night ground so lamp pools stand out and read as WIDE
+            // glows. Before this the outdoor night sky sat at ~1.0, so a lamp seed below 1.0
+            // was discarded by the max() and only vanilla's own small glow showed (widening
+            // our seed did nothing). Moderate — the shader's Strength + AmbientFloor keep the
+            // ground atmospheric, never pitch black.
+            sky *= MathHelper.Lerp(1f, 0.55f, nightT);
+            // Full moon lifts the night back up (cool) → a full-moon night is clearly brighter
+            // and bluer than a new-moon one.
             if (nightT > 0f)
-                sky += new Vector3(0.05f, 0.08f, 0.16f) * (ShadowRenderer.MoonStrength() * nightT);
+                sky += new Vector3(0.06f, 0.10f, 0.20f) * (ShadowRenderer.MoonStrength() * nightT);
             return sky;
         }
 
