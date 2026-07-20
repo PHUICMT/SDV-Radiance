@@ -147,11 +147,10 @@ namespace SDVRadiance
                             int ii = ci + di;
                             if (ii < 0 || ii >= tw) continue;
                             float dd = (float)Math.Sqrt(di * di + dj * dj);
-                            // Smooth gradient from the centre out (no flat plateau): bright core
-                            // fading gradually with distance, so a wide lamp reads as a natural
-                            // pool that dims the further out you go rather than a hard disc.
-                            float f = MathHelper.Clamp((R + 0.8f - dd) / (R + 0.8f), 0f, 1f);
-                            f *= f;   // ease-in: keeps a strong core, longer gentle tail = realistic falloff
+                            // Near-flat bright core out to ~3 tiles, then a long soft fade to the
+                            // rim — a WIDE pool that still dims gently with distance (the earlier
+                            // squared gradient dropped so fast the visible pool stayed small).
+                            float f = MathHelper.Clamp((R + 1.0f - dd) / 3.0f, 0f, 1f);
                             if (f <= 0f) continue;
                             int sidx = jj * tw + ii;
                             _cells[sidx] = Vector3.Max(_cells[sidx], seedColor * (inten * f));
@@ -308,7 +307,7 @@ namespace SDVRadiance
             // Full moon lifts the night back up (cool) → a full-moon night is clearly brighter
             // and bluer than a new-moon one.
             if (nightT > 0f)
-                sky += new Vector3(0.06f, 0.10f, 0.20f) * (ShadowRenderer.MoonStrength() * nightT);
+                sky += new Vector3(0.05f, 0.07f, 0.11f) * (ShadowRenderer.MoonStrength() * nightT);
             return sky;
         }
 
