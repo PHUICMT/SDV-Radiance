@@ -115,16 +115,25 @@ namespace SDVRadiance
                         continue;
                     Vector2 screen = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
                     // Shadows reach much further than the glow; keep a whole-room-crossing minimum
-                    // so a single small window still shadows the far corner.
+                    // so a single small window still shadows the far corner. reach is STEADY (no
+                    // flicker) — multiplying it by the flame flicker made a caster near the reach
+                    // boundary flip cast/no-cast every frame (the "blinking shadow" bug). The
+                    // flicker is applied to the shadow's ALPHA instead (see LightCast), so a fire's
+                    // cast dances in intensity but never blinks out.
                     float reach = Math.Max(640f, ls.radius.Value * 64f * 4f);
                     if (screen.X < -reach || screen.X > Game1.viewport.Width + reach ||
                         screen.Y < -reach || screen.Y > Game1.viewport.Height + reach)
                         continue;
-                    // Fire-type lights flicker; their cast shadows dance with the flame.
-                    _lightBuf.Add((screen, reach * FireFlicker(ls.position.Value, ls.textureIndex.Value)));
-                    if (_lightBuf.Count >= 6)
-                        break;
+                    _lightBuf.Add((screen, reach, FireFlicker(ls.position.Value, ls.textureIndex.Value)));
                 }
+            }
+            // Keep the lights NEAREST the screen centre (stable membership — the old
+            // dictionary-order + break-at-6 popped shadows in/out as the light set reordered).
+            if (_lightBuf.Count > 6)
+            {
+                Vector2 mid = new(Game1.viewport.Width * 0.5f, Game1.viewport.Height * 0.5f);
+                _lightBuf.Sort((a, b) => Vector2.DistanceSquared(a.pos, mid).CompareTo(Vector2.DistanceSquared(b.pos, mid)));
+                _lightBuf.RemoveRange(6, _lightBuf.Count - 6);
             }
 
             if (Diag != null && _diagFrames < 3)
@@ -252,7 +261,7 @@ namespace SDVRadiance
             }
         }
 
-        private readonly System.Collections.Generic.List<(Vector2 pos, float reach)> _lightBuf = new();
+        private readonly System.Collections.Generic.List<(Vector2 pos, float reach, float flick)> _lightBuf = new();
         private readonly System.Collections.Generic.List<(float rot, float st, float a)> _castBuf = new();
 
         /// <summary>Collect this caster's directional casts from every on-screen light into
@@ -262,8 +271,8 @@ namespace SDVRadiance
         private void GatherCasts(Vector2 feet, float strength, float lenCfg)
         {
             _castBuf.Clear();
-            foreach (var (lpos, reach) in _lightBuf)
-                if (LightCast(feet, lpos, reach, strength, lenCfg, out float rot, out float st, out float a))
+            foreach (var (lpos, reach, flick) in _lightBuf)
+                if (LightCast(feet, lpos, reach, strength, lenCfg, flick, out float rot, out float st, out float a))
                     _castBuf.Add((rot, st, a));
         }
 
@@ -302,7 +311,7 @@ namespace SDVRadiance
         }
 
         /// <summary>Shadow direction/length/opacity for a caster lit by one point light. False if out of reach.</summary>
-        private static bool LightCast(Vector2 feet, Vector2 lightPos, float reach, float strength, float lenCfg,
+        private static bool LightCast(Vector2 feet, Vector2 lightPos, float reach, float strength, float lenCfg, float flick,
             out float rot, out float stretch, out float alpha)
         {
             rot = 0f; stretch = 0f; alpha = 0f;
@@ -311,9 +320,11 @@ namespace SDVRadiance
             if (dist < 1f || dist > reach)
                 return false;
             float prox = 1f - dist / reach;                 // 1 next to the light, 0 at its edge
-            // Indoor shadows stay SUBTLE (bright rooms) and shorter, so they read softly and
-            // climb the (map-baked) walls less than the bold outdoor sun shadow.
-            alpha = 0.5f * (0.5f + 0.5f * prox) * strength;   // near a light = darker, edge = fainter
+            // Alpha falls off with prox² so a DISTANT light barely shadows you and the NEAREST
+            // light clearly dominates — several equal overlapping shadows read as a flickering
+            // "which light?" mess. flick (flame wobble) rides the ALPHA only, so a fire's cast
+            // dances in intensity but never blinks in/out (the reach is steady now).
+            alpha = (0.1f + 0.9f * prox * prox) * 0.5f * strength * flick;
             if (alpha <= 0.02f)
                 return false;
             rot = (float)Math.Atan2(away.X, -away.Y);        // point the silhouette away from the light
