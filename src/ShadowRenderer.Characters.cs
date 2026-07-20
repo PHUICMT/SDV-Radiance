@@ -135,6 +135,12 @@ namespace SDVRadiance
 
             float lenCfg = Math.Max(0.1f, config.DirectionalShadowLength);
             float ambAlpha = strength * 0.4f;   // soft grounding pool; directional cast adds on top
+            // OUTDOORS AT NIGHT a lamp is the only light on a dark ground, so its cast shadow
+            // should read boldly (indoors stays subtle — bright rooms, tuned look). Boost only
+            // the directional CAST strength here, not the ambient pool (a dark blob under
+            // everyone far from any lamp would look wrong).
+            bool outdoorNight = loc.IsOutdoors && Game1.timeOfDay >= TrulyDark();
+            float castStrength = strength * (outdoorNight ? 1.9f : 1.0f);
 
             foreach (NPC npc in CharactersIn(loc))
             {
@@ -146,7 +152,7 @@ namespace SDVRadiance
                     new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom - FeetLift));
                 float depth = MathHelper.Clamp(npc.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 float halfW = npc.GetSpriteWidthForPositioning() * 4f * 0.36f;
-                GatherCasts(feet, strength, lenCfg);
+                GatherCasts(feet, castStrength, lenCfg);
                 DrawContactBlob(b, feet, halfW, halfW * 0.5f, ambAlpha * (_castBuf.Count > 0 ? 0.45f : 1f), depth, blur);
                 foreach (var (rot, st, a) in _castBuf)
                     DrawNpcShadow(b, npc, rot, st, a, blur);
@@ -160,7 +166,7 @@ namespace SDVRadiance
                     new Vector2(animal.Position.X + animal.Sprite.SpriteWidth * 4 / 2f, animal.GetBoundingBox().Bottom));
                 float depth = MathHelper.Clamp(animal.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 float halfW = animal.Sprite.SpriteWidth * 4f * 0.36f;
-                GatherCasts(feet, strength, lenCfg);
+                GatherCasts(feet, castStrength, lenCfg);
                 DrawContactBlob(b, feet, halfW, halfW * 0.5f, ambAlpha * (_castBuf.Count > 0 ? 0.45f : 1f), depth, blur);
                 foreach (var (rot, st, a) in _castBuf)
                     DrawAnimalShadow(b, animal, rot, st, a, blur);
@@ -175,7 +181,7 @@ namespace SDVRadiance
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                         new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
                     float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
-                    GatherCasts(feet, strength, lenCfg);
+                    GatherCasts(feet, castStrength, lenCfg);
                     DrawContactBlob(b, feet, 22f, 11f, ambAlpha * (_castBuf.Count > 0 ? 0.45f : 1f), depth, blur);
                     foreach (var (rot, st, a) in _castBuf)
                         DrawSoft(b, Taps9, _playerRT, null, feet, Color.White, a, rot, _playerFeetInRT,
@@ -307,11 +313,14 @@ namespace SDVRadiance
             float prox = 1f - dist / reach;                 // 1 next to the light, 0 at its edge
             // Indoor shadows stay SUBTLE (bright rooms) and shorter, so they read softly and
             // climb the (map-baked) walls less than the bold outdoor sun shadow.
-            alpha = 0.5f * (0.5f + 0.5f * prox) * strength;
+            alpha = 0.5f * (0.5f + 0.5f * prox) * strength;   // near a light = darker, edge = fainter
             if (alpha <= 0.02f)
                 return false;
             rot = (float)Math.Atan2(away.X, -away.Y);        // point the silhouette away from the light
-            stretch = MathHelper.Lerp(0.35f, 0.85f, prox) * lenCfg;
+            // Physically: a lamp is ELEVATED, so standing right under it the light comes from
+            // nearly overhead → SHORT shadow; the further away you stand the more grazing the
+            // angle → LONGER shadow (like a low sun at dusk). (This was inverted before.)
+            stretch = MathHelper.Lerp(1.0f, 0.4f, prox) * lenCfg;
             return true;
         }
 

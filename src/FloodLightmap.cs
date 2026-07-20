@@ -147,6 +147,22 @@ namespace SDVRadiance
                             _cells[sIdx] = Vector3.Max(_cells[sIdx], shaft * f);
                         }
                     }
+                    // OUTDOOR lit storefronts/windows at night pour WARM light DOWN onto the
+                    // path in front (a saloon's windows lighting the ground). Short fading
+                    // column, softened afterwards by the bilinear sample + the wide bounce.
+                    else if (outdoors && ls.lightContext.Value == LightSource.LightContext.WindowLight)
+                    {
+                        var spill = new Vector3(1.00f, 0.84f, 0.60f);
+                        for (int k = 1; k <= 4; k++)
+                        {
+                            int jj = cj + k;
+                            if (jj >= th)
+                                break;
+                            float f = (1.0f - 0.22f * k) * inten * 2.2f;
+                            int sIdx = jj * tw + ci;
+                            _cells[sIdx] = Vector3.Max(_cells[sIdx], spill * f);
+                        }
+                    }
                 }
             }
 
@@ -176,11 +192,13 @@ namespace SDVRadiance
                 {
                     var acc = Vector3.Zero;
                     int n = 0;
-                    for (int dj = -1; dj <= 1; dj++)
+                    // 5×5 (was 3×3): a wider bounce spreads each light into a softer, fluffier
+                    // pool that fades out gradually instead of ending within one tile.
+                    for (int dj = -2; dj <= 2; dj++)
                     {
                         int jj = j + dj;
                         if (jj < 0 || jj >= th) continue;
-                        for (int di = -1; di <= 1; di++)
+                        for (int di = -2; di <= 2; di++)
                         {
                             int ii = i + di;
                             if (ii < 0 || ii >= tw) continue;
@@ -198,7 +216,7 @@ namespace SDVRadiance
             Vector3 lift = sky * (outdoors ? 0.92f : 0.85f);
             for (int idx = 0; idx < count; idx++)
             {
-                Vector3 v = _cells[idx] + _blur[idx] * 0.18f;
+                Vector3 v = _cells[idx] + _blur[idx] * 0.28f;
                 if (_decay[idx] == SolidDecay)
                     v = Vector3.Max(v, lift);
                 _pix[idx] = new Color(
