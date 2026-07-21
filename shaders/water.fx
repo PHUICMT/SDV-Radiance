@@ -179,10 +179,12 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // (coreTile==0), leaving them distorted inside real water bodies (coreTile==1).
     float ringGate = 1.0 - inPlayer;
     // The pixel mask is the AUTHORITY on where water is — colour tests only BOOST beyond the
-    // 0.75 floor (murky green lakes failed every colour gate and the effect went patchy).
-    // Their remaining job is grading, not coverage; sprites over water are handled by the
-    // carve pass + the player silhouette gate.
-    float water = tileWater * max(max(max(blueness, greyness * 0.9), cyan), 0.75) * ringGate;
+    // floor. Inside TRUE water tiles (core), keep a high floor (0.70) so murky green lakes
+    // and dark pond centres never go patchy. In the dilated shore RING (banks, surf zone),
+    // the floor drops to 0.30 — only genuinely blue/teal/grey pixels ripple; roofs, rocks
+    // and warm land art inside the ring stay still (Issue #13 refinement).
+    float floorBase = lerp(0.30, 0.70, coreSoft);
+    float water = tileWater * max(max(max(blueness, greyness * 0.9), cyan), floorBase) * ringGate;
     if (water <= 0.002)
         return src;
 
