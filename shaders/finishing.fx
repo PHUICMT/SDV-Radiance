@@ -33,9 +33,15 @@ float4 FinishPS(PixelInput input) : SV_TARGET
     float2 dir = uv - 0.5;
     float dist = length(dir);
 
+    // Edge-safe zone: CA fades near screen borders where UI elements (menus,
+    // HUD, toolbars) typically sit. The falloff starts at 85% of the way to
+    // the edge, leaving the centre fully affected but corners crisp and readable.
+    float2 edge = min(uv, 1.0 - uv);
+    float edgeSafe = smoothstep(0.0, 0.15, min(edge.x, edge.y));
+
     // Chromatic aberration: split R/B outward from the center, growing with
     // distance so the frame stays crisp in the middle (like a real lens).
-    float2 offset = dir * CAStrength * dist;
+    float2 offset = dir * CAStrength * dist * edgeSafe;
     float r = tex2D(SourceSampler, uv + offset).r;
     float4 mid = tex2D(SourceSampler, uv);
     float b = tex2D(SourceSampler, uv - offset).b;
