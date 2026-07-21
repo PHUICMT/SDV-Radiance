@@ -160,6 +160,8 @@ namespace SDVRadiance
                 (cmd, args) => this.Monitor.Log(_pipeline?.DumpMasks(System.IO.Path.GetTempPath()) ?? "pipeline not ready", LogLevel.Info));
             helper.Events.Display.RenderingWorld += OnRenderingWorld;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
+            WaterMapPainter.Init(this.Helper.DirectoryPath);
+            helper.Events.Display.RenderedWorld += OnRenderedWorldWaterOverlay;
             helper.Events.Display.RenderingStep += OnRenderingStep;
 
             var harmony = new Harmony(this.ModManifest.UniqueID);
@@ -343,6 +345,12 @@ namespace SDVRadiance
                     dev.exitThisMenu();
                 else if (Context.IsPlayerFree)
                     Game1.activeClickableMenu = new DevMenu(_config, onSave: () => this.Helper.WriteConfig(_config));
+            }
+
+            if (SButton.F9.JustPressed())
+            {
+                WaterMaskOverlay.Visible = !WaterMaskOverlay.Visible;
+                Game1.addHUDMessage(HUDMessage.ForCornerTextbox($"Water Mask: {(WaterMaskOverlay.Visible ? "ON" : "OFF")}"));
             }
 
             if (_config.TunerKey.JustPressed())
@@ -730,6 +738,13 @@ namespace SDVRadiance
             // --- Not yet implemented: shown as a roadmap so options don't imply working features ---
             api.AddSectionTitle(this.ModManifest, () => I18n("config.section.wip"));
             api.AddParagraph(this.ModManifest, () => I18n("config.wip.text"));
+        }
+
+        /// <summary>Draw the water mask debug overlay + painter when enabled (F9 toggles it).</summary>
+        private void OnRenderedWorldWaterOverlay(object? sender, RenderedWorldEventArgs e)
+        {
+            WaterMaskOverlay.Draw(e.SpriteBatch);
+            WaterMapPainter.Draw(e.SpriteBatch);
         }
 
         private string I18n(string key) => this.Helper.Translation.Get(key);
