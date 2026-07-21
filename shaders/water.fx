@@ -183,7 +183,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // and dark pond centres never go patchy. In the dilated shore RING (banks, surf zone),
     // the floor drops to 0.30 — only genuinely blue/teal/grey pixels ripple; roofs, rocks
     // and warm land art inside the ring stay still (Issue #13 refinement).
-    float floorBase = lerp(0.30, 0.70, coreSoft);
+    float floorBase = lerp(0.45, 0.65, coreSoft);
     float water = tileWater * max(max(max(blueness, greyness * 0.9), cyan), floorBase) * ringGate;
     if (water <= 0.002)
         return src;
@@ -201,7 +201,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float nRight = tex2D(MaskCoreSampler, maskUV + float2( tileStepX, 0.0)).r;
     float wetNeighbours = step(0.5, nUp) + step(0.5, nDown) + step(0.5, nLeft) + step(0.5, nRight);
     float smallness = smoothstep(1.5, 3.5, wetNeighbours); // 0 when isolated, 1 when surrounded
-    float smallDamp = lerp(0.15, 1.0, smallness);          // isolated water → 15% strength
+    float smallDamp = lerp(0.30, 1.0, smallness);          // isolated water → 30% strength
     water *= smallDamp;
 
     // Refraction in WORLD space so the ripple travels with the water:
