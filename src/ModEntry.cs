@@ -353,7 +353,7 @@ namespace SDVRadiance
                 Game1.addHUDMessage(HUDMessage.ForCornerTextbox("Water overrides saved to water-overrides.json"));
             }
 
-            if (SButton.F9.JustPressed())
+            if (SButton.F8.JustPressed())
             {
                 WaterMaskOverlay.Visible = !WaterMaskOverlay.Visible;
                 Game1.addHUDMessage(HUDMessage.ForCornerTextbox($"Water Mask: {(WaterMaskOverlay.Visible ? "ON" : "OFF")}"));

@@ -22,10 +22,9 @@ namespace SDVRadiance
         /// <summary>Path to the overrides JSON file.</summary>
         private static string _savePath = "";
 
-        /// <summary>Are we in paint mode? (Shift held while overlay is visible).</summary>
-        public static bool PaintMode => WaterMaskOverlay.Visible &&
-            Game1.oldKBState.IsKeyDown(Microsoft.Xna.Framework.Input.Keys.LeftShift) ||
-            (Game1.oldKBState.IsKeyDown(Microsoft.Xna.Framework.Input.Keys.LeftShift) && Game1.IsKeyHeld(Microsoft.Xna.Framework.Input.Keys.LeftShift));
+        /// <summary>True when Shift is held AND water mask overlay is visible.</summary>
+        private static bool ShiftHeld => Microsoft.Xna.Framework.Input.Keyboard.GetState().IsKeyDown(Microsoft.Xna.Framework.Input.Keys.LeftShift)
+                                     || Game1.input.GetKeyboardState().IsKeyDown(Microsoft.Xna.Framework.Input.Keys.LeftShift);
 
         private static Texture2D? _pixel;
         private static string _status = "";
@@ -115,8 +114,7 @@ namespace SDVRadiance
             int hoverTx = mx / 64;
             int hoverTy = my / 64;
 
-            bool painting = Game1.oldKBState.IsKeyDown(Microsoft.Xna.Framework.Input.Keys.LeftShift)
-                         && Game1.IsKeyHeld(Microsoft.Xna.Framework.Input.Keys.LeftShift);
+            bool painting = WaterMaskOverlay.Visible && ShiftHeld;
 
             // Paint on click
             if (painting && Game1.currentLocation != null && Game1.activeClickableMenu == null)
