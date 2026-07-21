@@ -295,11 +295,24 @@ namespace SDVRadiance
 
         private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
         {
+            // Early-out: skip all per-frame work when the mod is off or has nothing to do.
+            // This prevents CameraSmoother and shadow-state updates from contributing to
+            // frame-time jitter when the player has disabled every effect (Issue #19).
+            if (!_config.Enabled)
+            {
+                SuppressVanillaShadows = false;
+                SuppressVanillaClouds = false;
+                SuppressVanillaObjectShadows = false;
+                SuppressVanillaBlobShadows = false;
+                SuppressVanillaCritterShadows = false;
+                return;
+            }
+
             _camera.Update(_config);
             SuppressVanillaShadows = ShadowRenderer.ShadowsActiveNow(_config);
             // Suppress the BUSH blob (fixed-direction, fights our cast); the TREE blob is kept
             // (not patched) as a base anchor under the canopy.
-            SuppressVanillaClouds = _config.Enabled && _config.SuppressVanillaCloudShadow;
+            SuppressVanillaClouds = _config.SuppressVanillaCloudShadow;
             SuppressVanillaObjectShadows = _config.DirectionalShadowObjects && ShadowRenderer.SunShadowActive(_config);
             // Big-craftable blobs are replaced in BOTH paths (sun directional + indoor/night contact),
             // so gate on ShadowsActiveNow, not just the sun path.
