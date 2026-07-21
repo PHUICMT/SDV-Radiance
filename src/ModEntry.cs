@@ -145,6 +145,8 @@ namespace SDVRadiance
             FreezeGameWater = _config.Enabled && _config.WaterEnabled;
 
             helper.Events.GameLoop.GameLaunched += OnGameLaunched;
+            helper.Events.GameLoop.SaveLoaded += OnSaveLoaded;
+            helper.Events.GameLoop.ReturnedToTitle += OnReturnedToTitle;
             helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
             helper.Events.Input.ButtonsChanged += OnButtonsChanged;
             helper.ConsoleCommands.Add("radiance_lights",
@@ -447,6 +449,38 @@ namespace SDVRadiance
                 }
                 catch (Exception ex) { this.Monitor.Log("palette read failed: " + ex.Message, LogLevel.Info); }
             }
+        }
+
+        /// <summary>Re-read config from disk when a save is loaded, so any hand-edited
+        /// config.json changes (or settings from a previous session) are picked up.
+        /// Also resets the pipeline so stale render targets from the title screen
+        /// don't carry over into the loaded game.</summary>
+        private void OnSaveLoaded(object? sender, SaveLoadedEventArgs e)
+        {
+            _config = this.Helper.ReadConfig<ModConfig>();
+            _config.Clamp();
+            ForceBufferDraw = EffectsActive;
+            FreezeGameWater = _config.Enabled && _config.WaterEnabled;
+            _pipeline?.Dispose();
+            _pipeline = null;
+            _shadows = null;
+            this.Monitor.Log("Config reloaded on save load.", LogLevel.Trace);
+        }
+
+        /// <summary>Clean up GPU resources when returning to title, so the next
+        /// save load starts fresh with no stale render targets or shadow state.</summary>
+        private void OnReturnedToTitle(object? sender, ReturnedToTitleEventArgs e)
+        {
+            _pipeline?.Dispose();
+            _pipeline = null;
+            _shadows = null;
+            SuppressVanillaShadows = false;
+            SuppressVanillaClouds = false;
+            SuppressVanillaObjectShadows = false;
+            SuppressVanillaBlobShadows = false;
+            SuppressVanillaCritterShadows = false;
+            ForceBufferDraw = false;
+            FreezeGameWater = false;
         }
 
         private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
