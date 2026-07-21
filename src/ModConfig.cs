@@ -33,9 +33,13 @@ namespace SDVRadiance
     public sealed class NamedProfile
     {
         public string Name { get; set; } = "";
+
+        // Bloom
         public bool BloomEnabled { get; set; }
         public float BloomThreshold { get; set; }
         public float BloomIntensity { get; set; }
+
+        // Color grade
         public bool ColorGradeEnabled { get; set; }
         public bool ColorGradeAuto { get; set; }
         public bool ColorGradeToneMap { get; set; }
@@ -44,10 +48,74 @@ namespace SDVRadiance
         public float ColorGradeSaturation { get; set; }
         public float ColorGradeTemperature { get; set; }
         public float ColorGradeBrightness { get; set; }
+
+        // God rays
         public bool GodRaysEnabled { get; set; }
         public float GodRaysIntensity { get; set; }
+        public float GodRaysThreshold { get; set; }
+        public float GodRaysDensity { get; set; }
+        public float GodRaysDecay { get; set; }
+
+        // Fog
         public bool FogEnabled { get; set; }
         public float FogDensity { get; set; }
+        public float FogScale { get; set; }
+        public float FogSpeed { get; set; }
+        public float FogTopBias { get; set; }
+
+        // Cloud shadows
+        public bool CloudShadowEnabled { get; set; }
+        public float CloudShadowOpacity { get; set; }
+        public float CloudShadowCoverage { get; set; }
+        public float CloudShadowScale { get; set; }
+        public float CloudShadowSpeed { get; set; }
+
+        // Tilt-shift
+        public bool TiltShiftEnabled { get; set; }
+        public TiltShiftFocus TiltShiftMode { get; set; }
+        public float TiltShiftStrength { get; set; }
+        public float TiltShiftRadius { get; set; }
+        public float TiltShiftTopRatio { get; set; }
+        public float TiltShiftBottomRatio { get; set; }
+
+        // Water
+        public bool WaterEnabled { get; set; }
+        public float WaterStrength { get; set; }
+        public float WaterSpeed { get; set; }
+        public float WaterSparkle { get; set; }
+        public float WaterSparkleDensity { get; set; }
+        public bool WaterReflection { get; set; }
+        public float WaterReflectStrength { get; set; }
+
+        // Finishing
+        public bool VignetteEnabled { get; set; }
+        public float VignetteStrength { get; set; }
+        public bool ChromaticAberrationEnabled { get; set; }
+        public float ChromaticAberrationStrength { get; set; }
+
+        // Lighting
+        public bool FloodLightingEnabled { get; set; }
+        public float FloodLightingStrength { get; set; }
+        public float FloodShadowStrength { get; set; }
+        public bool LightingEnabled { get; set; }
+        public float LightingIndoorDarkness { get; set; }
+        public float LightingNightDarkness { get; set; }
+        public float LightingWarmth { get; set; }
+        public float LightingBoost { get; set; }
+        public float LightingRadiusScale { get; set; }
+        public bool LightingShadows { get; set; }
+        public float LightingShadowStrength { get; set; }
+
+        // Shadows
+        public bool DirectionalShadowsEnabled { get; set; }
+        public float DirectionalShadowStrength { get; set; }
+        public float DirectionalShadowLength { get; set; }
+        public float DirectionalShadowBlur { get; set; }
+        public bool DirectionalShadowObjects { get; set; }
+
+        // Camera
+        public CameraMode CameraMode { get; set; }
+        public float CameraFollowSpeed { get; set; }
     }
 
     /// <summary>
@@ -238,9 +306,11 @@ namespace SDVRadiance
         public NamedProfile CaptureProfile(string name) => new()
         {
             Name = name,
+            // Bloom
             BloomEnabled = BloomEnabled,
             BloomThreshold = BloomThreshold,
             BloomIntensity = BloomIntensity,
+            // Color grade
             ColorGradeEnabled = ColorGradeEnabled,
             ColorGradeAuto = ColorGradeAuto,
             ColorGradeToneMap = ColorGradeToneMap,
@@ -249,18 +319,75 @@ namespace SDVRadiance
             ColorGradeSaturation = ColorGradeSaturation,
             ColorGradeTemperature = ColorGradeTemperature,
             ColorGradeBrightness = ColorGradeBrightness,
+            // God rays
             GodRaysEnabled = GodRaysEnabled,
             GodRaysIntensity = GodRaysIntensity,
+            GodRaysThreshold = GodRaysThreshold,
+            GodRaysDensity = GodRaysDensity,
+            GodRaysDecay = GodRaysDecay,
+            // Fog
             FogEnabled = FogEnabled,
-            FogDensity = FogDensity
+            FogDensity = FogDensity,
+            FogScale = FogScale,
+            FogSpeed = FogSpeed,
+            FogTopBias = FogTopBias,
+            // Cloud shadows
+            CloudShadowEnabled = CloudShadowEnabled,
+            CloudShadowOpacity = CloudShadowOpacity,
+            CloudShadowCoverage = CloudShadowCoverage,
+            CloudShadowScale = CloudShadowScale,
+            CloudShadowSpeed = CloudShadowSpeed,
+            // Tilt-shift
+            TiltShiftEnabled = TiltShiftEnabled,
+            TiltShiftMode = TiltShiftMode,
+            TiltShiftStrength = TiltShiftStrength,
+            TiltShiftRadius = TiltShiftRadius,
+            TiltShiftTopRatio = TiltShiftTopRatio,
+            TiltShiftBottomRatio = TiltShiftBottomRatio,
+            // Water
+            WaterEnabled = WaterEnabled,
+            WaterStrength = WaterStrength,
+            WaterSpeed = WaterSpeed,
+            WaterSparkle = WaterSparkle,
+            WaterSparkleDensity = WaterSparkleDensity,
+            WaterReflection = WaterReflection,
+            WaterReflectStrength = WaterReflectStrength,
+            // Finishing
+            VignetteEnabled = VignetteEnabled,
+            VignetteStrength = VignetteStrength,
+            ChromaticAberrationEnabled = ChromaticAberrationEnabled,
+            ChromaticAberrationStrength = ChromaticAberrationStrength,
+            // Lighting
+            FloodLightingEnabled = FloodLightingEnabled,
+            FloodLightingStrength = FloodLightingStrength,
+            FloodShadowStrength = FloodShadowStrength,
+            LightingEnabled = LightingEnabled,
+            LightingIndoorDarkness = LightingIndoorDarkness,
+            LightingNightDarkness = LightingNightDarkness,
+            LightingWarmth = LightingWarmth,
+            LightingBoost = LightingBoost,
+            LightingRadiusScale = LightingRadiusScale,
+            LightingShadows = LightingShadows,
+            LightingShadowStrength = LightingShadowStrength,
+            // Shadows
+            DirectionalShadowsEnabled = DirectionalShadowsEnabled,
+            DirectionalShadowStrength = DirectionalShadowStrength,
+            DirectionalShadowLength = DirectionalShadowLength,
+            DirectionalShadowBlur = DirectionalShadowBlur,
+            DirectionalShadowObjects = DirectionalShadowObjects,
+            // Camera
+            CameraMode = CameraMode,
+            CameraFollowSpeed = CameraFollowSpeed,
         };
 
         /// <summary>Load a saved profile's settings into the live config.</summary>
         public void ApplyProfile(NamedProfile p)
         {
+            // Bloom
             BloomEnabled = p.BloomEnabled;
             BloomThreshold = p.BloomThreshold;
             BloomIntensity = p.BloomIntensity;
+            // Color grade
             ColorGradeEnabled = p.ColorGradeEnabled;
             ColorGradeAuto = p.ColorGradeAuto;
             ColorGradeToneMap = p.ColorGradeToneMap;
@@ -269,10 +396,65 @@ namespace SDVRadiance
             ColorGradeSaturation = p.ColorGradeSaturation;
             ColorGradeTemperature = p.ColorGradeTemperature;
             ColorGradeBrightness = p.ColorGradeBrightness;
+            // God rays
             GodRaysEnabled = p.GodRaysEnabled;
             GodRaysIntensity = p.GodRaysIntensity;
+            GodRaysThreshold = p.GodRaysThreshold;
+            GodRaysDensity = p.GodRaysDensity;
+            GodRaysDecay = p.GodRaysDecay;
+            // Fog
             FogEnabled = p.FogEnabled;
             FogDensity = p.FogDensity;
+            FogScale = p.FogScale;
+            FogSpeed = p.FogSpeed;
+            FogTopBias = p.FogTopBias;
+            // Cloud shadows
+            CloudShadowEnabled = p.CloudShadowEnabled;
+            CloudShadowOpacity = p.CloudShadowOpacity;
+            CloudShadowCoverage = p.CloudShadowCoverage;
+            CloudShadowScale = p.CloudShadowScale;
+            CloudShadowSpeed = p.CloudShadowSpeed;
+            // Tilt-shift
+            TiltShiftEnabled = p.TiltShiftEnabled;
+            TiltShiftMode = p.TiltShiftMode;
+            TiltShiftStrength = p.TiltShiftStrength;
+            TiltShiftRadius = p.TiltShiftRadius;
+            TiltShiftTopRatio = p.TiltShiftTopRatio;
+            TiltShiftBottomRatio = p.TiltShiftBottomRatio;
+            // Water
+            WaterEnabled = p.WaterEnabled;
+            WaterStrength = p.WaterStrength;
+            WaterSpeed = p.WaterSpeed;
+            WaterSparkle = p.WaterSparkle;
+            WaterSparkleDensity = p.WaterSparkleDensity;
+            WaterReflection = p.WaterReflection;
+            WaterReflectStrength = p.WaterReflectStrength;
+            // Finishing
+            VignetteEnabled = p.VignetteEnabled;
+            VignetteStrength = p.VignetteStrength;
+            ChromaticAberrationEnabled = p.ChromaticAberrationEnabled;
+            ChromaticAberrationStrength = p.ChromaticAberrationStrength;
+            // Lighting
+            FloodLightingEnabled = p.FloodLightingEnabled;
+            FloodLightingStrength = p.FloodLightingStrength;
+            FloodShadowStrength = p.FloodShadowStrength;
+            LightingEnabled = p.LightingEnabled;
+            LightingIndoorDarkness = p.LightingIndoorDarkness;
+            LightingNightDarkness = p.LightingNightDarkness;
+            LightingWarmth = p.LightingWarmth;
+            LightingBoost = p.LightingBoost;
+            LightingRadiusScale = p.LightingRadiusScale;
+            LightingShadows = p.LightingShadows;
+            LightingShadowStrength = p.LightingShadowStrength;
+            // Shadows
+            DirectionalShadowsEnabled = p.DirectionalShadowsEnabled;
+            DirectionalShadowStrength = p.DirectionalShadowStrength;
+            DirectionalShadowLength = p.DirectionalShadowLength;
+            DirectionalShadowBlur = p.DirectionalShadowBlur;
+            DirectionalShadowObjects = p.DirectionalShadowObjects;
+            // Camera
+            CameraMode = p.CameraMode;
+            CameraFollowSpeed = p.CameraFollowSpeed;
         }
 
         /// <summary>Apply a quick look preset by overwriting the effect fields.</summary>
