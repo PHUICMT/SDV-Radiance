@@ -78,6 +78,16 @@ float4 BrightPS(PixelInput input) : SV_TARGET
     float lum = dot(c, LUMA);
     float mask = smoothstep(Threshold, Threshold + 0.1, lum);
 
+    // Saturation guard: speech-bubble backgrounds are pure white (R≈G≈B, no
+    // saturation) and are UI elements, not light sources. Real light emitters
+    // (torches, lanterns, windows, glow rings) always carry some colour — warm
+    // orange or cool blue. Kill 85% of the bright-pass output for near-greyscale
+    // pixels above the threshold so bubbles don't streak rays.
+    float maxC = max(c.r, max(c.g, c.b));
+    float minC = min(c.r, min(c.g, c.b));
+    float whiteBias = saturate(1.0 - (maxC - minC) * 6.0); // 1 = white, 0 = colourful
+    mask *= 1.0 - whiteBias * 0.85;
+
     float2 d = input.UV - LightPos;
     d.x *= Aspect;                                   // circular in pixel space
     float within = 1.0 - smoothstep(LightRadius * 0.65, LightRadius, length(d));
