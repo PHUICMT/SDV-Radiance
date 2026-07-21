@@ -296,7 +296,7 @@ namespace SDVRadiance
         public KeybindList TunerKey { get; set; } = new(SButton.F6);
 
         /// <summary>Open the developer testing menu (teleports, time/weather controls).</summary>
-        public KeybindList DevKey { get; set; } = new(SButton.F8);
+        public KeybindList DevKey { get; set; } = new(SButton.F10);
 
         // --- Saved custom looks ---
         public List<NamedProfile> SavedProfiles { get; set; } = new();
