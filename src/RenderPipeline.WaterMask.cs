@@ -243,16 +243,7 @@ namespace SDVRadiance
                         confidence = 200; // overrides always win — higher than any auto source
                     }
 
-                    // --- Source 1: GameLocation.waterTiles dict (SDV's own water animation map) ---
-                    // This is THE ground truth for vanilla + SVE maps. If a tile is in this
-                    // dictionary, the game itself draws animated water there — it IS water.
-                    if (loc.waterTiles != null && loc.waterTiles.ContainsKey(new Microsoft.Xna.Framework.Point(tx, ty)))
-                    {
-                        water = true;
-                        confidence = 100;
-                    }
-
-                    // --- Source 2: Height Framework surface classifier (ponds/ocean vs deck/wall) ---
+                    // --- Source 1: Height Framework surface classifier (ponds/ocean vs deck/wall) ---
                     if (!water && hf != null)
                     {
                         try
@@ -280,7 +271,7 @@ namespace SDVRadiance
                         confidence = 80;
                     }
 
-                    // --- Source 5: Art classification (custom maps without properties, Issue #13) ---
+                    // --- Source 4: Art classification ---
                     // Puddle art: flat blue-grey outdoor floors. Island dig site & walk-through
                     // pools that are plain ground in map data but LOOK like water.
                     if (!water && loc.IsOutdoors)

@@ -134,11 +134,7 @@ namespace SDVRadiance
         private static (bool water, byte confidence, string source) ClassifyTile(
             GameLocation loc, Integrations.IHeightFrameworkApi? hf, int tx, int ty)
         {
-            // Source 1: waterTiles dict
-            if (loc.waterTiles != null && loc.waterTiles.ContainsKey(new Point(tx, ty)))
-                return (true, 100, "waterTiles dict");
-
-            // Source 2: Height Framework
+            // Source 1: Height Framework
             if (hf != null)
             {
                 try

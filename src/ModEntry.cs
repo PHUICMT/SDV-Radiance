@@ -20,6 +20,7 @@ namespace SDVRadiance
         private RenderPipeline? _pipeline;
         private ShadowRenderer? _shadows;
         private readonly CameraSmoother _camera = new();
+        private bool _prevF3, _prevF5;
 
         /// <summary>
         /// Mirrors <see cref="ModConfig.Enabled"/> for the static Harmony postfix.
@@ -347,17 +348,23 @@ namespace SDVRadiance
                     Game1.activeClickableMenu = new DevMenu(_config, onSave: () => this.Helper.WriteConfig(_config));
             }
 
-            if (SButton.F5.JustPressed() && WaterMaskOverlay.Visible)
-            {
-                WaterMapPainter.Save();
-                Game1.addHUDMessage(HUDMessage.ForCornerTextbox("Water overrides saved to water-overrides.json"));
-            }
-
-            if (SButton.F3.JustPressed())
+            // F3: toggle water mask overlay
+            bool f3Down = Game1.input.GetKeyboardState().IsKeyDown(Microsoft.Xna.Framework.Input.Keys.F3);
+            if (f3Down && !_prevF3)
             {
                 WaterMaskOverlay.Visible = !WaterMaskOverlay.Visible;
                 Game1.addHUDMessage(HUDMessage.ForCornerTextbox($"Water Mask: {(WaterMaskOverlay.Visible ? "ON" : "OFF")}"));
             }
+            _prevF3 = f3Down;
+
+            // F5: save water overrides (when overlay is visible)
+            bool f5Down = Game1.input.GetKeyboardState().IsKeyDown(Microsoft.Xna.Framework.Input.Keys.F5);
+            if (f5Down && !_prevF5 && WaterMaskOverlay.Visible)
+            {
+                WaterMapPainter.Save();
+                Game1.addHUDMessage(HUDMessage.ForCornerTextbox("Water overrides saved to water-overrides.json"));
+            }
+            _prevF5 = f5Down;
 
             if (_config.TunerKey.JustPressed())
             {
