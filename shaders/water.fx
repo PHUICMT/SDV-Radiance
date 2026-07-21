@@ -186,6 +186,22 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     if (water <= 0.002)
         return src;
 
+    // Small-water-body guard: troughs, sinks, and containers <1 tile are single isolated
+    // water tiles. Their neighbour core tiles (up/down/left/right) are almost entirely dry —
+    // the container art itself reads as the only "water" and distorts. Detect isolation by
+    // sampling the core mask at ±1 tile offsets; if 3+ neighbours are dry, tone the effect
+    // down to a faint shimmer so the container stays readable (Issue #12).
+    float tileStepX = 1.0 / (MaskSize.x * 16.0 / TilesPerScreen.x);
+    float tileStepY = 1.0 / (MaskSize.y * 16.0 / TilesPerScreen.y);
+    float nUp    = tex2D(MaskCoreSampler, maskUV + float2(0.0, -tileStepY)).r;
+    float nDown  = tex2D(MaskCoreSampler, maskUV + float2(0.0,  tileStepY)).r;
+    float nLeft  = tex2D(MaskCoreSampler, maskUV + float2(-tileStepX, 0.0)).r;
+    float nRight = tex2D(MaskCoreSampler, maskUV + float2( tileStepX, 0.0)).r;
+    float wetNeighbours = step(0.5, nUp) + step(0.5, nDown) + step(0.5, nLeft) + step(0.5, nRight);
+    float smallness = smoothstep(1.5, 3.5, wetNeighbours); // 0 when isolated, 1 when surrounded
+    float smallDamp = lerp(0.15, 1.0, smallness);          // isolated water → 15% strength
+    water *= smallDamp;
+
     // Refraction in WORLD space so the ripple travels with the water:
     //  - pond: fine crossing ripples, small & quick (still surface).
     //  - ocean: long directional swell, bigger & slower.

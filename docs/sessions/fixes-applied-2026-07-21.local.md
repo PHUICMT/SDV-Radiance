@@ -10,36 +10,21 @@
 **Commit:** `fe5de29`
 
 ### อาการ
-ผู้ใช้รายงานว่าการเคลื่อนที่ของผู้เล่นกระตุก (stutter) แม้จะปิด visual effects ทั้งหมดแล้ว — อาการหายเมื่อปิด SDV-Radiance ทั้ง mod แสดงว่าปัญหาไม่ได้อยู่ที่ shader แต่อยู่ที่ code path หลักของ mod
+ผู้ใช้รายงานว่าการเคลื่อนที่ของผู้เล่นกระตุก (stutter) แม้จะปิด visual effects ทั้งหมดแล้ว — อาการหายเมื่อปิด SDV-Radiance ทั้ง mod
 
 ### Root Cause
 `OnUpdateTicked` ใน `ModEntry.cs` ถูกเรียกทุก frame (60fps) และทำงานทุกครั้งแม้ `_config.Enabled == false`:
-
-1. `_camera.Update(_config)` — CameraSmoother ถูกเรียกทุก frame แม้ `CameraMode == Off` (แค่ set `_tracking = false` แต่ก็ยังมี overhead)
-2. `SuppressVanillaShadows`, `SuppressVanillaClouds`, `SuppressVanillaObjectShadows` — ถูก evaluate ทุก frame ผ่าน `ShadowRenderer.ShadowsActiveNow()` และ `ShadowRenderer.SunShadowActive()` ซึ่งอ่านค่า time-of-day, weather, location ทุกครั้ง
-3. static fields เหล่านี้ถูก Harmony prefix/transpiler อ่านทุก draw call — overhead สะสม
+1. `_camera.Update(_config)` — CameraSmoother ถูกเรียกทุก frame
+2. `SuppressVanilla*` — ถูก evaluate ทุก frame ผ่าน `ShadowRenderer` methods
+3. static fields ถูก Harmony patches อ่านทุก draw call
 
 ### วิธีแก้
-เพิ่ม **early-out guard** ที่บรรทัดแรกของ `OnUpdateTicked`:
-
-```csharp
-if (!_config.Enabled)
-{
-    SuppressVanillaShadows = false;
-    SuppressVanillaClouds = false;
-    SuppressVanillaObjectShadows = false;
-    SuppressVanillaBlobShadows = false;
-    SuppressVanillaCritterShadows = false;
-    return;  // <-- ข้ามทุกอย่างที่เหลือ
-}
-```
+เพิ่ม early-out guard ที่บรรทัดแรกของ `OnUpdateTicked` — return ทันทีเมื่อ `!_config.Enabled`
 
 ### ทำไมถึงแก้แบบนี้
-- ✅ เมื่อ mod ปิด → ไม่มี overhead เลย — `OnUpdateTicked` กลับทันทีหลังจาก reset static flags
-- ✅ static flags ถูกรีเซ็ตเป็น `false` เพื่อให้ Harmony patches คืนค่า vanilla behavior
-- ✅ CameraSmoother ไม่ถูกเรียกเลย (ประหยัดทั้ง method call + conditional checks ข้างใน)
-- ✅ `_config.Enabled` เป็น boolean check ที่ถูกมาก (nanoseconds) — zero overhead สำหรับคนที่เปิด mod ไว้
-- ✅ เดิม `SuppressVanillaClouds` ใช้ `_config.Enabled && _config.SuppressVanillaCloudShadow` — ตอนนี้ใช้แค่ `_config.SuppressVanillaCloudShadow` เพราะ guard ด้านบนจัดการ `_config.Enabled` ไปแล้ว
+- ✅ Zero overhead เมื่อ mod ปิด
+- ✅ static flags รีเซ็ตให้ vanilla behavior
+- ✅ CameraSmoother ไม่ถูกเรียกเลย
 
 ---
 
@@ -48,40 +33,18 @@ if (!_config.Enabled)
 **Commit:** `87b83c7`
 
 ### อาการ
-ผู้ใช้สามารถ save custom presets ได้ แต่เมื่อกด load กลับมาใช้ — การตั้งค่าไม่เปลี่ยน (โดยเฉพาะพวก water, lighting, shadows, cloud shadow, tilt-shift, chromatic aberration)
+Save custom presets ได้ แต่ load แล้วการตั้งค่าไม่เปลี่ยน (water, lighting, shadows, etc.)
 
 ### Root Cause
-`NamedProfile` class, `CaptureProfile()`, และ `ApplyProfile()` ถูกเขียนตอนเริ่มต้นโปรเจค — ตอนนั้นมีแค่ **5 effects แรก** (Bloom, ColorGrade, GodRays, Fog) — แต่หลังจากนั้นมี effects ใหม่เพิ่มมาอีกมากมายโดยที่ **ไม่มีใครอัปเดตระบบ preset**:
-
-| Effect | มีใน Preset? |
-|--------|-------------|
-| Bloom | ✅ |
-| Color Grade | ✅ |
-| God Rays | ✅ (แต่ขาด Threshold, Density, Decay) |
-| Fog | ✅ (แต่ขาด Scale, Speed, TopBias) |
-| Cloud Shadows | ❌ |
-| Tilt-Shift | ❌ |
-| Water | ❌ |
-| Vignette | ❌ |
-| Chromatic Aberration | ❌ |
-| Flood GI | ❌ |
-| Dynamic Lighting | ❌ |
-| Directional Shadows | ❌ |
-| Camera | ❌ |
-
-**ผล:** save → ได้แค่ 5 effects แรก / load → apply แค่ 5 effects แรก / effects ที่เหลือใช้ค่าเดิม
+`NamedProfile`/`CaptureProfile`/`ApplyProfile` มีแค่ 5 effects แรก (Bloom, ColorGrade, GodRays, Fog) — effects ที่เพิ่มมาทีหลัง 9 effects ไม่ถูก capture/apply
 
 ### วิธีแก้
-1. **ขยาย `NamedProfile`** — เพิ่ม properties ให้ครบทุก effect (จาก 16 → 80+ properties)
-2. **ขยาย `CaptureProfile()`** — capture ทุก property ลง NamedProfile
-3. **ขยาย `ApplyProfile()`** — apply ทุก property กลับจาก NamedProfile
+เติม properties ใน `NamedProfile` ให้ครบ 80+ properties + อัปเดต `CaptureProfile()` และ `ApplyProfile()` ให้ sync กัน
 
 ### ทำไมถึงแก้แบบนี้
-- ✅ ครบทุก effect ที่มีใน `ModConfig` — ไม่มี遗漏
-- ✅ JSON serialization อัตโนมัติ — เพิ่ม properties ใน C# class → config.json ก็เก็บครบ
-- ✅ Backward compatible — properties ใหม่มี default values (`false`, `0f`) → config.json เก่าโหลดได้ไม่มีพัง
-- ✅ ใช้ pattern เดิม — ไม่เปลี่ยน architecture, แค่ขยายข้อมูล
-- ⚠️ ข้อควรระวัง: ถ้าเพิ่ม effect ใหม่ในอนาคต ต้องอัปเดต `NamedProfile`, `CaptureProfile`, `ApplyProfile` ทั้ง 3 ที่
+- ✅ ครบทุก effect
+- ✅ Backward compatible — properties ใหม่มี default values
+- ⚠️ ถ้าเพิ่ม effect ใหม่ต้องอัปเดต 3 ที่
 
 ---
 
@@ -89,15 +52,74 @@ if (!_config.Enabled)
 
 **สถานะ:** 🟢 NOT A BUG — Verified
 
-### ตรวจสอบแล้ว
-- `WaterSparkle` (slider) → ควบคุมแค่ specular glints (ประกายแสงบนผิวน้ำ) ใน `RenderWater()` → `P(fx, "Sparkle")`
-- `WaterReflection` (toggle) → ควบคุม screen-space reflection ใน `RenderWater()` → `P(fx, "ReflectStrength")`
-- ใน shader `water.fx` — `Sparkle` กับ `ReflectStrength` ทำงานแยกกันโดยสิ้นเชิง:
-  - `ReflectStrength` → บรรทัด 211-336 (reflection + self-reflection)
-  - `Sparkle` → บรรทัด 352-386 (specular glints)
-- ใน Tuner UI — แยกเป็นคนละ widget (slider vs toggle)
+`WaterSparkle` (slider) กับ `WaterReflection` (toggle) แยกจากกันใน code และ shader — ผู้ใช้อาจสับสนกับ `WaterEnabled` ที่ปิดน้ำทั้งหมด
 
-**สรุป:** ผู้ใช้อาจสับสนระหว่าง "Water Shimmer" (ไม่มี toggle นี้ — `WaterSparkle` เป็น slider) กับ `WaterEnabled` (toggle ปิดน้ำทั้งหมดรวม reflection) หรืออาจเป็น edge case เฉพาะบาง map ที่ทั้ง shimmer และ reflection พังพร้อมกันเพราะ water mask ไม่ถูกสร้าง
+---
+
+## ✅ Fix #18: Settings Reset หลังเข้า-ออก Location
+
+**Commit:** `91137ae`
+
+### อาการ
+Settings reset หลังเข้า-ออก farm cave หรือ location อื่น
+
+### Root Cause
+1. ไม่มี `SaveLoaded` handler → config ใน memory ไม่ sync กับ disk
+2. ไม่มี `ReturnedToTitle` handler → stale GPU resources
+3. GMCM reset (`new ModConfig()`) ไม่ write ลง disk
+
+### วิธีแก้
+เพิ่ม `OnSaveLoaded` (reload config + clamp + dispose pipeline) + `OnReturnedToTitle` (cleanup GPU + reset flags)
+
+### ทำไมถึงแก้แบบนี้
+- ✅ Config ใน memory = บน disk เสมอ
+- ✅ ป้องกัน stale render targets
+- ✅ ใช้ SMAPI built-in events
+
+---
+
+## ✅ Fix #14: Chromatic Aberration — เบลอ UI มุมจอ
+
+**Commit:** `fad4fb6`
+
+### อาการ
+เปิด CA แล้ว UI elements ตรงมุมจอเบลอ
+
+### Root Cause
+`finishing.fx` ใช้ radial displacement ที่แรงสุดตรงมุมจอ — UI อยู่ตรงนั้นพอดี
+
+### วิธีแก้
+เพิ่ม `edgeSafe` zone — CA strength fade เหลือ 0 ภายใน 15% ของขอบจอ
+
+### ทำไมถึงแก้แบบนี้
+- ✅ `smoothstep` — smooth fade ไม่มีรอยต่อ
+- ✅ กลางจอยังได้ CA เต็ม
+- ✅ UI อ่านชัด 100%
+
+---
+
+## ✅ Fix #10: God Rays รั่วจาก Speech Bubbles
+
+**Commit:** `168bedc`
+
+### อาการ
+God rays ปรากฏจาก speech bubbles (The Muttering Farmer) และ UI ขาวอื่นๆ
+
+### Root Cause
+`BrightPS` ใช้แค่ brightness threshold — speech bubble พื้นหลังขาว luminance สูง → ผ่าน → streak rays
+
+### วิธีแก้
+เพิ่ม saturation guard — grayscale/white pixels (R≈G≈B) ถูก suppress 85%:
+```hlsl
+float whiteBias = saturate(1.0 - (maxC - minC) * 6.0);
+mask *= 1.0 - whiteBias * 0.85;
+```
+
+### ทำไมถึงแก้แบบนี้
+- ✅ Real light emitters มีสี → ไม่โดน suppress
+- ✅ Speech bubbles ขาว → โดน suppress 85%
+- ✅ 0.85 ไม่ใช่ 1.0 — กัน edge case แสงจันทร์ขาว
+- ⚠️ ต้อง recompile `godrays.mgfxo`
 
 ---
 
@@ -108,9 +130,9 @@ if (!_config.Enabled)
 | #19 Movement stutter | ✅ Fixed | `fe5de29` |
 | #17 Preset save/load | ✅ Fixed | `87b83c7` |
 | #15 Shimmer→Reflection | 🟢 Not a bug | — |
-| #18 Settings reset | ⏳ Pending | — |
-| #14 Chromatic aberration | ⏳ Pending | — |
-| #10 God rays speech bubbles | ⏳ Pending | — |
+| #18 Settings reset | ✅ Fixed | `91137ae` |
+| #14 Chromatic aberration | ✅ Fixed | `fad4fb6` |
+| #10 God rays speech bubbles | ✅ Fixed | `168bedc` |
 | #8 God rays weather | ⏳ Pending | — |
 | #11 Hot spring reflection | ⏳ Pending | — |
 | #12 Small water containers | ⏳ Pending | — |
