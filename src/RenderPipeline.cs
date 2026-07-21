@@ -50,6 +50,7 @@ namespace SDVRadiance
         private Texture2D? _waterMaskCore;     // undilated per-TILE mask — true water bodies, used for the reflection's shoreline search
         private Color[]? _waterMaskCoreBuf;
         private bool[]? _waterBoolBuf;         // pre-dilation water flags (see BuildWaterMask)
+        private byte[]? _waterConfBuf;         // per-tile confidence (0-100) for water detection
         private bool[]? _waterBool2Buf;        // scratch for the dilation passes (candidate ring for art classification)
         private Color[]? _waterPixBuf;         // pixel-mask upload buffer (tilesW*16 × tilesH*16)
         private bool[]? _waterPixBits;         // scratch bits for the close/carve passes (effect channel)

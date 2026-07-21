@@ -221,37 +221,80 @@ namespace SDVRadiance
             var back = loc.map?.GetLayer("Back");
             if (_waterBoolBuf == null || _waterBoolBuf.Length < count)
                 _waterBoolBuf = new bool[count];
+            if (_waterConfBuf == null || _waterConfBuf.Length < count)
+                _waterConfBuf = new byte[count];
             bool any = false;
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)
                 {
                     int tx = startTileX + i, ty = startTileY + j;
-                    bool water;
-                    try { water = hf != null ? hf.IsWaterSurface(loc, tx, ty) : loc.isWaterTile(tx, ty); }
-                    catch { hf = null; water = loc.isWaterTile(tx, ty); }
-                    // Walkable shallow pools (island dig site tide pools) aren't Water tiles,
-                    // but they refill the watering can → "WaterSource" marks them as real water.
-                    if (!water && loc.doesTileHaveProperty(tx, ty, "WaterSource", "Back") != null)
-                        water = true;
-                    // Custom-map fallback (Issue #13): many custom farm maps (Fantasy Farm
-                    // Cave, Immersive Farm 2 Remastered) don't set Water/WaterSource tile
-                    // properties. Detect water by its Back art — if ≥50% of opaque pixels
-                    // are blue/teal water colours, treat it as a true water tile.
-                    if (!water && loc.IsOutdoors && TryTileArt(back, tx, ty, out var fbtex, out var fbsrc))
+                    bool water = false;
+                    byte confidence = 0; // 0-100: how sure we are this is real water
+
+                    // --- Source 1: GameLocation.waterTiles dict (SDV's own water animation map) ---
+                    // This is THE ground truth for vanilla + SVE maps. If a tile is in this
+                    // dictionary, the game itself draws animated water there — it IS water.
+                    if (loc.waterTiles != null && loc.waterTiles.ContainsKey(new Microsoft.Xna.Framework.Point(tx, ty)))
                     {
-                        var fbBits = ClassifyBits(fbtex, fbsrc, water: true);
-                        int wc = 0, tc = 0;
-                        for (int pi = 0; pi < fbBits.Length; pi++)
-                        {
-                            tc++;
-                            if (fbBits[pi]) wc++;
-                        }
-                        if (tc >= 100 && wc * 100 / tc >= 50)
-                            water = true;
+                        water = true;
+                        confidence = 100;
                     }
+
+                    // --- Source 2: Height Framework surface classifier (ponds/ocean vs deck/wall) ---
+                    if (!water && hf != null)
+                    {
+                        try
+                        {
+                            if (hf.IsWaterSurface(loc, tx, ty))
+                            {
+                                water = true;
+                                confidence = 100;
+                            }
+                        }
+                        catch { hf = null; }
+                    }
+
+                    // --- Source 3: Tile property "Water" on Back layer (vanilla + most mod maps) ---
+                    if (!water && loc.isWaterTile(tx, ty))
+                    {
+                        water = true;
+                        confidence = 90;
+                    }
+
+                    // --- Source 4: "WaterSource" property (shallow pools, watering-can refills) ---
+                    if (!water && loc.doesTileHaveProperty(tx, ty, "WaterSource", "Back") != null)
+                    {
+                        water = true;
+                        confidence = 80;
+                    }
+
+                    // --- Source 5: Art classification (custom maps without properties, Issue #13) ---
+                    // Puddle art: flat blue-grey outdoor floors. Island dig site & walk-through
+                    // pools that are plain ground in map data but LOOK like water.
+                    if (!water && loc.IsOutdoors)
+                    {
+                        if (TryTileArt(back, tx, ty, out var fbtex, out var fbsrc))
+                        {
+                            var fbBits = ClassifyBits(fbtex, fbsrc, water: true);
+                            int wc = 0, tc = 0;
+                            for (int pi = 0; pi < fbBits.Length; pi++)
+                            {
+                                if (fbBits[pi]) wc++;
+                                tc++;
+                            }
+                            if (tc >= 100)
+                            {
+                                int pct = wc * 100 / tc;
+                                if (pct >= 70) { water = true; confidence = 70; }
+                                else if (pct >= 50) { water = true; confidence = 50; }
+                            }
+                        }
+                    }
+
                     if (water) any = true;
                     _waterBoolBuf[j * tilesW + i] = water;
+                    _waterConfBuf![j * tilesW + i] = confidence;
                 }
             }
 
