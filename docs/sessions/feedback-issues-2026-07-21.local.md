@@ -97,17 +97,127 @@
 
 ---
 
-## 📊 สรุป Priority
+## 🔴 Issue 8: God Rays — ไม่ปิดตอนสภาพอากาศเลวร้ายหรือใต้เมฆ
 
-| Priority | Issue | Impact |
-|----------|-------|--------|
-| 🔴 P0 | Shadow intensity/visibility | ผู้ใช้ไม่เปลี่ยนมาใช้เพราะเงาไม่เด่น |
-| 🔴 P0 | SVE/RSV shadow map support | ผู้ใช้กลุ่มใหญ่ (SVE+RSV) ไม่มีเงา |
-| 🔴 P0 | Data-driven shadow maps (JSON) | เปิดให้ community ช่วยสร้าง shadow maps |
-| 🟡 P1 | Cloud shadow fine-tune controls | เพิ่มความยืดหยุ่น |
-| 🟡 P1 | Cloud shadow on small maps | Bug ที่ทำลาย immersion |
-| 🟡 P2 | Water performance profiles | กังวลเรื่องประสิทธิภาพ |
-| 🟢 P3 | Blue light filter | Nice-to-have |
+**ปัญหา:** ผู้ใช้ถามว่า mod ปิด god rays ตอนฝนตก/พายุ หรือตอนอยู่ใต้เงาเมฆหรือไม่ — god rays ควรตอบสนองต่อสภาพอากาศและตำแหน่งเมฆ
+
+**สิ่งที่ต้องทำ:**
+- [ ] ตรวจสอบว่า god rays ปิด/ลดความเข้มตอนฝนตกหรือไม่
+- [ ] ตรวจสอบว่า god rays ปิด/ลดความเข้มตอนอยู่ใต้ cloud shadows หรือไม่
+- [ ] God rays intensity ควรแปรผันตาม weather (sunny > cloudy > rainy > stormy)
+- [ ] God rays ควร fade เมื่อ cloud shadow coverage สูง
+
+---
+
+## 🔴 Issue 9: Compatibility — ขัดแย้งกับ Clear Monocle / Clear Glasses
+
+**ปัญหา:** เมื่อใช้ร่วมกับ **Clear Monocle** (fork ของ Sprite Master/Clear Glasses ที่ใช้ xBRZ) และ **Dynamic Shader** พร้อมกัน — เกิดปัญหา "orange screen" (จอส้ม) ซึ่งน่าจะเกี่ยวข้องกับ shadow system
+
+**สิ่งที่ต้องทำ:**
+- [ ] ทดสอบ compatibility กับ Clear Monocle
+- [ ] ทดสอบ compatibility กับ Sprite Master / Clear Glasses
+- [ ] ตรวจสอบ render target conflicts ระหว่าง shadow pass กับ xBRZ upscaling
+- [ ] Debug "orange screen" issue — อาจเกิดจาก render target ไม่ถูก clear หรือ blend state clash
+- [ ] เพิ่ม compatibility mode หรือ auto-detect conflicting mods
+
+---
+
+## 🔴 Issue 10: God Rays — รั่วจาก Speech Bubbles (The Muttering Farmer)
+
+**ปัญหา:** God rays ปรากฏจาก speech bubbles ที่เพิ่มโดย mod **The Muttering Farmer** — god rays ควรกรองเฉพาะ light sources ที่เป็นแสงจริง ไม่ใช่ UI elements
+
+**สิ่งที่ต้องทำ:**
+- [ ] ตรวจสอบ source detection logic ใน god rays — ปัจจุบัน detect จาก brightness/luminance อย่างเดียวหรือไม่
+- [ ] เพิ่ม filtering ให้ ignore UI layer elements (speech bubbles, text, HUD)
+- [ ] แยก render layer สำหรับ god rays source detection (exclude UI layer)
+- [ ] ทดสอบกับ The Muttering Farmer mod
+
+---
+
+## 🔴 Issue 11: Water — Reflection ใน Hot Spring ไม่ทำงาน + Sprite บิดเบี้ยว
+
+**ปัญหา:** เมื่อเข้าบ่อน้ำร้อน (hot spring):
+1. Player reflection ไม่แสดง
+2. Sprite ของผู้เล่นบิดเบี้ยวไปตามการไหลของน้ำ
+
+**สิ่งที่ต้องทำ:**
+- [ ] ตรวจสอบ water mask detection ใน hot spring area
+- [ ] ตรวจสอบว่า hot spring tiles ถูก mark เป็น water tiles หรือไม่
+- [ ] Debug sprite distortion — อาจเกิดจาก water displacement shader ทำงานผิดพลาดบน tiles ที่ไม่ควรเป็น water
+- [ ] ทดสอบกับทุก hot spring/bathhouse locations
+
+---
+
+## 🔴 Issue 12: Water — ภาชนะน้ำขนาดเล็กกว่า 1 Tile บิดเบี้ยว
+
+**ปัญหา:** ใน water bodies ที่เล็กกว่า 1 tile (เช่น troughs/sinks — รางน้ำ/อ่างล้าง) ตัวภาชนะเองบิดเบี้ยวไปกับผิวน้ำ
+
+**สิ่งที่ต้องทำ:**
+- [ ] เพิ่ม minimum tile size threshold สำหรับ water effect
+- [ ] ตรวจสอบ water mask — อาจ include tiles ที่ไม่ใช่ water จริง (เช่น edges ของภาชนะ)
+- [ ] ปรับ water shader ให้ไม่ distort objects ที่อยู่ติดกับ water tiles ขนาดเล็ก
+- [ ] ทดสอบกับ troughs, sinks, และ water containers ขนาดเล็กทุกประเภท
+
+---
+
+## 🔴 Issue 13: Water — ไม่ทำงานบน Custom Maps
+
+**ปัญหา:** Water effects ไม่แสดงบน water bodies ใน custom maps:
+- **Lnh's Fantasy Farm Cave**
+- **Immersive Farm 2 Remastered**
+
+**สิ่งที่ต้องทำ:**
+- [ ] ตรวจสอบว่า water tile detection ใช้ tile properties จาก vanilla เท่านั้นหรือไม่
+- [ ] รองรับ custom map tile properties สำหรับ water detection
+- [ ] ทดสอบกับ custom farm maps ยอดนิยม
+- [ ] อาจต้องใช้ fallback detection (สีฟ้า + animation) แทน tile properties สำหรับ custom maps
+- [ ] สร้างระบบให้ผู้ใช้ระบุ water areas บน custom maps เองได้ (JSON config)
+
+---
+
+## 🔴 Issue 14: Chromatic Aberration — ทำให้จอเบลอโดยเฉพาะ 4 มุม
+
+**ปัญหา:** เมื่อเปิด Chromatic Aberration หน้าจอจะเบลอ โดยเฉพาะบริเวณ 4 มุม — ความแรงของ effect มากเกินไป
+
+**สิ่งที่ต้องทำ:**
+- [ ] ปรับ chromatic aberration strength ให้มีค่า default ที่เหมาะสม
+- [ ] เพิ่ม intensity slider ใน tuner/config
+- [ ] ตรวจสอบว่า CA shader ใช้ screen-space distance ถูกต้องหรือไม่
+- [ ] ลด falloff ที่มุมจอ — อาจใช้ radial falloff ที่ aggressive เกินไป
+- [ ] ทดสอบกับความละเอียดจอหลายขนาด
+
+---
+
+## 🔴 Issue 15: Water — ปิด Shimmer แล้ว Reflection หายด้วย
+
+**ปัญหา:** เมื่อปิด "Water Shimmer" effect — "Reflection" effect ก็หายไปด้วย (ทั้งที่ควรเป็นอิสระจากกัน)
+
+**สิ่งที่ต้องทำ:**
+- [ ] ตรวจสอบ code — shimmer กับ reflection อาจใช้ render pass หรือ toggle ร่วมกัน
+- [ ] แยก shimmer toggle กับ reflection toggle ให้เป็นอิสระจากกัน
+- [ ] ทดสอบทุก combination: shimmer on/off + reflection on/off
+
+---
+
+## 📊 สรุป Priority (Updated)
+
+| Priority | Issue # | Issue | Impact |
+|----------|---------|-------|--------|
+| 🔴 P0 | #1 | Shadow intensity/visibility | ผู้ใช้ไม่เปลี่ยนมาใช้เพราะเงาไม่เด่น |
+| 🔴 P0 | #2 | SVE/RSV shadow map support | ผู้ใช้กลุ่มใหญ่ (SVE+RSV) ไม่มีเงา |
+| 🔴 P0 | #3 | Data-driven shadow maps (JSON) | เปิดให้ community ช่วยสร้าง shadow maps |
+| 🔴 P0 | #11 | Water: Hot spring reflection broken + sprite distortion | Bug — ฟีเจอร์พัง |
+| 🔴 P0 | #12 | Water: Small containers (<1 tile) distort | Bug — ทำลาย assets |
+| 🔴 P0 | #13 | Water: ไม่ทำงานบน custom maps | ผู้ใช้ custom maps ไม่ได้ใช้ฟีเจอร์ |
+| 🔴 P0 | #14 | Chromatic aberration เบลอเกินไป | ทำให้เกมเล่นไม่ได้ |
+| 🔴 P0 | #15 | Shimmer toggle ปิด reflection ด้วย | Bug — logic error |
+| 🔴 P0 | #9 | Compatibility: Clear Monocle orange screen | Conflict กับ mod ยอดนิยม |
+| 🔴 P0 | #10 | God rays รั่วจาก speech bubbles | God rays ผิดที่ |
+| 🟡 P1 | #6 | Cloud shadow fine-tune controls | เพิ่มความยืดหยุ่น |
+| 🟡 P1 | #7 | Cloud shadow on small maps | Bug ที่ทำลาย immersion |
+| 🟡 P1 | #8 | God rays ไม่ตอบสนองต่อสภาพอากาศ | Immersion breaking |
+| 🟡 P2 | #4 | Water performance profiles | กังวลเรื่องประสิทธิภาพ |
+| 🟢 P3 | #5 | Blue light filter | Nice-to-have |
 
 ---
 
@@ -116,3 +226,8 @@
 - **Dynamic Shader mod:** https://www.nexusmods.com/stardewvalley/mods/40775
 - **SVE:** Stardew Valley Expanded
 - **RSV:** Ridgeside Village
+- **Clear Monocle:** Fork of Sprite Master/Clear Glasses (xBRZ only)
+- **The Muttering Farmer:** Mod ที่เพิ่ม speech bubbles
+- **Lnh's Fantasy Farm Cave:** Custom farm map
+- **Immersive Farm 2 Remastered:** Custom farm map
+- **SMAPI Log:** https://smapi.io/log/38be472d9cf64806ab0b33dda441508d
