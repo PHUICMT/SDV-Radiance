@@ -218,6 +218,7 @@ namespace SDVRadiance
             // beach tide pools count as water (they reflect too), while pier/bridge DECKS over
             // water do not (no reflection painted onto planks). Fall back to isWaterTile.
             var hf = ShadowRenderer.Height;
+            var back = loc.map?.GetLayer("Back");
             if (_waterBoolBuf == null || _waterBoolBuf.Length < count)
                 _waterBoolBuf = new bool[count];
             bool any = false;
@@ -233,6 +234,22 @@ namespace SDVRadiance
                     // but they refill the watering can → "WaterSource" marks them as real water.
                     if (!water && loc.doesTileHaveProperty(tx, ty, "WaterSource", "Back") != null)
                         water = true;
+                    // Custom-map fallback (Issue #13): many custom farm maps (Fantasy Farm
+                    // Cave, Immersive Farm 2 Remastered) don't set Water/WaterSource tile
+                    // properties. Detect water by its Back art — if ≥50% of opaque pixels
+                    // are blue/teal water colours, treat it as a true water tile.
+                    if (!water && loc.IsOutdoors && TryTileArt(back, tx, ty, out var fbtex, out var fbsrc))
+                    {
+                        var fbBits = ClassifyBits(fbtex, fbsrc, water: true);
+                        int wc = 0, tc = 0;
+                        for (int pi = 0; pi < fbBits.Length; pi++)
+                        {
+                            tc++;
+                            if (fbBits[pi]) wc++;
+                        }
+                        if (tc >= 100 && wc * 100 / tc >= 50)
+                            water = true;
+                    }
                     if (water) any = true;
                     _waterBoolBuf[j * tilesW + i] = water;
                 }
@@ -269,7 +286,6 @@ namespace SDVRadiance
             int pcount = pw * ph;
             if (_waterPixBuf == null || _waterPixBuf.Length < pcount)
                 _waterPixBuf = new Color[pcount];
-            var back = loc.map?.GetLayer("Back");
             var bld = loc.map?.GetLayer("Buildings");
             var front = loc.map?.GetLayer("Front");
             if (_waterPixBits == null || _waterPixBits.Length < pcount)
