@@ -173,7 +173,11 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float2 pmuv = (uv - PlayerRect.xy) / pmSpan;
     float pmIn = step(0.0, pmuv.x) * step(pmuv.x, 1.0) * step(0.0, pmuv.y) * step(pmuv.y, 1.0);
     float inPlayer = step(0.02, tex2D(PlayerMaskSampler, saturate(pmuv)).a) * pmIn;
-    float ringGate = lerp(1.0 - inPlayer, 1.0, coreTile);
+    // Player pixels are ALWAYS excluded from water effects — their sprite must not
+    // ripple or refract even when standing in true water (hot springs, wading).
+    // Previously the bank-ring gate only excluded the player in dilated shore zones
+    // (coreTile==0), leaving them distorted inside real water bodies (coreTile==1).
+    float ringGate = 1.0 - inPlayer;
     // The pixel mask is the AUTHORITY on where water is — colour tests only BOOST beyond the
     // 0.75 floor (murky green lakes failed every colour gate and the effect went patchy).
     // Their remaining job is grading, not coverage; sprites over water are handled by the
