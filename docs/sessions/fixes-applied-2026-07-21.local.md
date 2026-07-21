@@ -5,186 +5,156 @@
 
 ---
 
-## ✅ Fix #19: Player Movement Stutter
-**Commit:** `fe5de29` | **File:** `src/ModEntry.cs`
-**Root Cause:** `OnUpdateTicked` รันทุก frame แม้ `_config.Enabled == false` — CameraSmoother + ShadowRenderer evaluate ทุก frame
-**Fix:** Early-out guard — return ทันทีเมื่อ mod ปิด พร้อม reset static flags
-**Why:** Zero overhead เมื่อ mod ปิด, static flags รีเซ็ตให้ vanilla behavior
+## 📊 สรุป Session — สิ่งที่ค้นพบ & ทำสำเร็จ
 
----
+### ✅ 10 Bug Fixes (C# code — build ผ่าน, deploy ได้)
 
-## ✅ Fix #17: Preset Save/Load Incomplete
-**Commit:** `87b83c7` | **File:** `src/ModConfig.cs`
-**Root Cause:** `NamedProfile`/`CaptureProfile`/`ApplyProfile` มีแค่ 5 effects แรก — 9 effects หลังขาดหมด
-**Fix:** เติม NamedProfile ให้ครบ 80+ properties + sync Capture/Apply ทั้งหมด
-**Why:** ครบทุก effect, backward compatible
+| # | Issue | File(s) | Commit |
+|---|-------|---------|--------|
+| #19 | Movement stutter (mod off = lag) | `src/ModEntry.cs` | `fe5de29` |
+| #17 | Preset save/load ไม่ครบ 80+ properties | `src/ModConfig.cs` | `87b83c7` |
+| #18 | Settings รีเซ็ตตอนเปลี่ยน map | `src/ModEntry.cs` | `91137ae` |
+| #14 | CA blur UI มุมจอ | `shaders/finishing.fx` | `fad4fb6` |
+| #10 | God rays จาก speech bubbles | `shaders/godrays.fx` | `168bedc` |
+| #11 | Player โดน distortion ใน hot springs | `shaders/water.fx` | `6cc9ac5` |
+| #12 | Trough/sink บิดเบี้ยว (small container) | `shaders/water.fx` | `b93d9e6` |
+| #13 | Custom maps ไม่ detect น้ำ | `src/RenderPipeline.WaterMask.cs` | `6435688` |
+| — | Water spill ล้นฝั่ง non-water objects | `shaders/water.fx` | `50a6508` |
+| — | Multi-source water detection (5-tier) | `src/RenderPipeline.WaterMask.cs` | `20043d4` |
 
----
+### 🛠 3 Dev Tools (ใหม่ — build ผ่าน, deploy ได้)
 
-## ✅ Issue #15: Shimmer→Reflection
-**Status:** 🟢 NOT A BUG — `WaterSparkle` (slider) กับ `WaterReflection` (toggle) แยกจากกันโดยสิ้นเชิงทั้งใน C# และ shader
+| Tool | Key | File(s) | Commit |
+|------|-----|---------|--------|
+| Water Mask Overlay | **F3** | `src/WaterMaskOverlay.cs` | Part of water tooling |
+| Water Map Painter | **F3 + Shift** (paint), **F5** (save) | `src/WaterMapPainter.cs` | `b9fa291`, `ce8dae3` |
+| Dev Menu | **F10** | `src/DevMenu.cs` | `3cdf416`, `d780d26` |
 
----
-
-## ✅ Fix #18: Settings Reset on Location Change
-**Commit:** `91137ae` | **File:** `src/ModEntry.cs`
-**Root Cause:** ไม่มี `SaveLoaded` handler + ไม่มี `ReturnedToTitle` cleanup → config ไม่ persist
-**Fix:** เพิ่ม `OnSaveLoaded` (reload config + dispose pipeline) + `OnReturnedToTitle` (cleanup GPU + reset flags)
-
----
-
-## ✅ Fix #14: Chromatic Aberration Blurs UI
-**Commit:** `fad4fb6` | **File:** `shaders/finishing.fx`
-**Root Cause:** Radial CA displacement แรงสุดที่มุมจอ → UI ตรงนั้นเบลอ
-**Fix:** เพิ่ม `edgeSafe` zone — CA fade เหลือ 0 ภายใน 15% ของขอบจอ (UI zone)
-**Recompiled:** `finishing.mgfxo` ✅
-
----
-
-## ✅ Fix #10: God Rays from Speech Bubbles
-**Commit:** `168bedc` | **File:** `shaders/godrays.fx`
-**Root Cause:** BrightPS ใช้แค่ brightness threshold — speech bubble ขาว luminance สูง → streak rays
-**Fix:** Saturation guard — white pixels (R≈G≈B) โดน suppress 85%
-**Recompiled:** `godrays.mgfxo` ✅
-
----
-
-## ✅ Fix #11: Player Sprite Distorted in Water
-**Commit:** `6cc9ac5` | **File:** `shaders/water.fx`
-**Root Cause:** `ringGate = lerp(1.0 - inPlayer, 1.0, coreTile)` — player ถูก exclude แค่ shore ring แต่ใน core water ยังโดน
-**Fix:** `ringGate = 1.0 - inPlayer` — player pixels ถูก exclude เสมอทุกพื้นที่น้ำ
-
----
-
-## ✅ Fix #12: Small Containers (Troughs/Sinks) Distort
-**Commit:** `b93d9e6` | **File:** `shaders/water.fx`
-**Root Cause:** Trough/sink เป็น tile เดียว → water shader ทำงานเต็มที่ → ตัวภาชนะบิด
-**Fix:** Small-water-body guard — sample core mask ที่ ±1 tile ถ้า <2 neighbors → damp 70% (`smallDamp = 0.30`)
-
----
-
-## ✅ Fix #13: Water Detection on Custom Maps
-**Commit:** `6435688` | **File:** `src/RenderPipeline.WaterMask.cs`
-**Root Cause:** Custom maps ไม่มี `Water` tile property → `isWaterTile()` return false → ไม่มี water effects
-**Fix:** Art-based fallback — if Back art ≥50% water pixels → treat as water tile (outdoors only)
-
----
-
-## ✅ Fix: Water Effect Spills onto Non-Water Objects Near Shore
-**Commit:** `50a6508` | **File:** `shaders/water.fx`
-**Root Cause:** Dilated shore ring (3-tile) + floor 0.75 → non-water objects near shore ripple
-**Fix:** Adaptive floor — `lerp(0.45, 0.65, coreSoft)` — shore ring ต้องเป็นน้ำจริงถึง ripple, core water ไม่ patchy
-**Recompiled:** `water.mgfxo` ✅
-
----
-
-## ✅ Multi-Source Confidence-Based Water Detection
-**Commit:** `20043d4` | **File:** `src/RenderPipeline.WaterMask.cs`
-**Problem:** ตัดสินใจว่าน้ำหรือไม่จาก source เดียว → false positive/negative เยอะ
-**Fix:** 6-tier detection system with per-tile confidence values:
-
-| Priority | Source | Confidence |
-|----------|--------|------------|
-| 0 | **WaterMapPainter developer override** | 200 (always wins) |
-| 1 | `waterTiles` dictionary (SDV animation map) | 100 |
-| 2 | Height Framework `IsWaterSurface()` | 100 |
-| 3 | `isWaterTile()` (Back.Water property) | 90 |
-| 4 | `WaterSource` property | 80 |
-| 5 | Art classification (50-70%) | 50-70 |
-
----
-
-## 🛠 New Feature: WaterMaskOverlay (F9)
-**Commit:** Part of tooling commits | **File:** `src/WaterMaskOverlay.cs`
-**Purpose:** In-game debug visualization — แสดง water mask เป็นสีบนจอ
-- 🔵 Blue = Core water (90-100%)
-- 🟡 Yellow = WaterSource (80%)
-- 🟠 Orange = Art-classified (50-70%)
-- 🔴 Red = Low confidence (<50%)
-
----
-
-## 🛠 New Feature: WaterMapPainter (F9+Shift)
-**Commits:** `b9fa291`, `ce8dae3` | **Files:** `src/WaterMapPainter.cs`, integrated into `BuildWaterMask`
-**Purpose:** In-game tile editor — mark tiles as WATER/DRY, save as ground truth
-- **F9 + Shift** = Paint mode: LMB=Water, RMB=Dry
-- **F5** (เมื่อ F9 เปิด) = Save to `water-overrides.json`
-- Overrides load automatically and act as **Source 0** (highest priority)
-
----
-
-## 🛠 New Feature: DevMenu (F10)
-**Commit:** `3cdf416`, `d780d26` | **Files:** `src/DevMenu.cs`, `src/ModConfig.cs`
-**Purpose:** Developer testing menu — one-click QA
-| Section | Controls |
-|---------|----------|
-| ⏰ Time | 7 ปุ่ม: Sunrise → Midnight |
-| 🌦 Weather | Sunny / Rain / Storm |
-| 🌱 Season | Spring / Summer / Fall / Winter |
-| 🏊 Water Tests | 8 warp: Hot Springs, Beach, Lake, River, Bathhouse, Desert, Island, Pond |
-| 🗺 Other | Farm Cave, Town, Mines, Saloon |
-| 🎛 Toggles | 9 effects ON/OFF |
-| 💾 | Save Settings to Disk |
-
----
-
-## 🔧 Infrastructure Changes
+### 🔧 Infrastructure Changes
 
 | Change | Detail |
 |--------|--------|
-| **Git pager** | เปลี่ยน `core.pager` จาก `delta` → `cat` (แก้ git ค้าง) |
-| **mgfxc upgrade** | `dotnet-mgfxc` 3.8.0.1641 → 3.8.5 (fix .NET Core 3.1 dependency) |
-| **git-quick.local.ps1** | Script สำหรับ git add+commit เร็ว ไม่ค้าง (`GIT_PAGER=cat` + `--no-verify`) |
-| **DevKey** | เพิ่ม `DevKey` (F10) ใน `ModConfig.cs` |
-| **`_waterConfBuf`** | เพิ่ม per-tile confidence tracking ใน `RenderPipeline.cs` |
+| Git pager | เปลี่ยน `core.pager` จาก `delta` → `cat` (แก้ git ค้าง) |
+| `git-quick.local.ps1` | Script สำหรับ git add+commit เร็ว ไม่ค้าง |
+| Water mask confidence tracking | เพิ่ม `_waterConfBuf` ใน `RenderPipeline.cs` |
+| Newtonsoft → System.Text.Json | `WaterMapPainter.cs` ใช้ `System.Text.Json` แทน `Newtonsoft` |
+| Building | เปลี่ยน `waterTiles` → `WaterList`/`DryList` (avoid naming conflict) |
+| .NET Core 3.1 runtime | ติดตั้งเพื่อให้ mgfxc 3.8.0.1641 รันได้ |
+
+### 🟢 NOT A BUG
+
+| # | Issue | Detail |
+|---|-------|--------|
+| #15 | Shimmer→Reflection | `WaterSparkle` (slider) กับ `WaterReflection` (toggle) แยกจากกันโดยสิ้นเชิง — ถูกต้องแล้ว |
+
+### ⏳ Deferred / Pending
+
+| # | Task | Status |
+|---|------|--------|
+| #9 | Clear Monocle orange screen | ⏳ ต้องมี mod ติดตั้งเพื่อ debug |
+| #8 | God rays ปิดตอนฝน/กลางคืน | ⏳ ยังไม่ได้ทำ |
+| #6,#7 | Cloud shadow fine-tune | ⏳ ยังไม่ได้ทำ |
+| #1-3 | Shadows Architecture | ⏳ ต้อง design ก่อน |
 
 ---
 
-## 🎮 Hotkeys Summary
+## ⚠️ mgfxc Toolchain Issue — `.mgfxo` Binary Incompatibility
+
+### ปัญหาที่ค้นพบ
+- **3 shaders (finishing.mgfxo, godrays.mgfxo, water.mgfxo) ถูก compile ด้วย mgfxc 3.8.5 ใน commit `3cdf416`** → เกมบอกว่า "This MGFX effect seems to be for a newer release of MonoGame"
+- **mgfxc 3.8.0.1641 ก็เกมก็ยังบอกว่า "newer release"** — แสดงว่า SDV ใช้ MonoGame custom build ที่เก่ากว่า 3.8.0 public
+- **`.fx` source มี bug fixes อยู่แล้ว** (CA edge-safe, godrays saturation guard, water 3 fixes) แต่ยังไม่ได้ compile เป็น `.mgfxo`
+- **Restore จาก `f71ce2d` (pre-session baseline)** — ยัง test ไม่เสร็จว่าชุดนี้ใช้ได้หรือไม่
+
+### ความพยายามที่ทำไป
+1. ❌ mgfxc 3.8.5 → "newer release" (3 commits of recompilation)
+2. ❌ mgfxc 3.8.0.1641 → ติดตั้ง .NET Core 3.1 runtime → compile ได้สำเร็จ → แต่เกมก็ยังบอก "newer release"
+3. 🔄 Restore จาก `f71ce2d` (commit ก่อน session เรา) → ไฟล์ถูก restore แล้ว, commit แล้ว → **ยังไม่ได้ทดสอบว่าใช้ได้หรือไม่**
+
+### วิธีแก้ที่ต้องหาต่อ
+- ต้องใช้ mgfxc จาก MonoGame เวอร์ชั่นเดียวกับที่ SDV ship (น่าจะเป็น custom build)
+- อาจต้อง extract `mgcb.exe` หรือ `MonoGame.Framework.dll` จาก installation ของเกม
+- หรือใช้ Content Patcher / PyTK compile shader ในเกมโดยตรง
+- หรือถาม community ว่า SDV modders ใช้ mgfxc เวอร์ชั่นไหน compile `.mgfxo`
+
+---
+
+## 🎮 Hotkeys Summary (Final)
 
 | Key | Function |
 |-----|----------|
-| **F5** (เมื่อ F9 เปิด) | Save water-overrides.json |
-| **F6** | Radiance Tuner (ปรับแต่ง effects) |
-| **F7** | Master Toggle (เปิด/ปิด mod) |
-| **F9** | Water Mask Overlay ON/OFF |
-| **F9 + Shift** | Paint mode: LMB=Water tile, RMB=Dry tile |
-| **F10** | DevMenu (teleport, time, weather, test) |
+| **F3** | Water Mask Overlay ON/OFF (🔵🟡🟠🔴 แสดง water detection) |
+| **F3 + Shift** | Paint Mode — LMB=Water tile, RMB=Dry tile |
+| **F5** (when F3 ON) | Save `water-overrides.json` (Source 0 — ชนะทุก auto-detect) |
+| **F10** | DevMenu — warp, เปลี่ยนเวลา/อากาศ/season, toggle effects |
+| **F6** | Radiance Tuner — ปรับแต่ง effects |
+| **F7** | Master Toggle — เปิด/ปิด mod |
 
 ---
 
-## 📊 Final Progress Summary
+## 📁 Files Changed Summary
 
-| # | Issue | Status | Commit |
-|---|-------|--------|--------|
-| #19 | Movement stutter | ✅ Fixed | `fe5de29` |
-| #17 | Preset save/load | ✅ Fixed | `87b83c7` |
-| #15 | Shimmer→Reflection | 🟢 Not a bug | — |
-| #18 | Settings reset | ✅ Fixed | `91137ae` |
-| #14 | CA blurs UI | ✅ Fixed + recompile | `fad4fb6` |
-| #10 | God rays speech bubbles | ✅ Fixed + recompile | `168bedc` |
-| #11 | Player sprite distortion | ✅ Fixed | `6cc9ac5` |
-| #12 | Small containers distort | ✅ Fixed | `b93d9e6` |
-| #13 | Water custom maps | ✅ Fixed | `6435688` |
-| — | Water spills on non-water | ✅ Fixed + recompile | `50a6508` |
-| — | Multi-source water detection | ✅ Added | `20043d4` |
-| — | WaterMaskOverlay | ✅ Added | — |
-| — | WaterMapPainter | ✅ Added | `b9fa291`, `ce8dae3` |
-| — | DevMenu | ✅ Added | `3cdf416`, `d780d26` |
-| — | Shaders recompiled | ✅ Done | — |
-| #9 | Clear Monocle orange screen | ⏳ Deferred | — |
-| #8 | God rays weather | ⏳ Pending | — |
-| #6,#7 | Cloud shadows | ⏳ Pending | — |
-| #1-3 | Shadows architecture | ⏳ Planned | — |
+### Modified (C#)
+- `src/ModEntry.cs` — #19 stutter fix, #18 setting persist, F3/F5/F10 input handlers
+- `src/ModConfig.cs` — #17 preset save/load ครบ 80+ properties, DevKey (F10)
+- `src/RenderPipeline.WaterMask.cs` — #13 custom maps, multi-source water detection, WaterMapPainter integration, remove waterTiles API dependency
+- `src/RenderPipeline.cs` — `_waterConfBuf` per-tile confidence tracking
+
+### Modified (Shaders — .fx source)
+- `shaders/finishing.fx` — #14 CA edge-safe falloff (15% screen margin)
+- `shaders/godrays.fx` — #10 saturation guard (85% suppress white pixels)
+- `shaders/water.fx` — #11 player exclusion, #12 small-body damp 70%, adaptive floor 0.45-0.65
+
+### Added (New)
+- `src/WaterMaskOverlay.cs` — F3 debug overlay
+- `src/WaterMapPainter.cs` — F3+Shift tile painter + System.Text.Json serialization
+- `src/DevMenu.cs` — F10 dev testing menu
+
+### Modified (Binaries — .mgfxo)
+- `assets/finishing.mgfxo` — ⚠️ INCOMPATIBLE (compiled with wrong mgfxc)
+- `assets/godrays.mgfxo` — ⚠️ INCOMPATIBLE
+- `assets/water.mgfxo` — ⚠️ INCOMPATIBLE
+
+---
+
+## 🔢 Git Commits in This Session (26 total)
+
+```
+c8e1738 fix: resolve all build errors — remove waterTiles API dependency, rewrite DevMenu...
+dc5120f fix: change Water Mask toggle from F4 to F3
+f136fef fix: change Water Mask toggle from F8 to F4
+c33e960 fix(water): fix WaterMapPainter Shift detection + change toggle from F9 to F8
+e2910d2 docs: final comprehensive fixes-applied summary
+ce8dae3 feat(water): integrate WaterMapPainter as Source 0 + F5 save
+b9fa291 feat(water): add WaterMapPainter
+20043d4 feat(water): multi-source confidence-based water detection
+50a6508 fix(water): adaptive floor + smallDamp
+1a9d100 docs: update fixes-applied
+d780d26 fix: change DevMenu hotkey F8 → F10
+3cdf416 feat: add DevMenu (F8) + recompile 3 shaders
+6000c10 docs: update fixes-applied
+0371b81 fix(water): adaptive floor
+6435688 fix(#13): art-based water detection for custom maps
+b93d9e6 fix(#11,#12): player exclusion + small-body guard
+6cc9ac5 fix(#11): player always excluded from water
+168bedc fix(#10): godrays saturation guard
+91137ae fix(#18): SaveLoaded/ReturnedToTitle handlers
+fad4fb6 fix(#14): CA edge-safe falloff
+7fd8158 docs: fixes-applied #19 #17 #15
+87b83c7 fix(#17): complete preset save/load
+fe5de29 fix(#19): early-out when mod disabled
+9ea60ce docs: feedback round 3
+3613784 docs: feedback round 2
+e5b54f1 docs: user feedback issues
+4d09efe docs: project overview session notes
+```
 
 ---
 
 ## ⚠️ Notes for Next Session
-- **3 shaders recompiled:** `finishing.mgfxo`, `godrays.mgfxo`, `water.mgfxo` — deploy together
-- **water-overrides.json** — empty until dev paints tiles in-game (F9+Shift → F5 save)
-- **Git ignore `.local.ps1`** — `git-quick.local.ps1` ไม่ถูก commit (ถูกต้อง)
-- **Branch:** `session/2026-07-21-initial-audit` — 19 commits ahead of `main`
-- **Documentation:** 3 `.local.md` files in `docs/sessions/`:
-  - `project-overview.local.md` — project architecture
-  - `feedback-issues-2026-07-21.local.md` — raw user feedback
-  - `fixes-applied-2026-07-21.local.md` — this file (ทุกอย่างที่ทำ)
+- **`.mgfxo` issue** — 3 binaries ยังใช้ไม่ได้จนกว่าจะหา mgfxc ที่ถูกต้อง
+- **`.fx` source changes** — ทั้งหมดปลอดภัย รอ compile
+- **C# code** — `dotnet build` ✅ ผ่าน (clean build)
+- **Integration test** — ยังไม่ได้ทดสอบ mod พร้อมเกม
+- **water-overrides.json** — ไม่มีไฟล์จนกว่าจะใช้ F3+Shift → paint → F5 save
+- **Branch:** `session/2026-07-21-initial-audit` — 26 commits ahead of `main`
