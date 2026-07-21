@@ -337,6 +337,14 @@ namespace SDVRadiance
                 Game1.addHUDMessage(HUDMessage.ForCornerTextbox($"SDV-Radiance: {(_config.Enabled ? "ON" : "OFF")}"));
             }
 
+            if (_config.DevKey.JustPressed())
+            {
+                if (Game1.activeClickableMenu is DevMenu dev)
+                    dev.exitThisMenu();
+                else if (Context.IsPlayerFree)
+                    Game1.activeClickableMenu = new DevMenu(_config, onSave: () => this.Helper.WriteConfig(_config));
+            }
+
             if (_config.TunerKey.JustPressed())
             {
                 if (Game1.activeClickableMenu is RadianceTunerMenu tuner)

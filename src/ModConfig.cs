@@ -295,6 +295,9 @@ namespace SDVRadiance
         /// tools in the wild, and colliding with the most popular cosmetic mod hurts.</summary>
         public KeybindList TunerKey { get; set; } = new(SButton.F6);
 
+        /// <summary>Open the developer testing menu (teleports, time/weather controls).</summary>
+        public KeybindList DevKey { get; set; } = new(SButton.F8);
+
         // --- Saved custom looks ---
         public List<NamedProfile> SavedProfiles { get; set; } = new();
 
