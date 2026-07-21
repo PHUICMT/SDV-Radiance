@@ -232,6 +232,17 @@ namespace SDVRadiance
                     bool water = false;
                     byte confidence = 0; // 0-100: how sure we are this is real water
 
+                    // --- Source 0: Water Map Painter overrides (developer-painted ground truth) ---
+                    // If a dev has manually painted this tile as water or dry in the in-game
+                    // editor (F9 → hold Shift → paint), their override beats EVERY auto source.
+                    // This is the mechanism that ends the "guess forever" loop.
+                    (bool? paintedWater, bool isOverride) = WaterMapPainter.GetOverride(loc, tx, ty);
+                    if (isOverride)
+                    {
+                        water = paintedWater == true;
+                        confidence = 200; // overrides always win — higher than any auto source
+                    }
+
                     // --- Source 1: GameLocation.waterTiles dict (SDV's own water animation map) ---
                     // This is THE ground truth for vanilla + SVE maps. If a tile is in this
                     // dictionary, the game itself draws animated water there — it IS water.

@@ -347,6 +347,12 @@ namespace SDVRadiance
                     Game1.activeClickableMenu = new DevMenu(_config, onSave: () => this.Helper.WriteConfig(_config));
             }
 
+            if (SButton.F5.JustPressed() && WaterMaskOverlay.Visible)
+            {
+                WaterMapPainter.Save();
+                Game1.addHUDMessage(HUDMessage.ForCornerTextbox("Water overrides saved to water-overrides.json"));
+            }
+
             if (SButton.F9.JustPressed())
             {
                 WaterMaskOverlay.Visible = !WaterMaskOverlay.Visible;
