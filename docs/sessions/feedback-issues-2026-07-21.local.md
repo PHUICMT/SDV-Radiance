@@ -199,6 +199,56 @@
 
 ---
 
+## 🟢 Issue 16: Compatibility — ทำงานร่วมกับ Global God Rays + Dynamic Reflections ได้ดี
+
+**ปัญหา:** ไม่ใช่ปัญหา — ผู้ใช้รายงานว่า SDV-Radiance ทำงานร่วมกับ **Global God Rays** และ **Dynamic Reflections** ได้ดีมาก ไม่มี compatibility issues และแสง/reflection ดูดีขึ้นเมื่อใช้ร่วมกัน
+
+**สถานะ:** ✅ Compatible — บันทึกไว้เป็น reference
+
+---
+
+## 🔴 Issue 17: Preset System — Save ได้ แต่ Load ไม่ได้
+
+**ปัญหา:** ผู้ใช้สามารถ save custom presets ได้ แต่ไม่สามารถ load กลับมาใช้ได้ — ระบบ preset save/load พัง
+
+**สิ่งที่ต้องทำ:**
+- [ ] ตรวจสอบ serialization/deserialization ของ preset files
+- [ ] ตรวจสอบ file path ที่ใช้ save/load presets
+- [ ] ตรวจสอบว่า preset files ถูกเขียนลง disk จริงหรือไม่
+- [ ] ทดสอบ save → restart game → load
+- [ ] เพิ่ม error handling + log เมื่อ load ล้มเหลว
+
+---
+
+## 🔴 Issue 18: Preset/Setting — ค่า Reset หลังเข้า-ออกบาง Location (เช่น Farm Cave)
+
+**ปัญหา:** แม้จะเลือก default preset แล้ว การตั้งค่าบางครั้งก็ reset หลังจากเข้าและออกจากบาง location เช่น farm cave — state management มีปัญหา
+
+**สิ่งที่ต้องทำ:**
+- [ ] ตรวจสอบว่า config ถูก reload เมื่อเปลี่ยน location หรือไม่
+- [ ] ตรวจสอบ location-change event handling — อาจ trigger config reset โดยไม่ตั้งใจ
+- [ ] ตรวจสอบว่า ModConfig ถูก overwrite ด้วยค่า default เมื่อเข้า new area หรือไม่
+- [ ] ทดสอบเข้า-ออก locations ต่างๆ: farm cave, mines, town, bus stop, etc.
+- [ ] เพิ่ม unit test สำหรับ config persistence ข้าม location changes
+
+---
+
+## 🔴 Issue 19: Performance — Player Movement Stutter (แม้ปิดทุก Effect)
+
+**ปัญหา:** การเคลื่อนที่ของผู้เล่นกระตุก (stutter) แม้จะปิด visual effects ทั้งหมดแล้ว — อาการหายเมื่อปิด SDV-Radiance ทั้ง mod แสดงว่าปัญหาไม่ได้อยู่ที่ shader แต่อยู่ที่ code path หลักของ mod
+
+**สิ่งที่ต้องทำ:**
+- [ ] Profile โค้ดใน ModEntry.cs — ตรวจสอบว่า hook ไหนทำให้เกิด frame time spike
+- [ ] ตรวจสอบ Harmony patches — อาจมี patch ที่รันทุก frame โดยไม่จำเป็น
+- [ ] ตรวจสอบ RenderPipeline — แม้ effects จะปิด แต่ render targets อาจยังถูกสร้าง/clear ทุก frame
+- [ ] Early-out optimization: ถ้าทุก effect ปิด ควร skip render pipeline ทั้งหมด
+- [ ] ตรวจสอบ CameraSmoother — อาจเป็นสาเหตุของ movement stutter
+- [ ] ตรวจสอบ ShadowRenderer — แม้ shadow จะปิด อาจยังคำนวณ shadow map ทุก frame
+- [ ] ทดสอบ FPS/frame time ด้วย profiling tools
+- [ ] เพิ่ม config option "Performance Mode" ที่ skip non-essential processing
+
+---
+
 ## 📊 สรุป Priority (Updated)
 
 | Priority | Issue # | Issue | Impact |
@@ -213,11 +263,15 @@
 | 🔴 P0 | #15 | Shimmer toggle ปิด reflection ด้วย | Bug — logic error |
 | 🔴 P0 | #9 | Compatibility: Clear Monocle orange screen | Conflict กับ mod ยอดนิยม |
 | 🔴 P0 | #10 | God rays รั่วจาก speech bubbles | God rays ผิดที่ |
+| 🔴 P0 | #17 | Preset: Save ได้แต่ Load ไม่ได้ | ฟีเจอร์พัง — ใช้ preset ไม่ได้ |
+| 🔴 P0 | #18 | Settings reset หลังเข้า-ออก location | State management พัง |
+| 🔴 P0 | #19 | Player movement stutter (แม้ปิด effects) | Performance — เกมกระตุก |
 | 🟡 P1 | #6 | Cloud shadow fine-tune controls | เพิ่มความยืดหยุ่น |
 | 🟡 P1 | #7 | Cloud shadow on small maps | Bug ที่ทำลาย immersion |
 | 🟡 P1 | #8 | God rays ไม่ตอบสนองต่อสภาพอากาศ | Immersion breaking |
 | 🟡 P2 | #4 | Water performance profiles | กังวลเรื่องประสิทธิภาพ |
 | 🟢 P3 | #5 | Blue light filter | Nice-to-have |
+| 🟢 P3 | #16 | Compatible: Global God Rays + Dynamic Reflections | ✅ No issue — reference |
 
 ---
 
