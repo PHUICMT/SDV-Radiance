@@ -443,7 +443,11 @@ namespace SDVRadiance
             var fx = _finishing!;
             P(fx, "VignetteStrength")?.SetValue(config.VignetteEnabled ? config.VignetteStrength : 0f);
             // Map the 0..1 UI value to a tiny UV offset so it stays subtle on pixel art.
-            P(fx, "CAStrength")?.SetValue(config.ChromaticAberrationEnabled ? config.ChromaticAberrationStrength * 0.03f : 0f);
+            // No CA during events: the SKIP button is drawn inside the world frame and the
+            // channel split shreds its text (community report). Vignette stays — it's the
+            // cinematic part and doesn't hurt readability.
+            bool eventUp = Game1.eventUp || Game1.CurrentEvent != null;
+            P(fx, "CAStrength")?.SetValue(config.ChromaticAberrationEnabled && !eventUp ? config.ChromaticAberrationStrength * 0.03f : 0f);
             // A touch more vignette at night — but only as part of the vignette effect
             // itself: with Vignette OFF (e.g. only CA on) the shader must add nothing,
             // or "off" quietly darkens the night screen edges.

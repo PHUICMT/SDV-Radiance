@@ -283,8 +283,13 @@ namespace SDVRadiance
                 if ((_fogDayAmt > 0.004f || _fogMistAmt > 0.004f) && _fog != null && outdoors) stages.Add(_dFog);
                 if (config.ColorGradeEnabled && _colorGrade != null) stages.Add(_dGrade);
                 // Tilt-shift (depth-of-field) after grading, so it blurs the graded image.
-                if (config.TiltShiftEnabled && _tiltShift != null) stages.Add(_dTilt);
+                // NOT during events: the game draws the event UI (SKIP button) as part of the
+                // world frame, and the bottom blur band smears it unreadable. Cutscenes keep
+                // the rest of the stack (grade/bloom/fog/clouds) for the cinematic look.
+                bool eventUp = Game1.eventUp || Game1.CurrentEvent != null;
+                if (config.TiltShiftEnabled && _tiltShift != null && !eventUp) stages.Add(_dTilt);
                 // Finishing (vignette + chromatic aberration): true camera-lens pass, last.
+                // (CA is zeroed inside during events — it fringes the SKIP button's text.)
                 if ((config.VignetteEnabled || config.ChromaticAberrationEnabled) && _finishing != null) stages.Add(_dFinish);
 
                 Texture2D current = _sceneRT!;
