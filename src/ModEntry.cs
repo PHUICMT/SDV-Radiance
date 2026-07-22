@@ -613,6 +613,8 @@ namespace SDVRadiance
                 () => I18n("config.fog.nightmistcoverage.name"), () => I18n("config.fog.coverage.tooltip"), 0f, 1f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.FogNightMistDensity, v => _config.FogNightMistDensity = v,
                 () => I18n("config.fog.nightmistdensity.name"), () => I18n("config.fog.density.tooltip"), 0f, 1f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.FogNightMistSpeed, v => _config.FogNightMistSpeed = v,
+                () => I18n("config.fog.nightmistspeed.name"), null, 0f, 0.1f, 0.002f);
 
             // --- Cloud shadows (implemented) ---
             api.AddPage(this.ModManifest, "cloudshadow", () => I18n("config.section.cloudshadow"));

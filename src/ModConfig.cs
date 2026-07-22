@@ -103,6 +103,8 @@ namespace SDVRadiance
         public float FogCoverage { get; set; } = 0.20f;
         /// <summary>How much of the frame the night-mist wisps occupy.</summary>
         public float FogNightMistCoverage { get; set; } = 0.25f;
+        /// <summary>Night-mist drift speed.</summary>
+        public float FogNightMistSpeed { get; set; } = 0.012f;
         public float FogScale { get; set; } = 3.0f;
         public float FogSpeed { get; set; } = 0.02f;
         public float FogTopBias { get; set; } = 0.5f;
@@ -200,6 +202,7 @@ namespace SDVRadiance
             FogNightMistDensity = C(FogNightMistDensity, 0f, 1f);
             FogCoverage = C(FogCoverage, 0f, 1f);
             FogNightMistCoverage = C(FogNightMistCoverage, 0f, 1f);
+            FogNightMistSpeed = C(FogNightMistSpeed, 0f, 0.1f);
             FogScale = C(FogScale, 1f, 8f);
             FogSpeed = C(FogSpeed, 0f, 0.1f);
             FogTopBias = C(FogTopBias, 0f, 1f);

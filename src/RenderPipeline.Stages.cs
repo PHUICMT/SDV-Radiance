@@ -237,7 +237,7 @@ namespace SDVRadiance
             float total = _fogDayAmt + _fogMistAmt;
             float mistW = total > 0f ? _fogMistAmt / total : 0f;
             P(fx, "Time")?.SetValue(Time());
-            P(fx, "Speed")?.SetValue(MathHelper.Lerp(config.FogSpeed, 0.035f, mistW));
+            P(fx, "Speed")?.SetValue(MathHelper.Lerp(config.FogSpeed, config.FogNightMistSpeed, mistW));
             P(fx, "Scale")?.SetValue(MathHelper.Lerp(config.FogScale, 3.2f, mistW));
             P(fx, "Density")?.SetValue(total);
             P(fx, "Patchiness")?.SetValue(1f);
