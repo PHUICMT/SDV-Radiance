@@ -159,6 +159,13 @@ namespace SDVRadiance
             helper.ConsoleCommands.Add("radiance_maskdump",
                 "Save the water mask textures to PNG in the temp folder (debug).",
                 (cmd, args) => this.Monitor.Log(_pipeline?.DumpMasks(System.IO.Path.GetTempPath()) ?? "pipeline not ready", LogLevel.Info));
+            helper.ConsoleCommands.Add("radiance_maskview",
+                "Toggle the live water-mask overlay (cyan = full effect, orange = effect-only art water, green rim = reflection shoreline).",
+                (cmd, args) =>
+                {
+                    RenderPipeline.MaskView = !RenderPipeline.MaskView;
+                    this.Monitor.Log($"Water mask overlay: {(RenderPipeline.MaskView ? "ON" : "OFF")} (rebuilds on next tile crossing / within 10s)", LogLevel.Info);
+                });
             helper.Events.Display.RenderingWorld += OnRenderingWorld;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
             helper.Events.Display.RenderingStep += OnRenderingStep;
@@ -275,6 +282,8 @@ namespace SDVRadiance
             if (!EffectsActive)
                 return;
             Pipeline.Apply(e.SpriteBatch, _config);
+            if (RenderPipeline.MaskView)
+                Pipeline.DrawMaskOverlay(e.SpriteBatch);
         }
 
         /// <summary>

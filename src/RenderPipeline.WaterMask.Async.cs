@@ -738,6 +738,56 @@ namespace SDVRadiance
             }
             _waterMaskCore.SetData(_waterMaskCoreBuf, 0, count);
             _waterMaskSize = new Vector2(tilesW, tilesH);
+
+            if (MaskView)
+                BuildMaskViewTex(pw, ph);
+        }
+
+        // ---- live debug overlay: what the mask ACTUALLY covers, per pixel ----
+
+        /// <summary>Toggled by the radiance_maskview console command.</summary>
+        internal static bool MaskView;
+        private Texture2D? _maskViewTex;
+        private Color[]? _maskViewBuf;
+
+        /// <summary>Readable recolor of the freshly composed mask (built only while the
+        /// overlay is on): cyan = full water effect, orange = effect-only art water
+        /// (fountains/puddles, softer), green = march (reflection) shoreline band.</summary>
+        private void BuildMaskViewTex(int pw, int ph)
+        {
+            int pcount = pw * ph;
+            if (_maskViewBuf == null || _maskViewBuf.Length < pcount)
+                _maskViewBuf = new Color[pcount];
+            for (int p = 0; p < pcount; p++)
+            {
+                Color m = _waterPixBuf![p];
+                bool eff = m.R > 0, march = m.G > 0;
+                _maskViewBuf[p] =
+                    eff && march ? new Color(0, m.R, 255) :          // cyan: effect + reflection water
+                    eff ? new Color(255, (byte)(m.R / 2), 0) :       // orange: effect-only (soft art water)
+                    march ? new Color(0, 220, 60) :                  // green: march-only (rare)
+                    Color.Transparent;
+                // Bright rim right AT the smoothed waterline (edge distance ~0) — the anchor line.
+                if (march && m.B <= 2)
+                    _maskViewBuf[p] = new Color(120, 255, 120);
+            }
+            if (_maskViewTex == null || _maskViewTex.Width != pw || _maskViewTex.Height != ph)
+            {
+                _maskViewTex?.Dispose();
+                _maskViewTex = new Texture2D(_device, pw, ph, false, SurfaceFormat.Color);
+            }
+            _maskViewTex.SetData(_maskViewBuf, 0, pcount);
+        }
+
+        /// <summary>Draw the overlay into the world batch (RenderedWorld space = world px minus viewport).</summary>
+        public void DrawMaskOverlay(SpriteBatch b)
+        {
+            if (_maskViewTex == null || !_waterAny)
+                return;
+            var vp = Game1.viewport;
+            var dest = new Rectangle(_lastWaterTx * 64 - vp.X, _lastWaterTy * 64 - vp.Y,
+                _maskViewTex.Width * 4, _maskViewTex.Height * 4);
+            b.Draw(_maskViewTex, dest, Color.White * 0.55f);
         }
     }
 }
