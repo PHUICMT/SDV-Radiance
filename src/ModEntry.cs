@@ -133,7 +133,8 @@ namespace SDVRadiance
         private bool EffectsActive => _config.Enabled &&
             (_config.BloomEnabled || _config.ColorGradeEnabled || _config.GodRaysEnabled
              || _config.FogEnabled || _config.FogNightMist || _config.CloudShadowEnabled || _config.TiltShiftEnabled
-             || _config.WaterEnabled || _config.VignetteEnabled || _config.ChromaticAberrationEnabled
+             || _config.WaterEnabled || _config.WaterReflection
+             || _config.VignetteEnabled || _config.ChromaticAberrationEnabled
              || _config.LightingEnabled || _config.FloodLightingEnabled);
 
         public override void Entry(IModHelper helper)
@@ -279,7 +280,15 @@ namespace SDVRadiance
         /// </summary>
         private void OnRenderingWorld(object? sender, RenderingWorldEventArgs e)
         {
-            if (!_config.Enabled || !_config.DirectionalShadowsEnabled)
+            if (!_config.Enabled)
+                return;
+
+            // Per-frame water sprite mask (ducks/NPCs/critters on water must not ripple).
+            // Baked here because a render-target swap is only safe before the world batches open.
+            if ((_config.WaterEnabled || _config.WaterReflection) && Context.IsWorldReady)
+                _pipeline?.BakeWaterSpriteMask();
+
+            if (!_config.DirectionalShadowsEnabled)
                 return;
             _shadows ??= new ShadowRenderer();
             ShadowRenderer.Diag = _config.DebugLogging ? this.Monitor : null;
@@ -443,12 +452,15 @@ namespace SDVRadiance
                 try { this.Monitor.Log($"HF surface={hf.GetSurfaceAt(loc, t.X, t.Y)} (0G 1W 2Wall 3Roof 4Deck 5Void) height={hf.GetHeightAt(loc, t.X, t.Y)}", LogLevel.Info); }
                 catch { this.Monitor.Log("HF API threw", LogLevel.Info); }
             }
-            foreach (string layerName in new[] { "Back", "Buildings", "Front" })
+            foreach (string layerName in new[] { "Back", "Buildings", "Front", "AlwaysFront", "AlwaysFront2" })
             {
                 var layer = loc.map?.GetLayer(layerName);
                 var tile = layer?.Tiles[t.X, t.Y];
-                if (tile != null)
-                    this.Monitor.Log($"{layerName}: sheet={tile.TileSheet?.Id} index={tile.TileIndex}", LogLevel.Info);
+                if (tile == null)
+                    continue;
+                bool anim = tile is xTile.Tiles.AnimatedTile;
+                // ImageSource (the asset path) is what the labeler keys on; Id is the map-local alias.
+                this.Monitor.Log($"{layerName}: sheet={tile.TileSheet?.Id} src={tile.TileSheet?.ImageSource} index={tile.TileIndex} animated={anim}", LogLevel.Info);
             }
 
             // Palette of the Back art (top colours by count) — for tuning art classifiers.

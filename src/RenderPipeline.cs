@@ -61,7 +61,7 @@ namespace SDVRadiance
         private int[]? _edgeCnt;
         private Color[]? _artBuf;              // 16×16 scratch for tile-art reads
         private readonly System.Collections.Generic.Dictionary<string, Texture2D?> _sheetTexCache = new();
-        private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), bool[]> _waterBitsCache = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle, bool), bool[]> _waterBitsCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), (bool[] bits, int count)> _solidBitsCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), (bool[] bits, int count)> _puddleBitsCache = new();
         private byte[]? _puddleTileBuf;        // per-tile puddle level: 0 no, 1 weak (rocky variant), 2 strong
@@ -169,7 +169,7 @@ namespace SDVRadiance
             || ((c.FogEnabled || c.FogNightMist) && _fog != null)
             || (c.ColorGradeEnabled && _colorGrade != null)
             || (c.TiltShiftEnabled && _tiltShift != null)
-            || (c.WaterEnabled && _water != null)
+            || ((c.WaterEnabled || c.WaterReflection) && _water != null)
             || ((c.VignetteEnabled || c.ChromaticAberrationEnabled) && _finishing != null);
 
         private void EnsureTargets(int w, int h, SurfaceFormat format)
@@ -262,7 +262,9 @@ namespace SDVRadiance
                 }
                 // Water ripple first (only if the current location actually has visible
                 // water tiles), so everything downstream sees the refracted result.
-                if (config.WaterEnabled && _water != null && TimedBuild(config, 3, () => BuildWaterMask(w, h))) stages.Add(_dWater);
+                // Reflection is independent of the shimmer toggle: either switch keeps
+                // the stage alive (the other's params are zeroed inside RenderWater).
+                if ((config.WaterEnabled || config.WaterReflection) && _water != null && TimedBuild(config, 3, () => BuildWaterMask(w, h))) stages.Add(_dWater);
                 // Cloud shadows drift over the ground — outdoors only, and first so later
                 // effects (bloom/grade) see the shadowed scene. They are SUNLIGHT (or moonlight)
                 // being blocked, so they fade with dusk and at night exist only under a bright
@@ -440,10 +442,12 @@ namespace SDVRadiance
         public void Dispose()
         {
             _sceneRT?.Dispose(); _fullA?.Dispose(); _fullB?.Dispose(); _rtA?.Dispose(); _rtB?.Dispose(); _waterMask?.Dispose(); _waterMaskCore?.Dispose(); _occluderMask?.Dispose(); _lumRT?.Dispose(); _noiseTex?.Dispose(); _noiseTex = null;
+            _spriteMaskRT?.Dispose(); _spriteMaskBatch?.Dispose();
             _bloom?.Dispose(); _colorGrade?.Dispose(); _godRays?.Dispose(); _fog?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
             _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose(); _floodFx?.Dispose(); _flood.Dispose();
             _sceneRT = _fullA = _fullB = _rtA = _rtB = null;
             _waterMask = null; _waterMaskCore = null; _occluderMask = null; _lumRT = null;
+            _spriteMaskRT = null; _spriteMaskBatch = null;
             _bloom = _colorGrade = _godRays = _fog = _cloudShadow = _tiltShift = _water = _finishing = _lighting = _floodFx = null;
         }
     }

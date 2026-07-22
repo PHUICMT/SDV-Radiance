@@ -71,7 +71,19 @@ float4 Lights[8];       // xy = screen UV, z = radius (unused), w = intensity
 float LightCount;       // how many entries of Lights are live
 float PlayerInWater;    // 0..1 eased: the player's feet are on water pixels (wading). C# fades
                         // this in/out over ~a third of a second so the self-reflection never pops.
+float TintAmt;          // depth-tint amount (0 when the shimmer toggle is off; reflection may still run)
 float4 PlayerRect;      // player silhouette bounds in screen UV (x0,y0,x1,y1)
+float SpriteMaskOn;     // 1 when the per-frame sprite mask below is live
+// Per-frame mask of every sprite ON the water (NPCs, farm animals, critters) baked in
+// screen space before the world draws — their pixels are excluded from ripple/mirror so
+// a duck paddling a pond never distorts, and displaced taps can't smear them sideways.
+texture SpriteMaskTexture;
+sampler2D SpriteMaskSampler = sampler_state
+{
+    Texture = <SpriteMaskTexture>;
+    MinFilter = Point; MagFilter = Point; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
 texture PlayerMaskTexture;   // the player's baked silhouette — its alpha marks the
                              // player's ACTUAL pixels (not a box) to exclude from
                              // ring-tile effects, so water beside them keeps animating
@@ -174,7 +186,13 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float2 pmuv = (uv - PlayerRect.xy) / pmSpan;
     float pmIn = step(0.0, pmuv.x) * step(pmuv.x, 1.0) * step(0.0, pmuv.y) * step(pmuv.y, 1.0);
     float inPlayer = step(0.02, tex2D(PlayerMaskSampler, saturate(pmuv)).a) * pmIn;
-    float ringGate = lerp(1.0 - inPlayer, 1.0, coreTile);
+    // Exclude the player's pixels EVERYWHERE, not just in the bank ring: while swimming
+    // the visible half-body sits over core water and used to warp with the ripple.
+    float ringGate = 1.0 - inPlayer;
+    // Sprites ON the water (ducks, NPCs, critters — per-frame bake): their own pixels
+    // never ripple / mirror. Water beside them keeps animating (pixel-accurate mask).
+    float inSprite = SpriteMaskOn * step(0.05, tex2D(SpriteMaskSampler, uv).a);
+    ringGate *= 1.0 - inSprite;
     // The pixel mask is the AUTHORITY on where water is — colour tests only BOOST beyond the
     // 0.75 floor (murky green lakes failed every colour gate and the effect went patchy).
     // Their remaining job is grading, not coverage; sprites over water are handled by the
@@ -198,11 +216,22 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // barely moves inside a 3-tile walk-through pool, which read as "no effect up close".
     float kind = WaterKind * step(0.95, tileWater);
     float2 ripple = lerp(pondRipple, oceanRipple, kind) * water;
+    // A displaced tap must never land ON a sprite (that smeared duck/player pixels
+    // sideways into the water next to them) — fall back to the undisplaced sample there.
+    float tapSprite = SpriteMaskOn * step(0.05, tex2D(SpriteMaskSampler, uv + ripple).a);
+    float tapPlayer = 0.0;
+    {
+        float2 tuv = ((uv + ripple) - PlayerRect.xy) / pmSpan;
+        float tin = step(0.0, tuv.x) * step(tuv.x, 1.0) * step(0.0, tuv.y) * step(tuv.y, 1.0);
+        tapPlayer = step(0.02, tex2D(PlayerMaskSampler, saturate(tuv)).a) * tin;
+    }
+    ripple *= 1.0 - max(tapSprite, tapPlayer);
     float4 col = tex2D(SourceSampler, uv + ripple);
 
-    // Depth tint: cool + deepen for a wetter, more 3D surface.
+    // Depth tint: cool + deepen for a wetter, more 3D surface. TintAmt drops to 0 when
+    // the shimmer toggle is off (the stage may still be running just for the mirror).
     float3 tint = col.rgb * float3(0.90, 0.97, 1.12);
-    col.rgb = lerp(col.rgb, tint, 0.35 * water);
+    col.rgb = lerp(col.rgb, tint, TintAmt * water);
 
     // Screen-space reflection: a true vertical mirror. March UP the water mask to
     // find the shoreline (where water ends), then reflect the scene above that edge
@@ -349,7 +378,8 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // Gated to MARCH water (g): wet-shading fringe kept only in the effect mask must
     // not get a dark rim painted onto the bank.
     float rim = saturate(tileWater - rimMin) * tex2D(MaskSampler, maskUV).g;
-    col.rgb *= 1.0 - rim * 0.22 * water;
+    // Rim shading belongs to the shimmer look — gone when only the mirror is running.
+    col.rgb *= 1.0 - rim * 0.22 * water * saturate(TintAmt * 3.0);
 
     // Drifting specular glints — SCATTERED, not a grid. The old "one glint per cell,
     // all the same size" read as a regular dotted pattern. Now: TWO overlapping layers

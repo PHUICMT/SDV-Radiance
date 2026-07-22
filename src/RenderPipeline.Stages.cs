@@ -355,11 +355,18 @@ namespace SDVRadiance
             // Weather/season drive how agitated the water is: choppier & faster in
             // rain/storm, sluggish in winter; sparkle fades when there's no sun.
             ComputeWaterDynamics(out float strengthMul, out float speedMul, out float sparkleMul);
+            // The stage can run for the REFLECTION alone (shimmer toggled off): ripple,
+            // sparkle, tint and rim all zero out; the mirror keeps working independently.
+            float shimmer = config.WaterEnabled ? 1f : 0f;
             P(fx, "Time")?.SetValue(Time());
-            P(fx, "Strength")?.SetValue(config.WaterStrength * strengthMul);
+            P(fx, "Strength")?.SetValue(config.WaterStrength * strengthMul * shimmer);
             P(fx, "Speed")?.SetValue(config.WaterSpeed * speedMul);
-            P(fx, "Sparkle")?.SetValue(config.WaterSparkle * sparkleMul);
+            P(fx, "Sparkle")?.SetValue(config.WaterSparkle * sparkleMul * shimmer);
+            P(fx, "TintAmt")?.SetValue(0.35f * shimmer);
             P(fx, "ReflectStrength")?.SetValue(config.WaterReflection ? config.WaterReflectStrength : 0f);
+            // Per-frame sprite exclusion mask (ducks, NPCs, critters on the water).
+            P(fx, "SpriteMaskOn")?.SetValue(SpriteMaskReady && _spriteMaskRT != null ? 1f : 0f);
+            P(fx, "SpriteMaskTexture")?.SetValue(_spriteMaskRT);
             P(fx, "WaterKind")?.SetValue(WaterKind());
             P(fx, "TilesPerScreen")?.SetValue(_waterTilesPerScreen);
             P(fx, "WorldTileOffset")?.SetValue(_waterWorldTileOffset);
@@ -418,8 +425,11 @@ namespace SDVRadiance
             P(fx, "Lights")?.SetValue(_lightArr);
 
             // Wading: are the player's feet on water pixels? (mask texel = 4 world px)
+            // SWIMMING is excluded: half the body is already underwater, so a mirrored
+            // silhouette below the feet reads as a glitch, not a reflection — the ripple
+            // exclusion (silhouette gate) is what protects the visible half instead.
             float pin = 0f;
-            if (who != null && _waterPixBuf != null && _waterMask != null)
+            if (who != null && !who.swimming.Value && _waterPixBuf != null && _waterMask != null)
             {
                 Rectangle bb = who.GetBoundingBox();
                 int mxp = bb.Center.X / 4 - _lastWaterTx * 16;
