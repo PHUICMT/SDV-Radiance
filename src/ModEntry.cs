@@ -628,6 +628,8 @@ namespace SDVRadiance
                 () => I18n("config.cloudshadow.coverage.name"), null, 0.1f, 0.9f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.CloudShadowScale, v => _config.CloudShadowScale = v,
                 () => I18n("config.cloudshadow.scale.name"), null, 1f, 5f, 0.5f);
+            api.AddNumberOption(this.ModManifest, () => _config.CloudShadowCount, v => _config.CloudShadowCount = v,
+                () => I18n("config.cloudshadow.count.name"), () => I18n("config.cloudshadow.count.tooltip"), 0f, 1f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.CloudShadowSpeed, v => _config.CloudShadowSpeed = v,
                 () => I18n("config.cloudshadow.speed.name"), null, 0f, 0.1f, 0.005f);
 

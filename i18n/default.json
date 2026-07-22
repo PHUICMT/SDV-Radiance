@@ -99,6 +99,7 @@
   "tuner.cloudshadow": "Cloud shadows",
   "tuner.cloudopacity": "Opacity",
   "tuner.cloudcoverage": "Coverage",
+  "tuner.cloudcount": "Cloud count",
   "tuner.cloudspeed": "Drift speed",
   "tuner.section.tiltshift": "Tilt-shift",
   "tuner.tiltshift": "Tilt-shift",
@@ -154,6 +155,8 @@
   "config.cloudshadow.opacity.name": "Opacity",
   "config.cloudshadow.coverage.name": "Coverage",
   "config.cloudshadow.scale.name": "Cloud size",
+  "config.cloudshadow.count.name": "Cloud count",
+  "config.cloudshadow.count.tooltip": "How many separate cloud banks share the screen - low = a few big drifting banks, high = many small puffs.",
   "config.cloudshadow.speed.name": "Drift speed",
 
   "config.section.finishing": "Water & finishing",

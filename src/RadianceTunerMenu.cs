@@ -152,6 +152,7 @@ namespace SDVRadiance
             y += 44;
             _sliders.Add(new Slider(_t("tuner.cloudopacity"), x, y, innerW, 0f, 0.7f, () => _config.CloudShadowOpacity, v => _config.CloudShadowOpacity = v)); y += 50;
             _sliders.Add(new Slider(_t("tuner.cloudcoverage"), x, y, innerW, 0.1f, 0.9f, () => _config.CloudShadowCoverage, v => _config.CloudShadowCoverage = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.cloudcount"), x, y, innerW, 0f, 1f, () => _config.CloudShadowCount, v => _config.CloudShadowCount = v)); y += 50;
             _sliders.Add(new Slider(_t("tuner.cloudspeed"), x, y, innerW, 0f, 0.06f, () => _config.CloudShadowSpeed, v => _config.CloudShadowSpeed = v)); y += 50;
 
             y += 30; _sectionTitles.Add((_t("tuner.section.tiltshift"), y - 28));

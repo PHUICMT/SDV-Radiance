@@ -41,6 +41,8 @@ float Opacity;       // how dark the shadows get (0..1)
 float Coverage;      // fraction of area shadowed (0..1)
 float2 WorldOffset;  // viewport origin (world-anchor), pre-scaled on the CPU
 float2 TexelSize;    // blur step (1/width, 0) or (0, 1/height)
+float LightProtect;  // 0 by day .. 1 at night: only then do near-white cores resist the shadow
+float Count;         // 0..1 how many SEPARATE cloud banks are on screen (cluster frequency)
 
 static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
 static const int TAPS = 5;
@@ -99,6 +101,13 @@ float4 MaskPS(PixelInput input) : SV_TARGET
     // separate again.
     n = saturate((n - 0.5) * 2.4 + 0.5);
 
+    // CLUSTERING: a very low-frequency layer carves the field into separate cloud
+    // BANKS with genuinely clear sky between them — this is what makes clouds read
+    // as individual puffs instead of one even veil. Count raises the cluster
+    // frequency: more (smaller) banks on screen at once.
+    float cm = tex2D(NoiseSampler, p * lerp(0.018, 0.085, saturate(Count)) + 0.61).r;
+    n *= smoothstep(0.42, 0.60, cm);
+
     // Coverage must read as AREA (more/fewer cloud patches), not a global dimmer. A narrow ramp
     // keeps genuinely clear sky (cloud=0) next to genuinely shadowed patches (cloud=1); the
     // separable Gaussian blur below is what softens the edges (fluffy penumbra), so this can
@@ -144,12 +153,12 @@ float4 CompositePS(PixelInput input) : SV_TARGET
     float4 c = tex2D(SourceSampler, input.UV);
     float cloud = tex2D(ShadowSampler, input.UV).r;
 
-    // Only near-WHITE emissive cores (fire, lamp glow) resist the shadow — a passing
-    // cloud shouldn't dim a light source. Bright sunny ground (beach sand ~0.9 luma)
-    // must still receive full shadow, or the cloud gets hard-edged holes, so the
-    // window here is razor thin.
+    // Near-white cores resist the shadow ONLY AT NIGHT (lamp/fire glow shouldn't dim
+    // under a moon cloud). By DAY the sun is the light source: a cloud must shade
+    // everything, including white art — eyes, flowers, white walls — or they punch
+    // holes in the shadow (community report). LightProtect is the night factor.
     float lum = dot(c.rgb, LUMA);
-    float protect = smoothstep(0.955, 0.995, lum);
+    float protect = smoothstep(0.955, 0.995, lum) * saturate(LightProtect);
     float shade = 1.0 - cloud * Opacity * (1.0 - protect);
 
     return float4(c.rgb * shade, c.a);

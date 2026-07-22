@@ -114,6 +114,8 @@ namespace SDVRadiance
         /// <summary>Hide the vanilla drifting <c>Cloud</c> critter shadow (so only our cloud shadow shows).</summary>
         public bool SuppressVanillaCloudShadow { get; set; } = true;
         public float CloudShadowScale { get; set; } = 1.0f;
+        /// <summary>How many separate cloud banks share the screen (cluster frequency, 0..1).</summary>
+        public float CloudShadowCount { get; set; } = 0.5f;
         public float CloudShadowSpeed { get; set; } = 0.04f;
         public float CloudShadowOpacity { get; set; } = 0.61f;
         public float CloudShadowCoverage { get; set; } = 0.43f;
@@ -209,6 +211,7 @@ namespace SDVRadiance
             CloudShadowOpacity = C(CloudShadowOpacity, 0f, 0.7f);
             CloudShadowCoverage = C(CloudShadowCoverage, 0.1f, 0.9f);
             CloudShadowScale = C(CloudShadowScale, 1f, 5f);
+            CloudShadowCount = C(CloudShadowCount, 0f, 1f);
             CloudShadowSpeed = C(CloudShadowSpeed, 0f, 0.1f);
             TiltShiftStrength = C(TiltShiftStrength, 0f, 1f);
             TiltShiftRadius = C(TiltShiftRadius, 0.05f, 0.9f);

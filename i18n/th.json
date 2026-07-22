@@ -126,6 +126,7 @@
   "tuner.cloudshadow": "เงาเมฆ",
   "tuner.cloudopacity": "ความทึบ",
   "tuner.cloudcoverage": "ความครอบคลุม",
+  "tuner.cloudcount": "จำนวนก้อนเมฆ",
   "tuner.cloudspeed": "ความเร็วลอย",
   "tuner.section.tiltshift": "Tilt-shift",
   "tuner.tiltshift": "Tilt-shift",
@@ -162,6 +163,8 @@
   "config.section.cloudshadow": "เงาเมฆ",
   "config.cloudshadow.coverage.name": "ความครอบคลุม",
   "config.cloudshadow.scale.name": "ขนาดเมฆ",
+  "config.cloudshadow.count.name": "จำนวนก้อนเมฆ",
+  "config.cloudshadow.count.tooltip": "จอมีเมฆกี่กลุ่ม — ต่ำ = ก้อนใหญ่ไม่กี่ก้อน, สูง = ก้อนเล็กหลายก้อน",
   "config.cloudshadow.speed.name": "ความเร็วลอย",
 
   "config.section.tiltshift": "Tilt-shift (เบลอระยะชัด)",

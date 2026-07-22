@@ -62,6 +62,7 @@ namespace SDVRadiance
             P(fx, "Speed")?.SetValue(config.CloudShadowSpeed);
             P(fx, "Scale")?.SetValue(config.CloudShadowScale);
             P(fx, "Coverage")?.SetValue(config.CloudShadowCoverage);
+            P(fx, "Count")?.SetValue(config.CloudShadowCount);
             P(fx, "WorldOffset")?.SetValue(WorldOffset(dest.Width, dest.Height));
             P(fx, "NoiseTexture")?.SetValue(NoiseTex());
             fx.CurrentTechnique = fx.Techniques["Mask"];
@@ -78,6 +79,9 @@ namespace SDVRadiance
 
             // Pass 4: composite the blurred shadow onto the scene.
             P(fx, "Opacity")?.SetValue(config.CloudShadowOpacity * _cloudDayFactor);
+            // Day: clouds shade EVERYTHING (white eyes/flowers included — the sun is the
+            // light). Night: near-white lamp/fire cores resist the moon-cloud shadow.
+            P(fx, "LightProtect")?.SetValue(NightFactorNow());
             P(fx, "ShadowTexture")?.SetValue(rtA);
             fx.CurrentTechnique = fx.Techniques["Composite"];
             DrawFull(sb, source, dest, fx);
