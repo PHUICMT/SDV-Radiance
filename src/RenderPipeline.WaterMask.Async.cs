@@ -92,7 +92,7 @@ namespace SDVRadiance
             return (bits, nW, nI, nF, nL);
         }
 
-        /// <summary>Phase 1 - read every game-state dependency into plain arrays.
+        /// <summary>Gather stage - read every game-state dependency into plain arrays.
         /// MUST run on the main thread (content loads, texture GetData via the
         /// classification caches, live entity lists).</summary>
         private WaterMaskJob GatherWaterMask(GameLocation loc, int startTileX, int startTileY, int tilesW, int tilesH)
@@ -370,7 +370,7 @@ namespace SDVRadiance
             return job;
         }
 
-        /// <summary>Phase 2 - the pixel crunching (passes A-E). Pure array work on gathered
+        /// <summary>Compose stage - the pixel crunching (passes A-E). Pure array work on gathered
         /// data; safe on a worker thread. Jobs are serialized, so the shared scratch
         /// buffers are exclusively this job's while it runs.</summary>
         private void ComposeWaterMask(WaterMaskJob job)
@@ -810,7 +810,7 @@ namespace SDVRadiance
             }
         }
 
-        /// <summary>Phase 3 - main thread: upload the composed buffers and publish the new
+        /// <summary>Apply stage - main thread: upload the composed buffers and publish the new
         /// mask identity. Until this runs, the shader keeps the OLD texture + OLD origin
         /// (a consistent pair — the mask content is world-anchored).</summary>
         private void ApplyWaterMask(WaterMaskJob job)
