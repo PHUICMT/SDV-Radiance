@@ -62,7 +62,9 @@ float hash(float2 p)
 
 float vnoise(float2 p)
 {
-    float2 i = floor(p);
+    // Wrapped lattice: keeps the sin()-hash input small so it can never hit the
+    // float-precision cliff (hard axis-aligned seams) — same family as the Time wrap.
+    float2 i = fmod(floor(p), 128.0);
     float2 f = frac(p);
     f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0); // quintic smootherstep (C2)
     float a = hash(i);

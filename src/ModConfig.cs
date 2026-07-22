@@ -97,12 +97,12 @@ namespace SDVRadiance
         /// implicitly whenever any effect was on — now opt-in so Fog OFF really means off.</summary>
         public bool FogNightMist { get; set; } = false;
         /// <summary>How thick the night-mist wisps get at deep night (0..1).</summary>
-        public float FogNightMistDensity { get; set; } = 0.25f;
-        public float FogDensity { get; set; } = 0.25f;   // wisp OPACITY (how strong each wisp tints)
+        public float FogNightMistDensity { get; set; } = 0.90f;
+        public float FogDensity { get; set; } = 0.50f;   // wisp OPACITY (how strong each wisp tints)
         /// <summary>How much of the frame the day-fog wisps occupy (amount, not opacity).</summary>
-        public float FogCoverage { get; set; } = 0.4f;
+        public float FogCoverage { get; set; } = 0.20f;
         /// <summary>How much of the frame the night-mist wisps occupy.</summary>
-        public float FogNightMistCoverage { get; set; } = 0.4f;
+        public float FogNightMistCoverage { get; set; } = 0.25f;
         public float FogScale { get; set; } = 3.0f;
         public float FogSpeed { get; set; } = 0.02f;
         public float FogTopBias { get; set; } = 0.5f;

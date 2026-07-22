@@ -37,7 +37,11 @@ float hash(float2 p) { return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.545
 
 float vnoise(float2 p)
 {
-    float2 i = floor(p);
+    // Wrap the lattice so hash inputs stay SMALL: large p (world offset × scale ×
+    // fbm octaves + drift time) pushes sin() past GPU precision, and the error is
+    // stepwise along lattice lines — hard world-anchored rectangle seams in the fog.
+    // Noise repeats every 128 cells (dozens of screens at any Scale): unnoticeable.
+    float2 i = fmod(floor(p), 128.0);
     float2 f = frac(p);
     f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0); // quintic smootherstep (C2)
     float a = hash(i);

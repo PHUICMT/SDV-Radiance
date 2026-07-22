@@ -589,7 +589,10 @@ namespace SDVRadiance
 
         // ---- helpers -------------------------------------------------------
 
-        private static float Time() => Game1.ticks / 60f;
+        // Wrapped like the cloud shadow's Time: unbounded seconds eventually push the
+        // shader noise hashes past float/sin precision, which reads as hard axis-aligned
+        // seams. 100-minute period, multiple of 60 so whole seconds stay whole.
+        private static float Time() => (Game1.ticks % 360000) / 60f;
 
         /// <summary>Debug: save the water masks to PNG (R=effect, G=march, B=edge distance).</summary>
         public string DumpMasks(string dir)
