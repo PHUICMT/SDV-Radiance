@@ -22,6 +22,7 @@ float Scale;         // mist feature size
 float Density;       // overall opacity (0..1)
 float3 FogColor;     // fog tint
 float TopBias;       // extra fog toward the top of the screen (0..1)
+float Patchiness;    // 0 = classic even blanket · 1 = sparse drifting wisps with clear gaps
 float2 WorldOffset;  // world-anchor
 
 struct PixelInput
@@ -65,6 +66,12 @@ float4 FogPS(PixelInput input) : SV_TARGET
 {
     float2 p = (input.UV + WorldOffset) * Scale + float2(Time * Speed, Time * Speed * 0.2);
     float n = fbm(p);
+
+    // fbm covers the whole frame (mean ~0.5), which reads as an even film. Patchiness
+    // carves it into separate drifting wisps: only the denser cores survive, the rest
+    // clears out completely.
+    float wisps = smoothstep(0.62, 0.92, n) * 0.9;
+    n = lerp(n, wisps, saturate(Patchiness));
 
     // Slightly more mist toward the top of the screen.
     float grad = 1.0 + TopBias * (1.0 - input.UV.y);

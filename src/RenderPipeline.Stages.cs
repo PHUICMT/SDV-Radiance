@@ -176,14 +176,16 @@ namespace SDVRadiance
         private void RenderFog(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var fx = _fog!;
+            // When fog isn't manually enabled, this stage runs as the opt-in NIGHT MIST:
+            // not the manual fog's even film, but sparse blue wisps (Patchiness=1) that
+            // drift by with clear air between them. Manual fog keeps the user's sliders.
+            bool mistOnly = !config.FogEnabled;
             P(fx, "Time")?.SetValue(Time());
-            P(fx, "Speed")?.SetValue(config.FogSpeed);
-            P(fx, "Scale")?.SetValue(config.FogScale);
-            // When fog isn't manually enabled, this stage is running as the automatic blue
-            // NIGHT MIST — a subtle drifting haze (FogColor is already blue at night) that fades
-            // in after dusk. Manual fog uses the configured density.
-            float density = config.FogEnabled ? config.FogDensity : 0.16f * NightFactorNow();
+            P(fx, "Speed")?.SetValue(mistOnly ? 0.035f : config.FogSpeed);
+            P(fx, "Scale")?.SetValue(mistOnly ? 3.2f : config.FogScale);
+            float density = mistOnly ? 0.24f * NightFactorNow() : config.FogDensity;
             P(fx, "Density")?.SetValue(density);
+            P(fx, "Patchiness")?.SetValue(mistOnly ? 1f : 0f);
             P(fx, "TopBias")?.SetValue(config.FogTopBias);
             P(fx, "FogColor")?.SetValue(FogColor());
             P(fx, "WorldOffset")?.SetValue(WorldOffset(dest.Width, dest.Height));
