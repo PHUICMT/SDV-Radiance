@@ -152,11 +152,13 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float2 maskUV = (worldTile - MaskOrigin) / MaskSize;
     float tileWater = tex2D(MaskSampler, maskUV).r;
 
-    // Mask ALPHA = per-pixel ripple gate. 1 = normal water (ripple + sparkle); 0 = ICE
-    // (labeled frozen water) — a smooth still surface that still MIRRORS (the reflection
-    // path reads the G/march channel, unaffected) but never ripples or glints. Flowing
-    // water keeps alpha 1 and simply has no march channel, so it ripples without a mirror.
-    float rippleGate = tex2D(MaskSampler, maskUV).a;
+    // Mask ALPHA tags the water TYPE: ~1 normal, ~0 ICE (frozen: mirror kept, no ripple),
+    // ~0.5 (128) LAVA (slow molten flow + self-glow, no mirror). Ice/lava have no march
+    // channel-driven ripple gate difference — the gate below zeroes ripple only for ice.
+    float maskA = tex2D(MaskSampler, maskUV).a;
+    float isIce  = 1.0 - step(0.25, maskA);              // a < 0.25
+    float isLava = step(0.25, maskA) * (1.0 - step(0.75, maskA)); // 0.25..0.75
+    float rippleGate = 1.0 - isIce;                       // ice: no ripple; water/lava: yes
 
     float4 src = tex2D(SourceSampler, uv);
     if (tileWater <= 0.001)
@@ -210,7 +212,8 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // Refraction in WORLD space so the ripple travels with the water:
     //  - pond: fine crossing ripples, small & quick (still surface).
     //  - ocean: long directional swell, bigger & slower.
-    float t = Time * Speed;
+    //  - lava: the SAME molten motion but crawling (thick, viscous) — slow the phase hard.
+    float t = Time * Speed * lerp(1.0, 0.12, isLava);
     float pwx = sin(worldTile.y * 6.3 + t * 6.0) + 0.5 * sin(worldTile.x * 4.1 - t * 4.0);
     float pwy = cos(worldTile.x * 5.7 - t * 5.0) + 0.5 * cos(worldTile.y * 4.7 + t * 3.5);
     float2 pondRipple = float2(pwx, pwy) * (Strength * 0.0025);
@@ -236,8 +239,16 @@ float4 WaterPS(PixelInput input) : SV_TARGET
 
     // Depth tint: cool + deepen for a wetter, more 3D surface. TintAmt drops to 0 when
     // the shimmer toggle is off (the stage may still be running just for the mirror).
+    // NOT on lava — molten rock isn't cool/blue.
     float3 tint = col.rgb * float3(0.90, 0.97, 1.12);
-    col.rgb = lerp(col.rgb, tint, TintAmt * water);
+    col.rgb = lerp(col.rgb, tint, TintAmt * water * (1.0 - isLava));
+
+    // LAVA self-glow: a slow warm emissive pulse so molten rock lights itself (and blooms).
+    if (isLava > 0.5)
+    {
+        float pulse = 0.6 + 0.4 * sin(Time * 0.5 + worldTile.x * 0.6 + worldTile.y * 0.4);
+        col.rgb += float3(0.42, 0.14, 0.02) * pulse * water;
+    }
 
     // Screen-space reflection: a true vertical mirror. March UP the water mask to
     // find the shoreline (where water ends), then reflect the scene above that edge
@@ -421,7 +432,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     glint = saturate(glint);
     // Golden hour: the glints warm up with the low sun instead of staying white.
     float3 glintCol = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.82, 0.5), SunWarm);
-    col.rgb += glint * Sparkle * water * glintCol * rippleGate;   // ice: no glints (still surface)
+    col.rgb += glint * Sparkle * water * glintCol * rippleGate * (1.0 - isLava);   // ice/lava: no sun glints
 
     // ---- Night: starlight on the surface (clear nights only) ----
     if (NightGlow > 0.001)

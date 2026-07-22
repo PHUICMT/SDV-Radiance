@@ -58,6 +58,9 @@ namespace SDVRadiance
         private bool[]? _tileHasFrontBuf;
         private bool[]? _tileIceBuf;           // HF label class 9: frozen — reflection, no ripple
         private bool[]? _tileFlowBuf;          // HF label class 10: flowing/waterfall — ripple, no reflection
+        private bool[]? _tileLavaBuf;          // HF label class 11: lava — slow molten flow, self-glow, no reflection
+        private bool[]? _tileWetFlag;          // per-tile: has any effect-water pixel (for body-size flood fill)
+        private byte[]? _tileCalmBuf;          // per-tile 0..255 wave scale by water-body size (small = calmer)
         private readonly List<(int x0, int y0, int x1, int y1)> _carveRects = new();
 
         /// <summary>HF Studio label version, for the mask cache key (0 = no HF / old HF).
@@ -74,18 +77,19 @@ namespace SDVRadiance
         /// <summary>Water bits from 256 HF Studio per-pixel labels. Classes 1 (water), 9 (ice) and
         /// 10 (flowing) are ALL water for the mask; per-class counts let the tile pick a behaviour
         /// (ice = mirror only, flowing = ripple only).</summary>
-        private static (bool[] bits, int nWater, int nIce, int nFlow) WaterBitsFromLabels(byte[] classes)
+        private static (bool[] bits, int nWater, int nIce, int nFlow, int nLava) WaterBitsFromLabels(byte[] classes)
         {
             var bits = new bool[256];
-            int nW = 0, nI = 0, nF = 0;
+            int nW = 0, nI = 0, nF = 0, nL = 0;
             for (int p = 0; p < 256; p++)
             {
                 byte c = classes[p];
                 if (c == 1) { bits[p] = true; nW++; }
                 else if (c == 9) { bits[p] = true; nI++; }
                 else if (c == 10) { bits[p] = true; nF++; }
+                else if (c == 11) { bits[p] = true; nL++; }   // lava: slow molten flow + self-glow
             }
-            return (bits, nW, nI, nF);
+            return (bits, nW, nI, nF, nL);
         }
 
         /// <summary>Phase 1 - read every game-state dependency into plain arrays.
@@ -166,6 +170,7 @@ namespace SDVRadiance
             if (_animOnlyTileBuf == null || _animOnlyTileBuf.Length < count) _animOnlyTileBuf = new bool[count];
             if (_tileIceBuf == null || _tileIceBuf.Length < count) _tileIceBuf = new bool[count];
             if (_tileFlowBuf == null || _tileFlowBuf.Length < count) _tileFlowBuf = new bool[count];
+            if (_tileLavaBuf == null || _tileLavaBuf.Length < count) _tileLavaBuf = new bool[count];
 
             bool anyAnim = false;
             for (int j = 0; j < tilesH; j++)
@@ -178,7 +183,7 @@ namespace SDVRadiance
                     bool[]? bits = null;
                     byte puddle = 0;
                     bool animOnly = false;
-                    int iceN = 0, flowN = 0;   // accumulated across Back + Buildings labels
+                    int iceN = 0, flowN = 0, lavaN = 0;   // accumulated across Back + Buildings labels
                     // ---- GROUND-TRUTH LABELS FIRST (HF Studio). A labeled Back art is
                     // authoritative: its water pixels join the mask (STATIC painted pools on
                     // custom maps included — no ring or animation requirement), and a labeled
@@ -192,11 +197,11 @@ namespace SDVRadiance
                         if (lbl != null)
                         {
                             labeledBack = true;
-                            var (lb, nW, nI, nF) = WaterBitsFromLabels(lbl);
-                            if (nW + nI + nF > 0)
+                            var (lb, nW, nI, nF, nL) = WaterBitsFromLabels(lbl);
+                            if (nW + nI + nF + nL > 0)
                             {
                                 bits = lb;
-                                iceN += nI; flowN += nF;
+                                iceN += nI; flowN += nF; lavaN += nL;
                                 job.AnyLabeled = true;
                             }
                         }
@@ -258,11 +263,11 @@ namespace SDVRadiance
                         if (lbl != null)
                         {
                             labeledBld = true;
-                            var (ob, nW, nI, nF) = WaterBitsFromLabels(lbl);
-                            if (nW + nI + nF >= 8)
+                            var (ob, nW, nI, nF, nL) = WaterBitsFromLabels(lbl);
+                            if (nW + nI + nF + nL >= 8)
                             {
                                 overlayBits = ob;
-                                iceN += nI; flowN += nF;
+                                iceN += nI; flowN += nF; lavaN += nL;
                                 job.AnyLabeled = true;
                             }
                         }
@@ -295,8 +300,9 @@ namespace SDVRadiance
                     // Ice / flowing win over each other by pixel count; a plain-water majority
                     // keeps normal behaviour. Ice → reflection but no ripple (mask alpha 0);
                     // flowing → ripple but no reflection (scrubbed from the march channel).
-                    _tileIceBuf[idx] = iceN > 0 && iceN >= flowN;
-                    _tileFlowBuf[idx] = flowN > 0 && flowN > iceN;
+                    _tileIceBuf[idx] = iceN > 0 && iceN >= flowN && iceN >= lavaN;
+                    _tileFlowBuf[idx] = flowN > 0 && flowN > iceN && flowN >= lavaN;
+                    _tileLavaBuf[idx] = lavaN > 0 && lavaN > iceN && lavaN > flowN;
 
                     // Structure / carve inputs (Pass C + the land-connectivity test + arch fill).
                     bool hasFront = TryTileArt(front, tx, ty, out var t2, out var s2);
@@ -662,13 +668,13 @@ namespace SDVRadiance
                 }
             }
 
-            // FLOWING water (HF label class 10 — waterfalls, streams): scrub from the march
-            // channel so it never grows a mirror; the effect channel stays, so it still ripples
-            // and flows. Same treatment a shape-detected waterfall face gets, but label-driven.
+            // FLOWING water (class 10 — waterfalls/streams) and LAVA (class 11) both scrub from
+            // the march channel so neither grows a sky mirror; their effect channel stays (flow
+            // ripples; lava undulates slowly + self-glows, handled in the shader by the alpha tag).
             for (int j = 0; j < tilesH; j++)
                 for (int i = 0; i < tilesW; i++)
                 {
-                    if (!_tileFlowBuf![j * tilesW + i])
+                    if (!_tileFlowBuf![j * tilesW + i] && !_tileLavaBuf![j * tilesW + i])
                         continue;
                     for (int py = 0; py < Sub; py++)
                     {
@@ -699,6 +705,58 @@ namespace SDVRadiance
                                 _waterPixBits2![k * pw + x] = false;
                         top = -1;
                     }
+                }
+            }
+
+            // WATER-BODY SIZE → calm factor. A tiny tide pool should barely ripple while an
+            // ocean rolls; flood-fill the water TILES (4-connected) and scale each tile's effect
+            // value by its body's tile count. Works for heuristic AND labelled water alike — the
+            // game "knows it's small" from the connected area, not from colour or a special label.
+            if (_tileWetFlag == null || _tileWetFlag.Length < count) _tileWetFlag = new bool[count];
+            if (_tileCalmBuf == null || _tileCalmBuf.Length < count) _tileCalmBuf = new byte[count];
+            for (int j = 0; j < tilesH; j++)
+                for (int i = 0; i < tilesW; i++)
+                {
+                    bool wet = _waterBoolBuf![j * tilesW + i];
+                    if (!wet)
+                        for (int py = 0; py < Sub && !wet; py++)
+                        {
+                            int r = (j * Sub + py) * pw + i * Sub;
+                            for (int px = 0; px < Sub; px++)
+                                if (_waterPixBits![r + px]) { wet = true; break; }
+                        }
+                    _tileWetFlag[j * tilesW + i] = wet;
+                }
+            {
+                Span<int> stack = count <= 4096 ? stackalloc int[Math.Min(count, 4096)] : new int[count];
+                var seen = new bool[count];
+                var member = new List<int>(64);
+                for (int start = 0; start < count; start++)
+                {
+                    if (!_tileWetFlag[start] || seen[start])
+                        continue;
+                    int sp = 0; stack[sp++] = start; seen[start] = true; member.Clear();
+                    while (sp > 0)
+                    {
+                        int cur = stack[--sp]; member.Add(cur);
+                        int cx = cur % tilesW, cy = cur / tilesW;
+                        if (cx > 0 && _tileWetFlag[cur - 1] && !seen[cur - 1]) { seen[cur - 1] = true; stack[sp++] = cur - 1; }
+                        if (cx < tilesW - 1 && _tileWetFlag[cur + 1] && !seen[cur + 1]) { seen[cur + 1] = true; stack[sp++] = cur + 1; }
+                        if (cy > 0 && _tileWetFlag[cur - tilesW] && !seen[cur - tilesW]) { seen[cur - tilesW] = true; stack[sp++] = cur - tilesW; }
+                        if (cy < tilesH - 1 && _tileWetFlag[cur + tilesW] && !seen[cur + tilesW]) { seen[cur + tilesW] = true; stack[sp++] = cur + tilesW; }
+                    }
+                    // size → calm: <=3 tiles ~0.5 (a puddle), ramping to full by ~36 tiles (a pond+).
+                    // Bodies cut by the mask edge are likely larger off-screen → treat as full.
+                    bool touchesEdge = false;
+                    foreach (int idx in member)
+                    {
+                        int cx = idx % tilesW, cy = idx / tilesW;
+                        if (cx == 0 || cy == 0 || cx == tilesW - 1 || cy == tilesH - 1) { touchesEdge = true; break; }
+                    }
+                    float calm = touchesEdge ? 1f : MathHelper.Clamp(0.5f + (member.Count - 3) / 33f * 0.5f, 0.5f, 1f);
+                    byte cb = (byte)MathHelper.Clamp(calm * 255f, 0f, 255f);
+                    foreach (int idx in member)
+                        _tileCalmBuf[idx] = cb;
                 }
             }
 
@@ -742,9 +800,11 @@ namespace SDVRadiance
                     byte effV = !eff ? (byte)0
                         : _animSoftTileBuf![tileIdx] ? (byte)140
                         : _puddlePixBits![p] ? (byte)205 : (byte)255;
-                    // ALPHA = ripple gate: 0 on ICE tiles (labeled frozen) so the shader keeps the
-                    // mirror but stills the surface (no ripple/sparkle); 255 everywhere else.
-                    byte alpha = _tileIceBuf![tileIdx] ? (byte)0 : (byte)255;
+                    // Body-size calm: a small pool ripples/glints gentler than an open lake.
+                    if (eff) effV = (byte)(effV * _tileCalmBuf![tileIdx] / 255);
+                    // ALPHA tags the water TYPE for the shader: 0 = ICE (mirror, no ripple),
+                    // 128 = LAVA (slow molten flow + self-glow, no mirror), 255 = normal water.
+                    byte alpha = _tileIceBuf![tileIdx] ? (byte)0 : _tileLavaBuf![tileIdx] ? (byte)128 : (byte)255;
                     _waterPixBuf[p] = new Color(effV, march ? 255 : 0, bch, alpha);
                 }
             }
