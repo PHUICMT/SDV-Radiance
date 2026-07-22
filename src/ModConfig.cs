@@ -136,6 +136,11 @@ namespace SDVRadiance
         public float WaterSparkleDensity { get; set; } = 0.7f; // glint count/size (1 = old look)
         public bool WaterReflection { get; set; } = true;  // screen-space reflection on water
         public float WaterReflectStrength { get; set; } = 0.71f;
+        /// <summary>Apply the water effect inside building interiors (farmhouse, cabins, custom
+        /// home mods). Off = skip it there — some house mods have decorative rivers/ponds inside
+        /// the user may not want rippling. Caves, mines, the sewer and other dungeons ALWAYS keep
+        /// their water regardless of this (that water is part of the level, not decoration).</summary>
+        public bool WaterEffectIndoors { get; set; } = true;
 
         public bool VignetteEnabled { get; set; } = true;
         public float VignetteStrength { get; set; } = 0.25f;

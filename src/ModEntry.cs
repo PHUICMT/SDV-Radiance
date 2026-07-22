@@ -277,7 +277,13 @@ namespace SDVRadiance
         private void OnRenderedWorld(object? sender, RenderedWorldEventArgs e)
         {
             ForceBufferDraw = EffectsActive; // self-heal: keep the postfix in sync with live config
-            FreezeGameWater = _config.Enabled && _config.WaterEnabled;
+            // Only freeze the game's own water frame-cycle where we actually render ripple this
+            // frame — otherwise decorative indoor water (with the effect turned off there) would
+            // sit frozen instead of playing its normal vanilla animation.
+            GameLocation? wloc = Game1.currentLocation;
+            bool waterHere = _config.WaterEffectIndoors || (wloc?.IsOutdoors ?? false)
+                || RenderPipeline.IsDungeonWater(wloc);
+            FreezeGameWater = _config.Enabled && _config.WaterEnabled && waterHere;
             WaterDrawHook.Enabled = _config.Enabled && (_config.WaterEnabled || _config.WaterReflection);
             if (!EffectsActive)
                 return;
@@ -699,6 +705,8 @@ namespace SDVRadiance
                 () => I18n("config.water.reflection.name"), () => I18n("config.water.reflection.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.WaterReflectStrength, v => _config.WaterReflectStrength = v,
                 () => I18n("config.water.reflectstrength.name"), null, 0f, 1f, 0.05f);
+            api.AddBoolOption(this.ModManifest, () => _config.WaterEffectIndoors, v => _config.WaterEffectIndoors = v,
+                () => I18n("config.water.indoors.name"), () => I18n("config.water.indoors.tooltip"));
             api.AddBoolOption(this.ModManifest, () => _config.VignetteEnabled, v => _config.VignetteEnabled = v,
                 () => I18n("config.vignette.enabled.name"), () => I18n("config.vignette.enabled.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.VignetteStrength, v => _config.VignetteStrength = v,

@@ -108,6 +108,24 @@ namespace SDVRadiance
             if (ms > _buildMax[idx]) _buildMax[idx] = ms;
             return r;
         }
+        /// <summary>True for cave/mine/sewer/dungeon-style interiors whose water is part of the
+        /// level, not decoration. These keep their water even when WaterEffectIndoors is off — the
+        /// toggle is meant for house/building interiors with decorative ponds, not the mines.</summary>
+        internal static bool IsDungeonWater(GameLocation? loc)
+        {
+            if (loc == null)
+                return false;
+            if (loc is StardewValley.Locations.MineShaft or StardewValley.Locations.VolcanoDungeon)
+                return true;
+            string n = loc.Name ?? "";
+            string t = loc.GetType().Name;
+            static bool Has(string s, string k) => s.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0;
+            return Has(n, "Mine") || Has(n, "Cave") || Has(n, "Volcano") || Has(n, "Dungeon")
+                || Has(n, "Sewer") || Has(n, "Caldera") || Has(n, "Swamp") || Has(n, "BugLand")
+                || Has(n, "Submarine") || Has(n, "Tunnel") || Has(n, "Grotto") || Has(n, "Submarine")
+                || Has(t, "Mine") || Has(t, "Volcano") || Has(t, "Dungeon");
+        }
+
         private int _lastW = -1, _lastH = -1;
         private Vector2 _lightUV; // screen-UV of the light source god rays emanate from (set per frame)
         private Vector2 _godRayUV; // eased light position so rays glide, not jump
@@ -287,7 +305,10 @@ namespace SDVRadiance
                 // water tiles), so everything downstream sees the refracted result.
                 // Reflection is independent of the shimmer toggle: either switch keeps
                 // the stage alive (the other's params are zeroed inside RenderWater).
-                if ((config.WaterEnabled || config.WaterReflection) && _water != null && TimedBuild(config, 3, () => BuildWaterMask(w, h)))
+                bool waterAllowedHere = config.WaterEffectIndoors || outdoors
+                    || IsDungeonWater(Game1.currentLocation);
+                if ((config.WaterEnabled || config.WaterReflection) && _water != null && waterAllowedHere
+                    && TimedBuild(config, 3, () => BuildWaterMask(w, h)))
                 {
                     stages.Add(_dWater);
                     _fadeWater = Ease01(_fadeWater);

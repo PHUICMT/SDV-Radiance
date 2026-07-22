@@ -70,6 +70,8 @@
   "config.water.reflection.name": "เงาสะท้อนบนน้ำ",
   "config.water.reflection.tooltip": "สะท้อนฉากเหนือผิวน้ำลงบนน้ำจางๆ ให้ดูเปียกและมันวาว เนียนบางโดยตั้งใจ (ทดลอง)",
   "config.water.reflectstrength.name": "ความเข้มเงาสะท้อน",
+  "config.water.indoors.name": "เอฟเฟคน้ำในอาคาร",
+  "config.water.indoors.tooltip": "ใส่เอฟเฟคน้ำในตัวอาคาร (บ้าน กระท่อม มอดบ้านต่างๆ) ปิดได้ถ้ามอดบ้าน/interior มีน้ำตกแต่งที่ไม่อยากให้เป็นคลื่น ส่วนถ้ำ เหมือง และท่อระบายน้ำจะมีน้ำเหมือนเดิมเสมอ",
   "config.ca.enabled.name": "ใช้งานการเหลื่อมสี",
   "config.ca.enabled.tooltip": "แถบสีเหลื่อมบางๆ ที่ขอบจอ คล้ายเลนส์กล้อง แนะนำใช้ค่าน้อยกับภาพพิกเซล",
   "config.ca.strength.name": "ความแรงการเหลื่อมสี",

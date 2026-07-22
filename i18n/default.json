@@ -173,6 +173,8 @@
   "config.water.reflection.name": "Water reflection",
   "config.water.reflection.tooltip": "Faintly mirror the scene just above the surface down onto the water for a wet, reflective sheen. Subtle by design. Experimental.",
   "config.water.reflectstrength.name": "Reflection strength",
+  "config.water.indoors.name": "Water effect indoors",
+  "config.water.indoors.tooltip": "Apply the water effect inside building interiors (farmhouse, cabins, house mods). Turn off if a house/interior mod has decorative water you don't want rippling. Caves, mines and the sewer always keep their water.",
   "config.vignette.enabled.name": "Enable vignette",
   "config.vignette.enabled.tooltip": "Darken the screen edges for a cinematic frame.",
   "config.vignette.strength.name": "Vignette strength",
