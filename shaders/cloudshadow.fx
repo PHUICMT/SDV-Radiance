@@ -101,11 +101,14 @@ float4 MaskPS(PixelInput input) : SV_TARGET
     // separate again.
     n = saturate((n - 0.5) * 2.4 + 0.5);
 
-    // CLUSTERING: a very low-frequency layer carves the field into separate cloud
-    // BANKS with genuinely clear sky between them — this is what makes clouds read
-    // as individual puffs instead of one even veil. Count raises the cluster
-    // frequency: more (smaller) banks on screen at once.
-    float cm = tex2D(NoiseSampler, p * lerp(0.018, 0.085, saturate(Count)) + 0.61).r;
+    // CLUSTERING: a low-frequency layer carves the field into separate cloud BANKS
+    // with genuinely clear sky between them. The frequency is normalized by Scale so
+    // Count means "how many banks fit on screen" regardless of the size slider:
+    // Count 0 ≈ 1-2 big banks, Count 1 ≈ 6+ small ones. (First version multiplied
+    // the tiny factor into the already-scaled p — the whole screen fell inside ONE
+    // cluster cell, so the slider only slid the pattern instead of adding banks.)
+    float clusterFreq = lerp(0.35, 1.6, saturate(Count)) / max(Scale, 0.001);
+    float cm = tex2D(NoiseSampler, p * clusterFreq + 0.61).r;
     n *= smoothstep(0.42, 0.60, cm);
 
     // Coverage must read as AREA (more/fewer cloud patches), not a global dimmer. A narrow ramp
