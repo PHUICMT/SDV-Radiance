@@ -132,7 +132,7 @@ namespace SDVRadiance
         /// <summary>True only when the mod is on AND at least one implemented effect is switched on.</summary>
         private bool EffectsActive => _config.Enabled &&
             (_config.BloomEnabled || _config.ColorGradeEnabled || _config.GodRaysEnabled
-             || _config.FogEnabled || _config.CloudShadowEnabled || _config.TiltShiftEnabled
+             || _config.FogEnabled || _config.FogNightMist || _config.CloudShadowEnabled || _config.TiltShiftEnabled
              || _config.WaterEnabled || _config.VignetteEnabled || _config.ChromaticAberrationEnabled
              || _config.LightingEnabled);
 
@@ -299,7 +299,9 @@ namespace SDVRadiance
             SuppressVanillaShadows = ShadowRenderer.ShadowsActiveNow(_config);
             // Suppress the BUSH blob (fixed-direction, fights our cast); the TREE blob is kept
             // (not patched) as a base anchor under the canopy.
-            SuppressVanillaClouds = _config.Enabled && _config.SuppressVanillaCloudShadow;
+            // Only hide the vanilla drifting cloud when OUR cloud shadow is actually on —
+            // otherwise turning Cloud Shadows off silently removed vanilla clouds too.
+            SuppressVanillaClouds = _config.Enabled && _config.SuppressVanillaCloudShadow && _config.CloudShadowEnabled;
             SuppressVanillaObjectShadows = _config.DirectionalShadowObjects && ShadowRenderer.SunShadowActive(_config);
             // Big-craftable blobs are replaced in BOTH paths (sun directional + indoor/night contact),
             // so gate on ShadowsActiveNow, not just the sun path.
@@ -544,6 +546,8 @@ namespace SDVRadiance
             api.AddPage(this.ModManifest, "fog", () => I18n("config.section.fog"));
             api.AddBoolOption(this.ModManifest, () => _config.FogEnabled, v => _config.FogEnabled = v,
                 () => I18n("config.fog.enabled.name"), () => I18n("config.fog.enabled.tooltip"));
+            api.AddBoolOption(this.ModManifest, () => _config.FogNightMist, v => _config.FogNightMist = v,
+                () => I18n("config.fog.nightmist.name"), () => I18n("config.fog.nightmist.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.FogDensity, v => _config.FogDensity = v,
                 () => I18n("config.fog.density.name"), null, 0f, 1f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.FogScale, v => _config.FogScale = v,

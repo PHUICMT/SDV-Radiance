@@ -376,8 +376,10 @@ namespace SDVRadiance
             P(fx, "VignetteStrength")?.SetValue(config.VignetteEnabled ? config.VignetteStrength : 0f);
             // Map the 0..1 UI value to a tiny UV offset so it stays subtle on pixel art.
             P(fx, "CAStrength")?.SetValue(config.ChromaticAberrationEnabled ? config.ChromaticAberrationStrength * 0.03f : 0f);
-            // A touch more vignette at night.
-            P(fx, "NightAmt")?.SetValue(NightFactorNow());
+            // A touch more vignette at night — but only as part of the vignette effect
+            // itself: with Vignette OFF (e.g. only CA on) the shader must add nothing,
+            // or "off" quietly darkens the night screen edges.
+            P(fx, "NightAmt")?.SetValue(config.VignetteEnabled ? NightFactorNow() : 0f);
             fx.CurrentTechnique = fx.Techniques["Finishing"];
             DrawFull(sb, source, dest, fx);
         }

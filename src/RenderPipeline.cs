@@ -147,7 +147,7 @@ namespace SDVRadiance
             || (c.CloudShadowEnabled && _cloudShadow != null)
             || (c.GodRaysEnabled && _godRays != null)
             || (c.BloomEnabled && _bloom != null)
-            || (c.FogEnabled && _fog != null)
+            || ((c.FogEnabled || c.FogNightMist) && _fog != null)
             || (c.ColorGradeEnabled && _colorGrade != null)
             || (c.TiltShiftEnabled && _tiltShift != null)
             || (c.WaterEnabled && _water != null)
@@ -267,9 +267,10 @@ namespace SDVRadiance
                 }
                 if (config.BloomEnabled && _bloom != null) stages.Add(_dBloom);
                 // Fog is a weak, patchy effect indoors (and covers the black border), so outdoors only.
-                // Fog runs when manually enabled OR as the automatic blue night mist (outdoors,
-                // clear weather, after dusk — vanilla already grays out rain/snow).
-                bool nightMist = outdoors && !Game1.isRaining && !Game1.isSnowing && NightFactorNow() > 0f;
+                // Night mist (subtle blue haze after dusk, clear weather) is OPT-IN via its own
+                // toggle — it used to run whenever any effect was on, which read as "fog while
+                // Fog is off" and shifted night colors with unrelated toggles like tilt shift.
+                bool nightMist = config.FogNightMist && outdoors && !Game1.isRaining && !Game1.isSnowing && NightFactorNow() > 0f;
                 if ((config.FogEnabled || nightMist) && _fog != null && outdoors) stages.Add(_dFog);
                 if (config.ColorGradeEnabled && _colorGrade != null) stages.Add(_dGrade);
                 // Tilt-shift (depth-of-field) after grading, so it blurs the graded image.

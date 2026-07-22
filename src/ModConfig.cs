@@ -47,6 +47,7 @@ namespace SDVRadiance
         public bool GodRaysEnabled { get; set; }
         public float GodRaysIntensity { get; set; }
         public bool FogEnabled { get; set; }
+        public bool FogNightMist { get; set; }
         public float FogDensity { get; set; }
     }
 
@@ -87,6 +88,9 @@ namespace SDVRadiance
 
         // --- Volumetric fog ---
         public bool FogEnabled { get; set; } = false;
+        /// <summary>Automatic subtle blue mist after dusk (outdoors, clear weather). Used to run
+        /// implicitly whenever any effect was on — now opt-in so Fog OFF really means off.</summary>
+        public bool FogNightMist { get; set; } = false;
         public float FogDensity { get; set; } = 0.13f;
         public float FogScale { get; set; } = 3.0f;
         public float FogSpeed { get; set; } = 0.02f;
@@ -252,6 +256,7 @@ namespace SDVRadiance
             GodRaysEnabled = GodRaysEnabled,
             GodRaysIntensity = GodRaysIntensity,
             FogEnabled = FogEnabled,
+            FogNightMist = FogNightMist,
             FogDensity = FogDensity
         };
 
@@ -272,6 +277,7 @@ namespace SDVRadiance
             GodRaysEnabled = p.GodRaysEnabled;
             GodRaysIntensity = p.GodRaysIntensity;
             FogEnabled = p.FogEnabled;
+            FogNightMist = p.FogNightMist;
             FogDensity = p.FogDensity;
         }
 
