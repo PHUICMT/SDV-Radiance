@@ -396,6 +396,18 @@ namespace SDVRadiance
         /// Pier/bridge decks sit on Buildings-layer tiles OVER water tiles — standing on a
         /// deck is not standing on water, so require the tile to have no Buildings tile.
         /// </summary>
+        /// <summary>True only on OPEN water (this tile and all four neighbors are water).
+        /// Shoreline/surf tiles, i.e. water touching walkable ground, keep their shadows:
+        /// the beach wash is wet SAND visually, and the per-tile skip made shadows pop
+        /// in and out while walking along the waterline.</summary>
+        private static bool OnOpenWater(GameLocation loc, Point t)
+        {
+            if (!OnWater(loc, t))
+                return false;
+            return OnWater(loc, new Point(t.X - 1, t.Y)) && OnWater(loc, new Point(t.X + 1, t.Y))
+                && OnWater(loc, new Point(t.X, t.Y - 1)) && OnWater(loc, new Point(t.X, t.Y + 1));
+        }
+
         private static bool OnWater(GameLocation loc, Point tile)
         {
             try
