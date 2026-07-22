@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Reflection;
 using StardewModdingAPI;
 using StardewModdingAPI.Utilities;
 
@@ -33,6 +35,9 @@ namespace SDVRadiance
     public sealed class NamedProfile
     {
         public string Name { get; set; } = "";
+        /// <summary>Full snapshot (1.0.1+): every tunable value by property name, culture-invariant.
+        /// The explicit fields below are the 1.0.0 format, kept so old chips still load.</summary>
+        public Dictionary<string, string>? Values { get; set; }
         public bool BloomEnabled { get; set; }
         public float BloomThreshold { get; set; }
         public float BloomIntensity { get; set; }
@@ -239,30 +244,62 @@ namespace SDVRadiance
         public bool DebugLogging { get; set; } = false;
 
         /// <summary>Snapshot the current effect settings into a named profile.</summary>
-        public NamedProfile CaptureProfile(string name) => new()
+        /// <summary>Every user-tunable property: bool/int/float/enum, excluding the master
+        /// switch, debug logging, and the preset bookkeeping itself. Reflection-based so
+        /// new effect settings are picked up by saved looks automatically.</summary>
+        private static IEnumerable<PropertyInfo> TunableProps()
         {
-            Name = name,
-            BloomEnabled = BloomEnabled,
-            BloomThreshold = BloomThreshold,
-            BloomIntensity = BloomIntensity,
-            ColorGradeEnabled = ColorGradeEnabled,
-            ColorGradeAuto = ColorGradeAuto,
-            ColorGradeToneMap = ColorGradeToneMap,
-            ColorGradeStrength = ColorGradeStrength,
-            ColorGradeContrast = ColorGradeContrast,
-            ColorGradeSaturation = ColorGradeSaturation,
-            ColorGradeTemperature = ColorGradeTemperature,
-            ColorGradeBrightness = ColorGradeBrightness,
-            GodRaysEnabled = GodRaysEnabled,
-            GodRaysIntensity = GodRaysIntensity,
-            FogEnabled = FogEnabled,
-            FogNightMist = FogNightMist,
-            FogDensity = FogDensity
-        };
+            foreach (PropertyInfo p in typeof(ModConfig).GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (!p.CanRead || !p.CanWrite)
+                    continue;
+                if (p.Name is nameof(Enabled) or nameof(ActivePreset) or nameof(DebugLogging))
+                    continue;
+                Type t = p.PropertyType;
+                if (t == typeof(bool) || t == typeof(int) || t == typeof(float) || t.IsEnum)
+                    yield return p;
+            }
+        }
+
+        /// <summary>Snapshot the full current look (1.0.0 captured only ~a third of the
+        /// settings, which read as "loading my preset does nothing" for everything else).</summary>
+        public NamedProfile CaptureProfile(string name)
+        {
+            var prof = new NamedProfile { Name = name, Values = new Dictionary<string, string>() };
+            foreach (PropertyInfo p in TunableProps())
+                prof.Values[p.Name] = Convert.ToString(p.GetValue(this), CultureInfo.InvariantCulture) ?? "";
+            return prof;
+        }
 
         /// <summary>Load a saved profile's settings into the live config.</summary>
         public void ApplyProfile(NamedProfile p)
         {
+            // Full snapshot (1.0.1+ chips).
+            if (p.Values is { Count: > 0 })
+            {
+                foreach (PropertyInfo prop in TunableProps())
+                {
+                    if (!p.Values.TryGetValue(prop.Name, out string? raw) || string.IsNullOrEmpty(raw))
+                        continue;
+                    try
+                    {
+                        Type t = prop.PropertyType;
+                        object val = t.IsEnum ? Enum.Parse(t, raw)
+                            : t == typeof(bool) ? bool.Parse(raw)
+                            : t == typeof(int) ? int.Parse(raw, CultureInfo.InvariantCulture)
+                            : float.Parse(raw, CultureInfo.InvariantCulture);
+                        prop.SetValue(this, val);
+                    }
+                    catch
+                    {
+                        // value written by a different mod version — skip just that key
+                    }
+                }
+                Clamp();
+                return;
+            }
+
+            // Legacy 1.0.0 chips (only ever captured the fields below).
             BloomEnabled = p.BloomEnabled;
             BloomThreshold = p.BloomThreshold;
             BloomIntensity = p.BloomIntensity;
@@ -279,6 +316,7 @@ namespace SDVRadiance
             FogEnabled = p.FogEnabled;
             FogNightMist = p.FogNightMist;
             FogDensity = p.FogDensity;
+            Clamp();
         }
 
         /// <summary>Apply a quick look preset by overwriting the effect fields.</summary>

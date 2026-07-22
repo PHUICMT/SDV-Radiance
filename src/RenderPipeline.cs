@@ -80,6 +80,8 @@ namespace SDVRadiance
 
         private bool _loggedOnce;
         private int _frames, _applied, _skipNoTarget, _sizeChanges;
+        private readonly System.Diagnostics.Stopwatch _perfSw = new();
+        private double _perfTotalMs, _perfMaxMs;
         private int _lastW = -1, _lastH = -1;
         private Vector2 _lightUV; // screen-UV of the light source god rays emanate from (set per frame)
         private Vector2 _godRayUV; // eased light position so rays glide, not jump
@@ -181,7 +183,7 @@ namespace SDVRadiance
                 return;
             }
 
-            if (config.DebugLogging) _frames++;
+            if (config.DebugLogging) { _frames++; _perfSw.Restart(); }
 
             RenderTargetBinding[] bindings = _device.GetRenderTargets();
             if (bindings.Length == 0 || bindings[0].RenderTarget is not RenderTarget2D target)
@@ -344,13 +346,23 @@ namespace SDVRadiance
                 // Batch already open (an exotic failure path left it running) — that's the
                 // state SMAPI expects anyway, so continue.
             }
+
+            if (config.DebugLogging)
+            {
+                _perfSw.Stop();
+                double ms = _perfSw.Elapsed.TotalMilliseconds;
+                _perfTotalMs += ms;
+                if (ms > _perfMaxMs) _perfMaxMs = ms;
+            }
         }
 
         private void MaybeLogDiag(ModConfig config)
         {
             if (_frames < 120) return;
-            _monitor.Log($"[diag] over {_frames} frames: applied={_applied}, skipped={_skipNoTarget}, sizeChanges={_sizeChanges}, size={_lastW}x{_lastH}.", LogLevel.Debug);
+            _monitor.Log($"[diag] over {_frames} frames: applied={_applied}, skipped={_skipNoTarget}, sizeChanges={_sizeChanges}, size={_lastW}x{_lastH}, "
+                + $"apply avg={(_applied > 0 ? _perfTotalMs / _applied : 0):0.00}ms max={_perfMaxMs:0.00}ms.", LogLevel.Debug);
             _frames = _applied = _skipNoTarget = _sizeChanges = 0;
+            _perfTotalMs = _perfMaxMs = 0;
         }
 
         // ---- stages --------------------------------------------------------

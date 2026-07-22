@@ -134,7 +134,7 @@ namespace SDVRadiance
             (_config.BloomEnabled || _config.ColorGradeEnabled || _config.GodRaysEnabled
              || _config.FogEnabled || _config.FogNightMist || _config.CloudShadowEnabled || _config.TiltShiftEnabled
              || _config.WaterEnabled || _config.VignetteEnabled || _config.ChromaticAberrationEnabled
-             || _config.LightingEnabled);
+             || _config.LightingEnabled || _config.FloodLightingEnabled);
 
         public override void Entry(IModHelper helper)
         {
@@ -275,8 +275,22 @@ namespace SDVRadiance
                 return;
             _shadows ??= new ShadowRenderer();
             ShadowRenderer.Diag = _config.DebugLogging ? this.Monitor : null;
-            _shadows.PreparePlayer(Game1_GraphicsDevice, _config);
+            if (_config.DebugLogging)
+            {
+                _perfSw.Restart();
+                _shadows.PreparePlayer(Game1_GraphicsDevice, _config);
+                _perfSw.Stop();
+                _prepMs += _perfSw.Elapsed.TotalMilliseconds;
+            }
+            else
+                _shadows.PreparePlayer(Game1_GraphicsDevice, _config);
         }
+
+        // Perf probes (DebugLogging only): where the frame time actually goes, so stutter
+        // reports can be pinned to a subsystem instead of guessed at.
+        private readonly System.Diagnostics.Stopwatch _perfSw = new();
+        private double _prepMs, _drawMs, _drawMaxMs;
+        private int _perfFrames;
 
         /// <summary>
         /// Inject sprite shadows into the game's own World_Sorted pass (FrontToBack), so
@@ -290,7 +304,23 @@ namespace SDVRadiance
                 return;
             _shadows ??= new ShadowRenderer();
             ShadowRenderer.Diag = _config.DebugLogging ? this.Monitor : null;
-            _shadows.DrawInto(e.SpriteBatch, _config);
+            if (_config.DebugLogging)
+            {
+                _perfSw.Restart();
+                _shadows.DrawInto(e.SpriteBatch, _config);
+                _perfSw.Stop();
+                double ms = _perfSw.Elapsed.TotalMilliseconds;
+                _drawMs += ms;
+                if (ms > _drawMaxMs) _drawMaxMs = ms;
+                if (++_perfFrames >= 300)
+                {
+                    this.Monitor.Log($"[perf] shadows over {_perfFrames} frames: prepare avg={_prepMs / _perfFrames:0.00}ms, "
+                        + $"draw avg={_drawMs / _perfFrames:0.00}ms max={_drawMaxMs:0.00}ms.", LogLevel.Debug);
+                    _prepMs = _drawMs = _drawMaxMs = 0; _perfFrames = 0;
+                }
+            }
+            else
+                _shadows.DrawInto(e.SpriteBatch, _config);
         }
 
         private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
@@ -467,7 +497,12 @@ namespace SDVRadiance
                 this.Helper.WriteConfig(_config);
             }
 
-            api.Register(this.ModManifest, () => { _config = new ModConfig(); ForceBufferDraw = EffectsActive; }, Save);
+            api.Register(this.ModManifest, () =>
+            {
+                this.Monitor.Log("Config reset to defaults via GMCM.", LogLevel.Debug);
+                _config = new ModConfig();
+                ForceBufferDraw = EffectsActive;
+            }, Save);
 
             // --- Landing page: master switch, a one-click look preset, and links to each
             // effect's own page so the top level stays short instead of one giant scroll. ---
@@ -480,8 +515,16 @@ namespace SDVRadiance
                 {
                     if (Enum.TryParse<LookPreset>(v, out var p))
                     {
+                        // GMCM re-fires every option setter on save; only re-stamp the preset
+                        // when the dropdown actually changed, or it silently overwrites the
+                        // individual settings tuned on the other pages ("my settings reset").
+                        bool changed = p != _config.ActivePreset;
                         _config.ActivePreset = p;
-                        if (p != LookPreset.Custom) _config.ApplyPreset(p);
+                        if (changed && p != LookPreset.Custom)
+                        {
+                            this.Monitor.Log($"Preset applied via GMCM: {p}", LogLevel.Debug);
+                            _config.ApplyPreset(p);
+                        }
                         ForceBufferDraw = EffectsActive;
                     }
                 },
