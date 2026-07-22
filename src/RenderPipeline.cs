@@ -317,7 +317,11 @@ namespace SDVRadiance
                         _godRayUV = _godRayAmount < 0.02f ? luv : Vector2.Lerp(_godRayUV, luv, 0.1f);
                         _godRayRadiusUV = _godRayAmount < 0.02f ? lr : MathHelper.Lerp(_godRayRadiusUV, lr, 0.1f);
                     }
-                    _godRayAmount += ((hasLight ? 1f : 0f) - _godRayAmount) * 0.05f; // ~0.5s fade
+                    // Rain/snow: the overcast sky kills visible shafts — fade the rays out (and
+                    // back in when it clears). Eased through _godRayAmount so it never pops.
+                    bool overcast = outdoors && (Game1.isRaining || Game1.isSnowing || Game1.isLightning);
+                    float rayTarget = (hasLight && !overcast) ? 1f : 0f;
+                    _godRayAmount += (rayTarget - _godRayAmount) * 0.05f; // ~0.5s fade
                     if (_godRayAmount > 0.01f) { _lightUV = _godRayUV; stages.Add(_dGodRays); }
                 }
                 if (config.BloomEnabled && _bloom != null) stages.Add(_dBloom);

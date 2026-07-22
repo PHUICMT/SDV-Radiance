@@ -126,6 +126,7 @@ namespace SDVRadiance
         public float TiltShiftBottomRatio { get; set; } = 0.3f; // bottom blur amount (0 = none … 1 = up to middle)
         public float TiltShiftStrength { get; set; } = 0.9f;
         public float TiltShiftRadius { get; set; } = 0.85f;     // radial mode: size of the sharp circle around the player
+        public float TiltShiftFeather { get; set; } = 0.35f;    // softness of the sharp→blur edge (0 = crisp, 1 = very gradual)
 
         // --- Water + finishing ---
         public bool WaterEnabled { get; set; } = true;
@@ -215,6 +216,7 @@ namespace SDVRadiance
             CloudShadowSpeed = C(CloudShadowSpeed, 0f, 0.1f);
             TiltShiftStrength = C(TiltShiftStrength, 0f, 1f);
             TiltShiftRadius = C(TiltShiftRadius, 0.05f, 0.9f);
+            TiltShiftFeather = C(TiltShiftFeather, 0f, 1f);
             TiltShiftTopRatio = C(TiltShiftTopRatio, 0f, 1f);
             TiltShiftBottomRatio = C(TiltShiftBottomRatio, 0f, 1f);
             WaterStrength = C(WaterStrength, 0f, 2f);

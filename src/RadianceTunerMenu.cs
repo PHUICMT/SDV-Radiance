@@ -198,6 +198,7 @@ namespace SDVRadiance
                 v => _config.TiltShiftMode = v ? TiltShiftFocus.Radial : TiltShiftFocus.Bands));
             y += 44;
             _sliders.Add(new Slider(_t("tuner.tiltradius"), x, y, innerW, 0.05f, 0.9f, () => _config.TiltShiftRadius, v => _config.TiltShiftRadius = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.tiltfeather"), x, y, innerW, 0f, 1f, () => _config.TiltShiftFeather, v => _config.TiltShiftFeather = v)); y += 50;
             _sliders.Add(new Slider(_t("tuner.tiltstrength"), x, y, innerW, 0f, 1f, () => _config.TiltShiftStrength, v => _config.TiltShiftStrength = v)); y += 50;
             _sliders.Add(new Slider(_t("tuner.tilttop"), x, y, innerW, 0f, 1f, () => _config.TiltShiftTopRatio, v => _config.TiltShiftTopRatio = v)); y += 50;
             _sliders.Add(new Slider(_t("tuner.tiltbottom"), x, y, innerW, 0f, 1f, () => _config.TiltShiftBottomRatio, v => _config.TiltShiftBottomRatio = v)); y += 50;

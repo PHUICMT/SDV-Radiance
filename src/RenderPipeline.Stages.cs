@@ -63,6 +63,10 @@ namespace SDVRadiance
             P(fx, "Scale")?.SetValue(config.CloudShadowScale);
             P(fx, "Coverage")?.SetValue(config.CloudShadowCoverage);
             P(fx, "Count")?.SetValue(config.CloudShadowCount);
+            // Small maps: the cluster field spans <1 light/dark cycle across a tiny map, so the
+            // whole thing can fall in one dark bank (the "cutscene too dark" report). Boost the
+            // cluster frequency by how many times the map fits inside the viewport.
+            P(fx, "SmallMapBoost")?.SetValue(SmallMapCloudBoost());
             P(fx, "WorldOffset")?.SetValue(WorldOffset(dest.Width, dest.Height));
             P(fx, "NoiseTexture")?.SetValue(NoiseTex());
             fx.CurrentTechnique = fx.Techniques["Mask"];
@@ -85,6 +89,19 @@ namespace SDVRadiance
             P(fx, "ShadowTexture")?.SetValue(rtA);
             fx.CurrentTechnique = fx.Techniques["Composite"];
             DrawFull(sb, source, dest, fx);
+        }
+
+        /// <summary>How many times the current map fits inside the viewport (>=1), clamped.
+        /// 1 = map at least as big as the screen; higher = smaller map, more cloud banks.</summary>
+        private static float SmallMapCloudBoost()
+        {
+            var loc = Game1.currentLocation;
+            var layer = loc?.map?.Layers.Count > 0 ? loc.map.Layers[0] : null;
+            if (layer == null)
+                return 1f;
+            float mapW = Math.Max(1, layer.LayerWidth), mapH = Math.Max(1, layer.LayerHeight);
+            float vpW = Game1.viewport.Width / 64f, vpH = Game1.viewport.Height / 64f;
+            return MathHelper.Clamp(Math.Max(vpW / mapW, vpH / mapH), 1f, 4f);
         }
 
         private void RenderGodRays(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
@@ -281,6 +298,7 @@ namespace SDVRadiance
             P(fx, "Center")?.SetValue(PlayerScreenUV());
             P(fx, "Aspect")?.SetValue(dest.Height > 0 ? dest.Width / (float)dest.Height : 1f);
             P(fx, "RadRadius")?.SetValue(MathHelper.Clamp(config.TiltShiftRadius, 0.05f, 0.9f));
+            P(fx, "Feather")?.SetValue(MathHelper.Clamp(config.TiltShiftFeather, 0f, 1f));
             P(fx, "BlurTexture")?.SetValue(rtB);
             fx.CurrentTechnique = fx.Techniques["Composite"];
             DrawFull(sb, source, dest, fx);
@@ -495,6 +513,34 @@ namespace SDVRadiance
             DrawFull(sb, source, dest, fx);
         }
 
+        /// <summary>A light hovering right above a character's head is almost certainly a
+        /// speech-bubble / emote light some mods add (e.g. The Muttering Farmer), not an
+        /// environmental light — those shouldn't spawn god rays. Cheap per-character test.</summary>
+        private static bool IsCharacterBubble(GameLocation? loc, Vector2 worldPos)
+        {
+            if (loc == null)
+                return false;
+            foreach (NPC c in loc.characters)
+            {
+                if (c == null)
+                    continue;
+                Rectangle box = c.GetBoundingBox();
+                // above the head (roughly one-to-three tiles up), horizontally centred on them
+                if (Math.Abs(worldPos.X - box.Center.X) < 40f
+                    && worldPos.Y > box.Top - 160f && worldPos.Y < box.Top + 24f)
+                    return true;
+            }
+            var p = Game1.player;
+            if (p != null)
+            {
+                Rectangle box = p.GetBoundingBox();
+                if (Math.Abs(worldPos.X - box.Center.X) < 40f
+                    && worldPos.Y > box.Top - 160f && worldPos.Y < box.Top + 24f)
+                    return true;
+            }
+            return false;
+        }
+
         /// <summary>Screen-UV + UV-radius of the largest-radius real light source currently on screen, if any.</summary>
         private static bool TryGetLightUV(out Vector2 uv, out float radiusUV)
         {
@@ -504,6 +550,7 @@ namespace SDVRadiance
             if (lights == null || lights.Count == 0)
                 return false;
 
+            GameLocation? loc = Game1.currentLocation;
             int vw = Math.Max(1, Game1.viewport.Width);
             int vh = Math.Max(1, Game1.viewport.Height);
             float best = -1f;
@@ -511,6 +558,8 @@ namespace SDVRadiance
             foreach (var kv in lights)
             {
                 LightSource ls = kv.Value;
+                if (IsCharacterBubble(loc, ls.position.Value))
+                    continue; // speech-bubble / emote light — not an environmental ray source
                 Vector2 local = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
                 float u = local.X / vw;
                 float v = local.Y / vh;

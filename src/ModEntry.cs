@@ -676,6 +676,8 @@ namespace SDVRadiance
                 () => I18n("config.tiltshift.strength.name"), null, 0f, 1f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.TiltShiftRadius, v => _config.TiltShiftRadius = v,
                 () => I18n("config.tiltshift.radius.name"), () => I18n("config.tiltshift.radius.tooltip"), 0.05f, 0.9f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.TiltShiftFeather, v => _config.TiltShiftFeather = v,
+                () => I18n("config.tiltshift.feather.name"), () => I18n("config.tiltshift.feather.tooltip"), 0f, 1f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.TiltShiftTopRatio, v => _config.TiltShiftTopRatio = v,
                 () => I18n("config.tiltshift.top.name"), null, 0f, 1f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.TiltShiftBottomRatio, v => _config.TiltShiftBottomRatio = v,
