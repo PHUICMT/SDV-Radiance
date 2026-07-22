@@ -252,6 +252,7 @@ namespace SDVRadiance
             // The 10 s safety refresh only exists to pick up rare map mutations (a bridge
             // built, ice melting); everything routine invalidates via location/origin keys.
             if (_waterMask != null && loc == _lastWaterLoc && startTileX == _lastWaterTx && startTileY == _lastWaterTy
+                && _lastWaterHookVer == WaterDrawHook.Version
                 && _waterMask.Width == tilesW * 16 && Game1.ticks - _lastWaterTick < 600)
             {
                 _waterTilesPerScreen = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
@@ -263,6 +264,7 @@ namespace SDVRadiance
             _lastWaterTx = startTileX;
             _lastWaterTy = startTileY;
             _lastWaterTick = Game1.ticks;
+            _lastWaterHookVer = WaterDrawHook.Version;
 
             // Height Framework (when present) classifies the actual water SURFACE: ponds and
             // beach tide pools count as water (they reflect too), while pier/bridge DECKS over
@@ -282,6 +284,12 @@ namespace SDVRadiance
                     // Walkable shallow pools (island dig site tide pools) aren't Water tiles,
                     // but they refill the watering can → "WaterSource" marks them as real water.
                     if (!water && loc.doesTileHaveProperty(tx, ty, "WaterSource", "Back") != null)
+                        water = true;
+                    // Draw-call truth: the game DREW water here but the tile data doesn't know it
+                    // (a location/mod with custom drawWater logic). Only when isWaterTile is false —
+                    // isWaterTile-true tiles keep their pipeline above, so HF's deck-over-water veto
+                    // is never overridden by the hook.
+                    if (!water && !loc.isWaterTile(tx, ty) && WaterDrawHook.WasDrawn(loc, tx, ty))
                         water = true;
                     if (water) any = true;
                     _waterBoolBuf[j * tilesW + i] = water;

@@ -17,6 +17,7 @@ namespace SDVRadiance
     public sealed class ModEntry : Mod
     {
         private ModConfig _config = new();
+        private Harmony? _harmony;
         private RenderPipeline? _pipeline;
         private ShadowRenderer? _shadows;
         private readonly CameraSmoother _camera = new();
@@ -144,6 +145,7 @@ namespace SDVRadiance
             SMonitor = this.Monitor;
             ForceBufferDraw = EffectsActive;
             FreezeGameWater = _config.Enabled && _config.WaterEnabled;
+            WaterDrawHook.Enabled = _config.Enabled && (_config.WaterEnabled || _config.WaterReflection);
 
             helper.Events.GameLoop.GameLaunched += OnGameLaunched;
             helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
@@ -161,7 +163,7 @@ namespace SDVRadiance
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
             helper.Events.Display.RenderingStep += OnRenderingStep;
 
-            var harmony = new Harmony(this.ModManifest.UniqueID);
+            var harmony = _harmony = new Harmony(this.ModManifest.UniqueID);
             harmony.Patch(
                 original: AccessTools.Method(typeof(Game1), nameof(Game1.ShouldDrawOnBuffer)),
                 postfix: new HarmonyMethod(typeof(ModEntry), nameof(ShouldDrawOnBuffer_Postfix)));
@@ -269,6 +271,7 @@ namespace SDVRadiance
         {
             ForceBufferDraw = EffectsActive; // self-heal: keep the postfix in sync with live config
             FreezeGameWater = _config.Enabled && _config.WaterEnabled;
+            WaterDrawHook.Enabled = _config.Enabled && (_config.WaterEnabled || _config.WaterReflection);
             if (!EffectsActive)
                 return;
             Pipeline.Apply(e.SpriteBatch, _config);
@@ -438,7 +441,7 @@ namespace SDVRadiance
             var t = Game1.player.TilePoint;
             this.Monitor.Log($"=== Tile ({t.X},{t.Y}) in {loc?.NameOrUniqueName} ===", LogLevel.Info);
             if (loc == null) return;
-            this.Monitor.Log($"isWaterTile={loc.isWaterTile(t.X, t.Y)}", LogLevel.Info);
+            this.Monitor.Log($"isWaterTile={loc.isWaterTile(t.X, t.Y)} drawnWater={WaterDrawHook.WasDrawn(loc, t.X, t.Y)} (hook v{WaterDrawHook.Version})", LogLevel.Info);
             foreach (string prop in new[] { "Water", "WaterSource", "Passable", "Type" })
                 foreach (string layer in new[] { "Back", "Buildings" })
                 {
@@ -499,6 +502,10 @@ namespace SDVRadiance
             this.Monitor.Log(height != null
                 ? "Height Framework detected — using it for water/ledge shadow suppression."
                 : "Height Framework not installed — using built-in tile heuristics for shadows.", LogLevel.Info);
+
+            // Draw-call-accurate water discovery: patch drawWaterTile on GameLocation AND every
+            // loaded override (mod location classes included) — hence GameLaunched, not Entry.
+            WaterDrawHook.Install(_harmony!, this.Monitor);
         }
 
         private void RegisterGmcm()

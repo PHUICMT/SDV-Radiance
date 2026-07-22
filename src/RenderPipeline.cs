@@ -68,6 +68,7 @@ namespace SDVRadiance
         private bool[]? _puddlePixBits;        // per-pixel: came from the puddle classifier (softer effects)
         private int _occTx = int.MinValue, _occTy = int.MinValue, _occTick = int.MinValue;
         private int _lastWaterTx = int.MinValue, _lastWaterTy = int.MinValue, _lastWaterTick = int.MinValue;
+        private int _lastWaterHookVer = -1;
         private GameLocation? _lastWaterLoc;
         private bool _waterAny;
         private readonly Vector4[] _lightArr = new Vector4[8];   // on-screen lights → water glimmer
