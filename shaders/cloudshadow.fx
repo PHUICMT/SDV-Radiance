@@ -109,6 +109,8 @@ float4 MaskPS(PixelInput input) : SV_TARGET
     // cluster cell, so the slider only slid the pattern instead of adding banks.)
     float clusterFreq = lerp(0.35, 1.6, saturate(Count)) / max(Scale, 0.001);
     float cm = tex2D(NoiseSampler, p * clusterFreq + 0.61).r;
+    // Genuinely clear spells between banks are intentional (real skies have them);
+    // they drift through in a few in-game hours.
     n *= smoothstep(0.42, 0.60, cm);
 
     // Coverage must read as AREA (more/fewer cloud patches), not a global dimmer. A narrow ramp
