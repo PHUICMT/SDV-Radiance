@@ -78,7 +78,7 @@ namespace SDVRadiance
             Pass(sb, rtB, rtA, fx);
 
             // Pass 4: composite the blurred shadow onto the scene.
-            P(fx, "Opacity")?.SetValue(config.CloudShadowOpacity * _cloudDayFactor);
+            P(fx, "Opacity")?.SetValue(config.CloudShadowOpacity * _cloudDayFactor * _fadeCloud);
             // Day: clouds shade EVERYTHING (white eyes/flowers included — the sun is the
             // light). Night: near-white lamp/fire cores resist the moon-cloud shadow.
             P(fx, "LightProtect")?.SetValue(NightFactorNow());
@@ -276,7 +276,7 @@ namespace SDVRadiance
             // bottom blur pulls BottomEdge up.
             P(fx, "TopEdge")?.SetValue(MathHelper.Clamp(config.TiltShiftTopRatio, 0f, 1f) * 0.5f);
             P(fx, "BottomEdge")?.SetValue(1f - MathHelper.Clamp(config.TiltShiftBottomRatio, 0f, 1f) * 0.5f);
-            P(fx, "Strength")?.SetValue(config.TiltShiftStrength);
+            P(fx, "Strength")?.SetValue(config.TiltShiftStrength * _fadeTilt);
             P(fx, "Mode")?.SetValue(config.TiltShiftMode == TiltShiftFocus.Radial ? 1f : 0f);
             P(fx, "Center")?.SetValue(PlayerScreenUV());
             P(fx, "Aspect")?.SetValue(dest.Height > 0 ? dest.Width / (float)dest.Height : 1f);
@@ -322,7 +322,7 @@ namespace SDVRadiance
             P(fx, "WorldTileOffset")?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
             P(fx, "MapOrigin")?.SetValue(_flood.Origin);
             P(fx, "MapSize")?.SetValue(_flood.MapSize);
-            P(fx, "Strength")?.SetValue(MathHelper.Clamp(config.FloodLightingStrength, 0f, 1f));
+            P(fx, "Strength")?.SetValue(MathHelper.Clamp(config.FloodLightingStrength, 0f, 1f) * _fadeFlood);
             P(fx, "AmbientFloor")?.SetValue(0.10f);
 
             // Direct pools with per-light shadows: the brightest 8 on-screen lights (from
@@ -357,13 +357,13 @@ namespace SDVRadiance
             ComputeWaterDynamics(out float strengthMul, out float speedMul, out float sparkleMul);
             // The stage can run for the REFLECTION alone (shimmer toggled off): ripple,
             // sparkle, tint and rim all zero out; the mirror keeps working independently.
-            float shimmer = config.WaterEnabled ? 1f : 0f;
+            float shimmer = (config.WaterEnabled ? 1f : 0f) * _fadeWater;   // presence fade: never pops in
             P(fx, "Time")?.SetValue(Time());
             P(fx, "Strength")?.SetValue(config.WaterStrength * strengthMul * shimmer);
             P(fx, "Speed")?.SetValue(config.WaterSpeed * speedMul);
             P(fx, "Sparkle")?.SetValue(config.WaterSparkle * sparkleMul * shimmer);
             P(fx, "TintAmt")?.SetValue(0.35f * shimmer);
-            P(fx, "ReflectStrength")?.SetValue(config.WaterReflection ? config.WaterReflectStrength : 0f);
+            P(fx, "ReflectStrength")?.SetValue((config.WaterReflection ? config.WaterReflectStrength : 0f) * _fadeWater);
             // Per-frame sprite exclusion mask (ducks, NPCs, critters on the water).
             P(fx, "SpriteMaskOn")?.SetValue(SpriteMaskReady && _spriteMaskRT != null ? 1f : 0f);
             P(fx, "SpriteMaskTexture")?.SetValue(_spriteMaskRT);
@@ -469,7 +469,8 @@ namespace SDVRadiance
         private void RenderLighting(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var fx = _lighting!;
-            P(fx, "AmbientColor")?.SetValue(ComputeLightingAmbient(config));
+            // Presence fade: ambient darkening eases in from "no change" (white) on appearance.
+            P(fx, "AmbientColor")?.SetValue(Vector3.Lerp(Vector3.One, ComputeLightingAmbient(config), _fadeLighting));
             P(fx, "Aspect")?.SetValue(dest.Height > 0 ? dest.Width / (float)dest.Height : 1f);
             P(fx, "LightPos")?.SetValue(_lightPos);
             P(fx, "LightData")?.SetValue(_lightData);
@@ -478,7 +479,7 @@ namespace SDVRadiance
             // Occluder shadows: only when enabled AND a mask was built this frame.
             if (_shadowsReady && _occluderMask != null)
             {
-                P(fx, "ShadowStrength")?.SetValue(MathHelper.Clamp(config.LightingShadowStrength, 0f, 1f));
+                P(fx, "ShadowStrength")?.SetValue(MathHelper.Clamp(config.LightingShadowStrength, 0f, 1f) * _fadeLighting);
                 P(fx, "OccluderTexture")?.SetValue(_occluderMask);
                 P(fx, "OccTilesPerScreen")?.SetValue(_occTilesPerScreen);
                 P(fx, "OccWorldTileOffset")?.SetValue(_occWorldTileOffset);

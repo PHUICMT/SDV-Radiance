@@ -69,6 +69,13 @@ namespace SDVRadiance
         private int _occTx = int.MinValue, _occTy = int.MinValue, _occTick = int.MinValue;
         private int _lastWaterTx = int.MinValue, _lastWaterTy = int.MinValue, _lastWaterTick = int.MinValue;
         private int _lastWaterHookVer = -1;
+
+        // Presence fades (0..1): stages ease IN when they (re)appear instead of popping.
+        private GameLocation? _fadeLoc;
+        private float _fadeWater, _fadeCloud, _fadeLighting, _fadeFlood, _fadeTilt;
+
+        /// <summary>One ease-in step (~0.5 s to full at 60 fps).</summary>
+        private static float Ease01(float v) => v >= 0.999f ? 1f : Math.Min(1f, v + (1f - v) * 0.10f);
         private GameLocation? _lastWaterLoc;
         private bool _waterAny;
         private readonly Vector4[] _lightArr = new Vector4[8];   // on-screen lights → water glimmer
@@ -239,6 +246,16 @@ namespace SDVRadiance
                 // the last stage writes straight back into the game's target.
                 bool outdoors = Game1.currentLocation?.IsOutdoors ?? false;
 
+                // PRESENCE fades: any stage that (re)appears mid-play — a warp, water coming
+                // on screen, stepping outdoors, a cutscene ending — eases in over ~0.5 s
+                // instead of popping. A stage that is OFF this frame resets to 0 so its next
+                // appearance fades again. (God rays and fog have their own eases already.)
+                if (!ReferenceEquals(Game1.currentLocation, _fadeLoc))
+                {
+                    _fadeLoc = Game1.currentLocation;
+                    _fadeWater = _fadeCloud = _fadeLighting = _fadeFlood = _fadeTilt = 0f;
+                }
+
                 // Reused list + cached delegates: method-group conversion allocates a new
                 // delegate per call, which at 60fps × up to 9 stages is constant GC churn.
                 var stages = _stages;
@@ -255,24 +272,39 @@ namespace SDVRadiance
                     BuildLightList(w, h, config);       // direct-light pools (shader term)
                     _floodOccReady = TimedBuild(config, 1, () => BuildFloodOccluders(w, h));
                     stages.Add(_dFlood);
+                    _fadeFlood = Ease01(_fadeFlood); _fadeLighting = 0f;
                 }
                 else if (config.LightingEnabled && _lighting != null && BuildLightList(w, h, config))
                 {
                     _shadowsReady = config.LightingShadows && TimedBuild(config, 2, () => BuildOccluderMask(w, h));
                     stages.Add(_dLighting);
+                    _fadeLighting = Ease01(_fadeLighting); _fadeFlood = 0f;
                 }
+                else
+                    _fadeFlood = _fadeLighting = 0f;
                 // Water ripple first (only if the current location actually has visible
                 // water tiles), so everything downstream sees the refracted result.
                 // Reflection is independent of the shimmer toggle: either switch keeps
                 // the stage alive (the other's params are zeroed inside RenderWater).
-                if ((config.WaterEnabled || config.WaterReflection) && _water != null && TimedBuild(config, 3, () => BuildWaterMask(w, h))) stages.Add(_dWater);
+                if ((config.WaterEnabled || config.WaterReflection) && _water != null && TimedBuild(config, 3, () => BuildWaterMask(w, h)))
+                {
+                    stages.Add(_dWater);
+                    _fadeWater = Ease01(_fadeWater);
+                }
+                else
+                    _fadeWater = 0f;
                 // Cloud shadows drift over the ground — outdoors only, and first so later
                 // effects (bloom/grade) see the shadowed scene. They are SUNLIGHT (or moonlight)
                 // being blocked, so they fade with dusk and at night exist only under a bright
                 // moon — never stamped over lamp-lit ground on a dark night.
                 _cloudDayFactor = CloudDayFactor();
                 if (config.CloudShadowEnabled && _cloudShadow != null && outdoors && _cloudDayFactor > 0.02f)
+                {
                     stages.Add(_dCloud);
+                    _fadeCloud = Ease01(_fadeCloud);
+                }
+                else
+                    _fadeCloud = 0f;
                 // God rays only when there's a real light source on screen (lamp/torch/fire).
                 // Fade in/out (and glide the origin) so they never pop instantly when a
                 // light scrolls on/off screen.
@@ -307,7 +339,13 @@ namespace SDVRadiance
                 // world frame, and the bottom blur band smears it unreadable. Cutscenes keep
                 // the rest of the stack (grade/bloom/fog/clouds) for the cinematic look.
                 bool eventUp = Game1.eventUp || Game1.CurrentEvent != null;
-                if (config.TiltShiftEnabled && _tiltShift != null && !eventUp) stages.Add(_dTilt);
+                if (config.TiltShiftEnabled && _tiltShift != null && !eventUp)
+                {
+                    stages.Add(_dTilt);
+                    _fadeTilt = Ease01(_fadeTilt);   // also eases back in after a cutscene's skip
+                }
+                else
+                    _fadeTilt = 0f;
                 // Finishing (vignette + chromatic aberration): true camera-lens pass, last.
                 // (CA is zeroed inside during events — it fringes the SKIP button's text.)
                 if ((config.VignetteEnabled || config.ChromaticAberrationEnabled) && _finishing != null) stages.Add(_dFinish);
