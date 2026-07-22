@@ -221,6 +221,14 @@ namespace SDVRadiance
             }
 
             this.Monitor.Log("SDV-Radiance loaded (world post-processing via RenderedWorld).", LogLevel.Info);
+
+            // Local dev harness: src/DevMenu.local.cs is git-excluded, so it only exists on the
+            // author's machine; it additionally requires a dev.local.flag file in the mod folder.
+            // Reflection keeps this call harmless when neither is present (i.e. every release).
+            if (System.IO.File.Exists(System.IO.Path.Combine(helper.DirectoryPath, "dev.local.flag")))
+                Type.GetType("SDVRadiance.DevMenuLoader")
+                    ?.GetMethod("Init")
+                    ?.Invoke(null, new object[] { helper, this.Monitor, (Func<ModConfig>)(() => _config) });
         }
 
         private RenderPipeline Pipeline
