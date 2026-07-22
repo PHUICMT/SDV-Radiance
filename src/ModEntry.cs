@@ -542,15 +542,16 @@ namespace SDVRadiance
 
             api.AddParagraph(this.ModManifest, () => I18n("config.preset.hint"));
 
-            api.AddPageLink(this.ModManifest, "bloom", () => I18n("config.section.bloom"));
+            // Same order as the F6 tuner: tone first, then light/shadow, then ambience, lens last.
             api.AddPageLink(this.ModManifest, "colorgrade", () => I18n("config.section.colorgrade"));
+            api.AddPageLink(this.ModManifest, "bloom", () => I18n("config.section.bloom"));
+            api.AddPageLink(this.ModManifest, "shadows", () => I18n("config.section.shadows"));
+            api.AddPageLink(this.ModManifest, "lighting", () => I18n("config.section.lighting"));
             api.AddPageLink(this.ModManifest, "godrays", () => I18n("config.section.godrays"));
-            api.AddPageLink(this.ModManifest, "fog", () => I18n("config.section.fog"));
             api.AddPageLink(this.ModManifest, "cloudshadow", () => I18n("config.section.cloudshadow"));
+            api.AddPageLink(this.ModManifest, "fog", () => I18n("config.section.fog"));
             api.AddPageLink(this.ModManifest, "tiltshift", () => I18n("config.section.tiltshift"));
             api.AddPageLink(this.ModManifest, "finishing", () => I18n("config.section.finishing"));
-            api.AddPageLink(this.ModManifest, "lighting", () => I18n("config.section.lighting"));
-            api.AddPageLink(this.ModManifest, "shadows", () => I18n("config.section.shadows"));
             api.AddPageLink(this.ModManifest, "camera", () => I18n("config.section.camera"));
             api.AddPageLink(this.ModManifest, "misc", () => I18n("config.section.misc"));
 
@@ -622,14 +623,14 @@ namespace SDVRadiance
                 () => I18n("config.cloudshadow.hidevanilla.name"), () => I18n("config.cloudshadow.hidevanilla.tooltip"));
             api.AddBoolOption(this.ModManifest, () => _config.CloudShadowEnabled, v => _config.CloudShadowEnabled = v,
                 () => I18n("config.cloudshadow.enabled.name"), () => I18n("config.cloudshadow.enabled.tooltip"));
-            api.AddNumberOption(this.ModManifest, () => _config.CloudShadowOpacity, v => _config.CloudShadowOpacity = v,
-                () => I18n("config.cloudshadow.opacity.name"), null, 0f, 0.7f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.CloudShadowCoverage, v => _config.CloudShadowCoverage = v,
                 () => I18n("config.cloudshadow.coverage.name"), null, 0.1f, 0.9f, 0.05f);
-            api.AddNumberOption(this.ModManifest, () => _config.CloudShadowScale, v => _config.CloudShadowScale = v,
-                () => I18n("config.cloudshadow.scale.name"), null, 1f, 5f, 0.5f);
             api.AddNumberOption(this.ModManifest, () => _config.CloudShadowCount, v => _config.CloudShadowCount = v,
                 () => I18n("config.cloudshadow.count.name"), () => I18n("config.cloudshadow.count.tooltip"), 0f, 1f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.CloudShadowOpacity, v => _config.CloudShadowOpacity = v,
+                () => I18n("config.cloudshadow.opacity.name"), null, 0f, 0.7f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.CloudShadowScale, v => _config.CloudShadowScale = v,
+                () => I18n("config.cloudshadow.scale.name"), null, 1f, 5f, 0.5f);
             api.AddNumberOption(this.ModManifest, () => _config.CloudShadowSpeed, v => _config.CloudShadowSpeed = v,
                 () => I18n("config.cloudshadow.speed.name"), null, 0f, 0.1f, 0.005f);
 
