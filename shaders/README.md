@@ -9,8 +9,8 @@ and loaded at runtime. The compiled `.mgfxo` files are committed under
 | `bloom.fx` | bright-pass + gaussian blur + composite |
 | `colorgrade.fx` | tone mapping + palette by time / season / weather |
 | `godrays.fx` | light shafts from real in-world light sources |
-| `fog.fx` | screen-space volumetric fog |
-| `cloudshadow.fx` | animated cloud-shadow overlay |
+| `fog.fx` | wispy day fog + night mist (drifting layers of a CPU-baked tileable noise texture) |
+| `cloudshadow.fx` | drifting cloud-shadow banks (same baked noise texture as fog) |
 | `tiltshift.fx` | top/bottom or radial depth-of-field blur |
 | `water.fx` | water ripple, sparkle, and screen-space reflection |
 | `finishing.fx` | vignette + chromatic aberration |

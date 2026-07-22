@@ -38,8 +38,9 @@ sprites, outfit mods, and recolors work automatically — no per-mod patches.
 
 **Atmosphere & color**
 - God rays from real in-world light sources
-- Cloud shadows drifting across the ground
-- Bloom, volumetric fog, tilt-shift depth blur, vignette, chromatic aberration
+- Cloud shadows drifting across the ground — distinct fluffy-edged banks with count, coverage, size, and speed controls
+- Day fog and night mist — two separate wispy drifting effects, each with its own amount, intensity, and drift speed
+- Bloom, tilt-shift depth blur, vignette, chromatic aberration
 - Cinematic color grading with automatic mood by time / weather / season and metered auto-exposure
 
 **Controls**
