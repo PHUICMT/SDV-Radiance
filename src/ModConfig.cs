@@ -98,7 +98,11 @@ namespace SDVRadiance
         public bool FogNightMist { get; set; } = false;
         /// <summary>How thick the night-mist wisps get at deep night (0..1).</summary>
         public float FogNightMistDensity { get; set; } = 0.25f;
-        public float FogDensity { get; set; } = 0.13f;
+        public float FogDensity { get; set; } = 0.25f;   // wisp OPACITY (how strong each wisp tints)
+        /// <summary>How much of the frame the day-fog wisps occupy (amount, not opacity).</summary>
+        public float FogCoverage { get; set; } = 0.4f;
+        /// <summary>How much of the frame the night-mist wisps occupy.</summary>
+        public float FogNightMistCoverage { get; set; } = 0.4f;
         public float FogScale { get; set; } = 3.0f;
         public float FogSpeed { get; set; } = 0.02f;
         public float FogTopBias { get; set; } = 0.5f;
@@ -194,6 +198,8 @@ namespace SDVRadiance
             GodRaysDecay = C(GodRaysDecay, 0.5f, 0.99f);
             FogDensity = C(FogDensity, 0f, 1f);
             FogNightMistDensity = C(FogNightMistDensity, 0f, 1f);
+            FogCoverage = C(FogCoverage, 0f, 1f);
+            FogNightMistCoverage = C(FogNightMistCoverage, 0f, 1f);
             FogScale = C(FogScale, 1f, 8f);
             FogSpeed = C(FogSpeed, 0f, 0.1f);
             FogTopBias = C(FogTopBias, 0f, 1f);

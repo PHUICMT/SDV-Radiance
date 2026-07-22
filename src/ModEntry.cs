@@ -598,8 +598,10 @@ namespace SDVRadiance
             api.AddSectionTitle(this.ModManifest, () => I18n("config.fog.sectionday"));
             api.AddBoolOption(this.ModManifest, () => _config.FogEnabled, v => _config.FogEnabled = v,
                 () => I18n("config.fog.enabled.name"), () => I18n("config.fog.enabled.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.FogCoverage, v => _config.FogCoverage = v,
+                () => I18n("config.fog.coverage.name"), () => I18n("config.fog.coverage.tooltip"), 0f, 1f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.FogDensity, v => _config.FogDensity = v,
-                () => I18n("config.fog.density.name"), null, 0f, 1f, 0.05f);
+                () => I18n("config.fog.density.name"), () => I18n("config.fog.density.tooltip"), 0f, 1f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.FogScale, v => _config.FogScale = v,
                 () => I18n("config.fog.scale.name"), null, 1f, 8f, 0.5f);
             api.AddNumberOption(this.ModManifest, () => _config.FogSpeed, v => _config.FogSpeed = v,
@@ -607,8 +609,10 @@ namespace SDVRadiance
             api.AddSectionTitle(this.ModManifest, () => I18n("config.fog.sectionnight"));
             api.AddBoolOption(this.ModManifest, () => _config.FogNightMist, v => _config.FogNightMist = v,
                 () => I18n("config.fog.nightmist.name"), () => I18n("config.fog.nightmist.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.FogNightMistCoverage, v => _config.FogNightMistCoverage = v,
+                () => I18n("config.fog.nightmistcoverage.name"), () => I18n("config.fog.coverage.tooltip"), 0f, 1f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.FogNightMistDensity, v => _config.FogNightMistDensity = v,
-                () => I18n("config.fog.nightmistdensity.name"), null, 0f, 1f, 0.05f);
+                () => I18n("config.fog.nightmistdensity.name"), () => I18n("config.fog.density.tooltip"), 0f, 1f, 0.05f);
 
             // --- Cloud shadows (implemented) ---
             api.AddPage(this.ModManifest, "cloudshadow", () => I18n("config.section.cloudshadow"));

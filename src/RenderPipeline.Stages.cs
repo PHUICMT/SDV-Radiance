@@ -176,16 +176,18 @@ namespace SDVRadiance
         private void RenderFog(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var fx = _fog!;
-            // One shader pass renders the blend of two separate effects: DAY fog (even film,
-            // user's sliders) and NIGHT mist (sparse drifting wisps, Patchiness 1). The eased
-            // amounts crossfade over dusk, so params interpolate by the mist's share.
+            // One shader pass renders the blend of two separate effects: DAY fog and NIGHT
+            // mist. Both are the same sparse drifting-wisp look (Patchiness 1 — the author
+            // liked the night wisps and wants day fog to match); each keeps its own density
+            // slider, day also keeps its scale/speed sliders. Amounts crossfade over dusk.
             float total = _fogDayAmt + _fogMistAmt;
             float mistW = total > 0f ? _fogMistAmt / total : 0f;
             P(fx, "Time")?.SetValue(Time());
             P(fx, "Speed")?.SetValue(MathHelper.Lerp(config.FogSpeed, 0.035f, mistW));
             P(fx, "Scale")?.SetValue(MathHelper.Lerp(config.FogScale, 3.2f, mistW));
             P(fx, "Density")?.SetValue(total);
-            P(fx, "Patchiness")?.SetValue(mistW);
+            P(fx, "Patchiness")?.SetValue(1f);
+            P(fx, "Coverage")?.SetValue(MathHelper.Lerp(config.FogCoverage, config.FogNightMistCoverage, mistW));
             P(fx, "TopBias")?.SetValue(config.FogTopBias);
             P(fx, "FogColor")?.SetValue(FogColor());
             P(fx, "WorldOffset")?.SetValue(WorldOffset(dest.Width, dest.Height));
