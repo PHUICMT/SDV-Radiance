@@ -138,9 +138,15 @@ namespace SDVRadiance
         public float WaterReflectStrength { get; set; } = 0.71f;
         /// <summary>Apply the water effect inside building interiors (farmhouse, cabins, custom
         /// home mods). Off = skip it there — some house mods have decorative rivers/ponds inside
-        /// the user may not want rippling. Caves, mines, the sewer and other dungeons ALWAYS keep
-        /// their water regardless of this (that water is part of the level, not decoration).</summary>
+        /// the user may not want rippling. Real level water ALWAYS keeps the effect regardless of
+        /// this — caves, mines, the sewer, dungeons, and the bathhouse hot spring (see
+        /// RenderPipeline.HasLevelWater) — since that water is part of the level, not decoration.</summary>
         public bool WaterEffectIndoors { get; set; } = true;
+        /// <summary>Building interiors the player has individually opted OUT of the water effect,
+        /// by NameOrUniqueName. Toggled per-room from the F6 tuner. Lets a player kill decorative
+        /// water from one specific house/interior mod without turning it off everywhere. Only ever
+        /// consulted for gate-able interiors (outdoors and level water ignore it).</summary>
+        public List<string> WaterDisabledLocations { get; set; } = new();
 
         public bool VignetteEnabled { get; set; } = true;
         public float VignetteStrength { get; set; } = 0.25f;

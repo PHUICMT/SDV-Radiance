@@ -123,7 +123,10 @@ namespace SDVRadiance
                 return;
             _windowLoc = loc; _windowLabelVer = ver; _windowTiles.Clear();
             var layer = loc?.map?.Layers.Count > 0 ? loc.map.Layers[0] : null;
-            if (hf == null || layer == null)
+            // Windows are 100% label-driven: no labels loaded (version 0 = empty DB) means no window
+            // can exist, so skip the whole-map scan entirely. Without this we paid a w×h×3-layer scan
+            // on every location change even though it could never find anything.
+            if (hf == null || layer == null || ver == 0)
                 return;
             int w = layer.LayerWidth, h = layer.LayerHeight;
             for (int ty = 0; ty < h; ty++)

@@ -60,6 +60,15 @@ namespace SDVRadiance
         private int[]? _edgeSum;               // per-row prefix sums for the shoreline smoothing window
         private int[]? _edgeCnt;
         private Color[]? _artBuf;              // 16×16 scratch for tile-art reads
+        // Whole-tilesheet pixel cache. Reading each 16×16 tile with its own tex.GetData is a
+        // separate GPU→CPU readback (a pipeline flush ~1-3 ms EACH, regardless of the tiny size);
+        // walking into a fresh forest/town screen touched 100+ new tiles in one gather → a ~300 ms
+        // main-thread stall. Reading a sheet ONCE into a CPU array turns that into a single readback
+        // per sheet (a forest uses a handful), then every tile samples the array with zero GPU work.
+        // Huge sheets (> cap) fall back to per-region GetData so we never allocate a giant array.
+        private readonly System.Collections.Generic.Dictionary<Texture2D, Color[]?> _sheetPixCache = new();
+        private const int SheetPixCap = 8_000_000; // ~32 MB per sheet ceiling before falling back
+        private GameLocation? _prewarmedLoc;   // last location whose tilesheets we bulk-read back
         private readonly System.Collections.Generic.Dictionary<string, Texture2D?> _sheetTexCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle, bool), bool[]> _waterBitsCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), (bool[] bits, int count)> _solidBitsCache = new();
@@ -108,10 +117,11 @@ namespace SDVRadiance
             if (ms > _buildMax[idx]) _buildMax[idx] = ms;
             return r;
         }
-        /// <summary>True for cave/mine/sewer/dungeon-style interiors whose water is part of the
-        /// level, not decoration. These keep their water even when WaterEffectIndoors is off — the
-        /// toggle is meant for house/building interiors with decorative ponds, not the mines.</summary>
-        internal static bool IsDungeonWater(GameLocation? loc)
+        /// <summary>True for interiors whose water is part of the level itself, not decoration:
+        /// caves/mines/sewer/dungeons AND the bathhouse hot spring. These keep their water even
+        /// when WaterEffectIndoors is off — that toggle is meant for house/building interiors with
+        /// decorative ponds (custom home mods), not real level water like the mines or the spa.</summary>
+        internal static bool HasLevelWater(GameLocation? loc)
         {
             if (loc == null)
                 return false;
@@ -122,8 +132,22 @@ namespace SDVRadiance
             static bool Has(string s, string k) => s.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0;
             return Has(n, "Mine") || Has(n, "Cave") || Has(n, "Volcano") || Has(n, "Dungeon")
                 || Has(n, "Sewer") || Has(n, "Caldera") || Has(n, "Swamp") || Has(n, "BugLand")
-                || Has(n, "Submarine") || Has(n, "Tunnel") || Has(n, "Grotto") || Has(n, "Submarine")
+                || Has(n, "Submarine") || Has(n, "Tunnel") || Has(n, "Grotto")
+                // Bathhouse hot spring: real, wanted water inside an interior location.
+                || Has(n, "BathHouse") || Has(n, "Spa") || Has(n, "HotSpring") || Has(n, "Bath")
                 || Has(t, "Mine") || Has(t, "Volcano") || Has(t, "Dungeon");
+        }
+
+        /// <summary>Whether the water effect should run in this location. Outdoors and real level
+        /// water (see <see cref="HasLevelWater"/>) always qualify; building interiors qualify only
+        /// when the global indoor toggle is on AND the player hasn't opted this room out from the
+        /// tuner. Single source of truth shared by the render gate and the FreezeGameWater gate.</summary>
+        internal static bool WaterAllowedIn(GameLocation? loc, ModConfig config)
+        {
+            if (loc == null || loc.IsOutdoors || HasLevelWater(loc))
+                return true;
+            return config.WaterEffectIndoors
+                && !config.WaterDisabledLocations.Contains(loc.NameOrUniqueName);
         }
 
         private int _lastW = -1, _lastH = -1;
@@ -305,8 +329,7 @@ namespace SDVRadiance
                 // water tiles), so everything downstream sees the refracted result.
                 // Reflection is independent of the shimmer toggle: either switch keeps
                 // the stage alive (the other's params are zeroed inside RenderWater).
-                bool waterAllowedHere = config.WaterEffectIndoors || outdoors
-                    || IsDungeonWater(Game1.currentLocation);
+                bool waterAllowedHere = WaterAllowedIn(Game1.currentLocation, config);
                 if ((config.WaterEnabled || config.WaterReflection) && _water != null && waterAllowedHere
                     && TimedBuild(config, 3, () => BuildWaterMask(w, h)))
                 {

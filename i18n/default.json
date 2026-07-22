@@ -128,6 +128,8 @@
   "tuner.floodshadow": "Per-light shadow strength",
   "tuner.waterreflection": "Reflection",
   "tuner.waterreflectstrength": "Reflection strength",
+  "tuner.waterhere": "Water in this room",
+  "tuner.waterhere.always": "Water here: always on (outdoor / level water)",
 
   "tuner.section.finishing": "Finishing",
   "tuner.vignette": "Vignette",
@@ -174,7 +176,7 @@
   "config.water.reflection.tooltip": "Faintly mirror the scene just above the surface down onto the water for a wet, reflective sheen. Subtle by design. Experimental.",
   "config.water.reflectstrength.name": "Reflection strength",
   "config.water.indoors.name": "Water effect indoors",
-  "config.water.indoors.tooltip": "Apply the water effect inside building interiors (farmhouse, cabins, house mods). Turn off if a house/interior mod has decorative water you don't want rippling. Caves, mines and the sewer always keep their water.",
+  "config.water.indoors.tooltip": "Apply the water effect inside building interiors (farmhouse, cabins, house mods). Turn off if a house/interior mod has decorative water you don't want rippling. Real level water always keeps the effect: caves, mines, the sewer, and the bathhouse hot spring.",
   "config.vignette.enabled.name": "Enable vignette",
   "config.vignette.enabled.tooltip": "Darken the screen edges for a cinematic frame.",
   "config.vignette.strength.name": "Vignette strength",

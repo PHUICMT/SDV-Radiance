@@ -280,9 +280,7 @@ namespace SDVRadiance
             // Only freeze the game's own water frame-cycle where we actually render ripple this
             // frame — otherwise decorative indoor water (with the effect turned off there) would
             // sit frozen instead of playing its normal vanilla animation.
-            GameLocation? wloc = Game1.currentLocation;
-            bool waterHere = _config.WaterEffectIndoors || (wloc?.IsOutdoors ?? false)
-                || RenderPipeline.IsDungeonWater(wloc);
+            bool waterHere = RenderPipeline.WaterAllowedIn(Game1.currentLocation, _config);
             FreezeGameWater = _config.Enabled && _config.WaterEnabled && waterHere;
             WaterDrawHook.Enabled = _config.Enabled && (_config.WaterEnabled || _config.WaterReflection);
             if (!EffectsActive)

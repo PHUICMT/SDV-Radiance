@@ -190,6 +190,27 @@ namespace SDVRadiance
             y += 44;
             _sliders.Add(new Slider(_t("tuner.waterreflectstrength"), x, y, innerW, 0f, 1f, () => _config.WaterReflectStrength, v => _config.WaterReflectStrength = v)); y += 50;
 
+            // Per-room water switch: only offered in building interiors we actually gate (not
+            // outdoors, not real level water like the mines/hot spring). Lets the player kill
+            // decorative water from a single house/interior mod for THIS room, remembered by name.
+            GameLocation? here = Game1.currentLocation;
+            if (here != null && !here.IsOutdoors && !RenderPipeline.HasLevelWater(here))
+            {
+                string key = here.NameOrUniqueName;
+                _toggles.Add(new Toggle($"{_t("tuner.waterhere")} · {here.Name}", new Rectangle(x, y, innerW, 38),
+                    () => !_config.WaterDisabledLocations.Contains(key),
+                    v =>
+                    {
+                        if (v) _config.WaterDisabledLocations.Remove(key);
+                        else if (!_config.WaterDisabledLocations.Contains(key)) _config.WaterDisabledLocations.Add(key);
+                    }));
+                y += 44;
+            }
+            else
+            {
+                _sectionTitles.Add((_t("tuner.waterhere.always"), y)); y += 30;
+            }
+
             y += 30; _sectionTitles.Add((_t("tuner.section.tiltshift"), y - 28));
             _toggles.Add(new Toggle(_t("tuner.tiltshift"), new Rectangle(x, y, innerW, 38), () => _config.TiltShiftEnabled, v => _config.TiltShiftEnabled = v));
             y += 44;

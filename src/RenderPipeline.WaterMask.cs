@@ -84,6 +84,69 @@ namespace SDVRadiance
         /// foam). With <paramref name="foam"/> (animated tiles that touch core water — the surf
         /// line), bright unsaturated wash pixels count as water too: white wave foam fails every
         /// hue gate, which left dead un-effected bands along the tide line.</summary>
+        /// <summary>Whole-sheet pixel array for a tilesheet, read back once (main thread) and
+        /// cached. Returns null for over-cap sheets (caller falls back to per-region GetData) or
+        /// on failure. The single readback replaces one-per-tile readbacks (each a GPU stall).</summary>
+        private Color[]? EnsureSheetPixels(Texture2D tex)
+        {
+            if (_sheetPixCache.TryGetValue(tex, out Color[]? sheet))
+                return sheet;
+            if ((long)tex.Width * tex.Height <= SheetPixCap)
+            {
+                try { sheet = new Color[tex.Width * tex.Height]; tex.GetData(sheet); }
+                catch { sheet = null; }
+            }
+            _sheetPixCache[tex] = sheet; // null = over cap or failed → per-region fallback
+            return sheet;
+        }
+
+        /// <summary>Read back every tilesheet a location uses, once, on entry — so the first-touch
+        /// GPU readbacks all land in the (already synchronous, warp-fade-hidden) location change
+        /// instead of hitching mid-walk when you scroll into a region using a fresh sheet.</summary>
+        private void PrewarmSheetPixels(GameLocation loc)
+        {
+            if (ReferenceEquals(loc, _prewarmedLoc))
+                return;
+            _prewarmedLoc = loc;
+            var map = loc.map;
+            if (map == null)
+                return;
+            foreach (var ts in map.TileSheets)
+            {
+                if (!_sheetTexCache.TryGetValue(ts.ImageSource, out Texture2D? tex))
+                {
+                    try { tex = Game1.content.Load<Texture2D>(ts.ImageSource); }
+                    catch { tex = null; }
+                    _sheetTexCache[ts.ImageSource] = tex;
+                }
+                if (tex != null)
+                    EnsureSheetPixels(tex);
+            }
+        }
+
+        /// <summary>Fill <see cref="_artBuf"/> with a tile's 16×16 pixels. Reads from the cached
+        /// whole-sheet pixel array (no GPU work) when available, falling back to a per-region
+        /// <c>GetData</c> for over-cap sheets. Main-thread only (GPU readback on first sheet touch).</summary>
+        private void ReadTileArt(Texture2D tex, Rectangle src)
+        {
+            _artBuf ??= new Color[256];
+            Color[]? sheet = EnsureSheetPixels(tex);
+            if (sheet != null)
+            {
+                int tw = tex.Width;
+                for (int row = 0; row < 16; row++)
+                {
+                    int soff = (src.Y + row) * tw + src.X;
+                    if (soff < 0 || soff + 16 > sheet.Length) { Array.Clear(_artBuf, row * 16, 16); continue; }
+                    Array.Copy(sheet, soff, _artBuf, row * 16, 16);
+                }
+            }
+            else
+            {
+                try { tex.GetData(0, src, _artBuf, 0, 256); } catch { Array.Clear(_artBuf, 0, 256); }
+            }
+        }
+
         private bool[] ClassifyBits(Texture2D tex, Rectangle src, bool foam = false)
         {
             var key = (tex, src, foam);
@@ -93,7 +156,7 @@ namespace SDVRadiance
             _artBuf ??= new Color[256];
             try
             {
-                tex.GetData(0, src, _artBuf, 0, 256);
+                ReadTileArt(tex, src);
                 for (int p = 0; p < 256; p++)
                 {
                     Color c = _artBuf[p];
@@ -135,7 +198,7 @@ namespace SDVRadiance
             _artBuf ??= new Color[256];
             try
             {
-                tex.GetData(0, src, _artBuf, 0, 256);
+                ReadTileArt(tex, src);
                 for (int p = 0; p < 256; p++)
                 {
                     Color c = _artBuf[p];
@@ -183,7 +246,7 @@ namespace SDVRadiance
             _artBuf ??= new Color[256];
             try
             {
-                tex.GetData(0, src, _artBuf, 0, 256);
+                ReadTileArt(tex, src);
                 for (int p = 0; p < 256; p++)
                 {
                     if (bits[p] = _artBuf[p].A >= 128)
@@ -238,6 +301,10 @@ namespace SDVRadiance
             GameLocation? loc = Game1.currentLocation;
             if (loc == null)
                 return false;
+
+            // Bulk-read this location's tilesheets on entry, so every first-touch GPU readback
+            // lands here (during the fade-covered location change) rather than hitching mid-walk.
+            PrewarmSheetPixels(loc);
 
             int vx = Game1.viewport.X;
             int vy = Game1.viewport.Y;
