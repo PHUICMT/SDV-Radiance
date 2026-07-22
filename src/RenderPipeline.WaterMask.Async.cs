@@ -36,6 +36,7 @@ namespace SDVRadiance
             public bool AnyWater;              // gather: any true water tile
             public bool AnyAnim;               // gather: any anim-nominated tile
             public bool WaterAny;              // compose: final any-water verdict
+            public double ComposeMs;           // worker-side timing (diag)
             public System.Threading.Tasks.Task? Task;
             public volatile bool Done;
             public volatile bool Failed;
@@ -111,6 +112,14 @@ namespace SDVRadiance
             var back = loc.map?.GetLayer("Back");
             var bld = loc.map?.GetLayer("Buildings");
             var front = loc.map?.GetLayer("Front");
+            // AlwaysFront* (incl. numeric suffixes some maps/mods add): roof peaks and other
+            // over-player art live here — the fish shop's roof sits on ocean tiles, and
+            // without carving these layers the water shimmered straight through it.
+            List<xTile.Layers.Layer>? always = null;
+            if (loc.map != null)
+                foreach (var l in loc.map.Layers)
+                    if (l.Id.StartsWith("AlwaysFront", StringComparison.Ordinal))
+                        (always ??= new()).Add(l);
             bool outdoors = loc.IsOutdoors;
 
             if (_tileBitsBuf == null || _tileBitsBuf.Length < count) _tileBitsBuf = new bool[]?[count];
@@ -203,11 +212,30 @@ namespace SDVRadiance
                     // Structure / carve inputs (Pass C + the land-connectivity test + arch fill).
                     bool hasFront = TryTileArt(front, tx, ty, out var t2, out var s2);
                     _tileHasBldBuf[idx] = hasBld;
-                    _tileHasFrontBuf[idx] = hasFront;
                     var cb = hasBld ? SolidBits(t1, s1) : default;
                     var cf = hasFront ? SolidBits(t2, s2) : default;
+                    bool[]? fBits = hasFront ? cf.bits : null;
+                    int fCount = cf.count;
+                    // Fold every AlwaysFront layer's opacity into the Front carve channel.
+                    if (always != null)
+                        foreach (var l in always)
+                            if (TryTileArt(l, tx, ty, out var t3, out var s3))
+                            {
+                                var ca = SolidBits(t3, s3);
+                                if (ca.count == 0)
+                                    continue;
+                                if (fBits == null) fBits = ca.bits;
+                                else
+                                {
+                                    var merged = new bool[256];
+                                    for (int p = 0; p < 256; p++) merged[p] = fBits[p] || ca.bits[p];
+                                    fBits = merged;
+                                }
+                                fCount = Math.Max(fCount, ca.count);
+                            }
+                    _tileHasFrontBuf[idx] = fBits != null;
                     _tileCarveBBuf[idx] = hasBld ? cb.bits : null;
-                    _tileCarveFBuf[idx] = hasFront ? cf.bits : null;
+                    _tileCarveFBuf[idx] = fBits;
                     // Height Framework DECK tiles (walkable piers / plank bridges — Back-layer
                     // wood) block as whole tiles too: the beach plank's art has a painted wet
                     // stain that classified as water, punching a 2-texel channel through the
@@ -217,7 +245,7 @@ namespace SDVRadiance
                     if (hf != null)
                         try { deck = hf.GetSurfaceAt(loc, tx, ty) == 4; } catch { hf = null; }
                     _tileDeckBuf[idx] = deck;
-                    _tileBigSolidBuf[idx] = deck || (hasBld && cb.count >= 230) || (hasFront && cf.count >= 230);
+                    _tileBigSolidBuf[idx] = deck || (hasBld && cb.count >= 230) || fCount >= 230;
                 }
             }
             job.AnyAnim = anyAnim;

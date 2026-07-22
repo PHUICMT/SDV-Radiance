@@ -70,11 +70,13 @@ namespace SDVRadiance
             if (c.A < 200)
                 return false;
             if (c.B > c.R + 14 && c.B + 10 >= c.G) return true;   // blue water
-            // Teal / shallow edge — measured against the real tilesheets (2026-07-21):
-            // the old loose gate (B > R+6) classified plain GRASS greens (avg 22,104,53 —
-            // 227 outdoor tiles' worth) and rippled bushes/meadows near rivers. Real water
-            // teal keeps B close to G (within 25) and clearly above R.
-            if (c.G > c.R + 10 && c.B > c.R + 12 && c.B >= c.G - 25) return true;
+            // Teal / shallow edge — measured against the real tilesheets (2026-07-21, re-measured
+            // 2026-07-22): the old loose gate (B > R+6) classified plain GRASS greens and rippled
+            // meadows; at G-25 the DARK grass/fern strip tiles (summer avg (23,97,72), spring fern
+            // clumps — full 245-256px tiles) still passed at G-B exactly 23-25 and waved on land.
+            // Real teal water pixels sit at G-B ≤ 19 on every sheet (beach tide pools, pond edges);
+            // the 20-22 band is EMPTY, so G-20 splits them cleanly.
+            if (c.G > c.R + 10 && c.B > c.R + 12 && c.B >= c.G - 20) return true;
             return false;
         }
 
@@ -289,22 +291,29 @@ namespace SDVRadiance
                 return _waterAny;
             }
 
+            long g0 = System.Diagnostics.Stopwatch.GetTimestamp();
             var njob = GatherWaterMask(loc, startTileX, startTileY, tilesW, tilesH);
+            double gatherMs = (System.Diagnostics.Stopwatch.GetTimestamp() - g0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            if (gatherMs > 8)
+                _monitor.Log($"[diag] water gather={gatherMs:0.0}ms ({(loc == _lastWaterLoc ? "scroll" : "loc change")})", LogLevel.Debug);
 
-            // First sight of a location (or a resize): compose synchronously — there is no
-            // valid old mask to show behind a background build (warp frame; hitch invisible).
-            if (_waterMask == null || loc != _lastWaterLoc || _waterMask.Width != tilesW * 16)
-            {
-                ComposeWaterMask(njob);
-                ApplyWaterMask(njob);
-                return _waterAny;
-            }
+            // On a LOCATION change the old mask is another map's content — turn the stage
+            // off until the new compose lands (1-2 frames, hidden inside the warp fade).
+            // A same-map scroll/zoom keeps rendering the old mask: its content is
+            // world-anchored, so the old origin+size still map correctly.
+            if (loc != _lastWaterLoc || _waterMask == null)
+                _waterAny = false;
 
             njob.Task = System.Threading.Tasks.Task.Run(() =>
             {
+                long c0 = System.Diagnostics.Stopwatch.GetTimestamp();
                 try { ComposeWaterMask(njob); }
                 catch { njob.Failed = true; }
-                finally { njob.Done = true; }
+                finally
+                {
+                    njob.ComposeMs = (System.Diagnostics.Stopwatch.GetTimestamp() - c0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                    njob.Done = true;
+                }
             });
             _waterJob = njob;
             return _waterAny;   // old mask renders this frame; the swap lands when compose does
@@ -377,6 +386,47 @@ namespace SDVRadiance
                         Vector2 tl = Game1.GlobalToLocal(Game1.viewport, cr.position + new Vector2(-32f, -64f));
                         sb.Draw(cr.sprite.Texture, tl, cr.sprite.SourceRect, Color.White,
                             0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
+                    }
+                }
+
+                // Tree/bush canopies overhanging a pond are SPRITES (terrain features), not
+                // map art — Pass C can't carve them, so leaves at the water's edge rippled.
+                // Stamp them with the same geometry the shadow baker uses. Cheap screen cull:
+                // canopies reach ~±3 tiles from their anchor tile.
+                Rectangle cull = new(Game1.viewport.X - 256, Game1.viewport.Y - 512, Game1.viewport.Width + 512, Game1.viewport.Height + 768);
+                foreach (var pair in loc.terrainFeatures.Pairs)
+                {
+                    var tf = pair.Value;
+                    var tile = pair.Key;
+                    if (!cull.Contains((int)tile.X * 64, (int)tile.Y * 64))
+                        continue;
+                    switch (tf)
+                    {
+                        // Grown tree: canopy (0,0,48,96) at tile*64+(32,64), origin (24,96) — Tree.draw's math.
+                        case StardewValley.TerrainFeatures.Tree tree when tree.growthStage.Value >= 5 && !tree.stump.Value && tree.texture?.Value != null:
+                            sb.Draw(tree.texture.Value,
+                                Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
+                                StardewValley.TerrainFeatures.Tree.treeTopSourceRect, Color.White, 0f, new Vector2(24f, 96f), 4f,
+                                tree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
+                            break;
+                        // Mature fruit tree: 48x64 seasonal foliage at tile*64+(32,64), origin (24,80).
+                        case StardewValley.TerrainFeatures.FruitTree ft when ft.growthStage.Value >= 4 && !ft.stump.Value && ft.texture != null:
+                            int season = Game1.GetSeasonIndexForLocation(ft.Location);
+                            var fsrc = new Rectangle((12 + season * 3) * 16, ft.GetSpriteRowNumber() * 5 * 16, 48, 64);
+                            sb.Draw(ft.texture,
+                                Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
+                                fsrc, Color.White, 0f, new Vector2(24f, 80f), 4f,
+                                ft.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
+                            break;
+                        // Bush: bottom-centre = (tile.X*64 + (eff+1)*32, (tile.Y+1)*64) — the shadow baker's anchor.
+                        case StardewValley.TerrainFeatures.Bush bush when !bush.sourceRect.Value.IsEmpty:
+                            var bsrc = bush.sourceRect.Value;
+                            int eff = bush.size.Value switch { 3 => 0, 4 => 1, _ => bush.size.Value };
+                            sb.Draw(StardewValley.TerrainFeatures.Bush.texture.Value,
+                                Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + (eff + 1) * 32f, (tile.Y + 1) * 64f)),
+                                bsrc, Color.White, 0f, new Vector2(bsrc.Width / 2f, bsrc.Height), 4f,
+                                bush.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
+                            break;
                     }
                 }
 
