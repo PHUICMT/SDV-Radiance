@@ -79,6 +79,15 @@ namespace SDVRadiance
                 }
             }
 
+            // LABELED WINDOWS (HF class 12): warm interior glow that fades in at night, added
+            // as extra light sources so the existing lighting/flood pipeline lights + occludes
+            // them like any lamp. Cached per location so the map scan runs once.
+            if (Game1.currentLocation != null)
+            {
+                EnsureWindowCache(Game1.currentLocation);
+                AddWindowLights(vw, vh, boost);
+            }
+
             // Run the stage if we have lights, or if we're darkening a flat interior
             // (so the room actually gets darker even with no lamps in view).
             bool darkening = ComputeLightingAmbient(config) != Vector3.One;
@@ -95,6 +104,65 @@ namespace SDVRadiance
             }
 
             return _lightCount > 0 || darkening;
+        }
+
+        // ---- labeled-window glow (HF class 12) ----
+        private GameLocation? _windowLoc;
+        private int _windowLabelVer = -1;
+        private readonly List<Vector2> _windowTiles = new();   // world-px centres of window tiles
+        private static readonly string[] _winLayers = { "Front", "Buildings", "Back" };
+
+        /// <summary>Scan the whole map ONCE per location (or when labels reload) for window
+        /// tiles, caching their world-pixel centres. Cheap enough as a one-off.</summary>
+        private void EnsureWindowCache(GameLocation loc)
+        {
+            var hf = ShadowRenderer.Height;
+            int ver = 0;
+            try { ver = hf?.GetLabelVersion() ?? 0; } catch { hf = null; }
+            if (ReferenceEquals(loc, _windowLoc) && ver == _windowLabelVer)
+                return;
+            _windowLoc = loc; _windowLabelVer = ver; _windowTiles.Clear();
+            var layer = loc?.map?.Layers.Count > 0 ? loc.map.Layers[0] : null;
+            if (hf == null || layer == null)
+                return;
+            int w = layer.LayerWidth, h = layer.LayerHeight;
+            for (int ty = 0; ty < h; ty++)
+                for (int tx = 0; tx < w; tx++)
+                {
+                    foreach (string ln in _winLayers)
+                    {
+                        byte[]? cls;
+                        try { cls = hf.GetPixelClasses(loc, tx, ty, ln); } catch { cls = null; }
+                        if (cls == null) continue;
+                        int n = 0;
+                        for (int p = 0; p < 256; p++) if (cls[p] == 12) n++;
+                        if (n >= 8) { _windowTiles.Add(new Vector2(tx * 64 + 32, ty * 64 + 32)); break; }
+                    }
+                }
+        }
+
+        /// <summary>Add on-screen window tiles as warm night lights (scaled by dusk factor).</summary>
+        private void AddWindowLights(int vw, int vh, float boost)
+        {
+            if (_windowTiles.Count == 0)
+                return;
+            float night = NightFactorNow();          // windows only glow once it gets dark
+            if (night < 0.02f)
+                return;
+            Vector3 warm = new Vector3(1.0f, 0.72f, 0.42f) * night * Math.Max(0.4f, boost);
+            float radiusUv = 190f / Math.Max(1, vh);
+            foreach (var wp in _windowTiles)
+            {
+                if (_lightCount >= MaxLights)
+                    break;
+                Vector2 local = Game1.GlobalToLocal(Game1.viewport, wp);
+                float u = local.X / vw, v = local.Y / vh;
+                if (u < -0.1f || u > 1.1f || v < -0.1f || v > 1.1f)
+                    continue;   // off-screen
+                _lightPos[_lightCount] = new Vector2(u, v);
+                _lightData[_lightCount] = new Vector4(warm, Math.Max(0.02f, radiusUv));
+                _lightCount++;
+            }
         }
 
         private bool _loggedLightDiag;
