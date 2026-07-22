@@ -459,14 +459,19 @@ namespace SDVRadiance
 
                 // Tree/bush canopies overhanging a pond are SPRITES (terrain features), not
                 // map art — Pass C can't carve them, so leaves at the water's edge rippled.
-                // Stamp them with the same geometry the shadow baker uses. Cheap screen cull:
-                // canopies reach ~±3 tiles from their anchor tile.
-                Rectangle cull = new(Game1.viewport.X - 256, Game1.viewport.Y - 512, Game1.viewport.Width + 512, Game1.viewport.Height + 768);
-                foreach (var pair in loc.terrainFeatures.Pairs)
+                // Stamp them with the same geometry the shadow baker uses. Walk only the on-screen
+                // tile range (+ a canopy margin) and look each tile up, instead of enumerating EVERY
+                // terrain feature every frame and culling — the old full walk was O(all crops/trees)
+                // per frame on a mature farm.
+                var vp = Game1.viewport;
+                var tfDict = loc.terrainFeatures;
+                int ctx0 = (int)Math.Floor((vp.X - 256) / 64f), ctx1 = (int)Math.Floor((vp.X + vp.Width + 256) / 64f);
+                int cty0 = (int)Math.Floor((vp.Y - 512) / 64f), cty1 = (int)Math.Floor((vp.Y + vp.Height + 768) / 64f);
+                for (int cvY = cty0; cvY <= cty1; cvY++)
+                for (int cvX = ctx0; cvX <= ctx1; cvX++)
                 {
-                    var tf = pair.Value;
-                    var tile = pair.Key;
-                    if (!cull.Contains((int)tile.X * 64, (int)tile.Y * 64))
+                    Vector2 tile = new(cvX, cvY);
+                    if (!tfDict.TryGetValue(tile, out var tf))
                         continue;
                     switch (tf)
                     {

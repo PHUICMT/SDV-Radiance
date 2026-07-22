@@ -513,31 +513,39 @@ namespace SDVRadiance
             DrawFull(sb, source, dest, fx);
         }
 
-        /// <summary>A light hovering right above a character's head is almost certainly a
-        /// speech-bubble / emote light some mods add (e.g. The Muttering Farmer), not an
-        /// environmental light — those shouldn't spawn god rays. Cheap per-character test.</summary>
-        private static bool IsCharacterBubble(GameLocation? loc, Vector2 worldPos)
+        /// <summary>Character head anchors (centreX, boxTop), refilled once per light query so the
+        /// bubble test below doesn't call GetBoundingBox() again for every (light × character) pair.</summary>
+        private static readonly System.Collections.Generic.List<(float cx, float top)> _bubbleAnchors = new();
+
+        private static void FillBubbleAnchors(GameLocation? loc)
         {
-            if (loc == null)
-                return false;
-            foreach (NPC c in loc.characters)
-            {
-                if (c == null)
-                    continue;
-                Rectangle box = c.GetBoundingBox();
-                // above the head (roughly one-to-three tiles up), horizontally centred on them
-                if (Math.Abs(worldPos.X - box.Center.X) < 40f
-                    && worldPos.Y > box.Top - 160f && worldPos.Y < box.Top + 24f)
-                    return true;
-            }
+            _bubbleAnchors.Clear();
+            if (loc != null)
+                foreach (NPC c in loc.characters)
+                {
+                    if (c == null)
+                        continue;
+                    Rectangle box = c.GetBoundingBox();
+                    _bubbleAnchors.Add((box.Center.X, box.Top));
+                }
             var p = Game1.player;
             if (p != null)
             {
                 Rectangle box = p.GetBoundingBox();
-                if (Math.Abs(worldPos.X - box.Center.X) < 40f
-                    && worldPos.Y > box.Top - 160f && worldPos.Y < box.Top + 24f)
-                    return true;
+                _bubbleAnchors.Add((box.Center.X, box.Top));
             }
+        }
+
+        /// <summary>A light hovering right above a character's head is almost certainly a
+        /// speech-bubble / emote light some mods add (e.g. The Muttering Farmer), not an
+        /// environmental light — those shouldn't spawn god rays. Tests against the anchors filled
+        /// by <see cref="FillBubbleAnchors"/> (no per-call GetBoundingBox()).</summary>
+        private static bool IsCharacterBubble(Vector2 worldPos)
+        {
+            foreach (var (cx, top) in _bubbleAnchors)
+                // above the head (roughly one-to-three tiles up), horizontally centred on them
+                if (Math.Abs(worldPos.X - cx) < 40f && worldPos.Y > top - 160f && worldPos.Y < top + 24f)
+                    return true;
             return false;
         }
 
@@ -554,11 +562,12 @@ namespace SDVRadiance
             int vw = Math.Max(1, Game1.viewport.Width);
             int vh = Math.Max(1, Game1.viewport.Height);
             float best = -1f;
+            FillBubbleAnchors(loc);   // once per query, not once per (light × character)
 
             foreach (var kv in lights)
             {
                 LightSource ls = kv.Value;
-                if (IsCharacterBubble(loc, ls.position.Value))
+                if (IsCharacterBubble(ls.position.Value))
                     continue; // speech-bubble / emote light — not an environmental ray source
                 Vector2 local = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
                 float u = local.X / vw;

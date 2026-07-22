@@ -258,6 +258,18 @@ namespace SDVRadiance
             int count = tilesW * tilesH;
             int lw = layer.LayerWidth, lh = layer.LayerHeight;
 
+            // Same tile-cross + 3-tick throttle as the flood occluder path (which had it; the classic
+            // path rebuilt the grid and re-uploaded the texture every single frame). Mode-gated so a
+            // flood↔classic config switch never reuses the other builder's mask content.
+            if (_occluderMask != null && _occMaskMode == 1 && startTileX == _occTx && startTileY == _occTy
+                && _occluderMask.Width == tilesW && _occluderMask.Height == tilesH && Game1.ticks - _occTick < 3)
+            {
+                _occTilesPerScreen = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
+                _occWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
+                _occMaskSize = new Vector2(tilesW, tilesH);
+                return true;
+            }
+
             if (_occluderMaskBuf == null || _occluderMaskBuf.Length < count)
                 _occluderMaskBuf = new Color[count];
 
@@ -282,6 +294,10 @@ namespace SDVRadiance
                 _occluderMask = new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color);
             }
             _occluderMask.SetData(_occluderMaskBuf, 0, count);
+            _occMaskMode = 1;
+            _occTx = startTileX;
+            _occTy = startTileY;
+            _occTick = Game1.ticks;
 
             _occTilesPerScreen = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
             _occWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
@@ -314,13 +330,14 @@ namespace SDVRadiance
             // Same throttle as the flood lightmap: ~900 cross-mod tile lookups per build is
             // real money, and the occluder grid only shifts when the view crosses a tile (the
             // 3-tick refresh keeps moving NPC stamps fresh enough for a soft shadow).
-            if (_occluderMask != null && startTileX == _occTx && startTileY == _occTy
+            if (_occluderMask != null && _occMaskMode == 2 && startTileX == _occTx && startTileY == _occTy
                 && _occluderMask.Width == tilesW && Game1.ticks - _occTick < 3)
             {
                 _occWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
                 _occMaskSize = new Vector2(tilesW, tilesH);
                 return true;
             }
+            _occMaskMode = 2;
             _occTx = startTileX;
             _occTy = startTileY;
             _occTick = Game1.ticks;

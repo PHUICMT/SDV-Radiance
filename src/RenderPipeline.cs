@@ -76,6 +76,7 @@ namespace SDVRadiance
         private byte[]? _puddleTileBuf;        // per-tile puddle level: 0 no, 1 weak (rocky variant), 2 strong
         private bool[]? _puddlePixBits;        // per-pixel: came from the puddle classifier (softer effects)
         private int _occTx = int.MinValue, _occTy = int.MinValue, _occTick = int.MinValue;
+        private int _occMaskMode;   // which builder last filled _occluderMask: 1 = classic, 2 = flood (they share it + the throttle, and are mutually exclusive per frame)
         private int _lastWaterTx = int.MinValue, _lastWaterTy = int.MinValue, _lastWaterTick = int.MinValue;
         private int _lastWaterHookVer = -1;
         private int _lastWaterLabelVer = -1;

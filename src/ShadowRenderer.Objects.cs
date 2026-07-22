@@ -121,12 +121,19 @@ namespace SDVRadiance
             int tx0 = vp.X / 64 - 3, tx1 = (vp.X + vp.Width) / 64 + 3;
             int ty0 = vp.Y / 64 - 3, ty1 = (vp.Y + vp.Height) / 64 + 8; // extra bottom margin for tall trees
 
-            foreach (var kv in loc.terrainFeatures.Pairs)
+            // Scan the ON-SCREEN tile range and look each tile up, instead of enumerating EVERY
+            // terrain feature in the location and culling per item: a mature farm has thousands of
+            // crops, so the old full walk was O(all crops) ×2 passes ×60 fps. terrainFeatures is a
+            // tile-keyed dictionary, so a viewport-bounded lookup is O(visible tiles) and flat as
+            // the farm fills in.
+            var tfDict = loc.terrainFeatures;
+            for (int ftY = ty0; ftY <= ty1; ftY++)
+            for (int ftX = tx0; ftX <= tx1; ftX++)
             {
-                Vector2 tile = kv.Key;
-                if (tile.X < tx0 || tile.X > tx1 || tile.Y < ty0 || tile.Y > ty1)
+                Vector2 tile = new(ftX, ftY);
+                if (!tfDict.TryGetValue(tile, out var tf))
                     continue;
-                switch (kv.Value)
+                switch (tf)
                 {
                     // Tall sprites swing away from their base under the full character lean
                     // (the canopy shadow detaches from the trunk) — damp the lean for them.
@@ -169,13 +176,14 @@ namespace SDVRadiance
                 DrawResourceClumpShadow(b, clump, rot, stretch, alpha, blur);
             }
 
-            foreach (var kv in loc.objects.Pairs)
+            // Same viewport-bounded lookup for placed objects (machines, fences, decor): objects is
+            // tile-keyed too, so we never walk the whole placed-object set to find the on-screen few.
+            var objDict = loc.objects;
+            for (int obY = ty0; obY <= ty1; obY++)
+            for (int obX = tx0; obX <= tx1; obX++)
             {
-                Vector2 tile = kv.Key;
-                if (tile.X < tx0 || tile.X > tx1 || tile.Y < ty0 || tile.Y > ty1)
-                    continue;
-                SObject o = kv.Value;
-                if (o == null || o.isTemporarilyInvisible)
+                Vector2 tile = new(obX, obY);
+                if (!objDict.TryGetValue(tile, out SObject o) || o == null || o.isTemporarilyInvisible)
                     continue;
                 if (o.bigCraftable.Value)
                 {
@@ -493,6 +501,24 @@ namespace SDVRadiance
         /// (sheet, rect) and cached — this is the "look at the actual image" prop test.</summary>
         private readonly System.Collections.Generic.Dictionary<(Texture2D tex, Rectangle src), float> _tileCovCache = new();
         private Color[] _covBuf = new Color[1024];
+        // Whole-tilesheet pixel cache: reading each prop tile with its own tex.GetData is a separate
+        // GPU readback (pipeline flush); walking into a prop-heavy screen fired a burst of them in one
+        // frame. Read each sheet back ONCE, then count coverage from the CPU array (zero GPU work).
+        private readonly System.Collections.Generic.Dictionary<Texture2D, Color[]?> _covSheetPix = new();
+        private const int CovSheetCap = 8_000_000; // ~32 MB ceiling before per-region fallback
+
+        private Color[]? CovSheetPixels(Texture2D tex)
+        {
+            if (_covSheetPix.TryGetValue(tex, out Color[]? px))
+                return px;
+            if ((long)tex.Width * tex.Height <= CovSheetCap)
+            {
+                try { px = new Color[tex.Width * tex.Height]; tex.GetData(px); }
+                catch { px = null; }
+            }
+            _covSheetPix[tex] = px;
+            return px;
+        }
 
         private float TileCoverage(Texture2D tex, Rectangle src)
         {
@@ -501,13 +527,27 @@ namespace SDVRadiance
             int len = src.Width * src.Height;
             if (len <= 0 || src.X < 0 || src.Y < 0 || src.Right > tex.Width || src.Bottom > tex.Height)
                 return _tileCovCache[(tex, src)] = 1f;
-            if (_covBuf.Length < len)
-                _covBuf = new Color[len];
-            try { tex.GetData(0, src, _covBuf, 0, len); }
-            catch { return _tileCovCache[(tex, src)] = 1f; }
             int solid = 0;
-            for (int i = 0; i < len; i++)
-                if (_covBuf[i].A > 48) solid++;
+            Color[]? sheet = CovSheetPixels(tex);
+            if (sheet != null)
+            {
+                int tw = tex.Width;
+                for (int row = 0; row < src.Height; row++)
+                {
+                    int soff = (src.Y + row) * tw + src.X;
+                    for (int c = 0; c < src.Width; c++)
+                        if (sheet[soff + c].A > 48) solid++;
+                }
+            }
+            else
+            {
+                if (_covBuf.Length < len)
+                    _covBuf = new Color[len];
+                try { tex.GetData(0, src, _covBuf, 0, len); }
+                catch { return _tileCovCache[(tex, src)] = 1f; }
+                for (int i = 0; i < len; i++)
+                    if (_covBuf[i].A > 48) solid++;
+            }
             return _tileCovCache[(tex, src)] = (float)solid / len;
         }
 
@@ -562,12 +602,7 @@ namespace SDVRadiance
         /// </summary>
         private void DrawGenericObjectShadow(SpriteBatch b, SObject o, Vector2 tile, float rot, float stretch, float alpha, float blur)
         {
-            var data = ItemRegistry.GetDataOrErrorItem(o.QualifiedItemId);
-            Texture2D tex = data.GetTexture();
-            if (tex == null)
-                return;
-            Rectangle src = data.GetSourceRect();
-            if (src.IsEmpty)
+            if (!TryItemArt(o.QualifiedItemId, out Texture2D tex, out Rectangle src) || src.IsEmpty)
                 return;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 6f));
             float depth = MathHelper.Clamp(((tile.Y + 1f) * 64f) / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
@@ -594,11 +629,8 @@ namespace SDVRadiance
         /// <summary>Small forage lying on the ground (16x16) — a short leaning silhouette to ground it.</summary>
         private void DrawSmallObjectShadow(SpriteBatch b, SObject o, Vector2 tile, float rot, float stretch, float alpha, float blur)
         {
-            var data = ItemRegistry.GetDataOrErrorItem(o.QualifiedItemId);
-            Texture2D tex = data.GetTexture();
-            if (tex == null)
+            if (!TryItemArt(o.QualifiedItemId, out Texture2D tex, out Rectangle src))
                 return;
-            Rectangle src = data.GetSourceRect();
             // Forage rests near the tile's bottom edge; small lift so the shadow base meets the item.
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 12f));
             float depth = MathHelper.Clamp(((tile.Y + 1f) * 64f) / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
@@ -624,11 +656,8 @@ namespace SDVRadiance
 
         private void DrawBigCraftableShadow(SpriteBatch b, SObject o, Vector2 tile, float rot, float stretch, float alpha, float blur)
         {
-            var data = ItemRegistry.GetDataOrErrorItem(o.QualifiedItemId);
-            Texture2D tex = data.GetTexture();
-            if (tex == null)
+            if (!TryItemArt(o.QualifiedItemId, out Texture2D tex, out Rectangle src))
                 return;
-            Rectangle src = data.GetSourceRect();
             // Big craftables sit ON their tile; the barrel/machine visually rests a bit above the
             // tile's bottom edge, so anchor the shadow's dark base slightly up from (tile.Y+1)*64.
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 20f));
@@ -671,9 +700,8 @@ namespace SDVRadiance
             Rectangle src = f.sourceRect.Value;
             if (src.IsEmpty)
                 return;
-            var data = ItemRegistry.GetDataOrErrorItem(f.QualifiedItemId);
-            Texture2D tex = data.GetTexture();
-            if (tex == null)
+            // Furniture keeps its own (animated) sourceRect; only the texture resolution is cached.
+            if (!TryItemArt(f.QualifiedItemId, out Texture2D tex, out _))
                 return;
             // Anchor at the footprint's bottom-centre (drawPosition is protected; the bounding
             // box bottom matches the sprite's ground line for floor furniture).
@@ -682,6 +710,28 @@ namespace SDVRadiance
             float depth = MathHelper.Clamp((box.Bottom - 8f) / 10000f - ShadowDepthBias, 0f, 1f);
             EmitObj(b, tex, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, stretch, depth, blur);
+        }
+
+        // ItemRegistry.GetDataOrErrorItem parses the qualified id and walks the item-data registry;
+        // doing it per on-screen object ×2 passes ×60fps is wasted work when the resolved sprite is
+        // static. Cache (texture, sourceRect) per QualifiedItemId, cleared when the season rolls over
+        // (a few items swap art by season).
+        private readonly System.Collections.Generic.Dictionary<string, (Texture2D? tex, Rectangle src)> _itemArtCache = new();
+        private string _itemArtSeason = "";
+
+        private bool TryItemArt(string qualifiedId, out Texture2D tex, out Rectangle src)
+        {
+            string season = Game1.currentSeason ?? "";
+            if (season != _itemArtSeason) { _itemArtCache.Clear(); _itemArtSeason = season; }
+            if (!_itemArtCache.TryGetValue(qualifiedId, out var e))
+            {
+                var data = ItemRegistry.GetDataOrErrorItem(qualifiedId);
+                e = (data.GetTexture(), data.GetSourceRect());
+                _itemArtCache[qualifiedId] = e;
+            }
+            tex = e.tex!;
+            src = e.src;
+            return e.tex != null;
         }
 
         // ContentManager.Load is cached but still does per-call path normalization + a
