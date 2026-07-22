@@ -93,12 +93,18 @@ float4 MaskPS(PixelInput input) : SV_TARGET
     float detail = fbm(p * 2.37 + float2(11.3, 5.9));
     n = n * 0.68 + detail * 0.32;
 
+    // The texture-blend field has a narrower value range than the old in-shader fbm —
+    // left as-is the threshold ramp spans most of it, so EVERYTHING goes half-cloudy
+    // (reads as global dimming). Re-expand the contrast so clear sky and cloud cores
+    // separate again.
+    n = saturate((n - 0.5) * 2.4 + 0.5);
+
     // Coverage must read as AREA (more/fewer cloud patches), not a global dimmer. A narrow ramp
     // keeps genuinely clear sky (cloud=0) next to genuinely shadowed patches (cloud=1); the
-    // separable Gaussian blur below is what softens the edges, so this can stay tight without
-    // bringing back a hard contour. Raising Coverage lowers the threshold → more area crosses it.
+    // separable Gaussian blur below is what softens the edges (fluffy penumbra), so this can
+    // stay tight without a hard contour. Raising Coverage lowers the threshold → more area.
     float edge = 1.0 - Coverage;
-    float cloud = smoothstep(edge - 0.22, edge + 0.22, n);
+    float cloud = smoothstep(edge - 0.10, edge + 0.10, n);
     // Roll the low end smoothly toward 0 so open sky reads clear (no faint all-over tint) WITHOUT
     // a hard clip — a sharp cutoff makes the low tail pop on/off at the half-res grid as the mask
     // drifts, which reads as flicker. A gamma curve clears the baseline yet stays continuous, so
