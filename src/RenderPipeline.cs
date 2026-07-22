@@ -82,6 +82,23 @@ namespace SDVRadiance
         private int _frames, _applied, _skipNoTarget, _sizeChanges;
         private readonly System.Diagnostics.Stopwatch _perfSw = new();
         private double _perfTotalMs, _perfMaxMs;
+        // Per-builder timings (DebugLogging only): the tile-crossing grid rebuilds are the
+        // prime stutter suspects, and their cost scales with the zoomed-out viewport.
+        private static readonly string[] _buildNames = { "flood", "floodOcc", "occ", "water" };
+        private readonly double[] _buildMs = new double[4];
+        private readonly double[] _buildMax = new double[4];
+
+        private bool TimedBuild(ModConfig config, int idx, Func<bool> fn)
+        {
+            if (!config.DebugLogging)
+                return fn();
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            bool r = fn();
+            double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            _buildMs[idx] += ms;
+            if (ms > _buildMax[idx]) _buildMax[idx] = ms;
+            return r;
+        }
         private int _lastW = -1, _lastH = -1;
         private Vector2 _lightUV; // screen-UV of the light source god rays emanate from (set per frame)
         private Vector2 _godRayUV; // eased light position so rays glide, not jump
@@ -232,20 +249,20 @@ namespace SDVRadiance
                 // Lighting first, so everything downstream (bloom/god rays/grade) sees the
                 // lit result. FLOOD lighting (occlusion-aware GI lightmap) supersedes the
                 // old screen-space lighting stage when enabled — they model the same thing.
-                if (config.FloodLightingEnabled && _floodFx != null && _flood.Build(_device, w, h, config))
+                if (config.FloodLightingEnabled && _floodFx != null && TimedBuild(config, 0, () => _flood.Build(_device, w, h, config)))
                 {
                     BuildLightList(w, h, config);       // direct-light pools (shader term)
-                    _floodOccReady = BuildFloodOccluders(w, h);
+                    _floodOccReady = TimedBuild(config, 1, () => BuildFloodOccluders(w, h));
                     stages.Add(_dFlood);
                 }
                 else if (config.LightingEnabled && _lighting != null && BuildLightList(w, h, config))
                 {
-                    _shadowsReady = config.LightingShadows && BuildOccluderMask(w, h);
+                    _shadowsReady = config.LightingShadows && TimedBuild(config, 2, () => BuildOccluderMask(w, h));
                     stages.Add(_dLighting);
                 }
                 // Water ripple first (only if the current location actually has visible
                 // water tiles), so everything downstream sees the refracted result.
-                if (config.WaterEnabled && _water != null && BuildWaterMask(w, h)) stages.Add(_dWater);
+                if (config.WaterEnabled && _water != null && TimedBuild(config, 3, () => BuildWaterMask(w, h))) stages.Add(_dWater);
                 // Cloud shadows drift over the ground — outdoors only, and first so later
                 // effects (bloom/grade) see the shadowed scene. They are SUNLIGHT (or moonlight)
                 // being blocked, so they fade with dusk and at night exist only under a bright
@@ -371,8 +388,15 @@ namespace SDVRadiance
         private void MaybeLogDiag(ModConfig config)
         {
             if (_frames < 120) return;
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < 4; i++)
+            {
+                if (_buildMs[i] <= 0.01) continue;
+                sb.Append($" {_buildNames[i]}={_buildMs[i]:0.0}ms(max {_buildMax[i]:0.0})");
+                _buildMs[i] = _buildMax[i] = 0;
+            }
             _monitor.Log($"[diag] over {_frames} frames: applied={_applied}, skipped={_skipNoTarget}, sizeChanges={_sizeChanges}, size={_lastW}x{_lastH}, "
-                + $"apply avg={(_applied > 0 ? _perfTotalMs / _applied : 0):0.00}ms max={_perfMaxMs:0.00}ms.", LogLevel.Debug);
+                + $"apply avg={(_applied > 0 ? _perfTotalMs / _applied : 0):0.00}ms max={_perfMaxMs:0.00}ms | builders:{(sb.Length > 0 ? sb.ToString() : " none")}", LogLevel.Debug);
             _frames = _applied = _skipNoTarget = _sizeChanges = 0;
             _perfTotalMs = _perfMaxMs = 0;
         }
