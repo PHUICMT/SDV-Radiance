@@ -152,6 +152,12 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float2 maskUV = (worldTile - MaskOrigin) / MaskSize;
     float tileWater = tex2D(MaskSampler, maskUV).r;
 
+    // Mask ALPHA = per-pixel ripple gate. 1 = normal water (ripple + sparkle); 0 = ICE
+    // (labeled frozen water) — a smooth still surface that still MIRRORS (the reflection
+    // path reads the G/march channel, unaffected) but never ripples or glints. Flowing
+    // water keeps alpha 1 and simply has no march channel, so it ripples without a mirror.
+    float rippleGate = tex2D(MaskSampler, maskUV).a;
+
     float4 src = tex2D(SourceSampler, uv);
     if (tileWater <= 0.001)
         return src;
@@ -215,7 +221,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // Puddle pixels (mask < full) always ripple POND-style: an ocean map's long slow swell
     // barely moves inside a 3-tile walk-through pool, which read as "no effect up close".
     float kind = WaterKind * step(0.95, tileWater);
-    float2 ripple = lerp(pondRipple, oceanRipple, kind) * water;
+    float2 ripple = lerp(pondRipple, oceanRipple, kind) * water * rippleGate;
     // A displaced tap must never land ON a sprite (that smeared duck/player pixels
     // sideways into the water next to them) — fall back to the undisplaced sample there.
     float tapSprite = SpriteMaskOn * step(0.05, tex2D(SpriteMaskSampler, uv + ripple).a);
@@ -415,7 +421,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     glint = saturate(glint);
     // Golden hour: the glints warm up with the low sun instead of staying white.
     float3 glintCol = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.82, 0.5), SunWarm);
-    col.rgb += glint * Sparkle * water * glintCol;
+    col.rgb += glint * Sparkle * water * glintCol * rippleGate;   // ice: no glints (still surface)
 
     // ---- Night: starlight on the surface (clear nights only) ----
     if (NightGlow > 0.001)
