@@ -69,6 +69,7 @@ namespace SDVRadiance
         private int _occTx = int.MinValue, _occTy = int.MinValue, _occTick = int.MinValue;
         private int _lastWaterTx = int.MinValue, _lastWaterTy = int.MinValue, _lastWaterTick = int.MinValue;
         private int _lastWaterHookVer = -1;
+        private int _lastWaterLabelVer = -1;
 
         // Presence fades (0..1): stages ease IN when they (re)appear instead of popping.
         private GameLocation? _fadeLoc;

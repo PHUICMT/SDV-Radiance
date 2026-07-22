@@ -32,9 +32,10 @@ namespace SDVRadiance
         private sealed class WaterMaskJob
         {
             public GameLocation Loc = null!;
-            public int Tx, Ty, TilesW, TilesH, HookVer;
+            public int Tx, Ty, TilesW, TilesH, HookVer, LabelVer;
             public bool AnyWater;              // gather: any true water tile
             public bool AnyAnim;               // gather: any anim-nominated tile
+            public bool AnyLabeled;            // gather: any label-nominated water art
             public bool WaterAny;              // compose: final any-water verdict
             public double ComposeMs;           // worker-side timing (diag)
             public System.Threading.Tasks.Task? Task;
@@ -57,6 +58,27 @@ namespace SDVRadiance
         private bool[]? _tileHasFrontBuf;
         private readonly List<(int x0, int y0, int x1, int y1)> _carveRects = new();
 
+        /// <summary>HF Studio label version, for the mask cache key (0 = no HF / old HF).
+        /// Live-sync repaint: painting in the browser bumps this within seconds.</summary>
+        private static int CurrentLabelVersion()
+        {
+            var hf = ShadowRenderer.Height;
+            if (hf == null)
+                return 0;
+            try { return hf.GetLabelVersion(); }
+            catch { return 0; }
+        }
+
+        /// <summary>Water bits (class == 1) from 256 HF Studio per-pixel labels.</summary>
+        private static (bool[] bits, int count) WaterBitsFromLabels(byte[] classes)
+        {
+            var bits = new bool[256];
+            int n = 0;
+            for (int p = 0; p < 256; p++)
+                if (classes[p] == 1) { bits[p] = true; n++; }
+            return (bits, n);
+        }
+
         /// <summary>Phase 1 - read every game-state dependency into plain arrays.
         /// MUST run on the main thread (content loads, texture GetData via the
         /// classification caches, live entity lists).</summary>
@@ -67,6 +89,7 @@ namespace SDVRadiance
             {
                 Loc = loc, Tx = startTileX, Ty = startTileY,
                 TilesW = tilesW, TilesH = tilesH, HookVer = WaterDrawHook.Version,
+                LabelVer = CurrentLabelVersion(),
             };
 
             // Height Framework (when present) classifies the actual water SURFACE: ponds and
@@ -144,7 +167,28 @@ namespace SDVRadiance
                     bool[]? bits = null;
                     byte puddle = 0;
                     bool animOnly = false;
-                    if (!isWater && TryTileArt(back, tx, ty, out var btex, out var bsrc, out bool bAnim))
+                    // ---- GROUND-TRUTH LABELS FIRST (HF Studio). A labeled Back art is
+                    // authoritative: its water pixels join the mask (STATIC painted pools on
+                    // custom maps included — no ring or animation requirement), and a labeled
+                    // art with no water pixels never reaches the color classifier at all.
+                    bool labeledBack = false;
+                    if (!isWater && hf != null)
+                    {
+                        byte[]? lbl = null;
+                        try { lbl = hf.GetPixelClasses(loc, tx, ty, "Back"); }
+                        catch { hf = null; }
+                        if (lbl != null)
+                        {
+                            labeledBack = true;
+                            var (lb, ln) = WaterBitsFromLabels(lbl);
+                            if (ln > 0)
+                            {
+                                bits = lb;
+                                job.AnyLabeled = true;
+                            }
+                        }
+                    }
+                    if (!isWater && !labeledBack && TryTileArt(back, tx, ty, out var btex, out var bsrc, out bool bAnim))
                     {
                         if (_waterBool2Buf[idx])
                         {
@@ -189,19 +233,41 @@ namespace SDVRadiance
                     // always classifies (sand → empty bits, but NOT null), which used to skip
                     // this check entirely and left the whole tide line dead.
                     bool hasBld = TryTileArt(bld, tx, ty, out var t1, out var s1, out bool fAnim);
-                    if (!isWater && hasBld && fAnim)
+                    // Buildings-layer overlay water: labels first (a labeled fountain rim /
+                    // surf overlay needs no animation), color-classified animated art otherwise.
+                    bool[]? overlayBits = null;
+                    bool labeledBld = false;
+                    if (!isWater && hf != null)
+                    {
+                        byte[]? lbl = null;
+                        try { lbl = hf.GetPixelClasses(loc, tx, ty, "Buildings"); }
+                        catch { hf = null; }
+                        if (lbl != null)
+                        {
+                            labeledBld = true;
+                            var (ob, on) = WaterBitsFromLabels(lbl);
+                            if (on >= 8)
+                            {
+                                overlayBits = ob;
+                                job.AnyLabeled = true;
+                            }
+                        }
+                    }
+                    if (!isWater && !labeledBld && hasBld && fAnim)
                     {
                         var fb = ClassifyBits(t1, s1);
                         if (CountBits(fb) >= 64)
+                            overlayBits = fb;
+                    }
+                    if (overlayBits != null)
+                    {
+                        if (bits == null) { bits = overlayBits; animOnly = true; }
+                        else
                         {
-                            if (bits == null) { bits = fb; animOnly = true; }
-                            else
-                            {
-                                // OR-merge into a copy — `bits` may be a cached array.
-                                var merged = new bool[256];
-                                for (int p = 0; p < 256; p++) merged[p] = bits[p] || fb[p];
-                                bits = merged;
-                            }
+                            // OR-merge into a copy — `bits` may be a cached array.
+                            var merged = new bool[256];
+                            for (int p = 0; p < 256; p++) merged[p] = bits[p] || overlayBits[p];
+                            bits = merged;
                         }
                     }
                     if (animOnly) anyAnim = true;
@@ -350,7 +416,7 @@ namespace SDVRadiance
                     }
                 }
             }
-            job.WaterAny = job.AnyWater || anyPuddle || job.AnyAnim;
+            job.WaterAny = job.AnyWater || anyPuddle || job.AnyAnim || job.AnyLabeled;
             if (!job.WaterAny)
                 return;
 
@@ -651,6 +717,7 @@ namespace SDVRadiance
             _lastWaterTy = job.Ty;
             _lastWaterTick = Game1.ticks;
             _lastWaterHookVer = job.HookVer;
+            _lastWaterLabelVer = job.LabelVer;
             _waterAny = job.WaterAny;
             if (!job.WaterAny)
                 return;   // stage stays off; no texture upload needed

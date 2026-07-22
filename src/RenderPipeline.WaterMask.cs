@@ -285,6 +285,7 @@ namespace SDVRadiance
             // built, ice melting); everything routine invalidates via location/origin keys.
             if (_waterMask != null && loc == _lastWaterLoc && startTileX == _lastWaterTx && startTileY == _lastWaterTy
                 && _lastWaterHookVer == WaterDrawHook.Version
+                && _lastWaterLabelVer == CurrentLabelVersion()
                 && _waterMask.Width == tilesW * 16 && Game1.ticks - _lastWaterTick < 600)
             {
                 _waterMaskSize = new Vector2(tilesW, tilesH);
