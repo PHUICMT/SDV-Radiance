@@ -16,6 +16,19 @@
 
 sampler2D SourceSampler : register(s0);
 
+// Baked tileable fbm from C# (CPU-precision). Wrap addressing = seamless infinite
+// coverage; no runtime hash → no GPU sin() precision seams, identical on every card.
+texture NoiseTexture;
+sampler2D NoiseSampler = sampler_state
+{
+    Texture = <NoiseTexture>;
+    AddressU = Wrap;
+    AddressV = Wrap;
+    MinFilter = Linear;
+    MagFilter = Linear;
+    MipFilter = None;
+};
+
 float Time;          // seconds
 float Speed;         // drift speed
 float Scale;         // mist feature size
@@ -33,51 +46,29 @@ struct PixelInput
     float2 UV       : TEXCOORD0;
 };
 
-float hash(float2 p) { return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453); }
-
-float vnoise(float2 p)
-{
-    // Wrap the lattice so hash inputs stay SMALL: large p (world offset × scale ×
-    // fbm octaves + drift time) pushes sin() past GPU precision, and the error is
-    // stepwise along lattice lines — hard world-anchored rectangle seams in the fog.
-    // Noise repeats every 128 cells (dozens of screens at any Scale): unnoticeable.
-    float2 i = fmod(floor(p), 128.0);
-    float2 f = frac(p);
-    f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0); // quintic smootherstep (C2)
-    float a = hash(i);
-    float b = hash(i + float2(1.0, 0.0));
-    float c = hash(i + float2(0.0, 1.0));
-    float d = hash(i + float2(1.0, 1.0));
-    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
-}
-
 static const float2x2 M = float2x2(0.80, 0.60, -0.60, 0.80);
 
+// Two drifting layers of the baked fbm, second rotated + differently scaled so the
+// pattern evolves organically instead of sliding as one rigid sheet.
 float fbm(float2 p)
 {
-    float v = 0.0;
-    float amp = 0.5;
-    [unroll]
-    for (int i = 0; i < 5; i++)
-    {
-        v += amp * vnoise(p);
-        p = mul(M, p) * 2.0;
-        amp *= 0.5;
-    }
-    return v;
+    float n1 = tex2D(NoiseSampler, p * 0.11 + float2(Time * Speed, Time * Speed * 0.2)).r;
+    float n2 = tex2D(NoiseSampler, mul(M, p) * 0.23 + float2(-Time * Speed * 0.6, Time * Speed * 0.13) + 0.37).r;
+    return n1 * 0.65 + n2 * 0.35;
 }
 
 float4 FogPS(PixelInput input) : SV_TARGET
 {
-    float2 p = (input.UV + WorldOffset) * Scale + float2(Time * Speed, Time * Speed * 0.2);
+    float2 p = (input.UV + WorldOffset) * Scale;
     float n = fbm(p);
 
     // fbm covers the whole frame (mean ~0.5), which reads as an even film. Patchiness
     // carves it into separate drifting wisps: only the denser cores survive, the rest
     // clears out completely. Coverage moves the survival threshold — how much of the
-    // frame gets wisps — independently of Density (their opacity).
-    float lo = 0.8 - 0.45 * saturate(Coverage);
-    float wisps = smoothstep(lo, lo + 0.3, n) * 0.9;
+    // frame gets wisps — independently of Density (their opacity). Thresholds are
+    // calibrated to the two-layer blend's narrower value range (~0.25..0.75).
+    float lo = 0.70 - 0.5 * saturate(Coverage);
+    float wisps = smoothstep(lo, lo + 0.22, n) * 0.9;
     n = lerp(n, wisps, saturate(Patchiness));
 
     // Slightly more mist toward the top of the screen.

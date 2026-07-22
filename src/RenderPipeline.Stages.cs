@@ -173,6 +173,60 @@ namespace SDVRadiance
             DrawFull(sb, source, dest, bloom);
         }
 
+        // Baked, TILEABLE 5-octave value-noise fbm. GPU sin()-hash noise has NO precision
+        // guarantee (hard seams / faceted blobs on real hardware, varying by vendor) — the
+        // standard fix is to precompute the noise on the CPU at full precision once and let
+        // the shader just sample it with wrap addressing: seamless over the whole screen,
+        // identical on every GPU.
+        private Texture2D? _noiseTex;
+        private Texture2D NoiseTex()
+        {
+            if (_noiseTex != null)
+                return _noiseTex;
+            const int N = 256;
+            var acc = new float[N * N];
+            float amp = 0.5f, norm = 0f;
+            int cells = 4;                       // 4,8,16,32,64 — every octave tiles at 256
+            for (int o = 0; o < 5; o++)
+            {
+                for (int y = 0; y < N; y++)
+                {
+                    float fy = (float)y / N * cells;
+                    int y0 = (int)fy;
+                    float ty = fy - y0;
+                    ty = ty * ty * ty * (ty * (ty * 6f - 15f) + 10f);
+                    for (int x = 0; x < N; x++)
+                    {
+                        float fx = (float)x / N * cells;
+                        int x0 = (int)fx;
+                        float tx = fx - x0;
+                        tx = tx * tx * tx * (tx * (tx * 6f - 15f) + 10f);
+                        float a = NoiseHash(x0, y0, o, cells), b = NoiseHash(x0 + 1, y0, o, cells);
+                        float c = NoiseHash(x0, y0 + 1, o, cells), d = NoiseHash(x0 + 1, y0 + 1, o, cells);
+                        acc[y * N + x] += amp * MathHelper.Lerp(MathHelper.Lerp(a, b, tx), MathHelper.Lerp(c, d, tx), ty);
+                    }
+                }
+                norm += amp; amp *= 0.5f; cells *= 2;
+            }
+            var data = new Color[N * N];
+            for (int i = 0; i < acc.Length; i++)
+            {
+                byte v = (byte)MathHelper.Clamp(acc[i] / norm * 255f, 0f, 255f);
+                data[i] = new Color(v, v, v, (byte)255);
+            }
+            _noiseTex = new Texture2D(_device, N, N);
+            _noiseTex.SetData(data);
+            return _noiseTex;
+        }
+        private static float NoiseHash(int x, int y, int o, int cells)
+        {
+            x = ((x % cells) + cells) % cells;   // wrap the lattice → texture tiles perfectly
+            y = ((y % cells) + cells) % cells;
+            uint h = (uint)(x * 374761393 + y * 668265263 + (o + 1) * 2246822519);
+            h = (h ^ (h >> 13)) * 1274126177u;
+            return ((h ^ (h >> 16)) & 0xFFFF) / 65535f;
+        }
+
         private void RenderFog(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var fx = _fog!;
@@ -189,6 +243,7 @@ namespace SDVRadiance
             P(fx, "Patchiness")?.SetValue(1f);
             P(fx, "Coverage")?.SetValue(MathHelper.Lerp(config.FogCoverage, config.FogNightMistCoverage, mistW));
             P(fx, "TopBias")?.SetValue(config.FogTopBias);
+            P(fx, "NoiseTexture")?.SetValue(NoiseTex());
             P(fx, "FogColor")?.SetValue(FogColor());
             P(fx, "WorldOffset")?.SetValue(WorldOffset(dest.Width, dest.Height));
             fx.CurrentTechnique = fx.Techniques["Fog"];
