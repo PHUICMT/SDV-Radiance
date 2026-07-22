@@ -63,6 +63,10 @@ namespace SDVRadiance
             P(fx, "Scale")?.SetValue(config.CloudShadowScale);
             P(fx, "Coverage")?.SetValue(config.CloudShadowCoverage);
             P(fx, "Count")?.SetValue(config.CloudShadowCount);
+            // Small maps: the cluster field spans <1 light/dark cycle across a tiny map, so the
+            // whole thing can fall in one dark bank (the "cutscene too dark" report). Boost the
+            // cluster frequency by how many times the map fits inside the viewport.
+            P(fx, "SmallMapBoost")?.SetValue(SmallMapCloudBoost());
             P(fx, "WorldOffset")?.SetValue(WorldOffset(dest.Width, dest.Height));
             P(fx, "NoiseTexture")?.SetValue(NoiseTex());
             fx.CurrentTechnique = fx.Techniques["Mask"];
@@ -78,13 +82,26 @@ namespace SDVRadiance
             Pass(sb, rtB, rtA, fx);
 
             // Pass 4: composite the blurred shadow onto the scene.
-            P(fx, "Opacity")?.SetValue(config.CloudShadowOpacity * _cloudDayFactor);
+            P(fx, "Opacity")?.SetValue(config.CloudShadowOpacity * _cloudDayFactor * _fadeCloud);
             // Day: clouds shade EVERYTHING (white eyes/flowers included — the sun is the
             // light). Night: near-white lamp/fire cores resist the moon-cloud shadow.
             P(fx, "LightProtect")?.SetValue(NightFactorNow());
             P(fx, "ShadowTexture")?.SetValue(rtA);
             fx.CurrentTechnique = fx.Techniques["Composite"];
             DrawFull(sb, source, dest, fx);
+        }
+
+        /// <summary>How many times the current map fits inside the viewport (>=1), clamped.
+        /// 1 = map at least as big as the screen; higher = smaller map, more cloud banks.</summary>
+        private static float SmallMapCloudBoost()
+        {
+            var loc = Game1.currentLocation;
+            var layer = loc?.map?.Layers.Count > 0 ? loc.map.Layers[0] : null;
+            if (layer == null)
+                return 1f;
+            float mapW = Math.Max(1, layer.LayerWidth), mapH = Math.Max(1, layer.LayerHeight);
+            float vpW = Game1.viewport.Width / 64f, vpH = Game1.viewport.Height / 64f;
+            return MathHelper.Clamp(Math.Max(vpW / mapW, vpH / mapH), 1f, 4f);
         }
 
         private void RenderGodRays(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
@@ -276,11 +293,12 @@ namespace SDVRadiance
             // bottom blur pulls BottomEdge up.
             P(fx, "TopEdge")?.SetValue(MathHelper.Clamp(config.TiltShiftTopRatio, 0f, 1f) * 0.5f);
             P(fx, "BottomEdge")?.SetValue(1f - MathHelper.Clamp(config.TiltShiftBottomRatio, 0f, 1f) * 0.5f);
-            P(fx, "Strength")?.SetValue(config.TiltShiftStrength);
+            P(fx, "Strength")?.SetValue(config.TiltShiftStrength * _fadeTilt);
             P(fx, "Mode")?.SetValue(config.TiltShiftMode == TiltShiftFocus.Radial ? 1f : 0f);
             P(fx, "Center")?.SetValue(PlayerScreenUV());
             P(fx, "Aspect")?.SetValue(dest.Height > 0 ? dest.Width / (float)dest.Height : 1f);
             P(fx, "RadRadius")?.SetValue(MathHelper.Clamp(config.TiltShiftRadius, 0.05f, 0.9f));
+            P(fx, "Feather")?.SetValue(MathHelper.Clamp(config.TiltShiftFeather, 0f, 1f));
             P(fx, "BlurTexture")?.SetValue(rtB);
             fx.CurrentTechnique = fx.Techniques["Composite"];
             DrawFull(sb, source, dest, fx);
@@ -322,7 +340,7 @@ namespace SDVRadiance
             P(fx, "WorldTileOffset")?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
             P(fx, "MapOrigin")?.SetValue(_flood.Origin);
             P(fx, "MapSize")?.SetValue(_flood.MapSize);
-            P(fx, "Strength")?.SetValue(MathHelper.Clamp(config.FloodLightingStrength, 0f, 1f));
+            P(fx, "Strength")?.SetValue(MathHelper.Clamp(config.FloodLightingStrength, 0f, 1f) * _fadeFlood);
             P(fx, "AmbientFloor")?.SetValue(0.10f);
 
             // Direct pools with per-light shadows: the brightest 8 on-screen lights (from
@@ -355,11 +373,18 @@ namespace SDVRadiance
             // Weather/season drive how agitated the water is: choppier & faster in
             // rain/storm, sluggish in winter; sparkle fades when there's no sun.
             ComputeWaterDynamics(out float strengthMul, out float speedMul, out float sparkleMul);
+            // The stage can run for the REFLECTION alone (shimmer toggled off): ripple,
+            // sparkle, tint and rim all zero out; the mirror keeps working independently.
+            float shimmer = (config.WaterEnabled ? 1f : 0f) * _fadeWater;   // presence fade: never pops in
             P(fx, "Time")?.SetValue(Time());
-            P(fx, "Strength")?.SetValue(config.WaterStrength * strengthMul);
+            P(fx, "Strength")?.SetValue(config.WaterStrength * strengthMul * shimmer);
             P(fx, "Speed")?.SetValue(config.WaterSpeed * speedMul);
-            P(fx, "Sparkle")?.SetValue(config.WaterSparkle * sparkleMul);
-            P(fx, "ReflectStrength")?.SetValue(config.WaterReflection ? config.WaterReflectStrength : 0f);
+            P(fx, "Sparkle")?.SetValue(config.WaterSparkle * sparkleMul * shimmer);
+            P(fx, "TintAmt")?.SetValue(0.35f * shimmer);
+            P(fx, "ReflectStrength")?.SetValue((config.WaterReflection ? config.WaterReflectStrength : 0f) * _fadeWater);
+            // Per-frame sprite exclusion mask (ducks, NPCs, critters on the water).
+            P(fx, "SpriteMaskOn")?.SetValue(SpriteMaskReady && _spriteMaskRT != null ? 1f : 0f);
+            P(fx, "SpriteMaskTexture")?.SetValue(_spriteMaskRT);
             P(fx, "WaterKind")?.SetValue(WaterKind());
             P(fx, "TilesPerScreen")?.SetValue(_waterTilesPerScreen);
             P(fx, "WorldTileOffset")?.SetValue(_waterWorldTileOffset);
@@ -418,8 +443,11 @@ namespace SDVRadiance
             P(fx, "Lights")?.SetValue(_lightArr);
 
             // Wading: are the player's feet on water pixels? (mask texel = 4 world px)
+            // SWIMMING is excluded: half the body is already underwater, so a mirrored
+            // silhouette below the feet reads as a glitch, not a reflection — the ripple
+            // exclusion (silhouette gate) is what protects the visible half instead.
             float pin = 0f;
-            if (who != null && _waterPixBuf != null && _waterMask != null)
+            if (who != null && !who.swimming.Value && _waterPixBuf != null && _waterMask != null)
             {
                 Rectangle bb = who.GetBoundingBox();
                 int mxp = bb.Center.X / 4 - _lastWaterTx * 16;
@@ -459,7 +487,8 @@ namespace SDVRadiance
         private void RenderLighting(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var fx = _lighting!;
-            P(fx, "AmbientColor")?.SetValue(ComputeLightingAmbient(config));
+            // Presence fade: ambient darkening eases in from "no change" (white) on appearance.
+            P(fx, "AmbientColor")?.SetValue(Vector3.Lerp(Vector3.One, ComputeLightingAmbient(config), _fadeLighting));
             P(fx, "Aspect")?.SetValue(dest.Height > 0 ? dest.Width / (float)dest.Height : 1f);
             P(fx, "LightPos")?.SetValue(_lightPos);
             P(fx, "LightData")?.SetValue(_lightData);
@@ -468,7 +497,7 @@ namespace SDVRadiance
             // Occluder shadows: only when enabled AND a mask was built this frame.
             if (_shadowsReady && _occluderMask != null)
             {
-                P(fx, "ShadowStrength")?.SetValue(MathHelper.Clamp(config.LightingShadowStrength, 0f, 1f));
+                P(fx, "ShadowStrength")?.SetValue(MathHelper.Clamp(config.LightingShadowStrength, 0f, 1f) * _fadeLighting);
                 P(fx, "OccluderTexture")?.SetValue(_occluderMask);
                 P(fx, "OccTilesPerScreen")?.SetValue(_occTilesPerScreen);
                 P(fx, "OccWorldTileOffset")?.SetValue(_occWorldTileOffset);
@@ -484,6 +513,42 @@ namespace SDVRadiance
             DrawFull(sb, source, dest, fx);
         }
 
+        /// <summary>Character head anchors (centreX, boxTop), refilled once per light query so the
+        /// bubble test below doesn't call GetBoundingBox() again for every (light × character) pair.</summary>
+        private static readonly System.Collections.Generic.List<(float cx, float top)> _bubbleAnchors = new();
+
+        private static void FillBubbleAnchors(GameLocation? loc)
+        {
+            _bubbleAnchors.Clear();
+            if (loc != null)
+                foreach (NPC c in loc.characters)
+                {
+                    if (c == null)
+                        continue;
+                    Rectangle box = c.GetBoundingBox();
+                    _bubbleAnchors.Add((box.Center.X, box.Top));
+                }
+            var p = Game1.player;
+            if (p != null)
+            {
+                Rectangle box = p.GetBoundingBox();
+                _bubbleAnchors.Add((box.Center.X, box.Top));
+            }
+        }
+
+        /// <summary>A light hovering right above a character's head is almost certainly a
+        /// speech-bubble / emote light some mods add (e.g. The Muttering Farmer), not an
+        /// environmental light — those shouldn't spawn god rays. Tests against the anchors filled
+        /// by <see cref="FillBubbleAnchors"/> (no per-call GetBoundingBox()).</summary>
+        private static bool IsCharacterBubble(Vector2 worldPos)
+        {
+            foreach (var (cx, top) in _bubbleAnchors)
+                // above the head (roughly one-to-three tiles up), horizontally centred on them
+                if (Math.Abs(worldPos.X - cx) < 40f && worldPos.Y > top - 160f && worldPos.Y < top + 24f)
+                    return true;
+            return false;
+        }
+
         /// <summary>Screen-UV + UV-radius of the largest-radius real light source currently on screen, if any.</summary>
         private static bool TryGetLightUV(out Vector2 uv, out float radiusUV)
         {
@@ -493,13 +558,17 @@ namespace SDVRadiance
             if (lights == null || lights.Count == 0)
                 return false;
 
+            GameLocation? loc = Game1.currentLocation;
             int vw = Math.Max(1, Game1.viewport.Width);
             int vh = Math.Max(1, Game1.viewport.Height);
             float best = -1f;
+            FillBubbleAnchors(loc);   // once per query, not once per (light × character)
 
             foreach (var kv in lights)
             {
                 LightSource ls = kv.Value;
+                if (IsCharacterBubble(ls.position.Value))
+                    continue; // speech-bubble / emote light — not an environmental ray source
                 Vector2 local = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
                 float u = local.X / vw;
                 float v = local.Y / vh;

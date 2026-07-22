@@ -33,6 +33,7 @@ float Mode;         // 0 = horizontal bands, 1 = radial around Center
 float2 Center;      // radial focus point (screen UV)
 float Aspect;       // width/height, to keep the radial focus circular
 float RadRadius;    // radial mode: distance where blur starts (size of sharp circle)
+float Feather;      // 0..1 width of the sharp->blur transition (higher = softer, no harsh border)
 
 static const int TAPS = 5;
 static const float W[5] = { 0.227027, 0.194595, 0.121622, 0.054054, 0.016216 };
@@ -78,8 +79,9 @@ float4 CompositePS(PixelInput input) : SV_TARGET
     {
         // Horizontal bands: sharp middle, blur toward top & bottom edges.
         float y = input.UV.y;
-        float top = 1.0 - smoothstep(TopEdge - 0.12, TopEdge, y);
-        float bottom = smoothstep(BottomEdge, BottomEdge + 0.12, y);
+        float fw = lerp(0.04, 0.35, saturate(Feather));   // transition band width
+        float top = 1.0 - smoothstep(TopEdge - fw, TopEdge, y);
+        float bottom = smoothstep(BottomEdge, BottomEdge + fw, y);
         amt = saturate(top + bottom);
     }
     else
@@ -89,7 +91,7 @@ float4 CompositePS(PixelInput input) : SV_TARGET
         float2 d = input.UV - Center;
         d.x *= Aspect;
         float dist = length(d);
-        amt = smoothstep(RadRadius, RadRadius + 0.4, dist); // 0.4 feather = soft edge
+        amt = smoothstep(RadRadius, RadRadius + lerp(0.12, 0.7, saturate(Feather)), dist);
     }
     amt *= Strength;
 

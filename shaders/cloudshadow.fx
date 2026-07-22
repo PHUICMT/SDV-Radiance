@@ -43,6 +43,8 @@ float2 WorldOffset;  // viewport origin (world-anchor), pre-scaled on the CPU
 float2 TexelSize;    // blur step (1/width, 0) or (0, 1/height)
 float LightProtect;  // 0 by day .. 1 at night: only then do near-white cores resist the shadow
 float Count;         // 0..1 how many SEPARATE cloud banks are on screen (cluster frequency)
+float SmallMapBoost; // >=1: extra cluster frequency when the map is smaller than the viewport,
+                     // so a tiny map spans several banks instead of falling in one dark cell
 
 static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
 static const int TAPS = 5;
@@ -107,7 +109,7 @@ float4 MaskPS(PixelInput input) : SV_TARGET
     // Count 0 ≈ 1-2 big banks, Count 1 ≈ 6+ small ones. (First version multiplied
     // the tiny factor into the already-scaled p — the whole screen fell inside ONE
     // cluster cell, so the slider only slid the pattern instead of adding banks.)
-    float clusterFreq = lerp(0.35, 1.6, saturate(Count)) / max(Scale, 0.001);
+    float clusterFreq = lerp(0.35, 1.6, saturate(Count)) * max(SmallMapBoost, 1.0) / max(Scale, 0.001);
     float cm = tex2D(NoiseSampler, p * clusterFreq + 0.61).r;
     // Genuinely clear spells between banks are intentional (real skies have them);
     // they drift through in a few in-game hours.

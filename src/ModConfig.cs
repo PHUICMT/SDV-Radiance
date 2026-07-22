@@ -126,6 +126,7 @@ namespace SDVRadiance
         public float TiltShiftBottomRatio { get; set; } = 0.3f; // bottom blur amount (0 = none … 1 = up to middle)
         public float TiltShiftStrength { get; set; } = 0.9f;
         public float TiltShiftRadius { get; set; } = 0.85f;     // radial mode: size of the sharp circle around the player
+        public float TiltShiftFeather { get; set; } = 0.35f;    // softness of the sharp→blur edge (0 = crisp, 1 = very gradual)
 
         // --- Water + finishing ---
         public bool WaterEnabled { get; set; } = true;
@@ -135,6 +136,17 @@ namespace SDVRadiance
         public float WaterSparkleDensity { get; set; } = 0.7f; // glint count/size (1 = old look)
         public bool WaterReflection { get; set; } = true;  // screen-space reflection on water
         public float WaterReflectStrength { get; set; } = 0.71f;
+        /// <summary>Apply the water effect inside building interiors (farmhouse, cabins, custom
+        /// home mods). Off = skip it there — some house mods have decorative rivers/ponds inside
+        /// the user may not want rippling. Real level water ALWAYS keeps the effect regardless of
+        /// this — caves, mines, the sewer, dungeons, and the bathhouse hot spring (see
+        /// RenderPipeline.HasLevelWater) — since that water is part of the level, not decoration.</summary>
+        public bool WaterEffectIndoors { get; set; } = true;
+        /// <summary>Building interiors the player has individually opted OUT of the water effect,
+        /// by NameOrUniqueName. Toggled per-room from the F6 tuner. Lets a player kill decorative
+        /// water from one specific house/interior mod without turning it off everywhere. Only ever
+        /// consulted for gate-able interiors (outdoors and level water ignore it).</summary>
+        public List<string> WaterDisabledLocations { get; set; } = new();
 
         public bool VignetteEnabled { get; set; } = true;
         public float VignetteStrength { get; set; } = 0.25f;
@@ -215,6 +227,7 @@ namespace SDVRadiance
             CloudShadowSpeed = C(CloudShadowSpeed, 0f, 0.1f);
             TiltShiftStrength = C(TiltShiftStrength, 0f, 1f);
             TiltShiftRadius = C(TiltShiftRadius, 0.05f, 0.9f);
+            TiltShiftFeather = C(TiltShiftFeather, 0f, 1f);
             TiltShiftTopRatio = C(TiltShiftTopRatio, 0f, 1f);
             TiltShiftBottomRatio = C(TiltShiftBottomRatio, 0f, 1f);
             WaterStrength = C(WaterStrength, 0f, 2f);

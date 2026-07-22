@@ -60,14 +60,33 @@ namespace SDVRadiance
         private int[]? _edgeSum;               // per-row prefix sums for the shoreline smoothing window
         private int[]? _edgeCnt;
         private Color[]? _artBuf;              // 16×16 scratch for tile-art reads
+        // Whole-tilesheet pixel cache. Reading each 16×16 tile with its own tex.GetData is a
+        // separate GPU→CPU readback (a pipeline flush ~1-3 ms EACH, regardless of the tiny size);
+        // walking into a fresh forest/town screen touched 100+ new tiles in one gather → a ~300 ms
+        // main-thread stall. Reading a sheet ONCE into a CPU array turns that into a single readback
+        // per sheet (a forest uses a handful), then every tile samples the array with zero GPU work.
+        // Huge sheets (> cap) fall back to per-region GetData so we never allocate a giant array.
+        private readonly System.Collections.Generic.Dictionary<Texture2D, Color[]?> _sheetPixCache = new();
+        private const int SheetPixCap = 8_000_000; // ~32 MB per sheet ceiling before falling back
+        private GameLocation? _prewarmedLoc;   // last location whose tilesheets we bulk-read back
         private readonly System.Collections.Generic.Dictionary<string, Texture2D?> _sheetTexCache = new();
-        private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), bool[]> _waterBitsCache = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle, bool), bool[]> _waterBitsCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), (bool[] bits, int count)> _solidBitsCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), (bool[] bits, int count)> _puddleBitsCache = new();
         private byte[]? _puddleTileBuf;        // per-tile puddle level: 0 no, 1 weak (rocky variant), 2 strong
         private bool[]? _puddlePixBits;        // per-pixel: came from the puddle classifier (softer effects)
         private int _occTx = int.MinValue, _occTy = int.MinValue, _occTick = int.MinValue;
+        private int _occMaskMode;   // which builder last filled _occluderMask: 1 = classic, 2 = flood (they share it + the throttle, and are mutually exclusive per frame)
         private int _lastWaterTx = int.MinValue, _lastWaterTy = int.MinValue, _lastWaterTick = int.MinValue;
+        private int _lastWaterHookVer = -1;
+        private int _lastWaterLabelVer = -1;
+
+        // Presence fades (0..1): stages ease IN when they (re)appear instead of popping.
+        private GameLocation? _fadeLoc;
+        private float _fadeWater, _fadeCloud, _fadeLighting, _fadeFlood, _fadeTilt;
+
+        /// <summary>One ease-in step (~0.5 s to full at 60 fps).</summary>
+        private static float Ease01(float v) => v >= 0.999f ? 1f : Math.Min(1f, v + (1f - v) * 0.10f);
         private GameLocation? _lastWaterLoc;
         private bool _waterAny;
         private readonly Vector4[] _lightArr = new Vector4[8];   // on-screen lights → water glimmer
@@ -99,6 +118,39 @@ namespace SDVRadiance
             if (ms > _buildMax[idx]) _buildMax[idx] = ms;
             return r;
         }
+        /// <summary>True for interiors whose water is part of the level itself, not decoration:
+        /// caves/mines/sewer/dungeons AND the bathhouse hot spring. These keep their water even
+        /// when WaterEffectIndoors is off — that toggle is meant for house/building interiors with
+        /// decorative ponds (custom home mods), not real level water like the mines or the spa.</summary>
+        internal static bool HasLevelWater(GameLocation? loc)
+        {
+            if (loc == null)
+                return false;
+            if (loc is StardewValley.Locations.MineShaft or StardewValley.Locations.VolcanoDungeon)
+                return true;
+            string n = loc.Name ?? "";
+            string t = loc.GetType().Name;
+            static bool Has(string s, string k) => s.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0;
+            return Has(n, "Mine") || Has(n, "Cave") || Has(n, "Volcano") || Has(n, "Dungeon")
+                || Has(n, "Sewer") || Has(n, "Caldera") || Has(n, "Swamp") || Has(n, "BugLand")
+                || Has(n, "Submarine") || Has(n, "Tunnel") || Has(n, "Grotto")
+                // Bathhouse hot spring: real, wanted water inside an interior location.
+                || Has(n, "BathHouse") || Has(n, "Spa") || Has(n, "HotSpring") || Has(n, "Bath")
+                || Has(t, "Mine") || Has(t, "Volcano") || Has(t, "Dungeon");
+        }
+
+        /// <summary>Whether the water effect should run in this location. Outdoors and real level
+        /// water (see <see cref="HasLevelWater"/>) always qualify; building interiors qualify only
+        /// when the global indoor toggle is on AND the player hasn't opted this room out from the
+        /// tuner. Single source of truth shared by the render gate and the FreezeGameWater gate.</summary>
+        internal static bool WaterAllowedIn(GameLocation? loc, ModConfig config)
+        {
+            if (loc == null || loc.IsOutdoors || HasLevelWater(loc))
+                return true;
+            return config.WaterEffectIndoors
+                && !config.WaterDisabledLocations.Contains(loc.NameOrUniqueName);
+        }
+
         private int _lastW = -1, _lastH = -1;
         private Vector2 _lightUV; // screen-UV of the light source god rays emanate from (set per frame)
         private Vector2 _godRayUV; // eased light position so rays glide, not jump
@@ -169,7 +221,7 @@ namespace SDVRadiance
             || ((c.FogEnabled || c.FogNightMist) && _fog != null)
             || (c.ColorGradeEnabled && _colorGrade != null)
             || (c.TiltShiftEnabled && _tiltShift != null)
-            || (c.WaterEnabled && _water != null)
+            || ((c.WaterEnabled || c.WaterReflection) && _water != null)
             || ((c.VignetteEnabled || c.ChromaticAberrationEnabled) && _finishing != null);
 
         private void EnsureTargets(int w, int h, SurfaceFormat format)
@@ -238,6 +290,16 @@ namespace SDVRadiance
                 // the last stage writes straight back into the game's target.
                 bool outdoors = Game1.currentLocation?.IsOutdoors ?? false;
 
+                // PRESENCE fades: any stage that (re)appears mid-play — a warp, water coming
+                // on screen, stepping outdoors, a cutscene ending — eases in over ~0.5 s
+                // instead of popping. A stage that is OFF this frame resets to 0 so its next
+                // appearance fades again. (God rays and fog have their own eases already.)
+                if (!ReferenceEquals(Game1.currentLocation, _fadeLoc))
+                {
+                    _fadeLoc = Game1.currentLocation;
+                    _fadeWater = _fadeCloud = _fadeLighting = _fadeFlood = _fadeTilt = 0f;
+                }
+
                 // Reused list + cached delegates: method-group conversion allocates a new
                 // delegate per call, which at 60fps × up to 9 stages is constant GC churn.
                 var stages = _stages;
@@ -254,22 +316,41 @@ namespace SDVRadiance
                     BuildLightList(w, h, config);       // direct-light pools (shader term)
                     _floodOccReady = TimedBuild(config, 1, () => BuildFloodOccluders(w, h));
                     stages.Add(_dFlood);
+                    _fadeFlood = Ease01(_fadeFlood); _fadeLighting = 0f;
                 }
                 else if (config.LightingEnabled && _lighting != null && BuildLightList(w, h, config))
                 {
                     _shadowsReady = config.LightingShadows && TimedBuild(config, 2, () => BuildOccluderMask(w, h));
                     stages.Add(_dLighting);
+                    _fadeLighting = Ease01(_fadeLighting); _fadeFlood = 0f;
                 }
+                else
+                    _fadeFlood = _fadeLighting = 0f;
                 // Water ripple first (only if the current location actually has visible
                 // water tiles), so everything downstream sees the refracted result.
-                if (config.WaterEnabled && _water != null && TimedBuild(config, 3, () => BuildWaterMask(w, h))) stages.Add(_dWater);
+                // Reflection is independent of the shimmer toggle: either switch keeps
+                // the stage alive (the other's params are zeroed inside RenderWater).
+                bool waterAllowedHere = WaterAllowedIn(Game1.currentLocation, config);
+                if ((config.WaterEnabled || config.WaterReflection) && _water != null && waterAllowedHere
+                    && TimedBuild(config, 3, () => BuildWaterMask(w, h)))
+                {
+                    stages.Add(_dWater);
+                    _fadeWater = Ease01(_fadeWater);
+                }
+                else
+                    _fadeWater = 0f;
                 // Cloud shadows drift over the ground — outdoors only, and first so later
                 // effects (bloom/grade) see the shadowed scene. They are SUNLIGHT (or moonlight)
                 // being blocked, so they fade with dusk and at night exist only under a bright
                 // moon — never stamped over lamp-lit ground on a dark night.
                 _cloudDayFactor = CloudDayFactor();
                 if (config.CloudShadowEnabled && _cloudShadow != null && outdoors && _cloudDayFactor > 0.02f)
+                {
                     stages.Add(_dCloud);
+                    _fadeCloud = Ease01(_fadeCloud);
+                }
+                else
+                    _fadeCloud = 0f;
                 // God rays only when there's a real light source on screen (lamp/torch/fire).
                 // Fade in/out (and glide the origin) so they never pop instantly when a
                 // light scrolls on/off screen.
@@ -281,7 +362,11 @@ namespace SDVRadiance
                         _godRayUV = _godRayAmount < 0.02f ? luv : Vector2.Lerp(_godRayUV, luv, 0.1f);
                         _godRayRadiusUV = _godRayAmount < 0.02f ? lr : MathHelper.Lerp(_godRayRadiusUV, lr, 0.1f);
                     }
-                    _godRayAmount += ((hasLight ? 1f : 0f) - _godRayAmount) * 0.05f; // ~0.5s fade
+                    // Rain/snow: the overcast sky kills visible shafts — fade the rays out (and
+                    // back in when it clears). Eased through _godRayAmount so it never pops.
+                    bool overcast = outdoors && (Game1.isRaining || Game1.isSnowing || Game1.isLightning);
+                    float rayTarget = (hasLight && !overcast) ? 1f : 0f;
+                    _godRayAmount += (rayTarget - _godRayAmount) * 0.05f; // ~0.5s fade
                     if (_godRayAmount > 0.01f) { _lightUV = _godRayUV; stages.Add(_dGodRays); }
                 }
                 if (config.BloomEnabled && _bloom != null) stages.Add(_dBloom);
@@ -304,7 +389,13 @@ namespace SDVRadiance
                 // world frame, and the bottom blur band smears it unreadable. Cutscenes keep
                 // the rest of the stack (grade/bloom/fog/clouds) for the cinematic look.
                 bool eventUp = Game1.eventUp || Game1.CurrentEvent != null;
-                if (config.TiltShiftEnabled && _tiltShift != null && !eventUp) stages.Add(_dTilt);
+                if (config.TiltShiftEnabled && _tiltShift != null && !eventUp)
+                {
+                    stages.Add(_dTilt);
+                    _fadeTilt = Ease01(_fadeTilt);   // also eases back in after a cutscene's skip
+                }
+                else
+                    _fadeTilt = 0f;
                 // Finishing (vignette + chromatic aberration): true camera-lens pass, last.
                 // (CA is zeroed inside during events — it fringes the SKIP button's text.)
                 if ((config.VignetteEnabled || config.ChromaticAberrationEnabled) && _finishing != null) stages.Add(_dFinish);
@@ -440,10 +531,13 @@ namespace SDVRadiance
         public void Dispose()
         {
             _sceneRT?.Dispose(); _fullA?.Dispose(); _fullB?.Dispose(); _rtA?.Dispose(); _rtB?.Dispose(); _waterMask?.Dispose(); _waterMaskCore?.Dispose(); _occluderMask?.Dispose(); _lumRT?.Dispose(); _noiseTex?.Dispose(); _noiseTex = null;
+            _spriteMaskRT?.Dispose(); _spriteMaskBatch?.Dispose();
+            _maskViewTex?.Dispose(); _maskViewTex = null;
             _bloom?.Dispose(); _colorGrade?.Dispose(); _godRays?.Dispose(); _fog?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
             _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose(); _floodFx?.Dispose(); _flood.Dispose();
             _sceneRT = _fullA = _fullB = _rtA = _rtB = null;
             _waterMask = null; _waterMaskCore = null; _occluderMask = null; _lumRT = null;
+            _spriteMaskRT = null; _spriteMaskBatch = null;
             _bloom = _colorGrade = _godRays = _fog = _cloudShadow = _tiltShift = _water = _finishing = _lighting = _floodFx = null;
         }
     }

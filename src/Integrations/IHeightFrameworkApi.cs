@@ -15,5 +15,13 @@ namespace SDVRadiance.Integrations
         int GetHeightAt(GameLocation location, int tileX, int tileY);
         bool IsOccluder(GameLocation location, int tileX, int tileY);
         bool IsWaterSurface(GameLocation location, int tileX, int tileY);
+
+        /// <summary>HF Studio per-pixel labels for one layer tile's art (256 bytes, row-major 16×16;
+        /// 0 ground · 1 water · 2 wall · 3 roof · 4 deck · 5 void · 6 emissive · 7 reflect_floor ·
+        /// 8 mirror), or null when unlabeled. READ-ONLY. Requires HeightFramework ≥ 1.1.</summary>
+        byte[]? GetPixelClasses(GameLocation location, int tileX, int tileY, string layer);
+
+        /// <summary>Bumped whenever the label DB (re)loads — fold into caches for live-sync repaints.</summary>
+        int GetLabelVersion();
     }
 }

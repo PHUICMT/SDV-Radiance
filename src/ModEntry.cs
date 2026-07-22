@@ -17,6 +17,7 @@ namespace SDVRadiance
     public sealed class ModEntry : Mod
     {
         private ModConfig _config = new();
+        private Harmony? _harmony;
         private RenderPipeline? _pipeline;
         private ShadowRenderer? _shadows;
         private readonly CameraSmoother _camera = new();
@@ -133,7 +134,8 @@ namespace SDVRadiance
         private bool EffectsActive => _config.Enabled &&
             (_config.BloomEnabled || _config.ColorGradeEnabled || _config.GodRaysEnabled
              || _config.FogEnabled || _config.FogNightMist || _config.CloudShadowEnabled || _config.TiltShiftEnabled
-             || _config.WaterEnabled || _config.VignetteEnabled || _config.ChromaticAberrationEnabled
+             || _config.WaterEnabled || _config.WaterReflection
+             || _config.VignetteEnabled || _config.ChromaticAberrationEnabled
              || _config.LightingEnabled || _config.FloodLightingEnabled);
 
         public override void Entry(IModHelper helper)
@@ -143,6 +145,7 @@ namespace SDVRadiance
             SMonitor = this.Monitor;
             ForceBufferDraw = EffectsActive;
             FreezeGameWater = _config.Enabled && _config.WaterEnabled;
+            WaterDrawHook.Enabled = _config.Enabled && (_config.WaterEnabled || _config.WaterReflection);
 
             helper.Events.GameLoop.GameLaunched += OnGameLaunched;
             helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
@@ -156,11 +159,18 @@ namespace SDVRadiance
             helper.ConsoleCommands.Add("radiance_maskdump",
                 "Save the water mask textures to PNG in the temp folder (debug).",
                 (cmd, args) => this.Monitor.Log(_pipeline?.DumpMasks(System.IO.Path.GetTempPath()) ?? "pipeline not ready", LogLevel.Info));
+            helper.ConsoleCommands.Add("radiance_maskview",
+                "Toggle the live water-mask overlay (cyan = full effect, orange = effect-only art water, green rim = reflection shoreline).",
+                (cmd, args) =>
+                {
+                    RenderPipeline.MaskView = !RenderPipeline.MaskView;
+                    this.Monitor.Log($"Water mask overlay: {(RenderPipeline.MaskView ? "ON" : "OFF")} (rebuilds on next tile crossing / within 10s)", LogLevel.Info);
+                });
             helper.Events.Display.RenderingWorld += OnRenderingWorld;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
             helper.Events.Display.RenderingStep += OnRenderingStep;
 
-            var harmony = new Harmony(this.ModManifest.UniqueID);
+            var harmony = _harmony = new Harmony(this.ModManifest.UniqueID);
             harmony.Patch(
                 original: AccessTools.Method(typeof(Game1), nameof(Game1.ShouldDrawOnBuffer)),
                 postfix: new HarmonyMethod(typeof(ModEntry), nameof(ShouldDrawOnBuffer_Postfix)));
@@ -267,10 +277,17 @@ namespace SDVRadiance
         private void OnRenderedWorld(object? sender, RenderedWorldEventArgs e)
         {
             ForceBufferDraw = EffectsActive; // self-heal: keep the postfix in sync with live config
-            FreezeGameWater = _config.Enabled && _config.WaterEnabled;
+            // Only freeze the game's own water frame-cycle where we actually render ripple this
+            // frame — otherwise decorative indoor water (with the effect turned off there) would
+            // sit frozen instead of playing its normal vanilla animation.
+            bool waterHere = RenderPipeline.WaterAllowedIn(Game1.currentLocation, _config);
+            FreezeGameWater = _config.Enabled && _config.WaterEnabled && waterHere;
+            WaterDrawHook.Enabled = _config.Enabled && (_config.WaterEnabled || _config.WaterReflection);
             if (!EffectsActive)
                 return;
             Pipeline.Apply(e.SpriteBatch, _config);
+            if (RenderPipeline.MaskView)
+                Pipeline.DrawMaskOverlay(e.SpriteBatch);
         }
 
         /// <summary>
@@ -279,7 +296,15 @@ namespace SDVRadiance
         /// </summary>
         private void OnRenderingWorld(object? sender, RenderingWorldEventArgs e)
         {
-            if (!_config.Enabled || !_config.DirectionalShadowsEnabled)
+            if (!_config.Enabled)
+                return;
+
+            // Per-frame water sprite mask (ducks/NPCs/critters on water must not ripple).
+            // Baked here because a render-target swap is only safe before the world batches open.
+            if ((_config.WaterEnabled || _config.WaterReflection) && Context.IsWorldReady)
+                _pipeline?.BakeWaterSpriteMask();
+
+            if (!_config.DirectionalShadowsEnabled)
                 return;
             _shadows ??= new ShadowRenderer();
             ShadowRenderer.Diag = _config.DebugLogging ? this.Monitor : null;
@@ -429,7 +454,7 @@ namespace SDVRadiance
             var t = Game1.player.TilePoint;
             this.Monitor.Log($"=== Tile ({t.X},{t.Y}) in {loc?.NameOrUniqueName} ===", LogLevel.Info);
             if (loc == null) return;
-            this.Monitor.Log($"isWaterTile={loc.isWaterTile(t.X, t.Y)}", LogLevel.Info);
+            this.Monitor.Log($"isWaterTile={loc.isWaterTile(t.X, t.Y)} drawnWater={WaterDrawHook.WasDrawn(loc, t.X, t.Y)} (hook v{WaterDrawHook.Version})", LogLevel.Info);
             foreach (string prop in new[] { "Water", "WaterSource", "Passable", "Type" })
                 foreach (string layer in new[] { "Back", "Buildings" })
                 {
@@ -443,12 +468,15 @@ namespace SDVRadiance
                 try { this.Monitor.Log($"HF surface={hf.GetSurfaceAt(loc, t.X, t.Y)} (0G 1W 2Wall 3Roof 4Deck 5Void) height={hf.GetHeightAt(loc, t.X, t.Y)}", LogLevel.Info); }
                 catch { this.Monitor.Log("HF API threw", LogLevel.Info); }
             }
-            foreach (string layerName in new[] { "Back", "Buildings", "Front" })
+            foreach (string layerName in new[] { "Back", "Buildings", "Front", "AlwaysFront", "AlwaysFront2" })
             {
                 var layer = loc.map?.GetLayer(layerName);
                 var tile = layer?.Tiles[t.X, t.Y];
-                if (tile != null)
-                    this.Monitor.Log($"{layerName}: sheet={tile.TileSheet?.Id} index={tile.TileIndex}", LogLevel.Info);
+                if (tile == null)
+                    continue;
+                bool anim = tile is xTile.Tiles.AnimatedTile;
+                // ImageSource (the asset path) is what the labeler keys on; Id is the map-local alias.
+                this.Monitor.Log($"{layerName}: sheet={tile.TileSheet?.Id} src={tile.TileSheet?.ImageSource} index={tile.TileIndex} animated={anim}", LogLevel.Info);
             }
 
             // Palette of the Back art (top colours by count) — for tuning art classifiers.
@@ -487,6 +515,10 @@ namespace SDVRadiance
             this.Monitor.Log(height != null
                 ? "Height Framework detected — using it for water/ledge shadow suppression."
                 : "Height Framework not installed — using built-in tile heuristics for shadows.", LogLevel.Info);
+
+            // Draw-call-accurate water discovery: patch drawWaterTile on GameLocation AND every
+            // loaded override (mod location classes included) — hence GameLaunched, not Entry.
+            WaterDrawHook.Install(_harmony!, this.Monitor);
         }
 
         private void RegisterGmcm()
@@ -648,6 +680,8 @@ namespace SDVRadiance
                 () => I18n("config.tiltshift.strength.name"), null, 0f, 1f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.TiltShiftRadius, v => _config.TiltShiftRadius = v,
                 () => I18n("config.tiltshift.radius.name"), () => I18n("config.tiltshift.radius.tooltip"), 0.05f, 0.9f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.TiltShiftFeather, v => _config.TiltShiftFeather = v,
+                () => I18n("config.tiltshift.feather.name"), () => I18n("config.tiltshift.feather.tooltip"), 0f, 1f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.TiltShiftTopRatio, v => _config.TiltShiftTopRatio = v,
                 () => I18n("config.tiltshift.top.name"), null, 0f, 1f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.TiltShiftBottomRatio, v => _config.TiltShiftBottomRatio = v,
@@ -669,6 +703,8 @@ namespace SDVRadiance
                 () => I18n("config.water.reflection.name"), () => I18n("config.water.reflection.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.WaterReflectStrength, v => _config.WaterReflectStrength = v,
                 () => I18n("config.water.reflectstrength.name"), null, 0f, 1f, 0.05f);
+            api.AddBoolOption(this.ModManifest, () => _config.WaterEffectIndoors, v => _config.WaterEffectIndoors = v,
+                () => I18n("config.water.indoors.name"), () => I18n("config.water.indoors.tooltip"));
             api.AddBoolOption(this.ModManifest, () => _config.VignetteEnabled, v => _config.VignetteEnabled = v,
                 () => I18n("config.vignette.enabled.name"), () => I18n("config.vignette.enabled.tooltip"));
             api.AddNumberOption(this.ModManifest, () => _config.VignetteStrength, v => _config.VignetteStrength = v,
