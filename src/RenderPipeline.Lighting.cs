@@ -141,8 +141,9 @@ namespace SDVRadiance
             int vy = Game1.viewport.Y;
             int startTileX = (int)Math.Floor(vx / 64f);
             int startTileY = (int)Math.Floor(vy / 64f);
-            int tilesW = Math.Max(1, w / 64 + 2);
-            int tilesH = Math.Max(1, h / 64 + 2);
+            // Viewport-based (world px): w/64 is screen px and undercounts tiles when zoomed out.
+            int tilesW = Math.Max(1, Game1.viewport.Width / 64 + 2);
+            int tilesH = Math.Max(1, Game1.viewport.Height / 64 + 2);
             int count = tilesW * tilesH;
             int lw = layer.LayerWidth, lh = layer.LayerHeight;
 
@@ -171,7 +172,7 @@ namespace SDVRadiance
             }
             _occluderMask.SetData(_occluderMaskBuf, 0, count);
 
-            _occTilesPerScreen = new Vector2(w / 64f, h / 64f);
+            _occTilesPerScreen = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
             _occWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
             _occMaskSize = new Vector2(tilesW, tilesH);
             return true;
@@ -194,8 +195,9 @@ namespace SDVRadiance
             int vy = Game1.viewport.Y;
             int startTileX = (int)Math.Floor(vx / 64f);
             int startTileY = (int)Math.Floor(vy / 64f);
-            int tilesW = Math.Max(1, w / 64 + 2);
-            int tilesH = Math.Max(1, h / 64 + 2);
+            // Viewport-based (world px): w/64 is screen px and undercounts tiles when zoomed out.
+            int tilesW = Math.Max(1, Game1.viewport.Width / 64 + 2);
+            int tilesH = Math.Max(1, Game1.viewport.Height / 64 + 2);
             int count = tilesW * tilesH;
 
             // Same throttle as the flood lightmap: ~900 cross-mod tile lookups per build is

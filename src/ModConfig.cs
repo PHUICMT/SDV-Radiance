@@ -96,6 +96,8 @@ namespace SDVRadiance
         /// <summary>Automatic subtle blue mist after dusk (outdoors, clear weather). Used to run
         /// implicitly whenever any effect was on — now opt-in so Fog OFF really means off.</summary>
         public bool FogNightMist { get; set; } = false;
+        /// <summary>How thick the night-mist wisps get at deep night (0..1).</summary>
+        public float FogNightMistDensity { get; set; } = 0.25f;
         public float FogDensity { get; set; } = 0.13f;
         public float FogScale { get; set; } = 3.0f;
         public float FogSpeed { get; set; } = 0.02f;
@@ -191,6 +193,7 @@ namespace SDVRadiance
             GodRaysDensity = C(GodRaysDensity, 0.1f, 1f);
             GodRaysDecay = C(GodRaysDecay, 0.5f, 0.99f);
             FogDensity = C(FogDensity, 0f, 1f);
+            FogNightMistDensity = C(FogNightMistDensity, 0f, 1f);
             FogScale = C(FogScale, 1f, 8f);
             FogSpeed = C(FogSpeed, 0f, 0.1f);
             FogTopBias = C(FogTopBias, 0f, 1f);

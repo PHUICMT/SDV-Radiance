@@ -121,7 +121,7 @@ namespace SDVRadiance
             if (floodGate)
             {
                 P(fx, "FloodMapTexture")?.SetValue(_flood.Texture);
-                P(fx, "FloodTilesPerScreen")?.SetValue(new Vector2(dest.Width / 64f, dest.Height / 64f));
+                P(fx, "FloodTilesPerScreen")?.SetValue(new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f));
                 P(fx, "FloodWorldTileOffset")?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
                 P(fx, "FloodMapOrigin")?.SetValue(_flood.Origin);
                 P(fx, "FloodMapSize")?.SetValue(_flood.MapSize);
@@ -176,16 +176,16 @@ namespace SDVRadiance
         private void RenderFog(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var fx = _fog!;
-            // When fog isn't manually enabled, this stage runs as the opt-in NIGHT MIST:
-            // not the manual fog's even film, but sparse blue wisps (Patchiness=1) that
-            // drift by with clear air between them. Manual fog keeps the user's sliders.
-            bool mistOnly = !config.FogEnabled;
+            // One shader pass renders the blend of two separate effects: DAY fog (even film,
+            // user's sliders) and NIGHT mist (sparse drifting wisps, Patchiness 1). The eased
+            // amounts crossfade over dusk, so params interpolate by the mist's share.
+            float total = _fogDayAmt + _fogMistAmt;
+            float mistW = total > 0f ? _fogMistAmt / total : 0f;
             P(fx, "Time")?.SetValue(Time());
-            P(fx, "Speed")?.SetValue(mistOnly ? 0.035f : config.FogSpeed);
-            P(fx, "Scale")?.SetValue(mistOnly ? 3.2f : config.FogScale);
-            float density = mistOnly ? 0.24f * NightFactorNow() : config.FogDensity;
-            P(fx, "Density")?.SetValue(density);
-            P(fx, "Patchiness")?.SetValue(mistOnly ? 1f : 0f);
+            P(fx, "Speed")?.SetValue(MathHelper.Lerp(config.FogSpeed, 0.035f, mistW));
+            P(fx, "Scale")?.SetValue(MathHelper.Lerp(config.FogScale, 3.2f, mistW));
+            P(fx, "Density")?.SetValue(total);
+            P(fx, "Patchiness")?.SetValue(mistW);
             P(fx, "TopBias")?.SetValue(config.FogTopBias);
             P(fx, "FogColor")?.SetValue(FogColor());
             P(fx, "WorldOffset")?.SetValue(WorldOffset(dest.Width, dest.Height));
@@ -256,7 +256,7 @@ namespace SDVRadiance
         {
             var fx = _floodFx!;
             P(fx, "LightMapTexture")?.SetValue(_flood.Texture);
-            P(fx, "TilesPerScreen")?.SetValue(new Vector2(dest.Width / 64f, dest.Height / 64f));
+            P(fx, "TilesPerScreen")?.SetValue(new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f));
             P(fx, "WorldTileOffset")?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
             P(fx, "MapOrigin")?.SetValue(_flood.Origin);
             P(fx, "MapSize")?.SetValue(_flood.MapSize);
@@ -366,7 +366,11 @@ namespace SDVRadiance
                     && _waterPixBuf[myp * _waterMask.Width + mxp].R > 100)
                     pin = 1f;
             }
-            P(fx, "PlayerInWater")?.SetValue(pin);
+            // Ease the wading state so the under-feet self-reflection fades in/out (~0.3s)
+            // instead of popping the moment the feet cross the water edge.
+            _pinFade += (pin - _pinFade) * 0.12f;
+            if (Math.Abs(pin - _pinFade) < 0.01f) _pinFade = pin;
+            P(fx, "PlayerInWater")?.SetValue(_pinFade);
 
             fx.CurrentTechnique = fx.Techniques["Water"];
             DrawFull(sb, source, dest, fx);
@@ -450,8 +454,12 @@ namespace SDVRadiance
             return best > 0f;
         }
 
+        // World-anchor for drifting noise (fog/clouds): the offset must be in units of the
+        // VISIBLE world span (viewport, world px) — dividing by the render target's screen px
+        // made patterns slide against the world when zoom != 100%.
         private static Vector2 WorldOffset(int w, int h) =>
-            new(Game1.viewport.X / (float)Math.Max(1, w), Game1.viewport.Y / (float)Math.Max(1, h));
+            new(Game1.viewport.X / (float)Math.Max(1, Game1.viewport.Width),
+                Game1.viewport.Y / (float)Math.Max(1, Game1.viewport.Height));
 
         /// <summary>The player's position in screen UV (0..1), for the radial tilt-shift focus.</summary>
         private static Vector2 PlayerScreenUV()

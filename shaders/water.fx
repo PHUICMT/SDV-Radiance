@@ -69,7 +69,8 @@ float MoonGlow;         // 0–1 lunar phase × season × clouds: moonlit swell 
 float RainAmt;          // 0–1 raining: expanding drop rings on the surface
 float4 Lights[8];       // xy = screen UV, z = radius (unused), w = intensity
 float LightCount;       // how many entries of Lights are live
-float PlayerInWater;    // 1 when the player's feet stand on water pixels (wading in a pool)
+float PlayerInWater;    // 0..1 eased: the player's feet are on water pixels (wading). C# fades
+                        // this in/out over ~a third of a second so the self-reflection never pops.
 float4 PlayerRect;      // player silhouette bounds in screen UV (x0,y0,x1,y1)
 texture PlayerMaskTexture;   // the player's baked silhouette — its alpha marks the
                              // player's ACTUAL pixels (not a box) to exclude from
@@ -313,7 +314,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // shoreline, so the main mirror can't see them. Mirror the baked silhouette about
         // their own feet line instead — a dark rippling figure that follows them through
         // the pool. Silhouette-based → any outfit/appearance mod works automatically.
-        if (PlayerInWater > 0.5)
+        if (PlayerInWater > 0.02)
         {
             float feetFrac = 0.9545;                             // feet row inside the mask RT
             float feetV = PlayerRect.y + feetFrac * pmSpan.y;
@@ -331,7 +332,8 @@ float4 WaterPS(PixelInput input) : SV_TARGET
                            * float3(0.62, 0.72, 0.88);   // cool + darken: "in the water"
             float rfade = saturate(1.0 - dvB * 0.9);
             col.rgb = lerp(col.rgb, selfCol,
-                           saturate(ra * 1.3) * rfade * water * saturate(ReflectStrength) * 0.6);
+                           saturate(ra * 1.3) * rfade * water * saturate(ReflectStrength) * 0.6
+                           * saturate(PlayerInWater));
         }
     }
 

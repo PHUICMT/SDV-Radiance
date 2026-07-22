@@ -136,9 +136,12 @@ namespace SDVRadiance
             y += 30; _sectionTitles.Add((_t("tuner.section.fog"), y - 28));
             _toggles.Add(new Toggle(_t("tuner.fog"), new Rectangle(x, y, innerW, 38), () => _config.FogEnabled, v => _config.FogEnabled = v));
             y += 44;
+            _sliders.Add(new Slider(_t("tuner.fogdensity"), x, y, innerW, 0f, 1f, () => _config.FogDensity, v => _config.FogDensity = v)); y += 50;
+
+            y += 30; _sectionTitles.Add((_t("tuner.section.fognight"), y - 28));
             _toggles.Add(new Toggle(_t("tuner.fognightmist"), new Rectangle(x, y, innerW, 38), () => _config.FogNightMist, v => _config.FogNightMist = v));
             y += 44;
-            _sliders.Add(new Slider(_t("tuner.fogdensity"), x, y, innerW, 0f, 1f, () => _config.FogDensity, v => _config.FogDensity = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.fognightmistdensity"), x, y, innerW, 0f, 1f, () => _config.FogNightMistDensity, v => _config.FogNightMistDensity = v)); y += 50;
 
             y += 30; _sectionTitles.Add((_t("tuner.section.cloudshadow"), y - 28));
             _toggles.Add(new Toggle(_t("tuner.cloudshadow"), new Rectangle(x, y, innerW, 38), () => _config.CloudShadowEnabled, v => _config.CloudShadowEnabled = v));

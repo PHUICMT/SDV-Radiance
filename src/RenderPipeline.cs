@@ -269,11 +269,18 @@ namespace SDVRadiance
                 }
                 if (config.BloomEnabled && _bloom != null) stages.Add(_dBloom);
                 // Fog is a weak, patchy effect indoors (and covers the black border), so outdoors only.
-                // Night mist (subtle blue haze after dusk, clear weather) is OPT-IN via its own
-                // toggle — it used to run whenever any effect was on, which read as "fog while
-                // Fog is off" and shifted night colors with unrelated toggles like tilt shift.
-                bool nightMist = config.FogNightMist && outdoors && !Game1.isRaining && !Game1.isSnowing && NightFactorNow() > 0f;
-                if ((config.FogEnabled || nightMist) && _fog != null && outdoors) stages.Add(_dFog);
+                // DAY fog and NIGHT mist are separate effects with separate toggles: day fog
+                // fades out over dusk exactly as the night mist (sparse blue wisps, clear
+                // weather only) fades in. Both amounts are EASED so toggling never pops.
+                float night = NightFactorNow();
+                float dayTarget = (config.FogEnabled && outdoors) ? config.FogDensity * (1f - night) : 0f;
+                float mistTarget = (config.FogNightMist && outdoors && !Game1.isRaining && !Game1.isSnowing)
+                    ? config.FogNightMistDensity * night : 0f;
+                _fogDayAmt += (dayTarget - _fogDayAmt) * 0.035f;    // ~0.5–1s ease
+                _fogMistAmt += (mistTarget - _fogMistAmt) * 0.035f;
+                if (Math.Abs(dayTarget - _fogDayAmt) < 0.003f) _fogDayAmt = dayTarget;
+                if (Math.Abs(mistTarget - _fogMistAmt) < 0.003f) _fogMistAmt = mistTarget;
+                if ((_fogDayAmt > 0.004f || _fogMistAmt > 0.004f) && _fog != null && outdoors) stages.Add(_dFog);
                 if (config.ColorGradeEnabled && _colorGrade != null) stages.Add(_dGrade);
                 // Tilt-shift (depth-of-field) after grading, so it blurs the graded image.
                 if (config.TiltShiftEnabled && _tiltShift != null) stages.Add(_dTilt);
@@ -368,6 +375,9 @@ namespace SDVRadiance
         // ---- stages --------------------------------------------------------
 
         private float _cloudDayFactor = 1f;
+        // Eased effect amounts so nothing pops: day fog / night mist crossfade over time
+        // of day AND ease when toggled; wading self-reflection fades at the water edge.
+        private float _fogDayAmt, _fogMistAmt, _pinFade;
 
         // MonoGame's EffectParameterCollection indexer is a LINEAR scan with string compares,
         // and the stages look parameters up ~100 times per frame — cache the references once
