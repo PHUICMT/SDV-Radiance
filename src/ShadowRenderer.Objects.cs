@@ -237,8 +237,8 @@ namespace SDVRadiance
                     if (c is StardewValley.BellsAndWhistles.Squirrel)
                         wpos.Y += 60f;
                     int ctx = (int)(wpos.X / 64f), cty = (int)(wpos.Y / 64f);
-                    if (ctx < tx0 || ctx > tx1 || cty < ty0 || cty > ty1 || OnWater(loc, new Point(ctx, cty)))
-                        continue;
+                    if (ctx < tx0 || ctx > tx1 || cty < ty0 || cty > ty1 || OnOpenWater(loc, new Point(ctx, cty)))
+                        continue;   // seagulls on the surf line keep their shadow; open water doesn't
                     Rectangle src = c.sprite.SourceRect;
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport, wpos + new Vector2(0f, -2f));
                     float depth = MathHelper.Clamp((wpos.Y - 1f) / 10000f, 0f, 1f);
@@ -771,7 +771,7 @@ namespace SDVRadiance
                 return;
 
             Farmer who = Game1.player;
-            if (OnWater(loc, who.TilePoint))
+            if (OnOpenWater(loc, who.TilePoint))   // open water only — surf/shore keeps the shadow
                 return;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));

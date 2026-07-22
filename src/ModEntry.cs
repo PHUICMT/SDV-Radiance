@@ -132,9 +132,9 @@ namespace SDVRadiance
         /// <summary>True only when the mod is on AND at least one implemented effect is switched on.</summary>
         private bool EffectsActive => _config.Enabled &&
             (_config.BloomEnabled || _config.ColorGradeEnabled || _config.GodRaysEnabled
-             || _config.FogEnabled || _config.CloudShadowEnabled || _config.TiltShiftEnabled
+             || _config.FogEnabled || _config.FogNightMist || _config.CloudShadowEnabled || _config.TiltShiftEnabled
              || _config.WaterEnabled || _config.VignetteEnabled || _config.ChromaticAberrationEnabled
-             || _config.LightingEnabled);
+             || _config.LightingEnabled || _config.FloodLightingEnabled);
 
         public override void Entry(IModHelper helper)
         {
@@ -221,6 +221,14 @@ namespace SDVRadiance
             }
 
             this.Monitor.Log("SDV-Radiance loaded (world post-processing via RenderedWorld).", LogLevel.Info);
+
+            // Local dev harness: src/DevMenu.local.cs is git-excluded, so it only exists on the
+            // author's machine; it additionally requires a dev.local.flag file in the mod folder.
+            // Reflection keeps this call harmless when neither is present (i.e. every release).
+            if (System.IO.File.Exists(System.IO.Path.Combine(helper.DirectoryPath, "dev.local.flag")))
+                Type.GetType("SDVRadiance.DevMenuLoader")
+                    ?.GetMethod("Init")
+                    ?.Invoke(null, new object[] { helper, this.Monitor, (Func<ModConfig>)(() => _config) });
         }
 
         private RenderPipeline Pipeline
@@ -275,8 +283,22 @@ namespace SDVRadiance
                 return;
             _shadows ??= new ShadowRenderer();
             ShadowRenderer.Diag = _config.DebugLogging ? this.Monitor : null;
-            _shadows.PreparePlayer(Game1_GraphicsDevice, _config);
+            if (_config.DebugLogging)
+            {
+                _perfSw.Restart();
+                _shadows.PreparePlayer(Game1_GraphicsDevice, _config);
+                _perfSw.Stop();
+                _prepMs += _perfSw.Elapsed.TotalMilliseconds;
+            }
+            else
+                _shadows.PreparePlayer(Game1_GraphicsDevice, _config);
         }
+
+        // Perf probes (DebugLogging only): where the frame time actually goes, so stutter
+        // reports can be pinned to a subsystem instead of guessed at.
+        private readonly System.Diagnostics.Stopwatch _perfSw = new();
+        private double _prepMs, _drawMs, _drawMaxMs;
+        private int _perfFrames;
 
         /// <summary>
         /// Inject sprite shadows into the game's own World_Sorted pass (FrontToBack), so
@@ -290,7 +312,23 @@ namespace SDVRadiance
                 return;
             _shadows ??= new ShadowRenderer();
             ShadowRenderer.Diag = _config.DebugLogging ? this.Monitor : null;
-            _shadows.DrawInto(e.SpriteBatch, _config);
+            if (_config.DebugLogging)
+            {
+                _perfSw.Restart();
+                _shadows.DrawInto(e.SpriteBatch, _config);
+                _perfSw.Stop();
+                double ms = _perfSw.Elapsed.TotalMilliseconds;
+                _drawMs += ms;
+                if (ms > _drawMaxMs) _drawMaxMs = ms;
+                if (++_perfFrames >= 300)
+                {
+                    this.Monitor.Log($"[perf] shadows over {_perfFrames} frames: prepare avg={_prepMs / _perfFrames:0.00}ms, "
+                        + $"draw avg={_drawMs / _perfFrames:0.00}ms max={_drawMaxMs:0.00}ms.", LogLevel.Debug);
+                    _prepMs = _drawMs = _drawMaxMs = 0; _perfFrames = 0;
+                }
+            }
+            else
+                _shadows.DrawInto(e.SpriteBatch, _config);
         }
 
         private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
@@ -299,7 +337,9 @@ namespace SDVRadiance
             SuppressVanillaShadows = ShadowRenderer.ShadowsActiveNow(_config);
             // Suppress the BUSH blob (fixed-direction, fights our cast); the TREE blob is kept
             // (not patched) as a base anchor under the canopy.
-            SuppressVanillaClouds = _config.Enabled && _config.SuppressVanillaCloudShadow;
+            // Only hide the vanilla drifting cloud when OUR cloud shadow is actually on —
+            // otherwise turning Cloud Shadows off silently removed vanilla clouds too.
+            SuppressVanillaClouds = _config.Enabled && _config.SuppressVanillaCloudShadow && _config.CloudShadowEnabled;
             SuppressVanillaObjectShadows = _config.DirectionalShadowObjects && ShadowRenderer.SunShadowActive(_config);
             // Big-craftable blobs are replaced in BOTH paths (sun directional + indoor/night contact),
             // so gate on ShadowsActiveNow, not just the sun path.
@@ -465,7 +505,12 @@ namespace SDVRadiance
                 this.Helper.WriteConfig(_config);
             }
 
-            api.Register(this.ModManifest, () => { _config = new ModConfig(); ForceBufferDraw = EffectsActive; }, Save);
+            api.Register(this.ModManifest, () =>
+            {
+                this.Monitor.Log("Config reset to defaults via GMCM.", LogLevel.Debug);
+                _config = new ModConfig();
+                ForceBufferDraw = EffectsActive;
+            }, Save);
 
             // --- Landing page: master switch, a one-click look preset, and links to each
             // effect's own page so the top level stays short instead of one giant scroll. ---
@@ -478,8 +523,16 @@ namespace SDVRadiance
                 {
                     if (Enum.TryParse<LookPreset>(v, out var p))
                     {
+                        // GMCM re-fires every option setter on save; only re-stamp the preset
+                        // when the dropdown actually changed, or it silently overwrites the
+                        // individual settings tuned on the other pages ("my settings reset").
+                        bool changed = p != _config.ActivePreset;
                         _config.ActivePreset = p;
-                        if (p != LookPreset.Custom) _config.ApplyPreset(p);
+                        if (changed && p != LookPreset.Custom)
+                        {
+                            this.Monitor.Log($"Preset applied via GMCM: {p}", LogLevel.Debug);
+                            _config.ApplyPreset(p);
+                        }
                         ForceBufferDraw = EffectsActive;
                     }
                 },
@@ -489,15 +542,16 @@ namespace SDVRadiance
 
             api.AddParagraph(this.ModManifest, () => I18n("config.preset.hint"));
 
-            api.AddPageLink(this.ModManifest, "bloom", () => I18n("config.section.bloom"));
+            // Same order as the F6 tuner: tone first, then light/shadow, then ambience, lens last.
             api.AddPageLink(this.ModManifest, "colorgrade", () => I18n("config.section.colorgrade"));
+            api.AddPageLink(this.ModManifest, "bloom", () => I18n("config.section.bloom"));
+            api.AddPageLink(this.ModManifest, "shadows", () => I18n("config.section.shadows"));
+            api.AddPageLink(this.ModManifest, "lighting", () => I18n("config.section.lighting"));
             api.AddPageLink(this.ModManifest, "godrays", () => I18n("config.section.godrays"));
-            api.AddPageLink(this.ModManifest, "fog", () => I18n("config.section.fog"));
             api.AddPageLink(this.ModManifest, "cloudshadow", () => I18n("config.section.cloudshadow"));
+            api.AddPageLink(this.ModManifest, "fog", () => I18n("config.section.fog"));
             api.AddPageLink(this.ModManifest, "tiltshift", () => I18n("config.section.tiltshift"));
             api.AddPageLink(this.ModManifest, "finishing", () => I18n("config.section.finishing"));
-            api.AddPageLink(this.ModManifest, "lighting", () => I18n("config.section.lighting"));
-            api.AddPageLink(this.ModManifest, "shadows", () => I18n("config.section.shadows"));
             api.AddPageLink(this.ModManifest, "camera", () => I18n("config.section.camera"));
             api.AddPageLink(this.ModManifest, "misc", () => I18n("config.section.misc"));
 
@@ -542,14 +596,26 @@ namespace SDVRadiance
 
             // --- Volumetric fog (implemented) ---
             api.AddPage(this.ModManifest, "fog", () => I18n("config.section.fog"));
+            api.AddSectionTitle(this.ModManifest, () => I18n("config.fog.sectionday"));
             api.AddBoolOption(this.ModManifest, () => _config.FogEnabled, v => _config.FogEnabled = v,
                 () => I18n("config.fog.enabled.name"), () => I18n("config.fog.enabled.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.FogCoverage, v => _config.FogCoverage = v,
+                () => I18n("config.fog.coverage.name"), () => I18n("config.fog.coverage.tooltip"), 0f, 1f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.FogDensity, v => _config.FogDensity = v,
-                () => I18n("config.fog.density.name"), null, 0f, 1f, 0.05f);
+                () => I18n("config.fog.density.name"), () => I18n("config.fog.density.tooltip"), 0f, 1f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.FogScale, v => _config.FogScale = v,
                 () => I18n("config.fog.scale.name"), null, 1f, 8f, 0.5f);
             api.AddNumberOption(this.ModManifest, () => _config.FogSpeed, v => _config.FogSpeed = v,
                 () => I18n("config.fog.speed.name"), null, 0f, 0.1f, 0.005f);
+            api.AddSectionTitle(this.ModManifest, () => I18n("config.fog.sectionnight"));
+            api.AddBoolOption(this.ModManifest, () => _config.FogNightMist, v => _config.FogNightMist = v,
+                () => I18n("config.fog.nightmist.name"), () => I18n("config.fog.nightmist.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.FogNightMistCoverage, v => _config.FogNightMistCoverage = v,
+                () => I18n("config.fog.nightmistcoverage.name"), () => I18n("config.fog.coverage.tooltip"), 0f, 1f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.FogNightMistDensity, v => _config.FogNightMistDensity = v,
+                () => I18n("config.fog.nightmistdensity.name"), () => I18n("config.fog.density.tooltip"), 0f, 1f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.FogNightMistSpeed, v => _config.FogNightMistSpeed = v,
+                () => I18n("config.fog.nightmistspeed.name"), null, 0f, 0.1f, 0.002f);
 
             // --- Cloud shadows (implemented) ---
             api.AddPage(this.ModManifest, "cloudshadow", () => I18n("config.section.cloudshadow"));
@@ -557,10 +623,12 @@ namespace SDVRadiance
                 () => I18n("config.cloudshadow.hidevanilla.name"), () => I18n("config.cloudshadow.hidevanilla.tooltip"));
             api.AddBoolOption(this.ModManifest, () => _config.CloudShadowEnabled, v => _config.CloudShadowEnabled = v,
                 () => I18n("config.cloudshadow.enabled.name"), () => I18n("config.cloudshadow.enabled.tooltip"));
-            api.AddNumberOption(this.ModManifest, () => _config.CloudShadowOpacity, v => _config.CloudShadowOpacity = v,
-                () => I18n("config.cloudshadow.opacity.name"), null, 0f, 0.7f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.CloudShadowCoverage, v => _config.CloudShadowCoverage = v,
                 () => I18n("config.cloudshadow.coverage.name"), null, 0.1f, 0.9f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.CloudShadowCount, v => _config.CloudShadowCount = v,
+                () => I18n("config.cloudshadow.count.name"), () => I18n("config.cloudshadow.count.tooltip"), 0f, 1f, 0.05f);
+            api.AddNumberOption(this.ModManifest, () => _config.CloudShadowOpacity, v => _config.CloudShadowOpacity = v,
+                () => I18n("config.cloudshadow.opacity.name"), null, 0f, 0.7f, 0.05f);
             api.AddNumberOption(this.ModManifest, () => _config.CloudShadowScale, v => _config.CloudShadowScale = v,
                 () => I18n("config.cloudshadow.scale.name"), null, 1f, 5f, 0.5f);
             api.AddNumberOption(this.ModManifest, () => _config.CloudShadowSpeed, v => _config.CloudShadowSpeed = v,

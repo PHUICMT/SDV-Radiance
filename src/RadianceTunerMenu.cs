@@ -111,12 +111,6 @@ namespace SDVRadiance
             _toggles.Add(new Toggle(_t("tuner.master"), new Rectangle(x, y, innerW, 38), () => _config.Enabled, v => _config.Enabled = v));
             y += 44;
 
-            y += 30; _sectionTitles.Add((_t("tuner.section.bloom"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.bloom"), new Rectangle(x, y, innerW, 38), () => _config.BloomEnabled, v => _config.BloomEnabled = v));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.intensity"), x, y, innerW, 0f, 2f, () => _config.BloomIntensity, v => _config.BloomIntensity = v));
-            y += 50;
-
             y += 30; _sectionTitles.Add((_t("tuner.section.colorgrade"), y - 28));
             _toggles.Add(new Toggle(_t("tuner.colorgrade"), new Rectangle(x, y, innerW, 38), () => _config.ColorGradeEnabled, v => _config.ColorGradeEnabled = v));
             y += 44;
@@ -128,44 +122,20 @@ namespace SDVRadiance
             _sliders.Add(new Slider(_t("tuner.temperature"), x, y, innerW, -1f, 1f, () => _config.ColorGradeTemperature, v => _config.ColorGradeTemperature = v)); y += 50;
             _sliders.Add(new Slider(_t("tuner.brightness"), x, y, innerW, 0.5f, 1.5f, () => _config.ColorGradeBrightness, v => _config.ColorGradeBrightness = v)); y += 50;
 
-            y += 30; _sectionTitles.Add((_t("tuner.section.godrays"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.godrays"), new Rectangle(x, y, innerW, 38), () => _config.GodRaysEnabled, v => _config.GodRaysEnabled = v));
+            y += 30; _sectionTitles.Add((_t("tuner.section.bloom"), y - 28));
+            _toggles.Add(new Toggle(_t("tuner.bloom"), new Rectangle(x, y, innerW, 38), () => _config.BloomEnabled, v => _config.BloomEnabled = v));
             y += 44;
-            _sliders.Add(new Slider(_t("tuner.godraysintensity"), x, y, innerW, 0f, 1.5f, () => _config.GodRaysIntensity, v => _config.GodRaysIntensity = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.intensity"), x, y, innerW, 0f, 2f, () => _config.BloomIntensity, v => _config.BloomIntensity = v));
+            y += 50;
 
-            y += 30; _sectionTitles.Add((_t("tuner.section.fog"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.fog"), new Rectangle(x, y, innerW, 38), () => _config.FogEnabled, v => _config.FogEnabled = v));
+            y += 30; _sectionTitles.Add((_t("tuner.section.shadows"), y - 28));
+            _toggles.Add(new Toggle(_t("tuner.shadows"), new Rectangle(x, y, innerW, 38), () => _config.DirectionalShadowsEnabled, v => _config.DirectionalShadowsEnabled = v));
             y += 44;
-            _sliders.Add(new Slider(_t("tuner.fogdensity"), x, y, innerW, 0f, 1f, () => _config.FogDensity, v => _config.FogDensity = v)); y += 50;
-
-            y += 30; _sectionTitles.Add((_t("tuner.section.cloudshadow"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.cloudshadow"), new Rectangle(x, y, innerW, 38), () => _config.CloudShadowEnabled, v => _config.CloudShadowEnabled = v));
+            _sliders.Add(new Slider(_t("tuner.shadowstrength"), x, y, innerW, 0f, 1f, () => _config.DirectionalShadowStrength, v => _config.DirectionalShadowStrength = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.shadowlength"), x, y, innerW, 0.2f, 2f, () => _config.DirectionalShadowLength, v => _config.DirectionalShadowLength = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.shadowblur"), x, y, innerW, 0f, 5f, () => _config.DirectionalShadowBlur, v => _config.DirectionalShadowBlur = v)); y += 50;
+            _toggles.Add(new Toggle(_t("tuner.shadowobjects"), new Rectangle(x, y, innerW, 38), () => _config.DirectionalShadowObjects, v => _config.DirectionalShadowObjects = v));
             y += 44;
-            _sliders.Add(new Slider(_t("tuner.cloudopacity"), x, y, innerW, 0f, 0.7f, () => _config.CloudShadowOpacity, v => _config.CloudShadowOpacity = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.cloudcoverage"), x, y, innerW, 0.1f, 0.9f, () => _config.CloudShadowCoverage, v => _config.CloudShadowCoverage = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.cloudspeed"), x, y, innerW, 0f, 0.06f, () => _config.CloudShadowSpeed, v => _config.CloudShadowSpeed = v)); y += 50;
-
-            y += 30; _sectionTitles.Add((_t("tuner.section.tiltshift"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.tiltshift"), new Rectangle(x, y, innerW, 38), () => _config.TiltShiftEnabled, v => _config.TiltShiftEnabled = v));
-            y += 44;
-            _toggles.Add(new Toggle(_t("tuner.tiltradial"), new Rectangle(x, y, innerW, 38),
-                () => _config.TiltShiftMode == TiltShiftFocus.Radial,
-                v => _config.TiltShiftMode = v ? TiltShiftFocus.Radial : TiltShiftFocus.Bands));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.tiltradius"), x, y, innerW, 0.05f, 0.9f, () => _config.TiltShiftRadius, v => _config.TiltShiftRadius = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.tiltstrength"), x, y, innerW, 0f, 1f, () => _config.TiltShiftStrength, v => _config.TiltShiftStrength = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.tilttop"), x, y, innerW, 0f, 1f, () => _config.TiltShiftTopRatio, v => _config.TiltShiftTopRatio = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.tiltbottom"), x, y, innerW, 0f, 1f, () => _config.TiltShiftBottomRatio, v => _config.TiltShiftBottomRatio = v)); y += 50;
-
-            y += 30; _sectionTitles.Add((_t("tuner.section.water"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.water"), new Rectangle(x, y, innerW, 38), () => _config.WaterEnabled, v => _config.WaterEnabled = v));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.waterstrength"), x, y, innerW, 0f, 2f, () => _config.WaterStrength, v => _config.WaterStrength = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.waterspeed"), x, y, innerW, 0f, 3f, () => _config.WaterSpeed, v => _config.WaterSpeed = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.watersparkle"), x, y, innerW, 0f, 1f, () => _config.WaterSparkle, v => _config.WaterSparkle = v)); y += 50;
-            _toggles.Add(new Toggle(_t("tuner.waterreflection"), new Rectangle(x, y, innerW, 38), () => _config.WaterReflection, v => _config.WaterReflection = v));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.waterreflectstrength"), x, y, innerW, 0f, 1f, () => _config.WaterReflectStrength, v => _config.WaterReflectStrength = v)); y += 50;
 
             y += 30; _sectionTitles.Add((_t("tuner.section.lighting"), y - 28));
             _toggles.Add(new Toggle(_t("tuner.lighting"), new Rectangle(x, y, innerW, 38), () => _config.LightingEnabled, v => _config.LightingEnabled = v));
@@ -183,14 +153,54 @@ namespace SDVRadiance
             _sliders.Add(new Slider(_t("tuner.floodstrength"), x, y, innerW, 0f, 1.5f, () => _config.FloodLightingStrength, v => _config.FloodLightingStrength = v)); y += 50;
             _sliders.Add(new Slider(_t("tuner.floodshadow"), x, y, innerW, 0f, 1f, () => _config.FloodShadowStrength, v => _config.FloodShadowStrength = v)); y += 50;
 
-            y += 30; _sectionTitles.Add((_t("tuner.section.shadows"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.shadows"), new Rectangle(x, y, innerW, 38), () => _config.DirectionalShadowsEnabled, v => _config.DirectionalShadowsEnabled = v));
+            y += 30; _sectionTitles.Add((_t("tuner.section.godrays"), y - 28));
+            _toggles.Add(new Toggle(_t("tuner.godrays"), new Rectangle(x, y, innerW, 38), () => _config.GodRaysEnabled, v => _config.GodRaysEnabled = v));
             y += 44;
-            _sliders.Add(new Slider(_t("tuner.shadowstrength"), x, y, innerW, 0f, 1f, () => _config.DirectionalShadowStrength, v => _config.DirectionalShadowStrength = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.shadowlength"), x, y, innerW, 0.2f, 2f, () => _config.DirectionalShadowLength, v => _config.DirectionalShadowLength = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.shadowblur"), x, y, innerW, 0f, 5f, () => _config.DirectionalShadowBlur, v => _config.DirectionalShadowBlur = v)); y += 50;
-            _toggles.Add(new Toggle(_t("tuner.shadowobjects"), new Rectangle(x, y, innerW, 38), () => _config.DirectionalShadowObjects, v => _config.DirectionalShadowObjects = v));
+            _sliders.Add(new Slider(_t("tuner.godraysintensity"), x, y, innerW, 0f, 1.5f, () => _config.GodRaysIntensity, v => _config.GodRaysIntensity = v)); y += 50;
+
+            y += 30; _sectionTitles.Add((_t("tuner.section.cloudshadow"), y - 28));
+            _toggles.Add(new Toggle(_t("tuner.cloudshadow"), new Rectangle(x, y, innerW, 38), () => _config.CloudShadowEnabled, v => _config.CloudShadowEnabled = v));
             y += 44;
+            _sliders.Add(new Slider(_t("tuner.cloudcoverage"), x, y, innerW, 0.1f, 0.9f, () => _config.CloudShadowCoverage, v => _config.CloudShadowCoverage = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.cloudcount"), x, y, innerW, 0f, 1f, () => _config.CloudShadowCount, v => _config.CloudShadowCount = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.cloudopacity"), x, y, innerW, 0f, 0.7f, () => _config.CloudShadowOpacity, v => _config.CloudShadowOpacity = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.cloudspeed"), x, y, innerW, 0f, 0.06f, () => _config.CloudShadowSpeed, v => _config.CloudShadowSpeed = v)); y += 50;
+
+            y += 30; _sectionTitles.Add((_t("tuner.section.fog"), y - 28));
+            _toggles.Add(new Toggle(_t("tuner.fog"), new Rectangle(x, y, innerW, 38), () => _config.FogEnabled, v => _config.FogEnabled = v));
+            y += 44;
+            _sliders.Add(new Slider(_t("tuner.fogcoverage"), x, y, innerW, 0f, 1f, () => _config.FogCoverage, v => _config.FogCoverage = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.fogdensity"), x, y, innerW, 0f, 1f, () => _config.FogDensity, v => _config.FogDensity = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.fogspeed"), x, y, innerW, 0f, 0.1f, () => _config.FogSpeed, v => _config.FogSpeed = v)); y += 50;
+
+            y += 30; _sectionTitles.Add((_t("tuner.section.fognight"), y - 28));
+            _toggles.Add(new Toggle(_t("tuner.fognightmist"), new Rectangle(x, y, innerW, 38), () => _config.FogNightMist, v => _config.FogNightMist = v));
+            y += 44;
+            _sliders.Add(new Slider(_t("tuner.fognightmistcoverage"), x, y, innerW, 0f, 1f, () => _config.FogNightMistCoverage, v => _config.FogNightMistCoverage = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.fognightmistdensity"), x, y, innerW, 0f, 1f, () => _config.FogNightMistDensity, v => _config.FogNightMistDensity = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.fognightmistspeed"), x, y, innerW, 0f, 0.1f, () => _config.FogNightMistSpeed, v => _config.FogNightMistSpeed = v)); y += 50;
+
+            y += 30; _sectionTitles.Add((_t("tuner.section.water"), y - 28));
+            _toggles.Add(new Toggle(_t("tuner.water"), new Rectangle(x, y, innerW, 38), () => _config.WaterEnabled, v => _config.WaterEnabled = v));
+            y += 44;
+            _sliders.Add(new Slider(_t("tuner.waterstrength"), x, y, innerW, 0f, 2f, () => _config.WaterStrength, v => _config.WaterStrength = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.watersparkle"), x, y, innerW, 0f, 1f, () => _config.WaterSparkle, v => _config.WaterSparkle = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.waterspeed"), x, y, innerW, 0f, 3f, () => _config.WaterSpeed, v => _config.WaterSpeed = v)); y += 50;
+            _toggles.Add(new Toggle(_t("tuner.waterreflection"), new Rectangle(x, y, innerW, 38), () => _config.WaterReflection, v => _config.WaterReflection = v));
+            y += 44;
+            _sliders.Add(new Slider(_t("tuner.waterreflectstrength"), x, y, innerW, 0f, 1f, () => _config.WaterReflectStrength, v => _config.WaterReflectStrength = v)); y += 50;
+
+            y += 30; _sectionTitles.Add((_t("tuner.section.tiltshift"), y - 28));
+            _toggles.Add(new Toggle(_t("tuner.tiltshift"), new Rectangle(x, y, innerW, 38), () => _config.TiltShiftEnabled, v => _config.TiltShiftEnabled = v));
+            y += 44;
+            _toggles.Add(new Toggle(_t("tuner.tiltradial"), new Rectangle(x, y, innerW, 38),
+                () => _config.TiltShiftMode == TiltShiftFocus.Radial,
+                v => _config.TiltShiftMode = v ? TiltShiftFocus.Radial : TiltShiftFocus.Bands));
+            y += 44;
+            _sliders.Add(new Slider(_t("tuner.tiltradius"), x, y, innerW, 0.05f, 0.9f, () => _config.TiltShiftRadius, v => _config.TiltShiftRadius = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.tiltstrength"), x, y, innerW, 0f, 1f, () => _config.TiltShiftStrength, v => _config.TiltShiftStrength = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.tilttop"), x, y, innerW, 0f, 1f, () => _config.TiltShiftTopRatio, v => _config.TiltShiftTopRatio = v)); y += 50;
+            _sliders.Add(new Slider(_t("tuner.tiltbottom"), x, y, innerW, 0f, 1f, () => _config.TiltShiftBottomRatio, v => _config.TiltShiftBottomRatio = v)); y += 50;
 
             y += 30; _sectionTitles.Add((_t("tuner.section.finishing"), y - 28));
             _toggles.Add(new Toggle(_t("tuner.vignette"), new Rectangle(x, y, innerW, 38), () => _config.VignetteEnabled, v => _config.VignetteEnabled = v));

@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Reflection;
 using StardewModdingAPI;
 using StardewModdingAPI.Utilities;
 
@@ -33,6 +35,9 @@ namespace SDVRadiance
     public sealed class NamedProfile
     {
         public string Name { get; set; } = "";
+        /// <summary>Full snapshot (1.0.1+): every tunable value by property name, culture-invariant.
+        /// The explicit fields below are the 1.0.0 format, kept so old chips still load.</summary>
+        public Dictionary<string, string>? Values { get; set; }
         public bool BloomEnabled { get; set; }
         public float BloomThreshold { get; set; }
         public float BloomIntensity { get; set; }
@@ -47,6 +52,7 @@ namespace SDVRadiance
         public bool GodRaysEnabled { get; set; }
         public float GodRaysIntensity { get; set; }
         public bool FogEnabled { get; set; }
+        public bool FogNightMist { get; set; }
         public float FogDensity { get; set; }
     }
 
@@ -87,7 +93,18 @@ namespace SDVRadiance
 
         // --- Volumetric fog ---
         public bool FogEnabled { get; set; } = false;
-        public float FogDensity { get; set; } = 0.13f;
+        /// <summary>Automatic subtle blue mist after dusk (outdoors, clear weather). Used to run
+        /// implicitly whenever any effect was on — now opt-in so Fog OFF really means off.</summary>
+        public bool FogNightMist { get; set; } = false;
+        /// <summary>How thick the night-mist wisps get at deep night (0..1).</summary>
+        public float FogNightMistDensity { get; set; } = 0.90f;
+        public float FogDensity { get; set; } = 0.50f;   // wisp OPACITY (how strong each wisp tints)
+        /// <summary>How much of the frame the day-fog wisps occupy (amount, not opacity).</summary>
+        public float FogCoverage { get; set; } = 0.20f;
+        /// <summary>How much of the frame the night-mist wisps occupy.</summary>
+        public float FogNightMistCoverage { get; set; } = 0.25f;
+        /// <summary>Night-mist drift speed.</summary>
+        public float FogNightMistSpeed { get; set; } = 0.012f;
         public float FogScale { get; set; } = 3.0f;
         public float FogSpeed { get; set; } = 0.02f;
         public float FogTopBias { get; set; } = 0.5f;
@@ -97,6 +114,8 @@ namespace SDVRadiance
         /// <summary>Hide the vanilla drifting <c>Cloud</c> critter shadow (so only our cloud shadow shows).</summary>
         public bool SuppressVanillaCloudShadow { get; set; } = true;
         public float CloudShadowScale { get; set; } = 1.0f;
+        /// <summary>How many separate cloud banks share the screen (cluster frequency, 0..1).</summary>
+        public float CloudShadowCount { get; set; } = 0.5f;
         public float CloudShadowSpeed { get; set; } = 0.04f;
         public float CloudShadowOpacity { get; set; } = 0.61f;
         public float CloudShadowCoverage { get; set; } = 0.43f;
@@ -182,12 +201,17 @@ namespace SDVRadiance
             GodRaysDensity = C(GodRaysDensity, 0.1f, 1f);
             GodRaysDecay = C(GodRaysDecay, 0.5f, 0.99f);
             FogDensity = C(FogDensity, 0f, 1f);
+            FogNightMistDensity = C(FogNightMistDensity, 0f, 1f);
+            FogCoverage = C(FogCoverage, 0f, 1f);
+            FogNightMistCoverage = C(FogNightMistCoverage, 0f, 1f);
+            FogNightMistSpeed = C(FogNightMistSpeed, 0f, 0.1f);
             FogScale = C(FogScale, 1f, 8f);
             FogSpeed = C(FogSpeed, 0f, 0.1f);
             FogTopBias = C(FogTopBias, 0f, 1f);
             CloudShadowOpacity = C(CloudShadowOpacity, 0f, 0.7f);
             CloudShadowCoverage = C(CloudShadowCoverage, 0.1f, 0.9f);
             CloudShadowScale = C(CloudShadowScale, 1f, 5f);
+            CloudShadowCount = C(CloudShadowCount, 0f, 1f);
             CloudShadowSpeed = C(CloudShadowSpeed, 0f, 0.1f);
             TiltShiftStrength = C(TiltShiftStrength, 0f, 1f);
             TiltShiftRadius = C(TiltShiftRadius, 0.05f, 0.9f);
@@ -235,29 +259,62 @@ namespace SDVRadiance
         public bool DebugLogging { get; set; } = false;
 
         /// <summary>Snapshot the current effect settings into a named profile.</summary>
-        public NamedProfile CaptureProfile(string name) => new()
+        /// <summary>Every user-tunable property: bool/int/float/enum, excluding the master
+        /// switch, debug logging, and the preset bookkeeping itself. Reflection-based so
+        /// new effect settings are picked up by saved looks automatically.</summary>
+        private static IEnumerable<PropertyInfo> TunableProps()
         {
-            Name = name,
-            BloomEnabled = BloomEnabled,
-            BloomThreshold = BloomThreshold,
-            BloomIntensity = BloomIntensity,
-            ColorGradeEnabled = ColorGradeEnabled,
-            ColorGradeAuto = ColorGradeAuto,
-            ColorGradeToneMap = ColorGradeToneMap,
-            ColorGradeStrength = ColorGradeStrength,
-            ColorGradeContrast = ColorGradeContrast,
-            ColorGradeSaturation = ColorGradeSaturation,
-            ColorGradeTemperature = ColorGradeTemperature,
-            ColorGradeBrightness = ColorGradeBrightness,
-            GodRaysEnabled = GodRaysEnabled,
-            GodRaysIntensity = GodRaysIntensity,
-            FogEnabled = FogEnabled,
-            FogDensity = FogDensity
-        };
+            foreach (PropertyInfo p in typeof(ModConfig).GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (!p.CanRead || !p.CanWrite)
+                    continue;
+                if (p.Name is nameof(Enabled) or nameof(ActivePreset) or nameof(DebugLogging))
+                    continue;
+                Type t = p.PropertyType;
+                if (t == typeof(bool) || t == typeof(int) || t == typeof(float) || t.IsEnum)
+                    yield return p;
+            }
+        }
+
+        /// <summary>Snapshot the full current look (1.0.0 captured only ~a third of the
+        /// settings, which read as "loading my preset does nothing" for everything else).</summary>
+        public NamedProfile CaptureProfile(string name)
+        {
+            var prof = new NamedProfile { Name = name, Values = new Dictionary<string, string>() };
+            foreach (PropertyInfo p in TunableProps())
+                prof.Values[p.Name] = Convert.ToString(p.GetValue(this), CultureInfo.InvariantCulture) ?? "";
+            return prof;
+        }
 
         /// <summary>Load a saved profile's settings into the live config.</summary>
         public void ApplyProfile(NamedProfile p)
         {
+            // Full snapshot (1.0.1+ chips).
+            if (p.Values is { Count: > 0 })
+            {
+                foreach (PropertyInfo prop in TunableProps())
+                {
+                    if (!p.Values.TryGetValue(prop.Name, out string? raw) || string.IsNullOrEmpty(raw))
+                        continue;
+                    try
+                    {
+                        Type t = prop.PropertyType;
+                        object val = t.IsEnum ? Enum.Parse(t, raw)
+                            : t == typeof(bool) ? bool.Parse(raw)
+                            : t == typeof(int) ? int.Parse(raw, CultureInfo.InvariantCulture)
+                            : float.Parse(raw, CultureInfo.InvariantCulture);
+                        prop.SetValue(this, val);
+                    }
+                    catch
+                    {
+                        // value written by a different mod version — skip just that key
+                    }
+                }
+                Clamp();
+                return;
+            }
+
+            // Legacy 1.0.0 chips (only ever captured the fields below).
             BloomEnabled = p.BloomEnabled;
             BloomThreshold = p.BloomThreshold;
             BloomIntensity = p.BloomIntensity;
@@ -272,7 +329,9 @@ namespace SDVRadiance
             GodRaysEnabled = p.GodRaysEnabled;
             GodRaysIntensity = p.GodRaysIntensity;
             FogEnabled = p.FogEnabled;
+            FogNightMist = p.FogNightMist;
             FogDensity = p.FogDensity;
+            Clamp();
         }
 
         /// <summary>Apply a quick look preset by overwriting the effect fields.</summary>

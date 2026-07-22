@@ -7,14 +7,12 @@
 // World-anchored so the shadows slide across the map, not the screen.
 // Target: MonoGame OpenGL (Shader Model 3.0), used as a SpriteBatch effect.
 //
-// A hard, perfectly axis-aligned seam ("L" shape) could appear after long play
-// sessions: it was NOT the noise shape, it was float precision — `Time` (and
-// so `drift`) grows without bound as the session runs, and once the input to
-// sin()-hash gets large enough, frac()/floor() lose precision at exactly one
-// x line and one y line, reading as a straight seam. The CPU now wraps Time
-// into a bounded range before it ever reaches the shader (see RenderPipeline.
-// RenderCloudShadow), so the hash's input never grows large enough to hit that
-// cliff — the original hash-based fbm (the good, fluffy look) is unchanged.
+// NOISE: like the fog, the density field samples a tileable fbm texture baked
+// once on the CPU at full precision — GPU sin()-hash noise has no precision
+// guarantee and produced hard axis-aligned seams / faceted blobs (worse on
+// some vendors). Wrap addressing = seamless everywhere; also far cheaper than
+// the old 6-octave in-shader fbm called six times per pixel. Time stays
+// wrapped on the CPU so the drift offset itself never loses float precision.
 //=============================================================================
 
 #if OPENGL
@@ -43,6 +41,8 @@ float Opacity;       // how dark the shadows get (0..1)
 float Coverage;      // fraction of area shadowed (0..1)
 float2 WorldOffset;  // viewport origin (world-anchor), pre-scaled on the CPU
 float2 TexelSize;    // blur step (1/width, 0) or (0, 1/height)
+float LightProtect;  // 0 by day .. 1 at night: only then do near-white cores resist the shadow
+float Count;         // 0..1 how many SEPARATE cloud banks are on screen (cluster frequency)
 
 static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
 static const int TAPS = 5;
@@ -55,40 +55,26 @@ struct PixelInput
     float2 UV       : TEXCOORD0;
 };
 
-float hash(float2 p)
+// Baked tileable fbm from C# (shared with the fog).
+texture NoiseTexture;
+sampler2D NoiseSampler = sampler_state
 {
-    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
-}
+    Texture = <NoiseTexture>;
+    AddressU = Wrap;
+    AddressV = Wrap;
+    MinFilter = Linear;
+    MagFilter = Linear;
+    MipFilter = None;
+};
 
-float vnoise(float2 p)
-{
-    float2 i = floor(p);
-    float2 f = frac(p);
-    f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0); // quintic smootherstep (C2)
-    float a = hash(i);
-    float b = hash(i + float2(1.0, 0.0));
-    float c = hash(i + float2(0.0, 1.0));
-    float d = hash(i + float2(1.0, 1.0));
-    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
-}
-
-// Rotate each octave so the value-noise lattice doesn't read as a square grid.
 static const float2x2 M = float2x2(0.80, 0.60, -0.60, 0.80);
 
+// Two rotated layers of the baked fbm — organic, seamless, cheap.
 float fbm(float2 p)
 {
-    float v = 0.0;
-    float amp = 0.5;
-    // Non-integer lacunarity + a per-octave shift break the lattice so shapes
-    // read as curved/organic rather than faceted diagonals.
-    [unroll]
-    for (int i = 0; i < 6; i++)
-    {
-        v += amp * vnoise(p);
-        p = mul(M, p) * 2.02 + float2(37.0, 17.0);
-        amp *= 0.5;
-    }
-    return v;
+    float n1 = tex2D(NoiseSampler, p * 0.101).r;
+    float n2 = tex2D(NoiseSampler, mul(M, p) * 0.211 + 0.37).r;
+    return n1 * 0.65 + n2 * 0.35;
 }
 
 // --- Pass 1: cloud-density mask (rendered at low res) ---------------------
@@ -109,12 +95,30 @@ float4 MaskPS(PixelInput input) : SV_TARGET
     float detail = fbm(p * 2.37 + float2(11.3, 5.9));
     n = n * 0.68 + detail * 0.32;
 
+    // The texture-blend field has a narrower value range than the old in-shader fbm —
+    // left as-is the threshold ramp spans most of it, so EVERYTHING goes half-cloudy
+    // (reads as global dimming). Re-expand the contrast so clear sky and cloud cores
+    // separate again.
+    n = saturate((n - 0.5) * 2.4 + 0.5);
+
+    // CLUSTERING: a low-frequency layer carves the field into separate cloud BANKS
+    // with genuinely clear sky between them. The frequency is normalized by Scale so
+    // Count means "how many banks fit on screen" regardless of the size slider:
+    // Count 0 ≈ 1-2 big banks, Count 1 ≈ 6+ small ones. (First version multiplied
+    // the tiny factor into the already-scaled p — the whole screen fell inside ONE
+    // cluster cell, so the slider only slid the pattern instead of adding banks.)
+    float clusterFreq = lerp(0.35, 1.6, saturate(Count)) / max(Scale, 0.001);
+    float cm = tex2D(NoiseSampler, p * clusterFreq + 0.61).r;
+    // Genuinely clear spells between banks are intentional (real skies have them);
+    // they drift through in a few in-game hours.
+    n *= smoothstep(0.42, 0.60, cm);
+
     // Coverage must read as AREA (more/fewer cloud patches), not a global dimmer. A narrow ramp
     // keeps genuinely clear sky (cloud=0) next to genuinely shadowed patches (cloud=1); the
-    // separable Gaussian blur below is what softens the edges, so this can stay tight without
-    // bringing back a hard contour. Raising Coverage lowers the threshold → more area crosses it.
+    // separable Gaussian blur below is what softens the edges (fluffy penumbra), so this can
+    // stay tight without a hard contour. Raising Coverage lowers the threshold → more area.
     float edge = 1.0 - Coverage;
-    float cloud = smoothstep(edge - 0.22, edge + 0.22, n);
+    float cloud = smoothstep(edge - 0.10, edge + 0.10, n);
     // Roll the low end smoothly toward 0 so open sky reads clear (no faint all-over tint) WITHOUT
     // a hard clip — a sharp cutoff makes the low tail pop on/off at the half-res grid as the mask
     // drifts, which reads as flicker. A gamma curve clears the baseline yet stays continuous, so
@@ -154,12 +158,12 @@ float4 CompositePS(PixelInput input) : SV_TARGET
     float4 c = tex2D(SourceSampler, input.UV);
     float cloud = tex2D(ShadowSampler, input.UV).r;
 
-    // Only near-WHITE emissive cores (fire, lamp glow) resist the shadow — a passing
-    // cloud shouldn't dim a light source. Bright sunny ground (beach sand ~0.9 luma)
-    // must still receive full shadow, or the cloud gets hard-edged holes, so the
-    // window here is razor thin.
+    // Near-white cores resist the shadow ONLY AT NIGHT (lamp/fire glow shouldn't dim
+    // under a moon cloud). By DAY the sun is the light source: a cloud must shade
+    // everything, including white art — eyes, flowers, white walls — or they punch
+    // holes in the shadow (community report). LightProtect is the night factor.
     float lum = dot(c.rgb, LUMA);
-    float protect = smoothstep(0.955, 0.995, lum);
+    float protect = smoothstep(0.955, 0.995, lum) * saturate(LightProtect);
     float shade = 1.0 - cloud * Opacity * (1.0 - protect);
 
     return float4(c.rgb * shade, c.a);

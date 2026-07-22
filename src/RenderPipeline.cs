@@ -80,6 +80,25 @@ namespace SDVRadiance
 
         private bool _loggedOnce;
         private int _frames, _applied, _skipNoTarget, _sizeChanges;
+        private readonly System.Diagnostics.Stopwatch _perfSw = new();
+        private double _perfTotalMs, _perfMaxMs;
+        // Per-builder timings (DebugLogging only): the tile-crossing grid rebuilds are the
+        // prime stutter suspects, and their cost scales with the zoomed-out viewport.
+        private static readonly string[] _buildNames = { "flood", "floodOcc", "occ", "water" };
+        private readonly double[] _buildMs = new double[4];
+        private readonly double[] _buildMax = new double[4];
+
+        private bool TimedBuild(ModConfig config, int idx, Func<bool> fn)
+        {
+            if (!config.DebugLogging)
+                return fn();
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            bool r = fn();
+            double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            _buildMs[idx] += ms;
+            if (ms > _buildMax[idx]) _buildMax[idx] = ms;
+            return r;
+        }
         private int _lastW = -1, _lastH = -1;
         private Vector2 _lightUV; // screen-UV of the light source god rays emanate from (set per frame)
         private Vector2 _godRayUV; // eased light position so rays glide, not jump
@@ -147,7 +166,7 @@ namespace SDVRadiance
             || (c.CloudShadowEnabled && _cloudShadow != null)
             || (c.GodRaysEnabled && _godRays != null)
             || (c.BloomEnabled && _bloom != null)
-            || (c.FogEnabled && _fog != null)
+            || ((c.FogEnabled || c.FogNightMist) && _fog != null)
             || (c.ColorGradeEnabled && _colorGrade != null)
             || (c.TiltShiftEnabled && _tiltShift != null)
             || (c.WaterEnabled && _water != null)
@@ -181,7 +200,7 @@ namespace SDVRadiance
                 return;
             }
 
-            if (config.DebugLogging) _frames++;
+            if (config.DebugLogging) { _frames++; _perfSw.Restart(); }
 
             RenderTargetBinding[] bindings = _device.GetRenderTargets();
             if (bindings.Length == 0 || bindings[0].RenderTarget is not RenderTarget2D target)
@@ -230,20 +249,20 @@ namespace SDVRadiance
                 // Lighting first, so everything downstream (bloom/god rays/grade) sees the
                 // lit result. FLOOD lighting (occlusion-aware GI lightmap) supersedes the
                 // old screen-space lighting stage when enabled — they model the same thing.
-                if (config.FloodLightingEnabled && _floodFx != null && _flood.Build(_device, w, h, config))
+                if (config.FloodLightingEnabled && _floodFx != null && TimedBuild(config, 0, () => _flood.Build(_device, w, h, config)))
                 {
                     BuildLightList(w, h, config);       // direct-light pools (shader term)
-                    _floodOccReady = BuildFloodOccluders(w, h);
+                    _floodOccReady = TimedBuild(config, 1, () => BuildFloodOccluders(w, h));
                     stages.Add(_dFlood);
                 }
                 else if (config.LightingEnabled && _lighting != null && BuildLightList(w, h, config))
                 {
-                    _shadowsReady = config.LightingShadows && BuildOccluderMask(w, h);
+                    _shadowsReady = config.LightingShadows && TimedBuild(config, 2, () => BuildOccluderMask(w, h));
                     stages.Add(_dLighting);
                 }
                 // Water ripple first (only if the current location actually has visible
                 // water tiles), so everything downstream sees the refracted result.
-                if (config.WaterEnabled && _water != null && BuildWaterMask(w, h)) stages.Add(_dWater);
+                if (config.WaterEnabled && _water != null && TimedBuild(config, 3, () => BuildWaterMask(w, h))) stages.Add(_dWater);
                 // Cloud shadows drift over the ground — outdoors only, and first so later
                 // effects (bloom/grade) see the shadowed scene. They are SUNLIGHT (or moonlight)
                 // being blocked, so they fade with dusk and at night exist only under a bright
@@ -267,14 +286,27 @@ namespace SDVRadiance
                 }
                 if (config.BloomEnabled && _bloom != null) stages.Add(_dBloom);
                 // Fog is a weak, patchy effect indoors (and covers the black border), so outdoors only.
-                // Fog runs when manually enabled OR as the automatic blue night mist (outdoors,
-                // clear weather, after dusk — vanilla already grays out rain/snow).
-                bool nightMist = outdoors && !Game1.isRaining && !Game1.isSnowing && NightFactorNow() > 0f;
-                if ((config.FogEnabled || nightMist) && _fog != null && outdoors) stages.Add(_dFog);
+                // DAY fog and NIGHT mist are separate effects with separate toggles: day fog
+                // fades out over dusk exactly as the night mist (sparse blue wisps, clear
+                // weather only) fades in. Both amounts are EASED so toggling never pops.
+                float night = NightFactorNow();
+                float dayTarget = (config.FogEnabled && outdoors) ? config.FogDensity * (1f - night) : 0f;
+                float mistTarget = (config.FogNightMist && outdoors && !Game1.isRaining && !Game1.isSnowing)
+                    ? config.FogNightMistDensity * night : 0f;
+                _fogDayAmt += (dayTarget - _fogDayAmt) * 0.035f;    // ~0.5–1s ease
+                _fogMistAmt += (mistTarget - _fogMistAmt) * 0.035f;
+                if (Math.Abs(dayTarget - _fogDayAmt) < 0.003f) _fogDayAmt = dayTarget;
+                if (Math.Abs(mistTarget - _fogMistAmt) < 0.003f) _fogMistAmt = mistTarget;
+                if ((_fogDayAmt > 0.004f || _fogMistAmt > 0.004f) && _fog != null && outdoors) stages.Add(_dFog);
                 if (config.ColorGradeEnabled && _colorGrade != null) stages.Add(_dGrade);
                 // Tilt-shift (depth-of-field) after grading, so it blurs the graded image.
-                if (config.TiltShiftEnabled && _tiltShift != null) stages.Add(_dTilt);
+                // NOT during events: the game draws the event UI (SKIP button) as part of the
+                // world frame, and the bottom blur band smears it unreadable. Cutscenes keep
+                // the rest of the stack (grade/bloom/fog/clouds) for the cinematic look.
+                bool eventUp = Game1.eventUp || Game1.CurrentEvent != null;
+                if (config.TiltShiftEnabled && _tiltShift != null && !eventUp) stages.Add(_dTilt);
                 // Finishing (vignette + chromatic aberration): true camera-lens pass, last.
+                // (CA is zeroed inside during events — it fringes the SKIP button's text.)
                 if ((config.VignetteEnabled || config.ChromaticAberrationEnabled) && _finishing != null) stages.Add(_dFinish);
 
                 Texture2D current = _sceneRT!;
@@ -343,18 +375,38 @@ namespace SDVRadiance
                 // Batch already open (an exotic failure path left it running) — that's the
                 // state SMAPI expects anyway, so continue.
             }
+
+            if (config.DebugLogging)
+            {
+                _perfSw.Stop();
+                double ms = _perfSw.Elapsed.TotalMilliseconds;
+                _perfTotalMs += ms;
+                if (ms > _perfMaxMs) _perfMaxMs = ms;
+            }
         }
 
         private void MaybeLogDiag(ModConfig config)
         {
             if (_frames < 120) return;
-            _monitor.Log($"[diag] over {_frames} frames: applied={_applied}, skipped={_skipNoTarget}, sizeChanges={_sizeChanges}, size={_lastW}x{_lastH}.", LogLevel.Debug);
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < 4; i++)
+            {
+                if (_buildMs[i] <= 0.01) continue;
+                sb.Append($" {_buildNames[i]}={_buildMs[i]:0.0}ms(max {_buildMax[i]:0.0})");
+                _buildMs[i] = _buildMax[i] = 0;
+            }
+            _monitor.Log($"[diag] over {_frames} frames: applied={_applied}, skipped={_skipNoTarget}, sizeChanges={_sizeChanges}, size={_lastW}x{_lastH}, "
+                + $"apply avg={(_applied > 0 ? _perfTotalMs / _applied : 0):0.00}ms max={_perfMaxMs:0.00}ms | builders:{(sb.Length > 0 ? sb.ToString() : " none")}", LogLevel.Debug);
             _frames = _applied = _skipNoTarget = _sizeChanges = 0;
+            _perfTotalMs = _perfMaxMs = 0;
         }
 
         // ---- stages --------------------------------------------------------
 
         private float _cloudDayFactor = 1f;
+        // Eased effect amounts so nothing pops: day fog / night mist crossfade over time
+        // of day AND ease when toggled; wading self-reflection fades at the water edge.
+        private float _fogDayAmt, _fogMistAmt, _pinFade;
 
         // MonoGame's EffectParameterCollection indexer is a LINEAR scan with string compares,
         // and the stages look parameters up ~100 times per frame — cache the references once
@@ -387,7 +439,7 @@ namespace SDVRadiance
 
         public void Dispose()
         {
-            _sceneRT?.Dispose(); _fullA?.Dispose(); _fullB?.Dispose(); _rtA?.Dispose(); _rtB?.Dispose(); _waterMask?.Dispose(); _waterMaskCore?.Dispose(); _occluderMask?.Dispose(); _lumRT?.Dispose();
+            _sceneRT?.Dispose(); _fullA?.Dispose(); _fullB?.Dispose(); _rtA?.Dispose(); _rtB?.Dispose(); _waterMask?.Dispose(); _waterMaskCore?.Dispose(); _occluderMask?.Dispose(); _lumRT?.Dispose(); _noiseTex?.Dispose(); _noiseTex = null;
             _bloom?.Dispose(); _colorGrade?.Dispose(); _godRays?.Dispose(); _fog?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
             _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose(); _floodFx?.Dispose(); _flood.Dispose();
             _sceneRT = _fullA = _fullB = _rtA = _rtB = null;
