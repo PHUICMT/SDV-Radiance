@@ -141,16 +141,33 @@ namespace SDVRadiance
                 }
         }
 
-        /// <summary>Add on-screen window tiles as warm night lights (scaled by dusk factor).</summary>
+        /// <summary>Add on-screen window tiles as lights. OUTDOORS (a house exterior): warm lamp
+        /// glow that switches on after dusk and off at a per-window "bedtime" (houses go dark as
+        /// the night wears on). INDOORS: the opposite — cool daylight pours IN through the window
+        /// by day and fades to nothing at night.</summary>
         private void AddWindowLights(int vw, int vh, float boost)
         {
             if (_windowTiles.Count == 0)
                 return;
-            float night = NightFactorNow();          // windows only glow once it gets dark
-            if (night < 0.02f)
+            bool outdoors = _windowLoc?.IsOutdoors ?? true;
+            // PHASE 1 = exterior windows only (getting the night-street look right first).
+            // Interior daylight-through-glass is parked for a later phase — the code path
+            // below stays so it's a one-line re-enable, but we skip it for now.
+            if (!outdoors)
                 return;
-            Vector3 warm = new Vector3(1.0f, 0.72f, 0.42f) * night * Math.Max(0.4f, boost);
-            float radiusUv = 190f / Math.Max(1, vh);
+            float night = NightFactorNow();
+            float day = 1f - night;
+            if (night < 0.02f)
+                return;   // exterior windows only glow after dusk
+            int nowMin = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
+            float b = Math.Max(0.4f, boost);
+            // exterior lamp reads as a bright pool; interior daylight is a SOFT, tight wash so it
+            // never blows the window to white (the vanilla window-light already lifts the room).
+            float radiusOut = 190f / Math.Max(1, vh);
+            float radiusIn = 100f / Math.Max(1, vh);
+            Vector3 warm = new(1.0f, 0.72f, 0.42f);          // exterior lamp behind the glass
+            Vector3 cool = new(0.80f, 0.88f, 1.05f);         // daylight coming in
+            bool rain = Game1.isRaining || Game1.isSnowing;
             foreach (var wp in _windowTiles)
             {
                 if (_lightCount >= MaxLights)
@@ -159,8 +176,31 @@ namespace SDVRadiance
                 float u = local.X / vw, v = local.Y / vh;
                 if (u < -0.1f || u > 1.1f || v < -0.1f || v > 1.1f)
                     continue;   // off-screen
+
+                float amt; Vector3 col;
+                if (outdoors)
+                {
+                    // bedtime is hashed per ~6-tile BLOCK, so all the windows of one house go
+                    // dark together but different houses sleep at different times — the street
+                    // dims house-by-house, not all at once. Range 21:30–25:00, then a ~1h fade.
+                    int cx = ((int)wp.X - 32) / 64 / 6, cy = ((int)wp.Y - 32) / 64 / 6;
+                    int hcode = (cx * 73856093) ^ (cy * 19349663);
+                    int bedMin = 1290 + (Math.Abs(hcode) % 8) * 30;     // 21:30 … 25:00, 8 steps
+                    float bedFade = nowMin <= bedMin ? 1f : MathHelper.Clamp(1f - (nowMin - bedMin) / 60f, 0f, 1f);
+                    amt = night * bedFade;
+                    col = warm;
+                }
+                else
+                {
+                    // soft daylight through the glass — kept low so it never blows the window to
+                    // white (vanilla's own window light already lifts the room); dimmer in rain.
+                    amt = day * (rain ? 0.28f : 0.45f);
+                    col = rain ? new Vector3(0.8f, 0.84f, 0.92f) : cool;
+                }
+                if (amt < 0.02f)
+                    continue;
                 _lightPos[_lightCount] = new Vector2(u, v);
-                _lightData[_lightCount] = new Vector4(warm, Math.Max(0.02f, radiusUv));
+                _lightData[_lightCount] = new Vector4(col * amt * b, Math.Max(0.02f, outdoors ? radiusOut : radiusIn));
                 _lightCount++;
             }
         }
