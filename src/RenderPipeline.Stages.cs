@@ -63,6 +63,7 @@ namespace SDVRadiance
             P(fx, "Scale")?.SetValue(config.CloudShadowScale);
             P(fx, "Coverage")?.SetValue(config.CloudShadowCoverage);
             P(fx, "WorldOffset")?.SetValue(WorldOffset(dest.Width, dest.Height));
+            P(fx, "NoiseTexture")?.SetValue(NoiseTex());
             fx.CurrentTechnique = fx.Techniques["Mask"];
             Pass(sb, source, rtA, fx);
 

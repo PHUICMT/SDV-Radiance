@@ -7,14 +7,12 @@
 // World-anchored so the shadows slide across the map, not the screen.
 // Target: MonoGame OpenGL (Shader Model 3.0), used as a SpriteBatch effect.
 //
-// A hard, perfectly axis-aligned seam ("L" shape) could appear after long play
-// sessions: it was NOT the noise shape, it was float precision — `Time` (and
-// so `drift`) grows without bound as the session runs, and once the input to
-// sin()-hash gets large enough, frac()/floor() lose precision at exactly one
-// x line and one y line, reading as a straight seam. The CPU now wraps Time
-// into a bounded range before it ever reaches the shader (see RenderPipeline.
-// RenderCloudShadow), so the hash's input never grows large enough to hit that
-// cliff — the original hash-based fbm (the good, fluffy look) is unchanged.
+// NOISE: like the fog, the density field samples a tileable fbm texture baked
+// once on the CPU at full precision — GPU sin()-hash noise has no precision
+// guarantee and produced hard axis-aligned seams / faceted blobs (worse on
+// some vendors). Wrap addressing = seamless everywhere; also far cheaper than
+// the old 6-octave in-shader fbm called six times per pixel. Time stays
+// wrapped on the CPU so the drift offset itself never loses float precision.
 //=============================================================================
 
 #if OPENGL
@@ -55,42 +53,26 @@ struct PixelInput
     float2 UV       : TEXCOORD0;
 };
 
-float hash(float2 p)
+// Baked tileable fbm from C# (shared with the fog).
+texture NoiseTexture;
+sampler2D NoiseSampler = sampler_state
 {
-    return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
-}
+    Texture = <NoiseTexture>;
+    AddressU = Wrap;
+    AddressV = Wrap;
+    MinFilter = Linear;
+    MagFilter = Linear;
+    MipFilter = None;
+};
 
-float vnoise(float2 p)
-{
-    // Wrapped lattice: keeps the sin()-hash input small so it can never hit the
-    // float-precision cliff (hard axis-aligned seams) — same family as the Time wrap.
-    float2 i = fmod(floor(p), 128.0);
-    float2 f = frac(p);
-    f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0); // quintic smootherstep (C2)
-    float a = hash(i);
-    float b = hash(i + float2(1.0, 0.0));
-    float c = hash(i + float2(0.0, 1.0));
-    float d = hash(i + float2(1.0, 1.0));
-    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
-}
-
-// Rotate each octave so the value-noise lattice doesn't read as a square grid.
 static const float2x2 M = float2x2(0.80, 0.60, -0.60, 0.80);
 
+// Two rotated layers of the baked fbm — organic, seamless, cheap.
 float fbm(float2 p)
 {
-    float v = 0.0;
-    float amp = 0.5;
-    // Non-integer lacunarity + a per-octave shift break the lattice so shapes
-    // read as curved/organic rather than faceted diagonals.
-    [unroll]
-    for (int i = 0; i < 6; i++)
-    {
-        v += amp * vnoise(p);
-        p = mul(M, p) * 2.02 + float2(37.0, 17.0);
-        amp *= 0.5;
-    }
-    return v;
+    float n1 = tex2D(NoiseSampler, p * 0.101).r;
+    float n2 = tex2D(NoiseSampler, mul(M, p) * 0.211 + 0.37).r;
+    return n1 * 0.65 + n2 * 0.35;
 }
 
 // --- Pass 1: cloud-density mask (rendered at low res) ---------------------
