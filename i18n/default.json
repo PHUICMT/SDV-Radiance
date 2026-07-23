@@ -57,6 +57,8 @@
   "config.colorgrade.brightness.name": "Brightness",
   "config.colorgrade.tonemap.name": "Filmic tone mapping (ACES)",
   "config.colorgrade.tonemap.tooltip": "Off by default. The frame is already low-dynamic-range, so this mainly helps when Brightness is pushed above 1 — otherwise it can look muddy.",
+  "config.colorgrade.bluelight.name": "Blue-light filter",
+  "config.colorgrade.bluelight.tooltip": "Eye-comfort warm shift: cuts blue and lifts red a touch, like a night-light mode. 0 = off. Works even with color grading turned off.",
 
   "config.section.godrays": "God rays (light shafts)",
   "config.godrays.enabled.name": "Enable god rays",

@@ -22,6 +22,7 @@ float Saturation;   // 0..2 (1 = neutral)
 float Temperature;  // -1..1 (+ = warmer, - = cooler)
 float Brightness;   // ~0.5..1.5 multiplier (1 = neutral)
 float ToneMap;      // >0.5 = apply ACES filmic tone mapping
+float BlueLight;    // 0..1 eye-comfort warm shift, applied AFTER the grade blend (grade-independent)
 
 static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
 
@@ -79,7 +80,11 @@ float4 GradePS(PixelInput input) : SV_TARGET
 
     // Blend back toward the original by (1 - Strength).
     float3 outc = lerp(src.rgb, col, saturate(Strength));
-    return float4(outc, src.a);
+
+    // Blue-light / eye-comfort filter: cut blue and lift red a touch. Applied AFTER the
+    // grade blend so it is independent of the artistic controls (works with grading off).
+    outc *= float3(1.0 + BlueLight * 0.06, 1.0 - BlueLight * 0.06, 1.0 - BlueLight * 0.28);
+    return float4(saturate(outc), src.a);
 }
 
 technique ColorGrade { pass P0 { PixelShader = compile PS_SHADERMODEL GradePS(); } }

@@ -83,6 +83,10 @@ namespace SDVRadiance
         public bool ColorGradeToneMap { get; set; } = false;
         /// <summary>Auto-shift temperature/saturation by time of day, weather, and season.</summary>
         public bool ColorGradeAuto { get; set; } = true;
+        /// <summary>Blue-light / eye-comfort filter: 0 = off .. 1 = strong warm shift (cuts blue,
+        /// lifts red a touch). Applied on top of grading and independent of it, so it works even
+        /// with color grading turned off.</summary>
+        public float BlueLightFilter { get; set; } = 0f;
 
         // --- God rays ---
         public bool GodRaysEnabled { get; set; } = true;
@@ -237,6 +241,7 @@ namespace SDVRadiance
             WaterReflectStrength = C(WaterReflectStrength, 0f, 1f);
             VignetteStrength = C(VignetteStrength, 0f, 1f);
             ChromaticAberrationStrength = C(ChromaticAberrationStrength, 0f, 1f);
+            BlueLightFilter = C(BlueLightFilter, 0f, 1f);
             FloodLightingStrength = C(FloodLightingStrength, 0f, 1f);
             FloodShadowStrength = C(FloodShadowStrength, 0f, 1f);
             LightingIndoorDarkness = C(LightingIndoorDarkness, 0f, 0.95f);

@@ -86,6 +86,8 @@
   "config.colorgrade.brightness.name": "ความสว่าง",
   "config.colorgrade.tonemap.name": "โทนแบบฟิล์ม (ACES)",
   "config.colorgrade.tonemap.tooltip": "ค่าเริ่มต้นไม่ใช้ เพราะภาพเป็น LDR อยู่แล้ว จะช่วยเฉพาะตอนดันความสว่างเกิน 1 ไม่งั้นภาพจะหม่น",
+  "config.colorgrade.bluelight.name": "ฟิลเตอร์แสงสีฟ้า",
+  "config.colorgrade.bluelight.tooltip": "โหมดถนอมสายตา ปรับภาพให้อุ่นขึ้น (ลดฟ้า เพิ่มแดงนิดหน่อย) คล้ายโหมดกลางคืน 0 = ปิด ใช้ได้แม้ปิด color grade",
 
   "config.section.godrays": "ลำแสง (God rays)",
   "config.godrays.enabled.name": "ใช้ลำแสง",

@@ -136,7 +136,8 @@ namespace SDVRadiance
              || _config.FogEnabled || _config.FogNightMist || _config.CloudShadowEnabled || _config.TiltShiftEnabled
              || _config.WaterEnabled || _config.WaterReflection
              || _config.VignetteEnabled || _config.ChromaticAberrationEnabled
-             || _config.LightingEnabled || _config.FloodLightingEnabled);
+             || _config.LightingEnabled || _config.FloodLightingEnabled
+             || _config.BlueLightFilter > 0.001f);
 
         public override void Entry(IModHelper helper)
         {
@@ -621,6 +622,8 @@ namespace SDVRadiance
                 () => I18n("config.colorgrade.brightness.name"), null, 0.5f, 1.5f, 0.05f);
             api.AddBoolOption(this.ModManifest, () => _config.ColorGradeToneMap, v => _config.ColorGradeToneMap = v,
                 () => I18n("config.colorgrade.tonemap.name"), () => I18n("config.colorgrade.tonemap.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.BlueLightFilter, v => _config.BlueLightFilter = v,
+                () => I18n("config.colorgrade.bluelight.name"), () => I18n("config.colorgrade.bluelight.tooltip"), 0f, 1f, 0.05f);
 
             // --- God rays (implemented) ---
             api.AddPage(this.ModManifest, "godrays", () => I18n("config.section.godrays"));

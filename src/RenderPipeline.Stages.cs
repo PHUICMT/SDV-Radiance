@@ -307,9 +307,12 @@ namespace SDVRadiance
         private void ColorGrade(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var fx = _colorGrade!;
+            // The stage may run for the BLUE-LIGHT FILTER alone (grading toggled off): the
+            // artistic controls go neutral so only the warm eye-comfort shift applies.
+            bool gradeOn = config.ColorGradeEnabled;
             float temp = config.ColorGradeTemperature;
             float sat = config.ColorGradeSaturation;
-            if (config.ColorGradeAuto)
+            if (gradeOn && config.ColorGradeAuto)
             {
                 ComputeAuto(out float autoTemp, out float autoSatMul);
                 temp += autoTemp;
@@ -318,12 +321,13 @@ namespace SDVRadiance
 
             // _meteredExposure is measured & eased per frame in UpdateAutoExposure
             // (1.0 when auto is off), so bright scenes dim smoothly with no pop.
-            P(fx, "Strength")?.SetValue(MathHelper.Clamp(config.ColorGradeStrength, 0f, 1f));
-            P(fx, "Contrast")?.SetValue(config.ColorGradeContrast);
-            P(fx, "Saturation")?.SetValue(sat);
-            P(fx, "Temperature")?.SetValue(MathHelper.Clamp(temp, -1f, 1f));
-            P(fx, "Brightness")?.SetValue(config.ColorGradeBrightness * _meteredExposure);
-            P(fx, "ToneMap")?.SetValue(config.ColorGradeToneMap ? 1f : 0f);
+            P(fx, "Strength")?.SetValue(gradeOn ? MathHelper.Clamp(config.ColorGradeStrength, 0f, 1f) : 1f);
+            P(fx, "Contrast")?.SetValue(gradeOn ? config.ColorGradeContrast : 1f);
+            P(fx, "Saturation")?.SetValue(gradeOn ? sat : 1f);
+            P(fx, "Temperature")?.SetValue(gradeOn ? MathHelper.Clamp(temp, -1f, 1f) : 0f);
+            P(fx, "Brightness")?.SetValue(gradeOn ? config.ColorGradeBrightness * _meteredExposure : 1f);
+            P(fx, "ToneMap")?.SetValue(gradeOn && config.ColorGradeToneMap ? 1f : 0f);
+            P(fx, "BlueLight")?.SetValue(MathHelper.Clamp(config.BlueLightFilter, 0f, 1f));
             fx.CurrentTechnique = fx.Techniques["ColorGrade"];
             DrawFull(sb, source, dest, fx);
         }

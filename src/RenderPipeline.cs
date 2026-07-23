@@ -219,7 +219,7 @@ namespace SDVRadiance
             || (c.GodRaysEnabled && _godRays != null)
             || (c.BloomEnabled && _bloom != null)
             || ((c.FogEnabled || c.FogNightMist) && _fog != null)
-            || (c.ColorGradeEnabled && _colorGrade != null)
+            || ((c.ColorGradeEnabled || c.BlueLightFilter > 0.001f) && _colorGrade != null)
             || (c.TiltShiftEnabled && _tiltShift != null)
             || ((c.WaterEnabled || c.WaterReflection) && _water != null)
             || ((c.VignetteEnabled || c.ChromaticAberrationEnabled) && _finishing != null);
@@ -383,7 +383,7 @@ namespace SDVRadiance
                 if (Math.Abs(dayTarget - _fogDayAmt) < 0.003f) _fogDayAmt = dayTarget;
                 if (Math.Abs(mistTarget - _fogMistAmt) < 0.003f) _fogMistAmt = mistTarget;
                 if ((_fogDayAmt > 0.004f || _fogMistAmt > 0.004f) && _fog != null && outdoors) stages.Add(_dFog);
-                if (config.ColorGradeEnabled && _colorGrade != null) stages.Add(_dGrade);
+                if ((config.ColorGradeEnabled || config.BlueLightFilter > 0.001f) && _colorGrade != null) stages.Add(_dGrade);
                 // Tilt-shift (depth-of-field) after grading, so it blurs the graded image.
                 // NOT during events: the game draws the event UI (SKIP button) as part of the
                 // world frame, and the bottom blur band smears it unreadable. Cutscenes keep
