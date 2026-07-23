@@ -49,22 +49,6 @@ sampler2D MaskLinearSampler = sampler_state
     MinFilter = Linear; MagFilter = Linear; MipFilter = None;
     AddressU = Clamp; AddressV = Clamp;
 };
-// CROSSFADE source: the OUTGOING mask with its own world origin. Every mask read below
-// lerps prev→current by MaskBlend (0 at the moment a rebuild lands → 1 over ~0.3s), so
-// whatever a rebuild changes, the effects GLIDE to the new state — nothing ever steps.
-texture MaskPrevTexture;
-sampler2D MaskPrevSampler = sampler_state
-{
-    Texture = <MaskPrevTexture>;
-    MinFilter = Point; MagFilter = Point; MipFilter = None;
-    AddressU = Clamp; AddressV = Clamp;
-};
-sampler2D MaskPrevLinearSampler = sampler_state
-{
-    Texture = <MaskPrevTexture>;
-    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
-    AddressU = Clamp; AddressV = Clamp;
-};
 
 float Time;             // seconds
 float Strength;         // ripple amplitude (UV units are scaled inside)
@@ -76,9 +60,6 @@ float2 MaskSize;        // mask texture size in texels (tiles)
 float2 MaskOrigin;      // mask window origin in world tiles — the window is PADDED past
                         // the viewport (2 left/right, 4 above), so this is NOT
                         // floor(WorldTileOffset); the CPU passes the true origin.
-float2 MaskOriginPrev;  // prev mask's own world origin (window may have moved between rebuilds)
-float2 MaskSizePrev;
-float MaskBlend;        // 0 = just applied (all prev) → 1 = settled (all current)
 float WaterKind;        // 0 = still (pond/river), 1 = ocean/beach (big directional swell)
 float ReflectStrength;  // 0 = off; screen-space reflection of the scene above the surface
 float SparkleDensity;   // ~0.2–2: glint count per area; glint size follows inversely
@@ -125,25 +106,6 @@ float hash(float2 p)
     return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
 }
 
-// ---- BLENDED mask reads (prev→current crossfade) --------------------------------
-// Every consumer below reads through these: a fresh rebuild fades in over ~0.3s.
-
-float4 MaskAt(float2 p)          // point-filtered, full RGBA
-{
-    float2 wt = p * TilesPerScreen + WorldTileOffset;
-    float4 cur = tex2D(MaskSampler, (wt - MaskOrigin) / MaskSize);
-    float4 prv = tex2D(MaskPrevSampler, (wt - MaskOriginPrev) / MaskSizePrev);
-    return lerp(prv, cur, MaskBlend);
-}
-
-float4 MaskAtSmooth(float2 p)    // bilinear, full RGBA
-{
-    float2 wt = p * TilesPerScreen + WorldTileOffset;
-    float4 cur = tex2D(MaskLinearSampler, (wt - MaskOrigin) / MaskSize);
-    float4 prv = tex2D(MaskPrevLinearSampler, (wt - MaskOriginPrev) / MaskSizePrev);
-    return lerp(prv, cur, MaskBlend);
-}
-
 // Point-sample the PIXEL-accurate water mask at any screen-UV point. The shoreline
 // march runs on this, so a reflection anchors at the PAINTED waterline (the real
 // curved pond edge), not at the tile boundary above it — and carved art (pier posts,
@@ -153,22 +115,17 @@ float4 MaskAtSmooth(float2 p)    // bilinear, full RGBA
 // the shoreline search.
 float WaterAt(float2 p)
 {
-    return MaskAt(p).g;
+    float2 wt = p * TilesPerScreen + WorldTileOffset;
+    float2 muv = (wt - MaskOrigin) / MaskSize;
+    return tex2D(MaskSampler, muv).g;
 }
 
 // Smooth (bilinear) sample of the same mask — soft gradient near the waterline.
 float WaterAtSmooth(float2 p)
 {
-    return MaskAtSmooth(p).g;
-}
-
-// R channel (live EFFECT coverage, temporally smoothed CPU-side) at a screen point —
-// used to test whether a mirrored SOURCE pixel is itself water/foam: water must never
-// reflect itself (the animated surf crest mirrored into the wash read as a shadow
-// sweeping up and down with every wave).
-float WaterEffAtSmooth(float2 p)
-{
-    return MaskAtSmooth(p).r;
+    float2 wt = p * TilesPerScreen + WorldTileOffset;
+    float2 muv = (wt - MaskOrigin) / MaskSize;
+    return tex2D(MaskLinearSampler, muv).g;
 }
 
 // B channel = the CPU-precomputed WATERLINE MAP: distance (half-texel units) from this
@@ -176,15 +133,9 @@ float WaterEffAtSmooth(float2 p)
 // as one continuous waterline. 255 = not march-water / edge out of reach.
 float EdgeDistAt(float2 p)
 {
-    return MaskAt(p).b;
-}
-
-// Bilinear variant: interpolates the waterline distance BETWEEN mask columns, so a
-// diagonal bank's anchor ramps continuously instead of stepping a texel per column
-// (the residual 16px staircase on the mirror's boundary).
-float EdgeDistAtSmooth(float2 p)
-{
-    return MaskAtSmooth(p).b;
+    float2 wt = p * TilesPerScreen + WorldTileOffset;
+    float2 muv = (wt - MaskOrigin) / MaskSize;
+    return tex2D(MaskSampler, muv).b;
 }
 
 float4 WaterPS(PixelInput input) : SV_TARGET
@@ -198,15 +149,13 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // PIXEL-accurate mask (16 texels per tile): true water tiles + the painted water inside
     // shore art, holes carved for piers/bridges/pads. Sampled CONTINUOUSLY (no tile floor) —
     // the effect ends exactly at the painted waterline, never spilling onto land.
-    // All reads go through the prev→current CROSSFADE (MaskAt/MaskAtSmooth).
     float2 maskUV = (worldTile - MaskOrigin) / MaskSize;
-    float4 maskPix = MaskAt(uv);
-    float tileWater = maskPix.r;
+    float tileWater = tex2D(MaskSampler, maskUV).r;
 
     // Mask ALPHA tags the water TYPE: ~1 normal, ~0 ICE (frozen: mirror kept, no ripple),
     // ~0.5 (128) LAVA (slow molten flow + self-glow, no mirror). Ice/lava have no march
     // channel-driven ripple gate difference — the gate below zeroes ripple only for ice.
-    float maskA = maskPix.a;
+    float maskA = tex2D(MaskSampler, maskUV).a;
     float isIce  = 1.0 - step(0.25, maskA);              // a < 0.25
     float isLava = step(0.25, maskA) * (1.0 - step(0.75, maskA)); // 0.25..0.75
     float rippleGate = 1.0 - isIce;                       // ice: no ripple; water/lava: yes
@@ -257,34 +206,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // Their remaining job is grading, not coverage; sprites over water are handled by the
     // carve pass + the player silhouette gate.
     float water = tileWater * max(max(max(blueness, greyness * 0.9), cyan), 0.75) * ringGate;
-    // FOAM pixels — the WHITE SURF CREST only — get almost no effect: foam is opaque
-    // churned water, so ripple/sparkle/mirror on it read as artifacts. STRICT + SOFT:
-    // the first cut (step at maxc≥200) also caught the bright wash-zone art, whose
-    // brightness ANIMATES with the wave frames — the mirror was eaten along a moving
-    // line every frame ("เงามันตัดตรงนี้ตอนที่ลงไป"). Proven with static mask dumps:
-    // the mask never moved; this per-frame ART test did. smoothstep = fades, never cuts.
-    float foamPix = smoothstep(215.0 / 255.0, 240.0 / 255.0, maxc)
-                  * (1.0 - smoothstep(18.0 / 255.0, 45.0 / 255.0, maxc - minc));
-    water *= 1.0 - foamPix * 0.85;
-    // EDGE FEATHER: soften every effect's rim so nothing ends on a hard 1-texel line.
-    // Wide-ish soft coverage (bilinear + 4 neighbour taps ≈ 2-3 mask texels) ramps the
-    // effect down toward the painted waterline. Gated by the POINT sample (tileWater),
-    // so the feather only eats INWARD — zero spill onto land pixels, the rule that keeps
-    // shadows/ripple off sand stays intact.
-    float2 stex = (1.0 / 16.0) / TilesPerScreen;   // one mask texel in SCREEN uv
-    float rSoft = (MaskAtSmooth(uv).r * 2.0
-                 + MaskAtSmooth(uv + float2(stex.x, 0.0)).r
-                 + MaskAtSmooth(uv - float2(stex.x, 0.0)).r
-                 + MaskAtSmooth(uv + float2(0.0, stex.y)).r
-                 + MaskAtSmooth(uv - float2(0.0, stex.y)).r) / 6.0;
-    water *= smoothstep(0.03, 0.85, rSoft);
-    // STABLE water at this pixel (march channel, frame-consensus for animated surf): the
-    // reflection/shadow band gates on THIS, not on the live effect coverage — the live
-    // surf frames sweep the R channel up and down every flip, and a mirror gated on it
-    // popped in and out with the wave ("เงาพึบตามคลื่น"). Ripple/sparkle keep chasing the
-    // live frame; the mirror holds to the average wash line.
-    float waterStable = WaterAtSmooth(uv) * ringGate;
-    if (water <= 0.002 && waterStable <= 0.002)
+    if (water <= 0.002)
         return src;
 
     // Refraction in WORLD space so the ripple travels with the water:
@@ -349,10 +271,8 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // stripping the mirror off the left/right rim of pools and pier inlets.
         // Tiny now: the pixel mask draws real curved shorelines, so the old wide dither that
     // hid tile staircases would only smear the clean edge.
-    float dith = (hash(floor(worldTile * 4.0) / 4.0) - 0.5) * (0.12 / TilesPerScreen.x);
-        // STATIC column: the time-driven `wave` sway is removed from the mirror entirely —
-        // the user asked for a reflection that does not creep at all ("เอาการเลื่อนนี้ออก").
-        float mx = uv.x + dith;
+    float dith = (hash(floor(worldTile * 4.0) / 4.0) - 0.5) * (0.05 / TilesPerScreen.x);
+        float mx = uv.x + wave * waveAmp + dith;   // jittered column for the march + mirror
 
         // Bank-ring columns (the strip of drawn water inside shore tiles) have NO core water
         // above them — their march found land instantly, leaving the mirror short of the
@@ -368,21 +288,9 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // march): per-column distance to this water body's edge, already smoothed across
         // columns on the CPU — stepped tile banks anchor as one continuous line, so the
         // mirror never slices into offset blocks.
-        // Bilinear waterline distance: a diagonal bank's anchor ramps continuously between
-        // columns instead of stepping a texel at a time (the residual mirror staircase).
-        float distHalf = EdgeDistAtSmooth(float2(mx, uv.y)) * 255.0;
-        // Bilinear march sample: the mirror's LATERAL ends blend out over a texel or two
-        // instead of switching to sheen on a hard column seam.
-        float found = WaterAtSmooth(float2(mx, uv.y)) * step(distHalf, 252.5);
+        float distHalf = EdgeDistAt(float2(mx, uv.y)) * 255.0;
+        float found = WaterAt(float2(mx, uv.y)) * step(distHalf, 252.5);
         float waterOff = (distHalf * 0.5 / 16.0) / TilesPerScreen.y;
-        // Organic undulation: bow the anchor line with a world-anchored spatial wave
-        // (±2.5 texels) so the mirror's boundary curves like the foam art instead of
-        // running straight tile edges ("ให้มันโค้งๆ"). STRICTLY STATIC — the first
-        // version drifted this with TIME, which slid the whole reflection up and down
-        // on a slow cycle (the "เลื่อนขึ้นลง" the user chased for hours; self-inflicted).
-        float undul = sin(worldTile.x * 2.3) * 0.62
-                    + sin(worldTile.x * 4.9 + worldTile.y * 0.31) * 0.38;
-        waterOff += undul * (2.5 / 16.0) / TilesPerScreen.y;
         float edgeV = uv.y - waterOff;
 
         // Oblique-view mirror: the world is drawn at a slant, so a reflection must be
@@ -391,15 +299,12 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // The extra 0.6-tile source bias skips the mostly-transparent bottom sliver of shore
         // art (pier post rows, rim edges) so the SOLID body of the object meets the waterline.
         float depth = uv.y - edgeV;                 // how far below the shoreline
-        // Source bias 0.35 tile: start the mirrored CONTENT above the surf-crest band. The
-        // crest art animates every wave frame, and mirroring it painted an animated band
-        // under the waterline that read as the reflection's top being cut/bouncing — the
-        // last frame-coupled input after the mask and gates were proven static. With the
-        // bias, the content next to the line is sand/players/objects: stable art.
-        // No ripple terms in the sample position either — the mirror IMAGE stays pinned;
-        // the water SURFACE over it still ripples via the main col displacement.
-        float2 reflUv = float2(mx,
-                               edgeV - depth * 1.25 - 0.35 / TilesPerScreen.y);
+        // Source bias is nearly zero now: it existed to skip pier-post art rows, but posts are
+        // CARVED out of the pixel mask (the march stops at their base), so the mirror can start
+        // right at the painted waterline — bank rims, bridge arches and a player standing at
+        // the pond's edge all appear pressed against the water.
+        float2 reflUv = float2(mx + ripple.x * 3.0,
+                               edgeV - depth * 1.25 - 0.08 / TilesPerScreen.y + abs(ripple.y) * 2.0);
         reflUv = clamp(reflUv, float2(0.0, 0.0), float2(1.0, 1.0));
         float3 refl = tex2D(SourceSampler, reflUv).rgb;
 
@@ -427,10 +332,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // don't). Everywhere else, blend to a soft sky-glaze SHEEN instead of cutting to
         // nothing — the hard rectangles between mirrored and unmirrored water came from
         // those cuts, not from the mirror itself.
-        // Blend into the SURFACE: keep 45% of the water's own lighting (sunset glare, night
-        // sheen) and lay the cooled reflection over it — the old constant dark tint replaced
-        // bright sunset water with a near-black smudge ("ไม่เนียนไปกับน้ำ").
-        float3 mirrorCol = col.rgb * 0.45 + refl * float3(0.62, 0.72, 0.88) * 0.72;
+        float3 mirrorCol = refl * float3(0.66, 0.76, 0.92);   // cool + darken: reads as "in the water"
         float3 sheenCol = col.rgb * float3(1.06, 1.10, 1.18) + 0.015;
         // Keep the self-suppression zone TIGHT: small tide pools sit entirely within a couple of
     // tiles of their own shoreline, so a wide nearSelf band muted their whole mirror. And only
@@ -448,35 +350,10 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // reflection washed down to a faint ghost. Only deeper down (source genuinely
         // upstream water) does the damping engage.
         float srcDamp = srcWater * smoothstep(0.25, 1.2, depth * TilesPerScreen.y);
-        // Water must never reflect ITSELF: if the mirrored source pixel is live water/foam
-        // (the animated surf crest just above the waterline), kill the true-mirror part —
-        // no depth gate here, because the crest sits exactly where the depth gate is zero.
-        // The player/shore above the crest still mirrors (their pixels aren't in the mask).
-        float srcFoam = WaterEffAtSmooth(reflUv);
-        float mirrorness = found * (1.0 - srcDamp * 0.7) * (1.0 - nearSelf * 0.4)
-                         * (1.0 - srcFoam * 0.9);
-        // TOP FADE by waterline distance (B channel — static, proven stable): the mirror
-        // eases in over the first ~half tile below the stable line, so it never overlaps
-        // the surf-crest band. Replaces the per-frame foam-brightness kill there, which
-        // flickered the reflection's top with every wave frame ("เงาส่วนคลื่นๆ หายบางครั้ง").
-        float amtFoam = smoothstep(2.0, 16.0, distHalf);
+        float mirrorness = found * (1.0 - srcDamp * 0.7) * (1.0 - nearSelf * 0.4);
         float3 reflCol = lerp(sheenCol, mirrorCol, mirrorness);
-        // Coverage: STABLE water only (frame INTERSECTION = permanent waterline). Pinned
-        // and geometrically stable — the surf-wash band carries no mirror at all, which is
-        // what made the reflection stop bouncing (user: "เงาหยุดแค่ตรงนี้ ไม่ไปเต็มคลื่น").
-        // SOFT CUTOFF EDGE ("ขอบจุดตัดฟุ้งๆนวลๆ"): blur the permanent-water coverage over
-        // ~2 texels and smoothstep it, so the reflection DISSOLVES into the wash over a
-        // few px instead of ending on a crisp line — both the tide edge and the hard chunk
-        // beside the pier (user's red box) melt out softly.
-        float2 ftex = (2.0 / 16.0) / TilesPerScreen;
-        float stableSoft = (waterStable * 2.0
-                          + WaterAtSmooth(uv + float2(ftex.x, 0.0)) * ringGate
-                          + WaterAtSmooth(uv - float2(ftex.x, 0.0)) * ringGate
-                          + WaterAtSmooth(uv + float2(0.0, ftex.y)) * ringGate
-                          + WaterAtSmooth(uv - float2(0.0, ftex.y)) * ringGate) / 6.0;
-        float mirrorEdge = smoothstep(0.04, 0.55, stableSoft);
-        float amt = saturate(ReflectStrength) * mirrorEdge * fade * onScreen
-                  * saturate(srcLum * 3.2) * lerp(0.5, 1.0, mirrorness) * amtFoam;
+        float amt = saturate(ReflectStrength) * water * fade * onScreen
+                  * saturate(srcLum * 3.2) * lerp(0.5, 1.0, mirrorness);
         col.rgb = lerp(col.rgb, reflCol, amt);
 
         // SELF-REFLECTION while wading: standing IN the water the player is BELOW the
@@ -488,31 +365,20 @@ float4 WaterPS(PixelInput input) : SV_TARGET
             float feetFrac = 0.9545;                             // feet row inside the mask RT
             float feetV = PlayerRect.y + feetFrac * pmSpan.y;
             float dvB = (uv.y - feetV) / pmSpan.y;               // box units below the feet
-            // NO ripple term: the time-varying ripple.x here slid the wading reflection
-            // sideways every frame — the "เงาเลื่อน" seen while standing in open water.
-            // The reflection image stays PINNED; the surface over it still ripples via the
-            // main col displacement (same rule as the tide-line mirror).
-            float2 ruv = float2((uv.x - PlayerRect.x) / pmSpan.x,
+            float2 ruv = float2((uv.x + ripple.x * 2.5 - PlayerRect.x) / pmSpan.x,
                                 feetFrac - dvB);
             float inR = step(0.0, dvB) * step(0.0, ruv.x) * step(ruv.x, 1.0)
                       * step(0.0, ruv.y) * step(ruv.y, 1.0);
-            // 3-tap horizontal soften: the baked silhouette is hard-alpha, which drew the
-            // wading reflection with a razor outline — a couple of px of blur reads as water.
-            float ra = (tex2D(PlayerMaskSampler, saturate(ruv)).a
-                      + tex2D(PlayerMaskSampler, saturate(ruv + float2(0.02, 0.0))).a
-                      + tex2D(PlayerMaskSampler, saturate(ruv - float2(0.02, 0.0))).a) / 3.0 * inR;
+            float ra = tex2D(PlayerMaskSampler, saturate(ruv)).a * inR;
             // Colour comes from the SCREEN mirrored about the feet line (the player's own
             // drawn sprite) — outfit colours for free; the silhouette alpha keeps the shape
             // so nothing beside the player leaks in.
             float mirrY = feetV - dvB * pmSpan.y;
-            float3 selfCol = tex2D(SourceSampler, float2(saturate(uv.x), saturate(mirrY))).rgb
-                           * float3(0.62, 0.72, 0.88);   // cool + darken: "in the water" (no ripple slide)
-            // PULLED IN + soft tail ("หุบเข้ามา + ขอบฟุ้ง"): the reflection is shorter
-            // (gone by ~0.6 box below the feet, was ~1.1) and its end dissolves via
-            // smoothstep instead of a linear cut, so the bottom edge melts into the water.
-            float rfade = 1.0 - smoothstep(0.0, 0.6, dvB);
+            float3 selfCol = tex2D(SourceSampler, float2(saturate(uv.x + ripple.x * 2.5), saturate(mirrY))).rgb
+                           * float3(0.62, 0.72, 0.88);   // cool + darken: "in the water"
+            float rfade = saturate(1.0 - dvB * 0.9);
             col.rgb = lerp(col.rgb, selfCol,
-                           saturate(ra * 1.3) * rfade * waterStable * saturate(ReflectStrength) * 0.6
+                           saturate(ra * 1.3) * rfade * water * saturate(ReflectStrength) * 0.6
                            * saturate(PlayerInWater));
         }
     }
@@ -521,14 +387,14 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // island rims, lily pads, pier posts. The mirror above only reflects what stands
     // NORTH of the water, so side edges looked bare; this grounds every waterline the
     // way real shallows darken against their bank. Width ~2 mask texels (bilinear).
-    float2 mts = (2.0 / 16.0) / TilesPerScreen;   // ~2 mask texels in SCREEN uv
-    float rimMin = min(min(MaskAtSmooth(uv + float2(0.0, -mts.y)).r,
-                           MaskAtSmooth(uv + float2(0.0,  mts.y)).r),
-                       min(MaskAtSmooth(uv + float2(-mts.x, 0.0)).r,
-                           MaskAtSmooth(uv + float2( mts.x, 0.0)).r));
+    float2 mt = 2.0 / (MaskSize * 16.0);
+    float rimMin = min(min(tex2D(MaskLinearSampler, maskUV + float2(0.0, -mt.y)).r,
+                           tex2D(MaskLinearSampler, maskUV + float2(0.0,  mt.y)).r),
+                       min(tex2D(MaskLinearSampler, maskUV + float2(-mt.x, 0.0)).r,
+                           tex2D(MaskLinearSampler, maskUV + float2( mt.x, 0.0)).r));
     // Gated to MARCH water (g): wet-shading fringe kept only in the effect mask must
     // not get a dark rim painted onto the bank.
-    float rim = saturate(tileWater - rimMin) * maskPix.g;
+    float rim = saturate(tileWater - rimMin) * tex2D(MaskSampler, maskUV).g;
     // Rim shading belongs to the shimmer look — gone when only the mirror is running.
     col.rgb *= 1.0 - rim * 0.22 * water * saturate(TintAmt * 3.0);
 

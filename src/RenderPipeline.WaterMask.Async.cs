@@ -418,6 +418,14 @@ namespace SDVRadiance
                     if (animOnly) anyAnim = true;
                     _animOnlyTileBuf[idx] = animOnly;
                     _puddleTileBuf[idx] = puddle;
+                    // Surf tracking disabled → animated tiles use their frame-CONSENSUS bits for
+                    // the EFFECT channel too: each rebuild (tile crossing / 10s safety) used to
+                    // capture whichever frame the surf happened to be on, and the crossfade then
+                    // MORPHED the effects to the new snapshot — a slow slide while standing
+                    // still. Consensus in both channels = every rebuild reproduces the same
+                    // mask bit-for-bit, exactly the stability 1.2.0 had.
+                    if (!AnimTrackingEnabled && sbits != null)
+                        bits = sbits;
                     _tileBitsBuf[idx] = bits;
                     _tileRefineBuf[idx] = refineTile;
                     _tileBitsStableBuf[idx] = sbits;
