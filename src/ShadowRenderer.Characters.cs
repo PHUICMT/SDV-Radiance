@@ -113,6 +113,13 @@ namespace SDVRadiance
                     // stale window lights (window removed/dark: glow gone but source lingers).
                     if (!WindowGlowing(loc, ls))
                         continue;
+                    // Skip tiny transient point lights (fireflies from JP's The Night Lights,
+                    // sparkle mods): each drifting sub-1-radius light threw its own moving shadow
+                    // on the player. Their glow is untouched — only shadow casting is gated. Windows
+                    // always cast regardless of radius (a small window still shadows the room).
+                    bool isWindow = ls.lightContext.Value == LightSource.LightContext.WindowLight;
+                    if (!isWindow && ls.radius.Value < config.MinShadowLightRadius)
+                        continue;
                     Vector2 screen = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
                     // Shadows reach much further than the glow; keep a whole-room-crossing minimum
                     // so a single small window still shadows the far corner. reach is STEADY (no

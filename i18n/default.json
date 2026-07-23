@@ -214,6 +214,8 @@
   "config.shadows.blur.name": "Edge softness",
   "config.shadows.objects.name": "Shadows for trees & bushes",
   "config.shadows.objects.tooltip": "Also cast leaning shadows from trees and bushes, not just characters.",
+  "config.shadows.minlightradius.name": "Min light size for shadows",
+  "config.shadows.minlightradius.tooltip": "Point lights smaller than this (in tiles) don't cast shadows. Stops tiny drifting lights from other mods (fireflies in JP's The Night Lights, sparkles) from throwing endless moving shadows on you. Their glow is unaffected; windows always cast. Raise it if a mod's fireflies are still casting; lower it to let small candles cast.",
   "config.shadows.heightdrop.name": "Building & ledge shadows",
   "config.shadows.heightdrop.tooltip": "Project ground shadows from walls, buildings, and ledges (requires the Height Framework mod).",
   "config.shadows.heightlength.name": "Building shadow length",
