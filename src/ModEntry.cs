@@ -365,6 +365,13 @@ namespace SDVRadiance
             // Only hide the vanilla drifting cloud when OUR cloud shadow is actually on —
             // otherwise turning Cloud Shadows off silently removed vanilla clouds too.
             SuppressVanillaClouds = _config.Enabled && _config.SuppressVanillaCloudShadow && _config.CloudShadowEnabled;
+            // GGR interop: skipping the Cloud critter's DRAW (Cloud_Draw_Prefix) leaves it in
+            // loc.critters, so Global God Rays still dims its rays "under" the now-invisible
+            // cloud shadow. Remove the Cloud critters outright while we suppress them, so nothing
+            // downstream reacts to a shadow that no longer renders. (Our own cloud shadows come
+            // from the CloudShadow shader stage, not this critter, so nothing of ours is lost.)
+            if (SuppressVanillaClouds && Context.IsWorldReady)
+                Game1.currentLocation?.critters?.RemoveAll(c => c is StardewValley.BellsAndWhistles.Cloud);
             SuppressVanillaObjectShadows = _config.DirectionalShadowObjects && ShadowRenderer.SunShadowActive(_config);
             // Big-craftable blobs are replaced in BOTH paths (sun directional + indoor/night contact),
             // so gate on ShadowsActiveNow, not just the sun path.
