@@ -461,12 +461,21 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // flickered the reflection's top with every wave frame ("เงาส่วนคลื่นๆ หายบางครั้ง").
         float amtFoam = smoothstep(2.0, 16.0, distHalf);
         float3 reflCol = lerp(sheenCol, mirrorCol, mirrorness);
-        // Coverage: STABLE water only — geometrically PINNED. Following the live channel
-        // made a different slice of the mirrored figure visible each wave frame, which
-        // read as the reflection warping downward ("เงาวาปลงล่าง"). The stable line is
-        // raised CPU-side (40% frame consensus) so it hugs the visible wet edge; the
-        // foam band above it keeps no mirror (foam blocks reflections — physical).
-        float amt = saturate(ReflectStrength) * waterStable * fade * onScreen
+        // Coverage: STABLE water only (frame INTERSECTION = permanent waterline). Pinned
+        // and geometrically stable — the surf-wash band carries no mirror at all, which is
+        // what made the reflection stop bouncing (user: "เงาหยุดแค่ตรงนี้ ไม่ไปเต็มคลื่น").
+        // SOFT CUTOFF EDGE ("ขอบจุดตัดฟุ้งๆนวลๆ"): blur the permanent-water coverage over
+        // ~2 texels and smoothstep it, so the reflection DISSOLVES into the wash over a
+        // few px instead of ending on a crisp line — both the tide edge and the hard chunk
+        // beside the pier (user's red box) melt out softly.
+        float2 ftex = (2.0 / 16.0) / TilesPerScreen;
+        float stableSoft = (waterStable * 2.0
+                          + WaterAtSmooth(uv + float2(ftex.x, 0.0)) * ringGate
+                          + WaterAtSmooth(uv - float2(ftex.x, 0.0)) * ringGate
+                          + WaterAtSmooth(uv + float2(0.0, ftex.y)) * ringGate
+                          + WaterAtSmooth(uv - float2(0.0, ftex.y)) * ringGate) / 6.0;
+        float mirrorEdge = smoothstep(0.04, 0.55, stableSoft);
+        float amt = saturate(ReflectStrength) * mirrorEdge * fade * onScreen
                   * saturate(srcLum * 3.2) * lerp(0.5, 1.0, mirrorness) * amtFoam;
         col.rgb = lerp(col.rgb, reflCol, amt);
 
@@ -479,7 +488,11 @@ float4 WaterPS(PixelInput input) : SV_TARGET
             float feetFrac = 0.9545;                             // feet row inside the mask RT
             float feetV = PlayerRect.y + feetFrac * pmSpan.y;
             float dvB = (uv.y - feetV) / pmSpan.y;               // box units below the feet
-            float2 ruv = float2((uv.x + ripple.x * 2.5 - PlayerRect.x) / pmSpan.x,
+            // NO ripple term: the time-varying ripple.x here slid the wading reflection
+            // sideways every frame — the "เงาเลื่อน" seen while standing in open water.
+            // The reflection image stays PINNED; the surface over it still ripples via the
+            // main col displacement (same rule as the tide-line mirror).
+            float2 ruv = float2((uv.x - PlayerRect.x) / pmSpan.x,
                                 feetFrac - dvB);
             float inR = step(0.0, dvB) * step(0.0, ruv.x) * step(ruv.x, 1.0)
                       * step(0.0, ruv.y) * step(ruv.y, 1.0);
@@ -492,9 +505,12 @@ float4 WaterPS(PixelInput input) : SV_TARGET
             // drawn sprite) — outfit colours for free; the silhouette alpha keeps the shape
             // so nothing beside the player leaks in.
             float mirrY = feetV - dvB * pmSpan.y;
-            float3 selfCol = tex2D(SourceSampler, float2(saturate(uv.x + ripple.x * 2.5), saturate(mirrY))).rgb
-                           * float3(0.62, 0.72, 0.88);   // cool + darken: "in the water"
-            float rfade = saturate(1.0 - dvB * 0.9);
+            float3 selfCol = tex2D(SourceSampler, float2(saturate(uv.x), saturate(mirrY))).rgb
+                           * float3(0.62, 0.72, 0.88);   // cool + darken: "in the water" (no ripple slide)
+            // PULLED IN + soft tail ("หุบเข้ามา + ขอบฟุ้ง"): the reflection is shorter
+            // (gone by ~0.6 box below the feet, was ~1.1) and its end dissolves via
+            // smoothstep instead of a linear cut, so the bottom edge melts into the water.
+            float rfade = 1.0 - smoothstep(0.0, 0.6, dvB);
             col.rgb = lerp(col.rgb, selfCol,
                            saturate(ra * 1.3) * rfade * waterStable * saturate(ReflectStrength) * 0.6
                            * saturate(PlayerInWater));

@@ -103,12 +103,13 @@ namespace SDVRadiance
             if (nf < 2)
                 return null;
             var bits = new bool[256];
-            // 40% threshold (not majority): raises the stable line toward the visible wet
-            // edge, so the pinned mirror hugs the foam instead of floating a band below it.
-            // The outer strip is damp sand part of the cycle — wet sand reflecting is fine.
-            int need = Math.Max(1, (nf * 2 + 4) / 5);
+            // INTERSECTION (water in EVERY frame) = the PERMANENT waterline. The mirror gates
+            // on this, so it stops exactly where the water is always wet — the surf-wash band
+            // (wet only part of the cycle) is excluded and carries no reflection. This is what
+            // made vanilla-era water look stable: the reflection never entered the moving wash
+            // (user 2026-07-23: "เงาหยุดแค่ตรงนี้ ไม่ไปเต็มคลื่น" = correct, keep it there).
             for (int p = 0; p < 256; p++)
-                bits[p] = counts[p] >= need;
+                bits[p] = counts[p] >= nf;
             return bits;
         }
 
@@ -474,8 +475,17 @@ namespace SDVRadiance
         /// the mask was gathered (throttled to one scan per 8 ticks; no-op unless animated art
         /// actually fed the mask). A flip invalidates the cached mask so effects follow the
         /// surf/foam animation.</summary>
+        /// <summary>P0-C surf tracking is DISABLED (2026-07-23): rebuilding the mask whenever a
+        /// surf frame flipped made the water effects/reflection shift while the player stood
+        /// still — the "เงาเลื่อน" the user chased for hours. 1.2.0 rebuilt only on a tile
+        /// crossing (mask frozen while standing), which read as rock-stable. We match that:
+        /// the mask is built ONCE per tile-crossing from the current frame and held. Flip this
+        /// back on only with a much gentler mechanism if surf-following is ever wanted again.</summary>
+        private const bool AnimTrackingEnabled = false;
         private bool AnimFramesChanged()
         {
+            if (!AnimTrackingEnabled)
+                return false;
             if (!_animWatchAffectsMask || _animWatch.Count == 0)
                 return false;
             if (Game1.ticks - _animCheckTick < 8)
