@@ -323,6 +323,22 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // always-on base mirrored far-upstream cliffs down entire rivers as dark streaks;
         // 1.6 faded bridges out so fast their reflection looked cut short.)
         float fade = saturate(1.0 - depth * 1.3);
+        // Top-edge feather: the mirror used to hit FULL strength on the very first pixel
+        // below the waterline, reading as a hard dark line along the shore. Ramp it in
+        // over ~a third of a tile of waterline distance instead. Sampled at the pixel's
+        // TRUE position (not the wave-jittered march column mx) so the feathered edge is
+        // pure spatial distance — static, never sways with the surface.
+        // 255 (= fringe wash band / edge out of reach) counts as ZERO, not one: the wash
+        // band used to keep its bright sheen right up against the mirror zone's top tile
+        // row, and that sheen→mirror switch drew a straight horizontal seam across the
+        // beach. With the fringe at zero, both sides of that row fade from nothing.
+        // Ramp window starts ~0.35 tile BELOW the shoreline, full by ~0.95 tile: the top of
+        // the mirror used to reflect the sunlit foam/shore strip (brightest thing in frame) as a
+        // hard bright line. By the depth where edgeIn goes non-zero, the source (edgeV - depth×1.25)
+        // has already risen ABOVE the foam band, so the mirror shows trees/sky, not the bright surf.
+        // distHalf is in half-texel units → 32 per tile; 11→0.34 tile, 30→0.94 tile.
+        float edTrue = EdgeDistAt(uv) * 255.0;
+        float edgeIn = smoothstep(1.0, 14.0, edTrue) * (1.0 - smoothstep(240.0, 252.5, edTrue));
         // Fade the reflection out where the mirrored sample would fall OFF-screen, instead of
         // clamping (which smears the edge row/column across the water near the screen border).
         float2 dborder = min(reflUv, float2(1.0, 1.0) - reflUv);
@@ -352,8 +368,18 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         float srcDamp = srcWater * smoothstep(0.25, 1.2, depth * TilesPerScreen.y);
         float mirrorness = found * (1.0 - srcDamp * 0.7) * (1.0 - nearSelf * 0.4);
         float3 reflCol = lerp(sheenCol, mirrorCol, mirrorness);
-        float amt = saturate(ReflectStrength) * water * fade * onScreen
+        float amt = saturate(ReflectStrength) * water * fade * edgeIn * onScreen
                   * saturate(srcLum * 3.2) * lerp(0.5, 1.0, mirrorness);
+        // GLARE guard: a mirror of something BRIGHTER than the water (a sunlit snow beach, a
+        // white sky) at the reflection's leading edge spiked into a hard bright line along the
+        // shore (measured +29 lum, full width). A real reflection of trees / buildings / a
+        // standing figure is DARKER than the water and must stay — so suppress only by how much
+        // the reflected colour would out-brighten the water beneath it. Dark reflections: glare≈0,
+        // untouched. Bright shore/sky: glare≈1, nearly cut.
+        float reflLum = dot(reflCol, float3(0.299, 0.587, 0.114));
+        float colLum  = dot(col.rgb, float3(0.299, 0.587, 0.114));
+        float glare = saturate((reflLum - colLum) * 6.0);
+        amt *= 1.0 - glare * 0.96;
         col.rgb = lerp(col.rgb, reflCol, amt);
 
         // SELF-REFLECTION while wading: standing IN the water the player is BELOW the
@@ -387,14 +413,19 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // island rims, lily pads, pier posts. The mirror above only reflects what stands
     // NORTH of the water, so side edges looked bare; this grounds every waterline the
     // way real shallows darken against their bank. Width ~2 mask texels (bilinear).
+    // Each tap is normalized to COVERAGE (0..0.5 → 0..1, everything above = 1) before
+    // comparing: the R channel also GRADES effect strength (140 animated-art wash /
+    // 205 puddle / 255 open water), and the raw 255→140 grade step at the bottom of a
+    // beach's animated surf band read as a phantom "bank" — a straight dark contact
+    // line drawn across open water. Only real R→0 coverage edges may raise the rim.
     float2 mt = 2.0 / (MaskSize * 16.0);
-    float rimMin = min(min(tex2D(MaskLinearSampler, maskUV + float2(0.0, -mt.y)).r,
-                           tex2D(MaskLinearSampler, maskUV + float2(0.0,  mt.y)).r),
-                       min(tex2D(MaskLinearSampler, maskUV + float2(-mt.x, 0.0)).r,
-                           tex2D(MaskLinearSampler, maskUV + float2( mt.x, 0.0)).r));
+    float rimMin = min(min(smoothstep(0.0, 0.5, tex2D(MaskLinearSampler, maskUV + float2(0.0, -mt.y)).r),
+                           smoothstep(0.0, 0.5, tex2D(MaskLinearSampler, maskUV + float2(0.0,  mt.y)).r)),
+                       min(smoothstep(0.0, 0.5, tex2D(MaskLinearSampler, maskUV + float2(-mt.x, 0.0)).r),
+                           smoothstep(0.0, 0.5, tex2D(MaskLinearSampler, maskUV + float2( mt.x, 0.0)).r)));
     // Gated to MARCH water (g): wet-shading fringe kept only in the effect mask must
     // not get a dark rim painted onto the bank.
-    float rim = saturate(tileWater - rimMin) * tex2D(MaskSampler, maskUV).g;
+    float rim = saturate(smoothstep(0.0, 0.5, tileWater) - rimMin) * tex2D(MaskSampler, maskUV).g;
     // Rim shading belongs to the shimmer look — gone when only the mirror is running.
     col.rgb *= 1.0 - rim * 0.22 * water * saturate(TintAmt * 3.0);
 

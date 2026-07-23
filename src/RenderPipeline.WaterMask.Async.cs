@@ -49,6 +49,7 @@ namespace SDVRadiance
         // ---- gathered per-tile inputs (main thread writes, worker reads) ----
         private bool[]? _waterRingBuf;         // extra dilation scratch (ring must not destroy _waterBoolBuf)
         private bool[]?[]? _tileBitsBuf;       // effect-channel art classification per tile (null = none)
+        private bool[]? _tileRefineBuf;        // P0-A: isWater tile whose LABEL bits REPLACE the full-tile fill (per-pixel shoreline from ground truth)
         private bool[]?[]? _tilePuddleBitsBuf; // puddle classification bits per tile (tier > 0 only)
         private bool[]?[]? _tileCarveBBuf;     // Buildings-layer opacity bits (null = no art)
         private bool[]?[]? _tileCarveFBuf;     // Front-layer opacity bits
@@ -159,6 +160,7 @@ namespace SDVRadiance
             bool outdoors = loc.IsOutdoors;
 
             if (_tileBitsBuf == null || _tileBitsBuf.Length < count) _tileBitsBuf = new bool[]?[count];
+            if (_tileRefineBuf == null || _tileRefineBuf.Length < count) _tileRefineBuf = new bool[count];
             if (_tilePuddleBitsBuf == null || _tilePuddleBitsBuf.Length < count) _tilePuddleBitsBuf = new bool[]?[count];
             if (_tileCarveBBuf == null || _tileCarveBBuf.Length < count) _tileCarveBBuf = new bool[]?[count];
             if (_tileCarveFBuf == null || _tileCarveFBuf.Length < count) _tileCarveFBuf = new bool[]?[count];
@@ -183,6 +185,7 @@ namespace SDVRadiance
                     bool[]? bits = null;
                     byte puddle = 0;
                     bool animOnly = false;
+                    bool refineTile = false;   // P0-A: label bits REPLACE the full-tile water fill
                     int iceN = 0, flowN = 0, lavaN = 0;   // accumulated across Back + Buildings labels
                     // ---- GROUND-TRUTH LABELS FIRST (HF Studio). A labeled Back art is
                     // authoritative: its water pixels join the mask (STATIC painted pools on
@@ -202,6 +205,32 @@ namespace SDVRadiance
                             {
                                 bits = lb;
                                 iceN += nI; flowN += nF; lavaN += nL;
+                                job.AnyLabeled = true;
+                            }
+                        }
+                    }
+                    // isWater tiles (game-flagged beach/river/ocean): consult Back labels too. A
+                    // WELL-PAINTED label (>=75%) refines the tile PER-PIXEL from ground truth,
+                    // REPLACING the full-tile square fill that draws boxy shorelines. LABEL-ONLY +
+                    // STATIC: no art heuristic, no time term — painted labels never move, so the
+                    // mask can't slide. Sub-type counts apply too (lava/frozen pools ARE isWater).
+                    // Harmless until water is labelled: refineTile stays false, so the fill below
+                    // is byte-identical to today for every unlabelled tile.
+                    else if (isWater && hf != null)
+                    {
+                        byte[]? lbl = null;
+                        try { lbl = hf.GetPixelClasses(loc, tx, ty, "Back"); }
+                        catch { hf = null; }
+                        if (lbl != null)
+                        {
+                            var (lb, nW, nI, nF, nL) = WaterBitsFromLabels(lbl);
+                            if (nI + nF + nL > 0) { iceN += nI; flowN += nF; lavaN += nL; job.AnyLabeled = true; }
+                            int nPainted = 0;
+                            for (int p = 0; p < 256; p++) if (lbl[p] != 0) nPainted++;
+                            if (nPainted >= 192)   // >=75% painted -> per-pixel coverage from the label
+                            {
+                                bits = lb;
+                                refineTile = true;
                                 job.AnyLabeled = true;
                             }
                         }
@@ -297,6 +326,7 @@ namespace SDVRadiance
                     _animOnlyTileBuf[idx] = animOnly;
                     _puddleTileBuf[idx] = puddle;
                     _tileBitsBuf[idx] = bits;
+                    _tileRefineBuf![idx] = refineTile;
                     // Ice / flowing win over each other by pixel count; a plain-water majority
                     // keeps normal behaviour. Ice → reflection but no ripple (mask alpha 0);
                     // flowing → ripple but no reflection (scrubbed from the march channel).
