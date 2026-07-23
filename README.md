@@ -42,9 +42,10 @@ sprites, outfit mods, and recolors work automatically — no per-mod patches.
 - Day fog and night mist — two separate wispy drifting effects, each with its own amount, intensity, and drift speed
 - Bloom, tilt-shift depth blur, vignette, chromatic aberration
 - Cinematic color grading with automatic mood by time / weather / season and metered auto-exposure
+- Blue light eye comfort filter, layered on the grade or used on its own
 
 **Controls**
-- Live in-game tuner (default **F6**): drag to preview, presets, save/load named looks
+- Live in-game tuner (default **F6**), organized into tabs by category: drag to preview, presets, save/load named looks
 - Generic Mod Config Menu integration; per-effect toggles and sliders
 - Toggle the whole stack with **F7** (rebindable)
 

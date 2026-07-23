@@ -11,7 +11,7 @@ Status legend: **OK** works together · **PARTIAL** works with settings tweaks �
 
 | Mod | Status | Notes |
 |-----|--------|-------|
-| Global God Rays | OK | Confirmed by multiple users over several in-game days (2026-07-21). Radiance hugs in-world lights, GGR does the sun shafts — they stack nicely. Listed as compatible on the Nexus page. |
+| Global God Rays | OK | Confirmed by multiple users over several in-game days (2026-07-21). Radiance hugs in-world lights, GGR does the sun shafts, so they stack nicely. Listed as compatible on the Nexus page. As of 1.2.1, when Radiance hides the vanilla drifting clouds it removes them fully, so GGR no longer fades its rays under a cloud shadow that is no longer drawn. |
 | Dynamic Reflections (4.0.1) | PARTIAL | User-confirmed working alongside Radiance after tuning (2026-07-22). Two reflection systems still overlap conceptually — recommend keeping only one water/reflection system on for a predictable look (Radiance's Water toggle can be switched off). |
 | SpriteMaster / Clear Glasses / Clear Monocle | CONFLICT | Confirmed (2026-07-21/22): world renders solid orange/black on load until a menu forces a redraw; Clear Monocle (xBRZ-only fork) fails the same way. No reliable workaround (Dynamic Shader trick reported, then retracted by users). Documented as incompatible on the Nexus page; built-in upscaling is on the roadmap to remove the need for it. |
 
