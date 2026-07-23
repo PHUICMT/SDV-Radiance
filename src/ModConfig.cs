@@ -83,6 +83,10 @@ namespace SDVRadiance
         public bool ColorGradeToneMap { get; set; } = false;
         /// <summary>Auto-shift temperature/saturation by time of day, weather, and season.</summary>
         public bool ColorGradeAuto { get; set; } = true;
+        /// <summary>Blue-light / eye-comfort filter: 0 = off .. 1 = strong warm shift (cuts blue,
+        /// lifts red a touch). Applied on top of grading and independent of it, so it works even
+        /// with color grading turned off.</summary>
+        public float BlueLightFilter { get; set; } = 0f;
 
         // --- God rays ---
         public bool GodRaysEnabled { get; set; } = true;
@@ -190,6 +194,11 @@ namespace SDVRadiance
         public float DirectionalShadowBlur { get; set; } = 4.0f;
         /// <summary>Also cast directional shadows from trees and bushes (not just characters).</summary>
         public bool DirectionalShadowObjects { get; set; } = true;
+        /// <summary>Minimum light RADIUS (in tiles) for a point light to cast per-light shadows.
+        /// Tiny transient lights from other mods — fireflies (JP's The Night Lights), sparkles —
+        /// have a sub-1 radius; each moving one threw its own drifting shadow on the player. Lights
+        /// below this never cast (their glow is unaffected). Windows always cast regardless.</summary>
+        public float MinShadowLightRadius { get; set; } = 1.0f;
 
         /// <summary>
         /// Normalize every numeric field to its supported range. GMCM sliders only protect
@@ -237,6 +246,7 @@ namespace SDVRadiance
             WaterReflectStrength = C(WaterReflectStrength, 0f, 1f);
             VignetteStrength = C(VignetteStrength, 0f, 1f);
             ChromaticAberrationStrength = C(ChromaticAberrationStrength, 0f, 1f);
+            BlueLightFilter = C(BlueLightFilter, 0f, 1f);
             FloodLightingStrength = C(FloodLightingStrength, 0f, 1f);
             FloodShadowStrength = C(FloodShadowStrength, 0f, 1f);
             LightingIndoorDarkness = C(LightingIndoorDarkness, 0f, 0.95f);
@@ -246,6 +256,7 @@ namespace SDVRadiance
             LightingRadiusScale = C(LightingRadiusScale, 0.2f, 3f);
             LightingShadowStrength = C(LightingShadowStrength, 0f, 1f);
             DirectionalShadowStrength = C(DirectionalShadowStrength, 0f, 1f);
+            MinShadowLightRadius = C(MinShadowLightRadius, 0f, 3f);
             DirectionalShadowLength = C(DirectionalShadowLength, 0.2f, 2f);
             DirectionalShadowBlur = C(DirectionalShadowBlur, 0f, 5f);
             CameraFollowSpeed = C(CameraFollowSpeed, 0.05f, 1f);
