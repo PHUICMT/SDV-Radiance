@@ -166,6 +166,13 @@ namespace SDVRadiance
                     RenderPipeline.MaskView = !RenderPipeline.MaskView;
                     this.Monitor.Log($"Water mask overlay: {(RenderPipeline.MaskView ? "ON" : "OFF")} (rebuilds on next tile crossing / within 10s)", LogLevel.Info);
                 });
+            helper.ConsoleCommands.Add("radiance_covview",
+                "EXPERIMENT: toggle the water-COVERAGE overlay (isolate the game's water draw; magenta = exact per-pixel water this frame).",
+                (cmd, args) =>
+                {
+                    WaterCoverageHook.Active = !WaterCoverageHook.Active;
+                    this.Monitor.Log($"Water coverage capture: {(WaterCoverageHook.Active ? "ON (magenta overlay)" : "OFF")}", LogLevel.Info);
+                });
             helper.Events.Display.RenderingWorld += OnRenderingWorld;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
             helper.Events.Display.RenderingStep += OnRenderingStep;
@@ -519,6 +526,7 @@ namespace SDVRadiance
             // Draw-call-accurate water discovery: patch drawWaterTile on GameLocation AND every
             // loaded override (mod location classes included) — hence GameLaunched, not Entry.
             WaterDrawHook.Install(_harmony!, this.Monitor);
+            WaterCoverageHook.Install(_harmony!, this.Monitor);
         }
 
         private void RegisterGmcm()

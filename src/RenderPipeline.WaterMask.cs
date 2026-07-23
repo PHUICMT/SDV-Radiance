@@ -25,12 +25,15 @@ namespace SDVRadiance
         // SOFT mask value in Pass E (a fountain should barely shimmer, not churn like a lake).
         private bool[]? _animSoftTileBuf;
 
-        /// <summary>Resolve the 16×16 source art of a map tile (first frame for animated tiles).</summary>
+        /// <summary>Resolve the 16×16 source art of a map tile (current frame for animated tiles).</summary>
         private bool TryTileArt(xTile.Layers.Layer? layer, int tx, int ty, out Texture2D tex, out Rectangle src)
             => TryTileArt(layer, tx, ty, out tex, out src, out _);
 
         /// <summary>As above, also reporting whether the tile is ANIMATED — animation is a strong
-        /// "this is water/flowing art" signal (fountains, waterfalls, the beach surf line).</summary>
+        /// "this is water/flowing art" signal (fountains, waterfalls, the beach surf line).
+        /// Animated tiles resolve to their CURRENT frame (AnimatedTile.TileIndex is frame-aware);
+        /// the anim watch (P0-C) rebuilds the mask when a watched frame flips, so the mask
+        /// follows the surf wash instead of freezing on frame 0.</summary>
         private bool TryTileArt(xTile.Layers.Layer? layer, int tx, int ty, out Texture2D tex, out Rectangle src, out bool animated)
         {
             tex = null!;
@@ -39,9 +42,16 @@ namespace SDVRadiance
             if (layer == null || tx < 0 || ty < 0 || tx >= layer.LayerWidth || ty >= layer.LayerHeight)
                 return false;
             var t = layer.Tiles[tx, ty];
-            if (t is xTile.Tiles.AnimatedTile at && at.TileFrames is { Length: > 0 })
+            if (t is xTile.Tiles.AnimatedTile at && at.TileFrames is { Length: > 0 } frames)
             {
-                t = at.TileFrames[0];
+                int fi;
+                try { fi = at.TileIndex; }   // current frame's tile index
+                catch { fi = -1; }
+                // TileIndex is the sheet index, not the frame slot — find the frame that owns it
+                // (frames usually share one sheet; fall back to frame 0 on any mismatch).
+                t = frames[0];
+                for (int f = 0; f < frames.Length; f++)
+                    if (frames[f].TileIndex == fi) { t = frames[f]; break; }
                 animated = true;
             }
             if (t?.TileSheet == null)
@@ -62,6 +72,46 @@ namespace SDVRadiance
             return true;
         }
 
+        /// <summary>Frame-CONSENSUS water bits of an ANIMATED tile: a pixel counts as water only
+        /// when it is water in at least half of the animation frames. This is the STABLE
+        /// waterline — the surf wash sweeps up and down across frames, and anchoring the
+        /// march/edge channels (reflections, wading shadow) on the current frame made them
+        /// LURCH a whole wave-band every frame flip. Effects (R) keep following the live
+        /// frame; reflections anchor here instead. Returns null for non-animated tiles.</summary>
+        private bool[]? ConsensusBits(xTile.Layers.Layer? layer, int tx, int ty, bool foam)
+        {
+            if (layer == null || tx < 0 || ty < 0 || tx >= layer.LayerWidth || ty >= layer.LayerHeight)
+                return null;
+            if (layer.Tiles[tx, ty] is not xTile.Tiles.AnimatedTile at || at.TileFrames is not { Length: > 1 } frames)
+                return null;
+            var counts = new byte[256];
+            int nf = 0;
+            foreach (var fr in frames)
+            {
+                if (fr?.TileSheet == null)
+                    continue;
+                if (!_sheetTexCache.TryGetValue(fr.TileSheet.ImageSource, out Texture2D? sheet) || sheet == null)
+                    continue;   // sheet cache is already warm for anything TryTileArt touched
+                var ib = fr.TileSheet.GetTileImageBounds(fr.TileIndex);
+                if (ib.Width != 16 || ib.Height != 16)
+                    continue;
+                var fb = ClassifyBits(sheet, new Rectangle(ib.X, ib.Y, 16, 16), foam);
+                for (int p = 0; p < 256; p++)
+                    if (fb[p]) counts[p]++;
+                nf++;
+            }
+            if (nf < 2)
+                return null;
+            var bits = new bool[256];
+            // 40% threshold (not majority): raises the stable line toward the visible wet
+            // edge, so the pinned mirror hugs the foam instead of floating a band below it.
+            // The outer strip is damp sand part of the cycle — wet sand reflecting is fine.
+            int need = Math.Max(1, (nf * 2 + 4) / 5);
+            for (int p = 0; p < 256; p++)
+                bits[p] = counts[p] >= need;
+            return bits;
+        }
+
         /// <summary>Painted-water test for a single art pixel: blue-dominant or teal/foam.
         /// Matches the shader's colour gates, but runs on the STATIC source art (stable,
         /// classify once per tile art) instead of the composited frame.</summary>
@@ -78,6 +128,130 @@ namespace SDVRadiance
             // the 20-22 band is EMPTY, so G-20 splits them cleanly.
             if (c.G > c.R + 10 && c.B > c.R + 12 && c.B >= c.G - 20) return true;
             return false;
+        }
+
+        /// <summary>Palette-aware water test (P0-B): the static hue gates OR a distance match
+        /// against the location-calibrated palette. The palette carries whatever the CURRENT
+        /// art actually paints as water — recolored blues, lava oranges, frozen teals — so a
+        /// recolor can never strand the classifier (bug #13's whole failure class).</summary>
+        private bool WaterColorDyn(Color c)
+        {
+            if (c.A < 200)
+                return false;
+            if (WaterColor(c))
+                return true;
+            for (int k = 0; k < _palColors.Count; k++)
+            {
+                Color p = _palColors[k];
+                int dr = c.R - p.R, dg = c.G - p.G, db = c.B - p.B;
+                if (dr < 0) dr = -dr;
+                if (dg < 0) dg = -dg;
+                if (db < 0) db = -db;
+                if (dr <= 18 && dg <= 18 && db <= 18)
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>Build the location's water-colour palette from INTERIOR water tiles across
+        /// the WHOLE MAP, once per location (all four neighbours water → guaranteed body art,
+        /// no shore mixing). Per-pixel 16-step RGB bins across up to 24 sampled tiles spread
+        /// over the map; bins under 2% are noise (lily pads, rocks) and dropped.
+        ///
+        /// WINDOW-INDEPENDENT by design: the first version sampled the gather window, so the
+        /// palette (and every boundary classification keyed on it) shifted as the player
+        /// WALKED — proven with world-aligned mask dumps two tiles apart (G channel moved
+        /// 1,280 px). The reflection anchor bounced with every tile crossing. Sampling the
+        /// map once pins the palette (and the mask) for the whole visit.</summary>
+        private void BuildWaterPalette(GameLocation loc, int startTileX, int startTileY, int tilesW, int tilesH)
+        {
+            if (ReferenceEquals(loc, _palLoc) && _lastWaterLabelVer == CurrentLabelVersion())
+                return;   // palette already pinned for this location
+            _palLoc = loc;
+            var back = loc.map?.GetLayer("Back");
+            if (back == null)
+                return;
+            int mw = back.LayerWidth, mh = back.LayerHeight;
+            // interior water tiles across the whole map, strided scan, then an even
+            // sub-sample — capping the COLLECT would take all 24 from the map's top rows
+            // and miss a differently-coloured south body.
+            var cand = new List<(int tx, int ty)>(512);
+            int stride = Math.Max(1, (int)Math.Sqrt((double)mw * mh / 4096));
+            for (int ty = 1; ty < mh - 1 && cand.Count < 512; ty += stride)
+            {
+                for (int tx = 1; tx < mw - 1 && cand.Count < 512; tx += stride)
+                {
+                    try
+                    {
+                        if (!loc.isWaterTile(tx, ty) || !loc.isWaterTile(tx - 1, ty) || !loc.isWaterTile(tx + 1, ty)
+                            || !loc.isWaterTile(tx, ty - 1) || !loc.isWaterTile(tx, ty + 1))
+                            continue;
+                    }
+                    catch { continue; }
+                    cand.Add((tx, ty));
+                }
+            }
+            var picks = new List<(int tx, int ty)>(24);
+            if (cand.Count > 0)
+            {
+                int step = Math.Max(1, cand.Count / 24);
+                for (int k = 0; k < cand.Count && picks.Count < 24; k += step)
+                    picks.Add(cand[k]);
+            }
+            var bins = new Dictionary<int, int>();
+            int total = 0;
+            foreach (var (tx, ty) in picks)
+            {
+                if (!TryTileArt(back, tx, ty, out var tex, out var src))
+                    continue;
+                ReadTileArt(tex, src);
+                for (int p = 0; p < 256; p++)
+                {
+                    Color c = _artBuf![p];
+                    if (c.A < 200)
+                        continue;
+                    int bin = (c.R >> 4 << 8) | (c.G >> 4 << 4) | (c.B >> 4);
+                    bins.TryGetValue(bin, out int n);
+                    bins[bin] = n + 1;
+                    total++;
+                }
+            }
+            // Dominant bins → palette colours (bin centres). Selection and hash must be
+            // ORDER-INDEPENDENT: dictionary enumeration order shifts with the scan window,
+            // and a hash that changes on every scroll would bump _palVer and thrash the
+            // whole classify cache while walking. Top-24 by (count, bin) + XOR-mix hash.
+            ulong hash = 0;
+            var pal = new List<Color>(24);
+            if (total > 0)
+            {
+                int floor = Math.Max(4, total / 50);   // ≥2%
+                var strong = new List<(int bin, int n)>();
+                foreach (var kv in bins)
+                    if (kv.Value >= floor)
+                        strong.Add((kv.Key, kv.Value));
+                strong.Sort((a, b) => a.n != b.n ? b.n.CompareTo(a.n) : a.bin.CompareTo(b.bin));
+                int keep = Math.Min(24, strong.Count);
+                for (int k = 0; k < keep; k++)
+                {
+                    int bin = strong[k].bin;
+                    pal.Add(new Color((bin >> 8 & 0xF) << 4 | 8, (bin >> 4 & 0xF) << 4 | 8, (bin & 0xF) << 4 | 8));
+                    ulong m = (ulong)(uint)bin * 0x9E3779B97F4A7C15UL;
+                    m ^= m >> 29; m *= 0xBF58476D1CE4E5B9UL; m ^= m >> 32;
+                    hash ^= m;
+                }
+            }
+            if (hash == _palHash)
+                return;
+            _palHash = hash;
+            _palVer++;
+            _palColors.Clear();
+            _palColors.AddRange(pal);
+            // Classifications made under the old palette are dead weight (the cache key holds
+            // the version, so they can never be hit again) — drop them so the dictionary
+            // doesn't grow one generation per palette flip over a long session. SolidBits
+            // consults the palette too (water-art-vs-structure test), so its cache goes with it.
+            _waterBitsCache.Clear();
+            _solidBitsCache.Clear();
         }
 
         /// <summary>16×16 painted-water classification of one tile art, cached per (texture, rect,
@@ -149,7 +323,7 @@ namespace SDVRadiance
 
         private bool[] ClassifyBits(Texture2D tex, Rectangle src, bool foam = false)
         {
-            var key = (tex, src, foam);
+            var key = (tex, src, foam, _palVer);
             if (_waterBitsCache.TryGetValue(key, out bool[]? bits))
                 return bits;
             bits = new bool[256];
@@ -160,7 +334,7 @@ namespace SDVRadiance
                 for (int p = 0; p < 256; p++)
                 {
                     Color c = _artBuf[p];
-                    bool w = WaterColor(c);
+                    bool w = WaterColorDyn(c);
                     if (!w && foam && c.A >= 200)
                     {
                         int maxc = Math.Max(c.R, Math.Max(c.G, c.B));
@@ -252,7 +426,7 @@ namespace SDVRadiance
                     if (bits[p] = _artBuf[p].A >= 128)
                     {
                         n++;
-                        if (WaterColor(_artBuf[p])) w++;
+                        if (WaterColorDyn(_artBuf[p])) w++;
                     }
                 }
                 if (w * 10 >= n * 6)   // ≥60% of the opaque art is water → water overlay, not structure
@@ -296,11 +470,48 @@ namespace SDVRadiance
         /// was THE walking-near-water stutter. While a job is in flight the old mask keeps
         /// rendering (world-anchored content + padded window = no visible edge).
         /// </summary>
+        /// <summary>P0-C: true when any WATCHED animated tile has flipped to a new frame since
+        /// the mask was gathered (throttled to one scan per 8 ticks; no-op unless animated art
+        /// actually fed the mask). A flip invalidates the cached mask so effects follow the
+        /// surf/foam animation.</summary>
+        private bool AnimFramesChanged()
+        {
+            if (!_animWatchAffectsMask || _animWatch.Count == 0)
+                return false;
+            if (Game1.ticks - _animCheckTick < 8)
+                return false;
+            _animCheckTick = Game1.ticks;
+            for (int k = 0; k < _animWatch.Count; k++)
+            {
+                try
+                {
+                    if (_animWatch[k].tile.TileIndex != _animWatch[k].idx)
+                        return true;
+                }
+                catch { }
+            }
+            return false;
+        }
+
         private bool BuildWaterMask(int w, int h)
         {
             GameLocation? loc = Game1.currentLocation;
             if (loc == null)
                 return false;
+
+            // Advance the mask crossfade (see ApplyWaterMask): prev→current over ~0.6s.
+            // Slow on purpose — with per-apply rebasing this behaves like an exponential
+            // glide, so the surf's mask oscillation renders as a gentle swell.
+            if (_maskBlend < 1f)
+                _maskBlend = Math.Min(1f, _maskBlend + 0.028f);
+
+            // AgentBridge-requested mask dump (the bridge can only poke statics via reflection).
+            if (MaskDumpNext && _waterMask != null)
+            {
+                MaskDumpNext = false;
+                try { _monitor.Log(DumpMasks(Path.GetTempPath()), LogLevel.Info); }
+                catch (Exception ex) { _monitor.Log($"maskdump failed: {ex.Message}", LogLevel.Warn); }
+            }
 
             // Bulk-read this location's tilesheets on entry, so every first-touch GPU readback
             // lands here (during the fade-covered location change) rather than hitching mid-walk.
@@ -353,7 +564,8 @@ namespace SDVRadiance
             if (_waterMask != null && loc == _lastWaterLoc && startTileX == _lastWaterTx && startTileY == _lastWaterTy
                 && _lastWaterHookVer == WaterDrawHook.Version
                 && _lastWaterLabelVer == CurrentLabelVersion()
-                && _waterMask.Width == tilesW * 16 && Game1.ticks - _lastWaterTick < 600)
+                && _waterMask.Width == tilesW * 16 && Game1.ticks - _lastWaterTick < 600
+                && !AnimFramesChanged())
             {
                 _waterMaskSize = new Vector2(tilesW, tilesH);
                 return _waterAny;

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
@@ -406,6 +407,30 @@ namespace SDVRadiance
                 return false;
             return OnWater(loc, new Point(t.X - 1, t.Y)) && OnWater(loc, new Point(t.X + 1, t.Y))
                 && OnWater(loc, new Point(t.X, t.Y - 1)) && OnWater(loc, new Point(t.X, t.Y + 1));
+        }
+
+        /// <summary>Per-caster EASED opacity for the open-water shadow gate (rule: everything
+        /// fades, nothing pops). The binary OnOpenWater cut made shadows snap in/out per tile
+        /// while walking the surf line — this eases each caster's shadow over ~0.3s in BOTH
+        /// directions instead. Several draw paths run per frame (sun + moon + point lights);
+        /// the tick stamp makes them share one easing step.</summary>
+        private static readonly Dictionary<object, (float v, int tick)> _waterGateFade = new();
+        private static float WaterGateFade(GameLocation loc, object caster, Point tile)
+        {
+            float target = OnOpenWater(loc, tile) ? 0f : 1f;
+            if (_waterGateFade.Count > 512)
+                _waterGateFade.Clear();   // visitors churn across locations; cheap reset
+            if (_waterGateFade.TryGetValue(caster, out var e))
+            {
+                if (e.tick == Game1.ticks)
+                    return e.v;
+                float v = e.v + (target - e.v) * 0.16f;
+                if (Math.Abs(v - target) < 0.02f) v = target;
+                _waterGateFade[caster] = (v, Game1.ticks);
+                return v;
+            }
+            _waterGateFade[caster] = (target, Game1.ticks);   // first sighting: no wrong-state fade-in
+            return target;
         }
 
         private static bool OnWater(GameLocation loc, Point tile)

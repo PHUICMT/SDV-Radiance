@@ -392,6 +392,15 @@ namespace SDVRadiance
             P(fx, "MaskOrigin")?.SetValue(new Vector2(_lastWaterTx, _lastWaterTy));
             P(fx, "MaskTexture")?.SetValue(_waterMask);
             P(fx, "MaskCoreTexture")?.SetValue(_waterMaskCore);
+            // Crossfade source (prev mask + its own world anchor). No prev → bind the current
+            // mask with blend=1 so the lerp is a no-op.
+            bool hasPrev = _waterMaskPrev != null && _maskBlend < 1f;
+            P(fx, "MaskPrevTexture")?.SetValue(hasPrev ? _waterMaskPrev : _waterMask);
+            P(fx, "MaskOriginPrev")?.SetValue(hasPrev ? _waterMaskPrevOrigin : new Vector2(_lastWaterTx, _lastWaterTy));
+            P(fx, "MaskSizePrev")?.SetValue(hasPrev ? _waterMaskPrevSize : _waterMaskSize);
+            // smoothstep the blend so each glide eases in AND out (no linear-ramp corners)
+            float mbEase = _maskBlend * _maskBlend * (3f - 2f * _maskBlend);
+            P(fx, "MaskBlend")?.SetValue(hasPrev ? mbEase : 1f);
             P(fx, "SparkleDensity")?.SetValue(config.WaterSparkleDensity);
             // Player SILHOUETTE mask (the shadow system's per-frame bake) in buffer UV —
             // ring-tile water effects skip exactly the player's own pixels, so a blue outfit
@@ -446,6 +455,9 @@ namespace SDVRadiance
             // SWIMMING is excluded: half the body is already underwater, so a mirrored
             // silhouette below the feet reads as a glitch, not a reflection — the ripple
             // exclusion (silhouette gate) is what protects the visible half instead.
+            // Read the G channel (march / frame-CONSENSUS water), NOT R: the live effect
+            // channel sweeps with the surf animation frames, and gating on it made the
+            // wading reflection breathe up and down with every wave ("เงาขึ้นลง").
             float pin = 0f;
             if (who != null && !who.swimming.Value && _waterPixBuf != null && _waterMask != null)
             {
@@ -453,7 +465,7 @@ namespace SDVRadiance
                 int mxp = bb.Center.X / 4 - _lastWaterTx * 16;
                 int myp = (bb.Bottom - 4) / 4 - _lastWaterTy * 16;
                 if (mxp >= 0 && myp >= 0 && mxp < _waterMask.Width && myp < _waterMask.Height
-                    && _waterPixBuf[myp * _waterMask.Width + mxp].R > 100)
+                    && _waterPixBuf[myp * _waterMask.Width + mxp].G > 100)
                     pin = 1f;
             }
             // Ease the wading state so the under-feet self-reflection fades in/out (~0.3s)

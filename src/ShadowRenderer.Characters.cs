@@ -37,16 +37,20 @@ namespace SDVRadiance
             {
                 if (npc == null || npc.IsInvisible || (npc.HideShadow && !(npc is Pet)) || npc.swimming.Value || npc.Sprite?.Texture == null)
                     continue;
-                if (OnOpenWater(loc, npc.TilePoint))   // open water only — surf/shore keeps shadows
+                float wg = WaterGateFade(loc, npc, npc.TilePoint);   // open-water gate, eased — never pops
+                if (wg <= 0.02f)
                     continue;
-                DrawNpcShadow(b, npc, rot, stretch, alpha, blur);
+                DrawNpcShadow(b, npc, rot, stretch, alpha * wg, blur);
             }
 
             foreach (FarmAnimal a in AnimalsIn(loc))
             {
-                if (a?.Sprite?.Texture == null || OnOpenWater(loc, a.TilePoint))
+                if (a?.Sprite?.Texture == null)
                     continue;
-                DrawAnimalShadow(b, a, rot, stretch, alpha, blur);
+                float wg = WaterGateFade(loc, a, a.TilePoint);
+                if (wg <= 0.02f)
+                    continue;
+                DrawAnimalShadow(b, a, rot, stretch, alpha * wg, blur);
             }
 
             DrawPlayerShadow(b, loc, rot, stretch, alpha, blur);
@@ -155,16 +159,17 @@ namespace SDVRadiance
             {
                 if (npc == null || npc.IsInvisible || (npc.HideShadow && !(npc is Pet)) || npc.swimming.Value || npc.Sprite?.Texture == null)
                     continue;
-                if (OnOpenWater(loc, npc.TilePoint))   // same guard as the sun path (bathhouse, night beach)
+                float wg = WaterGateFade(loc, npc, npc.TilePoint);   // same gate as the sun path, eased
+                if (wg <= 0.02f)
                     continue;
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                     new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom - FeetLift));
                 float depth = MathHelper.Clamp(npc.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 float halfW = npc.GetSpriteWidthForPositioning() * 4f * 0.36f;
                 GatherCasts(feet, castStrength, lenCfg);
-                DrawContactBlob(b, feet, halfW, halfW * 0.5f, ambAlpha * (_castBuf.Count > 0 ? 0.45f : 1f), depth, blur);
+                DrawContactBlob(b, feet, halfW, halfW * 0.5f, ambAlpha * wg * (_castBuf.Count > 0 ? 0.45f : 1f), depth, blur);
                 foreach (var (rot, st, a) in _castBuf)
-                    DrawNpcShadow(b, npc, rot, st, a, blur);
+                    DrawNpcShadow(b, npc, rot, st, a * wg, blur);
             }
 
             foreach (FarmAnimal animal in AnimalsIn(loc))
@@ -184,16 +189,17 @@ namespace SDVRadiance
             if (_playerReady && _playerRT != null)
             {
                 Farmer who = Game1.player;
+                float pwg = who != null ? WaterGateFade(loc, who, who.TilePoint) : 0f;
                 if (who != null && who.currentLocation == loc && !who.swimming.Value && !who.isRidingHorse()
-                    && !OnOpenWater(loc, who.TilePoint))
+                    && pwg > 0.02f)
                 {
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                         new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
                     float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                     GatherCasts(feet, castStrength, lenCfg);
-                    DrawContactBlob(b, feet, 22f, 11f, ambAlpha * (_castBuf.Count > 0 ? 0.45f : 1f), depth, blur);
+                    DrawContactBlob(b, feet, 22f, 11f, ambAlpha * pwg * (_castBuf.Count > 0 ? 0.45f : 1f), depth, blur);
                     foreach (var (rot, st, a) in _castBuf)
-                        DrawSoft(b, Taps9, _playerRT, null, feet, Color.White, a, rot, _playerFeetInRT,
+                        DrawSoft(b, Taps9, _playerRT, null, feet, Color.White, a * pwg, rot, _playerFeetInRT,
                             new Vector2(1f, st), depth, SpriteEffects.None, blur);
                 }
             }

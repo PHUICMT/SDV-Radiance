@@ -821,8 +821,10 @@ namespace SDVRadiance
                 return;
 
             Farmer who = Game1.player;
-            if (OnOpenWater(loc, who.TilePoint))   // open water only — surf/shore keeps the shadow
+            float wg = WaterGateFade(loc, who, who.TilePoint);   // open-water gate, eased — never pops
+            if (wg <= 0.02f)
                 return;
+            alpha *= wg;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
             float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);

@@ -59,6 +59,15 @@ namespace SDVRadiance
         private bool[]? _tileIceBuf;           // HF label class 9: frozen — reflection, no ripple
         private bool[]? _tileFlowBuf;          // HF label class 10: flowing/waterfall — ripple, no reflection
         private bool[]? _tileLavaBuf;          // HF label class 11: lava — slow molten flow, self-glow, no reflection
+        private bool[]? _tileRefineBuf;        // P0-A: isWater tile whose bits REPLACE the full-tile fill (per-pixel shoreline)
+        private bool[]?[]? _tileBitsStableBuf; // frame-CONSENSUS bits for animated tiles (march/edge channels) — the
+                                               // current-frame bits drive effects, but reflections/wading anchor on the
+                                               // consensus waterline so they don't lurch on every surf frame flip
+        // Previous applied mask's R channel (world-anchored) — temporal smoothing source so
+        // the surf-frame flips fade through rebuilds instead of snapping (see compose tail).
+        private byte[]? _prevEffBuf;
+        private int _prevEffTx, _prevEffTy, _prevEffW, _prevEffH;
+        private GameLocation? _prevEffLoc;
         private bool[]? _tileWetFlag;          // per-tile: has any effect-water pixel (for body-size flood fill)
         private byte[]? _tileCalmBuf;          // per-tile 0..255 wave scale by water-body size (small = calmer)
         private readonly List<(int x0, int y0, int x1, int y1)> _carveRects = new();
@@ -90,6 +99,21 @@ namespace SDVRadiance
                 else if (c == 11) { bits[p] = true; nL++; }   // lava: slow molten flow + self-glow
             }
             return (bits, nW, nI, nF, nL);
+        }
+
+        /// <summary>Window-independent water flag straight from map data — used for boundary
+        /// decisions that must not change as the gather window moves with the player.
+        /// (Off-map counts as water so map-border water tiles don't become "shoreline".)</summary>
+        private static bool MapWater(GameLocation loc, int tx, int ty)
+        {
+            try
+            {
+                var back = loc.map?.GetLayer("Back");
+                if (back == null || tx < 0 || ty < 0 || tx >= back.LayerWidth || ty >= back.LayerHeight)
+                    return true;
+                return loc.isWaterTile(tx, ty);
+            }
+            catch { return true; }
         }
 
         /// <summary>Gather stage - read every game-state dependency into plain arrays.
@@ -145,6 +169,10 @@ namespace SDVRadiance
             Dilate8(_waterBool2Buf, _waterRingBuf, tilesW, tilesH);
             Dilate8(_waterRingBuf, _waterBool2Buf, tilesW, tilesH);
 
+            // P0-B: calibrate the water-colour palette from this window's interior water art
+            // BEFORE any classification below (ClassifyBits keys on the palette version).
+            BuildWaterPalette(loc, startTileX, startTileY, tilesW, tilesH);
+
             var back = loc.map?.GetLayer("Back");
             var bld = loc.map?.GetLayer("Buildings");
             var front = loc.map?.GetLayer("Front");
@@ -171,8 +199,11 @@ namespace SDVRadiance
             if (_tileIceBuf == null || _tileIceBuf.Length < count) _tileIceBuf = new bool[count];
             if (_tileFlowBuf == null || _tileFlowBuf.Length < count) _tileFlowBuf = new bool[count];
             if (_tileLavaBuf == null || _tileLavaBuf.Length < count) _tileLavaBuf = new bool[count];
+            if (_tileRefineBuf == null || _tileRefineBuf.Length < count) _tileRefineBuf = new bool[count];
+            if (_tileBitsStableBuf == null || _tileBitsStableBuf.Length < count) _tileBitsStableBuf = new bool[]?[count];
 
             bool anyAnim = false;
+            bool animMatters = false;   // any ANIMATED art contributed water bits → mask must follow frames (P0-C)
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)
@@ -181,8 +212,10 @@ namespace SDVRadiance
                     bool isWater = _waterBoolBuf[idx];
                     int tx = startTileX + i, ty = startTileY + j;
                     bool[]? bits = null;
+                    bool[]? sbits = null;      // frame-consensus variant of bits (null = bits are already stable)
                     byte puddle = 0;
                     bool animOnly = false;
+                    bool refineTile = false;   // P0-A: bits REPLACE the full-tile water fill
                     int iceN = 0, flowN = 0, lavaN = 0;   // accumulated across Back + Buildings labels
                     // ---- GROUND-TRUTH LABELS FIRST (HF Studio). A labeled Back art is
                     // authoritative: its water pixels join the mask (STATIC painted pools on
@@ -206,6 +239,71 @@ namespace SDVRadiance
                             }
                         }
                     }
+                    // isWater tiles (game-flagged): labels first — sub-type counts always (lava
+                    // pools and frozen water ARE isWaterTile), and a WELL-COVERED label refines
+                    // the tile per-pixel (class 0 = unpainted, NOT "no water", so a sparse label
+                    // must not erase the tile). Without a label, a SHORELINE tile (any non-water
+                    // 8-neighbour) refines from its ART instead of the full-tile fill (P0-A):
+                    // the painted sand/rock inside a game-flagged water tile stops getting
+                    // ripple/reflection, which was every "boxy shoreline" complaint at once.
+                    else if (isWater)
+                    {
+                        if (hf != null)
+                        {
+                            byte[]? lbl = null;
+                            try { lbl = hf.GetPixelClasses(loc, tx, ty, "Back"); }
+                            catch { hf = null; }
+                            if (lbl != null)
+                            {
+                                var (lb, nW, nI, nF, nL) = WaterBitsFromLabels(lbl);
+                                if (nI + nF + nL > 0)
+                                {
+                                    iceN += nI; flowN += nF; lavaN += nL;
+                                    job.AnyLabeled = true;
+                                }
+                                int nPainted = 0;
+                                for (int p = 0; p < 256; p++)
+                                    if (lbl[p] != 0) nPainted++;
+                                if (nPainted >= 192)   // ≥75% painted → treat unpainted as not-water
+                                {
+                                    bits = lb;
+                                    refineTile = true;
+                                    job.AnyLabeled = true;
+                                }
+                            }
+                        }
+                        if (!refineTile)
+                        {
+                            // MAP-GLOBAL neighbour test — never the window flags: a tile near
+                            // the window border used to flip shoreline↔interior as the player
+                            // walked and the window edge crossed its neighbours, which moved
+                            // the mask underfoot (proven with world-aligned dumps).
+                            bool shoreline = !MapWater(loc, tx - 1, ty) || !MapWater(loc, tx + 1, ty)
+                                          || !MapWater(loc, tx, ty - 1) || !MapWater(loc, tx, ty + 1)
+                                          || !MapWater(loc, tx - 1, ty - 1) || !MapWater(loc, tx + 1, ty - 1)
+                                          || !MapWater(loc, tx - 1, ty + 1) || !MapWater(loc, tx + 1, ty + 1);
+                            if (shoreline && TryTileArt(back, tx, ty, out var wtex, out var wsrc, out bool wAnim))
+                            {
+                                // foam:true — white surf wash ON the water tile is water for effects.
+                                var wb = ClassifyBits(wtex, wsrc, foam: true);
+                                int wn = CountBits(wb);
+                                // Trust the art when the palette is calibrated (interior water in
+                                // sight = same art family). Uncalibrated windows (thin rivers have
+                                // no interior tile) keep a floor: a near-empty result there means
+                                // "classifier lost", not "tile is sand" — fall back to full fill.
+                                if (_palColors.Count > 0 ? wn < 256 : wn is >= 16 and < 256)
+                                {
+                                    bits = wb;
+                                    refineTile = true;
+                                    if (wAnim)
+                                    {
+                                        animMatters = true;
+                                        sbits = ConsensusBits(back, tx, ty, foam: true);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if (!isWater && !labeledBack && TryTileArt(back, tx, ty, out var btex, out var bsrc, out bool bAnim))
                     {
                         if (_waterBool2Buf[idx])
@@ -218,6 +316,11 @@ namespace SDVRadiance
                                         || (j > 0 && _waterBoolBuf[idx - tilesW])
                                         || (j < tilesH - 1 && _waterBoolBuf[idx + tilesW]);
                             bits = ClassifyBits(btex, bsrc, foam: bAnim && coreAdj);
+                            if (bAnim && CountBits(bits) > 0)
+                            {
+                                animMatters = true;
+                                sbits = ConsensusBits(back, tx, ty, foam: coreAdj);
+                            }
                         }
                         else if (bAnim)
                         {
@@ -227,7 +330,11 @@ namespace SDVRadiance
                             // only (ripple/sparkle/tint), never the march: a reflection must
                             // not anchor on a fountain rim or a waterfall face.
                             var ab = ClassifyBits(btex, bsrc);
-                            if (CountBits(ab) >= 64) { bits = ab; animOnly = true; }
+                            if (CountBits(ab) >= 64)
+                            {
+                                bits = ab; animOnly = true; animMatters = true;
+                                sbits = ConsensusBits(back, tx, ty, foam: false);
+                            }
                         }
                         // Walkable shallow pools (island dig site) are plain GROUND in map data —
                         // recognise them by their ART: mostly flat blue-grey pixels. Rocky/pebbled
@@ -272,24 +379,39 @@ namespace SDVRadiance
                             }
                         }
                     }
+                    bool[]? overlayStable = null;
                     if (!isWater && !labeledBld && hasBld && fAnim)
                     {
                         var fb = ClassifyBits(t1, s1);
                         if (CountBits(fb) >= 64)
+                        {
                             overlayBits = fb;
+                            animMatters = true;
+                            overlayStable = ConsensusBits(bld, tx, ty, foam: false);
+                        }
                     }
                     if (overlayBits != null)
                     {
                         // LABELED water is ground truth → full treatment (ripple + reflection),
                         // never the soft animated-art path. Only COLOR-classified animated art
                         // (labeledBld == false) stays effect-only so a fountain doesn't churn.
-                        if (bits == null) { bits = overlayBits; animOnly = !labeledBld; }
+                        if (bits == null) { bits = overlayBits; sbits = overlayStable; animOnly = !labeledBld; }
                         else
                         {
-                            // OR-merge into a copy — `bits` may be a cached array.
+                            // OR-merge into a copy — `bits` may be a cached array. The stable
+                            // variant merges each layer's consensus (falling back to that
+                            // layer's live bits when it isn't animated).
                             var merged = new bool[256];
-                            for (int p = 0; p < 256; p++) merged[p] = bits[p] || overlayBits[p];
+                            bool anyStable = sbits != null || overlayStable != null;
+                            var smerged = anyStable ? new bool[256] : null;
+                            for (int p = 0; p < 256; p++)
+                            {
+                                merged[p] = bits[p] || overlayBits[p];
+                                if (smerged != null)
+                                    smerged[p] = (sbits ?? bits)[p] || (overlayStable ?? overlayBits)[p];
+                            }
                             bits = merged;
+                            sbits = smerged;
                             if (labeledBld) animOnly = false;
                         }
                     }
@@ -297,6 +419,8 @@ namespace SDVRadiance
                     _animOnlyTileBuf[idx] = animOnly;
                     _puddleTileBuf[idx] = puddle;
                     _tileBitsBuf[idx] = bits;
+                    _tileRefineBuf[idx] = refineTile;
+                    _tileBitsStableBuf[idx] = sbits;
                     // Ice / flowing win over each other by pixel count; a plain-water majority
                     // keeps normal behaviour. Ice → reflection but no ripple (mask alpha 0);
                     // flowing → ripple but no reflection (scrubbed from the march channel).
@@ -344,6 +468,35 @@ namespace SDVRadiance
                 }
             }
             job.AnyAnim = anyAnim;
+
+            // P0-C: remember every AnimatedTile in the window with the frame it was classified
+            // at. BuildWaterMask polls this list (throttled) and rebuilds when a frame flips —
+            // but only when animated art actually fed the mask (animMatters), so a purely
+            // decorative animation (a flag, a chimney) never costs a rebuild.
+            _animWatch.Clear();
+            _animWatchAffectsMask = animMatters;
+            if (animMatters)
+            {
+                for (int j = 0; j < tilesH; j++)
+                {
+                    for (int i = 0; i < tilesW; i++)
+                    {
+                        int tx = startTileX + i, ty = startTileY + j;
+                        if (back != null && tx >= 0 && ty >= 0 && tx < back.LayerWidth && ty < back.LayerHeight
+                            && back.Tiles[tx, ty] is xTile.Tiles.AnimatedTile ab2)
+                        {
+                            int fi; try { fi = ab2.TileIndex; } catch { fi = -1; }
+                            _animWatch.Add((ab2, fi));
+                        }
+                        if (bld != null && tx >= 0 && ty >= 0 && tx < bld.LayerWidth && ty < bld.LayerHeight
+                            && bld.Tiles[tx, ty] is xTile.Tiles.AnimatedTile ab3)
+                        {
+                            int fi; try { fi = ab3.TileIndex; } catch { fi = -1; }
+                            _animWatch.Add((ab3, fi));
+                        }
+                    }
+                }
+            }
 
             // FURNITURE and BUILDING entity rects (Pass C2 inputs). A fish tank's painted
             // water, a well's blue bucket art, a trough — water pixels inside an ENTITY
@@ -399,12 +552,16 @@ namespace SDVRadiance
                     int idx = j * tilesW + i;
                     bool isWater = _waterBoolBuf![idx];
                     bool[]? bits = _tileBitsBuf![idx];
+                    // P0-A: a refined water tile paints its CLASSIFIED bits instead of the
+                    // full-tile fill — the shoreline follows the art, not the tile grid.
+                    bool refine = _tileRefineBuf![idx] && bits != null;
                     for (int py = 0; py < Sub; py++)
                     {
                         int row = (j * Sub + py) * pw + i * Sub;
                         int arow = py * Sub;
                         for (int px = 0; px < Sub; px++)
-                            _waterPixBits[row + px] = isWater || (bits != null && bits[arow + px]);
+                            _waterPixBits[row + px] = refine ? bits![arow + px]
+                                : isWater || (bits != null && bits[arow + px]);
                     }
                 }
             }
@@ -475,6 +632,29 @@ namespace SDVRadiance
             if (_waterPixBits2 == null || _waterPixBits2.Length < pcount)
                 _waterPixBits2 = new bool[pcount];
             Array.Copy(_waterPixBits, _waterPixBits2, pcount);
+            // ANIMATED tiles: the march/edge copy swaps to the frame-CONSENSUS bits. Effects
+            // (_waterPixBits) keep chasing the live surf frame; the waterline the reflections
+            // and wading shadow anchor on is the average wash line, so they stop lurching a
+            // whole wave-band on every frame flip.
+            for (int j = 0; j < tilesH; j++)
+            {
+                for (int i = 0; i < tilesW; i++)
+                {
+                    int idx = j * tilesW + i;
+                    bool[]? sb = _tileBitsStableBuf![idx];
+                    if (sb == null)
+                        continue;
+                    bool isWater = _waterBoolBuf![idx];
+                    bool refine = _tileRefineBuf![idx];
+                    for (int py = 0; py < Sub; py++)
+                    {
+                        int row = (j * Sub + py) * pw + i * Sub;
+                        int arow = py * Sub;
+                        for (int px = 0; px < Sub; px++)
+                            _waterPixBits2[row + px] = refine ? sb[arow + px] : (isWater || sb[arow + px]);
+                    }
+                }
+            }
             // Remember every anim-nominated tile before the region pass mutates the buffer —
             // Pass E writes these with a SOFT value so fountains shimmer gently.
             if (_animSoftTileBuf == null || _animSoftTileBuf.Length < count)
@@ -786,10 +966,14 @@ namespace SDVRadiance
                     if (march)
                     {
                         int t0 = _edgeBuf[p];
-                        int x0 = Math.Max(0, x - 10), x1 = Math.Min(pw - 1, x + 10);
+                        // ±14 window / ±36 px clamp (was ±10/±24): diagonal tide banks still
+                        // showed a 16px mirror staircase — the wider window folds a full
+                        // tile-step into the smoothed line; the clamp still stops a different
+                        // water body sharing the row from dragging the anchor.
+                        int x0 = Math.Max(0, x - 14), x1 = Math.Min(pw - 1, x + 14);
                         int n = _edgeCnt![x1 + 1] - _edgeCnt[x0];
                         float ts = n > 0 ? (float)(_edgeSum[x1 + 1] - _edgeSum[x0]) / n : t0;
-                        ts = MathHelper.Clamp(ts, t0 - 24, t0 + 24);
+                        ts = MathHelper.Clamp(ts, t0 - 36, t0 + 36);
                         bch = (byte)MathHelper.Clamp((float)Math.Round((y - ts) * 2f), 0f, 252f);
                     }
                     // Shallow puddles get a SOFTER mask value: every effect (ripple, sparkle,
@@ -808,6 +992,47 @@ namespace SDVRadiance
                     _waterPixBuf[p] = new Color(effV, march ? 255 : 0, bch, alpha);
                 }
             }
+
+            // TEMPORAL SMOOTHING of the effect channel (rule: everything fades, nothing pops).
+            // The surf animation flips its art every ~150-250ms and the R channel snapped with
+            // it — ripple/mirror at the tide line appeared and vanished a wave-band at a time.
+            // Blend each rebuild's R toward the previous applied mask at the same WORLD pixel
+            // (the window is tile-anchored; offset by the origin delta) so the wet edge SWEEPS
+            // over ~2-3 rebuilds instead of snapping. G/B/A stay exact — the waterline anchor
+            // and type must never lag.
+            if (_prevEffBuf != null && _prevEffW == pw && _prevEffH == ph
+                && ReferenceEquals(job.Loc, _prevEffLoc))
+            {
+                int dx = (job.Tx - _prevEffTx) * Sub;
+                int dy = (job.Ty - _prevEffTy) * Sub;
+                for (int y = 0; y < ph; y++)
+                {
+                    int py = y + dy;
+                    if (py < 0 || py >= ph)
+                        continue;
+                    int rowBase = y * pw, prowBase = py * pw;
+                    for (int x = 0; x < pw; x++)
+                    {
+                        int px = x + dx;
+                        if (px < 0 || px >= pw)
+                            continue;
+                        int p = rowBase + x;
+                        byte prev = _prevEffBuf[prowBase + px];
+                        byte cur = _waterPixBuf[p].R;
+                        if (prev == cur)
+                            continue;
+                        var c = _waterPixBuf[p];
+                        c.R = (byte)((cur * 2 + prev * 3) / 5);   // ~0.4 step per rebuild
+                        _waterPixBuf[p] = c;
+                    }
+                }
+            }
+            if (_prevEffBuf == null || _prevEffBuf.Length < pcount)
+                _prevEffBuf = new byte[pcount];
+            for (int p = 0; p < pcount; p++)
+                _prevEffBuf[p] = _waterPixBuf[p].R;
+            _prevEffTx = job.Tx; _prevEffTy = job.Ty; _prevEffW = pw; _prevEffH = ph;
+            _prevEffLoc = job.Loc;
         }
 
         /// <summary>Apply stage - main thread: upload the composed buffers and publish the new
@@ -815,6 +1040,8 @@ namespace SDVRadiance
         /// (a consistent pair — the mask content is world-anchored).</summary>
         private void ApplyWaterMask(WaterMaskJob job)
         {
+            var prevLoc = _lastWaterLoc;
+            int prevTx = _lastWaterTx, prevTy = _lastWaterTy;
             _lastWaterLoc = job.Loc;
             _lastWaterTx = job.Tx;
             _lastWaterTy = job.Ty;
@@ -828,6 +1055,70 @@ namespace SDVRadiance
             int tilesW = job.TilesW, tilesH = job.TilesH;
             int count = tilesW * tilesH;
             int pw = tilesW * 16, ph = tilesH * 16;
+            // GPU CROSSFADE, CONTINUOUS (rule: nothing pops, at any rebuild rate): the fade
+            // SOURCE for each apply is a SNAPSHOT OF WHAT IS ON SCREEN RIGHT NOW —
+            // lerp(prevShown, lastApplied, blend), world-aligned into the new window. The
+            // first version used the last mask as the source, so when rebuilds arrived
+            // faster than the fade finished (surf flips every ~0.2s vs 0.3s fade) every
+            // apply first SNAPPED the picture to the target — the fast up/down the user
+            // called "ขึ้นไวลงไว". Rebasing from the shown state makes the response a true
+            // exponential glide toward whatever the mask is doing, however often it changes.
+            int pcountA = pw * ph;
+            bool canFade = _waterMask != null && _waterMask.Width == pw && _waterMask.Height == ph
+                && ReferenceEquals(prevLoc, job.Loc)
+                && _prevShownBuf != null && _lastAppliedBuf != null && _prevShownLen == pcountA;
+            if (canFade)
+            {
+                if (_shownScratch == null || _shownScratch.Length < pcountA)
+                    _shownScratch = new Color[pcountA];
+                int dx = (job.Tx - prevTx) * 16, dy = (job.Ty - prevTy) * 16;
+                // MUST match the eased value the shader displayed this frame, or the
+                // snapshot itself introduces a tiny pop at every swap.
+                float mb = _maskBlend * _maskBlend * (3f - 2f * _maskBlend);
+                for (int y = 0; y < ph; y++)
+                {
+                    int oy = y + dy;
+                    bool inY = oy >= 0 && oy < ph;
+                    int row = y * pw, orow = oy * pw;
+                    for (int x = 0; x < pw; x++)
+                    {
+                        int ox = x + dx;
+                        if (inY && ox >= 0 && ox < pw)
+                        {
+                            Color a = _prevShownBuf![orow + ox], c = _lastAppliedBuf![orow + ox];
+                            _shownScratch[row + x] = new Color(
+                                (byte)(a.R + (c.R - a.R) * mb), (byte)(a.G + (c.G - a.G) * mb),
+                                (byte)(a.B + (c.B - a.B) * mb), (byte)(a.A + (c.A - a.A) * mb));
+                        }
+                        else
+                            _shownScratch[row + x] = _waterPixBuf[row + x];   // newly scrolled-in: no fade
+                    }
+                }
+                (_prevShownBuf, _shownScratch) = (_shownScratch, _prevShownBuf);
+                if (_waterMaskPrev == null || _waterMaskPrev.Width != pw || _waterMaskPrev.Height != ph)
+                {
+                    _waterMaskPrev?.Dispose();
+                    _waterMaskPrev = new Texture2D(_device, pw, ph, false, SurfaceFormat.Color);
+                }
+                _waterMaskPrev.SetData(_prevShownBuf, 0, pcountA);
+                // prev is REBASED into the new window — same origin as current from here on
+                _waterMaskPrevOrigin = new Vector2(job.Tx, job.Ty);
+                _waterMaskPrevSize = new Vector2(tilesW, tilesH);
+                _maskBlend = 0f;
+            }
+            else
+            {
+                _waterMaskPrev?.Dispose();
+                _waterMaskPrev = null;
+                _maskBlend = 1f;   // location/size change: no valid prev — show the new mask at once
+                if (_prevShownBuf == null || _prevShownBuf.Length < pcountA)
+                    _prevShownBuf = new Color[pcountA];
+                Array.Copy(_waterPixBuf, _prevShownBuf, pcountA);
+            }
+            _prevShownLen = pcountA;
+            if (_lastAppliedBuf == null || _lastAppliedBuf.Length < pcountA)
+                _lastAppliedBuf = new Color[pcountA];
+            Array.Copy(_waterPixBuf, _lastAppliedBuf, pcountA);
             if (_waterMask == null || _waterMask.Width != pw || _waterMask.Height != ph)
             {
                 _waterMask?.Dispose();

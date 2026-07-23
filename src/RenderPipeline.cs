@@ -47,6 +47,14 @@ namespace SDVRadiance
         private Texture2D? _waterMask;         // PIXEL-accurate water mask (16 texels/tile): true water tiles + the painted
                                                // water inside shore-tile art, minus opaque Buildings/Front art (pier posts,
                                                // bridges, lily pads). Effects end exactly at the real waterline.
+        private Texture2D? _waterMaskPrev;     // the OUTGOING mask (GPU crossfade source): the shader lerps prev→current
+        private Vector2 _waterMaskPrevOrigin;  //   over ~0.3s after every apply, so rebuild deltas glide instead of stepping
+        private Vector2 _waterMaskPrevSize;
+        private float _maskBlend = 1f;         // 0 = fresh apply (all prev) → 1 = settled (all current)
+        private Color[]? _prevShownBuf;        // world-aligned snapshot of what the SCREEN showed at the last apply
+        private Color[]? _lastAppliedBuf;      // CPU copy of the last uploaded mask (fade target of the shown state)
+        private Color[]? _shownScratch;
+        private int _prevShownLen;
         private Texture2D? _waterMaskCore;     // undilated per-TILE mask — true water bodies, used for the reflection's shoreline search
         private Color[]? _waterMaskCoreBuf;
         private bool[]? _waterBoolBuf;         // pre-dilation water flags (see BuildWaterMask)
@@ -70,7 +78,28 @@ namespace SDVRadiance
         private const int SheetPixCap = 8_000_000; // ~32 MB per sheet ceiling before falling back
         private GameLocation? _prewarmedLoc;   // last location whose tilesheets we bulk-read back
         private readonly System.Collections.Generic.Dictionary<string, Texture2D?> _sheetTexCache = new();
-        private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle, bool), bool[]> _waterBitsCache = new();
+        // Key includes the palette version: the water-colour classifier is CALIBRATED per
+        // location (see BuildWaterPalette) — art classified under one palette must not be
+        // reused under another (walking from a lava cavern to a blue lake, or a recolor
+        // swapping sheets mid-session).
+        private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle, bool, int), bool[]> _waterBitsCache = new();
+        // Self-calibrating water palette (P0-B): dominant art colours sampled from INTERIOR
+        // water tiles of the current window — tiles the game itself flags as water, so the
+        // reference survives any recolor/custom sheet without hardcoded gates. Quantized to
+        // 16-step RGB bins; classification then matches boundary/shore pixels by distance.
+        private readonly System.Collections.Generic.List<Color> _palColors = new();
+        private int _palVer;                   // bumped when the palette CONTENT changes (classify cache key part)
+        private ulong _palHash;
+        private GameLocation? _palLoc;         // palette is pinned per LOCATION (window-independent — see BuildWaterPalette)
+        // Animated-art frame watch (P0-C): AnimatedTiles whose art fed the current mask, with
+        // the frame index they were classified at. When a watched frame flips, the mask
+        // rebuilds so effects follow the surf/foam animation instead of freezing on frame 0.
+        private readonly System.Collections.Generic.List<(xTile.Tiles.AnimatedTile tile, int idx)> _animWatch = new();
+        private bool _animWatchAffectsMask;    // any anim art actually contributed water bits
+        private int _animCheckTick = int.MinValue;
+        /// <summary>Diagnosis (AgentBridge): request a <see cref="DumpMasks"/> to the temp folder
+        /// on the next frame — the bridge has no reference to the pipeline instance.</summary>
+        internal static bool MaskDumpNext;
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), (bool[] bits, int count)> _solidBitsCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), (bool[] bits, int count)> _puddleBitsCache = new();
         private byte[]? _puddleTileBuf;        // per-tile puddle level: 0 no, 1 weak (rocky variant), 2 strong
@@ -536,7 +565,7 @@ namespace SDVRadiance
             _bloom?.Dispose(); _colorGrade?.Dispose(); _godRays?.Dispose(); _fog?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
             _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose(); _floodFx?.Dispose(); _flood.Dispose();
             _sceneRT = _fullA = _fullB = _rtA = _rtB = null;
-            _waterMask = null; _waterMaskCore = null; _occluderMask = null; _lumRT = null;
+            _waterMask = null; _waterMaskPrev = null; _waterMaskCore = null; _occluderMask = null; _lumRT = null;
             _spriteMaskRT = null; _spriteMaskBatch = null;
             _bloom = _colorGrade = _godRays = _fog = _cloudShadow = _tiltShift = _water = _finishing = _lighting = _floodFx = null;
         }

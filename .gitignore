@@ -29,3 +29,6 @@ stardewvalley.targets
 *.local.props
 *.local.md
 *.local.ps1
+
+# Internal water-detection test plan + staged test mods (never mirror)
+test-mods/
