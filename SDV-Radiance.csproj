@@ -7,7 +7,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>SDV-Radiance</AssemblyName>
     <RootNamespace>SDVRadiance</RootNamespace>
-    <Version>1.1.0</Version>
+    <Version>1.2.1</Version>
 
     <!-- SMAPI mod packaging: auto-detects the game folder and deploys to Mods/.
          Enables the bundled Harmony reference for the deeper _draw hook path. -->
