@@ -376,8 +376,15 @@ namespace SDVRadiance
             // The stage can run for the REFLECTION alone (shimmer toggled off): ripple,
             // sparkle, tint and rim all zero out; the mirror keeps working independently.
             float shimmer = (config.WaterEnabled ? 1f : 0f) * _fadeWater;   // presence fade: never pops in
+            // W8: during a cutscene the game draws the event UI (the SKIP button, dialogue)
+            // as part of the world frame, so the ripple's pixel DISPLACEMENT bent it over
+            // water/lava. Zero the displacement in events (same treatment as CA/tilt-shift) —
+            // but keep tint / reflection / sparkle, which don't move pixels, so the water
+            // still reads correctly in the cinematic.
+            bool eventUp = Game1.eventUp || Game1.CurrentEvent != null;
+            float dispGate = eventUp ? 0f : 1f;
             P(fx, "Time")?.SetValue(Time());
-            P(fx, "Strength")?.SetValue(config.WaterStrength * strengthMul * shimmer);
+            P(fx, "Strength")?.SetValue(config.WaterStrength * strengthMul * shimmer * dispGate);
             P(fx, "Speed")?.SetValue(config.WaterSpeed * speedMul);
             P(fx, "Sparkle")?.SetValue(config.WaterSparkle * sparkleMul * shimmer);
             P(fx, "TintAmt")?.SetValue(0.35f * shimmer);
