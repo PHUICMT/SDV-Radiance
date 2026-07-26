@@ -520,9 +520,12 @@ namespace SDVRadiance
             // Null when that mod isn't installed — the shadow code falls back to its own heuristics.
             var height = this.Helper.ModRegistry.GetApi<Integrations.IHeightFrameworkApi>("phuicmt.HeightFramework");
             ShadowRenderer.Height = height;
-            this.Monitor.Log(height != null
-                ? "Height Framework detected — using it for water/ledge shadow suppression."
-                : "Height Framework not installed — using built-in tile heuristics for shadows.", LogLevel.Info);
+            // Worded as clearly optional and logged at Trace when absent: players kept reading the
+            // old Info line as "you are missing a dependency" and asked what to install.
+            if (height != null)
+                this.Monitor.Log("Height Framework detected — using it for water/ledge shadow suppression.", LogLevel.Info);
+            else
+                this.Monitor.Log("Height Framework not found (optional, nothing to install) — using built-in tile heuristics for shadows.", LogLevel.Trace);
 
             // Draw-call-accurate water discovery: patch drawWaterTile on GameLocation AND every
             // loaded override (mod location classes included) — hence GameLaunched, not Entry.

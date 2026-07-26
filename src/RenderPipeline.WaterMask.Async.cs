@@ -172,6 +172,16 @@ namespace SDVRadiance
             if (_tileFlowBuf == null || _tileFlowBuf.Length < count) _tileFlowBuf = new bool[count];
             if (_tileLavaBuf == null || _tileLavaBuf.Length < count) _tileLavaBuf = new bool[count];
 
+            // Volcano interiors hold lava, not water. The lava sub-class (slow molten flow,
+            // self-glow, no mirror) otherwise only triggers on painted label class 11, which
+            // ships dormant — so vanilla lava rendered as ordinary water, complete with a
+            // mirror reflection. Tag it from the location instead so it reads as lava out of
+            // the box; a painted label still wins per tile below.
+            string locName = loc.NameOrUniqueName ?? loc.Name ?? "";
+            bool locIsLava = loc is StardewValley.Locations.VolcanoDungeon
+                || locName.Contains("Caldera", StringComparison.OrdinalIgnoreCase)
+                || locName.Contains("Volcano", StringComparison.OrdinalIgnoreCase);
+
             bool anyAnim = false;
             for (int j = 0; j < tilesH; j++)
             {
@@ -302,7 +312,9 @@ namespace SDVRadiance
                     // flowing → ripple but no reflection (scrubbed from the march channel).
                     _tileIceBuf[idx] = iceN > 0 && iceN >= flowN && iceN >= lavaN;
                     _tileFlowBuf[idx] = flowN > 0 && flowN > iceN && flowN >= lavaN;
-                    _tileLavaBuf[idx] = lavaN > 0 && lavaN > iceN && lavaN > flowN;
+                    // A volcano location is lava unless a label says this tile is something else.
+                    _tileLavaBuf[idx] = (lavaN > 0 && lavaN > iceN && lavaN > flowN)
+                        || (locIsLava && iceN == 0 && flowN == 0);
 
                     // Structure / carve inputs (Pass C + the land-connectivity test + arch fill).
                     bool hasFront = TryTileArt(front, tx, ty, out var t2, out var s2);

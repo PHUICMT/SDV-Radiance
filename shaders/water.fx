@@ -205,7 +205,23 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // 0.75 floor (murky green lakes failed every colour gate and the effect went patchy).
     // Their remaining job is grading, not coverage; sprites over water are handled by the
     // carve pass + the player silhouette gate.
-    float water = tileWater * max(max(max(blueness, greyness * 0.9), cyan), 0.75) * ringGate;
+    //
+    // ...but a floor of 0.75 also means NO colour test can reject, so wherever the mask
+    // over-covers (beach wave tiles are square, the painted sand inside them is not) the sand
+    // got 75% of the effect and read as a hard tile-shaped rectangle. Veto the pixels that are
+    // unmistakably dry land — WARM (red over blue) and SATURATED — which is sand, tilled soil,
+    // dirt paths and bare wood. Cool water is untouched, and so is the murky green/grey water
+    // the floor exists for (those are near-neutral, so `sand` stays ~0).
+    // LAVA is warm and saturated too, so it must be exempt or molten rock loses its effect.
+    // The isLava tag alone is NOT enough: it comes from painted label class 11, which ships
+    // dormant, so at the Caldera lava reads as ordinary water and the veto would eat it.
+    // Separate them by HUE instead: sand, soil, paths and wood ramp gently from red through
+    // green to blue (r-g stays small), while molten rock spikes red far above green.
+    float warm = saturate((src.r - src.b) * 3.0);
+    float notMolten = 1.0 - smoothstep(0.25, 0.45, src.r - src.g);
+    float sand = warm * saturate((maxc - minc) * 4.0) * notMolten * (1.0 - isLava);
+    float water = tileWater * max(max(max(blueness, greyness * 0.9), cyan), 0.75)
+                * ringGate * (1.0 - sand * 0.95);
     if (water <= 0.002)
         return src;
 
