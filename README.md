@@ -102,15 +102,19 @@ effects are active.
 3. Unzip this mod into your `Stardew Valley/Mods` folder.
 4. Launch through SMAPI. Press **F6** for the tuner, **F7** to toggle.
 
+Bundled languages: English, Thai, Simplified Chinese. A Korean translation is available
+as a [separate mod](https://www.nexusmods.com/stardewvalley/mods/49448).
+
 ## Compatibility
 
 - Stardew Valley 1.6.x, SMAPI 4.0.0+.
 - Works automatically with sprite mods, Fashion Sense, and recolors (it reads the rendered frame).
-- Single-player; effects are client-side. Android is not supported.
+- Single-player; effects are client-side. Split-screen co-op does not get the water reflections yet.
+- Android is not officially supported and is untested by the author, though players have reported it running (with some delay).
 - Run only one screen-space/lighting post-processing overlay at a time for a predictable look.
 
 ### Known incompatibilities
-- **SpriteMaster** (also distributed as *"Clear Glasses"*, `aurpine.ClearGlasses`) — **not compatible.** SpriteMaster hooks the sprite batch and render targets deeply for its texture upscaling/caching; SDV-Radiance captures and post-processes the game's render target. Running both makes the world render as a solid color (orange/black) on load until a menu forces a redraw. Use one or the other. Native high-quality upscaling is on the SDV-Radiance roadmap so the two are eventually one install.
+- **SpriteMaster** (also distributed as *"Clear Glasses"*, *"Clear Glasses HD"*, *"Clear Monocle"*, `aurpine.ClearGlasses`) — **not compatible.** SpriteMaster hooks the sprite batch and render targets deeply for its texture upscaling/caching; SDV-Radiance captures and post-processes the game's render target. Running both makes the world render as a solid color (orange/black) on load until a menu forces a redraw. One player on Clear Glasses HD also reported the view zooming in hard or blacking out when walking near god rays; switching the God rays effect off avoided that without disabling the rest. Use one or the other. Native high-quality upscaling is on the SDV-Radiance roadmap so the two are eventually one install.
 
 ## Building
 
@@ -155,3 +159,5 @@ Free and always will be. If it's useful to you, support is appreciated but never
 ## License & credits
 
 MIT — see [LICENSE](LICENSE). Third-party attribution (frameworks, tooling, and any reused code) is in [CREDITS.md](CREDITS.md).
+
+Translations: Simplified Chinese by **rime961**, Korean by **jjongleee** (separate mod).
