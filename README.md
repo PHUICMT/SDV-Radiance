@@ -161,4 +161,5 @@ Free and always will be. If it's useful to you, support is appreciated but never
 MIT — see [LICENSE](LICENSE). Third-party attribution (frameworks, tooling, and any reused code) is in [CREDITS.md](CREDITS.md).
 
 Translations: Simplified Chinese bundled from 1.2.2 by **rime961**. Separate translation mods on
-the Nexus, with thanks: Korean by **jjongleee**, Chinese by **Rubbish404**.
+the Nexus, with thanks: Korean by [jjongleee](https://www.nexusmods.com/stardewvalley/mods/49448),
+Chinese by [Rubbish404](https://www.nexusmods.com/stardewvalley/mods/49647).
