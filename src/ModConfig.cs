@@ -121,7 +121,8 @@ namespace SDVRadiance
         /// <summary>How many separate cloud banks share the screen (cluster frequency, 0..1).</summary>
         public float CloudShadowCount { get; set; } = 0.5f;
         public float CloudShadowSpeed { get; set; } = 0.04f;
-        public float CloudShadowOpacity { get; set; } = 0.61f;
+        /// <summary>Default kept well under the 0.7 cap: 0.61 read as near-black to players.</summary>
+        public float CloudShadowOpacity { get; set; } = 0.45f;
         public float CloudShadowCoverage { get; set; } = 0.43f;
 
         public bool TiltShiftEnabled { get; set; } = true;
