@@ -60,6 +60,12 @@ namespace SDVRadiance
         private bool[]? _tileIceBuf;           // HF label class 9: frozen — reflection, no ripple
         private bool[]? _tileFlowBuf;          // HF label class 10: flowing/waterfall — ripple, no reflection
         private bool[]? _tileLavaBuf;          // HF label class 11: lava — slow molten flow, self-glow, no reflection
+        // Buildings-label liquid bits on a tile the game already calls water. The overlay art is
+        // what you actually SEE as the waterline (a beach shore is a full water tile with the surf
+        // wash drawn over it), and its label is the only per-pixel statement of where that line
+        // runs — the carve bits cannot help, because SolidBits deliberately drops art that is
+        // mostly water-coloured, which the wash is.
+        private bool[]?[]? _tileOverlayLiqBuf;
         private bool[]? _tileSpanFlag;         // wet OR spans water (pier/bridge): connectivity only
         private bool[]? _tileWetFlag;          // per-tile: has any effect-water pixel (for body-size flood fill)
         private byte[]? _tileCalmBuf;          // per-tile 0..255 wave scale by water-body size (small = calmer)
@@ -165,6 +171,7 @@ namespace SDVRadiance
             if (_tileDeckBuf == null || _tileDeckBuf.Length < count) _tileDeckBuf = new bool[count];
             if (_tileHasBldBuf == null || _tileHasBldBuf.Length < count) _tileHasBldBuf = new bool[count];
             if (_tileHasFrontBuf == null || _tileHasFrontBuf.Length < count) _tileHasFrontBuf = new bool[count];
+            if (_tileOverlayLiqBuf == null || _tileOverlayLiqBuf.Length < count) _tileOverlayLiqBuf = new bool[]?[count];
             if (_puddleTileBuf == null || _puddleTileBuf.Length < count) _puddleTileBuf = new byte[count];
             if (_animOnlyTileBuf == null || _animOnlyTileBuf.Length < count) _animOnlyTileBuf = new bool[count];
             if (_tileIceBuf == null || _tileIceBuf.Length < count) _tileIceBuf = new bool[count];
@@ -339,6 +346,21 @@ namespace SDVRadiance
                                 fCount = Math.Max(fCount, ca.count);
                             }
                     _tileHasFrontBuf[idx] = fBits != null;
+                    // Overlay label on a true water tile — read unconditionally, NOT gated on the
+                    // carve bits: on a surf-wash tile there are none. Needs both liquid and dry
+                    // pixels to be a statement about a waterline at all.
+                    _tileOverlayLiqBuf![idx] = null;
+                    if (isWater && labels != null && hasBld)
+                    {
+                        byte[]? ol = labels.Get(bld, tx, ty);
+                        if (ol != null)
+                        {
+                            var (obits, oW2, oI2, oF2, oL2) = WaterBitsFromLabels(ol);
+                            int liq = oW2 + oI2 + oF2 + oL2;
+                            if (liq >= 8 && liq <= 248)
+                                _tileOverlayLiqBuf[idx] = obits;
+                        }
+                    }
                     _tileCarveBBuf[idx] = hasBld ? cb.bits : null;
                     _tileCarveFBuf[idx] = fBits;
                     // Buildings-layer art ON a water tile. Pass C already carves it by opacity,
@@ -844,7 +866,9 @@ namespace SDVRadiance
                         var keep = _tileKeepBuf![ti];
                         var cb = _tileCarveBBuf![ti];
                         var cf = _tileCarveFBuf![ti];
-                        if ((keep != null && !keep[sub]) || (cb != null && cb[sub]) || (cf != null && cf[sub]))
+                        var ov = _tileOverlayLiqBuf![ti];
+                        if ((keep != null && !keep[sub]) || (cb != null && cb[sub]) || (cf != null && cf[sub])
+                            || (ov != null && !ov[sub]))
                         {
                             _waterPixBits2![p] = false;   // above the waterline: no mirror here
                             isW = false;
