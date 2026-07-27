@@ -135,7 +135,9 @@ float EdgeDistAt(float2 p)
 {
     float2 wt = p * TilesPerScreen + WorldTileOffset;
     float2 muv = (wt - MaskOrigin) / MaskSize;
-    return tex2D(MaskSampler, muv).b;
+    // Bilinear: read as a point sample the distance jumps a whole unit between neighbouring
+    // texels, and along a diagonal shore those jumps line up into the staircase.
+    return tex2D(MaskLinearSampler, muv).b;
 }
 
 float4 WaterPS(PixelInput input) : SV_TARGET
@@ -294,7 +296,9 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // above them — their march found land instantly, leaving the mirror short of the
         // left/right waterline. If this column isn't over core water, borrow the neighbour
         // column on whichever side the real water is.
-        float tileW = 1.0 / TilesPerScreen.x;
+        // Borrow at TEXEL scale, not a whole tile: the mask is pixel accurate now, so a
+        // full-tile hop was itself quantising the mirror into 64px columns.
+        float tileW = 4.0 / (TilesPerScreen.x * 16.0);
         float coreC = WaterAt(float2(mx, uv.y));
         float coreL = WaterAt(float2(mx - tileW, uv.y));
         float coreR = WaterAt(float2(mx + tileW, uv.y));
@@ -306,7 +310,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // mirror never slices into offset blocks.
         float distHalf = EdgeDistAt(float2(mx, uv.y)) * 255.0;
         float found = WaterAt(float2(mx, uv.y)) * step(distHalf, 252.5);
-        float waterOff = (distHalf * 0.5 / 16.0) / TilesPerScreen.y;
+        float waterOff = (distHalf * 2.0 / 16.0) / TilesPerScreen.y;   // EdgeScale: 0.5 unit per texel on the CPU
         float edgeV = uv.y - waterOff;
 
         // Oblique-view mirror: the world is drawn at a slant, so a reflection must be
@@ -338,7 +342,12 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // Distance fade: defined near the shoreline, gone by ~0.75 screen below it. (An
         // always-on base mirrored far-upstream cliffs down entire rivers as dark streaks;
         // 1.6 faded bridges out so fast their reflection looked cut short.)
-        float fade = saturate(1.0 - depth * 1.3);
+        // Reach. At 1.3 the mirror was gone 0.77 of a screen below the shoreline, so an open
+        // sea reflected nothing beyond the first few tiles and read as two different surfaces
+        // with a band between them. 0.5 carries it past the bottom of the screen; the cliff-
+        // streak problem the steep falloff was guarding against is held off by the srcWater
+        // and onScreen damping below, which did not exist when 1.3 was chosen.
+        float fade = saturate(1.0 - depth * 0.5);
         // Fade the reflection out where the mirrored sample would fall OFF-screen, instead of
         // clamping (which smears the edge row/column across the water near the screen border).
         float2 dborder = min(reflUv, float2(1.0, 1.0) - reflUv);

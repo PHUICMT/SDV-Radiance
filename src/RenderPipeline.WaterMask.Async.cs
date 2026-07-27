@@ -60,12 +60,6 @@ namespace SDVRadiance
         private bool[]? _tileIceBuf;           // HF label class 9: frozen — reflection, no ripple
         private bool[]? _tileFlowBuf;          // HF label class 10: flowing/waterfall — ripple, no reflection
         private bool[]? _tileLavaBuf;          // HF label class 11: lava — slow molten flow, self-glow, no reflection
-        // Buildings-label liquid bits on a tile the game already calls water. The overlay art is
-        // what you actually SEE as the waterline (a beach shore is a full water tile with the surf
-        // wash drawn over it), and its label is the only per-pixel statement of where that line
-        // runs — the carve bits cannot help, because SolidBits deliberately drops art that is
-        // mostly water-coloured, which the wash is.
-        private bool[]?[]? _tileOverlayLiqBuf;
         private bool[]? _tileSpanFlag;         // wet OR spans water (pier/bridge): connectivity only
         private bool[]? _tileWetFlag;          // per-tile: has any effect-water pixel (for body-size flood fill)
         private byte[]? _tileCalmBuf;          // per-tile 0..255 wave scale by water-body size (small = calmer)
@@ -171,7 +165,6 @@ namespace SDVRadiance
             if (_tileDeckBuf == null || _tileDeckBuf.Length < count) _tileDeckBuf = new bool[count];
             if (_tileHasBldBuf == null || _tileHasBldBuf.Length < count) _tileHasBldBuf = new bool[count];
             if (_tileHasFrontBuf == null || _tileHasFrontBuf.Length < count) _tileHasFrontBuf = new bool[count];
-            if (_tileOverlayLiqBuf == null || _tileOverlayLiqBuf.Length < count) _tileOverlayLiqBuf = new bool[]?[count];
             if (_puddleTileBuf == null || _puddleTileBuf.Length < count) _puddleTileBuf = new byte[count];
             if (_animOnlyTileBuf == null || _animOnlyTileBuf.Length < count) _animOnlyTileBuf = new bool[count];
             if (_tileIceBuf == null || _tileIceBuf.Length < count) _tileIceBuf = new bool[count];
@@ -346,21 +339,6 @@ namespace SDVRadiance
                                 fCount = Math.Max(fCount, ca.count);
                             }
                     _tileHasFrontBuf[idx] = fBits != null;
-                    // Overlay label on a true water tile — read unconditionally, NOT gated on the
-                    // carve bits: on a surf-wash tile there are none. Needs both liquid and dry
-                    // pixels to be a statement about a waterline at all.
-                    _tileOverlayLiqBuf![idx] = null;
-                    if (isWater && labels != null && hasBld)
-                    {
-                        byte[]? ol = labels.Get(bld, tx, ty);
-                        if (ol != null)
-                        {
-                            var (obits, oW2, oI2, oF2, oL2) = WaterBitsFromLabels(ol);
-                            int liq = oW2 + oI2 + oF2 + oL2;
-                            if (liq >= 8 && liq <= 248)
-                                _tileOverlayLiqBuf[idx] = obits;
-                        }
-                    }
                     _tileCarveBBuf[idx] = hasBld ? cb.bits : null;
                     _tileCarveFBuf[idx] = fBits;
                     // Buildings-layer art ON a water tile. Pass C already carves it by opacity,
@@ -584,22 +562,15 @@ namespace SDVRadiance
             {
                 for (int i = 0; i < tilesW; i++)
                 {
-                    int ti2 = j * tilesW + i;
-                    bool[]? keep = _tileKeepBuf![ti2];
-                    // The OVERLAY label counts here too. A beach shore is a full Back water tile
-                    // with the surf wash drawn over it, so the Back art is solid blue and its
-                    // label rightly says water everywhere — nothing to subtract, and the effect
-                    // channel stayed square to the tile grid. The wet sand you can see is the
-                    // overlay, and only the overlay's label knows where it stops.
-                    bool[]? ovl = _tileOverlayLiqBuf![ti2];
-                    if (keep == null && ovl == null)
+                    bool[]? keep = _tileKeepBuf![j * tilesW + i];
+                    if (keep == null)
                         continue;
                     for (int py = 0; py < Sub; py++)
                     {
                         int row = (j * Sub + py) * pw + i * Sub;
                         int arow = py * Sub;
                         for (int px = 0; px < Sub; px++)
-                            if ((keep != null && !keep[arow + px]) || (ovl != null && !ovl[arow + px]))
+                            if (!keep[arow + px])
                                 _waterPixBits[row + px] = false;
                     }
                 }
@@ -853,35 +824,7 @@ namespace SDVRadiance
                 for (int y = 0; y <= ph; y++)
                 {
                     int p = y * pw + x;
-                    bool isW = y < ph && _waterPixBits2![p];
-                    // Refine where the run STARTS with the label. Pass A fills a Back water tile
-                    // edge to edge, and the label subtraction that trims it back to the painted
-                    // shape is applied to the effect channel only (an island in mid-pond must not
-                    // read as a shoreline). So the march channel's top edge could only ever step
-                    // whole tiles, which is the staircase down every diagonal beach. Trimming only
-                    // the LEADING pixels keeps interior islands harmless: the run never splits,
-                    // its start just lands where the water really begins.
-                    if (isW && !inRun)
-                    {
-                        int ti = (y / Sub) * tilesW + (x / Sub);
-                        int sub = (y % Sub) * 16 + (x % Sub);
-                        // The visible waterline is usually NOT the Back tile's edge. A beach shore
-                        // is a full Back water tile with the wash drawn OVER it on Buildings, so
-                        // the march channel saw water edge to edge and could only step whole tiles.
-                        // The carve bits are already "opaque overlay art that no label calls
-                        // liquid" — exactly the sand lying on top of the water.
-                        var keep = _tileKeepBuf![ti];
-                        var cb = _tileCarveBBuf![ti];
-                        var cf = _tileCarveFBuf![ti];
-                        var ov = _tileOverlayLiqBuf![ti];
-                        if ((keep != null && !keep[sub]) || (cb != null && cb[sub]) || (cf != null && cf[sub])
-                            || (ov != null && !ov[sub]))
-                        {
-                            _waterPixBits2![p] = false;   // above the waterline: no mirror here
-                            isW = false;
-                        }
-                    }
-                    if (isW)
+                    if (y < ph && _waterPixBits2![p])
                     {
                         if (!inRun)
                         {
@@ -1013,7 +956,13 @@ namespace SDVRadiance
                         int n = _edgeCnt![x1 + 1] - _edgeCnt[x0];
                         float ts = n > 0 ? (float)(_edgeSum[x1 + 1] - _edgeSum[x0]) / n : t0;
                         ts = MathHelper.Clamp(ts, t0 - 24, t0 + 24);
-                        bch = (byte)MathHelper.Clamp((float)Math.Round((y - ts) * 2f), 0f, 252f);
+                        // Distance to the waterline, encoded into a byte. The old scale was 2
+                        // units per texel, so it saturated at 126 texels — under 8 tiles — and
+                        // every water surface wider than that simply had no reflection past the
+                        // first few tiles from its shore. Half a unit per texel reaches ~31 tiles,
+                        // which covers a full screen of open sea. Keep EdgeScale in the shader in
+                        // step with this or the mirror lands at the wrong depth.
+                        bch = (byte)MathHelper.Clamp((float)Math.Round((y - ts) * 0.5f), 0f, 252f);
                     }
                     // Shallow puddles get a SOFTER mask value: every effect (ripple, sparkle,
                     // mirror) scales with it, so a walk-through pool shimmers gently instead of
