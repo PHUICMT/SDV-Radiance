@@ -64,16 +64,10 @@ namespace SDVRadiance
         private byte[]? _tileCalmBuf;          // per-tile 0..255 wave scale by water-body size (small = calmer)
         private readonly List<(int x0, int y0, int x1, int y1)> _carveRects = new();
 
-        /// <summary>HF Studio label version, for the mask cache key (0 = no HF / old HF).
-        /// Live-sync repaint: painting in the browser bumps this within seconds.</summary>
-        private static int CurrentLabelVersion()
-        {
-            var hf = ShadowRenderer.Height;
-            if (hf == null)
-                return 0;
-            try { return hf.GetLabelVersion(); }
-            catch { return 0; }
-        }
+        /// <summary>Label-set identity for the mask cache key (0 = no labels loaded). Labels are
+        /// read once at startup, so this is constant for a session — it exists so a build with no
+        /// labels can never reuse a cached mask built with them.</summary>
+        private static int CurrentLabelVersion() => LabelStore.Instance?.Version ?? 0;
 
         /// <summary>Water bits from 256 HF Studio per-pixel labels. Classes 1 (water), 9 (ice) and
         /// 10 (flowing) are ALL water for the mask; per-class counts let the tile pick a behaviour
@@ -106,10 +100,10 @@ namespace SDVRadiance
                 LabelVer = CurrentLabelVersion(),
             };
 
-            // Height Framework (when present) classifies the actual water SURFACE: ponds and
-            // beach tide pools count as water (they reflect too), while pier/bridge DECKS over
-            // water do not (no reflection painted onto planks). Fall back to isWaterTile.
-            var hf = ShadowRenderer.Height;
+            // The surface grid classifies the actual water SURFACE: ponds and beach tide pools
+            // count as water (they reflect too), while pier/bridge DECKS over water do not — no
+            // reflection is painted onto planks. Built once per location visit.
+            var surf = SurfaceMap.For(loc);
             // Ground-truth labels ship WITH this mod (labels/), read once at startup — nothing
             // here touches the disk or depends on another mod being installed.
             var labels = LabelStore.Instance;
@@ -121,9 +115,7 @@ namespace SDVRadiance
                 for (int i = 0; i < tilesW; i++)
                 {
                     int tx = startTileX + i, ty = startTileY + j;
-                    bool water;
-                    try { water = hf != null ? hf.IsWaterSurface(loc, tx, ty) : loc.isWaterTile(tx, ty); }
-                    catch { hf = null; water = loc.isWaterTile(tx, ty); }
+                    bool water = surf != null ? surf.IsWater(tx, ty) : loc.isWaterTile(tx, ty);
                     // Walkable shallow pools (island dig site tide pools) aren't Water tiles,
                     // but they refill the watering can → "WaterSource" marks them as real water.
                     if (!water && loc.doesTileHaveProperty(tx, ty, "WaterSource", "Back") != null)
@@ -419,14 +411,12 @@ namespace SDVRadiance
                     // A volcano location is lava unless a label says this tile is something else.
                     _tileLavaBuf[idx] = (lavaN > 0 && lavaN > iceN && lavaN > flowN)
                         || (locIsLava && iceN == 0 && flowN == 0);
-                    // Height Framework DECK tiles (walkable piers / plank bridges — Back-layer
-                    // wood) block as whole tiles too: the beach plank's art has a painted wet
-                    // stain that classified as water, punching a 2-texel channel through the
-                    // deck — and the ±10 shoreline smoothing then dragged the anchors of a
-                    // full tile around it up above the plank (reflection missing on that side).
-                    bool deck = false;
-                    if (hf != null)
-                        try { deck = hf.GetSurfaceAt(loc, tx, ty) == 4; } catch { hf = null; }
+                    // DECK tiles (walkable piers / plank bridges) block as whole tiles too: the
+                    // beach plank's art has a painted wet stain that classified as water, punching
+                    // a 2-texel channel through the deck — and the ±10 shoreline smoothing then
+                    // dragged the anchors of a full tile around it up above the plank (reflection
+                    // missing on that side).
+                    bool deck = surf != null && surf.GetSurface(tx, ty) == SurfaceClass.Deck;
                     _tileDeckBuf[idx] = deck;
                     _tileBigSolidBuf[idx] = deck || (hasBld && cb.count >= 230 && !bldLabeledLiquid) || fCount >= 230;
                 }

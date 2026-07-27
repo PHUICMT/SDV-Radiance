@@ -412,11 +412,12 @@ namespace SDVRadiance
         {
             try
             {
-                // Height Framework (if installed) already distinguishes open water from pier/bridge
-                // DECKS over water, so its water-surface test is the robust answer. Fall back to the
-                // isWaterTile + no-Buildings-tile heuristic (which approximates the same deck check).
-                if (Height != null)
-                    return Height.IsWaterSurface(loc, tile.X, tile.Y);
+                // The surface grid distinguishes open water from pier/bridge DECKS over water, so
+                // it is the robust answer. Fall back to the isWaterTile + no-Buildings-tile
+                // heuristic (which approximates the same deck check) if the map isn't ready.
+                var surf = SurfaceMap.For(loc);
+                if (surf != null)
+                    return surf.IsWater(tile.X, tile.Y);
                 return loc.isWaterTile(tile.X, tile.Y)
                     && !loc.hasTileAt(tile.X, tile.Y, "Buildings");
             }

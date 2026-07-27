@@ -27,9 +27,6 @@ namespace SDVRadiance
         /// <summary>Optional diagnostics sink; when set (config.DebugLogging), the first few draws + any error are logged once.</summary>
         internal static IMonitor? Diag;
 
-        /// <summary>Optional Height Framework API (null if that mod isn't installed); when present it
-        /// gives robust per-tile water/deck classification instead of our own tile heuristics.</summary>
-        internal static Integrations.IHeightFrameworkApi? Height;
         private int _diagFrames;
         private bool _errLogged;
 

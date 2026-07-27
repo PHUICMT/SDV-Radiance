@@ -151,6 +151,16 @@ namespace SDVRadiance
             helper.Events.GameLoop.GameLaunched += OnGameLaunched;
             helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
             helper.Events.Input.ButtonsChanged += OnButtonsChanged;
+            // Surface grids are inferred per location and cached for the visit. A save load means
+            // a whole new world, and placing/removing a farm building changes a map in place.
+            helper.Events.GameLoop.SaveLoaded += (_, _) => SurfaceMap.Clear();
+            helper.Events.World.BuildingListChanged += (_, e) => SurfaceMap.Invalidate(e.Location);
+            // Author tool: dumps every location's layers/tiles + sheet art for HF Studio, the
+            // browser labeler that produces labels/water-labels.json. Harmless for players (it
+            // only runs when typed) and it keeps the whole labeling loop inside this mod.
+            helper.ConsoleCommands.Add("radiance_mapdump",
+                "Dump every location's layer/tile layout + sheet art to Documents\\HF-Studio\\maps.json for the label editor.",
+                (_, _) => { MapDump.Run(this.Monitor, helper); });
             helper.ConsoleCommands.Add("radiance_lights",
                 "List every active light source in the current location (id, kind, tile, radius, color, distance from player).",
                 (cmd, args) => DumpLights());
@@ -470,12 +480,9 @@ namespace SDVRadiance
                     if (v != null)
                         this.Monitor.Log($"{layer}.{prop} = '{v}'", LogLevel.Info);
                 }
-            var hf = ShadowRenderer.Height;
-            if (hf != null)
-            {
-                try { this.Monitor.Log($"HF surface={hf.GetSurfaceAt(loc, t.X, t.Y)} (0G 1W 2Wall 3Roof 4Deck 5Void) height={hf.GetHeightAt(loc, t.X, t.Y)}", LogLevel.Info); }
-                catch { this.Monitor.Log("HF API threw", LogLevel.Info); }
-            }
+            var surf = SurfaceMap.For(loc);
+            if (surf != null)
+                this.Monitor.Log($"surface={surf.GetSurface(t.X, t.Y)} height={surf.GetHeight(t.X, t.Y)}", LogLevel.Info);
             foreach (string layerName in new[] { "Back", "Buildings", "Front", "AlwaysFront", "AlwaysFront2" })
             {
                 var layer = loc.map?.GetLayer(layerName);
@@ -525,17 +532,6 @@ namespace SDVRadiance
                     + $"{LabelStore.Instance.TileCount} tiles.", LogLevel.Info);
             else
                 this.Monitor.Log("No water labels found in labels/ — falling back to colour classification.", LogLevel.Warn);
-
-            // Optional Height Framework integration: robust per-tile water/deck/wall classification.
-            // Null when that mod isn't installed — the shadow code falls back to its own heuristics.
-            var height = this.Helper.ModRegistry.GetApi<Integrations.IHeightFrameworkApi>("phuicmt.HeightFramework");
-            ShadowRenderer.Height = height;
-            // Worded as clearly optional and logged at Trace when absent: players kept reading the
-            // old Info line as "you are missing a dependency" and asked what to install.
-            if (height != null)
-                this.Monitor.Log("Height Framework detected — using it for water/ledge shadow suppression.", LogLevel.Info);
-            else
-                this.Monitor.Log("Height Framework not found (optional, nothing to install) — using built-in tile heuristics for shadows.", LogLevel.Trace);
 
             // Draw-call-accurate water discovery: patch drawWaterTile on GameLocation AND every
             // loaded override (mod location classes included) — hence GameLaunched, not Entry.

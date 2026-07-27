@@ -81,7 +81,7 @@ namespace SDVRadiance
                 (loc is StardewValley.Locations.MineShaft || loc is StardewValley.Locations.VolcanoDungeon
                  || Game1.ambientLight.R < 245 || Game1.ambientLight.G < 245 || Game1.ambientLight.B < 245);
             Vector3 sky = SkyColor(outdoors, config);
-            var hf = ShadowRenderer.Height;
+            var surf = SurfaceMap.For(loc);
             for (int j = 0; j < th; j++)
             {
                 for (int i = 0; i < tw; i++)
@@ -93,18 +93,11 @@ namespace SDVRadiance
                     // height classifier reports as Roof — treating those as sky occluders zeroed
                     // the whole room's lightmap (black scene, then the warm lamp seed flooded it
                     // orange). Indoors, leave every cell open so ambient + lamps light it normally.
-                    if (hf != null && outdoors)
-                    {
-                        // Only WALLS and ROOF/canopy block sky light. Decks (piers, bridges) have
-                        // height 1 but are walk-on-top surfaces OPEN to the sky — treating them as
-                        // solid turned the whole beach pier into a giant dark pool. Water is open too.
-                        try
-                        {
-                            int cls = hf.GetSurfaceAt(loc, tx0 + i, ty0 + j);
-                            solid = cls == 2 || cls == 3;   // Wall / Roof
-                        }
-                        catch { hf = null; }
-                    }
+                    // Only WALLS and ROOF/canopy block sky light. Decks (piers, bridges) have
+                    // height 1 but are walk-on-top surfaces OPEN to the sky — treating them as
+                    // solid turned the whole beach pier into a giant dark pool. Water is open too.
+                    if (surf != null && outdoors)
+                        solid = surf.BlocksLight(tx0 + i, ty0 + j);
                     _decay[idx] = solid ? SolidDecay : AirDecay;
                     // Open cells receive direct sky light; occluded cells only what floods in
                     // from their surroundings → soft shade under trees/buildings for free.

@@ -346,19 +346,18 @@ namespace SDVRadiance
             if (_occluderMaskBuf == null || _occluderMaskBuf.Length < count)
                 _occluderMaskBuf = new Color[count];
 
-            var hf = ShadowRenderer.Height;
+            var surf = SurfaceMap.For(loc);
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)
                 {
                     int tx = startTileX + i, ty = startTileY + j;
                     bool solid;
-                    if (hf != null)
+                    if (surf != null)
                     {
                         // Walls/roofs block lamp light; decks (piers/bridges, height 1 but open)
                         // and water don't.
-                        try { int cls = hf.GetSurfaceAt(loc, tx, ty); solid = cls == 2 || cls == 3; }
-                        catch { hf = null; solid = false; }
+                        solid = surf.BlocksLight(tx, ty);
                     }
                     else
                     {
