@@ -820,8 +820,6 @@ namespace SDVRadiance
                 bool haveAnchor = _colAnchor.TryGetValue(worldCol, out int anchorRow);
                 int top = 0;
                 bool inRun = false, firstRun = true;   // `top` can be negative now, so it cannot double as the flag
-                int lastTop = 0, lastEnd = 0;
-                bool haveLast = false;                 // a surviving run ended earlier in this column
                 for (int y = 0; y <= ph; y++)
                 {
                     int p = y * pw + x;
@@ -835,15 +833,6 @@ namespace SDVRadiance
                                 // Floored: _edgeBuf is short, and the distance it feeds saturates
                                 // long before this, so a shore 4096 texels up is already infinite.
                                 top = Math.Max(anchorRow - worldRow0, -4096);
-                            }
-                            else if (haveLast && y - lastEnd <= BridgeGap)
-                            {
-                                // A short break in an otherwise continuous column of water is a
-                                // BRIDGE, not a bank: the river carries on underneath it. Treating
-                                // the structure's lower edge as a fresh shoreline restarted the
-                                // distance ramp at 0 and drew a hard horizontal seam across the
-                                // water just below every bridge. Carry the waterline through.
-                                top = lastTop;
                             }
                             else
                             {
@@ -868,10 +857,6 @@ namespace SDVRadiance
                                 // when this column's run reaches the window edge instead.
                                 _colAnchor[worldCol] = worldRow0 + top;
                             }
-                            // Only a run that SURVIVED can carry its waterline across a bridge.
-                            lastTop = top;
-                            lastEnd = y;
-                            haveLast = true;
                         }
                         firstRun = false;
                         inRun = false;
