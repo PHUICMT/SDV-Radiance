@@ -596,6 +596,7 @@ namespace SDVRadiance
                     seen[start] = true;
                     int minX = int.MaxValue, maxX = int.MinValue, minY = int.MaxValue, maxY = int.MinValue;
                     int n = 0;
+                    bool sideWater = false;   // region continues SIDEWAYS into real water
                     // collect the component (4-connected)
                     var member = new List<int>(16);
                     while (sp > 0)
@@ -608,12 +609,25 @@ namespace SDVRadiance
                         if (cx > maxX) maxX = cx;
                         if (cy < minY) minY = cy;
                         if (cy > maxY) maxY = cy;
+                        if (cx > 0 && _waterBoolBuf![cur - 1]) sideWater = true;
+                        if (cx < tilesW - 1 && _waterBoolBuf![cur + 1]) sideWater = true;
                         if (cx > 0 && _animOnlyTileBuf[cur - 1] && !seen[cur - 1]) { seen[cur - 1] = true; stack[sp++] = cur - 1; }
                         if (cx < tilesW - 1 && _animOnlyTileBuf[cur + 1] && !seen[cur + 1]) { seen[cur + 1] = true; stack[sp++] = cur + 1; }
                         if (cy > 0 && _animOnlyTileBuf[cur - tilesW] && !seen[cur - tilesW]) { seen[cur - tilesW] = true; stack[sp++] = cur - tilesW; }
                         if (cy < tilesH - 1 && _animOnlyTileBuf[cur + tilesW] && !seen[cur + tilesW]) { seen[cur + tilesW] = true; stack[sp++] = cur + tilesW; }
                     }
-                    bool poolLike = (maxX - minX) >= (maxY - minY);
+                    // Shape alone was the whole test, and it is wrong for a SHORELINE. The beach
+                    // surf wash is animated art that runs ALONGSIDE the sea, so wherever the
+                    // shore happens to run down the screen its region is taller than wide and
+                    // scored as a waterfall face: the wash lost its march, which is the strip of
+                    // sea with no reflection, and because the scrub works per TILE its edge came
+                    // back tile-aligned — the staircase along a diagonal shore.
+                    //
+                    // A waterfall face is vertical water hanging in the air: its neighbours to
+                    // the LEFT and RIGHT are rock. A wash is the edge of a horizontal surface and
+                    // continues sideways into the sea. That, not the bounding box, is what tells
+                    // them apart.
+                    bool poolLike = (maxX - minX) >= (maxY - minY) || sideWater;
                     if (!poolLike)
                         continue; // waterfall column → scrubbed below
                     foreach (int idx in member)
@@ -806,6 +820,8 @@ namespace SDVRadiance
                 bool haveAnchor = _colAnchor.TryGetValue(worldCol, out int anchorRow);
                 int top = 0;
                 bool inRun = false, firstRun = true;   // `top` can be negative now, so it cannot double as the flag
+                int lastTop = 0, lastEnd = 0;
+                bool haveLast = false;                 // a surviving run ended earlier in this column
                 for (int y = 0; y <= ph; y++)
                 {
                     int p = y * pw + x;
@@ -814,11 +830,25 @@ namespace SDVRadiance
                         if (!inRun)
                         {
                             inRun = true;
-                            // Floored: _edgeBuf is short, and the distance it feeds saturates long
-                            // before this, so a shore 4096 texels up is already "infinitely far".
-                            top = (y == 0 && haveAnchor)
-                                ? Math.Max(anchorRow - worldRow0, -4096)   // negative = shore is off-window
-                                : y;
+                            if (y == 0 && haveAnchor)
+                            {
+                                // Floored: _edgeBuf is short, and the distance it feeds saturates
+                                // long before this, so a shore 4096 texels up is already infinite.
+                                top = Math.Max(anchorRow - worldRow0, -4096);
+                            }
+                            else if (haveLast && y - lastEnd <= BridgeGap)
+                            {
+                                // A short break in an otherwise continuous column of water is a
+                                // BRIDGE, not a bank: the river carries on underneath it. Treating
+                                // the structure's lower edge as a fresh shoreline restarted the
+                                // distance ramp at 0 and drew a hard horizontal seam across the
+                                // water just below every bridge. Carry the waterline through.
+                                top = lastTop;
+                            }
+                            else
+                            {
+                                top = y;
+                            }
                         }
                         _edgeBuf[p] = (short)top;
                     }
@@ -830,11 +860,18 @@ namespace SDVRadiance
                             for (int k = runTop; k < y; k++)
                                 _waterPixBits2![k * pw + x] = false;
                         }
-                        else if (firstRun && top > 0)
+                        else
                         {
-                            // A shoreline we can actually SEE — worth remembering for later, when
-                            // this column's run reaches the window edge instead.
-                            _colAnchor[worldCol] = worldRow0 + top;
+                            if (firstRun && top > 0)
+                            {
+                                // A shoreline we can actually SEE — worth remembering for later,
+                                // when this column's run reaches the window edge instead.
+                                _colAnchor[worldCol] = worldRow0 + top;
+                            }
+                            // Only a run that SURVIVED can carry its waterline across a bridge.
+                            lastTop = top;
+                            lastEnd = y;
+                            haveLast = true;
                         }
                         firstRun = false;
                         inRun = false;

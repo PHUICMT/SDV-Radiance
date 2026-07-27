@@ -52,6 +52,12 @@ namespace SDVRadiance
         private readonly Dictionary<int, int> _colAnchor = new();
         private GameLocation? _colAnchorLoc;
 
+        // Longest break in a column of water that still counts as the SAME body with something
+        // spanning it, in mask texels (16 = one tile). A stone bridge is about three tiles thick;
+        // a bank between two separate ponds is normally thicker, and where it isn't, carrying the
+        // waterline through costs far less than the hard seam it removes.
+        private const int BridgeGap = 64;
+
         /// <summary>Resolve the 16×16 source art of a map tile (first frame for animated tiles).</summary>
         private bool TryTileArt(xTile.Layers.Layer? layer, int tx, int ty, out Texture2D tex, out Rectangle src)
             => TryTileArt(layer, tx, ty, out tex, out src, out _);
