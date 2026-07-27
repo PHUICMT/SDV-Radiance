@@ -584,15 +584,22 @@ namespace SDVRadiance
             {
                 for (int i = 0; i < tilesW; i++)
                 {
-                    bool[]? keep = _tileKeepBuf![j * tilesW + i];
-                    if (keep == null)
+                    int ti2 = j * tilesW + i;
+                    bool[]? keep = _tileKeepBuf![ti2];
+                    // The OVERLAY label counts here too. A beach shore is a full Back water tile
+                    // with the surf wash drawn over it, so the Back art is solid blue and its
+                    // label rightly says water everywhere — nothing to subtract, and the effect
+                    // channel stayed square to the tile grid. The wet sand you can see is the
+                    // overlay, and only the overlay's label knows where it stops.
+                    bool[]? ovl = _tileOverlayLiqBuf![ti2];
+                    if (keep == null && ovl == null)
                         continue;
                     for (int py = 0; py < Sub; py++)
                     {
                         int row = (j * Sub + py) * pw + i * Sub;
                         int arow = py * Sub;
                         for (int px = 0; px < Sub; px++)
-                            if (!keep[arow + px])
+                            if ((keep != null && !keep[arow + px]) || (ovl != null && !ovl[arow + px]))
                                 _waterPixBits[row + px] = false;
                     }
                 }
