@@ -823,7 +823,24 @@ namespace SDVRadiance
                 for (int y = 0; y <= ph; y++)
                 {
                     int p = y * pw + x;
-                    if (y < ph && _waterPixBits2![p])
+                    bool isW = y < ph && _waterPixBits2![p];
+                    // Refine where the run STARTS with the label. Pass A fills a Back water tile
+                    // edge to edge, and the label subtraction that trims it back to the painted
+                    // shape is applied to the effect channel only (an island in mid-pond must not
+                    // read as a shoreline). So the march channel's top edge could only ever step
+                    // whole tiles, which is the staircase down every diagonal beach. Trimming only
+                    // the LEADING pixels keeps interior islands harmless: the run never splits,
+                    // its start just lands where the water really begins.
+                    if (isW && !inRun)
+                    {
+                        var keep = _tileKeepBuf![(y / Sub) * tilesW + (x / Sub)];
+                        if (keep != null && !keep[(y % Sub) * 16 + (x % Sub)])
+                        {
+                            _waterPixBits2![p] = false;   // dry sand above the waterline: no mirror
+                            isW = false;
+                        }
+                    }
+                    if (isW)
                     {
                         if (!inRun)
                         {
