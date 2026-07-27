@@ -833,10 +833,19 @@ namespace SDVRadiance
                     // its start just lands where the water really begins.
                     if (isW && !inRun)
                     {
-                        var keep = _tileKeepBuf![(y / Sub) * tilesW + (x / Sub)];
-                        if (keep != null && !keep[(y % Sub) * 16 + (x % Sub)])
+                        int ti = (y / Sub) * tilesW + (x / Sub);
+                        int sub = (y % Sub) * 16 + (x % Sub);
+                        // The visible waterline is usually NOT the Back tile's edge. A beach shore
+                        // is a full Back water tile with the wash drawn OVER it on Buildings, so
+                        // the march channel saw water edge to edge and could only step whole tiles.
+                        // The carve bits are already "opaque overlay art that no label calls
+                        // liquid" — exactly the sand lying on top of the water.
+                        var keep = _tileKeepBuf![ti];
+                        var cb = _tileCarveBBuf![ti];
+                        var cf = _tileCarveFBuf![ti];
+                        if ((keep != null && !keep[sub]) || (cb != null && cb[sub]) || (cf != null && cf[sub]))
                         {
-                            _waterPixBits2![p] = false;   // dry sand above the waterline: no mirror
+                            _waterPixBits2![p] = false;   // above the waterline: no mirror here
                             isW = false;
                         }
                     }
