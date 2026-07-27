@@ -11,10 +11,6 @@
     {
       "UniqueID": "spacechase0.GenericModConfigMenu",
       "IsRequired": false
-    },
-    {
-      "UniqueID": "phuicmt.HeightFramework",
-      "IsRequired": false
     }
   ]
 }

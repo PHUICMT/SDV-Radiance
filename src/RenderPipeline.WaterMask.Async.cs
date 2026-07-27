@@ -50,6 +50,7 @@ namespace SDVRadiance
         private bool[]? _waterRingBuf;         // extra dilation scratch (ring must not destroy _waterBoolBuf)
         private bool[]?[]? _tileBitsBuf;       // effect-channel art classification per tile (null = none)
         private bool[]?[]? _tilePuddleBitsBuf; // puddle classification bits per tile (tier > 0 only)
+        private bool[]?[]? _tileKeepBuf;       // labelled water tile: pixels to KEEP in the effect channel (null = all)
         private bool[]?[]? _tileCarveBBuf;     // Buildings-layer opacity bits (null = no art)
         private bool[]?[]? _tileCarveFBuf;     // Front-layer opacity bits
         private bool[]? _tileBigSolidBuf;      // near-solid (>=230/256 opaque) Buildings/Front art
@@ -109,6 +110,10 @@ namespace SDVRadiance
             // beach tide pools count as water (they reflect too), while pier/bridge DECKS over
             // water do not (no reflection painted onto planks). Fall back to isWaterTile.
             var hf = ShadowRenderer.Height;
+            // Ground-truth labels ship WITH this mod (labels/), read once at startup — nothing
+            // here touches the disk or depends on another mod being installed.
+            var labels = LabelStore.Instance;
+            if (labels is { Any: false }) labels = null;
             if (_waterBoolBuf == null || _waterBoolBuf.Length < count) _waterBoolBuf = new bool[count];
             bool any = false;
             for (int j = 0; j < tilesH; j++)
@@ -160,6 +165,7 @@ namespace SDVRadiance
 
             if (_tileBitsBuf == null || _tileBitsBuf.Length < count) _tileBitsBuf = new bool[]?[count];
             if (_tilePuddleBitsBuf == null || _tilePuddleBitsBuf.Length < count) _tilePuddleBitsBuf = new bool[]?[count];
+            if (_tileKeepBuf == null || _tileKeepBuf.Length < count) _tileKeepBuf = new bool[]?[count];
             if (_tileCarveBBuf == null || _tileCarveBBuf.Length < count) _tileCarveBBuf = new bool[]?[count];
             if (_tileCarveFBuf == null || _tileCarveFBuf.Length < count) _tileCarveFBuf = new bool[]?[count];
             if (_tileBigSolidBuf == null || _tileBigSolidBuf.Length < count) _tileBigSolidBuf = new bool[count];
@@ -198,19 +204,27 @@ namespace SDVRadiance
                     // authoritative: its water pixels join the mask (STATIC painted pools on
                     // custom maps included — no ring or animation requirement), and a labeled
                     // art with no water pixels never reaches the color classifier at all.
+                    // On a tile the game ALREADY calls water, Pass A fills all 256 pixels, so a
+                    // label there cannot add coverage — it SUBTRACTS. `keep` is the set of pixels
+                    // that stay in the effect channel; the rest is art sitting on the water (a
+                    // pond's rock rim, the island in the middle, lily pads painted into the tile)
+                    // and must not ripple. Sub-types read from the same label, which is what lets
+                    // a real winter pond be marked ice at all.
+                    bool[]? keep = null;
                     bool labeledBack = false;
-                    if (!isWater && hf != null)
+                    if (labels != null)
                     {
-                        byte[]? lbl = null;
-                        try { lbl = hf.GetPixelClasses(loc, tx, ty, "Back"); }
-                        catch { hf = null; }
+                        byte[]? lbl = labels.Get(back, tx, ty);
                         if (lbl != null)
                         {
-                            labeledBack = true;
+                            labeledBack = !isWater;
                             var (lb, nW, nI, nF, nL) = WaterBitsFromLabels(lbl);
-                            if (nW + nI + nF + nL > 0)
+                            // A label with almost no liquid is not a statement about a water tile
+                            // (someone marked the rock art only) — it must never erase a surface.
+                            if (nW + nI + nF + nL > (isWater ? 7 : 0))
                             {
-                                bits = lb;
+                                if (isWater) keep = lb;
+                                else bits = lb;
                                 iceN += nI; flowN += nF; lavaN += nL;
                                 job.AnyLabeled = true;
                             }
@@ -265,11 +279,9 @@ namespace SDVRadiance
                     // surf overlay needs no animation), color-classified animated art otherwise.
                     bool[]? overlayBits = null;
                     bool labeledBld = false;
-                    if (!isWater && hf != null)
+                    if (!isWater && labels != null)
                     {
-                        byte[]? lbl = null;
-                        try { lbl = hf.GetPixelClasses(loc, tx, ty, "Buildings"); }
-                        catch { hf = null; }
+                        byte[]? lbl = labels.Get(bld, tx, ty);
                         if (lbl != null)
                         {
                             labeledBld = true;
@@ -307,16 +319,9 @@ namespace SDVRadiance
                     _animOnlyTileBuf[idx] = animOnly;
                     _puddleTileBuf[idx] = puddle;
                     _tileBitsBuf[idx] = bits;
-                    // Ice / flowing win over each other by pixel count; a plain-water majority
-                    // keeps normal behaviour. Ice → reflection but no ripple (mask alpha 0);
-                    // flowing → ripple but no reflection (scrubbed from the march channel).
-                    _tileIceBuf[idx] = iceN > 0 && iceN >= flowN && iceN >= lavaN;
-                    _tileFlowBuf[idx] = flowN > 0 && flowN > iceN && flowN >= lavaN;
-                    // A volcano location is lava unless a label says this tile is something else.
-                    _tileLavaBuf[idx] = (lavaN > 0 && lavaN > iceN && lavaN > flowN)
-                        || (locIsLava && iceN == 0 && flowN == 0);
 
                     // Structure / carve inputs (Pass C + the land-connectivity test + arch fill).
+                    bool bldLabeledLiquid = false;   // label says the overlay here IS water
                     bool hasFront = TryTileArt(front, tx, ty, out var t2, out var s2);
                     _tileHasBldBuf[idx] = hasBld;
                     var cb = hasBld ? SolidBits(t1, s1) : default;
@@ -343,6 +348,77 @@ namespace SDVRadiance
                     _tileHasFrontBuf[idx] = fBits != null;
                     _tileCarveBBuf[idx] = hasBld ? cb.bits : null;
                     _tileCarveFBuf[idx] = fBits;
+                    // Buildings-layer art ON a water tile. Pass C already carves it by opacity,
+                    // but SolidBits deliberately drops a tile whose opaque art is ≥60% water
+                    // (else a wave-overlay or waterfall tile carves itself into a dead patch) —
+                    // which is exactly the shape of a pond's rim tile: mostly water, one arc of
+                    // rock. A LABEL resolves it without guessing: cut the pixels the art draws
+                    // opaquely that the label does not call liquid, and leave everything else.
+                    if (isWater && labels != null && hasBld && cb.bits != null)
+                    {
+                        byte[]? olbl = labels.Get(bld, tx, ty);
+                        if (olbl != null)
+                        {
+                            var (ob, oW, oI, oF, oL) = WaterBitsFromLabels(olbl);
+                            var k = keep != null ? (bool[])keep.Clone() : null;
+                            if (k == null)
+                            {
+                                k = new bool[256];
+                                for (int p = 0; p < 256; p++) k[p] = true;
+                            }
+                            for (int p = 0; p < 256; p++)
+                                if (cb.bits[p] && !ob[p]) k[p] = false;
+                            keep = k;
+                            iceN += oI; flowN += oF; lavaN += oL;
+                            int oLiquid = oW + oI + oF + oL;
+                            if (oLiquid > 0)
+                            {
+                                job.AnyLabeled = true;
+                                // A label BEATS the art's opacity. A bridge's cast shadow is opaque
+                                // overlay art drawn across the river, and Pass C would punch its
+                                // exact rectangle out of the effect channel — but a shadow is still
+                                // water and has to keep rippling. Where the label says liquid, take
+                                // those pixels out of the carve (clone: SolidBits caches its array
+                                // per art, so writing to it would poison every other tile using it),
+                                // and stop a mostly-liquid tile counting as a solid structure.
+                                var carve = (bool[])cb.bits.Clone();
+                                for (int p = 0; p < 256; p++)
+                                    if (ob[p]) carve[p] = false;
+                                _tileCarveBBuf[idx] = carve;
+                                if (oLiquid >= 128) bldLabeledLiquid = true;
+                            }
+                        }
+                    }
+                    // Same override for the FRONT / ALWAYSFRONT carve. Cast shadows and overhang art
+                    // land there just as often as on Buildings, and a label saying "this is still
+                    // water" has to beat opacity on every layer or the rule only half works.
+                    if (isWater && labels != null && fBits != null)
+                    {
+                        byte[]? flbl = labels.Get(front, tx, ty);
+                        if (flbl != null)
+                        {
+                            var (fb2, fW, fI, fF, fL) = WaterBitsFromLabels(flbl);
+                            if (fW + fI + fF + fL > 0)
+                            {
+                                var carveF = (bool[])fBits.Clone();
+                                for (int p = 0; p < 256; p++)
+                                    if (fb2[p]) carveF[p] = false;
+                                _tileCarveFBuf[idx] = carveF;
+                                iceN += fI; flowN += fF; lavaN += fL;
+                                job.AnyLabeled = true;
+                                if (fW + fI + fF + fL >= 128) fCount = 0;   // no longer a structure
+                            }
+                        }
+                    }
+                    _tileKeepBuf![idx] = keep;
+                    // Ice / flowing win over each other by pixel count; a plain-water majority
+                    // keeps normal behaviour. Ice → reflection but no ripple (mask alpha 0);
+                    // flowing → ripple but no reflection (scrubbed from the march channel).
+                    _tileIceBuf[idx] = iceN > 0 && iceN >= flowN && iceN >= lavaN;
+                    _tileFlowBuf[idx] = flowN > 0 && flowN > iceN && flowN >= lavaN;
+                    // A volcano location is lava unless a label says this tile is something else.
+                    _tileLavaBuf[idx] = (lavaN > 0 && lavaN > iceN && lavaN > flowN)
+                        || (locIsLava && iceN == 0 && flowN == 0);
                     // Height Framework DECK tiles (walkable piers / plank bridges — Back-layer
                     // wood) block as whole tiles too: the beach plank's art has a painted wet
                     // stain that classified as water, punching a 2-texel channel through the
@@ -352,7 +428,7 @@ namespace SDVRadiance
                     if (hf != null)
                         try { deck = hf.GetSurfaceAt(loc, tx, ty) == 4; } catch { hf = null; }
                     _tileDeckBuf[idx] = deck;
-                    _tileBigSolidBuf[idx] = deck || (hasBld && cb.count >= 230) || fCount >= 230;
+                    _tileBigSolidBuf[idx] = deck || (hasBld && cb.count >= 230 && !bldLabeledLiquid) || fCount >= 230;
                 }
             }
             job.AnyAnim = anyAnim;
@@ -487,6 +563,27 @@ namespace SDVRadiance
             if (_waterPixBits2 == null || _waterPixBits2.Length < pcount)
                 _waterPixBits2 = new bool[pcount];
             Array.Copy(_waterPixBits, _waterPixBits2, pcount);
+            // Label subtraction on true water tiles — AFTER the march copy on purpose. The effect
+            // channel loses the rock rim / island / pads so they stop rippling, while the march
+            // channel still sees a full water surface: an island in mid-pond must not read as a
+            // shoreline, or every reflection in the pond re-anchors on it.
+            for (int j = 0; j < tilesH; j++)
+            {
+                for (int i = 0; i < tilesW; i++)
+                {
+                    bool[]? keep = _tileKeepBuf![j * tilesW + i];
+                    if (keep == null)
+                        continue;
+                    for (int py = 0; py < Sub; py++)
+                    {
+                        int row = (j * Sub + py) * pw + i * Sub;
+                        int arow = py * Sub;
+                        for (int px = 0; px < Sub; px++)
+                            if (!keep[arow + px])
+                                _waterPixBits[row + px] = false;
+                    }
+                }
+            }
             // Remember every anim-nominated tile before the region pass mutates the buffer —
             // Pass E writes these with a SOFT value so fountains shimmer gently.
             if (_animSoftTileBuf == null || _animSoftTileBuf.Length < count)

@@ -116,9 +116,8 @@ namespace SDVRadiance
         /// tiles, caching their world-pixel centres. Cheap enough as a one-off.</summary>
         private void EnsureWindowCache(GameLocation loc)
         {
-            var hf = ShadowRenderer.Height;
-            int ver = 0;
-            try { ver = hf?.GetLabelVersion() ?? 0; } catch { hf = null; }
+            var labels = LabelStore.Instance;
+            int ver = labels?.Version ?? 0;
             if (ReferenceEquals(loc, _windowLoc) && ver == _windowLabelVer)
                 return;
             _windowLoc = loc; _windowLabelVer = ver; _windowTiles.Clear();
@@ -126,16 +125,18 @@ namespace SDVRadiance
             // Windows are 100% label-driven: no labels loaded (version 0 = empty DB) means no window
             // can exist, so skip the whole-map scan entirely. Without this we paid a w×h×3-layer scan
             // on every location change even though it could never find anything.
-            if (hf == null || layer == null || ver == 0)
+            if (labels == null || layer == null || ver == 0)
                 return;
             int w = layer.LayerWidth, h = layer.LayerHeight;
+            // Resolve each layer once instead of per tile: this is a w×h×3 walk.
+            var winLayers = new xTile.Layers.Layer?[_winLayers.Length];
+            for (int i = 0; i < _winLayers.Length; i++) winLayers[i] = loc?.map?.GetLayer(_winLayers[i]);
             for (int ty = 0; ty < h; ty++)
                 for (int tx = 0; tx < w; tx++)
                 {
-                    foreach (string ln in _winLayers)
+                    foreach (var wl in winLayers)
                     {
-                        byte[]? cls;
-                        try { cls = hf.GetPixelClasses(loc, tx, ty, ln); } catch { cls = null; }
+                        byte[]? cls = labels.Get(wl, tx, ty);
                         if (cls == null) continue;
                         int n = 0;
                         for (int p = 0; p < 256; p++) if (cls[p] == 12) n++;

@@ -516,6 +516,16 @@ namespace SDVRadiance
         {
             RegisterGmcm();
 
+            // Hand-painted liquid ground truth, shipped in labels/ and read ONCE. It is versioned
+            // data, not live state: it changes when this mod updates, so there is no file watching.
+            LabelStore.Instance = new LabelStore(
+                System.IO.Path.Combine(this.Helper.DirectoryPath, "labels"), this.Monitor);
+            if (LabelStore.Instance.Any)
+                this.Monitor.Log($"Water labels loaded: {LabelStore.Instance.SheetCount} sheets, "
+                    + $"{LabelStore.Instance.TileCount} tiles.", LogLevel.Info);
+            else
+                this.Monitor.Log("No water labels found in labels/ — falling back to colour classification.", LogLevel.Warn);
+
             // Optional Height Framework integration: robust per-tile water/deck/wall classification.
             // Null when that mod isn't installed — the shadow code falls back to its own heuristics.
             var height = this.Helper.ModRegistry.GetApi<Integrations.IHeightFrameworkApi>("phuicmt.HeightFramework");

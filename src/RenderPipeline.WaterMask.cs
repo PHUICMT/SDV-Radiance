@@ -51,6 +51,13 @@ namespace SDVRadiance
                 try { sheet = Game1.content.Load<Texture2D>(t.TileSheet.ImageSource); }
                 catch { sheet = null; }
                 _sheetTexCache[t.TileSheet.ImageSource] = sheet;
+                // Shadow art ships in its OWN tilesheets, and the name says so. Every shadow sheet
+                // in the map dump is called *Shadow(s) / *ShadowTilesheet / *CanopyShadow (15 of
+                // them, vanilla and modded), so the sheet identity is a second, colour-independent
+                // way to know a tile is a cast shadow and must never carve the water it falls on.
+                if (sheet != null
+                    && t.TileSheet.ImageSource.IndexOf("shadow", StringComparison.OrdinalIgnoreCase) >= 0)
+                    _shadowSheets.Add(sheet);
             }
             if (sheet == null)
                 return false;
@@ -230,14 +237,39 @@ namespace SDVRadiance
             return entry;
         }
 
+        /// <summary>A CAST SHADOW, not a structure: near-black and translucent. Bridges, cliffs and
+        /// trees drop these onto the water from the Buildings/Front/AlwaysFront layers, and carving
+        /// them punched the shadow's exact silhouette out of the effect channel — but shaded water
+        /// is still water and has to keep rippling. Measured over the whole map dump: AlwaysFront
+        /// holds 192k distinct tiles of which only 11k are fully opaque and ~99k are exactly this
+        /// dark translucent wash, so the rule has to be conservative. Near-black only (art is
+        /// premultiplied, so a black wash stays black at any alpha) and grey, so no coloured art
+        /// can fall through it.</summary>
+        private static bool ShadowWash(Color c)
+        {
+            if (c.A >= 250)
+                return false;                       // fully opaque art is never a wash
+            // Brightness alone. A saturation term was tried and only cost recall: measured over
+            // the 15 shadow sheets in the map dump it rejected 28% of two of them (SVE's building
+            // shadow, IridiumQuarry) for being faintly blue, and at max(rgb) <= 40 a pixel is
+            // indistinguishable from black whatever its hue, so hue cannot separate art from wash.
+            return Math.Max(c.R, Math.Max(c.G, c.B)) <= 40;
+        }
+
         /// <summary>16×16 opacity bits + opaque-pixel count of one tile art, cached — used to
         /// carve piers/bridges/pads out of the water mask (count decides march-blocking).
         /// A tile whose opaque art is MOSTLY painted water (a waterfall, an animated water
         /// edge) is no structure at all — skipped entirely, or it carved whole water tiles
         /// into bright untouched patches. Below that bar, plain opacity rules: plank art
         /// keeps its dark blue-ish shadow pixels, so piers/bridges still block the march.</summary>
+        /// <summary>Textures that came from a tilesheet whose name says "shadow".</summary>
+        private readonly HashSet<Texture2D> _shadowSheets = new();
+        private static readonly bool[] _noBits = new bool[256];
+
         private (bool[] bits, int count) SolidBits(Texture2D tex, Rectangle src)
         {
+            if (_shadowSheets.Contains(tex))
+                return (_noBits, 0);        // a whole sheet of cast shadows carves nothing
             var key = (tex, src);
             if (_solidBitsCache.TryGetValue(key, out var entry))
                 return entry;
@@ -249,7 +281,7 @@ namespace SDVRadiance
                 ReadTileArt(tex, src);
                 for (int p = 0; p < 256; p++)
                 {
-                    if (bits[p] = _artBuf[p].A >= 128)
+                    if (bits[p] = _artBuf[p].A >= 128 && !ShadowWash(_artBuf[p]))
                     {
                         n++;
                         if (WaterColor(_artBuf[p])) w++;

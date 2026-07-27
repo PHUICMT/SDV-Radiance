@@ -34,6 +34,16 @@
     </None>
   </ItemGroup>
 
+  <!-- Ship the hand-painted liquid labels. LabelStore reads labels/*.json non-recursively and
+       once, so labels/archive/ is deliberately excluded: a file replaces a whole sheet on load,
+       and a superseded export sitting beside the current one would win on directory order. -->
+  <ItemGroup>
+    <None Include="labels\*.json">
+      <Link>labels\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
   <!-- Ship the license and credits with the mod (the Nexus page points to them). -->
   <ItemGroup>
     <None Include="LICENSE">
