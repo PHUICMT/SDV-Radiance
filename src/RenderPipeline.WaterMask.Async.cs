@@ -60,6 +60,7 @@ namespace SDVRadiance
         private bool[]? _tileIceBuf;           // HF label class 9: frozen — reflection, no ripple
         private bool[]? _tileFlowBuf;          // HF label class 10: flowing/waterfall — ripple, no reflection
         private bool[]? _tileLavaBuf;          // HF label class 11: lava — slow molten flow, self-glow, no reflection
+        private bool[]? _tileSpanFlag;         // wet OR spans water (pier/bridge): connectivity only
         private bool[]? _tileWetFlag;          // per-tile: has any effect-water pixel (for body-size flood fill)
         private byte[]? _tileCalmBuf;          // per-tile 0..255 wave scale by water-body size (small = calmer)
         private readonly List<(int x0, int y0, int x1, int y1)> _carveRects = new();
@@ -909,6 +910,14 @@ namespace SDVRadiance
                         }
                     _tileWetFlag[j * tilesW + i] = wet;
                 }
+            // A pier or a bridge does not divide the sea: the water runs on underneath it. The
+            // fill has to travel THROUGH those tiles or the strip on the far side of a dock is
+            // measured as its own little pond and comes out calmer than the ocean it belongs to,
+            // which reads as a seam straight down the pier. Spanning tiles carry the fill without
+            // joining the body, so they never inflate its size either.
+            if (_tileSpanFlag == null || _tileSpanFlag.Length < count) _tileSpanFlag = new bool[count];
+            for (int i = 0; i < count; i++)
+                _tileSpanFlag[i] = _tileWetFlag![i] || _tileDeckBuf![i] || _tileBigSolidBuf![i];
             {
                 Span<int> stack = count <= 4096 ? stackalloc int[Math.Min(count, 4096)] : new int[count];
                 var seen = new bool[count];
@@ -920,12 +929,13 @@ namespace SDVRadiance
                     int sp = 0; stack[sp++] = start; seen[start] = true; member.Clear();
                     while (sp > 0)
                     {
-                        int cur = stack[--sp]; member.Add(cur);
+                        int cur = stack[--sp];
+                        if (_tileWetFlag[cur]) member.Add(cur);   // spanning tiles carry, never join
                         int cx = cur % tilesW, cy = cur / tilesW;
-                        if (cx > 0 && _tileWetFlag[cur - 1] && !seen[cur - 1]) { seen[cur - 1] = true; stack[sp++] = cur - 1; }
-                        if (cx < tilesW - 1 && _tileWetFlag[cur + 1] && !seen[cur + 1]) { seen[cur + 1] = true; stack[sp++] = cur + 1; }
-                        if (cy > 0 && _tileWetFlag[cur - tilesW] && !seen[cur - tilesW]) { seen[cur - tilesW] = true; stack[sp++] = cur - tilesW; }
-                        if (cy < tilesH - 1 && _tileWetFlag[cur + tilesW] && !seen[cur + tilesW]) { seen[cur + tilesW] = true; stack[sp++] = cur + tilesW; }
+                        if (cx > 0 && _tileSpanFlag![cur - 1] && !seen[cur - 1]) { seen[cur - 1] = true; stack[sp++] = cur - 1; }
+                        if (cx < tilesW - 1 && _tileSpanFlag![cur + 1] && !seen[cur + 1]) { seen[cur + 1] = true; stack[sp++] = cur + 1; }
+                        if (cy > 0 && _tileSpanFlag![cur - tilesW] && !seen[cur - tilesW]) { seen[cur - tilesW] = true; stack[sp++] = cur - tilesW; }
+                        if (cy < tilesH - 1 && _tileSpanFlag![cur + tilesW] && !seen[cur + tilesW]) { seen[cur + tilesW] = true; stack[sp++] = cur + tilesW; }
                     }
                     // size → calm: <=3 tiles ~0.5 (a puddle), ramping to full by ~36 tiles (a pond+).
                     // Bodies cut by the mask edge are likely larger off-screen → treat as full.
