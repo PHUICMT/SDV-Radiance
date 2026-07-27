@@ -788,21 +788,56 @@ namespace SDVRadiance
             // 6 texels are DROPPED from the march: isolated wet-shading specks in shore
             // art each became a tiny mirror (dist 0) that painted a dark dash onto the
             // bank. Runs cut off by the mask bottom are kept — they continue off-screen.
+            // A run that starts at row 0 is CUT OFF by the window, not a shoreline: its real
+            // waterline is somewhere above. Substituting the anchor remembered for that world
+            // column keeps the reflection anchored to the shore itself, so it no longer jumps
+            // once and fades out as the camera leaves the shore behind (see _colAnchor).
             if (_edgeBuf == null || _edgeBuf.Length < pcount)
                 _edgeBuf = new short[pcount];
+            if (!ReferenceEquals(job.Loc, _colAnchorLoc))
+            {
+                _colAnchor.Clear();
+                _colAnchorLoc = job.Loc;
+            }
+            int worldCol0 = job.Tx * Sub, worldRow0 = job.Ty * Sub;
             for (int x = 0; x < pw; x++)
             {
-                int top = -1;
+                int worldCol = worldCol0 + x;
+                bool haveAnchor = _colAnchor.TryGetValue(worldCol, out int anchorRow);
+                int top = 0;
+                bool inRun = false, firstRun = true;   // `top` can be negative now, so it cannot double as the flag
                 for (int y = 0; y <= ph; y++)
                 {
                     int p = y * pw + x;
-                    if (y < ph && _waterPixBits2![p]) { if (top < 0) top = y; _edgeBuf[p] = (short)top; }
-                    else if (top >= 0)
+                    if (y < ph && _waterPixBits2![p])
                     {
-                        if (y < ph && y - top < 6)
-                            for (int k = top; k < y; k++)
+                        if (!inRun)
+                        {
+                            inRun = true;
+                            // Floored: _edgeBuf is short, and the distance it feeds saturates long
+                            // before this, so a shore 4096 texels up is already "infinitely far".
+                            top = (y == 0 && haveAnchor)
+                                ? Math.Max(anchorRow - worldRow0, -4096)   // negative = shore is off-window
+                                : y;
+                        }
+                        _edgeBuf[p] = (short)top;
+                    }
+                    else if (inRun)
+                    {
+                        int runTop = Math.Max(top, 0);          // where the run actually starts on screen
+                        if (y < ph && y - runTop < 6)
+                        {
+                            for (int k = runTop; k < y; k++)
                                 _waterPixBits2![k * pw + x] = false;
-                        top = -1;
+                        }
+                        else if (firstRun && top > 0)
+                        {
+                            // A shoreline we can actually SEE — worth remembering for later, when
+                            // this column's run reaches the window edge instead.
+                            _colAnchor[worldCol] = worldRow0 + top;
+                        }
+                        firstRun = false;
+                        inRun = false;
                     }
                 }
             }

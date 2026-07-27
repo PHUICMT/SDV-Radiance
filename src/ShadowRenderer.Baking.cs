@@ -391,30 +391,23 @@ namespace SDVRadiance
         /// </summary>
         private const float ShadowDepthBias = 1.2e-3f;
 
-        /// <summary>
-        /// True if the caster stands on open water (avoid laying a shadow on the surface).
-        /// Pier/bridge decks sit on Buildings-layer tiles OVER water tiles — standing on a
-        /// deck is not standing on water, so require the tile to have no Buildings tile.
-        /// </summary>
-        /// <summary>True only on OPEN water (this tile and all four neighbors are water).
-        /// Shoreline/surf tiles, i.e. water touching walkable ground, keep their shadows:
-        /// the beach wash is wet SAND visually, and the per-tile skip made shadows pop
-        /// in and out while walking along the waterline.</summary>
-        private static bool OnOpenWater(GameLocation loc, Point t)
-        {
-            if (!OnWater(loc, t))
-                return false;
-            return OnWater(loc, new Point(t.X - 1, t.Y)) && OnWater(loc, new Point(t.X + 1, t.Y))
-                && OnWater(loc, new Point(t.X, t.Y - 1)) && OnWater(loc, new Point(t.X, t.Y + 1));
-        }
-
+        // NOTE: CHARACTER cast shadows are no longer suppressed over water. Standing ankle deep
+        // in a tide pool, walking a plank bridge, a gull crossing the surf — a shadow belongs in
+        // all of them, and the old "open water" test could only ever guess which case it was
+        // looking at. Swimming casters are still skipped at each call site via swimming.Value.
+        //
+        // Baked PROP shadows still use this: the screen-space mirror already reflects a mooring
+        // post, so pooling its ground shadow on the same water reads as a ghost double.
         private static bool OnWater(GameLocation loc, Point tile)
         {
             try
             {
-                // The surface grid distinguishes open water from pier/bridge DECKS over water, so
-                // it is the robust answer. Fall back to the isWaterTile + no-Buildings-tile
-                // heuristic (which approximates the same deck check) if the map isn't ready.
+                // Walkable shallow pools (the island dig site's tide pools) carry WaterSource, not
+                // Water: you stand IN them, ankle deep, so a shadow belongs on the pool floor.
+                // Labelling them as water is right for the ripple pass and wrong here.
+                if (loc.doesTileHaveProperty(tile.X, tile.Y, "Water", "Back") == null
+                    && loc.doesTileHaveProperty(tile.X, tile.Y, "WaterSource", "Back") != null)
+                    return false;
                 var surf = SurfaceMap.For(loc);
                 if (surf != null)
                     return surf.IsWater(tile.X, tile.Y);
@@ -423,6 +416,7 @@ namespace SDVRadiance
             }
             catch { return false; }
         }
+
 
         /// <summary>Sun (or moon, after dark) angle → shadow lean (radians), length stretch,
         /// and base opacity. The moon crosses the sky over the night like the sun does over

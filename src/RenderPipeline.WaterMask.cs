@@ -25,6 +25,33 @@ namespace SDVRadiance
         // SOFT mask value in Pass E (a fountain should barely shimmer, not churn like a lake).
         private bool[]? _animSoftTileBuf;
 
+        // How far past the viewport the mask window reaches, in tiles. TOP padding is the one that
+        // matters: a column's reflection is anchored at the top of its water run, so once a pier or
+        // a bank scrolls further than this above the screen its anchor is gone and the reflection
+        // it was casting fades out mid-walk. 4 was not enough to hold a dock's reflection while
+        // walking down it. The cost is real — every compose pass is O(mask pixels) and each tile
+        // row is 16 texel rows — so this is the knob to turn back down if the water pass gets
+        // expensive on big screens.
+        private const int PadTop = 4;
+        private const int PadBottom = 2;
+        private const int PadSide = 2;
+
+        // Waterline anchors kept in WORLD texel coordinates, one per mask column.
+        //
+        // Pass D anchors a column's reflection at the top of its water run, but that row is
+        // MASK-LOCAL. Once the real shoreline scrolls above the window the run simply starts at
+        // row 0, and the anchor silently re-bases to the top of the screen: the reflection a pier
+        // was casting jumps in one step and then fades as you keep walking away from it. Padding
+        // the window only buys a few more tiles of the same behaviour, and every extra tile row
+        // costs 16 texel rows in every compose pass.
+        //
+        // Remembering where each column's shoreline really was lets a cut-off run keep the true
+        // anchor. It lands above the window, i.e. NEGATIVE in mask space, and that is exactly
+        // right: the distance below it just keeps growing, so the reflection fades the way
+        // distance says it should instead of the way the camera happens to be framed.
+        private readonly Dictionary<int, int> _colAnchor = new();
+        private GameLocation? _colAnchorLoc;
+
         /// <summary>Resolve the 16×16 source art of a map tile (first frame for animated tiles).</summary>
         private bool TryTileArt(xTile.Layers.Layer? layer, int tx, int ty, out Texture2D tex, out Rectangle src)
             => TryTileArt(layer, tx, ty, out tex, out src, out _);
@@ -345,12 +372,12 @@ namespace SDVRadiance
             // its shoreline scrolls just past the screen edge — anchored at the mask's
             // own first row instead, the whole reflection re-based and vanished in ONE
             // step as the player walked away, rather than fading out.
-            int startTileX = (int)Math.Floor(vx / 64f) - 2;
-            int startTileY = (int)Math.Floor(vy / 64f) - 4;
+            int startTileX = (int)Math.Floor(vx / 64f) - PadSide;
+            int startTileY = (int)Math.Floor(vy / 64f) - PadTop;
             // Viewport-based (world px): w/64 is screen px and undercounts tiles when zoomed
             // out — parts of the screen simply had no water mask (no ripple/reflection).
-            int tilesW = Math.Max(1, Game1.viewport.Width / 64 + 6);
-            int tilesH = Math.Max(1, Game1.viewport.Height / 64 + 6);
+            int tilesW = Math.Max(1, Game1.viewport.Width / 64 + PadSide * 2 + 2);
+            int tilesH = Math.Max(1, Game1.viewport.Height / 64 + PadTop + PadBottom);
 
             // Camera-follow params are valid for WHATEVER mask is currently bound (old or
             // new) — the mask content is tile-anchored; sub-tile scroll lives here.

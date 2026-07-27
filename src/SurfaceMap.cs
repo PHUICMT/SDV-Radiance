@@ -156,31 +156,24 @@ namespace SDVRadiance
                     bool hasBuildings = buildings?.Tiles[x, y] != null;
                     bool hasFront = front?.Tiles[x, y] != null;
 
-                    // ---- LABELS FIRST: painted ground truth beats every heuristic below. ----
-                    // Buildings decides first (a deck plank or fountain rim sits OVER the Back
-                    // tile), then Back, then Front (overhead art).
-                    if (labels != null)
+                    // ---- Buildings LABEL first: a labeled deck plank or fountain rim sits OVER
+                    // the Back tile, so it is the most specific statement about this tile. ----
+                    if (labels != null && labels.Get(buildings, x, y) is { } bb
+                        && ClassFromLabels(bb, overlay: true) is { } bldClass)
                     {
-                        SurfaceClass? lc = null;
-                        if (labels.Get(buildings, x, y) is { } bb) lc = ClassFromLabels(bb, overlay: true);
-                        if (lc == null && labels.Get(back, x, y) is { } gb) lc = ClassFromLabels(gb, overlay: false);
-                        if (lc == null && labels.Get(front, x, y) is { } fb) lc = ClassFromLabels(fb, overlay: true);
-                        if (lc is { } decided)
-                        {
-                            Set(sm, i, decided, decided switch
-                            {
-                                SurfaceClass.Water => (sbyte)-1,
-                                SurfaceClass.Ground => (sbyte)0,
-                                SurfaceClass.Void => (sbyte)0,
-                                _ => (sbyte)1,
-                            });
-                            continue;
-                        }
+                        Set(sm, i, bldClass, HeightFor(bldClass));
+                        continue;
                     }
 
                     SurfaceClass cls;
                     sbyte height;
                     bool passableB = hasBuildings && loc.doesTileHaveProperty(x, y, "Passable", "Buildings") != null;
+                    // ---- WALKABLE-DECK CHECKS BEAT THE BACK LABEL. ----
+                    // A plank bridge is drawn over a Back tile that really IS water, and that tile
+                    // is labeled water — correctly, because the label describes the ART. But you
+                    // are STANDING on the plank, not in the river, so the label must not decide
+                    // here: "Passable on Buildings" is the game's own word for a walk-on-top
+                    // surface and it is the stronger signal.
                     if (passableB && buildings!.Tiles[x, y] is xTile.Tiles.AnimatedTile && loc.isWaterTile(x, y))
                     {
                         // An ANIMATED passable Buildings tile over water IS the water surface —
@@ -198,6 +191,15 @@ namespace SDVRadiance
                     {
                         cls = SurfaceClass.Deck;      // Back-layer planking: pier / bridge / porch
                         height = 1;
+                    }
+                    // ---- then the Back / Front labels, then the remaining heuristics. ----
+                    else if (labels != null
+                             && ((labels.Get(back, x, y) is { } gb ? ClassFromLabels(gb, overlay: false) : null)
+                                 ?? (labels.Get(front, x, y) is { } fb ? ClassFromLabels(fb, overlay: true) : null))
+                                is { } artClass)
+                    {
+                        cls = artClass;
+                        height = HeightFor(artClass);
                     }
                     else if (hasBuildings && loc.doesTileHaveProperty(x, y, "Shadow", "Buildings") == null)
                     {
@@ -252,6 +254,14 @@ namespace SDVRadiance
 
             return sm;
         }
+
+        private static sbyte HeightFor(SurfaceClass cls) => cls switch
+        {
+            SurfaceClass.Water => (sbyte)-1,
+            SurfaceClass.Ground => (sbyte)0,
+            SurfaceClass.Void => (sbyte)0,
+            _ => (sbyte)1,
+        };
 
         private static void Set(SurfaceMap sm, int i, SurfaceClass cls, sbyte height)
         {
