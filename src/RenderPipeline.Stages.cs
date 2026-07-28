@@ -18,7 +18,8 @@ namespace SDVRadiance
     {
         /// <summary>How strongly celestial light is present (cloud shadows scale by this):
         /// 1 in daylight, fading over the last ~40 min before the seasonal dark time, then
-        /// moon-phase-scaled at night (a dark night has no light for clouds to block).</summary>
+        /// moon-phase-scaled at night (a dark night has no light for clouds to block).
+        /// WEATHER is applied by the caller (`_cloudWeatherAmt`), which needs an eased value.</summary>
         private static float CloudDayFactor()
         {
             int t = Game1.timeOfDay;

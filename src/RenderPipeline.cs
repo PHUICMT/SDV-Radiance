@@ -343,7 +343,18 @@ namespace SDVRadiance
                 // effects (bloom/grade) see the shadowed scene. They are SUNLIGHT (or moonlight)
                 // being blocked, so they fade with dusk and at night exist only under a bright
                 // moon — never stamped over lamp-lit ground on a dark night.
-                _cloudDayFactor = CloudDayFactor();
+                // Rain, storm and snow put a solid overcast between the sun and the ground. There is
+                // no direct beam left for a cloud to punch a gap in, so distinct drifting shadow
+                // banks should not exist at all — and a rainy day rolling heavy cloud shadows across
+                // it is what players notice. God rays already bow out in this weather (see
+                // _godRayAmount below) and so does the night mist; cloud shadows never did, because
+                // CloudDayFactor only ever looked at the clock and the moon.
+                //
+                // Eased rather than switched: weather mods (Cloudy Skies) can flip this mid-day, and
+                // the presence fade only ramps a stage back IN, so a hard cut here would pop.
+                bool cloudOvercast = Game1.isRaining || Game1.isSnowing || Game1.isLightning;
+                _cloudWeatherAmt += ((cloudOvercast ? 0f : 1f) - _cloudWeatherAmt) * 0.05f;   // ~1s
+                _cloudDayFactor = CloudDayFactor() * _cloudWeatherAmt;
                 if (config.CloudShadowEnabled && _cloudShadow != null && outdoors && _cloudDayFactor > 0.02f)
                 {
                     stages.Add(_dCloud);
@@ -495,6 +506,9 @@ namespace SDVRadiance
         // ---- stages --------------------------------------------------------
 
         private float _cloudDayFactor = 1f;
+        /// <summary>Eased 1 → 0 while the sky is overcast (rain / storm / snow): no direct sun means
+        /// no gaps for a cloud to cast through.</summary>
+        private float _cloudWeatherAmt = 1f;
         // Eased effect amounts so nothing pops: day fog / night mist crossfade over time
         // of day AND ease when toggled; wading self-reflection fades at the water edge.
         private float _fogDayAmt, _fogMistAmt, _pinFade;
