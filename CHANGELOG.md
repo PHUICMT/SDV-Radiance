@@ -2,6 +2,22 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.3.2
+
+### Fixed
+- Cutscenes showed shadows for townspeople who were not in the scene. During an event the game
+  draws only the characters the scene needs, and the shadow pass was still casting for everyone
+  who lives on the map. The same characters were also being mirrored in water and cut out of the
+  water surface. Reported by a player on Nexus.
+
+### Known issues
+- Bridges show an outline in the rain. Fix planned for 1.4.0.
+- Some scenes still step slightly brighter or darker as you walk.
+
+### For translators
+
+No new keys, and no meaning changes. Nothing to do for this release.
+
 ## 1.3.1
 
 ### Fixed

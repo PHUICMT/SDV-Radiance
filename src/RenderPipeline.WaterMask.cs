@@ -493,7 +493,7 @@ namespace SDVRadiance
                 // NPCs + monsters: bottom-centre at the collision-box feet, scale 4 —
                 // the same anchor the game draws them at (small bob/jump offsets are
                 // sub-pixel enough for an exclusion mask).
-                foreach (NPC c in loc.characters)
+                foreach (NPC c in ShadowRenderer.CharactersIn(loc))
                 {
                     if (c?.Sprite?.Texture == null || c.IsInvisible)
                         continue;

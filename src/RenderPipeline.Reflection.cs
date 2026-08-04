@@ -92,22 +92,14 @@ namespace SDVRadiance
 
                 // NPCs + monsters, bottom-centre at the collision-box feet (same anchor the
                 // game and the sprite mask use), flipped to hang downward.
-                foreach (NPC c in loc.characters)
+                // Whoever the game is drawing — during a cutscene that is the event's cast, NOT the
+                // residents (see ShadowRenderer.CharactersIn). Mirroring both lists reflected people
+                // who were not on screen.
+                foreach (NPC c in ShadowRenderer.CharactersIn(loc))
                 {
                     if (c?.Sprite?.Texture == null || c.IsInvisible || c.swimming.Value)
                         continue;
                     StampFlipped(sb, c.Sprite.Texture, c.Sprite.SourceRect, c.GetBoundingBox(), c.drawOffset);
-                }
-                // Cutscene actors live in the event, not loc.characters — effects must keep
-                // working in cutscenes (house rule), and actors often stand at the water.
-                if (Game1.CurrentEvent?.actors != null)
-                {
-                    foreach (NPC c in Game1.CurrentEvent.actors)
-                    {
-                        if (c?.Sprite?.Texture == null || c.IsInvisible)
-                            continue;
-                        StampFlipped(sb, c.Sprite.Texture, c.Sprite.SourceRect, c.GetBoundingBox(), c.drawOffset);
-                    }
                 }
                 // Farm animals.
                 foreach (var a in loc.animals.Values)

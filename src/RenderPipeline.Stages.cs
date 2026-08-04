@@ -614,7 +614,7 @@ namespace SDVRadiance
         {
             _bubbleAnchors.Clear();
             if (loc != null)
-                foreach (NPC c in loc.characters)
+                foreach (NPC c in ShadowRenderer.CharactersIn(loc))
                 {
                     if (c == null)
                         continue;

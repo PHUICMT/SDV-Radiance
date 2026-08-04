@@ -139,17 +139,41 @@ namespace SDVRadiance
         // log ONCE instead of recursing until the stack dies.
         private static int _renderDepth;
 
-        /// <summary>All shadow-casting characters: residents PLUS cutscene/festival actors —
-        /// during an event the scripted copies live in CurrentEvent.actors, not loc.characters
-        /// (a cutscene looked shadowless because we only read the latter).</summary>
-        private static System.Collections.Generic.IEnumerable<NPC> CharactersIn(GameLocation loc)
+        /// <summary>
+        /// Every character the game is DRAWING right now — the only ones an effect may key off.
+        ///
+        /// <para>
+        /// Normally that is the location's residents. During a cutscene it is not: the event
+        /// supplies its own cast in <c>CurrentEvent.actors</c> and the residents standing around
+        /// the map are not drawn at all. Reading both lists put shadows (and reflections, and
+        /// water-ripple exclusions) under people who were nowhere on screen — reported on Nexus
+        /// as "npc shadows everywhere that's not supposed to be included in the event cutscene".
+        /// </para>
+        ///
+        /// <para>
+        /// The test below is <c>GameLocation.drawCharacters</c>'s own, not a guess at it. Two
+        /// details are worth knowing because both are easy to get wrong from intuition:
+        /// FESTIVALS are not an exception (the townspeople at a festival are event actors, not
+        /// residents — <c>showWorldCharacters</c> is false there and only two vanilla events set
+        /// it), and an event can hide part of its OWN cast, which <c>Event.draw</c> honours with
+        /// <c>ShouldHideCharacter</c>.
+        /// </para>
+        ///
+        /// Shared with the reflection and water-mask passes, which had the same two-list bug for
+        /// the same reason.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<NPC> CharactersIn(GameLocation loc)
         {
-            foreach (NPC npc in loc.characters)
-                yield return npc;
-            var ev = Game1.CurrentEvent;
+            Event? ev = Game1.CurrentEvent;
+            bool residentsDrawn = !loc.shouldHideCharacters()
+                && !(Game1.eventUp && (ev == null || !ev.showWorldCharacters));
+            if (residentsDrawn)
+                foreach (NPC npc in loc.characters)
+                    yield return npc;
             if (ev?.actors != null)
                 foreach (NPC npc in ev.actors)
-                    yield return npc;
+                    if (!ev.ShouldHideCharacter(npc))
+                        yield return npc;
         }
 
         /// <summary>All farm animals in a location — including Marnie's paddock cows, which live in
