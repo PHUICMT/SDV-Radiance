@@ -134,6 +134,15 @@ namespace SDVRadiance
             return StardewModdingAPI.Context.IsWorldReady && Game1.currentLocation != null;
         }
 
+        /// <summary>1 = the sun path owns the frame, 0 = the per-light path does, in between = both
+        /// are drawing at their share while dusk (or a doorway) crosses over. Starts at the sun so
+        /// a daylight load does not fade in from nothing.</summary>
+        private float _sunBlend = 1f;
+
+        /// <summary>~1 s to cross over at 60 fps. Long enough to read as the light changing rather
+        /// than as the shadows being replaced.</summary>
+        private const float SunBlendRate = 0.02f;
+
         // Re-entrancy latch: if a patched draw call ever re-enters our render entry points
         // (an appearance mod calling back into the game's draw while we're baking), bail and
         // log ONCE instead of recursing until the stack dies.
@@ -174,6 +183,45 @@ namespace SDVRadiance
                 foreach (NPC npc in ev.actors)
                     if (!ev.ShouldHideCharacter(npc))
                         yield return npc;
+        }
+
+        /// <summary>
+        /// Whether this character's <c>HideShadow</c> flag should stop us casting.
+        ///
+        /// <para>
+        /// Usually yes: the game sets it on characters that must not have one at all, such as an
+        /// NPC laying down at the end of a route (<c>NPC.cs</c>), pets and horses.
+        /// </para>
+        ///
+        /// <para>
+        /// But the flag is also set for reasons that are about the VANILLA shadow specifically, a
+        /// round blob that cannot follow a sprite drawn away from its own tile. Those reasons do
+        /// not carry over to a silhouette cut from the sprite and anchored at the DRAWN position,
+        /// and honouring them left the Squid Fest fishermen as the only people on the beach with no
+        /// shadow while everyone beside them had one. <c>Beach.adjustDerbyFisherman</c> is the
+        /// clearest case: it sets <c>drawOffset = (0, 96)</c>, <c>shouldShadowBeOffset</c> and
+        /// <c>HideShadow</c> together, which is the game saying "the blob would land in the wrong
+        /// place", not "this thing casts no shadow".
+        /// </para>
+        ///
+        /// Each exception below names the game code that sets the flag, so the list can be checked
+        /// against the game rather than argued about.
+        /// </summary>
+        private static bool ShadowHiddenFor(NPC npc)
+        {
+            if (!npc.HideShadow || npc is Pet)
+                return false;
+            // NPC.cs, end-of-route behaviour: a standing silhouette over a sleeping sprite is worse
+            // than no shadow, so this is the one HideShadow that really means none.
+            if (npc.layingDown)
+                return true;
+            // Beach.adjustDerbyFisherman and friends: decorative standing NPCs drawn with an offset.
+            if (npc.SimpleNonVillagerNPC)
+                return false;
+            // Event.AddTemporaryActor: flag set from sprite width alone (>= 32).
+            if (npc.EventActor && (npc.Sprite?.SpriteWidth ?? 0) >= 32)
+                return false;
+            return true;
         }
 
         /// <summary>All farm animals in a location — including Marnie's paddock cows, which live in
@@ -263,13 +311,23 @@ namespace SDVRadiance
             if (strength <= 0.01f)
                 return;
 
+            // Dusk is a CROSS-FADE, not a switch. The two paths model the same thing from different
+            // sources, and swapping them on the frame SunCasts() flips took every shadow on screen
+            // from one direction to another in one frame. House rule: if it changes, it fades.
+            // Both paths run while the blend is in transit, each at its share of the strength, so
+            // the sun's long shadow thins out as the lamp's grows in.
+            float sunTarget = SunCasts() ? 1f : 0f;
+            _sunBlend += (sunTarget - _sunBlend) * SunBlendRate;
+            if (Math.Abs(sunTarget - _sunBlend) < 0.004f)
+                _sunBlend = sunTarget;
+
             _renderDepth++;
             try
             {
-                if (SunCasts())
-                    DrawSunShadows(b, loc, config, strength, blur);
-                else
-                    DrawLightShadows(b, loc, config, strength, blur);   // indoors / night → per light source
+                if (_sunBlend > 0.004f)
+                    DrawSunShadows(b, loc, config, strength * _sunBlend, blur);
+                if (_sunBlend < 0.996f)
+                    DrawLightShadows(b, loc, config, strength * (1f - _sunBlend), blur);   // indoors / night → per light source
             }
             catch (Exception ex)
             {

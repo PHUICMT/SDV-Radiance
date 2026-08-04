@@ -499,6 +499,8 @@ namespace SDVRadiance
                     sb.Draw(_sceneRT, new Rectangle(0, 0, w, h), Color.White * (1f - _masterFade));
                     sb.End();
                 }
+
+                RedrawEventSkipButton(sb, target);
             }
             catch (Exception ex)
             {
@@ -545,6 +547,56 @@ namespace SDVRadiance
                 _perfTotalMs += ms;
                 if (ms > _perfMaxMs) _perfMaxMs = ms;
             }
+        }
+
+        /// <summary>
+        /// Draw the event SKIP button again, on top of the finished frame.
+        ///
+        /// <para>
+        /// The button is not UI as far as this pipeline is concerned. The game draws it inside the
+        /// WORLD frame (<c>Event.drawAboveAlwaysFrontLayer</c>), which is the image we capture and
+        /// post-process, so every stage lands on it: over water it took the ripple's tint and the
+        /// reflection, and it read as the surface covering the button. Tilt-shift already carries
+        /// an event exception for the same reason, but that only fixed tilt-shift.
+        /// </para>
+        ///
+        /// <para>
+        /// Redrawn rather than masked out. Masking would leave a rectangle of untouched water
+        /// around the button, which is a more obvious artifact than the tint was. Drawing the
+        /// button again costs one sprite on event frames and puts it back exactly as the game
+        /// wanted it: nothing is over the UI.
+        /// </para>
+        ///
+        /// The bounds repeat <c>Event.skipBounds()</c> (private, so it is repeated rather than
+        /// called) including its safe-area clamp, so a change to the game's layout shows up as the
+        /// button being covered again rather than as a copy in the wrong corner.
+        /// </summary>
+        private void RedrawEventSkipButton(SpriteBatch sb, RenderTarget2D target)
+        {
+            Event? ev = Game1.CurrentEvent;
+            // Exactly the game's own draw condition, and nothing more. An earlier version also
+            // bailed on ev.skipped, which the game does not test: pressing the button set it
+            // immediately while the game kept drawing for several more frames, so the tinted copy
+            // came back for those frames and the button read as sinking into the scene.
+            if (ev == null || !ev.skippable
+                || (Game1.options?.SnappyMenus ?? false) || (Game1.game1?.takingMapScreenshot ?? false)
+                || Game1.mouseCursors == null)
+                return;
+
+            const int Scale = 4;
+            var bounds = new Rectangle(Game1.viewport.Width - 22 * Scale - 8, Game1.viewport.Height - 64,
+                22 * Scale, 15 * Scale);
+            Utility.makeSafe(ref bounds);
+            // Hover dim on RGB only: the game multiplies alpha too, which here would let the tinted
+            // copy underneath show through the replacement.
+            bool hover = bounds.Contains(Game1.getOldMouseX(), Game1.getOldMouseY());
+            Color tint = hover ? new Color(0.5f, 0.5f, 0.5f, 1f) : Color.White;
+
+            _device.SetRenderTarget(target);
+            sb.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+            sb.Draw(Game1.mouseCursors, new Vector2(bounds.X, bounds.Y), new Rectangle(205, 406, 22, 15),
+                tint, 0f, Vector2.Zero, Scale, SpriteEffects.None, 0f);
+            sb.End();
         }
 
         private void MaybeLogDiag(ModConfig config)

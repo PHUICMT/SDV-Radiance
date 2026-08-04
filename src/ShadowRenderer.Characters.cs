@@ -36,7 +36,7 @@ namespace SDVRadiance
 
             foreach (NPC npc in CharactersIn(loc))
             {
-                if (npc == null || npc.IsInvisible || (npc.HideShadow && !(npc is Pet)) || npc.swimming.Value || npc.Sprite?.Texture == null)
+                if (npc == null || npc.IsInvisible || ShadowHiddenFor(npc) || npc.swimming.Value || npc.Sprite?.Texture == null)
                     continue;
                 if (OnOpenWater(loc, npc.TilePoint))   // open water only — surf/shore keeps shadows
                     continue;
@@ -196,7 +196,7 @@ namespace SDVRadiance
 
             foreach (NPC npc in CharactersIn(loc))
             {
-                if (npc == null || npc.IsInvisible || (npc.HideShadow && !(npc is Pet)) || npc.swimming.Value || npc.Sprite?.Texture == null)
+                if (npc == null || npc.IsInvisible || ShadowHiddenFor(npc) || npc.swimming.Value || npc.Sprite?.Texture == null)
                     continue;
                 if (OnOpenWater(loc, npc.TilePoint))   // same guard as the sun path (bathhouse, night beach)
                     continue;
@@ -426,8 +426,25 @@ namespace SDVRadiance
         /// bus or posed by an event IS offset, and used to get a silhouette in the wrong place.
         /// </para>
         /// The 16 px floor keeps sub-pixel jitter from flipping anyone between the two paths.
+        /// <para>
+        /// The offset alone turned out to be too broad. Vanilla NPCs have no seat state at all
+        /// (only Farmer does), so an offset is the only clue available, and the Squid Fest
+        /// fishermen carry exactly the same one as Willy on his boat: drawOffset = (0, 96). They
+        /// are not sitting, they are STANDING in the surf, and the pool read as no shadow at all
+        /// against the water. SimpleNonVillagerNPC is what separates them: the game sets it on
+        /// decorative placed characters (Beach.adjustDerbyFisherman) and not on posed villagers.
+        /// Those keep the full silhouette, which lands correctly now that the shadow anchors at
+        /// feet + drawOffset rather than at the collision box.
+        /// </para>
         /// </remarks>
-        internal static bool IsSeated(Character? c) => c != null && c.drawOffset.LengthSquared() > 256f;
+        internal static bool IsSeated(Character? c)
+        {
+            if (c == null || c.drawOffset.LengthSquared() <= 256f)
+                return false;
+            // No seat art is drawn around a decorative standing NPC, so there is nothing for the
+            // silhouette to fight — the one thing the pool exists to avoid.
+            return !c.SimpleNonVillagerNPC;
+        }
 
         /// <summary>Screen point under a SEATED character's visible feet: the collision box says
         /// where they would stand, <c>drawOffset</c> says where the game actually drew them, and
@@ -449,19 +466,46 @@ namespace SDVRadiance
 
         private void DrawNpcShadow(SpriteBatch b, NPC npc, float rot, float stretch, float alpha, float blur)
         {
+            // The collision box is the anchor, with no drawOffset term. A stretched sprite and the
+            // offset that goes with it CANCEL: extendSourceRect(0, 32) with tempSpriteHeight = 64
+            // and drawOffset = (0, 96) puts the bottom of the PERSON back on
+            // GetBoundingBox().Bottom, which is where an ordinary character stands too. Adding the
+            // offset here pushed those characters' shadows a tile and a half down the beach.
+            Rectangle src = npc.Sprite.SourceRect;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
-                new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom - FeetLift));
+                new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f,
+                    npc.GetBoundingBox().Bottom - FeetLift));
             float depth = MathHelper.Clamp(npc.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
             // Prefer the baked silhouette (one cohesive image, smoothly faded — same as the
-            // player). Bands are the fallback only when the sprite is too big for a slot.
-            if (_casterBakes.TryGetValue((npc.Sprite.Texture, npc.Sprite.SourceRect), out var baked))
+            // player). Bands are the fallback only when the sprite is too big for a slot, which is
+            // every stretched one: 64 rows drawn at 4x overflow the bake slot.
+            if (_casterBakes.TryGetValue((npc.Sprite.Texture, src), out var baked))
             {
                 DrawSoft(b, Taps9, baked.rt, null, feet, Color.White, alpha, rot, baked.feetInRT,
                     new Vector2(1f, stretch), depth, SpriteEffects.None, blur);
                 return;
             }
-            Rectangle src = npc.Sprite.SourceRect;
-            DrawBandedGradient(b, npc.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, src.Height),
+            // Where the feet sit INSIDE the sprite, which is the sprite's bottom edge only when the
+            // game has not stretched it. A stretched sprite holds the person in its upper half and
+            // water or tackle below, so pivoting the lean at the bottom edge swung the body a
+            // couple of tiles clear of the person it belongs to.
+            //
+            // Read off the game's own placement rather than guessed: NPC.draw pins the sprite at
+            // getLocalPosition + (spriteWidth*4/2, boundingBox.Height/2) with origin
+            // (SpriteWidth/2, SpriteHeight*3/4), so the sprite's top edge is SpriteHeight*3 screen
+            // px above that point, and the feet are however far the anchor is below the top. An
+            // ordinary sprite comes out at exactly src.Height, the bottom edge, as before.
+            Vector2 gameAnchor = npc.getLocalPosition(Game1.viewport)
+                + new Vector2(npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Height / 2f);
+            float spriteTop = gameAnchor.Y - npc.Sprite.SpriteHeight * 3f;
+            float originY = MathHelper.Clamp((feet.Y - spriteTop) / 4f, 0f, src.Height);
+            // Whatever the stretch added BELOW the feet is not part of the character: on the Squid
+            // Fest fishermen it is the line and float sitting in the water. Casting it put tackle
+            // shadows on the sand beside them. Cropping there leaves the person, and leaves every
+            // ordinary sprite untouched because their feet are already the bottom edge.
+            if (originY >= 1f && originY < src.Height - 0.5f)
+                src = new Rectangle(src.X, src.Y, src.Width, (int)Math.Round(originY));
+            DrawBandedGradient(b, npc.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, Math.Min(originY, src.Height)),
                 alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
         }
     }

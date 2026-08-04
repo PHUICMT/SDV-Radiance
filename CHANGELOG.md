@@ -2,6 +2,28 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.3.3
+
+### Fixed
+- Cutscenes still cast shadows for a few things the 1.3.2 fix missed: small objects standing
+  where a scripted character walks (the game hides these too, not just townspeople), and
+  furniture during events outside the Farm and farmhouse.
+- Fishing event extras (Squid Fest, the winter fishing derby) had no shadow at all, and once
+  fixed their shadow floated away from their feet with the tackle drawn as part of it. All three
+  are fixed: they now cast a shadow anchored correctly, without the fishing line.
+- The event SKIP button could be covered by the water effect, and briefly showed the effect
+  underneath it at the moment it was pressed.
+- Shadows switching between sunlight and lamplight (dusk, or walking indoors) now fade over
+  about a second instead of snapping to the new direction in one frame.
+
+### Known issues
+- Bridges show an outline in the rain. Fix planned for 1.4.0.
+- Some scenes still step slightly brighter or darker as you walk.
+
+### For translators
+
+No new keys, and no meaning changes. Nothing to do for this release.
+
 ## 1.3.2
 
 ### Fixed

@@ -170,6 +170,21 @@ namespace SDVRadiance
                     DrawBushShadow(b, bush, rot * TallLeanScale, Math.Min(stretch, 0.8f), alpha, blur);
             }
 
+            // What an EVENT stops drawing. Trees, bushes, crops and large terrain features are drawn
+            // through the whole cutscene, but ground objects and furniture are not, so casting for
+            // them left shadows lying on bare ground with nothing above them (reported at a beach
+            // cutscene). Each test below is GameLocation.draw's own, and they are all different from
+            // each other, which is why they are three flags and not one:
+            //   objects    (!eventUp || currentEvent.showGroundObjects)
+            //   furniture  (!eventUp || Farm || FarmHouse)
+            //   clumps     only the Woods is gated, and by showGroundObjects
+            bool eventUp = Game1.eventUp;
+            bool showGround = loc.currentEvent != null && loc.currentEvent.showGroundObjects;
+            bool objectsDrawn = !eventUp || showGround;
+            bool furnitureDrawn = !eventUp || loc is Farm || loc is StardewValley.Locations.FarmHouse;
+            bool clumpsDrawn = !(loc is StardewValley.Locations.Woods && eventUp && !showGround);
+
+            if (clumpsDrawn)
             foreach (ResourceClump clump in loc.resourceClumps)
             {
                 if (clump == null)
@@ -183,11 +198,21 @@ namespace SDVRadiance
             // Same viewport-bounded lookup for placed objects (machines, fences, decor): objects is
             // tile-keyed too, so we never walk the whole placed-object set to find the on-screen few.
             var objDict = loc.objects;
+            if (objectsDrawn)
             for (int obY = ty0; obY <= ty1; obY++)
             for (int obX = tx0; obX <= tx1; obX++)
             {
                 Vector2 tile = new(obX, obY);
                 if (!objDict.TryGetValue(tile, out SObject o) || o == null || o.isTemporarilyInvisible)
+                    continue;
+                // showGroundObjects is only the first gate. Object.draw has a SECOND one: during an
+                // event, a small object standing where a character walks is not drawn at all
+                // (`!Game1.CurrentEvent.isTileWalkedOn(x, y)`), so the scene does not have items
+                // poking through it. A clam two tiles along the row Sam walks at Squid Fest is
+                // hidden by that rule, and its shadow was the mark left lying on empty snow.
+                // Craftables are exempt in the game's code, so they are exempt here too.
+                if (!o.bigCraftable.Value && Game1.eventUp
+                    && (Game1.CurrentEvent?.isTileWalkedOn(obX, obY) ?? false))
                     continue;
                 if (o.bigCraftable.Value)
                 {
@@ -214,6 +239,7 @@ namespace SDVRadiance
                 }
             }
 
+            if (furnitureDrawn)
             foreach (Furniture f in loc.furniture)
             {
                 if (f == null || f.isTemporarilyInvisible)

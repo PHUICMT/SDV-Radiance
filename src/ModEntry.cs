@@ -273,6 +273,14 @@ namespace SDVRadiance
                     RenderPipeline.MaskView = !RenderPipeline.MaskView;
                     this.Monitor.Log($"Water mask overlay: {(RenderPipeline.MaskView ? "ON" : "OFF")} (rebuilds on next tile crossing / within 10s)", LogLevel.Info);
                 });
+            helper.ConsoleCommands.Add("radiance_shadows",
+                "Report every character, object, plant, animal and critter that could cast, and what the shadow "
+                + "pass does with each one, plus the event flags that decide who the game is drawing. Reaches 20 "
+                + "tiles past the screen ('*' marks anything off screen); 'radiance_shadows all' scans the whole "
+                + "map. Use it when something has no shadow, or has one with nothing above it.",
+                (cmd, args) => this.Monitor.Log(
+                    ShadowRenderer.Report(_config, args.Length >= 1 && args[0].Equals("all", StringComparison.OrdinalIgnoreCase)),
+                    LogLevel.Info));
             helper.ConsoleCommands.Add("radiance_reflect",
                 "Reflection diagnostics/A-B. No args = report what each reflection layer is doing under the player. "
                 + "'scene on|off' forces the sprite-free scenery mirror source (P3c) on or off, so a missing "

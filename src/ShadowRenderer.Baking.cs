@@ -233,7 +233,7 @@ namespace SDVRadiance
             {
                 foreach (NPC npc in CharactersIn(loc))
                 {
-                    if (npc == null || npc.IsInvisible || (npc.HideShadow && !(npc is Pet)) || npc.swimming.Value || npc.Sprite?.Texture == null)
+                    if (npc == null || npc.IsInvisible || ShadowHiddenFor(npc) || npc.swimming.Value || npc.Sprite?.Texture == null)
                         continue;
                     Point t = npc.TilePoint;
                     if (t.X < tx0 || t.X > tx1 || t.Y < ty0 || t.Y > ty1)
@@ -404,6 +404,13 @@ namespace SDVRadiance
             Vector2 baseOrigin, float alpha, float rot, Vector2 scale, float depth, float blur,
             float headFade = HeadFade, SpriteEffects effects = SpriteEffects.None)
         {
+            // The ramp runs from the FEET row up, not from the sprite's bottom edge. On a sprite
+            // the game has stretched, the character occupies the upper half and the rest is water
+            // or tackle: measuring from the bottom edge handed the person the pale end of the ramp
+            // and spent the dark end on empty pixels, so the shadow came out barely visible. The
+            // feet row is baseOrigin.Y, which is the bottom edge for every ordinary sprite, so
+            // nothing changes for them.
+            float feetRow = Math.Max(1f, baseOrigin.Y);
             // Band count set by the sprite's SOURCE height (it's drawn ~4× on screen, so a short
             // stump at height/6 showed coarse steps). Finer division → the per-band alpha gradient
             // reads as a smooth ramp, not layers. Capped so tall sprites don't explode the draw count.
@@ -415,7 +422,9 @@ namespace SDVRadiance
                 var band = new Rectangle(src.X, src.Y + y0, src.Width, y1 - y0);
                 // Origin so the (virtual) full-sprite ground-anchor row still maps to the feet position.
                 var origin = new Vector2(baseOrigin.X, baseOrigin.Y - y0);
-                float tBottom = (i + 0.5f) / bands;              // 0 at the head band, 1 at the feet band
+                // 0 at the head band, 1 at the feet band. Rows below the feet (a stretched sprite's
+                // water half) clamp to 1 rather than running past it.
+                float tBottom = MathHelper.Clamp(src.Height * (i + 0.5f) / bands / feetRow, 0f, 1f);
                 float ga = headFade + (1f - headFade) * (float)Math.Pow(tBottom, 1.8);
                 DrawSoft(b, Taps5, tex, band, feet, Color.Black, alpha * ga, rot, origin, scale, depth,
                     effects, blur);
