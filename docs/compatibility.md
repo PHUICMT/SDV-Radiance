@@ -11,14 +11,15 @@ Status legend: **OK** works together · **PARTIAL** works with settings tweaks �
 
 | Mod | Status | Notes |
 |-----|--------|-------|
-| Dynamic Reflections (4.0.1) | UNTESTED | Competing water-reflection system (sprite-flip per entity vs our whole-scene screen-space mirror). Expect doubled reflections when both enabled — likely recommendation: disable one of the two water systems. |
-| SpriteMaster / Clear Glasses | UNTESTED | Texture upscaler; verify RT-baked shadows still key correctly off upscaled textures. |
+| Global God Rays | OK | Confirmed by multiple users over several in-game days (2026-07-21). Radiance hugs in-world lights, GGR does the sun shafts — they stack nicely. Listed as compatible on the Nexus page. |
+| Dynamic Reflections (4.0.1) | PARTIAL | User-confirmed working alongside Radiance after tuning (2026-07-22). Two reflection systems still overlap conceptually — recommend keeping only one water/reflection system on for a predictable look (Radiance's Water toggle can be switched off). |
+| SpriteMaster / Clear Glasses / Clear Monocle | CONFLICT | Confirmed (2026-07-21/22): world renders solid orange/black on load until a menu forces a redraw; Clear Monocle (xBRZ-only fork) fails the same way. No reliable workaround (Dynamic Shader trick reported, then retracted by users). Documented as incompatible on the Nexus page; built-in upscaling is on the roadmap to remove the need for it. |
 
 ## Content / map mods
 
 | Mod | Status | Notes |
 |-----|--------|-------|
-| Stardew Valley Expanded (1.15.11) | UNTESTED | Custom maps stress tile-art shadow classification, water masks, and flood GI on non-vanilla layouts. |
+| Stardew Valley Expanded (1.15.11) | OK | Daily-driven in the author's ~80-mod profile (SVE + CJB + Fashion Sense + more). Some SVE custom water bodies are still missed by the mask — tracked as the water-accuracy known issue, not an SVE-specific clash. |
 | Content Patcher recolors | UNTESTED | Recolored water/terrain stresses the water shader's blueness/greyness color gates. Deliberately not tested — noted here so the Nexus page can say so; if a recolor shifts water hue far from vanilla, the reflection/ripple gates may miss some tiles. |
 
 ## Cosmetic mods

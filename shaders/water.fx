@@ -71,7 +71,19 @@ float4 Lights[8];       // xy = screen UV, z = radius (unused), w = intensity
 float LightCount;       // how many entries of Lights are live
 float PlayerInWater;    // 0..1 eased: the player's feet are on water pixels (wading). C# fades
                         // this in/out over ~a third of a second so the self-reflection never pops.
+float TintAmt;          // depth-tint amount (0 when the shimmer toggle is off; reflection may still run)
 float4 PlayerRect;      // player silhouette bounds in screen UV (x0,y0,x1,y1)
+float SpriteMaskOn;     // 1 when the per-frame sprite mask below is live
+// Per-frame mask of every sprite ON the water (NPCs, farm animals, critters) baked in
+// screen space before the world draws — their pixels are excluded from ripple/mirror so
+// a duck paddling a pond never distorts, and displaced taps can't smear them sideways.
+texture SpriteMaskTexture;
+sampler2D SpriteMaskSampler = sampler_state
+{
+    Texture = <SpriteMaskTexture>;
+    MinFilter = Point; MagFilter = Point; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
 texture PlayerMaskTexture;   // the player's baked silhouette — its alpha marks the
                              // player's ACTUAL pixels (not a box) to exclude from
                              // ring-tile effects, so water beside them keeps animating
@@ -140,6 +152,14 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float2 maskUV = (worldTile - MaskOrigin) / MaskSize;
     float tileWater = tex2D(MaskSampler, maskUV).r;
 
+    // Mask ALPHA tags the water TYPE: ~1 normal, ~0 ICE (frozen: mirror kept, no ripple),
+    // ~0.5 (128) LAVA (slow molten flow + self-glow, no mirror). Ice/lava have no march
+    // channel-driven ripple gate difference — the gate below zeroes ripple only for ice.
+    float maskA = tex2D(MaskSampler, maskUV).a;
+    float isIce  = 1.0 - step(0.25, maskA);              // a < 0.25
+    float isLava = step(0.25, maskA) * (1.0 - step(0.75, maskA)); // 0.25..0.75
+    float rippleGate = 1.0 - isIce;                       // ice: no ripple; water/lava: yes
+
     float4 src = tex2D(SourceSampler, uv);
     if (tileWater <= 0.001)
         return src;
@@ -174,7 +194,13 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float2 pmuv = (uv - PlayerRect.xy) / pmSpan;
     float pmIn = step(0.0, pmuv.x) * step(pmuv.x, 1.0) * step(0.0, pmuv.y) * step(pmuv.y, 1.0);
     float inPlayer = step(0.02, tex2D(PlayerMaskSampler, saturate(pmuv)).a) * pmIn;
-    float ringGate = lerp(1.0 - inPlayer, 1.0, coreTile);
+    // Exclude the player's pixels EVERYWHERE, not just in the bank ring: while swimming
+    // the visible half-body sits over core water and used to warp with the ripple.
+    float ringGate = 1.0 - inPlayer;
+    // Sprites ON the water (ducks, NPCs, critters — per-frame bake): their own pixels
+    // never ripple / mirror. Water beside them keeps animating (pixel-accurate mask).
+    float inSprite = SpriteMaskOn * step(0.05, tex2D(SpriteMaskSampler, uv).a);
+    ringGate *= 1.0 - inSprite;
     // The pixel mask is the AUTHORITY on where water is — colour tests only BOOST beyond the
     // 0.75 floor (murky green lakes failed every colour gate and the effect went patchy).
     // Their remaining job is grading, not coverage; sprites over water are handled by the
@@ -186,7 +212,8 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // Refraction in WORLD space so the ripple travels with the water:
     //  - pond: fine crossing ripples, small & quick (still surface).
     //  - ocean: long directional swell, bigger & slower.
-    float t = Time * Speed;
+    //  - lava: the SAME molten motion but crawling (thick, viscous) — slow the phase hard.
+    float t = Time * Speed * lerp(1.0, 0.12, isLava);
     float pwx = sin(worldTile.y * 6.3 + t * 6.0) + 0.5 * sin(worldTile.x * 4.1 - t * 4.0);
     float pwy = cos(worldTile.x * 5.7 - t * 5.0) + 0.5 * cos(worldTile.y * 4.7 + t * 3.5);
     float2 pondRipple = float2(pwx, pwy) * (Strength * 0.0025);
@@ -197,12 +224,31 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // Puddle pixels (mask < full) always ripple POND-style: an ocean map's long slow swell
     // barely moves inside a 3-tile walk-through pool, which read as "no effect up close".
     float kind = WaterKind * step(0.95, tileWater);
-    float2 ripple = lerp(pondRipple, oceanRipple, kind) * water;
+    float2 ripple = lerp(pondRipple, oceanRipple, kind) * water * rippleGate;
+    // A displaced tap must never land ON a sprite (that smeared duck/player pixels
+    // sideways into the water next to them) — fall back to the undisplaced sample there.
+    float tapSprite = SpriteMaskOn * step(0.05, tex2D(SpriteMaskSampler, uv + ripple).a);
+    float tapPlayer = 0.0;
+    {
+        float2 tuv = ((uv + ripple) - PlayerRect.xy) / pmSpan;
+        float tin = step(0.0, tuv.x) * step(tuv.x, 1.0) * step(0.0, tuv.y) * step(tuv.y, 1.0);
+        tapPlayer = step(0.02, tex2D(PlayerMaskSampler, saturate(tuv)).a) * tin;
+    }
+    ripple *= 1.0 - max(tapSprite, tapPlayer);
     float4 col = tex2D(SourceSampler, uv + ripple);
 
-    // Depth tint: cool + deepen for a wetter, more 3D surface.
+    // Depth tint: cool + deepen for a wetter, more 3D surface. TintAmt drops to 0 when
+    // the shimmer toggle is off (the stage may still be running just for the mirror).
+    // NOT on lava — molten rock isn't cool/blue.
     float3 tint = col.rgb * float3(0.90, 0.97, 1.12);
-    col.rgb = lerp(col.rgb, tint, 0.35 * water);
+    col.rgb = lerp(col.rgb, tint, TintAmt * water * (1.0 - isLava));
+
+    // LAVA self-glow: a slow warm emissive pulse so molten rock lights itself (and blooms).
+    if (isLava > 0.5)
+    {
+        float pulse = 0.6 + 0.4 * sin(Time * 0.5 + worldTile.x * 0.6 + worldTile.y * 0.4);
+        col.rgb += float3(0.42, 0.14, 0.02) * pulse * water;
+    }
 
     // Screen-space reflection: a true vertical mirror. March UP the water mask to
     // find the shoreline (where water ends), then reflect the scene above that edge
@@ -349,7 +395,8 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // Gated to MARCH water (g): wet-shading fringe kept only in the effect mask must
     // not get a dark rim painted onto the bank.
     float rim = saturate(tileWater - rimMin) * tex2D(MaskSampler, maskUV).g;
-    col.rgb *= 1.0 - rim * 0.22 * water;
+    // Rim shading belongs to the shimmer look — gone when only the mirror is running.
+    col.rgb *= 1.0 - rim * 0.22 * water * saturate(TintAmt * 3.0);
 
     // Drifting specular glints — SCATTERED, not a grid. The old "one glint per cell,
     // all the same size" read as a regular dotted pattern. Now: TWO overlapping layers
@@ -385,7 +432,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     glint = saturate(glint);
     // Golden hour: the glints warm up with the low sun instead of staying white.
     float3 glintCol = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.82, 0.5), SunWarm);
-    col.rgb += glint * Sparkle * water * glintCol;
+    col.rgb += glint * Sparkle * water * glintCol * rippleGate * (1.0 - isLava);   // ice/lava: no sun glints
 
     // ---- Night: starlight on the surface (clear nights only) ----
     if (NightGlow > 0.001)

@@ -1,3 +1,6 @@
+# Secrets (API keys etc.) - never commit
+.env
+
 # .NET build output
 bin/
 obj/

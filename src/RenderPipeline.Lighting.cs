@@ -79,6 +79,15 @@ namespace SDVRadiance
                 }
             }
 
+            // LABELED WINDOWS (HF class 12): warm interior glow that fades in at night, added
+            // as extra light sources so the existing lighting/flood pipeline lights + occludes
+            // them like any lamp. Cached per location so the map scan runs once.
+            if (Game1.currentLocation != null)
+            {
+                EnsureWindowCache(Game1.currentLocation);
+                AddWindowLights(vw, vh, boost);
+            }
+
             // Run the stage if we have lights, or if we're darkening a flat interior
             // (so the room actually gets darker even with no lamps in view).
             bool darkening = ComputeLightingAmbient(config) != Vector3.One;
@@ -95,6 +104,108 @@ namespace SDVRadiance
             }
 
             return _lightCount > 0 || darkening;
+        }
+
+        // ---- labeled-window glow (HF class 12) ----
+        private GameLocation? _windowLoc;
+        private int _windowLabelVer = -1;
+        private readonly List<Vector2> _windowTiles = new();   // world-px centres of window tiles
+        private static readonly string[] _winLayers = { "Front", "Buildings", "Back" };
+
+        /// <summary>Scan the whole map ONCE per location (or when labels reload) for window
+        /// tiles, caching their world-pixel centres. Cheap enough as a one-off.</summary>
+        private void EnsureWindowCache(GameLocation loc)
+        {
+            var hf = ShadowRenderer.Height;
+            int ver = 0;
+            try { ver = hf?.GetLabelVersion() ?? 0; } catch { hf = null; }
+            if (ReferenceEquals(loc, _windowLoc) && ver == _windowLabelVer)
+                return;
+            _windowLoc = loc; _windowLabelVer = ver; _windowTiles.Clear();
+            var layer = loc?.map?.Layers.Count > 0 ? loc.map.Layers[0] : null;
+            // Windows are 100% label-driven: no labels loaded (version 0 = empty DB) means no window
+            // can exist, so skip the whole-map scan entirely. Without this we paid a w×h×3-layer scan
+            // on every location change even though it could never find anything.
+            if (hf == null || layer == null || ver == 0)
+                return;
+            int w = layer.LayerWidth, h = layer.LayerHeight;
+            for (int ty = 0; ty < h; ty++)
+                for (int tx = 0; tx < w; tx++)
+                {
+                    foreach (string ln in _winLayers)
+                    {
+                        byte[]? cls;
+                        try { cls = hf.GetPixelClasses(loc, tx, ty, ln); } catch { cls = null; }
+                        if (cls == null) continue;
+                        int n = 0;
+                        for (int p = 0; p < 256; p++) if (cls[p] == 12) n++;
+                        if (n >= 8) { _windowTiles.Add(new Vector2(tx * 64 + 32, ty * 64 + 32)); break; }
+                    }
+                }
+        }
+
+        /// <summary>Add on-screen window tiles as lights. OUTDOORS (a house exterior): warm lamp
+        /// glow that switches on after dusk and off at a per-window "bedtime" (houses go dark as
+        /// the night wears on). INDOORS: the opposite — cool daylight pours IN through the window
+        /// by day and fades to nothing at night.</summary>
+        private void AddWindowLights(int vw, int vh, float boost)
+        {
+            if (_windowTiles.Count == 0)
+                return;
+            bool outdoors = _windowLoc?.IsOutdoors ?? true;
+            // PHASE 1 = exterior windows only (getting the night-street look right first).
+            // Interior daylight-through-glass is parked for a later phase — the code path
+            // below stays so it's a one-line re-enable, but we skip it for now.
+            if (!outdoors)
+                return;
+            float night = NightFactorNow();
+            float day = 1f - night;
+            if (night < 0.02f)
+                return;   // exterior windows only glow after dusk
+            int nowMin = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
+            float b = Math.Max(0.4f, boost);
+            // exterior lamp reads as a bright pool; interior daylight is a SOFT, tight wash so it
+            // never blows the window to white (the vanilla window-light already lifts the room).
+            float radiusOut = 190f / Math.Max(1, vh);
+            float radiusIn = 100f / Math.Max(1, vh);
+            Vector3 warm = new(1.0f, 0.72f, 0.42f);          // exterior lamp behind the glass
+            Vector3 cool = new(0.80f, 0.88f, 1.05f);         // daylight coming in
+            bool rain = Game1.isRaining || Game1.isSnowing;
+            foreach (var wp in _windowTiles)
+            {
+                if (_lightCount >= MaxLights)
+                    break;
+                Vector2 local = Game1.GlobalToLocal(Game1.viewport, wp);
+                float u = local.X / vw, v = local.Y / vh;
+                if (u < -0.1f || u > 1.1f || v < -0.1f || v > 1.1f)
+                    continue;   // off-screen
+
+                float amt; Vector3 col;
+                if (outdoors)
+                {
+                    // bedtime is hashed per ~6-tile BLOCK, so all the windows of one house go
+                    // dark together but different houses sleep at different times — the street
+                    // dims house-by-house, not all at once. Range 21:30–25:00, then a ~1h fade.
+                    int cx = ((int)wp.X - 32) / 64 / 6, cy = ((int)wp.Y - 32) / 64 / 6;
+                    int hcode = (cx * 73856093) ^ (cy * 19349663);
+                    int bedMin = 1290 + (Math.Abs(hcode) % 8) * 30;     // 21:30 … 25:00, 8 steps
+                    float bedFade = nowMin <= bedMin ? 1f : MathHelper.Clamp(1f - (nowMin - bedMin) / 60f, 0f, 1f);
+                    amt = night * bedFade;
+                    col = warm;
+                }
+                else
+                {
+                    // soft daylight through the glass — kept low so it never blows the window to
+                    // white (vanilla's own window light already lifts the room); dimmer in rain.
+                    amt = day * (rain ? 0.28f : 0.45f);
+                    col = rain ? new Vector3(0.8f, 0.84f, 0.92f) : cool;
+                }
+                if (amt < 0.02f)
+                    continue;
+                _lightPos[_lightCount] = new Vector2(u, v);
+                _lightData[_lightCount] = new Vector4(col * amt * b, Math.Max(0.02f, outdoors ? radiusOut : radiusIn));
+                _lightCount++;
+            }
         }
 
         private bool _loggedLightDiag;
@@ -147,6 +258,18 @@ namespace SDVRadiance
             int count = tilesW * tilesH;
             int lw = layer.LayerWidth, lh = layer.LayerHeight;
 
+            // Same tile-cross + 3-tick throttle as the flood occluder path (which had it; the classic
+            // path rebuilt the grid and re-uploaded the texture every single frame). Mode-gated so a
+            // flood↔classic config switch never reuses the other builder's mask content.
+            if (_occluderMask != null && _occMaskMode == 1 && startTileX == _occTx && startTileY == _occTy
+                && _occluderMask.Width == tilesW && _occluderMask.Height == tilesH && Game1.ticks - _occTick < 3)
+            {
+                _occTilesPerScreen = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
+                _occWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
+                _occMaskSize = new Vector2(tilesW, tilesH);
+                return true;
+            }
+
             if (_occluderMaskBuf == null || _occluderMaskBuf.Length < count)
                 _occluderMaskBuf = new Color[count];
 
@@ -171,6 +294,10 @@ namespace SDVRadiance
                 _occluderMask = new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color);
             }
             _occluderMask.SetData(_occluderMaskBuf, 0, count);
+            _occMaskMode = 1;
+            _occTx = startTileX;
+            _occTy = startTileY;
+            _occTick = Game1.ticks;
 
             _occTilesPerScreen = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
             _occWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
@@ -203,13 +330,14 @@ namespace SDVRadiance
             // Same throttle as the flood lightmap: ~900 cross-mod tile lookups per build is
             // real money, and the occluder grid only shifts when the view crosses a tile (the
             // 3-tick refresh keeps moving NPC stamps fresh enough for a soft shadow).
-            if (_occluderMask != null && startTileX == _occTx && startTileY == _occTy
+            if (_occluderMask != null && _occMaskMode == 2 && startTileX == _occTx && startTileY == _occTy
                 && _occluderMask.Width == tilesW && Game1.ticks - _occTick < 3)
             {
                 _occWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
                 _occMaskSize = new Vector2(tilesW, tilesH);
                 return true;
             }
+            _occMaskMode = 2;
             _occTx = startTileX;
             _occTy = startTileY;
             _occTick = Game1.ticks;

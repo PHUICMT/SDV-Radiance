@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using Microsoft.Xna.Framework;
@@ -18,16 +18,32 @@ namespace SDVRadiance
     /// </summary>
     internal sealed partial class RenderPipeline
     {
+        // Tiles whose water came ONLY from animated-art nomination (fountains, waterfalls):
+        // they join the effect channel but must be cleared from the march channel.
+        private bool[]? _animOnlyTileBuf;
+        // Same tiles, remembered BEFORE the pool-region pass consumes the buffer — drives a
+        // SOFT mask value in Pass E (a fountain should barely shimmer, not churn like a lake).
+        private bool[]? _animSoftTileBuf;
+
         /// <summary>Resolve the 16×16 source art of a map tile (first frame for animated tiles).</summary>
         private bool TryTileArt(xTile.Layers.Layer? layer, int tx, int ty, out Texture2D tex, out Rectangle src)
+            => TryTileArt(layer, tx, ty, out tex, out src, out _);
+
+        /// <summary>As above, also reporting whether the tile is ANIMATED — animation is a strong
+        /// "this is water/flowing art" signal (fountains, waterfalls, the beach surf line).</summary>
+        private bool TryTileArt(xTile.Layers.Layer? layer, int tx, int ty, out Texture2D tex, out Rectangle src, out bool animated)
         {
             tex = null!;
             src = default;
+            animated = false;
             if (layer == null || tx < 0 || ty < 0 || tx >= layer.LayerWidth || ty >= layer.LayerHeight)
                 return false;
             var t = layer.Tiles[tx, ty];
             if (t is xTile.Tiles.AnimatedTile at && at.TileFrames is { Length: > 0 })
+            {
                 t = at.TileFrames[0];
+                animated = true;
+            }
             if (t?.TileSheet == null)
                 return false;
             if (!_sheetTexCache.TryGetValue(t.TileSheet.ImageSource, out Texture2D? sheet))
@@ -54,27 +70,118 @@ namespace SDVRadiance
             if (c.A < 200)
                 return false;
             if (c.B > c.R + 14 && c.B + 10 >= c.G) return true;   // blue water
-            if (c.G > c.R + 10 && c.B > c.R + 6) return true;     // teal / foam / shallow edge
+            // Teal / shallow edge — measured against the real tilesheets (2026-07-21, re-measured
+            // 2026-07-22): the old loose gate (B > R+6) classified plain GRASS greens and rippled
+            // meadows; at G-25 the DARK grass/fern strip tiles (summer avg (23,97,72), spring fern
+            // clumps — full 245-256px tiles) still passed at G-B exactly 23-25 and waved on land.
+            // Real teal water pixels sit at G-B ≤ 19 on every sheet (beach tide pools, pond edges);
+            // the 20-22 band is EMPTY, so G-20 splits them cleanly.
+            if (c.G > c.R + 10 && c.B > c.R + 12 && c.B >= c.G - 20) return true;
             return false;
         }
 
-        /// <summary>16×16 painted-water classification of one tile art, cached per (texture, rect).</summary>
-        private bool[] ClassifyBits(Texture2D tex, Rectangle src, bool water)
+        /// <summary>16×16 painted-water classification of one tile art, cached per (texture, rect,
+        /// foam). With <paramref name="foam"/> (animated tiles that touch core water — the surf
+        /// line), bright unsaturated wash pixels count as water too: white wave foam fails every
+        /// hue gate, which left dead un-effected bands along the tide line.</summary>
+        /// <summary>Whole-sheet pixel array for a tilesheet, read back once (main thread) and
+        /// cached. Returns null for over-cap sheets (caller falls back to per-region GetData) or
+        /// on failure. The single readback replaces one-per-tile readbacks (each a GPU stall).</summary>
+        private Color[]? EnsureSheetPixels(Texture2D tex)
         {
-            var key = (tex, src);
+            if (_sheetPixCache.TryGetValue(tex, out Color[]? sheet))
+                return sheet;
+            if ((long)tex.Width * tex.Height <= SheetPixCap)
+            {
+                try { sheet = new Color[tex.Width * tex.Height]; tex.GetData(sheet); }
+                catch { sheet = null; }
+            }
+            _sheetPixCache[tex] = sheet; // null = over cap or failed → per-region fallback
+            return sheet;
+        }
+
+        /// <summary>Read back every tilesheet a location uses, once, on entry — so the first-touch
+        /// GPU readbacks all land in the (already synchronous, warp-fade-hidden) location change
+        /// instead of hitching mid-walk when you scroll into a region using a fresh sheet.</summary>
+        private void PrewarmSheetPixels(GameLocation loc)
+        {
+            if (ReferenceEquals(loc, _prewarmedLoc))
+                return;
+            _prewarmedLoc = loc;
+            var map = loc.map;
+            if (map == null)
+                return;
+            foreach (var ts in map.TileSheets)
+            {
+                if (!_sheetTexCache.TryGetValue(ts.ImageSource, out Texture2D? tex))
+                {
+                    try { tex = Game1.content.Load<Texture2D>(ts.ImageSource); }
+                    catch { tex = null; }
+                    _sheetTexCache[ts.ImageSource] = tex;
+                }
+                if (tex != null)
+                    EnsureSheetPixels(tex);
+            }
+        }
+
+        /// <summary>Fill <see cref="_artBuf"/> with a tile's 16×16 pixels. Reads from the cached
+        /// whole-sheet pixel array (no GPU work) when available, falling back to a per-region
+        /// <c>GetData</c> for over-cap sheets. Main-thread only (GPU readback on first sheet touch).</summary>
+        private void ReadTileArt(Texture2D tex, Rectangle src)
+        {
+            _artBuf ??= new Color[256];
+            Color[]? sheet = EnsureSheetPixels(tex);
+            if (sheet != null)
+            {
+                int tw = tex.Width;
+                for (int row = 0; row < 16; row++)
+                {
+                    int soff = (src.Y + row) * tw + src.X;
+                    if (soff < 0 || soff + 16 > sheet.Length) { Array.Clear(_artBuf, row * 16, 16); continue; }
+                    Array.Copy(sheet, soff, _artBuf, row * 16, 16);
+                }
+            }
+            else
+            {
+                try { tex.GetData(0, src, _artBuf, 0, 256); } catch { Array.Clear(_artBuf, 0, 256); }
+            }
+        }
+
+        private bool[] ClassifyBits(Texture2D tex, Rectangle src, bool foam = false)
+        {
+            var key = (tex, src, foam);
             if (_waterBitsCache.TryGetValue(key, out bool[]? bits))
                 return bits;
             bits = new bool[256];
             _artBuf ??= new Color[256];
             try
             {
-                tex.GetData(0, src, _artBuf, 0, 256);
+                ReadTileArt(tex, src);
                 for (int p = 0; p < 256; p++)
-                    bits[p] = WaterColor(_artBuf[p]);
+                {
+                    Color c = _artBuf[p];
+                    bool w = WaterColor(c);
+                    if (!w && foam && c.A >= 200)
+                    {
+                        int maxc = Math.Max(c.R, Math.Max(c.G, c.B));
+                        int minc = Math.Min(c.R, Math.Min(c.G, c.B));
+                        w = maxc >= 190 && maxc - minc <= 25 && c.B >= c.R;   // white/pale foam
+                    }
+                    bits[p] = w;
+                }
             }
             catch { /* leave all-false */ }
             _waterBitsCache[key] = bits;
             return bits;
+        }
+
+        /// <summary>How many of a classification's 256 bits are set.</summary>
+        private static int CountBits(bool[] bits)
+        {
+            int n = 0;
+            for (int p = 0; p < bits.Length; p++)
+                if (bits[p]) n++;
+            return n;
         }
 
         /// <summary>16×16 puddle classification of one tile art, cached: flat BLUE-GREY pixels
@@ -91,7 +198,7 @@ namespace SDVRadiance
             _artBuf ??= new Color[256];
             try
             {
-                tex.GetData(0, src, _artBuf, 0, 256);
+                ReadTileArt(tex, src);
                 for (int p = 0; p < 256; p++)
                 {
                     Color c = _artBuf[p];
@@ -99,13 +206,19 @@ namespace SDVRadiance
                     int minc = Math.Min(c.R, Math.Min(c.G, c.B));
                     // Measured from the island dig-site pool art (palette: (163,177,165),
                     // (144,157,158), (153,163,162), (112,134,141) — grey-GREEN, R always the
-                    // lowest channel, B only +2..+29 over R). Guards against false positives:
-                    // sand/warm stone are R-dominant, grass has B far below G, pure-neutral
-                    // concrete/stone (B==R) fails the +2, dark cave floors fail brightness.
+                    // lowest channel, B only +2..+29 over R, and B within ~12 of G). Guards
+                    // against false positives: sand/warm stone are R-dominant, pure-neutral
+                    // concrete/stone (B==R) fails the +2, dark cave floors fail brightness —
+                    // and DARK FOREST GRASS (cool green, e.g. (60,90,70)) passed every old
+                    // gate and rippled whole meadows at night: it fails the two new ones
+                    // (B ≥ G−12: pool art is grey, grass keeps B well under G; G−R ≤ 25:
+                    // grass is strongly green-dominant, pool art never exceeds +22).
                     bool puddleish = c.A >= 200
                         && maxc - minc <= 34          // flat / unsaturated
                         && c.B >= c.R + 2             // cool tint (never true for warm ground)
                         && c.G >= c.R                 // R is the lowest channel
+                        && c.B >= c.G - 12            // grey, not green (kills grass)
+                        && c.G - c.R <= 25            // pool art is never strongly green-dominant
                         && maxc >= 55 && maxc <= 200; // mid brightness (not shadow, not foam)
                     if (bits[p] = puddleish)
                         n++;
@@ -133,7 +246,7 @@ namespace SDVRadiance
             _artBuf ??= new Color[256];
             try
             {
-                tex.GetData(0, src, _artBuf, 0, 256);
+                ReadTileArt(tex, src);
                 for (int p = 0; p < 256; p++)
                 {
                     if (bits[p] = _artBuf[p].A >= 128)
@@ -173,15 +286,25 @@ namespace SDVRadiance
         }
 
         /// <summary>
-        /// Build a per-tile water mask for the visible area from the current location,
-        /// aligned to the viewport. Returns false (and skips the water stage) when the
-        /// location has no water on screen, so we never distort a waterless frame.
+        /// Build (or reuse) the per-tile water mask for the visible area, aligned to the
+        /// viewport. Returns false (and skips the water stage) when the location has no
+        /// water on screen, so we never distort a waterless frame.
+        ///
+        /// The heavy pixel work runs on a WORKER thread (see RenderPipeline.WaterMask.Async.cs):
+        /// this method only gathers game-state inputs, launches/polls the compose job, and
+        /// uploads finished results — the 8-23 ms monolithic rebuild on every tile crossing
+        /// was THE walking-near-water stutter. While a job is in flight the old mask keeps
+        /// rendering (world-anchored content + padded window = no visible edge).
         /// </summary>
         private bool BuildWaterMask(int w, int h)
         {
             GameLocation? loc = Game1.currentLocation;
             if (loc == null)
                 return false;
+
+            // Bulk-read this location's tilesheets on entry, so every first-touch GPU readback
+            // lands here (during the fade-covered location change) rather than hitching mid-walk.
+            PrewarmSheetPixels(loc);
 
             int vx = Game1.viewport.X;
             int vy = Game1.viewport.Y;
@@ -196,7 +319,31 @@ namespace SDVRadiance
             // out — parts of the screen simply had no water mask (no ripple/reflection).
             int tilesW = Math.Max(1, Game1.viewport.Width / 64 + 6);
             int tilesH = Math.Max(1, Game1.viewport.Height / 64 + 6);
-            int count = tilesW * tilesH;
+
+            // Camera-follow params are valid for WHATEVER mask is currently bound (old or
+            // new) — the mask content is tile-anchored; sub-tile scroll lives here.
+            _waterTilesPerScreen = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
+            _waterWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
+
+            // Poll the in-flight compose FIRST: apply it if it finished and still matches
+            // the wanted window; keep showing the old mask while it runs; discard it if
+            // the camera crossed again mid-compose (fall through to a fresh gather).
+            if (_waterJob is { } job)
+            {
+                if (!job.Done)
+                    return _waterAny;
+                _waterJob = null;
+                if (job.Failed)
+                {
+                    if (!_loggedWaterJobFail) { _monitor.Log("Water mask compose failed once; rebuilding synchronously.", LogLevel.Warn); _loggedWaterJobFail = true; }
+                }
+                else if (job.Loc == loc && job.Tx == startTileX && job.Ty == startTileY
+                    && job.TilesW == tilesW && job.TilesH == tilesH)
+                {
+                    ApplyWaterMask(job);
+                    return _waterAny;
+                }
+            }
 
             // The mask content is TILE-ANCHORED (sub-tile camera scroll is handled by the
             // WorldTileOffset shader param), so it only changes when the view crosses a tile
@@ -204,387 +351,172 @@ namespace SDVRadiance
             // The 10 s safety refresh only exists to pick up rare map mutations (a bridge
             // built, ice melting); everything routine invalidates via location/origin keys.
             if (_waterMask != null && loc == _lastWaterLoc && startTileX == _lastWaterTx && startTileY == _lastWaterTy
+                && _lastWaterHookVer == WaterDrawHook.Version
+                && _lastWaterLabelVer == CurrentLabelVersion()
                 && _waterMask.Width == tilesW * 16 && Game1.ticks - _lastWaterTick < 600)
             {
-                _waterTilesPerScreen = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
-                _waterWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
                 _waterMaskSize = new Vector2(tilesW, tilesH);
                 return _waterAny;
             }
-            _lastWaterLoc = loc;
-            _lastWaterTx = startTileX;
-            _lastWaterTy = startTileY;
-            _lastWaterTick = Game1.ticks;
 
-            // Height Framework (when present) classifies the actual water SURFACE: ponds and
-            // beach tide pools count as water (they reflect too), while pier/bridge DECKS over
-            // water do not (no reflection painted onto planks). Fall back to isWaterTile.
-            var hf = ShadowRenderer.Height;
-            if (_waterBoolBuf == null || _waterBoolBuf.Length < count)
-                _waterBoolBuf = new bool[count];
-            bool any = false;
-            for (int j = 0; j < tilesH; j++)
+            long g0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            var njob = GatherWaterMask(loc, startTileX, startTileY, tilesW, tilesH);
+            double gatherMs = (System.Diagnostics.Stopwatch.GetTimestamp() - g0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            if (gatherMs > 8)
+                _monitor.Log($"[diag] water gather={gatherMs:0.0}ms ({(loc == _lastWaterLoc ? "scroll" : "loc change")})", LogLevel.Debug);
+
+            // On a LOCATION change the old mask is another map's content — turn the stage
+            // off until the new compose lands (1-2 frames, hidden inside the warp fade).
+            // A same-map scroll/zoom keeps rendering the old mask: its content is
+            // world-anchored, so the old origin+size still map correctly.
+            if (loc != _lastWaterLoc || _waterMask == null)
+                _waterAny = false;
+
+            njob.Task = System.Threading.Tasks.Task.Run(() =>
             {
-                for (int i = 0; i < tilesW; i++)
+                long c0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                try { ComposeWaterMask(njob); }
+                catch { njob.Failed = true; }
+                finally
                 {
-                    int tx = startTileX + i, ty = startTileY + j;
-                    bool water;
-                    try { water = hf != null ? hf.IsWaterSurface(loc, tx, ty) : loc.isWaterTile(tx, ty); }
-                    catch { hf = null; water = loc.isWaterTile(tx, ty); }
-                    // Walkable shallow pools (island dig site tide pools) aren't Water tiles,
-                    // but they refill the watering can → "WaterSource" marks them as real water.
-                    if (!water && loc.doesTileHaveProperty(tx, ty, "WaterSource", "Back") != null)
-                        water = true;
-                    if (water) any = true;
-                    _waterBoolBuf[j * tilesW + i] = water;
+                    njob.ComposeMs = (System.Diagnostics.Stopwatch.GetTimestamp() - c0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                    njob.Done = true;
                 }
-            }
+            });
+            _waterJob = njob;
+            return _waterAny;   // old mask renders this frame; the swap lands when compose does
+        }
 
-            // CORE mask first (undilated): the reflection's shoreline search must see bridges,
-            // piers and banks as land — the dilated mask swallowed any land strip ≤4 tiles
-            // wide (a bridge between two water bodies), which killed their reflections.
-            if (_waterMaskCoreBuf == null || _waterMaskCoreBuf.Length < count)
-                _waterMaskCoreBuf = new Color[count];
-            for (int idx = 0; idx < count; idx++)
-                _waterMaskCoreBuf[idx] = _waterBoolBuf[idx] ? Color.White : Color.Transparent;
+        // ---- per-frame sprite mask (things ON the water must not ripple) ----
 
-            // NOTE: no early-out on "no real water" here — walk-through puddles (art-classified
-            // below) count as water too; a dig site with the ocean scrolled off-screen used to
-            // shut the whole stage off and every pool went dead at once.
+        private RenderTarget2D? _spriteMaskRT;
+        private SpriteBatch? _spriteMaskBatch;
+        internal bool SpriteMaskReady;
 
-            // CANDIDATE ring: dilate three tiles (shore art + beach surf zone). These tiles are
-            // NOT marked water — they only nominate their ART for per-pixel classification below,
-            // so the final mask never spills a box past the painted waterline.
-            if (_waterBool2Buf == null || _waterBool2Buf.Length < count)
-                _waterBool2Buf = new bool[count];
-            Dilate8(_waterBoolBuf, _waterBool2Buf, tilesW, tilesH);
-            Dilate8(_waterBool2Buf, _waterBoolBuf, tilesW, tilesH);
-            Dilate8(_waterBoolBuf, _waterBool2Buf, tilesW, tilesH);
+        /// <summary>
+        /// Bake every sprite that could be standing ON water — NPCs, farm animals
+        /// (swimming ducks!), critters — into a screen-space mask, called from
+        /// Display.RenderingWorld (the only spot where a render-target swap is safe).
+        /// The water shader excludes these pixels from ripple/mirror so sprites never
+        /// distort, while the water beside them keeps animating. Positions mirror the
+        /// game's own draw math (bottom-centre at the collision box feet).
+        /// </summary>
+        public void BakeWaterSpriteMask()
+        {
+            SpriteMaskReady = false;
+            GameLocation? loc = Game1.currentLocation;
+            if (loc == null || !_waterAny)
+                return;
 
-            // ---- PIXEL-accurate mask (16 texels per tile = the art's own resolution) ----
-            // True water tiles fill solid; candidate shore tiles contribute only the pixels of
-            // their Back-layer art that are painted as water (classified ONCE per tile art and
-            // cached); opaque Buildings/Front art (pier posts, bridges, lily pads, canopies)
-            // carves holes so things standing in the water block the effect.
-            const int Sub = 16;
-            int pw = tilesW * Sub, ph = tilesH * Sub;
-            int pcount = pw * ph;
-            if (_waterPixBuf == null || _waterPixBuf.Length < pcount)
-                _waterPixBuf = new Color[pcount];
-            var back = loc.map?.GetLayer("Back");
-            var bld = loc.map?.GetLayer("Buildings");
-            var front = loc.map?.GetLayer("Front");
-            if (_waterPixBits == null || _waterPixBits.Length < pcount)
-                _waterPixBits = new bool[pcount];
-            // Pass A — raw water pixels (true tiles solid, shore tiles by art classification).
-            if (_puddleTileBuf == null || _puddleTileBuf.Length < count)
-                _puddleTileBuf = new byte[count];
-            for (int j = 0; j < tilesH; j++)
+            RenderTargetBinding[] prev = _device.GetRenderTargets();
+            int w = prev.Length > 0 && prev[0].RenderTarget is RenderTarget2D rt ? rt.Width : Game1.viewport.Width;
+            int h = prev.Length > 0 && prev[0].RenderTarget is RenderTarget2D rt2 ? rt2.Height : Game1.viewport.Height;
+            if (w <= 0 || h <= 0)
+                return;
+            if (_spriteMaskRT == null || _spriteMaskRT.Width != w || _spriteMaskRT.Height != h)
             {
-                for (int i = 0; i < tilesW; i++)
+                _spriteMaskRT?.Dispose();
+                _spriteMaskRT = new RenderTarget2D(_device, w, h, false, SurfaceFormat.Color, DepthFormat.None);
+            }
+            _spriteMaskBatch ??= new SpriteBatch(_device);
+
+            try
+            {
+                _device.SetRenderTarget(_spriteMaskRT);
+                _device.Clear(Color.Transparent);
+                var sb = _spriteMaskBatch;
+                sb.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+
+                // NPCs + monsters: bottom-centre at the collision-box feet, scale 4 —
+                // the same anchor the game draws them at (small bob/jump offsets are
+                // sub-pixel enough for an exclusion mask).
+                foreach (NPC c in loc.characters)
                 {
-                    int idx = j * tilesW + i;
-                    bool isWater = _waterMaskCoreBuf![idx].R > 0;
-                    int tx = startTileX + i, ty = startTileY + j;
-                    bool[]? bits = null;
-                    byte puddle = 0;
-                    if (!isWater && TryTileArt(back, tx, ty, out var btex, out var bsrc))
-                    {
-                        if (_waterBool2Buf[idx])
-                            bits = ClassifyBits(btex, bsrc, water: true);
-                        // Walkable shallow pools (island dig site) are plain GROUND in map data —
-                        // recognise them by their ART: mostly flat blue-grey pixels. Rocky/pebbled
-                        // pool variants only reach ~30-55% coverage → "weak" tier, accepted when
-                        // surrounded by enough other pool tiles. OUTDOORS only: grey-blue interior
-                        // floors (mines) must never classify as water.
-                        if (loc.IsOutdoors)
-                        {
-                            int pc = PuddleBits(btex, bsrc).count;
-                            puddle = pc >= 140 ? (byte)2 : pc >= 80 ? (byte)1 : (byte)0;
-                        }
-                    }
-                    _puddleTileBuf[idx] = puddle;
-                    for (int py = 0; py < Sub; py++)
-                    {
-                        int row = (j * Sub + py) * pw + i * Sub;
-                        int arow = py * Sub;
-                        for (int px = 0; px < Sub; px++)
-                            _waterPixBits[row + px] = isWater || (bits != null && bits[arow + px]);
-                    }
+                    if (c?.Sprite?.Texture == null || c.IsInvisible)
+                        continue;
+                    StampSprite(sb, c.Sprite.Texture, c.Sprite.SourceRect, c.GetBoundingBox());
                 }
-            }
-            // Puddle merge — strong tiles need ≥1 puddle neighbour, weak (rocky-variant) tiles
-            // need ≥2 (pools span multiple tiles; a lone grey-blue tile must not turn to water).
-            if (_puddlePixBits == null || _puddlePixBits.Length < pcount)
-                _puddlePixBits = new bool[pcount];
-            Array.Clear(_puddlePixBits, 0, pcount);
-            bool anyPuddle = false;
-            for (int j = 0; j < tilesH; j++)
-            {
-                for (int i = 0; i < tilesW; i++)
+                // Farm animals (ducks paddle straight into ponds).
+                foreach (var a in loc.animals.Values)
                 {
-                    int idx = j * tilesW + i;
-                    if (_puddleTileBuf[idx] == 0)
+                    if (a?.Sprite?.Texture == null)
                         continue;
-                    int buddies = ((i > 0 && _puddleTileBuf[idx - 1] > 0) ? 1 : 0)
-                                + ((i < tilesW - 1 && _puddleTileBuf[idx + 1] > 0) ? 1 : 0)
-                                + ((j > 0 && _puddleTileBuf[idx - tilesW] > 0) ? 1 : 0)
-                                + ((j < tilesH - 1 && _puddleTileBuf[idx + tilesW] > 0) ? 1 : 0);
-                    if (buddies < (_puddleTileBuf[idx] == 2 ? 1 : 2))
-                        continue;
-                    int tx = startTileX + i, ty = startTileY + j;
-                    if (!TryTileArt(back, tx, ty, out var ptex, out var psrc))
-                        continue;
-                    anyPuddle = true;
-                    bool[] pbits = PuddleBits(ptex, psrc).bits;
-                    for (int py = 0; py < Sub; py++)
-                    {
-                        int row = (j * Sub + py) * pw + i * Sub;
-                        int arow = py * Sub;
-                        for (int px = 0; px < Sub; px++)
-                            if (pbits[arow + px])
-                            {
-                                _waterPixBits[row + px] = true;
-                                _puddlePixBits[row + px] = true;
-                            }
-                    }
+                    StampSprite(sb, a.Sprite.Texture, a.Sprite.SourceRect, a.GetBoundingBox());
                 }
-            }
-            _waterAny = any || anyPuddle;
-            if (!_waterAny)
-                return false;
-            // Pass B — vertical CLOSE (fill gaps that have water above AND below), two widths:
-            //   effect bits: ≤4 texels — heals the dark shading slit the shore art paints
-            //                along the waterline without swallowing real land.
-            //   march bits:  ≤12 texels (~0.75 tile) — anything painted INSIDE a water body
-            //                (surf foam bands, starfish, sand flecks) must not read as a
-            //                shoreline, or reflections re-anchor below it and shift down.
-            //                Bridges/decks are ≥1 tile thick, so they still block.
-            void CloseVertical(bool[] bits, int maxGap)
-            {
-                for (int x = 0; x < pw; x++)
+                // Critters (seagulls, birds, frogs): base Critter.draw puts the 16×16
+                // sprite's bottom edge at position.Y, centred on position.X.
+                if (loc.critters != null)
                 {
-                    int last = -99;
-                    for (int y = 0; y < ph; y++)
+                    foreach (var cr in loc.critters)
                     {
-                        if (!bits[y * pw + x])
+                        if (cr?.sprite?.Texture == null)
                             continue;
-                        if (y - last > 1 && y - last <= maxGap + 1)
-                            for (int k = last + 1; k < y; k++)
-                                bits[k * pw + x] = true;
-                        last = y;
+                        Vector2 tl = Game1.GlobalToLocal(Game1.viewport, cr.position + new Vector2(-32f, -64f));
+                        sb.Draw(cr.sprite.Texture, tl, cr.sprite.SourceRect, Color.White,
+                            0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
                     }
                 }
-            }
-            if (_waterPixBits2 == null || _waterPixBits2.Length < pcount)
-                _waterPixBits2 = new bool[pcount];
-            Array.Copy(_waterPixBits, _waterPixBits2, pcount);
-            CloseVertical(_waterPixBits, 4);
-            // March close is SPECK-AWARE: a run shorter than 3 texels only bridges gaps
-            // ≤4 (a rim sliver above its slit), never the full 12 — wet-shading specks on
-            // the bank otherwise chained into the body below, pulling the column's
-            // waterline anchor up onto the bank (the surviving dark dashes).
-            for (int x = 0; x < pw; x++)
-            {
-                int last = -99, runH = 0;
-                for (int y = 0; y < ph; y++)
+
+                // Tree/bush canopies overhanging a pond are SPRITES (terrain features), not
+                // map art — Pass C can't carve them, so leaves at the water's edge rippled.
+                // Stamp them with the same geometry the shadow baker uses. Walk only the on-screen
+                // tile range (+ a canopy margin) and look each tile up, instead of enumerating EVERY
+                // terrain feature every frame and culling — the old full walk was O(all crops/trees)
+                // per frame on a mature farm.
+                var vp = Game1.viewport;
+                var tfDict = loc.terrainFeatures;
+                int ctx0 = (int)Math.Floor((vp.X - 256) / 64f), ctx1 = (int)Math.Floor((vp.X + vp.Width + 256) / 64f);
+                int cty0 = (int)Math.Floor((vp.Y - 512) / 64f), cty1 = (int)Math.Floor((vp.Y + vp.Height + 768) / 64f);
+                for (int cvY = cty0; cvY <= cty1; cvY++)
+                for (int cvX = ctx0; cvX <= ctx1; cvX++)
                 {
-                    if (!_waterPixBits2[y * pw + x])
+                    Vector2 tile = new(cvX, cvY);
+                    if (!tfDict.TryGetValue(tile, out var tf))
                         continue;
-                    int gap = y - last - 1;
-                    if (gap == 0)
-                        runH++;
-                    else if (gap <= 12 && (gap <= 4 || runH >= 3))
+                    switch (tf)
                     {
-                        for (int k = last + 1; k < y; k++)
-                            _waterPixBits2[k * pw + x] = true;
-                        runH += gap + 1;
-                    }
-                    else
-                        runH = 1;
-                    last = y;
-                }
-            }
-            // Structure test for the MARCH channel: near-solid art (≥90% opaque) that is
-            // CONNECTED TO LAND. A bridge or pier always touches a bank; a clump of lily pads
-            // dense enough to fill its tile still floats in open water — opacity alone let pad
-            // clusters re-anchor reflections below them. Connectivity: seed near-solid tiles
-            // that touch a non-water tile (or the screen edge — the structure may continue
-            // off-screen), then grow the seed through adjacent near-solid tiles.
-            if (_bigCarveBuf == null || _bigCarveBuf.Length < count) _bigCarveBuf = new bool[count];
-            if (_bigSeedBuf == null || _bigSeedBuf.Length < count) _bigSeedBuf = new bool[count];
-            for (int j = 0; j < tilesH; j++)
-            {
-                for (int i = 0; i < tilesW; i++)
-                {
-                    int idx = j * tilesW + i;
-                    int tx = startTileX + i, ty = startTileY + j;
-                    // Height Framework DECK tiles (walkable piers / plank bridges — Back-layer
-                    // wood) block as whole tiles too: the beach plank's art has a painted wet
-                    // stain that classified as water, punching a 2-texel channel through the
-                    // deck — and the ±10 shoreline smoothing then dragged the anchors of a
-                    // full tile around it up above the plank (reflection missing on that side).
-                    bool deck = false;
-                    if (hf != null)
-                        try { deck = hf.GetSurfaceAt(loc, tx, ty) == 4; } catch { hf = null; }
-                    bool big = deck
-                            || (TryTileArt(bld, tx, ty, out var t1, out var s1) && SolidBits(t1, s1).count >= 230)
-                            || (TryTileArt(front, tx, ty, out var t2, out var s2) && SolidBits(t2, s2).count >= 230);
-                    _bigCarveBuf[idx] = big;
-                    bool landNear = i == 0 || i == tilesW - 1 || j == 0 || j == tilesH - 1
-                        || !(_waterMaskCoreBuf![idx - 1].R > 0) || !(_waterMaskCoreBuf[idx + 1].R > 0)
-                        || !(_waterMaskCoreBuf[idx - tilesW].R > 0) || !(_waterMaskCoreBuf[idx + tilesW].R > 0);
-                    // A deck is walkable — land-connected by definition, no seed test needed.
-                    _bigSeedBuf[idx] = big && (landNear || deck);
-                }
-            }
-            for (int sweep = 0; sweep < 2; sweep++)
-            {
-                for (int idx = 0; idx < count; idx++)                       // forward
-                    if (_bigCarveBuf[idx] && !_bigSeedBuf[idx] &&
-                        ((idx % tilesW > 0 && _bigSeedBuf[idx - 1]) || (idx >= tilesW && _bigSeedBuf[idx - tilesW])))
-                        _bigSeedBuf[idx] = true;
-                for (int idx = count - 1; idx >= 0; idx--)                  // backward
-                    if (_bigCarveBuf[idx] && !_bigSeedBuf[idx] &&
-                        ((idx % tilesW < tilesW - 1 && _bigSeedBuf[idx + 1]) || (idx + tilesW < count && _bigSeedBuf[idx + tilesW])))
-                        _bigSeedBuf[idx] = true;
-            }
-
-            // ARCH FILL: a bridge's arch openings sit BETWEEN structure tiles in the same row.
-            // Fill gaps ≤3 tiles between two structure tiles when the gap tile itself carries
-            // Buildings/Front art (arch rims do; open water between two separate piers doesn't)
-            // — the structure becomes ONE solid block with a level base, so every column's
-            // reflection anchors on the same row, like a real bridge mirrored in water.
-            for (int j = 0; j < tilesH; j++)
-            {
-                int lastStruct = -99;
-                for (int i = 0; i < tilesW; i++)
-                {
-                    int idx = j * tilesW + i;
-                    if (!_bigSeedBuf[idx])
-                        continue;
-                    if (i - lastStruct > 1 && i - lastStruct <= 4)
-                    {
-                        for (int k = lastStruct + 1; k < i; k++)
-                        {
-                            int kx = startTileX + k, ky = startTileY + j;
-                            if (TryTileArt(bld, kx, ky, out _, out _) || TryTileArt(front, kx, ky, out _, out _))
-                                _bigSeedBuf[j * tilesW + k] = true;
-                        }
-                    }
-                    lastStruct = i;
-                }
-            }
-
-            // Pass C — carve opaque Buildings/Front art and emit two channels:
-            //   R = EFFECT mask: carve everything opaque (no ripple/mirror ON posts, pads, bridges).
-            //   G = MARCH mask: carve only land-connected structures (see above).
-            for (int j = 0; j < tilesH; j++)
-            {
-                for (int i = 0; i < tilesW; i++)
-                {
-                    int idx = j * tilesW + i;
-                    int tx = startTileX + i, ty = startTileY + j;
-                    (bool[] bits, int count)? carveB = TryTileArt(bld, tx, ty, out var t1, out var s1) ? SolidBits(t1, s1) : null;
-                    (bool[] bits, int count)? carveF = TryTileArt(front, tx, ty, out var t2, out var s2) ? SolidBits(t2, s2) : null;
-                    // A structure tile blocks the march as a WHOLE tile (arch openings included):
-                    // per-pixel carving gave each column its own edge and the mirror stepped.
-                    bool structTile = _bigSeedBuf[idx];
-                    for (int py = 0; py < Sub; py++)
-                    {
-                        int row = (j * Sub + py) * pw + i * Sub;
-                        int arow = py * Sub;
-                        for (int px = 0; px < Sub; px++)
-                        {
-                            if (structTile)
-                                _waterPixBits2![row + px] = false;
-                            if (carveB is { } cb && cb.bits[arow + px]) _waterPixBits[row + px] = false;
-                            if (carveF is { } cf && cf.bits[arow + px]) _waterPixBits[row + px] = false;
-                        }
+                        // Grown tree: canopy (0,0,48,96) at tile*64+(32,64), origin (24,96) — Tree.draw's math.
+                        case StardewValley.TerrainFeatures.Tree tree when tree.growthStage.Value >= 5 && !tree.stump.Value && tree.texture?.Value != null:
+                            sb.Draw(tree.texture.Value,
+                                Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
+                                StardewValley.TerrainFeatures.Tree.treeTopSourceRect, Color.White, 0f, new Vector2(24f, 96f), 4f,
+                                tree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
+                            break;
+                        // Mature fruit tree: 48x64 seasonal foliage at tile*64+(32,64), origin (24,80).
+                        case StardewValley.TerrainFeatures.FruitTree ft when ft.growthStage.Value >= 4 && !ft.stump.Value && ft.texture != null:
+                            int season = Game1.GetSeasonIndexForLocation(ft.Location);
+                            var fsrc = new Rectangle((12 + season * 3) * 16, ft.GetSpriteRowNumber() * 5 * 16, 48, 64);
+                            sb.Draw(ft.texture,
+                                Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
+                                fsrc, Color.White, 0f, new Vector2(24f, 80f), 4f,
+                                ft.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
+                            break;
+                        // Bush: bottom-centre = (tile.X*64 + (eff+1)*32, (tile.Y+1)*64) — the shadow baker's anchor.
+                        case StardewValley.TerrainFeatures.Bush bush when !bush.sourceRect.Value.IsEmpty:
+                            var bsrc = bush.sourceRect.Value;
+                            int eff = bush.size.Value switch { 3 => 0, 4 => 1, _ => bush.size.Value };
+                            sb.Draw(StardewValley.TerrainFeatures.Bush.texture.Value,
+                                Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + (eff + 1) * 32f, (tile.Y + 1) * 64f)),
+                                bsrc, Color.White, 0f, new Vector2(bsrc.Width / 2f, bsrc.Height), 4f,
+                                bush.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
+                            break;
                     }
                 }
-            }
 
-            // Pass D — WATERLINE HEIGHT-MAP: per column, remember the top row of each
-            // contiguous march-water run (= that pixel's shoreline). Runs shorter than
-            // 6 texels are DROPPED from the march: isolated wet-shading specks in shore
-            // art each became a tiny mirror (dist 0) that painted a dark dash onto the
-            // bank. Runs cut off by the mask bottom are kept — they continue off-screen.
-            if (_edgeBuf == null || _edgeBuf.Length < pcount)
-                _edgeBuf = new short[pcount];
-            for (int x = 0; x < pw; x++)
-            {
-                int top = -1;
-                for (int y = 0; y <= ph; y++)
-                {
-                    int p = y * pw + x;
-                    if (y < ph && _waterPixBits2![p]) { if (top < 0) top = y; _edgeBuf[p] = (short)top; }
-                    else if (top >= 0)
-                    {
-                        if (y < ph && y - top < 6)
-                            for (int k = top; k < y; k++)
-                                _waterPixBits2![k * pw + x] = false;
-                        top = -1;
-                    }
-                }
+                sb.End();
+                SpriteMaskReady = true;
             }
+            finally
+            {
+                _device.SetRenderTargets(prev);
+            }
+        }
 
-            // Pass E — smooth the shoreline HORIZONTALLY (±10 texels window) and emit. Stepped
-            // diagonal banks become a continuous slope, so a reflection is no longer sliced
-            // into offset blocks — the shader reads this distance (B, half-texel units) instead
-            // of marching. Uses per-row PREFIX SUMS (O(width) per row, was O(width×21)); the
-            // window average is clamped to ±1.5 tiles of the pixel's own edge, which bounds the
-            // pull from a different water body sharing the row (the old per-neighbour reject).
-            if (_edgeSum == null || _edgeSum.Length < pw + 1) { _edgeSum = new int[pw + 1]; _edgeCnt = new int[pw + 1]; }
-            for (int y = 0; y < ph; y++)
-            {
-                int rowBase = y * pw;
-                for (int x = 0; x < pw; x++)
-                {
-                    int p = rowBase + x;
-                    bool v = _waterPixBits2![p];
-                    _edgeSum![x + 1] = _edgeSum[x] + (v ? _edgeBuf[p] : 0);
-                    _edgeCnt![x + 1] = _edgeCnt[x] + (v ? 1 : 0);
-                }
-                for (int x = 0; x < pw; x++)
-                {
-                    int p = rowBase + x;
-                    bool eff = _waterPixBits[p];
-                    bool march = _waterPixBits2![p];
-                    byte bch = 255;
-                    if (march)
-                    {
-                        int t0 = _edgeBuf[p];
-                        int x0 = Math.Max(0, x - 10), x1 = Math.Min(pw - 1, x + 10);
-                        int n = _edgeCnt![x1 + 1] - _edgeCnt[x0];
-                        float ts = n > 0 ? (float)(_edgeSum[x1 + 1] - _edgeSum[x0]) / n : t0;
-                        ts = MathHelper.Clamp(ts, t0 - 24, t0 + 24);
-                        bch = (byte)MathHelper.Clamp((float)Math.Round((y - ts) * 2f), 0f, 252f);
-                    }
-                    // Shallow puddles get a SOFTER mask value: every effect (ripple, sparkle,
-                    // mirror) scales with it, so a walk-through pool shimmers gently instead of
-                    // sparkling like open water.
-                    byte effV = !eff ? (byte)0 : _puddlePixBits![p] ? (byte)205 : (byte)255;
-                    _waterPixBuf[p] = new Color(effV, march ? 255 : 0, bch, 255);
-                }
-            }
-            if (_waterMask == null || _waterMask.Width != pw || _waterMask.Height != ph)
-            {
-                _waterMask?.Dispose();
-                _waterMask = new Texture2D(_device, pw, ph, false, SurfaceFormat.Color);
-            }
-            _waterMask.SetData(_waterPixBuf, 0, pcount);
-            if (_waterMaskCore == null || _waterMaskCore.Width != tilesW || _waterMaskCore.Height != tilesH)
-            {
-                _waterMaskCore?.Dispose();
-                _waterMaskCore = new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color);
-            }
-            _waterMaskCore.SetData(_waterMaskCoreBuf, 0, count);
-
-            _waterTilesPerScreen = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
-            _waterWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
-            _waterMaskSize = new Vector2(tilesW, tilesH);
-            return true;
+        private static void StampSprite(SpriteBatch sb, Texture2D tex, Rectangle src, Rectangle bb)
+        {
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(bb.Center.X, bb.Bottom));
+            sb.Draw(tex, feet, src, Color.White, 0f,
+                new Vector2(src.Width / 2f, src.Height), 4f, SpriteEffects.None, 0f);
         }
 
         // ---- helpers -------------------------------------------------------
