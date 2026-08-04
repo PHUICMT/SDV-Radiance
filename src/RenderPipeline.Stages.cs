@@ -18,7 +18,8 @@ namespace SDVRadiance
     {
         /// <summary>How strongly celestial light is present (cloud shadows scale by this):
         /// 1 in daylight, fading over the last ~40 min before the seasonal dark time, then
-        /// moon-phase-scaled at night (a dark night has no light for clouds to block).</summary>
+        /// moon-phase-scaled at night (a dark night has no light for clouds to block).
+        /// WEATHER is applied by the caller (`_cloudWeatherAmt`), which needs an eased value.</summary>
         private static float CloudDayFactor()
         {
             int t = Game1.timeOfDay;
@@ -110,17 +111,29 @@ namespace SDVRadiance
             var rtA = _rtA!;
             var rtB = _rtB!;
 
-            // Rays emanate from a real in-world light source (converted to screen UV,
-            // so they stay anchored to the scene as the camera pans).
-            var lightPos = _lightUV;
+            // Rays emanate from real in-world light sources (screen UV, so they stay
+            // anchored to the scene as the camera pans) — one Bright+Rays pair PER light,
+            // beams summed into rtB, composited once. Each lamp owns its beams; nothing
+            // travels and nothing dims when another lamp takes over.
+            if (_rayLights.Count == 0)
+                return;
 
             float aspect = Game1.viewport.Width / (float)Math.Max(1, Game1.viewport.Height);
 
             // Bright pass is GATED to a disk around the real light, so only pixels near THIS
             // light streak into rays — distant bright scenery (flowers, white hair) no longer does.
-            P(fx, "Threshold")?.SetValue(config.GodRaysThreshold);
-            P(fx, "LightPos")?.SetValue(lightPos);
-            P(fx, "LightRadius")?.SetValue(_godRayRadiusUV);
+            // SNOW beats the bar wholesale: a winter field sits above 0.7 luminance edge to edge,
+            // so every patch near the sun streaked and the sum read as a soft glow instead of
+            // shafts (rays coming off things that are not lights). On snowy outdoor ground the bar rises to
+            // just under snow's own brightness — real lamp cores and sun glitter still pass.
+            // Eased, not switched: snow starting mid-day would otherwise change the bright bar
+            // in one frame and every shaft on screen would step. House rule - if it changes, it fades.
+            bool snowy = (Game1.currentSeason == "winter" || Game1.isSnowing) && (Game1.currentLocation?.IsOutdoors ?? false);
+            _snowThrAmt += ((snowy ? 1f : 0f) - _snowThrAmt) * 0.04f;
+            if (Math.Abs((snowy ? 1f : 0f) - _snowThrAmt) < 0.003f) _snowThrAmt = snowy ? 1f : 0f;
+            float grThr = MathHelper.Lerp(config.GodRaysThreshold,
+                Math.Max(config.GodRaysThreshold, 0.93f), _snowThrAmt);
+            P(fx, "Threshold")?.SetValue(grThr);
             P(fx, "Aspect")?.SetValue(aspect);
             // Player pixels are not light emitters — same silhouette exclusion as the water.
             var grWho = Game1.player;
@@ -136,6 +149,9 @@ namespace SDVRadiance
             }
             P(fx, "PlayerRect")?.SetValue(grRect);
             P(fx, "PlayerMaskTexture")?.SetValue(grMask);
+            // NPCs / animals / critters are not light emitters either (same mask the water uses).
+            P(fx, "SpriteMaskOn")?.SetValue(SpriteMaskReady && _spriteMaskRT != null ? 1f : 0f);
+            P(fx, "SpriteMaskTexture")?.SetValue(_spriteMaskRT);
             // With flood GI active, only lit pixels may emit rays (kills rays from bright
             // sprites in unlit corners; lamp glow zones still stream at night).
             bool floodGate = config.FloodLightingEnabled && _flood.Texture != null;
@@ -148,15 +164,23 @@ namespace SDVRadiance
                 P(fx, "FloodMapOrigin")?.SetValue(_flood.Origin);
                 P(fx, "FloodMapSize")?.SetValue(_flood.MapSize);
             }
-            fx.CurrentTechnique = fx.Techniques["Bright"];
-            Pass(sb, source, rtA, fx);
-
-            P(fx, "LightPos")?.SetValue(lightPos);
             P(fx, "Density")?.SetValue(config.GodRaysDensity);
             P(fx, "Decay")?.SetValue(config.GodRaysDecay);
             P(fx, "Weight")?.SetValue(0.5f);
-            fx.CurrentTechnique = fx.Techniques["Rays"];
-            Pass(sb, rtA, rtB, fx);
+            for (int li = 0; li < _rayLights.Count; li++)
+            {
+                var (luv, lruv, lamt) = _rayLights[li];
+                P(fx, "LightPos")?.SetValue(luv);
+                P(fx, "LightRadius")?.SetValue(lruv);
+                P(fx, "LightAmt")?.SetValue(lamt);   // this lamp's own eased presence
+                fx.CurrentTechnique = fx.Techniques["Bright"];
+                Pass(sb, source, rtA, fx);
+                fx.CurrentTechnique = fx.Techniques["Rays"];
+                if (li == 0)
+                    Pass(sb, rtA, rtB, fx);        // first light claims the buffer
+                else
+                    PassAdd(sb, rtA, rtB, fx);     // the rest SUM into it
+            }
 
             P(fx, "Intensity")?.SetValue(config.GodRaysIntensity * _godRayAmount);
             P(fx, "RaysTexture")?.SetValue(rtB);
@@ -387,15 +411,35 @@ namespace SDVRadiance
             // still reads correctly in the cinematic.
             bool eventUp = Game1.eventUp || Game1.CurrentEvent != null;
             float dispGate = eventUp ? 0f : 1f;
+            // Indoor water (hot spring, sewer, caves) sits under a ceiling, often in steam:
+            // there is no sun to sparkle, no sky to mirror sharply, and the pale pool art
+            // blows out under the full outdoor treatment. Calmer waves, faint reflection.
+            bool indoors = !(Game1.currentLocation?.IsOutdoors ?? true);
+            float inWave = indoors ? 0.6f : 1f;
+            float inSpark = indoors ? 0.35f : 1f;
+            float inRefl = indoors ? 0.35f : 1f;
+            float inTint = indoors ? 0.5f : 1f;
             P(fx, "Time")?.SetValue(Time());
-            P(fx, "Strength")?.SetValue(config.WaterStrength * strengthMul * shimmer * dispGate);
+            P(fx, "Strength")?.SetValue(config.WaterStrength * strengthMul * shimmer * dispGate * inWave);
             P(fx, "Speed")?.SetValue(config.WaterSpeed * speedMul);
-            P(fx, "Sparkle")?.SetValue(config.WaterSparkle * sparkleMul * shimmer);
-            P(fx, "TintAmt")?.SetValue(0.35f * shimmer);
-            P(fx, "ReflectStrength")?.SetValue((config.WaterReflection ? config.WaterReflectStrength : 0f) * _fadeWater);
+            P(fx, "Sparkle")?.SetValue(config.WaterSparkle * sparkleMul * shimmer * inSpark);
+            P(fx, "TintAmt")?.SetValue(0.35f * shimmer * inTint);
+            P(fx, "ReflectStrength")?.SetValue((config.WaterReflection ? config.WaterReflectStrength : 0f) * _fadeWater * inRefl);
             // Per-frame sprite exclusion mask (ducks, NPCs, critters on the water).
             P(fx, "SpriteMaskOn")?.SetValue(SpriteMaskReady && _spriteMaskRT != null ? 1f : 0f);
             P(fx, "SpriteMaskTexture")?.SetValue(_spriteMaskRT);
+            // P3b: flipped-entity reflection layer — the mirror's PREFERRED source. Where
+            // this RT has content, it is the correct reflection by construction; the
+            // screen-space flip only fills in scenery behind it (until P3c replaces that too).
+            P(fx, "ReflectRTOn")?.SetValue(ReflectRTReady && _reflectRT != null ? 1f : 0f);
+            P(fx, "ReflectRTPlayer")?.SetValue(ReflectRTReady && ReflectRTHasPlayer ? 1f : 0f);
+            P(fx, "ReflectRTTexture")?.SetValue(_reflectRT);
+            // P3c: sprite-free scenery source — the mirror reads the map's own pixels, so
+            // an excluded sprite can't leave a body-shaped sky hole in the reflection.
+            // The raw layer render carries no lighting; ambient rescales it to the scene.
+            P(fx, "SceneOn")?.SetValue(SceneRTReady && _mirrorSrcRT != null && !SceneSourceOff ? 1f : 0f);
+            P(fx, "SceneTexture")?.SetValue(_mirrorSrcRT);
+            P(fx, "SceneAmbient")?.SetValue(Vector3.Lerp(Vector3.One, ComputeLightingAmbient(config), _fadeLighting));
             P(fx, "WaterKind")?.SetValue(WaterKind());
             P(fx, "TilesPerScreen")?.SetValue(_waterTilesPerScreen);
             P(fx, "WorldTileOffset")?.SetValue(_waterWorldTileOffset);
@@ -403,6 +447,7 @@ namespace SDVRadiance
             P(fx, "MaskOrigin")?.SetValue(new Vector2(_lastWaterTx, _lastWaterTy));
             P(fx, "MaskTexture")?.SetValue(_waterMask);
             P(fx, "MaskCoreTexture")?.SetValue(_waterMaskCore);
+            P(fx, "SdfTexture")?.SetValue(_waterSdf);
             P(fx, "SparkleDensity")?.SetValue(config.WaterSparkleDensity);
             // Player SILHOUETTE mask (the shadow system's per-frame bake) in buffer UV —
             // ring-tile water effects skip exactly the player's own pixels, so a blue outfit
@@ -413,7 +458,10 @@ namespace SDVRadiance
             if (who != null && pmask != null)
             {
                 Rectangle box = who.GetBoundingBox();
-                Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, box.Bottom - 10f));
+                // yOffset is the DRAW-time bob (swimming, jumps) that the collision box never
+                // sees — without it the exclusion silhouette floats above the swimmer and the
+                // water effect leaves a dead margin over their head.
+                Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, box.Bottom - 10f + who.yOffset));
                 Vector2 tl = feet - new Vector2(ShadowRenderer.PlayerRtW / 2f, ShadowRenderer.PlayerRtH - 8f);
                 playerRect = new Vector4(tl.X / dest.Width, tl.Y / dest.Height,
                     (tl.X + ShadowRenderer.PlayerRtW) / dest.Width, (tl.Y + ShadowRenderer.PlayerRtH) / dest.Height);
@@ -436,6 +484,22 @@ namespace SDVRadiance
             P(fx, "NightGlow")?.SetValue(nightGlow);
             P(fx, "MoonGlow")?.SetValue(ShadowRenderer.MoonStrength());
             P(fx, "RainAmt")?.SetValue(Game1.isRaining ? 1f : 0f);
+
+            // SKY tint for the mirror's far end and the no-mirror sheen. Water reflects the sky
+            // before it reflects anything else; for an orthographic fixed-pitch camera the Fresnel
+            // mix is a CONSTANT, so the only things that vary are WHICH source (object vs sky) and
+            // the ripple breakup — never strength-by-distance. Stardew has no sky to sample
+            // top-down, so it is synthesised from time and weather, then scaled by the lighting
+            // stage's ambient so water never stays bright inside a darkened scene.
+            Vector3 sky = new(0.62f, 0.78f, 0.96f);                                  // open daylight
+            sky = Vector3.Lerp(sky, new Vector3(0.98f, 0.72f, 0.45f), sunWarm);      // golden hour
+            sky = Vector3.Lerp(sky, new Vector3(0.08f, 0.12f, 0.28f), nightGlow);    // dusk → night
+            if (Game1.isRaining || Game1.isSnowing)
+                sky = Vector3.Lerp(sky, new Vector3(0.52f, 0.56f, 0.62f), 0.75f);    // overcast
+            if (!(Game1.currentLocation?.IsOutdoors ?? true))
+                sky = Vector3.Lerp(sky, new Vector3(0.30f, 0.33f, 0.40f), 0.7f);     // no sky indoors
+            sky *= Vector3.Lerp(Vector3.One, ComputeLightingAmbient(config), _fadeLighting);
+            P(fx, "SkyColor")?.SetValue(sky);
 
             int lc = 0;
             if (nightGlow > 0f && Game1.currentLightSources != null)
@@ -560,44 +624,135 @@ namespace SDVRadiance
             return false;
         }
 
-        /// <summary>Screen-UV + UV-radius of the largest-radius real light source currently on screen, if any.</summary>
-        private static bool TryGetLightUV(out Vector2 uv, out float radiusUV)
+        /// <summary>Ray sources this frame, each with its OWN presence. Every on-screen lamp
+        /// gets its own beams: the old single-source pick made the one beam glide across the
+        /// screen to the next lamp as you walked, because there was only ever one origin.
+        /// <para>
+        /// Presence is PER LIGHT and eased, which is what stops the popping. A global fade
+        /// cannot express "this lamp is arriving while that one leaves", so a lamp entering
+        /// the view switched its beams on in a single frame. Worse where lamps CLUSTER: with
+        /// a hard top-N cut, walking past a row of them reshuffled which ones made the cut
+        /// and the losers vanished instantly. Now a light that loses its slot just eases out,
+        /// and its beams cross-fade with the one that took over.
+        /// </para></summary>
+        internal const int MaxRayLights = 3;      // how many lights may be ACTIVE at once
+        private const int RayRenderSlots = 5;     // + room for the ones still fading out
+        private const float RayMergeUV = 0.07f;   // closer than this and beams overlap anyway
+        private float _snowThrAmt;                // eased snow bright-bar blend (0..1)
+
+        private sealed class RayLight
         {
-            uv = Vector2.Zero;
-            radiusUV = 0.25f;
-            var lights = Game1.currentLightSources;
-            if (lights == null || lights.Count == 0)
-                return false;
+            public Vector2 Uv;
+            public float RadiusUv;
+            public float R;          // game radius: the "which lamps matter" ranking
+            public float Amt;        // eased presence 0..1
+            public bool Seen;        // present on screen this frame
+        }
 
-            GameLocation? loc = Game1.currentLocation;
-            int vw = Math.Max(1, Game1.viewport.Width);
-            int vh = Math.Max(1, Game1.viewport.Height);
-            float best = -1f;
-            FillBubbleAnchors(loc);   // once per query, not once per (light × character)
+        private readonly Dictionary<string, RayLight> _rayTrack = new();
+        private GameLocation? _rayTrackLoc;
+        private readonly List<KeyValuePair<string, RayLight>> _rayScratch = new();
+        private readonly List<(Vector2 uv, float radiusUV, float amt)> _rayLights = new();
 
-            foreach (var kv in lights)
+        /// <summary>Refresh the tracked ray lights: geometry, per-light presence, render list.</summary>
+        private bool UpdateRayLights()
+        {
+            if (!ReferenceEquals(Game1.currentLocation, _rayTrackLoc))
             {
-                LightSource ls = kv.Value;
-                if (IsCharacterBubble(ls.position.Value))
-                    continue; // speech-bubble / emote light — not an environmental ray source
-                Vector2 local = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
-                float u = local.X / vw;
-                float v = local.Y / vh;
-                if (u < -0.25f || u > 1.25f || v < -0.25f || v > 1.25f)
-                    continue; // off-screen
+                _rayTrackLoc = Game1.currentLocation;
+                _rayTrack.Clear();   // another map's lamps must not fade out over this one
+            }
+            foreach (var e in _rayTrack.Values)
+                e.Seen = false;
 
-                float r = ls.radius.Value;
-                if (r > best)
+            var lights = Game1.currentLightSources;
+            if (lights != null && lights.Count > 0)
+            {
+                int vw = Math.Max(1, Game1.viewport.Width);
+                int vh = Math.Max(1, Game1.viewport.Height);
+                FillBubbleAnchors(Game1.currentLocation);   // once per frame, not per (light × character)
+
+                foreach (var kv in lights)
                 {
-                    best = r;
-                    uv = new Vector2(u, v);
-                    // radius.Value is ~tiles; on-screen glow ≈ radius*64px. Give the rays a little
-                    // more reach than the glow, so only pixels near THIS light streak (not distant
-                    // bright scenery like flowers/white hair).
-                    radiusUV = MathHelper.Clamp(r * 64f * 2.2f / vh, 0.12f, 0.6f);
+                    LightSource ls = kv.Value;
+                    if (IsCharacterBubble(ls.position.Value))
+                        continue; // speech-bubble / emote light — not an environmental ray source
+                    float r = ls.radius.Value;
+                    if (r <= 0f)
+                        continue;
+                    Vector2 local = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
+                    float u = local.X / vw, v = local.Y / vh;
+                    if (u < -0.25f || u > 1.25f || v < -0.25f || v > 1.25f)
+                        continue; // off-screen
+
+                    if (!_rayTrack.TryGetValue(kv.Key, out RayLight? e))
+                        _rayTrack[kv.Key] = e = new RayLight();
+                    e.Uv = new Vector2(u, v);
+                    // radius.Value is ~tiles; on-screen glow ≈ radius*64px. Give the rays a
+                    // little more reach than the glow, so only pixels near THIS light streak
+                    // (not distant bright scenery like flowers/white hair).
+                    e.RadiusUv = MathHelper.Clamp(r * 64f * 2.2f / vh, 0.12f, 0.6f);
+                    e.R = r;
+                    e.Seen = true;
                 }
             }
-            return best > 0f;
+
+            // Rank the candidates. A light that is ALREADY lit gets a bonus so it keeps its
+            // slot until something is genuinely brighter — without that hysteresis, two lamps
+            // of equal radius traded the last slot every few frames and flickered.
+            _rayScratch.Clear();
+            foreach (var kv in _rayTrack)
+                if (kv.Value.Seen)
+                    _rayScratch.Add(kv);
+            if (_rayScratch.Count > 1)
+                _rayScratch.Sort((a, b) =>
+                {
+                    float sa = a.Value.R + (a.Value.Amt > 0.05f ? 1000f : 0f);
+                    float sb2 = b.Value.R + (b.Value.Amt > 0.05f ? 1000f : 0f);
+                    return sb2.CompareTo(sa);
+                });
+
+            int active = 0;
+            for (int i = 0; i < _rayScratch.Count; i++)
+            {
+                RayLight e = _rayScratch[i].Value;
+                bool on = active < MaxRayLights;
+                if (on)
+                    // Lamps standing almost on top of each other produce the same beams twice;
+                    // let the stronger one carry them and ease the neighbour out. This is what
+                    // keeps a row of close lamps from churning slots as the camera moves.
+                    for (int j = 0; j < i; j++)
+                    {
+                        RayLight o = _rayScratch[j].Value;
+                        if (o.Amt > 0.05f && Vector2.Distance(o.Uv, e.Uv) < RayMergeUV) { on = false; break; }
+                    }
+                if (on)
+                    active++;
+                e.Amt += ((on ? 1f : 0f) - e.Amt) * 0.07f;   // ~0.6 s in, same out
+            }
+            // Unseen lights keep fading from their LAST known spot: a lamp scrolling off the
+            // edge, or a torch being put out, dims where it stood instead of blinking off.
+            foreach (var e in _rayTrack.Values)
+                if (!e.Seen)
+                    e.Amt -= e.Amt * 0.07f;
+
+            _rayScratch.Clear();
+            foreach (var kv in _rayTrack)
+                if (kv.Value.Amt <= 0.004f && !kv.Value.Seen)
+                    _rayScratch.Add(kv);
+            foreach (var kv in _rayScratch)
+                _rayTrack.Remove(kv.Key);
+
+            _rayLights.Clear();
+            foreach (var e in _rayTrack.Values)
+                if (e.Amt > 0.01f)
+                    _rayLights.Add((e.Uv, e.RadiusUv, e.Amt));
+            if (_rayLights.Count > RayRenderSlots)
+            {
+                _rayLights.Sort((a, b) => b.amt.CompareTo(a.amt));
+                _rayLights.RemoveRange(RayRenderSlots, _rayLights.Count - RayRenderSlots);
+            }
+            return _rayLights.Count > 0;
         }
 
         // World-anchor for drifting noise (fog/clouds): the offset must be in units of the
@@ -685,7 +840,14 @@ namespace SDVRadiance
         /// <summary>0 = still water (pond/river/farm), 1 = ocean/beach (big directional swell).</summary>
         private static float WaterKind()
         {
-            string n = Game1.currentLocation?.Name ?? "";
+            var loc = Game1.currentLocation;
+            // Class first: Beach and the outdoor Ginger Island maps are the vanilla oceans
+            // (IslandLocation also covers island CAVES, hence the outdoors guard). Names stay
+            // as the fallback for custom coastal maps (SVE capes, resort shores ...).
+            if (loc is StardewValley.Locations.Beach
+                || (loc is StardewValley.Locations.IslandLocation && loc.IsOutdoors))
+                return 1f;
+            string n = loc?.Name ?? "";
             if (n.Contains("Beach") || n.Contains("Island") || n == "Docks")
                 return 1f;
             return 0f;

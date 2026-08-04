@@ -39,6 +39,15 @@ namespace SDVRadiance
                     continue;
                 if (OnOpenWater(loc, npc.TilePoint))   // open water only — surf/shore keeps shadows
                     continue;
+                if (IsSeated(npc))
+                {
+                    // A seated sprite gets a grounding pool and no cast silhouette: the silhouette
+                    // is the part that fought the seat (see IsSeated), while a small soft ellipse
+                    // cannot land half-way through the bench no matter what the seat's depth is.
+                    DrawContactBlob(b, SeatedAnchor(npc), npc.GetSpriteWidthForPositioning() * 4f * 0.34f,
+                        npc.GetSpriteWidthForPositioning() * 4f * 0.17f, alpha * 0.8f, SeatedDepth(npc), blur);
+                    continue;
+                }
                 DrawNpcShadow(b, npc, rot, stretch, alpha, blur);
             }
 
@@ -164,6 +173,13 @@ namespace SDVRadiance
                     continue;
                 if (OnOpenWater(loc, npc.TilePoint))   // same guard as the sun path (bathhouse, night beach)
                     continue;
+                if (IsSeated(npc))
+                {
+                    float sw = npc.GetSpriteWidthForPositioning() * 4f;
+                    DrawContactBlob(b, SeatedAnchor(npc), sw * 0.34f, sw * 0.17f,
+                        ambAlpha * 0.8f, SeatedDepth(npc), blur);
+                    continue;   // pool only — the cast silhouette is what fought the seat
+                }
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                     new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom - FeetLift));
                 float depth = MathHelper.Clamp(npc.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
@@ -188,11 +204,18 @@ namespace SDVRadiance
                     DrawAnimalShadow(b, animal, rot, st, a, blur);
             }
 
+            // The player, through the same two branches the NPCs above use.
+            {
+                Farmer sp = Game1.player;
+                if (sp != null && sp.currentLocation == loc && IsSeated(sp)
+                    && !sp.swimming.Value && !sp.isRidingHorse() && !OnOpenWater(loc, sp.TilePoint))
+                    DrawContactBlob(b, SeatedAnchor(sp), 20f, 10f, ambAlpha * 0.8f, SeatedDepth(sp), blur);
+            }
             if (_playerReady && _playerRT != null)
             {
                 Farmer who = Game1.player;
                 if (who != null && who.currentLocation == loc && !who.swimming.Value && !who.isRidingHorse()
-                    && !OnOpenWater(loc, who.TilePoint))
+                    && !IsSeated(who) && !OnOpenWater(loc, who.TilePoint))
                 {
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                         new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
@@ -345,6 +368,48 @@ namespace SDVRadiance
             stretch = MathHelper.Lerp(1.0f, 0.4f, prox) * lenCfg;
             return true;
         }
+
+        /// <summary>
+        /// A character the game is drawing through a SEAT (a chair, a bench, a map seat) instead of
+        /// through its own footprint. Its sprite is shifted by a draw offset and sorted at the
+        /// seat's depth, and neither shows up in <c>Position</c> or <c>GetBoundingBox()</c> — the
+        /// two things every anchor here is built from. Rather than guess the seat's geometry, we
+        /// stand down and let vanilla handle the whole character.
+        /// </summary>
+        /// <remarks>
+        /// ONE rule for the player and for NPCs, because a body is a body: the question is never
+        /// "is this sitting", it is "has the game drawn this sprite away from its collision box".
+        /// <c>drawOffset</c> is the only field that answers it, and it lives on
+        /// <see cref="Character"/> so both answer identically.
+        /// <para>
+        /// Asking <c>Farmer.IsSitting()</c> instead was the mistake that cost the player their
+        /// sun shadow. A farmer on a chair is MOVED, not offset - the game puts their Position on
+        /// the seat and draws them at it, so drawOffset stays zero and the ordinary silhouette at
+        /// the box is already correct. An NPC on a map seat is offset, so it is not. Keying on the
+        /// offset gets both right, and fixes a case nobody had reported yet: a player riding the
+        /// bus or posed by an event IS offset, and used to get a silhouette in the wrong place.
+        /// </para>
+        /// The 16 px floor keeps sub-pixel jitter from flipping anyone between the two paths.
+        /// </remarks>
+        internal static bool IsSeated(Character? c) => c != null && c.drawOffset.LengthSquared() > 256f;
+
+        /// <summary>Screen point under a SEATED character's visible feet: the collision box says
+        /// where they would stand, <c>drawOffset</c> says where the game actually drew them, and
+        /// only the sum lands on the sprite. Without the offset the pool sat behind the bench,
+        /// which is why a sitter looked like it had no shadow at all.</summary>
+        private static Vector2 SeatedAnchor(Character c)
+        {
+            Vector2 off = c.drawOffset;
+            return Game1.GlobalToLocal(Game1.viewport, new Vector2(
+                c.Position.X + c.GetSpriteWidthForPositioning() * 4 / 2f + off.X,
+                c.GetBoundingBox().Bottom - FeetLift + off.Y));
+        }
+
+        /// <summary>Sort depth for a seated character's pool. Biased a little further back than the
+        /// standing bias so the pool tucks under the seat art instead of painting over its front
+        /// edge — the seat is drawn at its own depth and we are not trying to guess it.</summary>
+        private static float SeatedDepth(Character c)
+            => MathHelper.Clamp(c.StandingPixel.Y / 10000f - ShadowDepthBias * 2f, 0f, 1f);
 
         private void DrawNpcShadow(SpriteBatch b, NPC npc, float rot, float stretch, float alpha, float blur)
         {

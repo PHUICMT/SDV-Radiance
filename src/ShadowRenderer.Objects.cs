@@ -221,7 +221,7 @@ namespace SDVRadiance
                 Vector2 tile = f.TileLocation;
                 if (tile.X < tx0 || tile.X > tx1 || tile.Y < ty0 || tile.Y > ty1)
                     continue;
-                DrawFurnitureShadow(b, f, rot, stretch, alpha, blur);
+                DrawFurnitureShadow(b, f, type, rot, stretch, alpha, blur);
             }
 
             // Critters (birds, squirrels, butterflies, bunnies…) — replace their vanilla blob with
@@ -411,6 +411,24 @@ namespace SDVRadiance
                         PD(x, y, "skip: on/over open water");
                         continue;
                     }
+                    // A PASSABLE Buildings tile is the game's own word for "you walk on top of
+                    // this": a plank bridge, a pier deck, a boardwalk. That is a horizontal
+                    // SURFACE, not a standing prop, and it must never reach the cast below.
+                    //
+                    // A log bridge otherwise sails through every gate above — it is not open
+                    // water (it has a Buildings tile, so the OnWater fallback says no), and its
+                    // art has gaps between the planks, so its coverage lands in the same 0.04–0.95
+                    // band as a picket fence. It then gets a fence's treatment: a sheared
+                    // silhouette leaning up-screen, plus the base tile REDRAWN opaque on top of
+                    // that shadow at depth + 5e-4. Both land on the tile a character standing on
+                    // the bridge occupies, so the planks are drawn over their legs and the sheared
+                    // copy sits offset beside the real bridge. Reported as "character texture is
+                    // covered" and "texture misaligned", and as players sinking into bridges.
+                    if (loc.doesTileHaveProperty(x, y, "Passable", "Buildings") != null)
+                    {
+                        PD(x, y, "skip: passable Buildings tile (walk-on deck / bridge)");
+                        continue;
+                    }
 
                     // Gather the column bottom→top: the base tile, its same-row Front overlay
                     // (level 0 too), then any Front stack above (level = tiles above the base).
@@ -463,7 +481,25 @@ namespace SDVRadiance
                     if (!_bakedObjMap.TryGetValue(key, out var bk))
                         continue;
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(x * 64f + 32f, (y + 1f) * 64f - 2f));
-                    float depth = MathHelper.Clamp(((y + 1f) * 64f) / 10000f + x * 1e-5f - ShadowDepthBias, 0f, 1f);
+                    // A body ON this tile (someone sitting on a map bench, standing against a
+                    // fence) sorts at roughly y*64/10000 - a full tile BELOW this prop's normal
+                    // (y+1)*64 depth. Both the cast and the base redraw below therefore won over
+                    // the body and painted the bench across the sitter: proven by A/B, the exact
+                    // "we clip through the chair" report, and almost certainly the original
+                    // graveyard-bench one too (that bench is map art, so no furniture or
+                    // character-side change could ever have reached it). Sort from the prop's OWN
+                    // row when someone is there, so the body always wins.
+                    bool bodyHere = false;
+                    try
+                    {
+                        var tileV = new Vector2(x, y);
+                        bodyHere = loc.isCharacterAtTile(tileV) != null
+                            || (Game1.player != null && Game1.player.currentLocation == loc
+                                && Game1.player.TilePoint.X == x && Game1.player.TilePoint.Y == y);
+                    }
+                    catch { }
+                    float rowY = bodyHere ? y * 64f : (y + 1f) * 64f;
+                    float depth = MathHelper.Clamp(rowY / 10000f + x * 1e-5f - ShadowDepthBias, 0f, 1f);
                     DrawSoft(b, Taps9, bk.rt, null, feet, Color.White, alpha, 0f, bk.feetInRT,
                         new Vector2(1f, sy), depth, SpriteEffects.None, blur);
                     // Redraw the base tile OVER its own shadow: the map layer painted before this
@@ -695,7 +731,7 @@ namespace SDVRadiance
                 alpha, rot, stretch, depth, blur, ObjectHeadFade, fx);
         }
 
-        private void DrawFurnitureShadow(SpriteBatch b, Furniture f, float rot, float stretch, float alpha, float blur)
+        private void DrawFurnitureShadow(SpriteBatch b, Furniture f, int type, float rot, float stretch, float alpha, float blur)
         {
             Rectangle src = f.sourceRect.Value;
             if (src.IsEmpty)
@@ -707,7 +743,15 @@ namespace SDVRadiance
             // box bottom matches the sprite's ground line for floor furniture).
             Rectangle box = f.boundingBox.Value;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, box.Bottom - 30f));
-            float depth = MathHelper.Clamp((box.Bottom - 8f) / 10000f - ShadowDepthBias, 0f, 1f);
+            // A SEAT is the one kind of furniture a body occupies, so its shadow has to sort a
+            // clear step below anything sitting on it. At box.Bottom - 8 the two depths were
+            // within a rounding error of each other and the order was a coin flip: the bench's
+            // own dark silhouette landed over the sitter's legs, which reads exactly like the
+            // body clipping through the bench (reported for the player, and the likeliest cause
+            // of the same report about NPCs). One tile of depth is plenty - the shadow still
+            // draws over the ground, it just can never win against a body at the same row.
+            bool seat = type is 0 or 1 or 2 or 3;   // chair / bench / couch / armchair
+            float depth = MathHelper.Clamp((box.Bottom - (seat ? 72f : 8f)) / 10000f - ShadowDepthBias, 0f, 1f);
             EmitObj(b, tex, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, stretch, depth, blur);
         }
@@ -817,6 +861,20 @@ namespace SDVRadiance
 
         private void DrawPlayerShadow(SpriteBatch b, GameLocation loc, float rot, float stretch, float alpha, float blur)
         {
+            // Seated: _playerReady is deliberately false (the silhouette's anchor cannot
+            // describe a sitter), so without a pool here sitting down silently REMOVES the
+            // player's shadow — the sun path has no ambient blob to fall back on. Same
+            // grounding pool the seated NPCs get, at the position the game actually drew us.
+            // Offset away from their box (the bus, an event pose): the silhouette's anchor cannot
+            // describe that, so the player takes the same grounding pool a seated NPC gets. A
+            // farmer on a chair is NOT offset (see IsSeated) and keeps the silhouette below.
+            Farmer sp = Game1.player;
+            if (sp != null && sp.currentLocation == loc && IsSeated(sp))
+            {
+                if (!sp.swimming.Value && !sp.isRidingHorse() && !OnOpenWater(loc, sp.TilePoint))
+                    DrawContactBlob(b, SeatedAnchor(sp), 20f, 10f, alpha * 0.8f, SeatedDepth(sp), blur);
+                return;
+            }
             if (!_playerReady || _playerRT == null)
                 return;
 

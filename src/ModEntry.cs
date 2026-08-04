@@ -49,6 +49,13 @@ namespace SDVRadiance
         private static bool _loggedFreeze;
 
         /// <summary>Skip the game's blob shadow while our directional shadow is active.</summary>
+        /// <remarks>
+        /// Seated characters are NOT exempted here. Handing them back to vanilla was the first
+        /// attempt and it read as "no shadow at all when sitting": vanilla draws its blob at the
+        /// standing feet, which for a sitter is behind the seat art, so nothing is visible.
+        /// Seated NPCs get our own grounding pool at the DRAWN position instead
+        /// (<see cref="ShadowRenderer.IsSeated"/>); the player keeps their normal silhouette.
+        /// </remarks>
         private static bool DrawShadow_Prefix() => !SuppressVanillaShadows;
 
         /// <summary>When true, the vanilla drifting Cloud critter shadow is hidden.</summary>
@@ -151,6 +158,40 @@ namespace SDVRadiance
             helper.Events.GameLoop.GameLaunched += OnGameLaunched;
             helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
             helper.Events.Input.ButtonsChanged += OnButtonsChanged;
+            // Surface grids are inferred per location and cached for the visit. A save load means
+            // a whole new world, and placing/removing a farm building changes a map in place.
+            helper.Events.GameLoop.SaveLoaded += (_, _) => SurfaceMap.Clear();
+            helper.Events.World.BuildingListChanged += (_, e) =>
+            {
+                SurfaceMap.Invalidate(e.Location);
+                // Fish-pond water lives in the mask now — a pond placed/moved/removed must
+                // show up on the next frame, not on the 10 s safety refresh.
+                RenderPipeline.MaskEpoch++;
+            };
+            // A map re-patched in place (Content Patcher seasonal/conditional edits reload the
+            // live location's map) can move the water itself. Invalidate both the surface grid
+            // and the mask when any Maps/* asset reloads.
+            helper.Events.Content.AssetsInvalidated += (_, e) =>
+            {
+                foreach (var name in e.Names)
+                {
+                    if (name.Name.StartsWith("Maps/", StringComparison.OrdinalIgnoreCase)
+                        || name.Name.StartsWith("Maps\\", StringComparison.OrdinalIgnoreCase))
+                    {
+                        SurfaceMap.Clear();
+                        RenderPipeline.MaskEpoch++;
+                        break;
+                    }
+                }
+            };
+            // Author tool: dumps every location's layers/tiles + sheet art for HF Studio, the
+            // browser labeler that produces labels/water-labels.json. Harmless for players (it
+            // only runs when typed) and it keeps the whole labeling loop inside this mod.
+            MapDump.BridgeMonitor = this.Monitor;
+            MapDump.BridgeHelper = helper;
+            helper.ConsoleCommands.Add("radiance_mapdump",
+                "Dump every location's layer/tile layout + sheet art to Documents\\HF-Studio\\maps.json for the label editor.",
+                (_, _) => { MapDump.Run(this.Monitor, helper); });
             helper.ConsoleCommands.Add("radiance_lights",
                 "List every active light source in the current location (id, kind, tile, radius, color, distance from player).",
                 (cmd, args) => DumpLights());
@@ -166,6 +207,20 @@ namespace SDVRadiance
                 {
                     RenderPipeline.MaskView = !RenderPipeline.MaskView;
                     this.Monitor.Log($"Water mask overlay: {(RenderPipeline.MaskView ? "ON" : "OFF")} (rebuilds on next tile crossing / within 10s)", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_reflect",
+                "Reflection diagnostics/A-B. No args = report what each reflection layer is doing under the player. "
+                + "'scene on|off' forces the sprite-free scenery mirror source (P3c) on or off, so a missing "
+                + "bridge/cliff reflection can be pinned on it in one keystroke.",
+                (cmd, args) =>
+                {
+                    if (args.Length >= 2 && args[0].Equals("scene", StringComparison.OrdinalIgnoreCase))
+                    {
+                        RenderPipeline.SceneSourceOff = args[1].Equals("off", StringComparison.OrdinalIgnoreCase);
+                        this.Monitor.Log($"Scenery mirror source (P3c): {(RenderPipeline.SceneSourceOff ? "FORCED OFF (mirror reads the composed screen)" : "ON")}", LogLevel.Info);
+                        return;
+                    }
+                    this.Monitor.Log(_pipeline?.ReflectionDiag() ?? "pipeline not ready", LogLevel.Info);
                 });
             helper.Events.Display.RenderingWorld += OnRenderingWorld;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
@@ -303,7 +358,18 @@ namespace SDVRadiance
             // Per-frame water sprite mask (ducks/NPCs/critters on water must not ripple).
             // Baked here because a render-target swap is only safe before the world batches open.
             if ((_config.WaterEnabled || _config.WaterReflection) && Context.IsWorldReady)
+            {
                 _pipeline?.BakeWaterSpriteMask();
+                // P3b: flipped-entity reflection layer (player/NPCs/animals/trees), built
+                // by construction instead of trusting whatever sits above on screen.
+                if (_config.WaterReflection)
+                {
+                    _pipeline?.BakeWaterReflection();
+                    // P3c: sprite-free map render — the mirror's source, so an excluded
+                    // sprite shows the true map pixels behind it instead of a sky hole.
+                    _pipeline?.BakeSceneryReflection();
+                }
+            }
 
             if (!_config.DirectionalShadowsEnabled)
                 return;
@@ -470,12 +536,9 @@ namespace SDVRadiance
                     if (v != null)
                         this.Monitor.Log($"{layer}.{prop} = '{v}'", LogLevel.Info);
                 }
-            var hf = ShadowRenderer.Height;
-            if (hf != null)
-            {
-                try { this.Monitor.Log($"HF surface={hf.GetSurfaceAt(loc, t.X, t.Y)} (0G 1W 2Wall 3Roof 4Deck 5Void) height={hf.GetHeightAt(loc, t.X, t.Y)}", LogLevel.Info); }
-                catch { this.Monitor.Log("HF API threw", LogLevel.Info); }
-            }
+            var surf = SurfaceMap.For(loc);
+            if (surf != null)
+                this.Monitor.Log($"surface={surf.GetSurface(t.X, t.Y)} height={surf.GetHeight(t.X, t.Y)}", LogLevel.Info);
             foreach (string layerName in new[] { "Back", "Buildings", "Front", "AlwaysFront", "AlwaysFront2" })
             {
                 var layer = loc.map?.GetLayer(layerName);
@@ -516,16 +579,15 @@ namespace SDVRadiance
         {
             RegisterGmcm();
 
-            // Optional Height Framework integration: robust per-tile water/deck/wall classification.
-            // Null when that mod isn't installed — the shadow code falls back to its own heuristics.
-            var height = this.Helper.ModRegistry.GetApi<Integrations.IHeightFrameworkApi>("phuicmt.HeightFramework");
-            ShadowRenderer.Height = height;
-            // Worded as clearly optional and logged at Trace when absent: players kept reading the
-            // old Info line as "you are missing a dependency" and asked what to install.
-            if (height != null)
-                this.Monitor.Log("Height Framework detected — using it for water/ledge shadow suppression.", LogLevel.Info);
+            // Hand-painted liquid ground truth, shipped in labels/ and read ONCE. It is versioned
+            // data, not live state: it changes when this mod updates, so there is no file watching.
+            LabelStore.Instance = new LabelStore(
+                System.IO.Path.Combine(this.Helper.DirectoryPath, "labels"), this.Monitor);
+            if (LabelStore.Instance.Any)
+                this.Monitor.Log($"Water labels loaded: {LabelStore.Instance.SheetCount} sheets, "
+                    + $"{LabelStore.Instance.TileCount} tiles.", LogLevel.Info);
             else
-                this.Monitor.Log("Height Framework not found (optional, nothing to install) — using built-in tile heuristics for shadows.", LogLevel.Trace);
+                this.Monitor.Log("No water labels found in labels/ — falling back to colour classification.", LogLevel.Warn);
 
             // Draw-call-accurate water discovery: patch drawWaterTile on GameLocation AND every
             // loaded override (mod location classes included) — hence GameLaunched, not Entry.

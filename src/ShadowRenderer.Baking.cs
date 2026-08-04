@@ -29,7 +29,9 @@ namespace SDVRadiance
             if (!ShouldCast(config))
             {
                 _playerReady = false;
+                _playerMaskFresh = false;
                 PlayerMask = null;
+                PlayerColor = null;
                 return;
             }
             if (_renderDepth > 0)
@@ -97,14 +99,19 @@ namespace SDVRadiance
             }
 
             // Sitting still casts (the bake captures the current SEATED animation frame, so the
-            // silhouette matches the pose); only swimming and horseback skip — the water owns
-            // the swimmer's reflection, and the horse's own shadow covers the rider.
+            // silhouette matches the pose); horseback skips — the horse's own shadow covers the
+            // rider. SWIMMING keeps the bake but drops _playerReady: the shadow consumers gate
+            // on _playerReady (a swimmer casts no shadow), while the water shader's exclusion
+            // gate reads PlayerMask — without it the ripple displacement warped the swimmer's
+            // own pixels (the bathhouse "wavy body").
             Farmer who = Game1.player;
-            if (who == null || who.currentLocation != Game1.currentLocation
-                || who.swimming.Value || who.isRidingHorse())
+            bool swim = who != null && who.swimming.Value;
+            if (who == null || who.currentLocation != Game1.currentLocation || who.isRidingHorse())
             {
                 _playerReady = false;
+                _playerMaskFresh = false;
                 PlayerMask = null;
+                PlayerColor = null;
                 return;
             }
 
@@ -121,9 +128,11 @@ namespace SDVRadiance
             // The every-8-frames refresh keeps accessory layers that animate independently of
             // the body frame (Fashion Sense hair sway etc.) fresh without paying every frame.
             var sig = (who.FarmerSprite.CurrentFrame, (int)who.FacingDirection, src);
-            if (_playerReady && sig == _playerBakeSig && Game1.ticks % 8 != 0)
+            if (_playerMaskFresh && sig == _playerBakeSig && Game1.ticks % 8 != 0)
             {
+                _playerReady = !swim && !IsSeated(who);
                 PlayerMask = _playerRT;
+                PlayerColor = _playerColorRT;
                 return;
             }
             _playerBakeSig = sig;
@@ -156,8 +165,22 @@ namespace SDVRadiance
                 _rtBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
                 _rtBatch.Draw(_gradTex, new Rectangle(0, 0, PlayerRtW, PlayerRtH), Color.White);
                 _rtBatch.End();
-                _playerReady = true;
+
+                // FULL-COLOUR twin of the bake (no scrub, no head fade) for the water
+                // reflection RT: same pose, same feet anchor, whatever appearance mods drew.
+                _playerColorRT ??= new RenderTarget2D(gd, PlayerRtW, PlayerRtH, false,
+                    SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
+                gd.SetRenderTarget(_playerColorRT);
+                gd.Clear(Color.Transparent);
+                _rtBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+                who.FarmerRenderer.draw(_rtBatch, who.FarmerSprite.CurrentAnimationFrame, who.FarmerSprite.CurrentFrame,
+                    src, pos, Vector2.Zero, 0f, who.FacingDirection, Color.White, 0f, 1f, who);
+                _rtBatch.End();
+
+                _playerMaskFresh = true;
+                _playerReady = !swim && !IsSeated(who);
                 PlayerMask = _playerRT;
+                PlayerColor = _playerColorRT;
             }
             catch (Exception ex)
             {
@@ -412,11 +435,12 @@ namespace SDVRadiance
         {
             try
             {
-                // Height Framework (if installed) already distinguishes open water from pier/bridge
-                // DECKS over water, so its water-surface test is the robust answer. Fall back to the
-                // isWaterTile + no-Buildings-tile heuristic (which approximates the same deck check).
-                if (Height != null)
-                    return Height.IsWaterSurface(loc, tile.X, tile.Y);
+                // The surface grid distinguishes open water from pier/bridge DECKS over water, so
+                // it is the robust answer. Fall back to the isWaterTile + no-Buildings-tile
+                // heuristic (which approximates the same deck check) if the map isn't ready.
+                var surf = SurfaceMap.For(loc);
+                if (surf != null)
+                    return surf.IsWater(tile.X, tile.Y);
                 return loc.isWaterTile(tile.X, tile.Y)
                     && !loc.hasTileAt(tile.X, tile.Y, "Buildings");
             }

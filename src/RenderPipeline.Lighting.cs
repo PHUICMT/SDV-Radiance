@@ -34,6 +34,18 @@ namespace SDVRadiance
             float boost = MathHelper.Clamp(config.LightingBoost, 0f, 2f);
             float radiusScale = MathHelper.Clamp(config.LightingRadiusScale, 0.2f, 3f);
 
+            // OUTDOOR lamp pools sink into full daylight the way real lamps do: a street lamp
+            // at noon reads as glass, not as a glowing pool (reported: light sources should
+            // not be this bright in daylight).
+            // 35% at midday, full again by 08:00/17:00 — indoors untouched.
+            float dayPool = 1f;
+            if (Game1.currentLocation?.IsOutdoors ?? false)
+            {
+                int pm = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
+                dayPool = 1f - 0.65f * (1f - MathHelper.Clamp(Math.Abs(pm - 750) / 270f, 0f, 1f));
+            }
+            _dayPoolDamp = dayPool;    // emissive tiles ride the same daylight sink
+
             var lights = Game1.currentLightSources;
             if (lights != null && lights.Count > 0)
             {
@@ -71,7 +83,7 @@ namespace SDVRadiance
                     Vector3 tone = coolDaylight
                         ? Vector3.Lerp(Vector3.One, new Vector3(0.82f, 0.92f, 1.12f), warmth)
                         : warm;
-                    glow *= tone * boost * ShadowRenderer.FireFlicker(ls.position.Value, ls.textureIndex.Value);
+                    glow *= tone * boost * dayPool * ShadowRenderer.FireFlicker(ls.position.Value, ls.textureIndex.Value);
 
                     _lightPos[_lightCount] = new Vector2(u, v);
                     _lightData[_lightCount] = new Vector4(glow, Math.Max(0.02f, radiusUv));
@@ -86,6 +98,8 @@ namespace SDVRadiance
             {
                 EnsureWindowCache(Game1.currentLocation);
                 AddWindowLights(vw, vh, boost);
+                EnsureEmissiveCache(Game1.currentLocation);
+                AddEmissiveLights(vw, vh, boost);
             }
 
             // Run the stage if we have lights, or if we're darkening a flat interior
@@ -116,9 +130,8 @@ namespace SDVRadiance
         /// tiles, caching their world-pixel centres. Cheap enough as a one-off.</summary>
         private void EnsureWindowCache(GameLocation loc)
         {
-            var hf = ShadowRenderer.Height;
-            int ver = 0;
-            try { ver = hf?.GetLabelVersion() ?? 0; } catch { hf = null; }
+            var labels = LabelStore.Instance;
+            int ver = labels?.Version ?? 0;
             if (ReferenceEquals(loc, _windowLoc) && ver == _windowLabelVer)
                 return;
             _windowLoc = loc; _windowLabelVer = ver; _windowTiles.Clear();
@@ -126,16 +139,18 @@ namespace SDVRadiance
             // Windows are 100% label-driven: no labels loaded (version 0 = empty DB) means no window
             // can exist, so skip the whole-map scan entirely. Without this we paid a w×h×3-layer scan
             // on every location change even though it could never find anything.
-            if (hf == null || layer == null || ver == 0)
+            if (labels == null || layer == null || ver == 0)
                 return;
             int w = layer.LayerWidth, h = layer.LayerHeight;
+            // Resolve each layer once instead of per tile: this is a w×h×3 walk.
+            var winLayers = new xTile.Layers.Layer?[_winLayers.Length];
+            for (int i = 0; i < _winLayers.Length; i++) winLayers[i] = loc?.map?.GetLayer(_winLayers[i]);
             for (int ty = 0; ty < h; ty++)
                 for (int tx = 0; tx < w; tx++)
                 {
-                    foreach (string ln in _winLayers)
+                    foreach (var wl in winLayers)
                     {
-                        byte[]? cls;
-                        try { cls = hf.GetPixelClasses(loc, tx, ty, ln); } catch { cls = null; }
+                        byte[]? cls = labels.Get(wl, tx, ty);
                         if (cls == null) continue;
                         int n = 0;
                         for (int p = 0; p < 256; p++) if (cls[p] == 12) n++;
@@ -204,6 +219,152 @@ namespace SDVRadiance
                     continue;
                 _lightPos[_lightCount] = new Vector2(u, v);
                 _lightData[_lightCount] = new Vector4(col * amt * b, Math.Max(0.02f, outdoors ? radiusOut : radiusIn));
+                _lightCount++;
+            }
+        }
+
+        // ---- labelled EMISSIVE art (class 6, "light source" in the studio) -----------------------
+        // A forge, a neon shop sign, a glowing crystal: art that is its OWN light source. Nothing in
+        // the game marks these, and no heuristic can tell a painted-orange fire from painted-orange
+        // rust, so this is 100% label-driven like windows.
+        //
+        // The colour is READ OUT OF THE ART, not configured: a Joja sign glows blue, Clint's forge
+        // glows orange, a Junimo crystal glows green, with no per-object tuning. Only the pixels the
+        // label marks are sampled, which is why the guide says to paint the FLAME and not the whole
+        // stove — averaging in the black iron body would wash the light out to grey.
+        //
+        // Unlike windows there is no night gate: a forge is lit at noon too. It just reads as more
+        // at night, so the strength ramps rather than switches.
+        private GameLocation? _emitLoc;
+        private int _emitLabelVer = -1;
+        private float _dayPoolDamp = 1f;   // outdoor midday sink shared by lamp pools and emissive
+        private readonly List<(Vector2 Pos, Vector3 Col, float Amt)> _emitTiles = new();
+        private static readonly string[] _emitLayers = { "Front", "Buildings", "Back" };
+        private const int EmitMinPixels = 6;    // below this it is a stray dab, not a light
+
+        private void EnsureEmissiveCache(GameLocation loc)
+        {
+            var labels = LabelStore.Instance;
+            int ver = labels?.Version ?? 0;
+            if (ReferenceEquals(loc, _emitLoc) && ver == _emitLabelVer)
+                return;
+            _emitLoc = loc; _emitLabelVer = ver; _emitTiles.Clear();
+            var layer0 = loc?.map?.Layers.Count > 0 ? loc.map.Layers[0] : null;
+            if (labels == null || layer0 == null || ver == 0 || loc == null)
+                return;
+
+            int w = layer0.LayerWidth, h = layer0.LayerHeight;
+            var emitLayers = new xTile.Layers.Layer?[_emitLayers.Length];
+            for (int i = 0; i < _emitLayers.Length; i++) emitLayers[i] = loc.map.GetLayer(_emitLayers[i]);
+
+            for (int ty = 0; ty < h; ty++)
+                for (int tx = 0; tx < w; tx++)
+                {
+                    foreach (var el in emitLayers)
+                    {
+                        byte[]? cls = labels.Get(el, tx, ty);
+                        if (cls == null)
+                            continue;
+                        int n = 0;
+                        for (int p = 0; p < 256; p++) if (cls[p] == 6) n++;
+                        if (n < EmitMinPixels)
+                            continue;
+                        if (SampleEmissive(el, tx, ty, cls, n) is { } lit)
+                        {
+                            _emitTiles.Add((new Vector2(tx * 64 + 32, ty * 64 + 32), lit.Col, lit.Amt));
+                            break;      // one light per tile: the topmost layer that carries it wins
+                        }
+                    }
+                }
+        }
+
+        /// <summary>Average the ART colour of exactly the pixels the label marked emissive, hue
+        /// preserved by normalising to the brightest channel (a dim red ember still emits RED, just
+        /// weakly — that "weakly" is the returned amount, not a washed-out colour).</summary>
+        private (Vector3 Col, float Amt)? SampleEmissive(xTile.Layers.Layer? layer, int tx, int ty, byte[] cls, int n)
+        {
+            var tile = layer?.Tiles[tx, ty];
+            if (tile?.TileSheet == null)
+                return null;
+            Texture2D? tex;
+            try
+            {
+                string src = tile.TileSheet.ImageSource;
+                if (!_sheetTexCache.TryGetValue(src, out tex))
+                {
+                    try { tex = Game1.content.Load<Texture2D>(src); }
+                    catch { tex = null; }
+                    _sheetTexCache[src] = tex;
+                }
+            }
+            catch { return null; }
+            if (tex == null)
+                return null;
+
+            Rectangle bounds;
+            try
+            {
+                var ib = tile.TileSheet.GetTileImageBounds(tile.TileIndex);
+                bounds = new Rectangle(ib.X, ib.Y, ib.Width, ib.Height);
+            }
+            catch { return null; }
+            if (bounds.Width != 16 || bounds.Height != 16)
+                return null;
+
+            ReadTileArt(tex, bounds);            // fills _artBuf from the cached whole-sheet readback
+            var buf = _artBuf;
+            if (buf == null)
+                return null;
+
+            float r = 0, g = 0, b = 0, lum = 0;
+            int taken = 0;
+            for (int p = 0; p < 256; p++)
+            {
+                if (cls[p] != 6)
+                    continue;
+                Color c = buf[p];
+                if (c.A < 40)
+                    continue;                    // transparent pixel carries no colour
+                r += c.R; g += c.G; b += c.B;
+                lum += (c.R * 0.299f + c.G * 0.587f + c.B * 0.114f) / 255f;
+                taken++;
+            }
+            if (taken < EmitMinPixels)
+                return null;
+            r /= taken; g /= taken; b /= taken; lum /= taken;
+            float peak = Math.Max(1f, Math.Max(r, Math.Max(g, b)));
+            var col = new Vector3(r / peak, g / peak, b / peak);
+            // How much light: how bright the art is × how much of the tile glows. A four-pixel
+            // pilot light must not shine like a whole forge mouth, so area counts — capped, because
+            // a fully emissive tile is not eight times a quarter-emissive one.
+            float area = MathHelper.Clamp(n / 96f, 0.25f, 1f);
+            return (col, MathHelper.Clamp(lum * area, 0f, 1f));
+        }
+
+        /// <summary>Add on-screen emissive tiles as lights. Always on — a forge burns at noon — but
+        /// ramped so it reads as a glow by day and a real light source at night.</summary>
+        private void AddEmissiveLights(int vw, int vh, float boost)
+        {
+            if (_emitTiles.Count == 0)
+                return;
+            float night = NightFactorNow();
+            float scale = (0.45f + 0.55f * night) * _dayPoolDamp;  // visible by day, dominant after
+                                                                   // dark, sunk into full daylight
+            float radius = 130f / Math.Max(1, vh);    // tighter than a window: a local pool, not a wash
+            float bst = Math.Max(0.4f, boost);
+            foreach (var (pos, col, amt) in _emitTiles)
+            {
+                if (_lightCount >= MaxLights)
+                    break;
+                Vector2 local = Game1.GlobalToLocal(Game1.viewport, pos);
+                float u = local.X / vw, v = local.Y / vh;
+                if (u < -0.1f || u > 1.1f || v < -0.1f || v > 1.1f)
+                    continue;
+                float a = amt * scale;
+                if (a < 0.02f)
+                    continue;
+                _lightPos[_lightCount] = new Vector2(u, v);
+                _lightData[_lightCount] = new Vector4(col * a * bst, Math.Max(0.02f, radius * (0.6f + 0.4f * amt)));
                 _lightCount++;
             }
         }
@@ -345,19 +506,18 @@ namespace SDVRadiance
             if (_occluderMaskBuf == null || _occluderMaskBuf.Length < count)
                 _occluderMaskBuf = new Color[count];
 
-            var hf = ShadowRenderer.Height;
+            var surf = SurfaceMap.For(loc);
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)
                 {
                     int tx = startTileX + i, ty = startTileY + j;
                     bool solid;
-                    if (hf != null)
+                    if (surf != null)
                     {
                         // Walls/roofs block lamp light; decks (piers/bridges, height 1 but open)
                         // and water don't.
-                        try { int cls = hf.GetSurfaceAt(loc, tx, ty); solid = cls == 2 || cls == 3; }
-                        catch { hf = null; solid = false; }
+                        solid = surf.BlocksLight(tx, ty);
                     }
                     else
                     {

@@ -7,7 +7,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>SDV-Radiance</AssemblyName>
     <RootNamespace>SDVRadiance</RootNamespace>
-    <Version>1.2.2</Version>
+    <Version>1.3.0</Version>
 
     <!-- SMAPI mod packaging: auto-detects the game folder and deploys to Mods/.
          Enables the bundled Harmony reference for the deeper _draw hook path. -->
@@ -30,6 +30,16 @@
   <!-- Ship compiled shaders (.mgfxo) with the mod. -->
   <ItemGroup>
     <None Include="assets\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!-- Ship the hand-painted liquid labels. LabelStore reads labels/*.json non-recursively and
+       once, so labels/archive/ is deliberately excluded: a file replaces a whole sheet on load,
+       and a superseded export sitting beside the current one would win on directory order. -->
+  <ItemGroup>
+    <None Include="labels\*.json">
+      <Link>labels\%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

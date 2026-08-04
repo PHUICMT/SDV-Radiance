@@ -25,6 +25,18 @@ sampler2D RaysSampler = sampler_state
 };
 
 float Threshold;    // brightness cutoff for the light source
+float LightAmt = 1;  // this light's eased presence (0..1) - per-light fade in/out
+float SpriteMaskOn;  // 1 when the per-frame sprite mask below is live
+// Every NPC / animal / critter on screen, baked before the world drew. The player was
+// already excluded by name; a bright NPC (white hair, a pale outfit) beside a lamp was
+// not, so it streaked rays like scenery. A sprite is never a light source.
+texture SpriteMaskTexture;
+sampler2D SpriteMaskSampler = sampler_state
+{
+    Texture = <SpriteMaskTexture>;
+    MinFilter = Point; MagFilter = Point; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
 float2 LightPos;    // light position in screen UV (may be off-screen)
 float LightRadius;  // UV radius around LightPos within which bright pixels may streak
 float Aspect;       // viewport w/h, to make the radius circular in UV space
@@ -81,13 +93,14 @@ float4 BrightPS(PixelInput input) : SV_TARGET
     float2 d = input.UV - LightPos;
     d.x *= Aspect;                                   // circular in pixel space
     float within = 1.0 - smoothstep(LightRadius * 0.65, LightRadius, length(d));
-    mask *= within;
+    mask *= within * LightAmt;
 
     // The player's own pixels never emit rays (bright face/hair beside a lamp).
     float2 pmSpan = max(PlayerRect.zw - PlayerRect.xy, float2(1e-4, 1e-4));
     float2 pmuv = (input.UV - PlayerRect.xy) / pmSpan;
     float pmIn = step(0.0, pmuv.x) * step(pmuv.x, 1.0) * step(0.0, pmuv.y) * step(pmuv.y, 1.0);
     mask *= 1.0 - step(0.02, tex2D(PlayerMaskSampler, saturate(pmuv)).a) * pmIn;
+    mask *= 1.0 - SpriteMaskOn * step(0.05, tex2D(SpriteMaskSampler, input.UV).a);
 
     // Only genuinely LIT pixels emit (flood lightmap gate) — daytime open ground is fully
     // lit so nothing changes; at night rays come from lamp glow zones only.

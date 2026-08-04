@@ -49,6 +49,17 @@ sampler2D MaskLinearSampler = sampler_state
     MinFilter = Linear; MagFilter = Linear; MipFilter = None;
     AddressU = Clamp; AddressV = Clamp;
 };
+// Signed distance to the effect shoreline, chamfer-baked on the CPU alongside the mask:
+// alpha = 128 at the waterline, +4 per texel into the water, -4 per texel onto land
+// (±31.75 texels of range). One field drives the quantized edge, the foam band and the
+// wet ground rim. Linear: the encoding is a distance, so interpolation is meaningful.
+texture SdfTexture;
+sampler2D SdfSampler = sampler_state
+{
+    Texture = <SdfTexture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
 
 float Time;             // seconds
 float Strength;         // ripple amplitude (UV units are scaled inside)
@@ -72,6 +83,7 @@ float LightCount;       // how many entries of Lights are live
 float PlayerInWater;    // 0..1 eased: the player's feet are on water pixels (wading). C# fades
                         // this in/out over ~a third of a second so the self-reflection never pops.
 float TintAmt;          // depth-tint amount (0 when the shimmer toggle is off; reflection may still run)
+float3 SkyColor;        // synthesised sky tint: day/golden-hour/night/overcast, ambient-scaled (C#)
 float4 PlayerRect;      // player silhouette bounds in screen UV (x0,y0,x1,y1)
 float SpriteMaskOn;     // 1 when the per-frame sprite mask below is live
 // Per-frame mask of every sprite ON the water (NPCs, farm animals, critters) baked in
@@ -90,6 +102,34 @@ texture PlayerMaskTexture;   // the player's baked silhouette — its alpha mark
 sampler2D PlayerMaskSampler = sampler_state
 {
     Texture = <PlayerMaskTexture>;
+    MinFilter = Point; MagFilter = Point; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+float ReflectRTOn;       // 1 when the flipped-entity reflection layer below is live
+float ReflectRTPlayer;   // 1 when the player was stamped into it (else the wading
+                         // silhouette fallback keeps running)
+// P3b: every entity (player, NPCs, animals, critters, tree canopies) drawn UPSIDE-DOWN
+// anchored at its own ground contact. Sampling this at the CURRENT pixel gives the
+// correct reflection by construction — right anchor, no hidden-surface errors, no
+// self-hits — where the screen flip can only guess from what happens to be above.
+texture ReflectRTTexture;
+sampler2D ReflectRTSampler = sampler_state
+{
+    Texture = <ReflectRTTexture>;
+    MinFilter = Point; MagFilter = Point; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+float SceneOn;           // 1 when the sprite-free scenery source below is live
+float3 SceneAmbient;     // lighting-stage ambient: the raw layer render carries no
+                         // lighting, so the mirror scales it to match the lit scene
+// P3c: the map's OWN layers (Back/Buildings/Front families) re-rendered with no
+// sprites in them. The mirror reads its source here instead of the composed screen:
+// a farmer standing on the bank can't punch a hole in the scenery's reflection,
+// because this source never contained them - the true map pixels are behind.
+texture SceneTexture;
+sampler2D SceneSampler = sampler_state
+{
+    Texture = <SceneTexture>;
     MinFilter = Point; MagFilter = Point; MipFilter = None;
     AddressU = Clamp; AddressV = Clamp;
 };
@@ -135,7 +175,9 @@ float EdgeDistAt(float2 p)
 {
     float2 wt = p * TilesPerScreen + WorldTileOffset;
     float2 muv = (wt - MaskOrigin) / MaskSize;
-    return tex2D(MaskSampler, muv).b;
+    // Bilinear: as a point sample the distance jumps a whole unit between neighbouring texels,
+    // and along a diagonal shore those jumps line up into a staircase.
+    return tex2D(MaskLinearSampler, muv).b;
 }
 
 float4 WaterPS(PixelInput input) : SV_TARGET
@@ -160,30 +202,23 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float isLava = step(0.25, maskA) * (1.0 - step(0.75, maskA)); // 0.25..0.75
     float rippleGate = 1.0 - isIce;                       // ice: no ripple; water/lava: yes
 
+    // Signed shore distance in TEXELS (+ = inside water). Sampled for every pixel because
+    // the wet ground rim below lives just OUTSIDE the water mask.
+    float sdfT = (tex2D(SdfSampler, maskUV).a - 0.501961) * 63.75;
+
     float4 src = tex2D(SourceSampler, uv);
     if (tileWater <= 0.001)
+    {
+        // Wet ground rim: the last ~3 texels of land before the waterline darken a touch,
+        // in two crisp steps (pixel-art rule: posterise, never a smooth ramp). Skipped
+        // beside ice (a frozen shore is not damp) and lava (rock does not glisten wet).
+        float wet = saturate((sdfT + 3.0) / 3.0);
+        wet = floor(wet * 2.0 + 0.5) * 0.5;
+        float wetOk = step(0.75, maskA);
+        src.rgb *= 1.0 - 0.08 * wet * wetOk;
         return src;
+    }
 
-    // Refine to the ACTUAL water pixels: the game draws curved banks / rocks
-    // inside the square water tiles, so gate on blue-dominant color — PLUS nearly
-    // unsaturated pixels (grey tide pools are water too; warm sand stays excluded
-    // because it is saturated and red-dominant).
-    float blueness = saturate((src.b - src.r) * 3.0) * saturate((src.b - src.g) * 3.0 + 0.35);
-    float maxc = max(src.r, max(src.g, src.b));
-    float minc = min(src.r, min(src.g, src.b));
-    // The grey gate only holds INSIDE true water tiles (grey tide pools) — in the dilated
-    // bank ring it caught grey/white land art (trailer roofs, stones) and rippled it.
-    float coreTile = tex2D(MaskCoreSampler, maskUV).r;
-    // Soft core reaches ~half a tile past true water tiles, so the PAINTED grey rim of a
-    // tide pool keeps its effects — the pixel mask already guarantees these are water pixels,
-    // while roofs/stones outside it never enter this branch at all.
-    float coreSoft = saturate(tex2D(MaskCoreLinearSampler, maskUV).r * 2.0);
-    float greyness = saturate(1.0 - (maxc - minc) * 6.0) * step(src.r, src.b + 0.02) * coreSoft;
-    // Teal/green-tinted water (shallow foam zones along banks, the greenish ring around
-    // lily pads) — g and b together dominate r, with b not far under g. Lily-pad leaf
-    // green itself (b well below g) stays excluded: a pad floats ON the water and must
-    // occlude the reflection, but the water around it must not lose it.
-    float cyan = saturate((min(src.g, src.b) - src.r) * 3.0) * saturate((src.b - src.g) * 4.0 + 0.8);
     float srcLum = dot(src.rgb, float3(0.299, 0.587, 0.114));
     // The player's own PIXELS never ripple where they overlap painted shore water. Sampled
     // from the baked silhouette so only the sprite is excluded, not a whole box. (The old
@@ -193,7 +228,9 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float2 pmSpan = max(PlayerRect.zw - PlayerRect.xy, float2(1e-4, 1e-4));
     float2 pmuv = (uv - PlayerRect.xy) / pmSpan;
     float pmIn = step(0.0, pmuv.x) * step(pmuv.x, 1.0) * step(0.0, pmuv.y) * step(pmuv.y, 1.0);
-    float inPlayer = step(0.02, tex2D(PlayerMaskSampler, saturate(pmuv)).a) * pmIn;
+    // 0.15, not 0.02: the bake fades a shadow penumbra toward the head, and the faintest
+    // tail of that fade must not widen the exclusion past the sprite's visible pixels.
+    float inPlayer = step(0.15, tex2D(PlayerMaskSampler, saturate(pmuv)).a) * pmIn;
     // Exclude the player's pixels EVERYWHERE, not just in the bank ring: while swimming
     // the visible half-body sits over core water and used to warp with the ripple.
     float ringGate = 1.0 - inPlayer;
@@ -201,27 +238,17 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // never ripple / mirror. Water beside them keeps animating (pixel-accurate mask).
     float inSprite = SpriteMaskOn * step(0.05, tex2D(SpriteMaskSampler, uv).a);
     ringGate *= 1.0 - inSprite;
-    // The pixel mask is the AUTHORITY on where water is — colour tests only BOOST beyond the
-    // 0.75 floor (murky green lakes failed every colour gate and the effect went patchy).
-    // Their remaining job is grading, not coverage; sprites over water are handled by the
-    // carve pass + the player silhouette gate.
-    //
-    // ...but a floor of 0.75 also means NO colour test can reject, so wherever the mask
-    // over-covers (beach wave tiles are square, the painted sand inside them is not) the sand
-    // got 75% of the effect and read as a hard tile-shaped rectangle. Veto the pixels that are
-    // unmistakably dry land — WARM (red over blue) and SATURATED — which is sand, tilled soil,
-    // dirt paths and bare wood. Cool water is untouched, and so is the murky green/grey water
-    // the floor exists for (those are near-neutral, so `sand` stays ~0).
-    // LAVA is warm and saturated too, so it must be exempt or molten rock loses its effect.
-    // The isLava tag alone is NOT enough: it comes from painted label class 11, which ships
-    // dormant, so at the Caldera lava reads as ordinary water and the veto would eat it.
-    // Separate them by HUE instead: sand, soil, paths and wood ramp gently from red through
-    // green to blue (r-g stays small), while molten rock spikes red far above green.
-    float warm = saturate((src.r - src.b) * 3.0);
-    float notMolten = 1.0 - smoothstep(0.25, 0.45, src.r - src.g);
-    float sand = warm * saturate((maxc - minc) * 4.0) * notMolten * (1.0 - isLava);
-    float water = tileWater * max(max(max(blueness, greyness * 0.9), cyan), 0.75)
-                * ringGate * (1.0 - sand * 0.95);
+    // V4: the pixel mask is the ONLY authority on coverage. Every colour test that used to
+    // grade or veto here (blueness/greyness/cyan boosts, the 0.75 floor, the warm+saturated
+    // sand veto) is gone — the mask is built from the game's own water flags refined by
+    // hand-painted labels, so there is no over-coverage left for a colour test to hide, and
+    // no recolor mod can ever fool a test that no longer exists.
+    float water = tileWater * ringGate;
+    // Distance-field edge: the mask's binary texel edge becomes a SHAPE-smooth,
+    // RENDER-crisp 3-step ramp over the last ~1.5 texels of water. The floor keeps a
+    // sliver of effect on 1-texel slivers so thin painted channels don't go dead.
+    float edgeQ = floor(saturate(sdfT / 1.5) * 3.0 + 0.5) / 3.0;
+    water *= max(edgeQ, 0.15);
     if (water <= 0.002)
         return src;
 
@@ -248,7 +275,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     {
         float2 tuv = ((uv + ripple) - PlayerRect.xy) / pmSpan;
         float tin = step(0.0, tuv.x) * step(tuv.x, 1.0) * step(0.0, tuv.y) * step(tuv.y, 1.0);
-        tapPlayer = step(0.02, tex2D(PlayerMaskSampler, saturate(tuv)).a) * tin;
+        tapPlayer = step(0.15, tex2D(PlayerMaskSampler, saturate(tuv)).a) * tin;
     }
     ripple *= 1.0 - max(tapSprite, tapPlayer);
     float4 col = tex2D(SourceSampler, uv + ripple);
@@ -294,7 +321,8 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // above them — their march found land instantly, leaving the mirror short of the
         // left/right waterline. If this column isn't over core water, borrow the neighbour
         // column on whichever side the real water is.
-        float tileW = 1.0 / TilesPerScreen.x;
+        // Borrow at TEXEL scale: a full-tile hop was itself quantising the mirror into 64px columns.
+        float tileW = 4.0 / (TilesPerScreen.x * 16.0);
         float coreC = WaterAt(float2(mx, uv.y));
         float coreL = WaterAt(float2(mx - tileW, uv.y));
         float coreR = WaterAt(float2(mx + tileW, uv.y));
@@ -306,7 +334,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // mirror never slices into offset blocks.
         float distHalf = EdgeDistAt(float2(mx, uv.y)) * 255.0;
         float found = WaterAt(float2(mx, uv.y)) * step(distHalf, 252.5);
-        float waterOff = (distHalf * 0.5 / 16.0) / TilesPerScreen.y;
+        float waterOff = (distHalf * 2.0 / 16.0) / TilesPerScreen.y;   // 0.5 unit per texel on the CPU
         float edgeV = uv.y - waterOff;
 
         // Oblique-view mirror: the world is drawn at a slant, so a reflection must be
@@ -322,7 +350,11 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         float2 reflUv = float2(mx + ripple.x * 3.0,
                                edgeV - depth * 1.25 - 0.08 / TilesPerScreen.y + abs(ripple.y) * 2.0);
         reflUv = clamp(reflUv, float2(0.0, 0.0), float2(1.0, 1.0));
-        float3 refl = tex2D(SourceSampler, reflUv).rgb;
+        // Prefer the sprite-free scenery source (P3c): the composed screen contains the
+        // player/NPCs, and excluding them left body-shaped sky holes in the reflection.
+        float3 refl = SceneOn > 0.5
+            ? tex2D(SceneSampler, reflUv).rgb * SceneAmbient
+            : tex2D(SourceSampler, reflUv).rgb;
 
         // Wide 5-tap smoothing: at pixel-mask resolution a single bilinear sample flips
         // land→water within ~4px, which drew a hard horizontal seam wherever the mirrored
@@ -338,7 +370,11 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // Distance fade: defined near the shoreline, gone by ~0.75 screen below it. (An
         // always-on base mirrored far-upstream cliffs down entire rivers as dark streaks;
         // 1.6 faded bridges out so fast their reflection looked cut short.)
-        float fade = saturate(1.0 - depth * 1.3);
+        // Reach. At 1.3 the mirror was gone 0.77 of a screen below the shoreline, which is about
+        // four tiles from a mid-screen waterline: a bridge's reflection stopped long before the
+        // river did. It no longer has to cut to nothing either, because what lies past it is the
+        // sky glaze rather than bare water.
+        float fade = saturate(1.0 - depth * 0.5);
         // Fade the reflection out where the mirrored sample would fall OFF-screen, instead of
         // clamping (which smears the edge row/column across the water near the screen border).
         float2 dborder = min(reflUv, float2(1.0, 1.0) - reflUv);
@@ -349,34 +385,99 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // nothing — the hard rectangles between mirrored and unmirrored water came from
         // those cuts, not from the mirror itself.
         float3 mirrorCol = refl * float3(0.66, 0.76, 0.92);   // cool + darken: reads as "in the water"
-        float3 sheenCol = col.rgb * float3(1.06, 1.10, 1.18) + 0.015;
-        // Keep the self-suppression zone TIGHT: small tide pools sit entirely within a couple of
-    // tiles of their own shoreline, so a wide nearSelf band muted their whole mirror. And only
-    // DAMP it (x0.4), never cut: the water strip inside a TOP shore tile has waterOff~0 across
-    // its whole row, and a full cut left every far bank with a blank unreflective band — the
-    // near-shore mirror (bank art, a player standing above the pond) belongs there.
-    float nearSelf = 1.0 - smoothstep(0.002, 0.01, waterOff);
-        // srcWater only DAMPS (x0.3 floor), never cuts: under a bridge the arch columns see
-        // through the opening onto upper water and used to drop to sheen 1-2 tiles before the
-        // wall columns did — the mirror's bottom edge stepped up and down. With a floor, every
-        // column keeps a faint continuation and the DEPTH fade (uniform) sets the visual end.
-        // srcWater damping is DEPTH-GATED: right under a shoreline/deck the mirrored
-        // source is the structure itself, but a 1-tile plank pier has open water directly
-        // above it and the ±0.8-tile srcWater taps leaked into that water — its whole
-        // reflection washed down to a faint ghost. Only deeper down (source genuinely
-        // upstream water) does the damping engage.
-        float srcDamp = srcWater * smoothstep(0.25, 1.2, depth * TilesPerScreen.y);
-        float mirrorness = found * (1.0 - srcDamp * 0.7) * (1.0 - nearSelf * 0.4);
+        // BOUNDED HEIGHT (see docs/water-v3-research). Nothing standing on a shore is taller than
+        // ~8 tiles, so a mirrored sample deeper than that cannot be a real reflection — and flat
+        // ground (height zero) reflected across a pond is what read as the "green sheet". The
+        // honest end of a reflection is SKY, not absence: dissolve the mirror into the sky tint
+        // across 5..9 tiles of depth instead of letting it run or cutting it off.
+        float depthTiles = depth * TilesPerScreen.y;
+        float3 skySurf = lerp(col.rgb, SkyColor, 0.25);
+        // ...and the same resolution when the mirrored SOURCE is upstream water. This used to be
+        // a 70% DAMP gated at 1.2 tiles, and that gate was a visible horizontal cut right under
+        // every bridge (a bridge is ~1 tile tall, so just past its own art the source is river
+        // again). Resolving to sky suppresses the same upstream-water streaks with no seam, and
+        // it engages at 2..4 tiles so a bridge plus a person standing on it (~2 tiles of genuine
+        // reflection) keeps its full band.
+        float toSky = max(smoothstep(5.0, 9.0, depthTiles),
+                          srcWater * smoothstep(2.0, 4.0, depthTiles));
+        // P3b — sprites already reflect via the flipped-entity RT (composited below); the
+        // same sprite left in the screen-flip SOURCE would mirror twice at a different
+        // offset. With the sprite-free scenery source (P3c) live there is nothing to
+        // exclude — the fallback below only runs when the mirror reads the composed
+        // screen, and it resolves sprite pixels to sky (the old body-shaped hole).
+        // The carve ONLY runs when the mirror is reading the composed screen. Making it
+        // unconditional was tried for one build and it brought the hollow straight back:
+        // carving at the SOURCE point punches a hole up-screen, while the body's own
+        // reflection is stamped down-screen from its feet - for anything whose stamp lands
+        // on land (a bird over the bank, a butterfly inland) that is a hole and no
+        // reflection, which is the artifact the scenery bake exists to retire. With the bake
+        // live there is nothing to carve, so the right answer is to leave it alone.
+        if (ReflectRTOn > 0.5 && SceneOn < 0.5)
+        {
+            float srcSprite = SpriteMaskOn * step(0.05, tex2D(SpriteMaskSampler, reflUv).a);
+            float2 pruv = (reflUv - PlayerRect.xy) / pmSpan;
+            float prIn = step(0.0, pruv.x) * step(pruv.x, 1.0) * step(0.0, pruv.y) * step(pruv.y, 1.0);
+            srcSprite = max(srcSprite, ReflectRTPlayer * prIn * step(0.05, tex2D(PlayerMaskSampler, saturate(pruv)).a));
+            toSky = max(toSky, srcSprite);
+        }
+        mirrorCol = lerp(mirrorCol, skySurf, toSky);
+        // The no-mirror fallback is the same surface with a WHISPER of sky, not a brightened copy
+        // of the water (two formulas ~40% apart in brightness met at a visible seam). Kept subtle:
+        // at 0.35 the glaze washed the mirror itself out — its job is only to remove the seam.
+        float3 sheenCol = lerp(col.rgb, SkyColor, 0.12);
+        // The old nearSelf damping (x0.6 within ~2 texels of the waterline) is retired: with a
+        // brighter sheen it rendered as a pale empty strip hugging every bank, and the physically
+        // right content there is the bank's own dark rim reflection at full strength.
+        float mirrorness = found;
         float3 reflCol = lerp(sheenCol, mirrorCol, mirrorness);
+        // The luminance gate keeps the mirror off water that is genuinely in shadow, but it was
+        // reading THIS pixel alone, so anything dark drawn INSIDE the water — a submerged rock, a
+        // patch of weed, a fish shadow — lost its reflection while the water touching it kept one.
+        // That edge is the thin bright outline around every underwater object. A reflection does
+        // not stop existing because the bottom is dark, so the gate now reads the NEIGHBOURHOOD:
+        // an object a few texels across no longer punches a hole, while a whole region in shadow
+        // still gates exactly as before.
+        float lumAvg = (srcLum
+                      + dot(tex2D(SourceSampler, uv + float2(0.0, -0.35 * tps)).rgb, float3(0.299, 0.587, 0.114))
+                      + dot(tex2D(SourceSampler, uv + float2(0.0,  0.35 * tps)).rgb, float3(0.299, 0.587, 0.114))
+                      + dot(tex2D(SourceSampler, uv + float2(-0.35 * tps, 0.0)).rgb, float3(0.299, 0.587, 0.114))
+                      + dot(tex2D(SourceSampler, uv + float2( 0.35 * tps, 0.0)).rgb, float3(0.299, 0.587, 0.114))) * 0.2;
         float amt = saturate(ReflectStrength) * water * fade * onScreen
-                  * saturate(srcLum * 3.2) * lerp(0.5, 1.0, mirrorness);
+                  * saturate(max(srcLum, lumAvg) * 3.2) * lerp(0.5, 1.0, mirrorness);
         col.rgb = lerp(col.rgb, reflCol, amt);
+
+        // P3b — composite the flipped-entity layer. It is correct by construction, so it
+        // rides neither the shoreline march nor the source-luminance gates: just the march
+        // mask at THIS pixel (flowing water and lava mirror nothing) and the same ripple
+        // wobble + cool grade as the mirror, so both read as one surface.
+        if (ReflectRTOn > 0.5)
+        {
+            // Wobble kept SMALL (was 1.8): a hard sway made the visible scrap of an
+            // occluded reflection drift sideways and read as a separate floating blob.
+            float4 ent = tex2D(ReflectRTSampler, saturate(uv + ripple * 0.9));
+            // Entities also mirror on the WET FRINGE (effect-only band: beach surf wash, the
+            // strip under a bank's overlay art) — the march channel stops there, and clipping
+            // a body's shallow half against it left the deep half floating detached below an
+            // NPC on the tide line. Plain water only: alpha 192 tags FLOWING water (a body
+            // must not print on a waterfall face) and lava/ice sit lower still.
+            float2 ewt = uv * TilesPerScreen + WorldTileOffset;
+            float4 em = tex2D(MaskSampler, (ewt - MaskOrigin) / MaskSize);
+            float entWater = max(em.g, em.r * step(0.9, em.a));
+            float entAmt = saturate(ReflectStrength) * entWater * ent.a * (1.0 - inSprite);
+            // Opacity walked in two reports: 0.85 read as "too clear" (denser than the bushes
+            // mirrored beside it), 0.66 as "a bit too faint" once the feet->head fade landed on
+            // top of it. 0.74 with that fade puts the near-feet band back at the old presence
+            // while the deep end stays soft.
+            col.rgb = lerp(col.rgb, ent.rgb * float3(0.66, 0.76, 0.92), entAmt * 0.74);
+        }
 
         // SELF-REFLECTION while wading: standing IN the water the player is BELOW the
         // shoreline, so the main mirror can't see them. Mirror the baked silhouette about
         // their own feet line instead — a dark rippling figure that follows them through
         // the pool. Silhouette-based → any outfit/appearance mod works automatically.
-        if (PlayerInWater > 0.02)
+        // (The flipped-entity RT covers this exact case when it holds the player — the
+        // fallback only runs when it doesn't, e.g. shadows disabled.)
+        if (PlayerInWater > 0.02 && ReflectRTPlayer < 0.5)
         {
             float feetFrac = 0.9545;                             // feet row inside the mask RT
             float feetV = PlayerRect.y + feetFrac * pmSpan.y;
@@ -413,6 +514,17 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float rim = saturate(tileWater - rimMin) * tex2D(MaskSampler, maskUV).g;
     // Rim shading belongs to the shimmer look — gone when only the mirror is running.
     col.rgb *= 1.0 - rim * 0.22 * water * saturate(TintAmt * 3.0);
+
+    // Shoreline foam from the distance field: a soft brightening over the first texels of
+    // water plus ONE drifting lap line, posterised to read as pixels (never a smooth wash).
+    // World-anchored phase jitter per texel so the line breaks up instead of tracing the
+    // grid. Ice doesn't lap; lava's edge glows on its own; rain roughens the lap line away.
+    float foamBand = (1.0 - smoothstep(0.5, 5.0, sdfT)) * step(0.0, sdfT);
+    float lapPhase = frac(sdfT * 0.45 - Time * 0.30 + hash(floor(worldTile * 16.0) / 16.0) * 0.25);
+    float lap = step(0.62, lapPhase);
+    float foam = foamBand * (0.30 + 0.70 * lap) * water * (1.0 - isIce) * (1.0 - isLava) * (1.0 - RainAmt * 0.5);
+    foam = floor(foam * 3.0 + 0.5) / 3.0;
+    col.rgb = lerp(col.rgb, float3(0.93, 0.97, 1.02), foam * 0.30);
 
     // Drifting specular glints — SCATTERED, not a grid. The old "one glint per cell,
     // all the same size" read as a regular dotted pattern. Now: TWO overlapping layers

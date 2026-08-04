@@ -18,13 +18,6 @@ namespace SDVRadiance
     /// </summary>
     internal sealed partial class RenderPipeline
     {
-        // Tiles whose water came ONLY from animated-art nomination (fountains, waterfalls):
-        // they join the effect channel but must be cleared from the march channel.
-        private bool[]? _animOnlyTileBuf;
-        // Same tiles, remembered BEFORE the pool-region pass consumes the buffer — drives a
-        // SOFT mask value in Pass E (a fountain should barely shimmer, not churn like a lake).
-        private bool[]? _animSoftTileBuf;
-
         /// <summary>Resolve the 16×16 source art of a map tile (first frame for animated tiles).</summary>
         private bool TryTileArt(xTile.Layers.Layer? layer, int tx, int ty, out Texture2D tex, out Rectangle src)
             => TryTileArt(layer, tx, ty, out tex, out src, out _);
@@ -51,6 +44,13 @@ namespace SDVRadiance
                 try { sheet = Game1.content.Load<Texture2D>(t.TileSheet.ImageSource); }
                 catch { sheet = null; }
                 _sheetTexCache[t.TileSheet.ImageSource] = sheet;
+                // Shadow art ships in its OWN tilesheets, and the name says so. Every shadow sheet
+                // in the map dump is called *Shadow(s) / *ShadowTilesheet / *CanopyShadow (15 of
+                // them, vanilla and modded), so the sheet identity is a second, colour-independent
+                // way to know a tile is a cast shadow and must never carve the water it falls on.
+                if (sheet != null
+                    && t.TileSheet.ImageSource.IndexOf("shadow", StringComparison.OrdinalIgnoreCase) >= 0)
+                    _shadowSheets.Add(sheet);
             }
             if (sheet == null)
                 return false;
@@ -147,97 +147,54 @@ namespace SDVRadiance
             }
         }
 
-        private bool[] ClassifyBits(Texture2D tex, Rectangle src, bool foam = false)
+        /// <summary>A CAST SHADOW, not a structure: near-black and translucent. Bridges, cliffs and
+        /// trees drop these onto the water from the Buildings/Front/AlwaysFront layers, and carving
+        /// them punched the shadow's exact silhouette out of the effect channel — but shaded water
+        /// is still water and has to keep rippling. Measured over the whole map dump: AlwaysFront
+        /// holds 192k distinct tiles of which only 11k are fully opaque and ~99k are exactly this
+        /// dark translucent wash, so the rule has to be conservative. Near-black only (art is
+        /// premultiplied, so a black wash stays black at any alpha) and grey, so no coloured art
+        /// can fall through it.</summary>
+        private static bool ShadowWash(Color c)
         {
-            var key = (tex, src, foam);
-            if (_waterBitsCache.TryGetValue(key, out bool[]? bits))
-                return bits;
-            bits = new bool[256];
-            _artBuf ??= new Color[256];
-            try
-            {
-                ReadTileArt(tex, src);
-                for (int p = 0; p < 256; p++)
-                {
-                    Color c = _artBuf[p];
-                    bool w = WaterColor(c);
-                    if (!w && foam && c.A >= 200)
-                    {
-                        int maxc = Math.Max(c.R, Math.Max(c.G, c.B));
-                        int minc = Math.Min(c.R, Math.Min(c.G, c.B));
-                        w = maxc >= 190 && maxc - minc <= 25 && c.B >= c.R;   // white/pale foam
-                    }
-                    bits[p] = w;
-                }
-            }
-            catch { /* leave all-false */ }
-            _waterBitsCache[key] = bits;
-            return bits;
-        }
-
-        /// <summary>How many of a classification's 256 bits are set.</summary>
-        private static int CountBits(bool[] bits)
-        {
-            int n = 0;
-            for (int p = 0; p < bits.Length; p++)
-                if (bits[p]) n++;
-            return n;
-        }
-
-        /// <summary>16×16 puddle classification of one tile art, cached: flat BLUE-GREY pixels
-        /// (low saturation, blue at least a nudge over red, mid brightness) — the look of the
-        /// walkable shallow pools that are plain ground in map data. Warm-grey stone, sand and
-        /// grass all fail one of the gates.</summary>
-        private (bool[] bits, int count) PuddleBits(Texture2D tex, Rectangle src)
-        {
-            var key = (tex, src);
-            if (_puddleBitsCache.TryGetValue(key, out var entry))
-                return entry;
-            var bits = new bool[256];
-            int n = 0;
-            _artBuf ??= new Color[256];
-            try
-            {
-                ReadTileArt(tex, src);
-                for (int p = 0; p < 256; p++)
-                {
-                    Color c = _artBuf[p];
-                    int maxc = Math.Max(c.R, Math.Max(c.G, c.B));
-                    int minc = Math.Min(c.R, Math.Min(c.G, c.B));
-                    // Measured from the island dig-site pool art (palette: (163,177,165),
-                    // (144,157,158), (153,163,162), (112,134,141) — grey-GREEN, R always the
-                    // lowest channel, B only +2..+29 over R, and B within ~12 of G). Guards
-                    // against false positives: sand/warm stone are R-dominant, pure-neutral
-                    // concrete/stone (B==R) fails the +2, dark cave floors fail brightness —
-                    // and DARK FOREST GRASS (cool green, e.g. (60,90,70)) passed every old
-                    // gate and rippled whole meadows at night: it fails the two new ones
-                    // (B ≥ G−12: pool art is grey, grass keeps B well under G; G−R ≤ 25:
-                    // grass is strongly green-dominant, pool art never exceeds +22).
-                    bool puddleish = c.A >= 200
-                        && maxc - minc <= 34          // flat / unsaturated
-                        && c.B >= c.R + 2             // cool tint (never true for warm ground)
-                        && c.G >= c.R                 // R is the lowest channel
-                        && c.B >= c.G - 12            // grey, not green (kills grass)
-                        && c.G - c.R <= 25            // pool art is never strongly green-dominant
-                        && maxc >= 55 && maxc <= 200; // mid brightness (not shadow, not foam)
-                    if (bits[p] = puddleish)
-                        n++;
-                }
-            }
-            catch { /* leave all-false */ }
-            entry = (bits, n);
-            _puddleBitsCache[key] = entry;
-            return entry;
+            if (c.A >= 250)
+                return false;                       // fully opaque art is never a wash
+            // Brightness alone. A saturation term was tried and only cost recall: measured over
+            // the 15 shadow sheets in the map dump it rejected 28% of two of them (SVE's building
+            // shadow, IridiumQuarry) for being faintly blue, and at max(rgb) <= 40 a pixel is
+            // indistinguishable from black whatever its hue, so hue cannot separate art from wash.
+            return Math.Max(c.R, Math.Max(c.G, c.B)) <= 40;
         }
 
         /// <summary>16×16 opacity bits + opaque-pixel count of one tile art, cached — used to
         /// carve piers/bridges/pads out of the water mask (count decides march-blocking).
-        /// A tile whose opaque art is MOSTLY painted water (a waterfall, an animated water
-        /// edge) is no structure at all — skipped entirely, or it carved whole water tiles
-        /// into bright untouched patches. Below that bar, plain opacity rules: plank art
-        /// keeps its dark blue-ish shadow pixels, so piers/bridges still block the march.</summary>
+        /// The old "≥60% of the opaque art is water-COLOURED → wave overlay, don't carve"
+        /// bail-out is GONE (V4 D1: no colour guessing): it existed to keep unlabelled water
+        /// overlays from carving themselves, but it also waved through every blue-ish or
+        /// murky-toned STRUCTURE — the SVE crystal boulder in the Mountain lake and the
+        /// FarmCave plank both rippled because their art happened to pass a colour test.
+        /// Genuine water drawn on overlay layers is protected by its LABEL now (a label's
+        /// liquid pixels are removed from the carve); art nobody labelled carves by opacity,
+        /// so an unlabelled mod pond at worst goes calm instead of rippling its own rocks.</summary>
+        /// <summary>Textures that came from a tilesheet whose name says "shadow".</summary>
+        private readonly HashSet<Texture2D> _shadowSheets = new();
+        private static readonly bool[] _noBits = new bool[256];
+
         private (bool[] bits, int count) SolidBits(Texture2D tex, Rectangle src)
         {
+            var r = OpaqueBits(tex, src);
+            return (r.bits, r.count);
+        }
+
+        /// <summary>The same opacity bits WITHOUT the "mostly water-coloured → not a structure"
+        /// bail-out. Only for art a label has explicitly called ground: that guess is right for a
+        /// wave overlay and wrong for a snow-covered bank ledge, whose pale blue reads as water
+        /// (winter_outdoorsTileSheet#211 is 189 of 220 opaque pixels water-coloured, so it carved
+        /// nothing at all and the mirror ran straight over the bank).</summary>
+        private (bool[] bits, int count, int water) OpaqueBits(Texture2D tex, Rectangle src)
+        {
+            if (_shadowSheets.Contains(tex))
+                return (_noBits, 0, 0);     // a whole sheet of cast shadows carves nothing
             var key = (tex, src);
             if (_solidBitsCache.TryGetValue(key, out var entry))
                 return entry;
@@ -249,20 +206,15 @@ namespace SDVRadiance
                 ReadTileArt(tex, src);
                 for (int p = 0; p < 256; p++)
                 {
-                    if (bits[p] = _artBuf[p].A >= 128)
+                    if (bits[p] = _artBuf[p].A >= 128 && !ShadowWash(_artBuf[p]))
                     {
                         n++;
                         if (WaterColor(_artBuf[p])) w++;
                     }
                 }
-                if (w * 10 >= n * 6)   // ≥60% of the opaque art is water → water overlay, not structure
-                {
-                    Array.Clear(bits, 0, 256);
-                    n = 0;
-                }
             }
             catch { /* leave all-false */ }
-            entry = (bits, n);
+            entry = (bits, n, w);
             _solidBitsCache[key] = entry;
             return entry;
         }
@@ -333,7 +285,14 @@ namespace SDVRadiance
                 if (!job.Done)
                     return _waterAny;
                 _waterJob = null;
-                if (job.Failed)
+                if (job.AnchorOnly)
+                {
+                    // P3a: publish the location-wide waterline anchor and shrink the
+                    // map-sized scratch back down. The window mask was fresh when this
+                    // was kicked; fall through so a camera move still rebuilds it now.
+                    ConsumeAnchorJob(job);
+                }
+                else if (job.Failed)
                 {
                     if (!_loggedWaterJobFail) { _monitor.Log("Water mask compose failed once; rebuilding synchronously.", LogLevel.Warn); _loggedWaterJobFail = true; }
                 }
@@ -349,13 +308,20 @@ namespace SDVRadiance
             // WorldTileOffset shader param), so it only changes when the view crosses a tile
             // boundary — rebuilding the pixel grid every frame was a walking-stutter tax.
             // The 10 s safety refresh only exists to pick up rare map mutations (a bridge
-            // built, ice melting); everything routine invalidates via location/origin keys.
+            // built, ice melting); everything routine invalidates via location/origin keys,
+            // and world EVENTS (a fish pond placed, a map re-patched) bump MaskEpoch so the
+            // change lands on the next frame instead of up to 10 s late.
             if (_waterMask != null && loc == _lastWaterLoc && startTileX == _lastWaterTx && startTileY == _lastWaterTy
                 && _lastWaterHookVer == WaterDrawHook.Version
                 && _lastWaterLabelVer == CurrentLabelVersion()
+                && _lastWaterEpoch == MaskEpoch
                 && _waterMask.Width == tilesW * 16 && Game1.ticks - _lastWaterTick < 600)
             {
                 _waterMaskSize = new Vector2(tilesW, tilesH);
+                // The window is fresh and no job is in flight — the cheap moment to build
+                // this location's full-map waterline anchor if it doesn't have one yet.
+                if (_waterAny)
+                    MaybeKickAnchorJob(loc);
                 return _waterAny;
             }
 
@@ -391,6 +357,21 @@ namespace SDVRadiance
 
         private RenderTarget2D? _spriteMaskRT;
         private SpriteBatch? _spriteMaskBatch;
+
+        /// <summary>Solid exclusion box in WORLD px, centre-top anchored — bubbles, emotes:
+        /// UI riding in the world layer that the water must never warp.</summary>
+        private void StampUiBox(SpriteBatch sb, int cx, int top, int w, int h)
+        {
+            Vector2 tl = Game1.GlobalToLocal(Game1.viewport, new Vector2(cx - w / 2f, top));
+            sb.Draw(Game1.staminaRect, new Rectangle((int)tl.X, (int)tl.Y, w, h), Color.White);
+        }
+
+        // NPC.textAboveHead / textAboveHeadTimer went protected in 1.6 — the bubble mask below
+        // needs to know a bubble is showing and how wide its text is, nothing more.
+        private static readonly System.Reflection.FieldInfo? _npcText =
+            HarmonyLib.AccessTools.Field(typeof(NPC), "textAboveHead");
+        private static readonly System.Reflection.FieldInfo? _npcTextTimer =
+            HarmonyLib.AccessTools.Field(typeof(NPC), "textAboveHeadTimer");
         internal bool SpriteMaskReady;
 
         /// <summary>
@@ -434,7 +415,40 @@ namespace SDVRadiance
                 {
                     if (c?.Sprite?.Texture == null || c.IsInvisible)
                         continue;
-                    StampSprite(sb, c.Sprite.Texture, c.Sprite.SourceRect, c.GetBoundingBox());
+                    // drawOffset is the shift the game applies at DRAW time and never writes back
+                    // into Position or the collision box — a character on a seat, in the bus, or
+                    // posed by an event is drawn somewhere its box does not admit to. Without it
+                    // the exclusion landed off the body: the sprite kept rippling and a hole was
+                    // punched into clean water beside it.
+                    Rectangle bb = c.GetBoundingBox();
+                    Vector2 off = c.drawOffset;
+                    if (off != Vector2.Zero)
+                        bb.Offset((int)off.X, (int)off.Y);
+                    StampSprite(sb, c.Sprite.Texture, c.Sprite.SourceRect, bb);
+                    // A SPEECH BUBBLE is part of the world layer too (drawn above AlwaysFront),
+                    // so a fisherman chatting over the river had his bubble rippled and tinted
+                    // like the water behind it. Mask a generous box where vanilla draws it
+                    // (~3 tiles above the feet, scroll background included); over-covering is
+                    // harmless — the box only exists for the seconds the bubble does.
+                    if ((_npcTextTimer?.GetValue(c) as int? ?? 0) > 0
+                        && _npcText?.GetValue(c) is string say && say.Length > 0)
+                    {
+                        int tw = (int)(StardewValley.BellsAndWhistles.SpriteText.getWidthOfString(say) * 1.1f) + 64;
+                        var world = new Rectangle(bb.Center.X - tw / 2, bb.Top - 260, tw, 176);
+                        Vector2 tl = Game1.GlobalToLocal(Game1.viewport, new Vector2(world.X, world.Y));
+                        sb.Draw(Game1.staminaRect, new Rectangle((int)tl.X, (int)tl.Y, world.Width, world.Height), Color.White);
+                    }
+                    // Emotes (the thought/exclamation balloon) live in the world layer too.
+                    if (c.isEmoting)
+                        StampUiBox(sb, bb.Center.X, bb.Top - 160, 80, 128);
+                }
+                // The player's own bubble/emote — their BODY is excluded via PlayerMask, but
+                // the balloon floats above the mask's reach.
+                var pw = Game1.player;
+                if (pw != null && pw.isEmoting)
+                {
+                    Rectangle pbb = pw.GetBoundingBox();
+                    StampUiBox(sb, pbb.Center.X, pbb.Top - 160, 80, 128);
                 }
                 // Farm animals (ducks paddle straight into ponds).
                 foreach (var a in loc.animals.Values)

@@ -27,9 +27,6 @@ namespace SDVRadiance
         /// <summary>Optional diagnostics sink; when set (config.DebugLogging), the first few draws + any error are logged once.</summary>
         internal static IMonitor? Diag;
 
-        /// <summary>Optional Height Framework API (null if that mod isn't installed); when present it
-        /// gives robust per-tile water/deck classification instead of our own tile heuristics.</summary>
-        internal static Integrations.IHeightFrameworkApi? Height;
         private int _diagFrames;
         private bool _errLogged;
 
@@ -46,6 +43,8 @@ namespace SDVRadiance
         private Texture2D? _propGradTex;
         private Vector2 _playerFeetInRT;
         private bool _playerReady;
+        private bool _playerMaskFresh;   // the RT holds the current pose (reuse gate); _playerReady
+                                         // additionally means "cast a shadow" and drops while swimming
         internal const int PlayerRtW = 96;
         internal const int PlayerRtH = 176;
 
@@ -53,6 +52,11 @@ namespace SDVRadiance
         /// the water shader uses it to exclude exactly the player's own pixels (not a box)
         /// from ring-tile water effects.</summary>
         internal static Texture2D? PlayerMask;
+        /// <summary>The player's FULL-COLOUR bake (same pose/geometry as <see cref="PlayerMask"/>,
+        /// no colour scrub, no head fade) — the water reflection RT flips this below the feet.
+        /// Whatever appearance mods drew is what gets reflected.</summary>
+        internal static Texture2D? PlayerColor;
+        private RenderTarget2D? _playerColorRT;
         /// <summary>Opacity at the far tip (head end) relative to the feet, for the gradient fade.</summary>
         private const float HeadFade = 0.05f;
 

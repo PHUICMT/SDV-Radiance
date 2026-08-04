@@ -2,6 +2,86 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.3.0
+
+Water coverage no longer comes from guessing at pixel colours: it comes from the game's own
+water data plus a hand-painted label set that ships with the mod. Winter is where that shows
+most, because snow passes every blue-dominance test ever written. Alongside it, painted
+labels now drive light: shop signs and forge fires glow, windows light up after dusk, and
+glass stops blocking lamplight.
+
+### Fixed
+- Water in winter no longer spills onto snow, and no longer leaves flat unaffected blocks along
+  a bank. Coverage used to be refined by a colour test, and snow beats that test edge to edge,
+  so the mask both crept up snowbanks and had to be trimmed back by hand map by map. Coverage is
+  now the game's water data refined by labels only, with no colour test left in the pass.
+- A character sitting on a bench or chair is no longer drawn behind it. Props painted into the
+  map redraw their own tile above their cast shadow so the shadow does not darken the prop, and
+  that redraw sorted a full tile in front of anyone sitting on the tile. Placed seat furniture
+  had the same conflict. Both now sort under a body on their tile.
+- Reflections of NPCs and animals sat ten pixels lower than the player's, and a seated NPC
+  reflected where it was not drawn. Every body now uses one anchor.
+- Butterflies, birds and falling leaves reflected at full strength while characters faded with
+  depth, and left a hole in the water where their own reflection landed on land. They go through
+  the same reflection path as everyone else now.
+- God rays no longer stream off things that are not lights: snowy ground, a pale NPC beside a
+  lamp, a white fence. Sprites are excluded outright, and on snow the brightness bar rises to
+  just under snow's own.
+- Walking between lamps no longer drags one set of rays across the screen to the next lamp. Every
+  light on screen has its own beams now, up to three at once, each fading in and out on its own.
+- Speech bubbles and emotes over water are no longer rippled and tinted with it. They are drawn
+  inside the world layer, so they needed the same exclusion sprites get.
+- Lamp pools and god rays no longer read as bright at midday. Both sink to about a third through
+  the middle of the day and return by early morning and late afternoon. Indoor lamps and night
+  are unchanged.
+- Effects no longer pop. Every effect eased in when it appeared but was cut in a single frame when
+  it stopped, so switching one off, stepping indoors, opting a room out of the water effect, or a
+  cutscene starting all snapped. Presence fades both ways now, and the two lighting models
+  cross-fade instead of leaving the room briefly unlit.
+- Bodies mirror on the wet fringe of a beach as well as on open water, so someone standing on the
+  tide line keeps a whole reflection instead of a detached lower half.
+- The bathhouse pool gets water effects. The game never declares it as water, so without a label
+  it had none.
+
+### Added
+- Painted light sources. A labelled glowing surface emits light with the colour read from its own
+  art, so a lit shop sign glows in its own colour and a forge glows orange, with no per-object setup.
+- Window lights, outdoors. Labelled windows glow after dusk and go dark at their own bedtime, so a
+  street dims house by house rather than all at once. Daylight coming IN through a window is not
+  switched on yet.
+- Clear glass. A labelled pane no longer blocks light, so a lamp beside a display case, a shop
+  door or a fish tank lights what is behind the glass instead of stopping at it. Glass reflecting
+  what stands in front of it is a separate piece of work and is not in this release.
+- Hot water, treated as water everywhere. Painted on the bathhouse pool, which the game never
+  declares as water at all. The class is there for modded hot springs too, but none are painted yet.
+- Stone and plank bridges are recognised without a label: a narrow strip of non-water with water
+  on both sides is a bridge. Neither of the older tests could see a stone one.
+- The label set shipping with the mod now covers 113 painted tilesheets: 5,534 water tiles, 3,141
+  flowing, 1,809 glass, 1,379 window, 1,356 light source, 114 mirror, 103 deck, 102 ice, 57 lava,
+  18 hot.
+
+### Changed
+- Reflections of characters reach further into the water and fade with depth below the feet,
+  strongest at the feet. A body at the water's edge reads clearly; one standing back from it fades
+  out instead of leaving a fragment floating.
+- Waterfalls are tagged as flowing water in the mask, so a body never prints on a waterfall face
+  while the ripple stays.
+
+### For translators
+No i18n keys were added, removed or changed in this release.
+
+## 1.2.3
+
+### Fixed
+- Plank bridges, piers and boardwalks no longer draw over the character standing on them, and no longer appear as a second copy of themselves offset to one side. A bridge you walk on top of was being treated as a standing prop like a fence, because it is not open water and its art has gaps between the planks. It got a fence's leaning shadow, plus a redraw of its own tile on top of that shadow, and both landed on the tile the character was standing on. Any Buildings tile the map marks as walk-on-top is now excluded.
+- Cloud shadows no longer drift across the ground during rain, storms and snow. An overcast sky has no direct sunlight left for a cloud to block, so the shadow banks should not be there at all. God rays and the night mist already stepped aside in this weather; cloud shadows never did. They fade out and back in over about a second, so a mod that changes the weather mid-day will not make them pop.
+
+### Changed
+- Clear Monocle is no longer listed as incompatible. Its author shipped explicit support for Radiance, confirmed by two users. Make sure Clear Monocle is up to date.
+
+### For translators
+No i18n keys were added, removed or changed in this release.
+
 ## 1.2.2
 
 ### Fixed
