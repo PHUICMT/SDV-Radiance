@@ -62,7 +62,9 @@ namespace SDVRadiance
             P(fx, "Speed")?.SetValue(config.CloudShadowSpeed);
             P(fx, "Scale")?.SetValue(config.CloudShadowScale);
             P(fx, "Coverage")?.SetValue(config.CloudShadowCoverage);
+            P(fx, "Count")?.SetValue(config.CloudShadowCount);
             P(fx, "WorldOffset")?.SetValue(WorldOffset(dest.Width, dest.Height));
+            P(fx, "NoiseTexture")?.SetValue(NoiseTex());
             fx.CurrentTechnique = fx.Techniques["Mask"];
             Pass(sb, source, rtA, fx);
 
@@ -77,6 +79,9 @@ namespace SDVRadiance
 
             // Pass 4: composite the blurred shadow onto the scene.
             P(fx, "Opacity")?.SetValue(config.CloudShadowOpacity * _cloudDayFactor);
+            // Day: clouds shade EVERYTHING (white eyes/flowers included — the sun is the
+            // light). Night: near-white lamp/fire cores resist the moon-cloud shadow.
+            P(fx, "LightProtect")?.SetValue(NightFactorNow());
             P(fx, "ShadowTexture")?.SetValue(rtA);
             fx.CurrentTechnique = fx.Techniques["Composite"];
             DrawFull(sb, source, dest, fx);
@@ -121,7 +126,7 @@ namespace SDVRadiance
             if (floodGate)
             {
                 P(fx, "FloodMapTexture")?.SetValue(_flood.Texture);
-                P(fx, "FloodTilesPerScreen")?.SetValue(new Vector2(dest.Width / 64f, dest.Height / 64f));
+                P(fx, "FloodTilesPerScreen")?.SetValue(new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f));
                 P(fx, "FloodWorldTileOffset")?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
                 P(fx, "FloodMapOrigin")?.SetValue(_flood.Origin);
                 P(fx, "FloodMapSize")?.SetValue(_flood.MapSize);
@@ -173,18 +178,77 @@ namespace SDVRadiance
             DrawFull(sb, source, dest, bloom);
         }
 
+        // Baked, TILEABLE 5-octave value-noise fbm. GPU sin()-hash noise has NO precision
+        // guarantee (hard seams / faceted blobs on real hardware, varying by vendor) — the
+        // standard fix is to precompute the noise on the CPU at full precision once and let
+        // the shader just sample it with wrap addressing: seamless over the whole screen,
+        // identical on every GPU.
+        private Texture2D? _noiseTex;
+        private Texture2D NoiseTex()
+        {
+            if (_noiseTex != null)
+                return _noiseTex;
+            const int N = 256;
+            var acc = new float[N * N];
+            float amp = 0.5f, norm = 0f;
+            int cells = 4;                       // 4,8,16,32,64 — every octave tiles at 256
+            for (int o = 0; o < 5; o++)
+            {
+                for (int y = 0; y < N; y++)
+                {
+                    float fy = (float)y / N * cells;
+                    int y0 = (int)fy;
+                    float ty = fy - y0;
+                    ty = ty * ty * ty * (ty * (ty * 6f - 15f) + 10f);
+                    for (int x = 0; x < N; x++)
+                    {
+                        float fx = (float)x / N * cells;
+                        int x0 = (int)fx;
+                        float tx = fx - x0;
+                        tx = tx * tx * tx * (tx * (tx * 6f - 15f) + 10f);
+                        float a = NoiseHash(x0, y0, o, cells), b = NoiseHash(x0 + 1, y0, o, cells);
+                        float c = NoiseHash(x0, y0 + 1, o, cells), d = NoiseHash(x0 + 1, y0 + 1, o, cells);
+                        acc[y * N + x] += amp * MathHelper.Lerp(MathHelper.Lerp(a, b, tx), MathHelper.Lerp(c, d, tx), ty);
+                    }
+                }
+                norm += amp; amp *= 0.5f; cells *= 2;
+            }
+            var data = new Color[N * N];
+            for (int i = 0; i < acc.Length; i++)
+            {
+                byte v = (byte)MathHelper.Clamp(acc[i] / norm * 255f, 0f, 255f);
+                data[i] = new Color(v, v, v, (byte)255);
+            }
+            _noiseTex = new Texture2D(_device, N, N);
+            _noiseTex.SetData(data);
+            return _noiseTex;
+        }
+        private static float NoiseHash(int x, int y, int o, int cells)
+        {
+            x = ((x % cells) + cells) % cells;   // wrap the lattice → texture tiles perfectly
+            y = ((y % cells) + cells) % cells;
+            uint h = (uint)(x * 374761393 + y * 668265263 + (o + 1) * 2246822519);
+            h = (h ^ (h >> 13)) * 1274126177u;
+            return ((h ^ (h >> 16)) & 0xFFFF) / 65535f;
+        }
+
         private void RenderFog(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var fx = _fog!;
+            // One shader pass renders the blend of two separate effects: DAY fog and NIGHT
+            // mist. Both are the same sparse drifting-wisp look (Patchiness 1 — the author
+            // liked the night wisps and wants day fog to match); each keeps its own density
+            // slider, day also keeps its scale/speed sliders. Amounts crossfade over dusk.
+            float total = _fogDayAmt + _fogMistAmt;
+            float mistW = total > 0f ? _fogMistAmt / total : 0f;
             P(fx, "Time")?.SetValue(Time());
-            P(fx, "Speed")?.SetValue(config.FogSpeed);
-            P(fx, "Scale")?.SetValue(config.FogScale);
-            // When fog isn't manually enabled, this stage is running as the automatic blue
-            // NIGHT MIST — a subtle drifting haze (FogColor is already blue at night) that fades
-            // in after dusk. Manual fog uses the configured density.
-            float density = config.FogEnabled ? config.FogDensity : 0.16f * NightFactorNow();
-            P(fx, "Density")?.SetValue(density);
+            P(fx, "Speed")?.SetValue(MathHelper.Lerp(config.FogSpeed, config.FogNightMistSpeed, mistW));
+            P(fx, "Scale")?.SetValue(MathHelper.Lerp(config.FogScale, 3.2f, mistW));
+            P(fx, "Density")?.SetValue(total);
+            P(fx, "Patchiness")?.SetValue(1f);
+            P(fx, "Coverage")?.SetValue(MathHelper.Lerp(config.FogCoverage, config.FogNightMistCoverage, mistW));
             P(fx, "TopBias")?.SetValue(config.FogTopBias);
+            P(fx, "NoiseTexture")?.SetValue(NoiseTex());
             P(fx, "FogColor")?.SetValue(FogColor());
             P(fx, "WorldOffset")?.SetValue(WorldOffset(dest.Width, dest.Height));
             fx.CurrentTechnique = fx.Techniques["Fog"];
@@ -254,7 +318,7 @@ namespace SDVRadiance
         {
             var fx = _floodFx!;
             P(fx, "LightMapTexture")?.SetValue(_flood.Texture);
-            P(fx, "TilesPerScreen")?.SetValue(new Vector2(dest.Width / 64f, dest.Height / 64f));
+            P(fx, "TilesPerScreen")?.SetValue(new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f));
             P(fx, "WorldTileOffset")?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
             P(fx, "MapOrigin")?.SetValue(_flood.Origin);
             P(fx, "MapSize")?.SetValue(_flood.MapSize);
@@ -364,7 +428,11 @@ namespace SDVRadiance
                     && _waterPixBuf[myp * _waterMask.Width + mxp].R > 100)
                     pin = 1f;
             }
-            P(fx, "PlayerInWater")?.SetValue(pin);
+            // Ease the wading state so the under-feet self-reflection fades in/out (~0.3s)
+            // instead of popping the moment the feet cross the water edge.
+            _pinFade += (pin - _pinFade) * 0.12f;
+            if (Math.Abs(pin - _pinFade) < 0.01f) _pinFade = pin;
+            P(fx, "PlayerInWater")?.SetValue(_pinFade);
 
             fx.CurrentTechnique = fx.Techniques["Water"];
             DrawFull(sb, source, dest, fx);
@@ -375,9 +443,15 @@ namespace SDVRadiance
             var fx = _finishing!;
             P(fx, "VignetteStrength")?.SetValue(config.VignetteEnabled ? config.VignetteStrength : 0f);
             // Map the 0..1 UI value to a tiny UV offset so it stays subtle on pixel art.
-            P(fx, "CAStrength")?.SetValue(config.ChromaticAberrationEnabled ? config.ChromaticAberrationStrength * 0.03f : 0f);
-            // A touch more vignette at night.
-            P(fx, "NightAmt")?.SetValue(NightFactorNow());
+            // No CA during events: the SKIP button is drawn inside the world frame and the
+            // channel split shreds its text (community report). Vignette stays — it's the
+            // cinematic part and doesn't hurt readability.
+            bool eventUp = Game1.eventUp || Game1.CurrentEvent != null;
+            P(fx, "CAStrength")?.SetValue(config.ChromaticAberrationEnabled && !eventUp ? config.ChromaticAberrationStrength * 0.03f : 0f);
+            // A touch more vignette at night — but only as part of the vignette effect
+            // itself: with Vignette OFF (e.g. only CA on) the shader must add nothing,
+            // or "off" quietly darkens the night screen edges.
+            P(fx, "NightAmt")?.SetValue(config.VignetteEnabled ? NightFactorNow() : 0f);
             fx.CurrentTechnique = fx.Techniques["Finishing"];
             DrawFull(sb, source, dest, fx);
         }
@@ -446,8 +520,12 @@ namespace SDVRadiance
             return best > 0f;
         }
 
+        // World-anchor for drifting noise (fog/clouds): the offset must be in units of the
+        // VISIBLE world span (viewport, world px) — dividing by the render target's screen px
+        // made patterns slide against the world when zoom != 100%.
         private static Vector2 WorldOffset(int w, int h) =>
-            new(Game1.viewport.X / (float)Math.Max(1, w), Game1.viewport.Y / (float)Math.Max(1, h));
+            new(Game1.viewport.X / (float)Math.Max(1, Game1.viewport.Width),
+                Game1.viewport.Y / (float)Math.Max(1, Game1.viewport.Height));
 
         /// <summary>The player's position in screen UV (0..1), for the radial tilt-shift focus.</summary>
         private static Vector2 PlayerScreenUV()

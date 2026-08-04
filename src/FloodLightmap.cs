@@ -46,8 +46,11 @@ namespace SDVRadiance
 
             int tx0 = (int)Math.Floor(Game1.viewport.X / 64f) - Pad;
             int ty0 = (int)Math.Floor(Game1.viewport.Y / 64f) - Pad;
-            int tw = Math.Max(1, w / 64 + 2) + Pad * 2;
-            int th = Math.Max(1, h / 64 + 2) + Pad * 2;
+            // Window size from the VIEWPORT (world px), never from the render target: screen
+            // px / 64 undercounts tiles when zoomed out, and the window edge showed up as a
+            // hard rectangle of missing GI in the middle of the screen.
+            int tw = Math.Max(1, Game1.viewport.Width / 64 + 2) + Pad * 2;
+            int th = Math.Max(1, Game1.viewport.Height / 64 + 2) + Pad * 2;
             int count = tw * th;
 
             // Rebuild throttle: the flood changes slowly (time, lights, viewport), but a full

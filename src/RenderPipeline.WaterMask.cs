@@ -192,8 +192,10 @@ namespace SDVRadiance
             // step as the player walked away, rather than fading out.
             int startTileX = (int)Math.Floor(vx / 64f) - 2;
             int startTileY = (int)Math.Floor(vy / 64f) - 4;
-            int tilesW = Math.Max(1, w / 64 + 6);
-            int tilesH = Math.Max(1, h / 64 + 6);
+            // Viewport-based (world px): w/64 is screen px and undercounts tiles when zoomed
+            // out — parts of the screen simply had no water mask (no ripple/reflection).
+            int tilesW = Math.Max(1, Game1.viewport.Width / 64 + 6);
+            int tilesH = Math.Max(1, Game1.viewport.Height / 64 + 6);
             int count = tilesW * tilesH;
 
             // The mask content is TILE-ANCHORED (sub-tile camera scroll is handled by the
@@ -204,7 +206,7 @@ namespace SDVRadiance
             if (_waterMask != null && loc == _lastWaterLoc && startTileX == _lastWaterTx && startTileY == _lastWaterTy
                 && _waterMask.Width == tilesW * 16 && Game1.ticks - _lastWaterTick < 600)
             {
-                _waterTilesPerScreen = new Vector2(w / 64f, h / 64f);
+                _waterTilesPerScreen = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
                 _waterWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
                 _waterMaskSize = new Vector2(tilesW, tilesH);
                 return _waterAny;
@@ -579,7 +581,7 @@ namespace SDVRadiance
             }
             _waterMaskCore.SetData(_waterMaskCoreBuf, 0, count);
 
-            _waterTilesPerScreen = new Vector2(w / 64f, h / 64f);
+            _waterTilesPerScreen = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
             _waterWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
             _waterMaskSize = new Vector2(tilesW, tilesH);
             return true;
@@ -587,7 +589,10 @@ namespace SDVRadiance
 
         // ---- helpers -------------------------------------------------------
 
-        private static float Time() => Game1.ticks / 60f;
+        // Wrapped like the cloud shadow's Time: unbounded seconds eventually push the
+        // shader noise hashes past float/sin precision, which reads as hard axis-aligned
+        // seams. 100-minute period, multiple of 60 so whole seconds stay whole.
+        private static float Time() => (Game1.ticks % 360000) / 60f;
 
         /// <summary>Debug: save the water masks to PNG (R=effect, G=march, B=edge distance).</summary>
         public string DumpMasks(string dir)

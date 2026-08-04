@@ -37,14 +37,14 @@ namespace SDVRadiance
             {
                 if (npc == null || npc.IsInvisible || (npc.HideShadow && !(npc is Pet)) || npc.swimming.Value || npc.Sprite?.Texture == null)
                     continue;
-                if (OnWater(loc, npc.TilePoint))   // don't lay a shadow on the water surface
+                if (OnOpenWater(loc, npc.TilePoint))   // open water only — surf/shore keeps shadows
                     continue;
                 DrawNpcShadow(b, npc, rot, stretch, alpha, blur);
             }
 
             foreach (FarmAnimal a in AnimalsIn(loc))
             {
-                if (a?.Sprite?.Texture == null || OnWater(loc, a.TilePoint))
+                if (a?.Sprite?.Texture == null || OnOpenWater(loc, a.TilePoint))
                     continue;
                 DrawAnimalShadow(b, a, rot, stretch, alpha, blur);
             }
@@ -155,7 +155,7 @@ namespace SDVRadiance
             {
                 if (npc == null || npc.IsInvisible || (npc.HideShadow && !(npc is Pet)) || npc.swimming.Value || npc.Sprite?.Texture == null)
                     continue;
-                if (OnWater(loc, npc.TilePoint))   // same guard as the sun path (bathhouse, night beach)
+                if (OnOpenWater(loc, npc.TilePoint))   // same guard as the sun path (bathhouse, night beach)
                     continue;
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                     new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom - FeetLift));
@@ -185,7 +185,7 @@ namespace SDVRadiance
             {
                 Farmer who = Game1.player;
                 if (who != null && who.currentLocation == loc && !who.swimming.Value && !who.isRidingHorse()
-                    && !OnWater(loc, who.TilePoint))
+                    && !OnOpenWater(loc, who.TilePoint))
                 {
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                         new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
