@@ -1,0 +1,28 @@
+# .NET build output
+bin/
+obj/
+*.user
+*.suo
+
+# Rider / VS
+.idea/
+.vs/
+
+# MonoGame content build intermediates
+*.mgcontent
+obj/Debug/
+obj/Release/
+
+# Shader build scratch dir. The shipped copies live in assets/ and ARE committed
+# (so the mod works without users installing mgfxc).
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local machine config overrides
+stardewvalley.targets
+*.local.props
+*.local.md
+*.local.ps1
