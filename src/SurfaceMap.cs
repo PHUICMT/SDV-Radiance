@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
+using StardewModdingAPI;
 using StardewValley;
 using xTile.Layers;
 
@@ -84,12 +85,23 @@ namespace SDVRadiance
                 return null;
             if (_cache.TryGetValue(loc, out SurfaceMap? map))
                 return map;
+            // Breadcrumbs, not a perf counter: this is a whole-map walk that runs once when a
+            // location is first drawn, and a freeze report can only be pinned to it if the log
+            // shows the walk STARTED and never finished. Trace always lands in the SMAPI log
+            // file, so a reporter needs no debug switch for it to be there after a hard stop.
+            Diag?.Log($"[loc] surface build start: {loc.NameOrUniqueName}", LogLevel.Trace);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try { map = Build(loc); }
-            catch { map = null; }
+            catch (Exception ex) { map = null; Diag?.Log($"[loc] surface build threw: {ex.Message}", LogLevel.Warn); }
+            sw.Stop();
+            Diag?.Log($"[loc] surface build done: {loc.NameOrUniqueName} {map?.Width ?? 0}x{map?.Height ?? 0} in {sw.Elapsed.TotalMilliseconds:0.0}ms", LogLevel.Trace);
             if (map != null)
                 _cache.Add(loc, map);
             return map;
         }
+
+        /// <summary>Optional diagnostics sink (set at startup) — see the breadcrumbs in <see cref="For"/>.</summary>
+        internal static IMonitor? Diag;
 
         public static void Invalidate(GameLocation? loc)
         {
@@ -183,6 +195,22 @@ namespace SDVRadiance
                         if (labels.Get(buildings, x, y) is { } bb) lc = ClassFromLabels(bb, overlay: true);
                         if (lc == null && labels.Get(back, x, y) is { } gb) lc = ClassFromLabels(gb, overlay: false);
                         if (lc == null && labels.Get(front, x, y) is { } fb) lc = ClassFromLabels(fb, overlay: true);
+                        // A DECK is the surface you stand on, even when the tile beneath it is
+                        // labelled water — and the plank itself often carries no label at all, so
+                        // the lookup falls through to the Back tile below and answers for the
+                        // wrong thing. The Beach bridge reads Buildings.Passable=T Type=Wood over
+                        // Back water:256: standing on it counted as standing on open water, which
+                        // costs the player their shadow outright, and cut the bridge's own shadow
+                        // wherever the water under it was open on all sides.
+                        //
+                        // The animated case is left alone: an ANIMATED passable Buildings tile
+                        // over water is the surf wash, which really is the water surface.
+                        if (lc == SurfaceClass.Water && hasBuildings
+                            && buildings!.Tiles[x, y] is not xTile.Tiles.AnimatedTile
+                            && (loc.doesTileHaveProperty(x, y, "Passable", "Buildings") != null
+                                || loc.doesTileHaveProperty(x, y, "Type", "Buildings") == "Wood"))
+                            lc = SurfaceClass.Deck;
+
                         if (lc is { } decided)
                         {
                             Set(sm, i, decided, decided switch
@@ -244,6 +272,7 @@ namespace SDVRadiance
             }
 
             SpanDecks(sm, labelled, w, h);
+            ThinRoofs(sm, labelled, w, h);
 
             // Farm buildings (coops, barns, cabins, the farmhouse) are Building ENTITIES, not
             // Buildings-layer tiles, so the per-tile pass misses them. The footprint rows are the
@@ -267,8 +296,22 @@ namespace SDVRadiance
                 int roofTop = by - (spriteRows - bh);
                 for (int y = roofTop; y < by + bh; y++)
                     for (int x = bx; x < bx + bw; x++)
-                        if (sm.InBounds(x, y))
-                            Set(sm, y * w + x, y >= by ? SurfaceClass.Wall : SurfaceClass.Roof, (sbyte)2);
+                    {
+                        if (!sm.InBounds(x, y))
+                            continue;
+                        // The stamp is the sprite's BOUNDING BOX, and a tall barn's box reaches
+                        // several rows past its footprint. On Riverland Farm those rows land on the
+                        // river behind the building, and stamping them turned real water into Roof:
+                        // the water pass reads this grid, so the overlap came out as a clean
+                        // rectangle of untouched vanilla river ("a transparent box"). Water under
+                        // an overhanging sprite is still water — the sprite carve already keeps the
+                        // effect off the building's own pixels, which is the part that has to be
+                        // rectangle-free.
+                        int i2 = y * w + x;
+                        if (sm._surface[i2] == SurfaceClass.Water)
+                            continue;
+                        Set(sm, i2, y >= by ? SurfaceClass.Wall : SurfaceClass.Roof, (sbyte)2);
+                    }
             }
 
             return sm;
@@ -333,6 +376,58 @@ namespace SDVRadiance
                     if (s > 0 && e < w - 1 && e - s + 1 <= MaxSpanTiles
                         && IsWater(row + s - 1) && IsWater(row + e + 1))
                         for (int xx = s; xx <= e; xx++) Promote(row + xx);
+                }
+            }
+        }
+
+        /// <summary>How many of the 8 neighbours must also be overhead mass before a Front-only
+        /// tile counts as a roof. A building top or a painted canopy is a BLOCK of Front tiles and
+        /// clears this easily; a lamppost head, a sign, a fence top or a single tuft of grass drawn
+        /// above the player has one or two neighbours at most.</summary>
+        private const int RoofNeighbours = 3;
+
+        /// <summary>
+        /// Demotes Front-only "roofs" that are too thin to shade anything.
+        /// <para>
+        /// <see cref="Build"/> calls any tile with Front-layer art a roof, and roofs block light.
+        /// That was harmless until this mod stopped asking Height Framework for the classification:
+        /// the old call returned nothing for the many players who never installed that mod, so sky
+        /// occlusion was effectively OFF for them and went live for everyone in one release. On the
+        /// Front layer the rule is far too broad — decorative art that merely draws above the player
+        /// became a light blocker, and walking into a stretch of map with a lot of it pulled a block
+        /// of unlit cells into the flood window and dimmed the screen.
+        /// </para>
+        /// Labels and Wall verdicts are never touched, and neighbours are counted on a SNAPSHOT so
+        /// the pass cannot cascade a whole roof away one ring at a time.
+        /// </summary>
+        private static void ThinRoofs(SurfaceMap sm, bool[] labelled, int w, int h)
+        {
+            var before = (SurfaceClass[])sm._surface.Clone();
+
+            for (int y = 0; y < h; y++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    int i = y * w + x;
+                    if (labelled[i] || before[i] != SurfaceClass.Roof)
+                        continue;
+
+                    int mass = 0;
+                    for (int dy = -1; dy <= 1; dy++)
+                    {
+                        int yy = y + dy;
+                        if (yy < 0 || yy >= h) continue;
+                        for (int dx = -1; dx <= 1; dx++)
+                        {
+                            int xx = x + dx;
+                            if ((dx == 0 && dy == 0) || xx < 0 || xx >= w) continue;
+                            var c = before[yy * w + xx];
+                            if (c == SurfaceClass.Roof || c == SurfaceClass.Wall)
+                                mass++;
+                        }
+                    }
+                    if (mass < RoofNeighbours)
+                        Set(sm, i, SurfaceClass.Ground, (sbyte)0);
                 }
             }
         }

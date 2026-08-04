@@ -22,7 +22,14 @@ namespace SDVRadiance
         /// <summary>Per-cell survival factor while sweeping through open ground.</summary>
         private const float AirDecay = 0.86f;
         /// <summary>Per-cell survival through solid/occluding tiles (light dies in ~2-3 tiles).</summary>
-        private const float SolidDecay = 0.45f;
+        private const float SolidDecay = 0.65f;
+        /// <summary>Sky light an occluded cell still starts with, as a fraction of the open sky.
+        /// It used to be zero, which is what a roof does to DIRECT sun but not to the sky as a
+        /// whole: a wall in the open still faces a bright hemisphere. Zero also made occlusion a
+        /// cliff — one step took a block of cells from full sky to nothing, and the sweeps carried
+        /// that into the open ground beside it, so crossing into a built-up stretch of a map
+        /// visibly dimmed the screen. Shade, not darkness.</summary>
+        private const float OccludedSeed = 0.5f;
         /// <summary>Cell values are stored ×0.5 in the texture so >1 (glow) survives; shader ×2.</summary>
         internal const float TexScale = 0.5f;
 
@@ -101,7 +108,7 @@ namespace SDVRadiance
                     _decay[idx] = solid ? SolidDecay : AirDecay;
                     // Open cells receive direct sky light; occluded cells only what floods in
                     // from their surroundings → soft shade under trees/buildings for free.
-                    _cells[idx] = vanillaDark ? Vector3.One : (solid ? Vector3.Zero : sky);
+                    _cells[idx] = vanillaDark ? Vector3.One : (solid ? sky * OccludedSeed : sky);
                 }
             }
 
@@ -124,6 +131,18 @@ namespace SDVRadiance
                     // so it beats the dimmed night ground; indoors it stays gentle.
                     float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * (outdoors ? 1.25f : 0.5f)
                                 * ShadowRenderer.FireFlicker(ls.position.Value, ls.textureIndex.Value);
+                    // The same midday sink the DIRECT pools got ("a street lamp at noon reads as
+                    // glass"): these seeds never had it, which went unnoticed while the flat bounce
+                    // held the whole outdoor field near 1.28 — every cell glowed a little, so lamp
+                    // cells did not stand out. With the bounce weighted (open ground now sits at
+                    // exactly sky), a daylight lantern's >1.0 seed became the only thing feeding
+                    // the shader's glow term, and it read as a bright pool at two in the afternoon.
+                    // Full strength returns by 08:00/17:00; night and indoors are untouched.
+                    if (outdoors)
+                    {
+                        int pm = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
+                        inten *= 1f - 0.65f * (1f - MathHelper.Clamp(Math.Abs(pm - 750) / 270f, 0f, 1f));
+                    }
                     // TWO-TONE rooms: an indoor window is DAYLIGHT (cool, slightly blue) while
                     // lamps and fires stay warm — the warm-vs-cool split across a room is what
                     // makes it read as cinematic instead of uniformly orange. Outdoor window
@@ -223,7 +242,20 @@ namespace SDVRadiance
             Vector3 lift = sky * (outdoors ? 0.92f : 0.85f);
             for (int idx = 0; idx < count; idx++)
             {
-                Vector3 v = _cells[idx] + _blur[idx] * 0.28f;
+                // The bounce FILLS SHADE. It used to be a flat add, which put every open outdoor
+                // cell at ~1.28 in broad daylight — and floodlight.fx reads anything over 1.0 as a
+                // lamp core and adds a glow for it, so open ground got a few percent of extra light
+                // it was never meant to have. On a winter beach, where snow is already close to
+                // white and most of the screen is open, that pushed the whole field past clipping
+                // and the detail in the snow disappeared. Weighting the bounce by how far the cell
+                // is BELOW full light leaves open ground at exactly sky, still lifts real shade,
+                // and leaves lamp cells (seeded above 1.0) free to glow as intended.
+                Vector3 c = _cells[idx];
+                Vector3 room = new(
+                    MathHelper.Clamp(1f - c.X, 0f, 1f),
+                    MathHelper.Clamp(1f - c.Y, 0f, 1f),
+                    MathHelper.Clamp(1f - c.Z, 0f, 1f));
+                Vector3 v = c + _blur[idx] * 0.28f * room;
                 if (_decay[idx] == SolidDecay)
                     v = Vector3.Max(v, lift);
                 _pix[idx] = new Color(

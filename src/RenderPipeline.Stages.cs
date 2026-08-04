@@ -419,6 +419,10 @@ namespace SDVRadiance
             float inSpark = indoors ? 0.35f : 1f;
             float inRefl = indoors ? 0.35f : 1f;
             float inTint = indoors ? 0.5f : 1f;
+            // Whole-pass presence (see water.fx): the per-term fades below do not reach every
+            // term, so the pass held full strength down to a fade of 0.02 and then popped out.
+            P(fx, "Presence")?.SetValue(_fadeWater);
+            P(fx, "WetRim")?.SetValue(1f);
             P(fx, "Time")?.SetValue(Time());
             P(fx, "Strength")?.SetValue(config.WaterStrength * strengthMul * shimmer * dispGate * inWave);
             P(fx, "Speed")?.SetValue(config.WaterSpeed * speedMul);
@@ -472,12 +476,18 @@ namespace SDVRadiance
             // Time-of-day / weather dressing: golden-hour sparkle, star reflections and
             // lamp glimmer after dusk, raindrop rings while raining.
             int tnow = Game1.timeOfDay;
-            int mins = (tnow / 100) * 60 + tnow % 100;
+            int mins = ClockMinutes();
+            // Golden hour, on the clock and without a cliff. This read the raw HHMM value (so it
+            // lurched at every hour boundary) and then cut to zero the instant the clock passed
+            // 19:00 - full warmth at 18:50, none at 19:00, in one step, which is the flash of a
+            // changed picture at seven in the evening. Ramp it down over the last half hour
+            // instead, on minutes, so it arrives at zero having already faded there.
             float sunWarm = 0f;
-            if (!Game1.isRaining && tnow < 1900)
+            if (!Game1.isRaining)
             {
-                float dd = MathHelper.Clamp((tnow - 1200) / 600f, -1f, 1f);
+                float dd = MathHelper.Clamp((mins - 12 * 60) / 360f, -1f, 1f);
                 sunWarm = MathHelper.Clamp((Math.Abs(dd) - 0.55f) / 0.45f, 0f, 1f);
+                sunWarm *= MathHelper.Clamp((19 * 60 - mins) / 30f, 0f, 1f);
             }
             float nightGlow = MathHelper.Clamp((mins - 1140) / 90f, 0f, 1f);   // 19:00 → 20:30
             P(fx, "SunWarm")?.SetValue(sunWarm);
@@ -539,6 +549,9 @@ namespace SDVRadiance
 
             fx.CurrentTechnique = fx.Techniques["Water"];
             DrawFull(sb, source, dest, fx);
+            // Presence enforced outside the shader (see BlendBackSource): the in-shader uniform
+            // measured inert, and the wet-rim early return never passes through it anyway.
+            BlendBackSource(sb, source, dest, _fadeWater);
         }
 
         private void RenderFinishing(SpriteBatch sb, Texture2D source, RenderTarget2D dest, ModConfig config)
@@ -564,6 +577,8 @@ namespace SDVRadiance
             var fx = _lighting!;
             // Presence fade: ambient darkening eases in from "no change" (white) on appearance.
             P(fx, "AmbientColor")?.SetValue(Vector3.Lerp(Vector3.One, ComputeLightingAmbient(config), _fadeLighting));
+            // Whole-pass presence (see lighting.fx): the light pools are not scaled by the fade.
+            P(fx, "Presence")?.SetValue(_fadeLighting);
             P(fx, "Aspect")?.SetValue(dest.Height > 0 ? dest.Width / (float)dest.Height : 1f);
             P(fx, "LightPos")?.SetValue(_lightPos);
             P(fx, "LightData")?.SetValue(_lightData);
@@ -586,6 +601,9 @@ namespace SDVRadiance
             }
             fx.CurrentTechnique = fx.Techniques["Lighting"];
             DrawFull(sb, source, dest, fx);
+            // Same out-of-shader presence as the water pass: the light POOLS never rode the
+            // fade, so this stage popped its full contribution in and out with the light list.
+            BlendBackSource(sb, source, dest, _fadeLighting);
         }
 
         /// <summary>Character head anchors (centreX, boxTop), refilled once per light query so the
@@ -774,26 +792,41 @@ namespace SDVRadiance
             return new Vector2(local.X / vw, local.Y / vh);
         }
 
+        /// <summary>Game clock as MINUTES since midnight.
+        /// <para>
+        /// timeOfDay is HHMM, so 1850 + 10 minutes is 1900 - the number jumps 50 for a ten minute
+        /// step. Curves that interpolated on the raw value therefore lurched five times their
+        /// normal rate at every hour boundary, which is a visible step in a tint that is supposed
+        /// to drift. Minutes make an hour worth sixty and the curves continuous.
+        /// </para></summary>
+        private static int ClockMinutes()
+        {
+            int t = Game1.timeOfDay;
+            return (t / 100) * 60 + t % 100;
+        }
+
         /// <summary>Fog tint by time of day: neutral haze by day, warm at dusk, blue at night.</summary>
         private static Vector3 FogColor()
         {
-            int t = Game1.timeOfDay;
+            int m = ClockMinutes();
             Vector3 day = new(0.72f, 0.76f, 0.82f);
             Vector3 dusk = new(0.85f, 0.68f, 0.55f);
             Vector3 night = new(0.38f, 0.44f, 0.60f);
-            if (t >= 1700 && t < 1930) return Vector3.Lerp(day, dusk, (t - 1700) / 230f);
-            if (t >= 1930 && t < 2100) return Vector3.Lerp(dusk, night, (t - 1930) / 170f);
-            if (t >= 2100 || t < 600) return night;
+            const int Dusk = 17 * 60, Late = 19 * 60 + 30, Night = 21 * 60, Dawn = 6 * 60;
+            if (m >= Dusk && m < Late) return Vector3.Lerp(day, dusk, (m - Dusk) / (float)(Late - Dusk));
+            if (m >= Late && m < Night) return Vector3.Lerp(dusk, night, (m - Late) / (float)(Night - Late));
+            if (m >= Night || m < Dawn) return night;
             return day;
         }
 
         private static void ComputeAuto(out float temp, out float satMul)
         {
             temp = 0f; satMul = 1f;
-            int t = Game1.timeOfDay;
-            if (t >= 1700 && t < 1930) temp += 0.25f * ((t - 1700) / 230f);
-            else if (t >= 1930 && t < 2100) temp += 0.25f - 0.55f * ((t - 1930) / 170f);
-            else if (t >= 2100 || t < 600) temp -= 0.30f;
+            int m = ClockMinutes();
+            const int Dusk = 17 * 60, Late = 19 * 60 + 30, Night = 21 * 60, Dawn = 6 * 60;
+            if (m >= Dusk && m < Late) temp += 0.25f * ((m - Dusk) / (float)(Late - Dusk));
+            else if (m >= Late && m < Night) temp += 0.25f - 0.55f * ((m - Late) / (float)(Night - Late));
+            else if (m >= Night || m < Dawn) temp -= 0.30f;
 
             if (Game1.isRaining) { temp -= 0.12f; satMul *= 0.85f; }
             if (Game1.isSnowing) { temp -= 0.15f; satMul *= 0.90f; }

@@ -97,7 +97,8 @@ namespace SDVRadiance
             _tileBitsBuf = null; _tileKeepBuf = null; _tileCarveBBuf = null; _tileCarveFBuf = null;
             _tileBigSolidBuf = null; _tileDeckBuf = null; _tileLabeledBuf = null; _tileHasBldBuf = null;
             _tileOverlayGroundBuf = null; _tileOverlayGroundFBuf = null;
-            _tileIceBitsBuf = null; _tileLavaBitsBuf = null;
+            _tileIceBitsBuf = null; _tileLavaBitsBuf = null; _tileFlowBitsBuf = null;
+            _marchOutside = null; _marchStack = null; _speckSeen = null; _speckMembers = null;
             _tileLandNearBuf = null; _tileHasFrontBuf = null;
             _tileIceBuf = null; _tileFlowBuf = null; _tileLavaBuf = null;
             _tileWetFlag = null; _tileCalmBuf = null;

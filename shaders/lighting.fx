@@ -43,6 +43,7 @@ float2 LightPos[MAX_LIGHTS];  // light centre in screen UV (0..1)
 float4 LightData[MAX_LIGHTS]; // xyz = light colour * boost, w = radius (UV, height units)
 float  ShadowStrength;        // 0 = no shadows; 1 = full occluder shadows
 float  Overbright;            // max light accumulation (>1 allows glow near lamps)
+float  Presence;              // 0..1 whole-pass presence fade (see the tail of LightingPS)
 float2 OccTilesPerScreen;     // world tiles spanning the buffer (w/64, h/64)
 float2 OccWorldTileOffset;    // viewport origin in world tiles (continuous)
 float2 OccMaskSize;           // occluder mask size in texels (tiles)
@@ -118,6 +119,11 @@ float4 LightingPS(PixelInput input) : SV_TARGET
     // small optional headroom for lamp cores feeding bloom.)
     accum = min(accum, max(1.0, Overbright));
     float3 lit = src.rgb * saturate(accum);
+    // Whole-pass presence: AmbientColor and ShadowStrength already ride the fade, but the light
+    // POOLS (LightData) never did, so this stage kept painting them at full strength all the way
+    // down and then vanished in one frame when it left the stage list. Fade the finished result
+    // back to the untouched pixel so every term - pools included - reaches zero before that.
+    lit = lerp(src.rgb, lit, Presence);
     return float4(lit, src.a);
 }
 

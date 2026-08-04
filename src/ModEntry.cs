@@ -65,15 +65,31 @@ namespace SDVRadiance
         private static bool Cloud_Draw_Prefix() => !SuppressVanillaClouds;
 
         /// <summary>
-        /// Transpiler shim for Tree.draw / Bush.draw: every vanilla tree/bush blob shadow is
-        /// drawn at layerDepth exactly 1E-06f (nothing else in those methods uses it), so we
-        /// swallow just those draws while our object shadows are active and forward the rest.
+        /// Transpiler shim for Tree.draw / Bush.draw: swallow the vanilla blob shadow while our
+        /// object shadows are active, and forward everything else.
+        /// <para>
+        /// The grown-canopy shadow is the one drawn at layerDepth exactly 1E-06f, and keying on
+        /// that alone is what left saplings and stumps with a vanilla blob while every grown tree
+        /// beside them wore ours — they draw their shadow at their own depth, so the test never
+        /// matched them. Inside a tree/bush draw, a <see cref="Game1.shadowTexture"/> draw IS the
+        /// shadow whatever depth it carries, which is the same rule the craftable shim uses.
+        /// </para>
         /// </summary>
         public static void Draw_SkipVanillaShadow(SpriteBatch sb, Texture2D tex, Vector2 pos,
             Rectangle? src, Color color, float rotation, Vector2 origin, float scale,
             SpriteEffects effects, float layerDepth)
         {
-            if (layerDepth == 1E-06f && SuppressVanillaObjectShadows)
+            if (SuppressVanillaObjectShadows && (layerDepth == 1E-06f || ReferenceEquals(tex, Game1.shadowTexture)))
+                return;
+            sb.Draw(tex, pos, src, color, rotation, origin, scale, effects, layerDepth);
+        }
+
+        /// <summary>Vector2-scale twin of <see cref="Draw_SkipVanillaShadow"/>.</summary>
+        public static void Draw_SkipVanillaShadowV(SpriteBatch sb, Texture2D tex, Vector2 pos,
+            Rectangle? src, Color color, float rotation, Vector2 origin, Vector2 scale,
+            SpriteEffects effects, float layerDepth)
+        {
+            if (SuppressVanillaObjectShadows && (layerDepth == 1E-06f || ReferenceEquals(tex, Game1.shadowTexture)))
                 return;
             sb.Draw(tex, pos, src, color, rotation, origin, scale, effects, layerDepth);
         }
@@ -82,6 +98,16 @@ namespace SDVRadiance
         /// craftables draw it at an object-specific depth, so we key on the texture, not layerDepth).</summary>
         public static void Draw_SkipBlobShadow(SpriteBatch sb, Texture2D tex, Vector2 pos,
             Rectangle? src, Color color, float rotation, Vector2 origin, float scale,
+            SpriteEffects effects, float layerDepth)
+        {
+            if (SuppressVanillaBlobShadows && ReferenceEquals(tex, Game1.shadowTexture))
+                return;
+            sb.Draw(tex, pos, src, color, rotation, origin, scale, effects, layerDepth);
+        }
+
+        /// <summary>Vector2-scale twin of <see cref="Draw_SkipBlobShadow"/>.</summary>
+        public static void Draw_SkipBlobShadowV(SpriteBatch sb, Texture2D tex, Vector2 pos,
+            Rectangle? src, Color color, float rotation, Vector2 origin, Vector2 scale,
             SpriteEffects effects, float layerDepth)
         {
             if (SuppressVanillaBlobShadows && ReferenceEquals(tex, Game1.shadowTexture))
@@ -103,20 +129,43 @@ namespace SDVRadiance
             sb.Draw(tex, pos, src, color, rotation, origin, scale, effects, layerDepth);
         }
 
+        /// <summary>Vector2-scale twin of <see cref="Draw_SkipCritterShadow"/>.</summary>
+        public static void Draw_SkipCritterShadowV(SpriteBatch sb, Texture2D tex, Vector2 pos,
+            Rectangle? src, Color color, float rotation, Vector2 origin, Vector2 scale,
+            SpriteEffects effects, float layerDepth)
+        {
+            if (SuppressVanillaCritterShadows && ReferenceEquals(tex, Game1.shadowTexture))
+                return;
+            sb.Draw(tex, pos, src, color, rotation, origin, scale, effects, layerDepth);
+        }
+
         /// <summary>Redirect a method's 9-arg SpriteBatch.Draw calls through <paramref name="shimName"/>.</summary>
         private static System.Collections.Generic.IEnumerable<CodeInstruction> RedirectDraws(
             System.Collections.Generic.IEnumerable<CodeInstruction> instructions, string shimName)
         {
-            var drawMethod = AccessTools.Method(typeof(SpriteBatch), nameof(SpriteBatch.Draw), new[]
+            // SpriteBatch.Draw has TWO overloads with this shape, differing only in whether scale
+            // is a float or a Vector2, and redirecting just the float one leaves every draw that
+            // used the other invisible to the shim — which is a hole, not a filter: a shadow drawn
+            // through the Vector2 overload was never offered for suppression, so it survived
+            // alongside ours as a second shadow.
+            var drawF = AccessTools.Method(typeof(SpriteBatch), nameof(SpriteBatch.Draw), new[]
             {
                 typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color),
                 typeof(float), typeof(Vector2), typeof(float), typeof(SpriteEffects), typeof(float)
             });
-            var shim = AccessTools.Method(typeof(ModEntry), shimName);
+            var drawV = AccessTools.Method(typeof(SpriteBatch), nameof(SpriteBatch.Draw), new[]
+            {
+                typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color),
+                typeof(float), typeof(Vector2), typeof(Vector2), typeof(SpriteEffects), typeof(float)
+            });
+            var shimF = AccessTools.Method(typeof(ModEntry), shimName);
+            var shimV = AccessTools.Method(typeof(ModEntry), shimName + "V");
             foreach (var ins in instructions)
             {
-                if (ins.Calls(drawMethod))
-                    yield return new CodeInstruction(System.Reflection.Emit.OpCodes.Call, shim) { labels = ins.labels, blocks = ins.blocks };
+                if (drawF != null && ins.Calls(drawF))
+                    yield return new CodeInstruction(System.Reflection.Emit.OpCodes.Call, shimF) { labels = ins.labels, blocks = ins.blocks };
+                else if (drawV != null && shimV != null && ins.Calls(drawV))
+                    yield return new CodeInstruction(System.Reflection.Emit.OpCodes.Call, shimV) { labels = ins.labels, blocks = ins.blocks };
                 else
                     yield return ins;
             }
@@ -149,6 +198,21 @@ namespace SDVRadiance
         public override void Entry(IModHelper helper)
         {
             _config = helper.ReadConfig<ModConfig>();
+            // 1.3.1: god rays off. Changing the DEFAULT only reaches new installs — everyone
+            // already playing has GodRaysEnabled written in their config.json, which is exactly
+            // the group reporting blown-out white sprites. So switch it off once, record that we
+            // did, and never touch their choice again.
+            if (_config.ConfigVersion < 1)
+            {
+                _config.ConfigVersion = 1;
+                if (_config.GodRaysEnabled)
+                {
+                    _config.GodRaysEnabled = false;
+                    this.Monitor.Log("God rays switched off: the effect treats bright surfaces as light sources, so pale sprites blow out. "
+                                   + "It is being rebuilt for 1.4.0 — re-enable it in the config or with F6 if you want it back.", LogLevel.Info);
+                }
+                helper.WriteConfig(_config);
+            }
             _config.Clamp();
             SMonitor = this.Monitor;
             ForceBufferDraw = EffectsActive;
@@ -187,6 +251,7 @@ namespace SDVRadiance
             // Author tool: dumps every location's layers/tiles + sheet art for HF Studio, the
             // browser labeler that produces labels/water-labels.json. Harmless for players (it
             // only runs when typed) and it keeps the whole labeling loop inside this mod.
+            SurfaceMap.Diag = this.Monitor;
             MapDump.BridgeMonitor = this.Monitor;
             MapDump.BridgeHelper = helper;
             helper.ConsoleCommands.Add("radiance_mapdump",
@@ -309,6 +374,7 @@ namespace SDVRadiance
         private static GraphicsDevice Game1_GraphicsDevice =>
             Game1.graphics.GraphicsDevice;
 
+        
         /// <summary>Force the game to draw the world into its buffer so a render target is bound during graphics events.</summary>
         private static void ShouldDrawOnBuffer_Postfix(ref bool __result)
         {
@@ -539,6 +605,9 @@ namespace SDVRadiance
             var surf = SurfaceMap.For(loc);
             if (surf != null)
                 this.Monitor.Log($"surface={surf.GetSurface(t.X, t.Y)} height={surf.GetHeight(t.X, t.Y)}", LogLevel.Info);
+            // Composed mask vs label, side by side — the acceptance test for this subsystem
+            // is that the game matches the labeler, so print both from the same tile.
+            this.Monitor.Log(_pipeline?.DescribeTileMask(loc, t.X, t.Y) ?? "pipeline not ready", LogLevel.Info);
             foreach (string layerName in new[] { "Back", "Buildings", "Front", "AlwaysFront", "AlwaysFront2" })
             {
                 var layer = loc.map?.GetLayer(layerName);
@@ -826,8 +895,6 @@ namespace SDVRadiance
                 () => I18n("config.shadows.blur.name"), null, 0f, 5f, 0.5f);
             api.AddBoolOption(this.ModManifest, () => _config.DirectionalShadowObjects, v => _config.DirectionalShadowObjects = v,
                 () => I18n("config.shadows.objects.name"), () => I18n("config.shadows.objects.tooltip"));
-            api.AddNumberOption(this.ModManifest, () => _config.MinShadowLightRadius, v => _config.MinShadowLightRadius = v,
-                () => I18n("config.shadows.minlightradius.name"), () => I18n("config.shadows.minlightradius.tooltip"), 0f, 3f, 0.25f);
 
             // --- Camera (implemented) ---
             api.AddPage(this.ModManifest, "camera", () => I18n("config.section.camera"));

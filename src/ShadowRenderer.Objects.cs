@@ -143,6 +143,12 @@ namespace SDVRadiance
                     case Tree tree when tree.growthStage.Value >= 5 && !tree.stump.Value && tree.texture?.Value != null:
                         DrawTreeShadow(b, tree, tile, rot * TreeLeanScale, Math.Min(stretch, TreeStretchMax), alpha, blur);
                         break;
+                    // Everything else the game still DRAWS as a tree: seeds, sprouts, saplings,
+                    // bush-stage growth and stumps. They are short, so they take the full lean a
+                    // bush does rather than the damped canopy lean above.
+                    case Tree small when small.texture?.Value != null:
+                        DrawSmallTreeShadow(b, small, tile, rot * TallLeanScale, Math.Min(stretch, 0.8f), alpha, blur);
+                        break;
                     case FruitTree ft when ft.growthStage.Value >= 4 && !ft.stump.Value && ft.texture != null:
                         DrawFruitTreeShadow(b, ft, tile, rot * TreeLeanScale, Math.Min(stretch, TreeStretchMax), alpha, blur);
                         break;
@@ -157,13 +163,11 @@ namespace SDVRadiance
 
             foreach (var ltf in loc.largeTerrainFeatures)
             {
+                Vector2 ltile = ltf?.Tile ?? Vector2.Zero;
+                if (ltf == null || ltile.X < tx0 || ltile.X > tx1 || ltile.Y < ty0 || ltile.Y > ty1)
+                    continue;
                 if (ltf is Bush bush)
-                {
-                    Vector2 tile = bush.Tile;
-                    if (tile.X < tx0 || tile.X > tx1 || tile.Y < ty0 || tile.Y > ty1)
-                        continue;
                     DrawBushShadow(b, bush, rot * TallLeanScale, Math.Min(stretch, 0.8f), alpha, blur);
-                }
             }
 
             foreach (ResourceClump clump in loc.resourceClumps)
@@ -361,27 +365,31 @@ namespace SDVRadiance
                         }
                     }
 
-                    // Read the ART itself: partially transparent art = a free-standing prop (fence,
-                    // post, sign, lamp base) → casts. Fully opaque art = terrain/wall (cliff faces,
-                    // house walls, path edging) → never casts, EXCEPT the boxed-prop case: an opaque
-                    // bottom standing directly on walkable ground with Front art stacked above
-                    // (planters, crates) — and only in runs ≤2 tiles so house walls stay excluded.
-                    // Cast bound is looser (0.95) than the wall bound (0.90): dense picket-fence
-                    // tiles read ~0.9x coverage while real walls sit at ~1.0.
+                    // Is this a thing standing on the ground, or the ground itself?
+                    //
+                    // Coverage alone cannot answer that, and treating it as if it could is what
+                    // left every desert cactus bare: a cactus reads 0.97 opaque, exactly like the
+                    // cliff behind it, because BOTH are solid art — one is just small. What
+                    // actually separates them is SPAN. A prop is a narrow island of map art;
+                    // terrain is a mass. So coverage now only rejects art too faint to be
+                    // anything (a bare collision tile), and span decides the rest.
+                    //
+                    // Measured on the Buildings layer in both axes, because one axis is not
+                    // enough on its own: a cliff's bottom row is wide, but a one-tile-wide
+                    // vertical spur of that same cliff is not.
                     bool aProp = cov >= 0.04f && cov <= 0.95f;
-                    bool bProp = false;
-                    if (!aProp && cov > 0.90f && sameSrc == null && (y + 1 >= H || bldg.Tiles[x, y + 1] == null) && Ft(x, y - 1) != null)
+                    int spanW = 1, spanH = 1;
+                    if (!aProp && cov > 0.04f)
                     {
-                        bool BCell(int xx) => xx >= 0 && xx < W && bldg.Tiles[xx, y] != null && Ft(xx, y) == null
-                            && Ft(xx, y - 1) != null && (y + 1 >= H || bldg.Tiles[xx, y + 1] == null);
-                        int run = 1, l = x - 1, r = x + 1;
-                        while (BCell(l)) { run++; l--; }
-                        while (BCell(r)) { run++; r++; }
-                        bProp = run <= 2;
+                        for (int i = x - 1; i >= 0 && spanW <= MaxPropSpan && bldg.Tiles[i, y] != null; i--) spanW++;
+                        for (int i = x + 1; i < W && spanW <= MaxPropSpan && bldg.Tiles[i, y] != null; i++) spanW++;
+                        for (int j = y - 1; j >= 0 && spanH <= MaxPropSpan && bldg.Tiles[x, j] != null; j--) spanH++;
+                        for (int j = y + 1; j < H && spanH <= MaxPropSpan && bldg.Tiles[x, j] != null; j++) spanH++;
                     }
+                    bool bProp = !aProp && cov > 0.04f && spanW <= MaxPropSpan && spanH <= MaxPropSpan;
                     if (!aProp && !bProp)
                     {
-                        PD(x, y, $"skip: cov={cov:0.00} → not a prop");
+                        PD(x, y, $"skip: cov={cov:0.00} span={spanW}x{spanH} → not a prop");
                         continue;
                     }
                     // A "prop" sitting ON opaque art below is wall decor — a window halfway up a
@@ -541,15 +549,29 @@ namespace SDVRadiance
         // GPU readback (pipeline flush); walking into a prop-heavy screen fired a burst of them in one
         // frame. Read each sheet back ONCE, then count coverage from the CPU array (zero GPU work).
         private readonly System.Collections.Generic.Dictionary<Texture2D, Color[]?> _covSheetPix = new();
-        private const int CovSheetCap = 8_000_000; // ~32 MB ceiling before per-region fallback
+        // Refusal bound for absurd sheets only — see the note on RenderPipeline.SheetPixCap. The
+        // old 8 Mpx ceiling landed under real modded tilesheets, and the fallback beneath it is a
+        // GPU readback per tile.
+        private const int CovSheetCap = 64_000_000;
+        private const int CovStripRows = 512;
 
         private Color[]? CovSheetPixels(Texture2D tex)
         {
             if (_covSheetPix.TryGetValue(tex, out Color[]? px))
                 return px;
-            if ((long)tex.Width * tex.Height <= CovSheetCap)
+            long n = (long)tex.Width * tex.Height;
+            if (n <= CovSheetCap)
             {
-                try { px = new Color[tex.Width * tex.Height]; tex.GetData(px); }
+                try
+                {
+                    px = new Color[n];
+                    for (int y0 = 0; y0 < tex.Height; y0 += CovStripRows)
+                    {
+                        int rows = Math.Min(CovStripRows, tex.Height - y0);
+                        tex.GetData(0, new Rectangle(0, y0, tex.Width, rows),
+                            px, y0 * tex.Width, rows * tex.Width);
+                    }
+                }
                 catch { px = null; }
             }
             _covSheetPix[tex] = px;
@@ -673,6 +695,12 @@ namespace SDVRadiance
             EmitObj(b, tex, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, stretch, depth, blur, ObjectHeadFade);
         }
+
+        /// <summary>How wide and how tall a mass of opaque Buildings art may be and still be a
+        /// THING standing on the ground rather than the ground itself. A cactus, a post, a
+        /// signboard, a crate are one or two tiles either way; a cliff face or a house wall is
+        /// not. This is the test that opacity was standing in for, badly.</summary>
+        private const int MaxPropSpan = 2;
 
         /// <summary>Lean damping for tall sprites (bushes/craftables) so the shadow stays rooted at the base.</summary>
         private const float TallLeanScale = 0.6f;
@@ -823,6 +851,36 @@ namespace SDVRadiance
             // Tree canopy draws with origin (24, 96); fade about the trunk base.
             EmitObj(b, tree.texture.Value, src, feet, new Vector2(24f, 96f),
                 alpha, rot, stretch, depth, blur, ObjectHeadFade);
+        }
+
+        /// <summary>
+        /// A tree the game does NOT draw as a grown canopy: seed, sprout, sapling, bush-stage
+        /// growth, or a stump. There is no stage threshold here on purpose — growth stage was never
+        /// the question. It only ever stood in for "is this the 48x96 canopy rect", and a desert
+        /// palm reports stage 18 while a stage-2 palm is still a real object standing on real sand.
+        /// Anything the game draws gets a shadow; the stage only picks WHICH art to cast from.
+        /// </summary>
+        private void DrawSmallTreeShadow(SpriteBatch b, Tree tree, Vector2 tile, float rot, float stretch, float alpha, float blur)
+        {
+            // Tree.draw's own rects for the pre-canopy stages, on the shared tree sheet.
+            Rectangle src = tree.stump.Value
+                ? new Rectangle(32, 96, 16, 32)
+                : tree.growthStage.Value switch
+                {
+                    0 => new Rectangle(32, 128, 16, 16),   // seed
+                    1 => new Rectangle(0, 128, 16, 16),    // sprout
+                    2 => new Rectangle(16, 128, 16, 16),   // sapling
+                    _ => new Rectangle(0, 96, 16, 32),     // bush stage (3-4)
+                };
+            // Anchor the sprite's BOTTOM at the tile's bottom edge rather than reproducing
+            // vanilla's pin/origin pair per stage: a shadow belongs where the art meets the
+            // ground, and deriving that from the tile is what keeps every stage consistent
+            // (the same reasoning as the bush anchor above).
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1) * 64f));
+            float depth = MathHelper.Clamp((tree.getBoundingBox().Bottom + 2f) / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
+            SpriteEffects fx = tree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
+            EmitObj(b, tree.texture.Value, src, feet, new Vector2(src.Width / 2f, src.Height),
+                alpha, rot, stretch, depth, blur, ObjectHeadFade, fx);
         }
 
         private void DrawFruitTreeShadow(SpriteBatch b, FruitTree ft, Vector2 tile, float rot, float stretch, float alpha, float blur)

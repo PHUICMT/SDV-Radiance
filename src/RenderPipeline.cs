@@ -67,7 +67,14 @@ namespace SDVRadiance
         // per sheet (a forest uses a handful), then every tile samples the array with zero GPU work.
         // Huge sheets (> cap) fall back to per-region GetData so we never allocate a giant array.
         private readonly System.Collections.Generic.Dictionary<Texture2D, Color[]?> _sheetPixCache = new();
-        private const int SheetPixCap = 8_000_000; // ~32 MB per sheet ceiling before falling back
+        // Refusal bound only for absurd sheets — NOT a performance knob. The old 8 Mpx ceiling sat
+        // just under a real SVE tilesheet (2400x3600 = 8.64 Mpx), and being 8% over it swapped one
+        // readback per sheet for one per TILE: 43 s inside a single gather on a 240x156 map.
+        private const int SheetPixCap = 64_000_000;
+        private const int SheetStripRows = 512;    // rows per readback, so staging stays bounded
+        /// <summary>Per-tile art for sheets too big to cache whole — so even the refused path costs
+        /// one readback per DISTINCT tile instead of one per tile the map happens to paint.</summary>
+        private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), Color[]> _tileArtCache = new();
         private GameLocation? _prewarmedLoc;   // last location whose tilesheets we bulk-read back
         private readonly System.Collections.Generic.Dictionary<string, Texture2D?> _sheetTexCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), (bool[] bits, int count, int water)> _solidBitsCache = new();
@@ -89,6 +96,7 @@ namespace SDVRadiance
 
         /// <summary>One ease-in step (~0.5 s to full at 60 fps).</summary>
         private static float Ease01(float v) => v >= 0.999f ? 1f : Math.Min(1f, v + (1f - v) * 0.10f);
+
 
         /// <summary>One ease-OUT step, the mirror of <see cref="Ease01"/> (~0.5 s to gone).
         /// House rule: no effect may ever pop - if something changes, it fades. Every presence
@@ -196,6 +204,20 @@ namespace SDVRadiance
         private RenderTarget2D? _lumRT;
         private Color[]? _lumBuf;
         private bool _lumPrimed;
+
+        // ---- brightness probe (radiance_probe) ------------------------------------------------
+        // Two wrong guesses were made about a report of the screen brightening and dimming as the
+        // player walks, because every candidate was argued from reading the code. This measures it
+        // instead: the mean of the frame BEFORE any stage runs and AFTER the whole stack, once a
+        // second, next to every scalar that could move a whole frame. Whichever number tracks the
+        // walk is the one to fix. Author tool, off unless typed.
+        /// <summary>Force the water pass's whole-pass presence (radiance_wpres). The measured gain
+        /// of that pass stayed at 0.920 whether the fade read 1.00 or 0.02, which either means the
+        /// uniform is not reaching the shader or the 8% does not come from the pass at all. Pinning
+        /// the value by hand separates those two without another argument from reading the code.</summary>
+        /// <summary>A/B switch for the damp-land band alone (radiance_wetrim). Everything else in
+        /// the water pass stays exactly as it is, so a dark edge hugging a fountain's stone lip or
+        /// a river bank can be told apart from the map's own shore art in one keystroke.</summary>
         private float _meteredExposure = 1f;
 
         public RenderPipeline(GraphicsDevice device, IMonitor monitor, string modDir)
@@ -360,8 +382,14 @@ namespace SDVRadiance
                 // Reflection is independent of the shimmer toggle: either switch keeps
                 // the stage alive (the other's params are zeroed inside RenderWater).
                 bool waterAllowedHere = WaterAllowedIn(Game1.currentLocation, config);
+                // The mask is still rebuilt every frame it needs to be; what changed is that its
+                // window-local answer no longer decides whether the STAGE exists. That answer flips
+                // every few tiles as the player walks, and each flip is a chance for the presence
+                // fade to be wrong - which it was, twice, both times reading as a flash near water.
+                // The location's answer changes only on a warp, behind the game's own fade.
+                TimedBuild(config, 3, () => BuildWaterMask(w, h));
                 bool waterOn = (config.WaterEnabled || config.WaterReflection) && _water != null && waterAllowedHere
-                    && TimedBuild(config, 3, () => BuildWaterMask(w, h));
+                    && Game1.currentLocation is { } wloc && LocationHasWater(wloc);
                 _fadeWater = waterOn ? Ease01(_fadeWater) : Ease0(_fadeWater);
                 // Still rendered while fading: the mask is world-anchored, so the last one built
                 // stays correct for the decay frames. Switching the water effect off (or opting a
@@ -582,6 +610,58 @@ namespace SDVRadiance
             sb.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone, effect);
             sb.Draw(source, new Rectangle(0, 0, dest.Width, dest.Height), Color.White);
             sb.End();
+        }
+
+        /// <summary>Whole-pass presence enforced OUTSIDE the shader: after the pass has drawn,
+        /// blend the untouched source back over the result at 1-presence.
+        /// <para>
+        /// The in-shader Presence uniform was measured doing nothing: the water pass held its
+        /// full 0.920 gain with the fade at 0.02 (compiled GLSL shows the mix in place, so the
+        /// value is not arriving — water.fx sits at the edge of the profile's constant limits,
+        /// the same shader that overflows X4505 on the DX profile). water.fx also has two early
+        /// RETURNs the tail mix can never cover, one of which darkens shoreline LAND by 8% with
+        /// no gate at all. A SpriteBatch blend after the pass covers every term, both exits, and
+        /// any register-mapping trouble, because it never enters the shader.
+        /// </para>
+        /// The weight is carried by the BLEND FACTOR, not by the drawn alpha. AlphaBlend computes
+        /// dest = drawn.rgb + dest.rgb*(1 - drawn.a), and drawn.a is the source texture's own alpha
+        /// times the tint - which is not 1 across these targets. Where it was low the second term
+        /// failed to remove the pass, so the source was ADDED on top of it instead of mixed with
+        /// it: measured at presence 0.10 the water pass came out 1.30x brighter than its input,
+        /// and since that presence rises and falls as the player walks toward and away from water,
+        /// it read as the picture flashing while walking. BlendFactor ignores alpha entirely.</summary>
+        private void BlendBackSource(SpriteBatch sb, Texture2D source, RenderTarget2D dest, float presence)
+        {
+            if (presence >= 0.999f)
+                return;
+            _device.SetRenderTarget(dest);
+            sb.Begin(SpriteSortMode.Deferred, LerpBlend(1f - presence), SamplerState.PointClamp);
+            sb.Draw(source, new Rectangle(0, 0, dest.Width, dest.Height), Color.White);
+            sb.End();
+        }
+
+        private readonly Dictionary<int, BlendState> _lerpBlends = new();
+
+        /// <summary>dest = drawn*k + dest*(1-k), with k in the blend factor so the source
+        /// texture's alpha never enters the arithmetic. Quantised to 1/255 and cached, because a
+        /// BlendState cannot be modified once the device has bound it.</summary>
+        private BlendState LerpBlend(float k)
+        {
+            int q = MathHelper.Clamp((int)Math.Round(k * 255f), 0, 255);
+            if (!_lerpBlends.TryGetValue(q, out BlendState? bs))
+            {
+                float f = q / 255f;
+                bs = new BlendState
+                {
+                    ColorSourceBlend = Blend.BlendFactor,
+                    ColorDestinationBlend = Blend.InverseBlendFactor,
+                    AlphaSourceBlend = Blend.BlendFactor,
+                    AlphaDestinationBlend = Blend.InverseBlendFactor,
+                    BlendFactor = new Color(f, f, f, f),
+                };
+                _lerpBlends[q] = bs;
+            }
+            return bs;
         }
 
         public void Dispose()

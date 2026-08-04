@@ -5,6 +5,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
 using StardewValley;
+using StardewValley.ItemTypeDefinitions;
 
 namespace SDVRadiance
 {
@@ -91,12 +92,30 @@ namespace SDVRadiance
         {
             if (_sheetPixCache.TryGetValue(tex, out Color[]? sheet))
                 return sheet;
-            if ((long)tex.Width * tex.Height <= SheetPixCap)
+            long px = (long)tex.Width * tex.Height;
+            if (px <= SheetPixCap)
             {
-                try { sheet = new Color[tex.Width * tex.Height]; tex.GetData(sheet); }
+                try
+                {
+                    sheet = new Color[px];
+                    // Read in STRIPS rather than one whole-surface GetData. The cap this replaces
+                    // existed to bound the driver's staging cost for a huge sheet, and its fallback
+                    // was a readback PER TILE — thousands of times more expensive than the
+                    // allocation it avoided (a 240x156 map on an 8.64 Mpx sheet spent 43 s in one
+                    // gather). Strips keep the staging bounded while still costing one readback per
+                    // strip, so size no longer decides between "fast" and "unusable".
+                    for (int y0 = 0; y0 < tex.Height; y0 += SheetStripRows)
+                    {
+                        int rows = Math.Min(SheetStripRows, tex.Height - y0);
+                        tex.GetData(0, new Rectangle(0, y0, tex.Width, rows),
+                            sheet, y0 * tex.Width, rows * tex.Width);
+                    }
+                }
                 catch { sheet = null; }
             }
-            _sheetPixCache[tex] = sheet; // null = over cap or failed → per-region fallback
+            if (sheet == null)
+                _monitor.Log($"[water] tilesheet {tex.Width}x{tex.Height} not cached — tile art falls back to per-tile reads", LogLevel.Warn);
+            _sheetPixCache[tex] = sheet; // null = absurd size or failed → per-tile fallback (deduped)
             return sheet;
         }
 
@@ -141,9 +160,22 @@ namespace SDVRadiance
                     Array.Copy(sheet, soff, _artBuf, row * 16, 16);
                 }
             }
+            else if (_tileArtCache.TryGetValue((tex, src), out Color[]? tile))
+            {
+                Array.Copy(tile, _artBuf, 256);
+            }
             else
             {
+                // A refused sheet still gets read at most ONCE per distinct tile: the gather walks
+                // every tile of the map, so an undeduped readback here is paid per painted cell,
+                // not per piece of art. Bounded so a pathological map cannot grow this without end.
                 try { tex.GetData(0, src, _artBuf, 0, 256); } catch { Array.Clear(_artBuf, 0, 256); }
+                if (_tileArtCache.Count < 16_384)
+                {
+                    var copy = new Color[256];
+                    Array.Copy(_artBuf, copy, 256);
+                    _tileArtCache[(tex, src)] = copy;
+                }
             }
         }
 
@@ -248,6 +280,44 @@ namespace SDVRadiance
         /// was THE walking-near-water stutter. While a job is in flight the old mask keeps
         /// rendering (world-anchored content + padded window = no visible edge).
         /// </summary>
+        private GameLocation? _locWaterLoc;
+        private bool _locWaterAny;
+
+        /// <summary>
+        /// Does THIS LOCATION have water anywhere, as opposed to "is water inside the mask window
+        /// right now".
+        /// <para>
+        /// The stage used to switch on the window answer, which changes every few tiles as the
+        /// player walks. Every switch is a chance for the presence fade to be wrong, and it was
+        /// wrong twice: the fade never reached the shader's pixels, and the blend that replaced it
+        /// added the frame to itself. Both read as the picture flashing near water.
+        /// </para>
+        /// A location answer changes only on a warp, which the game already covers with its own
+        /// fade to black. The pass then runs for the whole visit; on a frame with no water on
+        /// screen every pixel takes the shader's first early-out after two texture reads, so the
+        /// cost of keeping it alive is a fraction of what the switching was worth.
+        /// </summary>
+        private bool LocationHasWater(GameLocation loc)
+        {
+            if (!ReferenceEquals(loc, _locWaterLoc))
+            {
+                _locWaterLoc = loc;
+                _locWaterAny = false;
+                if (loc.waterTiles?.waterTiles is { } wt)
+                {
+                    int ww = wt.GetLength(0), wh = wt.GetLength(1);
+                    for (int y = 0; y < wh && !_locWaterAny; y++)
+                        for (int x = 0; x < ww; x++)
+                            if (wt[x, y].isWater) { _locWaterAny = true; break; }
+                }
+            }
+            // Labelled or draw-hooked water need not appear in the game's own grid, so once a
+            // compose has found any here, the location keeps the stage for the rest of the visit.
+            if (_waterAny)
+                _locWaterAny = true;
+            return _locWaterAny;
+        }
+
         private bool BuildWaterMask(int w, int h)
         {
             GameLocation? loc = Game1.currentLocation;
@@ -337,6 +407,18 @@ namespace SDVRadiance
             // world-anchored, so the old origin+size still map correctly.
             if (loc != _lastWaterLoc || _waterMask == null)
                 _waterAny = false;
+
+            // The gather already knows, on this thread, whether the window it just read contains
+            // water — but `_waterAny` was only ever updated when a COMPOSE landed, and a compose
+            // is discarded whenever the view moved while it ran. Walk continuously and no job ever
+            // matches on completion, so the flag keeps whatever it held the last time the player
+            // stood still: the same tile measured wAny=1 on one pass and wAny=0 on another, which
+            // is what took the stage in and out and read as the picture stepping brighter/darker.
+            // Turn ON from the fresh gather immediately; leave turning OFF to a completed compose,
+            // which also knows about label-only water. Lingering costs nothing (there is no water
+            // on screen to affect), while dropping out early is exactly the visible fault.
+            if (njob.AnyWater)
+                _waterAny = true;
 
             njob.Task = System.Threading.Tasks.Task.Run(() =>
             {
@@ -469,6 +551,34 @@ namespace SDVRadiance
                         sb.Draw(cr.sprite.Texture, tl, cr.sprite.SourceRect, Color.White,
                             0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
                     }
+                }
+
+                // World OBJECTS standing on a water tile: beach forage in a tide pool, a crab pot,
+                // anything dropped. They are drawn on top of the water, so the ripple was warping
+                // them along with it (reported: a sea urchin in a tide pool rippling like liquid).
+                // Objects are tile-keyed, so walk the visible tile range rather than the whole
+                // dictionary, the same way the canopy pass below does.
+                var vpO = Game1.viewport;
+                int otx0 = (int)Math.Floor((vpO.X - 128) / 64f), otx1 = (int)Math.Floor((vpO.X + vpO.Width + 128) / 64f);
+                int oty0 = (int)Math.Floor((vpO.Y - 128) / 64f), oty1 = (int)Math.Floor((vpO.Y + vpO.Height + 192) / 64f);
+                for (int ovY = oty0; ovY <= oty1; ovY++)
+                for (int ovX = otx0; ovX <= otx1; ovX++)
+                {
+                    if (!loc.objects.TryGetValue(new Vector2(ovX, ovY), out var obj) || obj == null)
+                        continue;
+                    ParsedItemData data;
+                    try { data = ItemRegistry.GetDataOrErrorItem(obj.QualifiedItemId); }
+                    catch { continue; }
+                    Texture2D? otex = data.GetTexture();
+                    if (otex == null)
+                        continue;
+                    Rectangle osrc = data.GetSourceRect(0, obj.ParentSheetIndex);
+                    // Vanilla draws a placed object at the tile's centre-bottom, nudged up by a
+                    // third of a tile — matching that keeps the stamp on the sprite instead of
+                    // punching a hole in the water beside it.
+                    sb.Draw(otex,
+                        Game1.GlobalToLocal(Game1.viewport, new Vector2(ovX * 64f + 32f, ovY * 64f + 51f)),
+                        osrc, Color.White, 0f, new Vector2(osrc.Width / 2f, osrc.Height), 4f, SpriteEffects.None, 0f);
                 }
 
                 // Tree/bush canopies overhanging a pond are SPRITES (terrain features), not

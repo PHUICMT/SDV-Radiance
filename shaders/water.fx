@@ -61,6 +61,15 @@ sampler2D SdfSampler = sampler_state
     AddressU = Clamp; AddressV = Clamp;
 };
 
+float Presence;         // 0..1 whole-pass presence fade. The CPU already scales Strength,
+                        // Sparkle, TintAmt and ReflectStrength by it, but several terms below
+                        // (foam, the sky sheen, the moon and lamp glimmers, the lava pulse) are
+                        // gated only by the mask, so the pass kept its full look all the way down
+                        // to a fade of 0.02 and then vanished in one frame when the stage left the
+                        // list - measured as an 8% jump in whole-frame brightness. Blending the
+                        // finished result back toward the untouched pixel makes the fade mean what
+                        // it says for EVERY term, including any added later.
+float WetRim;           // 1 = normal, 0 = the damp-land band off (A/B only, see its use below)
 float Time;             // seconds
 float Strength;         // ripple amplitude (UV units are scaled inside)
 float Speed;            // ripple animation speed
@@ -200,7 +209,13 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float maskA = tex2D(MaskSampler, maskUV).a;
     float isIce  = 1.0 - step(0.25, maskA);              // a < 0.25
     float isLava = step(0.25, maskA) * (1.0 - step(0.75, maskA)); // 0.25..0.75
-    float rippleGate = 1.0 - isIce;                       // ice: no ripple; water/lava: yes
+    // FLOWING (alpha 192) is a VERTICAL face - a waterfall, a fountain jet. It was left in the
+    // ripple because it is liquid, but the ripple is a horizontal SURFACE wave: applied to a
+    // falling jet it swings the whole column sideways in time with the pool behind it, which is
+    // what "the falling water sways with the waves" is. Water at 255 sits above the 0.85 bar and
+    // is unaffected; lava (128) is already excluded by its own tag.
+    float isFlow = step(0.75, maskA) * (1.0 - step(0.85, maskA));
+    float rippleGate = (1.0 - isIce) * (1.0 - isFlow);    // ice / falling: no surface wave
 
     // Signed shore distance in TEXELS (+ = inside water). Sampled for every pixel because
     // the wet ground rim below lives just OUTSIDE the water mask.
@@ -209,13 +224,27 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float4 src = tex2D(SourceSampler, uv);
     if (tileWater <= 0.001)
     {
-        // Wet ground rim: the last ~3 texels of land before the waterline darken a touch,
-        // in two crisp steps (pixel-art rule: posterise, never a smooth ramp). Skipped
-        // beside ice (a frozen shore is not damp) and lava (rock does not glisten wet).
-        float wet = saturate((sdfT + 3.0) / 3.0);
-        wet = floor(wet * 2.0 + 0.5) * 0.5;
+        // Wet ground rim: the last few texels of land before the waterline darken a touch.
+        // Skipped beside ice (a frozen shore is not damp) and lava (rock does not glisten wet).
+        //
+        // It used to be 8% over three texels in TWO steps, and two steps over three texels is
+        // not posterising, it is a hard-edged bar: the eye read it as the edge of the water
+        // rather than as damp ground. Worst at the town fountain, where stone surrounds the
+        // water on every side, so the bar closed into a dark ring and looked like the basin
+        // overflowing; along a river bank it read as the mask failing to reach the shore.
+        // Confirmed by switching this term alone (radiance_wetrim) with the rest of the pass
+        // untouched. Four steps over five texels at 3.5% keeps the pixel-art stepping while
+        // reading as ground that gets damp near water, which is all it was ever for.
+        float wet = saturate((sdfT + 5.0) / 5.0);
+        wet = floor(wet * 4.0 + 0.5) * 0.25;
         float wetOk = step(0.75, maskA);
-        src.rgb *= 1.0 - 0.08 * wet * wetOk;
+        // WetRim is an A/B switch (radiance_wetrim), not a look control. This is the one term
+        // that paints LAND, it leaves through the early return so no presence or fade reaches
+        // it, and its posterised step makes a hard-edged dark band hugging every waterline -
+        // which is what a fountain's stone lip and a river bank show as "the water coming out
+        // past the edge". Flipping it alone, with the rest of the pass untouched, is the only
+        // clean way to tell that band apart from the map's own shore art.
+        src.rgb *= 1.0 - 0.035 * wet * wetOk * WetRim;
         return src;
     }
 
@@ -278,6 +307,15 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         tapPlayer = step(0.15, tex2D(PlayerMaskSampler, saturate(tuv)).a) * tin;
     }
     ripple *= 1.0 - max(tapSprite, tapPlayer);
+    // ...and it must not land on the MAP's art either. The rule above was written for sprites
+    // only, so a water pixel beside a boat, a pier post or a fountain statue still displaced its
+    // tap onto that art and dragged those pixels sideways with the wave - the whole object read
+    // as swaying, even though its own pixels were carved out of the mask perfectly. Reported for
+    // Willy's boat at the fish shop, for the boat in BoatTunnel, and visible on the fountain.
+    // Turning the ripple down only shortens the smear, which is why it never went away.
+    float2 tapWT = (uv + ripple) * TilesPerScreen + WorldTileOffset;
+    float tapWater = tex2D(MaskSampler, (tapWT - MaskOrigin) / MaskSize).r;
+    ripple *= step(0.02, tapWater);
     float4 col = tex2D(SourceSampler, uv + ripple);
 
     // Depth tint: cool + deepen for a wetter, more 3D surface. TintAmt drops to 0 when
@@ -614,6 +652,9 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         col.rgb += ring * (1.0 - ph) * RainAmt * water * 0.10;
     }
 
+    // Whole-pass presence: fade the finished surface back to the pixel the game drew, so the
+    // stage's total contribution is already zero by the time it is dropped from the stage list.
+    col.rgb = lerp(tex2D(SourceSampler, uv).rgb, col.rgb, Presence);
     return col;
 }
 

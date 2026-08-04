@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
@@ -64,6 +65,7 @@ namespace SDVRadiance
         private bool[]? _tileOverlayGroundFBuf;// same for Front + every AlwaysFront layer here
         private bool[]?[]? _tileIceBitsBuf;    // per-pixel ice from the label (null = use the tile verdict)
         private bool[]?[]? _tileLavaBitsBuf;   // per-pixel lava from the label
+        private bool[]?[]? _tileFlowBitsBuf;   // per-pixel flowing (class 10) from the label
         private bool[]? _tileLandNearBuf;      // this water tile touches a non-water tile (or the mask edge)
         private bool[]? _tileHasFrontBuf;
         private bool[]? _tileIceBuf;           // HF label class 9: frozen — reflection, no ripple
@@ -81,6 +83,180 @@ namespace SDVRadiance
         /// <summary>Water bits from 256 HF Studio per-pixel labels. Classes 1 (water), 9 (ice) and
         /// 10 (flowing) are ALL water for the mask; per-class counts let the tile pick a behaviour
         /// (ice = mirror only, flowing = ripple only).</summary>
+        /// <summary>
+        /// Fill the holes a label carve punched in the march channel that are ENCLOSED by march
+        /// water, and leave the ones that reach the outside carved.
+        /// <para>
+        /// Both shapes are "painted non-liquid inside a water tile", but they mean opposite things
+        /// to the reflection. A pond's island or a lily pad is surrounded by water: if it survives
+        /// as a hole, every column crossing it finds a false shoreline and re-anchors the mirror
+        /// there. A fountain's stone lip, a bank ledge, a pier's footing all reach open land: those
+        /// ARE the waterline, and treating them as water is what pushed the mirror out past the
+        /// stone and left painted banks reading as water.
+        /// </para>
+        /// A four-way flood from the window border through everything that is not march water
+        /// separates them in one O(n) sweep: whatever the flood reaches is connected to the
+        /// outside and stays carved; the rest was enclosed and goes back to water. The border
+        /// itself counts as outside, so a rim continuing past the window edge is still a rim.
+        /// </summary>
+        private void RestoreEnclosedMarch(bool[] march, int pw, int ph)
+        {
+            int n = pw * ph;
+            if (_marchOutside == null || _marchOutside.Length < n)
+                _marchOutside = new bool[n];
+            var outside = _marchOutside;
+            Array.Clear(outside, 0, n);
+            if (_marchStack == null || _marchStack.Length < n)
+                _marchStack = new int[n];
+            var stack = _marchStack;
+            int sp = 0;
+
+            void Seed(int idx)
+            {
+                if (!march[idx] && !outside[idx]) { outside[idx] = true; stack[sp++] = idx; }
+            }
+            for (int x = 0; x < pw; x++) { Seed(x); Seed((ph - 1) * pw + x); }
+            for (int y = 0; y < ph; y++) { Seed(y * pw); Seed(y * pw + pw - 1); }
+
+            while (sp > 0)
+            {
+                int idx = stack[--sp];
+                int x = idx % pw, y = idx / pw;
+                if (x > 0) Seed(idx - 1);
+                if (x < pw - 1) Seed(idx + 1);
+                if (y > 0) Seed(idx - pw);
+                if (y < ph - 1) Seed(idx + pw);
+            }
+
+            for (int i = 0; i < n; i++)
+                if (!march[i] && !outside[i])
+                    march[i] = true;
+        }
+
+        private bool[]? _marchOutside;
+        private int[]? _marchStack;
+        private bool[]? _speckSeen;
+        private int[]? _speckMembers;
+
+        /// <summary>Smallest connected march area that is real water. A wet-shading dash painted
+        /// into shore art is a handful of texels; any actual body of water is hundreds.</summary>
+        private const int MinMarchArea = 32;
+
+        /// <summary>
+        /// Drop march blobs too small to be water, by CONNECTED AREA rather than by how tall the
+        /// blob happens to be in one column.
+        /// <para>
+        /// The rule here used to be "clear any column run shorter than six texels", aimed at the
+        /// isolated wet-shading dashes in shore art, each of which otherwise became a tiny mirror
+        /// sitting at distance zero and painted a dark dash onto the bank. It caught those, and it
+        /// also caught every place real water tapers: the curved front rim of the town fountain,
+        /// and the thin band of river that runs along the foot of a bank. Those are not specks -
+        /// they are the edge of a body thousands of texels across, and the label says so.
+        /// </para>
+        /// Area answers what column height cannot. A blob touching the window border is kept
+        /// whatever its size: it continues off-screen and its real extent is unknown.
+        /// </summary>
+        private void DropSpeckComponents(bool[] march, int pw, int ph)
+        {
+            int n = pw * ph;
+            if (_speckSeen == null || _speckSeen.Length < n) _speckSeen = new bool[n];
+            if (_marchStack == null || _marchStack.Length < n) _marchStack = new int[n];
+            if (_speckMembers == null || _speckMembers.Length < n) _speckMembers = new int[n];
+            var seen = _speckSeen;
+            var stack = _marchStack;
+            var members = _speckMembers;
+            Array.Clear(seen, 0, n);
+
+            for (int start = 0; start < n; start++)
+            {
+                if (!march[start] || seen[start])
+                    continue;
+                int sp = 0, count = 0;
+                bool touchesBorder = false;
+                seen[start] = true;
+                stack[sp++] = start;
+                while (sp > 0)
+                {
+                    int idx = stack[--sp];
+                    members[count++] = idx;
+                    int x = idx % pw, y = idx / pw;
+                    if (x == 0 || y == 0 || x == pw - 1 || y == ph - 1)
+                        touchesBorder = true;
+                    if (x > 0 && march[idx - 1] && !seen[idx - 1]) { seen[idx - 1] = true; stack[sp++] = idx - 1; }
+                    if (x < pw - 1 && march[idx + 1] && !seen[idx + 1]) { seen[idx + 1] = true; stack[sp++] = idx + 1; }
+                    if (y > 0 && march[idx - pw] && !seen[idx - pw]) { seen[idx - pw] = true; stack[sp++] = idx - pw; }
+                    if (y < ph - 1 && march[idx + pw] && !seen[idx + pw]) { seen[idx + pw] = true; stack[sp++] = idx + pw; }
+                }
+                if (!touchesBorder && count < MinMarchArea)
+                    for (int k = 0; k < count; k++)
+                        march[members[k]] = false;
+            }
+        }
+
+        /// <summary>What the composed mask actually says for one tile, next to what the LABEL says
+        /// for the art each layer draws there. The rule for this subsystem is that the game must
+        /// match the labeler pixel for pixel, and until now there was no way to see the two side by
+        /// side: a fix could be live and change nothing because the carve it feeds is only built
+        /// from ONE layer family, and nothing said so.</summary>
+        internal string DescribeTileMask(GameLocation? loc, int tx, int ty)
+        {
+            if (_waterPixBuf == null || _waterMask == null)
+                return "[mask] no composed mask yet";
+            const int Texels = 16;   // mask texels per tile (matches the compose pass)
+            int px0 = (tx - _lastWaterTx) * Texels, py0 = (ty - _lastWaterTy) * Texels;
+            int pw = _waterMask.Width;
+            if (px0 < 0 || py0 < 0 || px0 + Texels > pw || py0 + Texels > _waterMask.Height)
+                return $"[mask] tile ({tx},{ty}) is outside the mask window (origin {_lastWaterTx},{_lastWaterTy})";
+
+            // COUNT is not enough: the shader ramps coverage down over the last texels of water
+            // (edgeQ), so a band only a few texels wide can be fully inside the mask and still
+            // render at a sixth of strength - which looks exactly like no coverage at all. Report
+            // the strength as well as the count, so "not covered" and "covered but nearly
+            // invisible" stop being the same reading.
+            int eff = 0, march = 0, effSum = 0, effMin = 255, effMax = 0;
+            var alphas = new Dictionary<byte, int>();
+            for (int y = 0; y < Texels; y++)
+                for (int x = 0; x < Texels; x++)
+                {
+                    Color c = _waterPixBuf[(py0 + y) * pw + px0 + x];
+                    if (c.R > 0)
+                    {
+                        eff++; effSum += c.R;
+                        if (c.R < effMin) effMin = c.R;
+                        if (c.R > effMax) effMax = c.R;
+                    }
+                    if (c.G > 0) march++;
+                    alphas[c.A] = alphas.TryGetValue(c.A, out int n) ? n + 1 : 1;
+                }
+            string strength = eff > 0 ? $" R avg={effSum / eff} min={effMin} max={effMax}" : "";
+            string alphaTxt = string.Join(" ", alphas.OrderBy(kv => kv.Key)
+                .Select(kv => $"{(kv.Key == 0 ? "ice" : kv.Key == 128 ? "lava" : kv.Key == 192 ? "flow" : kv.Key == 255 ? "water" : kv.Key.ToString())}:{kv.Value}"));
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"[mask] tile ({tx},{ty})  effect={eff}/256  march={march}/256{strength}  alpha[{alphaTxt}]");
+            var labels = LabelStore.Instance;
+            if (labels == null || !labels.Any)
+                return sb.Append("[label] no label set loaded").ToString();
+            foreach (string layerName in new[] { "Back", "Back2", "Buildings", "Buildings2", "Front", "Front2", "AlwaysFront" })
+            {
+                byte[]? lbl = labels.Get(loc, tx, ty, layerName);
+                if (lbl == null)
+                    continue;
+                var hist = new Dictionary<byte, int>();
+                foreach (byte c in lbl) hist[c] = hist.TryGetValue(c, out int n) ? n + 1 : 1;
+                sb.AppendLine($"[label] {layerName,-11} " + string.Join(" ", hist.OrderBy(kv => kv.Key).Select(kv => $"{ClassName(kv.Key)}:{kv.Value}")));
+            }
+            return sb.ToString().TrimEnd();
+        }
+
+        private static string ClassName(byte c) => c switch
+        {
+            0 => "ground", 1 => "water", 2 => "wall", 3 => "roof", 4 => "deck", 5 => "void",
+            6 => "emissive", 7 => "reflfloor", 8 => "mirror", 9 => "ice", 10 => "flow",
+            11 => "lava", 12 => "window", 13 => "glass", 14 => "hot", 255 => "unset",
+            _ => c.ToString(),
+        };
+
         private static (bool[] bits, int nWater, int nIce, int nFlow, int nLava) WaterBitsFromLabels(byte[] classes)
         {
             var bits = new bool[256];
@@ -166,13 +342,14 @@ namespace SDVRadiance
 
         /// <summary>OR the label's ice (9) and lava (11) pixels into the tile's per-pixel sub-type
         /// masks, allocating only when there is something to record.</summary>
-        private static void AddSubTypePixels(byte[] classes, ref bool[]? icePx, ref bool[]? lavaPx)
+        private static void AddSubTypePixels(byte[] classes, ref bool[]? icePx, ref bool[]? lavaPx, ref bool[]? flowPx)
         {
             for (int p = 0; p < 256; p++)
             {
                 byte c = classes[p];
                 if (c == 9) (icePx ??= new bool[256])[p] = true;
                 else if (c == 11) (lavaPx ??= new bool[256])[p] = true;
+                else if (c == 10) (flowPx ??= new bool[256])[p] = true;
             }
         }
 
@@ -307,6 +484,7 @@ namespace SDVRadiance
             if (_tileOverlayGroundFBuf == null || _tileOverlayGroundFBuf.Length < count) _tileOverlayGroundFBuf = new bool[count];
             if (_tileIceBitsBuf == null || _tileIceBitsBuf.Length < count) _tileIceBitsBuf = new bool[]?[count];
             if (_tileLavaBitsBuf == null || _tileLavaBitsBuf.Length < count) _tileLavaBitsBuf = new bool[]?[count];
+            if (_tileFlowBitsBuf == null || _tileFlowBitsBuf.Length < count) _tileFlowBitsBuf = new bool[]?[count];
             if (_tileLandNearBuf == null || _tileLandNearBuf.Length < count) _tileLandNearBuf = new bool[count];
             if (_tileIceBuf == null || _tileIceBuf.Length < count) _tileIceBuf = new bool[count];
             if (_tileFlowBuf == null || _tileFlowBuf.Length < count) _tileFlowBuf = new bool[count];
@@ -351,7 +529,7 @@ namespace SDVRadiance
                     // half-frozen tile needs: #1269 is 184 ice pixels and 72 water, and a whole-tile
                     // verdict froze all 256, so the ripple stopped dead on a tile boundary and the
                     // river showed square patches. Null when nothing here is labelled.
-                    bool[]? icePx = null, lavaPx = null;
+                    bool[]? icePx = null, lavaPx = null, flowPx = null;
                     if (labels != null && backs != null)
                     {
                         // Topmost Back-family label wins (Back2 draws over Back).
@@ -365,7 +543,7 @@ namespace SDVRadiance
                         {
                             labeledBack = !isWater;
                             var (lb, nW, nI, nF, nL) = WaterBitsFromLabels(lbl);
-                            if (nI > 0 || nL > 0) AddSubTypePixels(lbl, ref icePx, ref lavaPx);
+                            if (nI > 0 || nL > 0 || nF > 0) AddSubTypePixels(lbl, ref icePx, ref lavaPx, ref flowPx);
                             if (isWater)
                             {
                                 // Subtract only what the author explicitly painted non-liquid;
@@ -431,7 +609,7 @@ namespace SDVRadiance
                             {
                                 overlayBits = ob;
                                 iceN += nI; flowN += nF; lavaN += nL;
-                                if (nI > 0 || nL > 0) AddSubTypePixels(lbl, ref icePx, ref lavaPx);
+                                if (nI > 0 || nL > 0 || nF > 0) AddSubTypePixels(lbl, ref icePx, ref lavaPx, ref flowPx);
                                 job.AnyLabeled = true;
                             }
                         }
@@ -553,7 +731,7 @@ namespace SDVRadiance
                                 if (cb.bits[p] && !ob[p]) k[p] = false;
                             keep = k;
                             iceN += oI; flowN += oF; lavaN += oL;
-                            if (oI > 0 || oL > 0) AddSubTypePixels(olbl, ref icePx, ref lavaPx);
+                            if (oI > 0 || oL > 0 || oF > 0) AddSubTypePixels(olbl, ref icePx, ref lavaPx, ref flowPx);
                             int oLiquid = oW + oI + oF + oL;
                             if (oLiquid > 0)
                             {
@@ -611,16 +789,53 @@ namespace SDVRadiance
                                     if (fb2[p]) carveF[p] = false;
                                 _tileCarveFBuf[idx] = carveF;
                                 iceN += fI; flowN += fF; lavaN += fL;
-                                if (fI > 0 || fL > 0) AddSubTypePixels(flbl, ref icePx, ref lavaPx);
+                                if (fI > 0 || fL > 0 || fF > 0) AddSubTypePixels(flbl, ref icePx, ref lavaPx, ref flowPx);
                                 job.AnyLabeled = true;
                                 fCount = 0;                 // labelled liquid is never a structure
                                 frontLabeledLiquid = true;
                             }
                         }
                     }
+                    // KEEP = the per-pixel carve, and it is the only thing that stops a water tile
+                    // covering all 256 of its texels. It was read from the Back family alone, which
+                    // silently does nothing wherever the liquid was painted on an overlay instead.
+                    // Measured at the town fountain, tile (27,24): isWaterTile is FALSE and Back is
+                    // plain Stone, but the FRONT label carries 59 water + 39 flow, and 98 liquid
+                    // pixels clear SurfaceMap's overlay bar of 48 - so the tile is declared Water,
+                    // the gather fills every texel, and with no Back label there is no carve to put
+                    // any of it back. Label said 98, mask shipped 206.
+                    //
+                    // The rule this subsystem is held to is that the game matches the labeler pixel
+                    // for pixel, so: if ANY layer painted this tile, the union of what those labels
+                    // call liquid IS the water, and everything else is carved. Only a tile nobody
+                    // painted falls back to the whole-tile flag.
+                    if (isWater && labels != null)
+                    {
+                        bool[]? union = null;
+                        void Union(xTile.Layers.Layer? layer)
+                        {
+                            byte[]? l = labels.Get(layer, tx, ty);
+                            if (l == null)
+                                return;
+                            union ??= new bool[256];
+                            for (int p = 0; p < 256; p++)
+                            {
+                                byte c = l[p];
+                                if (c == 1 || c == 9 || c == 10 || c == 11 || c == 14 || c == 255)
+                                    union[p] = true;
+                            }
+                        }
+                        if (backs != null) foreach (var l in backs) Union(l);
+                        if (blds != null) foreach (var l in blds) Union(l);
+                        if (fronts != null) foreach (var l in fronts) Union(l);
+                        if (always != null) foreach (var l in always) Union(l);
+                        if (union != null)
+                            keep = union;
+                    }
                     _tileKeepBuf![idx] = keep;
                     _tileIceBitsBuf![idx] = icePx;
                     _tileLavaBitsBuf![idx] = lavaPx;
+                    _tileFlowBitsBuf![idx] = flowPx;
                     // Ice / flowing win over each other by pixel count; a plain-water majority
                     // keeps normal behaviour. Ice → reflection but no ripple (mask alpha 0);
                     // flowing → ripple but no reflection (scrubbed from the march channel).
@@ -742,10 +957,20 @@ namespace SDVRadiance
             if (_waterPixBits2 == null || _waterPixBits2.Length < pcount)
                 _waterPixBits2 = new bool[pcount];
             Array.Copy(_waterPixBits, _waterPixBits2, pcount);
-            // Label subtraction on true water tiles — AFTER the march copy on purpose. The effect
-            // channel loses the rock rim / island / pads so they stop rippling, while the march
-            // channel still sees a full water surface: an island in mid-pond must not read as a
-            // shoreline, or every reflection in the pond re-anchors on it.
+            // Label subtraction on true water tiles. It runs on BOTH channels now.
+            //
+            // It used to touch the effect channel only, on the grounds that "an island in mid-pond
+            // must not read as a shoreline, or every reflection in the pond re-anchors on it".
+            // The island part is right, but the rule was applied to every carved pixel, so the
+            // march channel — the authority on where the waterline is — never saw a single label.
+            // A tile the game calls water stayed water edge to edge there, and the reflection
+            // geometry anchored on the TILE boundary instead of on the painted edge: the town
+            // fountain mirrored a sheet out past its stone lip, and a labelled bank read as
+            // water short of where the paint says the water stops.
+            //
+            // Islands and rims are not the same shape, and connectivity tells them apart without
+            // guessing: an island is carved water enclosed by water, a rim is carved water that
+            // reaches the outside. So carve march as well, then restore only the enclosed parts.
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)
@@ -759,10 +984,14 @@ namespace SDVRadiance
                         int arow = py * Sub;
                         for (int px = 0; px < Sub; px++)
                             if (!keep[arow + px])
+                            {
                                 _waterPixBits[row + px] = false;
+                                _waterPixBits2[row + px] = false;
+                            }
                     }
                 }
             }
+            RestoreEnclosedMarch(_waterPixBits2, pw, ph);
             // (V4) The anim-region shape test and its waterfall scrub are gone with the colour
             // classifier that fed them: vertical waterfall faces are label class 10's job now
             // (the whole-tile flow/lava march scrub below still runs on labelled tiles).
@@ -931,16 +1160,31 @@ namespace SDVRadiance
             // FLOWING water (class 10 — waterfalls/streams) and LAVA (class 11) both scrub from
             // the march channel so neither grows a sky mirror; their effect channel stays (flow
             // ripples; lava undulates slowly + self-glows, handled in the shader by the alpha tag).
+            //
+            // PER PIXEL where the label said so. This used to clear all 256 texels of any tile
+            // whose flow or lava pixels won the count, which is the same whole-tile verdict that
+            // froze half-iced river tiles before per-pixel ice landed. A fountain is the clear
+            // case: its jets and its pool share tiles, so the tile voted "flowing" and the POOL
+            // lost its reflection too. Ice and lava already carry per-pixel masks; flowing now
+            // does as well, so the falling face stays unmirrored and the water beside it does not.
             for (int j = 0; j < tilesH; j++)
                 for (int i = 0; i < tilesW; i++)
                 {
-                    if (!_tileFlowBuf![j * tilesW + i] && !_tileLavaBuf![j * tilesW + i])
+                    int ti = j * tilesW + i;
+                    bool[]? flowB = _tileFlowBitsBuf![ti], lavaB = _tileLavaBitsBuf![ti];
+                    bool wholeTile = flowB == null && lavaB == null
+                                  && (_tileFlowBuf![ti] || _tileLavaBuf![ti]);
+                    if (!wholeTile && flowB == null && lavaB == null)
                         continue;
                     for (int py = 0; py < Sub; py++)
                     {
                         int row = (j * Sub + py) * pw + i * Sub;
+                        int arow = py * Sub;
                         for (int px = 0; px < Sub; px++)
-                            _waterPixBits2![row + px] = false;
+                            if (wholeTile
+                                || (flowB != null && flowB[arow + px])
+                                || (lavaB != null && lavaB[arow + px]))
+                                _waterPixBits2![row + px] = false;
                     }
                 }
 
@@ -951,6 +1195,7 @@ namespace SDVRadiance
             // bank. Runs cut off by the mask bottom are kept — they continue off-screen.
             if (_edgeBuf == null || _edgeBuf.Length < pcount)
                 _edgeBuf = new short[pcount];
+            DropSpeckComponents(_waterPixBits2!, pw, ph);
             for (int x = 0; x < pw; x++)
             {
                 int top = -1;
@@ -958,13 +1203,7 @@ namespace SDVRadiance
                 {
                     int p = y * pw + x;
                     if (y < ph && _waterPixBits2![p]) { if (top < 0) top = y; _edgeBuf[p] = (short)top; }
-                    else if (top >= 0)
-                    {
-                        if (y < ph && y - top < 6)
-                            for (int k = top; k < y; k++)
-                                _waterPixBits2![k * pw + x] = false;
-                        top = -1;
-                    }
+                    else top = -1;
                 }
             }
 
@@ -1085,7 +1324,11 @@ namespace SDVRadiance
                     // both used to ship as 255. 192 still passes the shader's step(0.75) wet-rim
                     // gate — a waterfall's plunge shore does glisten — and stays clear of the
                     // 0.9 plain-water gate the entity layer reads.
-                    byte flowA = _tileFlowBuf![tileIdx] ? (byte)192 : (byte)255;
+                    // Flowing reads per pixel too now, for the same reason ice does: a fountain
+                    // tile holding both a jet and open pool used to tag all 256 texels 192, so
+                    // the entity mirror refused a body standing in the pool.
+                    bool[]? flowB = _tileFlowBitsBuf![tileIdx];
+                    byte flowA = (flowB != null ? flowB[lp] : _tileFlowBuf![tileIdx]) ? (byte)192 : (byte)255;
                     byte alpha = iceB != null || lavaB != null
                         ? (iceB != null && iceB[lp] ? (byte)0 : lavaB != null && lavaB[lp] ? (byte)128 : flowA)
                         : _tileIceBuf![tileIdx] ? (byte)0 : _tileLavaBuf![tileIdx] ? (byte)128 : flowA;
@@ -1123,7 +1366,16 @@ namespace SDVRadiance
             _lastWaterEpoch = job.Epoch;
             _waterAny = job.WaterAny;
             if (!job.WaterAny)
-                return;   // stage stays off; no texture upload needed
+            {
+                // The ORIGIN has just moved to this window, so the texture has to move with it.
+                // Skipping the upload here used to be safe only because the stage was skipped
+                // whenever this flag was false; now the stage belongs to the location, so a mask
+                // left holding the last window that DID have water gets sampled at the new
+                // window's world coordinates - the last window's water pattern reappearing in
+                // blocks on dry sand. A mask must always agree with its own origin.
+                ClearWaterMask(job);
+                return;
+            }
 
             int tilesW = job.TilesW, tilesH = job.TilesH;
             int count = tilesW * tilesH;
@@ -1150,6 +1402,45 @@ namespace SDVRadiance
 
             if (MaskView)
                 BuildMaskViewTex(pw, ph);
+        }
+
+        /// <summary>Publish an EMPTY mask for a window with no water, sized and anchored like any
+        /// other, so the shader reads "no water here" instead of the previous window's pattern.
+        /// All three textures are cleared together: R and G decide coverage, and the SDF's 128 is
+        /// its zero, so leaving a stale distance field behind would still shade a phantom shore.</summary>
+        private void ClearWaterMask(WaterMaskJob job)
+        {
+            int tilesW = job.TilesW, tilesH = job.TilesH;
+            int count = tilesW * tilesH;
+            int pw = tilesW * 16, ph = tilesH * 16;
+            int pcount = pw * ph;
+
+            if (_waterPixBuf == null || _waterPixBuf.Length < pcount) _waterPixBuf = new Color[pcount];
+            if (_waterMaskCoreBuf == null || _waterMaskCoreBuf.Length < count) _waterMaskCoreBuf = new Color[count];
+            if (_waterSdfBuf == null || _waterSdfBuf.Length < pcount) _waterSdfBuf = new byte[pcount];
+            Array.Clear(_waterPixBuf, 0, pcount);
+            Array.Clear(_waterMaskCoreBuf, 0, count);
+            for (int p = 0; p < pcount; p++) _waterSdfBuf[p] = 128;   // 128 = exactly on the waterline
+
+            if (_waterMask == null || _waterMask.Width != pw || _waterMask.Height != ph)
+            {
+                _waterMask?.Dispose();
+                _waterMask = new Texture2D(_device, pw, ph, false, SurfaceFormat.Color);
+            }
+            _waterMask.SetData(_waterPixBuf, 0, pcount);
+            if (_waterMaskCore == null || _waterMaskCore.Width != tilesW || _waterMaskCore.Height != tilesH)
+            {
+                _waterMaskCore?.Dispose();
+                _waterMaskCore = new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color);
+            }
+            _waterMaskCore.SetData(_waterMaskCoreBuf, 0, count);
+            if (_waterSdf == null || _waterSdf.Width != pw || _waterSdf.Height != ph)
+            {
+                _waterSdf?.Dispose();
+                _waterSdf = new Texture2D(_device, pw, ph, false, SurfaceFormat.Alpha8);
+            }
+            _waterSdf.SetData(_waterSdfBuf, 0, pcount);
+            _waterMaskSize = new Vector2(tilesW, tilesH);
         }
 
         // ---- live debug overlay: what the mask ACTUALLY covers, per pixel ----

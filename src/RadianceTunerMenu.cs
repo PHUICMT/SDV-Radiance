@@ -210,7 +210,6 @@ namespace SDVRadiance
             Sld("tuner.shadowlength", 0.2f, 2f, () => _config.DirectionalShadowLength, v => _config.DirectionalShadowLength = v);
             Sld("tuner.shadowblur", 0f, 5f, () => _config.DirectionalShadowBlur, v => _config.DirectionalShadowBlur = v);
             Tog("tuner.shadowobjects", () => _config.DirectionalShadowObjects, v => _config.DirectionalShadowObjects = v);
-            Sld("tuner.minlightradius", 0f, 3f, () => _config.MinShadowLightRadius, v => _config.MinShadowLightRadius = v);
         }
 
         private void BuildLighting()

@@ -68,9 +68,24 @@ namespace SDVRadiance
             long shearKey = objectsOn
                 ? ((long)Math.Round(srot * 512f) << 20) ^ (long)Math.Round(sstretch * 512f)
                 : long.MinValue;
+            bool objCapHit = _bakedObjMap.Count > 128;   // VRAM cap: slots are 400×456 RTs (~0.7 MB each)
             bool objCacheInvalid = shearKey != _objShearKey
                                 || Game1.currentLocation != _objBakeLoc
-                                || _bakedObjMap.Count > 128;   // VRAM cap: slots are 400×456 RTs (~0.7 MB each)
+                                || objCapHit;
+            // The cap is a full Clear(), so a location that stays OVER it re-bakes from scratch every
+            // frame and pays back the 50-150 render-target switches the cache exists to avoid. A
+            // custom foliage pack multiplies the distinct (texture, frame, flip) bakes, which is the
+            // suspected cause of "directional shadows on trees and bushes are unplayably slow with
+            // Simple Foliage, fine with the setting off". Say so once per location, with the count:
+            // one number in a log decides whether that is what is happening before anything is
+            // restructured to evict instead of clear.
+            if (objCapHit && Diag != null && Game1.currentLocation is { } capLoc && capLoc != _objCapLoggedLoc)
+            {
+                _objCapLoggedLoc = capLoc;
+                Diag.Log($"[shadow] object bake cache over cap at {capLoc.NameOrUniqueName}: "
+                       + $"{_bakedObjMap.Count} distinct sprites this frame (cap 128) — the cache is clearing every "
+                       + "frame here, so object shadows are re-baking from scratch.", LogLevel.Debug);
+            }
             if (objCacheInvalid)
             {
                 _bakedObjMap.Clear();

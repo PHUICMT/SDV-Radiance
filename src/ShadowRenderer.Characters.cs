@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
@@ -113,21 +114,37 @@ namespace SDVRadiance
             var lights = Game1.currentLightSources;
             if (lights != null)
             {
-                foreach (var kv in lights.Values)
+                _lightAlive.Clear();
+                foreach (var kv in lights)
                 {
-                    LightSource ls = kv;
+                    LightSource ls = kv.Value;
                     // Cast from real point lights AND window/map lights (a window still throws a
                     // believable shadow across the room). Player-attached lights sit on the player
                     // so they self-cancel in LightCast (dist≈0). Skip nothing by context — except
                     // stale window lights (window removed/dark: glow gone but source lingers).
                     if (!WindowGlowing(loc, ls))
                         continue;
-                    // Skip tiny transient point lights (fireflies from JP's The Night Lights,
-                    // sparkle mods): each drifting sub-1-radius light threw its own moving shadow
-                    // on the player. Their glow is untouched — only shadow casting is gated. Windows
-                    // always cast regardless of radius (a small window still shadows the room).
+                    // Skip DRIFTING decorative lights (fireflies from The Night Lights, sparkle
+                    // mods): each one threw its own moving shadow on the player. Neither signal
+                    // alone tells a firefly from a real lamp:
+                    //   - radius < 1 alone was the ORIGINAL bug: measured in Town, all 92 street
+                    //     lights report under 1, so that test threw away every real lamp too and
+                    //     a lamplit street cast nothing at all.
+                    //   - drift alone (moved since last frame) is not enough either: a firefly
+                    //     drifting slower than the pixel threshold below slips through, which is
+                    //     exactly the "firefly shadows are back" regression this fixes.
+                    // A firefly is BOTH small AND moving. A real lamp is small but PLANTED — its
+                    // world position is bit-identical every frame — so requiring both keeps street
+                    // lamps (small, static) while still catching slow-drifting decor (small,
+                    // moving by any amount, not just past a multi-pixel jump).
                     bool isWindow = ls.lightContext.Value == LightSource.LightContext.WindowLight;
-                    if (!isWindow && ls.radius.Value < config.MinShadowLightRadius)
+                    Vector2 lpos = ls.position.Value;
+                    _lightAlive.Add(kv.Key);
+                    bool drifting = _lightWasAt.TryGetValue(kv.Key, out Vector2 was)
+                                    && Vector2.DistanceSquared(was, lpos) > 0.02f;   // ~0.14px — any real movement, not a multi-pixel jump
+                    _lightWasAt[kv.Key] = lpos;
+                    bool firefly = !isWindow && drifting && ls.radius.Value < FireflyRadiusBound;
+                    if (firefly)
                         continue;
                     Vector2 screen = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
                     // Shadows reach much further than the glow; keep a whole-room-crossing minimum
@@ -143,6 +160,16 @@ namespace SDVRadiance
                     _lightBuf.Add((screen, reach, FireFlicker(ls.position.Value, ls.textureIndex.Value)));
                 }
             }
+            // NOTE: label-driven lights (window class 12, emissive art class 6) deliberately do
+            // NOT feed this list. They were added and reverted: being per-TILE, one painted lamp
+            // post is four "lights", and four of them next to the player took the whole six-slot
+            // budget from the real lamps — so the cast collapsed to stubs (a shadow is shortest
+            // right under its light) and the grounding pool halved itself because the code
+            // believed a real cast existed. Feeding them needs a light BUDGET that clusters tiles
+            // into sources and ranks by contribution, the way SelectLights does for the shader.
+            if (_lightWasAt.Count > _lightAlive.Count)
+                _lightWasAt.Keys.Where(k => !_lightAlive.Contains(k)).ToList().ForEach(k => _lightWasAt.Remove(k));
+
             // Keep the lights NEAREST the screen centre (stable membership — the old
             // dictionary-order + break-at-6 popped shadows in/out as the light set reordered).
             if (_lightBuf.Count > 6)
@@ -293,6 +320,15 @@ namespace SDVRadiance
 
         private readonly System.Collections.Generic.List<(Vector2 pos, float reach, float flick)> _lightBuf = new();
         private readonly System.Collections.Generic.List<(float rot, float st, float a)> _castBuf = new();
+        // Why the light list ended up the size it did: total offered, then each filter's toll.
+        /// <summary>Where each light was last frame, by its id — the drift test's memory. Pruned
+        /// to the ids still present so a location full of transient lights cannot grow it.</summary>
+        private readonly System.Collections.Generic.Dictionary<string, Vector2> _lightWasAt = new();
+        private readonly System.Collections.Generic.HashSet<string> _lightAlive = new();
+        /// <summary>The old MinShadowLightRadius default. Real lamps (Town's are ~0.6-0.9) sit
+        /// under this too, so this bound only matters ANDed with drift above — see the comment
+        /// at its use site.</summary>
+        private const float FireflyRadiusBound = 1.0f;
 
         /// <summary>Collect this caster's directional casts from every on-screen light into
         /// <see cref="_castBuf"/>. Gathered BEFORE the grounding pool is drawn: when at least

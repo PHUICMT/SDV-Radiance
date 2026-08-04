@@ -23,6 +23,7 @@ namespace SDVRadiance
         private bool BuildLightList(int w, int h, ModConfig config)
         {
             _lightCount = 0;
+            _lightCands.Clear();
             for (int i = 0; i < MaxLights; i++) { _lightPos[i] = Vector2.Zero; _lightData[i] = Vector4.Zero; }
 
             int vw = Math.Max(1, Game1.viewport.Width);
@@ -52,7 +53,7 @@ namespace SDVRadiance
                 GameLocation? lloc = Game1.currentLocation;
                 foreach (var kv in lights)
                 {
-                    if (_lightCount >= MaxLights)
+                    if (_lightCands.Count >= MaxLightCandidates)
                         break;
 
                     LightSource ls = kv.Value;
@@ -85,9 +86,7 @@ namespace SDVRadiance
                         : warm;
                     glow *= tone * boost * dayPool * ShadowRenderer.FireFlicker(ls.position.Value, ls.textureIndex.Value);
 
-                    _lightPos[_lightCount] = new Vector2(u, v);
-                    _lightData[_lightCount] = new Vector4(glow, Math.Max(0.02f, radiusUv));
-                    _lightCount++;
+                    AddLightCandidate(new Vector2(u, v), new Vector4(glow, Math.Max(0.02f, radiusUv)));
                 }
             }
 
@@ -101,6 +100,8 @@ namespace SDVRadiance
                 EnsureEmissiveCache(Game1.currentLocation);
                 AddEmissiveLights(vw, vh, boost);
             }
+
+            SelectLights();
 
             // Run the stage if we have lights, or if we're darkening a flat interior
             // (so the room actually gets darker even with no lamps in view).
@@ -118,6 +119,57 @@ namespace SDVRadiance
             }
 
             return _lightCount > 0 || darkening;
+        }
+
+        /// <summary>Lights collected this frame before the shader's fixed-size array forces a
+        /// choice. Bounded so a pathological map cannot make the sort itself the cost.</summary>
+        private readonly List<(Vector2 Uv, Vector4 Data)> _lightCands = new();
+        private const int MaxLightCandidates = 96;
+
+        private void AddLightCandidate(Vector2 uv, Vector4 data)
+        {
+            if (_lightCands.Count < MaxLightCandidates)
+                _lightCands.Add((uv, data));
+        }
+
+        /// <summary>How much this light can actually matter to the picture: how bright it is, how
+        /// far it reaches, and whether that reach lands on screen at all.</summary>
+        private static float Relevance(Vector2 uv, Vector4 data)
+        {
+            float lum = 0.2126f * data.X + 0.7152f * data.Y + 0.0722f * data.Z;
+            float reach = Math.Max(0.02f, data.W);
+            float dx = Math.Max(0f, Math.Max(-uv.X, uv.X - 1f));
+            float dy = Math.Max(0f, Math.Max(-uv.Y, uv.Y - 1f));
+            float outside = (float)Math.Sqrt(dx * dx + dy * dy);      // 0 while the centre is on screen
+            return lum * reach * MathHelper.Clamp(1f - outside / reach, 0f, 1f);
+        }
+
+        /// <summary>
+        /// Fill the shader's light slots with the lights that matter most.
+        /// <para>
+        /// The slots are a fixed-size uniform array the pixel shader loops over for every pixel,
+        /// so a cap is real. What was not real was WHICH lights got cut: the three sources filled
+        /// in a fixed order - the game's own lights, then labelled windows, then emissive tiles -
+        /// and each simply stopped at the cap. Whatever the location's light dictionary happened
+        /// to enumerate first won, so a lamp right in front of the player could lose its slot to
+        /// one off-screen, and walking a single tile reshuffled the set and flipped pools on and
+        /// off in one frame. That is the flash. It only started biting when the new label set
+        /// pushed window and emissive lights past the cap - measured going 4 to 16 while walking.
+        /// </para>
+        /// Ranking by what a light can contribute means the one that loses its slot is the
+        /// faintest or the furthest off-screen, whose pool was invisible anyway.
+        /// </summary>
+        private void SelectLights()
+        {
+            if (_lightCands.Count > MaxLights)
+                _lightCands.Sort((a, b) => Relevance(b.Uv, b.Data).CompareTo(Relevance(a.Uv, a.Data)));
+            int n = Math.Min(_lightCands.Count, MaxLights);
+            for (int i = 0; i < n; i++)
+            {
+                _lightPos[i] = _lightCands[i].Uv;
+                _lightData[i] = _lightCands[i].Data;
+            }
+            _lightCount = n;
         }
 
         // ---- labeled-window glow (HF class 12) ----
@@ -142,6 +194,8 @@ namespace SDVRadiance
             if (labels == null || layer == null || ver == 0)
                 return;
             int w = layer.LayerWidth, h = layer.LayerHeight;
+            _monitor.Log($"[loc] window scan start: {loc?.NameOrUniqueName} {w}x{h}", LogLevel.Trace);
+            var swWin = System.Diagnostics.Stopwatch.StartNew();
             // Resolve each layer once instead of per tile: this is a w×h×3 walk.
             var winLayers = new xTile.Layers.Layer?[_winLayers.Length];
             for (int i = 0; i < _winLayers.Length; i++) winLayers[i] = loc?.map?.GetLayer(_winLayers[i]);
@@ -157,6 +211,8 @@ namespace SDVRadiance
                         if (n >= 8) { _windowTiles.Add(new Vector2(tx * 64 + 32, ty * 64 + 32)); break; }
                     }
                 }
+            swWin.Stop();
+            _monitor.Log($"[loc] window scan done: {_windowTiles.Count} tiles in {swWin.Elapsed.TotalMilliseconds:0.0}ms", LogLevel.Trace);
         }
 
         /// <summary>Add on-screen window tiles as lights. OUTDOORS (a house exterior): warm lamp
@@ -188,13 +244,6 @@ namespace SDVRadiance
             bool rain = Game1.isRaining || Game1.isSnowing;
             foreach (var wp in _windowTiles)
             {
-                if (_lightCount >= MaxLights)
-                    break;
-                Vector2 local = Game1.GlobalToLocal(Game1.viewport, wp);
-                float u = local.X / vw, v = local.Y / vh;
-                if (u < -0.1f || u > 1.1f || v < -0.1f || v > 1.1f)
-                    continue;   // off-screen
-
                 float amt; Vector3 col;
                 if (outdoors)
                 {
@@ -217,9 +266,13 @@ namespace SDVRadiance
                 }
                 if (amt < 0.02f)
                     continue;
-                _lightPos[_lightCount] = new Vector2(u, v);
-                _lightData[_lightCount] = new Vector4(col * amt * b, Math.Max(0.02f, outdoors ? radiusOut : radiusIn));
-                _lightCount++;
+                if (_lightCands.Count >= MaxLightCandidates)
+                    continue;
+                Vector2 local = Game1.GlobalToLocal(Game1.viewport, wp);
+                float u = local.X / vw, v = local.Y / vh;
+                if (u < -0.1f || u > 1.1f || v < -0.1f || v > 1.1f)
+                    continue;   // off-screen
+                AddLightCandidate(new Vector2(u, v), new Vector4(col * amt * b, Math.Max(0.02f, outdoors ? radiusOut : radiusIn)));
             }
         }
 
@@ -254,6 +307,10 @@ namespace SDVRadiance
                 return;
 
             int w = layer0.LayerWidth, h = layer0.LayerHeight;
+            // Heaviest of the location-entry walks: every labelled candidate tile also reads its
+            // ART, which is a GPU readback the first time a tilesheet is touched.
+            _monitor.Log($"[loc] emissive scan start: {loc.NameOrUniqueName} {w}x{h}", LogLevel.Trace);
+            var swEmit = System.Diagnostics.Stopwatch.StartNew();
             var emitLayers = new xTile.Layers.Layer?[_emitLayers.Length];
             for (int i = 0; i < _emitLayers.Length; i++) emitLayers[i] = loc.map.GetLayer(_emitLayers[i]);
 
@@ -276,6 +333,8 @@ namespace SDVRadiance
                         }
                     }
                 }
+            swEmit.Stop();
+            _monitor.Log($"[loc] emissive scan done: {_emitTiles.Count} tiles in {swEmit.Elapsed.TotalMilliseconds:0.0}ms", LogLevel.Trace);
         }
 
         /// <summary>Average the ART colour of exactly the pixels the label marked emissive, hue
@@ -354,18 +413,16 @@ namespace SDVRadiance
             float bst = Math.Max(0.4f, boost);
             foreach (var (pos, col, amt) in _emitTiles)
             {
-                if (_lightCount >= MaxLights)
-                    break;
+                float a = amt * scale;
+                if (a < 0.02f)
+                    continue;
+                if (_lightCands.Count >= MaxLightCandidates)
+                    continue;
                 Vector2 local = Game1.GlobalToLocal(Game1.viewport, pos);
                 float u = local.X / vw, v = local.Y / vh;
                 if (u < -0.1f || u > 1.1f || v < -0.1f || v > 1.1f)
                     continue;
-                float a = amt * scale;
-                if (a < 0.02f)
-                    continue;
-                _lightPos[_lightCount] = new Vector2(u, v);
-                _lightData[_lightCount] = new Vector4(col * a * bst, Math.Max(0.02f, radius * (0.6f + 0.4f * amt)));
-                _lightCount++;
+                AddLightCandidate(new Vector2(u, v), new Vector4(col * a * bst, Math.Max(0.02f, radius * (0.6f + 0.4f * amt))));
             }
         }
 

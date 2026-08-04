@@ -88,8 +88,17 @@ namespace SDVRadiance
         /// with color grading turned off.</summary>
         public float BlueLightFilter { get; set; } = 0f;
 
+        /// <summary>Bumped when a release has to CHANGE a setting an existing config already
+        /// holds. An old config has no such field and lands on 0, so the migration in ModEntry
+        /// runs exactly once and then records that it did.</summary>
+        public int ConfigVersion { get; set; }
+
         // --- God rays ---
-        public bool GodRaysEnabled { get; set; } = true;
+        // OFF by default since 1.3.1. The effect keeps bright SURFACES as ray emitters instead of
+        // the light source, so any large pale sprite (a festival banner, a chef's whites) becomes
+        // a second sun and blows out flat. It is being rebuilt for 1.4.0 to emit from the light
+        // and treat the scene as occluders; until then, on by choice, not by default.
+        public bool GodRaysEnabled { get; set; }
         public float GodRaysIntensity { get; set; } = 0.68f;
         public float GodRaysThreshold { get; set; } = 0.7f;
         public float GodRaysDensity { get; set; } = 0.6f;

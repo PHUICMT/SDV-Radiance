@@ -94,6 +94,8 @@ namespace SDVRadiance
         /// <summary>Sun angle the object cache was baked at (shear is baked in) — cache clears when it changes.</summary>
         private long _objShearKey = long.MinValue;
         private GameLocation? _objBakeLoc;
+        /// <summary>Last location the over-cap bake warning was logged for: once per location, not per frame.</summary>
+        private GameLocation? _objCapLoggedLoc;
         /// <summary>Pose the player RT was last baked with — identical pose skips the re-bake.</summary>
         private (int frame, int facing, Rectangle src) _playerBakeSig = (-1, -1, default);
 

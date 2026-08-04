@@ -2,6 +2,37 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.3.1
+
+### Fixed
+- Entering Galdoran Crimson Badlands (Stardew Valley Expanded) froze the game for around
+  40 seconds. The desert was affected by the same problem, more briefly. Maps whose tilesheet
+  crossed an internal size limit were being read back one tile at a time instead of once.
+- Willy's boat carried the water ripple at the Fish Shop dock and in the Boat Tunnel, and the
+  reflection could climb onto the hull. Nothing drawn in front of water takes a water effect now.
+- Objects sitting in water (a sea urchin in a pond, for example) rippled with the surface.
+- Bridges and piers counted as open water underneath, so anything standing on one lost its shadow.
+
+### Changed
+- God rays are off by default. The effect currently treats bright surfaces as light sources, so
+  large pale sprites such as festival banners blow out to white. It is being rebuilt for 1.4.0.
+  If you had it on and want it back, turn it on again in the config or with F6 — this change only
+  touches the default for new installs and is applied once for existing ones.
+- Removed the "Min light size for shadows" option. It no longer controlled anything.
+
+### Known issues
+- Bridges show an outline in the rain. Fix planned for 1.4.0.
+- Some scenes still step slightly brighter or darker as you walk. Reduced in this version but
+  not resolved.
+
+### For translators
+
+No new keys. No meaning changes — god rays turning off by default is a config change, not a
+wording change, so `config.godrays.enabled.name`/`.tooltip` stay as they are.
+
+Removed (delete these from your language file, they are no longer read):
+`config.shadows.minlightradius.name`, `config.shadows.minlightradius.tooltip`, `tuner.minlightradius`
+
 ## 1.3.0
 
 Water coverage no longer comes from guessing at pixel colours: it comes from the game's own
@@ -71,6 +102,9 @@ glass stops blocking lamplight.
 No i18n keys were added, removed or changed in this release.
 
 ## 1.2.3
+
+Never released as its own file. Everything below shipped inside 1.3.0, so players moved from
+1.2.2 straight to 1.3.0 and the 1.3.0 release notes repeat these entries.
 
 ### Fixed
 - Plank bridges, piers and boardwalks no longer draw over the character standing on them, and no longer appear as a second copy of themselves offset to one side. A bridge you walk on top of was being treated as a standing prop like a fence, because it is not open water and its art has gaps between the planks. It got a fence's leaning shadow, plus a redraw of its own tile on top of that shadow, and both landed on the tile the character was standing on. Any Buildings tile the map marks as walk-on-top is now excluded.
