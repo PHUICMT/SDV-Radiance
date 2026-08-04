@@ -136,7 +136,8 @@ namespace SDVRadiance
              || _config.FogEnabled || _config.FogNightMist || _config.CloudShadowEnabled || _config.TiltShiftEnabled
              || _config.WaterEnabled || _config.WaterReflection
              || _config.VignetteEnabled || _config.ChromaticAberrationEnabled
-             || _config.LightingEnabled || _config.FloodLightingEnabled);
+             || _config.LightingEnabled || _config.FloodLightingEnabled
+             || _config.BlueLightFilter > 0.001f);
 
         public override void Entry(IModHelper helper)
         {
@@ -365,6 +366,13 @@ namespace SDVRadiance
             // Only hide the vanilla drifting cloud when OUR cloud shadow is actually on —
             // otherwise turning Cloud Shadows off silently removed vanilla clouds too.
             SuppressVanillaClouds = _config.Enabled && _config.SuppressVanillaCloudShadow && _config.CloudShadowEnabled;
+            // GGR interop: skipping the Cloud critter's DRAW (Cloud_Draw_Prefix) leaves it in
+            // loc.critters, so Global God Rays still dims its rays "under" the now-invisible
+            // cloud shadow. Remove the Cloud critters outright while we suppress them, so nothing
+            // downstream reacts to a shadow that no longer renders. (Our own cloud shadows come
+            // from the CloudShadow shader stage, not this critter, so nothing of ours is lost.)
+            if (SuppressVanillaClouds && Context.IsWorldReady)
+                Game1.currentLocation?.critters?.RemoveAll(c => c is StardewValley.BellsAndWhistles.Cloud);
             SuppressVanillaObjectShadows = _config.DirectionalShadowObjects && ShadowRenderer.SunShadowActive(_config);
             // Big-craftable blobs are replaced in BOTH paths (sun directional + indoor/night contact),
             // so gate on ShadowsActiveNow, not just the sun path.
@@ -614,6 +622,8 @@ namespace SDVRadiance
                 () => I18n("config.colorgrade.brightness.name"), null, 0.5f, 1.5f, 0.05f);
             api.AddBoolOption(this.ModManifest, () => _config.ColorGradeToneMap, v => _config.ColorGradeToneMap = v,
                 () => I18n("config.colorgrade.tonemap.name"), () => I18n("config.colorgrade.tonemap.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.BlueLightFilter, v => _config.BlueLightFilter = v,
+                () => I18n("config.colorgrade.bluelight.name"), () => I18n("config.colorgrade.bluelight.tooltip"), 0f, 1f, 0.05f);
 
             // --- God rays (implemented) ---
             api.AddPage(this.ModManifest, "godrays", () => I18n("config.section.godrays"));
@@ -751,6 +761,8 @@ namespace SDVRadiance
                 () => I18n("config.shadows.blur.name"), null, 0f, 5f, 0.5f);
             api.AddBoolOption(this.ModManifest, () => _config.DirectionalShadowObjects, v => _config.DirectionalShadowObjects = v,
                 () => I18n("config.shadows.objects.name"), () => I18n("config.shadows.objects.tooltip"));
+            api.AddNumberOption(this.ModManifest, () => _config.MinShadowLightRadius, v => _config.MinShadowLightRadius = v,
+                () => I18n("config.shadows.minlightradius.name"), () => I18n("config.shadows.minlightradius.tooltip"), 0f, 3f, 0.25f);
 
             // --- Camera (implemented) ---
             api.AddPage(this.ModManifest, "camera", () => I18n("config.section.camera"));

@@ -8,17 +8,22 @@ using StardewValley.Menus;
 namespace SDVRadiance
 {
     /// <summary>
-    /// On-screen tuner overlay. Occupies a panel on the right so the world stays
-    /// visible on the left and updates live as you drag (the shader re-applies every
-    /// frame via RenderedWorld while this menu is open). Scrolls if content exceeds
-    /// the screen. Localized via the injected translator. Opened with the tuner hotkey.
+    /// On-screen tuner overlay, TAB-RAIL layout: a column of category tabs on the left,
+    /// the selected category's controls on the right. Only one category is on screen at a
+    /// time, so the panel stays short no matter how many settings exist. Occupies the right
+    /// side so the world stays visible and updates live as you drag. Localized; opened with
+    /// the tuner hotkey.
     /// </summary>
     internal sealed class RadianceTunerMenu : IClickableMenu
     {
-        private const int PanelWidth = 480;
+        private const int RailWidth = 156;
+        private const int ContentWidth = 430;
+        private const int PanelWidth = RailWidth + ContentWidth;
         private const int HeaderH = 52;
-        private const int FooterH = 44;
+        private const int FooterH = 40;
+        private const int BodyPad = 12;   // breathing room at the top/bottom of the scrolling content
         private static readonly Rectangle DeleteSource = new(192, 256, 64, 64); // red X in mouseCursors
+        private static readonly RasterizerState _scissorRaster = new() { ScissorTestEnable = true, CullMode = CullMode.None };
 
         private readonly ModConfig _config;
         private readonly Func<string, string> _t;
@@ -27,12 +32,20 @@ namespace SDVRadiance
 
         private readonly List<Slider> _sliders = new();
         private readonly List<Toggle> _toggles = new();
-        private readonly List<TextButton> _buttons = new();
+        private readonly List<TextButton> _buttons = new();   // content-area buttons (scroll with content)
         private readonly List<Chip> _chips = new();
         private readonly List<(string text, int y)> _sectionTitles = new();
+        private readonly List<(TextButton btn, int idx)> _rail = new();  // fixed, never scroll
         private Slider? _dragging;
 
-        private int _scroll, _maxScroll, _bodyTop, _bodyBottom, _hintY;
+        // Tabs: (label i18n key, content builder). Remembered across reopens.
+        private readonly (string key, Action build)[] _tabs;
+        private static int _lastTab;
+        private int _activeTab;
+
+        private int _scroll, _maxScroll, _bodyTop, _bodyBottom, _hintY, _contentX;
+        // content-column layout cursor (build helpers advance it)
+        private int _cx, _cy, _cw;
 
         public RadianceTunerMenu(ModConfig config, Func<string, string> translate, Action onChange, Action onSave)
             : base(0, 0, PanelWidth, 0, showUpperRightCloseButton: true)
@@ -41,6 +54,20 @@ namespace SDVRadiance
             _t = translate;
             _onChange = onChange;
             _onSave = onSave;
+            _tabs = new (string, Action)[]
+            {
+                ("tuner.tab.looks",       BuildLooks),
+                ("tuner.section.colorgrade", BuildColorGrade),
+                ("tuner.section.bloom",   BuildBloom),
+                ("tuner.section.shadows", BuildShadows),
+                ("tuner.section.lighting", BuildLighting),
+                ("tuner.section.godrays", BuildGodRays),
+                ("tuner.section.cloudshadow", BuildCloud),
+                ("tuner.tab.fog",         BuildFog),
+                ("tuner.section.water",   BuildWater),
+                ("tuner.tab.lens",        BuildLens),
+            };
+            _activeTab = Math.Clamp(_lastTab, 0, _tabs.Length - 1);
             Reflow();
         }
 
@@ -53,6 +80,13 @@ namespace SDVRadiance
             public NamedProfile Profile = null!;
         }
 
+        // ---- content build helpers (append to lists, advance _cy) ----
+        private void Section(string key) { _sectionTitles.Add((_t(key), _cy)); _cy += 30; }
+        private void Tog(string key, Func<bool> g, Action<bool> s)
+            { _toggles.Add(new Toggle(_t(key), new Rectangle(_cx, _cy, _cw, 38), g, s)); _cy += 44; }
+        private void Sld(string key, float min, float max, Func<float> g, Action<float> s)
+            { _sliders.Add(new Slider(_t(key), _cx, _cy, _cw, min, max, g, s)); _cy += 50; }
+
         private void Reflow()
         {
             int vw = Game1.uiViewport.Width;
@@ -62,40 +96,78 @@ namespace SDVRadiance
             xPositionOnScreen = vw - width - 24;
             yPositionOnScreen = 20;
 
-            _sliders.Clear(); _toggles.Clear(); _buttons.Clear(); _chips.Clear(); _sectionTitles.Clear();
+            _sliders.Clear(); _toggles.Clear(); _buttons.Clear(); _chips.Clear(); _sectionTitles.Clear(); _rail.Clear();
 
-            int x = xPositionOnScreen + 28;
-            int innerW = width - 56;
-            int cy0 = yPositionOnScreen + HeaderH;
-            int y = cy0;
+            int contentTop = yPositionOnScreen + HeaderH;
 
-            // Built-in presets (localized label, enum action).
+            // ---- left rail: one button per tab (fixed; never scrolls) ----
+            int railX = xPositionOnScreen + 12;
+            int railW = RailWidth - 20;
+            for (int i = 0; i < _tabs.Length; i++)
+            {
+                int idx = i;
+                var rect = new Rectangle(railX, contentTop + i * 46, railW, 42);
+                _rail.Add((new TextButton(_t(_tabs[i].key), rect, () =>
+                {
+                    _activeTab = idx; _lastTab = idx; _scroll = 0; Reflow();
+                }), i));
+            }
+
+            // ---- right content column: only the active tab ----
+            _contentX = xPositionOnScreen + RailWidth;
+            _cx = _contentX + 16;
+            _cw = ContentWidth - 40;
+            _cy = contentTop + BodyPad;
+            _tabs[_activeTab].build();
+            int contentHeight = _cy - (contentTop + BodyPad);
+
+            // CONSISTENT panel height across tabs: the frame is sized to the tab rail (constant
+            // 10 tabs), capped to the view. Switching tabs never resizes the panel; a tab whose
+            // content is taller than the frame scrolls inside it instead of growing the window.
+            int railHeight = _tabs.Length * 46;
+            int maxBody = (vh - 40) - HeaderH - FooterH;
+            int bodyHeight = Math.Min(railHeight, maxBody);
+            height = HeaderH + bodyHeight + FooterH;
+
+            _bodyTop = contentTop + BodyPad;
+            _bodyBottom = contentTop + bodyHeight - BodyPad;
+            _hintY = yPositionOnScreen + height - 30;
+            _maxScroll = Math.Max(0, contentHeight - (_bodyBottom - _bodyTop));
+            _scroll = Math.Clamp(_scroll, 0, _maxScroll);
+
+            upperRightCloseButton.bounds.X = xPositionOnScreen + width - 40;
+            upperRightCloseButton.bounds.Y = yPositionOnScreen - 8;
+        }
+
+        // ================= per-tab content =================
+
+        private void BuildLooks()
+        {
+            // Preset buttons (4 across).
             (LookPreset preset, string key)[] presets =
             {
                 (LookPreset.Off, "off"), (LookPreset.Subtle, "subtle"),
                 (LookPreset.Cinematic, "cinematic"), (LookPreset.Vibrant, "vibrant")
             };
-            int bw = (innerW - 18) / 4;
+            int bw = (_cw - 18) / 4;
             for (int i = 0; i < presets.Length; i++)
             {
                 var (preset, key) = presets[i];
-                var rect = new Rectangle(x + i * (bw + 6), y, bw, 44);
+                var rect = new Rectangle(_cx + i * (bw + 6), _cy, bw, 44);
                 _buttons.Add(new TextButton(_t($"config.preset.{key}"), rect, () =>
                 {
-                    _config.ApplyPreset(preset);
-                    _onChange(); _onSave(); Reflow();
+                    _config.ApplyPreset(preset); _onChange(); _onSave(); Reflow();
                 }));
             }
-            y += 56;
+            _cy += 56;
 
-            // Saved custom looks.
-            _sectionTitles.Add((_t("tuner.mylooks"), y)); y += 28;
-            int chipX = x;
+            Section("tuner.mylooks");
+            int chipX = _cx;
             foreach (var prof in _config.SavedProfiles)
             {
                 int cw = Math.Min(160, 44 + (int)(Game1.smallFont.MeasureString(prof.Name).X * 0.7f));
-                if (chipX + cw > x + innerW - 100) { chipX = x; y += 46; }
-                var rect = new Rectangle(chipX, y, cw, 40);
+                if (chipX + cw > _cx + _cw - 100) { chipX = _cx; _cy += 46; }
+                var rect = new Rectangle(chipX, _cy, cw, 40);
                 var captured = prof;
                 _chips.Add(new Chip
                 {
@@ -105,146 +177,139 @@ namespace SDVRadiance
                 });
                 chipX += cw + 12;
             }
-            _buttons.Add(new TextButton(_t("tuner.save"), new Rectangle(x + innerW - 96, y, 96, 40), PromptSaveProfile));
-            y += 52;
+            _buttons.Add(new TextButton(_t("tuner.save"), new Rectangle(_cx + _cw - 96, _cy, 96, 40), PromptSaveProfile));
+            _cy += 52;
 
-            _toggles.Add(new Toggle(_t("tuner.master"), new Rectangle(x, y, innerW, 38), () => _config.Enabled, v => _config.Enabled = v));
-            y += 44;
+            Tog("tuner.master", () => _config.Enabled, v => _config.Enabled = v);
+        }
 
-            y += 30; _sectionTitles.Add((_t("tuner.section.colorgrade"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.colorgrade"), new Rectangle(x, y, innerW, 38), () => _config.ColorGradeEnabled, v => _config.ColorGradeEnabled = v));
-            y += 44;
-            _toggles.Add(new Toggle(_t("tuner.automood"), new Rectangle(x, y, innerW, 38), () => _config.ColorGradeAuto, v => _config.ColorGradeAuto = v));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.strength"), x, y, innerW, 0f, 1f, () => _config.ColorGradeStrength, v => _config.ColorGradeStrength = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.contrast"), x, y, innerW, 0.5f, 1.5f, () => _config.ColorGradeContrast, v => _config.ColorGradeContrast = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.saturation"), x, y, innerW, 0f, 2f, () => _config.ColorGradeSaturation, v => _config.ColorGradeSaturation = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.temperature"), x, y, innerW, -1f, 1f, () => _config.ColorGradeTemperature, v => _config.ColorGradeTemperature = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.brightness"), x, y, innerW, 0.5f, 1.5f, () => _config.ColorGradeBrightness, v => _config.ColorGradeBrightness = v)); y += 50;
+        private void BuildColorGrade()
+        {
+            Tog("tuner.colorgrade", () => _config.ColorGradeEnabled, v => _config.ColorGradeEnabled = v);
+            Tog("tuner.automood", () => _config.ColorGradeAuto, v => _config.ColorGradeAuto = v);
+            Sld("tuner.strength", 0f, 1f, () => _config.ColorGradeStrength, v => _config.ColorGradeStrength = v);
+            Sld("tuner.contrast", 0.5f, 1.5f, () => _config.ColorGradeContrast, v => _config.ColorGradeContrast = v);
+            Sld("tuner.saturation", 0f, 2f, () => _config.ColorGradeSaturation, v => _config.ColorGradeSaturation = v);
+            Sld("tuner.temperature", -1f, 1f, () => _config.ColorGradeTemperature, v => _config.ColorGradeTemperature = v);
+            Sld("tuner.brightness", 0.5f, 1.5f, () => _config.ColorGradeBrightness, v => _config.ColorGradeBrightness = v);
+            Tog("tuner.tonemap", () => _config.ColorGradeToneMap, v => _config.ColorGradeToneMap = v);
+            Sld("tuner.bluelight", 0f, 1f, () => _config.BlueLightFilter, v => _config.BlueLightFilter = v);
+        }
 
-            y += 30; _sectionTitles.Add((_t("tuner.section.bloom"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.bloom"), new Rectangle(x, y, innerW, 38), () => _config.BloomEnabled, v => _config.BloomEnabled = v));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.intensity"), x, y, innerW, 0f, 2f, () => _config.BloomIntensity, v => _config.BloomIntensity = v));
-            y += 50;
+        private void BuildBloom()
+        {
+            Tog("tuner.bloom", () => _config.BloomEnabled, v => _config.BloomEnabled = v);
+            Sld("tuner.intensity", 0f, 2f, () => _config.BloomIntensity, v => _config.BloomIntensity = v);
+            Sld("tuner.bloomthreshold", 0f, 1f, () => _config.BloomThreshold, v => _config.BloomThreshold = v);
+        }
 
-            y += 30; _sectionTitles.Add((_t("tuner.section.shadows"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.shadows"), new Rectangle(x, y, innerW, 38), () => _config.DirectionalShadowsEnabled, v => _config.DirectionalShadowsEnabled = v));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.shadowstrength"), x, y, innerW, 0f, 1f, () => _config.DirectionalShadowStrength, v => _config.DirectionalShadowStrength = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.shadowlength"), x, y, innerW, 0.2f, 2f, () => _config.DirectionalShadowLength, v => _config.DirectionalShadowLength = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.shadowblur"), x, y, innerW, 0f, 5f, () => _config.DirectionalShadowBlur, v => _config.DirectionalShadowBlur = v)); y += 50;
-            _toggles.Add(new Toggle(_t("tuner.shadowobjects"), new Rectangle(x, y, innerW, 38), () => _config.DirectionalShadowObjects, v => _config.DirectionalShadowObjects = v));
-            y += 44;
+        private void BuildShadows()
+        {
+            Tog("tuner.shadows", () => _config.DirectionalShadowsEnabled, v => _config.DirectionalShadowsEnabled = v);
+            Sld("tuner.shadowstrength", 0f, 1f, () => _config.DirectionalShadowStrength, v => _config.DirectionalShadowStrength = v);
+            Sld("tuner.shadowlength", 0.2f, 2f, () => _config.DirectionalShadowLength, v => _config.DirectionalShadowLength = v);
+            Sld("tuner.shadowblur", 0f, 5f, () => _config.DirectionalShadowBlur, v => _config.DirectionalShadowBlur = v);
+            Tog("tuner.shadowobjects", () => _config.DirectionalShadowObjects, v => _config.DirectionalShadowObjects = v);
+            Sld("tuner.minlightradius", 0f, 3f, () => _config.MinShadowLightRadius, v => _config.MinShadowLightRadius = v);
+        }
 
-            y += 30; _sectionTitles.Add((_t("tuner.section.lighting"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.lighting"), new Rectangle(x, y, innerW, 38), () => _config.LightingEnabled, v => _config.LightingEnabled = v));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.lightindoor"), x, y, innerW, 0f, 0.95f, () => _config.LightingIndoorDarkness, v => _config.LightingIndoorDarkness = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.lightnight"), x, y, innerW, 0f, 0.95f, () => _config.LightingNightDarkness, v => _config.LightingNightDarkness = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.lightwarmth"), x, y, innerW, 0f, 1f, () => _config.LightingWarmth, v => _config.LightingWarmth = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.lightboost"), x, y, innerW, 0f, 2f, () => _config.LightingBoost, v => _config.LightingBoost = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.lightradius"), x, y, innerW, 0.2f, 3f, () => _config.LightingRadiusScale, v => _config.LightingRadiusScale = v)); y += 50;
-            _toggles.Add(new Toggle(_t("tuner.lightshadows"), new Rectangle(x, y, innerW, 38), () => _config.LightingShadows, v => _config.LightingShadows = v));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.lightshadowstrength"), x, y, innerW, 0f, 1f, () => _config.LightingShadowStrength, v => _config.LightingShadowStrength = v)); y += 50;
-            _toggles.Add(new Toggle(_t("tuner.floodgi"), new Rectangle(x, y, innerW, 38), () => _config.FloodLightingEnabled, v => _config.FloodLightingEnabled = v));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.floodstrength"), x, y, innerW, 0f, 1.5f, () => _config.FloodLightingStrength, v => _config.FloodLightingStrength = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.floodshadow"), x, y, innerW, 0f, 1f, () => _config.FloodShadowStrength, v => _config.FloodShadowStrength = v)); y += 50;
+        private void BuildLighting()
+        {
+            Tog("tuner.lighting", () => _config.LightingEnabled, v => _config.LightingEnabled = v);
+            Sld("tuner.lightindoor", 0f, 0.95f, () => _config.LightingIndoorDarkness, v => _config.LightingIndoorDarkness = v);
+            Sld("tuner.lightnight", 0f, 0.95f, () => _config.LightingNightDarkness, v => _config.LightingNightDarkness = v);
+            Sld("tuner.lightwarmth", 0f, 1f, () => _config.LightingWarmth, v => _config.LightingWarmth = v);
+            Sld("tuner.lightboost", 0f, 2f, () => _config.LightingBoost, v => _config.LightingBoost = v);
+            Sld("tuner.lightradius", 0.2f, 3f, () => _config.LightingRadiusScale, v => _config.LightingRadiusScale = v);
+            Tog("tuner.lightshadows", () => _config.LightingShadows, v => _config.LightingShadows = v);
+            Sld("tuner.lightshadowstrength", 0f, 1f, () => _config.LightingShadowStrength, v => _config.LightingShadowStrength = v);
+            Tog("tuner.floodgi", () => _config.FloodLightingEnabled, v => _config.FloodLightingEnabled = v);
+            Sld("tuner.floodstrength", 0f, 1.5f, () => _config.FloodLightingStrength, v => _config.FloodLightingStrength = v);
+            Sld("tuner.floodshadow", 0f, 1f, () => _config.FloodShadowStrength, v => _config.FloodShadowStrength = v);
+        }
 
-            y += 30; _sectionTitles.Add((_t("tuner.section.godrays"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.godrays"), new Rectangle(x, y, innerW, 38), () => _config.GodRaysEnabled, v => _config.GodRaysEnabled = v));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.godraysintensity"), x, y, innerW, 0f, 1.5f, () => _config.GodRaysIntensity, v => _config.GodRaysIntensity = v)); y += 50;
+        private void BuildGodRays()
+        {
+            Tog("tuner.godrays", () => _config.GodRaysEnabled, v => _config.GodRaysEnabled = v);
+            Sld("tuner.godraysintensity", 0f, 1.5f, () => _config.GodRaysIntensity, v => _config.GodRaysIntensity = v);
+            Sld("tuner.godraysthreshold", 0f, 1f, () => _config.GodRaysThreshold, v => _config.GodRaysThreshold = v);
+            Sld("tuner.godraysdensity", 0.1f, 1f, () => _config.GodRaysDensity, v => _config.GodRaysDensity = v);
+        }
 
-            y += 30; _sectionTitles.Add((_t("tuner.section.cloudshadow"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.cloudshadow"), new Rectangle(x, y, innerW, 38), () => _config.CloudShadowEnabled, v => _config.CloudShadowEnabled = v));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.cloudcoverage"), x, y, innerW, 0.1f, 0.9f, () => _config.CloudShadowCoverage, v => _config.CloudShadowCoverage = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.cloudcount"), x, y, innerW, 0f, 1f, () => _config.CloudShadowCount, v => _config.CloudShadowCount = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.cloudopacity"), x, y, innerW, 0f, 0.7f, () => _config.CloudShadowOpacity, v => _config.CloudShadowOpacity = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.cloudspeed"), x, y, innerW, 0f, 0.06f, () => _config.CloudShadowSpeed, v => _config.CloudShadowSpeed = v)); y += 50;
+        private void BuildCloud()
+        {
+            Tog("tuner.cloudshadow", () => _config.CloudShadowEnabled, v => _config.CloudShadowEnabled = v);
+            Tog("tuner.cloudhidevanilla", () => _config.SuppressVanillaCloudShadow, v => _config.SuppressVanillaCloudShadow = v);
+            Sld("tuner.cloudcoverage", 0.1f, 0.9f, () => _config.CloudShadowCoverage, v => _config.CloudShadowCoverage = v);
+            Sld("tuner.cloudcount", 0f, 1f, () => _config.CloudShadowCount, v => _config.CloudShadowCount = v);
+            Sld("tuner.cloudopacity", 0f, 0.7f, () => _config.CloudShadowOpacity, v => _config.CloudShadowOpacity = v);
+            Sld("tuner.cloudspeed", 0f, 0.06f, () => _config.CloudShadowSpeed, v => _config.CloudShadowSpeed = v);
+        }
 
-            y += 30; _sectionTitles.Add((_t("tuner.section.fog"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.fog"), new Rectangle(x, y, innerW, 38), () => _config.FogEnabled, v => _config.FogEnabled = v));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.fogcoverage"), x, y, innerW, 0f, 1f, () => _config.FogCoverage, v => _config.FogCoverage = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.fogdensity"), x, y, innerW, 0f, 1f, () => _config.FogDensity, v => _config.FogDensity = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.fogspeed"), x, y, innerW, 0f, 0.1f, () => _config.FogSpeed, v => _config.FogSpeed = v)); y += 50;
+        private void BuildFog()
+        {
+            Section("tuner.section.fog");
+            Tog("tuner.fog", () => _config.FogEnabled, v => _config.FogEnabled = v);
+            Sld("tuner.fogcoverage", 0f, 1f, () => _config.FogCoverage, v => _config.FogCoverage = v);
+            Sld("tuner.fogdensity", 0f, 1f, () => _config.FogDensity, v => _config.FogDensity = v);
+            Sld("tuner.fogspeed", 0f, 0.1f, () => _config.FogSpeed, v => _config.FogSpeed = v);
+            _cy += 12;
+            Section("tuner.section.fognight");
+            Tog("tuner.fognightmist", () => _config.FogNightMist, v => _config.FogNightMist = v);
+            Sld("tuner.fognightmistcoverage", 0f, 1f, () => _config.FogNightMistCoverage, v => _config.FogNightMistCoverage = v);
+            Sld("tuner.fognightmistdensity", 0f, 1f, () => _config.FogNightMistDensity, v => _config.FogNightMistDensity = v);
+            Sld("tuner.fognightmistspeed", 0f, 0.1f, () => _config.FogNightMistSpeed, v => _config.FogNightMistSpeed = v);
+        }
 
-            y += 30; _sectionTitles.Add((_t("tuner.section.fognight"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.fognightmist"), new Rectangle(x, y, innerW, 38), () => _config.FogNightMist, v => _config.FogNightMist = v));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.fognightmistcoverage"), x, y, innerW, 0f, 1f, () => _config.FogNightMistCoverage, v => _config.FogNightMistCoverage = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.fognightmistdensity"), x, y, innerW, 0f, 1f, () => _config.FogNightMistDensity, v => _config.FogNightMistDensity = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.fognightmistspeed"), x, y, innerW, 0f, 0.1f, () => _config.FogNightMistSpeed, v => _config.FogNightMistSpeed = v)); y += 50;
+        private void BuildWater()
+        {
+            Tog("tuner.water", () => _config.WaterEnabled, v => _config.WaterEnabled = v);
+            Sld("tuner.waterstrength", 0f, 2f, () => _config.WaterStrength, v => _config.WaterStrength = v);
+            Sld("tuner.watersparkle", 0f, 1f, () => _config.WaterSparkle, v => _config.WaterSparkle = v);
+            Sld("tuner.watersparkledensity", 0.2f, 2f, () => _config.WaterSparkleDensity, v => _config.WaterSparkleDensity = v);
+            Sld("tuner.waterspeed", 0f, 3f, () => _config.WaterSpeed, v => _config.WaterSpeed = v);
+            Tog("tuner.waterreflection", () => _config.WaterReflection, v => _config.WaterReflection = v);
+            Sld("tuner.waterreflectstrength", 0f, 1f, () => _config.WaterReflectStrength, v => _config.WaterReflectStrength = v);
+            Tog("tuner.waterindoors", () => _config.WaterEffectIndoors, v => _config.WaterEffectIndoors = v);
 
-            y += 30; _sectionTitles.Add((_t("tuner.section.water"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.water"), new Rectangle(x, y, innerW, 38), () => _config.WaterEnabled, v => _config.WaterEnabled = v));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.waterstrength"), x, y, innerW, 0f, 2f, () => _config.WaterStrength, v => _config.WaterStrength = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.watersparkle"), x, y, innerW, 0f, 1f, () => _config.WaterSparkle, v => _config.WaterSparkle = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.waterspeed"), x, y, innerW, 0f, 3f, () => _config.WaterSpeed, v => _config.WaterSpeed = v)); y += 50;
-            _toggles.Add(new Toggle(_t("tuner.waterreflection"), new Rectangle(x, y, innerW, 38), () => _config.WaterReflection, v => _config.WaterReflection = v));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.waterreflectstrength"), x, y, innerW, 0f, 1f, () => _config.WaterReflectStrength, v => _config.WaterReflectStrength = v)); y += 50;
-
-            // Per-room water switch: only offered in building interiors we actually gate (not
-            // outdoors, not real level water like the mines/hot spring). Lets the player kill
-            // decorative water from a single house/interior mod for THIS room, remembered by name.
+            // Per-room water switch: only in gated building interiors (not outdoors / real level water).
             GameLocation? here = Game1.currentLocation;
             if (here != null && !here.IsOutdoors && !RenderPipeline.HasLevelWater(here))
             {
                 string key = here.NameOrUniqueName;
-                _toggles.Add(new Toggle($"{_t("tuner.waterhere")} · {here.Name}", new Rectangle(x, y, innerW, 38),
+                _toggles.Add(new Toggle($"{_t("tuner.waterhere")} · {here.Name}", new Rectangle(_cx, _cy, _cw, 38),
                     () => !_config.WaterDisabledLocations.Contains(key),
                     v =>
                     {
                         if (v) _config.WaterDisabledLocations.Remove(key);
                         else if (!_config.WaterDisabledLocations.Contains(key)) _config.WaterDisabledLocations.Add(key);
                     }));
-                y += 44;
+                _cy += 44;
             }
-            else
-            {
-                _sectionTitles.Add((_t("tuner.waterhere.always"), y)); y += 30;
-            }
+        }
 
-            y += 30; _sectionTitles.Add((_t("tuner.section.tiltshift"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.tiltshift"), new Rectangle(x, y, innerW, 38), () => _config.TiltShiftEnabled, v => _config.TiltShiftEnabled = v));
-            y += 44;
-            _toggles.Add(new Toggle(_t("tuner.tiltradial"), new Rectangle(x, y, innerW, 38),
+        private void BuildLens()
+        {
+            Section("tuner.section.tiltshift");
+            Tog("tuner.tiltshift", () => _config.TiltShiftEnabled, v => _config.TiltShiftEnabled = v);
+            _toggles.Add(new Toggle(_t("tuner.tiltradial"), new Rectangle(_cx, _cy, _cw, 38),
                 () => _config.TiltShiftMode == TiltShiftFocus.Radial,
                 v => _config.TiltShiftMode = v ? TiltShiftFocus.Radial : TiltShiftFocus.Bands));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.tiltradius"), x, y, innerW, 0.05f, 0.9f, () => _config.TiltShiftRadius, v => _config.TiltShiftRadius = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.tiltfeather"), x, y, innerW, 0f, 1f, () => _config.TiltShiftFeather, v => _config.TiltShiftFeather = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.tiltstrength"), x, y, innerW, 0f, 1f, () => _config.TiltShiftStrength, v => _config.TiltShiftStrength = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.tilttop"), x, y, innerW, 0f, 1f, () => _config.TiltShiftTopRatio, v => _config.TiltShiftTopRatio = v)); y += 50;
-            _sliders.Add(new Slider(_t("tuner.tiltbottom"), x, y, innerW, 0f, 1f, () => _config.TiltShiftBottomRatio, v => _config.TiltShiftBottomRatio = v)); y += 50;
-
-            y += 30; _sectionTitles.Add((_t("tuner.section.finishing"), y - 28));
-            _toggles.Add(new Toggle(_t("tuner.vignette"), new Rectangle(x, y, innerW, 38), () => _config.VignetteEnabled, v => _config.VignetteEnabled = v));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.vignettestrength"), x, y, innerW, 0f, 1f, () => _config.VignetteStrength, v => _config.VignetteStrength = v)); y += 50;
-            _toggles.Add(new Toggle(_t("tuner.ca"), new Rectangle(x, y, innerW, 38), () => _config.ChromaticAberrationEnabled, v => _config.ChromaticAberrationEnabled = v));
-            y += 44;
-            _sliders.Add(new Slider(_t("tuner.castrength"), x, y, innerW, 0f, 1f, () => _config.ChromaticAberrationStrength, v => _config.ChromaticAberrationStrength = v)); y += 50;
-
-            int contentHeight = y - cy0;
-            int maxH = vh - 40;
-            height = Math.Min(HeaderH + contentHeight + FooterH, maxH);
-
-            _bodyTop = yPositionOnScreen + HeaderH;
-            _bodyBottom = yPositionOnScreen + height - FooterH;
-            _hintY = yPositionOnScreen + height - 34;
-            _maxScroll = Math.Max(0, contentHeight - (_bodyBottom - _bodyTop));
-            _scroll = Math.Clamp(_scroll, 0, _maxScroll);
-
-            upperRightCloseButton.bounds.X = xPositionOnScreen + width - 40;
-            upperRightCloseButton.bounds.Y = yPositionOnScreen - 8;
+            _cy += 44;
+            Sld("tuner.tiltradius", 0.05f, 0.9f, () => _config.TiltShiftRadius, v => _config.TiltShiftRadius = v);
+            Sld("tuner.tiltfeather", 0f, 1f, () => _config.TiltShiftFeather, v => _config.TiltShiftFeather = v);
+            Sld("tuner.tiltstrength", 0f, 1f, () => _config.TiltShiftStrength, v => _config.TiltShiftStrength = v);
+            Sld("tuner.tilttop", 0f, 1f, () => _config.TiltShiftTopRatio, v => _config.TiltShiftTopRatio = v);
+            Sld("tuner.tiltbottom", 0f, 1f, () => _config.TiltShiftBottomRatio, v => _config.TiltShiftBottomRatio = v);
+            _cy += 12;
+            Section("tuner.section.finishing");
+            Tog("tuner.vignette", () => _config.VignetteEnabled, v => _config.VignetteEnabled = v);
+            Sld("tuner.vignettestrength", 0f, 1f, () => _config.VignetteStrength, v => _config.VignetteStrength = v);
+            Tog("tuner.ca", () => _config.ChromaticAberrationEnabled, v => _config.ChromaticAberrationEnabled = v);
+            Sld("tuner.castrength", 0f, 1f, () => _config.ChromaticAberrationStrength, v => _config.ChromaticAberrationStrength = v);
         }
+
+        // ================= interaction =================
 
         private void PromptSaveProfile()
         {
@@ -271,7 +336,7 @@ namespace SDVRadiance
         public override void gameWindowSizeChanged(Rectangle oldBounds, Rectangle newBounds)
         {
             base.gameWindowSizeChanged(oldBounds, newBounds);
-            Reflow(); // keep the panel pinned to the (new) right edge
+            Reflow();
         }
 
         public override void receiveScrollWheelAction(int direction)
@@ -282,7 +347,11 @@ namespace SDVRadiance
 
         public override void receiveLeftClick(int x, int y, bool playSound = true)
         {
-            if (y >= _bodyTop && y <= _bodyBottom)
+            // Rail buttons are fixed (no scroll offset) and always clickable.
+            foreach (var (btn, idx) in _rail)
+                if (btn.Bounds.Contains(x, y)) { if (idx != _activeTab) Game1.playSound("smallSelect"); btn.OnClick(); return; }
+
+            if (y >= _bodyTop && y <= _bodyBottom && x >= _contentX)
             {
                 foreach (var b in _buttons)
                     if (Visible(b.Bounds) && b.Bounds.Contains(x, y + _scroll)) { Game1.playSound("smallSelect"); b.OnClick(); return; }
@@ -337,12 +406,33 @@ namespace SDVRadiance
                 xPositionOnScreen, yPositionOnScreen, width, height, Color.White, 1f, drawShadow: true);
             DrawFit(b, _t("tuner.title"), new Vector2(xPositionOnScreen + 28, yPositionOnScreen + 22), innerW - 40, Game1.textColor, 1f);
 
-            int dy = -_scroll;
+            // Rail divider
+            int divX = xPositionOnScreen + RailWidth;
+            b.Draw(Game1.staminaRect, new Rectangle(divX, _bodyTop - 6, 2, _bodyBottom - _bodyTop + 12), Color.Black * 0.2f);
 
+            // Rail buttons (active highlighted)
+            foreach (var (btn, idx) in _rail)
+            {
+                if (idx == _activeTab)
+                    b.Draw(Game1.staminaRect, new Rectangle(btn.Bounds.X - 4, btn.Bounds.Y - 2, btn.Bounds.Width + 8, btn.Bounds.Height + 4), new Color(196, 130, 66) * 0.55f);
+                btn.Draw(b, 0, idx == _activeTab);
+            }
+
+            // Clip the scrolling content to the body rect so a half-scrolled row can't draw
+            // over the header/footer. Requires flushing this batch and reopening one with a
+            // scissor-enabled rasterizer, then restoring a normal batch for the rest.
+            var device = b.GraphicsDevice;
+            Rectangle prevScissor = device.ScissorRectangle;
+            b.End();
+            b.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, DepthStencilState.None, _scissorRaster);
+            device.ScissorRectangle = Rectangle.Intersect(device.Viewport.Bounds,
+                new Rectangle(_contentX, _bodyTop, ContentWidth, _bodyBottom - _bodyTop));
+
+            int dy = -_scroll;
             foreach (var (text, cy) in _sectionTitles)
             {
-                var r = new Rectangle(xPositionOnScreen + 28, cy, innerW, 24);
-                if (Visible(r)) DrawFit(b, text, new Vector2(xPositionOnScreen + 28, cy + dy), innerW, Game1.textColor * 0.85f, 0.85f);
+                var r = new Rectangle(_contentX + 16, cy, _cw, 24);
+                if (Visible(r)) DrawFit(b, text, new Vector2(_contentX + 16, cy + dy), _cw, Game1.textColor * 0.85f, 0.85f);
             }
             foreach (var btn in _buttons) if (Visible(btn.Bounds)) btn.Draw(b, dy);
             foreach (var c in _chips)
@@ -354,9 +444,13 @@ namespace SDVRadiance
             foreach (var t in _toggles) if (Visible(t.Row)) t.Draw(b, dy);
             foreach (var s in _sliders) if (Visible(s.Track)) s.Draw(b, dy);
 
+            b.End();
+            device.ScissorRectangle = prevScissor;
+            b.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, DepthStencilState.None, RasterizerState.CullCounterClockwise);
+
             if (_maxScroll > 0)
             {
-                int trackX = xPositionOnScreen + width - 20;
+                int trackX = xPositionOnScreen + width - 18;
                 int trackH = _bodyBottom - _bodyTop;
                 b.Draw(Game1.staminaRect, new Rectangle(trackX, _bodyTop, 6, trackH), Color.Black * 0.25f);
                 int barH = Math.Max(30, (int)(trackH * (float)trackH / (trackH + _maxScroll)));
@@ -450,15 +544,18 @@ namespace SDVRadiance
                 _label = label; Bounds = bounds; OnClick = onClick;
             }
 
-            public void Draw(SpriteBatch b, int dy)
+            public void Draw(SpriteBatch b, int dy, bool active = false)
             {
                 drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60),
-                    Bounds.X, Bounds.Y + dy, Bounds.Width, Bounds.Height, Color.White, 1f, drawShadow: false);
+                    Bounds.X, Bounds.Y + dy, Bounds.Width, Bounds.Height, active ? new Color(255, 240, 200) : Color.White, 1f, drawShadow: false);
                 Vector2 m = Game1.smallFont.MeasureString(_label);
-                float scale = Math.Min(0.9f, (Bounds.Width - 24) / Math.Max(1f, m.X));
-                Vector2 s = m * scale;
+                float scale = Math.Min(0.9f, (Bounds.Width - 20) / Math.Max(1f, m.X));
+                // Centre on a STANDARD cap height, not the label's own measured height: Thai
+                // strings measure taller (tone marks/upper vowels) which pushed text up off
+                // centre. A fixed reference keeps EN and TH visually centred the same way.
+                float refH = Game1.smallFont.MeasureString("A").Y * scale;
                 Utility.drawTextWithShadow(b, _label, Game1.smallFont,
-                    new Vector2(Bounds.Center.X - s.X / 2f, Bounds.Center.Y - s.Y / 2f + dy), Game1.textColor, scale);
+                    new Vector2(Bounds.Center.X - m.X * scale / 2f, Bounds.Center.Y - refH / 2f + dy + 2f), Game1.textColor, scale);
             }
         }
     }
