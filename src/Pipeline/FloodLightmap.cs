@@ -139,10 +139,7 @@ namespace SDVRadiance
                     // the shader's glow term, and it read as a bright pool at two in the afternoon.
                     // Full strength returns by 08:00/17:00; night and indoors are untouched.
                     if (outdoors)
-                    {
-                        int minutesSinceMidnight = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
-                        inten *= 1f - 0.65f * (1f - MathHelper.Clamp(Math.Abs(minutesSinceMidnight - 750) / 270f, 0f, 1f));
-                    }
+                        inten *= 1f - 0.65f * (1f - MathHelper.Clamp(Math.Abs(GameClock.MinutesNow() - 750f) / 270f, 0f, 1f));
                     // TWO-TONE rooms: an indoor window is DAYLIGHT (cool, slightly blue) while
                     // lamps and fires stay warm — the warm-vs-cool split across a room is what
                     // makes it read as cinematic instead of uniformly orange. Outdoor window
@@ -297,7 +294,7 @@ namespace SDVRadiance
                 float amb = MathHelper.Clamp(1f - config.LightingIndoorDarkness * 0.55f, 0.3f, 1f);
                 return new Vector3(amb);
             }
-            float dayProgress = MathHelper.Clamp((Game1.timeOfDay - 1200) / 600f, -1f, 1f);
+            float dayProgress = MathHelper.Clamp((GameClock.MinutesNow() - 720f) / 360f, -1f, 1f);
             float warm = MathHelper.Clamp((Math.Abs(dayProgress) - 0.55f) / 0.45f, 0f, 1f);
             Vector3 sky = Vector3.Lerp(new Vector3(1f, 1f, 1f), new Vector3(1.03f, 0.96f, 0.88f), warm);
             if (Game1.isRaining)

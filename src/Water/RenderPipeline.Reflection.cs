@@ -105,7 +105,23 @@ namespace SDVRadiance
                     Rectangle cbb = c.GetBoundingBox();
                     if (!WaterWithinTiles(cbb.Center.X / 64, cbb.Bottom / 64 + 2, 4))
                         continue;
-                    StampFlipped(spriteBatch, c.Sprite.Texture, c.Sprite.SourceRect, cbb, c.drawOffset);
+                    // Where the game REALLY draws this frame (NPC.draw: anchor at position +
+                    // bbHeight/2 + drawOffset, origin at 3/4 of the frame height, scale 4):
+                    float drawnTop = c.Position.Y + cbb.Height / 2f + c.drawOffset.Y + c.yJumpOffset
+                        - 3f * c.Sprite.SpriteHeight;
+                    float drawnBottom = drawnTop + 4f * c.Sprite.SpriteHeight;
+                    // The FEET in the art are the bottom of the standard 32-row body block at
+                    // the TOP of the frame. Verified against the winter derby actors (16x64
+                    // frames, drawOffset 96: the body fills the first 32 rows, the rod and line
+                    // over the water fill the rest): this one rule lands on bb.Bottom for a
+                    // standard frame, on bb.Bottom + drawOffset for a seated one, and on the
+                    // true boot row for the tall festival frames - where bb-based anchoring
+                    // sat 1.5 tiles low ("the reflection starts at the rod tip") and a
+                    // bystander's far tail painted a disembodied head into the water.
+                    float feetWorld = drawnTop + 4f * Math.Min(c.Sprite.SpriteHeight, 32);
+                    int belowFeet = Math.Max(0, (int)Math.Round((drawnBottom - feetWorld) / 4f));
+                    StampFlippedAt(spriteBatch, c.Sprite.Texture, c.Sprite.SourceRect,
+                        cbb.Center.X + c.drawOffset.X, feetWorld - 10f, belowFeet);
                 }
                 // Farm animals.
                 foreach (var a in location.animals.Values)
@@ -232,8 +248,17 @@ namespace SDVRadiance
             // little below the drawn shoes) and the sprite's own draw offset. Without them an NPC
             // mirrored 10 px lower than the player standing beside it, and a seated one mirrored
             // where it was not drawn. House rule: an NPC and the player get identical treatment.
-            float feetY = bb.Bottom - 10f + drawOffset.Y;
-            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(bb.Center.X + drawOffset.X, feetY));
+            StampFlippedAt(spriteBatch, texture, src, bb.Center.X + drawOffset.X, bb.Bottom - 10f + drawOffset.Y, 0);
+        }
+
+        /// <summary>Core of the flipped stamp: explicit feet anchor, plus how many source rows
+        /// at the frame's bottom sit BELOW the feet (tall festival frames) and stay out of the
+        /// mirror - the flip axis is the feet, those rows live under it.</summary>
+        private void StampFlippedAt(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, float centerX, float feetY, int belowFeetRows)
+        {
+            if (belowFeetRows > 0)
+                src.Height = Math.Max(1, src.Height - belowFeetRows);
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(centerX, feetY));
             float depth = StampDepth(feetY);
             var origin = new Vector2(src.Width / 2f, 0f);
             var scale = new Vector2(4f, 4f * MirrorSquash);

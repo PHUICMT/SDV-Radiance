@@ -478,23 +478,26 @@ namespace SDVRadiance
         /// the day; its shadows are much fainter and scale with the lunar phase.</summary>
         private static void ComputeSun(out float rot, out float stretch, out float alpha)
         {
-            int t = Game1.timeOfDay;
+            // Continuous minutes: the raw HHMM value made the angle lurch once per tick
+            // (and extra hard across hour boundaries, where HHMM skips 40).
+            float mins = GameClock.MinutesNow();
             int trulyDark = TrulyDark();
-            if (t >= trulyDark)
+            int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
+            if (mins >= m1)
             {
                 // MOON: track its transit from true dark to 02:00 (day's end), same geometry
                 // as the sun. Faint, phase-scaled shadows — full moon in winter is clearest.
-                int mins = (t / 100) * 60 + t % 100;
-                int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
-                float moonProgress = MathHelper.Clamp((mins - m1) / (float)Math.Max(1, 1560 - m1), 0f, 1f);
+                // Ease in over the first half hour: the sun fade reaches zero AT dark, and
+                // the moon used to arrive at full (phase) strength on the very same tick.
+                float moonProgress = MathHelper.Clamp((mins - m1) / Math.Max(1f, 1560f - m1), 0f, 1f);
                 float moonSkyOffset = moonProgress * 2f - 1f;
                 rot = 1.15f * moonSkyOffset;
                 stretch = MathHelper.Lerp(0.3f, 1.1f, Math.Abs(moonSkyOffset));
-                alpha = 0.9f * 0.35f * MoonStrength();
+                alpha = 0.9f * 0.35f * MoonStrength() * MathHelper.Clamp((mins - m1) / 30f, 0f, 1f);
                 return;
             }
             // Low sun (dawn/dusk) → long, far-leaning shadow; high sun (noon) → short & upright.
-            float sunSkyOffset = MathHelper.Clamp((t - 1200) / 600f, -1f, 1f);
+            float sunSkyOffset = MathHelper.Clamp((mins - 720f) / 360f, -1f, 1f);
             // Lean more sideways (was 0.8) so the shadow lies to the side of the body instead of
             // straight up over it — reduces the "shadow on the sprite" overlap while staying
             // upright (not the rejected upside-down flip).
@@ -509,8 +512,7 @@ namespace SDVRadiance
         /// clearly up. No dawn ramp — the day starts at 06:00 with the player active.</summary>
         private static float TimeFade()
         {
-            int t = Game1.timeOfDay;
-            int mins = (t / 100) * 60 + (t % 100);
+            float mins = GameClock.MinutesNow();
             int trulyDark = TrulyDark();
             int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
             if (mins >= m1)

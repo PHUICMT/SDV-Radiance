@@ -389,8 +389,15 @@ namespace SDVRadiance
                 // every few tiles as the player walks, and each flip is a chance for the presence
                 // fade to be wrong - which it was, twice, both times reading as a flash near water.
                 // The location's answer changes only on a warp, behind the game's own fade.
-                TimedBuild(config, 3, () => BuildWaterMask(w, h));
-                bool waterOn = (config.WaterEnabled || config.WaterReflection) && _water != null && waterAllowedHere
+                // With every water switch off, skip the build entirely: gather+compose ran on each
+                // tile crossing for a result nothing rendered (reported as stutter near water with
+                // water disabled). Gated on the GLOBAL flags and the fade only - never the
+                // window-local answer above - and kept alive through the fade-out so a toggle
+                // still decays instead of popping.
+                bool waterConfigOn = config.WaterEnabled || config.WaterReflection;
+                if ((waterConfigOn && waterAllowedHere) || _fadeWater > FadeGone)
+                    TimedBuild(config, 3, () => BuildWaterMask(w, h));
+                bool waterOn = waterConfigOn && _water != null && waterAllowedHere
                     && Game1.currentLocation is { } wloc && LocationHasWater(wloc);
                 _fadeWater = waterOn ? Ease01(_fadeWater) : Ease0(_fadeWater);
                 // Still rendered while fading: the mask is world-anchored, so the last one built

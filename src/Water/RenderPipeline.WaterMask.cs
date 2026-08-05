@@ -585,6 +585,38 @@ namespace SDVRadiance
                     Rectangle pbb = pw.GetBoundingBox();
                     StampUiBox(spriteBatch, pbb.Center.X, pbb.Top - 160, 80, 128);
                 }
+                // The CAST POWER METER is drawn by FishingRod.draw in the world layer, so it is
+                // neither in the PlayerMask bake (FarmerRenderer only) nor stamped as a sprite -
+                // charging a cast over water waved the meter and made max casts a guess. Cover
+                // vanilla's spot (left of and above the farmer) generously; the box only exists
+                // for the fraction of a second the meter does.
+                if (pw?.CurrentTool is StardewValley.Tools.FishingRod castRod && castRod.isTimingCast)
+                {
+                    Rectangle pbb = pw.GetBoundingBox();
+                    StampUiBox(spriteBatch, pbb.Center.X, pbb.Top - 280, 288, 240);
+                }
+                // The rod itself, the line and the floating bobber are all drawn by
+                // FishingRod.draw in the world layer - outside the PlayerMask bake (body only)
+                // and the sprite stamps - so a rod held out over the river waved with the
+                // water beneath it. Let it stamp ITSELF, the same way crab pots do: whatever
+                // the game draws for it lands in the exclusion pixel for pixel.
+                if (pw?.UsingTool == true && pw.CurrentTool is StardewValley.Tools.FishingRod heldRod)
+                {
+                    try { heldRod.draw(spriteBatch); } catch { }
+                    // FishingRod.draw covers only the line and the bobber; the ROD STICK is a
+                    // tools-sheet sprite the game renders separately via Game1.drawTool - and
+                    // that helper draws through Game1.spriteBatch, not the batch it is handed.
+                    // Point Game1.spriteBatch at the mask batch for the one call so the stick
+                    // lands in the mask, and restore it no matter what.
+                    var gameBatch = Game1.spriteBatch;
+                    try
+                    {
+                        Game1.spriteBatch = spriteBatch;
+                        Game1.drawTool(pw);
+                    }
+                    catch { }
+                    finally { Game1.spriteBatch = gameBatch; }
+                }
                 // Farm animals (ducks paddle straight into ponds).
                 foreach (var a in location.animals.Values)
                 {

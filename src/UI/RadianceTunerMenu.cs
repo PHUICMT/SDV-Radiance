@@ -66,6 +66,7 @@ namespace SDVRadiance
                 ("tuner.tab.fog",         BuildFog),
                 ("tuner.section.water",   BuildWater),
                 ("tuner.tab.lens",        BuildLens),
+                ("config.section.debug",  BuildDiagnostics),
             };
             _activeTab = Math.Clamp(_lastTab, 0, _tabDefinitions.Length - 1);
             Reflow();
@@ -299,6 +300,12 @@ namespace SDVRadiance
             Sld("tuner.vignettestrength", 0f, 1f, () => _config.VignetteStrength, v => _config.VignetteStrength = v);
             Tog("tuner.ca", () => _config.ChromaticAberrationEnabled, v => _config.ChromaticAberrationEnabled = v);
             Sld("tuner.castrength", 0f, 1f, () => _config.ChromaticAberrationStrength, v => _config.ChromaticAberrationStrength = v);
+        }
+
+        private void BuildDiagnostics()
+        {
+            Section("config.section.debug");
+            Tog("config.debug.name", () => _config.DebugLogging, v => _config.DebugLogging = v);
         }
 
         // ================= interaction =================

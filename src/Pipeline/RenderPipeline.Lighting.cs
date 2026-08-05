@@ -54,10 +54,7 @@ namespace SDVRadiance
             // 35% at midday, full again by 08:00/17:00 — indoors untouched.
             float dayPool = 1f;
             if (Game1.currentLocation?.IsOutdoors ?? false)
-            {
-                int minutesSinceMidnight = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
-                dayPool = 1f - 0.65f * (1f - MathHelper.Clamp(Math.Abs(minutesSinceMidnight - 750) / 270f, 0f, 1f));
-            }
+                dayPool = 1f - 0.65f * (1f - MathHelper.Clamp(Math.Abs(GameClock.MinutesNow() - 750f) / 270f, 0f, 1f));
             _daylightPoolDamping = dayPool;    // emissive tiles ride the same daylight sink
 
             var lights = Game1.currentLightSources;
@@ -242,7 +239,7 @@ namespace SDVRadiance
             float day = 1f - night;
             if (night < 0.02f)
                 return;   // exterior windows only glow after dusk
-            int nowMin = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
+            float nowMin = GameClock.MinutesNow();
             float b = Math.Max(0.4f, boost);
             float radiusOut = WindowPoolExteriorPx / Math.Max(1, vh);
             float radiusIn = WindowPoolInteriorPx / Math.Max(1, vh);
@@ -451,9 +448,11 @@ namespace SDVRadiance
                 return Vector3.One;
 
             float dark = MathHelper.Clamp(config.LightingIndoorDarkness, 0f, 0.95f);
-            int t = Game1.timeOfDay;
-            if (t >= 1900 || t < 600)
-                dark = MathHelper.Clamp(dark + config.LightingNightDarkness, 0f, 0.95f);
+            // Was a hard flip at 19:00 (rooms snapped darker on the tick). Ease over
+            // +-10 game-minutes; the pre-dawn branch keeps its old meaning (game time
+            // runs 600-2600, so it only matters for mods that stretch the clock).
+            float nightRamp = Math.Max(GameClock.RampAt(1900), 1f - GameClock.RampAt(600));
+            dark = MathHelper.Clamp(dark + config.LightingNightDarkness * nightRamp, 0f, 0.95f);
 
             // Cool moonlight-ish tint for the darkened room.
             Vector3 darkTint = new(0.45f, 0.48f, 0.62f);

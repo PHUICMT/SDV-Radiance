@@ -22,11 +22,10 @@ namespace SDVRadiance
         /// WEATHER is applied by the caller (`_cloudWeatherAmount`), which needs an eased value.</summary>
         private static float CloudDayFactor()
         {
-            int t = Game1.timeOfDay;
             int trulyDark;
             try { trulyDark = Game1.currentLocation != null ? Game1.getTrulyDarkTime(Game1.currentLocation) : 2000; }
             catch { trulyDark = 2000; }
-            int mins = (t / 100) * 60 + t % 100;
+            float mins = GameClock.MinutesNow();
             int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
             float moon = 0.35f * ShadowRenderer.MoonStrength();
             if (mins >= m1)
@@ -37,10 +36,7 @@ namespace SDVRadiance
         /// <summary>Night ramp 0→1 over 19:00→21:00 (0 by day). Shared by the night-only
         /// touches: warmer bloom, a touch more vignette, and the automatic blue night mist.</summary>
         private static float NightFactorNow()
-        {
-            int m = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
-            return MathHelper.Clamp((m - 1140) / 120f, 0f, 1f);
-        }
+            => MathHelper.Clamp((GameClock.MinutesNow() - 1140) / 120f, 0f, 1f);
 
         private void RenderCloudShadow(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
@@ -164,7 +160,8 @@ namespace SDVRadiance
             // With flood GI active, only lit pixels may emit rays (kills rays from bright
             // sprites in unlit corners; lamp glow zones still stream at night).
             bool floodGate = config.FloodLightingEnabled && _flood.Texture != null;
-            GetParam(effect, "FloodGate")?.SetValue(floodGate ? 1f : 0f);
+            // Ride the flood stage's own presence fade instead of snapping the ray gate.
+            GetParam(effect, "FloodGate")?.SetValue(floodGate ? _fadeFlood : 0f);
             if (floodGate)
             {
                 GetParam(effect, "FloodMapTexture")?.SetValue(_flood.Texture);
@@ -327,7 +324,8 @@ namespace SDVRadiance
             GetParam(effect, "TopEdge")?.SetValue(MathHelper.Clamp(config.TiltShiftTopRatio, 0f, 1f) * 0.5f);
             GetParam(effect, "BottomEdge")?.SetValue(1f - MathHelper.Clamp(config.TiltShiftBottomRatio, 0f, 1f) * 0.5f);
             GetParam(effect, "Strength")?.SetValue(config.TiltShiftStrength * _fadeTilt);
-            GetParam(effect, "Mode")?.SetValue(config.TiltShiftMode == TiltShiftFocus.Radial ? 1f : 0f);
+            Approach(ref _tiltModeEase, config.TiltShiftMode == TiltShiftFocus.Radial ? 1f : 0f, 0.08f);
+            GetParam(effect, "Mode")?.SetValue(_tiltModeEase);
             GetParam(effect, "Center")?.SetValue(PlayerScreenUV());
             GetParam(effect, "Aspect")?.SetValue(dest.Height > 0 ? dest.Width / (float)dest.Height : 1f);
             GetParam(effect, "RadRadius")?.SetValue(MathHelper.Clamp(config.TiltShiftRadius, 0.05f, 0.9f));
@@ -359,11 +357,18 @@ namespace SDVRadiance
             GetParam(effect, "Saturation")?.SetValue(gradeOn ? sat : 1f);
             GetParam(effect, "Temperature")?.SetValue(gradeOn ? MathHelper.Clamp(temp, -1f, 1f) : 0f);
             GetParam(effect, "Brightness")?.SetValue(gradeOn ? config.ColorGradeBrightness * _meteredExposure : 1f);
-            GetParam(effect, "ToneMap")?.SetValue(gradeOn && config.ColorGradeToneMap ? 1f : 0f);
+            Approach(ref _toneMapEase, gradeOn && config.ColorGradeToneMap ? 1f : 0f, 0.08f);
+            GetParam(effect, "ToneMap")?.SetValue(_toneMapEase);
             GetParam(effect, "BlueLight")?.SetValue(MathHelper.Clamp(config.BlueLightFilter, 0f, 1f));
             effect.CurrentTechnique = effect.Techniques["ColorGrade"];
             DrawFull(spriteBatch, source, dest, effect);
         }
+
+        // Eased twins of raw on/off drivers (house rule: nothing visible changes in one
+        // frame). Structural readiness gates (SpriteMaskOn/ReflectRTOn/SceneOn) stay
+        // binary on purpose - there is no texture to fade until the bake exists - and
+        // indoor/outdoor multipliers snap behind the game's own warp fade.
+        private float _shimmerEase, _dispGateEase = 1f, _rainRingsEase, _vignetteEase, _caEase, _toneMapEase, _tiltModeEase;
 
         private bool _isFloodOcclusionReady;
         private readonly Vector2[] _floodLightPositions = new Vector2[8];
@@ -412,14 +417,19 @@ namespace SDVRadiance
             ComputeWaterDynamics(out float strengthMul, out float speedMul, out float sparkleMul);
             // The stage can run for the REFLECTION alone (shimmer toggled off): ripple,
             // sparkle, tint and rim all zero out; the mirror keeps working independently.
-            float shimmer = (config.WaterEnabled ? 1f : 0f) * _fadeWater;   // presence fade: never pops in
+            // The toggle itself eases too: with the reflection keeping the stage alive,
+            // flipping the shimmer switch used to snap every ripple term in one frame.
+            Approach(ref _shimmerEase, config.WaterEnabled ? 1f : 0f, 0.08f);
+            float shimmer = _shimmerEase * _fadeWater;   // presence fade: never pops in
             // W8: during a cutscene the game draws the event UI (the SKIP button, dialogue)
             // as part of the world frame, so the ripple's pixel DISPLACEMENT bent it over
             // water/lava. Zero the displacement in events (same treatment as CA/tilt-shift) —
             // but keep tint / reflection / sparkle, which don't move pixels, so the water
-            // still reads correctly in the cinematic.
+            // still reads correctly in the cinematic. Eased over ~0.1s: events can start
+            // without a screen fade, and the flat-water snap was the tell.
             bool eventUp = Game1.eventUp || Game1.CurrentEvent != null;
-            float dispGate = eventUp ? 0f : 1f;
+            Approach(ref _dispGateEase, eventUp ? 0f : 1f, 0.15f);
+            float dispGate = _dispGateEase;
             // Indoor water (hot spring, sewer, caves) sits under a ceiling, often in steam:
             // there is no sun to sparkle, no sky to mirror sharply, and the pale pool art
             // blows out under the full outdoor treatment. Calmer waves, faint reflection.
@@ -490,7 +500,7 @@ namespace SDVRadiance
             // Time-of-day / weather dressing: golden-hour sparkle, star reflections and
             // lamp glimmer after dusk, raindrop rings while raining.
             int tnow = Game1.timeOfDay;
-            int mins = ClockMinutes();
+            float mins = ClockMinutes();
             // Golden hour, on the clock and without a cliff. This read the raw HHMM value (so it
             // lurched at every hour boundary) and then cut to zero the instant the clock passed
             // 19:00 - full warmth at 18:50, none at 19:00, in one step, which is the flash of a
@@ -507,7 +517,10 @@ namespace SDVRadiance
             GetParam(effect, "SunWarm")?.SetValue(sunWarm);
             GetParam(effect, "NightGlow")?.SetValue(nightGlow);
             GetParam(effect, "MoonGlow")?.SetValue(ShadowRenderer.MoonStrength());
-            GetParam(effect, "RainAmt")?.SetValue(Game1.isRaining ? 1f : 0f);
+            // Raindrop rings ease in rather than covering the surface the frame a rain
+            // totem (or a weather mod) flips the flag.
+            Approach(ref _rainRingsEase, Game1.isRaining ? 1f : 0f, 0.04f);
+            GetParam(effect, "RainAmt")?.SetValue(_rainRingsEase);
 
             // SKY tint for the mirror's far end and the no-mirror sheen. Water reflects the sky
             // before it reflects anything else; for an orthographic fixed-pitch camera the Fresnel
@@ -571,17 +584,21 @@ namespace SDVRadiance
         private void RenderFinishing(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var effect = _finishing!;
-            GetParam(effect, "VignetteStrength")?.SetValue(config.VignetteEnabled ? config.VignetteStrength : 0f);
+            // Both finishing toggles ease: this pass is always in the chain, so a raw
+            // config bool multiplied straight into the frame in a single step.
+            Approach(ref _vignetteEase, config.VignetteEnabled ? 1f : 0f, 0.08f);
+            GetParam(effect, "VignetteStrength")?.SetValue(config.VignetteStrength * _vignetteEase);
             // Map the 0..1 UI value to a tiny UV offset so it stays subtle on pixel art.
             // No CA during events: the SKIP button is drawn inside the world frame and the
             // channel split shreds its text (community report). Vignette stays — it's the
             // cinematic part and doesn't hurt readability.
             bool eventUp = Game1.eventUp || Game1.CurrentEvent != null;
-            GetParam(effect, "CAStrength")?.SetValue(config.ChromaticAberrationEnabled && !eventUp ? config.ChromaticAberrationStrength * 0.03f : 0f);
+            Approach(ref _caEase, config.ChromaticAberrationEnabled && !eventUp ? 1f : 0f, 0.15f);
+            GetParam(effect, "CAStrength")?.SetValue(config.ChromaticAberrationStrength * 0.03f * _caEase);
             // A touch more vignette at night — but only as part of the vignette effect
             // itself: with Vignette OFF (e.g. only CA on) the shader must add nothing,
             // or "off" quietly darkens the night screen edges.
-            GetParam(effect, "NightAmt")?.SetValue(config.VignetteEnabled ? NightFactorNow() : 0f);
+            GetParam(effect, "NightAmt")?.SetValue(NightFactorNow() * _vignetteEase);
             effect.CurrentTechnique = effect.Techniques["Finishing"];
             DrawFull(spriteBatch, source, dest, effect);
         }
@@ -813,16 +830,12 @@ namespace SDVRadiance
         /// normal rate at every hour boundary, which is a visible step in a tint that is supposed
         /// to drift. Minutes make an hour worth sixty and the curves continuous.
         /// </para></summary>
-        private static int ClockMinutes()
-        {
-            int t = Game1.timeOfDay;
-            return (t / 100) * 60 + t % 100;
-        }
+        private static float ClockMinutes() => GameClock.MinutesNow();
 
         /// <summary>Fog tint by time of day: neutral haze by day, warm at dusk, blue at night.</summary>
         private static Vector3 FogColor()
         {
-            int m = ClockMinutes();
+            float m = ClockMinutes();
             Vector3 day = new(0.72f, 0.76f, 0.82f);
             Vector3 dusk = new(0.85f, 0.68f, 0.55f);
             Vector3 night = new(0.38f, 0.44f, 0.60f);
@@ -836,7 +849,7 @@ namespace SDVRadiance
         private static void ComputeAuto(out float temp, out float satMul)
         {
             temp = 0f; satMul = 1f;
-            int m = ClockMinutes();
+            float m = ClockMinutes();
             const int Dusk = 17 * 60, Late = 19 * 60 + 30, Night = 21 * 60, Dawn = 6 * 60;
             if (m >= Dusk && m < Late) temp += 0.25f * ((m - Dusk) / (float)(Late - Dusk));
             else if (m >= Late && m < Night) temp += 0.25f - 0.55f * ((m - Late) / (float)(Night - Late));

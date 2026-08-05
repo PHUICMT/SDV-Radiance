@@ -2,6 +2,48 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.4.1
+
+### Fixed
+
+- Fishing gear no longer waves with the water. The cast power meter, the rod itself, the line and
+  the floating bobber are all drawn in the world layer, so the ripple bent them like anything else
+  over water, and judging a max cast was a guess.
+- An NPC fishing at a festival had its reflection start at the rod tip instead of the feet. The
+  ice fishing pose is drawn from a frame four tiles tall whose lower half is the rod reaching over
+  the water, and the mirror anchored to the bottom of the frame rather than the boots. The same
+  fix removes the disembodied mirrored head that a bystander standing tiles from the shore could
+  cast into the water.
+- Time no longer changes the picture in steps. The game clock advances in ten minute ticks, and
+  everything driven by it lurched once per tick: fog tint, night warmth, golden hour, window glow,
+  lamp dimming, and the sun and moon shadow angle. All of it now glides through the tick. Hard
+  boundaries became ramps too: rooms ease into their night darkness around 19:00 instead of
+  snapping, the stronger outdoor night shadows arrive gradually, and moon shadows fade in over the
+  first half hour of true dark.
+- Toggles fade. Rain rings on water, the ripple pausing during a cutscene, and the water shimmer,
+  vignette, chromatic aberration, tone map and tilt-shift mode switches all ease over a fraction
+  of a second instead of flipping the frame.
+
+### Performance
+
+- Turning every water setting off now actually stops the water work. The water surface map was
+  still being rebuilt on every camera tile crossing even with all water features disabled, which
+  showed up as stutter near water on machines that had disabled water for performance.
+
+### Added
+
+- Diagnostics tab in the F6 tuner with the Debug logging toggle, so the [diag] and [perf] timing
+  lines can be flipped on mid-session without opening Generic Mod Config Menu or config.json.
+
+### Known issues
+
+- Some scenes may still step slightly brighter or darker while walking. This could not be
+  reproduced on 1.4.x; if you still see it, a report with the spot helps.
+
+### For translators
+
+- No new or changed i18n keys in this release.
+
 ## 1.4.0
 
 ### Fixed

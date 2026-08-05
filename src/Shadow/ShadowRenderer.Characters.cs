@@ -191,8 +191,10 @@ namespace SDVRadiance
             // should read boldly (indoors stays subtle — bright rooms, tuned look). Boost only
             // the directional CAST strength here, not the ambient pool (a dark blob under
             // everyone far from any lamp would look wrong).
-            bool outdoorNight = location.IsOutdoors && Game1.timeOfDay >= TrulyDark();
-            float castStrength = strength * (outdoorNight ? 1.9f : 1.0f);
+            // Eased over ±10 game-minutes around dark - the 1.9x lamp-shadow boost used to
+            // land in a single tick, visibly thickening every cast shadow at once.
+            float nightBoost = location.IsOutdoors ? GameClock.RampAt(TrulyDark()) : 0f;
+            float castStrength = strength * MathHelper.Lerp(1.0f, 1.9f, nightBoost);
 
             foreach (NPC npc in CharactersIn(location))
             {
