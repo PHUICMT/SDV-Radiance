@@ -20,7 +20,7 @@ namespace SDVRadiance
     internal sealed partial class ShadowRenderer
     {
         /// <summary>One long shadow per caster, leaning away from the sun (outdoors, daytime).</summary>
-        private void DrawSunShadows(SpriteBatch b, GameLocation loc, ModConfig config, float strength, float blur)
+        private void DrawSunShadows(SpriteBatch spriteBatch, GameLocation location, ModConfig config, float strength, float blur)
         {
             ComputeSun(out float rot, out float stretch, out float alpha);
             alpha *= strength;
@@ -28,50 +28,50 @@ namespace SDVRadiance
                 return;
             stretch *= Math.Max(0.1f, config.DirectionalShadowLength);
 
-            if (Diag != null && _diagFrames < 3)
+            if (DiagnosticMonitor != null && _diagnosticFrameCount < 3)
             {
-                _diagFrames++;
-                Diag.Log($"[shadow] sun: npcs={loc.characters.Count}, time={Game1.timeOfDay}, rot={rot:0.00}, stretch={stretch:0.00}, alpha={alpha:0.00}, blur={blur:0.0}", LogLevel.Debug);
+                _diagnosticFrameCount++;
+                DiagnosticMonitor.Log($"[shadow] sun: npcs={location.characters.Count}, time={Game1.timeOfDay}, rot={rot:0.00}, stretch={stretch:0.00}, alpha={alpha:0.00}, blur={blur:0.0}", LogLevel.Debug);
             }
 
-            foreach (NPC npc in CharactersIn(loc))
+            foreach (NPC npc in CharactersIn(location))
             {
                 if (npc == null || npc.IsInvisible || ShadowHiddenFor(npc) || npc.swimming.Value || npc.Sprite?.Texture == null)
                     continue;
-                if (OnOpenWater(loc, npc.TilePoint))   // open water only — surf/shore keeps shadows
+                if (OnOpenWater(location, npc.TilePoint))   // open water only — surf/shore keeps shadows
                     continue;
                 if (IsSeated(npc))
                 {
                     // A seated sprite gets a grounding pool and no cast silhouette: the silhouette
                     // is the part that fought the seat (see IsSeated), while a small soft ellipse
                     // cannot land half-way through the bench no matter what the seat's depth is.
-                    DrawContactBlob(b, SeatedAnchor(npc), npc.GetSpriteWidthForPositioning() * 4f * 0.34f,
+                    DrawContactBlob(spriteBatch, SeatedAnchor(npc), npc.GetSpriteWidthForPositioning() * 4f * 0.34f,
                         npc.GetSpriteWidthForPositioning() * 4f * 0.17f, alpha * 0.8f, SeatedDepth(npc), blur);
                     continue;
                 }
-                DrawNpcShadow(b, npc, rot, stretch, alpha, blur);
+                DrawNpcShadow(spriteBatch, npc, rot, stretch, alpha, blur);
             }
 
-            foreach (FarmAnimal a in AnimalsIn(loc))
+            foreach (FarmAnimal a in AnimalsIn(location))
             {
-                if (a?.Sprite?.Texture == null || OnOpenWater(loc, a.TilePoint))
+                if (a?.Sprite?.Texture == null || OnOpenWater(location, a.TilePoint))
                     continue;
-                DrawAnimalShadow(b, a, rot, stretch, alpha, blur);
+                DrawAnimalShadow(spriteBatch, a, rot, stretch, alpha, blur);
             }
 
-            DrawPlayerShadow(b, loc, rot, stretch, alpha, blur);
+            DrawPlayerShadow(spriteBatch, location, rot, stretch, alpha, blur);
 
             if (config.DirectionalShadowObjects)
             {
-                DrawObjectShadows(b, loc, rot, stretch, alpha, blur);
+                DrawObjectShadows(spriteBatch, location, rot, stretch, alpha, blur);
 
                 // Farm building ENTITIES (coop/barn/house) cast a shape-accurate silhouette from
                 // their own texture, anchored at the footprint base — heavily damped/flattened so a
                 // tall building's shadow lies beside it instead of swinging up over itself.
-                var vp = Game1.viewport;
-                int btx0 = vp.X / 64 - 12, btx1 = (vp.X + vp.Width) / 64 + 4;
-                int bty0 = vp.Y / 64 - 12, bty1 = (vp.Y + vp.Height) / 64 + 4;
-                foreach (Building bld in loc.buildings)
+                var viewport = Game1.viewport;
+                int btx0 = viewport.X / 64 - 12, btx1 = (viewport.X + viewport.Width) / 64 + 4;
+                int bty0 = viewport.Y / 64 - 12, bty1 = (viewport.Y + viewport.Height) / 64 + 4;
+                foreach (Building bld in location.buildings)
                 {
                     if (bld == null || bld.tileX.Value > btx1 || bld.tileX.Value + bld.tilesWide.Value < btx0
                         || bld.tileY.Value > bty1 || bld.tileY.Value + bld.tilesHigh.Value < bty0)
@@ -79,24 +79,24 @@ namespace SDVRadiance
                     // Buildings get a neutral grounding pool: a shape-accurate cast can't lean
                     // up like everything else without swinging the roof over itself, and the
                     // sheared-down bake was rejected visually — see the session notes.
-                    DrawBuildingShadow(b, bld, alpha * 0.7f, blur);
+                    DrawBuildingShadow(spriteBatch, bld, alpha * 0.7f, blur);
                 }
             }
         }
 
-        private void DrawAnimalShadow(SpriteBatch b, FarmAnimal a, float rot, float stretch, float alpha, float blur)
+        private void DrawAnimalShadow(SpriteBatch spriteBatch, FarmAnimal a, float rot, float stretch, float alpha, float blur)
         {
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(a.Position.X + a.Sprite.SpriteWidth * 4 / 2f, a.GetBoundingBox().Bottom - FeetLift));
             float depth = MathHelper.Clamp(a.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
-            if (_casterBakes.TryGetValue((a.Sprite.Texture, a.Sprite.SourceRect), out var baked))
+            if (_casterBakeCache.TryGetValue((a.Sprite.Texture, a.Sprite.SourceRect), out var baked))
             {
-                DrawSoft(b, Taps9, baked.rt, null, feet, Color.White, alpha, rot, baked.feetInRT,
+                DrawSoft(spriteBatch, Taps9, baked.rt, null, feet, Color.White, alpha, rot, baked.feetInRT,
                     new Vector2(1f, stretch), depth, SpriteEffects.None, blur);
                 return;
             }
             Rectangle src = a.Sprite.SourceRect;
-            DrawBandedGradient(b, a.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, src.Height),
+            DrawBandedGradient(spriteBatch, a.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
         }
 
@@ -105,16 +105,16 @@ namespace SDVRadiance
         /// own shadow of every caster, radiating AWAY from that light and fading with distance.
         /// Multiple lights → multiple overlapping shadows, as in real multi-light rooms.
         /// </summary>
-        private void DrawLightShadows(SpriteBatch b, GameLocation loc, ModConfig config, float strength, float blur)
+        private void DrawLightShadows(SpriteBatch spriteBatch, GameLocation location, ModConfig config, float strength, float blur)
         {
             // Build the on-screen light list — may be EMPTY (a room with no lamps/windows). We no
             // longer bail on empty: an always-present ambient CONTACT pool grounds every caster
             // even in a lightless room, and point lights ADD their directional shadow on top.
-            _lightBuf.Clear();
+            _nearbyLightSources.Clear();
             var lights = Game1.currentLightSources;
             if (lights != null)
             {
-                _lightAlive.Clear();
+                _activeLightIds.Clear();
                 foreach (var kv in lights)
                 {
                     LightSource ls = kv.Value;
@@ -122,7 +122,7 @@ namespace SDVRadiance
                     // believable shadow across the room). Player-attached lights sit on the player
                     // so they self-cancel in LightCast (dist≈0). Skip nothing by context — except
                     // stale window lights (window removed/dark: glow gone but source lingers).
-                    if (!WindowGlowing(loc, ls))
+                    if (!WindowGlowing(location, ls))
                         continue;
                     // Skip DRIFTING decorative lights (fireflies from The Night Lights, sparkle
                     // mods): each one threw its own moving shadow on the player. Neither signal
@@ -139,10 +139,10 @@ namespace SDVRadiance
                     // moving by any amount, not just past a multi-pixel jump).
                     bool isWindow = ls.lightContext.Value == LightSource.LightContext.WindowLight;
                     Vector2 lpos = ls.position.Value;
-                    _lightAlive.Add(kv.Key);
-                    bool drifting = _lightWasAt.TryGetValue(kv.Key, out Vector2 was)
+                    _activeLightIds.Add(kv.Key);
+                    bool drifting = _lightPreviousPositions.TryGetValue(kv.Key, out Vector2 was)
                                     && Vector2.DistanceSquared(was, lpos) > 0.02f;   // ~0.14px — any real movement, not a multi-pixel jump
-                    _lightWasAt[kv.Key] = lpos;
+                    _lightPreviousPositions[kv.Key] = lpos;
                     bool firefly = !isWindow && drifting && ls.radius.Value < FireflyRadiusBound;
                     if (firefly)
                         continue;
@@ -157,7 +157,7 @@ namespace SDVRadiance
                     if (screen.X < -reach || screen.X > Game1.viewport.Width + reach ||
                         screen.Y < -reach || screen.Y > Game1.viewport.Height + reach)
                         continue;
-                    _lightBuf.Add((screen, reach, FireFlicker(ls.position.Value, ls.textureIndex.Value)));
+                    _nearbyLightSources.Add((screen, reach, FireFlicker(ls.position.Value, ls.textureIndex.Value)));
                 }
             }
             // NOTE: label-driven lights (window class 12, emissive art class 6) deliberately do
@@ -167,22 +167,22 @@ namespace SDVRadiance
             // right under its light) and the grounding pool halved itself because the code
             // believed a real cast existed. Feeding them needs a light BUDGET that clusters tiles
             // into sources and ranks by contribution, the way SelectLights does for the shader.
-            if (_lightWasAt.Count > _lightAlive.Count)
-                _lightWasAt.Keys.Where(k => !_lightAlive.Contains(k)).ToList().ForEach(k => _lightWasAt.Remove(k));
+            if (_lightPreviousPositions.Count > _activeLightIds.Count)
+                _lightPreviousPositions.Keys.Where(k => !_activeLightIds.Contains(k)).ToList().ForEach(k => _lightPreviousPositions.Remove(k));
 
             // Keep the lights NEAREST the screen centre (stable membership — the old
             // dictionary-order + break-at-6 popped shadows in/out as the light set reordered).
-            if (_lightBuf.Count > 6)
+            if (_nearbyLightSources.Count > 6)
             {
                 Vector2 mid = new(Game1.viewport.Width * 0.5f, Game1.viewport.Height * 0.5f);
-                _lightBuf.Sort((a, b) => Vector2.DistanceSquared(a.pos, mid).CompareTo(Vector2.DistanceSquared(b.pos, mid)));
-                _lightBuf.RemoveRange(6, _lightBuf.Count - 6);
+                _nearbyLightSources.Sort((lightA, lightB) => Vector2.DistanceSquared(lightA.pos, mid).CompareTo(Vector2.DistanceSquared(lightB.pos, mid)));
+                _nearbyLightSources.RemoveRange(6, _nearbyLightSources.Count - 6);
             }
 
-            if (Diag != null && _diagFrames < 3)
+            if (DiagnosticMonitor != null && _diagnosticFrameCount < 3)
             {
-                _diagFrames++;
-                Diag.Log($"[shadow] light path: lights on-screen={_lightBuf.Count}, ambient contact on", LogLevel.Debug);
+                _diagnosticFrameCount++;
+                DiagnosticMonitor.Log($"[shadow] light path: lights on-screen={_nearbyLightSources.Count}, ambient contact on", LogLevel.Debug);
             }
 
             float lenCfg = Math.Max(0.1f, config.DirectionalShadowLength);
@@ -191,19 +191,19 @@ namespace SDVRadiance
             // should read boldly (indoors stays subtle — bright rooms, tuned look). Boost only
             // the directional CAST strength here, not the ambient pool (a dark blob under
             // everyone far from any lamp would look wrong).
-            bool outdoorNight = loc.IsOutdoors && Game1.timeOfDay >= TrulyDark();
+            bool outdoorNight = location.IsOutdoors && Game1.timeOfDay >= TrulyDark();
             float castStrength = strength * (outdoorNight ? 1.9f : 1.0f);
 
-            foreach (NPC npc in CharactersIn(loc))
+            foreach (NPC npc in CharactersIn(location))
             {
                 if (npc == null || npc.IsInvisible || ShadowHiddenFor(npc) || npc.swimming.Value || npc.Sprite?.Texture == null)
                     continue;
-                if (OnOpenWater(loc, npc.TilePoint))   // same guard as the sun path (bathhouse, night beach)
+                if (OnOpenWater(location, npc.TilePoint))   // same guard as the sun path (bathhouse, night beach)
                     continue;
                 if (IsSeated(npc))
                 {
                     float sw = npc.GetSpriteWidthForPositioning() * 4f;
-                    DrawContactBlob(b, SeatedAnchor(npc), sw * 0.34f, sw * 0.17f,
+                    DrawContactBlob(spriteBatch, SeatedAnchor(npc), sw * 0.34f, sw * 0.17f,
                         ambAlpha * 0.8f, SeatedDepth(npc), blur);
                     continue;   // pool only — the cast silhouette is what fought the seat
                 }
@@ -212,12 +212,12 @@ namespace SDVRadiance
                 float depth = MathHelper.Clamp(npc.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 float halfW = npc.GetSpriteWidthForPositioning() * 4f * 0.36f;
                 GatherCasts(feet, castStrength, lenCfg);
-                DrawContactBlob(b, feet, halfW, halfW * 0.5f, ambAlpha * (_castBuf.Count > 0 ? 0.45f : 1f), depth, blur);
-                foreach (var (rot, st, a) in _castBuf)
-                    DrawNpcShadow(b, npc, rot, st, a, blur);
+                DrawContactBlob(spriteBatch, feet, halfW, halfW * 0.5f, ambAlpha * (_lightShadowCasts.Count > 0 ? 0.45f : 1f), depth, blur);
+                foreach (var (rot, st, a) in _lightShadowCasts)
+                    DrawNpcShadow(spriteBatch, npc, rot, st, a, blur);
             }
 
-            foreach (FarmAnimal animal in AnimalsIn(loc))
+            foreach (FarmAnimal animal in AnimalsIn(location))
             {
                 if (animal?.Sprite?.Texture == null)
                     continue;
@@ -226,31 +226,31 @@ namespace SDVRadiance
                 float depth = MathHelper.Clamp(animal.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 float halfW = animal.Sprite.SpriteWidth * 4f * 0.36f;
                 GatherCasts(feet, castStrength, lenCfg);
-                DrawContactBlob(b, feet, halfW, halfW * 0.5f, ambAlpha * (_castBuf.Count > 0 ? 0.45f : 1f), depth, blur);
-                foreach (var (rot, st, a) in _castBuf)
-                    DrawAnimalShadow(b, animal, rot, st, a, blur);
+                DrawContactBlob(spriteBatch, feet, halfW, halfW * 0.5f, ambAlpha * (_lightShadowCasts.Count > 0 ? 0.45f : 1f), depth, blur);
+                foreach (var (rot, st, a) in _lightShadowCasts)
+                    DrawAnimalShadow(spriteBatch, animal, rot, st, a, blur);
             }
 
             // The player, through the same two branches the NPCs above use.
             {
                 Farmer sp = Game1.player;
-                if (sp != null && sp.currentLocation == loc && IsSeated(sp)
-                    && !sp.swimming.Value && !sp.isRidingHorse() && !OnOpenWater(loc, sp.TilePoint))
-                    DrawContactBlob(b, SeatedAnchor(sp), 20f, 10f, ambAlpha * 0.8f, SeatedDepth(sp), blur);
+                if (sp != null && sp.currentLocation == location && IsSeated(sp)
+                    && !sp.swimming.Value && !sp.isRidingHorse() && !OnOpenWater(location, sp.TilePoint))
+                    DrawContactBlob(spriteBatch, SeatedAnchor(sp), 20f, 10f, ambAlpha * 0.8f, SeatedDepth(sp), blur);
             }
-            if (_playerReady && _playerRT != null)
+            if (_playerReady && _playerRenderTarget != null)
             {
                 Farmer who = Game1.player;
-                if (who != null && who.currentLocation == loc && !who.swimming.Value && !who.isRidingHorse()
-                    && !IsSeated(who) && !OnOpenWater(loc, who.TilePoint))
+                if (who != null && who.currentLocation == location && !who.swimming.Value && !who.isRidingHorse()
+                    && !IsSeated(who) && !OnOpenWater(location, who.TilePoint))
                 {
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                         new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
                     float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                     GatherCasts(feet, castStrength, lenCfg);
-                    DrawContactBlob(b, feet, 22f, 11f, ambAlpha * (_castBuf.Count > 0 ? 0.45f : 1f), depth, blur);
-                    foreach (var (rot, st, a) in _castBuf)
-                        DrawSoft(b, Taps9, _playerRT, null, feet, Color.White, a, rot, _playerFeetInRT,
+                    DrawContactBlob(spriteBatch, feet, 22f, 11f, ambAlpha * (_lightShadowCasts.Count > 0 ? 0.45f : 1f), depth, blur);
+                    foreach (var (rot, st, a) in _lightShadowCasts)
+                        DrawSoft(spriteBatch, Taps9, _playerRenderTarget, null, feet, Color.White, a, rot, _playerFeetInRenderTarget,
                             new Vector2(1f, st), depth, SpriteEffects.None, blur);
                 }
             }
@@ -258,27 +258,27 @@ namespace SDVRadiance
             // Furniture / big craftables / forage get a light ambient contact pool too (no per-light
             // silhouette — a room full of overlapping cast copies reads as clutter).
             if (config.DirectionalShadowObjects)
-                DrawObjectContactShadows(b, loc, ambAlpha * 0.85f, blur);
+                DrawObjectContactShadows(spriteBatch, location, ambAlpha * 0.85f, blur);
         }
 
         /// <summary>Draw a soft dark contact pool (grounding shadow) centred at a screen point.</summary>
-        private void DrawContactBlob(SpriteBatch b, Vector2 feet, float halfW, float halfH, float alpha, float depth, float blur)
+        private void DrawContactBlob(SpriteBatch spriteBatch, Vector2 feet, float halfW, float halfH, float alpha, float depth, float blur)
         {
-            if (_blobTex == null || alpha <= 0.01f)
+            if (_contactBlobTexture == null || alpha <= 0.01f)
                 return;
             var origin = new Vector2(32f, 32f);
             var scale = new Vector2(Math.Max(0.01f, halfW * 2f / 64f), Math.Max(0.01f, halfH * 2f / 64f));
-            DrawSoft(b, Taps5, _blobTex, null, feet, Color.Black, alpha, 0f, origin, scale, depth, SpriteEffects.None, blur);
+            DrawSoft(spriteBatch, Taps5, _contactBlobTexture, null, feet, Color.Black, alpha, 0f, origin, scale, depth, SpriteEffects.None, blur);
         }
 
         /// <summary>Ambient contact pools under furniture / craftables / forage (indoor & night path).</summary>
-        private void DrawObjectContactShadows(SpriteBatch b, GameLocation loc, float alpha, float blur)
+        private void DrawObjectContactShadows(SpriteBatch spriteBatch, GameLocation location, float alpha, float blur)
         {
-            var vp = Game1.viewport;
-            int tx0 = vp.X / 64 - 2, tx1 = (vp.X + vp.Width) / 64 + 2;
-            int ty0 = vp.Y / 64 - 2, ty1 = (vp.Y + vp.Height) / 64 + 2;
+            var viewport = Game1.viewport;
+            int tx0 = viewport.X / 64 - 2, tx1 = (viewport.X + viewport.Width) / 64 + 2;
+            int ty0 = viewport.Y / 64 - 2, ty1 = (viewport.Y + viewport.Height) / 64 + 2;
 
-            foreach (Furniture f in loc.furniture)
+            foreach (Furniture f in location.furniture)
             {
                 if (f == null || f.isTemporarilyInvisible)
                     continue;
@@ -289,12 +289,12 @@ namespace SDVRadiance
                 if (tile.X < tx0 || tile.X > tx1 || tile.Y < ty0 || tile.Y > ty1)
                     continue;
                 Rectangle box = f.boundingBox.Value;
-                Vector2 feet = Game1.GlobalToLocal(vp, new Vector2(box.Center.X, box.Bottom - 6f));
+                Vector2 feet = Game1.GlobalToLocal(viewport, new Vector2(box.Center.X, box.Bottom - 6f));
                 float depth = MathHelper.Clamp((box.Bottom - 4f) / 10000f - ShadowDepthBias, 0f, 1f);
-                DrawContactBlob(b, feet, box.Width * 0.5f * 0.8f, 12f, alpha, depth, blur);
+                DrawContactBlob(spriteBatch, feet, box.Width * 0.5f * 0.8f, 12f, alpha, depth, blur);
             }
 
-            foreach (var kv in loc.objects.Pairs)
+            foreach (var kv in location.objects.Pairs)
             {
                 Vector2 tile = kv.Key;
                 if (tile.X < tx0 || tile.X > tx1 || tile.Y < ty0 || tile.Y > ty1)
@@ -307,53 +307,53 @@ namespace SDVRadiance
                 {
                     if (o.Fragility == 2)
                         continue;
-                    Vector2 feet = Game1.GlobalToLocal(vp, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 8f));
-                    DrawContactBlob(b, feet, 26f, 12f, alpha, depth, blur);
+                    Vector2 feet = Game1.GlobalToLocal(viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 8f));
+                    DrawContactBlob(spriteBatch, feet, 26f, 12f, alpha, depth, blur);
                 }
                 else if (o.IsSpawnedObject)
                 {
-                    Vector2 feet = Game1.GlobalToLocal(vp, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 6f));
-                    DrawContactBlob(b, feet, 14f, 8f, alpha, depth, blur);
+                    Vector2 feet = Game1.GlobalToLocal(viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 6f));
+                    DrawContactBlob(spriteBatch, feet, 14f, 8f, alpha, depth, blur);
                 }
             }
         }
 
-        private readonly System.Collections.Generic.List<(Vector2 pos, float reach, float flick)> _lightBuf = new();
-        private readonly System.Collections.Generic.List<(float rot, float st, float a)> _castBuf = new();
+        private readonly System.Collections.Generic.List<(Vector2 pos, float reach, float flick)> _nearbyLightSources = new();
+        private readonly System.Collections.Generic.List<(float rot, float st, float a)> _lightShadowCasts = new();
         // Why the light list ended up the size it did: total offered, then each filter's toll.
         /// <summary>Where each light was last frame, by its id — the drift test's memory. Pruned
         /// to the ids still present so a location full of transient lights cannot grow it.</summary>
-        private readonly System.Collections.Generic.Dictionary<string, Vector2> _lightWasAt = new();
-        private readonly System.Collections.Generic.HashSet<string> _lightAlive = new();
+        private readonly System.Collections.Generic.Dictionary<string, Vector2> _lightPreviousPositions = new();
+        private readonly System.Collections.Generic.HashSet<string> _activeLightIds = new();
         /// <summary>The old MinShadowLightRadius default. Real lamps (Town's are ~0.6-0.9) sit
         /// under this too, so this bound only matters ANDed with drift above — see the comment
         /// at its use site.</summary>
         private const float FireflyRadiusBound = 1.0f;
 
         /// <summary>Collect this caster's directional casts from every on-screen light into
-        /// <see cref="_castBuf"/>. Gathered BEFORE the grounding pool is drawn: when at least
+        /// <see cref="_lightShadowCasts"/>. Gathered BEFORE the grounding pool is drawn: when at least
         /// one light throws a real shadow, the pool drops to a hint (0.45×) — a full pool under
         /// a full cast read as two stacked shadows.</summary>
         private void GatherCasts(Vector2 feet, float strength, float lenCfg)
         {
-            _castBuf.Clear();
-            foreach (var (lpos, reach, flick) in _lightBuf)
+            _lightShadowCasts.Clear();
+            foreach (var (lpos, reach, flick) in _nearbyLightSources)
                 if (LightCast(feet, lpos, reach, strength, lenCfg, flick, out float rot, out float st, out float a))
-                    _castBuf.Add((rot, st, a));
+                    _lightShadowCasts.Add((rot, st, a));
         }
 
         /// <summary>
         /// False for a STALE indoor window light: when a window is removed (decor mods) or goes
-        /// dark (night/rain) the game drops its glow sprite from loc.lightGlows immediately but
+        /// dark (night/rain) the game drops its glow sprite from location.lightGlows immediately but
         /// leaves the WindowLight in currentLightSources until the location is re-entered. A
         /// window with no glow isn't emitting. Outdoor window lights are left alone (town windows
         /// at night have no glow sprites).
         /// </summary>
-        internal static bool WindowGlowing(GameLocation loc, LightSource ls)
+        internal static bool WindowGlowing(GameLocation location, LightSource ls)
         {
-            if (loc.IsOutdoors || ls.lightContext.Value != LightSource.LightContext.WindowLight)
+            if (location.IsOutdoors || ls.lightContext.Value != LightSource.LightContext.WindowLight)
                 return true;
-            foreach (Vector2 g in loc.lightGlows)
+            foreach (Vector2 g in location.lightGlows)
                 if (Vector2.DistanceSquared(g, ls.position.Value) < 160f * 160f)
                     return true;
             return false;
@@ -369,7 +369,7 @@ namespace SDVRadiance
         {
             if (texIndex != 4 && texIndex != 5)
                 return 1f;
-            double t = Game1.currentGameTime?.TotalGameTime.TotalSeconds ?? 0.0;
+            double t = Determinism.Seconds;
             float phase = (worldPos.X * 0.013f + worldPos.Y * 0.007f) % 6.283f;
             float s = (float)(Math.Sin(t * 7.3 + phase) * 0.5 + Math.Sin(t * 12.9 + phase * 1.7) * 0.3
                             + Math.Sin(t * 23.7 + phase * 2.3) * 0.2);
@@ -464,7 +464,7 @@ namespace SDVRadiance
         private static float SeatedDepth(Character c)
             => MathHelper.Clamp(c.StandingPixel.Y / 10000f - ShadowDepthBias * 2f, 0f, 1f);
 
-        private void DrawNpcShadow(SpriteBatch b, NPC npc, float rot, float stretch, float alpha, float blur)
+        private void DrawNpcShadow(SpriteBatch spriteBatch, NPC npc, float rot, float stretch, float alpha, float blur)
         {
             // The collision box is the anchor, with no drawOffset term. A stretched sprite and the
             // offset that goes with it CANCEL: extendSourceRect(0, 32) with tempSpriteHeight = 64
@@ -479,9 +479,9 @@ namespace SDVRadiance
             // Prefer the baked silhouette (one cohesive image, smoothly faded — same as the
             // player). Bands are the fallback only when the sprite is too big for a slot, which is
             // every stretched one: 64 rows drawn at 4x overflow the bake slot.
-            if (_casterBakes.TryGetValue((npc.Sprite.Texture, src), out var baked))
+            if (_casterBakeCache.TryGetValue((npc.Sprite.Texture, src), out var baked))
             {
-                DrawSoft(b, Taps9, baked.rt, null, feet, Color.White, alpha, rot, baked.feetInRT,
+                DrawSoft(spriteBatch, Taps9, baked.rt, null, feet, Color.White, alpha, rot, baked.feetInRT,
                     new Vector2(1f, stretch), depth, SpriteEffects.None, blur);
                 return;
             }
@@ -505,7 +505,7 @@ namespace SDVRadiance
             // ordinary sprite untouched because their feet are already the bottom edge.
             if (originY >= 1f && originY < src.Height - 0.5f)
                 src = new Rectangle(src.X, src.Y, src.Width, (int)Math.Round(originY));
-            DrawBandedGradient(b, npc.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, Math.Min(originY, src.Height)),
+            DrawBandedGradient(spriteBatch, npc.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, Math.Min(originY, src.Height)),
                 alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
         }
     }

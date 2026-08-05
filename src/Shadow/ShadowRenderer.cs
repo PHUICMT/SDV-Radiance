@@ -25,23 +25,23 @@ namespace SDVRadiance
     internal sealed partial class ShadowRenderer
     {
         /// <summary>Optional diagnostics sink; when set (config.DebugLogging), the first few draws + any error are logged once.</summary>
-        internal static IMonitor? Diag;
+        internal static IMonitor? DiagnosticMonitor;
 
-        private int _diagFrames;
-        private bool _errLogged;
+        private int _diagnosticFrameCount;
+        private bool _errorLogged;
 
         // The player's silhouette is rendered to this offscreen target during RenderingWorld,
         // then drawn back (flattened + leaned) into the World_Sorted batch. FarmerRenderer only
         // supports a uniform scale, so the RT is the only way to squash the player vertically.
-        private RenderTarget2D? _playerRT;
-        private SpriteBatch? _rtBatch;
-        private Texture2D? _gradTex;
+        private RenderTarget2D? _playerRenderTarget;
+        private SpriteBatch? _renderTargetSpriteBatch;
+        private Texture2D? _gradientTexture;
         /// <summary>Soft radial disc for indoor/ambient CONTACT shadows (a grounding pool under a caster).</summary>
-        private Texture2D? _blobTex;
+        private Texture2D? _contactBlobTexture;
         /// <summary>Feet→tip fade that reaches EXACTLY zero, for map-tile props: their art often has
         /// a long straight top edge (fence rails), and any residual tip alpha reads as a hard line.</summary>
-        private Texture2D? _propGradTex;
-        private Vector2 _playerFeetInRT;
+        private Texture2D? _propGradientTexture;
+        private Vector2 _playerFeetInRenderTarget;
         private bool _playerReady;
         private bool _playerMaskFresh;   // the RT holds the current pose (reuse gate); _playerReady
                                          // additionally means "cast a shadow" and drops while swimming
@@ -56,7 +56,7 @@ namespace SDVRadiance
         /// no colour scrub, no head fade) — the water reflection RT flips this below the feet.
         /// Whatever appearance mods drew is what gets reflected.</summary>
         internal static Texture2D? PlayerColor;
-        private RenderTarget2D? _playerColorRT;
+        private RenderTarget2D? _playerColorRenderTarget;
         /// <summary>Opacity at the far tip (head end) relative to the feet, for the gradient fade.</summary>
         private const float HeadFade = 0.05f;
 
@@ -66,13 +66,13 @@ namespace SDVRadiance
         // sprites bigger than a slot fall back to the banded path.
         private const int CasterRtW = 160;
         private const int CasterRtH = 224;
-        private readonly System.Collections.Generic.List<RenderTarget2D> _casterPool = new();
-        private int _casterUsed;
+        private readonly System.Collections.Generic.List<RenderTarget2D> _casterRenderTargetPool = new();
+        private int _casterSlotsUsed;
         // PERSISTENT cache — keyed by (texture, source rect), i.e. the sprite FRAME, so every
         // NPC/animal sharing a frame shares one bake and warm frames cost a dictionary hit
         // instead of a render-target switch. Upright silhouettes carry no sun angle, so entries
         // stay valid indefinitely; the cache is only capped (see PreparePlayer).
-        private readonly System.Collections.Generic.Dictionary<(Texture2D tex, Rectangle src), (RenderTarget2D rt, Vector2 feetInRT)> _casterBakes = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle src), (RenderTarget2D rt, Vector2 feetInRT)> _casterBakeCache = new();
 
         // Objects (trees/bushes/clumps/furniture/craftables/crops/…) bake to pooled RTs with a
         // continuous gradient too — same smooth path as characters, no stepped bands. Slots are large
@@ -86,18 +86,18 @@ namespace SDVRadiance
         // glued to the ground, so baked objects composite with NO rotation at all.
         private const int ObjRtW = 400;
         private const int ObjRtH = 456;
-        private readonly System.Collections.Generic.List<RenderTarget2D> _objPool = new();
-        private int _objUsed;
-        private readonly System.Collections.Generic.Dictionary<(Texture2D tex, Rectangle src, SpriteEffects fx), (RenderTarget2D rt, Vector2 feetInRT)> _bakedObjMap = new();
-        private bool _objBaking;
-        private GraphicsDevice? _objGd;
+        private readonly System.Collections.Generic.List<RenderTarget2D> _objectRenderTargetPool = new();
+        private int _objectSlotsUsed;
+        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle src, SpriteEffects effect), (RenderTarget2D rt, Vector2 feetInRT)> _bakedObjectCache = new();
+        private bool _isBakingObjects;
+        private GraphicsDevice? _objectGraphicsDevice;
         /// <summary>Sun angle the object cache was baked at (shear is baked in) — cache clears when it changes.</summary>
-        private long _objShearKey = long.MinValue;
-        private GameLocation? _objBakeLoc;
+        private long _objectShearKey = long.MinValue;
+        private GameLocation? _objectBakeLocation;
         /// <summary>Last location the over-cap bake warning was logged for: once per location, not per frame.</summary>
-        private GameLocation? _objCapLoggedLoc;
+        private GameLocation? _objectCapLoggedLocation;
         /// <summary>Pose the player RT was last baked with — identical pose skips the re-bake.</summary>
-        private (int frame, int facing, Rectangle src) _playerBakeSig = (-1, -1, default);
+        private (int frame, int facing, Rectangle src) _playerBakeSignature = (-1, -1, default);
 
         // Multiply only the destination ALPHA by the source alpha (RGB untouched): dst.a *= src.a.
         // Used to bake the feet→head opacity gradient onto the silhouette.
@@ -171,13 +171,13 @@ namespace SDVRadiance
         /// Shared with the reflection and water-mask passes, which had the same two-list bug for
         /// the same reason.
         /// </summary>
-        internal static System.Collections.Generic.IEnumerable<NPC> CharactersIn(GameLocation loc)
+        internal static System.Collections.Generic.IEnumerable<NPC> CharactersIn(GameLocation location)
         {
             Event? ev = Game1.CurrentEvent;
-            bool residentsDrawn = !loc.shouldHideCharacters()
+            bool residentsDrawn = !location.shouldHideCharacters()
                 && !(Game1.eventUp && (ev == null || !ev.showWorldCharacters));
             if (residentsDrawn)
-                foreach (NPC npc in loc.characters)
+                foreach (NPC npc in location.characters)
                     yield return npc;
             if (ev?.actors != null)
                 foreach (NPC npc in ev.actors)
@@ -226,11 +226,11 @@ namespace SDVRadiance
 
         /// <summary>All farm animals in a location — including Marnie's paddock cows, which live in
         /// Forest.marniesLivestock rather than location.animals (they had no shadow otherwise).</summary>
-        private static System.Collections.Generic.IEnumerable<FarmAnimal> AnimalsIn(GameLocation loc)
+        private static System.Collections.Generic.IEnumerable<FarmAnimal> AnimalsIn(GameLocation location)
         {
-            foreach (FarmAnimal a in loc.animals.Values)
+            foreach (FarmAnimal a in location.animals.Values)
                 yield return a;
-            if (loc is StardewValley.Locations.Forest forest)
+            if (location is StardewValley.Locations.Forest forest)
                 foreach (FarmAnimal a in forest.marniesLivestock)
                     yield return a;
         }
@@ -249,8 +249,8 @@ namespace SDVRadiance
         /// </summary>
         internal static float MoonStrength()
         {
-            GameLocation? loc = Game1.currentLocation;
-            if (loc == null || !loc.IsOutdoors || Game1.isRaining || Game1.isSnowing || Game1.isLightning)
+            GameLocation? location = Game1.currentLocation;
+            if (location == null || !location.IsOutdoors || Game1.isRaining || Game1.isSnowing || Game1.isLightning)
                 return 0f;
             float phase = 1f - Math.Abs(Game1.dayOfMonth - 14.5f) / 13.5f;
             float season = Game1.season switch
@@ -271,8 +271,8 @@ namespace SDVRadiance
         /// shadowless). Moonlight still lifts the ambient/water via MoonStrength elsewhere.</summary>
         private static bool SunCasts()
         {
-            GameLocation? loc = Game1.currentLocation;
-            if (loc == null || !loc.IsOutdoors || Game1.isRaining || Game1.isSnowing)
+            GameLocation? location = Game1.currentLocation;
+            if (location == null || !location.IsOutdoors || Game1.isRaining || Game1.isSnowing)
                 return false;
             int t = Game1.timeOfDay;
             return t >= 600 && t < TrulyDark();   // day/dusk = sun cast; after dark → per-light path
@@ -295,17 +295,17 @@ namespace SDVRadiance
         }
 
         /// <summary>Draw all caster shadows into the game's open World_Sorted batch.</summary>
-        public void DrawInto(SpriteBatch b, ModConfig config)
+        public void DrawInto(SpriteBatch spriteBatch, ModConfig config)
         {
             if (!ShouldCast(config))
                 return;
             if (_renderDepth > 0)
             {
-                if (Diag != null && !_errLogged) { _errLogged = true; Diag.Log("[shadow] DrawInto re-entered — skipping nested call", LogLevel.Warn); }
+                if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log("[shadow] DrawInto re-entered — skipping nested call", LogLevel.Warn); }
                 return;
             }
 
-            GameLocation loc = Game1.currentLocation;
+            GameLocation location = Game1.currentLocation;
             float strength = MathHelper.Clamp(config.DirectionalShadowStrength, 0f, 1f);
             float blur = Math.Max(0f, config.DirectionalShadowBlur);
             if (strength <= 0.01f)
@@ -325,13 +325,13 @@ namespace SDVRadiance
             try
             {
                 if (_sunBlend > 0.004f)
-                    DrawSunShadows(b, loc, config, strength * _sunBlend, blur);
+                    DrawSunShadows(spriteBatch, location, config, strength * _sunBlend, blur);
                 if (_sunBlend < 0.996f)
-                    DrawLightShadows(b, loc, config, strength * (1f - _sunBlend), blur);   // indoors / night → per light source
+                    DrawLightShadows(spriteBatch, location, config, strength * (1f - _sunBlend), blur);   // indoors / night → per light source
             }
             catch (Exception ex)
             {
-                if (Diag != null && !_errLogged) { _errLogged = true; Diag.Log($"[shadow] draw threw: {ex}", LogLevel.Warn); }
+                if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log($"[shadow] draw threw: {ex}", LogLevel.Warn); }
             }
             finally
             {

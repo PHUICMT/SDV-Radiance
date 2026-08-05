@@ -17,10 +17,10 @@ namespace SDVRadiance
         private static readonly Rectangle OkSource = new(128, 256, 64, 64);
         private static readonly Rectangle CancelSource = new(192, 256, 64, 64);
 
-        private readonly string _title;
-        private readonly Action<string> _onDone;
-        private readonly Action _onCancel;
-        private readonly TextBox _box;
+        private readonly string _titleText;
+        private readonly Action<string> _onComplete;
+        private readonly Action _onCancelled;
+        private readonly TextBox _textBox;
         private ClickableTextureComponent _okButton = null!;
         private ClickableTextureComponent _cancelButton = null!;
         private bool _closing;
@@ -28,22 +28,22 @@ namespace SDVRadiance
         public TextEntryMenu(string title, string initial, Action<string> onDone, Action onCancel)
             : base(0, 0, 640, 210, showUpperRightCloseButton: false)
         {
-            _title = title;
-            _onDone = onDone;
-            _onCancel = onCancel;
+            _titleText = title;
+            _onComplete = onDone;
+            _onCancelled = onCancel;
 
             xPositionOnScreen = (Game1.uiViewport.Width - width) / 2;
             yPositionOnScreen = (Game1.uiViewport.Height - height) / 2;
 
-            _box = new TextBox(Game1.content.Load<Texture2D>("LooseSprites\\textBox"), null, Game1.smallFont, Game1.textColor)
+            _textBox = new TextBox(Game1.content.Load<Texture2D>("LooseSprites\\textBox"), null, Game1.smallFont, Game1.textColor)
             {
                 X = xPositionOnScreen + 32,
                 Y = yPositionOnScreen + 96,
                 Width = width - 210,
                 Text = initial ?? ""
             };
-            Game1.keyboardDispatcher.Subscriber = _box;
-            _box.Selected = true;
+            Game1.keyboardDispatcher.Subscriber = _textBox;
+            _textBox.Selected = true;
 
             _okButton = new ClickableTextureComponent(
                 new Rectangle(xPositionOnScreen + width - 162, yPositionOnScreen + 90, 64, 64),
@@ -57,9 +57,9 @@ namespace SDVRadiance
         {
             if (_closing) return;
             _closing = true;
-            string text = _box.Text;
+            string text = _textBox.Text;
             Unsubscribe();
-            _onDone(text);
+            _onComplete(text);
         }
 
         private void Cancel()
@@ -67,14 +67,14 @@ namespace SDVRadiance
             if (_closing) return;
             _closing = true;
             Unsubscribe();
-            _onCancel();
+            _onCancelled();
         }
 
         private void Unsubscribe()
         {
-            if (Game1.keyboardDispatcher.Subscriber == _box)
+            if (Game1.keyboardDispatcher.Subscriber == _textBox)
                 Game1.keyboardDispatcher.Subscriber = null;
-            _box.Selected = false;
+            _textBox.Selected = false;
         }
 
         /// <summary>
@@ -92,8 +92,8 @@ namespace SDVRadiance
         {
             if (_okButton.containsPoint(x, y)) { Game1.playSound("smallSelect"); Done(); return; }
             if (_cancelButton.containsPoint(x, y)) { Game1.playSound("bigDeSelect"); Cancel(); return; }
-            _box.Selected = true;
-            Game1.keyboardDispatcher.Subscriber = _box;
+            _textBox.Selected = true;
+            Game1.keyboardDispatcher.Subscriber = _textBox;
         }
 
         public override void receiveKeyPress(Keys key)
@@ -109,19 +109,19 @@ namespace SDVRadiance
             _cancelButton.tryHover(x, y);
         }
 
-        public override void draw(SpriteBatch b)
+        public override void draw(SpriteBatch spriteBatch)
         {
-            b.Draw(Game1.fadeToBlackRect, new Rectangle(0, 0, Game1.uiViewport.Width, Game1.uiViewport.Height), Color.Black * 0.4f);
-            drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60),
+            spriteBatch.Draw(Game1.fadeToBlackRect, new Rectangle(0, 0, Game1.uiViewport.Width, Game1.uiViewport.Height), Color.Black * 0.4f);
+            drawTextureBox(spriteBatch, Game1.menuTexture, new Rectangle(0, 256, 60, 60),
                 xPositionOnScreen, yPositionOnScreen, width, height, Color.White, 1f, drawShadow: true);
 
-            Utility.drawTextWithShadow(b, _title, Game1.smallFont,
+            Utility.drawTextWithShadow(spriteBatch, _titleText, Game1.smallFont,
                 new Vector2(xPositionOnScreen + 32, yPositionOnScreen + 32), Game1.textColor);
 
-            _box.Draw(b);
-            _okButton.draw(b);
-            _cancelButton.draw(b);
-            drawMouse(b);
+            _textBox.Draw(spriteBatch);
+            _okButton.draw(spriteBatch);
+            _cancelButton.draw(spriteBatch);
+            drawMouse(spriteBatch);
         }
     }
 }

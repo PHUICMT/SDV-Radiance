@@ -24,9 +24,18 @@ namespace SDVRadiance
         /// Called during RenderingWorld, before the world batches open, so a render-target
         /// swap is safe. The lean/squash/soften happen later when this is composited.
         /// </summary>
-        public void PreparePlayer(GraphicsDevice gd, ModConfig config)
+        public void PreparePlayer(GraphicsDevice graphicsDevice, ModConfig config)
         {
-            if (!ShouldCast(config))
+            // The water reflection draws the player from PlayerColor, so this bake has to run
+            // for a reflection-only setup as well. Gated on the shadow toggle alone, switching
+            // directional shadows OFF left PlayerColor holding the last pose it baked, and the
+            // mirrored player stopped turning with you (reported on 1.3.3: "the reflection only
+            // shows the front view and does not change"). The caster/object bakes below stay
+            // shadow-only work, so a reflection-only frame pays for one small render target.
+            bool shadowsOn = ShouldCast(config);
+            bool reflectionNeedsPlayer = config.Enabled && config.WaterReflection
+                && StardewModdingAPI.Context.IsWorldReady && Game1.currentLocation != null;
+            if (!shadowsOn && !reflectionNeedsPlayer)
             {
                 _playerReady = false;
                 _playerMaskFresh = false;
@@ -36,42 +45,42 @@ namespace SDVRadiance
             }
             if (_renderDepth > 0)
             {
-                if (Diag != null && !_errLogged) { _errLogged = true; Diag.Log("[shadow] PreparePlayer re-entered — skipping nested call", LogLevel.Warn); }
+                if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log("[shadow] PreparePlayer re-entered — skipping nested call", LogLevel.Warn); }
                 return;
             }
             _renderDepth++;
             try
             {
-            _rtBatch ??= new SpriteBatch(gd);
-            _gradTex ??= BuildGradient(gd);
-            _propGradTex ??= BuildGradient(gd, 0f);
-            _blobTex ??= BuildBlob(gd);
+            _renderTargetSpriteBatch ??= new SpriteBatch(graphicsDevice);
+            _gradientTexture ??= BuildGradient(graphicsDevice);
+            _propGradientTexture ??= BuildGradient(graphicsDevice, 0f);
+            _contactBlobTexture ??= BuildBlob(graphicsDevice);
 
             // ---- Persistent bake caches (the old clear-everything-every-frame here cost
             // 50-150 render-target switches per frame — the single biggest stutter source) ----
             // CHARACTER bakes are upright silhouettes keyed by (texture, frame): valid forever,
             // only capped. OBJECT bakes have the sun lean baked in as a shear: valid until the
             // sun angle ticks (every 10 game minutes) or the location changes.
-            if (_casterBakes.Count > 192)
+            if (_casterBakeCache.Count > 192)
             {
-                _casterBakes.Clear();
-                _casterUsed = 0;
+                _casterBakeCache.Clear();
+                _casterSlotsUsed = 0;
             }
 
-            bool objectsOn = SunCasts() && config.DirectionalShadowObjects;
-            float srot = 0f, sstretch = 0f;
+            bool objectsOn = shadowsOn && SunCasts() && config.DirectionalShadowObjects;
+            float sunRotation = 0f, sunStretch = 0f;
             if (objectsOn)
             {
-                ComputeSun(out srot, out sstretch, out _);
-                sstretch *= Math.Max(0.1f, config.DirectionalShadowLength);
+                ComputeSun(out sunRotation, out sunStretch, out _);
+                sunStretch *= Math.Max(0.1f, config.DirectionalShadowLength);
             }
-            long shearKey = objectsOn
-                ? ((long)Math.Round(srot * 512f) << 20) ^ (long)Math.Round(sstretch * 512f)
+            long objectShearCacheKey = objectsOn
+                ? ((long)Math.Round(sunRotation * 512f) << 20) ^ (long)Math.Round(sunStretch * 512f)
                 : long.MinValue;
-            bool objCapHit = _bakedObjMap.Count > 128;   // VRAM cap: slots are 400×456 RTs (~0.7 MB each)
-            bool objCacheInvalid = shearKey != _objShearKey
-                                || Game1.currentLocation != _objBakeLoc
-                                || objCapHit;
+            bool objectBakeCacheCapExceeded = _bakedObjectCache.Count > 128;   // VRAM cap: slots are 400×456 RTs (~0.7 MB each)
+            bool isObjectBakeCacheInvalid = objectShearCacheKey != _objectShearKey
+                                || Game1.currentLocation != _objectBakeLocation
+                                || objectBakeCacheCapExceeded;
             // The cap is a full Clear(), so a location that stays OVER it re-bakes from scratch every
             // frame and pays back the 50-150 render-target switches the cache exists to avoid. A
             // custom foliage pack multiplies the distinct (texture, frame, flip) bakes, which is the
@@ -79,38 +88,40 @@ namespace SDVRadiance
             // Simple Foliage, fine with the setting off". Say so once per location, with the count:
             // one number in a log decides whether that is what is happening before anything is
             // restructured to evict instead of clear.
-            if (objCapHit && Diag != null && Game1.currentLocation is { } capLoc && capLoc != _objCapLoggedLoc)
+            if (objectBakeCacheCapExceeded && DiagnosticMonitor != null && Game1.currentLocation is { } capLoc && capLoc != _objectCapLoggedLocation)
             {
-                _objCapLoggedLoc = capLoc;
-                Diag.Log($"[shadow] object bake cache over cap at {capLoc.NameOrUniqueName}: "
-                       + $"{_bakedObjMap.Count} distinct sprites this frame (cap 128) — the cache is clearing every "
+                _objectCapLoggedLocation = capLoc;
+                DiagnosticMonitor.Log($"[shadow] object bake cache over cap at {capLoc.NameOrUniqueName}: "
+                       + $"{_bakedObjectCache.Count} distinct sprites this frame (cap 128) — the cache is clearing every "
                        + "frame here, so object shadows are re-baking from scratch.", LogLevel.Debug);
             }
-            if (objCacheInvalid)
+            if (isObjectBakeCacheInvalid)
             {
-                _bakedObjMap.Clear();
-                _objUsed = 0;
-                _objShearKey = shearKey;
-                _objBakeLoc = Game1.currentLocation;
+                _bakedObjectCache.Clear();
+                _objectSlotsUsed = 0;
+                _objectShearKey = objectShearCacheKey;
+                _objectBakeLocation = Game1.currentLocation;
             }
 
             // Bake NPC + animal silhouettes (single-sprite casters) — cheap when warm: cache
             // hits only, no RT switch. Runs every frame so new animation frames bake instantly.
-            BakeCasters(gd, Game1.currentLocation);
+            // Shadow-only: the reflection stamps NPCs from their live sprite, not from a bake.
+            if (shadowsOn && Game1.currentLocation is { } casterLocation)
+                BakeCasters(graphicsDevice, casterLocation);
 
             // Bake OBJECT silhouettes (trees/bushes/clumps/furniture/craftables/…) by running the
             // object enumeration in BAKE mode. Composited later in DrawObjectShadows. Runs every
             // frame so sprites entering the view bake instantly (a 15-tick heartbeat was tried —
             // its cache-miss frames drew the banded fallback, reading as line artifacts) — but a
             // WARM frame is dictionary hits only, no RT switches, which is where the cost was.
-            if (objectsOn)
+            if (objectsOn && Game1.currentLocation is { } objectLocation)
             {
-                _objBaking = true;
-                _objGd = gd;
-                RenderTargetBinding[] objPrev = gd.GetRenderTargets();
-                try { DrawObjectShadows(_rtBatch, Game1.currentLocation, srot, sstretch, 0f, 0f); }
-                catch (Exception ex) { if (Diag != null && !_errLogged) { _errLogged = true; Diag.Log($"[shadow] obj bake threw: {ex}", LogLevel.Warn); } }
-                finally { gd.SetRenderTargets(objPrev); _objBaking = false; }
+                _isBakingObjects = true;
+                _objectGraphicsDevice = graphicsDevice;
+                RenderTargetBinding[] objPrev = graphicsDevice.GetRenderTargets();
+                try { DrawObjectShadows(_renderTargetSpriteBatch, objectLocation, sunRotation, sunStretch, 0f, 0f); }
+                catch (Exception ex) { if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log($"[shadow] obj bake threw: {ex}", LogLevel.Warn); } }
+                finally { graphicsDevice.SetRenderTargets(objPrev); _isBakingObjects = false; }
             }
 
             // Sitting still casts (the bake captures the current SEATED animation frame, so the
@@ -134,7 +145,7 @@ namespace SDVRadiance
             // DiscardContents only guarantees the pixels until the next target swap/present,
             // which was fine when everything re-baked per frame — cached across frames, the
             // content decayed into garbage (grid-line artifacts all over the map).
-            _playerRT ??= new RenderTarget2D(gd, PlayerRtW, PlayerRtH, false,
+            _playerRenderTarget ??= new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
                 SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
 
             Rectangle src = who.FarmerSprite.SourceRect;
@@ -143,68 +154,68 @@ namespace SDVRadiance
             // The every-8-frames refresh keeps accessory layers that animate independently of
             // the body frame (Fashion Sense hair sway etc.) fresh without paying every frame.
             var sig = (who.FarmerSprite.CurrentFrame, (int)who.FacingDirection, src);
-            if (_playerMaskFresh && sig == _playerBakeSig && Game1.ticks % 8 != 0)
+            if (_playerMaskFresh && sig == _playerBakeSignature && Game1.ticks % 8 != 0)
             {
                 _playerReady = !swim && !IsSeated(who);
-                PlayerMask = _playerRT;
-                PlayerColor = _playerColorRT;
+                PlayerMask = _playerRenderTarget;
+                PlayerColor = _playerColorRenderTarget;
                 return;
             }
-            _playerBakeSig = sig;
+            _playerBakeSignature = sig;
 
             float w = src.Width * 4f, h = src.Height * 4f;
             Vector2 pos = new Vector2((PlayerRtW - w) / 2f, PlayerRtH - h - 8f);
-            _playerFeetInRT = new Vector2(PlayerRtW / 2f, PlayerRtH - 8f);
+            _playerFeetInRenderTarget = new Vector2(PlayerRtW / 2f, PlayerRtH - 8f);
 
-            RenderTargetBinding[] prev = gd.GetRenderTargets();
+            RenderTargetBinding[] prev = graphicsDevice.GetRenderTargets();
             try
             {
-                gd.SetRenderTarget(_playerRT);
-                gd.Clear(Color.Transparent);
-                _rtBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
-                who.FarmerRenderer.draw(_rtBatch, who.FarmerSprite.CurrentAnimationFrame, who.FarmerSprite.CurrentFrame,
+                graphicsDevice.SetRenderTarget(_playerRenderTarget);
+                graphicsDevice.Clear(Color.Transparent);
+                _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+                who.FarmerRenderer.draw(_renderTargetSpriteBatch, who.FarmerSprite.CurrentAnimationFrame, who.FarmerSprite.CurrentFrame,
                     src, pos, Vector2.Zero, 0f, who.FacingDirection, Color.Black, 0f, 1f, who);
-                _rtBatch.End();
+                _renderTargetSpriteBatch.End();
 
                 // Scrub COLOUR out of the bake (RGB→0, alpha kept): appearance mods (Fashion
                 // Sense etc.) draw through their own patches and ignore the black tint above,
                 // so without this a white dress cast a white shadow. Works for ANY current or
                 // future appearance mod — whatever got drawn, only its shape survives.
-                _gradTex ??= BuildGradient(gd);
-                _rtBatch.Begin(SpriteSortMode.Deferred, ZeroColor, SamplerState.PointClamp);
-                _rtBatch.Draw(_gradTex, new Rectangle(0, 0, PlayerRtW, PlayerRtH), Color.White);
-                _rtBatch.End();
+                _gradientTexture ??= BuildGradient(graphicsDevice);
+                _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, ZeroColor, SamplerState.PointClamp);
+                _renderTargetSpriteBatch.Draw(_gradientTexture, new Rectangle(0, 0, PlayerRtW, PlayerRtH), Color.White);
+                _renderTargetSpriteBatch.End();
 
                 // Fade the silhouette's opacity from the feet (full) to the head/far tip (faint),
                 // so the stretched far end reads as a soft penumbra rather than a hard clone.
-                _rtBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
-                _rtBatch.Draw(_gradTex, new Rectangle(0, 0, PlayerRtW, PlayerRtH), Color.White);
-                _rtBatch.End();
+                _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
+                _renderTargetSpriteBatch.Draw(_gradientTexture, new Rectangle(0, 0, PlayerRtW, PlayerRtH), Color.White);
+                _renderTargetSpriteBatch.End();
 
                 // FULL-COLOUR twin of the bake (no scrub, no head fade) for the water
                 // reflection RT: same pose, same feet anchor, whatever appearance mods drew.
-                _playerColorRT ??= new RenderTarget2D(gd, PlayerRtW, PlayerRtH, false,
+                _playerColorRenderTarget ??= new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
                     SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
-                gd.SetRenderTarget(_playerColorRT);
-                gd.Clear(Color.Transparent);
-                _rtBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
-                who.FarmerRenderer.draw(_rtBatch, who.FarmerSprite.CurrentAnimationFrame, who.FarmerSprite.CurrentFrame,
+                graphicsDevice.SetRenderTarget(_playerColorRenderTarget);
+                graphicsDevice.Clear(Color.Transparent);
+                _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+                who.FarmerRenderer.draw(_renderTargetSpriteBatch, who.FarmerSprite.CurrentAnimationFrame, who.FarmerSprite.CurrentFrame,
                     src, pos, Vector2.Zero, 0f, who.FacingDirection, Color.White, 0f, 1f, who);
-                _rtBatch.End();
+                _renderTargetSpriteBatch.End();
 
                 _playerMaskFresh = true;
                 _playerReady = !swim && !IsSeated(who);
-                PlayerMask = _playerRT;
-                PlayerColor = _playerColorRT;
+                PlayerMask = _playerRenderTarget;
+                PlayerColor = _playerColorRenderTarget;
             }
             catch (Exception ex)
             {
-                try { _rtBatch.End(); } catch { }
-                if (Diag != null && !_errLogged) { _errLogged = true; Diag.Log($"[shadow] player RT prep threw: {ex}", LogLevel.Warn); }
+                try { _renderTargetSpriteBatch.End(); } catch { }
+                if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log($"[shadow] player RT prep threw: {ex}", LogLevel.Warn); }
             }
             finally
             {
-                gd.SetRenderTargets(prev);
+                graphicsDevice.SetRenderTargets(prev);
             }
             }
             finally
@@ -220,18 +231,18 @@ namespace SDVRadiance
         /// Runs during RenderingWorld (render-target swaps are safe there). Warm frames are a
         /// dictionary hit — only frames never seen before actually bake.
         /// </summary>
-        private void BakeCasters(GraphicsDevice gd, GameLocation loc)
+        private void BakeCasters(GraphicsDevice graphicsDevice, GameLocation location)
         {
-            if (loc == null)
+            if (location == null)
                 return;
-            var vp = Game1.viewport;
-            int tx0 = vp.X / 64 - 3, tx1 = (vp.X + vp.Width) / 64 + 3;
-            int ty0 = vp.Y / 64 - 3, ty1 = (vp.Y + vp.Height) / 64 + 3;
+            var viewport = Game1.viewport;
+            int tx0 = viewport.X / 64 - 3, tx1 = (viewport.X + viewport.Width) / 64 + 3;
+            int ty0 = viewport.Y / 64 - 3, ty1 = (viewport.Y + viewport.Height) / 64 + 3;
 
             RenderTargetBinding[]? prev = null;   // fetched lazily: only a cache MISS pays for it
             try
             {
-                foreach (NPC npc in CharactersIn(loc))
+                foreach (NPC npc in CharactersIn(location))
                 {
                     if (npc == null || npc.IsInvisible || ShadowHiddenFor(npc) || npc.swimming.Value || npc.Sprite?.Texture == null)
                         continue;
@@ -239,13 +250,13 @@ namespace SDVRadiance
                     if (t.X < tx0 || t.X > tx1 || t.Y < ty0 || t.Y > ty1)
                         continue;
                     var key = (npc.Sprite.Texture, npc.Sprite.SourceRect);
-                    if (_casterBakes.ContainsKey(key))
+                    if (_casterBakeCache.ContainsKey(key))
                         continue;
-                    prev ??= gd.GetRenderTargets();
-                    if (BakeSprite(gd, key.Item1, key.Item2, out RenderTarget2D rt, out Vector2 feet))
-                        _casterBakes[key] = (rt, feet);
+                    prev ??= graphicsDevice.GetRenderTargets();
+                    if (BakeSprite(graphicsDevice, key.Item1, key.Item2, out RenderTarget2D rt, out Vector2 feet))
+                        _casterBakeCache[key] = (rt, feet);
                 }
-                foreach (FarmAnimal a in AnimalsIn(loc))
+                foreach (FarmAnimal a in AnimalsIn(location))
                 {
                     if (a?.Sprite?.Texture == null)
                         continue;
@@ -253,21 +264,21 @@ namespace SDVRadiance
                     if (t.X < tx0 || t.X > tx1 || t.Y < ty0 || t.Y > ty1)
                         continue;
                     var key = (a.Sprite.Texture, a.Sprite.SourceRect);
-                    if (_casterBakes.ContainsKey(key))
+                    if (_casterBakeCache.ContainsKey(key))
                         continue;
-                    prev ??= gd.GetRenderTargets();
-                    if (BakeSprite(gd, key.Item1, key.Item2, out RenderTarget2D rt, out Vector2 feet))
-                        _casterBakes[key] = (rt, feet);
+                    prev ??= graphicsDevice.GetRenderTargets();
+                    if (BakeSprite(graphicsDevice, key.Item1, key.Item2, out RenderTarget2D rt, out Vector2 feet))
+                        _casterBakeCache[key] = (rt, feet);
                 }
             }
             catch (Exception ex)
             {
-                if (Diag != null && !_errLogged) { _errLogged = true; Diag.Log($"[shadow] caster bake threw: {ex}", LogLevel.Warn); }
+                if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log($"[shadow] caster bake threw: {ex}", LogLevel.Warn); }
             }
             finally
             {
                 if (prev != null)
-                    gd.SetRenderTargets(prev);
+                    graphicsDevice.SetRenderTargets(prev);
             }
         }
 
@@ -276,57 +287,57 @@ namespace SDVRadiance
         /// then a feet→head alpha ramp multiplied on. Returns false (→ banding fallback) if the
         /// sprite is larger than a slot. The caller owns the surrounding render-target swap.
         /// </summary>
-        private bool BakeSprite(GraphicsDevice gd, Texture2D tex, Rectangle src, out RenderTarget2D rt, out Vector2 feetInRT)
+        private bool BakeSprite(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle src, out RenderTarget2D rt, out Vector2 feetInRT)
         {
             rt = null!;
             feetInRT = default;
-            if (tex == null || src.IsEmpty)
+            if (texture == null || src.IsEmpty)
                 return false;
             float w = src.Width * 4f, h = src.Height * 4f;
             if (w > CasterRtW || h > CasterRtH - 8f)
                 return false;
 
-            rt = RentCasterRT(gd);
+            rt = RentCasterRT(graphicsDevice);
             var pos = new Vector2((CasterRtW - w) / 2f, CasterRtH - h - 8f);
             feetInRT = new Vector2(CasterRtW / 2f, CasterRtH - 8f);
             try
             {
-                gd.SetRenderTarget(rt);
-                gd.Clear(Color.Transparent);
-                _rtBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
-                _rtBatch.Draw(tex, pos, src, Color.Black, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
-                _rtBatch.End();
+                graphicsDevice.SetRenderTarget(rt);
+                graphicsDevice.Clear(Color.Transparent);
+                _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+                _renderTargetSpriteBatch.Draw(texture, pos, src, Color.Black, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
+                _renderTargetSpriteBatch.End();
 
                 // Fade only the sprite's vertical extent (full at the feet, faint at the head).
-                _rtBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
-                _rtBatch.Draw(_gradTex!, new Rectangle(0, (int)pos.Y, CasterRtW, (int)h), Color.White);
-                _rtBatch.End();
+                _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
+                _renderTargetSpriteBatch.Draw(_gradientTexture!, new Rectangle(0, (int)pos.Y, CasterRtW, (int)h), Color.White);
+                _renderTargetSpriteBatch.End();
                 return true;
             }
             catch
             {
-                try { _rtBatch!.End(); } catch { }
+                try { _renderTargetSpriteBatch!.End(); } catch { }
                 return false;
             }
         }
 
         /// <summary>Lease the next pooled caster target for this frame (grows the pool on demand).</summary>
-        private RenderTarget2D RentCasterRT(GraphicsDevice gd)
+        private RenderTarget2D RentCasterRT(GraphicsDevice graphicsDevice)
         {
-            if (_casterUsed < _casterPool.Count)
-                return _casterPool[_casterUsed++];
-            var rt = new RenderTarget2D(gd, CasterRtW, CasterRtH, false,
+            if (_casterSlotsUsed < _casterRenderTargetPool.Count)
+                return _casterRenderTargetPool[_casterSlotsUsed++];
+            var rt = new RenderTarget2D(graphicsDevice, CasterRtW, CasterRtH, false,
                 SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
-            _casterPool.Add(rt);
-            _casterUsed++;
+            _casterRenderTargetPool.Add(rt);
+            _casterSlotsUsed++;
             return rt;
         }
 
         /// <summary>A 64×64 soft radial disc (white, radial alpha) for ambient contact pools.</summary>
-        private static Texture2D BuildBlob(GraphicsDevice gd)
+        private static Texture2D BuildBlob(GraphicsDevice graphicsDevice)
         {
             const int N = 64;
-            var tex = new Texture2D(gd, N, N);
+            var texture = new Texture2D(graphicsDevice, N, N);
             var data = new Color[N * N];
             float r = N / 2f;
             for (int y = 0; y < N; y++)
@@ -340,14 +351,14 @@ namespace SDVRadiance
                     data[y * N + x] = new Color((byte)255, (byte)255, (byte)255, (byte)(a * 255f));
                 }
             }
-            tex.SetData(data);
-            return tex;
+            texture.SetData(data);
+            return texture;
         }
 
         /// <summary>1×H alpha ramp: 1.0 at the bottom (feet) fading to <paramref name="headFade"/> at the top (far tip).</summary>
-        private static Texture2D BuildGradient(GraphicsDevice gd, float headFade = HeadFade)
+        private static Texture2D BuildGradient(GraphicsDevice graphicsDevice, float headFade = HeadFade)
         {
-            var tex = new Texture2D(gd, 1, PlayerRtH);
+            var texture = new Texture2D(graphicsDevice, 1, PlayerRtH);
             var data = new Color[PlayerRtH];
             for (int y = 0; y < PlayerRtH; y++)
             {
@@ -356,8 +367,8 @@ namespace SDVRadiance
                 float a = headFade + (1f - headFade) * (float)Math.Pow(tBottom, 1.8);
                 data[y] = new Color(255, 255, 255, (int)(a * 255f));
             }
-            tex.SetData(data);
-            return tex;
+            texture.SetData(data);
+            return texture;
         }
 
         // Discs of offset taps → cheap soft edge. Weighted so overlapping translucent copies
@@ -373,7 +384,7 @@ namespace SDVRadiance
             new(0f, 0f), new(1f, 0f), new(-1f, 0f), new(0f, 1f), new(0f, -1f),
         };
 
-        private static void DrawSoft(SpriteBatch b, Vector2[] taps, Texture2D tex, Rectangle? src, Vector2 pos,
+        private static void DrawSoft(SpriteBatch spriteBatch, Vector2[] taps, Texture2D texture, Rectangle? src, Vector2 pos,
             Color baseColor, float alpha, float rot, Vector2 origin, Vector2 scale, float depth,
             SpriteEffects effects, float blur)
         {
@@ -381,7 +392,7 @@ namespace SDVRadiance
             // copies on the same pixel, costing N× the draw calls for nothing).
             if (blur <= 0f)
             {
-                b.Draw(tex, pos, src, baseColor * MathHelper.Clamp(alpha, 0f, 1f), rot, origin, scale, effects, depth);
+                spriteBatch.Draw(texture, pos, src, baseColor * MathHelper.Clamp(alpha, 0f, 1f), rot, origin, scale, effects, depth);
                 return;
             }
 
@@ -389,7 +400,7 @@ namespace SDVRadiance
             float a = 1f - (float)Math.Pow(1f - MathHelper.Clamp(alpha, 0f, 1f), 1f / taps.Length);
             Color c = baseColor * a;
             foreach (Vector2 t in taps)
-                b.Draw(tex, pos + t * blur, src, c, rot, origin, scale, effects, depth);
+                spriteBatch.Draw(texture, pos + t * blur, src, c, rot, origin, scale, effects, depth);
         }
 
         /// <summary>Number of horizontal bands used to fake the NPC opacity gradient.</summary>
@@ -400,7 +411,7 @@ namespace SDVRadiance
         /// slicing it into horizontal bands (each drawn about the shared feet anchor so they
         /// stay aligned under rotation + stretch) and fading each band's alpha toward the tip.
         /// </summary>
-        private void DrawBandedGradient(SpriteBatch b, Texture2D tex, Rectangle src, Vector2 feet,
+        private void DrawBandedGradient(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, Vector2 feet,
             Vector2 baseOrigin, float alpha, float rot, Vector2 scale, float depth, float blur,
             float headFade = HeadFade, SpriteEffects effects = SpriteEffects.None)
         {
@@ -426,7 +437,7 @@ namespace SDVRadiance
                 // water half) clamp to 1 rather than running past it.
                 float tBottom = MathHelper.Clamp(src.Height * (i + 0.5f) / bands / feetRow, 0f, 1f);
                 float ga = headFade + (1f - headFade) * (float)Math.Pow(tBottom, 1.8);
-                DrawSoft(b, Taps5, tex, band, feet, Color.Black, alpha * ga, rot, origin, scale, depth,
+                DrawSoft(spriteBatch, Taps5, texture, band, feet, Color.Black, alpha * ga, rot, origin, scale, depth,
                     effects, blur);
             }
         }
@@ -438,35 +449,26 @@ namespace SDVRadiance
         /// </summary>
         private const float ShadowDepthBias = 1.2e-3f;
 
-        /// <summary>
-        /// True if the caster stands on open water (avoid laying a shadow on the surface).
-        /// Pier/bridge decks sit on Buildings-layer tiles OVER water tiles — standing on a
-        /// deck is not standing on water, so require the tile to have no Buildings tile.
-        /// </summary>
-        /// <summary>True only on OPEN water (this tile and all four neighbors are water).
-        /// Shoreline/surf tiles, i.e. water touching walkable ground, keep their shadows:
-        /// the beach wash is wet SAND visually, and the per-tile skip made shadows pop
-        /// in and out while walking along the waterline.</summary>
-        private static bool OnOpenWater(GameLocation loc, Point t)
-        {
-            if (!OnWater(loc, t))
-                return false;
-            return OnWater(loc, new Point(t.X - 1, t.Y)) && OnWater(loc, new Point(t.X + 1, t.Y))
-                && OnWater(loc, new Point(t.X, t.Y - 1)) && OnWater(loc, new Point(t.X, t.Y + 1));
-        }
+        /// <summary>RETIRED 2026-08-05, kept as the single switch for the rule. Casters on
+        /// OPEN water (tile + 4 neighbours all water) used to lose their sun/lamp shadow so
+        /// nothing lay "on" the surface — but a body standing in shallow water casts a shadow
+        /// across the surface in reality, the skip made a wading player's shadow vanish
+        /// outright, and crossing the open-water boundary popped it. Swimming and riding
+        /// keep their own gates at the call sites.</summary>
+        private static bool OnOpenWater(GameLocation location, Point t) => false;
 
-        private static bool OnWater(GameLocation loc, Point tile)
+        private static bool OnWater(GameLocation location, Point tile)
         {
             try
             {
                 // The surface grid distinguishes open water from pier/bridge DECKS over water, so
                 // it is the robust answer. Fall back to the isWaterTile + no-Buildings-tile
                 // heuristic (which approximates the same deck check) if the map isn't ready.
-                var surf = SurfaceMap.For(loc);
+                var surf = SurfaceMap.For(location);
                 if (surf != null)
                     return surf.IsWater(tile.X, tile.Y);
-                return loc.isWaterTile(tile.X, tile.Y)
-                    && !loc.hasTileAt(tile.X, tile.Y, "Buildings");
+                return location.isWaterTile(tile.X, tile.Y)
+                    && !location.hasTileAt(tile.X, tile.Y, "Buildings");
             }
             catch { return false; }
         }
@@ -484,20 +486,20 @@ namespace SDVRadiance
                 // as the sun. Faint, phase-scaled shadows — full moon in winter is clearest.
                 int mins = (t / 100) * 60 + t % 100;
                 int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
-                float dm = MathHelper.Clamp((mins - m1) / (float)Math.Max(1, 1560 - m1), 0f, 1f);
-                float dd = dm * 2f - 1f;
-                rot = 1.15f * dd;
-                stretch = MathHelper.Lerp(0.3f, 1.1f, Math.Abs(dd));
+                float moonProgress = MathHelper.Clamp((mins - m1) / (float)Math.Max(1, 1560 - m1), 0f, 1f);
+                float moonSkyOffset = moonProgress * 2f - 1f;
+                rot = 1.15f * moonSkyOffset;
+                stretch = MathHelper.Lerp(0.3f, 1.1f, Math.Abs(moonSkyOffset));
                 alpha = 0.9f * 0.35f * MoonStrength();
                 return;
             }
             // Low sun (dawn/dusk) → long, far-leaning shadow; high sun (noon) → short & upright.
-            float d = MathHelper.Clamp((t - 1200) / 600f, -1f, 1f);
+            float sunSkyOffset = MathHelper.Clamp((t - 1200) / 600f, -1f, 1f);
             // Lean more sideways (was 0.8) so the shadow lies to the side of the body instead of
             // straight up over it — reduces the "shadow on the sprite" overlap while staying
             // upright (not the rejected upside-down flip).
-            rot = 1.15f * d;                                     // <0 morning lean-left, >0 evening lean-right
-            stretch = MathHelper.Lerp(0.3f, 1.2f, Math.Abs(d));  // stretched LONG when the sun is low
+            rot = 1.15f * sunSkyOffset;                                     // <0 morning lean-left, >0 evening lean-right
+            stretch = MathHelper.Lerp(0.3f, 1.2f, Math.Abs(sunSkyOffset));  // stretched LONG when the sun is low
             alpha = 0.9f * TimeFade();                           // opacity at the feet (× strength; fades toward the tip)
         }
 

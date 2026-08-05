@@ -48,17 +48,17 @@ namespace SDVRadiance
             // whole cycle.
             var animSigs = new HashSet<string>();
             var animGroups = new List<string[]>();
-            Utility.ForEachLocation(loc =>
+            Utility.ForEachLocation(location =>
             {
                 try
                 {
-                    object? entry = DumpLocation(loc, artSources, water, animSigs, animGroups);
+                    object? entry = DumpLocation(location, artSources, water, animSigs, animGroups);
                     if (entry != null)
-                        locations[loc.NameOrUniqueName] = entry;
+                        locations[location.NameOrUniqueName] = entry;
                 }
                 catch (Exception ex)
                 {
-                    monitor.Log($"mapdump: skipped {loc.NameOrUniqueName}: {ex.Message}", LogLevel.Trace);
+                    monitor.Log($"mapdump: skipped {location.NameOrUniqueName}: {ex.Message}", LogLevel.Trace);
                 }
                 return true;
             }, includeInteriors: true, includeGenerated: false);
@@ -99,9 +99,9 @@ namespace SDVRadiance
             {
                 try
                 {
-                    var tex = Game1.content.Load<Microsoft.Xna.Framework.Graphics.Texture2D>(src);
+                    var texture = Game1.content.Load<Microsoft.Xna.Framework.Graphics.Texture2D>(src);
                     using var ms = new MemoryStream();
-                    tex.SaveAsPng(ms, tex.Width, tex.Height);
+                    texture.SaveAsPng(ms, texture.Width, texture.Height);
                     art[name] = "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
                 }
                 catch (Exception ex)
@@ -212,10 +212,10 @@ namespace SDVRadiance
                 groups.Add(frames.ToArray());
         }
 
-        private static object? DumpLocation(GameLocation loc, Dictionary<string, string> artSources, Dictionary<string, HashSet<int>> water,
+        private static object? DumpLocation(GameLocation location, Dictionary<string, string> artSources, Dictionary<string, HashSet<int>> water,
                                            HashSet<string> animSigs, List<string[]> animGroups)
         {
-            xTile.Map? map = loc.Map;
+            xTile.Map? map = location.Map;
             if (map == null || map.TileSheets.Count == 0)
                 return null;
 
@@ -250,7 +250,7 @@ namespace SDVRadiance
                 bool isBack = layer.Id.Equals("Back", StringComparison.OrdinalIgnoreCase);
                 int[] cells = new int[w * h];
                 var animCells = new List<int>();   // packed y*w+x of animated cells on THIS layer
-                bool any = false;
+                bool layerHasWater = false;
                 for (int y = 0; y < h; y++)
                 {
                     for (int x = 0; x < w; x++)
@@ -269,8 +269,8 @@ namespace SDVRadiance
                         }
                         cells[y * w + x] = si * 0x100000 + t.TileIndex;
                         used[si] = true;
-                        any = true;
-                        if (isBack && loc.isWaterTile(x, y))
+                        layerHasWater = true;
+                        if (isBack && location.isWaterTile(x, y))
                         {
                             string sn = sheets[si];
                             if (!water.TryGetValue(sn, out HashSet<int>? set))
@@ -279,7 +279,7 @@ namespace SDVRadiance
                         }
                     }
                 }
-                if (!any)
+                if (!layerHasWater)
                     continue;
                 byte[] bytes = new byte[cells.Length * 4];
                 Buffer.BlockCopy(cells, 0, bytes, 0, bytes.Length);
@@ -304,7 +304,7 @@ namespace SDVRadiance
             // wI = packed y*w+x indices of the invisible subset.
             string? wgrid = null;
             var wI = new List<int>();
-            if (loc.waterTiles?.waterTiles is { } wt)
+            if (location.waterTiles?.waterTiles is { } wt)
             {
                 int ww = wt.GetLength(0), wh = wt.GetLength(1);
                 var bits = new byte[(ww * wh + 7) / 8];
@@ -343,10 +343,10 @@ namespace SDVRadiance
                     for (int x = 0; x < mw; x++)
                     {
                         int idx = y * mw + x;
-                        if (loc.doesTileHaveProperty(x, y, "Water", "Buildings") != null) wBld.Add(idx);
-                        if (loc.doesTileHaveProperty(x, y, "WaterSource", "Back") != null) wSrc.Add(idx);
-                        if (loc.doesTileHaveProperty(x, y, "Passable", "Buildings") != null) pBld.Add(idx);
-                        if (loc.doesTileHaveProperty(x, y, "NoFishing", "Back") != null) noFish.Add(idx);
+                        if (location.doesTileHaveProperty(x, y, "Water", "Buildings") != null) wBld.Add(idx);
+                        if (location.doesTileHaveProperty(x, y, "WaterSource", "Back") != null) wSrc.Add(idx);
+                        if (location.doesTileHaveProperty(x, y, "Passable", "Buildings") != null) pBld.Add(idx);
+                        if (location.doesTileHaveProperty(x, y, "NoFishing", "Back") != null) noFish.Add(idx);
                     }
                 }
             }
@@ -357,7 +357,7 @@ namespace SDVRadiance
             // tinted per FishPondData — none of it visible to waterTiles.
             var buildings = new List<object>();
             var fishPonds = new List<object>();
-            foreach (var b in loc.buildings)
+            foreach (var b in location.buildings)
             {
                 int srcH = 0;
                 try { srcH = b.getSourceRect().Height; } catch { }
@@ -391,20 +391,20 @@ namespace SDVRadiance
             }
             catch { }
             string? locSeason = null;
-            try { locSeason = loc.GetSeason().ToString(); } catch { }
+            try { locSeason = location.GetSeason().ToString(); } catch { }
 
-            var wc = loc.waterColor.Value;
+            var wc = location.waterColor.Value;
             var layersAll = new List<string>();
             foreach (Layer l in map.Layers)
                 layersAll.Add(l.Id);
 
             return new
             {
-                outdoors = loc.IsOutdoors, sheets, layers,
-                cls = loc.GetType().FullName,
+                outdoors = location.IsOutdoors, sheets, layers,
+                cls = location.GetType().FullName,
                 locSeason,
                 waterColor = new[] { (int)wc.R, (int)wc.G, (int)wc.B, (int)wc.A },
-                indoorWater = loc.HasMapPropertyWithValue("indoorWater"),
+                indoorWater = location.HasMapPropertyWithValue("indoorWater"),
                 mapProps = mapProps.Count > 0 ? mapProps : null,
                 layersAll,
                 wgrid,

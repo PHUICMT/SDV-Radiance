@@ -24,7 +24,7 @@ namespace SDVRadiance
     /// </summary>
     internal sealed partial class RenderPipeline
     {
-        private RenderTarget2D? _reflectRT;
+        private RenderTarget2D? _reflectionRenderTarget;
         internal bool ReflectRTReady;
         internal bool ReflectRTHasPlayer;   // player stamped this frame → the shader retires
                                             // its wading-silhouette fallback
@@ -36,8 +36,8 @@ namespace SDVRadiance
         {
             ReflectRTReady = false;
             ReflectRTHasPlayer = false;
-            GameLocation? loc = Game1.currentLocation;
-            if (loc == null || !_waterAny || Game1.game1.takingMapScreenshot)
+            GameLocation? location = Game1.currentLocation;
+            if (location == null || !_hasWaterInMask || Game1.game1.takingMapScreenshot)
                 return;
 
             RenderTargetBinding[] prev = _device.GetRenderTargets();
@@ -45,23 +45,23 @@ namespace SDVRadiance
             int h = prev.Length > 0 && prev[0].RenderTarget is RenderTarget2D rt2 ? rt2.Height : Game1.viewport.Height;
             if (w <= 0 || h <= 0)
                 return;
-            if (_reflectRT == null || _reflectRT.Width != w || _reflectRT.Height != h)
+            if (_reflectionRenderTarget == null || _reflectionRenderTarget.Width != w || _reflectionRenderTarget.Height != h)
             {
-                _reflectRT?.Dispose();
-                _reflectRT = new RenderTarget2D(_device, w, h, false, SurfaceFormat.Color, DepthFormat.None);
+                _reflectionRenderTarget?.Dispose();
+                _reflectionRenderTarget = new RenderTarget2D(_device, w, h, false, SurfaceFormat.Color, DepthFormat.None);
             }
-            _spriteMaskBatch ??= new SpriteBatch(_device);
+            _spriteMaskSpriteBatch ??= new SpriteBatch(_device);
 
             try
             {
-                _device.SetRenderTarget(_reflectRT);
+                _device.SetRenderTarget(_reflectionRenderTarget);
                 _device.Clear(Color.Transparent);
-                var sb = _spriteMaskBatch;
+                var spriteBatch = _spriteMaskSpriteBatch;
                 // BackToFront + per-stamp depth from the caster's TRUE feet row: whoever
                 // stands in front (bigger feet Y) draws last and wins the overlap — a
                 // fixed draw order let a tree's reflection cover the player standing in
                 // front of it.
-                sb.Begin(SpriteSortMode.BackToFront, BlendState.AlphaBlend, SamplerState.PointClamp);
+                spriteBatch.Begin(SpriteSortMode.BackToFront, BlendState.AlphaBlend, SamplerState.PointClamp);
 
                 // Player — the colour bake, flipped below the feet. Swimming is skipped:
                 // half the body is underwater, a full mirrored silhouette reads as a glitch.
@@ -83,7 +83,7 @@ namespace SDVRadiance
                         var srcR = new Rectangle(0, ShadowRenderer.PlayerRtH - (i + 1) * pbh,
                             ShadowRenderer.PlayerRtW, pbh);
                         float a = MathHelper.Lerp(1f, ReflHeadFade, (i + 0.5f) / pbn);
-                        sb.Draw(pcol, feet + new Vector2(-ShadowRenderer.PlayerRtW / 2f, (i * pbh - 8f) * MirrorSquash),
+                        spriteBatch.Draw(pcol, feet + new Vector2(-ShadowRenderer.PlayerRtW / 2f, (i * pbh - 8f) * MirrorSquash),
                             srcR, Color.White * a, 0f, Vector2.Zero, new Vector2(1f, MirrorSquash),
                             SpriteEffects.FlipVertically, pDepth);
                     }
@@ -95,55 +95,71 @@ namespace SDVRadiance
                 // Whoever the game is drawing — during a cutscene that is the event's cast, NOT the
                 // residents (see ShadowRenderer.CharactersIn). Mirroring both lists reflected people
                 // who were not on screen.
-                foreach (NPC c in ShadowRenderer.CharactersIn(loc))
+                // Only bodies whose mirror can land on water: the image hangs DOWNWARD from the
+                // feet, so the search reaches below them. On a map with water in one corner this
+                // skips a screenful of stamps per frame (same gate the sprite mask uses).
+                foreach (NPC c in ShadowRenderer.CharactersIn(location))
                 {
                     if (c?.Sprite?.Texture == null || c.IsInvisible || c.swimming.Value)
                         continue;
-                    StampFlipped(sb, c.Sprite.Texture, c.Sprite.SourceRect, c.GetBoundingBox(), c.drawOffset);
+                    Rectangle cbb = c.GetBoundingBox();
+                    if (!WaterWithinTiles(cbb.Center.X / 64, cbb.Bottom / 64 + 2, 4))
+                        continue;
+                    StampFlipped(spriteBatch, c.Sprite.Texture, c.Sprite.SourceRect, cbb, c.drawOffset);
                 }
                 // Farm animals.
-                foreach (var a in loc.animals.Values)
+                foreach (var a in location.animals.Values)
                 {
                     if (a?.Sprite?.Texture == null)
                         continue;
-                    StampFlipped(sb, a.Sprite.Texture, a.Sprite.SourceRect, a.GetBoundingBox());
+                    Rectangle abb = a.GetBoundingBox();
+                    if (!WaterWithinTiles(abb.Center.X / 64, abb.Bottom / 64 + 2, 4))
+                        continue;
+                    StampFlipped(spriteBatch, a.Sprite.Texture, a.Sprite.SourceRect, abb);
                 }
                 // Critters: bottom edge at position.Y, centred on position.X (Critter.draw).
-                if (loc.critters != null)
+                if (location.critters != null)
                 {
-                    foreach (var cr in loc.critters)
+                    foreach (var cr in location.critters)
                     {
                         if (cr?.sprite?.Texture == null)
                             continue;
                         // Same stamp every body uses (one anchor rule, the same feet->head
                         // fade): a butterfly's reflection was drawn at full opacity by its own
                         // code path while every body faded, so it read as a sticker.
+                        if (!WaterWithinTiles((int)(cr.position.X / 64f), (int)(cr.position.Y / 64f) + 2, 4))
+                            continue;
                         Rectangle crs = cr.sprite.SourceRect;
                         var crBox = new Rectangle((int)cr.position.X - crs.Width * 2,
                             (int)cr.position.Y - crs.Height * 4, crs.Width * 4, crs.Height * 4);
-                        StampFlipped(sb, cr.sprite.Texture, crs, crBox);
+                        StampFlipped(spriteBatch, cr.sprite.Texture, crs, crBox);
                     }
                 }
 
                 // Trees / fruit trees / bushes: sprites, not map art — the scenery re-render
                 // (P3c) can't see them, so their reflections are built here, flipped around
                 // the trunk/stem base. Same tile-walk culling as the sprite mask.
-                var vp = Game1.viewport;
-                var tfDict = loc.terrainFeatures;
-                int ctx0 = (int)Math.Floor((vp.X - 256) / 64f), ctx1 = (int)Math.Floor((vp.X + vp.Width + 256) / 64f);
-                int cty0 = (int)Math.Floor((vp.Y - 512) / 64f), cty1 = (int)Math.Floor((vp.Y + vp.Height + 768) / 64f);
+                var viewport = Game1.viewport;
+                var tfDict = location.terrainFeatures;
+                int ctx0 = (int)Math.Floor((viewport.X - 256) / 64f), ctx1 = (int)Math.Floor((viewport.X + viewport.Width + 256) / 64f);
+                int cty0 = (int)Math.Floor((viewport.Y - 512) / 64f), cty1 = (int)Math.Floor((viewport.Y + viewport.Height + 768) / 64f);
                 for (int cvY = cty0; cvY <= cty1; cvY++)
                 for (int cvX = ctx0; cvX <= ctx1; cvX++)
                 {
                     Vector2 tile = new(cvX, cvY);
                     if (!tfDict.TryGetValue(tile, out var tf))
                         continue;
+                    // A tree's mirror hangs BELOW its trunk and a crown is six tiles tall, then
+                    // stretched by MirrorSquash — so the reach downward has to be the largest of
+                    // any stamp here. Centred four tiles under the base with slack on both sides.
+                    if (!WaterWithinTiles(cvX, cvY + 4, 7))
+                        continue;
                     switch (tf)
                     {
                         // Grown tree: canopy 48×96 with the trunk base at tile*64+(32,64).
                         // Flipped: origin moves to the TOP of the source (24, 0).
                         case StardewValley.TerrainFeatures.Tree tree when tree.growthStage.Value >= 5 && !tree.stump.Value && tree.texture?.Value != null:
-                            sb.Draw(tree.texture.Value,
+                            spriteBatch.Draw(tree.texture.Value,
                                 Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
                                 StardewValley.TerrainFeatures.Tree.treeTopSourceRect, Color.White, 0f, new Vector2(24f, 0f), 4f,
                                 SpriteEffects.FlipVertically | (tree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None),
@@ -153,7 +169,7 @@ namespace SDVRadiance
                         case StardewValley.TerrainFeatures.FruitTree ft when ft.growthStage.Value >= 4 && !ft.stump.Value && ft.texture != null:
                             int season = Game1.GetSeasonIndexForLocation(ft.Location);
                             var fsrc = new Rectangle((12 + season * 3) * 16, ft.GetSpriteRowNumber() * 5 * 16, 48, 64);
-                            sb.Draw(ft.texture,
+                            spriteBatch.Draw(ft.texture,
                                 Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
                                 fsrc, Color.White, 0f, new Vector2(24f, fsrc.Height - 80f), 4f,
                                 SpriteEffects.FlipVertically | (ft.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None),
@@ -163,7 +179,7 @@ namespace SDVRadiance
                         case StardewValley.TerrainFeatures.Bush bush when !bush.sourceRect.Value.IsEmpty:
                             var bsrc = bush.sourceRect.Value;
                             int eff = bush.size.Value switch { 3 => 0, 4 => 1, _ => bush.size.Value };
-                            sb.Draw(StardewValley.TerrainFeatures.Bush.texture.Value,
+                            spriteBatch.Draw(StardewValley.TerrainFeatures.Bush.texture.Value,
                                 Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + (eff + 1) * 32f, (tile.Y + 1) * 64f)),
                                 bsrc, Color.White, 0f, new Vector2(bsrc.Width / 2f, 0f), 4f,
                                 SpriteEffects.FlipVertically | (bush.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None),
@@ -172,7 +188,7 @@ namespace SDVRadiance
                     }
                 }
 
-                sb.End();
+                spriteBatch.End();
                 ReflectRTReady = true;
             }
             finally
@@ -210,7 +226,7 @@ namespace SDVRadiance
         /// the sprite hangs downward from the feet, squashed like the scenery mirror —
         /// drawn in 4-source-row slices so the opacity can fall feet→head (see
         /// <see cref="ReflHeadFade"/>); one draw per slice, same depth, no overlap.</summary>
-        private void StampFlipped(SpriteBatch sb, Texture2D tex, Rectangle src, Rectangle bb, Vector2 drawOffset = default)
+        private void StampFlipped(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, Rectangle bb, Vector2 drawOffset = default)
         {
             // The SAME feet rule the player's stamp uses: the 10 px lift (a collision box sits a
             // little below the drawn shoes) and the sprite's own draw offset. Without them an NPC
@@ -230,7 +246,7 @@ namespace SDVRadiance
                 // feet) reads the i-th band counted from the sprite's bottom, itself flipped.
                 var srcR = new Rectangle(src.X, src.Y + src.Height - i * hs - rows, src.Width, rows);
                 float a = MathHelper.Lerp(1f, ReflHeadFade, (i + 0.5f) / n);
-                sb.Draw(tex, feet + new Vector2(0f, i * hs * scale.Y), srcR, Color.White * a,
+                spriteBatch.Draw(texture, feet + new Vector2(0f, i * hs * scale.Y), srcR, Color.White * a,
                     0f, origin, scale, SpriteEffects.FlipVertically, depth);
             }
         }
@@ -242,7 +258,7 @@ namespace SDVRadiance
 
         // ---- P3c-lite: clean scenery source for the screen-space mirror ----
 
-        private RenderTarget2D? _mirrorSrcRT;
+        private RenderTarget2D? _mirrorSourceRenderTarget;
         internal bool SceneRTReady;
 
         /// <summary>Re-render the map's own layers (Back/Buildings/Front families, numbered
@@ -254,8 +270,8 @@ namespace SDVRadiance
         public void BakeSceneryReflection()
         {
             SceneRTReady = false;
-            GameLocation? loc = Game1.currentLocation;
-            if (loc?.map == null || !_waterAny || Game1.game1.takingMapScreenshot)
+            GameLocation? location = Game1.currentLocation;
+            if (location?.map == null || !_hasWaterInMask || Game1.game1.takingMapScreenshot)
                 return;
 
             RenderTargetBinding[] prev = _device.GetRenderTargets();
@@ -263,48 +279,39 @@ namespace SDVRadiance
             int h = prev.Length > 0 && prev[0].RenderTarget is RenderTarget2D rt2 ? rt2.Height : Game1.viewport.Height;
             if (w <= 0 || h <= 0)
                 return;
-            if (_mirrorSrcRT == null || _mirrorSrcRT.Width != w || _mirrorSrcRT.Height != h)
+            if (_mirrorSourceRenderTarget == null || _mirrorSourceRenderTarget.Width != w || _mirrorSourceRenderTarget.Height != h)
             {
-                _mirrorSrcRT?.Dispose();
-                _mirrorSrcRT = new RenderTarget2D(_device, w, h, false, SurfaceFormat.Color, DepthFormat.None);
+                _mirrorSourceRenderTarget?.Dispose();
+                _mirrorSourceRenderTarget = new RenderTarget2D(_device, w, h, false, SurfaceFormat.Color, DepthFormat.None);
             }
-            _spriteMaskBatch ??= new SpriteBatch(_device);
-
-            static bool Fam(string id, string fam)
-            {
-                if (!id.StartsWith(fam, StringComparison.Ordinal))
-                    return false;
-                for (int k = fam.Length; k < id.Length; k++)
-                    if (id[k] < '0' || id[k] > '9') return false;   // "Back-1" = disabled layer
-                return true;
-            }
+            _spriteMaskSpriteBatch ??= new SpriteBatch(_device);
 
             try
             {
-                _device.SetRenderTarget(_mirrorSrcRT);
+                _device.SetRenderTarget(_mirrorSourceRenderTarget);
                 _device.Clear(Color.Black);
-                var sb = _spriteMaskBatch;
-                sb.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+                var spriteBatch = _spriteMaskSpriteBatch;
+                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
                 var dd = Game1.mapDisplayDevice;
-                dd.BeginScene(sb);
+                dd.BeginScene(spriteBatch);
                 // Bottom-up families, same order the game composes them. AlwaysFront is
                 // deliberately out: it is mostly weather + translucent shadow washes.
-                foreach (string fam in _sceneFams)
+                foreach (string fam in _sceneLayerFamilies)
                 {
-                    foreach (var l in loc.map.Layers)
+                    foreach (var l in location.map.Layers)
                     {
-                        if (Fam(l.Id, fam))
+                        if (MapLayers.BelongsToFamily(l.Id, fam))
                             l.Draw(dd, Game1.viewport, xTile.Dimensions.Location.Origin, false, 4);
                     }
                 }
                 dd.EndScene();
-                sb.End();
+                spriteBatch.End();
                 SceneRTReady = true;
             }
             catch (Exception ex)
             {
-                try { _spriteMaskBatch!.End(); } catch { }
-                if (!_sceneErrLogged) { _sceneErrLogged = true; _monitor.Log($"[water] scenery source bake threw: {ex}", StardewModdingAPI.LogLevel.Warn); }
+                try { _spriteMaskSpriteBatch!.End(); } catch { }
+                if (!_sceneErrorLogged) { _sceneErrorLogged = true; _monitor.Log($"[water] scenery source bake threw: {ex}", StardewModdingAPI.LogLevel.Warn); }
             }
             finally
             {
@@ -312,8 +319,8 @@ namespace SDVRadiance
             }
         }
 
-        private static readonly string[] _sceneFams = { "Back", "Buildings", "Front" };
-        private bool _sceneErrLogged;
+        private static readonly string[] _sceneLayerFamilies = { "Back", "Buildings", "Front" };
+        private bool _sceneErrorLogged;
 
         /// <summary>A/B switch for the scenery mirror source (radiance_reflect scene on/off).
         /// ON is the shipping default, and it is NOT an experiment: the composed-screen source
@@ -352,36 +359,36 @@ namespace SDVRadiance
         public string ReflectionDiag()
         {
             var who = Game1.player;
-            if (who == null || _waterMask == null || _waterPixBuf == null)
+            if (who == null || _waterMask == null || _waterMaskPixels == null)
                 return "[reflect] no player / no water mask on this map";
 
-            var sb = new System.Text.StringBuilder();
-            sb.AppendLine($"[reflect] loc={Game1.currentLocation?.Name} waterAny={_waterAny} maskOrigin=({_lastWaterTx},{_lastWaterTy}) maskPx={_waterMask.Width}x{_waterMask.Height}");
-            sb.AppendLine($"[reflect] entityRT ready={ReflectRTReady} hasPlayer={ReflectRTHasPlayer} squash={MirrorSquash} | sceneRT ready={SceneRTReady} forcedOff={SceneSourceOff} | spriteMask ready={SpriteMaskReady}");
-            sb.AppendLine($"[reflect] wlAnchor={(_wlAnchor != null ? $"built for {_wlAnchor.Loc?.Name} ({_wlAnchor.PixW}x{_wlAnchor.PixH})" : "none yet")}");
+            var report = new System.Text.StringBuilder();
+            report.AppendLine($"[reflect] location={Game1.currentLocation?.Name} waterAny={_hasWaterInMask} maskOrigin=({_lastWaterTileX},{_lastWaterTileY}) maskPx={_waterMask.Width}x{_waterMask.Height}");
+            report.AppendLine($"[reflect] entityRT ready={ReflectRTReady} hasPlayer={ReflectRTHasPlayer} squash={MirrorSquash} | sceneRT ready={SceneRTReady} forcedOff={SceneSourceOff} | spriteMask ready={SpriteMaskReady}");
+            report.AppendLine($"[reflect] wlAnchor={(_waterlineAnchorData != null ? $"built for {_waterlineAnchorData.Location?.Name} ({_waterlineAnchorData.PixelWidth}x{_waterlineAnchorData.PixelHeight})" : "none yet")}");
 
             Rectangle box = who.GetBoundingBox();
             int mpw = _waterMask.Width;
             for (int t = 0; t <= 4; t++)
             {
-                int wx = box.Center.X / 4 - _lastWaterTx * 16;
-                int wy = (box.Bottom - 4) / 4 - _lastWaterTy * 16 + t * 16;
+                int wx = box.Center.X / 4 - _lastWaterTileX * 16;
+                int wy = (box.Bottom - 4) / 4 - _lastWaterTileY * 16 + t * 16;
                 if (wx < 0 || wy < 0 || wx >= mpw || wy >= _waterMask.Height)
-                { sb.AppendLine($"[reflect] +{t} tile: outside the mask window"); continue; }
-                Color m = _waterPixBuf[wy * mpw + wx];
+                { report.AppendLine($"[reflect] +{t} tile: outside the mask window"); continue; }
+                Color m = _waterMaskPixels[wy * mpw + wx];
                 string kind = m.A < 64 ? "ice" : m.A < 192 ? "lava" : "water";
-                sb.AppendLine($"[reflect] +{t} tile below feet: effectR={m.R} marchG={m.G} edgeDistB={m.B} ({m.B * 0.5f:0.0} texels to the waterline) type={kind}"
+                report.AppendLine($"[reflect] +{t} tile below feet: effectR={m.R} marchG={m.G} edgeDistB={m.B} ({m.B * 0.5f:0.0} texels to the waterline) type={kind}"
                             + (m.G == 0 ? "   <- NO entity reflection here (not march water)" : ""));
             }
 
             var scr = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, box.Bottom));
             int sx = (int)scr.X, sy = (int)scr.Y;
-            Vector4 sceneMean = MeanAt(_mirrorSrcRT, sx, sy - 96);
-            Vector4 entMean = MeanAt(_reflectRT, sx, sy + 32);
-            sb.AppendLine($"[reflect] sceneRT mean 1.5 tiles ABOVE the feet (the mirror's source) = {(sceneMean.X < 0 ? "unreadable" : $"rgb({sceneMean.X:0.00},{sceneMean.Y:0.00},{sceneMean.Z:0.00}) a={sceneMean.W:0.00}")}");
-            sb.AppendLine($"[reflect] entityRT mean 0.5 tile BELOW the feet (your own reflection) = {(entMean.X < 0 ? "unreadable" : $"rgb({entMean.X:0.00},{entMean.Y:0.00},{entMean.Z:0.00}) a={entMean.W:0.00}")}");
-            sb.AppendLine("[reflect] a near-black sceneRT mean with lit map art on screen = the P3c source is the bug; run 'radiance_reflect scene off' and compare.");
-            return sb.ToString().TrimEnd();
+            Vector4 sceneMean = MeanAt(_mirrorSourceRenderTarget, sx, sy - 96);
+            Vector4 entMean = MeanAt(_reflectionRenderTarget, sx, sy + 32);
+            report.AppendLine($"[reflect] sceneRT mean 1.5 tiles ABOVE the feet (the mirror's source) = {(sceneMean.X < 0 ? "unreadable" : $"rgb({sceneMean.X:0.00},{sceneMean.Y:0.00},{sceneMean.Z:0.00}) a={sceneMean.W:0.00}")}");
+            report.AppendLine($"[reflect] entityRT mean 0.5 tile BELOW the feet (your own reflection) = {(entMean.X < 0 ? "unreadable" : $"rgb({entMean.X:0.00},{entMean.Y:0.00},{entMean.Z:0.00}) a={entMean.W:0.00}")}");
+            report.AppendLine("[reflect] a near-black sceneRT mean with lit map art on screen = the P3c source is the bug; run 'radiance_reflect scene off' and compare.");
+            return report.ToString().TrimEnd();
         }
     }
 }

@@ -2,6 +2,62 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.4.0
+
+### Fixed
+
+- Water reflections stopped short of the shore. A tile holding both bank art and water lost its
+  reflection completely, so every shoreline, bridge arch and pier edge had a dead strip where the
+  water met land. Reflections now hang from the art's own outline instead of the tile boundary, and
+  a character standing at the water's edge is mirrored from the edge rather than a tile out.
+- Waterfalls had no water effect at all, in any season. Falling water is drawn on a layer the
+  surface pass never read, so a waterfall and the pool at its base were treated as dry rock.
+- Standing in water removed your shadow. A body wading casts a shadow across the surface, and the
+  old rule also made the shadow pop in and out as you crossed into deeper water.
+- Bridges showed an outline in the rain. The gaps in a bridge's railing and its own painted shadow
+  were being rippled as water seen through the planks.
+- The last pixel of water along every shoreline rendered at a sixth strength, which read as a dim
+  band that flickered like notches as the water level bobbed.
+- The player's mirrored image froze in one pose for anyone playing with directional shadows turned
+  off, because the reflection draws from a bake that only the shadow pass refreshed.
+- A strip of water above the player's head stopped rippling: the exclusion silhouette that keeps
+  the ripple off your sprite was anchored 10 pixels too high.
+- Beach tide pools rippled without reflecting. The rock rim around a pool was being read as a
+  bridge deck, and decks block reflections by design.
+- Crab pots left the water notched beside them instead of around them, and cast a shadow that
+  matched neither their shape nor their position.
+- Water under a bridge arch, and the strip of water north of a bridge parapet, both lost their
+  reflection to the bridge's tile.
+
+### Changed
+
+- Rain, storm and snow no longer remove cloud shadows. They now keep a softened overcast layer:
+  fewer, larger, slower banks at reduced strength, which reads as a heavy ceiling instead of the
+  effect looking broken.
+
+### Performance
+
+- Sprites, canopies and placed objects with no water within a few tiles are no longer stamped into
+  the water masks every frame. On a map with water in one corner this was a screenful of draw calls
+  per frame spent on sprites nowhere near it.
+
+### Added
+
+- Console commands for diagnosing water problems: `radiance_verify` scores the mask against the
+  painted labels for everything on screen, `radiance_march` lists tiles that ripple without a
+  reflection, `radiance_tile x y` prints one tile's full story, and `radiance_debug <channel>`
+  overlays the mask, the label difference, the reflection channel and more.
+
+### Known issues
+
+- Rivers and lake edges outside winter still miss water where the painted labels have gaps.
+- Some scenes still step slightly brighter or darker as you walk.
+- God rays remain off by default while the effect is rebuilt.
+
+### For translators
+
+No new keys, and no meaning changes. Nothing to do for this release.
+
 ## 1.3.3
 
 ### Fixed

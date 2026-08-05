@@ -27,28 +27,28 @@ namespace SDVRadiance
         /// space (16 px per tile, origin 0,0). Immutable once published.</summary>
         private sealed class WaterlineAnchor
         {
-            public GameLocation Loc = null!;
-            public int LabelVer, Epoch, HookVer;
-            public int PixW, PixH;
-            public int[] ColStart = null!;   // length PixW+1; run indices for column x are [ColStart[x], ColStart[x+1])
-            public short[] Tops = null!;     // run top row (inclusive), sorted per column
-            public short[] Bots = null!;     // run bottom row (exclusive)
+            public GameLocation Location = null!;
+            public int LabelVersion, Epoch, WaterDrawHookVersion;
+            public int PixelWidth, PixelHeight;
+            public int[] ColumnRunStartIndices = null!;   // length PixelWidth+1; run indices for column x are [ColumnRunStartIndices[x], ColumnRunStartIndices[x+1])
+            public short[] RunTopRows = null!;     // run top row (inclusive), sorted per column
+            public short[] RunBottomRows = null!;     // run bottom row (exclusive)
         }
 
-        private WaterlineAnchor? _wlAnchor;
-        private int _wlFreshFrames;              // consecutive frames the window mask was fresh
-        private bool _wlAnchorFailedFor;         // one shot: don't retry a failed anchor for this loc
-        private GameLocation? _wlFailedLoc;
+        private WaterlineAnchor? _waterlineAnchorData;
+        private int _waterlineFreshFrameCount;              // consecutive frames the window mask was fresh
+        private bool _waterlineAnchorFailedForLocation;         // one shot: don't retry a failed anchor for this location
+        private GameLocation? _waterlineFailedLocation;
 
         /// <summary>Full-map pixel budget for the anchor precompute. Guards absurd custom
         /// maps: past this the anchor is skipped and Pass D keeps its window-local answer.</summary>
         private const int WlMaxPixels = 24_000_000;   // ~366 MB of bool scratch would be silly
 
-        private bool AnchorFresh(GameLocation loc) =>
-            _wlAnchor is { } a && a.Loc == loc
-            && a.LabelVer == CurrentLabelVersion()
+        private bool AnchorFresh(GameLocation location) =>
+            _waterlineAnchorData is { } a && a.Location == location
+            && a.LabelVersion == CurrentLabelVersion()
             && a.Epoch == MaskEpoch
-            && a.HookVer == WaterDrawHook.Version;
+            && a.WaterDrawHookVersion == WaterDrawHook.Version;
 
         /// <summary>Consume a finished ANCHOR job on the main thread: publish the compact
         /// run list and give the map-sized scratch buffers back to the GC.</summary>
@@ -56,30 +56,30 @@ namespace SDVRadiance
         {
             if (!job.Failed)
             {
-                int pw = job.TilesW * 16;
-                _wlAnchor = new WaterlineAnchor
+                int pw = job.TileWidth * 16;
+                _waterlineAnchorData = new WaterlineAnchor
                 {
-                    Loc = job.Loc,
-                    LabelVer = job.LabelVer,
+                    Location = job.Location,
+                    LabelVersion = job.LabelVersion,
                     Epoch = job.Epoch,
-                    HookVer = job.HookVer,
-                    PixW = pw,
-                    PixH = job.TilesH * 16,
+                    WaterDrawHookVersion = job.WaterDrawHookVersion,
+                    PixelWidth = pw,
+                    PixelHeight = job.TileHeight * 16,
                     // A waterless map composes no runs — publish an empty anchor so the
                     // kick test stops re-gathering it every rest frame.
-                    ColStart = job.AnchorColStart ?? new int[pw + 1],
-                    Tops = job.AnchorTops ?? Array.Empty<short>(),
-                    Bots = job.AnchorBots ?? Array.Empty<short>(),
+                    ColumnRunStartIndices = job.AnchorColumnRunStartIndices ?? new int[pw + 1],
+                    RunTopRows = job.AnchorRunTopRows ?? Array.Empty<short>(),
+                    RunBottomRows = job.AnchorRunBottomRows ?? Array.Empty<short>(),
                 };
             }
             else
             {
-                _wlAnchorFailedFor = true;
-                _wlFailedLoc = job.Loc;
-                if (!_loggedWaterJobFail)
+                _waterlineAnchorFailedForLocation = true;
+                _waterlineFailedLocation = job.Location;
+                if (!_waterMaskJobFailureLogged)
                 {
                     _monitor.Log("Waterline anchor compose failed; reflections fall back to window-local anchors here.", LogLevel.Warn);
-                    _loggedWaterJobFail = true;
+                    _waterMaskJobFailureLogged = true;
                 }
             }
             FreeOversizedScratch();
@@ -90,63 +90,63 @@ namespace SDVRadiance
         /// re-allocates them at window size.</summary>
         private void FreeOversizedScratch()
         {
-            _waterMaskCoreBuf = null; _waterBoolBuf = null; _waterPixBuf = null;
-            _waterPixBits = null; _waterPixBits2 = null;
-            _bigCarveBuf = null; _bigSeedBuf = null;
-            _edgeBuf = null; _edgeSum = null; _edgeCnt = null;
-            _tileBitsBuf = null; _tileKeepBuf = null; _tileCarveBBuf = null; _tileCarveFBuf = null;
-            _tileBigSolidBuf = null; _tileDeckBuf = null; _tileLabeledBuf = null; _tileHasBldBuf = null;
-            _tileOverlayGroundBuf = null; _tileOverlayGroundFBuf = null;
-            _tileIceBitsBuf = null; _tileLavaBitsBuf = null; _tileFlowBitsBuf = null;
-            _marchOutside = null; _marchStack = null; _speckSeen = null; _speckMembers = null;
-            _tileLandNearBuf = null; _tileHasFrontBuf = null;
-            _tileIceBuf = null; _tileFlowBuf = null; _tileLavaBuf = null;
-            _tileWetFlag = null; _tileCalmBuf = null;
-            _waterSdfBuf = null; _sdfIn = null; _sdfOut = null;
+            _waterMaskCorePixels = null; _waterTileFlags = null; _waterMaskPixels = null;
+            _waterEffectBits = null; _waterMarchBits = null;
+            _tileNearSolidFlags = null; _tileLandConnectedFlags = null;
+            _waterlineTopRowByPixel = null; _waterlineRowPrefixSums = null; _waterlineRowSampleCounts = null;
+            _tileEffectBits = null; _tileWaterKeepBits = null; _tileBuildingCarveBits = null; _tileFrontCarveBits = null;
+            _tileLargeSolidFlags = null; _tileDeckFlags = null; _tileLabeledLiquidFlags = null; _tileHasBuildingArtFlags = null;
+            _tileBuildingGroundOverlayFlags = null; _tileFrontGroundOverlayFlags = null;
+            _tileIceBits = null; _tileLavaBits = null; _tileFlowBits = null;
+            _marchOutsideFlags = null; _marchFloodStack = null; _speckVisitedFlags = null; _speckComponentMembers = null;
+            _tileNearLandFlags = null; _tileHasFrontArtFlags = null;
+            _tileIceFlags = null; _tileFlowFlags = null; _tileLavaFlags = null;
+            _tileHasEffectWaterFlags = null; _tileCalmnessValues = null;
+            _waterSignedDistancePixels = null; _distanceToLandScratch = null; _distanceToWaterScratch = null;
         }
 
         /// <summary>Kick the full-map anchor job if this location still needs one and the
         /// moment is cheap: the window mask is fresh, no job is in flight, and the player
         /// is resting (the full-map gather is a one-off ~tens-of-ms main-thread cost we
         /// hide in a stand-still frame, never mid-walk). Returns true when a job was kicked.</summary>
-        private bool MaybeKickAnchorJob(GameLocation loc)
+        private bool MaybeKickAnchorJob(GameLocation location)
         {
-            if (AnchorFresh(loc))
+            if (AnchorFresh(location))
                 return false;
-            if (_wlAnchorFailedFor && _wlFailedLoc == loc)
+            if (_waterlineAnchorFailedForLocation && _waterlineFailedLocation == location)
                 return false;
-            _wlAnchorFailedFor = false;
+            _waterlineAnchorFailedForLocation = false;
             if (Game1.game1.takingMapScreenshot || Game1.player?.isMoving() == true)
                 return false;
-            if (++_wlFreshFrames < 15)
+            if (++_waterlineFreshFrameCount < 15)
                 return false;
 
-            var back = loc.map?.GetLayer("Back");
+            var back = location.map?.GetLayer("Back");
             if (back == null)
                 return false;
             int mw = back.LayerWidth, mh = back.LayerHeight;
             if (mw <= 0 || mh <= 0 || (long)mw * mh * 256 > WlMaxPixels)
                 return false;
 
-            long g0 = System.Diagnostics.Stopwatch.GetTimestamp();
-            var njob = GatherWaterMask(loc, 0, 0, mw, mh);
-            njob.AnchorOnly = true;
-            double gatherMs = (System.Diagnostics.Stopwatch.GetTimestamp() - g0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-            _monitor.Log($"[diag] waterline-anchor gather {mw}x{mh} = {gatherMs:0.0}ms", LogLevel.Trace);
+            long gatherStartTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+            var newWaterMaskJob = GatherWaterMask(location, 0, 0, mw, mh);
+            newWaterMaskJob.AnchorOnly = true;
+            double gatherDurationMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - gatherStartTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            _monitor.Log($"[diag] waterline-anchor gather {mw}x{mh} = {gatherDurationMilliseconds:0.0}ms", LogLevel.Trace);
 
-            njob.Task = System.Threading.Tasks.Task.Run(() =>
+            newWaterMaskJob.Task = System.Threading.Tasks.Task.Run(() =>
             {
-                long c0 = System.Diagnostics.Stopwatch.GetTimestamp();
-                try { ComposeWaterMask(njob); }
-                catch { njob.Failed = true; }
+                long composeStartTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+                try { ComposeWaterMask(newWaterMaskJob); }
+                catch { newWaterMaskJob.Failed = true; }
                 finally
                 {
-                    njob.ComposeMs = (System.Diagnostics.Stopwatch.GetTimestamp() - c0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-                    njob.Done = true;
+                    newWaterMaskJob.ComposeDurationMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - composeStartTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                    newWaterMaskJob.Done = true;
                 }
             });
-            _waterJob = njob;
-            _wlFreshFrames = 0;
+            _pendingWaterMaskJob = newWaterMaskJob;
+            _waterlineFreshFrameCount = 0;
             return true;
         }
 
@@ -164,7 +164,7 @@ namespace SDVRadiance
                 int top = -1;
                 for (int y = 0; y <= ph; y++)
                 {
-                    bool w = y < ph && _waterPixBits2![y * pw + x];
+                    bool w = y < ph && _waterMarchBits![y * pw + x];
                     if (w) { if (top < 0) top = y; }
                     else if (top >= 0)
                     {
@@ -175,9 +175,9 @@ namespace SDVRadiance
                 }
             }
             colStart[pw] = tops.Count;
-            job.AnchorColStart = colStart;
-            job.AnchorTops = tops.ToArray();
-            job.AnchorBots = bots.ToArray();
+            job.AnchorColumnRunStartIndices = colStart;
+            job.AnchorRunTopRows = tops.ToArray();
+            job.AnchorRunBottomRows = bots.ToArray();
         }
 
         /// <summary>Worker-side, normal window job: replace window-local run tops with the
@@ -188,26 +188,26 @@ namespace SDVRadiance
         private void OverrideEdgeFromAnchor(WaterMaskJob job, int pw, int ph)
         {
             var wa = job.Anchor!;
-            int px0 = job.Tx * 16, py0 = job.Ty * 16;
+            int px0 = job.StartTileX * 16, py0 = job.StartTileY * 16;
             for (int x = 0; x < pw; x++)
             {
                 int wx = px0 + x;
-                if (wx < 0 || wx >= wa.PixW)
+                if (wx < 0 || wx >= wa.PixelWidth)
                     continue;
-                int r = wa.ColStart[wx], rEnd = wa.ColStart[wx + 1];
+                int r = wa.ColumnRunStartIndices[wx], rEnd = wa.ColumnRunStartIndices[wx + 1];
                 if (r == rEnd)
                     continue;
                 for (int y = 0; y < ph; y++)
                 {
                     int p = y * pw + x;
-                    if (!_waterPixBits2![p])
+                    if (!_waterMarchBits![p])
                         continue;
                     int wy = py0 + y;
-                    while (r < rEnd && wa.Bots[r] <= wy) r++;
+                    while (r < rEnd && wa.RunBottomRows[r] <= wy) r++;
                     if (r == rEnd)
                         break;   // past the last run in this column
-                    if (wa.Tops[r] <= wy)
-                        _edgeBuf![p] = (short)(wa.Tops[r] - py0);
+                    if (wa.RunTopRows[r] <= wy)
+                        _waterlineTopRowByPixel![p] = (short)(wa.RunTopRows[r] - py0);
                 }
             }
         }

@@ -274,10 +274,12 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // no recolor mod can ever fool a test that no longer exists.
     float water = tileWater * ringGate;
     // Distance-field edge: the mask's binary texel edge becomes a SHAPE-smooth,
-    // RENDER-crisp 3-step ramp over the last ~1.5 texels of water. The floor keeps a
-    // sliver of effect on 1-texel slivers so thin painted channels don't go dead.
-    float edgeQ = floor(saturate(sdfT / 1.5) * 3.0 + 0.5) / 3.0;
-    water *= max(edgeQ, 0.15);
+    // RENDER-crisp 3-step ramp over the last texel of water. The floor sat at 0.15
+    // over a 1.5-texel ramp and read as a DEAD band along every shoreline — with the
+    // vanilla water level bobbing, the band flickered like notches missing from the
+    // water. 0.5 over one texel keeps the edge soft without ever looking absent.
+    float edgeQ = floor(saturate(sdfT) * 3.0 + 0.5) / 3.0;
+    water *= max(edgeQ, 0.5);
     if (water <= 0.002)
         return src;
 

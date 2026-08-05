@@ -18,14 +18,14 @@ namespace SDVRadiance
     /// </summary>
     internal sealed class CameraSmoother
     {
-        private float _x, _y;
-        private bool _tracking;
+        private float _smoothedViewportX, _smoothedViewportY;
+        private bool _isTracking;
 
         public void Update(ModConfig config)
         {
             if (config.CameraMode != CameraMode.Smooth || !Context.IsWorldReady)
             {
-                _tracking = false;
+                _isTracking = false;
                 return;
             }
 
@@ -40,39 +40,39 @@ namespace SDVRadiance
             float tx = Game1.viewport.X;
             float ty = Game1.viewport.Y;
 
-            if (!_tracking)
+            if (!_isTracking)
             {
-                _x = tx; _y = ty;
-                _tracking = true;
+                _smoothedViewportX = tx; _smoothedViewportY = ty;
+                _isTracking = true;
                 return;
             }
 
             // Snap on big jumps (warp / teleport / wake-up) so we don't ease across the whole map.
-            if (Math.Abs(tx - _x) > Game1.viewport.Width * 0.75f
-                || Math.Abs(ty - _y) > Game1.viewport.Height * 0.75f)
+            if (Math.Abs(tx - _smoothedViewportX) > Game1.viewport.Width * 0.75f
+                || Math.Abs(ty - _smoothedViewportY) > Game1.viewport.Height * 0.75f)
             {
-                _x = tx; _y = ty;
+                _smoothedViewportX = tx; _smoothedViewportY = ty;
             }
             else
             {
                 float k = MathHelper.Clamp(config.CameraFollowSpeed, 0.05f, 1f);
-                _x += (tx - _x) * k;
-                _y += (ty - _y) * k;
+                _smoothedViewportX += (tx - _smoothedViewportX) * k;
+                _smoothedViewportY += (ty - _smoothedViewportY) * k;
 
                 // Deadzone: snap the last couple of pixels so it settles crisply, no crawl.
-                if (Math.Abs(tx - _x) < 2f) _x = tx;
-                if (Math.Abs(ty - _y) < 2f) _y = ty;
+                if (Math.Abs(tx - _smoothedViewportX) < 2f) _smoothedViewportX = tx;
+                if (Math.Abs(ty - _smoothedViewportY) < 2f) _smoothedViewportY = ty;
             }
 
-            Game1.viewport.X = (int)Math.Round(_x);
-            Game1.viewport.Y = (int)Math.Round(_y);
+            Game1.viewport.X = (int)Math.Round(_smoothedViewportX);
+            Game1.viewport.Y = (int)Math.Round(_smoothedViewportY);
         }
 
         private void Resync()
         {
-            _x = Game1.viewport.X;
-            _y = Game1.viewport.Y;
-            _tracking = true;
+            _smoothedViewportX = Game1.viewport.X;
+            _smoothedViewportY = Game1.viewport.Y;
+            _isTracking = true;
         }
     }
 }

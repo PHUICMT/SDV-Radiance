@@ -22,18 +22,18 @@ namespace SDVRadiance
     /// </summary>
     internal sealed class LabelStore
     {
-        private readonly Dictionary<string, Dictionary<int, byte[]>> _sheets = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Dictionary<int, byte[]>> _tilesBySheet = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Set once during Entry; null only if construction somehow failed.</summary>
         public static LabelStore? Instance;
 
-        public int SheetCount => _sheets.Count;
+        public int SheetCount => _tilesBySheet.Count;
         public int TileCount { get; private set; }
-        public bool Any => _sheets.Count > 0;
+        public bool Any => _tilesBySheet.Count > 0;
 
         /// <summary>Cache key for consumers. Load-once means this never changes after startup —
         /// it exists so an empty DB (0) is distinguishable from a loaded one (1).</summary>
-        public int Version => _sheets.Count > 0 ? 1 : 0;
+        public int Version => _tilesBySheet.Count > 0 ? 1 : 0;
 
         public LabelStore(string dir, IMonitor monitor)
         {
@@ -80,9 +80,9 @@ namespace SDVRadiance
             }
             // A whole sheet is replaced, never merged: two files describing one sheet would
             // otherwise blend a stale pass into the current one depending on directory order.
-            if (_sheets.TryGetValue(NormalizeSheet(name), out var prev))
+            if (_tilesBySheet.TryGetValue(NormalizeSheet(name), out var prev))
                 TileCount -= prev.Count;
-            _sheets[NormalizeSheet(name)] = map;
+            _tilesBySheet[NormalizeSheet(name)] = map;
             TileCount += map.Count;
         }
 
@@ -100,19 +100,19 @@ namespace SDVRadiance
 
         public byte[]? Get(string? imageSource, int tileIndex)
             => imageSource != null
-                && _sheets.TryGetValue(NormalizeSheet(imageSource), out var tiles)
+                && _tilesBySheet.TryGetValue(NormalizeSheet(imageSource), out var tiles)
                 && tiles.TryGetValue(tileIndex, out byte[]? bytes) ? bytes : null;
 
         /// <summary>Per-pixel classes for the art a layer draws at a tile, or null if unlabeled.
         /// Takes the Layer directly — the mask gather already holds Back/Buildings/Front, so
         /// looking them up by name once per tile would be pure overhead.</summary>
         public byte[]? Get(Layer? layer, int x, int y)
-            => _sheets.Count > 0 && TryTileArt(layer, x, y, out string? sheet, out int index)
+            => _tilesBySheet.Count > 0 && TryTileArt(layer, x, y, out string? sheet, out int index)
                 ? Get(sheet, index)
                 : null;
 
-        public byte[]? Get(GameLocation? loc, int x, int y, string layerName)
-            => _sheets.Count > 0 ? Get(loc?.map?.GetLayer(layerName), x, y) : null;
+        public byte[]? Get(GameLocation? location, int x, int y, string layerName)
+            => _tilesBySheet.Count > 0 ? Get(location?.map?.GetLayer(layerName), x, y) : null;
 
         /// <summary>Frame 0 of an animated tile is the frame labels are keyed to (HF Studio fans a
         /// stroke out to every frame of a cycle, so any frame resolves to the same marks).</summary>

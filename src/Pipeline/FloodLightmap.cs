@@ -33,22 +33,22 @@ namespace SDVRadiance
         /// <summary>Cell values are stored ×0.5 in the texture so >1 (glow) survives; shader ×2.</summary>
         internal const float TexScale = 0.5f;
 
-        private int _lastTx0 = int.MinValue, _lastTy0 = int.MinValue, _lastTick = int.MinValue;
-        private Vector3[] _cells = Array.Empty<Vector3>();
-        private Vector3[] _blur = Array.Empty<Vector3>();
-        private float[] _decay = Array.Empty<float>();
-        private Color[] _pix = Array.Empty<Color>();
-        private Texture2D? _tex;
+        private int _lastStartTileX = int.MinValue, _lastStartTileY = int.MinValue, _lastBuildTick = int.MinValue;
+        private Vector3[] _lightCells = Array.Empty<Vector3>();
+        private Vector3[] _blurredLightCells = Array.Empty<Vector3>();
+        private float[] _lightDecay = Array.Empty<float>();
+        private Color[] _lightmapPixels = Array.Empty<Color>();
+        private Texture2D? _lightmapTexture;
 
-        internal Texture2D? Texture => _tex;
+        internal Texture2D? Texture => _lightmapTexture;
         /// <summary>World tile coordinate of the map's (0,0) cell.</summary>
         internal Vector2 Origin;
         internal Vector2 MapSize;
 
-        internal bool Build(GraphicsDevice gd, int w, int h, ModConfig config)
+        internal bool Build(GraphicsDevice graphicsDevice, int width, int height, ModConfig config)
         {
-            GameLocation? loc = Game1.currentLocation;
-            if (loc == null)
+            GameLocation? location = Game1.currentLocation;
+            if (location == null)
                 return false;
 
             int tx0 = (int)Math.Floor(Game1.viewport.X / 64f) - Pad;
@@ -64,17 +64,17 @@ namespace SDVRadiance
             // rebuild is ~1k cross-mod HF lookups + CPU sweeps EVERY frame — a walking-stutter
             // tax. Reuse the last texture unless the view crossed a tile boundary or ~3 frames
             // passed (GI refreshes at ~20 Hz; the analytic direct light still runs at 60).
-            if (_tex != null && tx0 == _lastTx0 && ty0 == _lastTy0
-                && _tex.Width == tw && _tex.Height == th && Game1.ticks - _lastTick < 3)
+            if (_lightmapTexture != null && tx0 == _lastStartTileX && ty0 == _lastStartTileY
+                && _lightmapTexture.Width == tw && _lightmapTexture.Height == th && Game1.ticks - _lastBuildTick < 3)
                 return true;
-            _lastTx0 = tx0; _lastTy0 = ty0; _lastTick = Game1.ticks;
+            _lastStartTileX = tx0; _lastStartTileY = ty0; _lastBuildTick = Game1.ticks;
 
-            if (_cells.Length < count)
+            if (_lightCells.Length < count)
             {
-                _cells = new Vector3[count];
-                _blur = new Vector3[count];
-                _decay = new float[count];
-                _pix = new Color[count];
+                _lightCells = new Vector3[count];
+                _blurredLightCells = new Vector3[count];
+                _lightDecay = new float[count];
+                _lightmapPixels = new Color[count];
             }
 
             // ---- Seed pass: sky exposure + per-cell decay from the occluder grid ----
@@ -83,12 +83,12 @@ namespace SDVRadiance
             // (mines, volcano, any non-white ambient) run in ADD-ONLY mode — every cell
             // seeds at 1.0 so lamps enrich and cast shadows but nothing gets darker than
             // vanilla (multiplying on top of vanilla dark read as pitch black).
-            bool outdoors = loc.IsOutdoors;
+            bool outdoors = location.IsOutdoors;
             bool vanillaDark = !outdoors &&
-                (loc is StardewValley.Locations.MineShaft || loc is StardewValley.Locations.VolcanoDungeon
+                (location is StardewValley.Locations.MineShaft || location is StardewValley.Locations.VolcanoDungeon
                  || Game1.ambientLight.R < 245 || Game1.ambientLight.G < 245 || Game1.ambientLight.B < 245);
             Vector3 sky = SkyColor(outdoors, config);
-            var surf = SurfaceMap.For(loc);
+            var surf = SurfaceMap.For(location);
             for (int j = 0; j < th; j++)
             {
                 for (int i = 0; i < tw; i++)
@@ -105,10 +105,10 @@ namespace SDVRadiance
                     // solid turned the whole beach pier into a giant dark pool. Water is open too.
                     if (surf != null && outdoors)
                         solid = surf.BlocksLight(tx0 + i, ty0 + j);
-                    _decay[idx] = solid ? SolidDecay : AirDecay;
+                    _lightDecay[idx] = solid ? SolidDecay : AirDecay;
                     // Open cells receive direct sky light; occluded cells only what floods in
                     // from their surroundings → soft shade under trees/buildings for free.
-                    _cells[idx] = vanillaDark ? Vector3.One : (solid ? sky * OccludedSeed : sky);
+                    _lightCells[idx] = vanillaDark ? Vector3.One : (solid ? sky * OccludedSeed : sky);
                 }
             }
 
@@ -119,14 +119,14 @@ namespace SDVRadiance
                 foreach (var kv in lights.Values)
                 {
                     var ls = kv;
-                    if (!ShadowRenderer.WindowGlowing(loc, ls))   // stale/dark window: not emitting
+                    if (!ShadowRenderer.WindowGlowing(location, ls))   // stale/dark window: not emitting
                         continue;
                     int ci = (int)(ls.position.Value.X / 64f) - tx0;
                     int cj = (int)(ls.position.Value.Y / 64f) - ty0;
                     if (ci < 0 || ci >= tw || cj < 0 || cj >= th)
                         continue;
                     // INDIRECT spill (~half strength): the crisp direct pool + its per-light shadows
-                    // are computed analytically in floodlight.fx; the flood carries the bounce-like
+                    // are computed analytically in floodlight.effect; the flood carries the bounce-like
                     // glow that bends around corners and through doorways. Outdoors it sits above 1.0
                     // so it beats the dimmed night ground; indoors it stays gentle.
                     float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * (outdoors ? 1.25f : 0.5f)
@@ -140,8 +140,8 @@ namespace SDVRadiance
                     // Full strength returns by 08:00/17:00; night and indoors are untouched.
                     if (outdoors)
                     {
-                        int pm = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
-                        inten *= 1f - 0.65f * (1f - MathHelper.Clamp(Math.Abs(pm - 750) / 270f, 0f, 1f));
+                        int minutesSinceMidnight = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
+                        inten *= 1f - 0.65f * (1f - MathHelper.Clamp(Math.Abs(minutesSinceMidnight - 750) / 270f, 0f, 1f));
                     }
                     // TWO-TONE rooms: an indoor window is DAYLIGHT (cool, slightly blue) while
                     // lamps and fires stay warm — the warm-vs-cool split across a room is what
@@ -153,7 +153,7 @@ namespace SDVRadiance
                     // pool. (A wide radial seed disc was tried to force a bigger pool but never read
                     // as wider on the coarse grid — reverted to keep it simple.)
                     int idx = cj * tw + ci;
-                    _cells[idx] = Vector3.Max(_cells[idx], seedColor * inten);
+                    _lightCells[idx] = Vector3.Max(_lightCells[idx], seedColor * inten);
 
                     // SUN SHAFT: daylight through a window falls onto the floor below it — seed a
                     // fading column of cool light under the window so (after bilinear + the blur
@@ -170,7 +170,7 @@ namespace SDVRadiance
                                 break;
                             float f = 1.0f - 0.28f * k;
                             int sIdx = jj * tw + ci;
-                            _cells[sIdx] = Vector3.Max(_cells[sIdx], shaft * f);
+                            _lightCells[sIdx] = Vector3.Max(_lightCells[sIdx], shaft * f);
                         }
                     }
                     // OUTDOOR lit storefronts/windows at night pour WARM light DOWN onto the
@@ -186,7 +186,7 @@ namespace SDVRadiance
                                 break;
                             float f = (1.0f - 0.22f * k) * inten * 2.2f;
                             int sIdx = jj * tw + ci;
-                            _cells[sIdx] = Vector3.Max(_cells[sIdx], spill * f);
+                            _lightCells[sIdx] = Vector3.Max(_lightCells[sIdx], spill * f);
                         }
                     }
                 }
@@ -228,11 +228,11 @@ namespace SDVRadiance
                         {
                             int ii = i + di;
                             if (ii < 0 || ii >= tw) continue;
-                            acc += _cells[jj * tw + ii];
+                            acc += _lightCells[jj * tw + ii];
                             n++;
                         }
                     }
-                    _blur[j * tw + i] = acc / Math.Max(1, n);
+                    _blurredLightCells[j * tw + i] = acc / Math.Max(1, n);
                 }
             }
             // Walls/roofs are ELEVATED surfaces in a top-down view: the dark cell value models
@@ -243,33 +243,33 @@ namespace SDVRadiance
             for (int idx = 0; idx < count; idx++)
             {
                 // The bounce FILLS SHADE. It used to be a flat add, which put every open outdoor
-                // cell at ~1.28 in broad daylight — and floodlight.fx reads anything over 1.0 as a
+                // cell at ~1.28 in broad daylight — and floodlight.effect reads anything over 1.0 as a
                 // lamp core and adds a glow for it, so open ground got a few percent of extra light
                 // it was never meant to have. On a winter beach, where snow is already close to
                 // white and most of the screen is open, that pushed the whole field past clipping
                 // and the detail in the snow disappeared. Weighting the bounce by how far the cell
                 // is BELOW full light leaves open ground at exactly sky, still lifts real shade,
                 // and leaves lamp cells (seeded above 1.0) free to glow as intended.
-                Vector3 c = _cells[idx];
+                Vector3 c = _lightCells[idx];
                 Vector3 room = new(
                     MathHelper.Clamp(1f - c.X, 0f, 1f),
                     MathHelper.Clamp(1f - c.Y, 0f, 1f),
                     MathHelper.Clamp(1f - c.Z, 0f, 1f));
-                Vector3 v = c + _blur[idx] * 0.28f * room;
-                if (_decay[idx] == SolidDecay)
+                Vector3 v = c + _blurredLightCells[idx] * 0.28f * room;
+                if (_lightDecay[idx] == SolidDecay)
                     v = Vector3.Max(v, lift);
-                _pix[idx] = new Color(
+                _lightmapPixels[idx] = new Color(
                     (byte)MathHelper.Clamp(v.X * 255f * TexScale, 0f, 255f),
                     (byte)MathHelper.Clamp(v.Y * 255f * TexScale, 0f, 255f),
                     (byte)MathHelper.Clamp(v.Z * 255f * TexScale, 0f, 255f), (byte)255);
             }
 
-            if (_tex == null || _tex.Width != tw || _tex.Height != th)
+            if (_lightmapTexture == null || _lightmapTexture.Width != tw || _lightmapTexture.Height != th)
             {
-                _tex?.Dispose();
-                _tex = new Texture2D(gd, tw, th, false, SurfaceFormat.Color);
+                _lightmapTexture?.Dispose();
+                _lightmapTexture = new Texture2D(graphicsDevice, tw, th, false, SurfaceFormat.Color);
             }
-            _tex.SetData(_pix, 0, count);
+            _lightmapTexture.SetData(_lightmapPixels, 0, count);
             Origin = new Vector2(tx0, ty0);
             MapSize = new Vector2(tw, th);
             return true;
@@ -277,11 +277,11 @@ namespace SDVRadiance
 
         private void Propagate(ref Vector3 carry, int idx)
         {
-            float d = _decay[idx];
+            float d = _lightDecay[idx];
             carry *= d;
-            Vector3 c = _cells[idx];
+            Vector3 c = _lightCells[idx];
             carry = Vector3.Max(carry, c);
-            _cells[idx] = carry;
+            _lightCells[idx] = carry;
         }
 
         /// <summary>Direct-sky seed for open cells — RELATIVE only (the game's own day/night
@@ -297,8 +297,8 @@ namespace SDVRadiance
                 float amb = MathHelper.Clamp(1f - config.LightingIndoorDarkness * 0.55f, 0.3f, 1f);
                 return new Vector3(amb);
             }
-            float dd = MathHelper.Clamp((Game1.timeOfDay - 1200) / 600f, -1f, 1f);
-            float warm = MathHelper.Clamp((Math.Abs(dd) - 0.55f) / 0.45f, 0f, 1f);
+            float dayProgress = MathHelper.Clamp((Game1.timeOfDay - 1200) / 600f, -1f, 1f);
+            float warm = MathHelper.Clamp((Math.Abs(dayProgress) - 0.55f) / 0.45f, 0f, 1f);
             Vector3 sky = Vector3.Lerp(new Vector3(1f, 1f, 1f), new Vector3(1.03f, 0.96f, 0.88f), warm);
             if (Game1.isRaining)
                 sky *= 0.93f;   // gentle overcast dimming; vanilla already grays rain out
@@ -326,8 +326,8 @@ namespace SDVRadiance
 
         internal void Dispose()
         {
-            _tex?.Dispose();
-            _tex = null;
+            _lightmapTexture?.Dispose();
+            _lightmapTexture = null;
         }
     }
 }

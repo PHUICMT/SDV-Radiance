@@ -26,35 +26,35 @@ namespace SDVRadiance
         private static readonly RasterizerState _scissorRaster = new() { ScissorTestEnable = true, CullMode = CullMode.None };
 
         private readonly ModConfig _config;
-        private readonly Func<string, string> _t;
+        private readonly Func<string, string> _translate;
         private readonly Action _onChange;
         private readonly Action _onSave;
 
-        private readonly List<Slider> _sliders = new();
-        private readonly List<Toggle> _toggles = new();
-        private readonly List<TextButton> _buttons = new();   // content-area buttons (scroll with content)
-        private readonly List<Chip> _chips = new();
+        private readonly List<TunerSlider> _sliders = new();
+        private readonly List<TunerToggle> _toggles = new();
+        private readonly List<TunerTextButton> _buttons = new();   // content-area buttons (scroll with content)
+        private readonly List<TunerChip> _chips = new();
         private readonly List<(string text, int y)> _sectionTitles = new();
-        private readonly List<(TextButton btn, int idx)> _rail = new();  // fixed, never scroll
-        private Slider? _dragging;
+        private readonly List<(TunerTextButton btn, int idx)> _tabRailButtons = new();  // fixed, never scroll
+        private TunerSlider? _dragging;
 
         // Tabs: (label i18n key, content builder). Remembered across reopens.
-        private readonly (string key, Action build)[] _tabs;
+        private readonly (string key, Action build)[] _tabDefinitions;
         private static int _lastTab;
         private int _activeTab;
 
         private int _scroll, _maxScroll, _bodyTop, _bodyBottom, _hintY, _contentX;
         // content-column layout cursor (build helpers advance it)
-        private int _cx, _cy, _cw;
+        private int _contentCursorX, _contentCursorY, _contentColumnWidth;
 
         public RadianceTunerMenu(ModConfig config, Func<string, string> translate, Action onChange, Action onSave)
             : base(0, 0, PanelWidth, 0, showUpperRightCloseButton: true)
         {
             _config = config;
-            _t = translate;
+            _translate = translate;
             _onChange = onChange;
             _onSave = onSave;
-            _tabs = new (string, Action)[]
+            _tabDefinitions = new (string, Action)[]
             {
                 ("tuner.tab.looks",       BuildLooks),
                 ("tuner.section.colorgrade", BuildColorGrade),
@@ -67,25 +67,18 @@ namespace SDVRadiance
                 ("tuner.section.water",   BuildWater),
                 ("tuner.tab.lens",        BuildLens),
             };
-            _activeTab = Math.Clamp(_lastTab, 0, _tabs.Length - 1);
+            _activeTab = Math.Clamp(_lastTab, 0, _tabDefinitions.Length - 1);
             Reflow();
         }
 
-        private void Reopen() => Game1.activeClickableMenu = new RadianceTunerMenu(_config, _t, _onChange, _onSave);
+        private void Reopen() => Game1.activeClickableMenu = new RadianceTunerMenu(_config, _translate, _onChange, _onSave);
 
-        private sealed class Chip
-        {
-            public TextButton Load = null!;
-            public Rectangle Delete;
-            public NamedProfile Profile = null!;
-        }
-
-        // ---- content build helpers (append to lists, advance _cy) ----
-        private void Section(string key) { _sectionTitles.Add((_t(key), _cy)); _cy += 30; }
+        // ---- content build helpers (append to lists, advance _contentCursorY) ----
+        private void Section(string key) { _sectionTitles.Add((_translate(key), _contentCursorY)); _contentCursorY += 30; }
         private void Tog(string key, Func<bool> g, Action<bool> s)
-            { _toggles.Add(new Toggle(_t(key), new Rectangle(_cx, _cy, _cw, 38), g, s)); _cy += 44; }
+            { _toggles.Add(new TunerToggle(_translate(key), new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, 38), g, s)); _contentCursorY += 44; }
         private void Sld(string key, float min, float max, Func<float> g, Action<float> s)
-            { _sliders.Add(new Slider(_t(key), _cx, _cy, _cw, min, max, g, s)); _cy += 50; }
+            { _sliders.Add(new TunerSlider(_translate(key), _contentCursorX, _contentCursorY, _contentColumnWidth, min, max, g, s)); _contentCursorY += 50; }
 
         private void Reflow()
         {
@@ -96,18 +89,18 @@ namespace SDVRadiance
             xPositionOnScreen = vw - width - 24;
             yPositionOnScreen = 20;
 
-            _sliders.Clear(); _toggles.Clear(); _buttons.Clear(); _chips.Clear(); _sectionTitles.Clear(); _rail.Clear();
+            _sliders.Clear(); _toggles.Clear(); _buttons.Clear(); _chips.Clear(); _sectionTitles.Clear(); _tabRailButtons.Clear();
 
             int contentTop = yPositionOnScreen + HeaderH;
 
             // ---- left rail: one button per tab (fixed; never scrolls) ----
             int railX = xPositionOnScreen + 12;
             int railW = RailWidth - 20;
-            for (int i = 0; i < _tabs.Length; i++)
+            for (int i = 0; i < _tabDefinitions.Length; i++)
             {
                 int idx = i;
                 var rect = new Rectangle(railX, contentTop + i * 46, railW, 42);
-                _rail.Add((new TextButton(_t(_tabs[i].key), rect, () =>
+                _tabRailButtons.Add((new TunerTextButton(_translate(_tabDefinitions[i].key), rect, () =>
                 {
                     _activeTab = idx; _lastTab = idx; _scroll = 0; Reflow();
                 }), i));
@@ -115,16 +108,16 @@ namespace SDVRadiance
 
             // ---- right content column: only the active tab ----
             _contentX = xPositionOnScreen + RailWidth;
-            _cx = _contentX + 16;
-            _cw = ContentWidth - 40;
-            _cy = contentTop + BodyPad;
-            _tabs[_activeTab].build();
-            int contentHeight = _cy - (contentTop + BodyPad);
+            _contentCursorX = _contentX + 16;
+            _contentColumnWidth = ContentWidth - 40;
+            _contentCursorY = contentTop + BodyPad;
+            _tabDefinitions[_activeTab].build();
+            int contentHeight = _contentCursorY - (contentTop + BodyPad);
 
             // CONSISTENT panel height across tabs: the frame is sized to the tab rail (constant
             // 10 tabs), capped to the view. Switching tabs never resizes the panel; a tab whose
             // content is taller than the frame scrolls inside it instead of growing the window.
-            int railHeight = _tabs.Length * 46;
+            int railHeight = _tabDefinitions.Length * 46;
             int maxBody = (vh - 40) - HeaderH - FooterH;
             int bodyHeight = Math.Min(railHeight, maxBody);
             height = HeaderH + bodyHeight + FooterH;
@@ -149,36 +142,36 @@ namespace SDVRadiance
                 (LookPreset.Off, "off"), (LookPreset.Subtle, "subtle"),
                 (LookPreset.Cinematic, "cinematic"), (LookPreset.Vibrant, "vibrant")
             };
-            int bw = (_cw - 18) / 4;
+            int bw = (_contentColumnWidth - 18) / 4;
             for (int i = 0; i < presets.Length; i++)
             {
                 var (preset, key) = presets[i];
-                var rect = new Rectangle(_cx + i * (bw + 6), _cy, bw, 44);
-                _buttons.Add(new TextButton(_t($"config.preset.{key}"), rect, () =>
+                var rect = new Rectangle(_contentCursorX + i * (bw + 6), _contentCursorY, bw, 44);
+                _buttons.Add(new TunerTextButton(_translate($"config.preset.{key}"), rect, () =>
                 {
                     _config.ApplyPreset(preset); _onChange(); _onSave(); Reflow();
                 }));
             }
-            _cy += 56;
+            _contentCursorY += 56;
 
             Section("tuner.mylooks");
-            int chipX = _cx;
+            int chipX = _contentCursorX;
             foreach (var prof in _config.SavedProfiles)
             {
                 int cw = Math.Min(160, 44 + (int)(Game1.smallFont.MeasureString(prof.Name).X * 0.7f));
-                if (chipX + cw > _cx + _cw - 100) { chipX = _cx; _cy += 46; }
-                var rect = new Rectangle(chipX, _cy, cw, 40);
+                if (chipX + cw > _contentCursorX + _contentColumnWidth - 100) { chipX = _contentCursorX; _contentCursorY += 46; }
+                var rect = new Rectangle(chipX, _contentCursorY, cw, 40);
                 var captured = prof;
-                _chips.Add(new Chip
+                _chips.Add(new TunerChip
                 {
-                    Load = new TextButton(prof.Name, rect, () => { _config.ApplyProfile(captured); _onChange(); _onSave(); Reflow(); }),
+                    Load = new TunerTextButton(prof.Name, rect, () => { _config.ApplyProfile(captured); _onChange(); _onSave(); Reflow(); }),
                     Delete = new Rectangle(rect.Right - 14, rect.Y - 6, 24, 24),
                     Profile = captured
                 });
                 chipX += cw + 12;
             }
-            _buttons.Add(new TextButton(_t("tuner.save"), new Rectangle(_cx + _cw - 96, _cy, 96, 40), PromptSaveProfile));
-            _cy += 52;
+            _buttons.Add(new TunerTextButton(_translate("tuner.save"), new Rectangle(_contentCursorX + _contentColumnWidth - 96, _contentCursorY, 96, 40), PromptSaveProfile));
+            _contentCursorY += 52;
 
             Tog("tuner.master", () => _config.Enabled, v => _config.Enabled = v);
         }
@@ -252,7 +245,7 @@ namespace SDVRadiance
             Sld("tuner.fogcoverage", 0f, 1f, () => _config.FogCoverage, v => _config.FogCoverage = v);
             Sld("tuner.fogdensity", 0f, 1f, () => _config.FogDensity, v => _config.FogDensity = v);
             Sld("tuner.fogspeed", 0f, 0.1f, () => _config.FogSpeed, v => _config.FogSpeed = v);
-            _cy += 12;
+            _contentCursorY += 12;
             Section("tuner.section.fognight");
             Tog("tuner.fognightmist", () => _config.FogNightMist, v => _config.FogNightMist = v);
             Sld("tuner.fognightmistcoverage", 0f, 1f, () => _config.FogNightMistCoverage, v => _config.FogNightMistCoverage = v);
@@ -276,14 +269,14 @@ namespace SDVRadiance
             if (here != null && !here.IsOutdoors && !RenderPipeline.HasLevelWater(here))
             {
                 string key = here.NameOrUniqueName;
-                _toggles.Add(new Toggle($"{_t("tuner.waterhere")} · {here.Name}", new Rectangle(_cx, _cy, _cw, 38),
+                _toggles.Add(new TunerToggle($"{_translate("tuner.waterhere")} · {here.Name}", new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, 38),
                     () => !_config.WaterDisabledLocations.Contains(key),
                     v =>
                     {
                         if (v) _config.WaterDisabledLocations.Remove(key);
                         else if (!_config.WaterDisabledLocations.Contains(key)) _config.WaterDisabledLocations.Add(key);
                     }));
-                _cy += 44;
+                _contentCursorY += 44;
             }
         }
 
@@ -291,16 +284,16 @@ namespace SDVRadiance
         {
             Section("tuner.section.tiltshift");
             Tog("tuner.tiltshift", () => _config.TiltShiftEnabled, v => _config.TiltShiftEnabled = v);
-            _toggles.Add(new Toggle(_t("tuner.tiltradial"), new Rectangle(_cx, _cy, _cw, 38),
+            _toggles.Add(new TunerToggle(_translate("tuner.tiltradial"), new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, 38),
                 () => _config.TiltShiftMode == TiltShiftFocus.Radial,
                 v => _config.TiltShiftMode = v ? TiltShiftFocus.Radial : TiltShiftFocus.Bands));
-            _cy += 44;
+            _contentCursorY += 44;
             Sld("tuner.tiltradius", 0.05f, 0.9f, () => _config.TiltShiftRadius, v => _config.TiltShiftRadius = v);
             Sld("tuner.tiltfeather", 0f, 1f, () => _config.TiltShiftFeather, v => _config.TiltShiftFeather = v);
             Sld("tuner.tiltstrength", 0f, 1f, () => _config.TiltShiftStrength, v => _config.TiltShiftStrength = v);
             Sld("tuner.tilttop", 0f, 1f, () => _config.TiltShiftTopRatio, v => _config.TiltShiftTopRatio = v);
             Sld("tuner.tiltbottom", 0f, 1f, () => _config.TiltShiftBottomRatio, v => _config.TiltShiftBottomRatio = v);
-            _cy += 12;
+            _contentCursorY += 12;
             Section("tuner.section.finishing");
             Tog("tuner.vignette", () => _config.VignetteEnabled, v => _config.VignetteEnabled = v);
             Sld("tuner.vignettestrength", 0f, 1f, () => _config.VignetteStrength, v => _config.VignetteStrength = v);
@@ -312,7 +305,7 @@ namespace SDVRadiance
 
         private void PromptSaveProfile()
         {
-            Game1.activeClickableMenu = new TextEntryMenu(_t("tuner.naming"), "",
+            Game1.activeClickableMenu = new TextEntryMenu(_translate("tuner.naming"), "",
                 onDone: name =>
                 {
                     if (!string.IsNullOrWhiteSpace(name))
@@ -347,13 +340,13 @@ namespace SDVRadiance
         public override void receiveLeftClick(int x, int y, bool playSound = true)
         {
             // Rail buttons are fixed (no scroll offset) and always clickable.
-            foreach (var (btn, idx) in _rail)
+            foreach (var (btn, idx) in _tabRailButtons)
                 if (btn.Bounds.Contains(x, y)) { if (idx != _activeTab) Game1.playSound("smallSelect"); btn.OnClick(); return; }
 
             if (y >= _bodyTop && y <= _bodyBottom && x >= _contentX)
             {
-                foreach (var b in _buttons)
-                    if (Visible(b.Bounds) && b.Bounds.Contains(x, y + _scroll)) { Game1.playSound("smallSelect"); b.OnClick(); return; }
+                foreach (var button in _buttons)
+                    if (Visible(button.Bounds) && button.Bounds.Contains(x, y + _scroll)) { Game1.playSound("smallSelect"); button.OnClick(); return; }
                 foreach (var c in _chips)
                 {
                     if (Visible(c.Load.Bounds) && c.Delete.Contains(x, y + _scroll)) { DeleteChip(c); return; }
@@ -374,7 +367,7 @@ namespace SDVRadiance
                 if (Visible(c.Load.Bounds) && c.Load.Bounds.Contains(x, y + _scroll)) { DeleteChip(c); return; }
         }
 
-        private void DeleteChip(Chip c)
+        private void DeleteChip(TunerChip c)
         {
             _config.SavedProfiles.Remove(c.Profile);
             _onSave(); Game1.playSound("trashcan"); Reflow();
@@ -397,165 +390,71 @@ namespace SDVRadiance
             base.cleanupBeforeExit();
         }
 
-        public override void draw(SpriteBatch b)
+        public override void draw(SpriteBatch spriteBatch)
         {
             int innerW = width - 56;
 
-            drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60),
+            drawTextureBox(spriteBatch, Game1.menuTexture, new Rectangle(0, 256, 60, 60),
                 xPositionOnScreen, yPositionOnScreen, width, height, Color.White, 1f, drawShadow: true);
-            DrawFit(b, _t("tuner.title"), new Vector2(xPositionOnScreen + 28, yPositionOnScreen + 22), innerW - 40, Game1.textColor, 1f);
+            TunerText.DrawFit(spriteBatch, _translate("tuner.title"), new Vector2(xPositionOnScreen + 28, yPositionOnScreen + 22), innerW - 40, Game1.textColor, 1f);
 
             // Rail divider
             int divX = xPositionOnScreen + RailWidth;
-            b.Draw(Game1.staminaRect, new Rectangle(divX, _bodyTop - 6, 2, _bodyBottom - _bodyTop + 12), Color.Black * 0.2f);
+            spriteBatch.Draw(Game1.staminaRect, new Rectangle(divX, _bodyTop - 6, 2, _bodyBottom - _bodyTop + 12), Color.Black * 0.2f);
 
             // Rail buttons (active highlighted)
-            foreach (var (btn, idx) in _rail)
+            foreach (var (btn, idx) in _tabRailButtons)
             {
                 if (idx == _activeTab)
-                    b.Draw(Game1.staminaRect, new Rectangle(btn.Bounds.X - 4, btn.Bounds.Y - 2, btn.Bounds.Width + 8, btn.Bounds.Height + 4), new Color(196, 130, 66) * 0.55f);
-                btn.Draw(b, 0, idx == _activeTab);
+                    spriteBatch.Draw(Game1.staminaRect, new Rectangle(btn.Bounds.X - 4, btn.Bounds.Y - 2, btn.Bounds.Width + 8, btn.Bounds.Height + 4), new Color(196, 130, 66) * 0.55f);
+                btn.Draw(spriteBatch, 0, idx == _activeTab);
             }
 
             // Clip the scrolling content to the body rect so a half-scrolled row can't draw
             // over the header/footer. Requires flushing this batch and reopening one with a
             // scissor-enabled rasterizer, then restoring a normal batch for the rest.
-            var device = b.GraphicsDevice;
+            var device = spriteBatch.GraphicsDevice;
             Rectangle prevScissor = device.ScissorRectangle;
-            b.End();
-            b.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, DepthStencilState.None, _scissorRaster);
+            spriteBatch.End();
+            spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, DepthStencilState.None, _scissorRaster);
             device.ScissorRectangle = Rectangle.Intersect(device.Viewport.Bounds,
                 new Rectangle(_contentX, _bodyTop, ContentWidth, _bodyBottom - _bodyTop));
 
             int dy = -_scroll;
             foreach (var (text, cy) in _sectionTitles)
             {
-                var r = new Rectangle(_contentX + 16, cy, _cw, 24);
-                if (Visible(r)) DrawFit(b, text, new Vector2(_contentX + 16, cy + dy), _cw, Game1.textColor * 0.85f, 0.85f);
+                var r = new Rectangle(_contentX + 16, cy, _contentColumnWidth, 24);
+                if (Visible(r)) TunerText.DrawFit(spriteBatch, text, new Vector2(_contentX + 16, cy + dy), _contentColumnWidth, Game1.textColor * 0.85f, 0.85f);
             }
-            foreach (var btn in _buttons) if (Visible(btn.Bounds)) btn.Draw(b, dy);
+            foreach (var btn in _buttons) if (Visible(btn.Bounds)) btn.Draw(spriteBatch, dy);
             foreach (var c in _chips)
                 if (Visible(c.Load.Bounds))
                 {
-                    c.Load.Draw(b, dy);
-                    b.Draw(Game1.mouseCursors, new Rectangle(c.Delete.X, c.Delete.Y + dy, c.Delete.Width, c.Delete.Height), DeleteSource, Color.White);
+                    c.Load.Draw(spriteBatch, dy);
+                    spriteBatch.Draw(Game1.mouseCursors, new Rectangle(c.Delete.X, c.Delete.Y + dy, c.Delete.Width, c.Delete.Height), DeleteSource, Color.White);
                 }
-            foreach (var t in _toggles) if (Visible(t.Row)) t.Draw(b, dy);
-            foreach (var s in _sliders) if (Visible(s.Track)) s.Draw(b, dy);
+            foreach (var t in _toggles) if (Visible(t.Row)) t.Draw(spriteBatch, dy);
+            foreach (var s in _sliders) if (Visible(s.Track)) s.Draw(spriteBatch, dy);
 
-            b.End();
+            spriteBatch.End();
             device.ScissorRectangle = prevScissor;
-            b.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, DepthStencilState.None, RasterizerState.CullCounterClockwise);
+            spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, DepthStencilState.None, RasterizerState.CullCounterClockwise);
 
             if (_maxScroll > 0)
             {
                 int trackX = xPositionOnScreen + width - 18;
                 int trackH = _bodyBottom - _bodyTop;
-                b.Draw(Game1.staminaRect, new Rectangle(trackX, _bodyTop, 6, trackH), Color.Black * 0.25f);
+                spriteBatch.Draw(Game1.staminaRect, new Rectangle(trackX, _bodyTop, 6, trackH), Color.Black * 0.25f);
                 int barH = Math.Max(30, (int)(trackH * (float)trackH / (trackH + _maxScroll)));
                 int barY = _bodyTop + (int)((trackH - barH) * (_scroll / (float)_maxScroll));
-                b.Draw(Game1.staminaRect, new Rectangle(trackX, barY, 6, barH), new Color(196, 130, 66));
+                spriteBatch.Draw(Game1.staminaRect, new Rectangle(trackX, barY, 6, barH), new Color(196, 130, 66));
             }
 
-            DrawFit(b, _t("tuner.hint"), new Vector2(xPositionOnScreen + 28, _hintY), innerW, Game1.textColor * 0.7f, 0.8f);
+            TunerText.DrawFit(spriteBatch, _translate("tuner.hint"), new Vector2(xPositionOnScreen + 28, _hintY), innerW, Game1.textColor * 0.7f, 0.8f);
 
-            base.draw(b);
-            drawMouse(b);
+            base.draw(spriteBatch);
+            drawMouse(spriteBatch);
         }
 
-        private static void DrawFit(SpriteBatch b, string text, Vector2 pos, float maxWidth, Color color, float maxScale)
-        {
-            float m = Game1.smallFont.MeasureString(text).X;
-            float scale = Math.Min(maxScale, maxWidth / Math.Max(1f, m));
-            Utility.drawTextWithShadow(b, text, Game1.smallFont, pos, color, scale);
-        }
-
-        // ---- widgets (content-space rects; Draw takes a scroll offset) ----
-
-        private sealed class Slider
-        {
-            private readonly string _label;
-            private readonly float _min, _max;
-            private readonly Func<float> _get;
-            private readonly Action<float> _set;
-            public Rectangle Track;
-
-            public Slider(string label, int x, int y, int w, float min, float max, Func<float> get, Action<float> set)
-            {
-                _label = label; _min = min; _max = max; _get = get; _set = set;
-                Track = new Rectangle(x, y + 26, w, 20);
-            }
-
-            public void SetFromX(int mx)
-            {
-                float t = MathHelper.Clamp((mx - Track.X) / (float)Track.Width, 0f, 1f);
-                _set((float)Math.Round((_min + t * (_max - _min)) / 0.01f) * 0.01f);
-            }
-
-            public void Draw(SpriteBatch b, int dy)
-            {
-                float v = _get();
-                DrawFit(b, _label, new Vector2(Track.X, Track.Y - 26 + dy), Track.Width - 70, Game1.textColor, 0.9f);
-                string val = v.ToString("0.00");
-                Vector2 vs = Game1.smallFont.MeasureString(val) * 0.9f;
-                Utility.drawTextWithShadow(b, val, Game1.smallFont, new Vector2(Track.Right - vs.X, Track.Y - 26 + dy), Game1.textColor * 0.8f, 0.9f);
-
-                var track = new Rectangle(Track.X, Track.Y + dy, Track.Width, Track.Height);
-                b.Draw(Game1.staminaRect, track, Color.Black * 0.35f);
-                float t = (v - _min) / (_max - _min);
-                b.Draw(Game1.staminaRect, new Rectangle(track.X, track.Y, (int)(t * track.Width), track.Height), new Color(196, 130, 66));
-                b.Draw(Game1.staminaRect, new Rectangle(track.X + (int)(t * track.Width) - 6, track.Y - 4, 12, track.Height + 8), Color.White);
-            }
-        }
-
-        private sealed class Toggle
-        {
-            private static readonly Rectangle Unchecked = new(227, 425, 9, 9);
-            private static readonly Rectangle Checked = new(236, 425, 9, 9);
-            private readonly string _label;
-            public readonly Rectangle Row;
-            public readonly Func<bool> Get;
-            public readonly Action<bool> Set;
-
-            public Toggle(string label, Rectangle row, Func<bool> get, Action<bool> set)
-            {
-                _label = label; Row = row; Get = get; Set = set;
-            }
-
-            public bool Hit(int x, int y) => new Rectangle(Row.X, Row.Y, Row.Width, 36).Contains(x, y);
-
-            public void Draw(SpriteBatch b, int dy)
-            {
-                b.Draw(Game1.mouseCursors, new Vector2(Row.X, Row.Y + dy), Get() ? Checked : Unchecked,
-                    Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0.9f);
-                DrawFit(b, _label, new Vector2(Row.X + 48, Row.Y + 6 + dy), Row.Width - 56, Game1.textColor, 0.9f);
-            }
-        }
-
-        private sealed class TextButton
-        {
-            private readonly string _label;
-            public readonly Rectangle Bounds;
-            public readonly Action OnClick;
-
-            public TextButton(string label, Rectangle bounds, Action onClick)
-            {
-                _label = label; Bounds = bounds; OnClick = onClick;
-            }
-
-            public void Draw(SpriteBatch b, int dy, bool active = false)
-            {
-                drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 256, 60, 60),
-                    Bounds.X, Bounds.Y + dy, Bounds.Width, Bounds.Height, active ? new Color(255, 240, 200) : Color.White, 1f, drawShadow: false);
-                Vector2 m = Game1.smallFont.MeasureString(_label);
-                float scale = Math.Min(0.9f, (Bounds.Width - 20) / Math.Max(1f, m.X));
-                // Centre on a STANDARD cap height, not the label's own measured height: Thai
-                // strings measure taller (tone marks/upper vowels) which pushed text up off
-                // centre. A fixed reference keeps EN and TH visually centred the same way.
-                float refH = Game1.smallFont.MeasureString("A").Y * scale;
-                Utility.drawTextWithShadow(b, _label, Game1.smallFont,
-                    new Vector2(Bounds.Center.X - m.X * scale / 2f, Bounds.Center.Y - refH / 2f + dy + 2f), Game1.textColor, scale);
-            }
-        }
     }
 }

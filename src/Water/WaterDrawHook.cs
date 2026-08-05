@@ -32,8 +32,8 @@ namespace SDVRadiance
         /// into its cache key so newly discovered water triggers a rebuild on the existing throttle.</summary>
         internal static int Version;
 
-        private static GameLocation? _loc;
-        private static readonly HashSet<int> _tiles = new();
+        private static GameLocation? _currentLocation;
+        private static readonly HashSet<int> _waterTileIndices = new();
 
         private static int Key(int x, int y) => (y << 16) | (x & 0xFFFF);
 
@@ -80,21 +80,21 @@ namespace SDVRadiance
         {
             if (!Enabled)
                 return;
-            if (!ReferenceEquals(__instance, _loc))
+            if (!ReferenceEquals(__instance, _currentLocation))
             {
-                _loc = __instance;
-                _tiles.Clear();
+                _currentLocation = __instance;
+                _waterTileIndices.Clear();
                 Version++;
             }
             // Version only bumps for tiles the DATA doesn't know (they change the mask) —
             // ordinary isWaterTile tiles entering view must not add rebuilds on top of the
             // tile-crossing cadence, or walking near water would rebuild twice as often.
-            if (_tiles.Add(Key(x, y)) && !__instance.isWaterTile(x, y))
+            if (_waterTileIndices.Add(Key(x, y)) && !__instance.isWaterTile(x, y))
                 Version++;
         }
 
         /// <summary>True when the game has drawn water at this tile of the CURRENT location.</summary>
-        internal static bool WasDrawn(GameLocation loc, int x, int y)
-            => ReferenceEquals(loc, _loc) && (uint)x <= 0xFFFF && y >= 0 && _tiles.Contains(Key(x, y));
+        internal static bool WasDrawn(GameLocation location, int x, int y)
+            => ReferenceEquals(location, _currentLocation) && (uint)x <= 0xFFFF && y >= 0 && _waterTileIndices.Contains(Key(x, y));
     }
 }
