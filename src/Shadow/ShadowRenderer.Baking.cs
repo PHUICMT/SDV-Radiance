@@ -506,6 +506,93 @@ namespace SDVRadiance
             alpha = 0.9f * TimeFade();                           // opacity at the feet (× strength; fades toward the tip)
         }
 
+        /// <summary>
+        /// The daylight coming through a window right now: its colour and how strong it is.
+        ///
+        /// <para>
+        /// A window is not a lamp. It is a hole with the sky behind it, so it has to change
+        /// through the day and through the year - gold when the sun is low, white at noon,
+        /// gold again at dusk, and after dark a faint blue rather than the same daylight it
+        /// poured in at midday. That last one is why a farmhouse read as brightly lit at two
+        /// in the morning: the seed was a constant, and the game's own "is this window glowing"
+        /// test only asks whether the window exists, never what time it is.
+        /// </para>
+        ///
+        /// <para>
+        /// Everything that draws light arriving from outside asks this one function, so the
+        /// room's ambient, the window seed and the patch on the floor can never disagree about
+        /// what time of day it is.
+        /// </para>
+        /// </summary>
+        /// <summary>The game's seasonal nightfall, in minutes since midnight.</summary>
+        internal static float TrulyDarkMinutes()
+        {
+            int t = TrulyDark();
+            return (t / 100) * 60 + t % 100;
+        }
+
+        internal static void WindowDaylight(out Vector3 colour, out float strength)
+        {
+            float mins = GameClock.MinutesNow();
+            int trulyDark = TrulyDark();
+
+            // The sun is ALREADY up when the player wakes - the game's own outdoor light is at
+            // full daylight by 06:00 - so the climb has to be finished shortly after, not
+            // starting there. Ramping from 06:00 put this at exactly zero on the stroke of six,
+            // which dropped through to the after-dark branch and lit the bedroom with moonlight
+            // at sunrise.
+            float risen = MathHelper.Clamp((mins - 320f) / 60f, 0f, 1f);   // 05:20 -> 06:20
+            float notYetDark = 1f - GameClock.RampAt(trulyDark, 60f);
+            float day = Math.Min(risen, notYetDark);
+
+            // Low sun = warm. Squared, so only the real edges of the day go golden and the
+            // middle stays daylight-white instead of everything looking like a sunset.
+            float lowSun = Math.Abs(MathHelper.Clamp((mins - 720f) / 360f, -1f, 1f));
+            Vector3 noon = new(0.86f, 0.93f, 1.06f);
+            Vector3 gold = new(1.08f, 0.86f, 0.60f);
+            colour = Vector3.Lerp(noon, gold, lowSun * lowSun);
+
+            // The year: winter's sun is low and pale all day and the light is thin; summer is
+            // the opposite; autumn light is famously warm.
+            (float mul, Vector3 tint) season = Game1.season switch
+            {
+                Season.Winter => (0.80f, new Vector3(0.93f, 0.98f, 1.10f)),
+                Season.Summer => (1.12f, new Vector3(1.03f, 1.00f, 0.95f)),
+                Season.Fall => (0.94f, new Vector3(1.06f, 0.98f, 0.90f)),
+                _ => (1f, Vector3.One),
+            };
+            float weather = (Game1.isRaining || Game1.isSnowing || Game1.isLightning) ? 0.62f : 1f;
+            if (weather < 1f)
+                colour = Vector3.Lerp(colour, new Vector3(0.90f, 0.94f, 1.00f), 0.6f);   // flat overcast
+
+            strength = day * season.mul * weather;
+            colour *= season.tint;
+
+            if (strength <= 0.03f)
+            {
+                // After dark the window is still there - it just shows a night sky. A faint
+                // cool pane reads as moonlight; leaving it at zero made rooms look sealed.
+                colour = new Vector3(0.52f, 0.62f, 0.95f);
+                strength = 0.18f;
+            }
+        }
+
+        /// <summary>Where that daylight lands on the floor: <paramref name="lean"/> is tiles
+        /// sideways per tile into the room and <paramref name="reach"/> how far the patch
+        /// carries. Taken from the same sun the shadows use, so a low morning sun throws a long
+        /// patch across the boards in the same direction everything else is leaning.</summary>
+        internal static void WindowShaft(out float lean, out float reach)
+        {
+            ComputeSun(out float rot, out float stretch, out float alpha);
+            // Far shallower than a cast shadow's rotation. A shadow leans hard because it is
+            // measured on the ground away from a standing body; a patch of daylight seen from
+            // above mostly just drops into the room. At the shadow's own 0.7 the patch crossed
+            // more sideways than it travelled inward, which reads as a diagonal streak laid
+            // over the furniture rather than as light coming through the glass.
+            lean = MathHelper.Clamp(rot * 0.30f, -0.45f, 0.45f);
+            reach = alpha <= 0.01f ? 2.2f : MathHelper.Clamp(2.2f + stretch * 2.5f, 2.2f, 5f);
+        }
+
         /// <summary>Ease the shadow out toward dusk so it doesn't pop. Shadows stay at FULL
         /// strength until 40 minutes before the game's seasonal truly-dark time, then fade —
         /// a slow ramp across the whole evening left them invisible while the sun was still

@@ -129,13 +129,75 @@ namespace SDVRadiance
 
         /// <summary>Lights collected this frame before the shader's fixed-size array forces a
         /// choice. Bounded so a pathological map cannot make the sort itself the cost.</summary>
-        private readonly List<(Vector2 Uv, Vector4 Data)> _lightCandidates = new();
+        private readonly List<(Vector2 Uv, Vector4 Data, int Id, Vector2 World)> _lightCandidates = new();
         private const int MaxLightCandidates = 96;
+        /// <summary>The point past which the ranking actually decides something: the flood
+        /// gives its first eight a shadow ray and pools the rest, so from eight onward the
+        /// order on the list changes what the player sees.</summary>
+        private const int ShaderLightSlots = 8;
 
         private void AddLightCandidate(Vector2 uv, Vector4 data)
         {
-            if (_lightCandidates.Count < MaxLightCandidates)
-                _lightCandidates.Add((uv, data));
+            if (_lightCandidates.Count >= MaxLightCandidates)
+                return;
+            // Where this light stands in the WORLD, recovered from the viewport. It gives the
+            // light a name that survives the camera moving - screen UV cannot, it changes
+            // every step and the ranking has to recognise the lamp it chose last frame.
+            // Rounded to 8 for the name, so sub-pixel drift cannot rename a light that has
+            // not moved.
+            Vector2 world = new(
+                uv.X * Math.Max(1, Game1.viewport.Width) + Game1.viewport.X,
+                uv.Y * Math.Max(1, Game1.viewport.Height) + Game1.viewport.Y);
+            int wx = (int)Math.Round(world.X / 8f);
+            int wy = (int)Math.Round(world.Y / 8f);
+
+            // EDGE TAPER. A light is cut off at a fixed distance past the screen edge, and
+            // whatever it was still contributing went with it in a single frame: walking a town
+            // changed the live light count 29 times in twenty seconds and the frame's brightness
+            // rode along, which is the "lighting gets dimmer and brighter as I move" report.
+            //
+            // Tying the recovery to a TIMER was the first attempt and it was wrong to look at:
+            // a lamp that keeps burning for a third of a second after it should be gone reads as
+            // a light dying, not as a light leaving. The fade belongs to the CAMERA, not to a
+            // clock. Tapering by how far past the edge the light has travelled means its
+            // contribution is already zero by the time the cull takes it, so there is no step to
+            // hide; walk back and it returns along exactly the same curve, because the only
+            // input is where the light is relative to the view.
+            float reach = Math.Max(0.02f, data.W);
+            float aspect = Math.Max(1, Game1.viewport.Width) / (float)Math.Max(1, Game1.viewport.Height);
+            float dx = Math.Max(0f, Math.Max(-uv.X, uv.X - 1f)) * aspect;   // reach is in height units
+            float dy = Math.Max(0f, Math.Max(-uv.Y, uv.Y - 1f));
+            float outside = (float)Math.Sqrt(dx * dx + dy * dy);
+            float taper = MathHelper.Clamp(1f - outside / (reach * 2f), 0f, 1f);
+            taper = taper * taper * (3f - 2f * taper);                      // smooth at both ends
+            if (taper <= 0.001f)
+                return;
+            data = new Vector4(data.X * taper, data.Y * taper, data.Z * taper, data.W);
+
+            _lightCandidates.Add((uv, data, wx * 73856093 ^ wy * 19349663, world));
+        }
+
+        /// <summary>
+        /// True when a light is far enough outside the view that its pool cannot touch a pixel.
+        /// <para>
+        /// Consistency fix, NOT a cure for the brightness steps. Labelled windows and emissive
+        /// tiles were culled at a flat tenth of a screen past the edge whatever their radius,
+        /// while the game's own lights were culled at twice their own reach; a wide pool could
+        /// therefore be dropped while it was still lighting the screen. Asking the question in
+        /// the light's own units makes the three sources agree.
+        /// </para>
+        /// It was measured against the walk probe and changed nothing: the live light count in
+        /// Town still oscillates 11..17 over a twenty second walk, 29 changes, with the frame's
+        /// gain moving about 6% across it. Those windows sit near a twentieth of a screen in
+        /// radius, so the old margin and this one land in the same place for them. The churn is
+        /// real and it is what the "dimmer and brighter as I move" report is made of, but its
+        /// cause is that a light leaving the list disappears in ONE FRAME, not where the line is
+        /// drawn. Do not re-file this comment as the fix.
+        /// </summary>
+        private static bool OffScreenBeyondReach(float u, float v, float reach)
+        {
+            float margin = reach * 2f;
+            return u < -margin || u > 1f + margin || v < -margin || v > 1f + margin;
         }
 
         /// <summary>How much this light can actually matter to the picture: how bright it is, how
@@ -164,19 +226,82 @@ namespace SDVRadiance
         /// </para>
         /// Ranking by what a light can contribute means the one that loses its slot is the
         /// faintest or the furthest off-screen, whose pool was invisible anyway.
+        /// <para>
+        /// That ranking then went unused in the range where it mattered most. It only ran past
+        /// SIXTEEN candidates, the classic path's slot count, while the flood shader - the
+        /// default - reads EIGHT. A room with nine to sixteen lights, which is an ordinary
+        /// shop with a row of windows, skipped the sort entirely and handed the shader
+        /// whichever eight the game's light dictionary happened to enumerate first. Walk a
+        /// step, have one light pass the off-screen test, and every index after it shifts:
+        /// pools going out here and lighting up over there, several at once. Reported in
+        /// Pierre's at dawn, and invisible at midday only because the pools are switched off
+        /// in a fully lit room.
+        /// </para>
+        /// Three things keep the set steady now: the sort runs from the real cap of eight,
+        /// equal-scoring lights break their tie on a camera-independent name rather than on
+        /// enumeration order, and a light already chosen carries a bonus so a marginally
+        /// better newcomer cannot evict it and be evicted back a step later. What still does
+        /// change ramps in over a few frames instead of appearing whole.
         /// </summary>
         private void SelectLights()
         {
-            if (_lightCandidates.Count > MaxLights)
-                _lightCandidates.Sort((a, b) => Relevance(b.Uv, b.Data).CompareTo(Relevance(a.Uv, a.Data)));
+            bool sameRoom = ReferenceEquals(Game1.currentLocation, _lightRampLocation);
+            if (!sameRoom)
+            {
+                _lightRamp.Clear();
+                _lightChosen.Clear();
+                _lightRampLocation = Game1.currentLocation;
+            }
+
+            if (_lightCandidates.Count > ShaderLightSlots)
+            {
+                _lightCandidates.Sort((a, b) =>
+                {
+                    int byScore = Score(b).CompareTo(Score(a));
+                    return byScore != 0 ? byScore : a.Id.CompareTo(b.Id);
+                });
+            }
             int selectedLightCount = Math.Min(_lightCandidates.Count, MaxLights);
+
+            _lightChosen.Clear();
             for (int i = 0; i < selectedLightCount; i++)
             {
-                _lightPositions[i] = _lightCandidates[i].Uv;
-                _lightShaderData[i] = _lightCandidates[i].Data;
+                var cand = _lightCandidates[i];
+                _lightChosen.Add(cand.Id);
+                // Enter over ~8 frames. On the first frame in a room everything starts lit,
+                // or walking through a door would show the place unlit and filling in.
+                float ramp = _lightRamp.TryGetValue(cand.Id, out float prev) ? prev : (sameRoom ? 0f : 1f);
+                ramp = Math.Min(1f, ramp + 0.12f);
+                _lightRamp[cand.Id] = ramp;
+                _lightPositions[i] = cand.Uv;
+                var d = cand.Data;
+                _lightShaderData[i] = new Vector4(d.X * ramp, d.Y * ramp, d.Z * ramp, d.W);
             }
             _lightCount = selectedLightCount;
+
+            // Forget the lights that lost their slot, so one that comes back enters again
+            // instead of snapping straight to full.
+            if (_lightRamp.Count > selectedLightCount)
+            {
+                _rampDrop.Clear();
+                foreach (int id in _lightRamp.Keys)
+                    if (!_lightChosen.Contains(id))
+                        _rampDrop.Add(id);
+                foreach (int id in _rampDrop)
+                    _lightRamp.Remove(id);
+            }
+
+            float Score((Vector2 Uv, Vector4 Data, int Id, Vector2 World) c)
+            {
+                float r = Relevance(c.Uv, c.Data);
+                return _lightChosen.Contains(c.Id) ? r * 1.3f : r;   // incumbent's margin
+            }
         }
+
+        private readonly Dictionary<int, float> _lightRamp = new();
+        private readonly HashSet<int> _lightChosen = new();
+        private readonly List<int> _rampDrop = new();
+        private GameLocation? _lightRampLocation;
 
         // ---- labeled-window glow (HF class 12) ----
         private GameLocation? _windowCacheLocation;
@@ -274,9 +399,10 @@ namespace SDVRadiance
                     continue;
                 Vector2 local = Game1.GlobalToLocal(Game1.viewport, wp);
                 float u = local.X / vw, v = local.Y / vh;
-                if (u < -0.1f || u > 1.1f || v < -0.1f || v > 1.1f)
-                    continue;   // off-screen
-                AddLightCandidate(new Vector2(u, v), new Vector4(col * amt * b, Math.Max(0.02f, outdoors ? radiusOut : radiusIn)));
+                float reach = Math.Max(0.02f, outdoors ? radiusOut : radiusIn);
+                if (OffScreenBeyondReach(u, v, reach))
+                    continue;
+                AddLightCandidate(new Vector2(u, v), new Vector4(col * amt * b, reach));
             }
         }
 
@@ -424,9 +550,10 @@ namespace SDVRadiance
                     continue;
                 Vector2 local = Game1.GlobalToLocal(Game1.viewport, pos);
                 float u = local.X / vw, v = local.Y / vh;
-                if (u < -0.1f || u > 1.1f || v < -0.1f || v > 1.1f)
+                float reach = Math.Max(0.02f, radius * (0.6f + 0.4f * amt));
+                if (OffScreenBeyondReach(u, v, reach))
                     continue;
-                AddLightCandidate(new Vector2(u, v), new Vector4(col * a * bst, Math.Max(0.02f, radius * (0.6f + 0.4f * amt))));
+                AddLightCandidate(new Vector2(u, v), new Vector4(col * a * bst, reach));
             }
         }
 
@@ -448,10 +575,21 @@ namespace SDVRadiance
                 return Vector3.One;
 
             float dark = MathHelper.Clamp(config.LightingIndoorDarkness, 0f, 0.95f);
-            // Was a hard flip at 19:00 (rooms snapped darker on the tick). Ease over
-            // +-10 game-minutes; the pre-dawn branch keeps its old meaning (game time
-            // runs 600-2600, so it only matters for mods that stretch the clock).
-            float nightRamp = Math.Max(GameClock.RampAt(1900), 1f - GameClock.RampAt(600));
+            // Evening was a hard flip at 19:00 (rooms snapped darker on the tick), now eased
+            // over +-10 game-minutes.
+            //
+            // Morning is the half that never existed. The old dawn term ended at 06:10 - ten
+            // minutes after the player wakes - so a room was at full daytime brightness before
+            // anyone had walked across it, which is also the one time of day when the sun is
+            // lowest. It now holds through 06:00 and lifts over the next two hours, so waking
+            // up happens in a dim room that brightens while the morning gets going (asked for
+            // on Nexus, against Gentle Night Lighting as the reference).
+            // A QUARTER of the night term, not all of it: the sun is up at six, just low. At
+            // full strength the arithmetic lands on the same clamp as 20:00, so waking up would
+            // have looked exactly like midnight - dim is the ask, dark is a bug report.
+            const float MorningDimShare = 0.25f;
+            float morningRamp = MorningDimShare * (1f - GameClock.RampAt(700, 60f));
+            float nightRamp = Math.Max(GameClock.RampAt(1900), morningRamp);
             dark = MathHelper.Clamp(dark + config.LightingNightDarkness * nightRamp, 0f, 0.95f);
 
             // Cool moonlight-ish tint for the darkened room.

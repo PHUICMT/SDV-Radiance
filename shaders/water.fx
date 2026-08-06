@@ -69,7 +69,6 @@ float Presence;         // 0..1 whole-pass presence fade. The CPU already scales
                         // list - measured as an 8% jump in whole-frame brightness. Blending the
                         // finished result back toward the untouched pixel makes the fade mean what
                         // it says for EVERY term, including any added later.
-float WetRim;           // 1 = normal, 0 = the damp-land band off (A/B only, see its use below)
 float Time;             // seconds
 float Strength;         // ripple amplitude (UV units are scaled inside)
 float Speed;            // ripple animation speed
@@ -224,27 +223,25 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float4 src = tex2D(SourceSampler, uv);
     if (tileWater <= 0.001)
     {
-        // Wet ground rim: the last few texels of land before the waterline darken a touch.
-        // Skipped beside ice (a frozen shore is not damp) and lava (rock does not glisten wet).
+        // NOT WATER: the pass leaves the pixel exactly as it found it.
         //
-        // It used to be 8% over three texels in TWO steps, and two steps over three texels is
-        // not posterising, it is a hard-edged bar: the eye read it as the edge of the water
-        // rather than as damp ground. Worst at the town fountain, where stone surrounds the
-        // water on every side, so the bar closed into a dark ring and looked like the basin
-        // overflowing; along a river bank it read as the mask failing to reach the shore.
-        // Confirmed by switching this term alone (radiance_wetrim) with the rest of the pass
-        // untouched. Four steps over five texels at 3.5% keeps the pixel-art stepping while
-        // reading as ground that gets damp near water, which is all it was ever for.
-        float wet = saturate((sdfT + 5.0) / 5.0);
-        wet = floor(wet * 4.0 + 0.5) * 0.25;
-        float wetOk = step(0.75, maskA);
-        // WetRim is an A/B switch (radiance_wetrim), not a look control. This is the one term
-        // that paints LAND, it leaves through the early return so no presence or fade reaches
-        // it, and its posterised step makes a hard-edged dark band hugging every waterline -
-        // which is what a fountain's stone lip and a river bank show as "the water coming out
-        // past the edge". Flipping it alone, with the rest of the pass untouched, is the only
-        // clean way to tell that band apart from the map's own shore art.
-        src.rgb *= 1.0 - 0.035 * wet * wetOk * WetRim;
+        // There was a "wet ground rim" here, meant to darken the last few texels of land before
+        // a waterline so the ground read as damp. It never did that. Its gate was the mask's
+        // alpha CLASS rather than any measure of nearness to water, and its distance term read
+        // the neutral value of the distance field as "standing at the water's edge", so on a
+        // beach it dimmed 99% of the frame - sand tiles from the water, the cabin, the boat, the
+        // player - by about 3.9%, and at the town bridge 80% of the frame by 4.2%. Captured both
+        // ways and diffed; the heat map was the whole screen.
+        //
+        // That is also what made the picture jump while walking, reported since 1.3.0 and by
+        // three players: it rode on whether water was inside the mask window at all, so crossing
+        // that boundary switched a 4% dimming of EVERYTHING on and off. Removing it takes the
+        // step with it, and costs nothing that was ever visible, because a rim that covers the
+        // whole screen is not a rim.
+        //
+        // If a damp shoreline is wanted, it needs writing properly: gated on real distance to
+        // water, and with the distance field's "no water here" value distinguishable from its
+        // "right at the edge" value. Do not restore this version.
         return src;
     }
 

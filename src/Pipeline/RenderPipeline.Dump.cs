@@ -40,6 +40,11 @@ namespace SDVRadiance
 
         internal static void RequestDump(string name) => _pendingDump = name;
 
+        /// <summary>A capture is waiting for a frame. ModEntry reads this to keep the render path
+        /// alive while the whole stack is switched off, which is the only way to capture the
+        /// vanilla half of a comparison pair from inside the mod.</summary>
+        internal static bool DumpPending => _pendingDump != null;
+
         /// <summary>Root for captures: Documents, for the same reason MapDump goes there — the mod
         /// folder can live under Program Files and is not reliably writable.</summary>
         private static string DumpRoot
@@ -58,6 +63,41 @@ namespace SDVRadiance
         /// Write the frame's buffers. Called at the end of <c>Apply</c> with the game's target
         /// still bound, and it hands the device back exactly as it found it.
         /// </summary>
+        /// <summary>Window-sized scratch for the frame_out capture, allocated only while render
+        /// scale keeps the ping buffers smaller than the window.</summary>
+        private RenderTarget2D? _dumpCaptureRenderTarget;
+
+        /// <summary>
+        /// Capture the frame with the mod switched off. <c>Apply</c> returns before it reaches the
+        /// normal capture when nothing is active, so a vanilla half of a comparison pair would
+        /// otherwise be impossible to take from inside the mod. Everything downstream is the same
+        /// path, so the two halves are read back and encoded identically: the only difference
+        /// between them is the thing being demonstrated.
+        /// </summary>
+        private void WriteDisabledDump(SpriteBatch spriteBatch, ModConfig config)
+        {
+            try
+            {
+                RenderTargetBinding[] bindings = _device.GetRenderTargets();
+                if (bindings.Length == 0 || bindings[0].RenderTarget is not RenderTarget2D target)
+                    return;   // no buffer bound yet: keep the request and try the next frame
+                // WriteDump blits through the full-size ping buffer, which nothing has allocated
+                // this frame because the chain never ran.
+                EnsureTargets(target.Width, target.Height, target.Format);
+                _frameWidth = target.Width; _frameHeight = target.Height;
+                WriteDump(spriteBatch, target, target.Width, target.Height, config);
+                // Cleared only on the path that actually wrote. Clearing it up front loses the
+                // capture on the frames before the buffer is bound, and the caller has already
+                // moved on by the time anyone notices the file is missing.
+                _pendingDump = null;
+            }
+            catch (Exception ex)
+            {
+                _monitor.Log($"radiance_dump (stack off): {ex.Message}", LogLevel.Warn);
+                _pendingDump = null;
+            }
+        }
+
         private void WriteDump(SpriteBatch spriteBatch, RenderTarget2D target, int w, int h, ModConfig config)
         {
             string name = _pendingDump!;
@@ -65,9 +105,23 @@ namespace SDVRadiance
             Directory.CreateDirectory(dir);
 
             // The composed frame lives in the game's own target, which cannot be read back while
-            // it is bound. Blit it into a ping-pong buffer we already own, then rebind — one extra
+            // it is bound. Blit it into a buffer we already own, then rebind — one extra
             // full-res copy, on capture frames only.
-            _device.SetRenderTarget(_fullResolutionPingA);
+            // With render scale on, the ping buffers are SMALLER than the window: capturing
+            // through them would file a shrunken frame as "what the player saw" and every
+            // comparison would be measuring the wrong image. Use a full-size scratch instead.
+            RenderTarget2D capture = _fullResolutionPingA!;
+            if (capture.Width != w || capture.Height != h)
+            {
+                if (_dumpCaptureRenderTarget == null || _dumpCaptureRenderTarget.Width != w
+                    || _dumpCaptureRenderTarget.Height != h || _dumpCaptureRenderTarget.Format != target.Format)
+                {
+                    _dumpCaptureRenderTarget?.Dispose();
+                    _dumpCaptureRenderTarget = new RenderTarget2D(_device, w, h, false, target.Format, DepthFormat.None);
+                }
+                capture = _dumpCaptureRenderTarget;
+            }
+            _device.SetRenderTarget(capture);
             spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
             spriteBatch.Draw(target, new Rectangle(0, 0, w, h), Color.White);
             spriteBatch.End();
@@ -82,7 +136,7 @@ namespace SDVRadiance
             // frame_out is what the player sees; frame_in is what the game handed us. Both, because
             // a diff in frame_out with an identical frame_in is ours, and a diff in both is the
             // game's (a different save, a mod update, a cloud that moved) and the capture is void.
-            Add("frame_out", _fullResolutionPingA);
+            Add("frame_out", capture);
             Add("frame_in", _sceneRenderTarget);
             Add("mask_water", _waterMask);
             Add("mask_water_core", _waterMaskCore);

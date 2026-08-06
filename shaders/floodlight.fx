@@ -48,8 +48,38 @@ float2 OccMapSize;       // occluder mask size in cells
 float2 LightPosArr[8];   // per-light screen UV
 float4 LightColArr[8];   // rgb = colour, w = radius in UV (height units)
 float DirectCount;       // how many entries are live
+
+// SECOND TIER: more lights, same pools, no shadow ray. What costs real money per pixel
+// is the twelve-tap march each light of the first tier fires at the occluder mask, not
+// the slot itself - so the ranked leaders keep their shadows and everything behind them
+// still gets its circle of light. A row of shop windows now all light the floor; the
+// two or three that matter most are the ones that also cast.
+float2 SoftPosArr[16];
+float4 SoftColArr[16];
+float SoftCount;
 float Aspect;            // w/h so light pools stay round
 float ShadowStrength;    // 0..1 how dark a fully occluded ray gets
+
+// Room exposure: the time-of-day level of a WINDOWED interior. Deliberately its own
+// multiplier and NOT folded into Strength — Strength is the GI-relief slider players
+// tune low (0.1-0.2 is common), and anything routed through it becomes invisible.
+// (1,1,1) outdoors, in mines/volcano and in windowless rooms (caves stay untouched).
+float3 Exposure;
+
+// Puts back the colour that dimming flattens out, so a dark room reads as cold rather
+// than as grey. 1.0 = untouched (outdoors, caves, midday).
+float RoomSaturation;
+
+// Window light shafts: a sheared beam of daylight falling from each visible window,
+// leaning with the same sun the shadows use. Positions are the BOTTOM of the pane.
+float2 WindowPosArr[6];  // per-window screen UV
+float WindowCount;       // how many entries are live
+float3 WindowColour;     // daylight colour x strength (premultiplied, eased on CPU)
+float4 WindowBeam;       // x = lean (tiles sideways per tile of drop), y = reach (tiles),
+                         // z = half-width at the sill (tiles), w = gain
+float4 WindowPane;       // x,y = pane half-size (tiles), z = pane centre above the beam
+                         // origin (tiles), w = how much the glass itself glows
+float PaneDaylight;      // 1 while there is sky light outside, 0 after dark (eased on CPU)
 
 struct PixelInput
 {
@@ -91,6 +121,11 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // and characters block it, so every light × every object casts a soft shadow.
     // (The flood map above carries the sky + the lights' INDIRECT spill.)
     float3 direct = float3(0.0, 0.0, 0.0);
+    // The same pools carrying only their SHAPE and their HUE, with the brightness
+    // sliders divided out. Whether a fire lays a circle of light on the floor in front
+    // of it is not a matter of taste; how bright the mod's lamps burn is. Keeping the
+    // two apart is what lets a room we darkened still be answered by its own hearth.
+    float3 pool = float3(0.0, 0.0, 0.0);
     [unroll]
     for (int li = 0; li < 8; li++)
     {
@@ -99,7 +134,8 @@ float4 FloodPS(PixelInput input) : SV_TARGET
         float4 lc = LightColArr[li];
         float2 dvec = uv - lp;
         dvec.x *= Aspect;
-        float att = saturate(1.0 - length(dvec) / max(lc.w, 0.02));
+        float dist = length(dvec);
+        float att = saturate(1.0 - dist / max(lc.w, 0.02));
         // Softer than a pure square: the mid-pool stays brighter so the light reads as a
         // wide, diffuse glow that fades out gently, instead of a small hot dot.
         att = att * (0.55 + 0.45 * att);
@@ -116,9 +152,36 @@ float4 FloodPS(PixelInput input) : SV_TARGET
                 float wgt = smoothstep(0.06, 0.28, f) * smoothstep(1.02, 0.86, f);
                 occ = max(occ, OccAt(lerp(lp, uv, f)) * wgt);
             }
-            direct += lc.rgb * att * (1.0 - occ * ShadowStrength);
+            float lit01 = att * (1.0 - occ * ShadowStrength);
+            direct += lc.rgb * lit01;
+            // A HEARTH IS A CIRCLE ON THE FLOOR, NOT A WASH OVER THE ROOM. The reach above
+            // is deliberately generous so a single lamp can light a street; borrowing it
+            // for the push-back term spread the fire's warmth into every corner, which
+            // swallowed the room's own colour whole - a morning meant to be cool blue came
+            // out the same orange as noon. Tighter reach, squared falloff: bright on the
+            // boards in front of the fire, gone by the far wall.
+            float attP = saturate(1.0 - dist / max(lc.w * 0.6, 0.02));
+            float peak = max(max(lc.r, lc.g), max(lc.b, 0.0001));
+            pool += (lc.rgb / peak) * (attP * attP) * (1.0 - occ * ShadowStrength);
         }
     }
+    // Second tier: pools only, no ray. Same maths as above with the march left out.
+    [unroll]
+    for (int si = 0; si < 16; si++)
+    {
+        float son = step((float)si + 0.5, SoftCount);
+        float4 sc = SoftColArr[si];
+        float2 sdv = uv - SoftPosArr[si];
+        sdv.x *= Aspect;
+        float sdist = length(sdv);
+        float sa = saturate(1.0 - sdist / max(sc.w, 0.02));
+        sa = sa * (0.55 + 0.45 * sa) * son;
+        direct += sc.rgb * sa;
+        float saP = saturate(1.0 - sdist / max(sc.w * 0.6, 0.02));
+        float speak = max(max(sc.r, sc.g), max(sc.b, 0.0001));
+        pool += (sc.rgb / speak) * (saP * saP * son);
+    }
+
     light += direct;
 
     // Ordered dither breaks the bilinear ramps of the low-res map into pixel noise.
@@ -126,8 +189,88 @@ float4 FloodPS(PixelInput input) : SV_TARGET
 
     float3 mul = saturate(light + AmbientFloor + dith);
     float3 lit = src.rgb * lerp(float3(1.0, 1.0, 1.0), mul, Strength);
+
+    // THE GLASS IS NOT PART OF THE ROOM. A pane is a hole with the sky behind it, so the
+    // interior exposure must not touch it: multiplying a bright white pane by a dim
+    // morning room turned the glass a flat murky grey, which reads as dirty rather than
+    // as a window. Inside the pane the exposure returns to neutral and the daylight
+    // colour is added on top, so the glass stays the brightest thing in a dark room.
+    float pane = 0.0;
+    [unroll]
+    for (int pi = 0; pi < 6; pi++)
+    {
+        float pon = step((float)pi + 0.5, WindowCount);
+        float2 pd = (uv - WindowPosArr[pi]) * TilesPerScreen;
+        pd.y += WindowPane.z;                    // the beam starts below the pane's centre
+        float2 q = pd / max(WindowPane.xy, 0.001);
+        float r = saturate(1.0 - dot(q, q));
+        pane = max(pane, pon * r * r);
+    }
+    // ...but only while there is daylight on the other side of it. After dark the pane is a
+    // dark rectangle in a dark room, and exempting it from the room's exposure left a window
+    // still lit at midnight, brighter than the room it was supposed to be letting light into.
+    // The exemption follows the sun; the glow term below already fades with WindowColour.
+    float paneLit = pane * PaneDaylight;
+
+    // Time-of-day room level, applied BEFORE the lamp-glow and window-shaft terms so
+    // lamps and daylight beams punch through a dark room instead of dimming with it.
+    float3 expo = lerp(Exposure, float3(1.0, 1.0, 1.0), paneLit);
+    lit *= expo;
+
+    // Applied HERE, before the glass, the hearth and the sunbeam are added, so those
+    // three - the only light in the picture that is not room light - keep their own
+    // colour and stand out against it: a cold blue room with a warm fire and a gold bar
+    // of sun is the whole look. Held off the glass, which is not part of the room.
+    float sat = lerp(RoomSaturation, 1.0, paneLit);
+    float roomLum = dot(lit, float3(0.299, 0.587, 0.114));
+    lit = lerp(float3(roomLum, roomLum, roomLum), lit, sat);
+
+    lit += src.rgb * WindowColour * (pane * WindowPane.w);
+
+    // A FIRE IN A ROOM WE DARKENED HAS TO LOOK LIKE IT IS DOING THE LIGHTING. Every
+    // other path a light takes to the screen runs through Strength AND the brightness
+    // slider, both of which players tune low for a gentle look - a hearth's pool came
+    // out near a tenth of what the eye needs, so the flames burned with no circle of
+    // light on the boards in front of them. This term uses the SHAPE-only pool above,
+    // scaled by exactly how much WE dimmed the room, so it gives back what was taken and
+    // no more: outdoors, in caves and in a room at full daylight the exposure is 1, the
+    // term is identically zero, and nothing outside a dim interior changes by a pixel.
+    float dim = saturate(1.0 - dot(expo, float3(0.3333, 0.3333, 0.3333)));
+    lit += src.rgb * saturate(pool) * (1.15 * dim);
     // >1 light (lamp cores) adds a soft warm glow rather than clipping at white.
     lit += src.rgb * saturate(light - 1.0) * 0.45 * Strength;
+
+    // Window shafts: each pane lays a widening patch of daylight across the boards.
+    //
+    // Worked in TILES, not UV. UV is not isotropic — a screen is far wider than it is
+    // tall — so shearing UV x against UV y tilted the patch by a factor of the aspect
+    // ratio (about 2.5x on a widescreen): a lean meant as 0.35 tiles sideways per tile
+    // into the room came out near 0.9, and the patch read as a diagonal ribbon rather
+    // than light falling from a window. Tile space has no such trap.
+    //
+    // The light is almost entirely src-MODULATED — it brightens the wood it lands on
+    // the way sunlight does — with only a whisper of flat "air" term: a bigger flat
+    // term painted grey haze over the dark floor and read as murk, not as light.
+    float shaft = 0.0;
+    [unroll]
+    for (int wi = 0; wi < 6; wi++)
+    {
+        float won = step((float)wi + 0.5, WindowCount);
+        float2 wd = (uv - WindowPosArr[wi]) * TilesPerScreen;
+        float along = wd.y / max(WindowBeam.y, 0.001);
+        float x = wd.x - WindowBeam.x * wd.y;
+        // Spreads as it falls: a pane-wide band at the sill opening into a pool.
+        float hw = max(WindowBeam.z * (1.0 + 1.1 * saturate(along)), 0.001);
+        float t = saturate(abs(x) / hw);
+        float across = 1.0 - t * t;
+        across *= across;                       // soft shoulders, zero at the edge
+        // Brightest just inside the room, thinning out to nothing at the far end. A
+        // flat core with a quick edge is what reads as a painted stripe.
+        float f = saturate(1.0 - along);
+        float len = smoothstep(0.0, 0.22, along) * f * (0.3 + 0.7 * f);
+        shaft += won * across * len;
+    }
+    lit += (src.rgb * 1.2 + 0.03) * WindowColour * (shaft * WindowBeam.w);
 
     return float4(lit, src.a);
 }

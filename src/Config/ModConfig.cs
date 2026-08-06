@@ -31,6 +31,22 @@ namespace SDVRadiance
         Vibrant
     }
 
+    /// <summary>Quality presets, kept deliberately separate from <see cref="LookPreset"/>:
+    /// these change what the picture COSTS, never what it looks like. Someone running Cinematic
+    /// on a weak machine should not have to give up their look to get frames back.</summary>
+    public enum PerfPreset
+    {
+        /// <summary>Everything on at full resolution.</summary>
+        Quality,
+        /// <summary>Three quarter resolution and the two lens effects off. The measured sweet
+        /// spot: about 44% less fill work, and dropping chromatic aberration also lets the
+        /// grade and vignette merge into one pass.</summary>
+        Balanced,
+        /// <summary>Half resolution and the expensive extras off. Water reflections stay -
+        /// they are the point of the mod, and the scenery cache already made them cheap.</summary>
+        Performance
+    }
+
     /// <summary>A user-saved look: a named snapshot of the effect settings.</summary>
     public sealed class NamedProfile
     {
@@ -68,6 +84,23 @@ namespace SDVRadiance
         /// <summary>The quick-look preset last chosen from the menu's top dropdown (Custom = hand-tuned).</summary>
         public LookPreset ActivePreset { get; set; } = LookPreset.Custom;
 
+        /// <summary>Resolution the EFFECT chain runs at, as a fraction of the window. 1 = native.
+        /// The game still draws the world at full size; only our passes work on a smaller image
+        /// and the finished frame is scaled back up, so the saving is quadratic (0.5 = a quarter
+        /// of the fill cost). Point sampling both ways keeps the pixel art hard-edged: the art is
+        /// already magnified ~4x on screen, so at 0.5 a texel still covers less than one game
+        /// pixel and the blocks come back intact. Values between the two are a genuine resample -
+        /// softer, and the block grid can shimmer while the camera moves.</summary>
+        public float RenderScale { get; set; } = 1f;
+
+        /// <summary>How much of the upscale sharpening to apply, as a multiple of the tuned
+        /// amount: 0 turns it off (plain bilinear stretch), 1 is the measured default, and the
+        /// slider goes past that for anyone who likes it crisper. The tuned amount already
+        /// rises as <see cref="RenderScale"/> falls, since a smaller buffer needs more help.
+        /// Only does anything while the scale is below 1 — it lives inside the upscale, and at
+        /// native resolution there is no upscale to sharpen.</summary>
+        public float RenderSharpness { get; set; } = 1f;
+
         // --- Bloom ---
         public bool BloomEnabled { get; set; } = true;
         public float BloomThreshold { get; set; } = 0.72f;
@@ -76,7 +109,11 @@ namespace SDVRadiance
         // --- Color grade ---
         public bool ColorGradeEnabled { get; set; } = true;
         public float ColorGradeStrength { get; set; } = 1f;
-        public float ColorGradeContrast { get; set; } = 1.15f;
+        // 1.5.0: 1.15 (the Cinematic preset's own value) read as punchy on first launch, and the
+        // most common note from people who liked the look was that they had to soften it before a
+        // long session. 1.10 sits halfway to Subtle's 1.06. Changing the DEFAULT only reaches new
+        // installs: anyone already playing has this written in config.json and keeps their value.
+        public float ColorGradeContrast { get; set; } = 1.10f;
         public float ColorGradeSaturation { get; set; } = 1.05f;
         public float ColorGradeTemperature { get; set; } = 0.05f;
         public float ColorGradeBrightness { get; set; } = 1f;
@@ -220,6 +257,8 @@ namespace SDVRadiance
         {
             static float ClampToRange(float v, float lo, float hi) => float.IsNaN(v) ? lo : Math.Clamp(v, lo, hi);
 
+            RenderScale = ClampToRange(RenderScale, 0.5f, 1f);
+            RenderSharpness = ClampToRange(RenderSharpness, 0f, 2f);
             BloomThreshold = ClampToRange(BloomThreshold, 0f, 1f);
             BloomIntensity = ClampToRange(BloomIntensity, 0f, 2f);
             ColorGradeStrength = ClampToRange(ColorGradeStrength, 0f, 1f);
@@ -365,6 +404,51 @@ namespace SDVRadiance
             FogEnabled = p.FogEnabled;
             FogNightMist = p.FogNightMist;
             FogDensity = p.FogDensity;
+            Clamp();
+        }
+
+        /// <summary>Apply a quality preset. Touches only what costs frames — never the grade,
+        /// the temperature, or any other artistic control — so a chosen look survives it.</summary>
+        public void ApplyPerfPreset(PerfPreset preset)
+        {
+            switch (preset)
+            {
+                case PerfPreset.Quality:
+                    RenderScale = 1f;
+                    TiltShiftEnabled = true;
+                    ChromaticAberrationEnabled = true;
+                    FloodLightingEnabled = true;
+                    WaterReflection = true;
+                    DirectionalShadowObjects = true;
+                    break;
+
+                case PerfPreset.Balanced:
+                    RenderScale = 0.75f;
+                    // Both are lens dressing, and turning CA off also merges the grade and
+                    // finishing passes into one (see the tail pass) - two savings for one loss.
+                    TiltShiftEnabled = false;
+                    ChromaticAberrationEnabled = false;
+                    FloodLightingEnabled = true;
+                    WaterReflection = true;
+                    DirectionalShadowObjects = true;
+                    break;
+
+                case PerfPreset.Performance:
+                    RenderScale = 0.5f;
+                    TiltShiftEnabled = false;
+                    ChromaticAberrationEnabled = false;
+                    // Flood GI is the pricier of the two lighting models; classic lighting
+                    // keeps rooms lit and lamps pooled for a fraction of the work.
+                    FloodLightingEnabled = false;
+                    LightingEnabled = true;
+                    // Per-object shadow bakes scale with how much scenery is on screen, which
+                    // is exactly what a weak machine cannot afford. Characters keep theirs.
+                    DirectionalShadowObjects = false;
+                    // Reflections stay: they are the reason to run this mod, and the scenery
+                    // cache already took most of their cost away.
+                    WaterReflection = true;
+                    break;
+            }
             Clamp();
         }
 

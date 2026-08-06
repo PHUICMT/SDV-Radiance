@@ -139,14 +139,17 @@ namespace SDVRadiance
         /// <summary>Apply the effect chain to the world layer after the game has drawn it.</summary>
         private void OnRenderedWorld(object? sender, RenderedWorldEventArgs e)
         {
-            HarmonyPatcher.ForceBufferDraw = EffectsActive; // self-heal: keep the postfix in sync with live config
+            // Self-heal: keep the postfix in sync with live config. A pending capture holds the
+            // buffer open too, because the vanilla half of a before/after pair is taken with the
+            // whole stack off, and with no buffer bound there is nothing to read back.
+            HarmonyPatcher.ForceBufferDraw = EffectsActive || RenderPipeline.DumpPending;
             // Only freeze the game's own water frame-cycle where we actually render ripple this
             // frame — otherwise decorative indoor water (with the effect turned off there) would
             // sit frozen instead of playing its normal vanilla animation.
             bool waterHere = RenderPipeline.WaterAllowedIn(Game1.currentLocation, _config);
             HarmonyPatcher.FreezeGameWater = _config.Enabled && _config.WaterEnabled && waterHere;
             WaterDrawHook.Enabled = _config.Enabled && (_config.WaterEnabled || _config.WaterReflection);
-            if (!EffectsActive)
+            if (!EffectsActive && !RenderPipeline.DumpPending)
                 return;
             Pipeline.Apply(e.SpriteBatch, _config);
             if (RenderPipeline.DebugChannel != DebugOverlayChannel.Off)

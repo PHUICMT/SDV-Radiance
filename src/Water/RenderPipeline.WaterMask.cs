@@ -517,6 +517,14 @@ namespace SDVRadiance
         /// </summary>
         public void BakeWaterSpriteMask()
         {
+            if (!_timingOn) { BakeWaterSpriteMaskCore(); return; }
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            BakeWaterSpriteMaskCore();
+            AccumulateBuildTime(4, t0);
+        }
+
+        private void BakeWaterSpriteMaskCore()
+        {
             SpriteMaskReady = false;
             GameLocation? location = Game1.currentLocation;
             if (location == null || !_hasWaterInMask)

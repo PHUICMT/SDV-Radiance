@@ -21,13 +21,19 @@ namespace SDVRadiance
             _label = label; Row = row; Get = get; Set = set;
         }
 
-        public bool Hit(int x, int y) => new Rectangle(Row.X, Row.Y, Row.Width, 36).Contains(x, y);
+        /// <summary>Box and text grow with the panel on a large window (see the tuner's layout scale).</summary>
+        public float TextScale = 1f;
+
+        public bool Hit(int x, int y) => new Rectangle(Row.X, Row.Y, Row.Width, (int)(36 * TextScale)).Contains(x, y);
 
         public void Draw(SpriteBatch spriteBatch, int dy)
         {
+            float box = 4f * TextScale;
             spriteBatch.Draw(Game1.mouseCursors, new Vector2(Row.X, Row.Y + dy), Get() ? Checked : Unchecked,
-                Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0.9f);
-            TunerText.DrawFit(spriteBatch, _label, new Vector2(Row.X + 48, Row.Y + 6 + dy), Row.Width - 56, Game1.textColor, 0.9f);
+                Color.White, 0f, Vector2.Zero, box, SpriteEffects.None, 0.9f);
+            int textX = Row.X + (int)(48 * TextScale);
+            TunerText.DrawFit(spriteBatch, _label, new Vector2(textX, Row.Y + 6 * TextScale + dy),
+                Row.Right - textX - 8, Game1.textColor, 0.9f * TextScale);
         }
     }
 }

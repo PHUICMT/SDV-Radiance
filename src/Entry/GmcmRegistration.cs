@@ -69,16 +69,19 @@ namespace SDVRadiance
 
             api.AddParagraph(manifest, () => i18n("config.preset.hint"));
 
-            // Same order as the F6 tuner: tone first, then light/shadow, then ambience, lens last.
+            // Same order as the F6 tuner: how it runs first (the one setting every player has
+            // an opinion about), then camera/film, then light, then the world, then the
+            // troubleshooting page.
+            api.AddPageLink(manifest, "perf", () => i18n("config.section.perf"));
             api.AddPageLink(manifest, "colorgrade", () => i18n("config.section.colorgrade"));
             api.AddPageLink(manifest, "bloom", () => i18n("config.section.bloom"));
-            api.AddPageLink(manifest, "shadows", () => i18n("config.section.shadows"));
+            api.AddPageLink(manifest, "lens", () => i18n("config.section.lens"));
             api.AddPageLink(manifest, "lighting", () => i18n("config.section.lighting"));
+            api.AddPageLink(manifest, "shadows", () => i18n("config.section.shadows"));
             api.AddPageLink(manifest, "godrays", () => i18n("config.section.godrays"));
+            api.AddPageLink(manifest, "water", () => i18n("config.section.water"));
             api.AddPageLink(manifest, "cloudshadow", () => i18n("config.section.cloudshadow"));
             api.AddPageLink(manifest, "fog", () => i18n("config.section.fog"));
-            api.AddPageLink(manifest, "tiltshift", () => i18n("config.section.tiltshift"));
-            api.AddPageLink(manifest, "finishing", () => i18n("config.section.finishing"));
             api.AddPageLink(manifest, "camera", () => i18n("config.section.camera"));
             api.AddPageLink(manifest, "misc", () => i18n("config.section.misc"));
 
@@ -163,8 +166,8 @@ namespace SDVRadiance
             api.AddNumberOption(manifest, () => config().CloudShadowSpeed, v => config().CloudShadowSpeed = v,
                 () => i18n("config.cloudshadow.speed.name"), null, 0f, 0.1f, 0.005f);
 
-            // --- Tilt-shift (implemented) ---
-            api.AddPage(manifest, "tiltshift", () => i18n("config.section.tiltshift"));
+            // --- Lens: the camera-glass effects, grouped as the F6 tuner groups them ---
+            api.AddPage(manifest, "lens", () => i18n("config.section.lens"));
             api.AddBoolOption(manifest, () => config().TiltShiftEnabled, v => config().TiltShiftEnabled = v,
                 () => i18n("config.tiltshift.enabled.name"), () => i18n("config.tiltshift.enabled.tooltip"));
             api.AddTextOption(manifest,
@@ -183,9 +186,18 @@ namespace SDVRadiance
                 () => i18n("config.tiltshift.top.name"), null, 0f, 1f, 0.05f);
             api.AddNumberOption(manifest, () => config().TiltShiftBottomRatio, v => config().TiltShiftBottomRatio = v,
                 () => i18n("config.tiltshift.bottom.name"), null, 0f, 1f, 0.05f);
+            api.AddSectionTitle(manifest, () => i18n("config.section.finishing"));
+            api.AddBoolOption(manifest, () => config().VignetteEnabled, v => config().VignetteEnabled = v,
+                () => i18n("config.vignette.enabled.name"), () => i18n("config.vignette.enabled.tooltip"));
+            api.AddNumberOption(manifest, () => config().VignetteStrength, v => config().VignetteStrength = v,
+                () => i18n("config.vignette.strength.name"), null, 0f, 1f, 0.05f);
+            api.AddBoolOption(manifest, () => config().ChromaticAberrationEnabled, v => config().ChromaticAberrationEnabled = v,
+                () => i18n("config.ca.enabled.name"), () => i18n("config.ca.enabled.tooltip"));
+            api.AddNumberOption(manifest, () => config().ChromaticAberrationStrength, v => config().ChromaticAberrationStrength = v,
+                () => i18n("config.ca.strength.name"), null, 0f, 1f, 0.05f);
 
-            // --- Water + finishing (implemented) ---
-            api.AddPage(manifest, "finishing", () => i18n("config.section.finishing"));
+            // --- Water (implemented) ---
+            api.AddPage(manifest, "water", () => i18n("config.section.water"));
             api.AddBoolOption(manifest, () => config().WaterEnabled, v => config().WaterEnabled = v,
                 () => i18n("config.water.enabled.name"), () => i18n("config.water.enabled.tooltip"));
             api.AddNumberOption(manifest, () => config().WaterStrength, v => config().WaterStrength = v,
@@ -202,14 +214,6 @@ namespace SDVRadiance
                 () => i18n("config.water.reflectstrength.name"), null, 0f, 1f, 0.05f);
             api.AddBoolOption(manifest, () => config().WaterEffectIndoors, v => config().WaterEffectIndoors = v,
                 () => i18n("config.water.indoors.name"), () => i18n("config.water.indoors.tooltip"));
-            api.AddBoolOption(manifest, () => config().VignetteEnabled, v => config().VignetteEnabled = v,
-                () => i18n("config.vignette.enabled.name"), () => i18n("config.vignette.enabled.tooltip"));
-            api.AddNumberOption(manifest, () => config().VignetteStrength, v => config().VignetteStrength = v,
-                () => i18n("config.vignette.strength.name"), null, 0f, 1f, 0.05f);
-            api.AddBoolOption(manifest, () => config().ChromaticAberrationEnabled, v => config().ChromaticAberrationEnabled = v,
-                () => i18n("config.ca.enabled.name"), () => i18n("config.ca.enabled.tooltip"));
-            api.AddNumberOption(manifest, () => config().ChromaticAberrationStrength, v => config().ChromaticAberrationStrength = v,
-                () => i18n("config.ca.strength.name"), null, 0f, 1f, 0.05f);
 
             // --- Dynamic lighting (implemented) ---
             api.AddPage(manifest, "lighting", () => i18n("config.section.lighting"));
@@ -259,6 +263,13 @@ namespace SDVRadiance
                 v => i18n($"config.camera.mode.{v.ToLowerInvariant()}"));
             api.AddNumberOption(manifest, () => config().CameraFollowSpeed, v => config().CameraFollowSpeed = v,
                 () => i18n("config.smoothcam.speed.name"), () => i18n("config.smoothcam.speed.tooltip"), 0.05f, 1f, 0.05f);
+
+            // --- Performance page: what the picture costs, kept away from the look settings ---
+            api.AddPage(manifest, "perf", () => i18n("config.section.perf"));
+            api.AddNumberOption(manifest, () => config().RenderScale, v => config().RenderScale = v,
+                () => i18n("config.renderscale.name"), () => i18n("config.renderscale.tooltip"), 0.5f, 1f, 0.05f);
+            api.AddNumberOption(manifest, () => config().RenderSharpness, v => config().RenderSharpness = v,
+                () => i18n("config.rendersharpness.name"), () => i18n("config.rendersharpness.tooltip"), 0f, 2f, 0.1f);
 
             // --- Misc page: hotkeys + diagnostics + roadmap ---
             api.AddPage(manifest, "misc", () => i18n("config.section.misc"));

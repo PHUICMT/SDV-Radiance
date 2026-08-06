@@ -34,6 +34,14 @@ namespace SDVRadiance
         /// for render-target swaps).</summary>
         public void BakeWaterReflection()
         {
+            if (!_timingOn) { BakeWaterReflectionCore(); return; }
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            BakeWaterReflectionCore();
+            AccumulateBuildTime(5, t0);
+        }
+
+        private void BakeWaterReflectionCore()
+        {
             ReflectRTReady = false;
             ReflectRTHasPlayer = false;
             GameLocation? location = Game1.currentLocation;
@@ -294,6 +302,29 @@ namespace SDVRadiance
         /// as the other bakes (render-target swaps are safe there).</summary>
         public void BakeSceneryReflection()
         {
+            if (!_timingOn) { BakeSceneryReflectionCore(); return; }
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            BakeSceneryReflectionCore();
+            AccumulateBuildTime(6, t0);
+        }
+
+        // P2 (1.5.0): the xTile layer walk was the single most expensive item in the mod and
+        // it ran every frame. The camera only ever translates, so the walk now renders into a
+        // world-anchored cache with a guard band, and the per-frame cost is one quad blit from
+        // the cache into the screen-aligned mirror source (the shader is untouched). The cache
+        // rebuilds on a location/size change, when the camera leaves the guard band, on a
+        // pending dump (captures must be same-frame exact), and every few ticks so animated
+        // map tiles (waterfall art) keep moving in the mirror - at worst their reflection lags
+        // by SceneCacheTtlTicks, invisible in a squashed wavy mirror.
+        private RenderTarget2D? _mirrorSceneCache;
+        private GameLocation? _sceneCacheLocation;
+        private int _sceneCacheAnchorX, _sceneCacheAnchorY;   // world px of the cache's top-left
+        private int _sceneCacheBuiltTick = -1;
+        private const int SceneCachePadPx = 128;              // 2 tiles of camera drift per side
+        private const int SceneCacheTtlTicks = 6;             // animated-tile refresh (~100 ms)
+
+        private void BakeSceneryReflectionCore()
+        {
             SceneRTReady = false;
             GameLocation? location = Game1.currentLocation;
             if (location?.map == null || !_hasWaterInMask || Game1.game1.takingMapScreenshot)
@@ -311,25 +342,62 @@ namespace SDVRadiance
             }
             _spriteMaskSpriteBatch ??= new SpriteBatch(_device);
 
+            int vpX = Game1.viewport.X, vpY = Game1.viewport.Y;
+            int cacheW = w + 2 * SceneCachePadPx, cacheH = h + 2 * SceneCachePadPx;
+            bool cacheValid = _mirrorSceneCache != null
+                && ReferenceEquals(_sceneCacheLocation, location)
+                && _mirrorSceneCache.Width == cacheW && _mirrorSceneCache.Height == cacheH
+                && Game1.ticks - _sceneCacheBuiltTick < SceneCacheTtlTicks
+                && vpX >= _sceneCacheAnchorX && vpY >= _sceneCacheAnchorY
+                && vpX + w <= _sceneCacheAnchorX + cacheW && vpY + h <= _sceneCacheAnchorY + cacheH
+                && _pendingDump == null;
+
             try
             {
-                _device.SetRenderTarget(_mirrorSourceRenderTarget);
-                _device.Clear(Color.Black);
                 var spriteBatch = _spriteMaskSpriteBatch;
-                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
-                var dd = Game1.mapDisplayDevice;
-                dd.BeginScene(spriteBatch);
-                // Bottom-up families, same order the game composes them. AlwaysFront is
-                // deliberately out: it is mostly weather + translucent shadow washes.
-                foreach (string fam in _sceneLayerFamilies)
+                if (!cacheValid)
                 {
-                    foreach (var l in location.map.Layers)
+                    if (_mirrorSceneCache == null || _mirrorSceneCache.Width != cacheW || _mirrorSceneCache.Height != cacheH)
                     {
-                        if (MapLayers.BelongsToFamily(l.Id, fam))
-                            l.Draw(dd, Game1.viewport, xTile.Dimensions.Location.Origin, false, 4);
+                        _mirrorSceneCache?.Dispose();
+                        // PreserveContents: the whole point is reading it back on later frames.
+                        _mirrorSceneCache = new RenderTarget2D(_device, cacheW, cacheH, false, SurfaceFormat.Color,
+                            DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
                     }
+                    _sceneCacheLocation = location;
+                    _sceneCacheAnchorX = vpX - SceneCachePadPx;
+                    _sceneCacheAnchorY = vpY - SceneCachePadPx;
+                    _sceneCacheBuiltTick = Game1.ticks;
+
+                    _device.SetRenderTarget(_mirrorSceneCache);
+                    _device.Clear(Color.Black);
+                    spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+                    var dd = Game1.mapDisplayDevice;
+                    dd.BeginScene(spriteBatch);
+                    // Bottom-up families, same order the game composes them. AlwaysFront is
+                    // deliberately out: it is mostly weather + translucent shadow washes.
+                    // The main target in this event is WORLD-pixel sized, so the padded
+                    // viewport maps 1:1 onto the padded cache.
+                    var paddedViewport = new xTile.Dimensions.Rectangle(
+                        new xTile.Dimensions.Location(_sceneCacheAnchorX, _sceneCacheAnchorY),
+                        new xTile.Dimensions.Size(cacheW, cacheH));
+                    foreach (string fam in _sceneLayerFamilies)
+                    {
+                        foreach (var l in location.map.Layers)
+                        {
+                            if (MapLayers.BelongsToFamily(l.Id, fam))
+                                l.Draw(dd, paddedViewport, xTile.Dimensions.Location.Origin, false, 4);
+                        }
+                    }
+                    dd.EndScene();
+                    spriteBatch.End();
                 }
-                dd.EndScene();
+
+                // Screen-aligned mirror source = one quad from the cache, shifted by the
+                // camera delta since the cache was anchored.
+                _device.SetRenderTarget(_mirrorSourceRenderTarget);
+                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
+                spriteBatch.Draw(_mirrorSceneCache, new Vector2(_sceneCacheAnchorX - vpX, _sceneCacheAnchorY - vpY), Color.White);
                 spriteBatch.End();
                 SceneRTReady = true;
             }

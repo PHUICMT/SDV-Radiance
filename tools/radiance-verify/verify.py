@@ -56,9 +56,16 @@ def read_buffer(path, entry):
     return data.reshape(h, w, bpp)
 
 
-def comparable(a, b):
-    """Reasons these two captures cannot be compared. Empty list = go ahead."""
+def comparable(a, b, allow_settings=()):
+    """Reasons these two captures cannot be compared. Empty list = go ahead.
+
+    Returns (problems, notes): notes are differences worth printing that do not stop
+    the comparison. `allow_settings` names settings whose values are EXPECTED to differ
+    (--allow-setting), for the one case where that is the point of the run: measuring
+    what a quality setting actually costs the picture.
+    """
     problems = []
+    notes = []
     for name, meta in (("A", a), ("B", b)):
         if not meta.get("frozen"):
             problems.append(f"capture {name} was taken with the clock running (run radiance_freeze first)")
@@ -66,12 +73,32 @@ def comparable(a, b):
     for key in SCENE_KEYS:
         if sa.get(key) != sb.get(key):
             problems.append(f"scene.{key} differs: A={sa.get(key)!r} B={sb.get(key)!r}")
-    if a.get("config") != b.get("config"):
-        problems.append("config differs between the captures (different settings, not a regression)")
+    # Settings: a shared key holding different values means the two captures were taken
+    # with different settings and nothing can be concluded. A key that exists on ONE side
+    # only is a setting the release ADDED or RETIRED, which is exactly the situation you
+    # want to verify (does the new setting, at its default, change the old picture?) - so
+    # it is reported and the comparison continues. Naming the keys matters: a bare
+    # "config differs" used to make every cross-release comparison unusable.
+    ca, cb = a.get("config", {}) or {}, b.get("config", {}) or {}
+    changed = sorted(k for k in set(ca) & set(cb) if ca[k] != cb[k])
+    allowed = [k for k in changed if k in allow_settings]
+    changed = [k for k in changed if k not in allow_settings]
+    if allowed:
+        notes.append("settings deliberately compared across values: "
+                     + ", ".join(f"{k} A={ca[k]!r} B={cb[k]!r}" for k in allowed))
+    if changed:
+        problems.append("settings differ between the captures (not a regression): "
+                        + ", ".join(f"{k} A={ca[k]!r} B={cb[k]!r}" for k in changed))
+    added = sorted(set(cb) - set(ca))
+    removed = sorted(set(ca) - set(cb))
+    if added:
+        notes.append("settings present only in B (added since A): " + ", ".join(f"{k}={cb[k]!r}" for k in added))
+    if removed:
+        notes.append("settings present only in A (retired since): " + ", ".join(f"{k}={ca[k]!r}" for k in removed))
     ra, rb = a.get("render", {}), b.get("render", {})
     if ra != rb:
         problems.append(f"render size differs: A={ra} B={rb}")
-    return problems
+    return problems, notes
 
 
 def presence_drift(a, b):
@@ -177,17 +204,21 @@ def cmd_inspect(path):
     return 1 if problems else 0
 
 
-def cmd_compare(dir_a, dir_b, png):
+def cmd_compare(dir_a, dir_b, png, allow_settings=()):
     a, b = load(dir_a), load(dir_b)
     print(f"A: {dir_a}\n   {describe(a)}  (mod {a.get('modVersion')})")
     print(f"B: {dir_b}\n   {describe(b)}  (mod {b.get('modVersion')})\n")
 
-    problems = comparable(a, b)
+    problems, notes = comparable(a, b, allow_settings)
     if problems:
         print("NOT COMPARABLE:")
         for p in problems:
             print(f"  - {p}")
         return 2
+    if notes:
+        for n in notes:
+            print(f"note: {n}")
+        print()
 
     drift = presence_drift(a, b)
     if drift:
@@ -274,12 +305,15 @@ def main():
     ap.add_argument("-b", "--candidate", help="candidate capture directory")
     ap.add_argument("-d", "--inspect", help="inventory one capture directory")
     ap.add_argument("--png", action="store_true", help="write per-buffer diff images (needs Pillow)")
+    ap.add_argument("--allow-setting", action="append", metavar="KEY",
+                    help="compare even though this setting differs (e.g. RenderScale) - use when "
+                         "measuring what a quality setting costs, never to silence a surprise")
     args = ap.parse_args()
 
     if args.inspect:
         return cmd_inspect(args.inspect)
     if args.baseline and args.candidate:
-        return cmd_compare(args.baseline, args.candidate, args.png)
+        return cmd_compare(args.baseline, args.candidate, args.png, set(args.allow_setting or ()))
     ap.print_help()
     return 2
 

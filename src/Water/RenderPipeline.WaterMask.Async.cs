@@ -1625,7 +1625,12 @@ namespace SDVRadiance
             if (_waterSignedDistancePixels == null || _waterSignedDistancePixels.Length < pcount) _waterSignedDistancePixels = new byte[pcount];
             Array.Clear(_waterMaskPixels, 0, pcount);
             Array.Clear(_waterMaskCorePixels, 0, count);
-            for (int p = 0; p < pcount; p++) _waterSignedDistancePixels[p] = 128;   // 128 = exactly on the waterline
+            // 0 = as far from water as this encoding can say. It used to be 128, which means
+            // "exactly on the waterline", so a window with NO WATER IN IT told the shader that
+            // every single pixel was standing at the water's edge - and the wet-rim term, whose
+            // whole job is to darken the last few texels of land before the water, then had
+            // licence to darken the entire screen. Nothing is near water here; say so.
+            for (int p = 0; p < pcount; p++) _waterSignedDistancePixels[p] = 0;
 
             if (_waterMask == null || _waterMask.Width != pw || _waterMask.Height != ph)
             {

@@ -30,6 +30,9 @@ sprites, outfit mods, and recolors work automatically — no per-mod patches.
 - Moonlight shadows at night, scaled by lunar phase and season
 - Per-light indoor shadows (lamps, torches, fireplaces)
 - Occlusion-aware dynamic lighting: darken flat/unlit interiors, pool warm light around real light sources, blocked by walls
+- Interiors that follow the clock: rooms dim at dawn, fill through the morning, sink before dusk and go genuinely dark at night, with the colour moving from cool sky light to neutral to warm to blue
+- Daylight through the windows: each pane lays a patch of sun across the floor that leans with the same sun the shadows use, coloured by hour, season and weather
+- Up to 24 lights per scene; the nearest and brightest cast their own shadows, the rest pool light
 
 **Water**
 - Pixel-accurate reflections mirrored along the real painted shoreline (banks, trees, bridges, piers)
@@ -43,6 +46,10 @@ sprites, outfit mods, and recolors work automatically — no per-mod patches.
 - Bloom, tilt-shift depth blur, vignette, chromatic aberration
 - Cinematic color grading with automatic mood by time / weather / season and metered auto-exposure
 - Blue light eye comfort filter, layered on the grade or used on its own
+
+**Performance**
+- Effect resolution: compute the effects at a fraction of the window while the world stays full size, with FSR-style sharpening on the way back up
+- Three quality presets, and a benchmark that measures your machine and tells you what to set
 
 **Controls**
 - Live in-game tuner (default **F6**), organized into tabs by category: drag to preview, presets, save/load named looks
@@ -101,6 +108,10 @@ effects are active.
 2. (Recommended) Install [Generic Mod Config Menu](https://www.nexusmods.com/stardewvalley/mods/5098).
 3. Unzip this mod into your `Stardew Valley/Mods` folder.
 4. Launch through SMAPI. Press **F6** for the tuner, **F7** to toggle.
+
+The stock look is a strong one. If it reads as too contrasty for a long session, press **F6**
+and pick the **Subtle** preset on the first tab, or raise the blue light filter for tired eyes.
+Nothing needs editing by hand, and both are live.
 
 Bundled languages: English, Thai, Simplified Chinese. A Korean translation is available
 as a [separate mod](https://www.nexusmods.com/stardewvalley/mods/49448).

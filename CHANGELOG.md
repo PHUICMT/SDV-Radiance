@@ -2,6 +2,119 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.5.0
+
+### Added
+
+- Interiors now follow the time of day. A farmhouse used to look the same at six in the morning
+  as at noon, and the same again at midnight. Rooms are dim when you wake, fill in through the
+  morning, sink again before dark and are genuinely dark at night. The colour moves with the hour
+  as well: cool while the room is still lit by open sky rather than by the sun, neutral in the
+  middle of the day, warm before dusk, and blue at night. Only rooms with windows are affected.
+  Caves, the mines and the volcano are untouched.
+- Daylight comes through the windows. Each pane lays a patch of sunlight across the floor that
+  leans with the same sun your shadows follow, so it stretches long and low in the morning,
+  shortens toward noon and swings the other way in the evening. Its colour and strength follow the
+  hour, the season and the weather. The glass itself is lit from outside rather than by the room,
+  so it stays bright while the room around it is dark.
+- A fire lights the room it is in. A hearth or a lamp in a darkened interior now lays a real
+  circle of light on the boards in front of it, flickering with the flame and blocked by walls
+  like any other light.
+- Effect resolution, with sharpening. The effects can be computed at a fraction of your window
+  size while the game world stays full size, which costs far less GPU work. The image is sharpened
+  as it scales back up, and the sharpening has its own slider.
+- Quality presets and a benchmark. Three one-click presets, and a button that measures your
+  machine for about ten seconds and tells you what to set. Both live on a new Performance tab.
+
+### Changed
+
+- Up to 24 lights can light a scene at once, raised from 16. The nearest and brightest still cast
+  their own shadows; the rest add their pools of light. A town at night with many lamps is
+  noticeably better lit than before.
+- The F6 tuner is larger and scales with your window, every tab carries a one line description of
+  what it does, and the tabs have icons. Performance and Diagnostics have their own tabs.
+- The Generic Mod Config Menu pages are reorganised to match the F6 tabs, so the two describe the
+  mod the same way.
+- One command now writes a whole bug report for you. Stand where something looks wrong and type
+  `radiance_report` in the SMAPI console: no coordinates, no arguments. It writes
+  `Documents\Radiance-Dumps\radiance-report.txt` with the versions, the tile you are on and a small
+  map of the ones around it marking water, bridge decks, walls and ground, the time, season and
+  weather, which effects you had switched on, the label check for everything on screen, and the
+  installed mods that could be involved, with known-incompatible ones flagged. Attach that file and
+  there is nothing else to type. Almost every water report is about a shape rather than one tile,
+  and "which map or mod is that bridge from" was usually the one thing missing.
+- The stock colour grade is a little softer out of the box, with contrast moving from 1.15 to 1.10.
+  The most common note from people who liked the look was that they turned the contrast down before
+  settling in for a long session, so the shipped starting point now sits halfway to the Subtle
+  preset. This only changes new installs. If you already play with Radiance, your own value is
+  written in your config and is left exactly as it is.
+
+### Fixed
+
+- Light pools no longer blink on and off as you walk through a room with several windows or lamps,
+  such as a shop. Ranking the lights ran too late to matter, so a scene between nine and sixteen
+  lights handed the shader whichever ones the game happened to list first, and taking a single
+  step reshuffled them. Lights are now ranked properly, keep a stable order, and a new one fades
+  in rather than appearing whole.
+- The picture no longer jumps in brightness as you walk past water. A leftover effect meant to
+  darken the last few pixels of ground at a waterline was instead dimming almost the whole screen
+  by about 4% whenever water was anywhere nearby: on the beach it touched 99% of the frame, sand
+  far from the sea, the cabin, the boat and the player included. Because it switched on and off
+  with whether water was near you at all, walking past a river or a pond changed the brightness of
+  everything you could see. It has been removed. Measured at the coordinates a reporter gave from
+  their own game, the jump went from 4.1% to 0.2%.
+- Much less of the long-standing "lighting spontaneously gets dimmer and brighter as I walk
+  around". Besides the above, a light was cut from the picture at a fixed distance past the edge
+  of the screen, and whatever it was still contributing went with it in a single frame. Its
+  contribution now tapers to nothing as it travels off the edge, so there is nothing left to lose
+  when it goes. Measured on a scripted walk through town, brightness discontinuities went from
+  twenty seven in twenty seconds to none. That report has been open a long time and had more than
+  one cause; this is not being called closed until the people who raised it say so.
+- The water pass now fades out of the frame instead of being dropped from it when water leaves
+  the area, so switching it off costs nothing visible.
+- The player and everything else on screen no longer ripple along with the water when the effect
+  resolution is lowered.
+- The last effect you switch off finishes its fade instead of cutting out on the final frame.
+- Windows no longer stay lit at midnight. The glass is deliberately held out of the room dimming,
+  because a bright white pane multiplied by a dark room turns a murky grey and reads as dirty
+  rather than as a window. That exemption did not follow the sun, though: after dark the room went
+  dark around a window that was still as bright as noon. It now fades with the daylight outside, so
+  the glass is the brightest thing in the room by day and dark with the room at night.
+
+### Performance
+
+- Reflections of scenery are cached and reprojected as the camera moves instead of being redrawn
+  every frame, which removes about three quarters of that work.
+- The water pass is skipped entirely when no water is on screen.
+- Colour grade and vignette run as a single pass where the result is identical, one less
+  full-screen pass per frame.
+- Measured on the release build across eight scenes at 1707x960: a farm costs 0.22 ms per frame,
+  water scenes 0.28 to 0.29 ms, and the heaviest scene measured, a town at night full of lamps,
+  0.33 ms. That is about 2% of the frame budget at 60 fps. Lowering the effect resolution to 0.75
+  takes roughly a third off, and 0.5 takes roughly half.
+
+### For translators
+
+Twenty eight new keys, and one whose meaning changed.
+
+New:
+
+- `config.section.lens`, `config.section.water`, `config.section.perf`
+- `config.renderscale.name`, `config.renderscale.tooltip`
+- `config.rendersharpness.name`, `config.rendersharpness.tooltip`
+- `config.perfpreset.section`, `config.perfpreset.quality`, `config.perfpreset.balanced`,
+  `config.perfpreset.performance`
+- `config.bench.section`, `config.bench.run`, `config.bench.running`, `config.bench.apply`
+- `tuner.desc.looks`, `tuner.desc.perf`, `tuner.desc.colorgrade`, `tuner.desc.bloom`,
+  `tuner.desc.lens`, `tuner.desc.lighting`, `tuner.desc.shadows`, `tuner.desc.godrays`,
+  `tuner.desc.water`, `tuner.desc.cloudshadow`, `tuner.desc.fog`, `tuner.desc.camera`,
+  `tuner.desc.debug`
+
+Meaning changed:
+
+- `config.section.finishing` was "Water & finishing" and is now "Vignette & chromatic aberration".
+  Water moved to its own section, so the old wording no longer describes the page.
+
 ## 1.4.1
 
 ### Fixed
@@ -34,6 +147,10 @@ All notable changes to SDV-Radiance. Older releases are documented on the Nexus 
 
 - Diagnostics tab in the F6 tuner with the Debug logging toggle, so the [diag] and [perf] timing
   lines can be flipped on mid-session without opening Generic Mod Config Menu or config.json.
+
+### Translations
+
+- Chinese translation updated by Rime961, synced to the current text (thank you!).
 
 ### Known issues
 

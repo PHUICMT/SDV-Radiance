@@ -14,12 +14,17 @@ namespace SDVRadiance
         private readonly Func<float> _getValue;
         private readonly Action<float> _setValue;
         public Rectangle Track;
+        /// <summary>Text grows with the panel on a large window (see the tuner's layout scale).</summary>
+        public float TextScale = 1f;
 
-        public TunerSlider(string label, int x, int y, int w, float min, float max, Func<float> get, Action<float> set)
+        public TunerSlider(string label, int x, int y, int w, float min, float max, Func<float> get, Action<float> set, int labelHeight = 26, int trackHeight = 20)
         {
             _label = label; _minimum = min; _maximum = max; _getValue = get; _setValue = set;
-            Track = new Rectangle(x, y + 26, w, 20);
+            _labelHeight = labelHeight;
+            Track = new Rectangle(x, y + labelHeight, w, trackHeight);
         }
+
+        private readonly int _labelHeight;
 
         public void SetFromX(int mx)
         {
@@ -30,10 +35,11 @@ namespace SDVRadiance
         public void Draw(SpriteBatch spriteBatch, int dy)
         {
             float v = _getValue();
-            TunerText.DrawFit(spriteBatch, _label, new Vector2(Track.X, Track.Y - 26 + dy), Track.Width - 70, Game1.textColor, 0.9f);
+            float ts = 0.9f * TextScale;
+            TunerText.DrawFit(spriteBatch, _label, new Vector2(Track.X, Track.Y - _labelHeight + dy), Track.Width - (int)(70 * TextScale), Game1.textColor, ts);
             string val = v.ToString("0.00");
-            Vector2 vs = Game1.smallFont.MeasureString(val) * 0.9f;
-            Utility.drawTextWithShadow(spriteBatch, val, Game1.smallFont, new Vector2(Track.Right - vs.X, Track.Y - 26 + dy), Game1.textColor * 0.8f, 0.9f);
+            Vector2 vs = Game1.smallFont.MeasureString(val) * ts;
+            Utility.drawTextWithShadow(spriteBatch, val, Game1.smallFont, new Vector2(Track.Right - vs.X, Track.Y - _labelHeight + dy), Game1.textColor * 0.8f, ts);
 
             var track = new Rectangle(Track.X, Track.Y + dy, Track.Width, Track.Height);
             spriteBatch.Draw(Game1.staminaRect, track, Color.Black * 0.35f);
