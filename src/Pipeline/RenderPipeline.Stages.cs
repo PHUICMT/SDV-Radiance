@@ -405,6 +405,13 @@ namespace SDVRadiance
         private bool _isFloodOcclusionReady;
         private const int FloodShadowedLights = 8;
         private const int FloodSoftLights = 16;
+        /// <summary>What a direct pool is worth when the flood map is carrying the indirect half
+        /// of the same light at FULL strength. At no flood at all it is worth one: the pool is
+        /// then the only thing lighting the room and has to carry all of it.</summary>
+        private const float FloodDirectShare = 0.55f;
+        /// <summary>The least a hearth's circle on the floor is worth in a WINDOWED room, however
+        /// much daylight has filled it. Zero everywhere else.</summary>
+        private const float HearthLitRoomFloor = 0.35f;
         private readonly Vector2[] _floodLightPositions = new Vector2[FloodShadowedLights];
         private readonly Vector4[] _floodLightColors = new Vector4[FloodShadowedLights];
         private readonly Vector2[] _floodSoftPositions = new Vector2[FloodSoftLights];
@@ -431,6 +438,53 @@ namespace SDVRadiance
         private GameLocation? _exposureLocation;
         private readonly Vector2[] _windowShaftPositions = new Vector2[6];
 
+        // What the indoor pass last handed the shader. "The window beam is gone" has three
+        // completely different causes that look identical on screen - the room is not classed as
+        // windowed, the game published no WindowLight to stand a beam under, or the beam is being
+        // drawn but is washed out by everything else - and no screenshot can tell them apart.
+        // Recorded rather than recomputed so the report reads the frame that was actually drawn.
+        private bool _dbgWindowsHere, _dbgWindowBeamOn;
+        private int _dbgWindowCount, _dbgWindowLightsSeen, _dbgWindowLightsDark;
+        private Vector3 _dbgWindowColour, _dbgExposure = Vector3.One;
+        private float _dbgPaneDaylight, _dbgWindowLean, _dbgWindowReach;
+        private float _dbgHearthFloor, _dbgDirectScale;
+
+        /// <summary>
+        /// The indoor half of the flood pass, as it was last handed to the shader.
+        ///
+        /// <para>Written for one question that keeps coming back in different words: "the light
+        /// from the window is gone". It has three unrelated causes that produce the same empty
+        /// floor, and the only way to tell them apart is to see the numbers - the room is not
+        /// classed as a windowed interior at all, the game published no WindowLight for a beam to
+        /// hang under, or the beam is being drawn at full strength and something else in the frame
+        /// is sitting on top of it. The same block also carries the two knobs that lift a room's
+        /// floor, because "too bright/too flat indoors" is answered from exactly here.</para>
+        /// </summary>
+        private string DescribeIndoorLight()
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"flood presence {_fadeFlood:F2} (0 = the numbers below were not applied this frame)");
+            sb.AppendLine($"    windowed interior: {_dbgWindowsHere}, beam setting on: {_dbgWindowBeamOn}");
+            sb.AppendLine($"    window lights: {_dbgWindowLightsSeen} published by the game, "
+                        + $"{_dbgWindowLightsDark} not glowing, {_dbgWindowCount} used as beams (max 6)");
+            if (_dbgWindowsHere && _dbgWindowBeamOn && _dbgWindowCount == 0)
+                sb.AppendLine("    -> NO BEAM IS POSSIBLE: the room is windowed but nothing in it is emitting "
+                            + "window light, so there is nowhere to stand a beam. Two things look like this. A "
+                            + "window-art mod that draws glass without a light source is one. The other is not a "
+                            + "bug at all: the game only refreshes its window glows when a room is ENTERED, so "
+                            + "moving the clock past dawn while already standing inside leaves them at their "
+                            + "night state until you walk out and back in.");
+            sb.AppendLine($"    daylight through the glass: colour ({_dbgWindowColour.X:F2},{_dbgWindowColour.Y:F2},"
+                        + $"{_dbgWindowColour.Z:F2}) pane {_dbgPaneDaylight:F2}");
+            sb.AppendLine($"    beam shape: lean {_dbgWindowLean:F2} tiles sideways per tile down, reach {_dbgWindowReach:F1} tiles");
+            float dim = Math.Clamp(1f - (_dbgExposure.X + _dbgExposure.Y + _dbgExposure.Z) / 3f, 0f, 1f);
+            sb.AppendLine($"    room exposure ({_dbgExposure.X:F2},{_dbgExposure.Y:F2},{_dbgExposure.Z:F2}) "
+                        + $"-> we dimmed this room by {dim:P0}");
+            sb.AppendLine($"    light pools give back {1.15f * Math.Max(dim, _dbgHearthFloor):F2}x "
+                        + $"(floor {_dbgHearthFloor:F2}), direct pools scaled {_dbgDirectScale:F2}");
+            return sb.ToString().TrimEnd();
+        }
+
         private void RenderFloodLight(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var effect = _floodEffect!;
@@ -439,21 +493,32 @@ namespace SDVRadiance
             GetParam(effect, "WorldTileOffset")?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
             GetParam(effect, "MapOrigin")?.SetValue(_flood.Origin);
             GetParam(effect, "MapSize")?.SetValue(_flood.MapSize);
-            GetParam(effect, "Strength")?.SetValue(MathHelper.Clamp(config.FloodLightingStrength, 0f, 1f) * _fadeFlood);
+            float floodCarry = MathHelper.Clamp(config.FloodLightingStrength, 0f, 1f) * _fadeFlood;
+            GetParam(effect, "Strength")?.SetValue(floodCarry);
             GetParam(effect, "AmbientFloor")?.SetValue(0.10f);
 
             // Direct pools: the ranked leaders get the shadow ray, everything behind them
-            // still gets its pool. Direct is scaled DOWN vs the classic lighting stage
-            // because the flood map already carries the indirect spill.
+            // still gets its pool.
             // The two tiers together cover the WHOLE ranked list, so no light the ranking
             // kept can fall off the end unseen - which is what made pools blink in and out
             // of a shop full of windows while the entry ramp thought nothing had changed.
+            //
+            // A pool is dimmed here because the flood map is carrying the indirect half of the
+            // same light, and counting it twice would blow the room out. That was a FIXED 0.55,
+            // and fixed is wrong: how much the flood carries is exactly what the GI slider sets.
+            // Turned down, the flood stops carrying, and the direct pool went on paying a
+            // discount for help it was no longer getting. That is the arithmetic behind "night
+            // is dark but the lit places are dark too": the darkness sliders were at their
+            // defaults while the only thing meant to push back had been quietly cut to a bit
+            // over half, with no setting anywhere to undo it. The discount now tracks the help,
+            // so a room lit by lamps rather than by bounce gets its lamps at full strength.
+            float directScale = MathHelper.Lerp(1f, FloodDirectShare, floodCarry);
             int n = 0;
             for (int i = 0; i < _lightCount && n < FloodShadowedLights; i++, n++)
             {
                 _floodLightPositions[n] = _lightPositions[i];
                 var d = _lightShaderData[i];
-                _floodLightColors[n] = new Vector4(d.X * 0.55f, d.Y * 0.55f, d.Z * 0.55f, d.W);
+                _floodLightColors[n] = new Vector4(d.X * directScale, d.Y * directScale, d.Z * directScale, d.W);
             }
             for (int i = n; i < FloodShadowedLights; i++) { _floodLightPositions[i] = Vector2.Zero; _floodLightColors[i] = Vector4.Zero; }
             int m = 0;
@@ -461,7 +526,7 @@ namespace SDVRadiance
             {
                 _floodSoftPositions[m] = _lightPositions[i];
                 var d = _lightShaderData[i];
-                _floodSoftColors[m] = new Vector4(d.X * 0.55f, d.Y * 0.55f, d.Z * 0.55f, d.W);
+                _floodSoftColors[m] = new Vector4(d.X * directScale, d.Y * directScale, d.Z * directScale, d.W);
             }
             for (int i = m; i < FloodSoftLights; i++) { _floodSoftPositions[i] = Vector2.Zero; _floodSoftColors[i] = Vector4.Zero; }
             GetParam(effect, "LightPosArr")?.SetValue(_floodLightPositions);
@@ -513,8 +578,15 @@ namespace SDVRadiance
             // exposure walks back to neutral with it, so toggling never steps the room.
             GetParam(effect, "Exposure")?.SetValue(Vector3.Lerp(Vector3.One, _exposureEase, _fadeFlood));
             GetParam(effect, "RoomSaturation")?.SetValue(MathHelper.Lerp(1f, _roomSaturationEase, _fadeFlood));
+            // The hearth's give-back used to be scaled by our own dimming alone, so it faded to
+            // nothing as a room filled with morning light and the fire stopped lighting boards it
+            // was plainly lighting. This floor keeps it alive in a lit ROOM and stays zero
+            // outdoors and in caves, where a pool at noon was a bug we already fixed once.
+            GetParam(effect, "HearthFloor")?.SetValue(windowedRoom ? HearthLitRoomFloor * _fadeFlood : 0f);
 
             int windowCount = 0;
+            _dbgWindowLightsSeen = 0;
+            _dbgWindowLightsDark = 0;
             if (windowedRoom && Game1.currentLightSources != null && location != null)
             {
                 int vw = Math.Max(1, Game1.viewport.Width);
@@ -524,9 +596,14 @@ namespace SDVRadiance
                     if (windowCount >= 6)
                         break;
                     var ls = kv.Value;
-                    if (ls.lightContext.Value != LightSource.LightContext.WindowLight
-                        || !ShadowRenderer.WindowGlowing(location, ls))
+                    if (ls.lightContext.Value != LightSource.LightContext.WindowLight)
                         continue;
+                    _dbgWindowLightsSeen++;
+                    if (!ShadowRenderer.WindowGlowing(location, ls))
+                    {
+                        _dbgWindowLightsDark++;
+                        continue;
+                    }
                     // Beam origin: just under the pane's centre, so the light visibly
                     // CONNECTS to the glass instead of materialising half a tile below it.
                     Vector2 local = Game1.GlobalToLocal(Game1.viewport, ls.position.Value + new Vector2(0f, 12f));
@@ -551,6 +628,17 @@ namespace SDVRadiance
             // tall. The z term is the 12px the beam origin sits below the pane's centre,
             // expressed in tiles, so the glass and the beam agree on where the window is.
             GetParam(effect, "WindowPane")?.SetValue(new Vector4(0.55f, 0.8f, 12f / 64f, 0.35f));
+
+            _dbgWindowsHere = windowsHere;
+            _dbgWindowBeamOn = config.WindowBeamEnabled;
+            _dbgWindowCount = windowCount;
+            _dbgWindowColour = _windowColourEase * _fadeFlood;
+            _dbgPaneDaylight = _paneDaylightEase * _fadeFlood;
+            _dbgWindowLean = lean;
+            _dbgWindowReach = reachTiles;
+            _dbgExposure = Vector3.Lerp(Vector3.One, _exposureEase, _fadeFlood);
+            _dbgHearthFloor = windowedRoom ? HearthLitRoomFloor * _fadeFlood : 0f;
+            _dbgDirectScale = directScale;
 
             effect.CurrentTechnique = effect.Techniques["FloodLight"];
             DrawFull(spriteBatch, source, dest, effect);

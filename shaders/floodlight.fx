@@ -70,6 +70,12 @@ float3 Exposure;
 // than as grey. 1.0 = untouched (outdoors, caves, midday).
 float RoomSaturation;
 
+// The least a hearth's circle on the floor is ever worth, however light the room has
+// become. Set by the CPU and non-zero ONLY in a room with windows: it must stay zero
+// outdoors, or a street lamp gets a pool at noon again, which is a bug we already fixed
+// once. See its use below for why the floor has to exist at all.
+float HearthFloor;
+
 // Window light shafts: a sheared beam of daylight falling from each visible window,
 // leaning with the same sun the shadows use. Positions are the BOTTOM of the pane.
 float2 WindowPosArr[6];  // per-window screen UV
@@ -126,6 +132,11 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // of it is not a matter of taste; how bright the mod's lamps burn is. Keeping the
     // two apart is what lets a room we darkened still be answered by its own hearth.
     float3 pool = float3(0.0, 0.0, 0.0);
+    // How close this pixel is to sitting ON a light rather than under one. Far tighter than
+    // the pool - about three quarters of a tile, roughly the size of the sprite that IS the
+    // lamp - and taken as a MAX, not a sum, so a room full of lamps does not add up to an
+    // exemption everywhere. See the emitter block further down for what it is for.
+    float emitter = 0.0;
     [unroll]
     for (int li = 0; li < 8; li++)
     {
@@ -163,6 +174,8 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             float attP = saturate(1.0 - dist / max(lc.w * 0.6, 0.02));
             float peak = max(max(lc.r, lc.g), max(lc.b, 0.0001));
             pool += (lc.rgb / peak) * (attP * attP) * (1.0 - occ * ShadowStrength);
+            float attE = saturate(1.0 - dist / max(lc.w * 0.12, 0.004));
+            emitter = max(emitter, attE * attE);
         }
     }
     // Second tier: pools only, no ray. Same maths as above with the march left out.
@@ -180,6 +193,8 @@ float4 FloodPS(PixelInput input) : SV_TARGET
         float saP = saturate(1.0 - sdist / max(sc.w * 0.6, 0.02));
         float speak = max(max(sc.r, sc.g), max(sc.b, 0.0001));
         pool += (sc.rgb / speak) * (saP * saP * son);
+        float saE = saturate(1.0 - sdist / max(sc.w * 0.12, 0.004));
+        emitter = max(emitter, saE * saE * son);
     }
 
     light += direct;
@@ -212,16 +227,32 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // The exemption follows the sun; the glow term below already fades with WindowColour.
     float paneLit = pane * PaneDaylight;
 
+    // AND NEITHER IS THE FLAME. Exactly the same argument as the glass above, for the thing
+    // at the other end of it: a fire is not a surface the room's light falls on, it is where
+    // the light comes from, so scaling it by how dark we decided the room should be has no
+    // meaning. It was being dimmed by the exposure and then drained by the room's saturation
+    // on top, and a hearth came out a muddy brown smear with none of the near-white the
+    // sprite is actually drawn with. Reported as the flames looking dull.
+    //
+    // Two conditions, because either alone is a bug we have already had. Nearly ON the light,
+    // not merely lit by it, or every board in front of the fire stops taking the room's
+    // colour with it. AND bright in the source art, or a dark floor tile under a lamp gets
+    // exempted too - "bright pixel = light source" on its own is what made god rays stream
+    // out of a white-painted sign.
+    float srcLum = dot(src.rgb, float3(0.299, 0.587, 0.114));
+    float emitterLit = emitter * smoothstep(0.40, 0.80, srcLum);
+    float roomExempt = max(paneLit, emitterLit);
+
     // Time-of-day room level, applied BEFORE the lamp-glow and window-shaft terms so
     // lamps and daylight beams punch through a dark room instead of dimming with it.
-    float3 expo = lerp(Exposure, float3(1.0, 1.0, 1.0), paneLit);
+    float3 expo = lerp(Exposure, float3(1.0, 1.0, 1.0), roomExempt);
     lit *= expo;
 
     // Applied HERE, before the glass, the hearth and the sunbeam are added, so those
     // three - the only light in the picture that is not room light - keep their own
     // colour and stand out against it: a cold blue room with a warm fire and a gold bar
     // of sun is the whole look. Held off the glass, which is not part of the room.
-    float sat = lerp(RoomSaturation, 1.0, paneLit);
+    float sat = lerp(RoomSaturation, 1.0, roomExempt);
     float roomLum = dot(lit, float3(0.299, 0.587, 0.114));
     lit = lerp(float3(roomLum, roomLum, roomLum), lit, sat);
 
@@ -235,8 +266,15 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // scaled by exactly how much WE dimmed the room, so it gives back what was taken and
     // no more: outdoors, in caves and in a room at full daylight the exposure is 1, the
     // term is identically zero, and nothing outside a dim interior changes by a pixel.
+    // ...but scaling it by OUR dimming alone means it switches itself off exactly as the
+    // room fills with morning light: expo climbs toward 1, dim falls to 0, and the fire
+    // stops laying any circle at all on boards it is still clearly lighting. Reported as
+    // the hearth being "swallowed by the other effects" at six in the morning, which is
+    // the hour it happens at. A fire does not stop lighting the floor because the sun
+    // came up. The floor keeps it alive in a lit room and is zero outdoors, so the noon
+    // street lamp stays glass.
     float dim = saturate(1.0 - dot(expo, float3(0.3333, 0.3333, 0.3333)));
-    lit += src.rgb * saturate(pool) * (1.15 * dim);
+    lit += src.rgb * saturate(pool) * (1.15 * max(dim, HearthFloor));
     // >1 light (lamp cores) adds a soft warm glow rather than clipping at white.
     lit += src.rgb * saturate(light - 1.0) * 0.45 * Strength;
 

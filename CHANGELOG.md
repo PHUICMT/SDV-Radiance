@@ -2,6 +2,126 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.5.3
+
+### Translations
+
+- Chinese brought fully up to date by Rime961, who sent it in unprompted after noticing the text
+  had changed (thank you). It now covers all 273 keys, including everything added across 1.5.0,
+  1.5.1 and 1.5.2: the window settings, the performance tab and its benchmark, every tuner tab
+  description, and the shadows-per-character setting.
+
+### Fixed
+
+- A light you carry no longer goes dark while you walk. Reported with a glow ring, and it was
+  every carried light: a lantern, a horse's lamp, the ring. Each light is given a name so that the
+  next frame can tell it is the same light and not a new arrival, and that name was where the light
+  was standing. For a lamp post or a window that is exactly right. For something in your pocket it
+  is nonsense: eight world pixels is about two frames of walking, so a carried light was handed a
+  new name twice a second, and every time it got one the pipeline saw a stranger arriving and
+  started it from nothing to fade it in. It never finished, because two frames later it was a
+  stranger again. So it sat at a twentieth of its brightness for as long as you were moving and
+  only came up once you stood still, which is precisely how it was described. Anything the game
+  gives a name of its own now keeps it, moving or not. This was not new in 1.5.2, but 1.5.2 made
+  the fade in nearly three times slower, which is what took it from a flaw nobody had mentioned to
+  something two people reported within hours of each other.
+- Rooms light up fully again instead of only near you. A map lights a room by repeating a light:
+  the vanilla saloon has sixty four of them, all the same, laid a couple of tiles apart, and a
+  single one of those already reaches about six and a half tiles, so their pools sit almost exactly
+  on top of each other. It is not sixty four lamps, it is one even wash painted by repetition. The
+  shader has twenty four places, so feeding it sixty four meant most of a room went without one no
+  matter how carefully the twenty four were chosen. Neighbouring map lights of the same colour and
+  size are now drawn as one wider light centred on the group, which is close to the sum of what
+  they drew and brings that saloon down to about twenty five. Only the map's own lights are
+  merged: anything you carry, place or light keeps its own identity.
+- Which lights get drawn in a crowded room is no longer a lottery. The shader has room for
+  twenty four at a time, and choosing between them went by how bright a light is, how far it
+  reaches, and whether it is on screen. That works where lights differ. The vanilla saloon carries
+  sixty four map lights, all the same brightness and the same radius, laid a couple of tiles apart
+  to light the room evenly, so every one of them scored exactly the same and the choice fell
+  through to a tie-break on where the light happens to stand. The set was redrawn every time the
+  camera moved. That is the pool that switches on beside you as you walk, and on a wide window it
+  is a whole corner of a room left dark while a lamp on the far wall holds a place. How near the
+  middle of the screen a light is now counts too, so the ones that lose are the far ones nobody is
+  looking at, and walking slides the order along instead of shuffling it. An edge light is still
+  worth a third of a middle one, so nothing is refused while there is room.
+- Lights leaving the array fade out instead of vanishing. Entering was always a fade and leaving
+  never was, so in a room offering more lights than the array holds, the last places changed hands
+  constantly and every handover was a pool blinking out. 1.5.2 answered that by fading the last
+  places in proportion to how far each scored clear of the best light that had just missed out,
+  which is a number recomputed every frame from the whole scene. Where the lights in a scene are
+  alike, which a street of identical lamps is, that puts all of them inside the same band and dims
+  them as a group. Leaving is now simply the mirror of entering: each light fades out over its own
+  frames at its own last position, and nothing another light does can move it. The slots are filled
+  from what is actually lit rather than from the ranking, so a light handing its place over
+  crossfades with the one taking it.
+- Walking up to a lamp, its pool fades in from nothing instead of arriving half lit. A light that
+  had earned a place in the array but was still waiting for the one it was replacing to finish
+  fading was allowed to brighten while it waited, so the first half of its fade in happened before
+  anything was on screen and the pool appeared at about forty percent. Brightening now only happens
+  on the frames a light is actually being drawn.
+- A fire looks like a fire again in a room the mod has darkened. Everything on screen was scaled
+  by how dark the room was decided to be, and a flame is not a surface the room's light falls on,
+  it is where the light comes from, so scaling it by the room made no sense: the hearth was dimmed
+  and then had its colour drained on top, and came out a muddy brown smear with none of the near
+  white it is actually drawn with. Glass already had an exemption from this for the same reason,
+  and the flame now has the same one. It applies only to pixels that are both nearly on top of a
+  light and bright in the original art, so the boards in front of the fire still take the room's
+  colour, and a dark floor under a lamp is not mistaken for a lamp.
+- A hearth keeps lighting the floor after the sun comes up. Its circle of light on the boards was
+  scaled by how much the room had been dimmed, so as a room filled with morning light the circle
+  faded to nothing while the fire was plainly still burning. A fire does not stop lighting the
+  floor because it is daytime. It now keeps a share of it in any room with windows, and stays at
+  exactly zero outdoors and in caves, where a pool of light at noon would be wrong.
+- Water no longer flickers because an unrelated mod reloaded an unrelated map. Any map asset being
+  reloaded threw the whole water surface away and rebuilt it, whether or not it had anything to do
+  with where you were standing. On a modded install that is a steady drip of rebuilds coming from
+  maps you are nowhere near, under a player who has not moved, which is a flash of water with no
+  cause anyone could point at. Only a reload of the map you are actually standing on can do it now.
+  Found by adding the diagnostic below and then reading our own report: a station map belonging to
+  another mod was reloading while the player sat indoors.
+
+### Changed
+
+- New default lighting values, for NEW installs only. An existing config.json is never touched, so
+  nothing changes for anyone already playing. The old defaults had a flaw worth stating plainly:
+  the shader multiplies the scene by the lightmap and that multiply is clamped, so it can only
+  darken, and the one term that adds light needs the lightmap to pass full brightness before it
+  does anything at all. At the old brightness a lamp's pool reached about half of that, so for
+  everyone running the defaults that term was doing nothing, ever. Lamps could make a floor less
+  dark and never bright, which is the "night is dark and the lit places are dark too" that several
+  reports described from different angles. Brightness, pool size and bounce strength are all up,
+  night darkening and shadow strength are down to match. If you preferred the old look, the tuner
+  (F6) has every one of these on a slider.
+- A new install now says Cinematic in the look dropdown and ships the Cinematic numbers, again for
+  NEW installs only. It used to say Custom, meaning hand-tuned, in an install nobody had tuned, and
+  the bloom it shipped was more than double what that preset actually asks for. Contrast goes back
+  to the preset's own 1.15, which 1.5.0 had softened to 1.10 on the basis that it read as punchy;
+  that note was made when a lamp could not brighten anything and contrast was doing all the work,
+  which is no longer true. Nothing applies a preset when the game loads, so this changes a label
+  and two numbers, not your settings.
+
+### Diagnostics
+
+- `radiance_report` now answers the two questions that reports about water and about indoor light
+  keep raising and that no screenshot can settle. For water it keeps a running record of the last
+  few dozen things that changed on the surface, so running the command AFTER seeing something wrong
+  is enough to show what led up to it, along with how often the surface is being rebuilt, how wide
+  your view is in tiles, whether the shoreline is the map's own or a guess, and which mod last made
+  the game reload a map. For indoor light it says whether the room counts as having windows, how
+  many window lights the game actually published, how much the room was dimmed, and what a lamp's
+  pool on the floor is worth. "The light from my window is gone" has three unrelated causes that
+  look identical on screen, and one of them is not a fault at all.
+- A failure inside the effect chain now writes the whole error, once per session, instead of a
+  one-line message repeated every frame. The message alone named neither the pass nor the reason,
+  which meant a report of it could not be acted on.
+- New console command `radiance_waterwatch`, which prints what changes on the water surface frame
+  by frame while you walk. Console only, so no new text to translate.
+
+### For translators
+
+No new or changed keys in this release.
+
 ## 1.5.2
 
 ### Added

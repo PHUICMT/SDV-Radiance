@@ -41,6 +41,7 @@ namespace SDVRadiance
 
             int vw = Math.Max(1, Game1.viewport.Width);
             int vh = Math.Max(1, Game1.viewport.Height);
+            _lightAspect = vw / (float)vh;
 
             // Warm tint for the light pools (candle-orange at Warmth=1).
             float warmth = MathHelper.Clamp(config.LightingWarmth, 0f, 1f);
@@ -57,51 +58,44 @@ namespace SDVRadiance
                 dayPool = 1f - 0.65f * (1f - MathHelper.Clamp(Math.Abs(GameClock.MinutesNow() - 750f) / 270f, 0f, 1f));
             _daylightPoolDamping = dayPool;    // emissive tiles ride the same daylight sink
 
-            var lights = Game1.currentLightSources;
-            if (lights != null && lights.Count > 0)
+            GameLocation? lightLocation = Game1.currentLocation;
+            GatherGameLights(lightLocation);
+            foreach (var src in _gatheredLights)
             {
-                GameLocation? lightLocation = Game1.currentLocation;
-                foreach (var kv in lights)
-                {
-                    if (_lightCandidates.Count >= MaxLightCandidates)
-                        break;
+                if (_lightCandidates.Count >= MaxLightCandidates)
+                    break;
 
-                    LightSource ls = kv.Value;
-                    if (lightLocation != null && !ShadowRenderer.WindowGlowing(lightLocation, ls))
-                        continue;   // stale/dark window light — not emitting
-                    Vector2 local = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
-                    float u = local.X / vw;
-                    float v = local.Y / vh;
+                Vector2 local = Game1.GlobalToLocal(Game1.viewport, src.Position);
+                float u = local.X / vw;
+                float v = local.Y / vh;
 
-                    float radiusUv = ls.radius.Value * LampPoolReachPx / vh * radiusScale;
-                    if (u < -radiusUv * 2f || u > 1f + radiusUv * 2f || v < -radiusUv * 2f || v > 1f + radiusUv * 2f)
-                        continue; // fully off-screen
+                float radiusUv = src.Radius * LampPoolReachPx / vh * radiusScale;
+                if (u < -radiusUv * 2f || u > 1f + radiusUv * 2f || v < -radiusUv * 2f || v > 1f + radiusUv * 2f)
+                    continue; // fully off-screen
 
-                    // Vanilla stores light colour as the INVERSE (Black = full bright
-                    // white light), so invert to get the visible glow colour.
-                    Color c = ls.color.Value;
-                    Vector3 glow = new(1f - c.R / 255f, 1f - c.G / 255f, 1f - c.B / 255f);
-                    if (glow.LengthSquared() < 0.01f)
-                        glow = Vector3.One; // pure-white source stored as black-ish
-                    // Two-tone: indoor windows are daylight (cool) — everything else warm; fire
-                    // lights breathe with a slow flame flicker.
-                    bool coolDaylight = lightLocation != null && !lightLocation.IsOutdoors
-                        && ls.lightContext.Value == LightSource.LightContext.WindowLight;
-                    Vector3 tone = coolDaylight
-                        ? Vector3.Lerp(Vector3.One, new Vector3(0.82f, 0.92f, 1.12f), warmth)
-                        : warm;
-                    glow *= tone * boost * dayPool;
-                    // The flicker is carried SEPARATELY and applied after the array is chosen.
-                    // Folding it in here made a flickering quantity decide the ranking, and with
-                    // a room offering three times as many lights as there are slots the scores
-                    // sit close enough together that an eight percent wobble reorders the list
-                    // around the cut. The marginal lights then swung from full to nothing and
-                    // back on the flame's own cycle: a hearth quietly breathing turned into half
-                    // the room's lamps pulsing. Exactly the trap already documented in the shadow
-                    // path, where a flickering reach made casters blink in and out.
-                    AddLightCandidate(new Vector2(u, v), new Vector4(glow, Math.Max(0.02f, radiusUv)),
-                        ShadowRenderer.FireFlicker(ls.position.Value, ls.textureIndex.Value));
-                }
+                // Vanilla stores light colour as the INVERSE (Black = full bright
+                // white light), so invert to get the visible glow colour.
+                Color c = src.Colour;
+                Vector3 glow = new(1f - c.R / 255f, 1f - c.G / 255f, 1f - c.B / 255f);
+                if (glow.LengthSquared() < 0.01f)
+                    glow = Vector3.One; // pure-white source stored as black-ish
+                // Two-tone: indoor windows are daylight (cool) — everything else warm; fire
+                // lights breathe with a slow flame flicker.
+                bool coolDaylight = lightLocation != null && !lightLocation.IsOutdoors && src.IsWindow;
+                Vector3 tone = coolDaylight
+                    ? Vector3.Lerp(Vector3.One, new Vector3(0.82f, 0.92f, 1.12f), warmth)
+                    : warm;
+                glow *= tone * boost * dayPool;
+                // The flicker is carried SEPARATELY and applied after the array is chosen.
+                // Folding it in here made a flickering quantity decide the ranking, and with
+                // a room offering three times as many lights as there are slots the scores
+                // sit close enough together that an eight percent wobble reorders the list
+                // around the cut. The marginal lights then swung from full to nothing and
+                // back on the flame's own cycle: a hearth quietly breathing turned into half
+                // the room's lamps pulsing. Exactly the trap already documented in the shadow
+                // path, where a flickering reach made casters blink in and out.
+                AddLightCandidate(new Vector2(u, v), new Vector4(glow, Math.Max(0.02f, radiusUv)),
+                    ShadowRenderer.FireFlicker(src.Position, src.TextureIndex), src.Id);
             }
 
             // LABELED WINDOWS (HF class 12): warm interior glow that fades in at night, added
@@ -135,6 +129,154 @@ namespace SDVRadiance
             return _lightCount > 0 || darkening;
         }
 
+        /// <summary>One light as the rest of this file sees it, which is not always one light as
+        /// the game sees it: a neighbourhood of the map's own evenly spaced lamps arrives here as
+        /// a single wider source.</summary>
+        private struct GatheredLight
+        {
+            public Vector2 Position;
+            public Color Colour;
+            public float Radius;
+            public int TextureIndex;
+            public bool IsWindow;
+            public int Id;
+        }
+
+        private readonly List<GatheredLight> _gatheredLights = new();
+        /// <summary>Accumulator per neighbourhood while gathering: the box its members occupy, so
+        /// the merged light can be centred on them and widened to cover them all.</summary>
+        /// <summary>Neighbourhood key to its slot in <see cref="_clusterBoxes"/>. NOT a slot in
+        /// <see cref="_gatheredLights"/>: only map lights make a box, every light makes a gathered
+        /// entry, so the two lists run at different lengths the moment anything carried or placed
+        /// is in the room. Holding one index and using it on both read a stranger's box and then
+        /// ran off the end of the list, which a glow ring was enough to trigger. The box carries
+        /// the index of the light it belongs to instead.</summary>
+        private readonly Dictionary<long, int> _clusterSlotByCell = new();
+        private readonly List<(int Light, float MinX, float MinY, float MaxX, float MaxY, float MaxRadius, int Count)> _clusterBoxes = new();
+
+        /// <summary>
+        /// Turn the location's light sources into the list this pass will rank, merging the map's
+        /// own lamps by neighbourhood on the way through.
+        ///
+        /// <para>
+        /// A vanilla saloon carries SIXTY FOUR map lights, all at radius 1, laid a couple of tiles
+        /// apart. Radius 1 already reaches about six and a half tiles, so those pools overlap almost
+        /// completely: it is not sixty four lamps, it is one even wash that the map paints by
+        /// repeating a light. The shader has twenty four slots. Feeding it sixty four all but
+        /// guarantees that most of a room goes without, and no amount of care about WHICH
+        /// twenty four win can conjure the other forty back.
+        /// </para>
+        ///
+        /// <para>
+        /// Merging is the only thing that adds coverage rather than moving it around. A
+        /// neighbourhood becomes one light centred on the box its members occupy and widened to
+        /// reach past the farthest of them, which is close to the union of what they drew, and the
+        /// saloon comes down from sixty four to about twenty five.
+        /// </para>
+        ///
+        /// <para>
+        /// Only MAP lights merge. Anything carried moves, and a moving light merged by position
+        /// would change which neighbourhood it belongs to as it walked, renaming itself every few
+        /// tiles: the exact fault that made a glow ring dark. Placed lamps and fires keep their own
+        /// identity too, because those are things a player put somewhere on purpose.
+        /// </para>
+        /// </summary>
+        private void GatherGameLights(GameLocation? location)
+        {
+            _gatheredLights.Clear();
+            _clusterSlotByCell.Clear();
+            _clusterBoxes.Clear();
+            var lights = Game1.currentLightSources;
+            if (lights == null)
+                return;
+
+            const float cellPx = ClusterCellTiles * 64f;
+            foreach (var kv in lights)
+            {
+                LightSource ls = kv.Value;
+                if (location != null && !ShadowRenderer.WindowGlowing(location, ls))
+                    continue;   // stale/dark window light — not emitting
+                Vector2 pos = ls.position.Value;
+                Color colour = ls.color.Value;
+                float radius = ls.radius.Value;
+                bool isWindow = ls.lightContext.Value == LightSource.LightContext.WindowLight;
+
+                if (ls.lightContext.Value != LightSource.LightContext.MapLight)
+                {
+                    _gatheredLights.Add(new GatheredLight
+                    {
+                        Position = pos,
+                        Colour = colour,
+                        Radius = radius,
+                        TextureIndex = ls.textureIndex.Value,
+                        IsWindow = isWindow,
+                        Id = StableLightId(kv.Key.ToString() ?? string.Empty),
+                    });
+                    continue;
+                }
+
+                // The neighbourhood is a fixed grid in WORLD space, not a clustering of whatever
+                // happens to be on screen. A light's cell therefore never changes, so a merged
+                // light keeps the same name and the same place no matter where the camera is.
+                int cellX = (int)Math.Floor(pos.X / cellPx);
+                int cellY = (int)Math.Floor(pos.Y / cellPx);
+                // Colour and radius join the key so a hearth is never averaged into a wall lamp.
+                long key = ((long)(cellX & 0xFFFF) << 48) | ((long)(cellY & 0xFFFF) << 32)
+                         | ((long)(colour.R >> 5) << 27) | ((long)(colour.G >> 5) << 22) | ((long)(colour.B >> 5) << 17)
+                         | (long)(int)MathHelper.Clamp(radius * 4f, 0f, 255f);
+
+                if (_clusterSlotByCell.TryGetValue(key, out int slot))
+                {
+                    var box = _clusterBoxes[slot];
+                    _clusterBoxes[slot] = (box.Light,
+                                           Math.Min(box.MinX, pos.X), Math.Min(box.MinY, pos.Y),
+                                           Math.Max(box.MaxX, pos.X), Math.Max(box.MaxY, pos.Y),
+                                           Math.Max(box.MaxRadius, radius), box.Count + 1);
+                    continue;
+                }
+                _clusterSlotByCell[key] = _clusterBoxes.Count;
+                _clusterBoxes.Add((_gatheredLights.Count, pos.X, pos.Y, pos.X, pos.Y, radius, 1));
+                _gatheredLights.Add(new GatheredLight
+                {
+                    Position = pos,
+                    Colour = colour,
+                    Radius = radius,
+                    TextureIndex = ls.textureIndex.Value,
+                    IsWindow = isWindow,
+                    // Named after the neighbourhood, not the member that happened to arrive first,
+                    // so the merged light is the same light next frame however the game enumerates.
+                    Id = ClusterLightId(key),
+                });
+            }
+
+            // Second pass: centre each merged light on its members and widen it to reach past the
+            // farthest one, so the patch it replaces stays covered.
+            foreach (var box in _clusterBoxes)
+            {
+                if (box.Count <= 1)
+                    continue;
+                float spanX = box.MaxX - box.MinX, spanY = box.MaxY - box.MinY;
+                var merged = _gatheredLights[box.Light];
+                merged.Position = new Vector2((box.MinX + box.MaxX) * 0.5f, (box.MinY + box.MaxY) * 0.5f);
+                merged.Radius = box.MaxRadius
+                    + 0.5f * (float)Math.Sqrt(spanX * spanX + spanY * spanY) / LampPoolReachPx;
+                _gatheredLights[box.Light] = merged;
+            }
+        }
+
+        /// <summary>How wide a neighbourhood is, in tiles, when merging the map's own lamps. Six
+        /// is comfortably inside the six and a half tiles a single radius-1 pool already reaches,
+        /// so every lamp in a neighbourhood still stands inside the light that replaces it.</summary>
+        private const float ClusterCellTiles = 6f;
+
+        /// <summary>A merged light's name, from the neighbourhood it stands for. Salted away from
+        /// both the position hashes and the per-source names so the three cannot collide.</summary>
+        private static int ClusterLightId(long cellKey)
+        {
+            int id = (int)(cellKey ^ (cellKey >> 32)) ^ 0x2f1e4a7b;
+            return id == 0 ? 1 : id;
+        }
+
         /// <summary>Lights collected this frame before the shader's fixed-size array forces a
         /// choice. Bounded so a pathological map cannot make the sort itself the cost.</summary>
         private readonly List<(Vector2 Uv, Vector4 Data, int Id, Vector2 World, float Flick)> _lightCandidates = new();
@@ -146,7 +288,11 @@ namespace SDVRadiance
 
         /// <param name="flick">Per-frame flame wobble, kept OUT of the ranking and multiplied in
         /// only once the array is settled. Steady lights pass 1.</param>
-        private void AddLightCandidate(Vector2 uv, Vector4 data, float flick = 1f)
+        /// <param name="stableId">The light's own name, when it has one that survives moving. The
+        /// game's light sources do: the key the location files them under. Zero means "name it
+        /// after where it stands", which is correct for a window or a glowing tile and was wrong
+        /// for everything else. See below.</param>
+        private void AddLightCandidate(Vector2 uv, Vector4 data, float flick = 1f, int stableId = 0)
         {
             if (_lightCandidates.Count >= MaxLightCandidates)
                 return;
@@ -155,6 +301,15 @@ namespace SDVRadiance
             // every step and the ranking has to recognise the lamp it chose last frame.
             // Rounded to 8 for the name, so sub-pixel drift cannot rename a light that has
             // not moved.
+            //
+            // A light that MOVES has no business being named this way, and that is the whole of
+            // the glow-ring report. A lamp you are carrying is the same lamp one step later, but
+            // eight world pixels is two frames of walking, so it was handed a new name twice a
+            // second: the array saw a stranger arriving, started it at nothing, and had it fade in
+            // over a third of a second - which it never got, because two frames later it was a
+            // stranger again. A carried light therefore sat at a twentieth of its brightness for
+            // as long as you were moving and only lit up once you stood still. Anything with a
+            // name of its own now says so.
             Vector2 world = new(
                 uv.X * Math.Max(1, Game1.viewport.Width) + Game1.viewport.X,
                 uv.Y * Math.Max(1, Game1.viewport.Height) + Game1.viewport.Y);
@@ -184,7 +339,27 @@ namespace SDVRadiance
                 return;
             data = new Vector4(data.X * taper, data.Y * taper, data.Z * taper, data.W);
 
-            _lightCandidates.Add((uv, data, wx * 73856093 ^ wy * 19349663, world, flick));
+            _lightCandidates.Add((uv, data, stableId != 0 ? stableId : (wx * 73856093 ^ wy * 19349663), world, flick));
+        }
+
+        /// <summary>
+        /// Turn the game's own key for a light into a name this pipeline can use. Hashed by hand
+        /// rather than with string.GetHashCode, which is salted per process: a frozen capture has
+        /// to produce the same bytes on a second run, and the light order is part of that.
+        /// </summary>
+        /// <remarks>Never returns zero, which is the "this light has no name of its own" sentinel,
+        /// and is salted away from the world-position hashes so the two naming schemes cannot
+        /// collide and share a fade between a lamp and a window.</remarks>
+        private static int StableLightId(string key)
+        {
+            unchecked
+            {
+                int h = (int)2166136261;
+                foreach (char ch in key)
+                    h = (h ^ ch) * 16777619;
+                h ^= 0x5bf03635;
+                return h == 0 ? 1 : h;
+            }
         }
 
         /// <summary>
@@ -210,17 +385,56 @@ namespace SDVRadiance
             return u < -margin || u > 1f + margin || v < -margin || v > 1f + margin;
         }
 
-        /// <summary>How much this light can actually matter to the picture: how bright it is, how
-        /// far it reaches, and whether that reach lands on screen at all.</summary>
-        private static float Relevance(Vector2 uv, Vector4 data)
+        /// <summary>
+        /// How much this light can actually matter to the picture: how bright it is, how far it
+        /// reaches, whether that reach lands on screen at all, and how near the middle of the
+        /// screen it is.
+        ///
+        /// <para>
+        /// That last term is not a refinement, it is what makes the ranking mean anything in an
+        /// ordinary room. The vanilla saloon carries SIXTY FOUR map lights, every one of them at
+        /// radius 1 and the same colour, laid out a couple of tiles apart to light the room evenly.
+        /// Brightness and reach are therefore the same number for all of them, and the off-screen
+        /// taper is 1 for every light that is on screen, so without a distance term all sixty four
+        /// scored IDENTICALLY. Which two dozen got a slot came down to the tie-break, which is a
+        /// hash of where the light stands: a lottery, redrawn every time the camera moved. That is
+        /// the pool that blinks on beside you as you walk, and on a wide window it is whole corners
+        /// of a room left unlit while a lamp on the far wall holds a slot.
+        /// </para>
+        ///
+        /// <para>
+        /// Nearness is a floor, not a cut: a light at the screen edge is still worth a third of one
+        /// in the middle, so when the array has room it keeps its slot. What changes is that the
+        /// lights which lose are now the far ones nobody is looking at, and walking slides the
+        /// order along instead of reshuffling it.
+        /// </para>
+        /// </summary>
+        private float Relevance(Vector2 uv, Vector4 data)
         {
             float lum = 0.2126f * data.X + 0.7152f * data.Y + 0.0722f * data.Z;
             float reach = Math.Max(0.02f, data.W);
             float dx = Math.Max(0f, Math.Max(-uv.X, uv.X - 1f));
             float dy = Math.Max(0f, Math.Max(-uv.Y, uv.Y - 1f));
             float outside = (float)Math.Sqrt(dx * dx + dy * dy);      // 0 while the centre is on screen
-            return lum * reach * MathHelper.Clamp(1f - outside / reach, 0f, 1f);
+            // Aspect-corrected, so "near the middle" means the same distance sideways as it does
+            // up and down. The player sits at the middle of the screen, so this is also "near me".
+            float centreX = (uv.X - 0.5f) * _lightAspect;
+            float centreY = uv.Y - 0.5f;
+            float fromCentre = (float)Math.Sqrt(centreX * centreX + centreY * centreY);
+            float near = MathHelper.Lerp(1f, EdgeLightWeight,
+                MathHelper.Clamp(fromCentre / CentreFalloffScreens, 0f, 1f));
+            return lum * reach * MathHelper.Clamp(1f - outside / reach, 0f, 1f) * near;
         }
+
+        /// <summary>Screen width over height for the frame the lights were measured in.</summary>
+        private float _lightAspect = 1f;
+        /// <summary>Distance from the middle of the screen, in screen HEIGHTS, at which a light's
+        /// ranking has fallen all the way to its floor. About the corner of a widescreen window.</summary>
+        private const float CentreFalloffScreens = 0.9f;
+        /// <summary>What a light at the very edge of the screen is still worth against one in the
+        /// middle. Deliberately not zero: with room in the array an edge light must still get a
+        /// slot rather than be refused outright.</summary>
+        private const float EdgeLightWeight = 0.3f;
 
         /// <summary>
         /// Fill the shader's light slots with the lights that matter most.
@@ -251,7 +465,8 @@ namespace SDVRadiance
         /// equal-scoring lights break their tie on a camera-independent name rather than on
         /// enumeration order, and a light already chosen carries a bonus so a marginally
         /// better newcomer cannot evict it and be evicted back a step later. What still does
-        /// change ramps in over a few frames instead of appearing whole.
+        /// change fades both ways over its own frames, and the slots are filled from what is
+        /// actually lit rather than from the ranking, so a handover is a crossfade.
         /// </summary>
         private void SelectLights()
         {
@@ -271,62 +486,112 @@ namespace SDVRadiance
                     return byScore != 0 ? byScore : a.Id.CompareTo(b.Id);
                 });
             }
-            int selectedLightCount = Math.Min(_lightCandidates.Count, MaxLights);
-
-            // THE CONTESTED EDGE OF THE ARRAY. Entering was already a fade; leaving was not. A
-            // light that lost its slot simply stopped being written, so in a room offering more
-            // lights than the shader has slots - a saloon at dawn reports exactly the cap - the
-            // last places changed hands constantly and each handover was a pool blinking out and
-            // another blinking on. Hysteresis made the trade rarer without making it softer, and
-            // rare is not the same as invisible.
+            // WHO THE ARRAY WANTS THIS FRAME. Entering was always a fade; leaving was not, so a
+            // light that lost its slot simply stopped being written and its pool blinked out in
+            // one frame. In a room offering more lights than the shader has slots the last places
+            // change hands constantly, and every handover was a blink.
             //
-            // So the last slots now fade by how far clear of the best LOSER they are. A light
-            // comfortably inside the cut is untouched, and two lights trading the final slot are
-            // by definition scoring the same at the moment they trade, which puts both of them at
-            // nothing: the one leaving has already faded out, and the one arriving starts from
-            // there. Uncontested rooms - fewer lights than slots - never enter this at all.
-            float cutScore = _lightCandidates.Count > MaxLights ? Score(_lightCandidates[MaxLights]) : 0f;
-            float cutBand = cutScore * ContestedSlotBand;
-            // Measured BEFORE _lightChosen is rewritten below, because Score reads it for the
-            // incumbent's margin and would otherwise answer differently halfway down the loop.
-            for (int i = 0; i < selectedLightCount; i++)
-            {
-                float margin = cutBand > 0f
-                    ? MathHelper.Clamp((Score(_lightCandidates[i]) - cutScore) / cutBand, 0f, 1f)
-                    : 1f;
-                _slotMargins[i] = margin * margin * (3f - 2f * margin);
-            }
-
-            _lightChosen.Clear();
-            for (int i = 0; i < selectedLightCount; i++)
+            // The first attempt at that fixed the blink and bought something worse. It faded the
+            // last slots by how far clear each light scored of the best LOSER, which is a fraction
+            // of a number recomputed from the whole candidate list every frame. Two consequences,
+            // both reported within hours of 1.5.2 going out. A room UNDER the cap has no loser, so
+            // the whole mechanism was dormant until one more light tipped it over - which is
+            // exactly what equipping a glow ring does, and exactly how it was reported. And when
+            // the lights in a scene are ALIKE, which a street of identical lamps or a wall of
+            // identical windows is, every score sits inside the band at once and they all dim
+            // together. Walking moves which light is the best loser, so the whole scene breathed
+            // brighter and darker with every step and settled again when you stood still.
+            //
+            // The lesson is the one already written down for the flame wobble, in mirror image:
+            // nothing that moves per frame may decide how bright a light is through the RANKING.
+            // So leaving is now the plain mirror of entering - a per-light fade over its own
+            // frames, owned by that light, that no other light's score can move.
+            _lightWanted.Clear();
+            int wantedCount = Math.Min(_lightCandidates.Count, MaxLights);
+            for (int i = 0; i < wantedCount; i++)
             {
                 var cand = _lightCandidates[i];
-                _lightChosen.Add(cand.Id);
-                // Enter over about a third of a second. On the first frame in a room everything
-                // starts lit, or walking through a door would show the place unlit and filling in.
-                float ramp = _lightRamp.TryGetValue(cand.Id, out float prev) ? prev : (sameRoom ? 0f : 1f);
-                ramp = Math.Min(1f, ramp + LightEnterPerFrame);
-                _lightRamp[cand.Id] = ramp;
+                _lightWanted.Add(cand.Id);
+                // Keep its place and colour current even on a frame where it gets no slot: the
+                // fade it will eventually run has to start from where the light actually is.
+                float ramp = _lightRamp.TryGetValue(cand.Id, out LightFade prev) ? prev.Ramp : (sameRoom ? 0f : 1f);
+                _lightRamp[cand.Id] = new LightFade { Ramp = ramp, Uv = cand.Uv, Data = cand.Data, Flick = cand.Flick };
+            }
+
+            // Rank everything that could hold a slot by how bright it is ON SCREEN RIGHT NOW, so a
+            // light on its way out at nine tenths outranks the newcomer replacing it at nothing.
+            // That is what makes a handover a crossfade rather than a swap: the slot changes hands
+            // when the fade has finished, not at the instant the ranking flips.
+            //
+            // A light that is WANTED but still waiting for a slot is ranked at a floor instead of
+            // its true nothing, so that it can take the slot the moment the light leaving it has
+            // gone dim, rather than never. The floor is low enough that the one leaving is down to
+            // a couple of percent by then, which is not a thing anyone can see going out.
+            _lightWrite.Clear();
+            foreach (var kv in _lightRamp)
+            {
+                float lit = _lightWanted.Contains(kv.Key) ? Math.Max(kv.Value.Ramp, WaitingLightFloor) : kv.Value.Ramp;
+                _lightWrite.Add((kv.Key, kv.Value, lit * Relevance(kv.Value.Uv, kv.Value.Data)));
+            }
+            if (_lightWrite.Count > MaxLights)
+            {
+                _lightWrite.Sort((a, b) =>
+                {
+                    int byRank = b.Rank.CompareTo(a.Rank);
+                    return byRank != 0 ? byRank : a.Id.CompareTo(b.Id);
+                });
+            }
+
+            // Now move each ramp, and here is the rule that matters: a light may only get
+            // BRIGHTER on a frame it is actually drawn on.
+            //
+            // It used to brighten from the moment it was wanted, and a wanted light waits behind
+            // whatever is still fading out of the slot it needs. So the first half of its fade in
+            // ran while nothing was on screen, and the pool arrived at forty percent and climbed
+            // from there. Measured in the saloon: every light entered the array at 0.12 against a
+            // settled 0.31, ten of them in one walk, which is the "the pool does not fade in, it
+            // just turns on" report. A ramp is how bright this light is on screen, so something
+            // that is not on screen cannot have got brighter.
+            _lightChosen.Clear();
+            _rampDrop.Clear();
+            int selectedLightCount = Math.Min(_lightWrite.Count, MaxLights);
+            for (int i = 0; i < _lightWrite.Count; i++)
+            {
+                var (id, fade, _) = _lightWrite[i];
+                bool written = i < selectedLightCount;
+                if (_lightWanted.Contains(id))
+                {
+                    if (written)
+                        fade.Ramp = Math.Min(1f, fade.Ramp + LightEnterPerFrame);
+                    // Otherwise frozen. Waiting in the dark is not the same as getting brighter.
+                    _lightRamp[id] = fade;
+                }
+                else
+                {
+                    fade.Ramp -= LightLeavePerFrame;
+                    if (fade.Ramp <= 0f)
+                    {
+                        fade.Ramp = 0f;
+                        _rampDrop.Add(id);       // gone: it enters from nothing if it comes back
+                    }
+                    else
+                    {
+                        _lightRamp[id] = fade;
+                    }
+                }
+                if (!written)
+                    continue;
+                _lightChosen.Add(id);
                 // Flame wobble goes on LAST, after the ranking and the fades have had their say,
                 // so a breathing hearth changes how bright it is and never which lights exist.
-                ramp *= _slotMargins[i] * cand.Flick;
-                _lightPositions[i] = cand.Uv;
-                var d = cand.Data;
+                float ramp = fade.Ramp * fade.Flick;
+                _lightPositions[i] = fade.Uv;
+                Vector4 d = fade.Data;
                 _lightShaderData[i] = new Vector4(d.X * ramp, d.Y * ramp, d.Z * ramp, d.W);
             }
+            foreach (int id in _rampDrop)
+                _lightRamp.Remove(id);
             _lightCount = selectedLightCount;
-
-            // Forget the lights that lost their slot, so one that comes back enters again
-            // instead of snapping straight to full.
-            if (_lightRamp.Count > selectedLightCount)
-            {
-                _rampDrop.Clear();
-                foreach (int id in _lightRamp.Keys)
-                    if (!_lightChosen.Contains(id))
-                        _rampDrop.Add(id);
-                foreach (int id in _rampDrop)
-                    _lightRamp.Remove(id);
-            }
 
             ReportLightWatch(selectedLightCount);
 
@@ -360,7 +625,10 @@ namespace SDVRadiance
             _watchGone.AddRange(_watchPrevious.Keys);
             for (int i = 0; i < selectedLightCount; i++)
             {
-                int id = _lightCandidates[i].Id;
+                // From the WRITE list, not the candidate list. A slot can hold a light that is no
+                // longer a candidate at all, because it is fading out after walking off screen,
+                // and past that point the two lists have neither the same order nor the same length.
+                int id = _lightWrite[i].Id;
                 Vector4 now = _lightShaderData[i];
                 _watchGone.Remove(id);
                 if (!_watchPrevious.TryGetValue(id, out Vector4 was))
@@ -385,15 +653,32 @@ namespace SDVRadiance
         /// switching on. Twenty-two frames is about a third of a second, slow enough to be seen
         /// happening and short enough that nothing feels like it is lagging behind the player.</summary>
         private const float LightEnterPerFrame = 0.045f;
-        /// <summary>How far clear of the best loser a light has to score before it stops being
-        /// faded for sitting on the contested edge of the array, as a fraction of that loser's
-        /// own score. Scale-free, so it means the same thing in a dim room and a bright one.</summary>
-        private const float ContestedSlotBand = 0.25f;
-        /// <summary>Per-slot fade for the contested edge, this frame. Sized to the array it
-        /// feeds, so it never allocates.</summary>
-        private readonly float[] _slotMargins = new float[MaxLights];
-        private readonly Dictionary<int, float> _lightRamp = new();
+        /// <summary>And the mirror of it for a light that has lost its slot. Slightly quicker than
+        /// entering, so a handover frees the slot for the newcomer rather than the pair of them
+        /// sitting in the array for a third of a second each.</summary>
+        private const float LightLeavePerFrame = 0.06f;
+        /// <summary>What a light that is wanted but still waiting for a slot counts as, for the
+        /// purpose of taking one. Its real brightness is nothing, and nothing would never outrank
+        /// anything, so it would wait for ever; this lets it claim the slot once the light leaving
+        /// has faded to about two percent, which is well under what an eye picks up going out.</summary>
+        private const float WaitingLightFloor = 0.02f;
+
+        /// <summary>A light the shader is being told about: where it is, what it looks like, and
+        /// how far through its fade it is. Kept for lights that have LOST their slot as well as
+        /// for chosen ones, because a light on its way out still has to be drawn — at its last
+        /// known place, since it may already be off screen or out of the candidate list.</summary>
+        private struct LightFade
+        {
+            public float Ramp;
+            public Vector2 Uv;
+            public Vector4 Data;
+            public float Flick;
+        }
+
+        private readonly Dictionary<int, LightFade> _lightRamp = new();
         private readonly HashSet<int> _lightChosen = new();
+        private readonly HashSet<int> _lightWanted = new();
+        private readonly List<(int Id, LightFade Fade, float Rank)> _lightWrite = new();
         private readonly List<int> _rampDrop = new();
         private GameLocation? _lightRampLocation;
 

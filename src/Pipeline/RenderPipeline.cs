@@ -109,6 +109,11 @@ namespace SDVRadiance
         /// asset re-patched in place (Content Patcher seasonal/conditional edits). The next
         /// BuildWaterMask sees the mismatch and rebuilds immediately instead of within 10 s.</summary>
         internal static int MaskEpoch;
+        /// <summary>What last bumped <see cref="MaskEpoch"/>, in words. A count of invalidations
+        /// says the mask keeps being thrown away; this says who threw it. A content pack that
+        /// re-patches a map on a condition can do it repeatedly, and on a heavily modded install
+        /// that is indistinguishable from a fault in this mod until something names it.</summary>
+        internal static string MaskEpochReason = "nothing yet";
 
         // Presence fades (0..1): stages ease IN when they (re)appear instead of popping.
         private GameLocation? _fadeLocation;
@@ -139,6 +144,8 @@ namespace SDVRadiance
         private const float FadeGone = 0.004f;
         private GameLocation? _lastWaterLocation;
         private bool _hasWaterInMask;
+        /// <summary>Whether this session has already written one post-process failure out in full.</summary>
+        private bool _loggedPostProcessFailure;
         /// <summary>Eased twin of <see cref="_hasWaterInMask"/>: water scrolling into or out of
         /// the mask window must not add or remove a whole pass in one frame.</summary>
         private float _waterInMaskEase;
@@ -301,6 +308,8 @@ namespace SDVRadiance
             sb.AppendLine($"water mask: origin tile ({_lastWaterTileX},{_lastWaterTileY}) epoch {MaskEpoch} "
                         + $"rebuildInFlight={_pendingWaterMaskJob != null}");
             sb.AppendLine($"labels: {(LabelStore.Instance == null ? "NOT LOADED (every water verdict falls back to the game's own data)" : $"loaded, v{LabelStore.Instance.Version}")}");
+            sb.AppendLine("indoor light (windows, room level, what a lamp pool is worth):");
+            sb.AppendLine(DescribeIndoorLight());
             sb.AppendLine(DescribeCameraKeyedCaches());
             sb.AppendLine(DescribeSheetCache());
             return sb.ToString().TrimEnd();
@@ -731,6 +740,7 @@ namespace SDVRadiance
                 // jumped over it. Now the gate eases, and the pass is only dropped once the ease
                 // has reached zero - by which point there is nothing left to drop.
                 _waterInMaskEase = _hasWaterInMask ? Ease01(_waterInMaskEase) : Ease0(_waterInMaskEase);
+                ReportWaterWatch();
                 if (_fadeWater > FadeGone && _water != null && _waterMask != null && _waterInMaskEase > FadeGone) AddStage(_waterStageDelegate!, 2);
                 // Cloud shadows drift over the ground — outdoors only, and first so later
                 // effects (bloom/grade) see the shadowed scene. They are SUNLIGHT (or moonlight)
@@ -956,6 +966,18 @@ namespace SDVRadiance
             catch (Exception ex)
             {
                 _monitor.Log($"Post-process failed, leaving frame unmodified this frame: {ex.Message}", LogLevel.Warn);
+                // The message ALONE is useless. "Index was out of range" repeated forty times named
+                // neither the list nor the pass, and finding it meant reading the light code by eye
+                // looking for a plausible index - which is exactly the guessing this mod's
+                // diagnostics exist to replace. Once per session, on the first failure, the whole
+                // exception goes in at Error so the SMAPI log a reporter attaches already carries
+                // the line number. Once, because a per-frame fault would otherwise write a stack
+                // trace sixty times a second into their log file.
+                if (!_loggedPostProcessFailure)
+                {
+                    _loggedPostProcessFailure = true;
+                    _monitor.Log("First failure in full (this is logged once per session):\n" + ex, LogLevel.Error);
+                }
                 // A stage may have thrown between a Begin and its End — close the batch
                 // first, or the recovery Begin below throws too (and would escape).
                 try { spriteBatch.End(); } catch { }

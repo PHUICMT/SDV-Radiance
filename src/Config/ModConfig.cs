@@ -82,7 +82,12 @@ namespace SDVRadiance
         public bool Enabled { get; set; } = true;
 
         /// <summary>The quick-look preset last chosen from the menu's top dropdown (Custom = hand-tuned).</summary>
-        public LookPreset ActivePreset { get; set; } = LookPreset.Custom;
+        /// <remarks>It said Custom while shipping the Cinematic numbers, so the dropdown opened on
+        /// "hand-tuned" in an install nobody had tuned. Naming the look it actually is means the
+        /// menu tells the truth on first launch, and someone who wanders off it can find their way
+        /// back by picking it again. Nothing applies a preset on load, so this is a label, not an
+        /// action: an existing config keeps whatever it already says.</remarks>
+        public LookPreset ActivePreset { get; set; } = LookPreset.Cinematic;
 
         /// <summary>Resolution the EFFECT chain runs at, as a fraction of the window. 1 = native.
         /// The game still draws the world at full size; only our passes work on a smaller image
@@ -104,16 +109,20 @@ namespace SDVRadiance
         // --- Bloom ---
         public bool BloomEnabled { get; set; } = true;
         public float BloomThreshold { get; set; } = 0.72f;
-        public float BloomIntensity { get; set; } = 0.76f;
+        /// <remarks>0.35, not the 0.76 it shipped with: at more than double the Cinematic preset's
+        /// own value, a fresh install did not look like the preset it claimed to be.</remarks>
+        public float BloomIntensity { get; set; } = 0.35f;
 
         // --- Color grade ---
         public bool ColorGradeEnabled { get; set; } = true;
         public float ColorGradeStrength { get; set; } = 1f;
-        // 1.5.0: 1.15 (the Cinematic preset's own value) read as punchy on first launch, and the
-        // most common note from people who liked the look was that they had to soften it before a
-        // long session. 1.10 sits halfway to Subtle's 1.06. Changing the DEFAULT only reaches new
-        // installs: anyone already playing has this written in config.json and keeps their value.
-        public float ColorGradeContrast { get; set; } = 1.10f;
+        // 1.5.0 took this to 1.10, halfway to Subtle's 1.06: 1.15 read as punchy on first launch
+        // and the common note from people who liked the look was that they softened it before a
+        // long session. 1.5.3 puts it back to 1.15 as part of shipping the Cinematic preset whole,
+        // and the note it was lowered for was made against the OLD lighting, where a lamp could
+        // not brighten anything and contrast was carrying the whole picture. If it reads as harsh
+        // again now that the lights work, this line is the one to move, not the lighting.
+        public float ColorGradeContrast { get; set; } = 1.15f;
         public float ColorGradeSaturation { get; set; } = 1.05f;
         public float ColorGradeTemperature { get; set; } = 0.05f;
         public float ColorGradeBrightness { get; set; } = 1f;
@@ -210,9 +219,12 @@ namespace SDVRadiance
         /// canopies, coloured lamp pools). Supersedes LightingEnabled when on.</summary>
         public bool FloodLightingEnabled { get; set; } = true;
         /// <summary>How strongly the flood lightmap modulates the scene (0..1).</summary>
-        public float FloodLightingStrength { get; set; } = 0.54f;
+        /// <remarks>See <see cref="LightingBoost"/> for why this whole group was raised.</remarks>
+        public float FloodLightingStrength { get; set; } = 0.63f;
         /// <summary>How dark a fully occluded per-light ray gets (0 = no shadows, 1 = black).</summary>
-        public float FloodShadowStrength { get; set; } = 0.79f;
+        /// <remarks>Lowered with the rest of the group: with the pools finally bright enough to
+        /// read, a near-black occluded ray beside them was all contrast and no shape.</remarks>
+        public float FloodShadowStrength { get; set; } = 0.74f;
         /// <summary>Master switch for everything this mod does with windows: indoor daylight AND
         /// the warm glow on house windows outdoors at night. Off means no window anywhere is a
         /// light as far as we are concerned, which is what someone running a dedicated window mod
@@ -234,19 +246,30 @@ namespace SDVRadiance
         /// <summary>Darken flat/unlit areas and pool light around real light sources.</summary>
         public bool LightingEnabled { get; set; } = true;
         /// <summary>How dark interiors get (vanilla leaves them flat-bright). 0 = none, 1 = very dark.</summary>
-        public float LightingIndoorDarkness { get; set; } = 0.64f;
+        public float LightingIndoorDarkness { get; set; } = 0.68f;
         /// <summary>Extra darkening at night where we own the lighting. 0 = none.</summary>
-        public float LightingNightDarkness { get; set; } = 0.68f;
+        public float LightingNightDarkness { get; set; } = 0.56f;
         /// <summary>Warmth of the light pools (0 = neutral white, 1 = candle-orange).</summary>
-        public float LightingWarmth { get; set; } = 0.62f;
+        public float LightingWarmth { get; set; } = 0.55f;
         /// <summary>Scale the on-screen radius of every light pool.</summary>
-        public float LightingRadiusScale { get; set; } = 0.54f;
-        /// <summary>Brightness of the light pools added back over the darkened scene.</summary>
-        public float LightingBoost { get; set; } = 0.27f;
+        public float LightingRadiusScale { get; set; } = 1.31f;
+        /// <summary>
+        /// Brightness of the light pools added back over the darkened scene.
+        /// </summary>
+        /// <remarks>
+        /// Raised from 0.27, which was below the level at which a lamp can brighten anything at
+        /// all. The flood shader multiplies the scene by the lightmap CLAMPED AT ONE, so that term
+        /// can only ever darken; the single line that adds light needs the lightmap to pass one
+        /// first. At 0.27 a pool centre reached about half of that, so the adding term was exactly
+        /// zero in every interior, for everyone on the defaults, always. Lamps could make a floor
+        /// less dark and never bright, which is precisely the "night is dark and the lit places are
+        /// dark too" this group was tuned against. This clears the bar with room to spare.
+        /// </remarks>
+        public float LightingBoost { get; set; } = 0.89f;
         /// <summary>Cast hard-edge shadows from tall/solid tiles that block light.</summary>
         public bool LightingShadows { get; set; } = true;
         /// <summary>How dark occluder shadows are. 0 = none, 1 = full.</summary>
-        public float LightingShadowStrength { get; set; } = 0.59f;
+        public float LightingShadowStrength { get; set; } = 0.4f;
 
         // --- Directional sprite shadows (sun-cast, sheared silhouettes) ---
         /// <summary>Cast directional shadows from sprites (NPCs, later player/objects), by sun angle.</summary>

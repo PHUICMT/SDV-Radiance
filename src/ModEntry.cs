@@ -115,22 +115,44 @@ namespace SDVRadiance
                 // Fish-pond water lives in the mask now — a pond placed/moved/removed must
                 // show up on the next frame, not on the 10 s safety refresh.
                 RenderPipeline.MaskEpoch++;
+                RenderPipeline.MaskEpochReason = "a building was added or removed";
             };
             // A map re-patched in place (Content Patcher seasonal/conditional edits reload the
-            // live location's map) can move the water itself. Invalidate both the surface grid
-            // and the mask when any Maps/* asset reloads.
+            // live location's map) can move the water itself, so the cached surface grids have to
+            // go. That part is cheap: a grid is rebuilt when its location is next entered.
+            //
+            // Throwing away the WATER MASK is not cheap, and it used to happen here for ANY
+            // Maps/* asset, whether or not it had anything to do with where the player was
+            // standing. On a modded install that is a steady drip of invalidations from maps the
+            // player is nowhere near - Maps/Pathoschild.CentralStation reloading while the player
+            // sits indoors was the one that gave this away - and every one of them rebuilt the
+            // surface from scratch under a player who had not moved. That is a flash of water with
+            // no cause the player could ever point at, which is what the report says it looks like.
+            //
+            // The mask only ever holds the CURRENT location, and changing location rebuilds it
+            // regardless, so the only reload that can invalidate it is a reload of the map the
+            // player is standing on.
             helper.Events.Content.AssetsInvalidated += (_, e) =>
             {
+                string? here = Game1.currentLocation?.mapPath?.Value?.Replace('\\', '/');
+                bool anyMap = false;
                 foreach (var name in e.Names)
                 {
-                    if (name.Name.StartsWith("Maps/", StringComparison.OrdinalIgnoreCase)
-                        || name.Name.StartsWith("Maps\\", StringComparison.OrdinalIgnoreCase))
+                    if (!name.Name.StartsWith("Maps/", StringComparison.OrdinalIgnoreCase)
+                        && !name.Name.StartsWith("Maps\\", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    anyMap = true;
+                    // Every Maps/* name is checked, not just the first: a single invalidation can
+                    // carry a batch, and the player's own map is not always at the front of it.
+                    if (here != null && string.Equals(here, name.Name.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
                     {
-                        SurfaceMap.Clear();
                         RenderPipeline.MaskEpoch++;
+                        RenderPipeline.MaskEpochReason = "a mod reloaded the map you are standing on (" + name.Name + ")";
                         break;
                     }
                 }
+                if (anyMap)
+                    SurfaceMap.Clear();
             };
 
             SurfaceMap.DiagnosticMonitor = this.Monitor;

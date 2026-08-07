@@ -67,6 +67,17 @@ namespace SDVRadiance
                     RenderPipeline.LightWatchFrames = frames;
                     monitor.Log($"Watching the light array for {frames} frames.", LogLevel.Info);
                 });
+            helper.ConsoleCommands.Add("radiance_waterwatch",
+                "Trace the water surface for the next N frames (default 120) and say what changed each frame: "
+                + "when the mask was rebuilt, when the window moved, and when the shoreline the reflection is "
+                + "built against switched between the map's own and a window-local guess. If the water flashes "
+                + "while you walk, walk past it with this running and the flash will have a line next to it.",
+                (_, args) =>
+                {
+                    int frames = args.Length >= 1 && int.TryParse(args[0], out int f) ? Math.Clamp(f, 1, 600) : 120;
+                    RenderPipeline.WaterWatchFrames = frames;
+                    monitor.Log($"Watching the water for {frames} frames. Walk past the water now.", LogLevel.Info);
+                });
             helper.ConsoleCommands.Add("radiance_flood",
                 "Flood-GI rebuild A/B for chasing a flicker. 'radiance_flood freeze' holds the current bounce "
                 + "grid still (anything that still moves is NOT the flood), 'every' rebuilds it every frame "
@@ -294,6 +305,9 @@ namespace SDVRadiance
                 Write("");
                 Write("=== label check for everything on screen ===");
                 Write(pipeline?.VerifyLabels(Game1.currentLocation) ?? "pipeline not ready");
+                Write("");
+                Write("=== how the water surface has been behaving, and what just happened to it ===");
+                Write(pipeline?.DescribeWaterHistory() ?? "pipeline not ready");
                 Write("");
                 Write("=== water with ripple but no reflection, worst first ===");
                 Write(pipeline?.DescribeEffectOnlyTiles() ?? "pipeline not ready");

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using StardewModdingAPI;
 using StardewValley;
@@ -43,6 +44,163 @@ namespace SDVRadiance
         /// <summary>Full-map pixel budget for the anchor precompute. Guards absurd custom
         /// maps: past this the anchor is skipped and Pass D keeps its window-local answer.</summary>
         private const int WlMaxPixels = 24_000_000;   // ~366 MB of bool scratch would be silly
+
+        /// <summary>
+        /// Frames left on the water-side trace. The counterpart of the light watch, and written for
+        /// the same reason it was: "the water flashes when someone walks" is a report about TIME,
+        /// and every diagnostic we had was a snapshot of one frame. A snapshot cannot show a flash.
+        ///
+        /// <para>What it is looking for is the shape of that report. Walking rebuilds the mask,
+        /// a rebuild bumps the epoch, and the epoch is what the full-map waterline anchor is keyed
+        /// to - so the anchor goes stale the moment the player moves far enough, and the rebuild
+        /// that would replace it is deliberately refused while the player is moving. Between those
+        /// two the reflection is composed against a window-local shoreline instead of the map's
+        /// own, which is a different answer for the same water. If that is what is happening, the
+        /// trace shows the epoch bump and the anchor going stale on the frames the player reports
+        /// a flash, and shows them returning to normal a moment after they stand still.</para>
+        /// </summary>
+        internal static int WaterWatchFrames;
+        private int _watchWaterEpoch = int.MinValue, _watchWaterTileX = int.MinValue, _watchWaterTileY = int.MinValue;
+        private bool _watchWaterAnchor, _watchWaterInMask, _watchWaterJob;
+
+        /// <summary>
+        /// The last few dozen things that changed on the water side, kept whether anyone asked or
+        /// not.
+        ///
+        /// <para>Because the report is a snapshot and a flash is not. The reporter types ONE
+        /// command, after the thing has already happened, and telling them to start a trace first
+        /// and reproduce it on cue is asking for work nobody does: the report arrives with a
+        /// screenshot and nothing else, which is the whole reason radiance_report exists. So the
+        /// recording runs all the time - it is a handful of comparisons and a string only on the
+        /// frames something actually moved - and typing the command afterwards is enough to see
+        /// what the last few seconds looked like.</para>
+        /// </summary>
+        private readonly List<string> _waterLog = new();
+        /// <summary>Reused, never re-allocated: see the note in ReportWaterWatch.</summary>
+        private readonly System.Text.StringBuilder _waterChangeText = new();
+        private const int WaterLogMax = 48;
+        private GameLocation? _waterStatsLocation;
+        private int _waterWindowMoves, _waterEpochBumps, _waterAnchorBuilds, _waterPresenceFlips, _waterStatsFrames;
+
+        private void NoteWater(string what)
+        {
+            if (_waterLog.Count >= WaterLogMax)
+                _waterLog.RemoveAt(0);
+            _waterLog.Add($"t+{_waterStatsFrames,-6} {what}");
+        }
+
+        /// <summary>Record what changed on the water side this frame, and stream it to the console
+        /// too while a watch is running.</summary>
+        private void ReportWaterWatch()
+        {
+            var location = Game1.currentLocation;
+            if (!ReferenceEquals(location, _waterStatsLocation))
+            {
+                _waterStatsLocation = location;
+                _waterLog.Clear();
+                _waterWindowMoves = _waterEpochBumps = _waterAnchorBuilds = _waterPresenceFlips = 0;
+                _waterStatsFrames = 0;
+                _watchWaterEpoch = int.MinValue;
+                _watchWaterTileX = _watchWaterTileY = int.MinValue;
+            }
+            _waterStatsFrames++;
+
+            bool anchor = location != null && AnchorFresh(location);
+            bool job = _pendingWaterMaskJob != null;
+            bool first = _watchWaterEpoch == int.MinValue;
+
+            // Comparisons first, text second. This runs on EVERY frame and the overwhelming
+            // majority of them have nothing to say, so the frames that say nothing must not
+            // allocate: a per-frame StringBuilder is not slow on average, it is a steady drip of
+            // garbage, and garbage shows up as a hitch rather than as a lower average - which is
+            // the one shape of cost this mod is least allowed to add.
+            bool invalidated = !first && MaskEpoch != _watchWaterEpoch;
+            bool windowMoved = !first && (_lastWaterTileX != _watchWaterTileX || _lastWaterTileY != _watchWaterTileY);
+            bool anchorChanged = !first && anchor != _watchWaterAnchor;
+            bool presenceChanged = !first && _hasWaterInMask != _watchWaterInMask;
+            bool jobChanged = !first && job != _watchWaterJob;
+            if (invalidated) _waterEpochBumps++;
+            if (windowMoved) _waterWindowMoves++;
+            if (anchorChanged && anchor) _waterAnchorBuilds++;
+            if (presenceChanged) _waterPresenceFlips++;
+
+            var changes = _waterChangeText;
+            changes.Clear();
+            if (invalidated) changes.Append($"  SURFACE THROWN AWAY: {MaskEpochReason}");
+            if (windowMoved) changes.Append("  camera moved, surface rebuilt");
+            if (anchorChanged)
+                changes.Append(anchor
+                    ? "  ANCHOR READY (the shoreline is the map's own now)"
+                    : "  ANCHOR LOST (the shoreline is a guess from the screen edge again)");
+            if (presenceChanged)
+                changes.Append(_hasWaterInMask ? "  water entered the window" : "  water left the window");
+            if (jobChanged) changes.Append(job ? "  rebuild started" : "  rebuild landed");
+
+            _watchWaterEpoch = MaskEpoch;
+            _watchWaterTileX = _lastWaterTileX;
+            _watchWaterTileY = _lastWaterTileY;
+            _watchWaterAnchor = anchor;
+            _watchWaterInMask = _hasWaterInMask;
+            _watchWaterJob = job;
+
+            if (changes.Length > 0)
+                NoteWater($"origin=({_lastWaterTileX},{_lastWaterTileY}) anchor={(anchor ? "map" : "window-local")} "
+                        + $"moving={(Game1.player?.isMoving() == true ? 1 : 0)}{changes}");
+
+            if (WaterWatchFrames <= 0)
+                return;
+            WaterWatchFrames--;
+            _monitor.Log($"[waterwatch] epoch={MaskEpoch} origin=({_lastWaterTileX},{_lastWaterTileY}) "
+                       + $"anchor={(anchor ? "map" : "window-local")} ease={_waterInMaskEase:0.00} "
+                       + $"moving={Game1.player?.isMoving() == true} restFrames={_waterlineFreshFrameCount}"
+                       + (changes.Length > 0 ? changes.ToString() : "  steady"), LogLevel.Info);
+        }
+
+        /// <summary>
+        /// The water side of the report: how the shoreline is being decided right now, how hard
+        /// this player's view is making the mask work, and what actually happened in the seconds
+        /// before they typed the command.
+        /// </summary>
+        internal string DescribeWaterHistory()
+        {
+            var sb = new System.Text.StringBuilder();
+            var location = Game1.currentLocation;
+            bool anchor = location != null && AnchorFresh(location);
+
+            // How much slack the mask window has over the viewport. It is rebuilt whenever the
+            // camera crosses a SINGLE tile, so a wide view walks through rebuilds constantly, and
+            // that rate is the thing a report from a 4K player and a report from a 1080p player
+            // differ by. Worth stating in tiles rather than pixels: zoom and UI scale both move it.
+            float viewTilesX = Game1.viewport.Width / 64f, viewTilesY = Game1.viewport.Height / 64f;
+            sb.AppendLine($"your view covers {viewTilesX:0.0}x{viewTilesY:0.0} tiles, and the water surface is worked "
+                        + $"out for {(int)viewTilesX + 6}x{(int)viewTilesY + 6} tiles around it. It is rebuilt every "
+                        + "time you walk one tile, so the wider your view, the more rebuilds a walk costs.");
+            // Said plainly, because "GUESSED FROM THE SCREEN EDGE" in a room with no water in it
+            // reads as the fault the reporter came to report, and it is not one.
+            sb.AppendLine("shoreline right now: " + (!_hasWaterInMask
+                ? "not decided — there is no water in view here, so nothing below is a problem"
+                : anchor ? "the map's own (stable)" : "GUESSED FROM THE SCREEN EDGE"));
+            if (!anchor && _hasWaterInMask)
+                sb.AppendLine("    -> the map-wide shoreline is only ever built while standing still, so walking "
+                            + "in without pausing means every rebuild re-decides where the water's edge is. If the "
+                            + "water changes as you walk and settles when you stop, this line is why.");
+            if (_waterlineAnchorFailedForLocation && _waterlineFailedLocation == location)
+                sb.AppendLine("    -> and it FAILED here, so it will not be retried for this location");
+            // Written as sentences on purpose. This is read by the person filing the report, and
+            // "invalidations by the world" meant nothing to anyone who had not written the code.
+            sb.AppendLine($"since you arrived here ({_waterStatsFrames} frames):");
+            sb.AppendLine($"    the surface was rebuilt {_waterWindowMoves} times because the camera moved");
+            sb.AppendLine($"    it was thrown away {_waterEpochBumps} times because something reloaded the map under you");
+            sb.AppendLine($"    the map-wide shoreline finished building {_waterAnchorBuilds} times");
+            sb.AppendLine($"    water came into or left your view {_waterPresenceFlips} times");
+            sb.AppendLine("what changed, most recent last (t+ is frames since you arrived here):");
+            if (_waterLog.Count == 0)
+                sb.AppendLine("    nothing has changed since you arrived, which means the surface is not being rebuilt at all");
+            else
+                foreach (string line in _waterLog)
+                    sb.AppendLine("    " + line);
+            return sb.ToString().TrimEnd();
+        }
 
         private bool AnchorFresh(GameLocation location) =>
             _waterlineAnchorData is { } a && a.Location == location
