@@ -33,12 +33,17 @@ namespace SDVRadiance
             // shows the front view and does not change"). The caster/object bakes below stay
             // shadow-only work, so a reflection-only frame pays for one small render target.
             bool shadowsOn = ShouldCast(config);
-            bool reflectionNeedsPlayer = config.Enabled && config.WaterReflection
+            // "The reflection needs the player" requires water actually on screen, not just the
+            // setting: the only reader of PlayerColor early-outs without water, so a farmhouse
+            // frame that baked it anyway was doing a second FarmerRenderer draw for nobody. Both
+            // sides read the same flag (last compose's answer), so they cannot disagree.
+            bool reflectionNeedsPlayer = config.Enabled && config.WaterReflection && WaterOnScreen
                 && StardewModdingAPI.Context.IsWorldReady && Game1.currentLocation != null;
             if (!shadowsOn && !reflectionNeedsPlayer)
             {
                 _playerReady = false;
                 _playerMaskFresh = false;
+                _playerColorFresh = false;
                 PlayerMask = null;
                 PlayerColor = null;
                 return;
@@ -109,20 +114,34 @@ namespace SDVRadiance
             if (shadowsOn && Game1.currentLocation is { } casterLocation)
                 BakeCasters(graphicsDevice, casterLocation);
 
-            // Bake OBJECT silhouettes (trees/bushes/clumps/furniture/craftables/…) by running the
-            // object enumeration in BAKE mode. Composited later in DrawObjectShadows. Runs every
-            // frame so sprites entering the view bake instantly (a 15-tick heartbeat was tried —
-            // its cache-miss frames drew the banded fallback, reading as line artifacts) — but a
-            // WARM frame is dictionary hits only, no RT switches, which is where the cost was.
+            // Bake OBJECT silhouettes (trees/bushes/clumps/furniture/craftables/…). The FULL
+            // enumeration — every on-screen tile, every entity list, the tile-art classifier —
+            // runs only when the cache was actually invalidated (sun angle ticked, location
+            // changed, cap blown). On every other frame it used to run anyway, in bake mode,
+            // and on a warm frame that is a second complete walk of the scene per frame whose
+            // every lookup answers "already baked". The draw pass now reports what it found
+            // missing (see EmitObj), and a warm bake pass does exactly that list, which on a
+            // still screen is nothing. A brand-new sprite pays one frame of the banded stand-in
+            // — at the screen edge it is scrolling in over, not the 15 ticks of it that got the
+            // old heartbeat attempt reverted.
             if (objectsOn && Game1.currentLocation is { } objectLocation)
             {
                 _isBakingObjects = true;
                 _objectGraphicsDevice = graphicsDevice;
                 RenderTargetBinding[] objPrev = graphicsDevice.GetRenderTargets();
-                try { DrawObjectShadows(_renderTargetSpriteBatch, objectLocation, sunRotation, sunStretch, 0f, 0f); }
+                try
+                {
+                    if (isObjectBakeCacheInvalid || _bakedObjectCache.Count == 0)
+                        DrawObjectShadows(_renderTargetSpriteBatch, objectLocation, sunRotation, sunStretch, 0f, 0f);
+                    else
+                        BakeQueuedObjectSprites(graphicsDevice);
+                }
                 catch (Exception ex) { if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log($"[shadow] obj bake threw: {ex}", LogLevel.Warn); } }
                 finally { graphicsDevice.SetRenderTargets(objPrev); _isBakingObjects = false; }
             }
+            // Either path leaves the queue spent: the full walk covers everything the queue
+            // held, and stale entries must not outlive the shear they were recorded under.
+            _objectBakeQueue.Clear();
 
             // Sitting still casts (the bake captures the current SEATED animation frame, so the
             // silhouette matches the pose); horseback skips — the horse's own shadow covers the
@@ -136,6 +155,7 @@ namespace SDVRadiance
             {
                 _playerReady = false;
                 _playerMaskFresh = false;
+                _playerColorFresh = false;
                 PlayerMask = null;
                 PlayerColor = null;
                 return;
@@ -152,13 +172,19 @@ namespace SDVRadiance
 
             // Same pose as the last bake → the RT is still correct, skip the 3-batch redraw.
             // The every-8-frames refresh keeps accessory layers that animate independently of
-            // the body frame (Fashion Sense hair sway etc.) fresh without paying every frame.
+            // the body frame (Fashion Sense hair sway etc.) fresh — but ONLY when such a mod is
+            // actually installed. It used to run unconditionally, which meant a player standing
+            // perfectly still was re-baked 7.5 times a second on every install, for layers that
+            // in a vanilla-appearance game do not exist. This bake measured as the single most
+            // expensive part of the mod, ahead of drawing every shadow on screen.
             var sig = (who.FarmerSprite.CurrentFrame, (int)who.FacingDirection, src);
-            if (_playerMaskFresh && sig == _playerBakeSignature && Game1.ticks % 8 != 0)
+            bool accessoryRefreshDue = PlayerAccessoriesAnimate && Game1.ticks % 8 == 0;
+            if (_playerMaskFresh && sig == _playerBakeSignature && !accessoryRefreshDue
+                && (!reflectionNeedsPlayer || _playerColorFresh))
             {
                 _playerReady = !swim && !IsSeated(who);
                 PlayerMask = _playerRenderTarget;
-                PlayerColor = _playerColorRenderTarget;
+                PlayerColor = _playerColorFresh ? _playerColorRenderTarget : null;
                 return;
             }
             _playerBakeSignature = sig;
@@ -194,19 +220,28 @@ namespace SDVRadiance
 
                 // FULL-COLOUR twin of the bake (no scrub, no head fade) for the water
                 // reflection RT: same pose, same feet anchor, whatever appearance mods drew.
-                _playerColorRenderTarget ??= new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
-                    SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
-                graphicsDevice.SetRenderTarget(_playerColorRenderTarget);
-                graphicsDevice.Clear(Color.Transparent);
-                _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
-                who.FarmerRenderer.draw(_renderTargetSpriteBatch, who.FarmerSprite.CurrentAnimationFrame, who.FarmerSprite.CurrentFrame,
-                    src, pos, Vector2.Zero, 0f, who.FacingDirection, Color.White, 0f, 1f, who);
-                _renderTargetSpriteBatch.End();
+                // Skipped when no water is on screen — its one reader is the reflection, which
+                // early-outs on the same flag, so the second FarmerRenderer draw was pure waste
+                // on every waterless frame. _playerColorFresh is what makes the skip safe: the
+                // moment water scrolls back in, the stale-colour pose fails the reuse gate above
+                // and this bake runs again, even though the mask half is still current.
+                if (reflectionNeedsPlayer)
+                {
+                    _playerColorRenderTarget ??= new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
+                        SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
+                    graphicsDevice.SetRenderTarget(_playerColorRenderTarget);
+                    graphicsDevice.Clear(Color.Transparent);
+                    _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+                    who.FarmerRenderer.draw(_renderTargetSpriteBatch, who.FarmerSprite.CurrentAnimationFrame, who.FarmerSprite.CurrentFrame,
+                        src, pos, Vector2.Zero, 0f, who.FacingDirection, Color.White, 0f, 1f, who);
+                    _renderTargetSpriteBatch.End();
+                }
+                _playerColorFresh = reflectionNeedsPlayer;
 
                 _playerMaskFresh = true;
                 _playerReady = !swim && !IsSeated(who);
                 PlayerMask = _playerRenderTarget;
-                PlayerColor = _playerColorRenderTarget;
+                PlayerColor = _playerColorFresh ? _playerColorRenderTarget : null;
             }
             catch (Exception ex)
             {

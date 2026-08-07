@@ -27,6 +27,19 @@ namespace SDVRadiance
         /// <summary>Optional diagnostics sink; when set (config.DebugLogging), the first few draws + any error are logged once.</summary>
         internal static IMonitor? DiagnosticMonitor;
 
+        /// <summary>True while the benchmark is re-running this pass to measure it. Anything that
+        /// advances once per frame must not advance once per call while this is set.</summary>
+        internal static bool BenchmarkAmplifying;
+
+        /// <summary>Last compose's "any water on screen" answer, published by the pipeline. Gates
+        /// the player COLOUR bake, whose only reader is the water reflection.</summary>
+        internal static bool WaterOnScreen;
+
+        /// <summary>True when a mod that animates the player's appearance independently of the
+        /// body frame is installed (Fashion Sense hair sway and the like). Only then is the
+        /// periodic re-bake of an unchanged pose worth paying for.</summary>
+        internal static bool PlayerAccessoriesAnimate;
+
         private int _diagnosticFrameCount;
         private bool _errorLogged;
 
@@ -43,6 +56,7 @@ namespace SDVRadiance
         private Texture2D? _propGradientTexture;
         private Vector2 _playerFeetInRenderTarget;
         private bool _playerReady;
+        private bool _playerColorFresh;  // the COLOUR twin holds the current pose (it is skipped without water)
         private bool _playerMaskFresh;   // the RT holds the current pose (reuse gate); _playerReady
                                          // additionally means "cast a shadow" and drops while swimming
         internal const int PlayerRtW = 96;
@@ -89,6 +103,13 @@ namespace SDVRadiance
         private readonly System.Collections.Generic.List<RenderTarget2D> _objectRenderTargetPool = new();
         private int _objectSlotsUsed;
         private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle src, SpriteEffects effect), (RenderTarget2D rt, Vector2 feetInRT)> _bakedObjectCache = new();
+        /// <summary>Sprites the DRAW pass wanted and found unbaked, to bake next frame. This is
+        /// what lets the bake pass skip its full enumeration on a warm frame: instead of walking
+        /// every on-screen tile a second time to discover nothing is missing, it bakes exactly
+        /// what the draw pass reported missing, which on a still screen is nothing at all.
+        /// Value carries the bake inputs recorded at draw time (the shear is per-CALLER, damped
+        /// by sprite type, so it cannot be recomputed globally).</summary>
+        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle src, SpriteEffects effect), (Vector2 baseOrigin, float shear)> _objectBakeQueue = new();
         private bool _isBakingObjects;
         private GraphicsDevice? _objectGraphicsDevice;
         /// <summary>Sun angle the object cache was baked at (shear is baked in) — cache clears when it changes.</summary>
@@ -317,9 +338,15 @@ namespace SDVRadiance
             // Both paths run while the blend is in transit, each at its share of the strength, so
             // the sun's long shadow thins out as the lamp's grows in.
             float sunTarget = SunCasts() ? 1f : 0f;
-            _sunBlend += (sunTarget - _sunBlend) * SunBlendRate;
-            if (Math.Abs(sunTarget - _sunBlend) < 0.004f)
-                _sunBlend = sunTarget;
+            // The benchmark calls this several extra times per frame to measure it. Advancing the
+            // dusk cross-fade once per CALL rather than once per frame would run it at seven times
+            // speed for the length of the run, so the repeats read the blend without moving it.
+            if (!BenchmarkAmplifying)
+            {
+                _sunBlend += (sunTarget - _sunBlend) * SunBlendRate;
+                if (Math.Abs(sunTarget - _sunBlend) < 0.004f)
+                    _sunBlend = sunTarget;
+            }
 
             _renderDepth++;
             try

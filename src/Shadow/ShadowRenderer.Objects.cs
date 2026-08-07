@@ -50,8 +50,16 @@ namespace SDVRadiance
                 DrawSoft(spriteBatch, Taps9, bakedEntry.rt, null, feet, Color.White, alpha, 0f, bakedEntry.feetInRT,
                     new Vector2(1f, shearScaleY), depth, SpriteEffects.None, blur);
             else
+            {
+                // Ask the NEXT bake pass for exactly this sprite, so the banded stand-in below
+                // lasts one frame (a sprite scrolling in, a machine changing frame) instead of
+                // waiting for something else to trigger a full enumeration. Capped: a cap-blown
+                // frame misses on everything, and the full-bake path owns that case already.
+                if (_objectBakeQueue.Count < 96)
+                    _objectBakeQueue[key] = (baseOrigin, shear);
                 DrawBandedGradient(spriteBatch, texture, src, feet, baseOrigin, alpha, rot,
                     new Vector2(4f, 4f * stretch), depth, blur, headFade, effects);
+            }
         }
 
         /// <summary>Bake a sprite (black + feet→head gradient) to a pooled object RT, its baseOrigin
@@ -90,6 +98,23 @@ namespace SDVRadiance
             {
                 try { _renderTargetSpriteBatch!.End(); } catch { }
                 return false;
+            }
+        }
+
+        /// <summary>Bake exactly what the draw pass reported missing — the warm-frame
+        /// counterpart of the full enumeration. Each entry carries the origin and the damped,
+        /// per-type shear recorded at draw time, so the result is byte-identical to what the
+        /// full walk would have produced for the same sprite.</summary>
+        private void BakeQueuedObjectSprites(GraphicsDevice graphicsDevice)
+        {
+            foreach (var kv in _objectBakeQueue)
+            {
+                var key = kv.Key;
+                if (_bakedObjectCache.ContainsKey(key))
+                    continue;
+                if (BakeObjSprite(graphicsDevice, key.texture, key.src, kv.Value.baseOrigin, key.effect,
+                        kv.Value.shear, out RenderTarget2D rt, out Vector2 feetInRT))
+                    _bakedObjectCache[key] = (rt, feetInRT);
             }
         }
 

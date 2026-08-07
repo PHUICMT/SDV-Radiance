@@ -422,6 +422,12 @@ namespace SDVRadiance
         /// the sky behind it only while there IS sky light: after dark it is a dark rectangle, and
         /// exempting it then left a window still lit at midnight.</summary>
         private float _paneDaylightEase;
+        /// <summary>Eased twin of the window-beam setting, so switching it off fades the
+        /// floor patch out instead of deleting it in one frame.</summary>
+        private float _windowDaylightEase;
+        /// <summary>Eased twin of the window room-light setting: the daylight a window contributes
+        /// to the room's own lighting, which is the half a window-art mod cannot replace.</summary>
+        private float _windowRoomLightEase;
         private GameLocation? _exposureLocation;
         private readonly Vector2[] _windowShaftPositions = new Vector2[6];
 
@@ -473,7 +479,8 @@ namespace SDVRadiance
             // ---- Time-of-day room exposure + window shafts (windowed interiors only) ----
             var location = Game1.currentLocation;
             FloodLightmap.IndoorLook(location, config, out Vector3 exposureTarget, out float satTarget);
-            bool windowedRoom = FloodLightmap.IsWindowedInterior(location);
+            bool windowsHere = FloodLightmap.IsWindowedInterior(location) && config.WindowEffectsEnabled;
+            bool windowedRoom = windowsHere && config.WindowBeamEnabled;
             ShadowRenderer.WindowDaylight(out Vector3 dayColour, out float dayStrength);
             Vector3 windowColourTarget = windowedRoom ? dayColour * (dayStrength * 0.8f) : Vector3.Zero;
             float paneDaylightTarget = windowedRoom ? MathHelper.Clamp(dayStrength * 1.6f, 0f, 1f) : 0f;
@@ -484,6 +491,8 @@ namespace SDVRadiance
                 _windowColourEase = windowColourTarget;
                 _roomSaturationEase = satTarget;
                 _paneDaylightEase = paneDaylightTarget;
+                _windowDaylightEase = windowedRoom ? 1f : 0f;
+                _windowRoomLightEase = windowsHere && config.WindowRoomLightEnabled ? 1f : 0f;
             }
             else
             {
@@ -491,7 +500,15 @@ namespace SDVRadiance
                 _windowColourEase = Vector3.Lerp(_windowColourEase, windowColourTarget, 0.03f);
                 _roomSaturationEase = MathHelper.Lerp(_roomSaturationEase, satTarget, 0.03f);
                 _paneDaylightEase = MathHelper.Lerp(_paneDaylightEase, paneDaylightTarget, 0.03f);
+                _windowDaylightEase = MathHelper.Lerp(_windowDaylightEase, windowedRoom ? 1f : 0f, 0.03f);
+                _windowRoomLightEase = MathHelper.Lerp(_windowRoomLightEase,
+                    windowsHere && config.WindowRoomLightEnabled ? 1f : 0f, 0.03f);
             }
+            // The lightmap seeds both of its window terms on the CPU, a frame ahead of this, so
+            // hand it the EASED switches rather than the switches: turning either off has to fade
+            // its light away, not delete it between two frames.
+            FloodLightmap.WindowPatchScale = _windowDaylightEase;
+            FloodLightmap.WindowRoomScale = _windowRoomLightEase;
             // The stage's own fade still applies: while the flood is easing in/out the
             // exposure walks back to neutral with it, so toggling never steps the room.
             GetParam(effect, "Exposure")?.SetValue(Vector3.Lerp(Vector3.One, _exposureEase, _fadeFlood));

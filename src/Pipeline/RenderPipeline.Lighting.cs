@@ -102,7 +102,7 @@ namespace SDVRadiance
             if (Game1.currentLocation != null)
             {
                 EnsureWindowCache(Game1.currentLocation);
-                AddWindowLights(vw, vh, boost);
+                AddWindowLights(vw, vh, boost, config);
                 EnsureEmissiveCache(Game1.currentLocation);
                 AddEmissiveLights(vw, vh, boost);
             }
@@ -350,9 +350,16 @@ namespace SDVRadiance
         /// glow that switches on after dusk and off at a per-window "bedtime" (houses go dark as
         /// the night wears on). INDOORS: the opposite — cool daylight pours IN through the window
         /// by day and fades to nothing at night.</summary>
-        private void AddWindowLights(int vw, int vh, float boost)
+        /// <summary>Eased twin of the window master switch, so turning windows off dims the street
+        /// down instead of snapping every lit house dark in one frame.</summary>
+        private float _windowEffectsEase = 1f;
+
+        private void AddWindowLights(int vw, int vh, float boost, ModConfig config)
         {
             if (_windowTiles.Count == 0)
+                return;
+            _windowEffectsEase = MathHelper.Lerp(_windowEffectsEase, config.WindowEffectsEnabled ? 1f : 0f, 0.03f);
+            if (_windowEffectsEase < 0.02f)
                 return;
             bool outdoors = _windowCacheLocation?.IsOutdoors ?? true;
             // PHASE 1 = exterior windows only (getting the night-street look right first).
@@ -393,6 +400,7 @@ namespace SDVRadiance
                     amt = day * (rain ? 0.28f : 0.45f);
                     col = rain ? new Vector3(0.8f, 0.84f, 0.92f) : cool;
                 }
+                amt *= _windowEffectsEase;
                 if (amt < 0.02f)
                     continue;
                 if (_lightCandidates.Count >= MaxLightCandidates)
@@ -689,11 +697,27 @@ namespace SDVRadiance
             int tilesH = Math.Max(1, Game1.viewport.Height / 64 + 2);
             int count = tilesW * tilesH;
 
-            // Same throttle as the flood lightmap: ~900 cross-mod tile lookups per build is
-            // real money, and the occluder grid only shifts when the view crosses a tile (the
-            // 3-tick refresh keeps moving NPC stamps fresh enough for a soft shadow).
+            // Rebuild on an input change, not on a clock — the flood lightmap's fix, applied
+            // here after the split report showed this line inheriting its crown. The old comment
+            // justified the 3-tick refresh with "moving NPC stamps", but characters are
+            // deliberately NOT stamped into this grid any more (see below), so nothing in it
+            // moves per frame. What actually changes it: crossing a tile, a terrain feature or
+            // clump appearing/vanishing (the counts below), a building placed or removed (a new
+            // SurfaceMap identity), or a growth stage ticking over — which happens at day start
+            // behind the save fade, and is what the lazy once-a-second fallback is for.
+            var surf = SurfaceMap.For(location);
+            int occluderInputsHash;
+            unchecked
+            {
+                occluderInputsHash = 17;
+                occluderInputsHash = occluderInputsHash * 31 + location.terrainFeatures.Count();
+                occluderInputsHash = occluderInputsHash * 31 + location.largeTerrainFeatures.Count;
+                occluderInputsHash = occluderInputsHash * 31 + location.resourceClumps.Count;
+            }
             if (_occluderMask != null && _occluderMaskBuildMode == 2 && startTileX == _occluderTileX && startTileY == _occluderTileY
-                && _occluderMask.Width == tilesW && Game1.ticks - _occluderCacheTick < 3)
+                && _occluderMask.Width == tilesW
+                && ReferenceEquals(surf, _occluderSurfaceMap) && occluderInputsHash == _occluderInputsHash
+                && Game1.ticks - _occluderCacheTick < 60)
             {
                 _occluderWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
                 _occluderMaskSize = new Vector2(tilesW, tilesH);
@@ -703,11 +727,11 @@ namespace SDVRadiance
             _occluderTileX = startTileX;
             _occluderTileY = startTileY;
             _occluderCacheTick = Game1.ticks;
+            _occluderSurfaceMap = surf;
+            _occluderInputsHash = occluderInputsHash;
 
             if (_occluderMaskPixels == null || _occluderMaskPixels.Length < count)
                 _occluderMaskPixels = new Color[count];
-
-            var surf = SurfaceMap.For(location);
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)

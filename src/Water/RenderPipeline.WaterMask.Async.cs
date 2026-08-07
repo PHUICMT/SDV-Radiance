@@ -47,6 +47,9 @@ namespace SDVRadiance
             public int[]? AnchorColumnRunStartIndices;      // AnchorOnly results (worker writes, main consumes)
             public short[]? AnchorRunTopRows;
             public short[]? AnchorRunBottomRows;
+            // Location-wide water body sizes for the calm factor (main thread builds, worker reads):
+            public int[]? BodyTileCounts;
+            public int BodyGridWidth, BodyGridHeight;
         }
 
         private WaterMaskJob? _pendingWaterMaskJob;
@@ -256,6 +259,16 @@ namespace SDVRadiance
                     + $" ice={_tileIceFlags?[tIdx]} flow={_tileFlowFlags?[tIdx]} lava={_tileLavaFlags?[tIdx]}"
                     + $" keep={(keepBits == null ? "-" : keepBits.Count(b => b).ToString())}/256"
                     + $" artBits={(artBits == null ? "-" : artBits.Count(b => b).ToString())}/256");
+                // Body size and the calm factor it produced. Both are properties of the pool, so
+                // reading the same numbers from two standing spots is the check that a reported
+                // flicker is not this again.
+                if (_tileCalmnessValues != null && tIdx < _tileCalmnessValues.Length)
+                {
+                    int bodyTiles = _bodyTileCounts != null && (uint)tx < (uint)_bodyGridWidth && (uint)ty < (uint)_bodyGridHeight
+                        ? _bodyTileCounts[ty * _bodyGridWidth + tx] : -1;
+                    report.AppendLine($"[body] mapBodyTiles={(bodyTiles < 0 ? "n/a" : bodyTiles.ToString())}"
+                        + $" calm={_tileCalmnessValues[tIdx] / 255f:0.00} (wave/glint scale; same pool must read the same from anywhere)");
+                }
             }
             var labels = LabelStore.Instance;
             if (labels == null || !labels.Any)
@@ -473,6 +486,82 @@ namespace SDVRadiance
             return n;
         }
 
+        // ---- location-wide water body sizes (main thread builds, worker reads) ----
+        private SurfaceMap? _bodySizeSourceSurfaceMap;
+        private int _bodySizeEpoch = -1;
+        private int[]? _bodyTileCounts;      // per map tile: how many tiles its water body holds (0 = not water)
+        private int _bodyGridWidth, _bodyGridHeight;
+        private int[]? _bodySizeFloodStack;
+
+        /// <summary>
+        /// How many tiles the water body at each MAP tile holds, for the whole location.
+        /// <para>
+        /// Wave and glint strength scale down for a small pool, and "small" has to be a property of
+        /// the pool. It used to be measured by flood-filling inside the mask window, with any body
+        /// touching the window edge counted as full size on the grounds that it probably continued
+        /// off-window. The window moves with the camera: walk one tile and a tide pool that had been
+        /// wholly inside it starts touching its edge, so the pool's ripple and its glints doubled in
+        /// a single frame with no fade, then halved again on the way back. That is the flicker
+        /// reported around beach pools, and no amount of fading would have fixed it, because the
+        /// input itself was wrong.
+        /// </para>
+        /// The location's surface grid already answers "is this tile water" for the entire map, so
+        /// flood-fill that once per visit instead. The answer is the same wherever the camera is.
+        /// Cached on the surface grid's identity plus the mask epoch, which together cover a warp,
+        /// a map re-patched in place, and a fish pond appearing or being removed.
+        /// </summary>
+        private int[]? RefreshLocationBodySizes(SurfaceMap? surf, List<Rectangle>? pondRects)
+        {
+            if (surf == null || surf.Width <= 0 || surf.Height <= 0)
+            {
+                _bodyTileCounts = null; _bodySizeSourceSurfaceMap = null; _bodySizeEpoch = -1;
+                return null;
+            }
+            if (ReferenceEquals(surf, _bodySizeSourceSurfaceMap) && _bodySizeEpoch == MaskEpoch && _bodyTileCounts != null)
+                return _bodyTileCounts;
+
+            int gw = surf.Width, gh = surf.Height, n = gw * gh;
+            var grid = _bodyTileCounts != null && _bodyTileCounts.Length >= n ? _bodyTileCounts : new int[n];
+            Array.Clear(grid, 0, n);
+            // -1 marks "water, size not counted yet". Fish ponds join in: they are water the mask
+            // draws but the map data has never heard of, and a pond is small enough for the size
+            // rule to matter.
+            for (int y = 0; y < gh; y++)
+                for (int x = 0; x < gw; x++)
+                    if (surf.IsWater(x, y)) grid[y * gw + x] = -1;
+            if (pondRects != null)
+                foreach (var r in pondRects)
+                    for (int y = Math.Max(0, r.Top); y < Math.Min(gh, r.Bottom); y++)
+                        for (int x = Math.Max(0, r.Left); x < Math.Min(gw, r.Right); x++)
+                            grid[y * gw + x] = -1;
+
+            if (_bodySizeFloodStack == null || _bodySizeFloodStack.Length < n) _bodySizeFloodStack = new int[n];
+            var stack = _bodySizeFloodStack;
+            var member = new List<int>(256);
+            for (int start = 0; start < n; start++)
+            {
+                if (grid[start] != -1)
+                    continue;
+                int sp = 0; stack[sp++] = start; grid[start] = 0; member.Clear();
+                while (sp > 0)
+                {
+                    int cur = stack[--sp]; member.Add(cur);
+                    int cx = cur % gw, cy = cur / gw;
+                    if (cx > 0 && grid[cur - 1] == -1) { grid[cur - 1] = 0; stack[sp++] = cur - 1; }
+                    if (cx < gw - 1 && grid[cur + 1] == -1) { grid[cur + 1] = 0; stack[sp++] = cur + 1; }
+                    if (cy > 0 && grid[cur - gw] == -1) { grid[cur - gw] = 0; stack[sp++] = cur - gw; }
+                    if (cy < gh - 1 && grid[cur + gw] == -1) { grid[cur + gw] = 0; stack[sp++] = cur + gw; }
+                }
+                int size = member.Count;
+                foreach (int idx in member)
+                    grid[idx] = size;
+            }
+
+            _bodyTileCounts = grid; _bodyGridWidth = gw; _bodyGridHeight = gh;
+            _bodySizeSourceSurfaceMap = surf; _bodySizeEpoch = MaskEpoch;
+            return grid;
+        }
+
         /// <summary>Gather stage - read every game-state dependency into plain arrays.
         /// MUST run on the main thread (content loads, texture GetData via the
         /// classification caches, live entity lists).</summary>
@@ -512,6 +601,11 @@ namespace SDVRadiance
                         fp.tileX.Value + 1, fp.tileY.Value + 1,
                         Math.Max(0, fp.tilesWide.Value - 2), Math.Max(0, fp.tilesHigh.Value - 2)));
             }
+            // Body sizes for the calm factor, measured over the whole map rather than the window.
+            job.BodyTileCounts = RefreshLocationBodySizes(surf, pondRects);
+            job.BodyGridWidth = _bodyGridWidth;
+            job.BodyGridHeight = _bodyGridHeight;
+
             if (_waterTileFlags == null || _waterTileFlags.Length < count) _waterTileFlags = new bool[count];
             bool hasAnyWater = false;
             for (int j = 0; j < tilesH; j++)
@@ -1459,14 +1553,26 @@ namespace SDVRadiance
                         if (cy < tilesH - 1 && _tileHasEffectWaterFlags[cur + tilesW] && !seen[cur + tilesW]) { seen[cur + tilesW] = true; stack[sp++] = cur + tilesW; }
                     }
                     // size → calm: <=3 tiles ~0.5 (a puddle), ramping to full by ~36 tiles (a pond+).
-                    // Bodies cut by the mask edge are likely larger off-screen → treat as full.
-                    bool touchesEdge = false;
-                    foreach (int idx in member)
+                    // The size comes from the LOCATION-wide body (RefreshLocationBodySizes), so it
+                    // does not change as the window scrolls over the same pool. The window's own
+                    // count is only a floor, for water the map grid does not know about — a draw
+                    // hook's water, say. What it must never be again is the window EDGE: that used
+                    // to force full size and stepped a pool's ripple by 2x mid-walk.
+                    int bodyTiles = member.Count;
+                    if (job.BodyTileCounts is { } bodySizes)
                     {
-                        int cx = idx % tilesW, cy = idx / tilesW;
-                        if (cx == 0 || cy == 0 || cx == tilesW - 1 || cy == tilesH - 1) { touchesEdge = true; break; }
+                        int gw = job.BodyGridWidth, gh = job.BodyGridHeight;
+                        foreach (int idx in member)
+                        {
+                            int mx = job.StartTileX + idx % tilesW, my = job.StartTileY + idx / tilesW;
+                            if ((uint)mx < (uint)gw && (uint)my < (uint)gh)
+                            {
+                                int s = bodySizes[my * gw + mx];
+                                if (s > bodyTiles) bodyTiles = s;
+                            }
+                        }
                     }
-                    float calm = touchesEdge ? 1f : MathHelper.Clamp(0.5f + (member.Count - 3) / 33f * 0.5f, 0.5f, 1f);
+                    float calm = MathHelper.Clamp(0.5f + (bodyTiles - 3) / 33f * 0.5f, 0.5f, 1f);
                     byte cb = (byte)MathHelper.Clamp(calm * 255f, 0f, 255f);
                     foreach (int idx in member)
                         _tileCalmnessValues[idx] = cb;
@@ -1566,6 +1672,9 @@ namespace SDVRadiance
             _lastWaterLabelVersion = job.LabelVersion;
             _lastWaterEpoch = job.Epoch;
             _hasWaterInMask = job.WaterAny;
+            // Published for the player colour bake, which runs before this pipeline gets a look
+            // at the frame. One compose late is fine: its reader gates on the same flag.
+            ShadowRenderer.WaterOnScreen = job.WaterAny;
             if (!job.WaterAny)
             {
                 // The ORIGIN has just moved to this window, so the texture has to move with it.

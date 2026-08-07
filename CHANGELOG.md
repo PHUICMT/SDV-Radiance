@@ -2,6 +2,85 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.5.1
+
+### Added
+
+- A master switch for window effects, covering everything the mod does with a window: daylight
+  coming into a room, and the warm glow on house windows outdoors after dark. The outdoor half had
+  never had a switch of its own. Someone running a dedicated window mod can now turn all of it off
+  in one click and keep the rest, and the street dims down over about a second rather than every
+  lit house snapping dark at once.
+- Indoor window daylight is now two switches instead of one, split where a second window mod
+  actually collides. "Window beam and glass" is the visible half: the lit pane, the beam and the
+  patch of sun on the floor, all of which a dedicated window mod draws too. "Window light in the
+  room" is the half it cannot do, because painting a beam over the picture does not tell the
+  lighting where the daylight came from. Running both mods, the sensible setting is theirs for the
+  beam and ours for the room, and that is what you get now instead of having to switch one off.
+- Radiance now steps aside on its own when Dynamic Windows is installed: on the first launch it
+  turns off its own beam and glass, says so in the log, and leaves the room lighting alone. It
+  records that it has done this once, so turning the beam back on sticks.
+
+### For translators
+
+Eight new keys, no changes of meaning. English and Thai are filled in; the rest fall back to
+English until translated.
+
+- `tuner.windoweffects`, `tuner.windowbeam`, `tuner.windowroomlight`
+- `config.lighting.windoweffects.name`, `config.lighting.windoweffects.tooltip`
+- `config.lighting.windowbeam.name`, `config.lighting.windowbeam.tooltip`
+- `config.lighting.windowroomlight.name`, `config.lighting.windowroomlight.tooltip`
+
+### Performance
+
+- The flood lighting map rebuilds when one of its inputs changes, instead of twenty times a second
+  regardless. Standing still in a scene with no fire on screen, it used to redo about a thousand
+  tile lookups and three full-window sweeps at a fixed clock and produce the same texture every
+  time; measured, that was the second most expensive thing the mod did, in every scene. It still
+  rebuilds instantly when you cross a tile, a light appears or goes out, a window fades, or the
+  ambient tint moves, and a scene with a hearth or torch on screen keeps the fast clock so the
+  flicker stays alive.
+- The object-shadow scene walk no longer runs twice a frame. Preparing the shadows used to
+  re-enumerate every on-screen tile, object, furniture piece and critter just to confirm their
+  silhouettes were already baked, then the draw pass walked it all again to draw them. The draw
+  pass now reports anything it found unbaked and the next preparation bakes exactly that list,
+  which while you stand still is nothing at all. A full walk still happens when it means
+  something: the sun angle moving on, or a new area.
+- The lamp occluder grid (what blocks per-light shadows) now rebuilds the same way: crossing a
+  tile, chopping a tree, breaking a clump or placing a building rebuilds it at once, and otherwise
+  it coasts. It had been redoing roughly nine hundred tile lookups twenty times a second for a
+  grid that nothing per-frame ever changes.
+- The player's shadow silhouette is no longer re-baked several times a second while nothing about
+  it changed. The periodic refresh exists for mods that animate hair and accessories on their own
+  clock, so it now runs only when such a mod (Fashion Sense) is actually installed; everyone else
+  re-bakes only when the pose changes. Measured before the change, this bake was the single most
+  expensive thing the mod did per frame, ahead of drawing every shadow on screen.
+- The full-colour twin of that bake, which exists only so the water reflection can mirror the
+  player, is skipped whenever no water is on screen. Indoors and on dry maps that halves the bake
+  again; the moment water scrolls into view it is rebuilt before the mirror reads it.
+
+### Changed
+
+- The benchmark on the Performance tab now measures the shadow pass as well as the effects. It
+  could only ever see the full-screen effect chain, so on a heavily modded game it could report
+  that the machine had room to spare while shadows were the thing eating the frame. Shadow cost is
+  now counted against the same budget the recommendation comes from, and when shadows are most of
+  what the mod costs you, the result says so and names the setting that helps, rather than
+  suggesting an effect resolution that would not.
+- `radiance_report` now includes what the mod costs per frame, broken down by part, without
+  needing any debug setting turned on first. The grid rebuilds report as four separate lines
+  (flood lightmap, flood occluders, light occluders, water mask), so a stutter can be pinned on
+  the one that owns it instead of on the group.
+
+### Fixed
+
+- Small pools no longer change how hard they ripple as you walk past them. A body of water is
+  given gentler waves when it is small, and how small it was got measured against the edge of the
+  area the mask covers, which travels with the camera. A tide pool near the edge of the screen
+  therefore counted as full size, and its ripple and its glints doubled in a single frame as you
+  walked toward it and halved again on the way back. The size is now measured over the whole map,
+  so it is the same wherever you are standing.
+
 ## 1.5.0
 
 ### Added

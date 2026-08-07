@@ -213,6 +213,24 @@ namespace SDVRadiance
         public float FloodLightingStrength { get; set; } = 0.54f;
         /// <summary>How dark a fully occluded per-light ray gets (0 = no shadows, 1 = black).</summary>
         public float FloodShadowStrength { get; set; } = 0.79f;
+        /// <summary>Master switch for everything this mod does with windows: indoor daylight AND
+        /// the warm glow on house windows outdoors at night. Off means no window anywhere is a
+        /// light as far as we are concerned, which is what someone running a dedicated window mod
+        /// wants. Rooms still follow the time of day; that is not a window effect.</summary>
+        public bool WindowEffectsEnabled { get; set; } = true;
+        /// <summary>The VISIBLE half of indoor window daylight: the lit glass, the beam leaning out
+        /// of it, and the patch of sun it lays on the floor. This is the half a dedicated window mod
+        /// draws too (Dynamic Windows ships a shaft sprite and a fill sprite for exactly these), so
+        /// it is the half to give away when running one.</summary>
+        public bool WindowBeamEnabled { get; set; } = true;
+        /// <summary>The LIGHTING half: how much daylight a window adds to the room's own light, as
+        /// opposed to a beam drawn on top of it. A mod that draws window art cannot do this, because
+        /// it paints over the picture rather than feeding the lightmap, so this is the half worth
+        /// keeping when two window mods meet.</summary>
+        public bool WindowRoomLightEnabled { get; set; } = true;
+        /// <summary>Which mod, if any, we already stepped aside for once. Stops the compatibility
+        /// default from being reapplied on every launch and overriding a deliberate choice.</summary>
+        public string WindowCompatAppliedFor { get; set; } = "";
         /// <summary>Darken flat/unlit areas and pool light around real light sources.</summary>
         public bool LightingEnabled { get; set; } = true;
         /// <summary>How dark interiors get (vanilla leaves them flat-bright). 0 = none, 1 = very dark.</summary>

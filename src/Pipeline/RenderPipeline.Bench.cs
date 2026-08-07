@@ -29,11 +29,27 @@ namespace SDVRadiance
         /// The extra runs render into scratch and are thrown away — only their COST matters.</summary>
         private int _benchExtraChains;
 
+        /// <summary>
+        /// Extra times the SHADOW pass runs this frame, read by ModEntry (which owns the shadow
+        /// renderer) and drawn into a scratch target so nothing extra reaches the screen.
+        /// <para>
+        /// The sweep above measures the full-screen chain and nothing else, because amplification
+        /// cancels everything that does not repeat with it. The shadow pass runs in a different
+        /// event entirely, so it cancelled out too, and the number this benchmark reported was
+        /// therefore silent about the one part of the mod whose cost grows with how much scenery
+        /// and how many mods are on screen. A player with two hundred content mods could be told
+        /// "this machine has room to spare" while shadows were what was eating their frame.
+        /// </para>
+        /// </summary>
+        internal static int BenchExtraShadowRuns;
+
         private const int BenchWarmupFrames = 20;    // let GPU clocks and the eased fades settle
         private const int BenchSampleFrames = 40;
         private const int BenchAmplify = 6;          // extra chains in the "many" half
 
         private static readonly float[] BenchScales = { 1f, 0.75f, 0.5f };
+        /// <summary>Sweep steps: one/many per effect resolution, then one/many for shadows.</summary>
+        private static int BenchTotalSteps => BenchScales.Length * 2 + 2;
 
         internal static bool BenchRunning;
 
@@ -45,7 +61,7 @@ namespace SDVRadiance
         internal static int BenchStamp;
         /// <summary>0..1 while a run is in progress, for the in-menu readout.</summary>
         internal static float BenchProgress;
-        private int _benchStep;                      // 0..(scales*2-1): each scale gets one/many
+        private int _benchStep;                      // each scale gets one/many, then shadows get one/many
         private int _benchFrame;
         private double _benchAccumulator;
         private int _benchSamples;
@@ -53,6 +69,7 @@ namespace SDVRadiance
         private bool _benchSavedProbe;
         private readonly List<(float Scale, double One, double Many)> _benchResults = new();
         private double _benchPendingOne;
+        private double _benchShadowMilliseconds = -1;   // < 0 = not measured
 
         /// <summary>Arm the sweep. Runs for about ten seconds and restores every setting it
         /// touched, including the ones it had to change to measure.</summary>
@@ -77,12 +94,14 @@ namespace SDVRadiance
             _benchAccumulator = 0;
             _benchSamples = 0;
             _benchPendingOne = 0;
+            _benchShadowMilliseconds = -1;
+            BenchExtraShadowRuns = 0;
             _benchResults.Clear();
             BenchSummary.Clear();
             BenchProgress = 0f;
             config.RenderScale = BenchScales[0];
-            _monitor.Log($"Benchmarking {BenchScales.Length} effect-resolution settings at {Game1.currentLocation?.Name} — "
-                + "about ten seconds. The picture will flicker between settings; that is the measurement, not a fault.", LogLevel.Info);
+            _monitor.Log($"Benchmarking {BenchScales.Length} effect-resolution settings and the shadow pass at {Game1.currentLocation?.Name} — "
+                + "about twelve seconds. The picture will flicker between settings; that is the measurement, not a fault.", LogLevel.Info);
         }
 
         /// <summary>One benchmark frame. Called at the end of Apply, after the probe has taken
@@ -91,13 +110,17 @@ namespace SDVRadiance
         {
             int scaleIndex = _benchStep / 2;
             bool manyHalf = (_benchStep & 1) == 1;
-            config.RenderScale = BenchScales[scaleIndex];
-            _benchExtraChains = manyHalf ? BenchAmplify : 0;
+            bool shadowPair = scaleIndex >= BenchScales.Length;
+            // The shadow pair runs at the player's own resolution with the chain left alone, so
+            // the only thing that differs between its halves is the shadow pass.
+            config.RenderScale = shadowPair ? _benchSavedScale : BenchScales[scaleIndex];
+            _benchExtraChains = !shadowPair && manyHalf ? BenchAmplify : 0;
+            BenchExtraShadowRuns = shadowPair && manyHalf ? BenchAmplify : 0;
 
             _benchFrame++;
             BenchProgress = Math.Clamp(
                 (_benchStep * (BenchWarmupFrames + BenchSampleFrames) + _benchFrame)
-                / (float)(BenchScales.Length * 2 * (BenchWarmupFrames + BenchSampleFrames)), 0f, 1f);
+                / (float)(BenchTotalSteps * (BenchWarmupFrames + BenchSampleFrames)), 0f, 1f);
             if (_benchFrame <= BenchWarmupFrames)
                 return;
 
@@ -107,23 +130,29 @@ namespace SDVRadiance
                 return;
 
             double avg = _benchAccumulator / _benchSamples;
-            if (manyHalf)
-                _benchResults.Add((BenchScales[scaleIndex], _benchPendingOne, avg));
-            else
+            if (!manyHalf)
                 _benchPendingOne = avg;
+            else if (shadowPair)
+                _benchShadowMilliseconds = Math.Max(0, (avg - _benchPendingOne) / BenchAmplify);
+            else
+                _benchResults.Add((BenchScales[scaleIndex], _benchPendingOne, avg));
 
             _benchFrame = 0;
             _benchAccumulator = 0;
             _benchSamples = 0;
             _benchStep++;
 
-            if (_benchStep < BenchScales.Length * 2)
+            if (_benchStep < BenchTotalSteps)
                 return;
 
             _benchExtraChains = 0;
+            BenchExtraShadowRuns = 0;
             config.RenderScale = _benchSavedScale;
             GpuProbe = _benchSavedProbe;
             BenchRunning = false;
+            // The amplified frames were nothing like normal play; leaving them in the rolling
+            // meter would make the report that reads it lie for the next five seconds.
+            FrameCost.Reset();
             ReportBenchmark(config);
         }
 
@@ -132,6 +161,13 @@ namespace SDVRadiance
             BenchSummary.Clear();
             BenchSummary.Add($"{Game1.currentLocation?.Name} at {_lastViewportWidth}x{_lastViewportHeight}"
                 + ((Game1.currentLocation?.IsOutdoors ?? false) ? "" : " (indoors - outdoors with water costs more)"));
+
+            // Shadows are not part of the chain and no effect-resolution setting touches them,
+            // so their cost is a constant added to every row below. Counting it against the
+            // budget is the whole point: a resolution that fits on its own can still miss the
+            // frame once the shadow pass is paid for.
+            double shadowMilliseconds = Math.Max(0, _benchShadowMilliseconds);
+            double budget = 16.67 / 3.0;
 
             double smallest = double.MaxValue;
             float recommend = BenchScales[BenchScales.Length - 1];
@@ -146,13 +182,20 @@ namespace SDVRadiance
                 // Highest quality that still leaves the frame comfortable. A third of the
                 // budget is the line: past that a weaker GPU, or a busier map than the one
                 // being stood on, starts missing frames.
-                if (perChain <= 16.67 / 3.0)
+                if (perChain + shadowMilliseconds <= budget)
                     recommend = Math.Max(recommend, scale);
             }
 
+            if (_benchShadowMilliseconds < 0)
+                BenchSummary.Add("shadows: not measured");
+            else if (shadowMilliseconds < 0.05)
+                BenchSummary.Add("shadows  =  under 0.05 ms per frame here");
+            else
+                BenchSummary.Add($"shadows  =  {shadowMilliseconds:0.00} ms per frame (no resolution setting changes this)");
+
             if (_benchResults.Count == 0)
                 BenchSummary.Add("No samples - was the game minimised?");
-            else if (smallest < 0.05)
+            else if (smallest + shadowMilliseconds < 0.05)
             {
                 BenchSummary.Add("Below what can be measured here: this machine has room to spare.");
                 recommend = 1f;
@@ -160,6 +203,16 @@ namespace SDVRadiance
             BenchSuggestedScale = recommend;
             BenchSummary.Add($"Suggested: {recommend:0.00}"
                 + (Math.Abs(recommend - config.RenderScale) < 0.001f ? " - what you already have" : ""));
+            // When shadows alone eat the budget, the resolution slider is the wrong dial and
+            // saying so is worth more than a number. This is the case a heavily modded install
+            // lands in, and the one the benchmark used to be silent about.
+            if (shadowMilliseconds > budget * 0.5)
+            {
+                // Two short lines rather than one long one: the tuner shrinks a line to fit its
+                // column, and a sentence this important should not arrive at half size.
+                BenchSummary.Add("Shadows, not the effects, are most of what this mod costs here.");
+                BenchSummary.Add("Turn off shadows for objects, or use the Performance preset.");
+            }
             BenchSummary.Add("Measured where you stand. Try again on a busy outdoor map for the worst case.");
             BenchStamp++;
             BenchProgress = 0f;

@@ -304,6 +304,9 @@ namespace SDVRadiance
             Tog("tuner.floodgi", () => _config.FloodLightingEnabled, v => _config.FloodLightingEnabled = v);
             Sld("tuner.floodstrength", 0f, 1.5f, () => _config.FloodLightingStrength, v => _config.FloodLightingStrength = v);
             Sld("tuner.floodshadow", 0f, 1f, () => _config.FloodShadowStrength, v => _config.FloodShadowStrength = v);
+            Tog("tuner.windoweffects", () => _config.WindowEffectsEnabled, v => _config.WindowEffectsEnabled = v);
+            Tog("tuner.windowbeam", () => _config.WindowBeamEnabled, v => _config.WindowBeamEnabled = v);
+            Tog("tuner.windowroomlight", () => _config.WindowRoomLightEnabled, v => _config.WindowRoomLightEnabled = v);
         }
 
         private void BuildGodRays()

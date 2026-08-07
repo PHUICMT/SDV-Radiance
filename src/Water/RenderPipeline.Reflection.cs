@@ -34,10 +34,10 @@ namespace SDVRadiance
         /// for render-target swaps).</summary>
         public void BakeWaterReflection()
         {
-            if (!_timingOn) { BakeWaterReflectionCore(); return; }
-            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            long t0 = FrameCost.Begin();
             BakeWaterReflectionCore();
-            AccumulateBuildTime(5, t0);
+            double ms = FrameCost.End(FrameCost.Part.EntityReflection, t0);
+            if (_timingOn) AccumulateBuildMilliseconds(5, ms);
         }
 
         private void BakeWaterReflectionCore()
@@ -302,10 +302,10 @@ namespace SDVRadiance
         /// as the other bakes (render-target swaps are safe there).</summary>
         public void BakeSceneryReflection()
         {
-            if (!_timingOn) { BakeSceneryReflectionCore(); return; }
-            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            long t0 = FrameCost.Begin();
             BakeSceneryReflectionCore();
-            AccumulateBuildTime(6, t0);
+            double ms = FrameCost.End(FrameCost.Part.SceneryReflection, t0);
+            if (_timingOn) AccumulateBuildMilliseconds(6, ms);
         }
 
         // P2 (1.5.0): the xTile layer walk was the single most expensive item in the mod and

@@ -97,6 +97,8 @@ namespace SDVRadiance
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), (bool[] bits, int count, int water)> _tileSolidBitsCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), bool[]> _tileAnyAlphaBitsCache = new();
         private int _occluderTileX = int.MinValue, _occluderTileY = int.MinValue, _occluderCacheTick = int.MinValue;
+        private int _occluderInputsHash;              // feature/clump counts: chop a tree, rebuild now
+        private SurfaceMap? _occluderSurfaceMap;      // identity: a placed building makes a new one
         private int _occluderMaskBuildMode;   // which builder last filled _occluderMask: 1 = classic, 2 = flood (they share it + the throttle, and are mutually exclusive per frame)
         private int _lastWaterTileX = int.MinValue, _lastWaterTileY = int.MinValue, _lastWaterBuildTick = int.MinValue;
         private int _lastWaterHookVersion = -1;
@@ -149,6 +151,8 @@ namespace SDVRadiance
         private bool _shadowsReady;            // true when an occluder mask was built this frame
 
         private bool _loggedOnce;
+        private long _chainCostStarted;
+        private double _chainCostGridsAtStart;   // grid rebuilds run INSIDE the chain; do not bill them twice
         private int _frameCount, _appliedFrameCount, _skippedNoTargetCount, _renderTargetResizeCount;
         private readonly System.Diagnostics.Stopwatch _performanceStopwatch = new();
         private double _performanceTotalMilliseconds, _performanceMaxMilliseconds;
@@ -164,19 +168,31 @@ namespace SDVRadiance
         private bool _timingOn;
 
         private void AccumulateBuildTime(int idx, long t0)
+            => AccumulateBuildMilliseconds(idx,
+                (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+
+        private void AccumulateBuildMilliseconds(int idx, double ms)
         {
-            double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
             _buildMilliseconds[idx] += ms;
             if (ms > _buildMaxMilliseconds[idx]) _buildMaxMilliseconds[idx] = ms;
         }
 
+        /// <summary>The grid rebuilds are always timed into the frame cost meter, one line per
+        /// builder, because a hitch on entering an area is one of the two things a performance
+        /// report is usually about and it lives here. The old single "grid rebuilds" line hid
+        /// which of the four owned the number, which was the first question every time.</summary>
+        private static readonly FrameCost.Part[] _gridCostParts =
+        {
+            FrameCost.Part.GridFlood, FrameCost.Part.GridFloodOccluders,
+            FrameCost.Part.GridLightOccluders, FrameCost.Part.GridWaterMask,
+        };
+
         private bool TimedBuild(ModConfig config, int idx, Func<bool> fn)
         {
-            if (!config.DebugLogging)
-                return fn();
-            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            long t0 = FrameCost.Begin();
             bool r = fn();
-            AccumulateBuildTime(idx, t0);
+            double ms = FrameCost.End(_gridCostParts[idx], t0);
+            if (config.DebugLogging) AccumulateBuildMilliseconds(idx, ms);
             return r;
         }
 
@@ -554,6 +570,8 @@ namespace SDVRadiance
             }
 
             _timingOn = config.DebugLogging;
+            _chainCostStarted = FrameCost.Begin();
+            _chainCostGridsAtStart = FrameCost.RunningGrids();
             if (config.DebugLogging) { _frameCount++; _performanceStopwatch.Restart(); }
 
             RenderTargetBinding[] bindings = _device.GetRenderTargets();
@@ -958,6 +976,11 @@ namespace SDVRadiance
                 // state SMAPI expects anyway, so continue.
             }
 
+            // The benchmark's amplified frames run the chain seven times on purpose: charging
+            // that to the meter would report a cost nobody pays while playing.
+            if (_benchExtraChains == 0 && BenchExtraShadowRuns == 0)
+                FrameCost.End(FrameCost.Part.Chain, _chainCostStarted,
+                    FrameCost.RunningGrids() - _chainCostGridsAtStart);
             if (config.DebugLogging)
             {
                 _performanceStopwatch.Stop();

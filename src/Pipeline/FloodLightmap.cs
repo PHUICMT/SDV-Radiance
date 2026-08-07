@@ -34,6 +34,51 @@ namespace SDVRadiance
         internal const float TexScale = 0.5f;
 
         private int _lastStartTileX = int.MinValue, _lastStartTileY = int.MinValue, _lastBuildTick = int.MinValue;
+        private int _lastInputsHash;
+        private bool _hadFlameLights;
+        private GameLocation? _lastBuildLocation;
+
+        /// <summary>
+        /// Everything that can change the lightmap's CONTENT while the camera stands still,
+        /// folded into one number. The rebuild used to run on a flat 3-tick clock, which is the
+        /// right cadence for a flickering hearth and a 20-times-a-second tax everywhere else:
+        /// standing in a windowless noon field paid ~1k tile lookups and three full-window CPU
+        /// sweeps for a texture that came out identical every time. The measured cost was ~0.25 ms
+        /// per frame in every scene, the second most expensive thing the mod did.
+        /// <para>
+        /// The hash covers the light list (a lamp toggling, a light walking on screen), the eased
+        /// window scales (so the sun patch still FADES per frame while a switch is mid-ease), and
+        /// the ambient tint (dusk and weather ramps). The game clock is deliberately NOT in it:
+        /// it moves every frame, and its effect over the fallback cadence below is far below what
+        /// an eye can pick out. Flame flicker is per-frame noise by design, so scenes with a fire
+        /// on screen keep the old 3-tick clock instead.
+        /// </para>
+        /// </summary>
+        private static int HashLightInputs(GameLocation location)
+        {
+            unchecked
+            {
+                int h = 17;
+                var lights = Game1.currentLightSources;
+                if (lights != null)
+                {
+                    foreach (var kv in lights.Values)
+                    {
+                        var ls = kv;
+                        if (!ShadowRenderer.WindowGlowing(location, ls))
+                            continue;
+                        h = h * 31 + (int)(ls.position.Value.X / 16f);
+                        h = h * 31 + (int)(ls.position.Value.Y / 16f);
+                        h = h * 31 + (int)(ls.radius.Value * 16f);
+                        h = h * 31 + ls.textureIndex.Value;
+                    }
+                }
+                h = h * 31 + (int)(WindowPatchScale * 255f);
+                h = h * 31 + (int)(WindowRoomScale * 255f);
+                h = h * 31 + Game1.ambientLight.PackedValue.GetHashCode();
+                return h;
+            }
+        }
         private Vector3[] _lightCells = Array.Empty<Vector3>();
         private Vector3[] _blurredLightCells = Array.Empty<Vector3>();
         private float[] _lightDecay = Array.Empty<float>();
@@ -60,14 +105,27 @@ namespace SDVRadiance
             int th = Math.Max(1, Game1.viewport.Height / 64 + 2) + Pad * 2;
             int count = tw * th;
 
-            // Rebuild throttle: the flood changes slowly (time, lights, viewport), but a full
-            // rebuild is ~1k cross-mod HF lookups + CPU sweeps EVERY frame — a walking-stutter
-            // tax. Reuse the last texture unless the view crossed a tile boundary or ~3 frames
-            // passed (GI refreshes at ~20 Hz; the analytic direct light still runs at 60).
-            if (_lightmapTexture != null && tx0 == _lastStartTileX && ty0 == _lastStartTileY
-                && _lightmapTexture.Width == tw && _lightmapTexture.Height == th && Game1.ticks - _lastBuildTick < 3)
+            // Rebuild when an INPUT changed, not on a clock. A tile crossing or resize always
+            // rebuilds; a changed light list, window ease or ambient tint rebuilds (see
+            // HashLightInputs); otherwise the fallback cadence only covers what the hash cannot
+            // see, which is the game clock's slow drift: 3 ticks with a flame on screen (its
+            // flicker is per-frame noise, and the whole room breathes with it), a lazy 20 ticks
+            // without one. At 3 Hz the clock moves under half a game-minute per rebuild, which is
+            // an order of magnitude below anything that reads as a step.
+            int inputsHash = HashLightInputs(location);
+            int cadence = _hadFlameLights ? 3 : 20;
+            // The location is part of the identity, not the hash: two maps can put the camera at
+            // the same tile with the same lights (none), and at the old 3-tick clock showing the
+            // previous map's lightmap for 50 ms was invisible where a third of a second is not.
+            if (_lightmapTexture != null && ReferenceEquals(location, _lastBuildLocation)
+                && tx0 == _lastStartTileX && ty0 == _lastStartTileY
+                && _lightmapTexture.Width == tw && _lightmapTexture.Height == th
+                && inputsHash == _lastInputsHash
+                && Game1.ticks - _lastBuildTick < cadence)
                 return true;
             _lastStartTileX = tx0; _lastStartTileY = ty0; _lastBuildTick = Game1.ticks;
+            _lastInputsHash = inputsHash;
+            _lastBuildLocation = location;
 
             if (_lightCells.Length < count)
             {
@@ -124,6 +182,7 @@ namespace SDVRadiance
             }
 
             // ---- Seed the game's real light sources (lamps, torches, fires, windows) ----
+            bool anyFlameOnScreen = false;
             var lights = Game1.currentLightSources;
             if (lights != null)
             {
@@ -136,6 +195,10 @@ namespace SDVRadiance
                     int cj = (int)(ls.position.Value.Y / 64f) - ty0;
                     if (ci < 0 || ci >= tw || cj < 0 || cj >= th)
                         continue;
+                    // Fire types (sconce/fireplace/torch = 4, cauldron = 5): their flicker is why
+                    // the fast rebuild cadence exists at all, so remember whether one is here.
+                    if (ls.textureIndex.Value == 4 || ls.textureIndex.Value == 5)
+                        anyFlameOnScreen = true;
                     // INDIRECT spill (~half strength): the crisp direct pool + its per-light shadows
                     // are computed analytically in floodlight.effect; the flood carries the bounce-like
                     // glow that bends around corners and through doorways. Outdoors it sits above 1.0
@@ -164,7 +227,7 @@ namespace SDVRadiance
                         // WindowDaylight - that constant is why rooms stayed daylit at 2am).
                         ShadowRenderer.WindowDaylight(out Vector3 sunColour, out float sunStrength);
                         seedColor = sunColour;
-                        inten *= sunStrength;
+                        inten *= sunStrength * WindowRoomScale;
                     }
                     // One seed cell; the bilinear upsample + the 5×5 bounce spread it into a soft
                     // pool. (A wide radial seed disc was tried to force a bigger pool but never read
@@ -184,7 +247,9 @@ namespace SDVRadiance
                         // reaches right across the floorboards, and by noon it is a short pool
                         // directly under the window.
                         ShadowRenderer.WindowShaft(out float lean, out float reach);
-                        Vector3 shaft = seedColor * 0.72f;
+                        // The patch takes its OWN switch and not the room's intensity, so the two
+                        // halves can be turned off independently of each other.
+                        Vector3 shaft = seedColor * (0.72f * WindowPatchScale);
                         int steps = Math.Max(1, (int)Math.Round(reach));
                         for (int k = 1; k <= steps; k++)
                         {
@@ -215,6 +280,7 @@ namespace SDVRadiance
                     }
                 }
             }
+            _hadFlameLights = anyFlameOnScreen;
 
             // ---- Flood: two rounds of 4 directional sweeps (Terraria-style) ----
             for (int round = 0; round < 2; round++)
@@ -376,6 +442,15 @@ namespace SDVRadiance
         // WindowLight sources, so they are never touched.
         private static GameLocation? _windowedCacheLoc;
         private static bool _windowedCached;
+
+        /// <summary>How much of the sun PATCH under a window to seed, 0 to 1 - the visible half,
+        /// which a window-art mod draws too. Owned by the flood stage, which eases it from the
+        /// setting; this class only multiplies by it.</summary>
+        internal static float WindowPatchScale = 1f;
+        /// <summary>How much daylight a window contributes to the ROOM's light, 0 to 1. Separate
+        /// from the patch because the two are worth different things when another mod is drawing
+        /// windows: it can paint a beam, but it cannot make the room's lighting know about it.</summary>
+        internal static float WindowRoomScale = 1f;
 
         internal static bool IsWindowedInterior(GameLocation? location)
         {

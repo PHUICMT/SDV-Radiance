@@ -239,6 +239,12 @@ namespace SDVRadiance
                 () => i18n("config.lighting.shadows.name"), () => i18n("config.lighting.shadows.tooltip"));
             api.AddNumberOption(manifest, () => config().LightingShadowStrength, v => config().LightingShadowStrength = v,
                 () => i18n("config.lighting.shadowstrength.name"), null, 0f, 1f, 0.05f);
+            api.AddBoolOption(manifest, () => config().WindowEffectsEnabled, v => config().WindowEffectsEnabled = v,
+                () => i18n("config.lighting.windoweffects.name"), () => i18n("config.lighting.windoweffects.tooltip"));
+            api.AddBoolOption(manifest, () => config().WindowBeamEnabled, v => config().WindowBeamEnabled = v,
+                () => i18n("config.lighting.windowbeam.name"), () => i18n("config.lighting.windowbeam.tooltip"));
+            api.AddBoolOption(manifest, () => config().WindowRoomLightEnabled, v => config().WindowRoomLightEnabled = v,
+                () => i18n("config.lighting.windowroomlight.name"), () => i18n("config.lighting.windowroomlight.tooltip"));
 
             // --- Directional sprite shadows ---
             api.AddPage(manifest, "shadows", () => i18n("config.section.shadows"));

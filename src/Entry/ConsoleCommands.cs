@@ -237,6 +237,9 @@ namespace SDVRadiance
                 Write("=== what the effect chain is actually doing this frame ===");
                 Write(pipeline?.DescribeStageState() ?? "pipeline not ready");
                 Write("");
+                Write("=== what this mod costs per frame ===");
+                Write(FrameCost.Describe());
+                Write("");
                 Write("=== label check for everything on screen ===");
                 Write(pipeline?.VerifyLabels(Game1.currentLocation) ?? "pipeline not ready");
                 Write("");

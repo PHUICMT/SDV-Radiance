@@ -40,11 +40,56 @@ namespace SDVRadiance
              || _config.LightingEnabled || _config.FloodLightingEnabled
              || _config.BlueLightFilter > 0.001f);
 
+        /// <summary>Mods that draw daylight through windows themselves. Ours and theirs read the
+        /// same thing (the game's own window light) and draw over the same floor, so both running
+        /// at full strength means two beams and two patches of sun.</summary>
+        private static readonly string[] WindowDrawingModIds = { "Esoterick.DynamicWindows" };
+
+        /// <summary>
+        /// Hand the VISIBLE half of window daylight to a mod that specialises in it, once, on the
+        /// first launch where that mod is present.
+        ///
+        /// <para>
+        /// Only the beam and the glass: the room's own light through a window is not something a
+        /// mod drawing sprites over the picture can do, so that half stays on and the two end up
+        /// complementing each other rather than competing. The choice is recorded so a player who
+        /// turns the beam back on keeps it, instead of us overruling them at every launch.
+        /// </para>
+        /// </summary>
+        private void StepAsideForWindowMods(IModHelper helper)
+        {
+            if (!string.IsNullOrEmpty(_config.WindowCompatAppliedFor))
+                return;
+            foreach (string id in WindowDrawingModIds)
+            {
+                if (!helper.ModRegistry.IsLoaded(id))
+                    continue;
+                _config.WindowCompatAppliedFor = id;
+                if (_config.WindowBeamEnabled)
+                {
+                    _config.WindowBeamEnabled = false;
+                    this.Monitor.Log($"{id} is installed and draws its own light through windows, so Radiance's "
+                        + "window beam and lit glass are off to avoid drawing them twice. The room still lights up "
+                        + "from the window. Turn 'Window beam and glass' back on in the config if you want ours instead.",
+                        LogLevel.Info);
+                }
+                helper.WriteConfig(_config);
+                return;
+            }
+        }
+
         public override void Entry(IModHelper helper)
         {
             _config = helper.ReadConfig<ModConfig>();
             ApplyConfigMigrations(helper);
             _config.Clamp();
+            StepAsideForWindowMods(helper);
+
+            // Fashion Sense animates hair/accessory layers independently of the body frame, so
+            // with it installed the player bake refreshes on a heartbeat even when the pose has
+            // not changed. Without it, an unchanged pose is an unchanged silhouette and the
+            // heartbeat is pure cost, so it only runs when this is true.
+            ShadowRenderer.PlayerAccessoriesAnimate = helper.ModRegistry.IsLoaded("PeacefulEnd.FashionSense");
 
             SVersion = this.ModManifest.Version.ToString();
             HarmonyPatcher.ForceBufferDraw = EffectsActive;
@@ -171,19 +216,15 @@ namespace SDVRadiance
             // toggle used to freeze the mirrored player at whatever pose was baked last.
             bool prepPlayer = _config.DirectionalShadowsEnabled
                 || (_config.WaterReflection && Context.IsWorldReady);
+            FrameCost.NextFrame();
             if (prepPlayer)
             {
                 _shadows ??= new ShadowRenderer();
                 ShadowRenderer.DiagnosticMonitor = _config.DebugLogging ? this.Monitor : null;
-                if (_config.DebugLogging)
-                {
-                    _performanceStopwatch.Restart();
-                    _shadows.PreparePlayer(Game1_GraphicsDevice, _config);
-                    _performanceStopwatch.Stop();
-                    _prepareMilliseconds += _performanceStopwatch.Elapsed.TotalMilliseconds;
-                }
-                else
-                    _shadows.PreparePlayer(Game1_GraphicsDevice, _config);
+                long t0 = FrameCost.Begin();
+                _shadows.PreparePlayer(Game1_GraphicsDevice, _config);
+                double ms = FrameCost.End(FrameCost.Part.ShadowPrepare, t0);
+                if (_config.DebugLogging) _prepareMilliseconds += ms;
             }
 
             // Per-frame water sprite mask (ducks/NPCs/critters on water must not ripple).
@@ -200,6 +241,78 @@ namespace SDVRadiance
                     // sprite shows the true map pixels behind it instead of a sky hole.
                     _pipeline?.BakeSceneryReflection();
                 }
+            }
+
+            if (RenderPipeline.BenchExtraShadowRuns > 0)
+                RunBenchmarkShadowRepeats(RenderPipeline.BenchExtraShadowRuns);
+            else if (_benchmarkRenderTarget != null && !RenderPipeline.BenchRunning)
+            {
+                // A full-window target is megabytes. It exists for ten seconds every time somebody
+                // presses the benchmark button, and there is no reason to keep it after that.
+                _benchmarkRenderTarget.Dispose();
+                _benchmarkRenderTarget = null;
+            }
+        }
+
+        // Scratch surface for the benchmark's extra shadow passes. Sized to the window: the pass
+        // draws in screen space, so anything smaller would measure less fill than it really costs.
+        private SpriteBatch? _benchmarkSpriteBatch;
+        private RenderTarget2D? _benchmarkRenderTarget;
+
+        /// <summary>
+        /// Run the shadow pass a few extra times into a scratch target so the benchmark can take
+        /// its slope. Nothing drawn here reaches the screen.
+        ///
+        /// <para>
+        /// It has to happen in this event because a render-target swap is only safe before the
+        /// world batches open, and it has to be a scratch target because drawing the shadows again
+        /// into the real one would stack them and darken the picture for the length of the run.
+        /// </para>
+        ///
+        /// <para>
+        /// The repeats find every per-caster bake already warm, so what they measure is the
+        /// recurring per-frame draw rather than the one-off bakes. That is the honest thing to
+        /// report as a per-frame cost, and it is also the number that grows with a heavy mod list.
+        /// A benchmark must never cost the player their frame, so the whole thing is guarded.
+        /// </para>
+        /// </summary>
+        private void RunBenchmarkShadowRepeats(int runs)
+        {
+            if (_shadows == null || !_config.DirectionalShadowsEnabled)
+                return;
+            try
+            {
+                var device = Game1_GraphicsDevice;
+                int w = Math.Max(1, device.PresentationParameters.BackBufferWidth);
+                int h = Math.Max(1, device.PresentationParameters.BackBufferHeight);
+                if (_benchmarkRenderTarget == null || _benchmarkRenderTarget.Width != w || _benchmarkRenderTarget.Height != h)
+                {
+                    _benchmarkRenderTarget?.Dispose();
+                    _benchmarkRenderTarget = new RenderTarget2D(device, w, h, false, SurfaceFormat.Color, DepthFormat.None);
+                }
+                _benchmarkSpriteBatch ??= new SpriteBatch(device);
+
+                var previous = device.GetRenderTargets();
+                ShadowRenderer.BenchmarkAmplifying = true;
+                try
+                {
+                    device.SetRenderTarget(_benchmarkRenderTarget);
+                    for (int i = 0; i < runs; i++)
+                    {
+                        _benchmarkSpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+                        _shadows.DrawInto(_benchmarkSpriteBatch, _config);
+                        _benchmarkSpriteBatch.End();
+                    }
+                }
+                finally
+                {
+                    ShadowRenderer.BenchmarkAmplifying = false;
+                    device.SetRenderTargets(previous);
+                }
+            }
+            catch (Exception ex)
+            {
+                this.Monitor.Log($"[bench] shadow measurement skipped: {ex.Message}", LogLevel.Trace);
             }
         }
 
@@ -221,12 +334,11 @@ namespace SDVRadiance
                 return;
             _shadows ??= new ShadowRenderer();
             ShadowRenderer.DiagnosticMonitor = _config.DebugLogging ? this.Monitor : null;
+            long t0 = FrameCost.Begin();
+            _shadows.DrawInto(e.SpriteBatch, _config);
+            double ms = FrameCost.End(FrameCost.Part.ShadowDraw, t0);
             if (_config.DebugLogging)
             {
-                _performanceStopwatch.Restart();
-                _shadows.DrawInto(e.SpriteBatch, _config);
-                _performanceStopwatch.Stop();
-                double ms = _performanceStopwatch.Elapsed.TotalMilliseconds;
                 _drawMilliseconds += ms;
                 if (ms > _maxDrawMilliseconds) _maxDrawMilliseconds = ms;
                 if (++_performanceFrameCount >= 300)
@@ -236,8 +348,6 @@ namespace SDVRadiance
                     _prepareMilliseconds = _drawMilliseconds = _maxDrawMilliseconds = 0; _performanceFrameCount = 0;
                 }
             }
-            else
-                _shadows.DrawInto(e.SpriteBatch, _config);
         }
 
         private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)

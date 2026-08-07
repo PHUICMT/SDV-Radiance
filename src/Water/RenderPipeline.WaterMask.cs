@@ -432,6 +432,7 @@ namespace SDVRadiance
             // world-anchored, so the old origin+size still map correctly.
             if (location != _lastWaterLocation || _waterMask == null)
                 _hasWaterInMask = false;
+            ShadowRenderer.WaterOnScreen = _hasWaterInMask;
 
             // The gather already knows, on this thread, whether the window it just read contains
             // water � but `_hasWaterInMask` was only ever updated when a COMPOSE landed, and a compose
@@ -444,6 +445,10 @@ namespace SDVRadiance
             // on screen to affect), while dropping out early is exactly the visible fault.
             if (newWaterMaskJob.AnyWater)
                 _hasWaterInMask = true;
+            // Keep the bake gate's copy current from every write site, not just the compose:
+            // a stale FALSE here is the visible direction (water arrives, the mirror has no
+            // player in it until the flag catches up).
+            ShadowRenderer.WaterOnScreen = _hasWaterInMask;
 
             newWaterMaskJob.Task = System.Threading.Tasks.Task.Run(() =>
             {
@@ -517,10 +522,10 @@ namespace SDVRadiance
         /// </summary>
         public void BakeWaterSpriteMask()
         {
-            if (!_timingOn) { BakeWaterSpriteMaskCore(); return; }
-            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            long t0 = FrameCost.Begin();
             BakeWaterSpriteMaskCore();
-            AccumulateBuildTime(4, t0);
+            double ms = FrameCost.End(FrameCost.Part.SpriteMask, t0);
+            if (_timingOn) AccumulateBuildMilliseconds(4, ms);
         }
 
         private void BakeWaterSpriteMaskCore()
