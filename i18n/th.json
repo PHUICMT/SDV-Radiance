@@ -234,6 +234,8 @@
   "config.shadows.blur.name": "ความฟุ้งของขอบ",
   "config.shadows.objects.name": "เงาต้นไม้และพุ่มไม้",
   "config.shadows.objects.tooltip": "ทอดเงาให้ต้นไม้และพุ่มไม้ด้วย ไม่ใช่แค่ตัวละคร",
+  "config.shadows.casts.name": "จำนวนเงาต่อตัวละคร",
+  "config.shadows.casts.tooltip": "ในอาคารและหลังพระอาทิตย์ตก ตัวละครหนึ่งตัวทอดเงาจากไฟกี่ดวง ไล่จากดวงที่ใกล้ที่สุด — เป็นตัวปรับประสิทธิภาพด้วย เพราะทุกดวงคือเงาเต็มดวงหนึ่งเงา ในห้องที่มีโคมเยอะ ตั้ง 1 จะใช้แรงราวหนึ่งในสามของ 3 — ดวงอาทิตย์กลางแจ้งนับเป็นไฟดวงเดียว ไม่ได้รับผลจากค่านี้",
   "config.shadows.heightdrop.name": "เงาอาคารและขอบต่างระดับ",
   "config.shadows.heightdrop.tooltip": "ทอดเงาลงพื้นจากกำแพง อาคาร และขอบต่างระดับ (ต้องมีมอด Height Framework)",
   "config.shadows.heightlength.name": "ความยาวเงาอาคาร",
@@ -244,6 +246,7 @@
   "tuner.shadowlength": "ความยาว",
   "tuner.shadowblur": "ความฟุ้งของขอบ",
   "tuner.shadowobjects": "รวมต้นไม้/พุ่มไม้",
+  "tuner.shadowcasts": "จำนวนเงาต่อตัวละคร",
 
   "config.section.camera": "กล้อง",
   "config.camera.mode.name": "โหมดกล้อง",

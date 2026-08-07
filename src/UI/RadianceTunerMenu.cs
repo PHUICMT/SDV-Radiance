@@ -288,6 +288,9 @@ namespace SDVRadiance
             Sld("tuner.shadowstrength", 0f, 1f, () => _config.DirectionalShadowStrength, v => _config.DirectionalShadowStrength = v);
             Sld("tuner.shadowlength", 0.2f, 2f, () => _config.DirectionalShadowLength, v => _config.DirectionalShadowLength = v);
             Sld("tuner.shadowblur", 0f, 5f, () => _config.DirectionalShadowBlur, v => _config.DirectionalShadowBlur = v);
+            Sld("tuner.shadowcasts", ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax,
+                () => _config.ShadowCastsPerCharacter,
+                v => _config.ShadowCastsPerCharacter = (int)MathF.Round(v));
             Tog("tuner.shadowobjects", () => _config.DirectionalShadowObjects, v => _config.DirectionalShadowObjects = v);
         }
 

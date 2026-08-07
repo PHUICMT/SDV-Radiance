@@ -25,6 +25,9 @@ namespace SDVRadiance
         private ModConfig _config = new();
         private Harmony? _harmony;
         private RenderPipeline? _pipeline;
+        /// <summary>Frames left to trace the per-screen render pass for (radiance_screenwatch).
+        /// Counts CALLS, not frames, so on a split screen sixty is thirty frames of two.</summary>
+        internal static int ScreenWatchFrames;
         private ShadowRenderer? _shadows;
         private readonly CameraSmoother _camera = new();
 
@@ -194,9 +197,25 @@ namespace SDVRadiance
             bool waterHere = RenderPipeline.WaterAllowedIn(Game1.currentLocation, _config);
             HarmonyPatcher.FreezeGameWater = _config.Enabled && _config.WaterEnabled && waterHere;
             WaterDrawHook.Enabled = _config.Enabled && (_config.WaterEnabled || _config.WaterReflection);
+            // SPLIT SCREEN TRACE (radiance_screenwatch). This handler runs once per SCREEN per
+            // frame, and every expensive cache below it reuses its work while the camera has not
+            // moved. With two cameras taking turns, each pass moves the origin the next pass is
+            // about to test, so the reuse test can never pass and an async rebuild can never
+            // land. Logged from here because here is the one place that knows which screen asked.
+            bool watching = ScreenWatchFrames > 0;
+            if (watching)
+                ScreenWatchFrames--;
             if (!EffectsActive && !RenderPipeline.DumpPending)
+            {
+                if (watching)
+                    this.Monitor.Log($"[screenwatch] screen={Context.ScreenId} SKIPPED (effects not active)", LogLevel.Info);
                 return;
+            }
             Pipeline.Apply(e.SpriteBatch, _config);
+            // Logged AFTER the pass so the frame size is this screen's, not the previous screen's.
+            if (watching)
+                this.Monitor.Log($"[screenwatch] screen={Context.ScreenId} location={Game1.currentLocation?.NameOrUniqueName} "
+                    + Pipeline.DescribeCameraKeyedCaches(), LogLevel.Info);
             if (RenderPipeline.DebugChannel != DebugOverlayChannel.Off)
                 Pipeline.DrawDebugOverlay(e.SpriteBatch);
         }

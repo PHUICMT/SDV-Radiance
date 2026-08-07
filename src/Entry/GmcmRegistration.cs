@@ -258,6 +258,9 @@ namespace SDVRadiance
                 () => i18n("config.shadows.blur.name"), null, 0f, 5f, 0.5f);
             api.AddBoolOption(manifest, () => config().DirectionalShadowObjects, v => config().DirectionalShadowObjects = v,
                 () => i18n("config.shadows.objects.name"), () => i18n("config.shadows.objects.tooltip"));
+            api.AddNumberOption(manifest, () => config().ShadowCastsPerCharacter, v => config().ShadowCastsPerCharacter = v,
+                () => i18n("config.shadows.casts.name"), () => i18n("config.shadows.casts.tooltip"),
+                ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax, 1);
 
             // --- Camera (implemented) ---
             api.AddPage(manifest, "camera", () => i18n("config.section.camera"));

@@ -35,7 +35,12 @@ namespace SDVRadiance
 
         private int _lastStartTileX = int.MinValue, _lastStartTileY = int.MinValue, _lastBuildTick = int.MinValue;
         private int _lastInputsHash;
-        private bool _hadFlameLights;
+
+        /// <summary>What the rebuild gate is allowed to do. Author diagnostic only, set by
+        /// radiance_flood and never persisted.</summary>
+        internal enum RebuildOverride { Auto, Every, Freeze }
+        /// <summary>Diagnostic override for the rebuild gate. Auto in every normal session.</summary>
+        internal static RebuildOverride RebuildMode = RebuildOverride.Auto;
         private GameLocation? _lastBuildLocation;
 
         /// <summary>
@@ -50,8 +55,9 @@ namespace SDVRadiance
         /// window scales (so the sun patch still FADES per frame while a switch is mid-ease), and
         /// the ambient tint (dusk and weather ramps). The game clock is deliberately NOT in it:
         /// it moves every frame, and its effect over the fallback cadence below is far below what
-        /// an eye can pick out. Flame flicker is per-frame noise by design, so scenes with a fire
-        /// on screen keep the old 3-tick clock instead.
+        /// an eye can pick out. Flame flicker is not in it either, and no longer needs to be: the
+        /// bounce this grid carries does not flicker at all now (see the seed), so there is nothing
+        /// left that wanted a faster clock than a fire once did.
         /// </para>
         /// </summary>
         private static int HashLightInputs(GameLocation location)
@@ -108,16 +114,24 @@ namespace SDVRadiance
             // Rebuild when an INPUT changed, not on a clock. A tile crossing or resize always
             // rebuilds; a changed light list, window ease or ambient tint rebuilds (see
             // HashLightInputs); otherwise the fallback cadence only covers what the hash cannot
-            // see, which is the game clock's slow drift: 3 ticks with a flame on screen (its
-            // flicker is per-frame noise, and the whole room breathes with it), a lazy 20 ticks
-            // without one. At 3 Hz the clock moves under half a game-minute per rebuild, which is
-            // an order of magnitude below anything that reads as a step.
+            // see, which is the game clock's slow drift. A third of a second of that is a fraction
+            // of a game-minute, an order of magnitude below anything that reads as a step. Fires
+            // used to force this to 3 and no longer do: nothing in this grid flickers.
             int inputsHash = HashLightInputs(location);
-            int cadence = _hadFlameLights ? 3 : 20;
+            const int cadence = 20;
+            // Diagnostic override (radiance_flood). Freeze holds the last grid no matter what, so
+            // anything still moving on screen provably is not this grid; Every rebuilds it on every
+            // frame, so anything that stops moving provably WAS the rebuild rate rather than the
+            // content. Between the two answers there is nothing left to guess about.
+            if (RebuildMode == RebuildOverride.Freeze && _lightmapTexture != null
+                && ReferenceEquals(location, _lastBuildLocation)
+                && _lightmapTexture.Width == tw && _lightmapTexture.Height == th)
+                return true;
             // The location is part of the identity, not the hash: two maps can put the camera at
             // the same tile with the same lights (none), and at the old 3-tick clock showing the
             // previous map's lightmap for 50 ms was invisible where a third of a second is not.
-            if (_lightmapTexture != null && ReferenceEquals(location, _lastBuildLocation)
+            if (RebuildMode != RebuildOverride.Every
+                && _lightmapTexture != null && ReferenceEquals(location, _lastBuildLocation)
                 && tx0 == _lastStartTileX && ty0 == _lastStartTileY
                 && _lightmapTexture.Width == tw && _lightmapTexture.Height == th
                 && inputsHash == _lastInputsHash
@@ -182,7 +196,6 @@ namespace SDVRadiance
             }
 
             // ---- Seed the game's real light sources (lamps, torches, fires, windows) ----
-            bool anyFlameOnScreen = false;
             var lights = Game1.currentLightSources;
             if (lights != null)
             {
@@ -195,16 +208,21 @@ namespace SDVRadiance
                     int cj = (int)(ls.position.Value.Y / 64f) - ty0;
                     if (ci < 0 || ci >= tw || cj < 0 || cj >= th)
                         continue;
-                    // Fire types (sconce/fireplace/torch = 4, cauldron = 5): their flicker is why
-                    // the fast rebuild cadence exists at all, so remember whether one is here.
-                    if (ls.textureIndex.Value == 4 || ls.textureIndex.Value == 5)
-                        anyFlameOnScreen = true;
                     // INDIRECT spill (~half strength): the crisp direct pool + its per-light shadows
                     // are computed analytically in floodlight.effect; the flood carries the bounce-like
                     // glow that bends around corners and through doorways. Outdoors it sits above 1.0
                     // so it beats the dimmed night ground; indoors it stays gentle.
-                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * (outdoors ? 1.25f : 0.5f)
-                                * ShadowRenderer.FireFlicker(ls.position.Value, ls.textureIndex.Value);
+                    //
+                    // NO FLAME FLICKER HERE, on purpose. This grid is a CPU sweep that cannot afford
+                    // to run every frame, so multiplying the seed by the flicker sampled it at the
+                    // rebuild rate and held it in between: the bounce moved in 3-frame steps while
+                    // the direct pool around the same fire moved smoothly every frame, and the two
+                    // rates beating against each other is what read as the floor around a lamp
+                    // flashing. Physically the bounce is the half that should NOT snap anyway - it
+                    // is light that has crossed the room and come back off a wall. The flame still
+                    // breathes where it is visible, in the direct pool (RenderPipeline.Lighting)
+                    // and in the shadows it casts, both of which are per-frame and free.
+                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * (outdoors ? 1.25f : 0.5f);
                     // The same midday sink the DIRECT pools got ("a street lamp at noon reads as
                     // glass"): these seeds never had it, which went unnoticed while the flat bounce
                     // held the whole outdoor field near 1.28 — every cell glowed a little, so lamp
@@ -280,7 +298,6 @@ namespace SDVRadiance
                     }
                 }
             }
-            _hadFlameLights = anyFlameOnScreen;
 
             // ---- Flood: two rounds of 4 directional sweeps (Terraria-style) ----
             for (int round = 0; round < 2; round++)

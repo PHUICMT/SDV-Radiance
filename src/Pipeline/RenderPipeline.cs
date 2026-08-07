@@ -301,6 +301,7 @@ namespace SDVRadiance
             sb.AppendLine($"water mask: origin tile ({_lastWaterTileX},{_lastWaterTileY}) epoch {MaskEpoch} "
                         + $"rebuildInFlight={_pendingWaterMaskJob != null}");
             sb.AppendLine($"labels: {(LabelStore.Instance == null ? "NOT LOADED (every water verdict falls back to the game's own data)" : $"loaded, v{LabelStore.Instance.Version}")}");
+            sb.AppendLine(DescribeCameraKeyedCaches());
             sb.AppendLine(DescribeSheetCache());
             return sb.ToString().TrimEnd();
         }
@@ -535,6 +536,20 @@ namespace SDVRadiance
             || _fadeWater > FadeGone || _fadeCloud > FadeGone || _fadeLighting > FadeGone
             || _fadeFlood > FadeGone || _fadeTilt > FadeGone
             || _fogDayAmount > 0.004f || _fogMistAmount > 0.004f || _godRayAmount > 0.01f;
+
+        /// <summary>
+        /// The caches that are keyed to WHERE THE CAMERA IS, on one line. Every one of them reuses
+        /// its work while the camera has not crossed a tile, which is a safe bet with one camera
+        /// and a false one with two: split screen calls this pipeline once per screen per frame,
+        /// from two cameras, and each call moves the origin the other call is about to test
+        /// against. Read next to the screen id, this line says whether that is happening.
+        /// </summary>
+        internal string DescribeCameraKeyedCaches()
+            => $"chainFrame={_frameWidth}x{_frameHeight} scaled={_lastScaledWidth}x{_lastScaledHeight} "
+             + $"viewport=({Game1.viewport.X},{Game1.viewport.Y} {Game1.viewport.Width}x{Game1.viewport.Height}) "
+             + $"deviceViewport=({_device.Viewport.X},{_device.Viewport.Y} {_device.Viewport.Width}x{_device.Viewport.Height}) "
+             + $"waterMaskOrigin=({_lastWaterTileX},{_lastWaterTileY}) maskJobInFlight={_pendingWaterMaskJob != null} "
+             + $"occluderOrigin=({_occluderTileX},{_occluderTileY})";
 
         private void EnsureTargets(int w, int h, SurfaceFormat format)
         {

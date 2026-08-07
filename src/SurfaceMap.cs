@@ -122,6 +122,13 @@ namespace SDVRadiance
         /// patch of labeled water pixels already means something.
         /// </summary>
         private static SurfaceClass? ClassFromLabels(byte[] b, bool overlay)
+            => ClassFromLabels(b, overlay, out _);
+
+        /// <inheritdoc cref="ClassFromLabels(byte[], bool)"/>
+        /// <param name="deckPixels">How much of the tile the deck labels actually cover. The caller
+        /// needs it because a Deck verdict is the one verdict that can be right about the art and
+        /// wrong about the tile: see the plank rule in <see cref="Build"/>.</param>
+        private static SurfaceClass? ClassFromLabels(byte[] b, bool overlay, out int deckPixels)
         {
             int water = 0, deck = 0, wall = 0, roof = 0, ground = 0, glass = 0;
             for (int p = 0; p < 256; p++)
@@ -141,6 +148,7 @@ namespace SDVRadiance
                     default: ground++; break;                           // 0 ground, 6 emissive, 7 reflect_floor
                 }
             }
+            deckPixels = deck;
             // Order matters: a deck plank drawn OVER water has to read Deck, not Water.
             if (deck >= 64) return SurfaceClass.Deck;
             if (wall >= 64) return SurfaceClass.Wall;
@@ -155,6 +163,11 @@ namespace SDVRadiance
             if (!overlay && ground >= 192) return SurfaceClass.Ground;
             return null;
         }
+
+        /// <summary>Deck coverage at which a plank owns its whole tile rather than clipping it.
+        /// Half the tile: below that the water underneath keeps the tile and the plank is carved
+        /// per pixel instead.</summary>
+        private const int DeckOwnsTile = 128;
 
         private static SurfaceMap? Build(GameLocation location)
         {
@@ -201,7 +214,28 @@ namespace SDVRadiance
                     if (labels != null)
                     {
                         SurfaceClass? lc = null;
-                        if (labels.Get(buildings, x, y) is { } bb) { anyLabel = true; lc = ClassFromLabels(bb, overlay: true); }
+                        if (labels.Get(buildings, x, y) is { } bb)
+                        {
+                            anyLabel = true;
+                            lc = ClassFromLabels(bb, overlay: true, out int bldDeck);
+                            // A PLANK THAT ONLY CLIPS ITS TILE must not delete the tile's water.
+                            // Deck wins at a quarter of the tile, which is the right bar for "is
+                            // there a walkable surface drawn here" and much too low for "is this
+                            // tile still water": a bridge parapet or a plank end overlapping the
+                            // edge of a water tile took the whole tile out of the mask, and the
+                            // water stopped dead at a straight line beside the bridge (Mountain
+                            // 46,4 and its neighbours, reported as a bridge outline, 256 of 256
+                            // pixels missing on tiles the labels call water end to end).
+                            //
+                            // Handing the tile back to the water it is mostly made of loses
+                            // nothing, because the planks are carved out again PER PIXEL further
+                            // down the pipeline by the Buildings opacity carve. The whole-tile
+                            // Deck verdict is only needed when the deck really does own the tile.
+                            if (lc == SurfaceClass.Deck && bldDeck < DeckOwnsTile
+                                && labels.Get(back, x, y) is { } underneath
+                                && ClassFromLabels(underneath, overlay: false) == SurfaceClass.Water)
+                                lc = SurfaceClass.Water;
+                        }
                         if (lc == null && labels.Get(back, x, y) is { } gb) { anyLabel = true; lc = ClassFromLabels(gb, overlay: false); }
                         if (lc == null && labels.Get(front, x, y) is { } fb) { anyLabel = true; lc = ClassFromLabels(fb, overlay: true); }
                         // Additive fallback to the layers above — a Town waterfall labelled

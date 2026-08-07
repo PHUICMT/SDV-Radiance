@@ -46,6 +46,58 @@ namespace SDVRadiance
             helper.ConsoleCommands.Add("radiance_tile",
                 "Dump water-related data for the tile under the player, or 'radiance_tile x y' for any tile (layer properties, HF class, isWaterTile, compose flags).",
                 (_, args) => DumpTile(s => monitor.Log(s, LogLevel.Info), getPipeline(), getConfig(), args));
+            helper.ConsoleCommands.Add("radiance_screenwatch",
+                "Trace the per-screen render pass for the next N calls (default 60). Prints which screen asked, "
+                + "whether effects were active for it, and the caches that are keyed to where the camera is. "
+                + "For split screen: if the two screens' origins keep swapping and a mask rebuild is always in "
+                + "flight, that is one pipeline being pulled between two cameras.",
+                (_, args) =>
+                {
+                    int frames = args.Length >= 1 && int.TryParse(args[0], out int f) ? Math.Clamp(f, 1, 600) : 60;
+                    ModEntry.ScreenWatchFrames = frames;
+                    monitor.Log($"Watching the render pass for {frames} calls (split screen spends two per frame).", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_lightwatch",
+                "Trace the light array for the next N frames (default 60) and print only what changes: "
+                + "how many lights were offered versus how many slots exist, which ones entered or left, "
+                + "and any whose brightness moved. Stand still where it flickers and run it.",
+                (_, args) =>
+                {
+                    int frames = args.Length >= 1 && int.TryParse(args[0], out int f) ? Math.Clamp(f, 1, 600) : 60;
+                    RenderPipeline.LightWatchFrames = frames;
+                    monitor.Log($"Watching the light array for {frames} frames.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_flood",
+                "Flood-GI rebuild A/B for chasing a flicker. 'radiance_flood freeze' holds the current bounce "
+                + "grid still (anything that still moves is NOT the flood), 'every' rebuilds it every frame "
+                + "(anything that stops moving WAS the rebuild rate), 'auto' restores normal behaviour. "
+                + "Not saved, resets when the game restarts.",
+                (_, args) =>
+                {
+                    if (args.Length >= 1)
+                        FloodLightmap.RebuildMode = args[0].ToLowerInvariant() switch
+                        {
+                            "freeze" or "hold" => FloodLightmap.RebuildOverride.Freeze,
+                            "every" or "always" => FloodLightmap.RebuildOverride.Every,
+                            _ => FloodLightmap.RebuildOverride.Auto,
+                        };
+                    monitor.Log($"Flood rebuild: {FloodLightmap.RebuildMode}", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_shadowcasts",
+                "How many shadows one character may cast, nearest light first (default 3). "
+                + "'radiance_shadowcasts 1' for a single clean shadow, higher for a room lit from several "
+                + "sides. No argument prints the current value. A look setting - watch the shadow line in "
+                + "radiance_report for what each step costs.",
+                (_, args) =>
+                {
+                    if (args.Length >= 1 && int.TryParse(args[0], out int casts))
+                    {
+                        getConfig().ShadowCastsPerCharacter = casts;
+                        getConfig().Clamp();
+                    }
+                    monitor.Log($"Shadow casts per character: {getConfig().ShadowCastsPerCharacter} (nearest lights first; "
+                        + "same setting as the tuner's Shadows tab, but not saved from here)", LogLevel.Info);
+                });
             helper.ConsoleCommands.Add("radiance_march",
                 "List on-screen tiles whose water has effect but no march (ripple without reflection - the orange tiles in the radiance_debug water overlay), worst first.",
                 (_, _) => monitor.Log(getPipeline()?.DescribeEffectOnlyTiles() ?? "pipeline not ready", LogLevel.Info));

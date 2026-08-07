@@ -90,9 +90,17 @@ namespace SDVRadiance
                     Vector3 tone = coolDaylight
                         ? Vector3.Lerp(Vector3.One, new Vector3(0.82f, 0.92f, 1.12f), warmth)
                         : warm;
-                    glow *= tone * boost * dayPool * ShadowRenderer.FireFlicker(ls.position.Value, ls.textureIndex.Value);
-
-                    AddLightCandidate(new Vector2(u, v), new Vector4(glow, Math.Max(0.02f, radiusUv)));
+                    glow *= tone * boost * dayPool;
+                    // The flicker is carried SEPARATELY and applied after the array is chosen.
+                    // Folding it in here made a flickering quantity decide the ranking, and with
+                    // a room offering three times as many lights as there are slots the scores
+                    // sit close enough together that an eight percent wobble reorders the list
+                    // around the cut. The marginal lights then swung from full to nothing and
+                    // back on the flame's own cycle: a hearth quietly breathing turned into half
+                    // the room's lamps pulsing. Exactly the trap already documented in the shadow
+                    // path, where a flickering reach made casters blink in and out.
+                    AddLightCandidate(new Vector2(u, v), new Vector4(glow, Math.Max(0.02f, radiusUv)),
+                        ShadowRenderer.FireFlicker(ls.position.Value, ls.textureIndex.Value));
                 }
             }
 
@@ -129,14 +137,16 @@ namespace SDVRadiance
 
         /// <summary>Lights collected this frame before the shader's fixed-size array forces a
         /// choice. Bounded so a pathological map cannot make the sort itself the cost.</summary>
-        private readonly List<(Vector2 Uv, Vector4 Data, int Id, Vector2 World)> _lightCandidates = new();
+        private readonly List<(Vector2 Uv, Vector4 Data, int Id, Vector2 World, float Flick)> _lightCandidates = new();
         private const int MaxLightCandidates = 96;
         /// <summary>The point past which the ranking actually decides something: the flood
         /// gives its first eight a shadow ray and pools the rest, so from eight onward the
         /// order on the list changes what the player sees.</summary>
         private const int ShaderLightSlots = 8;
 
-        private void AddLightCandidate(Vector2 uv, Vector4 data)
+        /// <param name="flick">Per-frame flame wobble, kept OUT of the ranking and multiplied in
+        /// only once the array is settled. Steady lights pass 1.</param>
+        private void AddLightCandidate(Vector2 uv, Vector4 data, float flick = 1f)
         {
             if (_lightCandidates.Count >= MaxLightCandidates)
                 return;
@@ -174,7 +184,7 @@ namespace SDVRadiance
                 return;
             data = new Vector4(data.X * taper, data.Y * taper, data.Z * taper, data.W);
 
-            _lightCandidates.Add((uv, data, wx * 73856093 ^ wy * 19349663, world));
+            _lightCandidates.Add((uv, data, wx * 73856093 ^ wy * 19349663, world, flick));
         }
 
         /// <summary>
@@ -263,16 +273,43 @@ namespace SDVRadiance
             }
             int selectedLightCount = Math.Min(_lightCandidates.Count, MaxLights);
 
+            // THE CONTESTED EDGE OF THE ARRAY. Entering was already a fade; leaving was not. A
+            // light that lost its slot simply stopped being written, so in a room offering more
+            // lights than the shader has slots - a saloon at dawn reports exactly the cap - the
+            // last places changed hands constantly and each handover was a pool blinking out and
+            // another blinking on. Hysteresis made the trade rarer without making it softer, and
+            // rare is not the same as invisible.
+            //
+            // So the last slots now fade by how far clear of the best LOSER they are. A light
+            // comfortably inside the cut is untouched, and two lights trading the final slot are
+            // by definition scoring the same at the moment they trade, which puts both of them at
+            // nothing: the one leaving has already faded out, and the one arriving starts from
+            // there. Uncontested rooms - fewer lights than slots - never enter this at all.
+            float cutScore = _lightCandidates.Count > MaxLights ? Score(_lightCandidates[MaxLights]) : 0f;
+            float cutBand = cutScore * ContestedSlotBand;
+            // Measured BEFORE _lightChosen is rewritten below, because Score reads it for the
+            // incumbent's margin and would otherwise answer differently halfway down the loop.
+            for (int i = 0; i < selectedLightCount; i++)
+            {
+                float margin = cutBand > 0f
+                    ? MathHelper.Clamp((Score(_lightCandidates[i]) - cutScore) / cutBand, 0f, 1f)
+                    : 1f;
+                _slotMargins[i] = margin * margin * (3f - 2f * margin);
+            }
+
             _lightChosen.Clear();
             for (int i = 0; i < selectedLightCount; i++)
             {
                 var cand = _lightCandidates[i];
                 _lightChosen.Add(cand.Id);
-                // Enter over ~8 frames. On the first frame in a room everything starts lit,
-                // or walking through a door would show the place unlit and filling in.
+                // Enter over about a third of a second. On the first frame in a room everything
+                // starts lit, or walking through a door would show the place unlit and filling in.
                 float ramp = _lightRamp.TryGetValue(cand.Id, out float prev) ? prev : (sameRoom ? 0f : 1f);
-                ramp = Math.Min(1f, ramp + 0.12f);
+                ramp = Math.Min(1f, ramp + LightEnterPerFrame);
                 _lightRamp[cand.Id] = ramp;
+                // Flame wobble goes on LAST, after the ranking and the fades have had their say,
+                // so a breathing hearth changes how bright it is and never which lights exist.
+                ramp *= _slotMargins[i] * cand.Flick;
                 _lightPositions[i] = cand.Uv;
                 var d = cand.Data;
                 _lightShaderData[i] = new Vector4(d.X * ramp, d.Y * ramp, d.Z * ramp, d.W);
@@ -291,13 +328,70 @@ namespace SDVRadiance
                     _lightRamp.Remove(id);
             }
 
-            float Score((Vector2 Uv, Vector4 Data, int Id, Vector2 World) c)
+            ReportLightWatch(selectedLightCount);
+
+            // Flick is deliberately not read here: the ranking must be steady.
+            float Score((Vector2 Uv, Vector4 Data, int Id, Vector2 World, float Flick) c)
             {
                 float r = Relevance(c.Uv, c.Data);
                 return _lightChosen.Contains(c.Id) ? r * 1.3f : r;   // incumbent's margin
             }
         }
 
+        /// <summary>Frames left to trace the light array for (radiance_lightwatch). Author
+        /// diagnostic: it answers "what actually moves between one frame and the next" with
+        /// measurements instead of the theory of the day.</summary>
+        internal static int LightWatchFrames;
+        private readonly Dictionary<int, Vector4> _watchPrevious = new();
+        private readonly List<int> _watchGone = new();
+
+        /// <summary>One line per frame naming only what CHANGED: the light count, lights that
+        /// entered or left the array, and any light whose contribution moved by more than a
+        /// percent. A steady scene prints "steady", and anything that prints instead is the
+        /// thing the eye is seeing.</summary>
+        private void ReportLightWatch(int selectedLightCount)
+        {
+            if (LightWatchFrames <= 0)
+                return;
+            LightWatchFrames--;
+            var line = new System.Text.StringBuilder();
+            line.Append($"[lightwatch] slots={selectedLightCount}/{MaxLights} candidates={_lightCandidates.Count}");
+            _watchGone.Clear();
+            _watchGone.AddRange(_watchPrevious.Keys);
+            for (int i = 0; i < selectedLightCount; i++)
+            {
+                int id = _lightCandidates[i].Id;
+                Vector4 now = _lightShaderData[i];
+                _watchGone.Remove(id);
+                if (!_watchPrevious.TryGetValue(id, out Vector4 was))
+                    line.Append($"  +{id}(new {now.X:0.000})");
+                else if (Math.Abs(now.X - was.X) > 0.01f * Math.Max(0.05f, was.X))
+                    line.Append($"  {id}:{was.X:0.000}->{now.X:0.000}");
+                _watchPrevious[id] = now;
+            }
+            foreach (int id in _watchGone)
+            {
+                line.Append($"  -{id}(was {_watchPrevious[id].X:0.000})");
+                _watchPrevious.Remove(id);
+            }
+            _monitor.Log(line.Length > 60 ? line.ToString() : line.Append("  steady").ToString(), LogLevel.Info);
+            if (LightWatchFrames == 0)
+                _watchPrevious.Clear();
+        }
+
+        /// <summary>How much of its brightness a light gains per frame while entering the array.
+        /// It was 0.12, which is eight frames, and eight frames is not a fade anyone reads as one:
+        /// walking up to a lamp, its pool arrived in an eighth of a second and the eye called that
+        /// switching on. Twenty-two frames is about a third of a second, slow enough to be seen
+        /// happening and short enough that nothing feels like it is lagging behind the player.</summary>
+        private const float LightEnterPerFrame = 0.045f;
+        /// <summary>How far clear of the best loser a light has to score before it stops being
+        /// faded for sitting on the contested edge of the array, as a fraction of that loser's
+        /// own score. Scale-free, so it means the same thing in a dim room and a bright one.</summary>
+        private const float ContestedSlotBand = 0.25f;
+        /// <summary>Per-slot fade for the contested edge, this frame. Sized to the array it
+        /// feeds, so it never allocates.</summary>
+        private readonly float[] _slotMargins = new float[MaxLights];
         private readonly Dictionary<int, float> _lightRamp = new();
         private readonly HashSet<int> _lightChosen = new();
         private readonly List<int> _rampDrop = new();

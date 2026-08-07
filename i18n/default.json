@@ -236,6 +236,8 @@
   "config.shadows.blur.name": "Edge softness",
   "config.shadows.objects.name": "Shadows for trees & bushes",
   "config.shadows.objects.tooltip": "Also cast leaning shadows from trees and bushes, not just characters.",
+  "config.shadows.casts.name": "Shadows per character",
+  "config.shadows.casts.tooltip": "How many lights a character casts a shadow from indoors and after dark, nearest first. Also a performance setting: each one is a full shadow drawn for that character, so 1 costs a third of 3 in a room full of lamps. The sun outdoors is one light and is not affected.",
   "config.shadows.heightdrop.name": "Building & ledge shadows",
   "config.shadows.heightdrop.tooltip": "Project ground shadows from walls, buildings, and ledges (requires the Height Framework mod).",
   "config.shadows.heightlength.name": "Building shadow length",
@@ -246,6 +248,7 @@
   "tuner.shadowlength": "Length",
   "tuner.shadowblur": "Edge softness",
   "tuner.shadowobjects": "Trees & bushes too",
+  "tuner.shadowcasts": "Shadows per character",
 
   "config.section.camera": "Camera",
   "config.camera.mode.name": "Camera mode",

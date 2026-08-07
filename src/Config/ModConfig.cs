@@ -259,6 +259,16 @@ namespace SDVRadiance
         public float DirectionalShadowBlur { get; set; } = 4.0f;
         /// <summary>Also cast directional shadows from trees and bushes (not just characters).</summary>
         public bool DirectionalShadowObjects { get; set; } = true;
+        /// <summary>How many shadows one character may cast indoors and after dark, nearest light
+        /// first. A look control and a cost control at once: each cast is a full soft silhouette,
+        /// so this is a direct multiplier on what characters cost to shadow, and past about three
+        /// the shadows stop reading as "lit from a few directions" and start reading as a smudge.
+        /// The sun outdoors is one light and is not affected.</summary>
+        public int ShadowCastsPerCharacter { get; set; } = 3;
+        /// <summary>One shadow: the cheapest setting that still grounds a body.</summary>
+        public const int ShadowCastsMin = 1;
+        /// <summary>Where it used to sit before it was a setting. Higher reads as a smudge.</summary>
+        public const int ShadowCastsMax = 6;
         /// <summary>Minimum light RADIUS (in tiles) for a point light to cast per-light shadows.
         /// Tiny transient lights from other mods — fireflies (JP's The Night Lights), sparkles —
         /// have a sub-1 radius; each moving one threw its own drifting shadow on the player. Lights
@@ -326,6 +336,7 @@ namespace SDVRadiance
             MinShadowLightRadius = ClampToRange(MinShadowLightRadius, 0f, 3f);
             DirectionalShadowLength = ClampToRange(DirectionalShadowLength, 0.2f, 2f);
             DirectionalShadowBlur = ClampToRange(DirectionalShadowBlur, 0f, 5f);
+            ShadowCastsPerCharacter = Math.Clamp(ShadowCastsPerCharacter, ShadowCastsMin, ShadowCastsMax);
             CameraFollowSpeed = ClampToRange(CameraFollowSpeed, 0.05f, 1f);
         }
 
@@ -438,6 +449,7 @@ namespace SDVRadiance
                     FloodLightingEnabled = true;
                     WaterReflection = true;
                     DirectionalShadowObjects = true;
+                    ShadowCastsPerCharacter = 3;
                     break;
 
                 case PerfPreset.Balanced:
@@ -449,6 +461,9 @@ namespace SDVRadiance
                     FloodLightingEnabled = true;
                     WaterReflection = true;
                     DirectionalShadowObjects = true;
+                    // A body lit from two sides still reads as a lit room; the third shadow is
+                    // the one that adds atmosphere rather than information.
+                    ShadowCastsPerCharacter = 2;
                     break;
 
                 case PerfPreset.Performance:
@@ -462,6 +477,11 @@ namespace SDVRadiance
                     // Per-object shadow bakes scale with how much scenery is on screen, which
                     // is exactly what a weak machine cannot afford. Characters keep theirs.
                     DirectionalShadowObjects = false;
+                    // Every extra light a character answers to is another full soft silhouette
+                    // drawn for that character. One keeps everyone grounded for a third of the
+                    // work of the default, which matters most in exactly the scene that hurts:
+                    // a town at night, where the lamps are many and so are the people.
+                    ShadowCastsPerCharacter = 1;
                     // Reflections stay: they are the reason to run this mod, and the scenery
                     // cache already took most of their cost away.
                     WaterReflection = true;

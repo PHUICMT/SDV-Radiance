@@ -170,13 +170,25 @@ namespace SDVRadiance
             if (_lightPreviousPositions.Count > _activeLightIds.Count)
                 _lightPreviousPositions.Keys.Where(k => !_activeLightIds.Contains(k)).ToList().ForEach(k => _lightPreviousPositions.Remove(k));
 
-            // Keep the lights NEAREST the screen centre (stable membership — the old
-            // dictionary-order + break-at-6 popped shadows in/out as the light set reordered).
-            if (_nearbyLightSources.Count > 6)
+            // A RUNAWAY GUARD, not a look choice. Every light on screen casts from every caster
+            // now; this only stops a location carrying an absurd number of lights from turning one
+            // frame into thousands of soft draws. It is the same 24 the lighting shader budgets,
+            // so the two agree on what "the lights in this scene" means. When it does bite it
+            // keeps the lights nearest the screen centre, which is stable frame to frame (the old
+            // dictionary-order + break-at-N popped shadows in/out as the light set reordered).
+            //
+            // A bar of SIX here used to be the whole budget, and it cut by the wrong yardstick:
+            // the six nearest the CAMERA were shared by every caster, so walking to one end of
+            // Pierre's shop dropped the lights around the people standing at the other end and
+            // their cast shadows vanished while they were still in plain sight. Which light
+            // matters is a question about the caster, and the honest answer is all of them that
+            // reach it — LightCast already drops the rest by distance and by an alpha floor, so
+            // geometry does the limiting that an arbitrary count was doing badly.
+            if (_nearbyLightSources.Count > ScreenLightBudget)
             {
                 Vector2 mid = new(Game1.viewport.Width * 0.5f, Game1.viewport.Height * 0.5f);
                 _nearbyLightSources.Sort((lightA, lightB) => Vector2.DistanceSquared(lightA.pos, mid).CompareTo(Vector2.DistanceSquared(lightB.pos, mid)));
-                _nearbyLightSources.RemoveRange(6, _nearbyLightSources.Count - 6);
+                _nearbyLightSources.RemoveRange(ScreenLightBudget, _nearbyLightSources.Count - ScreenLightBudget);
             }
 
             if (DiagnosticMonitor != null && _diagnosticFrameCount < 3)
@@ -185,6 +197,7 @@ namespace SDVRadiance
                 DiagnosticMonitor.Log($"[shadow] light path: lights on-screen={_nearbyLightSources.Count}, ambient contact on", LogLevel.Debug);
             }
 
+            _castsPerCaster = Math.Clamp(config.ShadowCastsPerCharacter, ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax);
             float lenCfg = Math.Max(0.1f, config.DirectionalShadowLength);
             float ambAlpha = strength * 0.4f;   // soft grounding pool; directional cast adds on top
             // OUTDOORS AT NIGHT a lamp is the only light on a dark ground, so its cast shadow
@@ -215,7 +228,7 @@ namespace SDVRadiance
                 float halfW = npc.GetSpriteWidthForPositioning() * 4f * 0.36f;
                 GatherCasts(feet, castStrength, lenCfg);
                 DrawContactBlob(spriteBatch, feet, halfW, halfW * 0.5f, ambAlpha * (_lightShadowCasts.Count > 0 ? 0.45f : 1f), depth, blur);
-                foreach (var (rot, st, a) in _lightShadowCasts)
+                foreach (var (rot, st, a, _) in _lightShadowCasts)
                     DrawNpcShadow(spriteBatch, npc, rot, st, a, blur);
             }
 
@@ -229,7 +242,7 @@ namespace SDVRadiance
                 float halfW = animal.Sprite.SpriteWidth * 4f * 0.36f;
                 GatherCasts(feet, castStrength, lenCfg);
                 DrawContactBlob(spriteBatch, feet, halfW, halfW * 0.5f, ambAlpha * (_lightShadowCasts.Count > 0 ? 0.45f : 1f), depth, blur);
-                foreach (var (rot, st, a) in _lightShadowCasts)
+                foreach (var (rot, st, a, _) in _lightShadowCasts)
                     DrawAnimalShadow(spriteBatch, animal, rot, st, a, blur);
             }
 
@@ -251,7 +264,7 @@ namespace SDVRadiance
                     float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                     GatherCasts(feet, castStrength, lenCfg);
                     DrawContactBlob(spriteBatch, feet, 22f, 11f, ambAlpha * (_lightShadowCasts.Count > 0 ? 0.45f : 1f), depth, blur);
-                    foreach (var (rot, st, a) in _lightShadowCasts)
+                    foreach (var (rot, st, a, _) in _lightShadowCasts)
                         DrawSoft(spriteBatch, Taps9, _playerRenderTarget, null, feet, Color.White, a, rot, _playerFeetInRenderTarget,
                             new Vector2(1f, st), depth, SpriteEffects.None, blur);
                 }
@@ -321,7 +334,26 @@ namespace SDVRadiance
         }
 
         private readonly System.Collections.Generic.List<(Vector2 pos, float reach, float flick)> _nearbyLightSources = new();
-        private readonly System.Collections.Generic.List<(float rot, float st, float a)> _lightShadowCasts = new();
+        private readonly System.Collections.Generic.List<(float rot, float st, float a, float distSq)> _lightShadowCasts = new();
+        /// <summary>Runaway guard on the candidate lights, matching the lighting shader's own
+        /// budget so the two agree on what "the lights in this scene" means.</summary>
+        private const int ScreenLightBudget = 24;
+        /// <summary>How many shadows one body may cast this frame, nearest light first — read from
+        /// <see cref="ModConfig.ShadowCastsPerCharacter"/> once per frame rather than per caster.
+        /// Ranking by distance keeps the swap invisible when a nearer light overtakes the last one
+        /// in: at the moment they trade places they are the same distance away, so they are drawing
+        /// nearly the same shadow.</summary>
+        private int _castsPerCaster = ModConfig.ShadowCastsMax;
+        /// <summary>How far past the Nth light a cast still fades rather than vanishing, as a
+        /// multiple of that light's distance. Wide enough that a light crossing the edge at
+        /// walking pace takes several frames to leave.</summary>
+        private const float CastFadeBand = 1.35f;
+        /// <summary>Ranks one caster's casts by distance to the light. Distance and not alpha:
+        /// alpha carries the flame flicker, so ranking by it would let a fire sitting near the cut
+        /// flip in and out of the list every frame, which is the blinking this path was tuned to
+        /// avoid. Distance between two things that are standing still does not move.</summary>
+        private static readonly System.Comparison<(float rot, float st, float a, float distSq)> ByLightDistance
+            = (castA, castB) => castA.distSq.CompareTo(castB.distSq);
         // Why the light list ended up the size it did: total offered, then each filter's toll.
         /// <summary>Where each light was last frame, by its id — the drift test's memory. Pruned
         /// to the ids still present so a location full of transient lights cannot grow it.</summary>
@@ -341,7 +373,38 @@ namespace SDVRadiance
             _lightShadowCasts.Clear();
             foreach (var (lpos, reach, flick) in _nearbyLightSources)
                 if (LightCast(feet, lpos, reach, strength, lenCfg, flick, out float rot, out float st, out float a))
-                    _lightShadowCasts.Add((rot, st, a));
+                    _lightShadowCasts.Add((rot, st, a, Vector2.DistanceSquared(feet, lpos)));
+            // Keep the lights nearest THIS caster. Every caster asks the question for itself, so a
+            // person at the far end of a room keeps the window above them no matter where the
+            // camera is, and nobody's shadow depends on how many lights happen to be lit near
+            // somebody else.
+            if (_lightShadowCasts.Count <= _castsPerCaster)
+                return;
+            _lightShadowCasts.Sort(ByLightDistance);
+            // A SOFT edge on the count, because a hard one pops. Cutting the list at N drops the
+            // light that lost its place at whatever strength it happened to have, and walking
+            // across a room reorders that list constantly — a shadow would blink out mid-stride.
+            //
+            // So the count sets a DISTANCE instead of an index: whatever the Nth-nearest light is
+            // standing at becomes the edge, everything inside it casts at full strength, and
+            // everything beyond fades out across a band and then stops being drawn at all. Two
+            // lights trading places are by definition the same distance away at the moment they
+            // trade, so they are drawing the same shadow at the same strength, and the swap has
+            // nothing left to show. The band also means the extra draws are always the faint ones.
+            float cut = (float)Math.Sqrt(_lightShadowCasts[_castsPerCaster - 1].distSq);
+            float outer = Math.Max(cut * CastFadeBand, cut + 1f);
+            for (int i = _castsPerCaster; i < _lightShadowCasts.Count; i++)
+            {
+                var cast = _lightShadowCasts[i];
+                float fade = MathHelper.Clamp((outer - (float)Math.Sqrt(cast.distSq)) / (outer - cut), 0f, 1f);
+                fade = fade * fade * (3f - 2f * fade);
+                if (cast.a * fade <= 0.02f)   // the same floor LightCast drops a cast at
+                {
+                    _lightShadowCasts.RemoveRange(i, _lightShadowCasts.Count - i);
+                    break;
+                }
+                _lightShadowCasts[i] = (cast.rot, cast.st, cast.a * fade, cast.distSq);
+            }
         }
 
         /// <summary>

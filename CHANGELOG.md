@@ -2,6 +2,69 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.5.2
+
+### Added
+
+- A setting for how many shadows one character casts indoors and after dark, on the Shadows tab
+  and in the config menu. It is a look control and a performance control at once: each shadow is a
+  full soft silhouette drawn for that character, so one costs a third of three in a room full of
+  lamps, and past about three the shadows stop reading as a body lit from a few directions and
+  start reading as a smudge. The default is three. The performance presets set it too: three on
+  Quality, two on Balanced, one on Performance. The sun outdoors is one light and is not affected.
+
+### For translators
+
+Three new keys, no changes of meaning. English and Thai are filled in; the rest fall back to
+English until translated.
+
+- `tuner.shadowcasts`
+- `config.shadows.casts.name`, `config.shadows.casts.tooltip`
+
+### Fixed
+
+- Water no longer stops dead in a straight line beside a bridge. A tile counted as decking as soon
+  as a quarter of it was planking, which is the right bar for "is there something to walk on here"
+  and far too low for "is this tile still water": a parapet or a plank end clipping the edge of a
+  water tile took the whole tile out of the water, all 256 pixels of it. A tile that is mostly
+  water now stays water, and the planking on it is cut away pixel by pixel further down the
+  pipeline, which was always happening and was achieving nothing because the tile had already been
+  thrown away. Whether this clears the bridge to the mines depends on which tilesheets are
+  installed, so that report stays open until the person who filed it says otherwise.
+- The bounce lighting no longer flickers along with a fire. A hearth's flame wobble was multiplied
+  into the bounce grid, which is a CPU sweep that cannot afford to run every frame, so the wobble
+  got sampled at the rebuild rate and held in between: the bounce moved in steps while the direct
+  pool around the same fire moved smoothly, and two rates beating against each other is what read
+  as the floor around a lamp flashing. The bounce is light that has crossed the room and come back
+  off a wall, which is the half that should not be snapping anyway. The flame still breathes where
+  you can see it happening, in the pool it casts and the shadows it throws.
+- Lamps and window light no longer pulse in a busy room. The saloon offers seventy-two lights for
+  twenty-four slots, so the scores deciding which ones get in sit very close together, and a fire's
+  eight percent wobble was one of the things being scored. That was enough to reorder the list
+  around the cut, and the lights near it swung between full brightness and nothing on the flame's
+  own cycle: one hearth quietly breathing, half the room's lamps pulsing. Flicker now changes how
+  bright a light is and never which lights exist.
+- A light that loses its place in a busy room fades out instead of blinking off, and one arriving
+  takes about a third of a second rather than an eighth, which is long enough to read as a light
+  coming on rather than a light being switched on.
+- People standing across a room from you keep their shadows. Every character was sharing one set
+  of six lights, picked for being nearest the middle of the screen, so walking to one end of a shop
+  dropped the lights around the people at the other end and their shadows vanished while they were
+  still in plain sight. Which light matters is a question about the person casting the shadow, so
+  each of them now answers it for themselves, and the count sets a distance rather than a place in
+  a queue, so a light crossing that distance fades out instead of blinking.
+
+### Known issues
+
+- **Split-screen is not supported yet, and online co-op only shadows your own farmer.** Both come
+  from the same gap: the mod keeps one set of camera-shaped working data, and a second screen is a
+  second camera looking somewhere else. Traced this release rather than guessed at. On a split
+  screen the first player's half is close to correct while the second player's water effects are
+  cut to whatever rectangle the first player's camera happened to cover, and neither farmer's
+  shadow is reliable. In online co-op the other players cast no shadow and no reflection at all,
+  because the list of things that cast one never included them. Being worked on; `radiance_report`
+  and the console command `radiance_screenwatch` collect what is needed if you can reproduce it.
+
 ## 1.5.1
 
 ### Added
