@@ -2,7 +2,7 @@
   "config.enabled.name": "Enable SDV-Radiance",
   "config.enabled.tooltip": "Master switch for the whole post-processing pipeline.",
 
-  "config.preset.hint": "Tip: presets and your saved custom looks live in the on-screen tuner (open with the tuner hotkey, default F8). It previews live and always stays in sync.",
+  "config.preset.hint": "Tip: presets and your saved custom looks live in the on-screen tuner (open with the tuner hotkey, default F6). It previews live and always stays in sync.",
   "config.preset.name": "Quick preset",
   "config.preset.tooltip": "Apply a ready-made look. This overwrites the bloom and color-grading settings below; reopen the menu to see the updated values.",
   "config.preset.custom": "— (custom)",

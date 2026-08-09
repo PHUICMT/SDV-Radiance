@@ -62,6 +62,7 @@ namespace SDVRadiance
         internal static int WaterWatchFrames;
         private int _watchWaterEpoch = int.MinValue, _watchWaterTileX = int.MinValue, _watchWaterTileY = int.MinValue;
         private bool _watchWaterAnchor, _watchWaterInMask, _watchWaterJob;
+        private int _watchWaterMaskWidth, _watchWaterMaskHeight;
 
         /// <summary>
         /// The last few dozen things that changed on the water side, kept whether anyone asked or
@@ -81,6 +82,7 @@ namespace SDVRadiance
         private const int WaterLogMax = 48;
         private GameLocation? _waterStatsLocation;
         private int _waterWindowMoves, _waterEpochBumps, _waterAnchorBuilds, _waterPresenceFlips, _waterStatsFrames;
+        private int _waterSurfaceResizes;
 
         private void NoteWater(string what)
         {
@@ -99,9 +101,11 @@ namespace SDVRadiance
                 _waterStatsLocation = location;
                 _waterLog.Clear();
                 _waterWindowMoves = _waterEpochBumps = _waterAnchorBuilds = _waterPresenceFlips = 0;
+                _waterSurfaceResizes = 0;
                 _waterStatsFrames = 0;
                 _watchWaterEpoch = int.MinValue;
                 _watchWaterTileX = _watchWaterTileY = int.MinValue;
+                _watchWaterMaskWidth = _watchWaterMaskHeight = 0;
             }
             _waterStatsFrames++;
 
@@ -119,6 +123,13 @@ namespace SDVRadiance
             bool anchorChanged = !first && anchor != _watchWaterAnchor;
             bool presenceChanged = !first && _hasWaterInMask != _watchWaterInMask;
             bool jobChanged = !first && job != _watchWaterJob;
+            // The surface is sized from the view, so resizing the window resizes it. That was
+            // invisible here, which mattered: a crash and a misalignment both traced back to the
+            // moment the mask changed size, and the report could not say whether it ever had.
+            int maskWidth = _waterMask?.Width ?? 0, maskHeight = _waterMask?.Height ?? 0;
+            bool resized = !first && maskWidth > 0
+                           && (maskWidth != _watchWaterMaskWidth || maskHeight != _watchWaterMaskHeight);
+            if (resized) _waterSurfaceResizes++;
             if (invalidated) _waterEpochBumps++;
             if (windowMoved) _waterWindowMoves++;
             if (anchorChanged && anchor) _waterAnchorBuilds++;
@@ -135,7 +146,12 @@ namespace SDVRadiance
             if (presenceChanged)
                 changes.Append(_hasWaterInMask ? "  water entered the window" : "  water left the window");
             if (jobChanged) changes.Append(job ? "  rebuild started" : "  rebuild landed");
+            if (resized)
+                changes.Append($"  SURFACE RESIZED {_watchWaterMaskWidth}x{_watchWaterMaskHeight} -> {maskWidth}x{maskHeight}"
+                             + " (the window or the zoom changed)");
 
+            _watchWaterMaskWidth = maskWidth;
+            _watchWaterMaskHeight = maskHeight;
             _watchWaterEpoch = MaskEpoch;
             _watchWaterTileX = _lastWaterTileX;
             _watchWaterTileY = _lastWaterTileY;
@@ -193,6 +209,7 @@ namespace SDVRadiance
             sb.AppendLine($"    it was thrown away {_waterEpochBumps} times because something reloaded the map under you");
             sb.AppendLine($"    the map-wide shoreline finished building {_waterAnchorBuilds} times");
             sb.AppendLine($"    water came into or left your view {_waterPresenceFlips} times");
+            sb.AppendLine($"    it changed size {_waterSurfaceResizes} times because the window or the zoom changed");
             sb.AppendLine("what changed, most recent last (t+ is frames since you arrived here):");
             if (_waterLog.Count == 0)
                 sb.AppendLine("    nothing has changed since you arrived, which means the surface is not being rebuilt at all");
@@ -289,6 +306,7 @@ namespace SDVRadiance
             long gatherStartTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
             var newWaterMaskJob = GatherWaterMask(location, 0, 0, mw, mh);
             newWaterMaskJob.AnchorOnly = true;
+            newWaterMaskJob.ScreenId = _activeScreenId;
             double gatherDurationMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - gatherStartTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
             _monitor.Log($"[diag] waterline-anchor gather {mw}x{mh} = {gatherDurationMilliseconds:0.0}ms", LogLevel.Trace);
 

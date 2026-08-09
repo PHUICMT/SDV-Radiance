@@ -33,6 +33,12 @@ namespace SDVRadiance
         private sealed class WaterMaskJob
         {
             public GameLocation Location = null!;
+            /// <summary>Which screen asked for this window. Rebuilds stay serialized across ALL
+            /// screens (the gather and compose buffers are shared and unlocked, which is only safe
+            /// while one rebuild exists at a time), so a finished job has to be able to say whose
+            /// it is: the screen that happens to be drawing when it lands may not be the one that
+            /// asked, and applying it there would put another camera's window on this camera.</summary>
+            public int ScreenId;
             public int StartTileX, StartTileY, TileWidth, TileHeight, WaterDrawHookVersion, LabelVersion, Epoch;
             public bool AnyWater;              // gather: any true water tile
             public bool AnyLabeled;            // gather: any label-nominated water art
@@ -1690,6 +1696,14 @@ namespace SDVRadiance
             int tilesW = job.TileWidth, tilesH = job.TileHeight;
             int count = tilesW * tilesH;
             int pw = tilesW * 16, ph = tilesH * 16;
+            // Take this screen's own copy of the water flags before the next rebuild starts
+            // overwriting the shared gather buffer with somebody else's window.
+            if (_waterTileFlags != null && _waterTileFlags.Length >= count)
+            {
+                if (_waterTilesInMask == null || _waterTilesInMask.Length < count)
+                    _waterTilesInMask = new bool[count];
+                Array.Copy(_waterTileFlags, _waterTilesInMask, count);
+            }
             if (_waterMask == null || _waterMask.Width != pw || _waterMask.Height != ph)
             {
                 _waterMask?.Dispose();
@@ -1732,6 +1746,10 @@ namespace SDVRadiance
             if (_waterMaskPixels == null || _waterMaskPixels.Length < pcount) _waterMaskPixels = new Color[pcount];
             if (_waterMaskCorePixels == null || _waterMaskCorePixels.Length < count) _waterMaskCorePixels = new Color[count];
             if (_waterSignedDistancePixels == null || _waterSignedDistancePixels.Length < pcount) _waterSignedDistancePixels = new byte[pcount];
+            // No water in this window, so nothing is near any: the "is there water by this sprite"
+            // test must agree with the textures it is cleared alongside.
+            if (_waterTilesInMask != null)
+                Array.Clear(_waterTilesInMask, 0, Math.Min(count, _waterTilesInMask.Length));
             Array.Clear(_waterMaskPixels, 0, pcount);
             Array.Clear(_waterMaskCorePixels, 0, count);
             // 0 = as far from water as this encoding can say. It used to be 128, which means

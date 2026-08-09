@@ -57,6 +57,11 @@ namespace SDVRadiance
         private const int ClassicLightSlots = 16;
         private readonly Vector2[] _lightPositions = new Vector2[MaxLights];
         private readonly Vector4[] _lightShaderData = new Vector4[MaxLights]; // xyz = colour*boost, w = radiusUV
+        /// <summary>1 where the light in that slot is an actual FLAME, 0 for everything else.
+        /// Kept beside the array rather than folded into it because all four components of the
+        /// colour vector are spoken for, and it rides into the shader in the unused z of the
+        /// position instead.</summary>
+        private readonly float[] _lightIsFire = new float[MaxLights];
         private int _lightCount;
 
         private Texture2D? _waterMask;         // PIXEL-accurate water mask (16 texels/tile): true water tiles + the painted
@@ -65,7 +70,12 @@ namespace SDVRadiance
         private Texture2D? _waterMaskCore;     // undilated per-TILE mask — true water bodies, used for the reflection's shoreline search
         private Texture2D? _waterSignedDistanceTexture;          // Alpha8 signed shore distance (Pass F): 128 = waterline, ±4/texel
         private Color[]? _waterMaskCorePixels;
-        private bool[]? _waterTileFlags;         // pre-dilation water flags (see BuildWaterMask)
+        private bool[]? _waterTileFlags;         // pre-dilation water flags — GATHER/COMPOSE scratch, owned by the
+                                                 // rebuild in flight, not by any screen
+        /// <summary>The composed water flags for the mask currently on screen. A copy taken when a
+        /// rebuild lands, because <see cref="_waterTileFlags"/> belongs to whatever rebuild is
+        /// running next and a worker thread is writing it.</summary>
+        private bool[]? _waterTilesInMask;
         private Color[]? _waterMaskPixels;         // pixel-mask upload buffer (tilesW*16 × tilesH*16)
         private bool[]? _waterEffectBits;         // scratch bits for the close/carve passes (effect channel)
         private bool[]? _waterMarchBits;        // march-channel bits (wider close: floats never block)
@@ -308,6 +318,10 @@ namespace SDVRadiance
             sb.AppendLine($"water mask: origin tile ({_lastWaterTileX},{_lastWaterTileY}) epoch {MaskEpoch} "
                         + $"rebuildInFlight={_pendingWaterMaskJob != null}");
             sb.AppendLine($"labels: {(LabelStore.Instance == null ? "NOT LOADED (every water verdict falls back to the game's own data)" : $"loaded, v{LabelStore.Instance.Version}")}");
+            // Which file painted which sheet. A report saying one mod's water is wrong is only
+            // actionable if it names the pack that painted it.
+            if (LabelStore.Instance != null)
+                sb.AppendLine($"label sources: {LabelStore.Instance.DescribeSources()}");
             sb.AppendLine("indoor light (windows, room level, what a lamp pool is worth):");
             sb.AppendLine(DescribeIndoorLight());
             sb.AppendLine(DescribeCameraKeyedCaches());
@@ -448,7 +462,9 @@ namespace SDVRadiance
 
         // Flood-propagation GI lightmap (see FloodLightmap.cs).
         private Effect? _floodEffect;
-        private readonly FloodLightmap _flood = new();
+        /// <summary>Not readonly: in split screen each camera keeps its own grid, and this holds
+        /// whichever screen's turn it currently is (see RenderPipeline.Screens.cs).</summary>
+        private FloodLightmap _flood = new();
 
         // Metered auto-exposure: average the scene each frame (downsampled to a
         // tiny RT, read back a frame late so there's no GPU stall) and ease the
@@ -558,7 +574,9 @@ namespace SDVRadiance
              + $"viewport=({Game1.viewport.X},{Game1.viewport.Y} {Game1.viewport.Width}x{Game1.viewport.Height}) "
              + $"deviceViewport=({_device.Viewport.X},{_device.Viewport.Y} {_device.Viewport.Width}x{_device.Viewport.Height}) "
              + $"waterMaskOrigin=({_lastWaterTileX},{_lastWaterTileY}) maskJobInFlight={_pendingWaterMaskJob != null} "
-             + $"occluderOrigin=({_occluderTileX},{_occluderTileY})";
+             + $"maskJobScreen={(_pendingWaterMaskJob?.ScreenId.ToString() ?? "-")} "
+             + $"occluderOrigin=({_occluderTileX},{_occluderTileY}) "
+             + $"stateScreen={_activeScreenId} statesKept={_screenStates.Count}";
 
         private void EnsureTargets(int w, int h, SurfaceFormat format)
         {
@@ -1215,6 +1233,11 @@ namespace SDVRadiance
 
         public void Dispose()
         {
+            // The other screens' kept windows and caches first — the fields below only hold
+            // whichever screen happened to be loaded when this was called.
+            ReleaseScreenStates();
+            _mirrorSceneCache?.Dispose(); _mirrorSceneCache = null;
+            _waterSignedDistanceTexture?.Dispose(); _waterSignedDistanceTexture = null;
             _sceneRenderTarget?.Dispose(); _fullResolutionPingA?.Dispose(); _fullResolutionPingB?.Dispose(); _halfResolutionScratchA?.Dispose(); _halfResolutionScratchB?.Dispose(); _waterMask?.Dispose(); _waterMaskCore?.Dispose(); _occluderMask?.Dispose(); _luminanceRenderTarget?.Dispose(); _noiseTexture?.Dispose(); _noiseTexture = null;
             _spriteMaskRenderTarget?.Dispose(); _spriteMaskSpriteBatch?.Dispose();
             _maskDebugTexture?.Dispose(); _maskDebugTexture = null;

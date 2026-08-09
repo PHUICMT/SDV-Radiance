@@ -45,7 +45,7 @@ float AmbientFloor;      // lower bound so nothing ever goes fully black
 
 float2 OccOrigin;        // world tile coordinate of the occluder mask's (0,0) cell
 float2 OccMapSize;       // occluder mask size in cells
-float2 LightPosArr[8];   // per-light screen UV
+float4 LightPosArr[8];   // xy = per-light screen UV, z = 1 when this light is an actual flame
 float4 LightColArr[8];   // rgb = colour, w = radius in UV (height units)
 float DirectCount;       // how many entries are live
 
@@ -54,7 +54,7 @@ float DirectCount;       // how many entries are live
 // the slot itself - so the ranked leaders keep their shadows and everything behind them
 // still gets its circle of light. A row of shop windows now all light the floor; the
 // two or three that matter most are the ones that also cast.
-float2 SoftPosArr[16];
+float4 SoftPosArr[16];   // xy = UV, z = flame flag
 float4 SoftColArr[16];
 float SoftCount;
 float Aspect;            // w/h so light pools stay round
@@ -86,6 +86,26 @@ float4 WindowBeam;       // x = lean (tiles sideways per tile of drop), y = reac
 float4 WindowPane;       // x,y = pane half-size (tiles), z = pane centre above the beam
                          // origin (tiles), w = how much the glass itself glows
 float PaneDaylight;      // 1 while there is sky light outside, 0 after dark (eased on CPU)
+
+// 1 = paint the emitter test over the world instead of the lit scene (radiance_debug emitter).
+// Whether a flame is being recognised as a light source, and how much of it, has been reasoned
+// about twice now and reasoned wrong both times. This makes it a thing you can look at.
+float DebugEmitter;
+
+// Where the "bright enough to be a light" test starts and where it is fully passed.
+//
+// These were briefly tunable from the console, while the plan was still to fix a dim room by
+// deciding which pixels are a light and sparing them. That plan is gone: the room is dimmed with
+// a gamma curve now, which pins 1.0 and needs no such decision. What is left of this test only
+// keeps a flame from being drained by the room's own desaturation, and it does that well enough
+// at these numbers.
+//
+// The tuning command went with it, because the test was measurably a poor judge: with the emitter
+// overlay on, the Saloon's wall lamps came out as "too dark in the art to be a light" in the same
+// frame they were the whitest pixels on screen. Shipping a dial that adjusts a judgement we know
+// to be wrong is worse than shipping no dial.
+static const float EmitterGateLow = 0.40;
+static const float EmitterGateHigh = 0.80;
 
 struct PixelInput
 {
@@ -141,7 +161,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     for (int li = 0; li < 8; li++)
     {
         float on = step((float)li + 0.5, DirectCount);
-        float2 lp = LightPosArr[li];
+        float2 lp = LightPosArr[li].xy;
         float4 lc = LightColArr[li];
         float2 dvec = uv - lp;
         dvec.x *= Aspect;
@@ -175,7 +195,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             float peak = max(max(lc.r, lc.g), max(lc.b, 0.0001));
             pool += (lc.rgb / peak) * (attP * attP) * (1.0 - occ * ShadowStrength);
             float attE = saturate(1.0 - dist / max(lc.w * 0.12, 0.004));
-            emitter = max(emitter, attE * attE);
+            emitter = max(emitter, attE * attE * LightPosArr[li].z);
         }
     }
     // Second tier: pools only, no ray. Same maths as above with the march left out.
@@ -184,7 +204,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     {
         float son = step((float)si + 0.5, SoftCount);
         float4 sc = SoftColArr[si];
-        float2 sdv = uv - SoftPosArr[si];
+        float2 sdv = uv - SoftPosArr[si].xy;
         sdv.x *= Aspect;
         float sdist = length(sdv);
         float sa = saturate(1.0 - sdist / max(sc.w, 0.02));
@@ -194,7 +214,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
         float speak = max(max(sc.r, sc.g), max(sc.b, 0.0001));
         pool += (sc.rgb / speak) * (saP * saP * son);
         float saE = saturate(1.0 - sdist / max(sc.w * 0.12, 0.004));
-        emitter = max(emitter, saE * saE * son);
+        emitter = max(emitter, saE * saE * son * SoftPosArr[si].z);
     }
 
     light += direct;
@@ -240,13 +260,41 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // exempted too - "bright pixel = light source" on its own is what made god rays stream
     // out of a white-painted sign.
     float srcLum = dot(src.rgb, float3(0.299, 0.587, 0.114));
-    float emitterLit = emitter * smoothstep(0.40, 0.80, srcLum);
+    float emitterLit = emitter * smoothstep(EmitterGateLow, EmitterGateHigh, srcLum);
     float roomExempt = max(paneLit, emitterLit);
 
     // Time-of-day room level, applied BEFORE the lamp-glow and window-shaft terms so
     // lamps and daylight beams punch through a dark room instead of dimming with it.
     float3 expo = lerp(Exposure, float3(1.0, 1.0, 1.0), roomExempt);
-    lit *= expo;
+
+    // ...but HOW the room is dimmed decides whether a fire can look like fire at all.
+    //
+    // Multiplying took the same fraction off every pixel, so the brightest thing in the room lost
+    // the most absolute brightness: at a 39% dim a flame at 0.90 fell to 0.55 while the boards
+    // around it went 0.35 to 0.21. The picture stayed correctly dark and the fire stopped being
+    // the brightest thing in it, which is the one property that makes a flame read as a flame.
+    // Every fix tried on top of that - exempting the light's own pixels, then lifting them - needs
+    // to know which pixels ARE a light, and the brightness gate doing that judging is measurably
+    // wrong: with the emitter overlay on, the Saloon's lamps come out GREEN, meaning "too dark in
+    // the art to be a light", while in the same frame they are the whitest pixels on screen.
+    //
+    // A gamma curve needs no such judgement. It pins 1.0 to 1.0 and bends everything below it, so
+    // the same 39% dim leaves that flame at 0.84 and puts the boards at 0.16, darker than the
+    // multiply managed. Nothing has to be classified, there is no threshold to tune, and outdoors
+    // Exposure is 1 so the exponent is 1 and not a pixel changes.
+    //
+    // Worked on luminance with the colour scaled along it: per-channel gamma bends the channels by
+    // different amounts and shifts the room's hue as it darkens. Exposure's own tint is kept by
+    // splitting it into level and colour and re-applying only the colour.
+    float expoLevel = max(dot(expo, float3(0.3333, 0.3333, 0.3333)), 0.02);
+    float3 expoTint = expo / expoLevel;
+    float roomGamma = 1.0 - log2(expoLevel);
+    float preLum = dot(lit, float3(0.299, 0.587, 0.114));
+    // Above 1.0 the curve would stretch rather than compress, so highlights that are already
+    // over-range are carried through untouched instead of being amplified.
+    float shaped = pow(saturate(preLum), roomGamma) + max(preLum - 1.0, 0.0);
+    lit *= shaped / max(preLum, 1e-4);
+    lit *= expoTint;
 
     // Applied HERE, before the glass, the hearth and the sunbeam are added, so those
     // three - the only light in the picture that is not room light - keep their own
@@ -309,6 +357,18 @@ float4 FloodPS(PixelInput input) : SV_TARGET
         shaft += won * across * len;
     }
     lit += (src.rgb * 1.2 + 0.03) * WindowColour * (shaft * WindowBeam.w);
+
+    // A flame used to be lifted above its own art here, so it could come out brighter than the
+    // room it was lighting. That term is gone, and nothing replaced it, because nothing needs to:
+    // the gamma curve leaves a flame at 0.84 where the old multiply put it at 0.55, which is
+    // already brighter than anything around it. Lifting on top of that only risked the noon street
+    // lamp glowing again, and it depended on the same brightness test that judges lamps wrongly.
+
+    // Debug view, last so it wins: RED = this pixel is treated as being the light itself, GREEN =
+    // it is near enough a light but not bright enough in the art to qualify. Reading the two apart
+    // says which half of the test is the one failing, which is exactly what could not be worked
+    // out by staring at a screenshot of a fireplace.
+    lit = lerp(lit, float3(emitterLit, saturate(emitter - emitterLit) * 0.6, 0.0), DebugEmitter);
 
     return float4(lit, src.a);
 }

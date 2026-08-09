@@ -43,31 +43,57 @@ namespace SDVRadiance
             {
                 if (_objectGraphicsDevice != null && !_bakedObjectCache.ContainsKey(key)
                     && BakeObjSprite(_objectGraphicsDevice, texture, src, baseOrigin, effects, shear, out RenderTarget2D rt, out Vector2 feetInRT))
-                    _bakedObjectCache[key] = (rt, feetInRT);
+                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedShear = shear, LastUsedTick = Game1.ticks };
                 return;
             }
-            if (_bakedObjectCache.TryGetValue(key, out var bakedEntry))
-                DrawSoft(spriteBatch, Taps9, bakedEntry.rt, null, feet, Color.White, alpha, 0f, bakedEntry.feetInRT,
+            if (_bakedObjectCache.TryGetValue(key, out SpriteBake? bakedEntry))
+            {
+                bakedEntry.LastUsedTick = Game1.ticks;
+                // The lean is in the PIXELS, so the sun walking across the sky makes every bake
+                // gradually wrong. That used to be answered by throwing the whole cache away
+                // whenever a rounded sun angle changed, which on a continuous clock happens about
+                // twice a second: a hundred-sprite screen re-baked a hundred times a second, in
+                // bursts, all day. Now each sprite is judged on its own error. The shear is a
+                // sideways slide per pixel of height, so the tip moves by shear × the sprite's
+                // on-screen height: a tall tree earns a re-bake every second or so and a small
+                // crop goes minutes without one, which is both correct and an order of magnitude
+                // less work than the old sweep.
+                if (Math.Abs(shear - bakedEntry.BakedShear) * src.Height * 4f > ShearRefreshPixels
+                    && _objectBakeQueue.Count < ObjectBakeQueueCap)
+                    _objectBakeQueue[key] = new ObjectBakeRequest { BaseOrigin = baseOrigin, Shear = shear };
+                DrawSoft(spriteBatch, Taps9, bakedEntry.Rt, null, feet, Color.White, alpha, 0f, bakedEntry.FeetInRt,
                     new Vector2(1f, shearScaleY), depth, SpriteEffects.None, blur);
+            }
             else
             {
                 // Ask the NEXT bake pass for exactly this sprite, so the banded stand-in below
                 // lasts one frame (a sprite scrolling in, a machine changing frame) instead of
-                // waiting for something else to trigger a full enumeration. Capped: a cap-blown
-                // frame misses on everything, and the full-bake path owns that case already.
-                if (_objectBakeQueue.Count < 96)
-                    _objectBakeQueue[key] = (baseOrigin, shear);
+                // waiting for something else to trigger a full enumeration.
+                if (_objectBakeQueue.Count < ObjectBakeQueueCap)
+                    _objectBakeQueue[key] = new ObjectBakeRequest { BaseOrigin = baseOrigin, Shear = shear };
                 DrawBandedGradient(spriteBatch, texture, src, feet, baseOrigin, alpha, rot,
                     new Vector2(4f, 4f * stretch), depth, blur, headFade, effects);
             }
         }
+
+        /// <summary>How far the baked lean may drift from the true one, at the sprite's tip, before
+        /// it is worth a re-bake. Under a pixel and a half nothing is visible; the whole point is
+        /// that this is measured per sprite instead of assumed for all of them.</summary>
+        private const float ShearRefreshPixels = 1.5f;
+        /// <summary>Sprites the bake pass will be asked for in one frame. Misses and stale leans
+        /// share it; misses are served first because a miss is a visibly different drawing.</summary>
+        private const int ObjectBakeQueueCap = 128;
+        /// <summary>Stale leans re-baked per frame. A screen full of trees crossing the threshold
+        /// together must not turn into one long frame; a couple of frames of a lean that is two
+        /// pixels off is not something anyone can see.</summary>
+        private const int MaxShearRefreshesPerFrame = 12;
 
         /// <summary>Bake a sprite (black + feet→head gradient) to a pooled object RT, its baseOrigin
         /// pinned at the RT's feet point and the sun lean pre-baked as a shear about that row
         /// (x' = x + shear·(y − feetY): bottom edge stays put, higher rows slide sideways).
         /// Returns false (→ banded fallback) if it won't fit a slot.</summary>
         private bool BakeObjSprite(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle src, Vector2 baseOrigin,
-            SpriteEffects effects, float shear, out RenderTarget2D rt, out Vector2 feetInRT)
+            SpriteEffects effects, float shear, out RenderTarget2D rt, out Vector2 feetInRT, RenderTarget2D? into = null)
         {
             rt = null!;
             feetInRT = default;
@@ -77,7 +103,8 @@ namespace SDVRadiance
             if (spriteWidth + Math.Abs(shear) * spriteHeight > ObjRtW || spriteHeight > ObjRtH - 8f)
                 return false;
 
-            rt = RentObjRT(graphicsDevice);
+            // A refresh re-renders the slot the entry already owns; only a first bake leases one.
+            rt = into ?? RentObjRT(graphicsDevice);
             feetInRT = new Vector2(ObjRtW / 2f, ObjRtH - 8f);
             Vector2 pos = feetInRT - baseOrigin * 4f;      // so baseOrigin maps to the feet point
             Matrix lean = ShearAbout(feetInRT, shear);
@@ -97,25 +124,75 @@ namespace SDVRadiance
             catch
             {
                 try { _renderTargetSpriteBatch!.End(); } catch { }
+                // Only a lease taken here is given back. A refresh was handed a slot the cache
+                // entry still owns, and returning that to the free list would let two entries be
+                // drawn from one target.
+                if (into == null)
+                {
+                    _objectFreeTargets.Add(rt);
+                    rt = null!;
+                }
                 return false;
             }
         }
 
-        /// <summary>Bake exactly what the draw pass reported missing — the warm-frame
+        /// <summary>Bake exactly what the draw pass reported missing or stale — the warm-frame
         /// counterpart of the full enumeration. Each entry carries the origin and the damped,
         /// per-type shear recorded at draw time, so the result is byte-identical to what the
         /// full walk would have produced for the same sprite.</summary>
         private void BakeQueuedObjectSprites(GraphicsDevice graphicsDevice)
         {
+            // MISSES first, and unbudgeted: a sprite with no bake at all is drawing as bands,
+            // which is a different picture, not a slightly older one.
             foreach (var kv in _objectBakeQueue)
             {
                 var key = kv.Key;
+                ObjectBakeRequest req = kv.Value;
                 if (_bakedObjectCache.ContainsKey(key))
                     continue;
-                if (BakeObjSprite(graphicsDevice, key.texture, key.src, kv.Value.baseOrigin, key.effect,
-                        kv.Value.shear, out RenderTarget2D rt, out Vector2 feetInRT))
-                    _bakedObjectCache[key] = (rt, feetInRT);
+                if (BakeRequest(graphicsDevice, key, req, null, out RenderTarget2D rt, out Vector2 feetInRT))
+                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedShear = req.Shear, LastUsedTick = Game1.ticks };
             }
+
+            // Then the leans the sun has moved off, re-rendered into the slot each entry already
+            // owns, up to the per-frame budget. Whatever does not fit gets asked for again next
+            // frame, because the error that queued it is still there.
+            int refreshBudget = MaxShearRefreshesPerFrame;
+            foreach (var kv in _objectBakeQueue)
+            {
+                if (refreshBudget <= 0)
+                    break;
+                var key = kv.Key;
+                ObjectBakeRequest req = kv.Value;
+                if (!_bakedObjectCache.TryGetValue(key, out SpriteBake? stale) || stale.BakedShear == req.Shear)
+                    continue;
+                if (BakeRequest(graphicsDevice, key, req, stale.Rt, out _, out Vector2 refreshedFeet))
+                {
+                    stale.FeetInRt = refreshedFeet;
+                    stale.BakedShear = req.Shear;
+                    refreshBudget--;
+                }
+                else
+                {
+                    // The lean grew until the sheared sprite no longer fits a slot. Keeping the
+                    // old pixels would freeze that shadow at whatever angle it last fit at, so
+                    // hand the slot back and let the draw path fall to bands, which has no such
+                    // limit. Only reachable at a very low sun on a sprite near the slot width.
+                    _objectFreeTargets.Add(stale.Rt);
+                    _bakedObjectCache.Remove(key);
+                }
+            }
+        }
+
+        /// <summary>Run one queued request, whichever of the two kinds of bake it is.</summary>
+        private bool BakeRequest(GraphicsDevice graphicsDevice, (Texture2D texture, Rectangle src, SpriteEffects effect) key,
+            ObjectBakeRequest req, RenderTarget2D? into, out RenderTarget2D rt, out Vector2 feetInRT)
+        {
+            if (req.ColumnSources != null && req.ColumnLevels != null)
+                return BakeTileColumn(graphicsDevice, key.texture, req.ColumnSources, req.ColumnLevels,
+                    req.ColumnSources.Length, req.Shear, out rt, out feetInRT, into);
+            return BakeObjSprite(graphicsDevice, key.texture, key.src, req.BaseOrigin, key.effect,
+                req.Shear, out rt, out feetInRT, into);
         }
 
         /// <summary>Shear about a pivot row: x' = x + k·(y − pivot.Y), y unchanged — the horizontal
@@ -129,14 +206,17 @@ namespace SDVRadiance
 
         private RenderTarget2D RentObjRT(GraphicsDevice graphicsDevice)
         {
-            if (_objectSlotsUsed < _objectRenderTargetPool.Count)
-                return _objectRenderTargetPool[_objectSlotsUsed++];
+            if (_objectFreeTargets.Count > 0)
+            {
+                RenderTarget2D reused = _objectFreeTargets[^1];
+                _objectFreeTargets.RemoveAt(_objectFreeTargets.Count - 1);
+                return reused;
+            }
             // PreserveContents: these slots are CACHED across frames now (see PreparePlayer) —
             // the default DiscardContents decays into garbage after later target swaps.
             var renderTarget = new RenderTarget2D(graphicsDevice, ObjRtW, ObjRtH, false,
                 SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
             _objectRenderTargetPool.Add(renderTarget);
-            _objectSlotsUsed++;
             return renderTarget;
         }
 
@@ -346,15 +426,6 @@ namespace SDVRadiance
             tileX0 = Math.Max(0, tileX0); tileX1 = Math.Min(W - 1, tileX1);
             tileY0 = Math.Max(1, tileY0); tileY1 = Math.Min(H - 1, tileY1);
 
-            // Some maps paint the pole top on AlwaysFront instead of Front — treat them as one layer.
-            xTile.Tiles.Tile? Ft(int xx, int yy)
-            {
-                var t = front.Tiles[xx, yy];
-                if (t == null && always != null && xx < always.LayerWidth && yy < always.LayerHeight)
-                    t = always.Tiles[xx, yy];
-                return t;
-            }
-
             float rotD = rot * TallLeanScale;
             float stD = Math.Min(stretch, 0.6f);
             float shear = -(float)Math.Sin(rotD) * stD;
@@ -370,182 +441,70 @@ namespace SDVRadiance
                     DiagnosticMonitor!.Log($"[shadow] prop({xx},{yy}) {why}", LogLevel.Debug);
             }
 
+            // Which way the shadow leans decides which neighbouring column the wall guard has to
+            // look at, so it is the one part of the classification that cannot be answered without
+            // the sun. All three of its possible answers are cached instead.
+            int leanDir = shear > 0.01f ? -1 : (shear < -0.01f ? 1 : 0);
+
+            // Everything else here is a question about the MAP ART: which sheet a tile is on, how
+            // opaque it is, what stands beside and above it, whether the game calls it passable.
+            // None of that changes while you are standing there, and all of it was being worked out
+            // again for every tile on screen, in two passes, sixty times a second. Now it is worked
+            // out once per tile and kept until the map itself changes.
+            if (!ReferenceEquals(location, _propCacheLocation) || !ReferenceEquals(location.map, _propCacheMap)
+                || Game1.Date.TotalDays != _propCacheDay)
+            {
+                _propCache.Clear();
+                _propCacheLocation = location;
+                _propCacheMap = location.map;
+                _propCacheDay = Game1.Date.TotalDays;
+            }
+
             for (int y = tileY0; y <= tileY1; y++)
             {
                 for (int x = tileX0; x <= tileX1; x++)
                 {
-                    var bt = bldg.Tiles[x, y];
-                    if (bt == null)
-                        continue;
-                    // A prop base is a Buildings tile. Front art on the SAME row is normal for
-                    // fences (their upper half is painted there so the player walks behind it) —
-                    // it joins the silhouette as a level-0 overlay rather than disqualifying the
-                    // cell. Animated tiles are skipped — a frozen frame would cast a lie.
-                    if (bt is xTile.Tiles.AnimatedTile || bt.TileSheet == null)
+                    int cell = y * W + x;
+                    if (!_propCache.TryGetValue(cell, out TilePropCast? cast))
+                        _propCache[cell] = cast = ClassifyTileProp(location, bldg, front, always, x, y, W, H);
+                    if (!cast.Casts)
                     {
-                        PD(x, y, bt is xTile.Tiles.AnimatedTile ? "skip: animated tile" : "skip: no tilesheet");
+                        if (cast.Note != null)
+                            PD(x, y, cast.Note);
                         continue;
                     }
-                    Texture2D? texture = LoadCached(bt.TileSheet.ImageSource);
-                    if (texture == null)
-                        continue;
-                    var ibB = bt.TileSheet.GetTileImageBounds(bt.TileIndex);
-                    var baseSrc = new Rectangle(ibB.X, ibB.Y, ibB.Width, ibB.Height);
-                    float cov = TileCoverage(texture, baseSrc);
-
-                    // Fences paint their upper half on Front at the SAME row (so the player can
-                    // walk behind them). Fold that art into the prop: classification uses the
-                    // union coverage, and the silhouette gets it as a level-0 overlay. When the
-                    // Buildings tile is a bare INVISIBLE collision tile (cov≈0) under Front-drawn
-                    // art on another sheet, the Front art IS the prop — adopt its sheet instead.
-                    Rectangle? sameSrc = null;
-                    int sameIdx = 0, baseIdx = bt.TileIndex;
-                    {
-                        var st = Ft(x, y);
-                        if (st != null && st is not xTile.Tiles.AnimatedTile && st.TileSheet != null
-                            && LoadCached(st.TileSheet.ImageSource) is { } stex)
-                        {
-                            var ibS = st.TileSheet.GetTileImageBounds(st.TileIndex);
-                            var srcS = new Rectangle(ibS.X, ibS.Y, ibS.Width, ibS.Height);
-                            if (ReferenceEquals(stex, texture))
-                            {
-                                sameSrc = srcS;
-                                sameIdx = st.TileIndex;
-                                cov = Math.Max(cov, TileCoverage(texture, srcS));
-                            }
-                            else if (cov < 0.04f)
-                            {
-                                texture = stex;
-                                baseSrc = srcS;
-                                baseIdx = st.TileIndex;
-                                cov = TileCoverage(stex, srcS);
-                            }
-                        }
-                    }
-
-                    // Is this a thing standing on the ground, or the ground itself?
-                    //
-                    // Coverage alone cannot answer that, and treating it as if it could is what
-                    // left every desert cactus bare: a cactus reads 0.97 opaque, exactly like the
-                    // cliff behind it, because BOTH are solid art — one is just small. What
-                    // actually separates them is SPAN. A prop is a narrow island of map art;
-                    // terrain is a mass. So coverage now only rejects art too faint to be
-                    // anything (a bare collision tile), and span decides the rest.
-                    //
-                    // Measured on the Buildings layer in both axes, because one axis is not
-                    // enough on its own: a cliff's bottom row is wide, but a one-tile-wide
-                    // vertical spur of that same cliff is not.
-                    bool aProp = cov >= 0.04f && cov <= 0.95f;
-                    int spanW = 1, spanH = 1;
-                    if (!aProp && cov > 0.04f)
-                    {
-                        for (int i = x - 1; i >= 0 && spanW <= MaxPropSpan && bldg.Tiles[i, y] != null; i--) spanW++;
-                        for (int i = x + 1; i < W && spanW <= MaxPropSpan && bldg.Tiles[i, y] != null; i++) spanW++;
-                        for (int j = y - 1; j >= 0 && spanH <= MaxPropSpan && bldg.Tiles[x, j] != null; j--) spanH++;
-                        for (int j = y + 1; j < H && spanH <= MaxPropSpan && bldg.Tiles[x, j] != null; j++) spanH++;
-                    }
-                    bool bProp = !aProp && cov > 0.04f && spanW <= MaxPropSpan && spanH <= MaxPropSpan;
-                    if (!aProp && !bProp)
-                    {
-                        PD(x, y, $"skip: cov={cov:0.00} span={spanW}x{spanH} → not a prop");
-                        continue;
-                    }
-                    // A "prop" sitting ON opaque art below is wall decor — a window halfway up a
-                    // house wall must not cast.
-                    if (OpaqueMapTile(bldg, x, y + 1, H))
-                    {
-                        PD(x, y, "skip: sits on opaque art (wall decor)");
-                        continue;
-                    }
-                    // A transparent tile BESIDE opaque art is the fringe of a big structure (the
-                    // truck's edge tiles, awning ends…), not a free-standing prop — its lone-column
-                    // cast reads as a stray dark line. Real fences/posts never hug opaque art.
-                    if (aProp && (OpaqueMapTile(bldg, x - 1, y, H) || OpaqueMapTile(bldg, x + 1, y, H)))
-                    {
-                        PD(x, y, "skip: opaque neighbour beside (structure fringe)");
-                        continue;
-                    }
-                    // Skip only when the prop itself (or the tile its lean lands on) is open WATER
-                    // SURFACE — pier decks over water are solid ground (Height Framework separates
-                    // deck from water), so dock ropes / mooring posts / lanterns cast onto the pier.
-                    // Also check BELOW the base: a pier post's baked shadow pools onto the water
-                    // under the dock, fighting the screen-space mirror (the water already reflects
-                    // the post — a ground-shadow smear on top reads as a ghost double).
-                    if (OnWater(location, new Point(x, y)) || OnWater(location, new Point(x, y - 1))
-                        || OnWater(location, new Point(x, y + 1)))
-                    {
-                        PD(x, y, "skip: on/over open water");
-                        continue;
-                    }
-                    // A PASSABLE Buildings tile is the game's own word for "you walk on top of
-                    // this": a plank bridge, a pier deck, a boardwalk. That is a horizontal
-                    // SURFACE, not a standing prop, and it must never reach the cast below.
-                    //
-                    // A log bridge otherwise sails through every gate above — it is not open
-                    // water (it has a Buildings tile, so the OnWater fallback says no), and its
-                    // art has gaps between the planks, so its coverage lands in the same 0.04–0.95
-                    // band as a picket fence. It then gets a fence's treatment: a sheared
-                    // silhouette leaning up-screen, plus the base tile REDRAWN opaque on top of
-                    // that shadow at depth + 5e-4. Both land on the tile a character standing on
-                    // the bridge occupies, so the planks are drawn over their legs and the sheared
-                    // copy sits offset beside the real bridge. Reported as "character texture is
-                    // covered" and "texture misaligned", and as players sinking into bridges.
-                    if (location.doesTileHaveProperty(x, y, "Passable", "Buildings") != null)
-                    {
-                        PD(x, y, "skip: passable Buildings tile (walk-on deck / bridge)");
-                        continue;
-                    }
-
-                    // Gather the column bottom→top: the base tile, its same-row Front overlay
-                    // (level 0 too), then any Front stack above (level = tiles above the base).
-                    _tileColumnSourceRects[0] = baseSrc;
-                    _tileColumnLevels[0] = 0;
-                    int count = 1, levels = 1, keyHash = 17 * 31 + baseIdx;
-                    if (sameSrc is Rectangle sr)
-                    {
-                        _tileColumnSourceRects[count] = sr;
-                        _tileColumnLevels[count++] = 0;
-                        keyHash = keyHash * 31 + sameIdx;
-                    }
-                    for (int i = 1; count < _tileColumnSourceRects.Length && y - i >= 0; i++)
-                    {
-                        var t = Ft(x, y - i);
-                        if (t == null || t is xTile.Tiles.AnimatedTile || t.TileSheet == null
-                            || !ReferenceEquals(LoadCached(t.TileSheet.ImageSource), texture))
-                            break;
-                        var ib = t.TileSheet.GetTileImageBounds(t.TileIndex);
-                        _tileColumnSourceRects[count] = new Rectangle(ib.X, ib.Y, ib.Width, ib.Height);
-                        _tileColumnLevels[count++] = i;
-                        levels = i + 1;
-                        keyHash = keyHash * 31 + t.TileIndex;
-                    }
-
-                    // Wall guard, scaled to the prop's height: the up-lean cast occupies the tiles
-                    // north of the base (and one column toward the lean side) — if any of those is
-                    // opaque wall art, the shadow would paint onto the wall ("through the house").
-                    int leanDir = shear > 0.01f ? -1 : (shear < -0.01f ? 1 : 0);
-                    bool blocked = false;
-                    for (int i = 1; i <= levels && !blocked; i++)
-                        blocked = OpaqueMapTile(bldg, x, y - i, H)
-                               || (leanDir != 0 && OpaqueMapTile(bldg, x + leanDir, y - i, H));
-                    if (blocked)
+                    if (cast.BlockedNorth || (leanDir < 0 ? cast.BlockedWest : leanDir > 0 && cast.BlockedEast))
                     {
                         PD(x, y, "skip: wall to the north (lean would paint onto it)");
                         continue;
                     }
-                    PD(x, y, $"cast: col={count} cov={cov:0.00}");
+                    if (cast.Note != null)
+                        PD(x, y, cast.Note);
 
-                    // Synthetic sprite key: width −1 can never collide with a real source rect.
-                    var key = (texture, new Rectangle(keyHash, count, -1, -1), SpriteEffects.None);
+                    var key = cast.Key;
+                    Texture2D texture = cast.Texture;
+                    int count = cast.Sources.Length;
                     if (_isBakingObjects)
                     {
                         if (_objectGraphicsDevice != null && !_bakedObjectCache.ContainsKey(key)
-                            && BakeTileColumn(_objectGraphicsDevice, texture, count, shear, out RenderTarget2D rt, out Vector2 fInRT))
-                            _bakedObjectCache[key] = (rt, fInRT);
+                            && BakeTileColumn(_objectGraphicsDevice, texture, cast.Sources, cast.Levels, count, shear,
+                                out RenderTarget2D rt, out Vector2 fInRT))
+                            _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = fInRT, BakedShear = shear, LastUsedTick = Game1.ticks };
                         continue;
                     }
-                    if (!_bakedObjectCache.TryGetValue(key, out var bakedEntry))
+                    if (!_bakedObjectCache.TryGetValue(key, out SpriteBake? bakedEntry))
+                    {
+                        // A prop the bake pass has not seen yet (this map arrived after the last
+                        // full walk, or its slot was evicted). The classification already holds
+                        // the column, so the request is just a reference to it.
+                        QueueTileColumnBake(key, cast, shear);
                         continue;
+                    }
+                    bakedEntry.LastUsedTick = Game1.ticks;
+                    // Same per-sprite staleness rule as EmitObj: the lean lives in the pixels, so
+                    // the column earns a re-bake once the sun has moved its tip a pixel and a half.
+                    if (Math.Abs(shear - bakedEntry.BakedShear) * (cast.Height + 1) * 64f > ShearRefreshPixels)
+                        QueueTileColumnBake(key, cast, shear);
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(x * 64f + 32f, (y + 1f) * 64f - 2f));
                     // A body ON this tile (someone sitting on a map bench, standing against a
                     // fence) sorts at roughly y*64/10000 - a full tile BELOW this prop's normal
@@ -566,16 +525,190 @@ namespace SDVRadiance
                     catch { }
                     float rowY = bodyHere ? y * 64f : (y + 1f) * 64f;
                     float depth = MathHelper.Clamp(rowY / 10000f + x * 1e-5f - ShadowDepthBias, 0f, 1f);
-                    DrawSoft(spriteBatch, Taps9, bakedEntry.rt, null, feet, Color.White, alpha, 0f, bakedEntry.feetInRT,
+                    DrawSoft(spriteBatch, Taps9, bakedEntry.Rt, null, feet, Color.White, alpha, 0f, bakedEntry.FeetInRt,
                         new Vector2(1f, shearScaleY), depth, SpriteEffects.None, blur);
                     // Redraw the base tile OVER its own shadow: the map layer painted before this
                     // batch, so without this the near end of the cast darkens the prop itself
                     // (the "shadow on the lamp post" complaint). Front-stack tiles need no redraw —
                     // the Front layer paints after us anyway.
-                    spriteBatch.Draw(texture, Game1.GlobalToLocal(Game1.viewport, new Vector2(x * 64f, y * 64f)), baseSrc,
+                    spriteBatch.Draw(texture, Game1.GlobalToLocal(Game1.viewport, new Vector2(x * 64f, y * 64f)), cast.BaseSrc,
                         Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, Math.Min(1f, depth + 5e-4f));
                 }
             }
+        }
+
+        /// <summary>
+        /// Decide, once, whether the map art at one tile is a free-standing prop that should cast,
+        /// and if so what its column is made of. Everything it reads is fixed for the map, so the
+        /// answer is kept until the map changes underneath it (see the cache in the caller).
+        /// </summary>
+        private TilePropCast ClassifyTileProp(GameLocation location, xTile.Layers.Layer bldg,
+            xTile.Layers.Layer front, xTile.Layers.Layer? always, int x, int y, int W, int H)
+        {
+            // Reasons are only worth building when someone is reading them.
+            TilePropCast NoCast(string why) => new() { Note = DiagnosticMonitor != null ? why : null };
+
+            // Some maps paint the pole top on AlwaysFront instead of Front — treat them as one layer.
+            xTile.Tiles.Tile? Ft(int xx, int yy)
+            {
+                var t = front.Tiles[xx, yy];
+                if (t == null && always != null && xx < always.LayerWidth && yy < always.LayerHeight)
+                    t = always.Tiles[xx, yy];
+                return t;
+            }
+
+            var bt = bldg.Tiles[x, y];
+            if (bt == null)
+                return new TilePropCast();
+            // A prop base is a Buildings tile. Front art on the SAME row is normal for
+            // fences (their upper half is painted there so the player walks behind it) —
+            // it joins the silhouette as a level-0 overlay rather than disqualifying the
+            // cell. Animated tiles are skipped — a frozen frame would cast a lie.
+            if (bt is xTile.Tiles.AnimatedTile || bt.TileSheet == null)
+                return NoCast(bt is xTile.Tiles.AnimatedTile ? "skip: animated tile" : "skip: no tilesheet");
+            Texture2D? texture = LoadCached(bt.TileSheet.ImageSource);
+            if (texture == null)
+                return new TilePropCast();
+            var ibB = bt.TileSheet.GetTileImageBounds(bt.TileIndex);
+            var baseSrc = new Rectangle(ibB.X, ibB.Y, ibB.Width, ibB.Height);
+            float cov = TileCoverage(texture, baseSrc);
+
+            // Fences paint their upper half on Front at the SAME row (so the player can
+            // walk behind them). Fold that art into the prop: classification uses the
+            // union coverage, and the silhouette gets it as a level-0 overlay. When the
+            // Buildings tile is a bare INVISIBLE collision tile (cov≈0) under Front-drawn
+            // art on another sheet, the Front art IS the prop — adopt its sheet instead.
+            Rectangle? sameSrc = null;
+            int sameIdx = 0, baseIdx = bt.TileIndex;
+            {
+                var st = Ft(x, y);
+                if (st != null && st is not xTile.Tiles.AnimatedTile && st.TileSheet != null
+                    && LoadCached(st.TileSheet.ImageSource) is { } stex)
+                {
+                    var ibS = st.TileSheet.GetTileImageBounds(st.TileIndex);
+                    var srcS = new Rectangle(ibS.X, ibS.Y, ibS.Width, ibS.Height);
+                    if (ReferenceEquals(stex, texture))
+                    {
+                        sameSrc = srcS;
+                        sameIdx = st.TileIndex;
+                        cov = Math.Max(cov, TileCoverage(texture, srcS));
+                    }
+                    else if (cov < 0.04f)
+                    {
+                        texture = stex;
+                        baseSrc = srcS;
+                        baseIdx = st.TileIndex;
+                        cov = TileCoverage(stex, srcS);
+                    }
+                }
+            }
+
+            // Is this a thing standing on the ground, or the ground itself?
+            //
+            // Coverage alone cannot answer that, and treating it as if it could is what
+            // left every desert cactus bare: a cactus reads 0.97 opaque, exactly like the
+            // cliff behind it, because BOTH are solid art — one is just small. What
+            // actually separates them is SPAN. A prop is a narrow island of map art;
+            // terrain is a mass. So coverage now only rejects art too faint to be
+            // anything (a bare collision tile), and span decides the rest.
+            //
+            // Measured on the Buildings layer in both axes, because one axis is not
+            // enough on its own: a cliff's bottom row is wide, but a one-tile-wide
+            // vertical spur of that same cliff is not.
+            bool aProp = cov >= 0.04f && cov <= 0.95f;
+            int spanW = 1, spanH = 1;
+            if (!aProp && cov > 0.04f)
+            {
+                for (int i = x - 1; i >= 0 && spanW <= MaxPropSpan && bldg.Tiles[i, y] != null; i--) spanW++;
+                for (int i = x + 1; i < W && spanW <= MaxPropSpan && bldg.Tiles[i, y] != null; i++) spanW++;
+                for (int j = y - 1; j >= 0 && spanH <= MaxPropSpan && bldg.Tiles[x, j] != null; j--) spanH++;
+                for (int j = y + 1; j < H && spanH <= MaxPropSpan && bldg.Tiles[x, j] != null; j++) spanH++;
+            }
+            bool bProp = !aProp && cov > 0.04f && spanW <= MaxPropSpan && spanH <= MaxPropSpan;
+            if (!aProp && !bProp)
+                return NoCast($"skip: cov={cov:0.00} span={spanW}x{spanH} → not a prop");
+            // A "prop" sitting ON opaque art below is wall decor — a window halfway up a
+            // house wall must not cast.
+            if (OpaqueMapTile(bldg, x, y + 1, H))
+                return NoCast("skip: sits on opaque art (wall decor)");
+            // A transparent tile BESIDE opaque art is the fringe of a big structure (the
+            // truck's edge tiles, awning ends…), not a free-standing prop — its lone-column
+            // cast reads as a stray dark line. Real fences/posts never hug opaque art.
+            if (aProp && (OpaqueMapTile(bldg, x - 1, y, H) || OpaqueMapTile(bldg, x + 1, y, H)))
+                return NoCast("skip: opaque neighbour beside (structure fringe)");
+            // Skip only when the prop itself (or the tile its lean lands on) is open WATER
+            // SURFACE — pier decks over water are solid ground (Height Framework separates
+            // deck from water), so dock ropes / mooring posts / lanterns cast onto the pier.
+            // Also check BELOW the base: a pier post's baked shadow pools onto the water
+            // under the dock, fighting the screen-space mirror (the water already reflects
+            // the post — a ground-shadow smear on top reads as a ghost double).
+            if (OnWater(location, new Point(x, y)) || OnWater(location, new Point(x, y - 1))
+                || OnWater(location, new Point(x, y + 1)))
+                return NoCast("skip: on/over open water");
+            // A PASSABLE Buildings tile is the game's own word for "you walk on top of
+            // this": a plank bridge, a pier deck, a boardwalk. That is a horizontal
+            // SURFACE, not a standing prop, and it must never reach the cast below.
+            //
+            // A log bridge otherwise sails through every gate above — it is not open
+            // water (it has a Buildings tile, so the OnWater fallback says no), and its
+            // art has gaps between the planks, so its coverage lands in the same 0.04–0.95
+            // band as a picket fence. It then gets a fence's treatment: a sheared
+            // silhouette leaning up-screen, plus the base tile REDRAWN opaque on top of
+            // that shadow at depth + 5e-4. Both land on the tile a character standing on
+            // the bridge occupies, so the planks are drawn over their legs and the sheared
+            // copy sits offset beside the real bridge. Reported as "character texture is
+            // covered" and "texture misaligned", and as players sinking into bridges.
+            if (location.doesTileHaveProperty(x, y, "Passable", "Buildings") != null)
+                return NoCast("skip: passable Buildings tile (walk-on deck / bridge)");
+
+            // Gather the column bottom→top: the base tile, its same-row Front overlay
+            // (level 0 too), then any Front stack above (level = tiles above the base).
+            _tileColumnSourceRects[0] = baseSrc;
+            _tileColumnLevels[0] = 0;
+            int count = 1, levels = 1, keyHash = 17 * 31 + baseIdx;
+            if (sameSrc is Rectangle sr)
+            {
+                _tileColumnSourceRects[count] = sr;
+                _tileColumnLevels[count++] = 0;
+                keyHash = keyHash * 31 + sameIdx;
+            }
+            for (int i = 1; count < _tileColumnSourceRects.Length && y - i >= 0; i++)
+            {
+                var t = Ft(x, y - i);
+                if (t == null || t is xTile.Tiles.AnimatedTile || t.TileSheet == null
+                    || !ReferenceEquals(LoadCached(t.TileSheet.ImageSource), texture))
+                    break;
+                var ib = t.TileSheet.GetTileImageBounds(t.TileIndex);
+                _tileColumnSourceRects[count] = new Rectangle(ib.X, ib.Y, ib.Width, ib.Height);
+                _tileColumnLevels[count++] = i;
+                levels = i + 1;
+                keyHash = keyHash * 31 + t.TileIndex;
+            }
+
+            // Wall guard, scaled to the prop's height: the up-lean cast occupies the tiles
+            // north of the base (and one column toward the lean side) — if any of those is
+            // opaque wall art, the shadow would paint onto the wall ("through the house").
+            // All three lean directions are answered here so the draw pass can just pick one.
+            var result = new TilePropCast
+            {
+                Casts = true,
+                Texture = texture,
+                BaseSrc = baseSrc,
+                Height = levels,
+                Sources = new Rectangle[count],
+                Levels = new int[count],
+                Key = (texture, new Rectangle(keyHash, count, -1, -1), SpriteEffects.None),   // width −1 can never collide with a real source rect
+                Note = DiagnosticMonitor != null ? $"cast: col={count} cov={cov:0.00}" : null,
+            };
+            Array.Copy(_tileColumnSourceRects, result.Sources, count);
+            Array.Copy(_tileColumnLevels, result.Levels, count);
+            for (int i = 1; i <= levels; i++)
+            {
+                result.BlockedNorth |= OpaqueMapTile(bldg, x, y - i, H);
+                result.BlockedWest |= OpaqueMapTile(bldg, x - 1, y - i, H);
+                result.BlockedEast |= OpaqueMapTile(bldg, x + 1, y - i, H);
+            }
+            return result;
         }
 
         /// <summary>True when a Buildings tile exists at (x,y) and its art is essentially opaque
@@ -667,6 +800,46 @@ namespace SDVRadiance
             return _tileCovCache[(texture, src)] = (float)solid / len;
         }
 
+        /// <summary>Record a map-tile column for the next bake pass. The classification owns the
+        /// column arrays and outlives the frame, so the request just points at them.</summary>
+        private void QueueTileColumnBake((Texture2D texture, Rectangle src, SpriteEffects effect) key, TilePropCast cast, float shear)
+        {
+            if (_objectBakeQueue.Count >= ObjectBakeQueueCap || cast.Sources.Length == 0)
+                return;
+            _objectBakeQueue[key] = new ObjectBakeRequest { Shear = shear, ColumnSources = cast.Sources, ColumnLevels = cast.Levels };
+        }
+
+        /// <summary>
+        /// What the map art at one tile means for shadows: whether it is a free-standing prop at
+        /// all, and if so which tiles make up its column and which directions the lean is walled
+        /// off in. Fixed for a given map, so it is worked out once per tile rather than per frame.
+        /// </summary>
+        private sealed class TilePropCast
+        {
+            public bool Casts;
+            /// <summary>Why not, for the near-player diagnostic. Only filled when it will be read.</summary>
+            public string? Note;
+            public Texture2D Texture = null!;
+            public Rectangle BaseSrc;
+            /// <summary>Tiles the column occupies above its base row, for the lean-drift test.</summary>
+            public int Height;
+            public Rectangle[] Sources = System.Array.Empty<Rectangle>();
+            public int[] Levels = System.Array.Empty<int>();
+            public (Texture2D texture, Rectangle src, SpriteEffects effect) Key;
+            /// <summary>Is there opaque art where the cast would land, leaning each of the three
+            /// ways the sun can take it? Answered here because the sun is the only part of this
+            /// that changes, and it changes between three fixed choices.</summary>
+            public bool BlockedNorth, BlockedWest, BlockedEast;
+        }
+
+        private readonly System.Collections.Generic.Dictionary<int, TilePropCast> _propCache = new();
+        private GameLocation? _propCacheLocation;
+        private xTile.Map? _propCacheMap;
+        /// <summary>Day the classification was taken on. Map art is edited by content packs at the
+        /// day boundary (seasonal sheets, festival layouts) and buildings finish overnight, so a
+        /// new day is the one moment the answers can change without the map object being replaced.</summary>
+        private int _propCacheDay = -1;
+
         /// <summary>Per-column tile source rects, filled by the scan then baked.</summary>
         private readonly Rectangle[] _tileColumnSourceRects = new Rectangle[7];
         /// <summary>Height level (tiles above the base row) for each entry of <see cref="_tileColumnSourceRects"/> —
@@ -674,19 +847,21 @@ namespace SDVRadiance
         private readonly int[] _tileColumnLevels = new int[7];
 
         /// <summary>Bake a stacked tile column (black + feet→tip gradient, sun lean pre-baked as a
-        /// shear about the feet row) into a pooled object RT.
-        /// Reads the sources/levels from <see cref="_tileColumnSourceRects"/>/<see cref="_tileColumnLevels"/>.</summary>
-        private bool BakeTileColumn(GraphicsDevice graphicsDevice, Texture2D texture, int count, float shear, out RenderTarget2D renderTarget, out Vector2 feetInRT)
+        /// shear about the feet row) into a pooled object RT. The sources and their heights are
+        /// passed in rather than read from the scan's scratch arrays, so a queued re-bake a frame
+        /// later replays the same column without redoing the scan that found it.</summary>
+        private bool BakeTileColumn(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle[] sources, int[] tileLevels,
+            int count, float shear, out RenderTarget2D renderTarget, out Vector2 feetInRT, RenderTarget2D? into = null)
         {
             renderTarget = null!;
             feetInRT = default;
             int levels = 0;
             for (int i = 0; i < count; i++)
-                levels = Math.Max(levels, _tileColumnLevels[i] + 1);
+                levels = Math.Max(levels, tileLevels[i] + 1);
             float columnHeight = levels * 64f;
             if (count <= 0 || columnHeight > ObjRtH - 8f || 64f + Math.Abs(shear) * columnHeight > ObjRtW)
                 return false;
-            renderTarget = RentObjRT(graphicsDevice);
+            renderTarget = into ?? RentObjRT(graphicsDevice);
             feetInRT = new Vector2(ObjRtW / 2f, ObjRtH - 8f);
             Matrix lean = ShearAbout(feetInRT, shear);
             try
@@ -695,8 +870,8 @@ namespace SDVRadiance
                 graphicsDevice.Clear(Color.Transparent);
                 _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, RasterizerState.CullNone, null, lean);
                 for (int i = 0; i < count; i++)
-                    _renderTargetSpriteBatch.Draw(texture, new Vector2(feetInRT.X - 32f, feetInRT.Y - 64f * (_tileColumnLevels[i] + 1)),
-                        _tileColumnSourceRects[i], Color.Black, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
+                    _renderTargetSpriteBatch.Draw(texture, new Vector2(feetInRT.X - 32f, feetInRT.Y - 64f * (tileLevels[i] + 1)),
+                        sources[i], Color.Black, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
                 _renderTargetSpriteBatch.End();
                 _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
                 _renderTargetSpriteBatch.Draw(_propGradientTexture!, new Rectangle(0, (int)(feetInRT.Y - columnHeight), ObjRtW, (int)columnHeight), Color.White);

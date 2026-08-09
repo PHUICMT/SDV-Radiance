@@ -19,6 +19,39 @@ namespace SDVRadiance
     /// </summary>
     internal sealed partial class RenderPipeline
     {
+        /// <summary>
+        /// One mask pixel from the CPU copy, in mask-pixel coordinates, or null when that pixel is
+        /// not inside the buffer as it currently stands.
+        ///
+        /// Every reader must come through here. The two that did not both checked their coordinates
+        /// against <c>_waterMask</c>, the GPU texture, and then indexed <c>_waterMaskPixels</c>, the
+        /// CPU array, which are two different objects that are only usually the same size. That
+        /// crashed a player on 1.5.3 with an index outside the bounds of the array, in the same
+        /// frame the game reported the window changing size. It is the same mistake as the light
+        /// cluster crash: a bound taken from one object and used on another is not a bound.
+        /// </summary>
+        /// <remarks>
+        /// Known limit on a split screen: the pixels belong to whichever rebuild ran last, which
+        /// may be another screen's, so the wading test can read the wrong screen's water for a few
+        /// frames after a swap. Making the buffer per-screen was tried and is WRONG: the worker
+        /// thread writes into this field while it composes, so swapping it mid-flight sent one
+        /// screen's compose into the other screen's array. That showed up immediately as one pond
+        /// losing its effects, the reflection appearing on the other player's half, and the screen
+        /// that did have water flickering. The real fix is for a rebuild to own its own buffer,
+        /// which is more than a release-day change.
+        /// </remarks>
+        private Color? ReadWaterMaskPixel(int maskPixelX, int maskPixelY)
+        {
+            Color[]? pixels = _waterMaskPixels;
+            Texture2D? mask = _waterMask;
+            if (pixels == null || mask == null)
+                return null;
+            if (maskPixelX < 0 || maskPixelY < 0 || maskPixelX >= mask.Width || maskPixelY >= mask.Height)
+                return null;
+            int index = maskPixelY * mask.Width + maskPixelX;
+            return index < pixels.Length ? pixels[index] : null;
+        }
+
         /// <summary>Resolve the 16�16 source art of a map tile (first frame for animated tiles).</summary>
         private bool TryTileArt(xTile.Layers.Layer? layer, int tx, int ty, out Texture2D texture, out Rectangle src)
             => TryTileArt(layer, tx, ty, out texture, out src, out _);
@@ -375,8 +408,21 @@ namespace SDVRadiance
             // Poll the in-flight compose FIRST: apply it if it finished and still matches
             // the wanted window; keep showing the old mask while it runs; discard it if
             // the camera crossed again mid-compose (fall through to a fresh gather).
+            // A rebuild belonging to a screen that has since left can never be claimed: nothing
+            // will match its id again, so it would hold the one slot for the rest of the session
+            // and every remaining screen would keep deferring to it. The water surface would stop
+            // rebuilding for everybody the moment a split-screen player dropped out.
+            if (_pendingWaterMaskJob is { } orphan && orphan.ScreenId != _activeScreenId
+                && !ScreenStillExists(orphan.ScreenId))
+                _pendingWaterMaskJob = null;
+
             if (_pendingWaterMaskJob is { } job)
             {
+                // Another screen's rebuild: leave it alone, keep showing this screen's own mask,
+                // and do not start a second one. One rebuild at a time is what lets the gather and
+                // compose buffers be shared without locks.
+                if (job.ScreenId != _activeScreenId)
+                    return _hasWaterInMask;
                 if (!job.Done)
                     return _hasWaterInMask;
                 _pendingWaterMaskJob = null;
@@ -410,7 +456,12 @@ namespace SDVRadiance
                 && _lastWaterHookVersion == WaterDrawHook.Version
                 && _lastWaterLabelVersion == CurrentLabelVersion()
                 && _lastWaterEpoch == MaskEpoch
-                && _waterMask.Width == tilesW * 16 && Game1.ticks - _lastWaterBuildTick < 600)
+                // Height as well as width. Checking only the width let a window that changed
+                // height alone take this path and then report the NEW height to the shader as
+                // MaskSize, for a mask that had been built at the old one, so the water sat
+                // misaligned until the next rebuild up to ten seconds later.
+                && _waterMask.Width == tilesW * 16 && _waterMask.Height == tilesH * 16
+                && Game1.ticks - _lastWaterBuildTick < 600)
             {
                 _waterMaskPixelSize = new Vector2(tilesW, tilesH);
                 // The window is fresh and no job is in flight � the cheap moment to build
@@ -422,6 +473,7 @@ namespace SDVRadiance
 
             long gatherStartTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
             var newWaterMaskJob = GatherWaterMask(location, startTileX, startTileY, tilesW, tilesH);
+            newWaterMaskJob.ScreenId = _activeScreenId;
             double gatherDurationMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - gatherStartTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
             if (gatherDurationMilliseconds > 8)
                 _monitor.Log($"[diag] water gather={gatherDurationMilliseconds:0.0}ms ({(location == _lastWaterLocation ? "scroll" : "location change")})", LogLevel.Debug);
@@ -494,10 +546,11 @@ namespace SDVRadiance
         /// mask never silently drops an exclusion.</summary>
         private bool WaterWithinTiles(int tileX, int tileY, int radiusTiles)
         {
-            if (_waterTileFlags == null || _waterMask == null)
+            bool[]? flags = _waterTilesInMask;
+            if (flags == null || _waterMask == null)
                 return true;
             int tilesW = _waterMask.Width / 16, tilesH = _waterMask.Height / 16;
-            if (tilesW <= 0 || tilesH <= 0 || _waterTileFlags.Length < tilesW * tilesH)
+            if (tilesW <= 0 || tilesH <= 0 || flags.Length < tilesW * tilesH)
                 return true;
             int cx = tileX - _lastWaterTileX, cy = tileY - _lastWaterTileY;
             int x0 = Math.Max(0, cx - radiusTiles), x1 = Math.Min(tilesW - 1, cx + radiusTiles);
@@ -506,7 +559,7 @@ namespace SDVRadiance
             {
                 int row = y * tilesW;
                 for (int x = x0; x <= x1; x++)
-                    if (_waterTileFlags[row + x])
+                    if (flags[row + x])
                         return true;
             }
             return false;
@@ -597,6 +650,23 @@ namespace SDVRadiance
                 {
                     Rectangle pbb = pw.GetBoundingBox();
                     StampUiBox(spriteBatch, pbb.Center.X, pbb.Top - 160, 80, 128);
+                }
+                // The OTHER players' bodies. Yours is excluded per pixel by the shader, which
+                // reads one texture and can only ever be about one farmer, so in co-op everybody
+                // else's legs rippled along with the water they were standing in. Their colour
+                // bake is the right stamp for it: it is their exact shape at full opacity, with
+                // none of the head fade the shadow silhouette carries.
+                foreach (var other in ShadowRenderer.OtherFarmerImages)
+                {
+                    if (other.Colour == null)
+                        continue;
+                    Rectangle obb = other.Who.GetBoundingBox();
+                    Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
+                        new Vector2(obb.Center.X, obb.Bottom - 10f + other.Who.yOffset));
+                    spriteBatch.Draw(other.Colour, feet - new Vector2(ShadowRenderer.PlayerRtW / 2f, ShadowRenderer.PlayerRtH - 8f),
+                        Color.White);
+                    if (other.Who.isEmoting)
+                        StampUiBox(spriteBatch, obb.Center.X, obb.Top - 160, 80, 128);
                 }
                 // The CAST POWER METER is drawn by FishingRod.draw in the world layer, so it is
                 // neither in the PlayerMask bake (FarmerRenderer only) nor stamped as a sprite -

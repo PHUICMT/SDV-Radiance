@@ -2,7 +2,7 @@
   "config.enabled.name": "启用 SDV-Radiance",
   "config.enabled.tooltip": "整个后期处理管线的总开关。",
 
-  "config.preset.hint": "提示：预设和您保存的自定义外观可在屏幕调色器中调整（使用调色器热键打开，默认为 F8）。它可以实时预览并始终保持同步。",
+  "config.preset.hint": "提示：预设和您保存的自定义外观可在屏幕调色器中调整（使用调色器热键打开，默认为 F6）。它可以实时预览并始终保持同步。",
   "config.preset.name": "快速预设",
   "config.preset.tooltip": "应用一个预设好的外观。将覆盖下方的泛光和颜色分级设置；重新打开菜单以查看更新后的数值。",
   "config.preset.custom": "— (自定义)",

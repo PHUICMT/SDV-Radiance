@@ -2,6 +2,118 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.5.4
+
+### Added
+
+- Other players cast shadows. In co-op, online or split screen, everyone but you was skipped: the
+  list the game keeps of the other farmers in a location was never read by this mod, so your
+  partner stood in full sun with nothing under them and threw nothing from a lamp. They now get the
+  same silhouette you do, baked the same way and anchored by the same rule, so a stranger's outfit
+  mod shows up in their shadow exactly as yours does in yours.
+- Other players reflect in water, and stop rippling their own legs. The mirror only ever drew one
+  farmer, and the water's exclusion of a body reads a single picture of a single person, so in
+  co-op everybody except you stood over still water with nothing under them while the surface
+  wobbled through their boots. They now go through the same stamp yours does, from their own
+  full-colour bake, so their outfit appears in the water the way yours does.
+
+### Fixed
+
+- A dim room no longer takes the fire down with it. Darkening a room multiplied every pixel by the
+  same fraction, which takes the most from the brightest thing in it: at a typical evening dim a
+  flame went from 0.90 to 0.55 while the boards around it went 0.35 to 0.21. The room was correctly
+  dark and the fire had stopped being the brightest thing in it, which is the one property that
+  makes a flame look like a flame, and is why the hearth was reported as muddy. Rooms are now
+  darkened with a curve that leaves white alone and bends everything under it, so the same room
+  comes out darker than before while the fire, the lamps and the window light come out brighter.
+  Measured in the saloon at ten at night: the middle of the picture fell by a fifth, and the number
+  of pixels bright enough to bloom went up by two and a half times. Outdoors, in caves and in the
+  mines nothing changes at all, to four decimal places, because none of those are dimmed by us.
+- A crash in the water stage. Working out whether your feet are in water checked the coordinates
+  against the water picture on the graphics card and then looked them up in a copy held in memory,
+  which are two different things that are only usually the same size. A player hit it in the same
+  second the game reported the window changing size: the frame was dropped, the effects vanished
+  for that one frame, and a red line appeared in the log.
+- Water no longer sits out of place after the window changes height. The check that decides whether
+  the water surface is still usable compared the width it was asked for but not the height, so
+  changing only the height kept the old surface and told the shader the new size for it. The water
+  drew shifted away from the actual water until the next rebuild, up to ten seconds later.
+- Camera smoothing stands down on a split screen. There is one smoother and there are two cameras,
+  so the eased position it kept belonged to whichever screen updated last and writing it back moved
+  the other player's view as well: both halves drifted toward a point somewhere between the two
+  farmers instead of following either of them. Single player is untouched.
+- The settings menu named the wrong key for the tuner. It said F8; the tuner is on F6, and has been
+  since the key was picked, because F8 and F9 belong to Fashion Sense in the wild. That tip is the
+  one place we tell anyone where the tuner is, so anyone who followed it pressed a key that does
+  nothing.
+- Split screen works. Reflections, water effects and lighting were mostly missing on the second
+  half and came back the moment the other player left, which is exactly what it looked like: one
+  camera's worth of memory being fought over by two cameras. Four things are kept from frame to
+  frame here, and every one of them is built around where a camera is pointing: the water mask, the
+  grid of what blocks light, the mirror's copy of the scenery, and the bounce lighting. With two
+  players standing apart, each was rebuilt for whichever screen asked and immediately declared
+  out of date by the other. The water mask never landed at all, because building one takes a few
+  frames on a background thread and it was being thrown away before it could finish, every single
+  time. Each screen now keeps its own. The auto-exposure meter and the fades went the same way, so
+  one player walking into a cave no longer dims the other player's half of the screen, and one
+  player leaving the shore no longer fades the water out from under the other.
+- Your own reflection no longer depends on what the other player can see. Whether the mirrored
+  player is drawn was decided by one shared answer to "is there water on screen", written by
+  whichever half of the screen was drawn last.
+
+### Performance
+
+- Object shadows no longer re-draw the whole screen twice a second. The lean of a shadow was
+  stored in the picture, so as the sun moved the stored pictures went wrong, and the answer was to
+  throw all of them away and make them again. On a continuous clock that happened about twice a
+  second, all day, every day: on a map with a hundred distinct plants and props that is two hundred
+  offscreen redraws a second, arriving in bursts, which is what a stutter is. Each shadow is now
+  judged on its own. The lean of a tall tree drifts visibly in about a second and it is remade
+  then; a crop's drifts by a hair and it is left alone for minutes; and no more than a dozen are
+  remade in any one frame, so a whole avenue of trees coming due together cannot become one long
+  frame. Measured on the same town screen, this is roughly a sevenfold cut in that work.
+- The shadow caches stop emptying themselves. Both of them answered "too many entries" by deleting
+  everything, which on a map that simply has more distinct sprites than the cache holds meant
+  deleting and rebuilding the entire screen every single frame. The cache became a cost instead of
+  a saving, on precisely the heavily modded installs it exists to protect, which is the likeliest
+  explanation for shadows on trees and bushes being reported as unplayable with a large foliage
+  pack while everything else was fine. They now drop only the coldest few entries, and never one
+  that was on screen a moment ago.
+- Shadows for props painted into the map (street lamps, fences, signposts, cacti) stop re-reading
+  the map every frame. Deciding whether a tile is a free-standing thing or part of the scenery
+  means looking at the tile's picture, at what stands beside and above it, and at what the map says
+  about walking on it. That is a question about the map, and the map does not change while you are
+  standing in it, but it was being asked again for every tile on screen, sixty times a second. It
+  is now asked once per tile and remembered until the map itself changes, which it does at the turn
+  of a day or when you go somewhere else.
+- Walking between two places no longer rebuilds their shadows each way. A shadow is stored against
+  the sprite that casts it, which has nothing to do with which map you are standing on, so leaving
+  a map and coming back was throwing away work that was still perfectly good.
+
+Measured on one save, two runs each way, standing on the same tiles at the same time of day: the
+work this mod submits per frame fell by about a third on the farm, a little under a half in town,
+and about a third in the forest.
+
+### Diagnostics
+
+- `radiance_shadows` can see the other players. Asked why a co-op partner had no shadow, it
+  answered with an empty character list, because it only ever walked the villagers. An empty list
+  reads as evidence: it says nothing is there to cast, when in fact nothing had been looked at. It
+  now lists every farmer the screen should be drawing for and what the shadow pass did with each.
+- `radiance_report` can say the water surface changed size. Two faults fixed in this release both
+  happened at the moment the window changed shape, and the report had no way to say whether that
+  had ever occurred, so a report from someone who hit either one could not confirm or rule out the
+  only theory anyone had.
+- `radiance_emitter` is gone. It existed to find three numbers by eye while a dim room was still
+  going to be fixed by deciding which pixels are a light and sparing them, and that plan has been
+  replaced. The test behind it was also measurably a poor judge, so a dial that adjusted it was
+  worse than no dial.
+
+### For translators
+
+One changed key, and only its text: **`config.preset.hint`** now says F6 instead of F8, which is
+the key the tuner has actually been on. Nothing else moved, and no key was added or removed.
+
 ## 1.5.3
 
 ### Translations

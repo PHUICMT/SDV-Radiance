@@ -26,8 +26,10 @@ namespace SDVRadiance
             // browser labeler that produces labels/water-labels.json. Harmless for players (it
             // only runs when typed) and it keeps the whole labeling loop inside this mod.
             helper.ConsoleCommands.Add("radiance_mapdump",
-                "Dump every location's layer/tile layout + sheet art to Documents\\HF-Studio\\maps.json for the label editor.",
-                (_, _) => { MapDump.Run(monitor, helper); });
+                "Dump every location's layer/tile layout + sheet art to Documents\\HF-Studio\\maps.json for the label editor. "
+                + "Add 'all' to also embed tilesheets that no loaded map places: the water-heavy and bridge-heavy art ships "
+                + "as bare resource packs with no maps of their own, so walking the maps can never find it.",
+                (_, args) => { MapDump.Run(monitor, helper, allSheets: args.Length >= 1 && args[0].Equals("all", StringComparison.OrdinalIgnoreCase)); });
             helper.ConsoleCommands.Add("radiance_lights",
                 "List every active light source in the current location (id, kind, tile, radius, color, distance from player).",
                 (_, _) => DumpLights(monitor));
@@ -124,13 +126,15 @@ namespace SDVRadiance
                     monitor.Log($"Water mask overlay: {(RenderPipeline.MaskView ? "ON" : "OFF")} (rebuilds on next tile crossing / within 10s)", LogLevel.Info);
                 });
             helper.ConsoleCommands.Add("radiance_debug",
-                "Show one internal buffer over the world. Channels: off | water | labeldiff | sdf | subtype | sprite | reflect | mirror. "
+                "Show one internal buffer over the world. Channels: off | water | labeldiff | sdf | subtype | sprite | reflect | mirror | emitter. "
+                + "emitter paints the lighting pass's answer to 'which pixels ARE a light': RED = treated as the light "
+                + "itself and spared the room's dimming, GREEN = close enough to a light but not bright enough in the art to count. "
                 + "labeldiff paints the radiance_verify verdict: RED = label says liquid but the mask has none, YELLOW = the mask ripples where the label says solid.",
                 (_, args) =>
                 {
                     if (args.Length < 1 || !Enum.TryParse(args[0], ignoreCase: true, out DebugOverlayChannel channel))
                     {
-                        monitor.Log("usage: radiance_debug off|water|labeldiff|sdf|subtype|sprite|reflect|mirror "
+                        monitor.Log("usage: radiance_debug off|water|labeldiff|sdf|subtype|sprite|reflect|mirror|emitter "
                             + $"(now: {RenderPipeline.DebugChannel})", LogLevel.Info);
                         return;
                     }

@@ -105,6 +105,44 @@ namespace SDVRadiance
             if (shown == 0)
                 report.AppendLine("  (none — if you can see NPCs, they are not in the list the pass reads)");
 
+            // The other players are a separate list with a separate bake, and this report did not
+            // know they existed. That is exactly the case it was asked about first: on a split
+            // screen the partner had no shadow, and the answer here was an empty character list,
+            // which says nothing at all. A diagnostic that cannot see half the casters is worse
+            // than no diagnostic, because it reads as evidence.
+            report.AppendLine($"[shadows] other farmers on this screen (screen {StardewModdingAPI.Context.ScreenId}, "
+                        + $"local player {Game1.player?.UniqueMultiplayerID}):");
+            int farmersShown = 0;
+            foreach (var (who, hasBake, ready, hasMask, hasColour, colourFresh) in DescribeRemoteFarmers(location))
+            {
+                farmersShown++;
+                Point t = who.TilePoint;
+                string verdict =
+                    !hasBake ? "SKIP no bake for this farmer yet"
+                    : who.FarmerRenderer == null || who.FarmerSprite == null ? "SKIP nothing to draw them from"
+                    : who.swimming.Value ? "SKIP swimming"
+                    : who.isRidingHorse() ? "SKIP riding (the horse casts)"
+                    : OnOpenWater(location, t) ? "SKIP on open water"
+                    : IsSeated(who) ? "contact pool only (seated)"
+                    : !hasMask ? "SKIP bake has no mask target"
+                    : !ready ? "SKIP bake not ready"
+                    : "CASTS";
+                report.AppendLine($"{Mark(t.X, t.Y)} {who.Name,-16} id={who.UniqueMultiplayerID} tile={t.X},{t.Y} "
+                            + $"{Screen(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom)} "
+                            + $"onScreen={Visible(t.X, t.Y)} bake={(hasBake ? "yes" : "NO")} "
+                            + $"ready={ready} mask={hasMask} colour={hasColour} colourFresh={colourFresh} "
+                            + $"-> {verdict}");
+            }
+            if (farmersShown == 0)
+                report.AppendLine("  (none — this screen's own player is excluded by design, so a solo game is empty here)");
+            report.AppendLine($"  bakes held: {RemoteFarmerBakeCount}, farmers the game lists here: {location.farmers.Count}, "
+                        + $"images published to the water passes this frame: {OtherFarmerImages.Count}");
+            report.AppendLine($"  what the last bake pass itself saw: {RemoteFarmerLastPassView}");
+            report.AppendLine($"  bake pass entered {RemoteFarmerPreparePasses} time(s) since launch"
+                        + (RemoteFarmerPreparePasses == 0
+                            ? "  <- IT IS NEVER BEING CALLED, which is a different fault entirely"
+                            : RemoteFarmerLastSkip != null ? $", last gave up because: {RemoteFarmerLastSkip}" : ""));
+
             // Objects are the other half: an orphan shadow means we cast for something the game is
             // not drawing, so the gate value matters as much as the item list.
             bool eventUp = Game1.eventUp;

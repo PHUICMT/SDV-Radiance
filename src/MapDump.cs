@@ -24,10 +24,12 @@ namespace SDVRadiance
         internal static IMonitor? BridgeMonitor;
         internal static IModHelper? BridgeHelper;
 
-        public static string? RunFromBridge()
-            => BridgeMonitor != null && BridgeHelper != null ? Run(BridgeMonitor, BridgeHelper) : null;
+        public static string? RunFromBridge(bool allSheets)
+            => BridgeMonitor != null && BridgeHelper != null ? Run(BridgeMonitor, BridgeHelper, allSheets) : null;
 
-        public static string? Run(IMonitor monitor, IModHelper helper)
+        /// <param name="allSheets">Also embed tilesheet art that NO loaded map places. Off by
+        /// default because it reads every PNG under the Mods folder and roughly doubles the dump.</param>
+        public static string? Run(IMonitor monitor, IModHelper helper, bool allSheets = false)
         {
             if (!Context.IsWorldReady)
             {
@@ -94,15 +96,42 @@ namespace SDVRadiance
                 }
             }
 
+            // ...and then the sheets NO map places, which is a whole category the dump used to miss
+            // entirely. The most water-dense and bridge-dense art in the mod scene ships as bare
+            // TILESHEET RESOURCE PACKS - Sharogg's, crystalinerose, AToMS, Alvadea's, Lumisteria -
+            // which carry no maps of their own. Their art only reaches a map when some OTHER mod
+            // decides to use it, so walking the loaded maps can never find it, and it was invisible
+            // to the labeller no matter which mods were switched on. Read off disk instead, since
+            // an asset nobody has loaded has no asset name to ask the content pipeline for.
+            if (allSheets)
+                AddUnplacedSheetArt(helper, monitor, artPaths);
+
             var art = new Dictionary<string, string>();
             foreach ((string name, string src) in artPaths)
             {
                 try
                 {
-                    var texture = Game1.content.Load<Microsoft.Xna.Framework.Graphics.Texture2D>(src);
-                    using var ms = new MemoryStream();
-                    texture.SaveAsPng(ms, texture.Width, texture.Height);
-                    art[name] = "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
+                    // Two kinds of source now share this list: an asset key the content pipeline
+                    // knows, and a plain file on disk for a sheet nothing has loaded. A rooted path
+                    // is never a valid asset key, so the two cannot be confused.
+                    bool fromDisk = Path.IsPathRooted(src);
+                    var texture = fromDisk
+                        ? LoadFromDisk(src)
+                        : Game1.content.Load<Microsoft.Xna.Framework.Graphics.Texture2D>(src);
+                    try
+                    {
+                        using var ms = new MemoryStream();
+                        texture.SaveAsPng(ms, texture.Width, texture.Height);
+                        art[name] = "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
+                    }
+                    finally
+                    {
+                        // Only the ones we opened ourselves. A texture from the content pipeline is
+                        // the game's and is still in use; one read off disk here belongs to nobody
+                        // else, and `all` reads several hundred of them, so holding every one until
+                        // the dump finished was hundreds of megabytes of video memory for nothing.
+                        if (fromDisk) texture.Dispose();
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -210,6 +239,82 @@ namespace SDVRadiance
             string sig = string.Join("|", frames);
             if (sigs.Add(sig))
                 groups.Add(frames.ToArray());
+        }
+
+        /// <summary>
+        /// Find tilesheet PNGs sitting in the Mods folder that no loaded map references, and add
+        /// them to the art list by file path.
+        ///
+        /// <para>Deliberately crude about WHAT a tilesheet is, because being wrong is cheap here: a
+        /// sheet that turns out to be a portrait sheet costs one line in a JSON file, while a
+        /// waterfall sheet that never appears costs an afternoon of wondering where it went. The
+        /// filters are only there to keep the dump from swallowing every character sprite in a
+        /// hundred-mod install: at least 128px on both sides, a multiple of 16, and not sitting in
+        /// a folder whose name says it is people rather than places.</para>
+        ///
+        /// <para>Keyed on the FILE name, which is what the label store keys on, and which for a
+        /// resource pack is also the asset name the consuming map will use. That is not guaranteed
+        /// for every pack, so anything found this way is marked in artSrc as coming from disk.</para>
+        /// </summary>
+        /// <summary>A PNG the content pipeline has never heard of, read straight off disk.</summary>
+        private static Microsoft.Xna.Framework.Graphics.Texture2D LoadFromDisk(string path)
+        {
+            using var fs = File.OpenRead(path);
+            return Microsoft.Xna.Framework.Graphics.Texture2D.FromStream(Game1.graphics.GraphicsDevice, fs);
+        }
+
+        private static void AddUnplacedSheetArt(IModHelper helper, IMonitor monitor, Dictionary<string, string> artPaths)
+        {
+            string? mods = helper.DirectoryPath;
+            while (mods != null && !string.Equals(Path.GetFileName(mods), "Mods", StringComparison.OrdinalIgnoreCase))
+                mods = Path.GetDirectoryName(mods);
+            if (mods == null)
+            {
+                monitor.Log("mapdump: could not find the Mods folder, so unplaced sheets were skipped.", LogLevel.Warn);
+                return;
+            }
+            string[] roots = { mods, Path.Combine(Path.GetDirectoryName(mods)!, "Mods (disabled)") };
+            // The shape test cannot tell a tilesheet from a 1080p screenshot: both are big and
+            // 16-aligned. Screenshot folders were 82% of the first all-sheets dump (406MB of the
+            // 495MB), all of it from our own dev capture folder, so name them out up front.
+            string[] notPlaces = { "portrait", "character", "animals", "fashion", "\\ui", "icon", "emoji",
+                                   "hair", "shirt", "pants", "hats", "shoes", "tattoo", "bodies",
+                                   "\\shots\\", "screenshot", "\\shot_" };
+            int added = 0;
+            byte[] head = new byte[24];      // outside the loop: a stackalloc in there is a slow leak
+            foreach (string root in roots)
+            {
+                if (!Directory.Exists(root))
+                    continue;
+                foreach (string file in Directory.EnumerateFiles(root, "*.png", SearchOption.AllDirectories))
+                {
+                    string lower = file.Replace('/', '\\').ToLowerInvariant();
+                    bool skip = false;
+                    foreach (string bad in notPlaces)
+                        if (lower.Contains(bad)) { skip = true; break; }
+                    if (skip)
+                        continue;
+                    string name = LabelStore.NormalizeSheet(file);
+                    if (artPaths.ContainsKey(name))
+                        continue;
+                    try
+                    {
+                        // Header only: width and height live at a fixed offset in every PNG, so the
+                        // shape test costs 24 bytes rather than decoding a megabyte to reject it.
+                        using var fs = File.OpenRead(file);
+                        if (fs.Read(head, 0, 24) < 24 || head[1] != 'P' || head[2] != 'N' || head[3] != 'G')
+                            continue;
+                        int w = (head[16] << 24) | (head[17] << 16) | (head[18] << 8) | head[19];
+                        int h = (head[20] << 24) | (head[21] << 16) | (head[22] << 8) | head[23];
+                        if (w < 128 || h < 128 || (w & 15) != 0 || (h & 15) != 0)
+                            continue;
+                    }
+                    catch { continue; }
+                    artPaths[name] = file;
+                    added++;
+                }
+            }
+            monitor.Log($"mapdump: {added} tilesheet(s) found on disk that no loaded map places.", LogLevel.Info);
         }
 
         private static object? DumpLocation(GameLocation location, Dictionary<string, string> artSources, Dictionary<string, HashSet<int>> water,

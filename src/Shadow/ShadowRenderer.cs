@@ -27,6 +27,14 @@ namespace SDVRadiance
         /// <summary>Optional diagnostics sink; when set (config.DebugLogging), the first few draws + any error are logged once.</summary>
         internal static IMonitor? DiagnosticMonitor;
 
+        /// <summary>The mod's own monitor, set once at startup and never gated by a setting.
+        /// <see cref="DiagnosticMonitor"/> only exists while diagnostic logging is turned on, so
+        /// anything routed exclusively through it is invisible by default. That is right for the
+        /// per-frame chatter and wrong for a failure that silently disables a feature: a co-op
+        /// partner's shadow went missing with nothing in the log, on a machine that had logging
+        /// off, and there was no way to tell that from the feature never having run.</summary>
+        internal static IMonitor? SharedMonitor;
+
         /// <summary>True while the benchmark is re-running this pass to measure it. Anything that
         /// advances once per frame must not advance once per call while this is set.</summary>
         internal static bool BenchmarkAmplifying;
@@ -80,13 +88,16 @@ namespace SDVRadiance
         // sprites bigger than a slot fall back to the banded path.
         private const int CasterRtW = 160;
         private const int CasterRtH = 224;
+        /// <summary>Every caster slot ever allocated. Nothing reads it back except the over-cap
+        /// diagnostic (it is the honest VRAM number); leases come from the free list.</summary>
         private readonly System.Collections.Generic.List<RenderTarget2D> _casterRenderTargetPool = new();
-        private int _casterSlotsUsed;
+        /// <summary>Slots an evicted entry handed back, waiting to be leased again.</summary>
+        private readonly System.Collections.Generic.List<RenderTarget2D> _casterFreeTargets = new();
         // PERSISTENT cache — keyed by (texture, source rect), i.e. the sprite FRAME, so every
         // NPC/animal sharing a frame shares one bake and warm frames cost a dictionary hit
         // instead of a render-target switch. Upright silhouettes carry no sun angle, so entries
         // stay valid indefinitely; the cache is only capped (see PreparePlayer).
-        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle src), (RenderTarget2D rt, Vector2 feetInRT)> _casterBakeCache = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle src), SpriteBake> _casterBakeCache = new();
 
         // Objects (trees/bushes/clumps/furniture/craftables/crops/…) bake to pooled RTs with a
         // continuous gradient too — same smooth path as characters, no stepped bands. Slots are large
@@ -101,22 +112,69 @@ namespace SDVRadiance
         private const int ObjRtW = 400;
         private const int ObjRtH = 456;
         private readonly System.Collections.Generic.List<RenderTarget2D> _objectRenderTargetPool = new();
-        private int _objectSlotsUsed;
-        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle src, SpriteEffects effect), (RenderTarget2D rt, Vector2 feetInRT)> _bakedObjectCache = new();
+        private readonly System.Collections.Generic.List<RenderTarget2D> _objectFreeTargets = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle src, SpriteEffects effect), SpriteBake> _bakedObjectCache = new();
         /// <summary>Sprites the DRAW pass wanted and found unbaked, to bake next frame. This is
         /// what lets the bake pass skip its full enumeration on a warm frame: instead of walking
         /// every on-screen tile a second time to discover nothing is missing, it bakes exactly
         /// what the draw pass reported missing, which on a still screen is nothing at all.
         /// Value carries the bake inputs recorded at draw time (the shear is per-CALLER, damped
         /// by sprite type, so it cannot be recomputed globally).</summary>
-        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle src, SpriteEffects effect), (Vector2 baseOrigin, float shear)> _objectBakeQueue = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle src, SpriteEffects effect), ObjectBakeRequest> _objectBakeQueue = new();
+
+        /// <summary>What the draw pass needs baked, recorded at draw time because the shear is
+        /// per-caller (damped by sprite type) and cannot be recomputed globally.</summary>
+        private sealed class ObjectBakeRequest
+        {
+            public Vector2 BaseOrigin;
+            public float Shear;
+            /// <summary>Set only for a stacked MAP-TILE column, which is several tiles drawn one
+            /// above another and so has no single source rect. Copied out of the scan's scratch
+            /// arrays at request time, so the bake can be replayed a frame later without redoing
+            /// the scan that found them.</summary>
+            public Rectangle[]? ColumnSources;
+            public int[]? ColumnLevels;
+        }
         private bool _isBakingObjects;
         private GraphicsDevice? _objectGraphicsDevice;
-        /// <summary>Sun angle the object cache was baked at (shear is baked in) — cache clears when it changes.</summary>
-        private long _objectShearKey = long.MinValue;
         private GameLocation? _objectBakeLocation;
         /// <summary>Last location the over-cap bake warning was logged for: once per location, not per frame.</summary>
         private GameLocation? _objectCapLoggedLocation;
+
+        /// <summary>
+        /// One cached silhouette: the pooled target holding its pixels, where the caster's feet sit
+        /// inside that target, the frame it was last drawn on, and (objects only) the sun lean that
+        /// is baked into those pixels.
+        ///
+        /// <para>The tick is what makes eviction possible at all. Both caches used to answer "too
+        /// many entries" with <c>Clear()</c>, which on a map that simply HAS more distinct sprites
+        /// than the cap re-baked the whole screen every single frame — the cache turned into a cost
+        /// rather than a saving, precisely on the heavily modded installs it was there to protect.
+        /// Knowing when each entry was last wanted turns that into dropping the coldest few.</para>
+        /// </summary>
+        private sealed class SpriteBake
+        {
+            public RenderTarget2D Rt = null!;
+            public Vector2 FeetInRt;
+            public int LastUsedTick;
+            /// <summary>Horizontal lean baked into the pixels. Characters bake upright (0).</summary>
+            public float BakedShear;
+        }
+
+        /// <summary>Distinct object silhouettes kept alive. Slots are 400×456 (~0.73 MB each), so
+        /// this is the VRAM ceiling: 128 slots is about 93 MB.</summary>
+        private const int ObjectBakeCap = 128;
+        /// <summary>Distinct character/animal frames kept alive. Slots are 160×224 (~0.14 MB).</summary>
+        private const int CasterBakeCap = 192;
+        /// <summary>An eviction pass goes this far under the cap, so it is not re-triggered on the
+        /// very next frame by a single new sprite scrolling in.</summary>
+        private const float EvictHeadroom = 0.85f;
+        /// <summary>A sprite drawn within this many ticks is on screen NOW; evicting it buys a
+        /// banded stand-in and an immediate re-bake, which is the thrash being replaced. Only a
+        /// cache that has run away to twice its cap stops respecting this.</summary>
+        private const int HotBakeTicks = 8;
+        private readonly System.Collections.Generic.List<(Texture2D texture, Rectangle src)> _casterEvictScratch = new();
+        private readonly System.Collections.Generic.List<(Texture2D texture, Rectangle src, SpriteEffects effect)> _objectEvictScratch = new();
         /// <summary>Pose the player RT was last baked with — identical pose skips the re-bake.</summary>
         private (int frame, int facing, Rectangle src) _playerBakeSignature = (-1, -1, default);
 

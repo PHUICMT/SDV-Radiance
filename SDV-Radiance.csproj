@@ -27,6 +27,12 @@
     <Compile Remove="src\DevMenu.local.cs" />
   </ItemGroup>
 
+  <!-- tests/ has its own project and compiles two of these source files into itself. Without this,
+       the default glob pulls its Program.cs into the mod and the mod gets a second entry point. -->
+  <ItemGroup>
+    <Compile Remove="tests\**\*.cs" />
+  </ItemGroup>
+
   <!-- Ship compiled shaders (.mgfxo) with the mod. -->
   <ItemGroup>
     <None Include="assets\**\*">

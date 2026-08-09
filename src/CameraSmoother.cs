@@ -29,6 +29,17 @@ namespace SDVRadiance
                 return;
             }
 
+            // Split screen stands the smoothing down. There is ONE of these and there are two
+            // cameras, so the eased position it keeps between ticks belongs to whichever screen
+            // updated last, and writing it back moves the other player's view as well: both halves
+            // drift toward a point between them. Per-screen easing is the real fix and it is not
+            // free, so until then two rigid cameras beat two cameras pulling on each other.
+            if (Context.IsSplitScreen)
+            {
+                Resync();
+                return;
+            }
+
             // The game owns the camera in these states — don't fight it.
             if (Game1.viewportFreeze || Game1.eventUp || Game1.currentLocation is null
                 || (Game1.game1?.takingMapScreenshot ?? false))

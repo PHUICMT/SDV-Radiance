@@ -412,9 +412,12 @@ namespace SDVRadiance
         /// <summary>The least a hearth's circle on the floor is worth in a WINDOWED room, however
         /// much daylight has filled it. Zero everywhere else.</summary>
         private const float HearthLitRoomFloor = 0.35f;
-        private readonly Vector2[] _floodLightPositions = new Vector2[FloodShadowedLights];
+
+        // xy = screen UV, z = 1 when this light is an actual flame. The z was free: a float2 array
+        // still costs a whole register per element, so the flag rides in for nothing.
+        private readonly Vector4[] _floodLightPositions = new Vector4[FloodShadowedLights];
         private readonly Vector4[] _floodLightColors = new Vector4[FloodShadowedLights];
-        private readonly Vector2[] _floodSoftPositions = new Vector2[FloodSoftLights];
+        private readonly Vector4[] _floodSoftPositions = new Vector4[FloodSoftLights];
         private readonly Vector4[] _floodSoftColors = new Vector4[FloodSoftLights];
         private readonly Vector2[] _classicLightPositions = new Vector2[ClassicLightSlots];
         private readonly Vector4[] _classicLightData = new Vector4[ClassicLightSlots];
@@ -516,19 +519,19 @@ namespace SDVRadiance
             int n = 0;
             for (int i = 0; i < _lightCount && n < FloodShadowedLights; i++, n++)
             {
-                _floodLightPositions[n] = _lightPositions[i];
+                _floodLightPositions[n] = new Vector4(_lightPositions[i].X, _lightPositions[i].Y, _lightIsFire[i], 0f);
                 var d = _lightShaderData[i];
                 _floodLightColors[n] = new Vector4(d.X * directScale, d.Y * directScale, d.Z * directScale, d.W);
             }
-            for (int i = n; i < FloodShadowedLights; i++) { _floodLightPositions[i] = Vector2.Zero; _floodLightColors[i] = Vector4.Zero; }
+            for (int i = n; i < FloodShadowedLights; i++) { _floodLightPositions[i] = Vector4.Zero; _floodLightColors[i] = Vector4.Zero; }
             int m = 0;
             for (int i = FloodShadowedLights; i < _lightCount && m < FloodSoftLights; i++, m++)
             {
-                _floodSoftPositions[m] = _lightPositions[i];
+                _floodSoftPositions[m] = new Vector4(_lightPositions[i].X, _lightPositions[i].Y, _lightIsFire[i], 0f);
                 var d = _lightShaderData[i];
                 _floodSoftColors[m] = new Vector4(d.X * directScale, d.Y * directScale, d.Z * directScale, d.W);
             }
-            for (int i = m; i < FloodSoftLights; i++) { _floodSoftPositions[i] = Vector2.Zero; _floodSoftColors[i] = Vector4.Zero; }
+            for (int i = m; i < FloodSoftLights; i++) { _floodSoftPositions[i] = Vector4.Zero; _floodSoftColors[i] = Vector4.Zero; }
             GetParam(effect, "LightPosArr")?.SetValue(_floodLightPositions);
             GetParam(effect, "LightColArr")?.SetValue(_floodLightColors);
             GetParam(effect, "DirectCount")?.SetValue((float)(_isFloodOcclusionReady ? n : 0));
@@ -628,6 +631,7 @@ namespace SDVRadiance
             // tall. The z term is the 12px the beam origin sits below the pane's centre,
             // expressed in tiles, so the glass and the beam agree on where the window is.
             GetParam(effect, "WindowPane")?.SetValue(new Vector4(0.55f, 0.8f, 12f / 64f, 0.35f));
+            GetParam(effect, "DebugEmitter")?.SetValue(DebugChannel == DebugOverlayChannel.Emitter ? 1f : 0f);
 
             _dbgWindowsHere = windowsHere;
             _dbgWindowBeamOn = config.WindowBeamEnabled;
@@ -797,13 +801,12 @@ namespace SDVRadiance
             // silhouette below the feet reads as a glitch, not a reflection — the ripple
             // exclusion (silhouette gate) is what protects the visible half instead.
             float pin = 0f;
-            if (who != null && !who.swimming.Value && _waterMaskPixels != null && _waterMask != null)
+            if (who != null && !who.swimming.Value)
             {
                 Rectangle bb = who.GetBoundingBox();
-                int mxp = bb.Center.X / 4 - _lastWaterTileX * 16;
-                int myp = (bb.Bottom - 4) / 4 - _lastWaterTileY * 16;
-                if (mxp >= 0 && myp >= 0 && mxp < _waterMask.Width && myp < _waterMask.Height
-                    && _waterMaskPixels[myp * _waterMask.Width + mxp].R > 100)
+                Color? underFeet = ReadWaterMaskPixel(bb.Center.X / 4 - _lastWaterTileX * 16,
+                                                     (bb.Bottom - 4) / 4 - _lastWaterTileY * 16);
+                if (underFeet is { R: > 100 })
                     pin = 1f;
             }
             // Ease the wading state so the under-feet self-reflection fades in/out (~0.3s)

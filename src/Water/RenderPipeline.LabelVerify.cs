@@ -18,6 +18,11 @@ namespace SDVRadiance
         Sprite,     // sprite exclusion mask RT
         Reflect,    // flipped-entity reflection RT
         Mirror,     // sprite-free scenery mirror source RT
+        // Not a water channel, and painted by floodlight.fx rather than by an overlay texture:
+        // which pixels the lighting pass believes ARE a light source rather than lit by one.
+        // The question "is the flame being caught at all" has been answered by argument twice and
+        // both answers were wrong, so it gets a picture instead.
+        Emitter,
     }
 
     /// <summary>
@@ -317,6 +322,8 @@ namespace SDVRadiance
                 case DebugOverlayChannel.Mirror:
                     DrawScreenTexture(spriteBatch, _mirrorSourceRenderTarget);
                     break;
+                case DebugOverlayChannel.Emitter:
+                    break;      // floodlight.fx already painted it; this just adds the caption
                 default:
                     return;
             }

@@ -233,6 +233,9 @@ namespace SDVRadiance
                     this.Monitor.Log($"[screenwatch] screen={Context.ScreenId} SKIPPED (effects not active)", LogLevel.Info);
                 return;
             }
+            // Belt and braces: the pre-draw handler normally claims the screen, but it returns
+            // early when the mod is switched off and a capture can still bring us here.
+            Pipeline.BeginScreen(Context.ScreenId);
             Pipeline.Apply(e.SpriteBatch, _config);
             // Logged AFTER the pass so the frame size is this screen's, not the previous screen's.
             if (watching)
@@ -251,6 +254,13 @@ namespace SDVRadiance
             if (!_config.Enabled)
                 return;
 
+            // Hand both renderers over to this screen before anything reads a cache. On a split
+            // screen this handler runs once per screen per frame, and everything remembered
+            // between frames below is built around where one camera is looking.
+            _shadows ??= new ShadowRenderer();
+            Pipeline.BeginScreen(Context.ScreenId);
+            _shadows.BeginScreen(Context.ScreenId);
+
             // Player silhouette + colour bake FIRST: the reflection below stamps the player
             // from it, so baking afterwards mirrored last frame's pose. It also has to run
             // when only the reflection needs it — see PreparePlayer, where the shadow-only
@@ -262,8 +272,12 @@ namespace SDVRadiance
             {
                 _shadows ??= new ShadowRenderer();
                 ShadowRenderer.DiagnosticMonitor = _config.DebugLogging ? this.Monitor : null;
+                ShadowRenderer.SharedMonitor = this.Monitor;
                 long t0 = FrameCost.Begin();
                 _shadows.PreparePlayer(Game1_GraphicsDevice, _config);
+                // Co-op partners get their own silhouette, baked in the same window where a
+                // render-target swap is legal. Costs nothing in single player: the list is empty.
+                _shadows.PrepareOtherFarmers(Game1_GraphicsDevice, Game1.currentLocation, _config);
                 double ms = FrameCost.End(FrameCost.Part.ShadowPrepare, t0);
                 if (_config.DebugLogging) _prepareMilliseconds += ms;
             }
@@ -451,11 +465,20 @@ namespace SDVRadiance
 
             // Hand-painted liquid ground truth, shipped in labels/ and read ONCE. It is versioned
             // data, not live state: it changes when this mod updates, so there is no file watching.
+            //
+            // Other mods may add their own labels for their own art, which is what makes the
+            // labelling tool worth publishing: an author can paint their sheets and ship the result
+            // without this mod having to bundle it. A pack may only paint art its own mod supplies.
             LabelStore.Instance = new LabelStore(
-                System.IO.Path.Combine(this.Helper.DirectoryPath, "labels"), this.Monitor);
+                System.IO.Path.Combine(this.Helper.DirectoryPath, "labels"),
+                LabelPacks.Discover(this.Helper.DirectoryPath, this.Monitor), this.Monitor);
             if (LabelStore.Instance.Any)
                 this.Monitor.Log($"Water labels loaded: {LabelStore.Instance.SheetCount} sheets, "
-                    + $"{LabelStore.Instance.TileCount} tiles.", LogLevel.Info);
+                    + $"{LabelStore.Instance.TileCount} tiles"
+                    + (LabelStore.Instance.PackCount == 0
+                        ? "."
+                        : $", including {LabelStore.Instance.PackCount} pack(s) from other mods."),
+                    LogLevel.Info);
             else
                 this.Monitor.Log("No water labels found in labels/ — falling back to colour classification.", LogLevel.Warn);
 

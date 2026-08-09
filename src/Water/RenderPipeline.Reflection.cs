@@ -40,6 +40,31 @@ namespace SDVRadiance
             if (_timingOn) AccumulateBuildMilliseconds(5, ms);
         }
 
+        /// <summary>
+        /// Stamp one farmer's colour bake into the mirror, flipped below their feet. The bake pins
+        /// the feet at (RtW/2, RtH-8), so flipped that anchor is 8px from the TOP; the sprite is
+        /// positioned so the flipped feet meet it. Sliced into 16-row bands to get the same
+        /// feet-to-head fade every other body in here is given.
+        /// </summary>
+        private void StampFarmerBake(SpriteBatch spriteBatch, Texture2D bake, Farmer who)
+        {
+            Rectangle box = who.GetBoundingBox();
+            float feetY = box.Bottom - 10f + who.yOffset;
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, feetY));
+            float depth = StampDepth(feetY);
+            const int bandHeight = 16;
+            int bands = ShadowRenderer.PlayerRtH / bandHeight;
+            for (int i = 0; i < bands; i++)
+            {
+                var srcR = new Rectangle(0, ShadowRenderer.PlayerRtH - (i + 1) * bandHeight,
+                    ShadowRenderer.PlayerRtW, bandHeight);
+                float a = MathHelper.Lerp(1f, ReflHeadFade, (i + 0.5f) / bands);
+                spriteBatch.Draw(bake, feet + new Vector2(-ShadowRenderer.PlayerRtW / 2f, (i * bandHeight - 8f) * MirrorSquash),
+                    srcR, Color.White * a, 0f, Vector2.Zero, new Vector2(1f, MirrorSquash),
+                    SpriteEffects.FlipVertically, depth);
+            }
+        }
+
         private void BakeWaterReflectionCore()
         {
             ReflectRTReady = false;
@@ -77,25 +102,19 @@ namespace SDVRadiance
                 var pcol = ShadowRenderer.PlayerColor;
                 if (who != null && pcol != null && !who.swimming.Value)
                 {
-                    Rectangle box = who.GetBoundingBox();
-                    float pFeetY = box.Bottom - 10f + who.yOffset;
-                    Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, pFeetY));
-                    // The bake pins the feet at (RtW/2, RtH-8); flipped, that anchor is 8px
-                    // from the TOP. Position so the flipped feet meet the anchor. Sliced into
-                    // 16-row bands for the same feet→head fade the NPC stamps get.
-                    float pDepth = StampDepth(pFeetY);
-                    const int pbh = 16;
-                    int pbn = ShadowRenderer.PlayerRtH / pbh;
-                    for (int i = 0; i < pbn; i++)
-                    {
-                        var srcR = new Rectangle(0, ShadowRenderer.PlayerRtH - (i + 1) * pbh,
-                            ShadowRenderer.PlayerRtW, pbh);
-                        float a = MathHelper.Lerp(1f, ReflHeadFade, (i + 0.5f) / pbn);
-                        spriteBatch.Draw(pcol, feet + new Vector2(-ShadowRenderer.PlayerRtW / 2f, (i * pbh - 8f) * MirrorSquash),
-                            srcR, Color.White * a, 0f, Vector2.Zero, new Vector2(1f, MirrorSquash),
-                            SpriteEffects.FlipVertically, pDepth);
-                    }
+                    StampFarmerBake(spriteBatch, pcol, who);
                     ReflectRTHasPlayer = true;
+                }
+
+                // The other players, from their own colour bakes, through the same stamp. House
+                // rule: a body is a body and only the image differs. Nothing here read them before,
+                // so in co-op every farmer but you stood over water with no reflection at all.
+                // ReflectRTHasPlayer stays about the LOCAL player: it retires the shader's wading
+                // fallback, which is drawn for you and nobody else.
+                foreach (var other in ShadowRenderer.OtherFarmerImages)
+                {
+                    if (other.Colour != null)
+                        StampFarmerBake(spriteBatch, other.Colour, other.Who);
                 }
 
                 // NPCs + monsters, bottom-centre at the collision-box feet (same anchor the
@@ -461,14 +480,12 @@ namespace SDVRadiance
             report.AppendLine($"[reflect] wlAnchor={(_waterlineAnchorData != null ? $"built for {_waterlineAnchorData.Location?.Name} ({_waterlineAnchorData.PixelWidth}x{_waterlineAnchorData.PixelHeight})" : "none yet")}");
 
             Rectangle box = who.GetBoundingBox();
-            int mpw = _waterMask.Width;
             for (int t = 0; t <= 4; t++)
             {
                 int wx = box.Center.X / 4 - _lastWaterTileX * 16;
                 int wy = (box.Bottom - 4) / 4 - _lastWaterTileY * 16 + t * 16;
-                if (wx < 0 || wy < 0 || wx >= mpw || wy >= _waterMask.Height)
+                if (ReadWaterMaskPixel(wx, wy) is not Color m)
                 { report.AppendLine($"[reflect] +{t} tile: outside the mask window"); continue; }
-                Color m = _waterMaskPixels[wy * mpw + wx];
                 string kind = m.A < 64 ? "ice" : m.A < 192 ? "lava" : "water";
                 report.AppendLine($"[reflect] +{t} tile below feet: effectR={m.R} marchG={m.G} edgeDistB={m.B} ({m.B * 0.5f:0.0} texels to the waterline) type={kind}"
                             + (m.G == 0 ? "   <- NO entity reflection here (not march water)" : ""));

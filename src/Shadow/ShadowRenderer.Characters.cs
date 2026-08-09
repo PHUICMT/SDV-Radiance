@@ -60,6 +60,7 @@ namespace SDVRadiance
             }
 
             DrawPlayerShadow(spriteBatch, location, rot, stretch, alpha, blur);
+            DrawOtherFarmerSunShadows(spriteBatch, location, rot, stretch, alpha, blur);
 
             if (config.DirectionalShadowObjects)
             {
@@ -89,9 +90,10 @@ namespace SDVRadiance
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(a.Position.X + a.Sprite.SpriteWidth * 4 / 2f, a.GetBoundingBox().Bottom - FeetLift));
             float depth = MathHelper.Clamp(a.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
-            if (_casterBakeCache.TryGetValue((a.Sprite.Texture, a.Sprite.SourceRect), out var baked))
+            if (_casterBakeCache.TryGetValue((a.Sprite.Texture, a.Sprite.SourceRect), out SpriteBake? baked))
             {
-                DrawSoft(spriteBatch, Taps9, baked.rt, null, feet, Color.White, alpha, rot, baked.feetInRT,
+                baked.LastUsedTick = Game1.ticks;
+                DrawSoft(spriteBatch, Taps9, baked.Rt, null, feet, Color.White, alpha, rot, baked.FeetInRt,
                     new Vector2(1f, stretch), depth, SpriteEffects.None, blur);
                 return;
             }
@@ -269,6 +271,10 @@ namespace SDVRadiance
                             new Vector2(1f, st), depth, SpriteEffects.None, blur);
                 }
             }
+
+            // Co-op partners, through the same two branches. They were absent from every caster
+            // list this class walks, which is why nobody but you ever cast a shadow indoors.
+            DrawOtherFarmerLightShadows(spriteBatch, location, castStrength, lenCfg, ambAlpha, blur);
 
             // Furniture / big craftables / forage get a light ambient contact pool too (no per-light
             // silhouette — a room full of overlapping cast copies reads as clutter).
@@ -544,9 +550,10 @@ namespace SDVRadiance
             // Prefer the baked silhouette (one cohesive image, smoothly faded — same as the
             // player). Bands are the fallback only when the sprite is too big for a slot, which is
             // every stretched one: 64 rows drawn at 4x overflow the bake slot.
-            if (_casterBakeCache.TryGetValue((npc.Sprite.Texture, src), out var baked))
+            if (_casterBakeCache.TryGetValue((npc.Sprite.Texture, src), out SpriteBake? baked))
             {
-                DrawSoft(spriteBatch, Taps9, baked.rt, null, feet, Color.White, alpha, rot, baked.feetInRT,
+                baked.LastUsedTick = Game1.ticks;
+                DrawSoft(spriteBatch, Taps9, baked.Rt, null, feet, Color.White, alpha, rot, baked.FeetInRt,
                     new Vector2(1f, stretch), depth, SpriteEffects.None, blur);
                 return;
             }

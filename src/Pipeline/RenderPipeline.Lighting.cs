@@ -37,7 +37,7 @@ namespace SDVRadiance
         {
             _lightCount = 0;
             _lightCandidates.Clear();
-            for (int i = 0; i < MaxLights; i++) { _lightPositions[i] = Vector2.Zero; _lightShaderData[i] = Vector4.Zero; }
+            for (int i = 0; i < MaxLights; i++) { _lightPositions[i] = Vector2.Zero; _lightShaderData[i] = Vector4.Zero; _lightIsFire[i] = 0f; }
 
             int vw = Math.Max(1, Game1.viewport.Width);
             int vh = Math.Max(1, Game1.viewport.Height);
@@ -95,7 +95,8 @@ namespace SDVRadiance
                 // the room's lamps pulsing. Exactly the trap already documented in the shadow
                 // path, where a flickering reach made casters blink in and out.
                 AddLightCandidate(new Vector2(u, v), new Vector4(glow, Math.Max(0.02f, radiusUv)),
-                    ShadowRenderer.FireFlicker(src.Position, src.TextureIndex), src.Id);
+                    ShadowRenderer.FireFlicker(src.Position, src.TextureIndex), src.Id,
+                    fire: src.TextureIndex == 4 || src.TextureIndex == 5);
             }
 
             // LABELED WINDOWS (HF class 12): warm interior glow that fades in at night, added
@@ -279,7 +280,7 @@ namespace SDVRadiance
 
         /// <summary>Lights collected this frame before the shader's fixed-size array forces a
         /// choice. Bounded so a pathological map cannot make the sort itself the cost.</summary>
-        private readonly List<(Vector2 Uv, Vector4 Data, int Id, Vector2 World, float Flick)> _lightCandidates = new();
+        private readonly List<(Vector2 Uv, Vector4 Data, int Id, Vector2 World, float Flick, bool Fire)> _lightCandidates = new();
         private const int MaxLightCandidates = 96;
         /// <summary>The point past which the ranking actually decides something: the flood
         /// gives its first eight a shadow ray and pools the rest, so from eight onward the
@@ -292,7 +293,14 @@ namespace SDVRadiance
         /// game's light sources do: the key the location files them under. Zero means "name it
         /// after where it stands", which is correct for a window or a glowing tile and was wrong
         /// for everything else. See below.</param>
-        private void AddLightCandidate(Vector2 uv, Vector4 data, float flick = 1f, int stableId = 0)
+        /// <param name="fire">Whether this is an actual FLAME rather than any other bright thing.
+        /// The game already tells us, and has all along, through the texture it picks for the
+        /// glow: 4 is the sconce sheet shared by torches, wall lamps and fireplaces, 5 is the
+        /// cauldron. The flicker has read it since the beginning; nothing else did, so the shader
+        /// was being handed a lamp, a window, a glowing crystal and a hearth as if they were the
+        /// same kind of thing. They are not, and the one place it matters is deciding what is
+        /// allowed to burn brighter than its own art.</param>
+        private void AddLightCandidate(Vector2 uv, Vector4 data, float flick = 1f, int stableId = 0, bool fire = false)
         {
             if (_lightCandidates.Count >= MaxLightCandidates)
                 return;
@@ -339,7 +347,7 @@ namespace SDVRadiance
                 return;
             data = new Vector4(data.X * taper, data.Y * taper, data.Z * taper, data.W);
 
-            _lightCandidates.Add((uv, data, stableId != 0 ? stableId : (wx * 73856093 ^ wy * 19349663), world, flick));
+            _lightCandidates.Add((uv, data, stableId != 0 ? stableId : (wx * 73856093 ^ wy * 19349663), world, flick, fire));
         }
 
         /// <summary>
@@ -515,7 +523,7 @@ namespace SDVRadiance
                 // Keep its place and colour current even on a frame where it gets no slot: the
                 // fade it will eventually run has to start from where the light actually is.
                 float ramp = _lightRamp.TryGetValue(cand.Id, out LightFade prev) ? prev.Ramp : (sameRoom ? 0f : 1f);
-                _lightRamp[cand.Id] = new LightFade { Ramp = ramp, Uv = cand.Uv, Data = cand.Data, Flick = cand.Flick };
+                _lightRamp[cand.Id] = new LightFade { Ramp = ramp, Uv = cand.Uv, Data = cand.Data, Flick = cand.Flick, Fire = cand.Fire };
             }
 
             // Rank everything that could hold a slot by how bright it is ON SCREEN RIGHT NOW, so a
@@ -586,6 +594,7 @@ namespace SDVRadiance
                 // so a breathing hearth changes how bright it is and never which lights exist.
                 float ramp = fade.Ramp * fade.Flick;
                 _lightPositions[i] = fade.Uv;
+                _lightIsFire[i] = fade.Fire ? 1f : 0f;
                 Vector4 d = fade.Data;
                 _lightShaderData[i] = new Vector4(d.X * ramp, d.Y * ramp, d.Z * ramp, d.W);
             }
@@ -596,7 +605,7 @@ namespace SDVRadiance
             ReportLightWatch(selectedLightCount);
 
             // Flick is deliberately not read here: the ranking must be steady.
-            float Score((Vector2 Uv, Vector4 Data, int Id, Vector2 World, float Flick) c)
+            float Score((Vector2 Uv, Vector4 Data, int Id, Vector2 World, float Flick, bool Fire) c)
             {
                 float r = Relevance(c.Uv, c.Data);
                 return _lightChosen.Contains(c.Id) ? r * 1.3f : r;   // incumbent's margin
@@ -673,6 +682,7 @@ namespace SDVRadiance
             public Vector2 Uv;
             public Vector4 Data;
             public float Flick;
+            public bool Fire;
         }
 
         private readonly Dictionary<int, LightFade> _lightRamp = new();

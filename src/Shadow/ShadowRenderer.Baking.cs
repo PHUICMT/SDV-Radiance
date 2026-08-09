@@ -63,14 +63,15 @@ namespace SDVRadiance
 
             // ---- Persistent bake caches (the old clear-everything-every-frame here cost
             // 50-150 render-target switches per frame — the single biggest stutter source) ----
-            // CHARACTER bakes are upright silhouettes keyed by (texture, frame): valid forever,
-            // only capped. OBJECT bakes have the sun lean baked in as a shear: valid until the
-            // sun angle ticks (every 10 game minutes) or the location changes.
-            if (_casterBakeCache.Count > 192)
-            {
-                _casterBakeCache.Clear();
-                _casterSlotsUsed = 0;
-            }
+            // CHARACTER bakes are upright silhouettes keyed by (texture, frame): valid forever.
+            // OBJECT bakes have the sun lean baked in as a shear, so they go stale as the sun
+            // moves — that is now handled per sprite, by error, and not by throwing the lot away.
+            // Both caches EVICT the coldest entries when they outgrow their cap. They used to
+            // Clear(), and a map that simply has more distinct sprites than the cap then re-baked
+            // its whole screen every frame: the cache became a cost instead of a saving on exactly
+            // the mod-heavy installs it exists for.
+            EvictColdCasterBakes();
+            EvictColdObjectBakes();
 
             bool objectsOn = shadowsOn && SunCasts() && config.DirectionalShadowObjects;
             float sunRotation = 0f, sunStretch = 0f;
@@ -79,33 +80,25 @@ namespace SDVRadiance
                 ComputeSun(out sunRotation, out sunStretch, out _);
                 sunStretch *= Math.Max(0.1f, config.DirectionalShadowLength);
             }
-            long objectShearCacheKey = objectsOn
-                ? ((long)Math.Round(sunRotation * 512f) << 20) ^ (long)Math.Round(sunStretch * 512f)
-                : long.MinValue;
-            bool objectBakeCacheCapExceeded = _bakedObjectCache.Count > 128;   // VRAM cap: slots are 400×456 RTs (~0.7 MB each)
-            bool isObjectBakeCacheInvalid = objectShearCacheKey != _objectShearKey
-                                || Game1.currentLocation != _objectBakeLocation
-                                || objectBakeCacheCapExceeded;
-            // The cap is a full Clear(), so a location that stays OVER it re-bakes from scratch every
-            // frame and pays back the 50-150 render-target switches the cache exists to avoid. A
-            // custom foliage pack multiplies the distinct (texture, frame, flip) bakes, which is the
-            // suspected cause of "directional shadows on trees and bushes are unplayably slow with
-            // Simple Foliage, fine with the setting off". Say so once per location, with the count:
-            // one number in a log decides whether that is what is happening before anything is
-            // restructured to evict instead of clear.
-            if (objectBakeCacheCapExceeded && DiagnosticMonitor != null && Game1.currentLocation is { } capLoc && capLoc != _objectCapLoggedLocation)
+            // A location change no longer clears: the key is (texture, frame, flip), which is not
+            // tied to a map, so warping back and forth used to re-bake everything both ways for
+            // nothing. It still triggers ONE full enumeration, so a new screen arrives baked
+            // instead of spending a frame on banded stand-ins.
+            bool locationChanged = Game1.currentLocation != _objectBakeLocation;
+            _objectBakeLocation = Game1.currentLocation;
+
+            // Over cap AFTER eviction means the hot set alone does not fit: a foliage pack that
+            // multiplies the distinct (texture, frame, flip) bakes is the suspected cause of
+            // "directional shadows on trees and bushes are unplayably slow with Simple Foliage,
+            // fine with the setting off". Say so once per location, with both numbers.
+            if (_bakedObjectCache.Count > ObjectBakeCap && DiagnosticMonitor != null
+                && Game1.currentLocation is { } capLoc && capLoc != _objectCapLoggedLocation)
             {
                 _objectCapLoggedLocation = capLoc;
                 DiagnosticMonitor.Log($"[shadow] object bake cache over cap at {capLoc.NameOrUniqueName}: "
-                       + $"{_bakedObjectCache.Count} distinct sprites this frame (cap 128) — the cache is clearing every "
-                       + "frame here, so object shadows are re-baking from scratch.", LogLevel.Debug);
-            }
-            if (isObjectBakeCacheInvalid)
-            {
-                _bakedObjectCache.Clear();
-                _objectSlotsUsed = 0;
-                _objectShearKey = objectShearCacheKey;
-                _objectBakeLocation = Game1.currentLocation;
+                       + $"{_bakedObjectCache.Count} distinct sprites still hot (cap {ObjectBakeCap}, "
+                       + $"{_objectRenderTargetPool.Count} slots allocated) — more sprites are on screen at once "
+                       + "than the cache can hold, so some object shadows re-bake as they scroll.", LogLevel.Debug);
             }
 
             // Bake NPC + animal silhouettes (single-sprite casters) — cheap when warm: cache
@@ -116,14 +109,14 @@ namespace SDVRadiance
 
             // Bake OBJECT silhouettes (trees/bushes/clumps/furniture/craftables/…). The FULL
             // enumeration — every on-screen tile, every entity list, the tile-art classifier —
-            // runs only when the cache was actually invalidated (sun angle ticked, location
-            // changed, cap blown). On every other frame it used to run anyway, in bake mode,
-            // and on a warm frame that is a second complete walk of the scene per frame whose
-            // every lookup answers "already baked". The draw pass now reports what it found
-            // missing (see EmitObj), and a warm bake pass does exactly that list, which on a
-            // still screen is nothing. A brand-new sprite pays one frame of the banded stand-in
-            // — at the screen edge it is scrolling in over, not the 15 ticks of it that got the
-            // old heartbeat attempt reverted.
+            // runs on arrival in a location and never again. On every other frame it used to run
+            // anyway, in bake mode, and on a warm frame that is a second complete walk of the
+            // scene per frame whose every lookup answers "already baked". The draw pass now
+            // reports what it found missing OR stale (see EmitObj), and a warm bake pass does
+            // exactly that list, which on a still screen under a still sun is nothing. A
+            // brand-new sprite pays one frame of the banded stand-in — at the screen edge it is
+            // scrolling in over, not the 15 ticks of it that got the old heartbeat attempt
+            // reverted.
             if (objectsOn && Game1.currentLocation is { } objectLocation)
             {
                 _isBakingObjects = true;
@@ -131,7 +124,7 @@ namespace SDVRadiance
                 RenderTargetBinding[] objPrev = graphicsDevice.GetRenderTargets();
                 try
                 {
-                    if (isObjectBakeCacheInvalid || _bakedObjectCache.Count == 0)
+                    if (locationChanged || _bakedObjectCache.Count == 0)
                         DrawObjectShadows(_renderTargetSpriteBatch, objectLocation, sunRotation, sunStretch, 0f, 0f);
                     else
                         BakeQueuedObjectSprites(graphicsDevice);
@@ -139,8 +132,10 @@ namespace SDVRadiance
                 catch (Exception ex) { if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log($"[shadow] obj bake threw: {ex}", LogLevel.Warn); } }
                 finally { graphicsDevice.SetRenderTargets(objPrev); _isBakingObjects = false; }
             }
-            // Either path leaves the queue spent: the full walk covers everything the queue
-            // held, and stale entries must not outlive the shear they were recorded under.
+            // Either path leaves the queue spent, including anything the refresh budget did not
+            // reach. Nothing is lost by that: an entry the sun has moved off is still stale next
+            // frame, so the draw pass simply asks again, and dropping the list keeps a request
+            // from outliving the shear it was recorded under.
             _objectBakeQueue.Clear();
 
             // Sitting still casts (the bake captures the current SEATED animation frame, so the
@@ -285,11 +280,17 @@ namespace SDVRadiance
                     if (t.X < tx0 || t.X > tx1 || t.Y < ty0 || t.Y > ty1)
                         continue;
                     var key = (npc.Sprite.Texture, npc.Sprite.SourceRect);
-                    if (_casterBakeCache.ContainsKey(key))
+                    // Stamping the tick on a HIT is what keeps eviction honest: this loop already
+                    // walks exactly the casters on screen, so "seen here this frame" is the same
+                    // question as "is this bake still wanted".
+                    if (_casterBakeCache.TryGetValue(key, out SpriteBake? warm))
+                    {
+                        warm.LastUsedTick = Game1.ticks;
                         continue;
+                    }
                     prev ??= graphicsDevice.GetRenderTargets();
                     if (BakeSprite(graphicsDevice, key.Item1, key.Item2, out RenderTarget2D rt, out Vector2 feet))
-                        _casterBakeCache[key] = (rt, feet);
+                        _casterBakeCache[key] = new SpriteBake { Rt = rt, FeetInRt = feet, LastUsedTick = Game1.ticks };
                 }
                 foreach (FarmAnimal a in AnimalsIn(location))
                 {
@@ -299,11 +300,14 @@ namespace SDVRadiance
                     if (t.X < tx0 || t.X > tx1 || t.Y < ty0 || t.Y > ty1)
                         continue;
                     var key = (a.Sprite.Texture, a.Sprite.SourceRect);
-                    if (_casterBakeCache.ContainsKey(key))
+                    if (_casterBakeCache.TryGetValue(key, out SpriteBake? warm))
+                    {
+                        warm.LastUsedTick = Game1.ticks;
                         continue;
+                    }
                     prev ??= graphicsDevice.GetRenderTargets();
                     if (BakeSprite(graphicsDevice, key.Item1, key.Item2, out RenderTarget2D rt, out Vector2 feet))
-                        _casterBakeCache[key] = (rt, feet);
+                        _casterBakeCache[key] = new SpriteBake { Rt = rt, FeetInRt = feet, LastUsedTick = Game1.ticks };
                 }
             }
             catch (Exception ex)
@@ -352,20 +356,88 @@ namespace SDVRadiance
             catch
             {
                 try { _renderTargetSpriteBatch!.End(); } catch { }
+                // Hand the slot back. Returning false means the caller never stores this target,
+                // so without this the lease is lost: the pool still owns the memory but nothing
+                // can ever reuse it, and a sprite that fails to bake every frame leaks a slot
+                // every frame. Recycling used to happen wholesale when the cache cleared itself,
+                // and that is exactly what was removed to stop the cache thrashing.
+                _casterFreeTargets.Add(rt);
+                rt = null!;
                 return false;
             }
         }
 
-        /// <summary>Lease the next pooled caster target for this frame (grows the pool on demand).</summary>
+        /// <summary>Lease a caster slot: an evicted one if there is one, otherwise a new allocation.</summary>
         private RenderTarget2D RentCasterRT(GraphicsDevice graphicsDevice)
         {
-            if (_casterSlotsUsed < _casterRenderTargetPool.Count)
-                return _casterRenderTargetPool[_casterSlotsUsed++];
+            if (_casterFreeTargets.Count > 0)
+            {
+                RenderTarget2D reused = _casterFreeTargets[^1];
+                _casterFreeTargets.RemoveAt(_casterFreeTargets.Count - 1);
+                return reused;
+            }
             var rt = new RenderTarget2D(graphicsDevice, CasterRtW, CasterRtH, false,
                 SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
             _casterRenderTargetPool.Add(rt);
-            _casterSlotsUsed++;
             return rt;
+        }
+
+        /// <summary>
+        /// Drop the least recently drawn character bakes once the cache outgrows its cap, handing
+        /// their targets back to be leased again.
+        /// </summary>
+        private void EvictColdCasterBakes()
+        {
+            if (_casterBakeCache.Count <= CasterBakeCap)
+                return;
+            _casterEvictScratch.Clear();
+            int keep = (int)(CasterBakeCap * EvictHeadroom);
+            bool desperate = _casterBakeCache.Count > CasterBakeCap * 2;
+            int coldBefore = Game1.ticks - HotBakeTicks;
+            foreach (var kv in _casterBakeCache)
+            {
+                if (desperate || kv.Value.LastUsedTick < coldBefore)
+                    _casterEvictScratch.Add(kv.Key);
+            }
+            _casterEvictScratch.Sort((a, b) => _casterBakeCache[a].LastUsedTick.CompareTo(_casterBakeCache[b].LastUsedTick));
+            int drop = Math.Min(_casterBakeCache.Count - keep, _casterEvictScratch.Count);
+            for (int i = 0; i < drop; i++)
+            {
+                if (_casterBakeCache.TryGetValue(_casterEvictScratch[i], out SpriteBake? bake))
+                {
+                    _casterFreeTargets.Add(bake.Rt);
+                    _casterBakeCache.Remove(_casterEvictScratch[i]);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The same for object bakes. Their slots are five times the size, so this is the one that
+        /// decides how much VRAM the mod holds.
+        /// </summary>
+        private void EvictColdObjectBakes()
+        {
+            if (_bakedObjectCache.Count <= ObjectBakeCap)
+                return;
+            _objectEvictScratch.Clear();
+            int keep = (int)(ObjectBakeCap * EvictHeadroom);
+            bool desperate = _bakedObjectCache.Count > ObjectBakeCap * 2;
+            int coldBefore = Game1.ticks - HotBakeTicks;
+            foreach (var kv in _bakedObjectCache)
+            {
+                if (desperate || kv.Value.LastUsedTick < coldBefore)
+                    _objectEvictScratch.Add(kv.Key);
+            }
+            _objectEvictScratch.Sort((a, b) => _bakedObjectCache[a].LastUsedTick.CompareTo(_bakedObjectCache[b].LastUsedTick));
+            int drop = Math.Min(_bakedObjectCache.Count - keep, _objectEvictScratch.Count);
+            for (int i = 0; i < drop; i++)
+            {
+                if (_bakedObjectCache.TryGetValue(_objectEvictScratch[i], out SpriteBake? bake))
+                {
+                    _objectFreeTargets.Add(bake.Rt);
+                    _bakedObjectCache.Remove(_objectEvictScratch[i]);
+                }
+            }
         }
 
         /// <summary>A 64×64 soft radial disc (white, radial alpha) for ambient contact pools.</summary>
