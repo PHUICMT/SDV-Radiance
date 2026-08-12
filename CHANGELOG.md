@@ -2,6 +2,273 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.5.5
+
+### Added
+
+- Every setting in the on-screen tuner explains itself. Rest the pointer on a row and a plain
+  sentence says what it does. Bloom, vignette, aberration and GI were named and never explained,
+  which is a settings screen people switch off rather than tune. Three of the notes answer
+  questions that have been asked more than once: bounced-light strength is the contrast between a
+  lit corner and an unlit one rather than the room's brightness, god rays ship off, and water can
+  only mirror what is on your screen.
+- Buildings reflect in water. A coop or a shed at the water's edge mirrored the ground it stands on
+  and nothing else, because a building is drawn from its own texture and no part of the mirror ever
+  looked for one. Noticed with Build Anywhere, where putting a shed on the shore is the point, and
+  just as wrong on a vanilla farm pond.
+- Grass and the big decorative bushes reflect. Grass grows down to the bank on most maps and had no
+  mirror at all, so the first tile of water was empty right where the eye expects the most. The
+  bushes a map places live in a different list from the ones you plant, and only one list was
+  being read, so two bushes standing side by side reflected differently.
+
+- Shafts of sunlight, on by default, and this time you can see them. The old bright-pass god rays
+  could never work in a top-down game: streaking bright pixels toward the sun needs a sky in the
+  frame, and there is none. The shafts are now cut from the occluder map instead, the same one the
+  per-lamp shadows already march: where a canopy blocks the sun's path there is shade, and where
+  light comes through a gap beside it there is a slanting, slowly shimmering shaft, leaning with
+  the time of day and gone under an overcast sky. Forests and treelines show them best; open
+  ground is lit evenly and shows none, which is also the physics. They are their own switch,
+  independent of the lamp shafts, which still ship off.
+- The sun's shafts answer the sky and the air, not just the trees. Clouds passing between the sun
+  and the ground now kill the shafts underneath and set them blazing at the sunward edge of every
+  gap, which is where crepuscular rays actually live; on a misty morning the crisp bands thicken
+  into the soft glow scattered light really has, and both fade together when the mist lifts. Dust
+  motes drift through the beams, visible only while inside one, because a shaft with nothing
+  floating in it reads as a decal on the ground. The god-ray density slider now also sets how far
+  the dapple stretches from the canopy that casts it, with its default exactly the tuned look.
+- The night has a character, and the night slider owns all of it. Deep settings darken outdoors
+  too (the old hardcoded night never listened to the slider), the moonlit ground leans cool at the
+  same brightness while lamps and fires keep their full warmth, and the unlit world quietly gives
+  up part of its colour the way eyes actually do in the dark, so a torch at night reads as an
+  event. Slid low, the night instead LIFTS above vanilla with a film-print gamma curve: shadows
+  rise, highlights barely move, nothing goes milky, and at zero the colour is pure vanilla, only
+  readable. One slider, one hour-long ramp, no frame where anything switches.
+- Firelight is a gradient, not a flat circle. Near white at the source, gold a step out, deep warm
+  at the tail, which is what real firelight does and most of why a fire used to read as a painted
+  disc. The flame's own art also sits brighter than anything it lights now, and a fire reaches a
+  fifth further than a lamp of the same nominal radius. White wall lamps stay white.
+- A fire lays a circle of its own colour on the floor in front of it. A dim room is tinted the
+  colour of what is lighting it, which after dark is the sky through its windows, and that is
+  simply not true of the boards in front of a hearth. Within about four tiles of a fire the room's
+  cast now hands over to the fire's own, so a farmhouse morning is a cool room with a warm ring
+  around the hearth instead of one flat colour with a fire sitting in it. It changes colour only:
+  nothing in it can make a room brighter than the sliders asked for.
+
+### Fixed
+
+- Fireplaces, paintings and dark furniture indoors are no longer solid black cutouts. The night
+  lift added this version raises a picture with a curve, and a curve needs a logarithm, and the
+  logarithm of zero is not a number. Any pixel with a channel at exactly zero in the game's own
+  art came out black in all three, which is deep brick, dark wood and a night sky in a painting,
+  and is most of what a fireplace is drawn with. Measured in a farmhouse at nine in the evening:
+  three quarters of the hearth was fully black, and is now down to the level of the same room with
+  the mod switched off.
+- A dim room no longer repaints everything in it blue. The interior colour cast was three times
+  the spread of the outdoor night's and reached the screen at three times the strength, so it took
+  nearly half the red out of brick, pine and firelight alike. It is now held to what an outdoor
+  night is allowed. How dark a room gets has not changed: that is the sliders' job and they still
+  own it alone.
+- The give-back that lets a lit room answer its own dimming was switched off at night, which is
+  the hour it exists for. It measured the dimming as a flat average of the three channels while
+  the dimming itself is applied by luminance, and a cool cast puts blue above 1.0, which hid the
+  whole thing. `radiance_report` was doing the same sum and printing "dimmed by 0%" for a room a
+  fifth darker.
+- Fireflies stop flickering a shadow under you. Decorative drifting lights are meant to be left
+  out of the shadow pass, and the test asked whether the light had moved since the last frame,
+  which a firefly answers no to constantly: at the turning point of its wobble it is standing
+  still, so for that one frame it counts as a planted lamp and casts. The next frame it moves
+  again and the shadow is gone. One frame of shadow, over and over, on each firefly's own rhythm,
+  which is why it read as a faint shadow blinking rather than one that is simply there. Whether a
+  light drifts is now remembered for as long as that light exists instead of being re-decided
+  every frame. Lamps, torches, windows and fireplaces are untouched, and so is the light the
+  fireflies themselves give off.
+- A horse casts a shadow, so riding one no longer removes every shadow you had. The game hides a
+  horse's shadow and draws none of its own, and the rider was being skipped here on the grounds
+  that the horse's shadow covered them. It did not exist. Mounting therefore took away the only
+  shadow in the frame that belonged to you.
+- One sun instead of one per kind of thing. Trees leaned at 0.38 of the character angle and every
+  other object at 0.6, so at six in the morning a player's shadow pointed one way and the trees
+  beside them pointed another. It was reported as two suns, with the difference measured in clock
+  hours. The damping existed to stop a long canopy shadow detaching from its trunk, and it is the
+  wrong lever for that: shortening a shadow leaves its direction alone, while damping the angle
+  moves the sun for that one caster. The per-kind length limits are untouched.
+- The shadow length setting reaches objects. Each kind of object had a fixed ceiling on how far its
+  shadow could reach, and the sun passes that ceiling for most of the daylight hours, so a bench, a
+  fence or a lightning rod sat pinned at its limit whatever you set and the slider only ever moved
+  people and animals. The limits now scale with the setting, so the whole screen throws a long
+  evening shadow together.
+- Reflections no longer arrive in halves as you walk towards the water, and no longer fade out down
+  the sides of the screen. A reflection is the picture from above the waterline, flipped, and that
+  picture came from the screen, so a bank sitting high on the screen had nothing above it to mirror.
+  The mirror now reads twelve tiles past the top of the frame and three tiles past each side. Twelve
+  is the whole of what it can use rather than a preference: the source sits 1.25 tiles higher per
+  tile of depth and the reflection has already dissolved into sky by nine tiles down, so 11.25 tiles
+  above a waterline sitting on the very top row is the furthest any pixel can ask for, at any window
+  size.
+- A wide river or lake reflects its banks instead of reading as flat paint. The reflection was
+  dissolved into sky past nine tiles from the water's own upstream bank, which is most of a river
+  and most of a lake, so the middle of a body of water carried nothing at all. That bound was set
+  when the mirror could only read what was on the screen; with the source now reaching twelve tiles
+  past the top of the frame there are real pixels out there, and a cliff or a stand of trees is
+  taller than the old bound allowed for. It runs to sixteen tiles now.
+- Dead crops cast a shadow. They were excluded, and a withered plant is still a plant standing on
+  the soil until someone scythes it. A field the player let die read as painted onto the ground
+  while the scarecrow two tiles away stood on it.
+- Grass casts a shadow. It stands on the ground like everything else and was the only thing on a
+  meadow not casting, which reads as the grass being printed onto the dirt while the fence beside it
+  stands on it. A tuft is up to four separate blades at jittered spots inside its tile, so each one
+  casts from its own place rather than one silhouette sitting under none of them.
+- A crop's shadow clears the crop. The lean slides a silhouette sideways by a fixed amount for
+  every pixel of its height, so at a sun fifty degrees off vertical a plant twelve pixels tall needs
+  a shadow around 0.85 of its own height before the cast escapes its own half-width. Crops were
+  capped at 0.55, which put them at 0.51, and the shadow landed on the plant and read as a dark half
+  rather than as a cast. The cap was never earned: a crop sprite's height is the plant's height, so
+  it takes the same sun a person does.
+- The indoor bounce stops dyeing the room orange. Every seed in the bounce grid is warm, because
+  lamps and fires are, and the sweeps carry that colour into every cell they reach; the field is
+  then multiplied over the whole screen. Blue was losing better than a third of itself everywhere at
+  once while red kept all of its own, which is a dye rather than lighting. It reads as an orange
+  wash, and because every surface is pulled toward the same warm axis the differences between
+  surfaces shrink with it, so outlines soften and the picture goes smooth. The field now carries
+  brightness and gives up most of its hue, and colour comes from the direct pools instead, which are
+  per light, local and gone within a few tiles of the lamp that owns them. A hearth still lays a warm
+  circle on the boards in front of it; the far wall stops being painted in the hearth's colour.
+- Rain no longer hands the screen back to vanilla shadows. Weather switched the whole sun path off,
+  and the same test decides whether the game's own blob shadows are suppressed, so a rainy day gave
+  every tree, bush and critter back to the shadows this mod exists to replace. An overcast sky does
+  not remove shadows, it makes them faint, short and soft, so weather is a dimmer on the sun now
+  rather than a switch, eased so a shower starting mid-day cannot pop.
+- Tree shadows stay attached to their trees. The game draws a tree's trunk as a separate piece of
+  art from its canopy, and only the canopy was casting, so the shadow began a tile and a half up
+  the tree. While the lean was damped that landed close enough to the base to look joined; with the
+  true sun angle it slid clear and the shadow came away from the tree. Trunks cast now, on both
+  ordinary and fruit trees, so the shadow starts where the wood meets the ground at any sun angle.
+- The reflection is at full strength wherever it exists. A sample landing outside the picture used
+  to be faded rather than clamped, over a band 6% of the screen wide, which left a permanently
+  dimmed strip of reflection about a tile and a quarter deep down both sides of every view. The same
+  test also measured the BOTTOM edge, which the mirror can never cross because it only ever reads
+  upward, so a shoreline low on the screen had its reflection dimmed for nothing at all. With real
+  pixels now sitting past the edges the taper is a hairline at the true end of the data.
+  This covers the SCENERY. People, trees and buildings are stamped into a separate layer that
+  already handles the same case correctly, because those reflections hang straight down from their
+  own feet: something standing above the top of the screen lands its visible reflection inside the
+  frame on its own, and something off the side has nothing visible to land.
+- Seagulls and other critters stop being smeared by the water they sit on. The mask that keeps
+  things drawn on water from being displaced by it was written for a 16 pixel frame, and every
+  critter in the game is 32, so the exclusion sat a whole 32 pixels right of the bird and 64 below
+  it. The gull stayed inside the rippling water while a bird-shaped patch of empty sea beside it
+  was held still.
+- Zooming out no longer multiplies the work. Zooming out does not shrink the world; the game draws
+  the same world pixels into a bigger buffer and scales the whole thing down onto the window. At
+  half zoom that is four times the pixels, all of them averaged away before anyone sees them, and
+  the effect chain was sized from that buffer. Measured in town, the chain went from 0.17 ms at
+  full zoom to 0.45 ms at half; it is now 0.17 ms at both. Nothing is lost, because the game's own
+  downscale was about to discard exactly the difference.
+- The same fix lands on split screen, where it is larger. The game halves the zoom for a split
+  (Options.zoomLevel is baseZoomLevel times a modifier that is 0.5 with more than one screen), so
+  each half was drawing its world into a buffer twice its own size on each axis, and the effect
+  chain was sized from that: four times the pixels per screen, eight times across two. Each half
+  now works at the size of the half. Reported as a split screen dropping to around 20 fps.
+- Walking near water costs a third of the rebuilds it did, which split screen feels twice: the two
+  halves share one rebuild slot, so a rebuild demanded every tile by two moving players kept that
+  slot permanently busy.
+
+- Walking near water stopped costing a full rebuild every step. The water surface is worked out for
+  a window larger than the screen, and that slack was spent on nothing: the window followed the
+  camera tile for tile, so every step rebuilt all of it on the main thread. One player measured
+  their rebuild at 11 ms, which is a dropped frame per step, and reported it as a hitch crossing
+  from town onto the beach. Measured after: twelve steps through open water cost four rebuilds
+  instead of twelve.
+- The tuner says when another mod took the window beam. It switches itself off if a mod that draws
+  its own light through windows is installed, and it used to say so in the startup log only, which
+  on screen reads as a feature that does not work and a switch that does nothing.
+
+- Everything standing on the ground casts at the person's own length. Forage was capped at 0.4 of
+  its height, fences and signs at 0.5, kegs and machines at 0.55, and none of those numbers was
+  earned: at a morning sun a 16-pixel shell needs about 0.65 before its shadow escapes its own
+  footprint, which is why forage read as having "a hint of a shadow but nothing deserving to be
+  called one". The ceilings that remain belong to sprites whose height is not a height: canopies,
+  bush masses, props painted into the map.
+- A room full of sconces stops shimmering. A wall sconce carries the same texture id as a
+  fireplace, so all twenty-four of the saloon's lamps breathed the hearth's eight percent flicker,
+  out of phase, sixty times a second - measured standing still: ten to seventeen of the light
+  slots changed value on almost every frame. Independent wobbles average out rather than add, so
+  the flicker now falls with the square root of how many flames share the screen: one hearth keeps
+  every bit of its breathing, a room of two dozen sconces holds still while each flame still moves.
+- The saloon at noon stops being orange, from three directions at once. Every light in the game
+  was bounced off the walls as one fixed warm colour whatever colour the light actually was, and
+  all 66 of that room's lamps are white. The minimum-brightness floor written to keep a hearth
+  alive in a sunlit room was applied to every lamp, so the floor alone repainted the room at noon.
+  And the output roll-off started compressing at 0.60, where most of the daylit world's art lives,
+  squeezing thirty points of highlight range into twelve - which is what read as the whole picture
+  being dyed, soft, and short of its edges, indoors and out. Lights now bounce their own colour,
+  only fires keep the floor, and the roll-off starts at 0.85, above ordinary art.
+- A window at midday is a window again. The glass glow was uncapped and asked for well over the
+  display's ceiling, so the panes, the bars between them and part of the wall all arrived at flat
+  white and the window became a featureless ellipse. The glow now climbs to the ceiling and no
+  further, so every difference the art has below that point survives: the bars stay dark, the
+  frame keeps its shape. Mornings were always readable, which is the half of the day the sum
+  stayed under the ceiling.
+- A tuft of grass no longer sits in a black puddle. The game anchors each blade two and a half
+  rows up from the bottom of its frame, so the widest part of the blade is below the ground line.
+  Cast as a shadow those rows landed under the anchor and stacked there at full strength, four
+  blades deep, which read to one person as a base far too dark and to another as the shadow being
+  in front of the plant instead of behind it. They were the same pixels. A blade now casts only
+  what stands above the ground, and the blades of one tuft share the strength of a single shadow
+  rather than compounding into an almost opaque one.
+
+### Removed
+
+- The "Window light in the room" setting. It moved a single seed in the bounce grid, right beside
+  the window beam's own column of seeds, which is stronger and carries its own switch, so with the
+  beam on the setting did nothing anyone could see. Two diagnostic reports taken either side of the
+  toggle came back with every number in the indoor lighting block identical. Rooms still fill with
+  daylight from their windows exactly as before, under the window master switch; that half is
+  lighting rather than art, and it is the half no window mod can do for you.
+
+### Changed
+
+- Water offers three looks for its reflection: still, natural and choppy. How rough the surface is
+  and how broken the mirror is were the same number, so calming the reflection also flattened the
+  water, and rain, which the game itself makes up to twice as choppy, could not be told apart from
+  a mill pond by any setting. They are now separate, and the middle setting is what you had.
+
+- The god rays switch now means the LAMP shafts, and says so. Sun shafts (see Added) are their own
+  switch beside it, each working without the other: the two effects share nothing but a word, and
+  tying the sun to the lamp toggle only meant two clicks to get one effect. Every description of
+  both has been rewritten to match what they actually do.
+
+### For translators
+
+60 new keys, 3 removed and 5 changed. (`i18n/default.json` also gains a `//` line, which is a
+note to whoever opens the file next and is not a string anyone should translate.)
+
+- **50** are prefixed `help.` (`help.master` through `help.ca`): the hover notes for the on-screen
+  tuner, one plain sentence per setting, aimed at a player who has never met the word "aberration".
+  A missing one costs only the tip, so these are safe to leave for later.
+- **6** are the water reflection looks: `config.water.reflstyle.name`, `config.water.reflstyle.tooltip`,
+  `tuner.reflstyle` and the three names `tuner.reflstyle.still`, `tuner.reflstyle.natural`,
+  `tuner.reflstyle.choppy`. The three names are read on a small button, so short words win.
+- **3** are the sun switch under god rays: `config.godrays.sun.name`, `config.godrays.sun.tooltip`,
+  `tuner.godrayssun`.
+- **1** is `tuner.windowcompat`, one line shown under the window beam switch when another mod has
+  taken it.
+
+**Removed**, and safe to delete: `tuner.windowroomlight`, `config.lighting.windowroomlight.name`
+and `config.lighting.windowroomlight.tooltip`. The setting they belonged to is gone.
+
+**Changed**, and needing retranslation: `config.godrays.enabled.tooltip` described sun-following
+shafts and now describes lamp shafts with a pointer to the separate sun switch. `tuner.godrays`
+is now "Lamp shafts" rather than "God rays", and `tuner.desc.godrays` mentions both sources.
+`config.lighting.night.tooltip` now describes the whole night character (outdoors too, cool
+ground, brighter-than-vanilla at low values). `config.lighting.windowbeam.tooltip` used to end by
+pointing at a setting that no longer exists, and now says the same thing without the pointer.
+The `help.` keys for god rays, sun shafts and night darkness were rewritten to match.
+`help.godraysdensity` gained a second job: the slider now also sets how far the sun's dapple
+stretches from the trees, and the note says so.
+
+Thai (`th.json`) is complete for this release.
+
 ## 1.5.4
 
 ### Added

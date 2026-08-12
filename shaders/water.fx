@@ -128,6 +128,26 @@ sampler2D ReflectRTSampler = sampler_state
     AddressU = Clamp; AddressV = Clamp;
 };
 float SceneOn;           // 1 when the sprite-free scenery source below is live
+// The share of SceneTexture that lies ABOVE the screen. The scenery source is taller than
+// the frame, because a mirror only ever reads upward and the pixels it wanted most - a bank
+// sitting at the top edge with trees standing on it - were off the screen entirely. Screen
+// v maps to source v * (1 - SceneTopPad) + SceneTopPad, and a NEGATIVE screen v, meaning
+// "above the top of the screen", now has somewhere real to land.
+float SceneTopPad;
+// And the same band down each SIDE. Sideways the mirror barely moves, so this is not about
+// reach: it is that a sample landing outside the source is faded rather than clamped, and that
+// fade is 6% of the picture - a permanent dimmed strip down both edges of the screen. With real
+// pixels out there it stops firing.
+float SceneSidePad;
+// REFLECTION STYLE. Two numbers, chosen from a named look in the settings.
+//   ReflWobble - how much of the surface's own ripple is allowed to displace the MIRROR.
+//     The surface wobble and the reflection's clarity used to be one number, so calming a
+//     choppy surface also flattened the ripple everywhere and the only way to read the
+//     reflection on a rainy day was to turn the water down. They are separate questions.
+//   ReflTint   - the cool darkening that makes a reflection read as being IN the water rather
+//     than painted on it. Still water sits lighter and cooler, choppy water deeper.
+float ReflWobble;
+float3 ReflTint;
 float3 SceneAmbient;     // lighting-stage ambient: the raw layer render carries no
                          // lighting, so the mirror scales it to match the lit scene
 // P3c: the map's OWN layers (Back/Buildings/Front families) re-rendered with no
@@ -139,6 +159,20 @@ sampler2D SceneSampler = sampler_state
 {
     Texture = <SceneTexture>;
     MinFilter = Point; MagFilter = Point; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+// The SAME texture read with filtering on, for the mirror only.
+//
+// Everything else in this shader wants point sampling, because the game's art is pixels drawn
+// at whole multiples and a filtered read of that is just a blurred game. The mirror is the one
+// place where it is wrong: the source is squashed by 1.25 vertically and then displaced by the
+// ripple, so a nearest-neighbour read drops and doubles whole rows of pixels. That is the
+// stair-stepped, notched edge along a reflected pier - it was never the water, it was the
+// resample.
+sampler2D SceneSmoothSampler = sampler_state
+{
+    Texture = <SceneTexture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
     AddressU = Clamp; AddressV = Clamp;
 };
 
@@ -384,13 +418,29 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // CARVED out of the pixel mask (the march stops at their base), so the mirror can start
         // right at the painted waterline — bank rims, bridge arches and a player standing at
         // the pond's edge all appear pressed against the water.
-        float2 reflUv = float2(mx + ripple.x * 3.0,
-                               edgeV - depth * 1.25 - 0.08 / TilesPerScreen.y + abs(ripple.y) * 2.0);
+        float2 reflUv = float2(mx + ripple.x * 3.0 * ReflWobble,
+                               edgeV - depth * 1.25 - 0.08 / TilesPerScreen.y + abs(ripple.y) * 2.0 * ReflWobble);
+        // Keep the UNCLAMPED coordinate for the scenery source, which reaches past the top of
+        // the screen; the composed-screen fallback and the mask lookups have nothing up there
+        // and still work on the clamped one.
+        float2 reflUvRaw = reflUv;
         reflUv = clamp(reflUv, float2(0.0, 0.0), float2(1.0, 1.0));
         // Prefer the sprite-free scenery source (P3c): the composed screen contains the
         // player/NPCs, and excluding them left body-shaped sky holes in the reflection.
+        float2 sceneUv = float2(reflUvRaw.x * (1.0 - 2.0 * SceneSidePad) + SceneSidePad,
+                                reflUvRaw.y * (1.0 - SceneTopPad) + SceneTopPad);
+        // Softened with DEPTH, the way water actually does it: sharp against the bank it is
+        // reflecting and hazier the further out it goes. Three taps up the compression axis,
+        // filtered, spread by how deep this pixel sits - at the waterline they land inside one
+        // source pixel and the reflection stays crisp, and out in open water they merge. This is
+        // both the fix for the stair-stepping and the reason the far end of a reflection now reads
+        // as distance rather than as a low-resolution copy.
+        float reflSoft = (0.25 + depth * TilesPerScreen.y * 0.10) / max(1.0, TilesPerScreen.y) / 16.0;
+        float2 sceneUvC = clamp(sceneUv, float2(0.0, 0.0), float2(1.0, 1.0));
         float3 refl = SceneOn > 0.5
-            ? tex2D(SceneSampler, reflUv).rgb * SceneAmbient
+            ? (tex2D(SceneSmoothSampler, sceneUvC).rgb * 0.5
+             + tex2D(SceneSmoothSampler, clamp(sceneUv + float2(0.0,  reflSoft), 0.0, 1.0)).rgb * 0.25
+             + tex2D(SceneSmoothSampler, clamp(sceneUv - float2(0.0,  reflSoft), 0.0, 1.0)).rgb * 0.25) * SceneAmbient
             : tex2D(SourceSampler, reflUv).rgb;
 
         // Wide 5-tap smoothing: at pixel-mask resolution a single bilinear sample flips
@@ -414,19 +464,51 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         float fade = saturate(1.0 - depth * 0.5);
         // Fade the reflection out where the mirrored sample would fall OFF-screen, instead of
         // clamping (which smears the edge row/column across the water near the screen border).
-        float2 dborder = min(reflUv, float2(1.0, 1.0) - reflUv);
-        float onScreen = saturate(min(dborder.x, dborder.y) / 0.06);
+        // Measured against whichever source is actually being read, so the padding around the
+        // screen counts as available when the scenery source is live and is still refused when
+        // the fallback is reading the composed frame.
+        //
+        // Two things were wrong with fading by "distance to the edge of the picture".
+        //
+        // The BOTTOM edge is not an edge this sample can fall off. The mirror reads upward from
+        // the waterline and never downward, so the only way sceneUv reaches the bottom of the
+        // source is a shoreline sitting low on the screen with almost no depth below it - which is
+        // a perfectly good reflection that was being dimmed for no reason. It is dropped from the
+        // test entirely.
+        //
+        // And the band was 6% of the picture, so the left and right of every screen carried a
+        // permanently faded strip of reflection about a tile and a quarter wide. With the scenery
+        // source padded past all three edges there are TRUE pixels out there for the whole of the
+        // reach the mirror can use, so the taper belongs at the very end of the data as a hairline,
+        // not as a standing tax on the edges of the view. The composed-screen fallback keeps the
+        // wide guard: it has no padding, and there a clamped sample really does smear the edge row
+        // across the water.
+        float2 borderUv = SceneOn > 0.5 ? sceneUv : reflUvRaw;
+        float guardBand = SceneOn > 0.5 ? 0.01 : 0.06;
+        float3 dedge = float3(borderUv.x, 1.0 - borderUv.x, borderUv.y);
+        float onScreen = saturate(min(min(dedge.x, dedge.y), dedge.z) / guardBand);
         // A TRUE mirror only exists when a shoreline was found, the mirrored source is not
         // itself water, and this column actually had water above it (bank-fringe columns
         // don't). Everywhere else, blend to a soft sky-glaze SHEEN instead of cutting to
         // nothing — the hard rectangles between mirrored and unmirrored water came from
         // those cuts, not from the mirror itself.
-        float3 mirrorCol = refl * float3(0.66, 0.76, 0.92);   // cool + darken: reads as "in the water"
-        // BOUNDED HEIGHT (see docs/water-v3-research). Nothing standing on a shore is taller than
-        // ~8 tiles, so a mirrored sample deeper than that cannot be a real reflection — and flat
-        // ground (height zero) reflected across a pond is what read as the "green sheet". The
-        // honest end of a reflection is SKY, not absence: dissolve the mirror into the sky tint
-        // across 5..9 tiles of depth instead of letting it run or cutting it off.
+        float3 mirrorCol = refl * ReflTint;   // cool + darken: reads as "in the water"
+        // BOUNDED HEIGHT (see docs/water-v3-research). A mirrored sample deeper than the tallest
+        // thing that can stand on a shore is not a reflection of anything — and flat ground
+        // (height zero) mirrored across a pond is what read as the "green sheet". The honest end of
+        // a reflection is SKY, not absence, so the mirror dissolves into the sky tint rather than
+        // running on or being cut off.
+        //
+        // The bound was 5..9 tiles, chosen when the mirror could only read what was on the screen.
+        // It is what made a wide river read as flat paint: the water more than nine tiles from its
+        // own upstream bank had its reflection dissolved away entirely, which is most of a river
+        // and most of a lake. Now that the source reaches twelve tiles past the top of the frame
+        // there are real pixels to mirror out there, and a cliff or a stand of trees is easily
+        // taller than the old bound allowed for, so it runs to 9..16.
+        //
+        // The upstream-WATER branch moved with it, 2..4 to 4..8, for the same reason and with the
+        // same caution: mirroring water onto water is what produced the dark streaks down a river,
+        // so it still resolves to sky, just not before the bank above has had its say.
         float depthTiles = depth * TilesPerScreen.y;
         float3 skySurf = lerp(col.rgb, SkyColor, 0.25);
         // ...and the same resolution when the mirrored SOURCE is upstream water. This used to be
@@ -435,8 +517,8 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // again). Resolving to sky suppresses the same upstream-water streaks with no seam, and
         // it engages at 2..4 tiles so a bridge plus a person standing on it (~2 tiles of genuine
         // reflection) keeps its full band.
-        float toSky = max(smoothstep(5.0, 9.0, depthTiles),
-                          srcWater * smoothstep(2.0, 4.0, depthTiles));
+        float toSky = max(smoothstep(9.0, 16.0, depthTiles),
+                          srcWater * smoothstep(4.0, 8.0, depthTiles));
         // P3b — sprites already reflect via the flipped-entity RT (composited below); the
         // same sprite left in the screen-flip SOURCE would mirror twice at a different
         // offset. With the sprite-free scenery source (P3c) live there is nothing to
@@ -491,7 +573,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         {
             // Wobble kept SMALL (was 1.8): a hard sway made the visible scrap of an
             // occluded reflection drift sideways and read as a separate floating blob.
-            float4 ent = tex2D(ReflectRTSampler, saturate(uv + ripple * 0.9));
+            float4 ent = tex2D(ReflectRTSampler, saturate(uv + ripple * 0.9 * ReflWobble));
             // Entities also mirror on the WET FRINGE (effect-only band: beach surf wash, the
             // strip under a bank's overlay art) — the march channel stops there, and clipping
             // a body's shallow half against it left the deep half floating detached below an
@@ -505,7 +587,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
             // mirrored beside it), 0.66 as "a bit too faint" once the feet->head fade landed on
             // top of it. 0.74 with that fade puts the near-feet band back at the old presence
             // while the deep end stays soft.
-            col.rgb = lerp(col.rgb, ent.rgb * float3(0.66, 0.76, 0.92), entAmt * 0.74);
+            col.rgb = lerp(col.rgb, ent.rgb * ReflTint, entAmt * 0.74);
         }
 
         // SELF-REFLECTION while wading: standing IN the water the player is BELOW the

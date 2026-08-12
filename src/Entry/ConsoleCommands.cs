@@ -392,9 +392,16 @@ namespace SDVRadiance
             // are identified: there is no id convention for "this is a recolour".
             (string Pattern, string Why)[] flags =
             {
-                ("spritemaster",  "INCOMPATIBLE, see Known issues"),
-                ("clearglasses",  "INCOMPATIBLE (SpriteMaster), see Known issues"),
-                ("clear monocle", "INCOMPATIBLE (SpriteMaster), see Known issues"),
+                // Two separate faults, both measured on this machine: the world rendering solid
+                // orange or black on load, and water losing its reflection in patches that shift
+                // as you walk. The second one was chased for hours as a water bug before anyone
+                // switched SpriteMaster off, so it is worth naming here rather than in a footnote.
+                ("spritemaster",  "INCOMPATIBLE: orange/black world on load, and patches of water lose their reflection"),
+                ("clearglasses",  "INCOMPATIBLE (SpriteMaster): orange/black world on load, and patches of water lose their reflection"),
+                // Clear Monocle is NOT SpriteMaster and has not been incompatible since its author
+                // shipped explicit support on 2026-07-28, confirmed by two users. This line used to
+                // say otherwise and told everyone running a current copy to remove a mod that works.
+                ("clear monocle", "was incompatible before its 2026-07-28 update; current versions are fine"),
                 ("reshade",       "another post-processing layer"),
                 ("dynamic shader", "another post-processing layer"),
                 ("shader",        "another post-processing layer"),

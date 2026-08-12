@@ -204,6 +204,31 @@ namespace SDVRadiance
                  * Matrix.CreateTranslation(pivot.X, pivot.Y, 0f);
         }
 
+        /// <summary>The player's shadow-length setting, remembered when the sun is computed so the
+        /// object pass can reach it. Both callers of <see cref="DrawObjectShadows"/> set it.</summary>
+        private float _sunLengthScale = 1f;
+
+        /// <summary>
+        /// How far a shadow of this KIND may reach, as a fraction of the sprite's own height.
+        ///
+        /// <para>
+        /// The caps are what keep a tree from throwing a shadow across the whole screen and a
+        /// fence from looking like a flagpole, and they were absolute: the sun's own stretch runs
+        /// past 0.4 for most of the day, so a small object sat pinned at its cap from mid-morning
+        /// to mid-afternoon and the length slider did nothing at all for anything but people. The
+        /// report was that benches, lightning rods and fences have no shadow worth the name "despite
+        /// player shadow sits at value 1.0", which is exactly what a dead slider looks like.
+        /// </para>
+        ///
+        /// <para>
+        /// Scaling the cap by the setting keeps every proportion the caps were chosen for and hands
+        /// the length back to the player: at the default 1.18 a fence reaches a little further than
+        /// it used to, and at the top of the slider everything on screen casts a long evening
+        /// shadow together.
+        /// </para>
+        /// </summary>
+        private float LengthCap(float stretch, float cap) => Math.Min(stretch, cap * _sunLengthScale);
+
         private RenderTarget2D RentObjRT(GraphicsDevice graphicsDevice)
         {
             if (_objectFreeTargets.Count > 0)
@@ -246,22 +271,36 @@ namespace SDVRadiance
                     // trunk (its vanilla contact blob is kept to fill the base). Bushes are
                     // short → full lean, matching the character direction, blob suppressed.
                     case Tree tree when tree.growthStage.Value >= 5 && !tree.stump.Value && tree.texture?.Value != null:
-                        DrawTreeShadow(spriteBatch, tree, tile, rot * TreeLeanScale, Math.Min(stretch, TreeStretchMax), alpha, blur);
+                        DrawTreeShadow(spriteBatch, tree, tile, rot, LengthCap(stretch, TreeStretchMax), alpha, blur);
                         break;
                     // Everything else the game still DRAWS as a tree: seeds, sprouts, saplings,
                     // bush-stage growth and stumps. They are short, so they take the full lean a
                     // bush does rather than the damped canopy lean above.
                     case Tree small when small.texture?.Value != null:
-                        DrawSmallTreeShadow(spriteBatch, small, tile, rot * TallLeanScale, Math.Min(stretch, 0.8f), alpha, blur);
+                        DrawSmallTreeShadow(spriteBatch, small, tile, rot, LengthCap(stretch, 0.8f), alpha, blur);
                         break;
                     case FruitTree ft when ft.growthStage.Value >= 4 && !ft.stump.Value && ft.texture != null:
-                        DrawFruitTreeShadow(spriteBatch, ft, tile, rot * TreeLeanScale, Math.Min(stretch, TreeStretchMax), alpha, blur);
+                        DrawFruitTreeShadow(spriteBatch, ft, tile, rot, LengthCap(stretch, TreeStretchMax), alpha, blur);
                         break;
                     case Bush bush:
-                        DrawBushShadow(spriteBatch, bush, rot * TallLeanScale, Math.Min(stretch, 0.8f), alpha, blur);
+                        DrawBushShadow(spriteBatch, bush, rot, LengthCap(stretch, 0.8f), alpha, blur);
                         break;
-                    case HoeDirt { crop: { } crop } hd when !crop.dead.Value && !crop.forageCrop.Value && !crop.IsErrorCrop():
-                        DrawCropShadow(spriteBatch, crop, tile, rot * TallLeanScale, Math.Min(stretch, 0.55f), alpha, blur);
+                    // DEAD crops cast too. They were excluded, and a withered plant is still a
+                    // plant standing on the soil: the game keeps drawing it, from art it keeps
+                    // current, until someone scythes it. A field the player let die read as
+                    // painted onto the ground while the scarecrow two tiles away stood on it,
+                    // which is how it was reported - "the little plants have no shadow", with a
+                    // picture of a dead crop row. Nothing else here needed changing: the crop
+                    // keeps its texture, its source rect, its draw position and its flip through
+                    // dying, so the same call handles it.
+                    case HoeDirt { crop: { } crop } hd when !crop.forageCrop.Value && !crop.IsErrorCrop():
+                        DrawCropShadow(spriteBatch, crop, tile, rot, LengthCap(stretch, StandingStretchMax), alpha, blur);
+                        break;
+                    // Grass. It stands on the ground like everything else here and was the only
+                    // thing on a meadow not casting, which reads as the grass being printed on the
+                    // dirt while the fence beside it stands on it.
+                    case StardewValley.TerrainFeatures.Grass grass when grass.texture?.Value != null:
+                        DrawGrassShadow(spriteBatch, grass, tile, rot, LengthCap(stretch, 0.35f), alpha, blur);
                         break;
                 }
             }
@@ -272,7 +311,7 @@ namespace SDVRadiance
                 if (ltf == null || ltile.X < tileX0 || ltile.X > tileX1 || ltile.Y < tileY0 || ltile.Y > tileY1)
                     continue;
                 if (ltf is Bush bush)
-                    DrawBushShadow(spriteBatch, bush, rot * TallLeanScale, Math.Min(stretch, 0.8f), alpha, blur);
+                    DrawBushShadow(spriteBatch, bush, rot, LengthCap(stretch, 0.8f), alpha, blur);
             }
 
             // What an EVENT stops drawing. Trees, bushes, crops and large terrain features are drawn
@@ -330,16 +369,15 @@ namespace SDVRadiance
                 {
                     if (o.Fragility == 2)
                         continue;
-                    // Damp the lean (like tall sprites) so a craftable against a wall climbs it less,
-                    // and cap the length so a small keg/machine's shadow stays near its own footprint
-                    // instead of stretching a full character-length away.
-                    DrawBigCraftableShadow(spriteBatch, o, tile, rot * TallLeanScale, Math.Min(stretch, 0.55f), alpha, blur);
+                    // A keg or a machine stands on the ground at its own height, so it takes the
+                    // same sun a person does (see StandingStretchMax).
+                    DrawBigCraftableShadow(spriteBatch, o, tile, rot, LengthCap(stretch, StandingStretchMax), alpha, blur);
                 }
                 else if (o.IsSpawnedObject)
                 {
                     // Small forage lying on the ground (beach shells, mushrooms, coral…). Short,
                     // strongly-damped shadow.
-                    DrawSmallObjectShadow(spriteBatch, o, tile, rot * TallLeanScale, Math.Min(stretch, 0.4f), alpha, blur);
+                    DrawSmallObjectShadow(spriteBatch, o, tile, rot, LengthCap(stretch, StandingStretchMax), alpha, blur);
                 }
                 else if (!o.isPassable() && o.QualifiedItemId != "(O)590" && o.QualifiedItemId != "(O)SeedSpot")
                 {
@@ -347,7 +385,7 @@ namespace SDVRadiance
                     // decor…) gets a real leaning silhouette too — drawn generically from the item's
                     // own sprite via ItemRegistry, so no per-type method is needed. Skip flat passable
                     // items and the ground-mark spots (artifact / seed) that shouldn't cast.
-                    DrawGenericObjectShadow(spriteBatch, o, tile, rot * TallLeanScale, Math.Min(stretch, 0.5f), alpha, blur);
+                    DrawGenericObjectShadow(spriteBatch, o, tile, rot, LengthCap(stretch, StandingStretchMax), alpha, blur);
                 }
             }
 
@@ -393,7 +431,7 @@ namespace SDVRadiance
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport, wpos + new Vector2(0f, -2f));
                     float depth = MathHelper.Clamp((wpos.Y - 1f) / 10000f, 0f, 1f);
                     EmitObj(spriteBatch, c.sprite.Texture, src, feet, new Vector2(src.Width / 2f, src.Height),
-                        ca, rot * TallLeanScale, Math.Min(stretch, 0.45f), depth, blur, ObjectHeadFade,
+                        ca, rot, LengthCap(stretch, 0.45f), depth, blur, ObjectHeadFade,
                         c.flip ? SpriteEffects.FlipHorizontally : SpriteEffects.None);
                 }
             }
@@ -426,8 +464,8 @@ namespace SDVRadiance
             tileX0 = Math.Max(0, tileX0); tileX1 = Math.Min(W - 1, tileX1);
             tileY0 = Math.Max(1, tileY0); tileY1 = Math.Min(H - 1, tileY1);
 
-            float rotD = rot * TallLeanScale;
-            float stD = Math.Min(stretch, 0.6f);
+            float rotD = rot;
+            float stD = LengthCap(stretch, 0.6f);
             float shear = -(float)Math.Sin(rotD) * stD;
             float shearScaleY = Math.Max(0.15f, stD * (float)Math.Cos(rotD));
 
@@ -917,6 +955,43 @@ namespace SDVRadiance
             DrawContactBlob(spriteBatch, feet, w * 0.5f * 0.85f, 24f, alpha, depth, blur);
         }
 
+        /// <summary>
+        /// A tuft of grass, cast blade by blade from the game's own layout (see <see cref="GrassArt"/>).
+        /// <para>
+        /// Blade by blade rather than one shadow for the tile, because a tuft is up to four separate
+        /// 15x20 sprites at jittered spots and a single silhouette in the middle of the tile would
+        /// sit under none of them. The blades share very few distinct source frames, so they share
+        /// bakes and the extra cost is draw calls, not bakes.
+        /// </para>
+        /// <para>
+        /// The cap is the shortest of any caster here. Grass is a hand's breadth tall; a shadow the
+        /// length of a fence post's would read as a shrub.
+        /// </para>
+        /// </summary>
+        /// <summary>
+        /// Per-blade strength. A tuft is up to four blades whose bases sit within a few pixels of
+        /// each other, and four transparent shadows laid on top of one another are not four times
+        /// as dark - they are 1-(1-a)^4, which at full strength is very nearly opaque. Every other
+        /// caster here is one silhouette, so this is the only place that needs the discount.
+        /// </summary>
+        private const float GrassBladeAlpha = 0.62f;
+
+        private void DrawGrassShadow(SpriteBatch spriteBatch, StardewValley.TerrainFeatures.Grass grass, Vector2 tile,
+            float rot, float stretch, float alpha, float blur)
+        {
+            if (!GrassArt.TryRead(grass, out int blades, out int[] which, out int[] ox, out int[] oy))
+                return;
+            Texture2D texture = grass.texture.Value;
+            float depth = MathHelper.Clamp(((tile.Y + 1f) * 64f) / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
+            for (int i = 0; i < blades; i++)
+            {
+                Vector2 at = GrassArt.BladeAt(tile, i, ox, oy);
+                EmitObj(spriteBatch, texture, GrassArt.BladeShadowSource(grass, i, which),
+                    Game1.GlobalToLocal(Game1.viewport, at), GrassArt.BladeOrigin,
+                    alpha * GrassBladeAlpha, rot, stretch, depth, blur, ObjectHeadFade);
+            }
+        }
+
         /// <summary>Small forage lying on the ground (16x16) — a short leaning silhouette to ground it.</summary>
         private void DrawSmallObjectShadow(SpriteBatch spriteBatch, SObject o, Vector2 tile, float rot, float stretch, float alpha, float blur)
         {
@@ -935,11 +1010,26 @@ namespace SDVRadiance
         /// not. This is the test that opacity was standing in for, badly.</summary>
         private const int MaxPropSpan = 2;
 
-        /// <summary>Lean damping for tall sprites (bushes/craftables) so the shadow stays rooted at the base.</summary>
-        private const float TallLeanScale = 0.6f;
-        /// <summary>Trees lean/stretch the least: the long canopy cast otherwise detaches from the
-        /// trunk (and its contact blob), reading as two separate shadows.</summary>
-        private const float TreeLeanScale = 0.38f;
+        /// <summary>
+        /// How long a tree's shadow may get, as a fraction of the trunk-to-crown height.
+        ///
+        /// <para>
+        /// This is the ONLY lever that may be pulled to stop a canopy cast detaching from its own
+        /// trunk. Two constants used to damp the tree's and the props' sun ANGLE instead — 0.38 and
+        /// 0.6 of the character angle — and that is a different sun for each of them. The geometry
+        /// says so plainly: the silhouette is sheared by <c>-sin(rot)·stretch</c> sideways and
+        /// <c>cos(rot)·stretch</c> upward, so the tip lands at an angle of exactly <c>-rot</c> and
+        /// the stretch cancels out of it. Shortening a shadow leaves its direction alone; damping
+        /// the angle moves the sun.
+        /// </para>
+        ///
+        /// <para>
+        /// Reported, correctly, as two suns: at six in the morning the player's shadow pointed one
+        /// way and every tree's pointed another, and the reporter had measured the difference in
+        /// clock hours before writing in. Everything the sun casts now takes one angle, and the
+        /// caps below decide only how far each thing reaches.
+        /// </para>
+        /// </summary>
         private const float TreeStretchMax = 0.6f;
         /// <summary>Lift the character/animal feet anchor a touch so the shadow base sits at the
         /// visual feet rather than a few px below (the bounding-box bottom overshoots).</summary>
@@ -971,6 +1061,30 @@ namespace SDVRadiance
         /// transparent padding above young growth stages means the shadow shrinks with the plant.
         /// </summary>
         private static readonly Vector2 CropOrigin = new(8f, 32f);
+
+        /// <summary>
+        /// How long the shadow of a thing STANDING on the ground may get, as a fraction of its
+        /// own height. Crops, forage, fences, signs, kegs, machines.
+        ///
+        /// <para>
+        /// A shadow has to clear the thing casting it or it is not read as a shadow. The lean
+        /// slides the silhouette sideways by <c>sin(rot)·stretch</c> per pixel of height, so at a
+        /// sun 50 degrees off vertical a plant twelve pixels tall needed a stretch near 0.85 for
+        /// its shadow to escape its own eight-pixel half-width. The old ceiling of 0.55 put it at
+        /// 0.51, and the shadow of every dead crop landed ON the plant. Reported as exactly that:
+        /// the shadow is on top of the plant, it should be behind it, with an A/B screenshot.
+        /// Forage (0.4) and fences (0.5) were the same failure at other numbers, and were reported
+        /// too: "a hint of shadow but nothing deserving to be called one".
+        /// </para>
+        ///
+        /// <para>
+        /// A standing sprite's height IS the thing's height, so there was never a reason for any
+        /// of these to take a shorter sun than a person does. The ceilings that remain are for
+        /// sprites whose height is not a height: a tree's canopy, a bush's mass, a painted-on map
+        /// prop's tile column.
+        /// </para>
+        /// </summary>
+        private const float StandingStretchMax = 1.0f;
 
         private void DrawCropShadow(SpriteBatch spriteBatch, Crop crop, Vector2 tile, float rot, float stretch, float alpha, float blur)
         {
@@ -1081,9 +1195,25 @@ namespace SDVRadiance
             Rectangle src = Tree.treeTopSourceRect;                 // (0,0,48,96) standard canopy
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f));
             float depth = MathHelper.Clamp((tree.getBoundingBox().Bottom + 2f) / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
+            SpriteEffects effects = tree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
+            // THE TRUNK, first, because the canopy is only half the tree.
+            //
+            // Tree.draw puts the trunk on screen as its own crop - stumpSourceRect, 16x32, bottom
+            // on the same line the canopy is anchored to - and the canopy rect's bottom rows are
+            // empty precisely because that is where the trunk would have been. Casting the canopy
+            // alone therefore threw a shadow that begins a tile and a half up the tree. A gentle
+            // lean landed it close enough to the base to read as attached; the moment the lean
+            // became the true one it slid clear and the shadow came away from the tree it belongs
+            // to, which is what the old angle damping was really hiding.
+            //
+            // A shadow that starts where the wood meets the ground stays attached at any sun angle,
+            // which is the honest fix rather than shortening the lean until the seam is covered.
+            Rectangle trunk = Tree.stumpSourceRect;                  // (32,96,16,32)
+            EmitObj(spriteBatch, tree.texture.Value, trunk, feet, new Vector2(trunk.Width / 2f, trunk.Height),
+                alpha, rot, stretch, depth, blur, ObjectHeadFade, effects);
             // Tree canopy draws with origin (24, 96); fade about the trunk base.
             EmitObj(spriteBatch, tree.texture.Value, src, feet, new Vector2(24f, 96f),
-                alpha, rot, stretch, depth, blur, ObjectHeadFade);
+                alpha, rot, stretch, depth, blur, ObjectHeadFade, effects);
         }
 
         /// <summary>
@@ -1125,8 +1255,13 @@ namespace SDVRadiance
             var src = new Rectangle((12 + season * 3) * 16, row * 5 * 16, 48, 64);
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f));
             float depth = MathHelper.Clamp(ft.getBoundingBox().Bottom / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
+            SpriteEffects effects = ft.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
+            // Its trunk is a separate crop too (FruitTree.draw: 48x32 at x=384, origin (24,32)),
+            // and it was missing for the same reason and with the same result.
+            EmitObj(spriteBatch, ft.texture, new Rectangle(384, row * 5 * 16 + 48, 48, 32), feet,
+                new Vector2(24f, 32f), alpha, rot, stretch, depth, blur, ObjectHeadFade, effects);
             EmitObj(spriteBatch, ft.texture, src, feet, new Vector2(24f, 80f),
-                alpha, rot, stretch, depth, blur, ObjectHeadFade);
+                alpha, rot, stretch, depth, blur, ObjectHeadFade, effects);
         }
 
         private void DrawBushShadow(SpriteBatch spriteBatch, Bush bush, float rot, float stretch, float alpha, float blur)

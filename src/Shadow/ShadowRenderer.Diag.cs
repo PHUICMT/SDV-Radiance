@@ -31,6 +31,7 @@ namespace SDVRadiance
             Event? ev = Game1.CurrentEvent;
             report.AppendLine($"[shadows] location={location.NameOrUniqueName} outdoors={location.IsOutdoors} time={Game1.timeOfDay} season={Game1.season}");
             report.AppendLine($"[shadows] path={(SunCasts() ? "SUN" : "PER-LIGHT")} shouldCast={ShouldCast(config)} strength={config.DirectionalShadowStrength:0.00} objectsEnabled={config.DirectionalShadowObjects}");
+            AppendSunGeometry(report, config);
             // The event flags decide who the game is drawing at all. Every one of them has caught
             // an assumption out at least once, so all of them are printed, not just the relevant one.
             report.AppendLine($"[shadows] eventUp={Game1.eventUp} currentEvent={(ev != null)} isFestival={ev?.isFestival} "
@@ -226,6 +227,50 @@ namespace SDVRadiance
                 report.AppendLine("  (none — an orphan shadow here comes from something not in these lists)");
 
             return report.ToString().TrimEnd();
+        }
+
+        /// <summary>
+        /// The angle every kind of shadow is ACTUALLY drawn at, next to the sun's own.
+        ///
+        /// <para>
+        /// A character is drawn as a rotation of its silhouette; everything else is drawn as a
+        /// shear about the feet row plus a vertical squash. Those two are supposed to land on the
+        /// same on-screen angle, and reading the code says they do, so when someone reports that a
+        /// crop's shadow does not point where a person's does, the code is not what to re-read.
+        /// This prints the number each kind ends up at, so the report can be checked against the
+        /// screen instead of against an argument. <c>floor</c> marks a kind whose squash hit the
+        /// 0.15 clamp, which is the one thing that CAN bend an angle away from the sun's.
+        /// </para>
+        /// </summary>
+        private static void AppendSunGeometry(StringBuilder report, ModConfig config)
+        {
+            ComputeSun(out float rot, out float stretch, out float _);
+            // The drawn value is eased toward this one over about a second, so a report taken in
+            // the middle of a shower reads a few percent off. Nothing here turns on that.
+            float overcast = OvercastNow();
+            float lengthScale = Math.Max(0.1f, config.DirectionalShadowLength)
+                              * MathHelper.Lerp(1f, OvercastLength, overcast);
+            float sunStretch = stretch * lengthScale;
+            const float Deg = 180f / (float)Math.PI;
+            report.AppendLine($"[shadows] sun rot={rot * Deg:0.0}deg stretch={sunStretch:0.00} lengthScale={lengthScale:0.00} "
+                        + $"overcast={overcast:0.00}");
+            report.AppendLine($"[shadows] geometry: character (rotated) angle={rot * Deg:0.0}deg stretch={sunStretch:0.00}");
+
+            void Kind(string name, float cap)
+            {
+                float st = Math.Min(sunStretch, cap * lengthScale);
+                float shear = -(float)Math.Sin(rot) * st;
+                float raw = st * (float)Math.Cos(rot);
+                float sy = Math.Max(0.15f, raw);
+                float angle = (float)Math.Atan2(-shear, sy) * Deg;
+                report.AppendLine($"[shadows]   {name,-12} cap={cap:0.00} stretch={st:0.00} shear={shear:0.000} "
+                            + $"squash={sy:0.000}{(raw < 0.15f ? " floor" : "")} angle={angle:0.0}deg");
+            }
+            Kind("tree", TreeStretchMax);
+            Kind("bush", 0.8f);
+            Kind("crop", 0.55f);
+            Kind("grass", 0.35f);
+            Kind("object", 0.5f);
         }
     }
 }

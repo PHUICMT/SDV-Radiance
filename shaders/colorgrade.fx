@@ -71,7 +71,28 @@ float4 GradePS(PixelInput input) : SV_TARGET
     // --- back to gamma space: perceptual ops (contrast, saturation) ---
     float3 col = ToSRGB(lin);
 
-    col = (col - 0.5) * Contrast + 0.5;          // contrast, pivoted at mid-grey
+    // Contrast on LUMINANCE, with the colour carried along at its own ratio.
+    //
+    // Per-channel, this was `(col - 0.5) * Contrast + 0.5`, which pushes each channel away from
+    // mid-grey by itself and therefore pulls them apart from EACH OTHER: a warm pixel at
+    // (0.80, 0.50, 0.30) comes out (0.845, 0.500, 0.270) at a contrast of 1.15, so its
+    // saturation has risen even though the saturation control was never touched. Measured in the
+    // saloon, the grade alone took HSV saturation from 0.798 to 0.956 while the Saturation
+    // setting was 1.05 - a twenty percent lift asked for by a five percent control, with the
+    // other fifteen coming from here. Working on luminance and scaling the channels together
+    // gives the same tonal contrast and leaves the hue and the saturation exactly where the
+    // artist's own controls put them.
+    float preLum = dot(col, LUMA);
+    float postLum = saturate((preLum - 0.5) * Contrast + 0.5);
+    // A pivot contrast line crosses zero: at 1.15 everything below a luminance of 0.065 lands
+    // AT zero, exactly. Per channel that was survivable - a dark blue kept its blue while red
+    // and green clipped - but on luminance the ratio below multiplies ALL THREE channels by
+    // that zero, and half of an outdoor night sits under the cut-off. Measured in the forest
+    // at 21:00: vanilla 0.3% pure black, this line 60.5%, and it bisected to exactly this
+    // commit's rework. Film curves solve it with a TOE: fade the contrast back to identity
+    // through the deepest shadows, so darkness compresses smoothly and never hits the floor.
+    postLum = lerp(preLum, postLum, smoothstep(0.0, 0.25, preLum));
+    col *= postLum / max(preLum, 1e-4);
 
     float lum = dot(col, LUMA);
     col = lerp(lum.xxx, col, Saturation);        // saturation

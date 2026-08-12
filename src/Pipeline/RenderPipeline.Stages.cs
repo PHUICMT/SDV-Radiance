@@ -82,18 +82,29 @@ namespace SDVRadiance
             effect.CurrentTechnique = effect.Techniques["BlurH"];
             Pass(spriteBatch, rtA, rtB, effect);
 
+            // The last blur lands in the KEPT target, not the scratch one: god rays and bloom
+            // rewrite the scratch buffers later this same frame, and the sun shafts need this
+            // mask still intact NEXT frame (see _cloudMaskKeep). Same pass, different address.
+            var keep = _cloudMaskKeep ?? rtA;
             GetParam(effect, "TexelSize")?.SetValue(new Vector2(0f, 1f / rtB.Height));
             effect.CurrentTechnique = effect.Techniques["BlurV"];
-            Pass(spriteBatch, rtB, rtA, effect);
+            Pass(spriteBatch, rtB, keep, effect);
 
             // Pass 4: composite the blurred shadow onto the scene.
-            GetParam(effect, "Opacity")?.SetValue(config.CloudShadowOpacity * _cloudDayFactor * _fadeCloud);
+            float cloudOpacity = config.CloudShadowOpacity * _cloudDayFactor * _fadeCloud;
+            GetParam(effect, "Opacity")?.SetValue(cloudOpacity);
             // Day: clouds shade EVERYTHING (white eyes/flowers included — the sun is the
             // light). Night: near-white lamp/fire cores resist the moon-cloud shadow.
             GetParam(effect, "LightProtect")?.SetValue(NightFactorNow());
-            GetParam(effect, "ShadowTexture")?.SetValue(rtA);
+            GetParam(effect, "ShadowTexture")?.SetValue(keep);
             effect.CurrentTechnique = effect.Techniques["Composite"];
             DrawFull(spriteBatch, source, dest, effect);
+
+            // What the sun shafts will read back next frame, and the facts they need to trust
+            // it: when it was drawn, from where, and how dark the sky actually was.
+            _cloudMaskTick = Determinism.Ticks;
+            _cloudMaskTileOffset = new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f);
+            _cloudMaskStrength = cloudOpacity;
         }
 
         /// <summary>How many times the current map fits inside the viewport (>=1), clamped.
@@ -177,10 +188,11 @@ namespace SDVRadiance
             GetParam(effect, "Weight")?.SetValue(0.5f);
             for (int li = 0; li < _godRayLights.Count; li++)
             {
-                var (luv, lruv, lamt) = _godRayLights[li];
+                var (luv, lruv, lamt, lreach) = _godRayLights[li];
                 GetParam(effect, "LightPos")?.SetValue(luv);
                 GetParam(effect, "LightRadius")?.SetValue(lruv);
                 GetParam(effect, "LightAmt")?.SetValue(lamt);   // this lamp's own eased presence
+                GetParam(effect, "RayReach")?.SetValue(lreach); // 0 for a lamp, a fixed march for the sun
                 effect.CurrentTechnique = effect.Techniques["Bright"];
                 Pass(spriteBatch, source, rtA, effect);
                 effect.CurrentTechnique = effect.Techniques["Rays"];
@@ -449,6 +461,14 @@ namespace SDVRadiance
         private bool _dbgWindowsHere, _dbgWindowBeamOn;
         private int _dbgWindowCount, _dbgWindowLightsSeen, _dbgWindowLightsDark;
         private Vector3 _dbgWindowColour, _dbgExposure = Vector3.One;
+        private float _dbgRoomSaturation = 1f, _dbgGiStrength;
+        /// <summary>Sun shaft term as last handed to the shader, for the report: "no shafts" has
+        /// four gates (both switches, outdoors, sun up) and a strength of zero does not say which.</summary>
+        internal float _dbgShaftStrength;
+        internal Vector2 _dbgShaftDir;
+        private float _shaftStrengthEase;
+        private Vector2 _shaftDirEase = new(0f, 1f);
+        private Vector3 _shaftColourEase;
         private float _dbgPaneDaylight, _dbgWindowLean, _dbgWindowReach;
         private float _dbgHearthFloor, _dbgDirectScale;
 
@@ -480,9 +500,24 @@ namespace SDVRadiance
             sb.AppendLine($"    daylight through the glass: colour ({_dbgWindowColour.X:F2},{_dbgWindowColour.Y:F2},"
                         + $"{_dbgWindowColour.Z:F2}) pane {_dbgPaneDaylight:F2}");
             sb.AppendLine($"    beam shape: lean {_dbgWindowLean:F2} tiles sideways per tile down, reach {_dbgWindowReach:F1} tiles");
-            float dim = Math.Clamp(1f - (_dbgExposure.X + _dbgExposure.Y + _dbgExposure.Z) / 3f, 0f, 1f);
+            // Luminance, the same way the exposure was built and the same way the shader's own
+            // give-back reads it. An arithmetic mean answered 0% dimmed for a room measurably
+            // dimmed by a fifth, because a cool cast puts blue above 1 and the mean hides the
+            // whole thing - a diagnostic that agreed with the bug rather than reporting it.
+            float dim = Math.Clamp(1f - (0.299f * _dbgExposure.X + 0.587f * _dbgExposure.Y
+                                         + 0.114f * _dbgExposure.Z), 0f, 1f);
             sb.AppendLine($"    room exposure ({_dbgExposure.X:F2},{_dbgExposure.Y:F2},{_dbgExposure.Z:F2}) "
                         + $"-> we dimmed this room by {dim:P0}");
+            // The two terms behind "the colours look wrong indoors". The exposure above is a
+            // COLOUR: its three channels apart is the hour's cast, cool in the morning and warm
+            // before dark, and a wide spread on warm wood is what reads as the room losing its
+            // own colour. Saturation is the lift that is supposed to answer that, and the GI
+            // strength is the separate soft glow laid over the room. Each has its own switch, so
+            // naming which one is doing it takes one number rather than one argument.
+            float spread = Math.Max(Math.Max(_dbgExposure.X, _dbgExposure.Y), _dbgExposure.Z)
+                         - Math.Min(Math.Min(_dbgExposure.X, _dbgExposure.Y), _dbgExposure.Z);
+            sb.AppendLine($"    hour cast: channels spread {spread:F2} "
+                        + $"({(_dbgExposure.Z > _dbgExposure.X ? "cool" : "warm")}), saturation lift {_dbgRoomSaturation:F2}, GI strength {_dbgGiStrength:F2}");
             sb.AppendLine($"    light pools give back {1.15f * Math.Max(dim, _dbgHearthFloor):F2}x "
                         + $"(floor {_dbgHearthFloor:F2}), direct pools scaled {_dbgDirectScale:F2}");
             return sb.ToString().TrimEnd();
@@ -499,6 +534,97 @@ namespace SDVRadiance
             float floodCarry = MathHelper.Clamp(config.FloodLightingStrength, 0f, 1f) * _fadeFlood;
             GetParam(effect, "Strength")?.SetValue(floodCarry);
             GetParam(effect, "AmbientFloor")?.SetValue(0.10f);
+            // Purkinje night desaturation, outdoors only. Scaled by the same night ramp as the
+            // ground dim so the two arrive together, and by the night-darkness slider relative to
+            // its default so one setting owns the whole character of the night: slid to zero the
+            // night keeps every colour, slid deep it goes properly rod-vision. The ramp is an
+            // hour of game time, so there is no frame anyone can point at where it switched on.
+            bool purkinjeOutdoors = Game1.currentLocation?.IsOutdoors ?? false;
+            float purkinje = purkinjeOutdoors
+                ? Math.Min(0.45f, 0.35f * FloodLightmap.NightAmount() * (config.LightingNightDarkness / 0.56f))
+                : 0f;
+            GetParam(effect, "NightDesat")?.SetValue(purkinje * _fadeFlood);
+            // The brighten half of the night slider (see the shader's NightLift note). Below ~0.32
+            // the night is LIFTED above vanilla, cool and readable; at the default and above this
+            // is exactly zero and the dim side of the slider rules alone. Same one-hour ramp.
+            float nightLift = purkinjeOutdoors
+                ? FloodLightmap.NightAmount() * Math.Max(0f, 0.32f - config.LightingNightDarkness) * 1.4f
+                : 0f;
+            GetParam(effect, "NightLift")?.SetValue(nightLift * _fadeFlood);
+            // Sun shafts: the occluder-marched god rays (see the shader's param block for why the
+            // bright-pass version could never work top-down). Both switches, outdoors, sun up.
+            float shaftTarget = 0f;
+            Vector2 shaftDir = _shaftDirEase;
+            Vector3 shaftColour = _shaftColourEase;
+            // The sun switch stands on its own. It lived under the lamp-ray master for a day, and
+            // that read as one switch too many: the two effects share nothing but a word - lamp
+            // rays are a bright-pass streak, sun shafts are an occluder march - so tying the sun
+            // to the lamp toggle only meant two clicks to get one effect.
+            if (config.GodRaysSun && purkinjeOutdoors
+                && ShadowRenderer.SunInSky(out float shaftLean, out float _))
+            {
+                ShadowRenderer.WindowDaylight(out Vector3 sunColour, out float sunStrength);
+                shaftDir = Vector2.Normalize(new Vector2(shaftLean, 1f));
+                shaftColour = sunColour;
+                // The intensity slider players already own scales it; 0.30 at the default 0.68
+                // keeps the shafts a garnish rather than a filter.
+                shaftTarget = 0.45f * sunStrength * MathHelper.Clamp(config.GodRaysIntensity, 0f, 1.5f) * _fadeFlood;
+            }
+            // Every gate on the shafts is a hard flip - rain starting, the toggle, a warp - and a
+            // hard flip on a whole-screen effect is a pop. Ease over about a second, both ways,
+            // per the house rule that every effect fades in both directions. Direction and colour
+            // ease with it so a shaft mid-fade cannot snap to a new sun.
+            _shaftStrengthEase += (shaftTarget - _shaftStrengthEase) * 0.05f;
+            if (Math.Abs(shaftTarget - _shaftStrengthEase) < 0.002f) _shaftStrengthEase = shaftTarget;
+            _shaftDirEase = Vector2.Lerp(_shaftDirEase, shaftDir, 0.05f);
+            if (_shaftDirEase.LengthSquared() > 0.001f) _shaftDirEase = Vector2.Normalize(_shaftDirEase);
+            else _shaftDirEase = shaftDir;
+            _shaftColourEase = Vector3.Lerp(_shaftColourEase, shaftColour, 0.05f);
+            float shaftStrength = _shaftStrengthEase;
+            shaftDir = _shaftDirEase;
+            shaftColour = _shaftColourEase;
+            _dbgShaftStrength = shaftStrength;
+            _dbgShaftDir = shaftDir;
+            GetParam(effect, "SunShaftDir")?.SetValue(shaftDir);
+            GetParam(effect, "SunShaftColour")?.SetValue(shaftColour);
+            GetParam(effect, "SunShaftStrength")?.SetValue(shaftStrength);
+            GetParam(effect, "SunShaftDrift")?.SetValue((float)(Determinism.Seconds * 0.35 % 6283.185) );
+            // The density slider players already own also sets how far the dapple stretches from
+            // its canopy. Normalised so the DEFAULT (0.6) is exactly the tuned look - binding the
+            // raw slider would have silently shortened every shaft by 40% at defaults - and capped
+            // at 1.1 because the occluder mask is padded 8 tiles (FloodOccPad): march past the
+            // padding and shafts appear as you walk, the exact bug the padding was added to fix.
+            GetParam(effect, "SunShaftReach")?.SetValue(MathHelper.Clamp(config.GodRaysDensity / 0.6f, 0.15f, 1.1f));
+            // The fog stage's own eased amount, so a misty morning thickens the shafts in step
+            // with the haze it is already drawing, and both fade together when the mist lifts.
+            GetParam(effect, "SunShaftHaze")?.SetValue(MathHelper.Clamp(_fogDayAmount, 0f, 1f));
+            // The same baked fbm the clouds and fog sample, here for the shaft dust motes.
+            GetParam(effect, "NoiseTexture")?.SetValue(NoiseTex());
+            // Cloud coupling: the cloud stage's kept mask from LAST frame (see _cloudMaskKeep),
+            // one frame stale by construction since flood runs first. Refused outright when the
+            // mask is old (cloud stage off) or the camera jumped more than half a screen since
+            // it was drawn (a warp: the kept mask is a picture of somewhere else). The coupling
+            // strength eases like every other gate here, so clouds joining or leaving the frame
+            // never step the shafts.
+            float cloudCoupleTarget = 0f;
+            Vector2 cloudShift = Vector2.Zero;
+            if (_cloudMaskKeep != null && Determinism.Ticks - _cloudMaskTick <= 2)
+            {
+                var tilesPer = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
+                Vector2 shiftTiles = new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f) - _cloudMaskTileOffset;
+                cloudShift = shiftTiles / tilesPer;
+                if (Math.Abs(cloudShift.X) < 0.5f && Math.Abs(cloudShift.Y) < 0.5f)
+                    // 2.2: the mask's opacity is a SHADE strength (0.35 by default), but a cloud
+                    // between the sun and the ground cuts the direct beam much harder than it
+                    // dims the ground - a faint moon-cloud still gates faintly, a storm fully.
+                    cloudCoupleTarget = MathHelper.Clamp(_cloudMaskStrength * 2.2f, 0f, 1f);
+                else
+                    cloudShift = Vector2.Zero;
+            }
+            Approach(ref _shaftCloudEase, cloudCoupleTarget, 0.05f);
+            GetParam(effect, "CloudMaskTexture")?.SetValue(_cloudMaskKeep);
+            GetParam(effect, "CloudCouple")?.SetValue(_shaftCloudEase);
+            GetParam(effect, "CloudMaskShift")?.SetValue(cloudShift);
 
             // Direct pools: the ranked leaders get the shadow ray, everything behind them
             // still gets its pool.
@@ -539,9 +665,18 @@ namespace SDVRadiance
             GetParam(effect, "SoftColArr")?.SetValue(_floodSoftColors);
             GetParam(effect, "SoftCount")?.SetValue((float)m);
             GetParam(effect, "Aspect")?.SetValue(dest.Width / (float)Math.Max(1, dest.Height));
-            GetParam(effect, "OccluderTexture")?.SetValue(_occluderMask);
-            GetParam(effect, "OccOrigin")?.SetValue(new Vector2((float)Math.Floor(Game1.viewport.X / 64f), (float)Math.Floor(Game1.viewport.Y / 64f)));
-            GetParam(effect, "OccMapSize")?.SetValue(_occluderMaskSize);
+            // FLOOD's own mask, own origin, own size fields — see the note on _floodOccluderMask
+            // for why these must never be the classic path's shared fields. They used to be, and
+            // classic's build runs later in the same frame and always overwrote them, so flood's
+            // shader was reading classic's smaller, unpadded, un-softened mask back every frame
+            // whenever both lighting systems were on (the shipped default, since flood does not
+            // disable classic on its own). Found while chasing a different bug (a solid black
+            // fireplace, which turned out to be the saturation lerp elsewhere in this shader) and
+            // fixed on sight rather than left as a landmine for whoever hits it next: two systems
+            // silently overwriting one shared cache is wrong regardless of what it does today.
+            GetParam(effect, "OccluderTexture")?.SetValue(_floodOccluderMask);
+            GetParam(effect, "OccOrigin")?.SetValue(new Vector2(_floodOccluderTileX, _floodOccluderTileY));
+            GetParam(effect, "OccMapSize")?.SetValue(_floodOccluderMaskSize);
             GetParam(effect, "ShadowStrength")?.SetValue(MathHelper.Clamp(config.FloodShadowStrength, 0f, 1f));
 
             // ---- Time-of-day room exposure + window shafts (windowed interiors only) ----
@@ -560,7 +695,7 @@ namespace SDVRadiance
                 _roomSaturationEase = satTarget;
                 _paneDaylightEase = paneDaylightTarget;
                 _windowDaylightEase = windowedRoom ? 1f : 0f;
-                _windowRoomLightEase = windowsHere && config.WindowRoomLightEnabled ? 1f : 0f;
+                _windowRoomLightEase = windowsHere ? 1f : 0f;
             }
             else
             {
@@ -569,8 +704,7 @@ namespace SDVRadiance
                 _roomSaturationEase = MathHelper.Lerp(_roomSaturationEase, satTarget, 0.03f);
                 _paneDaylightEase = MathHelper.Lerp(_paneDaylightEase, paneDaylightTarget, 0.03f);
                 _windowDaylightEase = MathHelper.Lerp(_windowDaylightEase, windowedRoom ? 1f : 0f, 0.03f);
-                _windowRoomLightEase = MathHelper.Lerp(_windowRoomLightEase,
-                    windowsHere && config.WindowRoomLightEnabled ? 1f : 0f, 0.03f);
+                _windowRoomLightEase = MathHelper.Lerp(_windowRoomLightEase, windowsHere ? 1f : 0f, 0.03f);
             }
             // The lightmap seeds both of its window terms on the CPU, a frame ahead of this, so
             // hand it the EASED switches rather than the switches: turning either off has to fade
@@ -581,6 +715,11 @@ namespace SDVRadiance
             // exposure walks back to neutral with it, so toggling never steps the room.
             GetParam(effect, "Exposure")?.SetValue(Vector3.Lerp(Vector3.One, _exposureEase, _fadeFlood));
             GetParam(effect, "RoomSaturation")?.SetValue(MathHelper.Lerp(1f, _roomSaturationEase, _fadeFlood));
+            // ...and the switch that says the saturation lift may run at all. See the shader's
+            // RoomLookOn note: handing it a neutral 1.0 outdoors was supposed to make the block an
+            // identity and measurably did not, so the room look is now switched off outdoors
+            // rather than argued into being harmless there.
+            GetParam(effect, "RoomLookOn")?.SetValue(windowsHere ? 1f : 0f);
             // The hearth's give-back used to be scaled by our own dimming alone, so it faded to
             // nothing as a room filled with morning light and the fire stopped lighting boards it
             // was plainly lighting. This floor keeps it alive in a lit ROOM and stays zero
@@ -641,6 +780,8 @@ namespace SDVRadiance
             _dbgWindowLean = lean;
             _dbgWindowReach = reachTiles;
             _dbgExposure = Vector3.Lerp(Vector3.One, _exposureEase, _fadeFlood);
+            _dbgRoomSaturation = MathHelper.Lerp(1f, _roomSaturationEase, _fadeFlood);
+            _dbgGiStrength = config.FloodLightingStrength;
             _dbgHearthFloor = windowedRoom ? HearthLitRoomFloor * _fadeFlood : 0f;
             _dbgDirectScale = directScale;
 
@@ -700,6 +841,20 @@ namespace SDVRadiance
             // The raw layer render carries no lighting; ambient rescales it to the scene.
             GetParam(effect, "SceneOn")?.SetValue(SceneRTReady && _mirrorSourceRenderTarget != null && !SceneSourceOff ? 1f : 0f);
             GetParam(effect, "SceneTexture")?.SetValue(_mirrorSourceRenderTarget);
+            GetParam(effect, "SceneTopPad")?.SetValue(MirrorSourceTopPad);
+            GetParam(effect, "SceneSidePad")?.SetValue(MirrorSourceSidePad);
+            // The named reflection look. The surface's own movement and how much of it is allowed
+            // to displace the MIRROR were one number, so the only way to read a reflection on a
+            // rainy day - where the game makes the surface half again as choppy on its own - was
+            // to turn the water down everywhere. Two questions, two answers.
+            (float reflWobble, Vector3 reflTint) = config.WaterReflectStyle switch
+            {
+                WaterReflectionStyle.StillWater => (0.15f, new Vector3(0.80f, 0.86f, 0.96f)),
+                WaterReflectionStyle.Choppy     => (1.90f, new Vector3(0.60f, 0.72f, 0.90f)),
+                _                               => (1.00f, new Vector3(0.66f, 0.76f, 0.92f)),
+            };
+            GetParam(effect, "ReflWobble")?.SetValue(reflWobble);
+            GetParam(effect, "ReflTint")?.SetValue(reflTint);
             GetParam(effect, "SceneAmbient")?.SetValue(Vector3.Lerp(Vector3.One, ComputeLightingAmbient(config), _fadeLighting));
             GetParam(effect, "WaterKind")?.SetValue(WaterKind());
             GetParam(effect, "TilesPerScreen")?.SetValue(_waterMaskTilesPerScreen);
@@ -946,6 +1101,7 @@ namespace SDVRadiance
             public Vector2 Uv;
             public float RadiusUv;
             public float R;          // game radius: the "which lamps matter" ranking
+            public float Reach;      // 0 = march toward it (a lamp); > 0 = a fixed march along the direction (the sun)
             public float Amt;        // eased presence 0..1
             public bool Seen;        // present on screen this frame
         }
@@ -953,10 +1109,29 @@ namespace SDVRadiance
         private readonly Dictionary<string, RayLight> _godRayTracking = new();
         private GameLocation? _godRayTrackingLocation;
         private readonly List<KeyValuePair<string, RayLight>> _godRayTrackingScratch = new();
-        private readonly List<(Vector2 uv, float radiusUV, float amt)> _godRayLights = new();
+        private readonly List<(Vector2 uv, float radiusUV, float amt, float reach)> _godRayLights = new();
 
         /// <summary>Refresh the tracked ray lights: geometry, per-light presence, render list.</summary>
-        private bool UpdateRayLights()
+        /// <summary>How far to the side of the screen the sun sits when it is low. Off the edge,
+        /// so the shafts come in at a slant rather than radiating from a point you can look at.</summary>
+        private const float SunRayReachU = 0.75f;
+        /// <summary>How far above the top of the screen the sun sits, on the horizon and overhead.
+        /// Never on screen: there is no sun sprite to stand under, and a source inside the frame
+        /// makes a starburst instead of shafts.</summary>
+        private const float SunRayAboveMin = 0.20f, SunRayAboveSpan = 0.55f;
+        /// <summary>The sun's reach has to cover the whole frame from off its corner, unlike a lamp
+        /// whose disk is what keeps distant bright scenery from streaking.</summary>
+        private const float SunRayRadiusUv = 2.5f;
+        /// <summary>How long a sun shaft is, in screen heights. The sun is off the frame, so the
+        /// march is a fixed distance along its direction rather than a fraction of the way to it -
+        /// a fraction of THAT would leave the picture in a couple of steps and streak the clamped
+        /// border pixel instead of the scene.</summary>
+        private const float SunRayReach = 0.32f;
+        /// <summary>Reserved tracking key. The game's own light sources are keyed by strings it
+        /// generates, and none of them look like this.</summary>
+        private const string SunRayKey = "__radiance_sun";
+
+        private bool UpdateRayLights(ModConfig config)
         {
             if (!ReferenceEquals(Game1.currentLocation, _godRayTrackingLocation))
             {
@@ -998,6 +1173,34 @@ namespace SDVRadiance
                 }
             }
 
+            // THE SUN. Rays coming out of lamps are the half of this effect that was built first,
+            // and on its own it does not do what the name says: outdoors in the afternoon nothing
+            // is lit, so there was nothing to make a shaft from and the whole effect read as
+            // broken. Reported in those words, by someone who had walked every map looking for one.
+            //
+            // The sun is a light like any other here, just an enormous one standing off the edge of
+            // the frame. Its place comes from the same number the shadows lean by, mirrored,
+            // because a shadow points away from what lit it: morning sun off the right of the
+            // screen, evening off the left, and higher above the top the closer it is to noon. It
+            // is never placed INSIDE the frame - there is no sun sprite to stand under, and a
+            // source in view makes a starburst rather than shafts.
+            //
+            // Its reach is the whole frame, where a lamp's is a disk: for a lamp that disk is what
+            // stops distant bright scenery streaking, and for the sun there is no such thing as
+            // "too far from the sun". What keeps snow and pale walls out is the brightness bar,
+            // which already lifts itself on snowy ground.
+            if (config.GodRaysSun && ShadowRenderer.SunInSky(out float sunLean, out float sunHeight))
+            {
+                if (!_godRayTracking.TryGetValue(SunRayKey, out RayLight? sun))
+                    _godRayTracking[SunRayKey] = sun = new RayLight();
+                sun.Uv = new Vector2(0.5f - (float)Math.Sin(sunLean) * SunRayReachU,
+                                     -(SunRayAboveMin + SunRayAboveSpan * sunHeight));
+                sun.RadiusUv = SunRayRadiusUv;
+                sun.R = 1000f;      // never loses its slot to a lamp
+                sun.Reach = SunRayReach;
+                sun.Seen = true;
+            }
+
             // Rank the candidates. A light that is ALREADY lit gets a bonus so it keeps its
             // slot until something is genuinely brighter — without that hysteresis, two lamps
             // of equal radius traded the last slot every few frames and flickered.
@@ -1026,6 +1229,7 @@ namespace SDVRadiance
                     {
                         RayLight o = _godRayTrackingScratch[j].Value;
                         if (o.Amt > 0.05f && Vector2.Distance(o.Uv, e.Uv) < RayMergeUV) { on = false; break; }
+                        // (the sun sorts first, so it is never the one merged away)
                     }
                 if (on)
                     active++;
@@ -1047,7 +1251,7 @@ namespace SDVRadiance
             _godRayLights.Clear();
             foreach (var e in _godRayTracking.Values)
                 if (e.Amt > 0.01f)
-                    _godRayLights.Add((e.Uv, e.RadiusUv, e.Amt));
+                    _godRayLights.Add((e.Uv, e.RadiusUv, e.Amt, e.Reach));
             if (_godRayLights.Count > RayRenderSlots)
             {
                 _godRayLights.Sort((a, b) => b.amt.CompareTo(a.amt));
@@ -1101,6 +1305,21 @@ namespace SDVRadiance
         private static void ComputeAuto(out float temp, out float satMul)
         {
             temp = 0f; satMul = 1f;
+            // Every term below describes the SKY: the hour's colour, rain, snow, the season. A
+            // room with no window onto any of it was being graded by all four anyway, and the
+            // interior lighting stage already walks the room's own colour through the day, so an
+            // indoor scene at six in the evening was warmed twice - once by the room and again by
+            // a dusk that is not visible from inside it. Measured in the saloon: turning the whole
+            // grade off took median saturation from 0.761 to 0.596, the largest single contributor
+            // to a room that reads as blasted orange.
+            //
+            // Weather and season stay outdoors for the same reason a rainy day does not desaturate
+            // a cellar. What does still reach an interior is the player's own Temperature and
+            // Saturation settings, which are not automatic and are not ours to override.
+            bool underSky = Game1.currentLocation?.IsOutdoors ?? true;
+            if (!underSky)
+                return;
+
             float m = ClockMinutes();
             const int Dusk = 17 * 60, Late = 19 * 60 + 30, Night = 21 * 60, Dawn = 6 * 60;
             if (m >= Dusk && m < Late) temp += 0.25f * ((m - Dusk) / (float)(Late - Dusk));

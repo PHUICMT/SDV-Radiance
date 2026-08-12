@@ -80,7 +80,17 @@ float4 TailPS(PixelInput input) : SV_TARGET
 
         float3 col = ToSRGB(lin);
 
-        col = (col - 0.5) * Contrast + 0.5;          // contrast, pivoted at mid-grey
+        // Contrast on LUMINANCE with a shadow toe - kept in step with colorgrade.fx, which this
+        // pass exists to reproduce bit for bit. It had fallen behind once already: colorgrade
+        // moved to luminance contrast (so contrast stops inflating saturation) and this copy
+        // kept the per-channel line, so the fused frames and the CA frames graded differently.
+        // The toe matters more than parity: a pivot line crosses zero at Contrast > 1, and on
+        // luminance that zero multiplies all three channels - half an outdoor night went pure
+        // black. See colorgrade.fx for the numbers.
+        float preLum = dot(col, LUMA);
+        float postLum = saturate((preLum - 0.5) * Contrast + 0.5);
+        postLum = lerp(preLum, postLum, smoothstep(0.0, 0.25, preLum));
+        col *= postLum / max(preLum, 1e-4);
 
         float lum = dot(col, LUMA);
         col = lerp(lum.xxx, col, Saturation);        // saturation

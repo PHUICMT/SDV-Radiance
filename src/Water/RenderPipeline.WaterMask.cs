@@ -376,6 +376,15 @@ namespace SDVRadiance
             return _locationHasWater;
         }
 
+        /// <summary>How far past the view the water surface is worked out, in tiles. The sides and
+        /// the bottom are the walking slack (see BuildWaterMask); the TOP is also what a column's
+        /// waterline anchor needs, because a shoreline scrolling just past the top edge must keep
+        /// its world-anchored run top instead of re-basing on the mask's own first row - which made
+        /// a whole reflection vanish in one step as the player walked away from it.</summary>
+        private const int MaskPadSideTiles = 4;
+        private const int MaskPadTopTiles = 6;
+        private const int MaskPadBottomTiles = 4;
+
         private bool BuildWaterMask(int w, int h)
         {
             GameLocation? location = Game1.currentLocation;
@@ -393,12 +402,40 @@ namespace SDVRadiance
             // its shoreline scrolls just past the screen edge � anchored at the mask's
             // own first row instead, the whole reflection re-based and vanished in ONE
             // step as the player walked away, rather than fading out.
-            int startTileX = (int)Math.Floor(vx / 64f) - 2;
-            int startTileY = (int)Math.Floor(vy / 64f) - 4;
             // Viewport-based (world px): w/64 is screen px and undercounts tiles when zoomed
             // out � parts of the screen simply had no water mask (no ripple/reflection).
-            int tilesW = Math.Max(1, Game1.viewport.Width / 64 + 6);
-            int tilesH = Math.Max(1, Game1.viewport.Height / 64 + 6);
+            int tilesW = Math.Max(1, Game1.viewport.Width / 64 + 2 * MaskPadSideTiles);
+            int tilesH = Math.Max(1, Game1.viewport.Height / 64 + MaskPadTopTiles + MaskPadBottomTiles);
+            int startTileX = (int)Math.Floor(vx / 64f) - MaskPadSideTiles;
+            int startTileY = (int)Math.Floor(vy / 64f) - MaskPadTopTiles;
+
+            // KEEP THE WINDOW WE ALREADY BUILT while the view still fits inside it.
+            //
+            // The padding above exists so the mask covers a little more than the screen, and that
+            // slack used to be spent on nothing: the origin was recomputed from the camera every
+            // frame, so crossing a single tile boundary moved it by one tile and rebuilt the whole
+            // surface. Walking therefore paid a full gather PER TILE, and the gather is a
+            // main-thread cost that a player measured at 11 ms on a busy map. That is the hitch
+            // reported crossing from town onto the beach, where the walk enters a screenful of
+            // water and every step re-reads it.
+            //
+            // The mask content is world-anchored and the shader is told the real origin
+            // (MaskOrigin), so a window that is off-centre is already correct to draw from. Only
+            // re-anchor when the view actually reaches an edge, which turns a rebuild every tile
+            // into a rebuild every few.
+            if (_waterMask != null && location == _lastWaterLocation
+                && _waterMask.Width == tilesW * 16 && _waterMask.Height == tilesH * 16)
+            {
+                int viewLeft = (int)Math.Floor(vx / 64f), viewTop = (int)Math.Floor(vy / 64f);
+                int viewRight = (int)Math.Floor((vx + Game1.viewport.Width) / 64f);
+                int viewBottom = (int)Math.Floor((vy + Game1.viewport.Height) / 64f);
+                if (viewLeft >= _lastWaterTileX && viewRight <= _lastWaterTileX + tilesW - 1
+                    && viewTop >= _lastWaterTileY && viewBottom <= _lastWaterTileY + tilesH - 1)
+                {
+                    startTileX = _lastWaterTileX;
+                    startTileY = _lastWaterTileY;
+                }
+            }
 
             // Camera-follow params are valid for WHATEVER mask is currently bound (old or
             // new) � the mask content is tile-anchored; sub-tile scroll lives here.
@@ -710,8 +747,22 @@ namespace SDVRadiance
                         continue;
                     StampSprite(spriteBatch, a.Sprite.Texture, a.Sprite.SourceRect, abb);
                 }
-                // Critters (seagulls, birds, frogs): base Critter.draw puts the 16�16
-                // sprite's bottom edge at position.Y, centred on position.X.
+                // Critters (seagulls, birds, frogs). Critter.draw puts the frame's bottom edge at
+                // position.Y, centred on position.X, and lifts it by the flight offset:
+                //   position + (-64, -128 + yJumpOffset + yOffset), scale 4.
+                //
+                // That -64/-128 is half a 32x32 frame, and the stamp here was written for a 16x16
+                // one. Every critter in the game is 32x32 (Critter's own constructor says so), so
+                // the exclusion box was pinned a whole 32 px right of the bird and 64 px below it:
+                // the seagull itself was left inside the rippling water while a bird-shaped patch
+                // of empty sea beside it was held still. That is the "objects above water, such as
+                // seagulls, fail to render correctly" report - the bird was being displaced by the
+                // water it was sitting on.
+                //
+                // The offsets come off the SOURCE RECT rather than being written out again, so a
+                // mod's critter with a different frame size lands correctly too, and the flight
+                // offset is honoured: a gull on the wing is drawn well above its own position and
+                // was being excluded at ground level.
                 if (location.critters != null)
                 {
                     foreach (var cr in location.critters)
@@ -720,9 +771,11 @@ namespace SDVRadiance
                             continue;
                         if (!WaterWithinTiles((int)(cr.position.X / 64f), (int)(cr.position.Y / 64f), 3))
                             continue;
-                        Vector2 tl = Game1.GlobalToLocal(Game1.viewport, cr.position + new Vector2(-32f, -64f));
-                        spriteBatch.Draw(cr.sprite.Texture, tl, cr.sprite.SourceRect, Color.White,
-                            0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
+                        Rectangle crs = cr.sprite.SourceRect;
+                        Vector2 tl = Game1.GlobalToLocal(Game1.viewport, cr.position
+                            + new Vector2(-crs.Width * 2f, -crs.Height * 4f + cr.yJumpOffset + cr.yOffset));
+                        spriteBatch.Draw(cr.sprite.Texture, tl, crs, Color.White, 0f, Vector2.Zero, 4f,
+                            cr.flip ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
                     }
                 }
 

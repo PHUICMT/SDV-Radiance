@@ -56,6 +56,13 @@ namespace SDVRadiance
             public SurfaceMap? OccluderSurfaceMap;
             public int OccluderMaskBuildMode;
             public Vector2 OccluderTilesPerScreen, OccluderWorldTileOffset, OccluderMaskSize;
+            // FLOOD's own mask state, kept apart from classic's above (see _floodOccluderMask).
+            public Texture2D? FloodOccluderMask;
+            public Color[]? FloodOccluderMaskPixels;
+            public int FloodOccluderTileX = int.MinValue, FloodOccluderTileY = int.MinValue, FloodOccluderCacheTick = int.MinValue;
+            public int FloodOccluderInputsHash;
+            public SurfaceMap? FloodOccluderSurfaceMap;
+            public Vector2 FloodOccluderMaskSize;
             public bool ShadowsReady;
 
             // ---- the mirror's scenery cache ----
@@ -89,6 +96,7 @@ namespace SDVRadiance
                 WaterMaskCore?.Dispose();
                 WaterSignedDistance?.Dispose();
                 OccluderMask?.Dispose();
+                FloodOccluderMask?.Dispose();
                 MirrorSceneCache?.Dispose();
                 LuminanceTarget?.Dispose();
                 Flood.Dispose();
@@ -157,6 +165,14 @@ namespace SDVRadiance
             s.OccluderTilesPerScreen = _occluderTilesPerScreen;
             s.OccluderWorldTileOffset = _occluderWorldTileOffset;
             s.OccluderMaskSize = _occluderMaskSize;
+            s.FloodOccluderMask = _floodOccluderMask;
+            s.FloodOccluderMaskPixels = _floodOccluderMaskPixels;
+            s.FloodOccluderTileX = _floodOccluderTileX;
+            s.FloodOccluderTileY = _floodOccluderTileY;
+            s.FloodOccluderCacheTick = _floodOccluderCacheTick;
+            s.FloodOccluderInputsHash = _floodOccluderInputsHash;
+            s.FloodOccluderSurfaceMap = _floodOccluderSurfaceMap;
+            s.FloodOccluderMaskSize = _floodOccluderMaskSize;
             s.ShadowsReady = _shadowsReady;
 
             s.MirrorSceneCache = _mirrorSceneCache;
@@ -218,6 +234,14 @@ namespace SDVRadiance
             _occluderTilesPerScreen = s.OccluderTilesPerScreen;
             _occluderWorldTileOffset = s.OccluderWorldTileOffset;
             _occluderMaskSize = s.OccluderMaskSize;
+            _floodOccluderMask = s.FloodOccluderMask;
+            _floodOccluderMaskPixels = s.FloodOccluderMaskPixels;
+            _floodOccluderTileX = s.FloodOccluderTileX;
+            _floodOccluderTileY = s.FloodOccluderTileY;
+            _floodOccluderCacheTick = s.FloodOccluderCacheTick;
+            _floodOccluderInputsHash = s.FloodOccluderInputsHash;
+            _floodOccluderSurfaceMap = s.FloodOccluderSurfaceMap;
+            _floodOccluderMaskSize = s.FloodOccluderMaskSize;
             _shadowsReady = s.ShadowsReady;
 
             _mirrorSceneCache = s.MirrorSceneCache;

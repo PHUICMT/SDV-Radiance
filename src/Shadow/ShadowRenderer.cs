@@ -269,7 +269,7 @@ namespace SDVRadiance
         ///
         /// <para>
         /// Usually yes: the game sets it on characters that must not have one at all, such as an
-        /// NPC laying down at the end of a route (<c>NPC.cs</c>), pets and horses.
+        /// NPC laying down at the end of a route (<c>NPC.cs</c>).
         /// </para>
         ///
         /// <para>
@@ -288,7 +288,14 @@ namespace SDVRadiance
         /// </summary>
         private static bool ShadowHiddenFor(NPC npc)
         {
-            if (!npc.HideShadow || npc is Pet)
+            // Horse.cs sets HideShadow in its constructor and then draws no shadow of its own, so a
+            // horse has none in vanilla at all. That is a decision about the BLOB: the sprite is two
+            // tiles wide and stands well away from its own tile, which one round patch cannot follow.
+            // A silhouette cut from the sprite can, and it has to, because the rider is skipped on
+            // the grounds that "the horse's shadow covers them" — which was only ever true if the
+            // horse had one. Riding therefore removed every shadow from the player, reported as the
+            // shadow disappearing the moment you mount.
+            if (!npc.HideShadow || npc is Pet || npc is Horse)
                 return false;
             // NPC.cs, end-of-route behaviour: a standing silhouette over a sleeping sprite is worse
             // than no shadow, so this is the one HideShadow that really means none.
@@ -351,10 +358,71 @@ namespace SDVRadiance
         private static bool SunCasts()
         {
             GameLocation? location = Game1.currentLocation;
-            if (location == null || !location.IsOutdoors || Game1.isRaining || Game1.isSnowing)
+            if (location == null || !location.IsOutdoors)
                 return false;
             int t = Game1.timeOfDay;
             return t >= 600 && t < TrulyDark();   // day/dusk = sun cast; after dark → per-light path
+        }
+
+        /// <summary>
+        /// How overcast it is: 1 in rain, snow or a storm, 0 under a clear sky.
+        ///
+        /// <para>
+        /// Weather used to switch the sun path OFF, and that did more than remove the long shadows.
+        /// The same test drives whether the game's own blob shadows are suppressed, so a rainy day
+        /// handed every tree, bush and critter back to vanilla: the whole screen visibly reverted
+        /// to the shadows the mod exists to replace, which is how it was reported.
+        /// </para>
+        ///
+        /// <para>
+        /// An overcast sky does not remove shadows, it makes them soft, short and faint, and that
+        /// is a DIMMER on the sun path rather than a switch. Everything keeps its own silhouette,
+        /// the vanilla blobs stay suppressed, and nothing on screen changes kind when it starts
+        /// raining.
+        /// </para>
+        /// </summary>
+        private static float OvercastNow() =>
+            (Game1.isRaining || Game1.isSnowing || Game1.isLightning) ? 1f : 0f;
+
+        /// <summary>What a shadow keeps of its strength, length and edge under a full overcast.
+        /// Faint and short and soft: the light is coming from the whole sky, not from a point.</summary>
+        private const float OvercastAlpha = 0.42f;
+        private const float OvercastLength = 0.5f;
+        private const float OvercastExtraBlur = 1.6f;
+        /// <summary>Eased, because weather can turn mid-day and a shadow may not pop.</summary>
+        private float _overcastBlend;
+
+        /// <summary>
+        /// Where the sun is in the sky right now, for anything that needs to point AT it rather
+        /// than away from it.
+        ///
+        /// <para>
+        /// <paramref name="lean"/> is the same angle the shadows lean by, and a shadow leans away
+        /// from its light, so the sun is on the opposite side of the screen from wherever a shadow
+        /// is pointing. <paramref name="height"/> is 0 on the horizon and 1 overhead.
+        /// </para>
+        ///
+        /// <para>
+        /// False when there is no direct sun to point at: indoors, before six, after true dark, or
+        /// under an overcast sky. The shadow pass keeps casting under overcast, softly, because a
+        /// bright sky still throws one; a SHAFT of light is a different thing and needs the sun
+        /// itself.
+        /// </para>
+        /// </summary>
+        internal static bool SunInSky(out float lean, out float height)
+        {
+            lean = 0f;
+            height = 0f;
+            GameLocation? location = Game1.currentLocation;
+            if (location == null || !location.IsOutdoors || Game1.isRaining || Game1.isSnowing || Game1.isLightning)
+                return false;
+            float mins = GameClock.MinutesNow();
+            if (mins < 360f || mins >= TrulyDarkMinutes())
+                return false;
+            float sky = MathHelper.Clamp((mins - 720f) / 360f, -1f, 1f);
+            lean = 1.15f * sky;
+            height = 1f - Math.Abs(sky);
+            return true;
         }
 
         /// <summary>True when the outdoor sun shadow is active.</summary>
@@ -395,6 +463,9 @@ namespace SDVRadiance
             // from one direction to another in one frame. House rule: if it changes, it fades.
             // Both paths run while the blend is in transit, each at its share of the strength, so
             // the sun's long shadow thins out as the lamp's grows in.
+            _overcastBlend += (OvercastNow() - _overcastBlend) * SunBlendRate;
+            if (Math.Abs(OvercastNow() - _overcastBlend) < 0.004f)
+                _overcastBlend = OvercastNow();
             float sunTarget = SunCasts() ? 1f : 0f;
             // The benchmark calls this several extra times per frame to measure it. Advancing the
             // dusk cross-fade once per CALL rather than once per frame would run it at seven times

@@ -78,7 +78,8 @@ namespace SDVRadiance
             if (objectsOn)
             {
                 ComputeSun(out sunRotation, out sunStretch, out _);
-                sunStretch *= Math.Max(0.1f, config.DirectionalShadowLength);
+                _sunLengthScale = Math.Max(0.1f, config.DirectionalShadowLength);
+                sunStretch *= _sunLengthScale;
             }
             // A location change no longer clears: the key is (texture, frame, flip), which is not
             // tied to a map, so warping back and forth used to re-bake everything both ways for

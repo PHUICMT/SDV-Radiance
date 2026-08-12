@@ -56,6 +56,23 @@ namespace SDVRadiance
         /// <summary>Read-only lines. Supplied per draw rather than baked at layout time, so a
         /// running measurement can count up without rebuilding the menu underneath it.</summary>
         private readonly List<(Func<string> text, int y)> _infoLines = new();
+        /// <summary>
+        /// A plain-language note per control row, shown while the pointer rests on it.
+        ///
+        /// <para>
+        /// Asked for in exactly these words: bloom, vignette, aberration and GI lighting "is
+        /// confusing for the ordinary player who has no idea about them". A name is not an
+        /// explanation, and a settings screen full of names the player has to look up elsewhere
+        /// is a settings screen they turn off instead of tuning.
+        /// </para>
+        ///
+        /// <para>
+        /// The rectangles are in CONTENT coordinates, the same as every other row here, so the
+        /// scroll offset is taken off the pointer rather than added to a hundred rectangles.
+        /// </para>
+        /// </summary>
+        private readonly List<(Rectangle row, string text)> _help = new();
+        private string? _hoverText;
         private int _seenBenchStamp = -1;
 
         /// <summary>Tab icons: one 16x16 cell per tab, in tab order (assets/tuner-icons.png,
@@ -114,15 +131,27 @@ namespace SDVRadiance
         // ---- content build helpers (append to lists, advance _contentCursorY) ----
         private void Section(string key) { _sectionTitles.Add((_translate(key), _contentCursorY)); _contentCursorY += S(30); }
         private void Info(Func<string> text) { _infoLines.Add((text, _contentCursorY)); _contentCursorY += S(26); }
-        private void Tog(string key, Func<bool> g, Action<bool> s)
+        private void Tog(string key, Func<bool> g, Action<bool> s, string? help = null)
         {
-            _toggles.Add(new TunerToggle(_translate(key), new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, S(38)), g, s) { TextScale = _ui });
+            var row = new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, S(38));
+            _toggles.Add(new TunerToggle(_translate(key), row, g, s) { TextScale = _ui });
+            Help(row, help);
             _contentCursorY += S(44);
         }
-        private void Sld(string key, float min, float max, Func<float> g, Action<float> s)
+        private void Sld(string key, float min, float max, Func<float> g, Action<float> s, string? help = null)
         {
             _sliders.Add(new TunerSlider(_translate(key), _contentCursorX, _contentCursorY, _contentColumnWidth, min, max, g, s, S(26), S(20)) { TextScale = _ui });
+            // The label sits above the track, so the hover area is the whole row, not the bar.
+            Help(new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, S(50)), help);
             _contentCursorY += S(50);
+        }
+
+        /// <summary>Register the plain-language note for the row just laid out. Only rows that
+        /// were given a key get one, so there is no guessing at whether a translation exists.</summary>
+        private void Help(Rectangle row, string? key)
+        {
+            if (key != null)
+                _help.Add((row, _translate(key)));
         }
         private TunerTextButton Btn(string label, Rectangle bounds, Action onClick)
         {
@@ -150,7 +179,7 @@ namespace SDVRadiance
             xPositionOnScreen = vw - width - S(24);
             yPositionOnScreen = S(20);
 
-            _sliders.Clear(); _toggles.Clear(); _buttons.Clear(); _chips.Clear(); _sectionTitles.Clear(); _tabRailButtons.Clear(); _infoLines.Clear();
+            _sliders.Clear(); _toggles.Clear(); _buttons.Clear(); _chips.Clear(); _sectionTitles.Clear(); _tabRailButtons.Clear(); _infoLines.Clear(); _help.Clear();
 
             int contentTop = yPositionOnScreen + HeaderH;
 
@@ -259,73 +288,79 @@ namespace SDVRadiance
             _buttons.Add(new TunerTextButton(_translate("tuner.save"), new Rectangle(_contentCursorX + _contentColumnWidth - 96, _contentCursorY, 96, 40), PromptSaveProfile));
             _contentCursorY += 52;
 
-            Tog("tuner.master", () => _config.Enabled, v => _config.Enabled = v);
+            Tog("tuner.master", () => _config.Enabled, v => _config.Enabled = v, "help.master");
         }
 
         private void BuildColorGrade()
         {
-            Tog("tuner.colorgrade", () => _config.ColorGradeEnabled, v => _config.ColorGradeEnabled = v);
-            Tog("tuner.automood", () => _config.ColorGradeAuto, v => _config.ColorGradeAuto = v);
+            Tog("tuner.colorgrade", () => _config.ColorGradeEnabled, v => _config.ColorGradeEnabled = v, "help.colorgrade");
+            Tog("tuner.automood", () => _config.ColorGradeAuto, v => _config.ColorGradeAuto = v, "help.automood");
             Sld("tuner.strength", 0f, 1f, () => _config.ColorGradeStrength, v => _config.ColorGradeStrength = v);
-            Sld("tuner.contrast", 0.5f, 1.5f, () => _config.ColorGradeContrast, v => _config.ColorGradeContrast = v);
-            Sld("tuner.saturation", 0f, 2f, () => _config.ColorGradeSaturation, v => _config.ColorGradeSaturation = v);
-            Sld("tuner.temperature", -1f, 1f, () => _config.ColorGradeTemperature, v => _config.ColorGradeTemperature = v);
+            Sld("tuner.contrast", 0.5f, 1.5f, () => _config.ColorGradeContrast, v => _config.ColorGradeContrast = v, "help.contrast");
+            Sld("tuner.saturation", 0f, 2f, () => _config.ColorGradeSaturation, v => _config.ColorGradeSaturation = v, "help.saturation");
+            Sld("tuner.temperature", -1f, 1f, () => _config.ColorGradeTemperature, v => _config.ColorGradeTemperature = v, "help.temperature");
             Sld("tuner.brightness", 0.5f, 1.5f, () => _config.ColorGradeBrightness, v => _config.ColorGradeBrightness = v);
-            Tog("tuner.tonemap", () => _config.ColorGradeToneMap, v => _config.ColorGradeToneMap = v);
-            Sld("tuner.bluelight", 0f, 1f, () => _config.BlueLightFilter, v => _config.BlueLightFilter = v);
+            Tog("tuner.tonemap", () => _config.ColorGradeToneMap, v => _config.ColorGradeToneMap = v, "help.tonemap");
+            Sld("tuner.bluelight", 0f, 1f, () => _config.BlueLightFilter, v => _config.BlueLightFilter = v, "help.bluelight");
         }
 
         private void BuildBloom()
         {
-            Tog("tuner.bloom", () => _config.BloomEnabled, v => _config.BloomEnabled = v);
+            Tog("tuner.bloom", () => _config.BloomEnabled, v => _config.BloomEnabled = v, "help.bloom");
             Sld("tuner.intensity", 0f, 2f, () => _config.BloomIntensity, v => _config.BloomIntensity = v);
-            Sld("tuner.bloomthreshold", 0f, 1f, () => _config.BloomThreshold, v => _config.BloomThreshold = v);
+            Sld("tuner.bloomthreshold", 0f, 1f, () => _config.BloomThreshold, v => _config.BloomThreshold = v, "help.bloomthreshold");
         }
 
         private void BuildShadows()
         {
-            Tog("tuner.shadows", () => _config.DirectionalShadowsEnabled, v => _config.DirectionalShadowsEnabled = v);
+            Tog("tuner.shadows", () => _config.DirectionalShadowsEnabled, v => _config.DirectionalShadowsEnabled = v, "help.shadows");
             Sld("tuner.shadowstrength", 0f, 1f, () => _config.DirectionalShadowStrength, v => _config.DirectionalShadowStrength = v);
-            Sld("tuner.shadowlength", 0.2f, 2f, () => _config.DirectionalShadowLength, v => _config.DirectionalShadowLength = v);
-            Sld("tuner.shadowblur", 0f, 5f, () => _config.DirectionalShadowBlur, v => _config.DirectionalShadowBlur = v);
+            Sld("tuner.shadowlength", 0.2f, 2f, () => _config.DirectionalShadowLength, v => _config.DirectionalShadowLength = v, "help.shadowlength");
+            Sld("tuner.shadowblur", 0f, 5f, () => _config.DirectionalShadowBlur, v => _config.DirectionalShadowBlur = v, "help.shadowblur");
             Sld("tuner.shadowcasts", ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax,
                 () => _config.ShadowCastsPerCharacter,
-                v => _config.ShadowCastsPerCharacter = (int)MathF.Round(v));
-            Tog("tuner.shadowobjects", () => _config.DirectionalShadowObjects, v => _config.DirectionalShadowObjects = v);
+                v => _config.ShadowCastsPerCharacter = (int)MathF.Round(v), "help.shadowcasts");
+            Tog("tuner.shadowobjects", () => _config.DirectionalShadowObjects, v => _config.DirectionalShadowObjects = v, "help.shadowobjects");
         }
 
         private void BuildLighting()
         {
-            Tog("tuner.lighting", () => _config.LightingEnabled, v => _config.LightingEnabled = v);
-            Sld("tuner.lightindoor", 0f, 0.95f, () => _config.LightingIndoorDarkness, v => _config.LightingIndoorDarkness = v);
-            Sld("tuner.lightnight", 0f, 0.95f, () => _config.LightingNightDarkness, v => _config.LightingNightDarkness = v);
-            Sld("tuner.lightwarmth", 0f, 1f, () => _config.LightingWarmth, v => _config.LightingWarmth = v);
-            Sld("tuner.lightboost", 0f, 2f, () => _config.LightingBoost, v => _config.LightingBoost = v);
-            Sld("tuner.lightradius", 0.2f, 3f, () => _config.LightingRadiusScale, v => _config.LightingRadiusScale = v);
-            Tog("tuner.lightshadows", () => _config.LightingShadows, v => _config.LightingShadows = v);
+            Tog("tuner.lighting", () => _config.LightingEnabled, v => _config.LightingEnabled = v, "help.lighting");
+            Sld("tuner.lightindoor", 0f, 0.95f, () => _config.LightingIndoorDarkness, v => _config.LightingIndoorDarkness = v, "help.lightindoor");
+            Sld("tuner.lightnight", 0f, 0.95f, () => _config.LightingNightDarkness, v => _config.LightingNightDarkness = v, "help.lightnight");
+            Sld("tuner.lightwarmth", 0f, 1f, () => _config.LightingWarmth, v => _config.LightingWarmth = v, "help.lightwarmth");
+            Sld("tuner.lightboost", 0f, 2f, () => _config.LightingBoost, v => _config.LightingBoost = v, "help.lightboost");
+            Sld("tuner.lightradius", 0.2f, 3f, () => _config.LightingRadiusScale, v => _config.LightingRadiusScale = v, "help.lightradius");
+            Tog("tuner.lightshadows", () => _config.LightingShadows, v => _config.LightingShadows = v, "help.lightshadows");
             Sld("tuner.lightshadowstrength", 0f, 1f, () => _config.LightingShadowStrength, v => _config.LightingShadowStrength = v);
-            Tog("tuner.floodgi", () => _config.FloodLightingEnabled, v => _config.FloodLightingEnabled = v);
-            Sld("tuner.floodstrength", 0f, 1.5f, () => _config.FloodLightingStrength, v => _config.FloodLightingStrength = v);
-            Sld("tuner.floodshadow", 0f, 1f, () => _config.FloodShadowStrength, v => _config.FloodShadowStrength = v);
-            Tog("tuner.windoweffects", () => _config.WindowEffectsEnabled, v => _config.WindowEffectsEnabled = v);
-            Tog("tuner.windowbeam", () => _config.WindowBeamEnabled, v => _config.WindowBeamEnabled = v);
-            Tog("tuner.windowroomlight", () => _config.WindowRoomLightEnabled, v => _config.WindowRoomLightEnabled = v);
+            Tog("tuner.floodgi", () => _config.FloodLightingEnabled, v => _config.FloodLightingEnabled = v, "help.floodgi");
+            Sld("tuner.floodstrength", 0f, 1.5f, () => _config.FloodLightingStrength, v => _config.FloodLightingStrength = v, "help.floodstrength");
+            Sld("tuner.floodshadow", 0f, 1f, () => _config.FloodShadowStrength, v => _config.FloodShadowStrength = v, "help.floodshadow");
+            Tog("tuner.windoweffects", () => _config.WindowEffectsEnabled, v => _config.WindowEffectsEnabled = v, "help.windoweffects");
+            Tog("tuner.windowbeam", () => _config.WindowBeamEnabled, v => _config.WindowBeamEnabled = v, "help.windowbeam");
+            // The beam switches itself off when a mod that draws its own is installed, and until
+            // now it did that in the startup log only. On screen it read as a feature that simply
+            // does not work, with a switch that appears to do nothing when you turn it back on and
+            // reopen the menu. Say who took it, where the switch is.
+            if (!string.IsNullOrEmpty(_config.WindowCompatAppliedFor) && !_config.WindowBeamEnabled)
+                Info(() => _translate("tuner.windowcompat"));
         }
 
         private void BuildGodRays()
         {
-            Tog("tuner.godrays", () => _config.GodRaysEnabled, v => _config.GodRaysEnabled = v);
+            Tog("tuner.godrays", () => _config.GodRaysEnabled, v => _config.GodRaysEnabled = v, "help.godrays");
+            Tog("tuner.godrayssun", () => _config.GodRaysSun, v => _config.GodRaysSun = v, "help.godrayssun");
             Sld("tuner.godraysintensity", 0f, 1.5f, () => _config.GodRaysIntensity, v => _config.GodRaysIntensity = v);
-            Sld("tuner.godraysthreshold", 0f, 1f, () => _config.GodRaysThreshold, v => _config.GodRaysThreshold = v);
-            Sld("tuner.godraysdensity", 0.1f, 1f, () => _config.GodRaysDensity, v => _config.GodRaysDensity = v);
+            Sld("tuner.godraysthreshold", 0f, 1f, () => _config.GodRaysThreshold, v => _config.GodRaysThreshold = v, "help.godraysthreshold");
+            Sld("tuner.godraysdensity", 0.1f, 1f, () => _config.GodRaysDensity, v => _config.GodRaysDensity = v, "help.godraysdensity");
         }
 
         private void BuildCloud()
         {
-            Tog("tuner.cloudshadow", () => _config.CloudShadowEnabled, v => _config.CloudShadowEnabled = v);
+            Tog("tuner.cloudshadow", () => _config.CloudShadowEnabled, v => _config.CloudShadowEnabled = v, "help.cloudshadow");
             Tog("tuner.cloudhidevanilla", () => _config.SuppressVanillaCloudShadow, v => _config.SuppressVanillaCloudShadow = v);
-            Sld("tuner.cloudcoverage", 0.1f, 0.9f, () => _config.CloudShadowCoverage, v => _config.CloudShadowCoverage = v);
-            Sld("tuner.cloudcount", 0f, 1f, () => _config.CloudShadowCount, v => _config.CloudShadowCount = v);
+            Sld("tuner.cloudcoverage", 0.1f, 0.9f, () => _config.CloudShadowCoverage, v => _config.CloudShadowCoverage = v, "help.cloudcoverage");
+            Sld("tuner.cloudcount", 0f, 1f, () => _config.CloudShadowCount, v => _config.CloudShadowCount = v, "help.cloudcount");
             Sld("tuner.cloudopacity", 0f, 0.7f, () => _config.CloudShadowOpacity, v => _config.CloudShadowOpacity = v);
             Sld("tuner.cloudspeed", 0f, 0.06f, () => _config.CloudShadowSpeed, v => _config.CloudShadowSpeed = v);
         }
@@ -333,13 +368,13 @@ namespace SDVRadiance
         private void BuildFog()
         {
             Section("tuner.section.fog");
-            Tog("tuner.fog", () => _config.FogEnabled, v => _config.FogEnabled = v);
+            Tog("tuner.fog", () => _config.FogEnabled, v => _config.FogEnabled = v, "help.fog");
             Sld("tuner.fogcoverage", 0f, 1f, () => _config.FogCoverage, v => _config.FogCoverage = v);
             Sld("tuner.fogdensity", 0f, 1f, () => _config.FogDensity, v => _config.FogDensity = v);
             Sld("tuner.fogspeed", 0f, 0.1f, () => _config.FogSpeed, v => _config.FogSpeed = v);
             _contentCursorY += 12;
             Section("tuner.section.fognight");
-            Tog("tuner.fognightmist", () => _config.FogNightMist, v => _config.FogNightMist = v);
+            Tog("tuner.fognightmist", () => _config.FogNightMist, v => _config.FogNightMist = v, "help.fognightmist");
             Sld("tuner.fognightmistcoverage", 0f, 1f, () => _config.FogNightMistCoverage, v => _config.FogNightMistCoverage = v);
             Sld("tuner.fognightmistdensity", 0f, 1f, () => _config.FogNightMistDensity, v => _config.FogNightMistDensity = v);
             Sld("tuner.fognightmistspeed", 0f, 0.1f, () => _config.FogNightMistSpeed, v => _config.FogNightMistSpeed = v);
@@ -347,14 +382,38 @@ namespace SDVRadiance
 
         private void BuildWater()
         {
-            Tog("tuner.water", () => _config.WaterEnabled, v => _config.WaterEnabled = v);
-            Sld("tuner.waterstrength", 0f, 2f, () => _config.WaterStrength, v => _config.WaterStrength = v);
-            Sld("tuner.watersparkle", 0f, 1f, () => _config.WaterSparkle, v => _config.WaterSparkle = v);
+            Tog("tuner.water", () => _config.WaterEnabled, v => _config.WaterEnabled = v, "help.water");
+            Sld("tuner.waterstrength", 0f, 2f, () => _config.WaterStrength, v => _config.WaterStrength = v, "help.waterstrength");
+            Sld("tuner.watersparkle", 0f, 1f, () => _config.WaterSparkle, v => _config.WaterSparkle = v, "help.watersparkle");
             Sld("tuner.watersparkledensity", 0.2f, 2f, () => _config.WaterSparkleDensity, v => _config.WaterSparkleDensity = v);
             Sld("tuner.waterspeed", 0f, 3f, () => _config.WaterSpeed, v => _config.WaterSpeed = v);
-            Tog("tuner.waterreflection", () => _config.WaterReflection, v => _config.WaterReflection = v);
+            Tog("tuner.waterreflection", () => _config.WaterReflection, v => _config.WaterReflection = v, "help.waterreflection");
             Sld("tuner.waterreflectstrength", 0f, 1f, () => _config.WaterReflectStrength, v => _config.WaterReflectStrength = v);
-            Tog("tuner.waterindoors", () => _config.WaterEffectIndoors, v => _config.WaterEffectIndoors = v);
+            // Three named looks rather than another slider: the two things they move together
+            // (how much the surface's ripple displaces the mirror, and how deep the water reads)
+            // have no meaning apart, and a picked look is something a player can see the point of
+            // without knowing what either number is.
+            Section("tuner.reflstyle");
+            (WaterReflectionStyle style, string key)[] reflStyles =
+            {
+                (WaterReflectionStyle.StillWater, "still"),
+                (WaterReflectionStyle.Natural, "natural"),
+                (WaterReflectionStyle.Choppy, "choppy"),
+            };
+            int rw = (_contentColumnWidth - 12) / 3;
+            for (int i = 0; i < reflStyles.Length; i++)
+            {
+                var (style, key) = reflStyles[i];
+                var rect = new Rectangle(_contentCursorX + i * (rw + 6), _contentCursorY, rw, S(40));
+                var btn = Btn(_translate($"tuner.reflstyle.{key}"), rect, () =>
+                {
+                    _config.WaterReflectStyle = style; _onChange(); _onSave(); Reflow();
+                });
+                btn.TextScale = _ui * (_config.WaterReflectStyle == style ? 1f : 0.82f);
+                Help(rect, $"help.reflstyle.{key}");
+            }
+            _contentCursorY += S(50);
+            Tog("tuner.waterindoors", () => _config.WaterEffectIndoors, v => _config.WaterEffectIndoors = v, "help.waterindoors");
 
             // Per-room water switch: only in gated building interiors (not outdoors / real level water).
             GameLocation? here = Game1.currentLocation;
@@ -375,21 +434,21 @@ namespace SDVRadiance
         private void BuildLens()
         {
             Section("tuner.section.tiltshift");
-            Tog("tuner.tiltshift", () => _config.TiltShiftEnabled, v => _config.TiltShiftEnabled = v);
+            Tog("tuner.tiltshift", () => _config.TiltShiftEnabled, v => _config.TiltShiftEnabled = v, "help.tiltshift");
             _toggles.Add(new TunerToggle(_translate("tuner.tiltradial"), new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, 38),
                 () => _config.TiltShiftMode == TiltShiftFocus.Radial,
                 v => _config.TiltShiftMode = v ? TiltShiftFocus.Radial : TiltShiftFocus.Bands));
             _contentCursorY += 44;
             Sld("tuner.tiltradius", 0.05f, 0.9f, () => _config.TiltShiftRadius, v => _config.TiltShiftRadius = v);
-            Sld("tuner.tiltfeather", 0f, 1f, () => _config.TiltShiftFeather, v => _config.TiltShiftFeather = v);
+            Sld("tuner.tiltfeather", 0f, 1f, () => _config.TiltShiftFeather, v => _config.TiltShiftFeather = v, "help.tiltfeather");
             Sld("tuner.tiltstrength", 0f, 1f, () => _config.TiltShiftStrength, v => _config.TiltShiftStrength = v);
-            Sld("tuner.tilttop", 0f, 1f, () => _config.TiltShiftTopRatio, v => _config.TiltShiftTopRatio = v);
-            Sld("tuner.tiltbottom", 0f, 1f, () => _config.TiltShiftBottomRatio, v => _config.TiltShiftBottomRatio = v);
+            Sld("tuner.tilttop", 0f, 1f, () => _config.TiltShiftTopRatio, v => _config.TiltShiftTopRatio = v, "help.tilttop");
+            Sld("tuner.tiltbottom", 0f, 1f, () => _config.TiltShiftBottomRatio, v => _config.TiltShiftBottomRatio = v, "help.tiltbottom");
             _contentCursorY += 12;
             Section("tuner.section.finishing");
-            Tog("tuner.vignette", () => _config.VignetteEnabled, v => _config.VignetteEnabled = v);
+            Tog("tuner.vignette", () => _config.VignetteEnabled, v => _config.VignetteEnabled = v, "help.vignette");
             Sld("tuner.vignettestrength", 0f, 1f, () => _config.VignetteStrength, v => _config.VignetteStrength = v);
-            Tog("tuner.ca", () => _config.ChromaticAberrationEnabled, v => _config.ChromaticAberrationEnabled = v);
+            Tog("tuner.ca", () => _config.ChromaticAberrationEnabled, v => _config.ChromaticAberrationEnabled = v, "help.ca");
             Sld("tuner.castrength", 0f, 1f, () => _config.ChromaticAberrationStrength, v => _config.ChromaticAberrationStrength = v);
         }
 
@@ -494,6 +553,22 @@ namespace SDVRadiance
         {
             base.gameWindowSizeChanged(oldBounds, newBounds);
             Reflow();
+        }
+
+        public override void performHoverAction(int x, int y)
+        {
+            base.performHoverAction(x, y);
+            _hoverText = null;
+            if (y < _bodyTop || y > _bodyBottom || x < _contentX)
+                return;
+            foreach (var (row, text) in _help)
+            {
+                if (Visible(row) && row.Contains(x, y + _scroll))
+                {
+                    _hoverText = text;
+                    return;
+                }
+            }
         }
 
         public override void receiveScrollWheelAction(int direction)
@@ -647,6 +722,8 @@ namespace SDVRadiance
             TunerText.DrawFit(spriteBatch, _translate("tuner.hint"), new Vector2(xPositionOnScreen + 28, _hintY), innerW, Game1.textColor * 0.7f, 0.8f);
 
             base.draw(spriteBatch);
+            if (!string.IsNullOrEmpty(_hoverText))
+                drawHoverText(spriteBatch, _hoverText, Game1.smallFont);
             drawMouse(spriteBatch);
         }
 

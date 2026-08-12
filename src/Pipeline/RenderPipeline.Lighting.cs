@@ -60,6 +60,25 @@ namespace SDVRadiance
 
             GameLocation? lightLocation = Game1.currentLocation;
             GatherGameLights(lightLocation);
+            // HOW HARD A FLAME BREATHES DEPENDS ON HOW MANY FLAMES ARE IN THE ROOM.
+            //
+            // The wobble was written for a hearth, where a room quietly pulsing with one fire is
+            // the whole charm of it. The saloon has two dozen wall sconces, and a sconce carries
+            // the same texture index as a fireplace, so all of them breathed at eight percent, out
+            // of phase with each other, sixty times a second. Measured with radiance_lightwatch
+            // standing perfectly still in that room: ten to seventeen of the twenty-four slots
+            // changed value on almost every single frame, and it was reported as the lights
+            // flickering while walking around, which is where anyone would notice it.
+            //
+            // Independent wobbles average out rather than pile up, so the amplitude comes down as
+            // the square root of how many of them share the screen. One fire keeps every bit of
+            // its flicker. Twenty-four keep a fifth of it each, and the room stops shimmering
+            // while each fire still moves.
+            int flameCount = 0;
+            foreach (var g in _gatheredLights)
+                if (g.TextureIndex == 4 || g.TextureIndex == 5)
+                    flameCount++;
+            float flickerShare = 1f / (float)Math.Sqrt(Math.Max(1, flameCount));
             foreach (var src in _gatheredLights)
             {
                 if (_lightCandidates.Count >= MaxLightCandidates)
@@ -94,9 +113,17 @@ namespace SDVRadiance
                 // back on the flame's own cycle: a hearth quietly breathing turned into half
                 // the room's lamps pulsing. Exactly the trap already documented in the shadow
                 // path, where a flickering reach made casters blink in and out.
+                // A fire lights further than a bulb of the same nominal radius: it is taller than
+                // a point, it flickers past its own edge, and the eye expects a hearth to own the
+                // half of the room in front of it. The game hands both the same radius, so give
+                // flames a fifth more reach here rather than asking players to move a global
+                // slider that would swell every porch lamp with it.
+                bool isFire = src.TextureIndex == 4 || src.TextureIndex == 5;
+                if (isFire)
+                    radiusUv *= 1.2f;
                 AddLightCandidate(new Vector2(u, v), new Vector4(glow, Math.Max(0.02f, radiusUv)),
-                    ShadowRenderer.FireFlicker(src.Position, src.TextureIndex), src.Id,
-                    fire: src.TextureIndex == 4 || src.TextureIndex == 5);
+                    MathHelper.Lerp(1f, ShadowRenderer.FireFlicker(src.Position, src.TextureIndex), flickerShare), src.Id,
+                    fire: isFire);
             }
 
             // LABELED WINDOWS (HF class 12): warm interior glow that fades in at night, added
@@ -1070,6 +1097,14 @@ namespace SDVRadiance
         /// tree trunks, resource clumps, bushes, and characters/animals, each with an occlusion
         /// WEIGHT in the red channel (entities are partial blockers → softer shadows).
         /// </summary>
+        /// <summary>How far past the screen the FLOOD occluder mask reaches, in tiles. The sun
+        /// shaft march walks up to eight tiles toward the sun, and with a screen-sized mask
+        /// everything it needed was off the edge: a canopy's shafts sprang into being as the
+        /// canopy scrolled into the mask, which read as light that follows the player around.
+        /// Clouds do not do that, and neither should sun. Same fix as the water mirror's source
+        /// padding, same reason.</summary>
+        private const int FloodOccPad = 8;
+
         private bool BuildFloodOccluders(int w, int h)
         {
             GameLocation? location = Game1.currentLocation;
@@ -1079,11 +1114,11 @@ namespace SDVRadiance
 
             int vx = Game1.viewport.X;
             int vy = Game1.viewport.Y;
-            int startTileX = (int)Math.Floor(vx / 64f);
-            int startTileY = (int)Math.Floor(vy / 64f);
+            int startTileX = (int)Math.Floor(vx / 64f) - FloodOccPad;
+            int startTileY = (int)Math.Floor(vy / 64f) - FloodOccPad;
             // Viewport-based (world px): w/64 is screen px and undercounts tiles when zoomed out.
-            int tilesW = Math.Max(1, Game1.viewport.Width / 64 + 2);
-            int tilesH = Math.Max(1, Game1.viewport.Height / 64 + 2);
+            int tilesW = Math.Max(1, Game1.viewport.Width / 64 + 2) + FloodOccPad * 2;
+            int tilesH = Math.Max(1, Game1.viewport.Height / 64 + 2) + FloodOccPad * 2;
             int count = tilesW * tilesH;
 
             // Rebuild on an input change, not on a clock — the flood lightmap's fix, applied
@@ -1103,24 +1138,22 @@ namespace SDVRadiance
                 occluderInputsHash = occluderInputsHash * 31 + location.largeTerrainFeatures.Count;
                 occluderInputsHash = occluderInputsHash * 31 + location.resourceClumps.Count;
             }
-            if (_occluderMask != null && _occluderMaskBuildMode == 2 && startTileX == _occluderTileX && startTileY == _occluderTileY
-                && _occluderMask.Width == tilesW
-                && ReferenceEquals(surf, _occluderSurfaceMap) && occluderInputsHash == _occluderInputsHash
-                && Game1.ticks - _occluderCacheTick < 60)
+            if (_floodOccluderMask != null && startTileX == _floodOccluderTileX && startTileY == _floodOccluderTileY
+                && _floodOccluderMask.Width == tilesW
+                && ReferenceEquals(surf, _floodOccluderSurfaceMap) && occluderInputsHash == _floodOccluderInputsHash
+                && Game1.ticks - _floodOccluderCacheTick < 60)
             {
-                _occluderWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
-                _occluderMaskSize = new Vector2(tilesW, tilesH);
+                _floodOccluderMaskSize = new Vector2(tilesW, tilesH);
                 return true;
             }
-            _occluderMaskBuildMode = 2;
-            _occluderTileX = startTileX;
-            _occluderTileY = startTileY;
-            _occluderCacheTick = Game1.ticks;
-            _occluderSurfaceMap = surf;
-            _occluderInputsHash = occluderInputsHash;
+            _floodOccluderTileX = startTileX;
+            _floodOccluderTileY = startTileY;
+            _floodOccluderCacheTick = Game1.ticks;
+            _floodOccluderSurfaceMap = surf;
+            _floodOccluderInputsHash = occluderInputsHash;
 
-            if (_occluderMaskPixels == null || _occluderMaskPixels.Length < count)
-                _occluderMaskPixels = new Color[count];
+            if (_floodOccluderMaskPixels == null || _floodOccluderMaskPixels.Length < count)
+                _floodOccluderMaskPixels = new Color[count];
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)
@@ -1139,7 +1172,7 @@ namespace SDVRadiance
                             && layer.Tiles[tx, ty] != null;
                     }
                     byte v = solid ? (byte)255 : (byte)0;
-                    _occluderMaskPixels[j * tilesW + i] = new Color(v, v, v, (byte)255);
+                    _floodOccluderMaskPixels[j * tilesW + i] = new Color(v, v, v, (byte)255);
                 }
             }
 
@@ -1149,8 +1182,8 @@ namespace SDVRadiance
                 if (i < 0 || i >= tilesW || j < 0 || j >= tilesH)
                     return;
                 int idx = j * tilesW + i;
-                if (_occluderMaskPixels[idx].R < strength)
-                    _occluderMaskPixels[idx] = new Color(strength, strength, strength, (byte)255);
+                if (_floodOccluderMaskPixels[idx].R < strength)
+                    _floodOccluderMaskPixels[idx] = new Color(strength, strength, strength, (byte)255);
             }
 
             foreach (var kv in location.terrainFeatures.Pairs)
@@ -1184,14 +1217,13 @@ namespace SDVRadiance
             // sprite silhouette pass — stamping them here too gave everyone standing near a
             // lamp a second blurry dark blotch on top of their cast shadow.
 
-            if (_occluderMask == null || _occluderMask.Width != tilesW || _occluderMask.Height != tilesH)
+            if (_floodOccluderMask == null || _floodOccluderMask.Width != tilesW || _floodOccluderMask.Height != tilesH)
             {
-                _occluderMask?.Dispose();
-                _occluderMask = new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color);
+                _floodOccluderMask?.Dispose();
+                _floodOccluderMask = new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color);
             }
-            _occluderMask.SetData(_occluderMaskPixels, 0, count);
-            _occluderWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
-            _occluderMaskSize = new Vector2(tilesW, tilesH);
+            _floodOccluderMask.SetData(_floodOccluderMaskPixels, 0, count);
+            _floodOccluderMaskSize = new Vector2(tilesW, tilesH);
             return true;
         }
     }

@@ -21,6 +21,23 @@ namespace SDVRadiance
         Radial   // sharp circle around the player, blur outward
     }
 
+    /// <summary>
+    /// How a reflection sits on the water. The surface's own movement and the reflection's
+    /// clarity used to be one number, so calming a choppy mirror meant flattening the ripple
+    /// everywhere; on a rainy day, where the game's own weather makes the surface half again as
+    /// choppy, the only way to read a reflection was to turn the water off.
+    /// </summary>
+    public enum WaterReflectionStyle
+    {
+        /// <summary>Barely moved. The reflection reads like a still pond: the surface keeps its
+        /// ripple, the image in it stays legible, and it sits lighter and cooler on the water.</summary>
+        StillWater,
+        /// <summary>The surface's own movement, unchanged. What the mod has always shipped.</summary>
+        Natural,
+        /// <summary>Broken up and deeper, for open sea and weather.</summary>
+        Choppy
+    }
+
     /// <summary>Quick look presets applied to the whole effect stack.</summary>
     public enum LookPreset
     {
@@ -86,8 +103,16 @@ namespace SDVRadiance
         /// "hand-tuned" in an install nobody had tuned. Naming the look it actually is means the
         /// menu tells the truth on first launch, and someone who wanders off it can find their way
         /// back by picking it again. Nothing applies a preset on load, so this is a label, not an
-        /// action: an existing config keeps whatever it already says.</remarks>
-        public LookPreset ActivePreset { get; set; } = LookPreset.Cinematic;
+        /// action: an existing config keeps whatever it already says.
+        /// <para>
+        /// 1.5.5 moves it off Cinematic for the same reason it was moved onto it: the label has to
+        /// match what is actually shipping, and the colour grade is off by default now. Custom is
+        /// the honest answer for a set of defaults that is nobody's named look - lighting and water
+        /// on, the game's own colours untouched. Picking Cinematic from the dropdown still gives
+        /// the old look in one click.
+        /// </para>
+        /// </remarks>
+        public LookPreset ActivePreset { get; set; } = LookPreset.Custom;
 
         /// <summary>Resolution the EFFECT chain runs at, as a fraction of the window. 1 = native.
         /// The game still draws the world at full size; only our passes work on a smaller image
@@ -114,7 +139,22 @@ namespace SDVRadiance
         public float BloomIntensity { get; set; } = 0.35f;
 
         // --- Color grade ---
-        public bool ColorGradeEnabled { get; set; } = true;
+        /// <summary>OFF by default from 1.5.5: the mod ships with the game's own colours.</summary>
+        /// <remarks>
+        /// This is a grade, which is to say an opinion about how the game should look, and it was
+        /// being applied to everybody before they had asked for one. Two players called the picture
+        /// too strong in the same week and a third thanked us for pointing out which setting was
+        /// softening their sprites, which is three people spending their time undoing a decision
+        /// they never made.
+        /// <para>
+        /// Measured in the saloon, the grade alone lifted saturation from the game's own 0.798 to
+        /// 0.956 and was the largest single colour change in the stack. The lighting is what this
+        /// mod is for and it stays on; the colour of the game is Concerned Ape's and it goes back
+        /// to him. Anyone who wants the graded look has a preset for it in the first dropdown of
+        /// the menu, and it is one click.
+        /// </para>
+        /// </remarks>
+        public bool ColorGradeEnabled { get; set; } = false;
         public float ColorGradeStrength { get; set; } = 1f;
         // 1.5.0 took this to 1.10, halfway to Subtle's 1.06: 1.15 read as punchy on first launch
         // and the common note from people who liked the look was that they softened it before a
@@ -122,7 +162,13 @@ namespace SDVRadiance
         // and the note it was lowered for was made against the OLD lighting, where a lamp could
         // not brighten anything and contrast was carrying the whole picture. If it reads as harsh
         // again now that the lights work, this line is the one to move, not the lighting.
-        public float ColorGradeContrast { get; set; } = 1.15f;
+        // 1.5.5 takes it to 1.10. Two players called the picture too strong, and until this
+        // release the number was doing more than it said: contrast ran per channel, which pulled
+        // the channels apart from each other and lifted saturation by about fifteen percent on
+        // top of whatever the saturation control asked for. That side effect is gone now, so the
+        // same number would read as more contrast than it used to deliver, and the honest move
+        // is to take the number down rather than quietly hand back the difference.
+        public float ColorGradeContrast { get; set; } = 1.10f;
         public float ColorGradeSaturation { get; set; } = 1.05f;
         public float ColorGradeTemperature { get; set; } = 0.05f;
         public float ColorGradeBrightness { get; set; } = 1f;
@@ -146,6 +192,8 @@ namespace SDVRadiance
         // and treat the scene as occluders; until then, on by choice, not by default.
         public bool GodRaysEnabled { get; set; }
         public float GodRaysIntensity { get; set; } = 0.68f;
+        /// <summary>Let the SUN be a ray source, not only lamps and fires. See UpdateRayLights.</summary>
+        public bool GodRaysSun { get; set; } = true;
         public float GodRaysThreshold { get; set; } = 0.7f;
         public float GodRaysDensity { get; set; } = 0.6f;
         public float GodRaysDecay { get; set; } = 0.96f;
@@ -196,6 +244,8 @@ namespace SDVRadiance
         public float WaterSparkleDensity { get; set; } = 0.7f; // glint count/size (1 = old look)
         public bool WaterReflection { get; set; } = true;  // screen-space reflection on water
         public float WaterReflectStrength { get; set; } = 0.71f;
+        /// <summary>Which of the named reflection looks is in use (see WaterReflectionStyle).</summary>
+        public WaterReflectionStyle WaterReflectStyle { get; set; } = WaterReflectionStyle.Natural;
         /// <summary>Apply the water effect inside building interiors (farmhouse, cabins, custom
         /// home mods). Off = skip it there — some house mods have decorative rivers/ponds inside
         /// the user may not want rippling. Real level water ALWAYS keeps the effect regardless of
@@ -219,8 +269,21 @@ namespace SDVRadiance
         /// canopies, coloured lamp pools). Supersedes LightingEnabled when on.</summary>
         public bool FloodLightingEnabled { get; set; } = true;
         /// <summary>How strongly the flood lightmap modulates the scene (0..1).</summary>
-        /// <remarks>See <see cref="LightingBoost"/> for why this whole group was raised.</remarks>
-        public float FloodLightingStrength { get; set; } = 0.63f;
+        /// <remarks>
+        /// 1.5.5 takes it from 0.63 to 0.45. Two players have now said the defaults are too strong,
+        /// one of them putting it as being unable to see anything in a farmhouse until they found
+        /// the settings. Measured in the saloon at six in the evening, against the same scene with
+        /// the mod switched off: this stage alone carried half of a +25% red channel and all of a
+        /// +35% rise in brightness, the other stages together accounting for the rest.
+        /// <para>
+        /// The number was worth more before 1.5.5 than it looks, because the hearth term was not
+        /// scaled by it: turning the slider down by half moved the room by a couple of percent and
+        /// people reasonably concluded the slider did nothing. It governs the whole stage now, so
+        /// a lower default is a real change rather than a cosmetic one.
+        /// </para>
+        /// See <see cref="LightingBoost"/> for why this whole group was raised in the first place.
+        /// </remarks>
+        public float FloodLightingStrength { get; set; } = 0.45f;
         /// <summary>How dark a fully occluded per-light ray gets (0 = no shadows, 1 = black).</summary>
         /// <remarks>Lowered with the rest of the group: with the pools finally bright enough to
         /// read, a near-black occluded ray beside them was all contrast and no shape.</remarks>
@@ -235,11 +298,6 @@ namespace SDVRadiance
         /// draws too (Dynamic Windows ships a shaft sprite and a fill sprite for exactly these), so
         /// it is the half to give away when running one.</summary>
         public bool WindowBeamEnabled { get; set; } = true;
-        /// <summary>The LIGHTING half: how much daylight a window adds to the room's own light, as
-        /// opposed to a beam drawn on top of it. A mod that draws window art cannot do this, because
-        /// it paints over the picture rather than feeding the lightmap, so this is the half worth
-        /// keeping when two window mods meet.</summary>
-        public bool WindowRoomLightEnabled { get; set; } = true;
         /// <summary>Which mod, if any, we already stepped aside for once. Stops the compatibility
         /// default from being reapplied on every launch and overriding a deliberate choice.</summary>
         public string WindowCompatAppliedFor { get; set; } = "";
@@ -533,6 +591,15 @@ namespace SDVRadiance
                     ColorGradeTemperature = 0f;
                     ColorGradeBrightness = 1f;
                     ColorGradeToneMap = false;
+                    // The LIGHT too, from 1.5.5. Until now this preset only touched bloom and the
+                    // colour grade, and measurement says those are the small half: in the saloon
+                    // the grade accounts for about +5% on the red channel and the lighting for
+                    // +13%, and only the lighting changes the brightness at all. Somebody choosing
+                    // "Subtle" and still getting the lighting at full strength has been given the
+                    // name of the thing they asked for and not the thing.
+                    FloodLightingStrength = 0.30f;
+                    LightingBoost = 0.70f;
+                    LightingWarmth = 0.35f;
                     break;
 
                 case LookPreset.Cinematic:

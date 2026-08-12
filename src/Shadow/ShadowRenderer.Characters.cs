@@ -23,10 +23,16 @@ namespace SDVRadiance
         private void DrawSunShadows(SpriteBatch spriteBatch, GameLocation location, ModConfig config, float strength, float blur)
         {
             ComputeSun(out float rot, out float stretch, out float alpha);
-            alpha *= strength;
+            // Overcast is a dimmer on the sun, not a switch (see OvercastNow): faint, short and
+            // soft, with everything keeping its own silhouette instead of the screen reverting to
+            // the game's blobs the moment it rains.
+            alpha *= strength * MathHelper.Lerp(1f, OvercastAlpha, _overcastBlend);
             if (alpha <= 0.01f)
                 return;
-            stretch *= Math.Max(0.1f, config.DirectionalShadowLength);
+            blur += OvercastExtraBlur * _overcastBlend;
+            _sunLengthScale = Math.Max(0.1f, config.DirectionalShadowLength)
+                            * MathHelper.Lerp(1f, OvercastLength, _overcastBlend);
+            stretch *= _sunLengthScale;
 
             if (DiagnosticMonitor != null && _diagnosticFrameCount < 3)
             {
@@ -139,13 +145,47 @@ namespace SDVRadiance
                     // world position is bit-identical every frame — so requiring both keeps street
                     // lamps (small, static) while still catching slow-drifting decor (small,
                     // moving by any amount, not just past a multi-pixel jump).
+                    //
+                    // AND "MOVING" IS A PROPERTY OF THE LIGHT, NOT OF THIS FRAME. Asking whether it
+                    // moved SINCE THE LAST FRAME put a per-frame quantity in charge of a yes/no that
+                    // changes the picture, which is the trap this file already warns about twice for
+                    // the ranking and for the flame wobble. A firefly answers "no" constantly: at the
+                    // turning point of its wobble its speed is zero, so it travels less than the
+                    // threshold, is read as a lamp for that one frame, and casts. On the frame it
+                    // spawns there is no previous position at all, so it casts then too. The next
+                    // frame it moves again and the shadow is gone.
+                    //
+                    // One frame of shadow, over and over, on every firefly's own rhythm. Reported as
+                    // a faint shadow that BLINKS rather than one that is there, which is the exact
+                    // signature: a steady wrong answer looks like a bug in the shadow, an
+                    // intermittent one looks like a bug in the test.
+                    //
+                    // So drift is REMEMBERED. Seen to move once and it is a firefly for as long as it
+                    // exists; a lamp whose position never changes is never marked, which is the whole
+                    // reason this test beats "radius < 1" (all 92 of Town's street lights are under
+                    // that). The other half closes the spawn frame: a small light with no history has
+                    // to hold still for a few frames before it may cast at all. A planted lamp clears
+                    // that in fifty milliseconds and nobody sees it; a firefly never clears it,
+                    // because its first move is measured before the count gets there.
                     bool isWindow = ls.lightContext.Value == LightSource.LightContext.WindowLight;
                     Vector2 lpos = ls.position.Value;
                     _activeLightIds.Add(kv.Key);
-                    bool drifting = _lightPreviousPositions.TryGetValue(kv.Key, out Vector2 was)
-                                    && Vector2.DistanceSquared(was, lpos) > 0.02f;   // ~0.14px — any real movement, not a multi-pixel jump
+                    bool small = ls.radius.Value < FireflyRadiusBound;
+                    bool hadHistory = _lightPreviousPositions.TryGetValue(kv.Key, out Vector2 was);
+                    if (hadHistory && Vector2.DistanceSquared(was, lpos) > 0.02f)   // ~0.14px — any real movement
+                    {
+                        _driftingLightIds.Add(kv.Key);
+                        _lightSteadyFrames[kv.Key] = 0;
+                    }
+                    else
+                    {
+                        _lightSteadyFrames.TryGetValue(kv.Key, out int steady);
+                        _lightSteadyFrames[kv.Key] = hadHistory ? Math.Min(FireflySettleFrames, steady + 1) : 0;
+                    }
                     _lightPreviousPositions[kv.Key] = lpos;
-                    bool firefly = !isWindow && drifting && ls.radius.Value < FireflyRadiusBound;
+                    bool firefly = !isWindow && small
+                                   && (_driftingLightIds.Contains(kv.Key)
+                                       || _lightSteadyFrames[kv.Key] < FireflySettleFrames);
                     if (firefly)
                         continue;
                     Vector2 screen = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
@@ -171,6 +211,13 @@ namespace SDVRadiance
             // into sources and ranks by contribution, the way SelectLights does for the shader.
             if (_lightPreviousPositions.Count > _activeLightIds.Count)
                 _lightPreviousPositions.Keys.Where(k => !_activeLightIds.Contains(k)).ToList().ForEach(k => _lightPreviousPositions.Remove(k));
+            // The drift memory and the settle counters live and die with the position memory: a
+            // firefly mod spawns and retires lights all night, and a set that only ever grew would
+            // be a leak as well as a way for a reused id to inherit a stranger's verdict.
+            if (_driftingLightIds.Count > _activeLightIds.Count)
+                _driftingLightIds.Where(k => !_activeLightIds.Contains(k)).ToList().ForEach(k => _driftingLightIds.Remove(k));
+            if (_lightSteadyFrames.Count > _activeLightIds.Count)
+                _lightSteadyFrames.Keys.Where(k => !_activeLightIds.Contains(k)).ToList().ForEach(k => _lightSteadyFrames.Remove(k));
 
             // A RUNAWAY GUARD, not a look choice. Every light on screen casts from every caster
             // now; this only stops a location carrying an absurd number of lights from turning one
@@ -365,6 +412,20 @@ namespace SDVRadiance
         /// to the ids still present so a location full of transient lights cannot grow it.</summary>
         private readonly System.Collections.Generic.Dictionary<string, Vector2> _lightPreviousPositions = new();
         private readonly System.Collections.Generic.HashSet<string> _activeLightIds = new();
+        /// <summary>Every light seen to MOVE since it appeared. The drift test's real answer: a
+        /// light either is the kind of thing that drifts or it is not, and asking one frame at a
+        /// time gave a different answer at every turning point of a firefly's wobble. Pruned with
+        /// the position memory, so an id that leaves the location is forgotten and a light that
+        /// comes back is judged fresh.</summary>
+        private readonly System.Collections.Generic.HashSet<string> _driftingLightIds = new();
+        /// <summary>How many consecutive frames each light has held still, capped at the settle
+        /// count. A light with no history is at zero, which is what keeps a firefly from casting
+        /// on the frame it spawns, before its first movement can be measured.</summary>
+        private readonly System.Collections.Generic.Dictionary<string, int> _lightSteadyFrames = new();
+        /// <summary>How long a small light must stand still before it is allowed to cast. Three
+        /// frames is fifty milliseconds: a planted lamp clears it on the way in and nobody can see
+        /// that it did, and a firefly never clears it because it moves first.</summary>
+        private const int FireflySettleFrames = 3;
         /// <summary>The old MinShadowLightRadius default. Real lamps (Town's are ~0.6-0.9) sit
         /// under this too, so this bound only matters ANDed with drift above — see the comment
         /// at its use site.</summary>

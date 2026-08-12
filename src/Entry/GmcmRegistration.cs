@@ -119,6 +119,8 @@ namespace SDVRadiance
             api.AddPage(manifest, "godrays", () => i18n("config.section.godrays"));
             api.AddBoolOption(manifest, () => config().GodRaysEnabled, v => config().GodRaysEnabled = v,
                 () => i18n("config.godrays.enabled.name"), () => i18n("config.godrays.enabled.tooltip"));
+            api.AddBoolOption(manifest, () => config().GodRaysSun, v => config().GodRaysSun = v,
+                () => i18n("config.godrays.sun.name"), () => i18n("config.godrays.sun.tooltip"));
             api.AddNumberOption(manifest, () => config().GodRaysIntensity, v => config().GodRaysIntensity = v,
                 () => i18n("config.godrays.intensity.name"), null, 0f, 1.5f, 0.05f);
             api.AddNumberOption(manifest, () => config().GodRaysThreshold, v => config().GodRaysThreshold = v,
@@ -212,6 +214,11 @@ namespace SDVRadiance
                 () => i18n("config.water.reflection.name"), () => i18n("config.water.reflection.tooltip"));
             api.AddNumberOption(manifest, () => config().WaterReflectStrength, v => config().WaterReflectStrength = v,
                 () => i18n("config.water.reflectstrength.name"), null, 0f, 1f, 0.05f);
+            api.AddTextOption(manifest,
+                () => config().WaterReflectStyle.ToString(),
+                v => config().WaterReflectStyle = Enum.TryParse<WaterReflectionStyle>(v, out var rs) ? rs : WaterReflectionStyle.Natural,
+                () => i18n("config.water.reflstyle.name"), () => i18n("config.water.reflstyle.tooltip"),
+                new[] { "StillWater", "Natural", "Choppy" });
             api.AddBoolOption(manifest, () => config().WaterEffectIndoors, v => config().WaterEffectIndoors = v,
                 () => i18n("config.water.indoors.name"), () => i18n("config.water.indoors.tooltip"));
 
@@ -243,8 +250,6 @@ namespace SDVRadiance
                 () => i18n("config.lighting.windoweffects.name"), () => i18n("config.lighting.windoweffects.tooltip"));
             api.AddBoolOption(manifest, () => config().WindowBeamEnabled, v => config().WindowBeamEnabled = v,
                 () => i18n("config.lighting.windowbeam.name"), () => i18n("config.lighting.windowbeam.tooltip"));
-            api.AddBoolOption(manifest, () => config().WindowRoomLightEnabled, v => config().WindowRoomLightEnabled = v,
-                () => i18n("config.lighting.windowroomlight.name"), () => i18n("config.lighting.windowroomlight.tooltip"));
 
             // --- Directional sprite shadows ---
             api.AddPage(manifest, "shadows", () => i18n("config.section.shadows"));

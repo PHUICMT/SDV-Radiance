@@ -109,7 +109,42 @@ namespace SDVRadiance
         private int _occluderTileX = int.MinValue, _occluderTileY = int.MinValue, _occluderCacheTick = int.MinValue;
         private int _occluderInputsHash;              // feature/clump counts: chop a tree, rebuild now
         private SurfaceMap? _occluderSurfaceMap;      // identity: a placed building makes a new one
-        private int _occluderMaskBuildMode;   // which builder last filled _occluderMask: 1 = classic, 2 = flood (they share it + the throttle, and are mutually exclusive per frame)
+        private int _occluderMaskBuildMode;   // 1 = classic has ever built into _occluderMask (diagnostic only now)
+        /// <summary>
+        /// FLOOD's own occluder mask, kept fully separate from classic's above.
+        ///
+        /// <para>
+        /// They used to share one texture and one set of origin fields, on the reasoning that
+        /// only one of the two builders would be "the one currently needed" per frame - written
+        /// down at the time as "they share it + the throttle, and are mutually exclusive per
+        /// frame". That was true only because both builders happened to compute the SAME
+        /// unpadded window, so whichever one clobbered the shared fields left behind a texture
+        /// and an origin that were still numerically interchangeable with what the other wanted.
+        /// </para>
+        ///
+        /// <para>
+        /// Padding flood's window past the screen for the sun shafts broke that coincidence.
+        /// Classic's build always runs after flood's in the same frame (build slot 2 follows
+        /// slot 1), so with both lighting systems on - the shipped default, since flood does
+        /// not switch classic off - classic's smaller, unpadded, Buildings-layer-only mask was
+        /// overwriting flood's padded one every single frame, and flood's shader read the origin
+        /// AND the texture back from whatever classic had just left there.
+        /// </para>
+        ///
+        /// <para>
+        /// This was found while chasing something else (a solid black fireplace, which turned out
+        /// to be an unrelated saturation overshoot in floodlight.fx) and split anyway, because two
+        /// systems quietly overwriting one shared cache is a landmine regardless of what it
+        /// happens to produce on any given frame. Two independent sets of fields cannot clobber
+        /// each other, whatever window size either one ever needs.
+        /// </para>
+        /// </summary>
+        private Texture2D? _floodOccluderMask;
+        private Color[]? _floodOccluderMaskPixels;
+        private int _floodOccluderTileX = int.MinValue, _floodOccluderTileY = int.MinValue, _floodOccluderCacheTick = int.MinValue;
+        private int _floodOccluderInputsHash;
+        private SurfaceMap? _floodOccluderSurfaceMap;
+        private Vector2 _floodOccluderMaskSize;
         private int _lastWaterTileX = int.MinValue, _lastWaterTileY = int.MinValue, _lastWaterBuildTick = int.MinValue;
         private int _lastWaterHookVersion = -1;
         private int _lastWaterLabelVersion = -1;
@@ -296,6 +331,8 @@ namespace SDVRadiance
             sb.AppendLine($"frame {_frameWidth}x{_frameHeight}, effects computed at {_lastScaledWidth}x{_lastScaledHeight}");
             sb.AppendLine($"ready: occluders={_isFloodOcclusionReady} shadows={_shadowsReady} waterOnScreen={_hasWaterInMask} "
                         + $"lights={_lightCount} meteredExposure={_meteredExposure:F3}");
+            sb.AppendLine($"    sun shafts: strength={_dbgShaftStrength:F3} dir=({_dbgShaftDir.X:F2},{_dbgShaftDir.Y:F2}) "
+                        + $"(0 = a gate closed: god rays off, sun source off, indoors, or no sun)");
             // A fade at 0 means the stage is listed but contributing nothing this frame, which
             // looks identical to "switched off" from the outside and is not the same problem.
             sb.AppendLine("presence (0 = contributing nothing this frame):");
@@ -575,7 +612,7 @@ namespace SDVRadiance
              + $"deviceViewport=({_device.Viewport.X},{_device.Viewport.Y} {_device.Viewport.Width}x{_device.Viewport.Height}) "
              + $"waterMaskOrigin=({_lastWaterTileX},{_lastWaterTileY}) maskJobInFlight={_pendingWaterMaskJob != null} "
              + $"maskJobScreen={(_pendingWaterMaskJob?.ScreenId.ToString() ?? "-")} "
-             + $"occluderOrigin=({_occluderTileX},{_occluderTileY}) "
+             + $"occluderOrigin=({_occluderTileX},{_occluderTileY}) floodOccluderOrigin=({_floodOccluderTileX},{_floodOccluderTileY}) "
              + $"stateScreen={_activeScreenId} statesKept={_screenStates.Count}";
 
         private void EnsureTargets(int w, int h, SurfaceFormat format)
@@ -586,13 +623,15 @@ namespace SDVRadiance
             if (_sceneRenderTarget != null && _sceneRenderTarget.Width == w && _sceneRenderTarget.Height == h && _sceneRenderTarget.Format == format)
                 return;
 
-            _sceneRenderTarget?.Dispose(); _fullResolutionPingA?.Dispose(); _fullResolutionPingB?.Dispose(); _halfResolutionScratchA?.Dispose(); _halfResolutionScratchB?.Dispose();
+            _sceneRenderTarget?.Dispose(); _fullResolutionPingA?.Dispose(); _fullResolutionPingB?.Dispose(); _halfResolutionScratchA?.Dispose(); _halfResolutionScratchB?.Dispose(); _cloudMaskKeep?.Dispose();
 
             _sceneRenderTarget = CreateRenderTarget(w, h, format);
             _fullResolutionPingA = CreateRenderTarget(w, h, format);
             _fullResolutionPingB = CreateRenderTarget(w, h, format);
             _halfResolutionScratchA = CreateRenderTarget(Math.Max(1, w / 2), Math.Max(1, h / 2), format);
             _halfResolutionScratchB = CreateRenderTarget(Math.Max(1, w / 2), Math.Max(1, h / 2), format);
+            _cloudMaskKeep = CreateRenderTarget(Math.Max(1, w / 2), Math.Max(1, h / 2), format);
+            _cloudMaskTick = int.MinValue;   // whatever the new target holds, it is not a sky
         }
 
         private RenderTarget2D CreateRenderTarget(int w, int h, SurfaceFormat format) =>
@@ -630,6 +669,26 @@ namespace SDVRadiance
             // than the render target, and every shader input is UV or tile space, so nothing
             // downstream has to learn about the smaller buffers - see EnsureTargets.
             float renderScale = MathHelper.Clamp(config.RenderScale, 0.5f, 1f);
+            // ZOOMED OUT. The game does not shrink the world when you zoom out - it draws the same
+            // world pixels into a BIGGER buffer (window size / zoom) and then scales that whole
+            // buffer down onto the window. At 50% zoom on a 1280x720 window that is a 2560x1440
+            // frame: four times the pixels, every one of them averaged away on the way to the
+            // screen. Our chain was sized from that frame, so zooming out quadrupled the fill rate
+            // of every pass for a picture nobody could see any more of.
+            //
+            // Measured on an RTX 5080 in Town: the chain went 0.17 ms at 100% zoom to 0.45 ms at
+            // 50%, and the report showed "frame 2560x1440, effects computed at 2560x1440" behind a
+            // 1280x720 window. On a slower machine that multiplier is the whole of the "zooming out
+            // killed my frame rate below 15 fps, snowball effect" report.
+            //
+            // Working at the buffer's ON-SCREEN size costs nothing visible, because the game's own
+            // downscale is about to throw the difference away. It only ever lowers the number the
+            // player chose, so someone who has already turned the resolution down keeps their
+            // setting. A map screenshot is exempt: that frame is written to a file at full size and
+            // never goes near the window.
+            float zoomOut = Game1.options?.zoomLevel ?? 1f;
+            if (zoomOut > 0.05f && zoomOut < 0.999f && !Game1.game1.takingMapScreenshot)
+                renderScale = Math.Max(0.25f, Math.Min(renderScale, zoomOut));
             int sw = Math.Max(1, (int)Math.Round(w * renderScale));
             int sh = Math.Max(1, (int)Math.Round(h * renderScale));
             bool scaled = sw != w || sh != h;
@@ -791,7 +850,7 @@ namespace SDVRadiance
                 // daylight and lights entering/leaving the screen.
                 if (config.GodRaysEnabled && _godRays != null)
                 {
-                    bool hasLight = UpdateRayLights();
+                    bool hasLight = UpdateRayLights(config);
                     // Rain/snow: the overcast sky kills visible shafts — fade the rays out (and
                     // back in when it clears). Eased through _godRayAmount so it never pops.
                     bool overcast = outdoors && (Game1.isRaining || Game1.isSnowing || Game1.isLightning);
@@ -1145,6 +1204,26 @@ namespace SDVRadiance
         /// <summary>What is left of the cloud-shadow strength under a full overcast. Not zero:
         /// an overcast sky still varies, and cutting the effect outright reads as a bug.</summary>
         private const float OvercastCloudStrength = 0.45f;
+        /// <summary>The cloud stage's blurred density mask, kept in its OWN target so it survives
+        /// to the next frame — the scratch buffers it used to live in are rewritten by god rays
+        /// and bloom later in the same frame. The sun shafts read it one frame late (flood is
+        /// stage 0, clouds are stage 3), which for a mask that drifts a texel a second is
+        /// invisible; what it buys is shafts that die under a cloud and blaze at its sunward
+        /// edge, instead of the two effects being painted over each other as strangers.
+        /// Cross-frame RT — PreserveContents (CreateRenderTarget default) is load-bearing.</summary>
+        private RenderTarget2D? _cloudMaskKeep;
+        /// <summary>Tick <see cref="_cloudMaskKeep"/> was last written; the flood stage refuses a
+        /// stale mask (cloud stage off, or just faded out) rather than gating on old sky.</summary>
+        private int _cloudMaskTick = int.MinValue;
+        /// <summary>Viewport origin in world tiles when the kept mask was drawn, so the flood
+        /// stage can shift its sample by however far the camera moved since.</summary>
+        private Vector2 _cloudMaskTileOffset;
+        /// <summary>The opacity the kept mask was composited at (already carries day factor and
+        /// fade), so the shafts respect a faint moon-cloud faintly and a storm ceiling hard.</summary>
+        private float _cloudMaskStrength;
+        /// <summary>Eased coupling strength, so shafts do not pop when the cloud stage joins or
+        /// leaves the frame — same house rule as every other gate on this effect.</summary>
+        private float _shaftCloudEase;
         // Eased effect amounts so nothing pops: day fog / night mist crossfade over time
         // of day AND ease when toggled; wading self-reflection fades at the water edge.
         private float _fogDayAmount, _fogMistAmount, _pinFadeAmount;
@@ -1238,13 +1317,13 @@ namespace SDVRadiance
             ReleaseScreenStates();
             _mirrorSceneCache?.Dispose(); _mirrorSceneCache = null;
             _waterSignedDistanceTexture?.Dispose(); _waterSignedDistanceTexture = null;
-            _sceneRenderTarget?.Dispose(); _fullResolutionPingA?.Dispose(); _fullResolutionPingB?.Dispose(); _halfResolutionScratchA?.Dispose(); _halfResolutionScratchB?.Dispose(); _waterMask?.Dispose(); _waterMaskCore?.Dispose(); _occluderMask?.Dispose(); _luminanceRenderTarget?.Dispose(); _noiseTexture?.Dispose(); _noiseTexture = null;
+            _sceneRenderTarget?.Dispose(); _fullResolutionPingA?.Dispose(); _fullResolutionPingB?.Dispose(); _halfResolutionScratchA?.Dispose(); _halfResolutionScratchB?.Dispose(); _cloudMaskKeep?.Dispose(); _cloudMaskKeep = null; _waterMask?.Dispose(); _waterMaskCore?.Dispose(); _occluderMask?.Dispose(); _floodOccluderMask?.Dispose(); _luminanceRenderTarget?.Dispose(); _noiseTexture?.Dispose(); _noiseTexture = null;
             _spriteMaskRenderTarget?.Dispose(); _spriteMaskSpriteBatch?.Dispose();
             _maskDebugTexture?.Dispose(); _maskDebugTexture = null;
             _bloom?.Dispose(); _colorGrade?.Dispose(); _godRays?.Dispose(); _fogEffect?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
             _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose(); _floodEffect?.Dispose(); _flood.Dispose();
             _sceneRenderTarget = _fullResolutionPingA = _fullResolutionPingB = _halfResolutionScratchA = _halfResolutionScratchB = null;
-            _waterMask = null; _waterMaskCore = null; _occluderMask = null; _luminanceRenderTarget = null;
+            _waterMask = null; _waterMaskCore = null; _occluderMask = null; _floodOccluderMask = null; _luminanceRenderTarget = null;
             _spriteMaskRenderTarget = null; _spriteMaskSpriteBatch = null;
             _bloom = _colorGrade = _godRays = _fogEffect = _cloudShadow = _tiltShift = _water = _finishing = _lighting = _floodEffect = null;
             _fxParamCache.Clear(); // parameter cache keys pin the disposed Effects otherwise

@@ -183,14 +183,17 @@ namespace SDVRadiance
             var location = Game1.currentLocation;
             bool anchor = location != null && AnchorFresh(location);
 
-            // How much slack the mask window has over the viewport. It is rebuilt whenever the
-            // camera crosses a SINGLE tile, so a wide view walks through rebuilds constantly, and
-            // that rate is the thing a report from a 4K player and a report from a 1080p player
-            // differ by. Worth stating in tiles rather than pixels: zoom and UI scale both move it.
+            // How much slack the mask window has over the viewport, and how often that slack buys a
+            // skipped rebuild. Worth stating in tiles rather than pixels: zoom and UI scale both
+            // move it, and the rate is the thing a report from a 4K player and a report from a
+            // 1080p player differ by. Read the real target rather than recomputing the formula, so
+            // this line cannot go stale the way it did when the padding last changed.
             float viewTilesX = Game1.viewport.Width / 64f, viewTilesY = Game1.viewport.Height / 64f;
+            int maskTilesX = _waterMask != null ? _waterMask.Width / 16 : (int)viewTilesX + 2 * MaskPadSideTiles;
+            int maskTilesY = _waterMask != null ? _waterMask.Height / 16 : (int)viewTilesY + MaskPadTopTiles + MaskPadBottomTiles;
             sb.AppendLine($"your view covers {viewTilesX:0.0}x{viewTilesY:0.0} tiles, and the water surface is worked "
-                        + $"out for {(int)viewTilesX + 6}x{(int)viewTilesY + 6} tiles around it. It is rebuilt every "
-                        + "time you walk one tile, so the wider your view, the more rebuilds a walk costs.");
+                        + $"out for {maskTilesX}x{maskTilesY} tiles around it. The extra is walking slack: it is "
+                        + "rebuilt when the view reaches the edge of what was built, not every time you cross a tile.");
             // Said plainly, because "GUESSED FROM THE SCREEN EDGE" in a room with no water in it
             // reads as the fault the reporter came to report, and it is not one.
             sb.AppendLine("shoreline right now: " + (!_hasWaterInMask

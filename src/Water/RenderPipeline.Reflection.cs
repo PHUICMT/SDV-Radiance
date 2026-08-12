@@ -220,15 +220,55 @@ namespace SDVRadiance
                             break;
                         // Bush: bottom-centre at (tile.X*64 + (eff+1)*32, (tile.Y+1)*64).
                         case StardewValley.TerrainFeatures.Bush bush when !bush.sourceRect.Value.IsEmpty:
-                            var bsrc = bush.sourceRect.Value;
-                            int eff = bush.size.Value switch { 3 => 0, 4 => 1, _ => bush.size.Value };
-                            spriteBatch.Draw(StardewValley.TerrainFeatures.Bush.texture.Value,
-                                Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + (eff + 1) * 32f, (tile.Y + 1) * 64f)),
-                                bsrc, Color.White, 0f, new Vector2(bsrc.Width / 2f, 0f), 4f,
-                                SpriteEffects.FlipVertically | (bush.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None),
-                                StampDepth((tile.Y + 1) * 64f));
+                            StampBushReflection(spriteBatch, bush, tile);
+                            break;
+                        // Grass, which grows right down to the bank on most maps and had no
+                        // mirror at all. Named in the report next to the modded trees.
+                        case StardewValley.TerrainFeatures.Grass grass when grass.texture?.Value != null:
+                            StampGrassReflection(spriteBatch, grass, tile);
                             break;
                     }
+                }
+
+                // The BIG bushes live in a different list. terrainFeatures is tile-keyed and holds
+                // the small stuff; the decorative bushes a map places, and everything a content pack
+                // adds as scenery, are largeTerrainFeatures. Only the first list was walked, so a
+                // planted bush reflected and the bush beside it - identical to look at - did not.
+                foreach (var ltf in location.largeTerrainFeatures)
+                {
+                    if (ltf is not StardewValley.TerrainFeatures.Bush lbush || lbush.sourceRect.Value.IsEmpty)
+                        continue;
+                    Vector2 ltile = lbush.Tile;
+                    if (!WaterWithinTiles((int)ltile.X, (int)ltile.Y + 4, 7))
+                        continue;
+                    StampBushReflection(spriteBatch, lbush, ltile);
+                }
+
+                // Buildings. They are entities drawn from their own texture, so neither the scenery
+                // re-render (map layers only) nor any stamp above could see them: a coop built at
+                // the edge of a pond mirrored the GROUND it stands on and nothing else. Reported
+                // against Build Anywhere, where putting a shed on the shore is the whole point, and
+                // it is just as wrong on a vanilla farm pond.
+                //
+                // Building.draw pins the art's bottom-LEFT corner at
+                // (tileX*64, (tileY + tilesHigh)*64) + DrawOffset*4, at scale 4, so the base line
+                // and the centre both come off that. A building under construction or in the middle
+                // of being moved is not drawn, so it must not be mirrored either.
+                foreach (var bld in location.buildings)
+                {
+                    if (bld?.texture?.Value == null || bld.isMoving || bld.daysOfConstructionLeft.Value > 0)
+                        continue;
+                    Rectangle bsrcRect = bld.getSourceRect();
+                    if (bsrcRect.IsEmpty)
+                        continue;
+                    Vector2 bOffset = (bld.GetData()?.DrawOffset ?? Vector2.Zero) * 4f;
+                    float bBaseY = (bld.tileY.Value + bld.tilesHigh.Value) * 64f + bOffset.Y;
+                    float bCentreX = bld.tileX.Value * 64f + bOffset.X + bsrcRect.Width * 2f;
+                    // Reaches further than anything else here: a barn is six source tiles tall and
+                    // the mirror stretches that again, so the water it can land on is a long way down.
+                    if (!WaterWithinTiles((int)(bCentreX / 64f), (int)(bBaseY / 64f) + 5, 9))
+                        continue;
+                    StampFlippedAt(spriteBatch, bld.texture.Value, bsrcRect, bCentreX, bBaseY, 0);
                 }
 
                 spriteBatch.End();
@@ -303,6 +343,41 @@ namespace SDVRadiance
             }
         }
 
+        /// <summary>One bush, mirrored. Bush.draw puts the frame's bottom-centre at
+        /// (tile.X*64 + (effectiveSize+1)*32, (tile.Y+1)*64), which is the same whether the game
+        /// filed it under terrainFeatures or largeTerrainFeatures.</summary>
+        private void StampBushReflection(SpriteBatch spriteBatch, StardewValley.TerrainFeatures.Bush bush, Vector2 tile)
+        {
+            var bsrc = bush.sourceRect.Value;
+            int eff = bush.size.Value switch { 3 => 0, 4 => 1, _ => bush.size.Value };
+            spriteBatch.Draw(StardewValley.TerrainFeatures.Bush.texture.Value,
+                Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + (eff + 1) * 32f, (tile.Y + 1) * 64f)),
+                bsrc, Color.White, 0f, new Vector2(bsrc.Width / 2f, 0f), 4f,
+                SpriteEffects.FlipVertically | (bush.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None),
+                StampDepth((tile.Y + 1) * 64f));
+        }
+
+        /// <summary>
+        /// One tuft of grass, mirrored blade by blade, from the game's own layout (see
+        /// <see cref="GrassArt"/>). Blade i is anchored at its ground contact, so the mirror hangs
+        /// from there and the two and a half source rows below that point stay out of it.
+        /// <para>
+        /// The shake is deliberately left out: a fraction of a degree on a fifteen pixel blade,
+        /// seen through a squashed rippling surface, is not worth a field read per tuft per frame.
+        /// </para>
+        /// </summary>
+        private void StampGrassReflection(SpriteBatch spriteBatch, StardewValley.TerrainFeatures.Grass grass, Vector2 tile)
+        {
+            if (!GrassArt.TryRead(grass, out int blades, out int[] which, out int[] ox, out int[] oy))
+                return;
+            Texture2D texture = grass.texture.Value;
+            for (int i = 0; i < blades; i++)
+            {
+                Vector2 at = GrassArt.BladeAt(tile, i, ox, oy);
+                StampFlippedAt(spriteBatch, texture, GrassArt.BladeSource(grass, i, which), at.X, at.Y, 3);
+            }
+        }
+
         /// <summary>BackToFront layer depth from the caster's TRUE feet row: bigger feet Y
         /// = closer to the camera = drawn later = wins reflection overlaps.</summary>
         private static float StampDepth(float feetWorldY) =>
@@ -312,6 +387,11 @@ namespace SDVRadiance
 
         private RenderTarget2D? _mirrorSourceRenderTarget;
         internal bool SceneRTReady;
+        /// <summary>The share of the mirror source that lies ABOVE the screen, so the shader can
+        /// turn a screen coordinate into a source one. 0 means the source is screen-sized.</summary>
+        internal float MirrorSourceTopPad;
+        /// <summary>The same for each side of it.</summary>
+        internal float MirrorSourceSidePad;
 
         /// <summary>Re-render the map's own layers (Back/Buildings/Front families, numbered
         /// variants included — DR issue #48) into a sprite-free source for the mirror.
@@ -342,6 +422,61 @@ namespace SDVRadiance
         private const int SceneCachePadPx = 128;              // 2 tiles of camera drift per side
         private const int SceneCacheTtlTicks = 6;             // animated-tile refresh (~100 ms)
 
+        /// <summary>
+        /// How far ABOVE the screen the mirror is allowed to read, in world pixels.
+        ///
+        /// <para>
+        /// A reflection is the picture from above the waterline, flipped. That picture came from
+        /// the screen, so when the waterline sat near the TOP of the screen there was nothing above
+        /// it to mirror and the water below the bank stayed bare. Walking north brought the bank
+        /// down the screen, the things standing on it came into view, and their reflection appeared
+        /// with them. Reported in those words: no reflections when you are away, some as you get
+        /// closer, all of it when you are at the edge, and "IRL there is no such thing as half
+        /// reflections".
+        /// </para>
+        ///
+        /// <para>
+        /// The map layers are already re-rendered into a world-anchored cache with a guard band, so
+        /// the pixels above the screen are a matter of asking for more of that cache rather than of
+        /// drawing anything new.
+        /// </para>
+        ///
+        /// <para>
+        /// TWELVE TILES IS THE WHOLE OF IT, and the shader says so rather than taste. The mirror
+        /// reads its source at 1.25 units above the waterline per unit of depth below it, and it
+        /// has already dissolved into sky by nine tiles of depth, so the deepest pixel that can
+        /// still show a reflection reads 9 x 1.25 = 11.25 tiles above the waterline. The waterline
+        /// itself is always somewhere on the screen, so the furthest the mirror can ever reach past
+        /// the top edge is those 11.25 tiles - at the worst case of a shoreline sitting exactly on
+        /// the top row. Anything past twelve is buffer nobody samples.
+        /// </para>
+        ///
+        /// <para>
+        /// This buys the SCENERY only. Trees, buildings and people are stamped into their own
+        /// screen-sized layer and still cannot be mirrored from above the screen edge.
+        /// </para>
+        /// </summary>
+        private const int MirrorTopReachPx = 768;
+
+        /// <summary>
+        /// How far past the LEFT and RIGHT edges of the screen the mirror may read, in world pixels.
+        ///
+        /// <para>
+        /// Sideways the mirror barely moves - the sample is the same column plus a few pixels of
+        /// ripple - so the reason for a side band is not reach but the OFF-SCREEN FADE. A mirrored
+        /// sample landing outside the source used to be faded out rather than clamped, because
+        /// clamping smears the edge column across the water; that fade is 6% of the picture, which
+        /// is about a tile and a quarter of dimmed reflection down each side of the screen at all
+        /// times. With real pixels out there the fade has nothing to hide and stops firing.
+        /// </para>
+        ///
+        /// <para>
+        /// Three tiles is comfortably past both the 6% band and the widest ripple offset
+        /// (ripple.x * 3 is a fraction of a tile), and it costs one more tile of cache either side.
+        /// </para>
+        /// </summary>
+        private const int MirrorSideReachPx = 192;
+
         private void BakeSceneryReflectionCore()
         {
             SceneRTReady = false;
@@ -354,20 +489,28 @@ namespace SDVRadiance
             int h = prev.Length > 0 && prev[0].RenderTarget is RenderTarget2D rt2 ? rt2.Height : Game1.viewport.Height;
             if (w <= 0 || h <= 0)
                 return;
-            if (_mirrorSourceRenderTarget == null || _mirrorSourceRenderTarget.Width != w || _mirrorSourceRenderTarget.Height != h)
+            // The mirror source is TALLER than the screen: the extra rows sit above it, which is
+            // the only direction a reflection ever reads. See MirrorTopReachPx.
+            int sourceW = w + 2 * MirrorSideReachPx, sourceH = h + MirrorTopReachPx;
+            if (_mirrorSourceRenderTarget == null || _mirrorSourceRenderTarget.Width != sourceW || _mirrorSourceRenderTarget.Height != sourceH)
             {
                 _mirrorSourceRenderTarget?.Dispose();
-                _mirrorSourceRenderTarget = new RenderTarget2D(_device, w, h, false, SurfaceFormat.Color, DepthFormat.None);
+                _mirrorSourceRenderTarget = new RenderTarget2D(_device, sourceW, sourceH, false, SurfaceFormat.Color, DepthFormat.None);
             }
+            MirrorSourceTopPad = MirrorTopReachPx / (float)sourceH;
+            MirrorSourceSidePad = MirrorSideReachPx / (float)sourceW;
             _spriteMaskSpriteBatch ??= new SpriteBatch(_device);
 
             int vpX = Game1.viewport.X, vpY = Game1.viewport.Y;
-            int cacheW = w + 2 * SceneCachePadPx, cacheH = h + 2 * SceneCachePadPx;
+            // The region the blit needs is the screen plus the reach around it; the guard band is
+            // the slack around THAT, so the walk still only re-runs when the camera leaves it.
+            int wantX = vpX - MirrorSideReachPx, wantY = vpY - MirrorTopReachPx;
+            int cacheW = sourceW + 2 * SceneCachePadPx, cacheH = sourceH + 2 * SceneCachePadPx;
             bool cacheValid = _mirrorSceneCache != null
                 && ReferenceEquals(_sceneCacheLocation, location)
                 && _mirrorSceneCache.Width == cacheW && _mirrorSceneCache.Height == cacheH
                 && Game1.ticks - _sceneCacheBuiltTick < SceneCacheTtlTicks
-                && vpX >= _sceneCacheAnchorX && vpY >= _sceneCacheAnchorY
+                && wantX >= _sceneCacheAnchorX && wantY >= _sceneCacheAnchorY
                 && vpX + w <= _sceneCacheAnchorX + cacheW && vpY + h <= _sceneCacheAnchorY + cacheH
                 && _pendingDump == null;
 
@@ -384,8 +527,8 @@ namespace SDVRadiance
                             DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
                     }
                     _sceneCacheLocation = location;
-                    _sceneCacheAnchorX = vpX - SceneCachePadPx;
-                    _sceneCacheAnchorY = vpY - SceneCachePadPx;
+                    _sceneCacheAnchorX = wantX - SceneCachePadPx;
+                    _sceneCacheAnchorY = wantY - SceneCachePadPx;
                     _sceneCacheBuiltTick = Game1.ticks;
 
                     _device.SetRenderTarget(_mirrorSceneCache);
@@ -416,7 +559,7 @@ namespace SDVRadiance
                 // camera delta since the cache was anchored.
                 _device.SetRenderTarget(_mirrorSourceRenderTarget);
                 spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
-                spriteBatch.Draw(_mirrorSceneCache, new Vector2(_sceneCacheAnchorX - vpX, _sceneCacheAnchorY - vpY), Color.White);
+                spriteBatch.Draw(_mirrorSceneCache, new Vector2(_sceneCacheAnchorX - wantX, _sceneCacheAnchorY - wantY), Color.White);
                 spriteBatch.End();
                 SceneRTReady = true;
             }

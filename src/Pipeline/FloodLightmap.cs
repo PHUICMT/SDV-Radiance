@@ -237,7 +237,21 @@ namespace SDVRadiance
                     // makes it read as cinematic instead of uniformly orange. Outdoor window
                     // lights (town houses at night) are lamp-lit from inside, so they stay warm.
                     bool coolDaylight = !outdoors && ls.lightContext.Value == LightSource.LightContext.WindowLight;
-                    Vector3 seedColor = new(1.00f, 0.83f, 0.58f);
+                    // A LIGHT'S BOUNCE IS THE LIGHT'S OWN COLOUR. This was one fixed warm constant
+                    // for every source in the game, which is where the saloon's orange came from and
+                    // had been coming from for a long time: all 66 of that room's map lights are
+                    // white, and every one of them was being bounced back off the walls as
+                    // (1.00, 0.83, 0.58). The note in the interior colour curve saying the lamps were
+                    // measured white and therefore innocent was right about the lamps and wrong about
+                    // us. Stardew stores a light's colour inverted, the same way the direct pass
+                    // already reads it, and the seed is normalised so only the HUE comes from here
+                    // and the strength keeps coming from the radius rule above.
+                    Color raw = ls.color.Value;
+                    Vector3 emitted = new(1f - raw.R / 255f, 1f - raw.G / 255f, 1f - raw.B / 255f);
+                    float emittedPeak = Math.Max(emitted.X, Math.Max(emitted.Y, emitted.Z));
+                    Vector3 seedColor = emittedPeak > 0.02f
+                        ? emitted / emittedPeak
+                        : new Vector3(1.00f, 0.83f, 0.58f);   // a light with no colour at all: warm, as before
                     if (coolDaylight)
                     {
                         // The sky is what is on the other side of this window, so it follows the
@@ -395,6 +409,19 @@ namespace SDVRadiance
         /// darkening stays in charge of the global level, so no double-darkening at night):
         /// ~1.0 with a warm golden-hour tint outdoors; interiors use the indoor-darkness
         /// slider (vanilla leaves rooms flat-bright — that darkening is the feature).</summary>
+        /// <summary>How far into night the clock is, 0 at an hour before truly-dark, 1 from
+        /// truly-dark on. The one ramp every outdoor night term shares, so they arrive together.</summary>
+        internal static float NightAmount()
+        {
+            int t = Game1.timeOfDay;
+            int trulyDark;
+            try { trulyDark = Game1.currentLocation != null ? Game1.getTrulyDarkTime(Game1.currentLocation) : 2000; }
+            catch { trulyDark = 2000; }
+            int mins = (t / 100) * 60 + t % 100;
+            int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
+            return MathHelper.Clamp((mins - (m1 - 60)) / 60f, 0f, 1f);
+        }
+
         private static Vector3 SkyColor(bool outdoors, ModConfig config)
         {
             if (!outdoors)
@@ -433,17 +460,29 @@ namespace SDVRadiance
             // MOONLIGHT: after dark, open ground gets a cool lift scaled by the lunar phase
             // (SDV's 28-day month = one synthetic cycle) and season — cells under canopies
             // and buildings receive none, so a full moon paints real moon shade.
-            int t = Game1.timeOfDay;
-            int trulyDark;
-            try { trulyDark = Game1.currentLocation != null ? Game1.getTrulyDarkTime(Game1.currentLocation) : 2000; }
-            catch { trulyDark = 2000; }
-            int mins = (t / 100) * 60 + t % 100;
-            int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
-            float nightT = MathHelper.Clamp((mins - (m1 - 60)) / 60f, 0f, 1f);
-            // Our flood gently DIMS the open night ground so lamp pools stand out. Kept MILD
-            // (×0.82, was ×0.55 which turned a lampless farm nearly pitch black) — lamp seeds
-            // are pushed above 1.0 so they show through the max() without needing a dark ground.
-            sky *= MathHelper.Lerp(1f, 0.62f, nightT);
+            float nightT = NightAmount();
+            // HOW DARK, AND WHAT COLOUR OF DARK. Two decisions, and both used to be hardcoded.
+            //
+            // The depth was a bare 0.62 that no setting reached, while the night-darkness
+            // slider's own help text promised "how dark the world gets outdoors after
+            // nightfall" - a promise the code never kept, because the slider only ever ran
+            // indoors. It drives this now, mapped so the default lands exactly on the old
+            // 0.62: nobody's night changes until they move the thing that now works.
+            //
+            // The colour was neutral grey, and neutral dim is why the old night read as muddy
+            // rather than as night. Eyes at low light lose red first (the Purkinje shift), and
+            // every film and game night trades on it: the unlit world leans blue-cool, the
+            // flames stay warm, and that warm-against-cool is the whole picture. Same
+            // luminance as before - the tint is normalised - so nothing gets darker by gaining
+            // a colour, and the moon lift below still rides on top.
+            float nightFloor = MathHelper.Clamp(1f - config.LightingNightDarkness * 0.68f, 0.2f, 1f);
+            // The cool cast follows the slider down: at the default it is the full moonlit blue,
+            // and at zero it is gone entirely, so someone who slides the night away gets a night
+            // that is simply a brighter vanilla rather than this mod's colour opinion at a lower
+            // volume. Asked for in exactly those words: low should look like vanilla, only lit.
+            Vector3 moonCool = new(0.910f, 1.003f, 1.220f);
+            float coolShare = MathHelper.Clamp(config.LightingNightDarkness / 0.56f, 0f, 1f);
+            sky *= Vector3.Lerp(Vector3.One, Vector3.Lerp(Vector3.One, moonCool, coolShare) * nightFloor, nightT);
             // Full moon lifts the night back up (cool) → a full-moon night is clearly brighter
             // and bluer than a new-moon one.
             if (nightT > 0f)
@@ -552,13 +591,55 @@ namespace SDVRadiance
             // pixel's own balance to blue AND keeps them different from each other, so the
             // room goes cold without going flat.
             Vector3 coolSky = new(0.40f, 0.55f, 1.00f);
-            Vector3 warmDusk = new(1.00f, 0.80f, 0.55f);
+            // Softened and started later in 1.5.5. At (1.00, 0.80, 0.55) on a ramp opening 200
+            // minutes before dark, a saloon at six in the evening was already half way into the
+            // cast, and a room whose art is warm wood to begin with came out uniformly orange:
+            // measured median saturation 0.87 against 0.73 at noon in the same room. The lamps
+            // were not the cause and never had been - all 66 of the saloon's map lights are
+            // white - it was this. The hour before dark still runs warm, which is the point;
+            // it no longer starts in the middle of the afternoon.
+            Vector3 warmDusk = new(1.00f, 0.90f, 0.76f);
             Vector3 nightSky = new(0.36f, 0.52f, 1.00f);
             float morning = 1f - MathHelper.Clamp((nowMinutes - 360f) / 200f, 0f, 1f);   // 06:00 -> 09:20
-            float evening = MathHelper.Clamp((nowMinutes - (darkMinutes - 200f)) / 170f, 0f, 1f);
+            float evening = MathHelper.Clamp((nowMinutes - (darkMinutes - 110f)) / 110f, 0f, 1f);
             Vector3 chroma = Vector3.Lerp(Vector3.One, coolSky, morning);
             chroma = Vector3.Lerp(chroma, warmDusk, evening);
             chroma = Vector3.Lerp(chroma, nightSky, nightness);
+
+            // AND A CAST MAY NOT OUTRUN THE ONE THE OUTDOOR NIGHT IS ALLOWED.
+            //
+            // This chroma is a MULTIPLIER on the finished picture, so the gap between its
+            // channels is how hard it pushes a warm surface toward blue - and the numbers above
+            // were written as a mood rather than measured against anything. nightSky spans 0.36
+            // to 1.00: a blue-to-red ratio of 2.78, which takes 45% of the red out of every warm
+            // thing in the room. Brick, pine, and the fire itself, which is the one object in the
+            // room that IS the light.
+            //
+            // The outdoor night is the comparison that settles it, because nobody has ever
+            // reported that one: its cast is (0.910, 1.003, 1.220), a ratio of 1.34, and even
+            // that reaches a pixel through the GI slider (0.30 by default) because outdoors the
+            // tint lives in the light FIELD. This one bypasses the slider on purpose - the room
+            // level must not be something the GI slider can swallow - so it arrives at three
+            // times the spread and three times the authority, call it nine times the cast.
+            // Measured side by side against the same farmhouse with the mod off: a hearth that
+            // vanilla draws as orange brick with a glow on the boards came out a black block in
+            // a violet room. That is the whole "the fire indoors is black" report.
+            //
+            // Pulled back toward neutral until the ratio is one an outdoor night would be
+            // allowed. The room still reads as cold - the level below is untouched and the level
+            // is what "dark" means - it just stops repainting everything in it.
+            const float MaxCastRatio = 1.7f;
+            float castLo = Math.Min(chroma.X, Math.Min(chroma.Y, chroma.Z));
+            float castHi = Math.Max(chroma.X, Math.Max(chroma.Y, chroma.Z));
+            if (castLo > 0.0001f && castHi > castLo * MaxCastRatio)
+            {
+                // Solve lerp(1, chroma, t) for the t whose ends land exactly on the ratio, so a
+                // cast already inside it is untouched and one outside is walked in, not clamped.
+                float denom = (castHi - 1f) - MaxCastRatio * (castLo - 1f);
+                if (Math.Abs(denom) > 0.0001f)
+                    chroma = Vector3.Lerp(Vector3.One, chroma,
+                        MathHelper.Clamp((MaxCastRatio - 1f) / denom, 0f, 1f));
+            }
 
             // Brightness and colour must not fight: a strong cast is dark all by itself, so
             // the chroma is rescaled to carry exactly the luminance the curve above asked

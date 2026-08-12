@@ -41,6 +41,16 @@ float2 LightPos;    // light position in screen UV (may be off-screen)
 float LightRadius;  // UV radius around LightPos within which bright pixels may streak
 float Aspect;       // viewport w/h, to make the radius circular in UV space
 float Density;      // how far along the ray to march (0..1)
+// How far to march when the source is DIRECTIONAL, in UV, or 0 for a lamp.
+//
+// A lamp stands inside the frame, so marching a fraction of the distance TO it keeps every
+// sample on screen and the shafts converge on the lamp. The sun does not stand in the frame at
+// all - a top-down game has no sky in it, so the sun is placed off the edge - and marching a
+// fraction of THAT distance leaves the picture after a few steps and averages the clamped border
+// pixel for the rest. That is why the sun produced no shafts at all: the march never sampled the
+// scene it was supposed to streak. A directional source marches a FIXED distance along the
+// direction instead, which is what a shaft from something infinitely far away actually is.
+float RayReach;
 float Decay;        // per-step falloff
 float Weight;       // per-step weight
 float Intensity;    // final additive strength
@@ -118,7 +128,10 @@ float4 BrightPS(PixelInput input) : SV_TARGET
 // Radial blur toward LightPos over the bright buffer.
 float4 RaysPS(PixelInput input) : SV_TARGET
 {
-    float2 delta = (input.UV - LightPos) * (Density / SAMPLES);
+    float2 toLight = input.UV - LightPos;
+    float2 delta = (RayReach > 0.0001)
+        ? normalize(toLight) * (RayReach / SAMPLES)
+        : toLight * (Density / SAMPLES);
     float2 uv = input.UV;
     float3 col = tex2D(SourceSampler, uv).rgb;
     float illum = 1.0;
