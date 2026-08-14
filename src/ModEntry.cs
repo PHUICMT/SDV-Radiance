@@ -282,6 +282,7 @@ namespace SDVRadiance
                 if (_config.DebugLogging) _prepareMilliseconds += ms;
             }
 
+
             // Per-frame water sprite mask (ducks/NPCs/critters on water must not ripple).
             // Baked here because a render-target swap is only safe before the world batches open.
             if ((_config.WaterEnabled || _config.WaterReflection) && Context.IsWorldReady)
@@ -343,7 +344,7 @@ namespace SDVRadiance
                 if (_benchmarkRenderTarget == null || _benchmarkRenderTarget.Width != w || _benchmarkRenderTarget.Height != h)
                 {
                     _benchmarkRenderTarget?.Dispose();
-                    _benchmarkRenderTarget = new RenderTarget2D(device, w, h, false, SurfaceFormat.Color, DepthFormat.None);
+                    _benchmarkRenderTarget = VramTally.Track(new RenderTarget2D(device, w, h, false, SurfaceFormat.Color, DepthFormat.None), "scene capture");
                 }
                 _benchmarkSpriteBatch ??= new SpriteBatch(device);
 
@@ -407,6 +408,24 @@ namespace SDVRadiance
 
         private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
         {
+            // Resource maintenance lives HERE, on the game's own tick, and not on any render
+            // path, because every render path in this mod is gated on the mod being switched on.
+            // Both earlier attempts put the release behind such a gate and both measured as
+            // doing nothing: the first inside PreparePlayer (skipped when directional shadows
+            // are off, 85 MB stayed held), the second on the chain's inactive return (never
+            // reached, because OnRenderingWorld returns before it when Enabled is false, and
+            // 147.8 MB stayed held through forty-five seconds of being switched off). A
+            // switched-off mod runs no render code by design; the tick is the one path its own
+            // gates cannot skip, so that is where giving things back belongs.
+            // Each release decides for itself whether its resource is wanted RIGHT NOW, rather
+            // than trusting some render path to have reset a counter. The render paths are the
+            // ones that stop running when the mod is switched off, which is the whole problem.
+            bool shadowsWanted = _config.Enabled
+                && (_config.DirectionalShadowsEnabled || _config.WaterReflection);
+            _shadows?.ReleaseIdleTargets(shadowsWanted);
+            Pipeline.ReleaseIdleChainTargets(EffectsActive);
+            Pipeline.ReleaseIdleWaterTargets(_config.Enabled
+                && (_config.WaterEnabled || _config.WaterReflection) && ShadowRenderer.WaterOnScreen);
             _camera.Update(_config);
             ShadowSuppression.SuppressVanillaShadows = ShadowRenderer.ShadowsActiveNow(_config);
             // Suppress the BUSH blob (fixed-direction, fights our cast); the TREE blob is kept

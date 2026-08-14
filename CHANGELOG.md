@@ -2,6 +2,175 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.5.6
+
+### Added
+
+- Morning darkness, on the lighting tab and in GMCM. It sets how much of the night's darkness is
+  still in the room when you wake, so the sun coming up is something you watch happen rather than
+  a light switch. Set it to zero for vanilla's fully lit morning.
+
+### Performance
+
+Every number below was measured, and where it was measured matters enough to say first, because
+a frame rate quoted without its machine is not a claim anyone can check. Two setups, both an
+RTX 5080:
+
+- **A 62-mod profile with the frame cap lifted.** This is the benchmark rig. Lifting the cap is
+  what turns frame time back into a measurement rather than a report of your monitor, so the
+  numbers are large and they isolate what this mod costs. They are not what your game looks like.
+- **The author's own 105-mod save, played normally.** This is the honest one. The farm at noon
+  runs at 17.3 ms a frame with this mod switched off entirely and 19.2 ms with everything on, so
+  the mod costs about 2 ms. In the mines it was 1.6 ms. The worst frame in the sample is the same
+  either way, 27.0 ms against 27.1 ms, which says the periodic hitch people report is not this
+  mod's doing even though its average cost is real.
+
+The second setup is also worth reading as a warning that has nothing to do with us: going from 62
+mods to 105 took the baseline frame, with this mod OFF, from about 3.8 ms to 17.3 ms. If your game
+is slow with a large pack installed, this mod is a couple of milliseconds of it.
+
+- Object shadows cost about a fiftieth of what they did. On a crop-dense farm at noon they were
+  measured at 1.80 ms per frame, more than half the whole frame, and they now sit inside the noise
+  of having them switched off; on the benchmark rig described above the same scene went from
+  3.78 ms to 2.53 ms a frame, 265 fps to 396.
+  Four things were wrong and each is worth naming, because the shape of the mistake repeats. The
+  soft edge was being drawn nine times per shadow per FRAME, when the blur never changes between
+  frames, so it moved into the bake and every shadow became a single draw. Each shadow was then
+  drawn as its whole storage slot rather than the part of it holding a shadow, sending on the order
+  of a hundred million transparent pixels a frame. Objects were still using the round nine-tap
+  pattern the player uses, where a five-tap cross is indistinguishable on anything that is not a
+  person. And grass cast one shadow per BLADE, up to four per tile, each drawn at reduced opacity
+  precisely because four of them stacked; a meadow now costs a quarter of that for the same dark
+  patch. Blurring at bake time is the one of these that changes the picture at all, and only by
+  making the blur exact instead of approximate.
+- The mod gives graphics memory back when its effects are off. Nothing in the mod had ever called
+  Dispose, so every render target it had ever built stayed resident: 147.8 MB held on a machine
+  where the mod was switched off entirely, and 211.8 MB on a farm at wide zoom. Switching
+  everything off now returns all but 0.1 MB, and the wide-zoom farm holds 140.2 MB. Confirmed again
+  on the 105-mod save: 129.5 MB held in the mines and 45.8 MB on the farm, both down to 1.2 MB with
+  the mod switched off, and the picture is identical when it is switched back on. Two earlier
+  attempts at this did nothing at all, both for the same reason, which is now a rule the code
+  states: the code that hands a resource back must not sit on a path that the feature wanting the
+  resource can skip. It runs on the game tick, the one path none of our own gates can turn off.
+- The shadow bake cache holds three and a half times more in less memory. Every baked sprite got a
+  400x464 slot whatever its size, so a crop using three percent of one still paid for all of it,
+  and an ordinary modded farm sat at 134 entries against a cap of 128, evicting and re-baking
+  constantly. Sprites now take one of three slot sizes, each with its own eviction, and the same
+  farm holds 464 entries with no evictions at all.
+- An unchanged occluder mask is no longer re-sent to the graphics card. The rebuild was already
+  throttled, but the result was uploaded regardless, so standing still pushed an identical mask
+  twenty times a second.
+
+### Diagnostics
+
+- radiance_verify no longer scores pixels the player cannot see. It read the art opacity of a map
+  layer only when that layer also carried a label, so an unlabelled but opaque overlay - a bridge
+  deck, a jetty, a rock shelf - stayed invisible to it: the Back label underneath said liquid, the
+  mask correctly shipped nothing, and the tile was reported as 256/256 missing water. Those pixels
+  are now counted separately as hidden. Measured over six locations the accuracy this reports moves
+  from 87.3-95.5% to 99.6-100%, with the false-water count unchanged to the pixel, which is what
+  says the mask was right all along and the instrument was wrong.
+- radiance_report says how long a frame really took and how much graphics memory the mod is
+  holding, broken down by what it is for. Every timing it carried before measured only the work of
+  telling the card what to draw, which is why object shadows could be half a frame while every
+  number in the report read as a rounding error. If you are reporting a performance problem, this
+  is the one to paste.
+- radiance_config changes any setting live, without editing config.json, so a suspect can be
+  switched off and back on in the same scene instead of across a restart. radiance_effectcost
+  prices each effect separately by running its pass repeatedly and keeping the slope.
+
+### Water labels
+
+- The bundled label set gains 2,138 tiles: 155,704 more pixels of water, 119,035 of falling water
+  and 59,095 of bridge or jetty deck, over sheets from A_TK's Tilesheets of Misc Stuff,
+  crystalinerose's Better Water, the Waterfall Forest maps, and vanilla's own island, beach and
+  volcano sheets. The volcano's dungeon was labelled as still water and is now falling water.
+  Checked afterwards with radiance_verify at ten places, which score 98.6% to 100% against the
+  composed mask.
+
+### Translations
+
+- Updated the bundled Chinese translation to cover every 1.5.5 key, including all the tuner help
+  notes and the sun shafts strings (thanks Rime961).
+
+### For translators
+
+**Four new keys, nothing removed and nothing changed in meaning.** They are all the one new
+setting, Morning darkness:
+
+- `config.lighting.morning.name` and `config.lighting.morning.tooltip` for the GMCM page
+- `tuner.lightmorning` for the row in the on-screen tuner (F6)
+- `help.lightmorning` for that row's hover note
+
+A missing `help.` key costs only the hover note, so it is the safe one to leave for later. Thai
+already ships all four.
+
+The new diagnostics (`radiance_report`'s frame and memory blocks, `radiance_config`,
+`radiance_effectcost`) are console commands, which this mod does not translate: their output is
+meant to be pasted into a bug report and read by whoever is diagnosing it.
+
+### Fixed
+
+- Waking up on a stormy day is no longer far brighter than waking up on a clear one. A windowed
+  interior in rain or a storm fell back to the flat night seed instead of the daylight one, so the
+  room lit itself as if it were a cave with lamps in it, which reads as too bright rather than too
+  dark because nothing was tinted by the weather outside. Reported as "waking up in the rain is
+  massively brighter than otherwise".
+- Morning light inside farmhouses is no longer overexposed. Rooms with windows were seeded at full
+  daylight the moment the day began, so first thing in the morning the walls were blown out and
+  everything in the room carried the contrast to match. The seed now follows the sun, and how much
+  of the night it holds onto is the new Morning darkness setting. Reported against 1.5.4.
+- A room's own windows are found by looking at the glow sprites the game is drawing right now,
+  rather than by a verdict cached the first time you entered. A room whose windows are added,
+  removed or changed by another mod after your first visit kept the old answer for the rest of the
+  session.
+- Turning window effects off no longer takes the room's daylight with it. The beam, the lit glass
+  and the patch on the floor are effects; the light a window puts into a room is lighting, and
+  switching the effect off left rooms darker than they should be with no way to get it back.
+- A fish pond has water in it again. A pond is a building, and buildings are held out of the water
+  mask so their walls do not ripple, so the one building whose entire point is water carved its own
+  water away.
+- A bridge or a jetty painted on a map's own layers keeps the water off it. A deck drawn on the
+  second Buildings layer was not recognised as a deck, so the ripple ran over the planks you walk
+  on rather than the river under them.
+- Furniture placed on water carves only its own shape. A bed or a table used its whole rectangle,
+  so the water went missing in a block around it rather than under it.
+- Beach Farm has the ocean swell it should always have had. The farm map was never recognised as a
+  coastal one, so its sea got the small ripple a pond gets.
+- Map layers whose names end in a negative suffix are drawn layers like any other. Maps that name
+  their layers this way had those layers ignored by the mask, the dump and the verifier alike, so
+  the art you could see was invisible to everything deciding what was water.
+- The mask, the dump, the verifier and the lights now sort a map's layers the same way. They each
+  had their own order, so a tile could be judged from a different layer depending on which part of
+  the mod was asking.
+- Flipped and rotated map tiles are read the way the game draws them. Maps place sheet tiles
+  mirrored or turned (Gem Sea Shores' Beach_West alone carries 368 such cells, building the
+  waterfall basins out of mirrored pieces), and every reader - the label lookup, the carve's
+  opacity bits, the verifier - took the art upright, so the mask disagreed with the picture by
+  exactly that reflection wherever a map author turned a tile. All of them now turn with the tile.
+- Water no longer dies in a rectangle behind a building placed at the bank. Every building was
+  carved out of the water mask as its full bounding box, and most of a building's box is
+  transparent - the sky beside a pointed roof, the gaps around a well's frame - so the ripple and
+  the waterline vanished in a hard-edged block behind the roof. Reported with a before/after pair
+  of placing a coop beside a pond. The carve now follows the sprite's own opaque outline, and the
+  box only remains as a fallback when the sprite cannot be read.
+- Buildings no longer let the ripple run straight through them. A shed or a coop at the water's
+  edge is drawn from its own texture, so the mask that holds sprites out of the water never saw one
+  and the shimmer crossed the walls. Reported with a before and after pair of placing a coop beside
+  a pond, where the water behind it changed. Same list the mirror already knew about.
+- Big decorative bushes no longer shimmer like water. The mask that holds sprites out of the ripple
+  walked only the tile-keyed terrain list, so a planted bush at the bank sat still while the map's
+  own bush beside it, identical to look at, rippled along with the pond it overhangs. Those bushes
+  live in a second list that the reflection stamp was taught about and this mask was not; it now
+  walks both, with the same anchor and the same cull radius.
+- Water shimmer no longer creeps onto dry land. A grass or dirt tile beside water could be flagged
+  as water and light up with the ripple, and bushes standing on it picked up the sparkle. The pass
+  that puts a pond's island or a lily pad back after the labels carve it was allowed to promote any
+  pixel the flood missed, not only the pixels the carve had removed, so plain land counted as water
+  whenever the camera happened to put its open side off-screen. Measured on one tile: the same
+  ground read march=256/256 from one standing spot and 0/256 from another with nothing in the world
+  changed, which is also why it came and went as you walked.
+
 ## 1.5.5
 
 ### Added

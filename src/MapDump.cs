@@ -29,7 +29,11 @@ namespace SDVRadiance
 
         /// <param name="allSheets">Also embed tilesheet art that NO loaded map places. Off by
         /// default because it reads every PNG under the Mods folder and roughly doubles the dump.</param>
-        public static string? Run(IMonitor monitor, IModHelper helper, bool allSheets = false)
+        /// <param name="embedArt">Write the old single-file dump with every sheet inlined as a
+        /// base64 data URI, instead of one PNG per sheet beside it. Only for a labeller build
+        /// that has not learned about artPng yet.</param>
+        public static string? Run(IMonitor monitor, IModHelper helper, bool allSheets = false,
+                                  bool embedArt = false)
         {
             if (!Context.IsWorldReady)
             {
@@ -106,7 +110,29 @@ namespace SDVRadiance
             if (allSheets)
                 AddUnplacedSheetArt(helper, monitor, artPaths);
 
-            var art = new Dictionary<string, string>();
+            // Sheet art goes to its own PNG per sheet, and maps.json only names the files.
+            //
+            // Embedding every sheet as a base64 data URI made the art 76% of a 240MB maps.json
+            // (182MB of it, 108MB for sheets no map even places), and the labeller has to
+            // JSON.parse the whole thing before it can show a single map - so opening the tool
+            // meant decoding a thousand images nobody had asked for. base64 also inflates a PNG
+            // by a third on top of that. Written as files, maps.json drops to the ~58MB of map
+            // structure, and the labeller reads a sheet's PNG only when that sheet is opened.
+            //
+            // The labeller loads them through its Live-JSON directory handle, so the bytes
+            // arrive as a File and become a blob URL. That matters: a plain file:// <img> from
+            // another folder TAINTS the canvas and getImageData - which reads the labels back -
+            // throws SecurityError. A data URI never tainted, which is why the art was embedded
+            // in the first place; a blob URL from a handle does not taint either.
+            var art = new Dictionary<string, string>();          // legacy embed (embedArt only)
+            var artPng = new Dictionary<string, string>();        // name -> "sheets/<file>.png"
+            var usedFileNames = new HashSet<string>();            // case-insensitive, see SafeFileName
+            string sheetDir = Path.Combine(HfStudioDir(), "sheets");
+            if (!embedArt)
+            {
+                try { Directory.CreateDirectory(sheetDir); }
+                catch (Exception ex) { monitor.Log($"mapdump: cannot create {sheetDir}: {ex.Message}", LogLevel.Warn); }
+            }
             foreach ((string name, string src) in artPaths)
             {
                 try
@@ -120,9 +146,19 @@ namespace SDVRadiance
                         : Game1.content.Load<Microsoft.Xna.Framework.Graphics.Texture2D>(src);
                     try
                     {
-                        using var ms = new MemoryStream();
-                        texture.SaveAsPng(ms, texture.Width, texture.Height);
-                        art[name] = "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
+                        if (embedArt)
+                        {
+                            using var ms = new MemoryStream();
+                            texture.SaveAsPng(ms, texture.Width, texture.Height);
+                            art[name] = "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
+                        }
+                        else
+                        {
+                            string file = SafeFileName(name, usedFileNames) + ".png";
+                            using (var fs = File.Create(Path.Combine(sheetDir, file)))
+                                texture.SaveAsPng(fs, texture.Width, texture.Height);
+                            artPng[name] = "sheets/" + file;
+                        }
                     }
                     finally
                     {
@@ -156,11 +192,13 @@ namespace SDVRadiance
             var artSrc = new Dictionary<string, string>();
             foreach ((string name, string src) in artPaths)
             {
-                if (art.ContainsKey(name))
+                if (art.ContainsKey(name) || artPng.ContainsKey(name))
                     artSrc[name] = src;
             }
 
-            var doc = new { format = "hf-mapdump-v1", season = Game1.currentSeason, locations, art, artSrc, water = waterOut, animGroups };
+            // artPng is additive: a labeller that only knows `art` still works against an
+            // embedded dump, and one that knows both prefers the files.
+            var doc = new { format = "hf-mapdump-v1", season = Game1.currentSeason, locations, art, artPng, artSrc, water = waterOut, animGroups };
             string json = JsonSerializer.Serialize(doc);
 
             // Primary target: Documents\HF-Studio. The mod folder lives under Program Files,
@@ -171,8 +209,7 @@ namespace SDVRadiance
             string primary;
             try
             {
-                string docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-                string sdir = Path.Combine(docs, "HF-Studio");
+                string sdir = HfStudioDir();
                 Directory.CreateDirectory(sdir);
                 primary = Path.Combine(sdir, "maps.json");
                 File.WriteAllText(primary, json);
@@ -192,31 +229,34 @@ namespace SDVRadiance
             string modPath = Path.Combine(dir, "maps.json");
             try { File.WriteAllText(modPath, json); } catch { /* Program Files may be read-only */ }
 
-            monitor.Log($"Dumped {locations.Count} locations + {art.Count} sheet art + {animGroups.Count} animation groups.", LogLevel.Info);
+            monitor.Log($"Dumped {locations.Count} locations + {art.Count + artPng.Count} sheet art"
+                + (artPng.Count > 0 ? $" (as PNG files in {sheetDir})" : " (embedded)")
+                + $" + {animGroups.Count} animation groups.", LogLevel.Info);
             monitor.Log(primary.Length > 0
                 ? $"In HF Studio: click the map-dump button, pick:  {primary}"
                 : $"In HF Studio: click the map-dump button, pick:  {modPath}", LogLevel.Info);
             return primary.Length > 0 ? primary : modPath;
         }
 
-        /// <summary>True for the layer names the game draws: the four families, optionally with a
-        /// numeric suffix (Back2, Buildings3, AlwaysFront4). Anything else is markers or a
-        /// deliberately disabled layer.</summary>
-        private static bool IsRenderedLayer(string id)
-        {
-            foreach (string fam in new[] { "Back", "Buildings", "Front", "AlwaysFront" })
-            {
-                if (!id.StartsWith(fam, StringComparison.Ordinal))
-                    continue;
-                string rest = id.Substring(fam.Length);
-                bool digitsOnly = true;
-                foreach (char ch in rest)
-                    if (ch < '0' || ch > '9') { digitsOnly = false; break; }
-                if (digitsOnly)
-                    return true;   // "AlwaysFront" must win over the "Front" prefix test: check all
-            }
-            return false;
-        }
+        /// <summary>True for a layer the game draws. The single source of truth is
+        /// <see cref="MapLayers.CompositeRank"/>: a negative rank means a marker/logic layer or a
+        /// non-numeric suffix, and those stay out. Delegating here (instead of duplicating the
+        /// family test) keeps the dump's idea of a drawn layer identical to the mod's - negative
+        /// suffixes included, which is how Gem Sea Shores' Buildings-1 (267 cells on Beach_West
+        /// alone) stopped being dropped.</summary>
+        private static bool IsRenderedLayer(string id) => MapLayers.CompositeRank(id) >= 0;
+
+        /// <summary>
+        /// How a tile is turned, as one byte: bit 0-1 = quarter turns clockwise, bit 2 = mirrored
+        /// horizontally BEFORE the turn. 0 means a plain tile, which is almost all of them.
+        /// <para>
+        /// Delegates to <see cref="MapLayers.Orientation"/> so the dump and the mask can never
+        /// read a turned tile two different ways. The dump used to keep its own copy of the
+        /// property parse, and both copies shared the same blind spots (@Flip=2, @Rotation=-90);
+        /// the full TMXTile translation table lives on the shared method.
+        /// </para>
+        /// </summary>
+        private static byte ReadOrientation(Tile tile) => MapLayers.Orientation(tile);
 
         /// <summary>Record every frame of an animated tile as "&lt;sheet&gt;:&lt;index&gt;", deduplicated
         /// across the whole dump. A frame's own sheet is registered for art embedding too: a cycle
@@ -256,6 +296,35 @@ namespace SDVRadiance
         /// resource pack is also the asset name the consuming map will use. That is not guaranteed
         /// for every pack, so anything found this way is marked in artSrc as coming from disk.</para>
         /// </summary>
+        /// <summary>Where the labeller reads its dump from: Documents\HF-Studio. The mod folder
+        /// sits under Program Files, and Chrome refuses to hand out a directory handle there.</summary>
+        private static string HfStudioDir()
+            => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "HF-Studio");
+
+        /// <summary>
+        /// A sheet name turned into a file name Windows will accept AND keep distinct.
+        /// <para>
+        /// Sheet names are case-sensitive and Windows file names are not, so names that differ
+        /// only in case land on one file and the last one written wins. That is not a theoretical
+        /// clash: 15 pairs collided in a full dump, every one of them genuinely different art -
+        /// HxW's "hime_outdoorfurniture_front" is the Muted recolour and "..._Front" is the
+        /// Vanilla one, and Sunberry's Machines.png has nothing to do with Lumisteria's
+        /// machines.png. A name already taken case-insensitively gets a ~2, ~3 ... suffix; the
+        /// map in maps.json carries the real name, so nothing downstream has to guess.
+        /// </para>
+        /// </summary>
+        private static string SafeFileName(string name, HashSet<string> used)
+        {
+            var sb = new System.Text.StringBuilder(name.Length);
+            foreach (char c in name)
+                sb.Append(Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c);
+            string baseName = sb.ToString();
+            string candidate = baseName;
+            for (int n = 2; !used.Add(candidate.ToLowerInvariant()); n++)
+                candidate = baseName + "~" + n;
+            return candidate;
+        }
+
         /// <summary>A PNG the content pipeline has never heard of, read straight off disk.</summary>
         private static Microsoft.Xna.Framework.Graphics.Texture2D LoadFromDisk(string path)
         {
@@ -354,6 +423,15 @@ namespace SDVRadiance
                 // (sheet, index) so HF Studio can auto-fill exactly those tiles as class 1.
                 bool isBack = layer.Id.Equals("Back", StringComparison.OrdinalIgnoreCase);
                 int[] cells = new int[w * h];
+                // Per-cell orientation. A .tmx keeps flip/rotate in the gid's top bits, and the
+                // loader that brings the map in cannot put them in the tile index, so they land in
+                // the tile's PROPERTY bag as @Flip / @Rotation. Nothing here ever read them, so the
+                // dump described a mirrored tile as a plain one and the preview drew the waterfall
+                // pieces facing the wrong way - the "HF assembles it wrong" reports. Kept as a
+                // SIDE ARRAY rather than packed into the cell int: additive, so a labeler that has
+                // not learned about it still reads the map, and no risk to the existing encoding.
+                byte[] orient = new byte[w * h];
+                bool layerHasOrient = false;
                 var animCells = new List<int>();   // packed y*w+x of animated cells on THIS layer
                 bool layerHasWater = false;
                 for (int y = 0; y < h; y++)
@@ -365,7 +443,15 @@ namespace SDVRadiance
                         {
                             RecordAnim(anim, artSources, animSigs, animGroups);
                             animCells.Add(y * w + x);
+                            // The orientation lives on the ANIMATED tile, not on its frames.
+                            byte oA = ReadOrientation(t);
+                            if (oA != 0) { orient[y * w + x] = oA; layerHasOrient = true; }
                             t = anim.TileFrames[0];   // deterministic: first frame
+                        }
+                        else if (t != null)
+                        {
+                            byte o = ReadOrientation(t);
+                            if (o != 0) { orient[y * w + x] = o; layerHasOrient = true; }
                         }
                         if (t == null || !sheetIndex.TryGetValue(t.TileSheet, out int si))
                         {
@@ -388,10 +474,20 @@ namespace SDVRadiance
                     continue;
                 byte[] bytes = new byte[cells.Length * 4];
                 Buffer.BlockCopy(cells, 0, bytes, 0, bytes.Length);
+                // fam + ord publish the game's bottom-to-top order with the layer so the labeler
+                // stops GUESSING it from the name. ord is the same CompositeRank the mod sorts by,
+                // so a map that numbers its layers oddly can never compose one way in the preview
+                // and another in the water mask. Both are additive: an older labeler simply
+                // ignores them and keeps its own fallback.
+                bool hasFam = MapLayers.TryGetFamily(layer.Id, out string fam);
+                int ord = MapLayers.CompositeRank(layer.Id);
                 layers.Add(new
                 {
-                    id = layer.Id, w, h, cells = Convert.ToBase64String(bytes),
+                    id = layer.Id, fam = hasFam ? fam : null, ord, w, h,
+                    cells = Convert.ToBase64String(bytes),
                     anim = animCells.Count > 0 ? animCells.ToArray() : null,
+                    // Only when something on this layer is actually turned: most layers add nothing.
+                    orient = layerHasOrient ? Convert.ToBase64String(orient) : null,
                 });
             }
             if (layers.Count == 0)

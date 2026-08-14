@@ -288,10 +288,11 @@ namespace SDVRadiance
         /// <remarks>Lowered with the rest of the group: with the pools finally bright enough to
         /// read, a near-black occluded ray beside them was all contrast and no shape.</remarks>
         public float FloodShadowStrength { get; set; } = 0.74f;
-        /// <summary>Master switch for everything this mod does with windows: indoor daylight AND
-        /// the warm glow on house windows outdoors at night. Off means no window anywhere is a
-        /// light as far as we are concerned, which is what someone running a dedicated window mod
-        /// wants. Rooms still follow the time of day; that is not a window effect.</summary>
+        /// <summary>Gates the VISIBLE window work (the beam, the lit glass, the patch of sun on the
+        /// floor) and the warm glow on house windows outdoors at night. It does NOT gate the
+        /// daylight a window adds to the room's own lighting - that half answers to
+        /// WindowRoomLightEnabled, so a player who turns the flashy effect off still has lit
+        /// rooms. Rooms also still follow the time of day; that is not a window effect.</summary>
         public bool WindowEffectsEnabled { get; set; } = true;
         /// <summary>The VISIBLE half of indoor window daylight: the lit glass, the beam leaning out
         /// of it, and the patch of sun it lays on the floor. This is the half a dedicated window mod
@@ -307,6 +308,9 @@ namespace SDVRadiance
         public float LightingIndoorDarkness { get; set; } = 0.68f;
         /// <summary>Extra darkening at night where we own the lighting. 0 = none.</summary>
         public float LightingNightDarkness { get; set; } = 0.56f;
+        /// <summary>How much of the night darkening carries into the early morning (before 7:00).
+        /// 0 wakes in a bright room; higher = darker mornings. The historical look used 0.25.</summary>
+        public float LightingMorningDarkness { get; set; } = 0.25f;
         /// <summary>Warmth of the light pools (0 = neutral white, 1 = candle-orange).</summary>
         public float LightingWarmth { get; set; } = 0.55f;
         /// <summary>Scale the on-screen radius of every light pool.</summary>

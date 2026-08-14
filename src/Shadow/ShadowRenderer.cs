@@ -110,9 +110,55 @@ namespace SDVRadiance
         // line (the "bush shadow droops down-left" artifact); a shear keeps the whole bottom edge
         // glued to the ground, so baked objects composite with NO rotation at all.
         private const int ObjRtW = 400;
-        private const int ObjRtH = 456;
-        private readonly System.Collections.Generic.List<RenderTarget2D> _objectRenderTargetPool = new();
-        private readonly System.Collections.Generic.List<RenderTarget2D> _objectFreeTargets = new();
+        private const int ObjRtH = TallestColumnPx + 8 + 8;   // column + feet margin + max blur (5, rounded up)
+
+        /// <summary>
+        /// Slot sizes, smallest first. One size fits nobody: a crop is 64 pixels of shadow in a
+        /// 400x456 slot, which is three percent of it, and the other ninety-seven were being both
+        /// allocated and (until the content rect landed) rasterized. A farm at a wide zoom held
+        /// 134 slots against a cap of 128 - over cap, evicting - for 211 MB of graphics memory
+        /// whose real content would fit in a fraction of that.
+        ///
+        /// <para>Bucketing by size instead of forcing every sprite into the largest one is what
+        /// makes both numbers better at once: MORE sprites fit (a tripled effective cap) for LESS
+        /// memory, because the many small ones stop paying tree prices. The classes are coarse on
+        /// purpose - three pools reuse well, a pool per exact size would fragment.</para>
+        /// </summary>
+        private static readonly (int W, int H, int Cap)[] ObjSlotClasses =
+        {
+            (128, 160, 320),     // crops, grass, forage, small craftables  -  0.08 MB each
+            (256, 288, 96),      // bushes, furniture, medium props         -  0.29 MB each
+            (ObjRtW, ObjRtH, 48) // trees, buildings, tall tile columns     -  0.74 MB each
+        };
+
+        /// <summary>
+        /// The tallest silhouette the largest class must take, and why it is that number.
+        ///
+        /// <para>
+        /// A stacked map-tile column runs up to seven tiles (448 px). The old single slot was 456
+        /// tall and the fit test compared the bare column height against 456 minus the 8 px feet
+        /// margin, so a seven-tile column fit by exactly zero pixels. Adding the blur bleed to the
+        /// fit test - correctly, since the blur really does push outward - then refused those
+        /// columns, and they fell back to banded shadows: seven of them per frame on a farm,
+        /// caught by the miss counter, which is the only reason it was noticed at all.
+        /// </para>
+        ///
+        /// <para>So the largest class is sized from what has to fit rather than the other way
+        /// round: 448 of column, 8 of feet margin, and the widest blur the slider allows.</para>
+        /// </summary>
+        private const int TallestColumnPx = 448;
+        /// <summary>One slot-sized scratch for the bake-time blur (see SpriteBake.BakedBlur), and
+        /// the blur radius the NEXT bake will use - refreshed from live config each frame so the
+        /// slider works, read at bake time so a queued bake uses the value of the frame it runs.</summary>
+        private readonly RenderTarget2D?[] _objectBlurScratches = new RenderTarget2D?[3];
+        private float _bakeBlurPx;
+        /// <summary>Every slot ever allocated, and the idle ones ready to lease again, PER SIZE
+        /// CLASS. A free small slot cannot serve a tree, so one shared free list would hand back
+        /// a target the caller cannot use.</summary>
+        private readonly System.Collections.Generic.List<RenderTarget2D>[] _objectRenderTargetPools =
+            { new(), new(), new() };
+        private readonly System.Collections.Generic.List<RenderTarget2D>[] _objectFreeTargetsByClass =
+            { new(), new(), new() };
         private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle src, SpriteEffects effect), SpriteBake> _bakedObjectCache = new();
         /// <summary>Sprites the DRAW pass wanted and found unbaked, to bake next frame. This is
         /// what lets the bake pass skip its full enumeration on a warm frame: instead of walking
@@ -159,11 +205,34 @@ namespace SDVRadiance
             public int LastUsedTick;
             /// <summary>Horizontal lean baked into the pixels. Characters bake upright (0).</summary>
             public float BakedShear;
+            /// <summary>Edge softness baked into the pixels, in pixels of the player's blur
+            /// setting. Object shadows used to buy their soft edge per FRAME - five translucent
+            /// copies of every silhouette, every frame, which on a mature farm at noon was ~2,900
+            /// draws and 0.7 ms of pure fill. Paying the same taps ONCE, here, when the sprite
+            /// bakes, leaves the per-frame cost at one draw and the picture the same. Tracked per
+            /// entry so a moved blur slider re-bakes gradually through the existing stale queue
+            /// instead of all at once.</summary>
+            public float BakedBlur = -1f;
+            /// <summary>The part of the slot that holds shadow (see ContentBounds). Drawing with
+            /// this as the source rect instead of the whole slot is what stops the card blending
+            /// hundreds of thousands of transparent pixels per shadow. Empty means an entry from
+            /// before this field existed: draw the full slot and let the blur-mismatch check
+            /// re-bake it into shape.</summary>
+            public Rectangle Content;
+            /// <summary>Which slot-size pool this target came from, so eviction hands it back to
+            /// the right free list. A small slot returned to the large pool is a target nobody can
+            /// use for what the pool promises.</summary>
+            public int SlotClass;
         }
 
         /// <summary>Distinct object silhouettes kept alive. Slots are 400×456 (~0.73 MB each), so
         /// this is the VRAM ceiling: 128 slots is about 93 MB.</summary>
-        private const int ObjectBakeCap = 128;
+        /// <summary>Sprites all three pools can hold together, for the report and the over-cap
+        /// warning. The real limits are per class (see ObjSlotClasses); this is their sum.</summary>
+        private static int ObjectBakeCapTotal
+        {
+            get { int n = 0; foreach (var c in ObjSlotClasses) n += c.Cap; return n; }
+        }
         /// <summary>Distinct character/animal frames kept alive. Slots are 160×224 (~0.14 MB).</summary>
         private const int CasterBakeCap = 192;
         /// <summary>An eviction pass goes this far under the cap, so it is not re-triggered on the
@@ -180,6 +249,28 @@ namespace SDVRadiance
 
         // Multiply only the destination ALPHA by the source alpha (RGB untouched): dst.a *= src.a.
         // Used to bake the feet→head opacity gradient onto the silhouette.
+        /// <summary>
+        /// Straight sum, with no premultiply on the way in.
+        ///
+        /// <para>
+        /// The bake-time blur needs the MEAN of nine shifted copies, which is nine draws at a
+        /// ninth of the weight each, added together. BlendState.Additive cannot express that: it
+        /// multiplies the source by its own alpha before adding, so a tap tinted to one ninth
+        /// contributed alpha squared over eighty-one, and nine of those come to a ninth of the
+        /// silhouette instead of all of it. Every object shadow in the game came out at eleven
+        /// per cent opacity - which reads, on screen, as no shadow at all.
+        /// </para>
+        ///
+        /// <para>With One/One the tint is the only weight, and nine ninths is one.</para>
+        /// </summary>
+        private static readonly BlendState SumTaps = new()
+        {
+            ColorSourceBlend = Blend.One,
+            ColorDestinationBlend = Blend.One,
+            AlphaSourceBlend = Blend.One,
+            AlphaDestinationBlend = Blend.One,
+        };
+
         private static readonly BlendState MultiplyAlpha = new()
         {
             ColorWriteChannels = ColorWriteChannels.Alpha,

@@ -81,7 +81,7 @@ namespace SDVRadiance
             if (_reflectionRenderTarget == null || _reflectionRenderTarget.Width != w || _reflectionRenderTarget.Height != h)
             {
                 _reflectionRenderTarget?.Dispose();
-                _reflectionRenderTarget = new RenderTarget2D(_device, w, h, false, SurfaceFormat.Color, DepthFormat.None);
+                _reflectionRenderTarget = VramTally.Track(new RenderTarget2D(_device, w, h, false, SurfaceFormat.Color, DepthFormat.None), "entity mirror");
             }
             _spriteMaskSpriteBatch ??= new SpriteBatch(_device);
 
@@ -416,6 +416,65 @@ namespace SDVRadiance
         // map tiles (waterfall art) keep moving in the mirror - at worst their reflection lags
         // by SceneCacheTtlTicks, invisible in a squashed wavy mirror.
         private RenderTarget2D? _mirrorSceneCache;
+
+        /// <summary>Consecutive frames with no water on screen and nothing wanting a mirror.</summary>
+        private int _waterIdleFrames;
+
+        /// <summary>
+        /// Hand back the water render targets when there is no water to use them on.
+        ///
+        /// <para>
+        /// These three are the largest single allocations in the mod after the shadow pool: the
+        /// mirror scene cache is the screen plus a guard band (17.8 MB measured), the mirror
+        /// source is the screen plus twelve tiles of headroom (13.8 MB), the entity mirror and
+        /// sprite mask are a screen each (6.3 MB apiece). Together they are a third of the
+        /// mod's memory, and until now they survived walking indoors, switching water off, and
+        /// disabling the mod outright - measured at 130.7 MB held with every effect off, not one
+        /// byte of it returned.
+        /// </para>
+        ///
+        /// <para>They cost nothing to rebuild compared to a screen of shadow bakes (one frame of
+        /// re-render), so the idle delay here can be short.</para>
+        /// </summary>
+        internal void ReleaseIdleWaterTargets(bool wanted)
+        {
+            const int IdleTicksBeforeRelease = 300;       // five seconds at the game's 60 Hz tick
+            if (wanted)
+            {
+                _waterIdleFrames = 0;
+                return;
+            }
+            if (_mirrorSceneCache == null && _mirrorSourceRenderTarget == null
+                && _reflectionRenderTarget == null && _spriteMaskRenderTarget == null)
+                return;
+            if (++_waterIdleFrames < IdleTicksBeforeRelease)
+                return;
+            _waterIdleFrames = 0;
+
+            try { _mirrorSceneCache?.Dispose(); } catch { }
+            try { _mirrorSourceRenderTarget?.Dispose(); } catch { }
+            try { _reflectionRenderTarget?.Dispose(); } catch { }
+            try { _spriteMaskRenderTarget?.Dispose(); } catch { }
+            _mirrorSceneCache = null;
+            _mirrorSourceRenderTarget = null;
+            _reflectionRenderTarget = null;
+            _spriteMaskRenderTarget = null;
+            // Split screen keeps a saved copy of these fields per camera and restores them when
+            // the screen changes, so nulling the live field is not enough: screen 0's state would
+            // hand the disposed target straight back on the next BeginScreen. Single screen never
+            // hits it (BeginScreen returns early when the id has not changed), which is exactly
+            // the kind of hole that ships and then only breaks for the people using co-op.
+            foreach (var st in _screenStates.Values)
+            {
+                st.MirrorSceneCache = null;
+                st.SceneCacheLocation = null;
+            }
+            // The scene cache's validity test starts with "is the target there", so nulling it is
+            // enough to invalidate; the location stamp goes too so a return to the same map
+            // cannot match against a cache that no longer exists.
+            SceneRTReady = false;
+            _sceneCacheLocation = null;
+        }
         private GameLocation? _sceneCacheLocation;
         private int _sceneCacheAnchorX, _sceneCacheAnchorY;   // world px of the cache's top-left
         private int _sceneCacheBuiltTick = -1;
@@ -495,7 +554,7 @@ namespace SDVRadiance
             if (_mirrorSourceRenderTarget == null || _mirrorSourceRenderTarget.Width != sourceW || _mirrorSourceRenderTarget.Height != sourceH)
             {
                 _mirrorSourceRenderTarget?.Dispose();
-                _mirrorSourceRenderTarget = new RenderTarget2D(_device, sourceW, sourceH, false, SurfaceFormat.Color, DepthFormat.None);
+                _mirrorSourceRenderTarget = VramTally.Track(new RenderTarget2D(_device, sourceW, sourceH, false, SurfaceFormat.Color, DepthFormat.None), "mirror source");
             }
             MirrorSourceTopPad = MirrorTopReachPx / (float)sourceH;
             MirrorSourceSidePad = MirrorSideReachPx / (float)sourceW;
@@ -523,8 +582,8 @@ namespace SDVRadiance
                     {
                         _mirrorSceneCache?.Dispose();
                         // PreserveContents: the whole point is reading it back on later frames.
-                        _mirrorSceneCache = new RenderTarget2D(_device, cacheW, cacheH, false, SurfaceFormat.Color,
-                            DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
+                        _mirrorSceneCache = VramTally.Track(new RenderTarget2D(_device, cacheW, cacheH, false, SurfaceFormat.Color,
+                            DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "mirror scene cache");
                     }
                     _sceneCacheLocation = location;
                     _sceneCacheAnchorX = wantX - SceneCachePadPx;
@@ -543,13 +602,17 @@ namespace SDVRadiance
                     var paddedViewport = new xTile.Dimensions.Rectangle(
                         new xTile.Dimensions.Location(_sceneCacheAnchorX, _sceneCacheAnchorY),
                         new xTile.Dimensions.Size(cacheW, cacheH));
-                    foreach (string fam in _sceneLayerFamilies)
+                    // Bottom-to-top by the one shared sort key, then drawn family-by-family.
+                    // AlwaysFront is deliberately out (weather + translucent shadow washes), so it
+                    // is filtered after the sort — a map that declares "Front2" before "Front" or
+                    // numbers its layers oddly now composes the mirror the same way the labeler
+                    // and the mask do, instead of whichever way the declaration order happened to
+                    // fall. The actual layer.Draw is the game's own rasteriser, so orientation is
+                    // still the game's, this only fixes the ORDER.
+                    foreach (var l in MapLayers.RenderedLayers(location.map, topToBottom: false))
                     {
-                        foreach (var l in location.map.Layers)
-                        {
-                            if (MapLayers.BelongsToFamily(l.Id, fam))
-                                l.Draw(dd, paddedViewport, xTile.Dimensions.Location.Origin, false, 4);
-                        }
+                        if (MapLayers.TryGetFamily(l.Id, out string fam) && fam != "AlwaysFront")
+                            l.Draw(dd, paddedViewport, xTile.Dimensions.Location.Origin, false, 4);
                     }
                     dd.EndScene();
                     spriteBatch.End();
@@ -574,7 +637,6 @@ namespace SDVRadiance
             }
         }
 
-        private static readonly string[] _sceneLayerFamilies = { "Back", "Buildings", "Front" };
         private bool _sceneErrorLogged;
 
         /// <summary>A/B switch for the scenery mirror source (radiance_reflect scene on/off).

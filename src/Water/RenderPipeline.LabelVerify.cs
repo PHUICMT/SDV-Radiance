@@ -18,6 +18,8 @@ namespace SDVRadiance
         Sprite,     // sprite exclusion mask RT
         Reflect,    // flipped-entity reflection RT
         Mirror,     // sprite-free scenery mirror source RT
+        Flood,      // the flood GI lightmap texture itself (1 cell = 1 tile) - flick the room-light
+                    // toggle and watch the window's cells brighten/darken without guessing from the scene
         // Not a water channel, and painted by floodlight.fx rather than by an overlay texture:
         // which pixels the lighting pass believes ARE a light source rather than lit by one.
         // The question "is the flame being caught at all" has been answered by argument twice and
@@ -43,9 +45,6 @@ namespace SDVRadiance
         private Texture2D? _labelDiffTexture;
         private Color[]? _labelDiffPixels;
 
-        /// <summary>Layer names checked for labels, BOTTOM to TOP — the resolve walks it backwards.</summary>
-        private static readonly string[] LabelLayerNames =
-            { "Back", "Back2", "Buildings", "Buildings2", "Front", "Front2", "AlwaysFront" };
 
         private static bool IsLiquidClass(byte c) => c is 1 or 9 or 10 or 11 or 14;
 
@@ -58,6 +57,11 @@ namespace SDVRadiance
             var tile = layer?.Tiles[tx, ty];
             if (tile == null)
                 return null;
+            // The map may place this tile mirrored or turned (@Flip/@Rotation). The LABEL buffer
+            // this is compared against comes back oriented from LabelStore, so the opacity has to
+            // turn the same way or the two disagree by exactly that reflection: measured as FALSE
+            // water jumping 18 -> 535 px on Gem Sea Shores, whose maps carry 368 turned cells.
+            byte orient = MapLayers.Orientation(tile);
             if (tile is xTile.Tiles.AnimatedTile at && at.TileFrames is { Length: > 0 })
                 tile = at.TileFrames[0];
             if (tile?.TileSheet == null)
@@ -66,7 +70,8 @@ namespace SDVRadiance
             {
                 var texture = Game1.content.Load<Texture2D>(tile.TileSheet.ImageSource);
                 var ib = tile.TileSheet.GetTileImageBounds(tile.TileIndex);
-                return OpaqueBits(texture, new Rectangle(ib.X, ib.Y, ib.Width, ib.Height)).bits;
+                bool[] bits = OpaqueBits(texture, new Rectangle(ib.X, ib.Y, ib.Width, ib.Height)).bits;
+                return MapLayers.Orient(bits, orient);
             }
             catch { return null; }
         }
@@ -123,12 +128,16 @@ namespace SDVRadiance
                 _labelDiffPixels = new Color[pcount];
             Array.Clear(_labelDiffPixels, 0, pcount);
 
-            // Resolve layer objects once — LabelStore.Get(location,...) would re-find them per tile.
-            var layers = new xTile.Layers.Layer?[LabelLayerNames.Length];
-            for (int i = 0; i < LabelLayerNames.Length; i++)
-                layers[i] = location.map?.GetLayer(LabelLayerNames[i]);
+            // Every layer the game draws, BOTTOM to TOP from the one shared sort key, so this
+            // verifier reads the same layer order the compose and the map dump publish. It used to
+            // be a fixed eleven-name list, which was blind to Back3 / Buildings3 / AlwaysFront2 and
+            // to any negative-suffix layer — the mask saw them, this tool did not, and the verdict
+            // disagreed with the effect for a whole map numbering its layers differently.
+            var layers = MapLayers.RenderedLayers(location.map, topToBottom: false).ToArray();
+            if (layers.Length == 0)
+                return "[verify] no rendered layers on this map";
 
-            long labeledOpinionPixels = 0, agreeLiquid = 0, agreeDry = 0;
+            long labeledOpinionPixels = 0, agreeLiquid = 0, agreeDry = 0, hiddenPixels = 0;
             long missingWater = 0, falseWater = 0;
             long glassPixels = 0, glassMirrored = 0;
             long deckSkipped = 0;
@@ -141,8 +150,8 @@ namespace SDVRadiance
             var deckSurfaces = SurfaceMap.For(location);
             var missingByClass = new Dictionary<byte, long>();
             var perTile = new List<(int tx, int ty, int miss, int falsePx)>();
-            var tileLabelBuf = new byte[LabelLayerNames.Length][];
-            var tileOpaqueBuf = new bool[]?[LabelLayerNames.Length];
+            var tileLabelBuf = new byte[layers.Length][];
+            var tileOpaqueBuf = new bool[]?[layers.Length];
 
             for (int ty = 0; ty < tilesH; ty++)
             {
@@ -161,7 +170,14 @@ namespace SDVRadiance
                         // decoration labelled ground:256 on Buildings called 247 px of real lake
                         // "false water" per tile (the whole mountain-lake 12.7k figure). Back
                         // (i == 0) is the base art and always counts.
-                        tileOpaqueBuf[i] = i > 0 && tileLabelBuf[i] != null
+                        // Opacity is needed for EVERY overlay, not only the labelled ones. An
+                        // unlabelled overlay that is opaque still hides the water under it, and
+                        // reading it only when a label existed is what made a bridge deck score as
+                        // 256/256 MISSING water: the Back label says liquid, the deck's Front art
+                        // covers all 256 texels, the mask correctly ships nothing, and the verifier
+                        // called the mask wrong. Measured on the Waterfall Forest crossing, tiles
+                        // (33,27) / (32,28) / (33,28): keep=256/256 with carveFront=256/256.
+                        tileOpaqueBuf[i] = i > 0
                             ? OpaqueBitsForLayerTile(layers[i], worldTx, worldTy)
                             : null;
                     }
@@ -192,12 +208,28 @@ namespace SDVRadiance
                         // Topmost layer with an opinion (255 = unset = no opinion) wins; an
                         // overlay's opinion exists only where its art is opaque (see above).
                         byte cls = 255;
+                        bool hiddenByArt = false;
                         for (int i = layers.Length - 1; i >= 0; i--)
                         {
+                            // Does this layer's art physically occupy the pixel? Back (i == 0) is
+                            // the base and always does.
+                            if (i > 0 && !(tileOpaqueBuf[i] is { } opaque && opaque[p]))
+                                continue;
                             byte c = tileLabelBuf[i] != null ? tileLabelBuf[i][p] : (byte)255;
-                            if (c == 255) continue;
-                            if (tileOpaqueBuf[i] is { } opaque && !opaque[p]) continue;
+                            if (c == 255)
+                            {
+                                // Opaque art that nobody labelled. Whatever the layers below say,
+                                // the player cannot see it, so neither the mask nor the label can
+                                // be judged wrong here. Scored separately rather than as MISSING.
+                                hiddenByArt = i > 0;
+                                break;
+                            }
                             cls = c; break;
+                        }
+                        if (hiddenByArt)
+                        {
+                            hiddenPixels++;
+                            continue;
                         }
                         if (cls == 255)
                             continue;
@@ -258,7 +290,8 @@ namespace SDVRadiance
             report.AppendLine($"[verify] accuracy {accuracy:0.00}%  —  agree liquid {agreeLiquid:N0}, agree dry {agreeDry:N0}, "
                 + $"MISSING water {missingWater:N0}, FALSE water {falseWater:N0}"
                 + (glassPixels > 0 ? $", glass {glassPixels:N0} (mirrored {glassMirrored:N0})" : "")
-                + (deckSkipped > 0 ? $", deck {deckSkipped:N0} px not scored (bridges never ripple)" : ""));
+                + (deckSkipped > 0 ? $", deck {deckSkipped:N0} px not scored (bridges never ripple)" : "")
+                + (hiddenPixels > 0 ? $", hidden {hiddenPixels:N0} px behind opaque unlabelled art (not scored)" : ""));
             foreach (var kv in missingByClass.OrderByDescending(kv => kv.Value))
                 report.AppendLine($"[verify]   missing by class: {ClassName(kv.Key)} = {kv.Value:N0} px");
             if (perTile.Count > 0)
@@ -287,7 +320,7 @@ namespace SDVRadiance
             if (_labelDiffTexture == null || _labelDiffTexture.Width != _waterMask.Width || _labelDiffTexture.Height != _waterMask.Height)
             {
                 _labelDiffTexture?.Dispose();
-                _labelDiffTexture = new Texture2D(_device, _waterMask.Width, _waterMask.Height, false, SurfaceFormat.Color);
+                _labelDiffTexture = VramTally.Track(new Texture2D(_device, _waterMask.Width, _waterMask.Height, false, SurfaceFormat.Color), "label diff (diagnostic)");
             }
             _labelDiffTexture.SetData(_labelDiffPixels, 0, pcount);
         }
@@ -322,6 +355,17 @@ namespace SDVRadiance
                 case DebugOverlayChannel.Mirror:
                     DrawScreenTexture(spriteBatch, _mirrorSourceRenderTarget);
                     break;
+                case DebugOverlayChannel.Flood:
+                    if (_flood.Texture != null)
+                    {
+                        // 1 cell = 1 world tile = 64 px, anchored to the flood map's world origin.
+                        float fx = _flood.Origin.X * 64f - Game1.viewport.X;
+                        float fy = _flood.Origin.Y * 64f - Game1.viewport.Y;
+                        var dest = new Rectangle((int)fx, (int)fy,
+                            (int)(_flood.MapSize.X * 64f), (int)(_flood.MapSize.Y * 64f));
+                        spriteBatch.Draw(_flood.Texture, dest, Color.White);
+                    }
+                    break;
                 case DebugOverlayChannel.Emitter:
                     break;      // floodlight.fx already painted it; this just adds the caption
                 default:
@@ -329,6 +373,23 @@ namespace SDVRadiance
             }
             Utility.drawTextWithShadow(spriteBatch, $"radiance_debug: {DebugChannel}", Game1.smallFont,
                 new Vector2(12, 12), Color.White);
+            if (DebugChannel == DebugOverlayChannel.Flood && Game1.currentLocation != null)
+            {
+                // Live read-back so toggling a light shows up as a NUMBER, not a hunch.
+                string glowProbe = "none";
+                foreach (Vector2 g in Game1.currentLocation.lightGlows)
+                {
+                    int gx = (int)(g.X / 64f), gy = (int)(g.Y / 64f);
+                    glowProbe = $"({gx},{gy})={_flood.Probe(gx, gy)}";
+                    break;
+                }
+                var pt = Game1.player.TilePoint;
+                Utility.drawTextWithShadow(spriteBatch,
+                    $"cell@{pt} = {_flood.Probe(pt.X, pt.Y)}   glow {glowProbe}   "
+                    + $"roomLight={FloodLightmap.WindowRoomScale:F2} patch={FloodLightmap.WindowPatchScale:F2}   "
+                    + FloodLightmap.LastWindowSeed,
+                    Game1.smallFont, new Vector2(12, 36), Color.Yellow);
+            }
         }
 
         private (DebugOverlayChannel channel, long buildTick) _channelViewBuiltFor = (DebugOverlayChannel.Off, -1);
@@ -370,7 +431,7 @@ namespace SDVRadiance
             if (_channelViewTexture == null || _channelViewTexture.Width != _waterMask.Width || _channelViewTexture.Height != _waterMask.Height)
             {
                 _channelViewTexture?.Dispose();
-                _channelViewTexture = new Texture2D(_device, _waterMask.Width, _waterMask.Height, false, SurfaceFormat.Color);
+                _channelViewTexture = VramTally.Track(new Texture2D(_device, _waterMask.Width, _waterMask.Height, false, SurfaceFormat.Color), "channel view (diagnostic)");
             }
             _channelViewTexture.SetData(_channelViewPixels, 0, pcount);
         }

@@ -236,6 +236,8 @@ namespace SDVRadiance
                 () => i18n("config.lighting.indoor.name"), () => i18n("config.lighting.indoor.tooltip"), 0f, 0.95f, 0.05f);
             api.AddNumberOption(manifest, () => config().LightingNightDarkness, v => config().LightingNightDarkness = v,
                 () => i18n("config.lighting.night.name"), () => i18n("config.lighting.night.tooltip"), 0f, 0.95f, 0.05f);
+            api.AddNumberOption(manifest, () => config().LightingMorningDarkness, v => config().LightingMorningDarkness = v,
+                () => i18n("config.lighting.morning.name"), () => i18n("config.lighting.morning.tooltip"), 0f, 0.95f, 0.05f);
             api.AddNumberOption(manifest, () => config().LightingWarmth, v => config().LightingWarmth = v,
                 () => i18n("config.lighting.warmth.name"), null, 0f, 1f, 0.05f);
             api.AddNumberOption(manifest, () => config().LightingBoost, v => config().LightingBoost = v,

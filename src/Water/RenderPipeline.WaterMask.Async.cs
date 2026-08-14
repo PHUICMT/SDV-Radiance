@@ -82,7 +82,33 @@ namespace SDVRadiance
         private bool[]? _tileLavaFlags;          // HF label class 11: lava — slow molten flow, self-glow, no reflection
         private bool[]? _tileHasEffectWaterFlags;          // per-tile: has any effect-water pixel (for body-size flood fill)
         private byte[]? _tileCalmnessValues;          // per-tile 0..255 wave scale by water-body size (small = calmer)
-        private readonly List<(int x0, int y0, int x1, int y1)> _entityCarveWorldRectangles = new();
+        // Entity rects Pass C2 carves, plus the sprite's opacity when it could be read: bits is
+        // art-pixel resolution (w*h of the source rect), null means carve the whole rectangle.
+        private readonly List<(int x0, int y0, int x1, int y1, bool[]? opaque, int ow, int oh)> _entityCarveWorldRectangles = new();
+        private readonly Dictionary<(Texture2D tex, Rectangle src), (bool[]? bits, int w, int h)> _entityOpaqueCache = new();
+
+        /// <summary>Opacity of one entity sprite at art-pixel resolution, cached per
+        /// (texture, sourceRect). MAIN THREAD ONLY — it reads the GPU texture back. Null on any
+        /// failure, which callers treat as "carve the whole rect", the old behaviour.</summary>
+        private (bool[]? bits, int w, int h) EntityOpaqueBits(Texture2D tex, Rectangle src)
+        {
+            var key = (tex, src);
+            if (_entityOpaqueCache.TryGetValue(key, out var e))
+                return e;
+            (bool[]? bits, int w, int h) entry = (null, 0, 0);
+            try
+            {
+                var px = new Color[src.Width * src.Height];
+                tex.GetData(0, src, px, 0, px.Length);
+                var bits = new bool[px.Length];
+                for (int i = 0; i < px.Length; i++)
+                    bits[i] = px[i].A >= 128;
+                entry = (bits, src.Width, src.Height);
+            }
+            catch { /* keep null — whole-rect fallback */ }
+            _entityOpaqueCache[key] = entry;
+            return entry;
+        }
 
         /// <summary>Label-set identity for the mask cache key (0 = no labels loaded). Labels are
         /// read once at startup, so this is constant for a session — it exists so a build with no
@@ -107,8 +133,17 @@ namespace SDVRadiance
         /// separates them in one O(n) sweep: whatever the flood reaches is connected to the
         /// outside and stays carved; the rest was enclosed and goes back to water. The border
         /// itself counts as outside, so a rim continuing past the window edge is still a rim.
+        /// <para>
+        /// Only pixels the carve ACTUALLY removed may come back, which is what <paramref name="carved"/>
+        /// records. Without that gate the sweep restored every non-march pixel the flood missed,
+        /// including plain land that was never water and never carved: a grass pocket with water
+        /// above it and a deck to its left reads as enclosed the moment the camera puts its open
+        /// side off-screen, so the same world tile measured march=256/256 from one standing spot
+        /// and 0/256 from another, and the bushes growing on it picked up the water shimmer.
+        /// Enclosure is a window-local test; the set it is allowed to act on must not be.
+        /// </para>
         /// </summary>
-        private void RestoreEnclosedMarch(bool[] march, int pw, int ph)
+        private void RestoreEnclosedMarch(bool[] march, bool[] carved, int pw, int ph)
         {
             int n = pw * ph;
             if (_marchOutsideFlags == null || _marchOutsideFlags.Length < n)
@@ -138,11 +173,12 @@ namespace SDVRadiance
             }
 
             for (int i = 0; i < n; i++)
-                if (!march[i] && !outside[i])
+                if (carved[i] && !march[i] && !outside[i])
                     march[i] = true;
         }
 
         private bool[]? _marchOutsideFlags;
+        private bool[]? _marchCarvedBits;
         private int[]? _marchFloodStack;
         private bool[]? _speckVisitedFlags;
         private int[]? _speckComponentMembers;
@@ -264,7 +300,15 @@ namespace SDVRadiance
                     + $" bldGroundOverlay={_tileBuildingGroundOverlayFlags?[tIdx]} frontGroundOverlay={_tileFrontGroundOverlayFlags?[tIdx]}"
                     + $" ice={_tileIceFlags?[tIdx]} flow={_tileFlowFlags?[tIdx]} lava={_tileLavaFlags?[tIdx]}"
                     + $" keep={(keepBits == null ? "-" : keepBits.Count(b => b).ToString())}/256"
-                    + $" artBits={(artBits == null ? "-" : artBits.Count(b => b).ToString())}/256");
+                    + $" artBits={(artBits == null ? "-" : artBits.Count(b => b).ToString())}/256"
+                    // The two carve sets Pass C actually scrubs with. They separate the only two
+                    // ways a structure tile can end up with no water left: "-" on both means there
+                    // were no art bits to build a silhouette from and the tile was scrubbed WHOLE,
+                    // which is a coverage bug; a high count means the art really is opaque across
+                    // the tile and the empty mask is correct. Reading the flags alone cannot tell
+                    // those apart, and guessing between them cost this session three wrong causes.
+                    + $" carveBld={(_tileBuildingCarveBits?[tIdx] == null ? "-" : _tileBuildingCarveBits[tIdx]!.Count(b => b).ToString())}/256"
+                    + $" carveFront={(_tileFrontCarveBits?[tIdx] == null ? "-" : _tileFrontCarveBits[tIdx]!.Count(b => b).ToString())}/256");
                 // Body size and the calm factor it produced. Both are properties of the pool, so
                 // reading the same numbers from two standing spots is the check that a reported
                 // flicker is not this again.
@@ -653,6 +697,13 @@ namespace SDVRadiance
                     else if (MapLayers.BelongsToFamily(l.Id, "Buildings")) (blds ??= new()).Add(l);
                     else if (MapLayers.BelongsToFamily(l.Id, "Front")) (fronts ??= new()).Add(l);
                 }
+                // Declaration order is not the draw order everywhere: a map may declare Front2
+                // before Front or Back before Back-1. Sort each bucket by the one shared key so
+                // "fronts[0] = the lowest Front" stays true, matching the labeler and the dump.
+                backs?.Sort(MapLayers.CompareLayerRank);
+                blds?.Sort(MapLayers.CompareLayerRank);
+                fronts?.Sort(MapLayers.CompareLayerRank);
+                always?.Sort(MapLayers.CompareLayerRank);
             }
             var front = fronts is { Count: > 0 } ? fronts[0] : null;
             // Extra Front layers (Front2 ...) carve exactly like AlwaysFront: over-player art.
@@ -760,17 +811,17 @@ namespace SDVRadiance
                     // (t1/s1 — the label-vs-opacity overrides below key off it); every further
                     // layer's opacity is UNIONED into the carve, and the topmost label wins.
                     bool hasBld = false;
-                    Texture2D t1 = null!; Rectangle s1 = default;
+                    Texture2D t1 = null!; Rectangle s1 = default; byte o1 = 0;
                     (bool[] bits, int count) cbAcc = (null!, 0);
                     byte[]? bldLbl = null;
                     if (blds != null)
                     {
                         foreach (var bl in blds)
                         {
-                            if (TryTileArt(bl, tx, ty, out var tb, out var srcRect, out _))
+                            if (TryTileArt(bl, tx, ty, out var tb, out var srcRect, out _, out byte bOri))
                             {
-                                var solid = SolidBits(tb, srcRect);
-                                if (!hasBld) { hasBld = true; t1 = tb; s1 = srcRect; cbAcc = solid; }
+                                var solid = SolidBits(tb, srcRect, bOri);
+                                if (!hasBld) { hasBld = true; t1 = tb; s1 = srcRect; o1 = bOri; cbAcc = solid; }
                                 else if (solid.count > 0)
                                 {
                                     var merged = new bool[256];
@@ -829,7 +880,7 @@ namespace SDVRadiance
                     // Structure / carve inputs (Pass C + the land-connectivity test + arch fill).
                     bool bldLabeledLiquid = false;   // label says the overlay here IS water
                     bool frontLabeledLiquid = false;
-                    bool hasFront = TryTileArt(front, tx, ty, out var t2, out var s2);
+                    bool hasFront = TryTileArt(front, tx, ty, out var t2, out var s2, out _, out byte fOri);
                     _tileHasBuildingArtFlags[idx] = hasBld;
                     _tileBuildingGroundOverlayFlags![idx] = false;   // buffers are reused frame to frame
                     _tileFrontGroundOverlayFlags![idx] = false;
@@ -859,23 +910,23 @@ namespace SDVRadiance
                     if (hasFront)
                     {
                         frontArt = true;
-                        var cfSolid = SolidBits(t2, s2);
+                        var cfSolid = SolidBits(t2, s2, fOri);
                         fCount = cfSolid.count;
                         bool g = OverlayIsGround(labels, front, tx, ty, waterHere);
                         if (!g) frontAllGround = false;
                         fBits = g ? OpaqueBits(t2, s2).bits : cfSolid.bits;
-                        MergeAny(AnyAlphaBits(t2, s2));
+                        MergeAny(AnyAlphaBits(t2, s2, fOri));
                     }
                     // Fold every AlwaysFront layer's opacity into the Front carve channel.
                     if (always != null)
                         foreach (var l in always)
-                            if (TryTileArt(l, tx, ty, out var t3, out var s3))
+                            if (TryTileArt(l, tx, ty, out var t3, out var s3, out _, out byte lOri))
                             {
                                 frontArt = true;
-                                var ca = SolidBits(t3, s3);
+                                var ca = SolidBits(t3, s3, lOri);
                                 bool g = OverlayIsGround(labels, l, tx, ty, waterHere);
                                 if (!g) frontAllGround = false;
-                                MergeAny(AnyAlphaBits(t3, s3));
+                                MergeAny(AnyAlphaBits(t3, s3, lOri));
                                 var cbits = g ? OpaqueBits(t3, s3).bits : ca.bits;
                                 int cn = g ? OpaqueBits(t3, s3).count : ca.count;
                                 if (cn == 0)
@@ -929,7 +980,31 @@ namespace SDVRadiance
                             // real outline — carving the whole tile instead squared the boundary
                             // off to the tile grid (a frame around the bridge) and took the
                             // march with it, which cost the reflection under the span.
-                            var groundBits = FillEnclosedHoles(AnyAlphaBits(t1, s1), 8);
+                            //
+                            // EVERY Buildings-family layer's art, not just the first one the
+                            // gather saw: t1 is the BOTTOM layer with art, and on Aimon's
+                            // festival bridge that is a lone support beam on Buildings-1 while
+                            // the planks live on Buildings2 — carving the beam alone left the
+                            // whole deck rippling. The branch is rare (labelled zero-liquid
+                            // overlay on a water tile), so the re-walk costs nothing measurable.
+                            bool[]? visAll = null;
+                            if (blds != null)
+                            {
+                                foreach (var bl in blds)
+                                {
+                                    if (!TryTileArt(bl, tx, ty, out var tv, out var sv, out _, out byte vOri2))
+                                        continue;
+                                    var av = AnyAlphaBits(tv, sv, vOri2);
+                                    if (visAll == null) visAll = av;
+                                    else
+                                    {
+                                        var m = new bool[256];
+                                        for (int p = 0; p < 256; p++) m[p] = visAll[p] || av[p];
+                                        visAll = m;
+                                    }
+                                }
+                            }
+                            var groundBits = FillEnclosedHoles(visAll ?? AnyAlphaBits(t1, s1, o1), 8);
                             int groundCount = 0;
                             for (int p = 0; p < 256; p++) if (groundBits[p]) groundCount++;
                             if (groundCount > 0)
@@ -1005,9 +1080,9 @@ namespace SDVRadiance
                             var (lb, lW, lI, lF, lL) = WaterBitsFromLabels(lbl2);
                             if (lW + lI + lF + lL == 0)
                                 return;
-                            if (!TryTileArt(layer, tx, ty, out var lt, out var ls))
+                            if (!TryTileArt(layer, tx, ty, out var lt, out var ls, out _, out byte vOri))
                                 return;
-                            bool[] vis = AnyAlphaBits(lt, ls);
+                            bool[] vis = AnyAlphaBits(lt, ls, vOri);
                             bool any = false;
                             for (int p = 0; p < 256; p++)
                                 if (lb[p] && vis[p])
@@ -1120,19 +1195,86 @@ namespace SDVRadiance
             foreach (var f in location.furniture)
             {
                 Rectangle bb = f.boundingBox.Value;
-                int artH = f.sourceRect.Value.Height * 4;
-                _entityCarveWorldRectangles.Add((bb.X, bb.Bottom - Math.Max(artH, bb.Height), bb.Right, bb.Bottom));
+                Rectangle src = f.sourceRect.Value;
+                int artH = src.Height * 4;
+                int top = bb.Bottom - Math.Max(artH, bb.Height);
+                int left = bb.X, right = bb.Right;
+                // Carve the SILHOUETTE, exactly as buildings already do. Furniture passed a bare
+                // rectangle, and most of a bed's box is the empty space beside the headboard, so
+                // a bed standing in shallow water cut a hard rectangle out of the ripple above
+                // and beside itself - straight edges in open water, nowhere near the sprite.
+                //
+                // Furniture.draw pins the art's LEFT edge at the box's left and its BOTTOM at the
+                // box's bottom, at scale 4, so the drawn rect is the source rect times four from
+                // that corner. Giving the carve those bounds makes one mask texel one art pixel,
+                // which is what the proportional lookup in Pass C2 assumes.
+                bool[]? opq = null; int ow = 0, oh = 0;
+                try
+                {
+                    var tex = StardewValley.ItemRegistry.GetDataOrErrorItem(f.QualifiedItemId)?.GetTexture();
+                    if (tex != null && !src.IsEmpty)
+                    {
+                        (opq, ow, oh) = EntityOpaqueBits(tex, src);
+                        if (opq != null)
+                        {
+                            left = bb.X;
+                            right = left + src.Width * 4;
+                            top = bb.Bottom - artH;
+                        }
+                    }
+                }
+                catch { opq = null; /* art not resolvable — the box is still better than nothing */ }
+                _entityCarveWorldRectangles.Add((left, top, right, bb.Bottom, opq, ow, oh));
             }
             foreach (var b in location.buildings)
             {
                 if (b == null)
                     continue;
+                // A FISH POND is the one building whose sprite IS water. Its interior is marked
+                // water in the gather above (FishPond.isTileFishable: everything inside the
+                // 1-tile masonry rim), and then this loop carved the whole sprite straight back
+                // out again — the two cancelled, so a pond has never shown ripple or reflection
+                // even though every other part of the pipeline was ready for it. The rim tiles
+                // are not marked water in the first place, so there is nothing here left to
+                // carve; skipping the pond entirely is the whole fix.
+                if (b is StardewValley.Buildings.FishPond)
+                    continue;
+                // Carve the building's SILHOUETTE, not its bounding rectangle. The rect kills the
+                // water sharing every pixel of the sprite's box, and most of a building's box is
+                // transparent: the sky beside a pointed roof, the gaps around a well's frame. A
+                // well placed at the pond bank erased the waterline and the ripple in a hard
+                // rectangle behind its roof — the reported "water has a notch behind the
+                // building", with a before/after pair of placing a coop. The rect stays as the
+                // fallback when the sprite cannot be read.
                 int bx = b.tileX.Value * 64, bw2 = b.tilesWide.Value * 64;
                 int bottom = (b.tileY.Value + b.tilesHigh.Value) * 64;
                 int artH = b.tilesHigh.Value * 64;
-                try { int sh = b.getSourceRect().Height * 4; if (sh > 0) artH = Math.Max(artH, sh); }
-                catch { /* sprite not ready — footprint only */ }
-                _entityCarveWorldRectangles.Add((bx, bottom - artH, bx + bw2, bottom));
+                bool[]? opq = null; int ow = 0, oh = 0;
+                int left = bx, right = bx + bw2;
+                try
+                {
+                    Rectangle srcR = b.getSourceRect();
+                    if (srcR.Height > 0)
+                        artH = Math.Max(artH, srcR.Height * 4);
+                    var tex = b.texture?.Value;
+                    if (tex != null && !srcR.IsEmpty)
+                    {
+                        (opq, ow, oh) = EntityOpaqueBits(tex, srcR);
+                        if (opq != null)
+                        {
+                            // Building.draw pins the art's bottom-left at the footprint's bottom
+                            // row plus DrawOffset, at scale 4 — the same anchor the mirror and the
+                            // sprite mask use, so all three agree on where the sprite is.
+                            var off = (b.GetData()?.DrawOffset ?? Microsoft.Xna.Framework.Vector2.Zero) * 4f;
+                            left = (int)(bx + off.X);
+                            right = left + srcR.Width * 4;
+                            bottom = (int)(bottom + off.Y);
+                            artH = srcR.Height * 4;
+                        }
+                    }
+                }
+                catch { opq = null; /* sprite not ready — footprint rect */ }
+                _entityCarveWorldRectangles.Add((left, bottom - artH, right, bottom, opq, ow, oh));
             }
             return job;
         }
@@ -1208,6 +1350,11 @@ namespace SDVRadiance
             if (_waterMarchBits == null || _waterMarchBits.Length < pcount)
                 _waterMarchBits = new bool[pcount];
             Array.Copy(_waterEffectBits, _waterMarchBits, pcount);
+            // Which march texels the carve below actually removes. RestoreEnclosedMarch may only
+            // put these back; see its remarks for what happened when it could touch anything.
+            if (_marchCarvedBits == null || _marchCarvedBits.Length < pcount)
+                _marchCarvedBits = new bool[pcount];
+            Array.Clear(_marchCarvedBits, 0, pcount);
             // Label subtraction on true water tiles. It runs on BOTH channels now.
             //
             // It used to touch the effect channel only, on the grounds that "an island in mid-pond
@@ -1237,12 +1384,14 @@ namespace SDVRadiance
                             if (!keep[arow + px])
                             {
                                 _waterEffectBits[row + px] = false;
+                                if (_waterMarchBits[row + px])
+                                    _marchCarvedBits[row + px] = true;
                                 _waterMarchBits[row + px] = false;
                             }
                     }
                 }
             }
-            RestoreEnclosedMarch(_waterMarchBits, pw, ph);
+            RestoreEnclosedMarch(_waterMarchBits, _marchCarvedBits, pw, ph);
             // (V4) The anim-region shape test and its waterfall scrub are gone with the colour
             // classifier that fed them: vertical waterfall faces are label class 10's job now
             // (the whole-tile flow/lava march scrub below still runs on labelled tiles).
@@ -1424,17 +1573,29 @@ namespace SDVRadiance
             }
 
             // Pass C2 — carve FURNITURE and BUILDING entity rects gathered on the main thread.
-            foreach (var (wx0, wy0, wx1, wy1) in _entityCarveWorldRectangles)
+            // Where the sprite's opacity was readable, only its OPAQUE pixels carve: one mask
+            // texel is 4 world px and a building draws its art at scale 4, so one texel maps to
+            // exactly one art pixel and the sprite's outline lands on the mask 1:1. Transparent
+            // parts of the box leave the water (and its waterline) alone.
+            foreach (var (wx0, wy0, wx1, wy1, opq, ow, oh) in _entityCarveWorldRectangles)
             {
                 int px0 = Math.Max(0, wx0 / 4 - job.StartTileX * Sub);
                 int py0 = Math.Max(0, wy0 / 4 - job.StartTileY * Sub);
                 int px1 = Math.Min(pw, wx1 / 4 - job.StartTileX * Sub);
                 int py1 = Math.Min(ph, wy1 / 4 - job.StartTileY * Sub);
+                int rw = Math.Max(1, wx1 - wx0), rh = Math.Max(1, wy1 - wy0);
                 for (int y = py0; y < py1; y++)
                 {
                     int row = y * pw;
+                    int ay = opq == null ? 0 : ((y + job.StartTileY * Sub) * 4 - wy0) * oh / rh;
                     for (int x = px0; x < px1; x++)
                     {
+                        if (opq != null)
+                        {
+                            int ax = ((x + job.StartTileX * Sub) * 4 - wx0) * ow / rw;
+                            if ((uint)ax >= (uint)ow || (uint)ay >= (uint)oh || !opq[ay * ow + ax])
+                                continue;
+                        }
                         _waterEffectBits![row + x] = false;
                         _waterMarchBits![row + x] = false;
                     }
@@ -1707,13 +1868,13 @@ namespace SDVRadiance
             if (_waterMask == null || _waterMask.Width != pw || _waterMask.Height != ph)
             {
                 _waterMask?.Dispose();
-                _waterMask = new Texture2D(_device, pw, ph, false, SurfaceFormat.Color);
+                _waterMask = VramTally.Track(new Texture2D(_device, pw, ph, false, SurfaceFormat.Color), "water mask");
             }
             _waterMask.SetData(_waterMaskPixels, 0, pw * ph);
             if (_waterMaskCore == null || _waterMaskCore.Width != tilesW || _waterMaskCore.Height != tilesH)
             {
                 _waterMaskCore?.Dispose();
-                _waterMaskCore = new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color);
+                _waterMaskCore = VramTally.Track(new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color), "water mask (tiles)");
             }
             _waterMaskCore.SetData(_waterMaskCorePixels, 0, count);
             if (_waterSignedDistanceTexture == null || _waterSignedDistanceTexture.Width != pw || _waterSignedDistanceTexture.Height != ph)

@@ -280,7 +280,7 @@ namespace SDVRadiance
                 byte v = (byte)MathHelper.Clamp(acc[i] / norm * 255f, 0f, 255f);
                 data[i] = new Color(v, v, v, (byte)255);
             }
-            _noiseTexture = new Texture2D(_device, N, N);
+            _noiseTexture = VramTally.Track(new Texture2D(_device, N, N), "fog noise");
             _noiseTexture.SetData(data);
             return _noiseTexture;
         }
@@ -459,7 +459,11 @@ namespace SDVRadiance
         // drawn but is washed out by everything else - and no screenshot can tell them apart.
         // Recorded rather than recomputed so the report reads the frame that was actually drawn.
         private bool _dbgWindowsHere, _dbgWindowBeamOn;
+        private bool _dbgInteriorWindowed;                 // layout truth, before the effects master switch
+        private float _dbgWindowRoomScale = 1f;            // what the flood actually used for window room light
+        private string _dbgWindowGlowPos = "";             // world tiles of the room's glow sprites
         private int _dbgWindowCount, _dbgWindowLightsSeen, _dbgWindowLightsDark;
+        private int _dbgWindowGlows = -1;   // lightGlows count in this location (0 or more)
         private Vector3 _dbgWindowColour, _dbgExposure = Vector3.One;
         private float _dbgRoomSaturation = 1f, _dbgGiStrength;
         /// <summary>Sun shaft term as last handed to the shader, for the report: "no shafts" has
@@ -488,8 +492,11 @@ namespace SDVRadiance
             var sb = new System.Text.StringBuilder();
             sb.AppendLine($"flood presence {_fadeFlood:F2} (0 = the numbers below were not applied this frame)");
             sb.AppendLine($"    windowed interior: {_dbgWindowsHere}, beam setting on: {_dbgWindowBeamOn}");
+            sb.AppendLine($"    interior windowed (layout): {_dbgInteriorWindowed}, room-light scale: {_dbgWindowRoomScale:F2}");
+            sb.AppendLine($"    window glows at tile: {(_dbgWindowGlowPos.Length > 0 ? _dbgWindowGlowPos : "none")}");
             sb.AppendLine($"    window lights: {_dbgWindowLightsSeen} published by the game, "
                         + $"{_dbgWindowLightsDark} not glowing, {_dbgWindowCount} used as beams (max 6)");
+            sb.AppendLine($"    window glow sprites in this room: {_dbgWindowGlows}");
             if (_dbgWindowsHere && _dbgWindowBeamOn && _dbgWindowCount == 0)
                 sb.AppendLine("    -> NO BEAM IS POSSIBLE: the room is windowed but nothing in it is emitting "
                             + "window light, so there is nowhere to stand a beam. Two things look like this. A "
@@ -682,7 +689,14 @@ namespace SDVRadiance
             // ---- Time-of-day room exposure + window shafts (windowed interiors only) ----
             var location = Game1.currentLocation;
             FloodLightmap.IndoorLook(location, config, out Vector3 exposureTarget, out float satTarget);
-            bool windowsHere = FloodLightmap.IsWindowedInterior(location) && config.WindowEffectsEnabled;
+            bool interiorWindowed = FloodLightmap.IsWindowedInterior(location);
+            // The master "window effects" toggle gates the VISIBLE half (the beam, the lit glass,
+            // the patch on the floor) and the outdoor window glow. The daylight a window adds to
+            // the room is lighting, not an effect - turning the flashy effect off must not take
+            // the room's light with it - so that half reads interiorWindowed directly and never
+            // this master switch. It had its own setting once; that was dropped rather than given
+            // a job, so the room light in a windowed interior is simply always on.
+            bool windowsHere = interiorWindowed && config.WindowEffectsEnabled;
             bool windowedRoom = windowsHere && config.WindowBeamEnabled;
             ShadowRenderer.WindowDaylight(out Vector3 dayColour, out float dayStrength);
             Vector3 windowColourTarget = windowedRoom ? dayColour * (dayStrength * 0.8f) : Vector3.Zero;
@@ -695,7 +709,7 @@ namespace SDVRadiance
                 _roomSaturationEase = satTarget;
                 _paneDaylightEase = paneDaylightTarget;
                 _windowDaylightEase = windowedRoom ? 1f : 0f;
-                _windowRoomLightEase = windowsHere ? 1f : 0f;
+                _windowRoomLightEase = interiorWindowed ? 1f : 0f;
             }
             else
             {
@@ -704,7 +718,8 @@ namespace SDVRadiance
                 _roomSaturationEase = MathHelper.Lerp(_roomSaturationEase, satTarget, 0.03f);
                 _paneDaylightEase = MathHelper.Lerp(_paneDaylightEase, paneDaylightTarget, 0.03f);
                 _windowDaylightEase = MathHelper.Lerp(_windowDaylightEase, windowedRoom ? 1f : 0f, 0.03f);
-                _windowRoomLightEase = MathHelper.Lerp(_windowRoomLightEase, windowsHere ? 1f : 0f, 0.03f);
+                _windowRoomLightEase = MathHelper.Lerp(_windowRoomLightEase,
+                    interiorWindowed ? 1f : 0f, 0.03f);
             }
             // The lightmap seeds both of its window terms on the CPU, a frame ahead of this, so
             // hand it the EASED switches rather than the switches: turning either off has to fade
@@ -774,6 +789,14 @@ namespace SDVRadiance
 
             _dbgWindowsHere = windowsHere;
             _dbgWindowBeamOn = config.WindowBeamEnabled;
+            _dbgInteriorWindowed = interiorWindowed;
+            _dbgWindowGlows = location?.lightGlows.Count ?? -1;
+            var glowSb = new System.Text.StringBuilder();
+            if (location != null)
+                foreach (Vector2 g in location.lightGlows)
+                { if (glowSb.Length > 0) glowSb.Append(", "); glowSb.Append($"({g.X / 64f:F0},{g.Y / 64f:F0})"); }
+            _dbgWindowGlowPos = glowSb.ToString();
+            _dbgWindowRoomScale = FloodLightmap.WindowRoomScale;
             _dbgWindowCount = windowCount;
             _dbgWindowColour = _windowColourEase * _fadeFlood;
             _dbgPaneDaylight = _paneDaylightEase * _fadeFlood;
@@ -1353,7 +1376,7 @@ namespace SDVRadiance
             // GPU readback sync without changing the (already eased) response visibly.
             if (Game1.ticks % 4 != 0)
                 return;
-            _luminanceRenderTarget ??= new RenderTarget2D(_device, 32, 32, false, SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
+            _luminanceRenderTarget ??= VramTally.Track(new RenderTarget2D(_device, 32, 32, false, SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "luminance probe");
             _luminancePixels ??= new Color[32 * 32];
 
             if (_isLuminancePrimed)
@@ -1405,6 +1428,14 @@ namespace SDVRadiance
                 return 1f;
             string n = location?.Name ?? "";
             if (n.Contains("Beach") || n.Contains("Island") || n == "Docks")
+                return 1f;
+            // Beach Farm answers to none of the above and is the ocean anyway: its class is Farm,
+            // its name is "Farm", and it is not an island — so the swell stopped at the property
+            // line and the same sea that rolls a hundred tiles east lay flat here. The MAP it was
+            // built from is the tell, and reading that also covers the farm layouts mods derive
+            // from Farm_Beach, which no class or location name could ever have caught.
+            string map = location?.mapPath?.Value ?? "";
+            if (map.Contains("Beach") || map.Contains("Island"))
                 return 1f;
             return 0f;
         }

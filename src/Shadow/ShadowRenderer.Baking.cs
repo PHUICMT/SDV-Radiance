@@ -72,7 +72,11 @@ namespace SDVRadiance
             // the mod-heavy installs it exists for.
             EvictColdCasterBakes();
             EvictColdObjectBakes();
+            // Report occupancy AFTER eviction: what the caches actually hold going into this
+            // frame is the number that pairs with the miss count below it.
+            FrameCost.CacheOccupancy(_bakedObjectCache.Count, ObjectBakeCapTotal, _casterBakeCache.Count, CasterBakeCap);
 
+            _bakeBlurPx = config.DirectionalShadowBlur;
             bool objectsOn = shadowsOn && SunCasts() && config.DirectionalShadowObjects;
             float sunRotation = 0f, sunStretch = 0f;
             if (objectsOn)
@@ -92,13 +96,13 @@ namespace SDVRadiance
             // multiplies the distinct (texture, frame, flip) bakes is the suspected cause of
             // "directional shadows on trees and bushes are unplayably slow with Simple Foliage,
             // fine with the setting off". Say so once per location, with both numbers.
-            if (_bakedObjectCache.Count > ObjectBakeCap && DiagnosticMonitor != null
+            if (_bakedObjectCache.Count > ObjectBakeCapTotal && DiagnosticMonitor != null
                 && Game1.currentLocation is { } capLoc && capLoc != _objectCapLoggedLocation)
             {
                 _objectCapLoggedLocation = capLoc;
                 DiagnosticMonitor.Log($"[shadow] object bake cache over cap at {capLoc.NameOrUniqueName}: "
-                       + $"{_bakedObjectCache.Count} distinct sprites still hot (cap {ObjectBakeCap}, "
-                       + $"{_objectRenderTargetPool.Count} slots allocated) — more sprites are on screen at once "
+                       + $"{_bakedObjectCache.Count} distinct sprites still hot (cap {ObjectBakeCapTotal}, "
+                       + $"{ObjectSlotsAllocated()} slots allocated) — more sprites are on screen at once "
                        + "than the cache can hold, so some object shadows re-bake as they scroll.", LogLevel.Debug);
             }
 
@@ -161,8 +165,8 @@ namespace SDVRadiance
             // DiscardContents only guarantees the pixels until the next target swap/present,
             // which was fine when everything re-baked per frame — cached across frames, the
             // content decayed into garbage (grid-line artifacts all over the map).
-            _playerRenderTarget ??= new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
-                SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
+            _playerRenderTarget ??= VramTally.Track(new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
+                SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "player silhouette");
 
             Rectangle src = who.FarmerSprite.SourceRect;
 
@@ -223,8 +227,8 @@ namespace SDVRadiance
                 // and this bake runs again, even though the mask half is still current.
                 if (reflectionNeedsPlayer)
                 {
-                    _playerColorRenderTarget ??= new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
-                        SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
+                    _playerColorRenderTarget ??= VramTally.Track(new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
+                        SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "player colour");
                     graphicsDevice.SetRenderTarget(_playerColorRenderTarget);
                     graphicsDevice.Clear(Color.Transparent);
                     _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
@@ -352,6 +356,7 @@ namespace SDVRadiance
                 _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
                 _renderTargetSpriteBatch.Draw(_gradientTexture!, new Rectangle(0, (int)pos.Y, CasterRtW, (int)h), Color.White);
                 _renderTargetSpriteBatch.End();
+                FrameCost.Count(FrameCost.Counter.CasterBakes);
                 return true;
             }
             catch
@@ -377,10 +382,87 @@ namespace SDVRadiance
                 _casterFreeTargets.RemoveAt(_casterFreeTargets.Count - 1);
                 return reused;
             }
-            var rt = new RenderTarget2D(graphicsDevice, CasterRtW, CasterRtH, false,
-                SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
+            var rt = VramTally.Track(new RenderTarget2D(graphicsDevice, CasterRtW, CasterRtH, false,
+                SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "character bake slots");
             _casterRenderTargetPool.Add(rt);
             return rt;
+        }
+
+        /// <summary>Consecutive frames with nothing to bake for. Not a tick count: the release
+        /// below has to survive a doorway, a cutscene and a menu without throwing away a screen
+        /// of bakes that will be wanted again two seconds later.</summary>
+        private int _idleFrames;
+
+        /// <summary>
+        /// Give the graphics memory back when the shadows that needed it are switched off.
+        ///
+        /// <para>
+        /// The pools only ever grew. Nothing in this mod disposed a render target, so once a busy
+        /// farm had filled the object pool, 123 slots at 400x456 stayed resident for the rest of
+        /// the session: measured at 130.7 MB held in total, and measured again with every single
+        /// effect switched off, where it was still 130.7 MB. A player who turns the mod's features
+        /// off to fix their frame rate keeps paying the memory in full.
+        /// </para>
+        ///
+        /// <para>
+        /// That is the one cost shaped like the report we could not explain - "it ran fine before
+        /// I installed this" from someone with everything disabled. It takes no time per frame,
+        /// so every timer in this mod reads zero, and on a card with little to spare it makes the
+        /// driver start evicting textures, which stutters. Holding it while switched off was
+        /// never defensible; it simply was not visible until something measured memory instead of
+        /// milliseconds.
+        /// </para>
+        ///
+        /// <para>The delay is what makes this safe: bakes are expensive to rebuild, so a brief
+        /// pass through a menu or a cutscene must not cost a screenful of them.</para>
+        ///
+        /// <para>
+        /// CALLED FROM OUTSIDE THE FEATURE GATE, and that is the whole point. The first attempt
+        /// put this call inside PreparePlayer, which ModEntry skips entirely when directional
+        /// shadows are off - so the release never ran in precisely the case it exists for, and
+        /// the measurement said so: 85 MB still held after every effect was switched off. Code
+        /// that gives a resource back cannot live on the path that is skipped when the feature
+        /// that wanted it is switched off.
+        /// </para>
+        /// </summary>
+        internal void ReleaseIdleTargets(bool wanted)
+        {
+            const int IdleTicksBeforeRelease = 600;       // ten seconds at the game's 60 Hz tick
+            if (wanted)
+            {
+                _idleFrames = 0;
+                return;
+            }
+            if (ObjectSlotsAllocated() == 0 && _casterRenderTargetPool.Count == 0)
+                return;
+            if (++_idleFrames < IdleTicksBeforeRelease)
+                return;
+            _idleFrames = 0;
+
+            _bakedObjectCache.Clear();
+            _casterBakeCache.Clear();
+            _objectBakeQueue.Clear();
+            foreach (var free in _objectFreeTargetsByClass) free.Clear();
+            _casterFreeTargets.Clear();
+            int freed = ObjectSlotsAllocated() + _casterRenderTargetPool.Count;
+            foreach (var pool in _objectRenderTargetPools)
+            {
+                foreach (RenderTarget2D rt in pool)
+                    try { rt.Dispose(); } catch { }
+                pool.Clear();
+            }
+            foreach (RenderTarget2D rt in _casterRenderTargetPool)
+                try { rt.Dispose(); } catch { }
+            _casterRenderTargetPool.Clear();
+            for (int i = 0; i < _objectBlurScratches.Length; i++)
+            {
+                try { _objectBlurScratches[i]?.Dispose(); } catch { }
+                _objectBlurScratches[i] = null;
+            }
+            // A full re-enumeration has to happen if the shadows come back, or the draw pass
+            // would find every sprite missing and paint a screen of banded stand-ins.
+            _objectBakeLocation = null;
+            DiagnosticMonitor?.Log($"[shadow] released {freed} idle bake targets - shadows have been off for a while.", LogLevel.Debug);
         }
 
         /// <summary>
@@ -408,35 +490,56 @@ namespace SDVRadiance
                 {
                     _casterFreeTargets.Add(bake.Rt);
                     _casterBakeCache.Remove(_casterEvictScratch[i]);
+                    FrameCost.Count(FrameCost.Counter.BakeEvictions);
                 }
             }
         }
 
         /// <summary>
-        /// The same for object bakes. Their slots are five times the size, so this is the one that
-        /// decides how much VRAM the mod holds.
+        /// The same for object bakes, but PER SIZE CLASS.
+        ///
+        /// <para>
+        /// A single total cap was wrong once the slots stopped being one size: a screen of crops
+        /// filling the small pool would evict a tree, whose slot is nine times the memory and far
+        /// more expensive to rebuild, to make room for something that was never competing for the
+        /// same space. Each pool now holds its own line, so a farm full of crops presses only on
+        /// the crop-sized pool.
+        /// </para>
+        ///
+        /// <para>The caps together allow 464 sprites where the old single pool allowed 128, and
+        /// hold less memory doing it, because the ones that only need a small slot get one.</para>
         /// </summary>
         private void EvictColdObjectBakes()
         {
-            if (_bakedObjectCache.Count <= ObjectBakeCap)
-                return;
-            _objectEvictScratch.Clear();
-            int keep = (int)(ObjectBakeCap * EvictHeadroom);
-            bool desperate = _bakedObjectCache.Count > ObjectBakeCap * 2;
-            int coldBefore = Game1.ticks - HotBakeTicks;
-            foreach (var kv in _bakedObjectCache)
+            for (int cls = 0; cls < ObjSlotClasses.Length; cls++)
             {
-                if (desperate || kv.Value.LastUsedTick < coldBefore)
-                    _objectEvictScratch.Add(kv.Key);
-            }
-            _objectEvictScratch.Sort((a, b) => _bakedObjectCache[a].LastUsedTick.CompareTo(_bakedObjectCache[b].LastUsedTick));
-            int drop = Math.Min(_bakedObjectCache.Count - keep, _objectEvictScratch.Count);
-            for (int i = 0; i < drop; i++)
-            {
-                if (_bakedObjectCache.TryGetValue(_objectEvictScratch[i], out SpriteBake? bake))
+                int cap = ObjSlotClasses[cls].Cap;
+                int live = 0;
+                foreach (var kv in _bakedObjectCache)
+                    if (kv.Value.SlotClass == cls) live++;
+                if (live <= cap)
+                    continue;
+
+                _objectEvictScratch.Clear();
+                int keep = (int)(cap * EvictHeadroom);
+                bool desperate = live > cap * 2;
+                int coldBefore = Game1.ticks - HotBakeTicks;
+                foreach (var kv in _bakedObjectCache)
                 {
-                    _objectFreeTargets.Add(bake.Rt);
-                    _bakedObjectCache.Remove(_objectEvictScratch[i]);
+                    if (kv.Value.SlotClass != cls) continue;
+                    if (desperate || kv.Value.LastUsedTick < coldBefore)
+                        _objectEvictScratch.Add(kv.Key);
+                }
+                _objectEvictScratch.Sort((a, b) => _bakedObjectCache[a].LastUsedTick.CompareTo(_bakedObjectCache[b].LastUsedTick));
+                int drop = Math.Min(live - keep, _objectEvictScratch.Count);
+                for (int i = 0; i < drop; i++)
+                {
+                    if (_bakedObjectCache.TryGetValue(_objectEvictScratch[i], out SpriteBake? bake))
+                    {
+                        _objectFreeTargetsByClass[bake.SlotClass].Add(bake.Rt);
+                        _bakedObjectCache.Remove(_objectEvictScratch[i]);
+                        FrameCost.Count(FrameCost.Counter.BakeEvictions);
+                    }
                 }
             }
         }
@@ -491,7 +594,6 @@ namespace SDVRadiance
         {
             new(0f, 0f), new(1f, 0f), new(-1f, 0f), new(0f, 1f), new(0f, -1f),
         };
-
         private static void DrawSoft(SpriteBatch spriteBatch, Vector2[] taps, Texture2D texture, Rectangle? src, Vector2 pos,
             Color baseColor, float alpha, float rot, Vector2 origin, Vector2 scale, float depth,
             SpriteEffects effects, float blur)

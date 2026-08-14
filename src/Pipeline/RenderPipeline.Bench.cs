@@ -45,7 +45,12 @@ namespace SDVRadiance
 
         private const int BenchWarmupFrames = 20;    // let GPU clocks and the eased fades settle
         private const int BenchSampleFrames = 40;
-        private const int BenchAmplify = 6;          // extra chains in the "many" half
+        /// <summary>Extra chains in the "many" half. Not const: the per-effect sweep varies it to
+        /// check its own arithmetic. Anything the amplifier does NOT multiply (work that runs once
+        /// a frame outside the stages) is divided by the amplification anyway, so it is reported
+        /// at a fraction of its real size - and the way to catch that is to measure the same
+        /// effect at two amplifications and see whether the answer moves.</summary>
+        private static int BenchAmplify = 6;
 
         private static readonly float[] BenchScales = { 1f, 0.75f, 0.5f };
         /// <summary>Sweep steps: one/many per effect resolution, then one/many for shadows.</summary>
@@ -85,6 +90,11 @@ namespace SDVRadiance
                 _monitor.Log("Radiance is switched off, so there is nothing to measure. Turn it on and run this again.", LogLevel.Warn);
                 return;
             }
+            // Declare our own amplification rather than inheriting whatever ran last. This is
+            // shared mutable state now (the per-effect sweep varies it to audit its own
+            // arithmetic), and a benchmark that divides its slope by someone else's number
+            // reports a wrong answer with no sign that anything went wrong.
+            BenchAmplify = 6;
             BenchRunning = true;
             _benchSavedScale = config.RenderScale;
             _benchSavedProbe = GpuProbe;

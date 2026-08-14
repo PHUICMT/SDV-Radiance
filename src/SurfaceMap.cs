@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using StardewModdingAPI;
 using StardewValley;
@@ -183,11 +184,19 @@ namespace SDVRadiance
             Layer? back = map.GetLayer("Back");
             Layer? buildings = map.GetLayer("Buildings");
             Layer? front = map.GetLayer("Front");
+            // EVERY Buildings-family layer, topmost first. A deck plank sits OVER the Back tile
+            // no matter which numbered layer carries it: Aimon's festival bridge draws its planks
+            // on Buildings2 (with only a support beam on Buildings-1), and consulting just the
+            // base "Buildings" layer let the Back water label win the tile — the river rippled
+            // straight across a bridge whose planks were painted Deck.
+            var bldsTopDown = new List<Layer>();
+            foreach (var l in MapLayers.RenderedLayers(map, topToBottom: true))
+                if (MapLayers.BelongsToFamily(l.Id, "Buildings"))
+                    bldsTopDown.Add(l);
             // Layers the canonical trio never covers (SVE puts water art on Back2,
             // vanilla waterfalls live on AlwaysFront). Consulted below ONLY when the trio
             // yields no verdict, so no tile that already classifies changes class.
             Layer? back2 = map.GetLayer("Back2");
-            Layer? buildings2 = map.GetLayer("Buildings2");
             Layer? front2 = map.GetLayer("Front2");
             Layer? alwaysFront = map.GetLayer("AlwaysFront");
             Layer? alwaysFront2 = map.GetLayer("AlwaysFront2");
@@ -214,8 +223,12 @@ namespace SDVRadiance
                     if (labels != null)
                     {
                         SurfaceClass? lc = null;
-                        if (labels.Get(buildings, x, y) is { } bb)
+                        // The Buildings family decides first, topmost layer down: the layer the
+                        // player sees is the layer whose label should answer for the tile.
+                        foreach (Layer bLayer in bldsTopDown)
                         {
+                            if (labels.Get(bLayer, x, y) is not { } bb)
+                                continue;
                             anyLabel = true;
                             lc = ClassFromLabels(bb, overlay: true, out int bldDeck);
                             // A PLANK THAT ONLY CLIPS ITS TILE must not delete the tile's water.
@@ -235,6 +248,8 @@ namespace SDVRadiance
                                 && labels.Get(back, x, y) is { } underneath
                                 && ClassFromLabels(underneath, overlay: false) == SurfaceClass.Water)
                                 lc = SurfaceClass.Water;
+                            if (lc != null)
+                                break;
                         }
                         if (lc == null && labels.Get(back, x, y) is { } gb) { anyLabel = true; lc = ClassFromLabels(gb, overlay: false); }
                         if (lc == null && labels.Get(front, x, y) is { } fb) { anyLabel = true; lc = ClassFromLabels(fb, overlay: true); }
@@ -242,7 +257,6 @@ namespace SDVRadiance
                         // flow:256 on AlwaysFront was never declared water at all, so its
                         // liquid never reached the mask (the compose already honours these
                         // labels for the carve and sub-type; classification was the gap).
-                        if (lc == null && labels.Get(buildings2, x, y) is { } b2) { anyLabel = true; lc = ClassFromLabels(b2, overlay: true); }
                         if (lc == null && labels.Get(back2, x, y) is { } g2) { anyLabel = true; lc = ClassFromLabels(g2, overlay: false); }
                         if (lc == null && labels.Get(front2, x, y) is { } f2) { anyLabel = true; lc = ClassFromLabels(f2, overlay: true); }
                         if (lc == null && labels.Get(alwaysFront, x, y) is { } af) { anyLabel = true; lc = ClassFromLabels(af, overlay: true); }

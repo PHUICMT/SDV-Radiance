@@ -64,6 +64,7 @@ namespace SDVRadiance
         {
             if (SuppressVanillaObjectShadows && (layerDepth == VanillaCanopyShadowDepth || ReferenceEquals(texture, Game1.shadowTexture)))
                 return;
+            FrameCost.Count(FrameCost.Counter.ShimDraws);
             spriteBatch.Draw(texture, pos, src, color, rotation, origin, scale, effects, layerDepth);
         }
 
@@ -74,6 +75,7 @@ namespace SDVRadiance
         {
             if (SuppressVanillaObjectShadows && (layerDepth == VanillaCanopyShadowDepth || ReferenceEquals(texture, Game1.shadowTexture)))
                 return;
+            FrameCost.Count(FrameCost.Counter.ShimDraws);
             spriteBatch.Draw(texture, pos, src, color, rotation, origin, scale, effects, layerDepth);
         }
 
@@ -85,6 +87,7 @@ namespace SDVRadiance
         {
             if (SuppressVanillaBlobShadows && ReferenceEquals(texture, Game1.shadowTexture))
                 return;
+            FrameCost.Count(FrameCost.Counter.ShimDraws);
             spriteBatch.Draw(texture, pos, src, color, rotation, origin, scale, effects, layerDepth);
         }
 
@@ -95,6 +98,7 @@ namespace SDVRadiance
         {
             if (SuppressVanillaBlobShadows && ReferenceEquals(texture, Game1.shadowTexture))
                 return;
+            FrameCost.Count(FrameCost.Counter.ShimDraws);
             spriteBatch.Draw(texture, pos, src, color, rotation, origin, scale, effects, layerDepth);
         }
 
@@ -105,6 +109,7 @@ namespace SDVRadiance
         {
             if (SuppressVanillaCritterShadows && ReferenceEquals(texture, Game1.shadowTexture))
                 return;
+            FrameCost.Count(FrameCost.Counter.ShimDraws);
             spriteBatch.Draw(texture, pos, src, color, rotation, origin, scale, effects, layerDepth);
         }
 
@@ -115,6 +120,7 @@ namespace SDVRadiance
         {
             if (SuppressVanillaCritterShadows && ReferenceEquals(texture, Game1.shadowTexture))
                 return;
+            FrameCost.Count(FrameCost.Counter.ShimDraws);
             spriteBatch.Draw(texture, pos, src, color, rotation, origin, scale, effects, layerDepth);
         }
 

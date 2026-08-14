@@ -328,6 +328,7 @@ namespace SDVRadiance
             Tog("tuner.lighting", () => _config.LightingEnabled, v => _config.LightingEnabled = v, "help.lighting");
             Sld("tuner.lightindoor", 0f, 0.95f, () => _config.LightingIndoorDarkness, v => _config.LightingIndoorDarkness = v, "help.lightindoor");
             Sld("tuner.lightnight", 0f, 0.95f, () => _config.LightingNightDarkness, v => _config.LightingNightDarkness = v, "help.lightnight");
+            Sld("tuner.lightmorning", 0f, 0.95f, () => _config.LightingMorningDarkness, v => _config.LightingMorningDarkness = v, "help.lightmorning");
             Sld("tuner.lightwarmth", 0f, 1f, () => _config.LightingWarmth, v => _config.LightingWarmth = v, "help.lightwarmth");
             Sld("tuner.lightboost", 0f, 2f, () => _config.LightingBoost, v => _config.LightingBoost = v, "help.lightboost");
             Sld("tuner.lightradius", 0.2f, 3f, () => _config.LightingRadiusScale, v => _config.LightingRadiusScale = v, "help.lightradius");

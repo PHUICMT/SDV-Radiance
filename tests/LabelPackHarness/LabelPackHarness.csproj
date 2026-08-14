@@ -21,6 +21,9 @@
          without adding an InternalsVisibleTo to the mod for the sake of a test. -->
     <Compile Include="$(ModPath)\src\LabelPacks.cs" />
     <Compile Include="$(ModPath)\src\LabelStore.cs" />
+    <!-- LabelStore reads tile orientation and render-layer identity through these shared helpers,
+         so they compile in with the rest of the real sources. -->
+    <Compile Include="$(ModPath)\src\Shared\MapLayers.cs" />
     <Compile Include="Program.cs" />
   </ItemGroup>
 

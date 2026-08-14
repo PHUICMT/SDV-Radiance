@@ -28,11 +28,36 @@ namespace SDVRadiance
             helper.ConsoleCommands.Add("radiance_mapdump",
                 "Dump every location's layer/tile layout + sheet art to Documents\\HF-Studio\\maps.json for the label editor. "
                 + "Add 'all' to also embed tilesheets that no loaded map places: the water-heavy and bridge-heavy art ships "
-                + "as bare resource packs with no maps of their own, so walking the maps can never find it.",
-                (_, args) => { MapDump.Run(monitor, helper, allSheets: args.Length >= 1 && args[0].Equals("all", StringComparison.OrdinalIgnoreCase)); });
+                + "as bare resource packs with no maps of their own, so walking the maps can never find it. "
+                + "Sheet art is written as one PNG per sheet beside maps.json; add 'embed' for the old single inlined file.",
+                (_, args) =>
+                {
+                    bool all = false, embed = false;
+                    foreach (string a in args)
+                    {
+                        if (a.Equals("all", StringComparison.OrdinalIgnoreCase)) all = true;
+                        else if (a.Equals("embed", StringComparison.OrdinalIgnoreCase)) embed = true;
+                    }
+                    MapDump.Run(monitor, helper, allSheets: all, embedArt: embed);
+                });
             helper.ConsoleCommands.Add("radiance_lights",
                 "List every active light source in the current location (id, kind, tile, radius, color, distance from player).",
                 (_, _) => DumpLights(monitor));
+            // Flip any config value LIVE, without a restart and without touching config.json.
+            //
+            // This exists for one reason: measuring what each effect costs. A config edit needs a
+            // game restart, restarts move the machine's baseline by more than a cheap effect
+            // costs (two runs an hour apart differed by 0.25 ms in EVERY scene), so per-effect
+            // numbers taken across restarts are noise arranged in a table. Toggling in-place
+            // keeps every measurement inside one run where the baseline holds still.
+            //
+            // Deliberately not persisted: the point is A/B, and an A/B that rewrites the
+            // player's file has a failure mode where a crash strands them on the B.
+            helper.ConsoleCommands.Add("radiance_config",
+                "Get or set a config value live, in memory only (config.json is not written). "
+                + "'radiance_config' lists all keys, 'radiance_config Key' prints one, "
+                + "'radiance_config Key value' sets it. Restart or GMCM-save to discard.",
+                (_, args) => LiveConfig(monitor, getConfig(), args));
             // ONE COMMAND, NO ARGUMENTS. Everything below this line is a tool for someone who
             // already knows what it does. A player who has just seen something wrong should not
             // have to pick a command, read coordinates off the screen and type them correctly
@@ -134,7 +159,7 @@ namespace SDVRadiance
                 {
                     if (args.Length < 1 || !Enum.TryParse(args[0], ignoreCase: true, out DebugOverlayChannel channel))
                     {
-                        monitor.Log("usage: radiance_debug off|water|labeldiff|sdf|subtype|sprite|reflect|mirror|emitter "
+                        monitor.Log("usage: radiance_debug off|water|labeldiff|sdf|subtype|sprite|reflect|mirror|flood|emitter "
                             + $"(now: {RenderPipeline.DebugChannel})", LogLevel.Info);
                         return;
                     }
@@ -218,6 +243,25 @@ namespace SDVRadiance
                     if (pipeline == null) monitor.Log("Pipeline not ready.", LogLevel.Info);
                     else pipeline.StartBenchmark(getConfig());
                 });
+            helper.ConsoleCommands.Add("radiance_effectcost",
+                "Price EVERY effect separately, in this scene, in about thirty seconds. Toggling one effect and "
+                + "watching the frame rate cannot answer this: an effect costs a tenth of a millisecond and the "
+                + "machine's own drift between two readings is half of one, so the answer is noise. This runs each "
+                + "effect seven times per frame and keeps the slope, which lifts the signal clear of the drift, and "
+                + "it reads the GPU's clock rather than the CPU's, because fill is what most of these cost. Stand "
+                + "somewhere demanding and do not move while it runs.",
+                (_, args) =>
+                {
+                    if (!StardewModdingAPI.Context.IsWorldReady)
+                    {
+                        monitor.Log("Load a save first — there is nothing being drawn to measure.", LogLevel.Info);
+                        return;
+                    }
+                    var pipeline = getPipeline();
+                    int amp = args.Length > 0 && int.TryParse(args[0], out int a) ? a : 6;
+                    if (pipeline == null) monitor.Log("Pipeline not ready.", LogLevel.Info);
+                    else pipeline.StartEffectCost(getConfig(), amp);
+                });
             helper.ConsoleCommands.Add("radiance_gpu",
                 "Measure real GPU time per frame (needs Debug logging on). Every other timer here counts CPU "
                 + "submission, which the driver returns from before the GPU has done anything; this one blocks on "
@@ -228,6 +272,50 @@ namespace SDVRadiance
                     RenderPipeline.GpuProbe = args.Length == 0 || !args[0].Equals("off", StringComparison.OrdinalIgnoreCase);
                     monitor.Log($"GPU wall-clock probe: {(RenderPipeline.GpuProbe ? "ON - watch for [perf] gpu wall-clock lines" : "off")}", LogLevel.Info);
                 });
+        }
+
+        /// <summary>Console command: read or write one config property on the LIVE instance, by
+        /// reflection so a new setting is covered the day it is added rather than when someone
+        /// remembers this list exists. Clamp() runs after every set, so the console cannot put a
+        /// value out of the range the sliders enforce.</summary>
+        private static void LiveConfig(IMonitor monitor, ModConfig config, string[] args)
+        {
+            var props = typeof(ModConfig).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+            if (args.Length == 0)
+            {
+                var text = new System.Text.StringBuilder("Live config values (in-memory; not saved to config.json):\n");
+                foreach (var p in props)
+                    if (p.CanWrite && (p.PropertyType == typeof(bool) || p.PropertyType == typeof(float) || p.PropertyType == typeof(int) || p.PropertyType == typeof(string)))
+                        text.AppendLine($"  {p.Name} = {p.GetValue(config)}");
+                monitor.Log(text.ToString().TrimEnd(), LogLevel.Info);
+                return;
+            }
+            var prop = Array.Find(props, p => p.Name.Equals(args[0], StringComparison.OrdinalIgnoreCase));
+            if (prop == null || !prop.CanWrite)
+            {
+                monitor.Log($"No writable config property named '{args[0]}'. Run radiance_config with no arguments for the list.", LogLevel.Warn);
+                return;
+            }
+            if (args.Length == 1)
+            {
+                monitor.Log($"{prop.Name} = {prop.GetValue(config)}", LogLevel.Info);
+                return;
+            }
+            try
+            {
+                object value =
+                    prop.PropertyType == typeof(bool) ? bool.Parse(args[1])
+                    : prop.PropertyType == typeof(float) ? float.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture)
+                    : prop.PropertyType == typeof(int) ? int.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture)
+                    : args[1];
+                prop.SetValue(config, value);
+                config.Clamp();
+                monitor.Log($"{prop.Name} = {prop.GetValue(config)}  (live only; config.json untouched)", LogLevel.Info);
+            }
+            catch (Exception ex)
+            {
+                monitor.Log($"Could not set {prop.Name} to '{args[1]}': {ex.Message}", LogLevel.Warn);
+            }
         }
 
         /// <summary>Console command: dump every light the game currently tracks, so "why does my
@@ -306,6 +394,8 @@ namespace SDVRadiance
                 Write("");
                 Write("=== what this mod costs per frame ===");
                 Write(FrameCost.Describe());
+                Write("");
+                Write(VramTally.Describe());
                 Write("");
                 Write("=== label check for everything on screen ===");
                 Write(pipeline?.VerifyLabels(Game1.currentLocation) ?? "pipeline not ready");
@@ -499,16 +589,39 @@ namespace SDVRadiance
             // Composed mask vs label, side by side — the acceptance test for this subsystem
             // is that the game matches the labeler, so print both from the same tile.
             write(pipeline?.DescribeTileMask(location, t.X, t.Y) ?? "pipeline not ready");
-            foreach (string layerName in new[] { "Back", "Buildings", "Front", "AlwaysFront", "AlwaysFront2" })
+            // Walk the map's OWN layer list rather than a fixed set of names: a map may carry
+            // Back3, Buildings4 or a negative suffix, and naming them here by hand is how this
+            // report ended up silent about layers the game draws.
+            foreach (var layer in location.map?.Layers ?? (System.Collections.Generic.IEnumerable<xTile.Layers.Layer>)System.Array.Empty<xTile.Layers.Layer>())
             {
-                var layer = location.map?.GetLayer(layerName);
-                var tile = layer?.Tiles[t.X, t.Y];
+                if (!MapLayers.TryGetFamily(layer.Id, out _))
+                    continue;
+                if (t.X >= layer.LayerWidth || t.Y >= layer.LayerHeight)
+                    continue;
+                var tile = layer.Tiles[t.X, t.Y];
                 if (tile == null)
                     continue;
                 bool anim = tile is xTile.Tiles.AnimatedTile;
+                // Tile PROPERTIES, because a flip or rotation does not live in the tile index.
+                // The .tmx stores it in the gid's top bits, and whichever loader brought the map
+                // in has to put it somewhere the index cannot carry. Neither the dump nor this
+                // report ever showed it, so "the preview draws this tile unrotated" was a
+                // question nothing here could answer. Empty means the tile really is plain.
+                string props = "";
+                try
+                {
+                    var parts = new System.Collections.Generic.List<string>();
+                    foreach (var kv in tile.Properties)
+                        parts.Add($"{kv.Key}={kv.Value}");
+                    foreach (var kv in tile.TileIndexProperties)
+                        parts.Add($"idx:{kv.Key}={kv.Value}");
+                    if (parts.Count > 0)
+                        props = "  props{" + string.Join(", ", parts) + "}";
+                }
+                catch { /* a property bag that throws is not worth failing the report over */ }
                 // ImageSource (the asset path) is what the labeler keys on; Id is the map-local alias.
-                write($"{layerName}: sheet={tile.TileSheet?.Id} src={tile.TileSheet?.ImageSource} index={tile.TileIndex} animated={anim}"
-                    + $"  [{AttributeAsset(tile.TileSheet?.ImageSource)}]");
+                write($"{layer.Id}: sheet={tile.TileSheet?.Id} src={tile.TileSheet?.ImageSource} index={tile.TileIndex} animated={anim}"
+                    + $"  [{AttributeAsset(tile.TileSheet?.ImageSource)}]{props}");
             }
 
             // THE NEIGHBOURHOOD, not just the tile. Almost every water report is about a SHAPE:

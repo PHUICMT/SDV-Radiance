@@ -202,9 +202,17 @@ namespace SDVRadiance
         /// Takes the Layer directly — the mask gather already holds Back/Buildings/Front, so
         /// looking them up by name once per tile would be pure overhead.</summary>
         public byte[]? Get(Layer? layer, int x, int y)
-            => _tilesBySheet.Count > 0 && TryTileArt(layer, x, y, out string? sheet, out int index)
-                ? Get(sheet, index)
-                : null;
+        {
+            if (_tilesBySheet.Count == 0
+                || !TryTileArt(layer, x, y, out string? sheet, out int index, out byte orient))
+                return null;
+            // Labels are painted on the sheet, upright. The map may place the tile mirrored or
+            // turned, so the marks have to be turned the same way before they can be compared with
+            // anything on screen - otherwise a mirrored waterfall's liquid pixels sit on the wrong
+            // side of the tile and the mask disagrees with the art by exactly that reflection.
+            byte[]? bytes = Get(sheet, index);
+            return bytes == null ? null : MapLayers.Orient(bytes, orient);
+        }
 
         public byte[]? Get(GameLocation? location, int x, int y, string layerName)
             => _tilesBySheet.Count > 0 ? Get(location?.map?.GetLayer(layerName), x, y) : null;
@@ -212,12 +220,19 @@ namespace SDVRadiance
         /// <summary>Frame 0 of an animated tile is the frame labels are keyed to (HF Studio fans a
         /// stroke out to every frame of a cycle, so any frame resolves to the same marks).</summary>
         private static bool TryTileArt(Layer? layer, int x, int y, out string? sheet, out int index)
+            => TryTileArt(layer, x, y, out sheet, out index, out _);
+
+        private static bool TryTileArt(Layer? layer, int x, int y, out string? sheet, out int index,
+                                       out byte orient)
         {
             sheet = null;
             index = -1;
+            orient = 0;
             if (layer == null || x < 0 || y < 0 || x >= layer.LayerWidth || y >= layer.LayerHeight)
                 return false;
             var t = layer.Tiles[x, y];
+            // The turn is on the tile the MAP holds, not on an animation frame inside it.
+            orient = MapLayers.Orientation(t);
             if (t is xTile.Tiles.AnimatedTile at && at.TileFrames is { Length: > 0 })
                 t = at.TileFrames[0];
             if (t?.TileSheet == null)

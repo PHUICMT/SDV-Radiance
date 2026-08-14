@@ -96,6 +96,22 @@ namespace SDVRadiance
         internal Vector2 Origin;
         internal Vector2 MapSize;
 
+        /// <summary>The lightmap value at one world tile, scaled back out of the ×0.5 storage.
+        /// For the radiance_debug flood caption: flick a light switch and read off whether the
+        /// map actually moved instead of trusting the composite to show it.</summary>
+        internal string Probe(int tileX, int tileY)
+        {
+            if (_lightmapTexture == null)
+                return "no texture";
+            int xi = tileX - (int)Origin.X;
+            int yi = tileY - (int)Origin.Y;
+            if (xi < 0 || yi < 0 || xi >= (int)MapSize.X || yi >= (int)MapSize.Y)
+                return "off-map";
+            Color c = _lightmapPixels[yi * (int)MapSize.X + xi];
+            float v = c.R / 255f / TexScale;   // stored ×TexScale (0.5); scale back for display
+            return v.ToString("F2");
+        }
+
         internal bool Build(GraphicsDevice graphicsDevice, int width, int height, ModConfig config)
         {
             GameLocation? location = Game1.currentLocation;
@@ -160,8 +176,15 @@ namespace SDVRadiance
             // black when anything multiplied on top, so they stay strictly add-only.
             bool scriptedDark = !outdoors &&
                 (location is StardewValley.Locations.MineShaft || location is StardewValley.Locations.VolcanoDungeon);
-            bool vanillaDark = !outdoors && (scriptedDark
-                 || Game1.ambientLight.R < 245 || Game1.ambientLight.G < 245 || Game1.ambientLight.B < 245);
+            // A storm dims a house's ambient a hair under white, but it is still day: the flat
+            // add-only night seed is for places the game keeps dark, not for a daytime weather
+            // dip. Gating the ambient term on real night stops a stormy morning from flipping the
+            // room to a flat-bright seed while a clear one keeps the (dimmer) daylight curve -
+            // the exact inverse of how daylight works, and how "dark on clear, bright on storm"
+            // (1115938) was reported.
+            bool itIsNight = GameClock.MinutesNow() >= ShadowRenderer.TrulyDarkMinutes() - 60f;
+            bool ambientDark = Game1.ambientLight.R < 245 || Game1.ambientLight.G < 245 || Game1.ambientLight.B < 245;
+            bool vanillaDark = !outdoors && (scriptedDark || (ambientDark && itIsNight));
             // A HOUSE at midnight is not a mine. The game tints it down a little and then leaves
             // it evenly lit, so the fireplace and the lamps have nothing to stand out against.
             // Add a second, gentle layer there - and let the night-darkness slider drive it,
@@ -259,7 +282,10 @@ namespace SDVRadiance
                         // WindowDaylight - that constant is why rooms stayed daylit at 2am).
                         ShadowRenderer.WindowDaylight(out Vector3 sunColour, out float sunStrength);
                         seedColor = sunColour;
-                        inten *= sunStrength * WindowRoomScale;
+                        // ×1.25 so the pool can actually show through the room's exposure (a bare
+                        // sunStrength at 0.85 stays under the multiply-only floor and reads as if
+                        // nothing happened when the toggle is flicked).
+                        inten *= (1.25f * sunStrength) * WindowRoomScale;
                     }
                     // One seed cell; the bilinear upsample + the 5×5 bounce spread it into a soft
                     // pool. (A wide radial seed disc was tried to force a bigger pool but never read
@@ -311,6 +337,62 @@ namespace SDVRadiance
                         }
                     }
                 }
+            }
+
+            // ---- Seed window daylight from the room's window glow sprites ----
+            // Some interiors publish their windows only as lightGlows (no WindowLight source and
+            // no DayTiles property - the vanilla farmhouse is one), so the loop above never
+            // touches them. A glow sprite IS the game saying "this window is lit", so seed the
+            // same cool daylight there; otherwise the flood leaves the floor beside a real
+            // window at bare sky and it reads as a dark strip in front of the glass.
+            int glowCount = location.lightGlows is { } lg ? lg.Count : -1;
+            bool glowGate = !outdoors && !scriptedDark && WindowRoomScale > 0.01f && glowCount > 0;
+            if (glowGate)
+            {
+                ShadowRenderer.WindowDaylight(out Vector3 sunColour, out float sunStrength);
+                int seeded = 0;
+                if (sunStrength > 0.03f)
+                {
+                    foreach (Vector2 gp in location.lightGlows)
+                    {
+                        int ci = (int)(gp.X / 64f) - tx0;
+                        int cj = (int)(gp.Y / 64f) - ty0;
+                        if (ci < 0 || ci >= tw || cj < 0 || cj >= th)
+                            continue;
+                        // Skip any spot a real window light source already covered above.
+                        bool covered = false;
+                        if (lights != null)
+                            foreach (var ls in lights.Values)
+                                if (ls.lightContext.Value == LightSource.LightContext.WindowLight
+                                    && Math.Abs((int)(ls.position.Value.X / 64f) - (tx0 + ci)) <= 1
+                                    && Math.Abs((int)(ls.position.Value.Y / 64f) - (ty0 + cj)) <= 1)
+                                { covered = true; break; }
+                        if (covered)
+                            continue;
+                        float glowInten = 1.35f * sunStrength * WindowRoomScale;
+                        int sIdx = cj * tw + ci;
+                        _lightCells[sIdx] = Vector3.Max(_lightCells[sIdx], sunColour * glowInten);
+                        // Spread the daylight down the first cells INTO the room, so the patch
+                        // reads as light pooling in front of the glass rather than a single-cell
+                        // glint that a toggle is easy to miss. Kept at/over 1.0 so it can actually
+                        // ADD light - below 1.0 the flood can only darken less, which is why the
+                        // old seed read as nothing next to the room's exposure.
+                        for (int k = 1; k <= 3; k++)
+                        {
+                            int jj = cj + k;
+                            if (jj >= th)
+                                break;
+                            _lightCells[jj * tw + ci] = Vector3.Max(_lightCells[jj * tw + ci],
+                                sunColour * glowInten * (1f - 0.25f * k));
+                        }
+                        seeded++;
+                    }
+                }
+                LastWindowSeed = $"seed: {seeded} cell / scale={WindowRoomScale:F2} sun={sunStrength:F2} glows={glowCount}";
+            }
+            else
+            {
+                LastWindowSeed = $"seed: GATE (out={outdoors} scripted={scriptedDark} scale={WindowRoomScale:F2} glows={glowCount})";
             }
 
             // ---- Flood: two rounds of 4 directional sweeps (Terraria-style) ----
@@ -388,7 +470,7 @@ namespace SDVRadiance
             if (_lightmapTexture == null || _lightmapTexture.Width != tw || _lightmapTexture.Height != th)
             {
                 _lightmapTexture?.Dispose();
-                _lightmapTexture = new Texture2D(graphicsDevice, tw, th, false, SurfaceFormat.Color);
+                _lightmapTexture = VramTally.Track(new Texture2D(graphicsDevice, tw, th, false, SurfaceFormat.Color), "flood lightmap");
             }
             _lightmapTexture.SetData(_lightmapPixels, 0, count);
             Origin = new Vector2(tx0, ty0);
@@ -446,7 +528,10 @@ namespace SDVRadiance
                 float darkMinutes = ShadowRenderer.TrulyDarkMinutes();
                 float fill = Math.Min(MathHelper.Clamp((nowMinutes - 380f) / 160f, 0f, 1f),
                                       MathHelper.Clamp((darkMinutes - nowMinutes) / 90f, 0f, 1f));
-                amb = MathHelper.Clamp(amb * MathHelper.Lerp(0.42f, 1f, fill), 0.16f, 1f);
+                // The wake floor follows the morning-darkness slider: at its default (0.25) the
+                // room wakes at the historical ~0.42; 0 lifts it to a fully bright wake.
+                float wakeFloor = MathHelper.Lerp(1f, 0.42f, MathHelper.Clamp(config.LightingMorningDarkness / 0.25f, 0f, 1f));
+                amb = MathHelper.Clamp(amb * MathHelper.Lerp(wakeFloor, 1f, fill), 0.16f, 1f);
                 // ...and takes its colour, so the air in the room agrees with the light coming
                 // through the glass rather than staying neutral grey while the patch goes gold.
                 return new Vector3(amb) * Vector3.Lerp(Vector3.One, dayColour, 0.5f);
@@ -503,6 +588,9 @@ namespace SDVRadiance
         /// which a window-art mod draws too. Owned by the flood stage, which eases it from the
         /// setting; this class only multiplies by it.</summary>
         internal static float WindowPatchScale = 1f;
+        /// <summary>Live reason the window-glow seed did or did not run this rebuild (for the
+        /// radiance_debug flood caption - answers \"is the seed even attempted\" without a log).</summary>
+        internal static string LastWindowSeed = "?";
         /// <summary>How much daylight a window contributes to the ROOM's light, 0 to 1. Separate
         /// from the patch because the two are worth different things when another mod is drawing
         /// windows: it can paint a beam, but it cannot make the room's lighting know about it.</summary>
@@ -514,6 +602,7 @@ namespace SDVRadiance
                 return false;
             if (location is StardewValley.Locations.MineShaft || location is StardewValley.Locations.VolcanoDungeon)
                 return false;
+            // DayTiles/NightTiles is a MAP property - time independent, safe to cache per visit.
             if (!ReferenceEquals(location, _windowedCacheLoc))
             {
                 _windowedCacheLoc = location;
@@ -524,15 +613,18 @@ namespace SDVRadiance
                 var props = location.Map?.Properties;
                 _windowedCached = props != null
                     && (props.ContainsKey("DayTiles") || props.ContainsKey("NightTiles"));
-                if (!_windowedCached && Game1.currentLightSources != null)
-                {
-                    // Fallback for maps that skip DayTiles: any window light source counts.
-                    foreach (var kv in Game1.currentLightSources)
-                        if (kv.Value.lightContext.Value == LightSource.LightContext.WindowLight)
-                        { _windowedCached = true; break; }
-                }
             }
-            return _windowedCached;
+            if (_windowedCached)
+                return true;
+            // The light-source and glow signals change through the day AND with when the room
+            // was entered, so they are checked LIVE, never cached: entering a farmhouse at
+            // night must not freeze the answer as "no windows" for the whole visit (that
+            // freeze is what left the floor beside a real window at bare sky in the morning).
+            if (Game1.currentLightSources != null)
+                foreach (var kv in Game1.currentLightSources)
+                    if (kv.Value.lightContext.Value == LightSource.LightContext.WindowLight)
+                        return true;
+            return location.lightGlows is { Count: > 0 };
         }
 
         /// <summary>

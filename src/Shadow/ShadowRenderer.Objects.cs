@@ -43,7 +43,7 @@ namespace SDVRadiance
             {
                 if (_objectGraphicsDevice != null && !_bakedObjectCache.ContainsKey(key)
                     && BakeObjSprite(_objectGraphicsDevice, texture, src, baseOrigin, effects, shear, out RenderTarget2D rt, out Vector2 feetInRT))
-                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedShear = shear, LastUsedTick = Game1.ticks };
+                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedShear = shear, BakedBlur = _bakeBlurPx, Content = _lastBakeContent, SlotClass = _lastBakeClass, LastUsedTick = Game1.ticks };
                 return;
             }
             if (_bakedObjectCache.TryGetValue(key, out SpriteBake? bakedEntry))
@@ -58,11 +58,19 @@ namespace SDVRadiance
                 // on-screen height: a tall tree earns a re-bake every second or so and a small
                 // crop goes minutes without one, which is both correct and an order of magnitude
                 // less work than the old sweep.
-                if (Math.Abs(shear - bakedEntry.BakedShear) * src.Height * 4f > ShearRefreshPixels
+                if ((Math.Abs(shear - bakedEntry.BakedShear) * src.Height * 4f > ShearRefreshPixels
+                        || Math.Abs(_bakeBlurPx - bakedEntry.BakedBlur) > 0.3f)
                     && _objectBakeQueue.Count < ObjectBakeQueueCap)
                     _objectBakeQueue[key] = new ObjectBakeRequest { BaseOrigin = baseOrigin, Shear = shear };
-                DrawSoft(spriteBatch, Taps9, bakedEntry.Rt, null, feet, Color.White, alpha, 0f, bakedEntry.FeetInRt,
-                    new Vector2(1f, shearScaleY), depth, SpriteEffects.None, blur);
+                FrameCost.Count(FrameCost.Counter.ShadowSprites);
+                // ONE draw of ONLY the content: the soft edge is in the baked pixels (see
+                // SpriteBake.BakedBlur) and the source rect stops the card blending the slot's
+                // acres of transparent padding (see ContentBounds). Origin re-anchors because a
+                // source rect makes the draw's coordinates content-relative.
+                Rectangle content = bakedEntry.Content.IsEmpty ? new Rectangle(0, 0, bakedEntry.Rt.Width, bakedEntry.Rt.Height) : bakedEntry.Content;
+                DrawSoft(spriteBatch, Taps9, bakedEntry.Rt, content, feet,
+                    Color.White, alpha, 0f, bakedEntry.FeetInRt - new Vector2(content.X, content.Y),
+                    new Vector2(1f, shearScaleY), depth, SpriteEffects.None, 0f);
             }
             else
             {
@@ -71,6 +79,13 @@ namespace SDVRadiance
                 // waiting for something else to trigger a full enumeration.
                 if (_objectBakeQueue.Count < ObjectBakeQueueCap)
                     _objectBakeQueue[key] = new ObjectBakeRequest { BaseOrigin = baseOrigin, Shear = shear };
+                // Counted here rather than at the queue insert: the queue is a dictionary keyed by
+                // sprite, so two misses of the SAME sprite in one frame collapse into one entry and
+                // the count would under-report exactly the case it exists to catch. A miss is a
+                // drawing that came out as bands instead of a silhouette, and every one of them is
+                // worth knowing about.
+                FrameCost.Count(FrameCost.Counter.BakeMisses);
+                FrameCost.Count(FrameCost.Counter.ShadowSprites);
                 DrawBandedGradient(spriteBatch, texture, src, feet, baseOrigin, alpha, rot,
                     new Vector2(4f, 4f * stretch), depth, blur, headFade, effects);
             }
@@ -100,12 +115,24 @@ namespace SDVRadiance
             if (texture == null || src.IsEmpty)
                 return false;
             float spriteWidth = src.Width * 4f, spriteHeight = src.Height * 4f;
-            if (spriteWidth + Math.Abs(shear) * spriteHeight > ObjRtW || spriteHeight > ObjRtH - 8f)
+            // The bake-time blur stamps the silhouette shifted by up to the blur radius in every
+            // direction, so the fit test keeps that much slack or the soft edge clips at the slot.
+            float needW = spriteWidth + Math.Abs(shear) * spriteHeight + 2f * _bakeBlurPx;
+            float needH = spriteHeight + _bakeBlurPx;
+            // A refresh re-renders the slot the entry already owns and must keep its size; a first
+            // bake takes the smallest class the silhouette fits, which is what stops a crop from
+            // being handed a tree's slot.
+            int slotClass = into != null ? ClassOfSlot(into) : ObjSlotClassFor(needW, needH);
+            if (slotClass < 0)
+            {
+                NoteOversize(src, needW, needH);
                 return false;
-
-            // A refresh re-renders the slot the entry already owns; only a first bake leases one.
-            rt = into ?? RentObjRT(graphicsDevice);
-            feetInRT = new Vector2(ObjRtW / 2f, ObjRtH - 8f);
+            }
+            if (into != null && (needW > into.Width || needH > into.Height - 8f))
+                return false;   // the lean grew past the slot it already owns
+            _lastBakeClass = slotClass;
+            rt = into ?? RentObjRT(graphicsDevice, slotClass);
+            feetInRT = new Vector2(rt.Width / 2f, rt.Height - 8f);
             Vector2 pos = feetInRT - baseOrigin * 4f;      // so baseOrigin maps to the feet point
             Matrix lean = ShearAbout(feetInRT, shear);
             try
@@ -117,8 +144,11 @@ namespace SDVRadiance
                 _renderTargetSpriteBatch.End();
                 // Continuous feet(full)→head(faint) gradient over the sprite's vertical extent.
                 _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
-                _renderTargetSpriteBatch.Draw(_gradientTexture!, new Rectangle(0, (int)pos.Y, ObjRtW, (int)spriteHeight), Color.White);
+                _renderTargetSpriteBatch.Draw(_gradientTexture!, new Rectangle(0, (int)pos.Y, rt.Width, (int)spriteHeight), Color.White);
                 _renderTargetSpriteBatch.End();
+                BlurSlotInPlace(graphicsDevice, rt);
+                _lastBakeContent = ContentBounds(pos, spriteWidth, spriteHeight, feetInRT, shear, _bakeBlurPx, rt.Width, rt.Height);
+                FrameCost.Count(FrameCost.Counter.ObjectBakes);
                 return true;
             }
             catch
@@ -129,7 +159,7 @@ namespace SDVRadiance
                 // drawn from one target.
                 if (into == null)
                 {
-                    _objectFreeTargets.Add(rt);
+                    _objectFreeTargetsByClass[slotClass].Add(rt);
                     rt = null!;
                 }
                 return false;
@@ -151,7 +181,7 @@ namespace SDVRadiance
                 if (_bakedObjectCache.ContainsKey(key))
                     continue;
                 if (BakeRequest(graphicsDevice, key, req, null, out RenderTarget2D rt, out Vector2 feetInRT))
-                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedShear = req.Shear, LastUsedTick = Game1.ticks };
+                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedShear = req.Shear, BakedBlur = _bakeBlurPx, Content = _lastBakeContent, SlotClass = _lastBakeClass, LastUsedTick = Game1.ticks };
             }
 
             // Then the leans the sun has moved off, re-rendered into the slot each entry already
@@ -170,6 +200,9 @@ namespace SDVRadiance
                 {
                     stale.FeetInRt = refreshedFeet;
                     stale.BakedShear = req.Shear;
+                    stale.BakedBlur = _bakeBlurPx;
+                    stale.Content = _lastBakeContent;
+                    stale.SlotClass = _lastBakeClass;
                     refreshBudget--;
                 }
                 else
@@ -178,10 +211,86 @@ namespace SDVRadiance
                     // old pixels would freeze that shadow at whatever angle it last fit at, so
                     // hand the slot back and let the draw path fall to bands, which has no such
                     // limit. Only reachable at a very low sun on a sprite near the slot width.
-                    _objectFreeTargets.Add(stale.Rt);
+                    _objectFreeTargetsByClass[stale.SlotClass].Add(stale.Rt);
                     _bakedObjectCache.Remove(key);
                 }
             }
+        }
+
+        /// <summary>
+        /// The rectangle of a slot that actually holds shadow, computed from the same geometry
+        /// the bake just drew with. Everything outside it is transparent padding - and until this
+        /// existed, every one of those pixels was rasterized anyway, per shadow, per frame: the
+        /// cached slots were drawn with a NULL source rect, so a 3-tile crop shadow submitted the
+        /// full 400x456 slot to the card and alpha blending obligingly read and wrote 180
+        /// thousand pixels to show nine thousand. Five hundred shadows made that a hundred
+        /// million pixels a frame of blending nothing over nothing, which is exactly the
+        /// fill-without-submission signature the frame clock kept showing and the CPU probes
+        /// kept not. (Factorio's shadow-trimming write-up, FFF-227, is the same lesson on the
+        /// same kind of sprite.)
+        ///
+        /// <para>Analytic, not measured from pixels: the sprite lands at a known position, the
+        /// shear slides rows sideways by a known amount that is largest at the top row, and the
+        /// blur pushes everything outward by its radius. The union of those is the content, no
+        /// GPU readback required. Clamped to the slot, snapped outward to whole pixels.</para>
+        /// </summary>
+        private static Rectangle ContentBounds(Vector2 pos, float widthPx, float heightPx, Vector2 feetInRT, float shear, float blurPx, int slotW, int slotH)
+        {
+            float topShift = shear * (pos.Y - feetInRT.Y);   // sideways slide of the top row
+            float left = Math.Min(pos.X, pos.X + topShift) - blurPx;
+            float right = Math.Max(pos.X + widthPx, pos.X + widthPx + topShift) + blurPx;
+            float top = pos.Y - blurPx;
+            float bottom = Math.Max(feetInRT.Y, pos.Y + heightPx) + blurPx;
+            int x0 = Math.Max(0, (int)left), y0 = Math.Max(0, (int)top);
+            int x1 = Math.Min(slotW, (int)Math.Ceiling(right)), y1 = Math.Min(slotH, (int)Math.Ceiling(bottom));
+            return x1 <= x0 || y1 <= y0 ? new Rectangle(0, 0, slotW, slotH) : new Rectangle(x0, y0, x1 - x0, y1 - y0);
+        }
+
+        /// <summary>What the last successful bake computed as its content rect, for the caller
+        /// that stores the cache entry. Single-threaded by construction (bakes run on the main
+        /// thread inside RenderingWorld), so a field is safe where an out-param would have to be
+        /// threaded through both funnels and the request plumbing.</summary>
+        private Rectangle _lastBakeContent = new(0, 0, ObjRtW, ObjRtH);
+        private int _lastBakeClass;
+
+        /// <summary>Which pool a target came from, recovered from its size. Cheaper and less
+        /// error-prone than threading the class through every refresh path.</summary>
+        private static int ClassOfSlot(RenderTarget2D rt)
+        {
+            for (int i = 0; i < ObjSlotClasses.Length; i++)
+                if (rt.Width == ObjSlotClasses[i].W && rt.Height == ObjSlotClasses[i].H)
+                    return i;
+            return ObjSlotClasses.Length - 1;
+        }
+
+        /// <summary>
+        /// Soften a freshly baked slot IN PLACE: copy it aside, then stamp the copy back nine
+        /// times, each shifted by the blur radius and carrying a ninth of the weight. Additive
+        /// blending makes that the true mean of nine shifted copies - the core where all nine
+        /// land stays solid, the rim fades over the blur radius - which is a cleaner gradient
+        /// than the per-frame alpha-compositing trick this replaces, and it runs once per BAKE
+        /// (a handful per second on a warm screen) instead of five times per sprite per frame.
+        /// </summary>
+        private void BlurSlotInPlace(GraphicsDevice graphicsDevice, RenderTarget2D rt)
+        {
+            if (_bakeBlurPx <= 0f)
+                return;
+            int cls = ClassOfSlot(rt);
+            _objectBlurScratches[cls] ??= VramTally.Track(new RenderTarget2D(graphicsDevice, rt.Width, rt.Height,
+                false, SurfaceFormat.Color, DepthFormat.None), "object blur scratch");
+            RenderTarget2D scratch = _objectBlurScratches[cls]!;
+            graphicsDevice.SetRenderTarget(scratch);
+            graphicsDevice.Clear(Color.Transparent);
+            _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
+            _renderTargetSpriteBatch.Draw(rt, Vector2.Zero, Color.White);
+            _renderTargetSpriteBatch.End();
+            graphicsDevice.SetRenderTarget(rt);
+            graphicsDevice.Clear(Color.Transparent);
+            _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, SumTaps, SamplerState.LinearClamp);
+            Color weight = Color.White * (1f / Taps9.Length);
+            foreach (Vector2 tap in Taps9)
+                _renderTargetSpriteBatch.Draw(scratch, tap * _bakeBlurPx, weight);
+            _renderTargetSpriteBatch.End();
         }
 
         /// <summary>Run one queued request, whichever of the two kinds of bake it is.</summary>
@@ -229,20 +338,67 @@ namespace SDVRadiance
         /// </summary>
         private float LengthCap(float stretch, float cap) => Math.Min(stretch, cap * _sunLengthScale);
 
-        private RenderTarget2D RentObjRT(GraphicsDevice graphicsDevice)
+        /// <summary>Sprites refused a slot because nothing is big enough, logged once each. A
+        /// refusal means that shadow draws as bands instead of a silhouette for as long as it is
+        /// on screen, so a steady miss count is a picture problem before it is a speed one, and
+        /// the report showing "7 misses a frame" with no way to ask WHICH seven is a diagnostic
+        /// that only tells you to start guessing.</summary>
+        private readonly System.Collections.Generic.HashSet<Rectangle> _oversizeLogged = new();
+
+        private readonly System.Collections.Generic.HashSet<string> _columnRefusalLogged = new();
+
+        private void NoteColumnRefusal(string why)
         {
-            if (_objectFreeTargets.Count > 0)
+            if (DiagnosticMonitor == null || !_columnRefusalLogged.Add(why))
+                return;
+            DiagnosticMonitor.Log($"[shadow] tile column not baked: {why} - it draws banded.", LogLevel.Debug);
+        }
+
+        private void NoteOversize(Rectangle src, float needW, float needH)
+        {
+            if (DiagnosticMonitor == null || !_oversizeLogged.Add(src))
+                return;
+            DiagnosticMonitor.Log($"[shadow] sprite {src.Width}x{src.Height} needs a {needW:0}x{needH:0} slot - "
+                + $"larger than the biggest ({ObjSlotClasses[^1].W}x{ObjSlotClasses[^1].H}), so it draws banded.", LogLevel.Debug);
+        }
+
+        /// <summary>The smallest slot class that fits a silhouette of this size, or -1 if even the
+        /// largest cannot take it (the caller falls back to the banded draw, as it always did for
+        /// oversized sprites).</summary>
+        private static int ObjSlotClassFor(float neededW, float neededH)
+        {
+            for (int i = 0; i < ObjSlotClasses.Length; i++)
+                if (neededW <= ObjSlotClasses[i].W && neededH <= ObjSlotClasses[i].H - 8f)
+                    return i;
+            return -1;
+        }
+
+        /// <summary>Lease a slot of the given class, reusing a returned one when there is one.</summary>
+        private RenderTarget2D RentObjRT(GraphicsDevice graphicsDevice, int slotClass)
+        {
+            var free = _objectFreeTargetsByClass[slotClass];
+            if (free.Count > 0)
             {
-                RenderTarget2D reused = _objectFreeTargets[^1];
-                _objectFreeTargets.RemoveAt(_objectFreeTargets.Count - 1);
+                RenderTarget2D reused = free[^1];
+                free.RemoveAt(free.Count - 1);
                 return reused;
             }
+            (int w, int h, _) = ObjSlotClasses[slotClass];
             // PreserveContents: these slots are CACHED across frames now (see PreparePlayer) —
             // the default DiscardContents decays into garbage after later target swaps.
-            var renderTarget = new RenderTarget2D(graphicsDevice, ObjRtW, ObjRtH, false,
-                SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
-            _objectRenderTargetPool.Add(renderTarget);
+            var renderTarget = VramTally.Track(new RenderTarget2D(graphicsDevice, w, h, false,
+                SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents),
+                $"object bake slots {w}x{h}");
+            _objectRenderTargetPools[slotClass].Add(renderTarget);
             return renderTarget;
+        }
+
+        /// <summary>Total slots held across every class, for the over-cap diagnostic.</summary>
+        private int ObjectSlotsAllocated()
+        {
+            int n = 0;
+            foreach (var pool in _objectRenderTargetPools) n += pool.Count;
+            return n;
         }
 
         private void DrawObjectShadows(SpriteBatch spriteBatch, GameLocation location, float rot, float stretch, float alpha, float blur)
@@ -527,7 +683,7 @@ namespace SDVRadiance
                         if (_objectGraphicsDevice != null && !_bakedObjectCache.ContainsKey(key)
                             && BakeTileColumn(_objectGraphicsDevice, texture, cast.Sources, cast.Levels, count, shear,
                                 out RenderTarget2D rt, out Vector2 fInRT))
-                            _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = fInRT, BakedShear = shear, LastUsedTick = Game1.ticks };
+                            _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = fInRT, BakedShear = shear, BakedBlur = _bakeBlurPx, Content = _lastBakeContent, SlotClass = _lastBakeClass, LastUsedTick = Game1.ticks };
                         continue;
                     }
                     if (!_bakedObjectCache.TryGetValue(key, out SpriteBake? bakedEntry))
@@ -535,13 +691,16 @@ namespace SDVRadiance
                         // A prop the bake pass has not seen yet (this map arrived after the last
                         // full walk, or its slot was evicted). The classification already holds
                         // the column, so the request is just a reference to it.
+                        FrameCost.Count(FrameCost.Counter.BakeMisses);
                         QueueTileColumnBake(key, cast, shear);
                         continue;
                     }
+                    FrameCost.Count(FrameCost.Counter.ShadowSprites);
                     bakedEntry.LastUsedTick = Game1.ticks;
                     // Same per-sprite staleness rule as EmitObj: the lean lives in the pixels, so
                     // the column earns a re-bake once the sun has moved its tip a pixel and a half.
-                    if (Math.Abs(shear - bakedEntry.BakedShear) * (cast.Height + 1) * 64f > ShearRefreshPixels)
+                    if (Math.Abs(shear - bakedEntry.BakedShear) * (cast.Height + 1) * 64f > ShearRefreshPixels
+                        || Math.Abs(_bakeBlurPx - bakedEntry.BakedBlur) > 0.3f)
                         QueueTileColumnBake(key, cast, shear);
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(x * 64f + 32f, (y + 1f) * 64f - 2f));
                     // A body ON this tile (someone sitting on a map bench, standing against a
@@ -563,8 +722,10 @@ namespace SDVRadiance
                     catch { }
                     float rowY = bodyHere ? y * 64f : (y + 1f) * 64f;
                     float depth = MathHelper.Clamp(rowY / 10000f + x * 1e-5f - ShadowDepthBias, 0f, 1f);
-                    DrawSoft(spriteBatch, Taps9, bakedEntry.Rt, null, feet, Color.White, alpha, 0f, bakedEntry.FeetInRt,
-                        new Vector2(1f, shearScaleY), depth, SpriteEffects.None, blur);
+                    Rectangle propContent = bakedEntry.Content.IsEmpty ? new Rectangle(0, 0, bakedEntry.Rt.Width, bakedEntry.Rt.Height) : bakedEntry.Content;
+                    DrawSoft(spriteBatch, Taps9, bakedEntry.Rt, propContent,
+                        feet, Color.White, alpha, 0f, bakedEntry.FeetInRt - new Vector2(propContent.X, propContent.Y),
+                        new Vector2(1f, shearScaleY), depth, SpriteEffects.None, 0f);
                     // Redraw the base tile OVER its own shadow: the map layer painted before this
                     // batch, so without this the near end of the cast darkens the prop itself
                     // (the "shadow on the lamp post" complaint). Front-stack tiles need no redraw —
@@ -897,10 +1058,23 @@ namespace SDVRadiance
             for (int i = 0; i < count; i++)
                 levels = Math.Max(levels, tileLevels[i] + 1);
             float columnHeight = levels * 64f;
-            if (count <= 0 || columnHeight > ObjRtH - 8f || 64f + Math.Abs(shear) * columnHeight > ObjRtW)
+            int colClass = into != null ? ClassOfSlot(into)
+                : ObjSlotClassFor(64f + Math.Abs(shear) * columnHeight + 2f * _bakeBlurPx, columnHeight + _bakeBlurPx);
+            if (colClass < 0)
+            {
+                NoteColumnRefusal($"no slot fits a {columnHeight:0}px column with shear {shear:0.00}");
                 return false;
-            renderTarget = into ?? RentObjRT(graphicsDevice);
-            feetInRT = new Vector2(ObjRtW / 2f, ObjRtH - 8f);
+            }
+            _lastBakeClass = colClass;
+            if (count <= 0 || columnHeight > ObjSlotClasses[colClass].H - 8f
+                || 64f + Math.Abs(shear) * columnHeight > ObjSlotClasses[colClass].W)
+            {
+                NoteColumnRefusal($"column {columnHeight:0}px shear {shear:0.00} count {count} "
+                    + $"refused by class {colClass} ({ObjSlotClasses[colClass].W}x{ObjSlotClasses[colClass].H})");
+                return false;
+            }
+            renderTarget = into ?? RentObjRT(graphicsDevice, colClass);
+            feetInRT = new Vector2(renderTarget.Width / 2f, renderTarget.Height - 8f);
             Matrix lean = ShearAbout(feetInRT, shear);
             try
             {
@@ -912,8 +1086,12 @@ namespace SDVRadiance
                         sources[i], Color.Black, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
                 _renderTargetSpriteBatch.End();
                 _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
-                _renderTargetSpriteBatch.Draw(_propGradientTexture!, new Rectangle(0, (int)(feetInRT.Y - columnHeight), ObjRtW, (int)columnHeight), Color.White);
+                _renderTargetSpriteBatch.Draw(_propGradientTexture!, new Rectangle(0, (int)(feetInRT.Y - columnHeight), renderTarget.Width, (int)columnHeight), Color.White);
                 _renderTargetSpriteBatch.End();
+                BlurSlotInPlace(graphicsDevice, renderTarget);
+                _lastBakeContent = ContentBounds(new Vector2(feetInRT.X - 32f, feetInRT.Y - columnHeight),
+                    64f, columnHeight, feetInRT, shear, _bakeBlurPx, renderTarget.Width, renderTarget.Height);
+                FrameCost.Count(FrameCost.Counter.ObjectBakes);
                 return true;
             }
             catch
@@ -956,40 +1134,45 @@ namespace SDVRadiance
         }
 
         /// <summary>
-        /// A tuft of grass, cast blade by blade from the game's own layout (see <see cref="GrassArt"/>).
+        /// A tuft of grass: one shadow at the tuft's own centre, from the game's own layout
+        /// (see <see cref="GrassArt"/>).
         /// <para>
-        /// Blade by blade rather than one shadow for the tile, because a tuft is up to four separate
-        /// 15x20 sprites at jittered spots and a single silhouette in the middle of the tile would
-        /// sit under none of them. The blades share very few distinct source frames, so they share
-        /// bakes and the extra cost is draw calls, not bakes.
+        /// The centre is the mean of the blade anchors rather than the tile centre, because a tuft
+        /// is up to four 15x20 sprites at jittered spots and the middle of the TILE can sit under
+        /// none of them. One frame stands in for all the blades, so a whole meadow shares a handful
+        /// of bakes: the source rect varies only with the weed variant and the season offset.
         /// </para>
         /// <para>
         /// The cap is the shortest of any caster here. Grass is a hand's breadth tall; a shadow the
         /// length of a fence post's would read as a shrub.
         /// </para>
         /// </summary>
-        /// <summary>
-        /// Per-blade strength. A tuft is up to four blades whose bases sit within a few pixels of
-        /// each other, and four transparent shadows laid on top of one another are not four times
-        /// as dark - they are 1-(1-a)^4, which at full strength is very nearly opaque. Every other
-        /// caster here is one silhouette, so this is the only place that needs the discount.
-        /// </summary>
-        private const float GrassBladeAlpha = 0.62f;
-
         private void DrawGrassShadow(SpriteBatch spriteBatch, StardewValley.TerrainFeatures.Grass grass, Vector2 tile,
             float rot, float stretch, float alpha, float blur)
         {
+            // ONE shadow per tuft, not one per blade. The per-blade version was the single
+            // largest sprite-count driver in the mod: up to four EmitObj calls per grass tile
+            // put a meadow at four times the draws, four times the bake-cache keys (the cache
+            // sits within a handful of slots of its cap on an ordinary profile), and four
+            // times the fill - for four near-identical smudges stacked within a few pixels of
+            // each other, drawn at 0.62 alpha each precisely BECAUSE stacking four of them
+            // approached opaque. One silhouette at the tuft's own center, at full strength,
+            // is the same dark patch for a quarter of everything.
             if (!GrassArt.TryRead(grass, out int blades, out int[] which, out int[] ox, out int[] oy))
+                return;
+            if (blades <= 0)
                 return;
             Texture2D texture = grass.texture.Value;
             float depth = MathHelper.Clamp(((tile.Y + 1f) * 64f) / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
+            // Anchor at the mean of the blade anchors, so the shadow sits where the tuft
+            // actually leans rather than at the geometric tile center.
+            Vector2 at = Vector2.Zero;
             for (int i = 0; i < blades; i++)
-            {
-                Vector2 at = GrassArt.BladeAt(tile, i, ox, oy);
-                EmitObj(spriteBatch, texture, GrassArt.BladeShadowSource(grass, i, which),
-                    Game1.GlobalToLocal(Game1.viewport, at), GrassArt.BladeOrigin,
-                    alpha * GrassBladeAlpha, rot, stretch, depth, blur, ObjectHeadFade);
-            }
+                at += GrassArt.BladeAt(tile, i, ox, oy);
+            at /= blades;
+            EmitObj(spriteBatch, texture, GrassArt.BladeShadowSource(grass, 0, which),
+                Game1.GlobalToLocal(Game1.viewport, at), GrassArt.BladeOrigin,
+                alpha, rot, stretch, depth, blur, ObjectHeadFade);
         }
 
         /// <summary>Small forage lying on the ground (16x16) — a short leaning silhouette to ground it.</summary>

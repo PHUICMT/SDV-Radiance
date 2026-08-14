@@ -54,18 +54,26 @@ namespace SDVRadiance
 
         /// <summary>Resolve the 16�16 source art of a map tile (first frame for animated tiles).</summary>
         private bool TryTileArt(xTile.Layers.Layer? layer, int tx, int ty, out Texture2D texture, out Rectangle src)
-            => TryTileArt(layer, tx, ty, out texture, out src, out _);
+            => TryTileArt(layer, tx, ty, out texture, out src, out _, out _);
 
         /// <summary>As above, also reporting whether the tile is ANIMATED � animation is a strong
         /// "this is water/flowing art" signal (fountains, waterfalls, the beach surf line).</summary>
         private bool TryTileArt(xTile.Layers.Layer? layer, int tx, int ty, out Texture2D texture, out Rectangle src, out bool animated)
+            => TryTileArt(layer, tx, ty, out texture, out src, out animated, out _);
+
+        /// <summary>As above, also reporting how the MAP turns the tile (see MapLayers.Orientation).
+        /// The source rect points at the upright art on the sheet; anything derived from those
+        /// pixels has to be turned by this before it can line up with what the player sees.</summary>
+        private bool TryTileArt(xTile.Layers.Layer? layer, int tx, int ty, out Texture2D texture, out Rectangle src, out bool animated, out byte orient)
         {
             texture = null!;
             src = default;
             animated = false;
+            orient = 0;
             if (layer == null || tx < 0 || ty < 0 || tx >= layer.LayerWidth || ty >= layer.LayerHeight)
                 return false;
             var t = layer.Tiles[tx, ty];
+            orient = MapLayers.Orientation(t);
             if (t is xTile.Tiles.AnimatedTile at && at.TileFrames is { Length: > 0 })
             {
                 t = at.TileFrames[0];
@@ -250,6 +258,18 @@ namespace SDVRadiance
             var r = OpaqueBits(texture, src);
             return (r.bits, r.count);
         }
+
+        /// <summary>Opacity bits turned the way the map places the tile. The count is unchanged by
+        /// a turn, so only the bits move. Caching stays keyed on the upright art: one sheet tile
+        /// can appear on a map both plain and mirrored, and both readings come off the same entry.</summary>
+        private (bool[] bits, int count) SolidBits(Texture2D texture, Rectangle src, byte orient)
+        {
+            var r = SolidBits(texture, src);
+            return orient == 0 ? r : (MapLayers.Orient(r.bits, orient), r.count);
+        }
+
+        private bool[] AnyAlphaBits(Texture2D texture, Rectangle src, byte orient)
+            => MapLayers.Orient(AnyAlphaBits(texture, src), orient);
 
         /// <summary>The same opacity bits WITHOUT the "mostly water-coloured ? not a structure"
         /// bail-out. Only for art a label has explicitly called ground: that guess is right for a
@@ -633,7 +653,7 @@ namespace SDVRadiance
             if (_spriteMaskRenderTarget == null || _spriteMaskRenderTarget.Width != w || _spriteMaskRenderTarget.Height != h)
             {
                 _spriteMaskRenderTarget?.Dispose();
-                _spriteMaskRenderTarget = new RenderTarget2D(_device, w, h, false, SurfaceFormat.Color, DepthFormat.None);
+                _spriteMaskRenderTarget = VramTally.Track(new RenderTarget2D(_device, w, h, false, SurfaceFormat.Color, DepthFormat.None), "water sprite mask");
             }
             _spriteMaskSpriteBatch ??= new SpriteBatch(_device);
 
@@ -705,33 +725,42 @@ namespace SDVRadiance
                     if (other.Who.isEmoting)
                         StampUiBox(spriteBatch, obb.Center.X, obb.Top - 160, 80, 128);
                 }
-                // The CAST POWER METER is drawn by FishingRod.draw in the world layer, so it is
-                // neither in the PlayerMask bake (FarmerRenderer only) nor stamped as a sprite -
-                // charging a cast over water waved the meter and made max casts a guess. Cover
-                // vanilla's spot (left of and above the farmer) generously; the box only exists
-                // for the fraction of a second the meter does.
-                if (pw?.CurrentTool is StardewValley.Tools.FishingRod castRod && castRod.isTimingCast)
+                // EVERYTHING THE GAME DRAWS FOR THE PLAYER'S TOOL. All of it lives in the world
+                // layer, outside the PlayerMask bake (which is the body only) and outside the
+                // sprite stamps, so anything held or swung over water waved with the water under
+                // it. Each piece stamps ITSELF, the same way crab pots do: whatever the game
+                // draws lands in the exclusion pixel for pixel.
+                //
+                // Two reports, opposite failures of the same gap, and both are fixed by widening
+                // this from "the fishing rod" to "the tool".
+                //
+                // The cast power meter used to be covered by a generous 288x240 box rather than
+                // its own shape, on the reasoning that it only shows for a fraction of a second.
+                // Holding the button to charge keeps it up far longer than that, and 288x240 is
+                // four and a half tiles by nearly four of SOLID exclusion. This mask is also what
+                // holds sprites out of the REFLECTION, so charging a cast punched a square hole in
+                // the reflections around the farmer: "when I have the reflection options and water
+                // features enabled, and I go fishing, the reflections disappear within a square
+                // radius". The meter now stamps its own pixels like everything else here.
+                //
+                // A swung axe, pickaxe, hoe or watering can had the opposite problem: the stamp
+                // ran only for a FishingRod, so no other tool was excluded at all and the water
+                // drew straight over it. Reported as "when swinging a tool where the tool crosses
+                // water, the tool renders under the water".
+                bool timingCast = pw?.CurrentTool is StardewValley.Tools.FishingRod rodTiming
+                                  && rodTiming.isTimingCast;
+                if (pw != null && (pw.UsingTool || timingCast))
                 {
-                    Rectangle pbb = pw.GetBoundingBox();
-                    StampUiBox(spriteBatch, pbb.Center.X, pbb.Top - 280, 288, 240);
-                }
-                // The rod itself, the line and the floating bobber are all drawn by
-                // FishingRod.draw in the world layer - outside the PlayerMask bake (body only)
-                // and the sprite stamps - so a rod held out over the river waved with the
-                // water beneath it. Let it stamp ITSELF, the same way crab pots do: whatever
-                // the game draws for it lands in the exclusion pixel for pixel.
-                if (pw?.UsingTool == true && pw.CurrentTool is StardewValley.Tools.FishingRod heldRod)
-                {
-                    try { heldRod.draw(spriteBatch); } catch { }
-                    // FishingRod.draw covers only the line and the bobber; the ROD STICK is a
-                    // tools-sheet sprite the game renders separately via Game1.drawTool - and
-                    // that helper draws through Game1.spriteBatch, not the batch it is handed.
-                    // Point Game1.spriteBatch at the mask batch for the one call so the stick
-                    // lands in the mask, and restore it no matter what.
+                    // Game1.drawTool renders through Game1.spriteBatch rather than the batch it is
+                    // handed, and FishingRod.draw reaches for it too, so point it at the mask batch
+                    // for the duration and restore it no matter what happens in between.
                     var gameBatch = Game1.spriteBatch;
                     try
                     {
                         Game1.spriteBatch = spriteBatch;
+                        // The rod carries the line, the bobber and the cast meter.
+                        if (pw.CurrentTool is StardewValley.Tools.FishingRod heldRod)
+                            heldRod.draw(spriteBatch);
                         Game1.drawTool(pw);
                     }
                     catch { }
@@ -848,14 +877,111 @@ namespace SDVRadiance
                             break;
                         // Bush: bottom-centre = (tile.X*64 + (eff+1)*32, (tile.Y+1)*64) � the shadow baker's anchor.
                         case StardewValley.TerrainFeatures.Bush bush when !bush.sourceRect.Value.IsEmpty:
-                            var bsrc = bush.sourceRect.Value;
-                            int eff = bush.size.Value switch { 3 => 0, 4 => 1, _ => bush.size.Value };
-                            spriteBatch.Draw(StardewValley.TerrainFeatures.Bush.texture.Value,
-                                Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + (eff + 1) * 32f, (tile.Y + 1) * 64f)),
-                                bsrc, Color.White, 0f, new Vector2(bsrc.Width / 2f, bsrc.Height), 4f,
-                                bush.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
+                            StampBushMask(bush, tile);
+                            break;
+                        // Everything the game still draws as a tree BELOW canopy stage: seeds,
+                        // sprouts, saplings, bush-stage growth, stumps. The case above takes only
+                        // stage 5 and up, so a sapling growing at the water's edge was left inside
+                        // the ripple and the effect ran over the plant. The shadow pass has taken
+                        // every stage since it was written, which is the asymmetry to watch for
+                        // here: the same object is a THING to one half of the mod and scenery to
+                        // the other. Same split that left buildings and the big bushes out.
+                        case StardewValley.TerrainFeatures.Tree small when small.texture?.Value != null:
+                            StampSmallTreeMask(small, tile);
+                            break;
+                        // A planted crop is a plant standing on the soil like any of the above.
+                        // Crop.draw puts origin (8,24) at drawPosition, and mirrors the sprite at
+                        // random, so both have to be reproduced or the carve lands beside the
+                        // plant rather than on it.
+                        case StardewValley.TerrainFeatures.HoeDirt { crop: { } crop }
+                             when !crop.forageCrop.Value && !crop.IsErrorCrop()
+                                  && crop.DrawnCropTexture != null && !crop.sourceRect.IsEmpty:
+                            spriteBatch.Draw(crop.DrawnCropTexture,
+                                Game1.GlobalToLocal(Game1.viewport, crop.drawPosition),
+                                crop.sourceRect, Color.White, 0f, new Vector2(8f, 24f), 4f,
+                                crop.flip.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
                             break;
                     }
+                }
+
+                // The BIG bushes live in a different list, which is the same split the reflection
+                // stamp had to learn: terrainFeatures is tile-keyed and holds the small stuff, while
+                // the decorative bushes a map places - and everything a content pack adds as
+                // scenery - are largeTerrainFeatures. The mirror was taught both lists and this mask
+                // was not, so a big bush overhanging a bank stayed inside the ripple and shimmered
+                // like the water it was standing in, while the planted bush beside it, identical to
+                // look at, sat still. Same list, same anchor, same cull radius as the mirror.
+                foreach (var ltf in location.largeTerrainFeatures)
+                {
+                    if (ltf is not StardewValley.TerrainFeatures.Bush lbush || lbush.sourceRect.Value.IsEmpty)
+                        continue;
+                    Vector2 ltile = lbush.Tile;
+                    if (!WaterWithinTiles((int)ltile.X, (int)ltile.Y + 4, 7))
+                        continue;
+                    StampBushMask(lbush, ltile);
+                }
+
+                // Buildings. A shed or a coop at the water's edge is an entity drawn from its own
+                // texture, so nothing above could see it, and the ripple ran straight through the
+                // building: reported as "notice the effect on the water behind" with a before and
+                // after shot of placing a coop. The mirror learned buildings and this mask did not,
+                // the same split the bushes above had.
+                //
+                // Building.draw pins the art's bottom-LEFT corner at
+                // (tileX*64, (tileY + tilesHigh)*64) + DrawOffset*4 at scale 4, so the top-left the
+                // stamp needs is that base line minus the source height. One under construction or
+                // mid-move is not drawn, so it must not be masked either.
+                foreach (var bld in location.buildings)
+                {
+                    if (bld?.texture?.Value == null || bld.isMoving || bld.daysOfConstructionLeft.Value > 0)
+                        continue;
+                    Rectangle bsrcRect = bld.getSourceRect();
+                    if (bsrcRect.IsEmpty)
+                        continue;
+                    Vector2 bOffset = (bld.GetData()?.DrawOffset ?? Vector2.Zero) * 4f;
+                    float bLeftX = bld.tileX.Value * 64f + bOffset.X;
+                    float bBaseY = (bld.tileY.Value + bld.tilesHigh.Value) * 64f + bOffset.Y;
+                    // Same reach the mirror uses: a barn is six source tiles tall, so its art covers
+                    // water a long way above the tile it is filed under.
+                    if (!WaterWithinTiles((int)((bLeftX + bsrcRect.Width * 2f) / 64f), (int)(bBaseY / 64f) - 3, 9))
+                        continue;
+                    spriteBatch.Draw(bld.texture.Value,
+                        Game1.GlobalToLocal(Game1.viewport, new Vector2(bLeftX, bBaseY - bsrcRect.Height * 4f)),
+                        bsrcRect, Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
+                }
+
+                // Bush: bottom-centre = (tile.X*64 + (eff+1)*32, (tile.Y+1)*64), the shadow baker's anchor.
+                // Pre-canopy tree stages, from Tree.draw's own source rects (the same table the
+                // shadow baker reads). Bottom-centred on the tile's bottom edge rather than
+                // reproducing vanilla's per-stage pin: these sprites are 16x16 or 16x32, so at
+                // scale 4 the stamp covers its tile, and a carve that covers slightly more than
+                // the plant costs nothing while one that covers slightly less leaves the ripple
+                // running across a leaf, which is the thing being fixed.
+                void StampSmallTreeMask(StardewValley.TerrainFeatures.Tree t, Vector2 at)
+                {
+                    Rectangle src = t.stump.Value
+                        ? new Rectangle(32, 96, 16, 32)
+                        : t.growthStage.Value switch
+                        {
+                            0 => new Rectangle(32, 128, 16, 16),   // seed
+                            1 => new Rectangle(0, 128, 16, 16),    // sprout
+                            2 => new Rectangle(16, 128, 16, 16),   // sapling
+                            _ => new Rectangle(0, 96, 16, 32),     // bush stage (3-4)
+                        };
+                    spriteBatch.Draw(t.texture.Value,
+                        Game1.GlobalToLocal(Game1.viewport, new Vector2(at.X * 64f + 32f, (at.Y + 1) * 64f)),
+                        src, Color.White, 0f, new Vector2(src.Width / 2f, src.Height), 4f,
+                        t.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
+                }
+
+                void StampBushMask(StardewValley.TerrainFeatures.Bush b, Vector2 at)
+                {
+                    var bsrc = b.sourceRect.Value;
+                    int eff = b.size.Value switch { 3 => 0, 4 => 1, _ => b.size.Value };
+                    spriteBatch.Draw(StardewValley.TerrainFeatures.Bush.texture.Value,
+                        Game1.GlobalToLocal(Game1.viewport, new Vector2(at.X * 64f + (eff + 1) * 32f, (at.Y + 1) * 64f)),
+                        bsrc, Color.White, 0f, new Vector2(bsrc.Width / 2f, bsrc.Height), 4f,
+                        b.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
                 }
 
                 spriteBatch.End();

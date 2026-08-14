@@ -723,7 +723,12 @@ namespace SDVRadiance
         private GameLocation? _windowCacheLocation;
         private int _windowLabelVersion = -1;
         private readonly List<Vector2> _windowTiles = new();   // world-px centres of window tiles
-        private static readonly string[] _windowLayerNames = { "Front", "Buildings", "Back" };
+        // Every drawn layer, TOP to BOTTOM (Front wins over Buildings over Back), from the shared
+        // sort key. It used to be the three bare names, which missed Back2 / negative-suffix /
+        // numbered layers outright, and ran in declaration order — the labeler and the mask now
+        // both read the same order this scan does.
+        private static List<xTile.Layers.Layer> WindowLayersTopToBottom(xTile.Map? map)
+            => MapLayers.RenderedLayers(map, topToBottom: true);
 
         /// <summary>Scan the whole map ONCE per location (or when labels reload) for window
         /// tiles, caching their world-pixel centres. Cheap enough as a one-off.</summary>
@@ -734,18 +739,19 @@ namespace SDVRadiance
             if (ReferenceEquals(location, _windowCacheLocation) && ver == _windowLabelVersion)
                 return;
             _windowCacheLocation = location; _windowLabelVersion = ver; _windowTiles.Clear();
-            var layer = location?.map?.Layers.Count > 0 ? location.map.Layers[0] : null;
+            var map = location.map;
+            var layer = map != null && map.Layers.Count > 0 ? map.Layers[0] : null;
             // Windows are 100% label-driven: no labels loaded (version 0 = empty DB) means no window
             // can exist, so skip the whole-map scan entirely. Without this we paid a w×h×3-layer scan
             // on every location change even though it could never find anything.
-            if (labels == null || layer == null || ver == 0)
+            if (labels == null || layer == null || map == null || ver == 0)
                 return;
             int w = layer.LayerWidth, h = layer.LayerHeight;
-            _monitor.Log($"[location] window scan start: {location?.NameOrUniqueName} {w}x{h}", LogLevel.Trace);
+            _monitor.Log($"[location] window scan start: {location.NameOrUniqueName} {w}x{h}", LogLevel.Trace);
             var windowScanStopwatch = System.Diagnostics.Stopwatch.StartNew();
-            // Resolve each layer once instead of per tile: this is a w×h×3 walk.
-            var winLayers = new xTile.Layers.Layer?[_windowLayerNames.Length];
-            for (int i = 0; i < _windowLayerNames.Length; i++) winLayers[i] = location?.map?.GetLayer(_windowLayerNames[i]);
+            // Resolve every drawn layer once instead of per tile: this is a w×h walk over however
+            // many drawn layers the map carries, top to bottom.
+            var winLayers = WindowLayersTopToBottom(map).ToArray();
             for (int ty = 0; ty < h; ty++)
                 for (int tx = 0; tx < w; tx++)
                 {
@@ -846,8 +852,11 @@ namespace SDVRadiance
         private int _emissiveLabelVersion = -1;
         private float _daylightPoolDamping = 1f;   // outdoor midday sink shared by lamp pools and emissive
         private readonly List<(Vector2 Pos, Vector3 Col, float Amt)> _emissiveTiles = new();
-        private static readonly string[] _emissiveLayerNames = { "Front", "Buildings", "Back" };
         private const int EmitMinPixels = 6;    // below this it is a stray dab, not a light
+        // Same lesson as the window scan: every drawn layer, top to bottom, never the three bare
+        // names. A map carrying emissive art on Back2 or a negative-suffix layer must light it.
+        private static List<xTile.Layers.Layer> EmissiveLayersTopToBottom(xTile.Map? map)
+            => MapLayers.RenderedLayers(map, topToBottom: true);
 
         private void EnsureEmissiveCache(GameLocation location)
         {
@@ -865,8 +874,7 @@ namespace SDVRadiance
             // ART, which is a GPU readback the first time a tilesheet is touched.
             _monitor.Log($"[location] emissive scan start: {location.NameOrUniqueName} {w}x{h}", LogLevel.Trace);
             var emissiveScanStopwatch = System.Diagnostics.Stopwatch.StartNew();
-            var emitLayers = new xTile.Layers.Layer?[_emissiveLayerNames.Length];
-            for (int i = 0; i < _emissiveLayerNames.Length; i++) emitLayers[i] = location.map.GetLayer(_emissiveLayerNames[i]);
+            var emitLayers = EmissiveLayersTopToBottom(location.map).ToArray();
 
             for (int ty = 0; ty < h; ty++)
                 for (int tx = 0; tx < w; tx++)
@@ -992,9 +1000,15 @@ namespace SDVRadiance
         private static Vector3 ComputeLightingAmbient(ModConfig config)
         {
             bool outdoors = Game1.currentLocation?.IsOutdoors ?? false;
+            // The game dims indoor ambient for the NIGHT; we must not pile darkening on top of
+            // that or a room goes black. A daytime storm only tints ambient slightly, and the
+            // morning/afternoon dim is ours to keep - so honour the game's ambient only when it
+            // is actually night, not whenever a weather tint drifts off white (1115938: clear
+            // morning dark, stormy morning flat-bright, the inverse of daylight).
+            bool itIsNight = GameClock.MinutesNow() >= ShadowRenderer.TrulyDarkMinutes() - 60f;
             bool vanillaLit = outdoors
                 || Game1.currentLocation is StardewValley.Locations.MineShaft
-                || !Game1.ambientLight.Equals(Color.White);
+                || (itIsNight && !Game1.ambientLight.Equals(Color.White));
             if (vanillaLit)
                 return Vector3.One;
 
@@ -1008,11 +1022,10 @@ namespace SDVRadiance
             // lowest. It now holds through 06:00 and lifts over the next two hours, so waking
             // up happens in a dim room that brightens while the morning gets going (asked for
             // on Nexus, against Gentle Night Lighting as the reference).
-            // A QUARTER of the night term, not all of it: the sun is up at six, just low. At
-            // full strength the arithmetic lands on the same clamp as 20:00, so waking up would
-            // have looked exactly like midnight - dim is the ask, dark is a bug report.
-            const float MorningDimShare = 0.25f;
-            float morningRamp = MorningDimShare * (1f - GameClock.RampAt(700, 60f));
+            // The morning share became its own slider (LightingMorningDarkness, default 0.25 =
+            // the historical quarter) so the waking darkness can be tuned. The sun is up at six,
+            // just low, so the default keeps "dim is the ask, dark is a bug report".
+            float morningRamp = config.LightingMorningDarkness * (1f - GameClock.RampAt(700, 60f));
             float nightRamp = Math.Max(GameClock.RampAt(1900), morningRamp);
             dark = MathHelper.Clamp(dark + config.LightingNightDarkness * nightRamp, 0f, 0.95f);
 
@@ -1027,6 +1040,20 @@ namespace SDVRadiance
         /// Aligned to the viewport exactly like the water mask. Returns false (skipping
         /// shadows) when there are no occluders on screen.
         /// </summary>
+        /// <summary>The pixels last handed to the GPU, so an unchanged mask is not sent again.</summary>
+        private Color[]? _occluderMaskUploaded;
+        private int _occluderUploadedCount;
+
+        private bool SameOccluderContent(int count)
+        {
+            if (_occluderMaskUploaded == null || _occluderUploadedCount != count)
+                return false;
+            for (int i = 0; i < count; i++)
+                if (_occluderMaskPixels![i] != _occluderMaskUploaded[i])
+                    return false;
+            return true;
+        }
+
         private bool BuildOccluderMask(int w, int h)
         {
             GameLocation? location = Game1.currentLocation;
@@ -1074,12 +1101,31 @@ namespace SDVRadiance
             if (!hasAnyOccluders)
                 return false;
 
-            if (_occluderMask == null || _occluderMask.Width != tilesW || _occluderMask.Height != tilesH)
+            bool sizeChanged = _occluderMask == null || _occluderMask.Width != tilesW || _occluderMask.Height != tilesH;
+            if (sizeChanged)
             {
                 _occluderMask?.Dispose();
-                _occluderMask = new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color);
+                _occluderMask = VramTally.Track(new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color), "light occluder mask");
             }
-            _occluderMask.SetData(_occluderMaskPixels, 0, count);
+            // UPLOAD ONLY WHAT CHANGED. The throttle above stops the grid being rebuilt more than
+            // every third tick, but it did not stop the RESULT being pushed to the card, so a
+            // player standing still re-uploaded an identical mask twenty times a second. That
+            // upload is a GPU-side cost with no CPU-side signature, which is how it hid: the
+            // build timer reads a few microseconds and the setting still prices at 0.19 ms, the
+            // most expensive thing left in the mod.
+            //
+            // The flood path already learned this and gates on content; the classic path never
+            // got the same treatment. Comparing the bytes costs a walk of a grid we have just
+            // walked anyway, against a texture transfer and whatever the driver does to a
+            // resource the GPU may still be reading.
+            if (_occluderMask != null && (sizeChanged || !SameOccluderContent(count)))
+            {
+                _occluderMask.SetData(_occluderMaskPixels, 0, count);
+                if (_occluderMaskUploaded == null || _occluderMaskUploaded.Length < count)
+                    _occluderMaskUploaded = new Color[count];
+                Array.Copy(_occluderMaskPixels, _occluderMaskUploaded, count);
+                _occluderUploadedCount = count;
+            }
             _occluderMaskBuildMode = 1;
             _occluderTileX = startTileX;
             _occluderTileY = startTileY;
@@ -1220,7 +1266,7 @@ namespace SDVRadiance
             if (_floodOccluderMask == null || _floodOccluderMask.Width != tilesW || _floodOccluderMask.Height != tilesH)
             {
                 _floodOccluderMask?.Dispose();
-                _floodOccluderMask = new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color);
+                _floodOccluderMask = VramTally.Track(new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color), "flood occluder mask");
             }
             _floodOccluderMask.SetData(_floodOccluderMaskPixels, 0, count);
             _floodOccluderMaskSize = new Vector2(tilesW, tilesH);

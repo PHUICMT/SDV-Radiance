@@ -284,7 +284,7 @@ namespace SDVRadiance
             double ms = 0;
             try
             {
-                _gpuProbeRenderTarget ??= new RenderTarget2D(_device, 1, 1, false, target.Format, DepthFormat.None);
+                _gpuProbeRenderTarget ??= VramTally.Track(new RenderTarget2D(_device, 1, 1, false, target.Format, DepthFormat.None), "gain probe");
                 long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                 _device.SetRenderTarget(_gpuProbeRenderTarget);
                 spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp);
@@ -411,7 +411,7 @@ namespace SDVRadiance
         {
             try
             {
-                _gainProbeRenderTarget ??= new RenderTarget2D(_device, 32, 32, false, SurfaceFormat.Color, DepthFormat.None);
+                _gainProbeRenderTarget ??= VramTally.Track(new RenderTarget2D(_device, 32, 32, false, SurfaceFormat.Color, DepthFormat.None), "luminance");
                 _gainProbePixels ??= new Color[32 * 32];
                 _device.SetRenderTarget(_gainProbeRenderTarget);
                 spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp);
@@ -634,8 +634,57 @@ namespace SDVRadiance
             _cloudMaskTick = int.MinValue;   // whatever the new target holds, it is not a sky
         }
 
+        private int _chainIdleFrames;
+
+        /// <summary>
+        /// Hand the chain's working buffers back when the whole stack is switched off.
+        ///
+        /// <para>
+        /// Six targets, three of them full-screen: about 25 MB at 1707x960 and more on a bigger
+        /// display. They were allocated on the first frame that drew anything and then held for
+        /// the session, including for a player who had turned every effect off - the same
+        /// never-disposed pattern as the shadow and water pools, and the same reason it went
+        /// unnoticed, which is that memory held costs no time and no timer here measures it.
+        /// </para>
+        ///
+        /// <para>Cheap to rebuild (one allocation, no content), so the delay is short. Placed on
+        /// the inactive-stack return path deliberately: that is the path a switched-off mod
+        /// takes every frame, which is exactly where the release has to be able to run.</para>
+        /// </summary>
+        internal void ReleaseIdleChainTargets(bool wanted)
+        {
+            const int IdleTicksBeforeRelease = 300;       // five seconds at the game's 60 Hz tick
+            if (wanted)
+            {
+                _chainIdleFrames = 0;
+                return;
+            }
+            if (_sceneRenderTarget == null)
+                return;
+            if (++_chainIdleFrames < IdleTicksBeforeRelease)
+                return;
+            _chainIdleFrames = 0;
+            try { _sceneRenderTarget?.Dispose(); } catch { }
+            try { _fullResolutionPingA?.Dispose(); } catch { }
+            try { _fullResolutionPingB?.Dispose(); } catch { }
+            try { _halfResolutionScratchA?.Dispose(); } catch { }
+            try { _halfResolutionScratchB?.Dispose(); } catch { }
+            try { _cloudMaskKeep?.Dispose(); } catch { }
+            _sceneRenderTarget = _fullResolutionPingA = _fullResolutionPingB = null;
+            _halfResolutionScratchA = _halfResolutionScratchB = _cloudMaskKeep = null;
+            // EnsureTargets keys off the scene target being the right size; a null one rebuilds
+            // the set, and the cloud mask must not be read as a sky it no longer holds.
+            _cloudMaskTick = int.MinValue;
+        }
+
+        /// <summary>The chain's own working targets: two full-res ping-pong buffers, the scene
+        /// capture, and three half-res scratches. Tracked because the first VRAM sweep missed
+        /// them entirely - the tally was applied by a script that looked for "new RenderTarget2D",
+        /// and this one is target-typed - so the 130.7 MB first measured was itself an
+        /// understatement by about a fifth.</summary>
         private RenderTarget2D CreateRenderTarget(int w, int h, SurfaceFormat format) =>
-            new(_device, w, h, false, format, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
+            VramTally.Track(new RenderTarget2D(_device, w, h, false, format, DepthFormat.None, 0,
+                RenderTargetUsage.PreserveContents), "effect chain buffers");
 
         public void Apply(SpriteBatch spriteBatch, ModConfig config)
         {
@@ -1028,6 +1077,8 @@ namespace SDVRadiance
                     double gpuMs = ProbeGpuTime(spriteBatch, target, w, h);
                     if (BenchRunning)
                         BenchTick(config, gpuMs);
+                    else if (EffectCostRunning)
+                        EffectCostTick(config, gpuMs);
                 }
 
                 // Last thing in the frame, so the capture is the finished picture (skip button

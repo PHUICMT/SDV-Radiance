@@ -1,72 +1,57 @@
-# Pull the newest HF Studio label export into the mod, verify it, and build.
+# Fold the newest HF Studio label export into the mod's label DB, then build.
 #
-# Labels are read once at startup now, so painting in the browser no longer shows up live: the
-# loop is export-all in HF Studio -> run this -> relaunch. Verification is the point of the
-# script, not the copy: a truncated or empty export used to deploy silently and the water simply
-# went back to colour guessing with nothing in the log to say why.
+# Labels are read once at startup, so painting in the browser does not show up live: the loop is
+# paint -> run this -> relaunch.
+#
+# This USED to copy the export over labels\water-labels.json. That is only correct while the
+# export is a superset of what ships, and on 2026-08-14 it stopped being one: the export had
+# 2,095 new liquid tiles but had also lost a whole sheet's glass (renamed with a leading dot and
+# emptied) and 9 winter veto tiles, and a copy would have taken the loss silently. The old
+# verification could not have caught either one - it counted painted pixels, and veto tiles have
+# none. So the merge, and the decision about what wins, now lives in one place that can explain
+# itself:
+#
+#   tools\labelops\mergelabels.py   - export wins conflicts, DB fills gaps, nothing is dropped
 #
 #   .\tools\sync-labels.ps1              # newest radiance-labels*.json from Documents\HF-Studio
-#   .\tools\sync-labels.ps1 -NoBuild     # copy + verify only
+#   .\tools\sync-labels.ps1 -NoBuild     # merge only
+#   .\tools\sync-labels.ps1 -DryRun      # report what the merge would do, write nothing
 #   .\tools\sync-labels.ps1 -Source path\to\export.json
 
 [CmdletBinding()]
 param(
     [string] $Source,
     [switch] $NoBuild,
+    [switch] $DryRun,
+    [string] $Python,
     [ValidateSet('Debug', 'Release')] [string] $Configuration = 'Debug'
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$dest = Join-Path $root 'labels\water-labels.json'
+$merge = Join-Path $PSScriptRoot 'labelops\mergelabels.py'
 
-if (-not $Source) {
-    $studio = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'HF-Studio'
-    # The labeler's AUTO export lands in HF-Studio\labels\, not the root: searching the root only
-    # meant every sync silently used the last MANUAL "Export all" and threw away hours of painting
-    # that the auto-save had already written. Search both, newest wins.
-    $newest = Get-ChildItem -Path $studio, (Join-Path $studio 'labels') -Filter 'radiance-labels*.json' -ErrorAction SilentlyContinue |
-              Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if (-not $newest) { throw "No radiance-labels*.json in $studio (or $studio\labels). Export all sheets from HF Studio first." }
-    $Source = $newest.FullName
-}
-if (-not (Test-Path $Source)) { throw "Not found: $Source" }
-
-Write-Host "source  $Source" -ForegroundColor Cyan
-Write-Host ("        {0:n2} MB, written {1}" -f ((Get-Item $Source).Length / 1MB), (Get-Item $Source).LastWriteTime)
-
-# ---- verify BEFORE overwriting: a bad export must not replace a good one -------------------
-$json = Get-Content $Source -Raw | ConvertFrom-Json
-if (-not $json.sheets) { throw "No 'sheets' object: this is not an export-all file." }
-
-$sheetNames = $json.sheets.PSObject.Properties.Name
-$tiles = 0
-$hist = @{}
-foreach ($n in $sheetNames) {
-    $t = $json.sheets.$n.tiles
-    if (-not $t) { continue }
-    foreach ($p in $t.PSObject.Properties) {
-        $tiles++
-        foreach ($b in [Convert]::FromBase64String($p.Value)) {
-            if ($b -ne 0) { $hist[$b] = 1 + $(if ($hist.ContainsKey($b)) { $hist[$b] } else { 0 }) }
-        }
+if (-not $Python) {
+    foreach ($candidate in @('py', 'python', 'python3')) {
+        $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($cmd) { $Python = $cmd.Source; break }
     }
 }
-if ($tiles -eq 0) { throw "Export contains 0 painted tiles: refusing to overwrite $dest." }
+if (-not $Python) { throw 'No python on PATH. Pass -Python <path to python.exe>.' }
 
-$names = @{ 1 = 'water'; 9 = 'ice'; 10 = 'falling'; 11 = 'lava'; 12 = 'window'; 4 = 'deck' }
-Write-Host ("sheets  {0}" -f $sheetNames.Count) -ForegroundColor Green
-Write-Host ("tiles   {0}" -f $tiles) -ForegroundColor Green
-foreach ($k in ($hist.Keys | Sort-Object)) {
-    $label = if ($names.ContainsKey([int]$k)) { $names[[int]$k] } else { "class $k" }
-    Write-Host ("        {0,-8} {1,12:n0} px" -f $label, $hist[$k])
+$mergeArgs = @($merge)
+if ($Source) {
+    if (-not (Test-Path $Source)) { throw "Not found: $Source" }
+    $mergeArgs += @('--export', $Source)
 }
+if ($DryRun) { $mergeArgs += '--dry-run' }
 
-New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
-Copy-Item $Source $dest -Force
-Write-Host "copied  -> $dest" -ForegroundColor Green
+# The merge refuses to write when a single tile the mod already ships would go missing, so a
+# non-zero exit here means the DB was left exactly as it was.
+& $Python @mergeArgs
+if ($LASTEXITCODE -ne 0) { throw "mergelabels.py failed ($LASTEXITCODE): labels\water-labels.json untouched." }
 
-if ($NoBuild) { return }
+if ($DryRun -or $NoBuild) { return }
 
 # The DLL is locked while the game runs, so a build would fail halfway through deploying.
 $running = Get-Process -Name 'Stardew Valley', 'StardewModdingAPI' -ErrorAction SilentlyContinue

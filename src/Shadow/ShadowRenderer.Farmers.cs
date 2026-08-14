@@ -210,14 +210,14 @@ namespace SDVRadiance
                     // PreserveContents, for the same reason every persistent bake target here
                     // needs it: a cached target on DiscardContents decays into garbage between
                     // frames instead of holding the pose it was baked with.
-                    bake.Mask ??= new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
-                        SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
+                    bake.Mask ??= VramTally.Track(new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
+                        SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "farmer bakes (co-op)");
                     previous ??= graphicsDevice.GetRenderTargets();
                     BakeFarmerSilhouette(graphicsDevice, who, src, bake.Mask, out Vector2 feetInRt);
                     if (reflectionNeedsFarmers)
                     {
-                        bake.Color ??= new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
-                            SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
+                        bake.Color ??= VramTally.Track(new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
+                            SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "farmer bakes (co-op)");
                         BakeFarmerColour(graphicsDevice, who, src, bake.Color);
                     }
                     bake.ColorFresh = reflectionNeedsFarmers;

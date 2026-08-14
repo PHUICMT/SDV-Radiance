@@ -68,6 +68,15 @@ struct PixelInput
 // occluder along the ray (max) sets how shadowed the pixel is. Samples very
 // near the light are faded out so a light mounted ON an occluder tile (sconce,
 // window) doesn't shadow its own glow.
+// THE STEP COUNT IS NOT WHERE THE COST IS. Measured, twice, so nobody spends the afternoon
+// on it again: the "light shadows" setting prices at 0.19 ms, more than every other effect
+// combined, and it looks exactly like a march cost - fourteen texture fetches per light per
+// pixel, for every light reaching that pixel. It is not. Sizing the loop by the distance in
+// mask tiles (three or four steps for the common close light) changed nothing; halving it to
+// a flat seven changed nothing either. Both readings came back inside the noise on three
+// scenes. The target here is ps_4_0_level_9_1, where the compiler flattens this loop whatever
+// it is written as, and the samples are hitting a tiny per-tile texture that lives in cache.
+// The money is elsewhere - look at what turning the setting OFF skips on the C# side.
 float ShadowFactor(float2 uv, float2 lightUv)
 {
     if (ShadowStrength <= 0.001)
