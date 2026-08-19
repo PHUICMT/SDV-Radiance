@@ -80,8 +80,18 @@ float DirectCount;       // how many entries are live
 // the slot itself - so the ranked leaders keep their shadows and everything behind them
 // still gets its circle of light. A row of shop windows now all light the floor; the
 // two or three that matter most are the ones that also cast.
-float4 SoftPosArr[16];   // xy = UV, z = flame flag
-float4 SoftColArr[16];
+// FORTY, not sixteen. The two tiers together are the shader's whole light budget, and a room
+// offering more lights than that budget cannot be lit without evicting some: the ranking then
+// hands the last slots back and forth as the camera moves, and every handover is a pool fading
+// out here and another fading in there - the "it looks like a light just switched on" report,
+// walked to and marked frame by frame in the saloon (29-32 candidates against 24 slots) and in
+// town at night (30-50). The cure is a budget the ordinary scene never fills, so the array only
+// changes at its far edge, where a light's pool has already tapered to nothing. Each slot below
+// is skipped in one branch where its pool cannot touch the pixel, so an empty or distant slot
+// costs a test and nothing else.
+#define SOFT_LIGHTS 40
+float4 SoftPosArr[SOFT_LIGHTS];   // xy = UV, z = flame flag
+float4 SoftColArr[SOFT_LIGHTS];
 float SoftCount;
 float Aspect;            // w/h so light pools stay round
 float ShadowStrength;    // 0..1 how dark a fully occluded ray gets
@@ -292,6 +302,15 @@ float4 FloodPS(PixelInput input) : SV_TARGET
         [branch]
         if (on * att > 0.004)
         {
+            // How much of this light's own shadow to apply. Only the first eight lights get a
+            // shadow ray at all, and which eight changes as the camera moves, so switching it on
+            // and off at the boundary made a pool flip between shadowed and flat in a single
+            // frame - reported as a flicker while walking, in town and indoors alike, and traced
+            // to here after every other stage was cleared by switching it off and finding the
+            // flicker still there. The weight is eased on the CPU and rides in .w, so a light
+            // arriving in this tier starts identical to the tier below it and grows a shadow
+            // instead of gaining one.
+            float shadowW = LightPosArr[li].w;
             float occ = 0.0;
             [unroll]
             for (int s = 1; s <= 12; s++)
@@ -302,7 +321,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
                 float wgt = smoothstep(0.06, 0.28, f) * smoothstep(1.02, 0.86, f);
                 occ = max(occ, OccAt(lerp(lp, uv, f)) * wgt);
             }
-            float lit01 = att * (1.0 - occ * ShadowStrength);
+            float lit01 = att * (1.0 - occ * ShadowStrength * shadowW);
             // BLACKBODY WALK, flames only: real firelight is not one colour, it is a gradient -
             // near white at the source, gold a step out, deep warm at the tail. One flat orange
             // over the whole pool is most of why a fire reads as a painted circle instead of a
@@ -327,18 +346,18 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             // lamps from adding up into a wash. Same reason the emitter term below uses max.
             float attP = saturate(1.0 - dist / max(lc.w * 0.6, 0.02));
             float peak = max(max(lc.r, lc.g), max(lc.b, 0.0001));
-            float3 poolHere = (lc.rgb / peak) * (attP * attP) * (1.0 - occ * ShadowStrength);
+            float3 poolHere = (lc.rgb / peak) * (attP * attP) * (1.0 - occ * ShadowStrength * shadowW);
             pool = max(pool, poolHere);
             firePool = max(firePool, poolHere * LightPosArr[li].z);
             float attE = saturate(1.0 - dist / max(lc.w * 0.12, 0.004));
             emitter = max(emitter, attE * attE * LightPosArr[li].z);
             float attH = saturate(1.0 - dist * TilesPerScreen.y / HearthCircleTiles);
-            hearthLit = max(hearthLit, attH * attH * (1.0 - occ * ShadowStrength) * LightPosArr[li].z);
+            hearthLit = max(hearthLit, attH * attH * (1.0 - occ * ShadowStrength * shadowW) * LightPosArr[li].z);
         }
     }
     // Second tier: pools only, no ray. Same maths as above with the march left out.
     [unroll]
-    for (int si = 0; si < 16; si++)
+    for (int si = 0; si < SOFT_LIGHTS; si++)
     {
         float son = step((float)si + 0.5, SoftCount);
         float4 sc = SoftColArr[si];
@@ -347,6 +366,12 @@ float4 FloodPS(PixelInput input) : SV_TARGET
         float sdist = length(sdv);
         float sa = saturate(1.0 - sdist / max(sc.w, 0.02));
         sa = sa * (0.55 + 0.45 * sa) * son;
+        // Every term below is zero when the pool does not reach this pixel (the hearth circle
+        // is inside every fire's reach, and only fires have one), so the branch is exact and an
+        // empty slot costs a distance test. Without it forty slots would price like forty lights.
+        [branch]
+        if (sa <= 0.0)
+            continue;
         // Same blackbody walk as the shadowed tier above.
         float softCoreT = saturate(1.0 - sdist / max(sc.w * 0.30, 0.01));
         softCoreT = softCoreT * softCoreT * SoftPosArr[si].z;

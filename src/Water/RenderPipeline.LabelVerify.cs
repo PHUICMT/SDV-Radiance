@@ -124,9 +124,6 @@ namespace SDVRadiance
             int tilesW = _waterMask.Width / Texels, tilesH = _waterMask.Height / Texels;
             int pw = _waterMask.Width;
             int pcount = pw * _waterMask.Height;
-            if (_labelDiffPixels == null || _labelDiffPixels.Length < pcount)
-                _labelDiffPixels = new Color[pcount];
-            Array.Clear(_labelDiffPixels, 0, pcount);
 
             // Every layer the game draws, BOTTOM to TOP from the one shared sort key, so this
             // verifier reads the same layer order the compose and the map dump publish. It used to
@@ -137,10 +134,34 @@ namespace SDVRadiance
             if (layers.Length == 0)
                 return "[verify] no rendered layers on this map";
 
-            long labeledOpinionPixels = 0, agreeLiquid = 0, agreeDry = 0, hiddenPixels = 0;
-            long missingWater = 0, falseWater = 0;
-            long glassPixels = 0, glassMirrored = 0;
-            long deckSkipped = 0;
+            LabelScanTally tally = ScanLabelWindow(location, labels, maskPixels, layers, tilesW, tilesH, pw, pcount);
+
+            UploadLabelDiffTexture(pcount);
+            return BuildVerifyReport(location, tally, tilesW, tilesH, worstToList);
+        }
+
+        /// <summary>What one pass of the label scan counted. The fields carry the scan's own
+        /// local names so the report below still reads the way it did.</summary>
+        private sealed class LabelScanTally
+        {
+            public long labeledOpinionPixels, agreeLiquid, agreeDry, hiddenPixels;
+            public long missingWater, falseWater, glassPixels, glassMirrored, deckSkipped;
+            public Dictionary<byte, long> missingByClass = new();
+            public List<(int tx, int ty, int miss, int falsePx)> perTile = new();
+        }
+
+        /// <summary>Walk every tile of the mask window, resolve what the labels say each pixel is,
+        /// and compare that with what the composed mask holds. Paints the labeldiff overlay as it
+        /// goes and returns the tally.</summary>
+        private LabelScanTally ScanLabelWindow(GameLocation location, LabelStore labels, Color[] maskPixels,
+                                               xTile.Layers.Layer[] layers, int tilesW, int tilesH,
+                                               int pw, int pcount)
+        {
+            const int Texels = 16;
+            if (_labelDiffPixels == null || _labelDiffPixels.Length < pcount)
+                _labelDiffPixels = new Color[pcount];
+            Array.Clear(_labelDiffPixels, 0, pcount);
+            var tally = new LabelScanTally();
             // Walk-on DECKS are excluded from the tally, not scored. A bridge's railing slots and
             // its painted shadow are see-through, so this rule ("the topmost layer whose art is
             // opaque decides; otherwise the water below shows") calls them water and the mask
@@ -148,11 +169,8 @@ namespace SDVRadiance
             // Scoring them anyway parked a permanent few-hundred-pixel MISSING count on every
             // river map, which is exactly the size of shortfall a real regression would show.
             var deckSurfaces = SurfaceMap.For(location);
-            var missingByClass = new Dictionary<byte, long>();
-            var perTile = new List<(int tx, int ty, int miss, int falsePx)>();
             var tileLabelBuf = new byte[layers.Length][];
             var tileOpaqueBuf = new bool[]?[layers.Length];
-
             for (int ty = 0; ty < tilesH; ty++)
             {
                 int worldTy = _lastWaterTileY + ty;
@@ -185,6 +203,25 @@ namespace SDVRadiance
                         continue;
                     if (deckSurfaces != null && deckSurfaces.GetSurface(worldTx, worldTy) == SurfaceClass.Deck)
                     {
+                        CountDeckPixels(tally, layers, tileLabelBuf, tileOpaqueBuf);
+                        continue;
+                    }
+
+                    int px0 = tx * Texels, py0 = ty * Texels;
+                    (int tileMiss, int tileFalse) = ScoreTilePixels(tally, layers, tileLabelBuf,
+                        tileOpaqueBuf, maskPixels, px0, py0, pw);
+                    if (tileMiss > 0 || tileFalse > 0)
+                        tally.perTile.Add((worldTx, worldTy, tileMiss, tileFalse));
+                }
+            }
+            return tally;
+        }
+
+        /// <summary>Count the labelled pixels on a walk-on deck, which are excluded from the
+        /// score rather than judged: a bridge is specified never to ripple.</summary>
+        private static void CountDeckPixels(LabelScanTally tally, xTile.Layers.Layer[] layers,
+                                            byte[][] tileLabelBuf, bool[]?[] tileOpaqueBuf)
+        {
                         for (int p = 0; p < 256; p++)
                         {
                             byte deckCls = 255;
@@ -196,13 +233,17 @@ namespace SDVRadiance
                                 deckCls = c; break;
                             }
                             if (deckCls != 255)
-                                deckSkipped++;
+                                tally.deckSkipped++;
                         }
-                        continue;
-                    }
+        }
 
-                    int tileMiss = 0, tileFalse = 0;
-                    int px0 = tx * Texels, py0 = ty * Texels;
+        /// <summary>Score one tile's 256 pixels: topmost layer with an opinion against what the
+        /// composed mask holds, painting the labeldiff overlay as it goes.</summary>
+        private (int Miss, int False) ScoreTilePixels(LabelScanTally tally, xTile.Layers.Layer[] layers,
+                                                      byte[][] tileLabelBuf, bool[]?[] tileOpaqueBuf,
+                                                      Color[] maskPixels, int px0, int py0, int pw)
+        {
+            int tileMiss = 0, tileFalse = 0;
                     for (int p = 0; p < 256; p++)
                     {
                         // Topmost layer with an opinion (255 = unset = no opinion) wins; an
@@ -228,7 +269,7 @@ namespace SDVRadiance
                         }
                         if (hiddenByArt)
                         {
-                            hiddenPixels++;
+                            tally.hiddenPixels++;
                             continue;
                         }
                         if (cls == 255)
@@ -239,70 +280,70 @@ namespace SDVRadiance
 
                         if (cls == 13) // glass: reflects but is not liquid — informational only in v1
                         {
-                            glassPixels++;
-                            if (m.G > 0) glassMirrored++;
+                            tally.glassPixels++;
+                            if (m.G > 0) tally.glassMirrored++;
                             continue;
                         }
 
-                        labeledOpinionPixels++;
+                        tally.labeledOpinionPixels++;
                         if (IsLiquidClass(cls))
                         {
                             if (MaskAgreesWithLiquid(cls, m))
                             {
-                                agreeLiquid++;
-                                _labelDiffPixels[pi] = new Color(0, 160, 0, 140);          // green: liquid ok
+                                tally.agreeLiquid++;
+                                _labelDiffPixels![pi] = new Color(0, 160, 0, 140);          // green: liquid ok
                             }
                             else
                             {
-                                missingWater++; tileMiss++;
-                                missingByClass[cls] = missingByClass.TryGetValue(cls, out long n) ? n + 1 : 1;
-                                _labelDiffPixels[pi] = new Color(255, 0, 0, 230);          // red: label says liquid, mask has none
+                                tally.missingWater++; tileMiss++;
+                                tally.missingByClass[cls] = tally.missingByClass.TryGetValue(cls, out long n) ? n + 1 : 1;
+                                _labelDiffPixels![pi] = new Color(255, 0, 0, 230);          // red: label says liquid, mask has none
                             }
                         }
                         else
                         {
                             if (m.R > 0)
                             {
-                                falseWater++; tileFalse++;
-                                _labelDiffPixels[pi] = new Color(255, 220, 0, 230);        // yellow: mask ripples where label says solid/ground
+                                tally.falseWater++; tileFalse++;
+                                _labelDiffPixels![pi] = new Color(255, 220, 0, 230);        // yellow: mask ripples where label says solid/ground
                             }
                             else
                             {
-                                agreeDry++;
-                                _labelDiffPixels[pi] = new Color(40, 60, 200, 40);         // faint blue: labeled-dry agreement (shows coverage)
+                                tally.agreeDry++;
+                                _labelDiffPixels![pi] = new Color(40, 60, 200, 40);         // faint blue: labeled-dry agreement (shows coverage)
                             }
                         }
                     }
-                    if (tileMiss > 0 || tileFalse > 0)
-                        perTile.Add((worldTx, worldTy, tileMiss, tileFalse));
-                }
-            }
+            return (tileMiss, tileFalse);
+        }
 
-            UploadLabelDiffTexture(pcount);
-
+        /// <summary>Turn one scan's tally into the console report.</summary>
+        private static string BuildVerifyReport(GameLocation location, LabelScanTally tally,
+                                                int tilesW, int tilesH, int worstToList)
+        {
             var report = new System.Text.StringBuilder();
-            long disagreements = missingWater + falseWater;
-            double accuracy = labeledOpinionPixels > 0 ? 100.0 * (labeledOpinionPixels - disagreements) / labeledOpinionPixels : 100.0;
+            long disagreements = tally.missingWater + tally.falseWater;
+            double accuracy = tally.labeledOpinionPixels > 0 ? 100.0 * (tally.labeledOpinionPixels - disagreements) / tally.labeledOpinionPixels : 100.0;
             report.AppendLine($"[verify] {location.NameOrUniqueName}: window {tilesW}x{tilesH} tiles, "
-                + $"{labeledOpinionPixels:N0} labeled pixels checked"
+                + $"{tally.labeledOpinionPixels:N0} labeled pixels checked"
                 + " (measure STANDING STILL - a rebuild mid-walk can skew mask vs labels by one tile"
                 + " and print paired missing/false ghosts)");
-            report.AppendLine($"[verify] accuracy {accuracy:0.00}%  —  agree liquid {agreeLiquid:N0}, agree dry {agreeDry:N0}, "
-                + $"MISSING water {missingWater:N0}, FALSE water {falseWater:N0}"
-                + (glassPixels > 0 ? $", glass {glassPixels:N0} (mirrored {glassMirrored:N0})" : "")
-                + (deckSkipped > 0 ? $", deck {deckSkipped:N0} px not scored (bridges never ripple)" : "")
-                + (hiddenPixels > 0 ? $", hidden {hiddenPixels:N0} px behind opaque unlabelled art (not scored)" : ""));
-            foreach (var kv in missingByClass.OrderByDescending(kv => kv.Value))
+            report.AppendLine($"[verify] accuracy {accuracy:0.00}%  —  agree liquid {tally.agreeLiquid:N0}, agree dry {tally.agreeDry:N0}, "
+                + $"MISSING water {tally.missingWater:N0}, FALSE water {tally.falseWater:N0}"
+                + (tally.glassPixels > 0 ? $", glass {tally.glassPixels:N0} (mirrored {tally.glassMirrored:N0})" : "")
+                + (tally.deckSkipped > 0 ? $", deck {tally.deckSkipped:N0} px not scored (bridges never ripple)" : "")
+                + (tally.hiddenPixels > 0 ? $", hidden {tally.hiddenPixels:N0} px behind opaque unlabelled art (not scored)" : ""));
+            foreach (var kv in tally.missingByClass.OrderByDescending(kv => kv.Value))
                 report.AppendLine($"[verify]   missing by class: {ClassName(kv.Key)} = {kv.Value:N0} px");
-            if (perTile.Count > 0)
+            if (tally.perTile.Count > 0)
             {
-                report.AppendLine($"[verify] {perTile.Count} tiles disagree; worst {Math.Min(worstToList, perTile.Count)} "
+                report.AppendLine($"[verify] {tally.perTile.Count} tiles disagree; worst {Math.Min(worstToList, tally.perTile.Count)} "
                     + "(radiance_tile on them prints the per-layer story):");
-                foreach (var t in perTile.OrderByDescending(t => t.miss + t.falsePx).Take(worstToList))
+                foreach (var t in tally.perTile.OrderByDescending(t => t.miss + t.falsePx).Take(worstToList))
                     report.AppendLine($"[verify]   tile ({t.tx},{t.ty})  missing={t.miss}/256  false={t.falsePx}/256");
                 report.AppendLine("[verify] overlay: radiance_debug labeldiff  (red = water missing, yellow = false water)");
             }
-            else if (labeledOpinionPixels > 0)
+            else if (tally.labeledOpinionPixels > 0)
             {
                 report.AppendLine("[verify] PASS — every labeled pixel in this window matches the composed mask.");
             }

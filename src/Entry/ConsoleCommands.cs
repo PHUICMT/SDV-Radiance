@@ -10,7 +10,7 @@ namespace SDVRadiance
     /// The radiance_* console commands: author/diagnostic tools only — none of them run
     /// unless typed into the SMAPI console. Registered once from ModEntry.Entry().
     /// </summary>
-    internal static class ConsoleCommands
+    internal static partial class ConsoleCommands
     {
         /// <param name="getConfig">Live config accessor (the instance is replaced on GMCM reset).</param>
         /// <param name="getPipeline">Live pipeline accessor (null until the first frame needs it).</param>
@@ -18,10 +18,27 @@ namespace SDVRadiance
         /// A report that arrives without it costs a round trip roughly every other time.</summary>
         private static IModRegistry? _registry;
 
+        /// <summary>Opens (or closes) the F6 tuner. Held here because the game reads input through
+        /// SDL rather than through window messages, so a synthesised keypress never reaches it and
+        /// nothing driving the game from outside could open the menu at all.</summary>
+        private static Action? _toggleTuner;
+
         internal static void RegisterAll(IModHelper helper, IMonitor monitor,
-            Func<ModConfig> getConfig, Func<RenderPipeline?> getPipeline)
+            Func<ModConfig> getConfig, Func<RenderPipeline?> getPipeline, Action toggleTuner)
         {
             _registry = helper.ModRegistry;
+            _toggleTuner = toggleTuner;
+            RegisterSceneReports(helper, monitor, getConfig, getPipeline);
+            RegisterLiveWatches(helper, monitor, getConfig, getPipeline);
+            RegisterLightAndShadowDiagnostics(helper, monitor, getConfig);
+            RegisterBufferDiagnostics(helper, monitor, getConfig, getPipeline);
+            RegisterCostMeasurements(helper, monitor, getConfig, getPipeline);
+            RegisterOverlaysAndSwitches(helper, monitor);
+        }
+
+        /// <summary>Ask the mod what it can see: the map dump, the light list, the live config and the report.</summary>
+        private static void RegisterSceneReports(IModHelper helper, IMonitor monitor, Func<ModConfig> getConfig, Func<RenderPipeline?> getPipeline)
+        {
             // Author tool: dumps every location's layers/tiles + sheet art for HF Studio, the
             // browser labeler that produces labels/water-labels.json. Harmless for players (it
             // only runs when typed) and it keeps the whole labeling loop inside this mod.
@@ -70,6 +87,11 @@ namespace SDVRadiance
                 + "the label check for the screen, and the installed mods that could be involved. No arguments, "
                 + "just stand where the problem is and run it.",
                 (_, _) => WriteReport(helper, monitor, getPipeline(), getConfig()));
+        }
+
+        /// <summary>Traces that print only what CHANGED per frame - the shape of tool that beat three wrong guesses.</summary>
+        private static void RegisterLiveWatches(IModHelper helper, IMonitor monitor, Func<ModConfig> getConfig, Func<RenderPipeline?> getPipeline)
+        {
             helper.ConsoleCommands.Add("radiance_tile",
                 "Dump water-related data for the tile under the player, or 'radiance_tile x y' for any tile (layer properties, HF class, isWaterTile, compose flags).",
                 (_, args) => DumpTile(s => monitor.Log(s, LogLevel.Info), getPipeline(), getConfig(), args));
@@ -90,10 +112,30 @@ namespace SDVRadiance
                 + "and any whose brightness moved. Stand still where it flickers and run it.",
                 (_, args) =>
                 {
-                    int frames = args.Length >= 1 && int.TryParse(args[0], out int f) ? Math.Clamp(f, 1, 600) : 60;
+                    int frames = args.Length >= 1 && int.TryParse(args[0], out int f) ? Math.Clamp(f, 1, 3600) : 60;
                     RenderPipeline.LightWatchFrames = frames;
                     monitor.Log($"Watching the light array for {frames} frames.", LogLevel.Info);
                 });
+            helper.ConsoleCommands.Add("radiance_brightwatch",
+                "Trace EVERYTHING that decides how bright the frame is, for the next N frames "
+                + "(default 300), printing only what changed: the light array's total, the ambient "
+                + "darkness, the metered exposure, the lighting fade, the bounce grid's origin and "
+                + "whether the occluder mask is up. radiance_lightwatch watches one of those and "
+                + "will happily report that the lights are fine while the picture is pulsing. "
+                + "WALK while it runs - standing still is the state in which the fault does not "
+                + "happen, which is why a still capture cannot find it.",
+                (_, args) =>
+                {
+                    int frames = args.Length >= 1 && int.TryParse(args[0], out int bf) ? Math.Clamp(bf, 1, 3600) : 300;
+                    RenderPipeline.BrightWatchFrames = frames;
+                    monitor.Log($"Watching everything that changes the brightness for {frames} frames. Walk now.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_mark",
+                "Write the whole light state of the NEXT frame to the log and capture a dump of it: position, clock, "
+                + "every light slot with its ramp and shadow weight, the lights waiting for a slot, the bounce grid origin. "
+                + "For the walking flicker: start radiance_lightwatch 3600 and radiance_brightwatch 3600, walk, and mark the "
+                + "moment you see it (the author build also binds this to a key).",
+                (_, _) => RenderPipeline.MarkPending = ++_markCount);
             helper.ConsoleCommands.Add("radiance_waterwatch",
                 "Trace the water surface for the next N frames (default 120) and say what changed each frame: "
                 + "when the mask was rebuilt, when the window moved, and when the shoreline the reflection is "
@@ -105,6 +147,11 @@ namespace SDVRadiance
                     RenderPipeline.WaterWatchFrames = frames;
                     monitor.Log($"Watching the water for {frames} frames. Walk past the water now.", LogLevel.Info);
                 });
+        }
+
+        /// <summary>A/B the bounce grid against a flicker, and count what each caster shadows.</summary>
+        private static void RegisterLightAndShadowDiagnostics(IModHelper helper, IMonitor monitor, Func<ModConfig> getConfig)
+        {
             helper.ConsoleCommands.Add("radiance_flood",
                 "Flood-GI rebuild A/B for chasing a flicker. 'radiance_flood freeze' holds the current bounce "
                 + "grid still (anything that still moves is NOT the flood), 'every' rebuilds it every frame "
@@ -136,6 +183,11 @@ namespace SDVRadiance
                     monitor.Log($"Shadow casts per character: {getConfig().ShadowCastsPerCharacter} (nearest lights first; "
                         + "same setting as the tuner's Shadows tab, but not saved from here)", LogLevel.Info);
                 });
+        }
+
+        /// <summary>Paint an internal buffer over the world, or capture every buffer for offline comparison.</summary>
+        private static void RegisterBufferDiagnostics(IModHelper helper, IMonitor monitor, Func<ModConfig> getConfig, Func<RenderPipeline?> getPipeline)
+        {
             helper.ConsoleCommands.Add("radiance_march",
                 "List on-screen tiles whose water has effect but no march (ripple without reflection - the orange tiles in the radiance_debug water overlay), worst first.",
                 (_, _) => monitor.Log(getPipeline()?.DescribeEffectOnlyTiles() ?? "pipeline not ready", LogLevel.Info));
@@ -216,7 +268,9 @@ namespace SDVRadiance
             helper.ConsoleCommands.Add("radiance_reflect",
                 "Reflection diagnostics/A-B. No args = report what each reflection layer is doing under the player. "
                 + "'scene on|off' forces the sprite-free scenery mirror source (P3c) on or off, so a missing "
-                + "bridge/cliff reflection can be pinned on it in one keystroke.",
+                + "bridge/cliff reflection can be pinned on it in one keystroke. "
+                + "(The slice height that used to live here is now the WaterReflectFadeRows setting, so "
+                + "'radiance_config WaterReflectFadeRows 8' is the same A/B and it is saveable.)",
                 (_, args) =>
                 {
                     if (args.Length >= 2 && args[0].Equals("scene", StringComparison.OrdinalIgnoreCase))
@@ -227,6 +281,11 @@ namespace SDVRadiance
                     }
                     monitor.Log(getPipeline()?.ReflectionDiag() ?? "pipeline not ready", LogLevel.Info);
                 });
+        }
+
+        /// <summary>What this machine actually pays, per stage and per effect.</summary>
+        private static void RegisterCostMeasurements(IModHelper helper, IMonitor monitor, Func<ModConfig> getConfig, Func<RenderPipeline?> getPipeline)
+        {
             helper.ConsoleCommands.Add("radiance_bench",
                 "Measure what this mod costs on THIS machine and suggest an effect resolution. Sweeps the "
                 + "settings for about ten seconds (the picture flickers while it does), then prints the cost of "
@@ -272,12 +331,95 @@ namespace SDVRadiance
                     RenderPipeline.GpuProbe = args.Length == 0 || !args[0].Equals("off", StringComparison.OrdinalIgnoreCase);
                     monitor.Log($"GPU wall-clock probe: {(RenderPipeline.GpuProbe ? "ON - watch for [perf] gpu wall-clock lines" : "off")}", LogLevel.Info);
                 });
+            helper.ConsoleCommands.Add("radiance_gldiag",
+                "Report the real graphics backend and test whether a GPU timer query can be created, run and read "
+                + "back from inside this mod. Every other timer here measures CPU submission, not GPU execution, "
+                + "which is why object shadows once read as a rounding error while costing 1.80 ms. Answers whether "
+                + "the fix for that is available on this machine.",
+                (_, _) => GlDiag(monitor));
+        }
+
+        /// <summary>Open the tuner, drive the on-screen HUDs, and flip the author-only switches.</summary>
+        private static void RegisterOverlaysAndSwitches(IModHelper helper, IMonitor monitor)
+        {
+            helper.ConsoleCommands.Add("radiance_tuner",
+                "Open the on-screen tuner, the same panel the tuner hotkey opens (F6 by default). Exists because "
+                + "the game takes keyboard input straight from SDL, so a keypress sent by a script never arrives "
+                + "and there was no way to reach this menu except by hand. Add part of a tab name to open on "
+                + "that tab, for example 'radiance_tuner perf' or 'radiance_tuner water'.",
+                (_, args) =>
+                {
+                    if (args.Length > 0)
+                        RadianceTunerMenu.OpenAtTab(args[0]);
+                    _toggleTuner?.Invoke();
+                });
+            helper.ConsoleCommands.Add("radiance_perfhud",
+                "Show the cost readout on screen while you play (radiance_perfhud on|off). Same numbers as "
+                + "radiance_report, but live, so you can walk into the spot that stutters and watch which line "
+                + "moves. It also says when the game window has lost focus, which makes the frame time read far "
+                + "worse than it is.",
+                (_, args) =>
+                {
+                    PerfHud.Visible = args.Length > 0
+                        ? args[0].Equals("on", StringComparison.OrdinalIgnoreCase) || args[0] == "1"
+                        : !PerfHud.Visible;
+                    monitor.Log($"Perf readout: {(PerfHud.Visible ? "on" : "off")}", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_gputime",
+                "Switch per-stage GPU timing on or off (radiance_gputime on|off). Off by default: it reaches "
+                + "around MonoGame into the game's own OpenGL context, which is not a risk worth taking while "
+                + "nobody is asking a question. With it on, radiance_report grows a GPU column beside the CPU "
+                + "one, and where the two disagree the larger is the real cost.",
+                (_, args) =>
+                {
+                    bool on = args.Length > 0
+                        && (args[0].Equals("on", StringComparison.OrdinalIgnoreCase)
+                            || args[0] == "1" || args[0].Equals("true", StringComparison.OrdinalIgnoreCase));
+                    GpuTimer.SetWanted(on);
+                    monitor.Log($"GPU timing: {GpuTimer.Status}"
+                        + (on ? ". Play for five seconds, then run radiance_report." : ""), LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_autoscale",
+                "What the automatic render scale is doing, and a way to make it do it. With no "
+                + "argument it prints the controller's state. 'radiance_autoscale budget <ms>' makes it "
+                + "believe the frame budget is that short, which turns an ordinary capped frame into an "
+                + "overrun and so exercises the real controller on a machine that never misses its own "
+                + "budget; 'radiance_autoscale budget off' puts the real one back. The override is never "
+                + "saved and does not survive a restart.",
+                (_, args) =>
+                {
+                    if (args.Length >= 2 && args[0].Equals("budget", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (args[1].Equals("off", StringComparison.OrdinalIgnoreCase))
+                        {
+                            RenderPipeline.BudgetOverrideMs = 0;
+                            monitor.Log("Frame budget back to the game's own.", LogLevel.Info);
+                        }
+                        else if (double.TryParse(args[1], System.Globalization.NumberStyles.Float,
+                                     System.Globalization.CultureInfo.InvariantCulture, out double ms) && ms > 0.1)
+                        {
+                            RenderPipeline.BudgetOverrideMs = ms;
+                            monitor.Log($"Pretending the frame budget is {ms:0.0} ms. "
+                                + "Play for a few seconds, then run this again.", LogLevel.Info);
+                        }
+                        else
+                            monitor.Log("Give a number of milliseconds, or 'off'.", LogLevel.Warn);
+                    }
+                    monitor.Log(RenderPipeline.Current?.DescribeAutoScale() ?? "pipeline not ready", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_anim",
+                "Count this location's animated map tiles and report how fast they actually advance, in ticks. "
+                + "The map dump records which tiles animate but not their frame interval, so this is the only way "
+                + "to tell whether a cache clocked in ticks can keep up with the art it is mirroring.",
+                (_, _) => AnimReport(monitor));
         }
 
         /// <summary>Console command: read or write one config property on the LIVE instance, by
         /// reflection so a new setting is covered the day it is added rather than when someone
         /// remembers this list exists. Clamp() runs after every set, so the console cannot put a
         /// value out of the range the sliders enforce.</summary>
+        private static int _markCount;
+
         private static void LiveConfig(IMonitor monitor, ModConfig config, string[] args)
         {
             var props = typeof(ModConfig).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
@@ -366,7 +508,7 @@ namespace SDVRadiance
         /// The whole diagnosis in one file. Everything a report needs, gathered without asking the
         /// reporter a single question, written somewhere they can find it and attach it.
         /// </summary>
-        private static void WriteReport(IModHelper helper, IMonitor monitor, RenderPipeline? pipeline, ModConfig config)
+        internal static void WriteReport(IModHelper helper, IMonitor monitor, RenderPipeline? pipeline, ModConfig config, bool alsoLog = false)
         {
             if (!StardewModdingAPI.Context.IsWorldReady || Game1.player == null)
             {
@@ -394,6 +536,11 @@ namespace SDVRadiance
                 Write("");
                 Write("=== what this mod costs per frame ===");
                 Write(FrameCost.Describe());
+                Write("");
+                Write("=== the effect chain, one line per full-screen pass ===");
+                Write(pipeline?.DescribeStageCost() ?? "pipeline not ready");
+                Write("");
+                Write(pipeline?.DescribeAutoScale() ?? "pipeline not ready");
                 Write("");
                 Write(VramTally.Describe());
                 Write("");
@@ -427,6 +574,12 @@ namespace SDVRadiance
                 // a folder with nine near-identical names is worse than one that is always current.
                 string path = System.IO.Path.Combine(dir, "radiance-report.txt");
                 System.IO.File.WriteAllText(path, text.ToString());
+                // On a phone there is no console to type this from and no easy way to reach a file
+                // in app storage, but the SMAPI log uploads to smapi.io in two taps. So when the
+                // report is asked for from the settings menu rather than the console, it goes into
+                // the log as well, where the reporter can actually get at it.
+                if (alsoLog)
+                    monitor.Log("--- SDV-Radiance report ---" + Environment.NewLine + text, LogLevel.Info);
                 monitor.Log($"Report written to: {path}", LogLevel.Alert);
                 monitor.Log("Attach that file to your bug report. It already carries your version, location, "
                           + "time, weather, settings and mod list, so there is nothing else to type.", LogLevel.Info);
@@ -554,6 +707,22 @@ namespace SDVRadiance
                 t = new Point(ax, ay);
             write($"=== Tile ({t.X},{t.Y}) in {location?.NameOrUniqueName} ===");
             if (location == null) return;
+            WriteSceneHeader(write, location, config);
+            var surf = SurfaceMap.For(location);
+            WriteTileVerdict(write, location, t, surf, pipeline);
+            WriteLayerTiles(write, location, t);
+            WriteNeighbourhood(write, location, t, surf);
+
+            // Palette of the Back art (top colours by count) — for tuning art classifiers.
+            if (!includePalette)
+                return;
+            WriteBackPalette(write, location, t);
+        }
+
+        /// <summary>Everything needed to reproduce the scene, first, because this output gets
+        /// pasted into a bug report by someone who will not be asked a second question.</summary>
+        private static void WriteSceneHeader(Action<string> write, GameLocation location, ModConfig config)
+        {
             // HEADER FIRST, and complete. This output gets pasted into a bug report by someone who
             // will not be asked a second question, so everything needed to reproduce the scene has
             // to be in the paste: which build, which scene, and which of our switches were on.
@@ -575,6 +744,13 @@ namespace SDVRadiance
                 + $" | size {location.Map?.Layers[0].LayerWidth}x{location.Map?.Layers[0].LayerHeight}"
                 + $" | tilesheets: {location.Map?.TileSheets.Count}");
             ReportRelevantMods(write);
+        }
+
+        /// <summary>What the game and this mod each believe about the one tile: its water
+        /// properties, its surface class, and the composed mask beside the label.</summary>
+        private static void WriteTileVerdict(Action<string> write, GameLocation location, Point t,
+                                             SurfaceMap? surf, RenderPipeline? pipeline)
+        {
             write($"isWaterTile={location.isWaterTile(t.X, t.Y)} drawnWater={WaterDrawHook.WasDrawn(location, t.X, t.Y)} (hook v{WaterDrawHook.Version})");
             foreach (string prop in new[] { "Water", "WaterSource", "Passable", "Type" })
                 foreach (string layer in new[] { "Back", "Buildings" })
@@ -583,12 +759,17 @@ namespace SDVRadiance
                     if (v != null)
                         write($"{layer}.{prop} = '{v}'");
                 }
-            var surf = SurfaceMap.For(location);
             if (surf != null)
                 write($"surface={surf.GetSurface(t.X, t.Y)} height={surf.GetHeight(t.X, t.Y)}");
             // Composed mask vs label, side by side — the acceptance test for this subsystem
             // is that the game matches the labeler, so print both from the same tile.
             write(pipeline?.DescribeTileMask(location, t.X, t.Y) ?? "pipeline not ready");
+        }
+
+        /// <summary>The tile on every layer the game draws, walked from the map's own layer list
+        /// rather than a fixed set of names.</summary>
+        private static void WriteLayerTiles(Action<string> write, GameLocation location, Point t)
+        {
             // Walk the map's OWN layer list rather than a fixed set of names: a map may carry
             // Back3, Buildings4 or a negative suffix, and naming them here by hand is how this
             // report ended up silent about layers the game draws.
@@ -623,7 +804,13 @@ namespace SDVRadiance
                 write($"{layer.Id}: sheet={tile.TileSheet?.Id} src={tile.TileSheet?.ImageSource} index={tile.TileIndex} animated={anim}"
                     + $"  [{AttributeAsset(tile.TileSheet?.ImageSource)}]{props}");
             }
+        }
 
+        /// <summary>The block around the tile as a picture. Almost every water report is about a
+        /// SHAPE, and one tile cannot show a shape.</summary>
+        private static void WriteNeighbourhood(Action<string> write, GameLocation location, Point t,
+                                               SurfaceMap? surf)
+        {
             // THE NEIGHBOURHOOD, not just the tile. Almost every water report is about a SHAPE:
             // a bridge that reads as a hole, a shoreline that stops early, a pier with a square
             // around it. One tile cannot show a shape, and asking the reporter to run the command
@@ -664,10 +851,11 @@ namespace SDVRadiance
                 write("(lowercase w = the game calls it water but our surface pass does not, "
                           + "which is the usual signature of art drawn over water)");
             }
+        }
 
-            // Palette of the Back art (top colours by count) — for tuning art classifiers.
-            if (!includePalette)
-                return;
+        /// <summary>Top colours of the Back art, for tuning art classifiers.</summary>
+        private static void WriteBackPalette(Action<string> write, GameLocation location, Point t)
+        {
             var back = location.map?.GetLayer("Back");
             var bt = back?.Tiles[t.X, t.Y];
             if (bt is xTile.Tiles.AnimatedTile at && at.TileFrames is { Length: > 0 })

@@ -38,6 +38,17 @@ float Feather;      // 0..1 width of the sharp->blur transition (higher = softer
 static const int TAPS = 5;
 static const float W[5] = { 0.227027, 0.194595, 0.121622, 0.054054, 0.016216 };
 
+// Linear-sampling form of the same kernel: one bilinear fetch between two neighbouring
+// texels returns their weighted sum, so 9 taps become 5 fetches. See bloom.fx for the
+// derivation and the numeric check.
+//
+// Only BlurV can use it here. BlurH reads the FULL-RES source into a half-res target,
+// so its TexelSize is a destination texel and its taps land two source texels apart -
+// bilinear can only merge texels that are adjacent, so there is nothing to merge. Fixing
+// that would mean halving the blur radius, which is a look change, not a free one.
+static const float LW[2] = { 0.316217, 0.070270 };
+static const float LO[2] = { 1.384615, 3.230769 };
+
 struct PixelInput
 {
     float4 Position : SV_POSITION;
@@ -59,12 +70,13 @@ float4 BlurHPS(PixelInput input) : SV_TARGET
 
 float4 BlurVPS(PixelInput input) : SV_TARGET
 {
+    // Half-res to half-res, so the taps are on adjacent texels and the pairs merge.
     float3 sum = tex2D(SourceSampler, input.UV).rgb * W[0];
-    [unroll] for (int i = 1; i < TAPS; i++)
+    [unroll] for (int i = 0; i < 2; i++)
     {
-        float2 o = float2(0.0, TexelSize.y * i);
-        sum += tex2D(SourceSampler, input.UV + o).rgb * W[i];
-        sum += tex2D(SourceSampler, input.UV - o).rgb * W[i];
+        float2 o = float2(0.0, TexelSize.y * LO[i]);
+        sum += tex2D(SourceSampler, input.UV + o).rgb * LW[i];
+        sum += tex2D(SourceSampler, input.UV - o).rgb * LW[i];
     }
     return float4(sum, 1.0);
 }

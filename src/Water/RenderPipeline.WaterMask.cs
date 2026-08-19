@@ -52,312 +52,6 @@ namespace SDVRadiance
             return index < pixels.Length ? pixels[index] : null;
         }
 
-        /// <summary>Resolve the 16�16 source art of a map tile (first frame for animated tiles).</summary>
-        private bool TryTileArt(xTile.Layers.Layer? layer, int tx, int ty, out Texture2D texture, out Rectangle src)
-            => TryTileArt(layer, tx, ty, out texture, out src, out _, out _);
-
-        /// <summary>As above, also reporting whether the tile is ANIMATED � animation is a strong
-        /// "this is water/flowing art" signal (fountains, waterfalls, the beach surf line).</summary>
-        private bool TryTileArt(xTile.Layers.Layer? layer, int tx, int ty, out Texture2D texture, out Rectangle src, out bool animated)
-            => TryTileArt(layer, tx, ty, out texture, out src, out animated, out _);
-
-        /// <summary>As above, also reporting how the MAP turns the tile (see MapLayers.Orientation).
-        /// The source rect points at the upright art on the sheet; anything derived from those
-        /// pixels has to be turned by this before it can line up with what the player sees.</summary>
-        private bool TryTileArt(xTile.Layers.Layer? layer, int tx, int ty, out Texture2D texture, out Rectangle src, out bool animated, out byte orient)
-        {
-            texture = null!;
-            src = default;
-            animated = false;
-            orient = 0;
-            if (layer == null || tx < 0 || ty < 0 || tx >= layer.LayerWidth || ty >= layer.LayerHeight)
-                return false;
-            var t = layer.Tiles[tx, ty];
-            orient = MapLayers.Orientation(t);
-            if (t is xTile.Tiles.AnimatedTile at && at.TileFrames is { Length: > 0 })
-            {
-                t = at.TileFrames[0];
-                animated = true;
-            }
-            if (t?.TileSheet == null)
-                return false;
-            if (!_tilesheetTextureCache.TryGetValue(t.TileSheet.ImageSource, out Texture2D? sheet))
-            {
-                try { sheet = Game1.content.Load<Texture2D>(t.TileSheet.ImageSource); }
-                catch { sheet = null; }
-                _tilesheetTextureCache[t.TileSheet.ImageSource] = sheet;
-                // Shadow art ships in its OWN tilesheets, and the name says so. Every shadow sheet
-                // in the map dump is called *Shadow(s) / *ShadowTilesheet / *CanopyShadow (15 of
-                // them, vanilla and modded), so the sheet identity is a second, colour-independent
-                // way to know a tile is a cast shadow and must never carve the water it falls on.
-                if (sheet != null
-                    && t.TileSheet.ImageSource.IndexOf("shadow", StringComparison.OrdinalIgnoreCase) >= 0)
-                    _shadowTilesheets.Add(sheet);
-            }
-            if (sheet == null)
-                return false;
-            var ib = t.TileSheet.GetTileImageBounds(t.TileIndex);
-            if (ib.Width != 16 || ib.Height != 16)
-                return false;
-            texture = sheet;
-            src = new Rectangle(ib.X, ib.Y, 16, 16);
-            return true;
-        }
-
-        /// <summary>Painted-water test for a single art pixel: blue-dominant or teal/foam.
-        /// Matches the shader's colour gates, but runs on the STATIC source art (stable,
-        /// classify once per tile art) instead of the composited frame.</summary>
-        private static bool WaterColor(Color c)
-        {
-            if (c.A < 200)
-                return false;
-            if (c.B > c.R + 14 && c.B + 10 >= c.G) return true;   // blue water
-            // Teal / shallow edge � measured against the real tilesheets (2026-07-21, re-measured
-            // 2026-07-22): the old loose gate (B > R+6) classified plain GRASS greens and rippled
-            // meadows; at G-25 the DARK grass/fern strip tiles (summer avg (23,97,72), spring fern
-            // clumps � full 245-256px tiles) still passed at G-B exactly 23-25 and waved on land.
-            // Real teal water pixels sit at G-B = 19 on every sheet (beach tide pools, pond edges);
-            // the 20-22 band is EMPTY, so G-20 splits them cleanly.
-            if (c.G > c.R + 10 && c.B > c.R + 12 && c.B >= c.G - 20) return true;
-            return false;
-        }
-
-        /// <summary>16�16 painted-water classification of one tile art, cached per (texture, rect,
-        /// foam). With <paramref name="foam"/> (animated tiles that touch core water � the surf
-        /// line), bright unsaturated wash pixels count as water too: white wave foam fails every
-        /// hue gate, which left dead un-effected bands along the tide line.</summary>
-        /// <summary>Whole-sheet pixel array for a tilesheet, read back once (main thread) and
-        /// cached. Returns null for over-cap sheets (caller falls back to per-region GetData) or
-        /// on failure. The single readback replaces one-per-tile readbacks (each a GPU stall).</summary>
-        private Color[]? EnsureSheetPixels(Texture2D texture)
-        {
-            if (_tilesheetPixelCache.TryGetValue(texture, out Color[]? sheet))
-                return sheet;
-            long px = (long)texture.Width * texture.Height;
-            if (px <= SheetPixCap)
-            {
-                try
-                {
-                    sheet = new Color[px];
-                    // Read in STRIPS rather than one whole-surface GetData. The cap this replaces
-                    // existed to bound the driver's staging cost for a huge sheet, and its fallback
-                    // was a readback PER TILE � thousands of times more expensive than the
-                    // allocation it avoided (a 240x156 map on an 8.64 Mpx sheet spent 43 s in one
-                    // gather). Strips keep the staging bounded while still costing one readback per
-                    // strip, so size no longer decides between "fast" and "unusable".
-                    for (int y0 = 0; y0 < texture.Height; y0 += SheetStripRows)
-                    {
-                        int rows = Math.Min(SheetStripRows, texture.Height - y0);
-                        texture.GetData(0, new Rectangle(0, y0, texture.Width, rows),
-                            sheet, y0 * texture.Width, rows * texture.Width);
-                    }
-                }
-                catch { sheet = null; }
-            }
-            if (sheet == null)
-                _monitor.Log($"[water] tilesheet {texture.Width}x{texture.Height} not cached � tile art falls back to per-tile reads", LogLevel.Warn);
-            _tilesheetPixelCache[texture] = sheet; // null = absurd size or failed ? per-tile fallback (deduped)
-            return sheet;
-        }
-
-        /// <summary>Read back every tilesheet a location uses, once, on entry � so the first-touch
-        /// GPU readbacks all land in the (already synchronous, warp-fade-hidden) location change
-        /// instead of hitching mid-walk when you scroll into a region using a fresh sheet.</summary>
-        private void PrewarmSheetPixels(GameLocation location)
-        {
-            if (ReferenceEquals(location, _prewarmedLocation))
-                return;
-            _prewarmedLocation = location;
-            var map = location.map;
-            if (map == null)
-                return;
-            foreach (var ts in map.TileSheets)
-            {
-                if (!_tilesheetTextureCache.TryGetValue(ts.ImageSource, out Texture2D? texture))
-                {
-                    try { texture = Game1.content.Load<Texture2D>(ts.ImageSource); }
-                    catch { texture = null; }
-                    _tilesheetTextureCache[ts.ImageSource] = texture;
-                }
-                if (texture != null)
-                    EnsureSheetPixels(texture);
-            }
-        }
-
-        /// <summary>Fill <see cref="_tileArtPixels"/> with a tile's 16�16 pixels. Reads from the cached
-        /// whole-sheet pixel array (no GPU work) when available, falling back to a per-region
-        /// <c>GetData</c> for over-cap sheets. Main-thread only (GPU readback on first sheet touch).</summary>
-        private void ReadTileArt(Texture2D texture, Rectangle src)
-        {
-            _tileArtPixels ??= new Color[256];
-            Color[]? sheet = EnsureSheetPixels(texture);
-            if (sheet != null)
-            {
-                int tw = texture.Width;
-                for (int row = 0; row < 16; row++)
-                {
-                    int soff = (src.Y + row) * tw + src.X;
-                    if (soff < 0 || soff + 16 > sheet.Length) { Array.Clear(_tileArtPixels, row * 16, 16); continue; }
-                    Array.Copy(sheet, soff, _tileArtPixels, row * 16, 16);
-                }
-            }
-            else if (_tileArtCache.TryGetValue((texture, src), out Color[]? tile))
-            {
-                Array.Copy(tile, _tileArtPixels, 256);
-            }
-            else
-            {
-                // A refused sheet still gets read at most ONCE per distinct tile: the gather walks
-                // every tile of the map, so an undeduped readback here is paid per painted cell,
-                // not per piece of art. Bounded so a pathological map cannot grow this without end.
-                try { texture.GetData(0, src, _tileArtPixels, 0, 256); } catch { Array.Clear(_tileArtPixels, 0, 256); }
-                if (_tileArtCache.Count < 16_384)
-                {
-                    var copy = new Color[256];
-                    Array.Copy(_tileArtPixels, copy, 256);
-                    _tileArtCache[(texture, src)] = copy;
-                }
-            }
-        }
-
-        /// <summary>A CAST SHADOW, not a structure: near-black and translucent. Bridges, cliffs and
-        /// trees drop these onto the water from the Buildings/Front/AlwaysFront layers, and carving
-        /// them punched the shadow's exact silhouette out of the effect channel � but shaded water
-        /// is still water and has to keep rippling. Measured over the whole map dump: AlwaysFront
-        /// holds 192k distinct tiles of which only 11k are fully opaque and ~99k are exactly this
-        /// dark translucent wash, so the rule has to be conservative. Near-black only (art is
-        /// premultiplied, so a black wash stays black at any alpha) and grey, so no coloured art
-        /// can fall through it.</summary>
-        private static bool ShadowWash(Color c)
-        {
-            if (c.A >= 250)
-                return false;                       // fully opaque art is never a wash
-            // Brightness alone. A saturation term was tried and only cost recall: measured over
-            // the 15 shadow sheets in the map dump it rejected 28% of two of them (SVE's building
-            // shadow, IridiumQuarry) for being faintly blue, and at max(rgb) <= 40 a pixel is
-            // indistinguishable from black whatever its hue, so hue cannot separate art from wash.
-            return Math.Max(c.R, Math.Max(c.G, c.B)) <= 40;
-        }
-
-        /// <summary>16�16 opacity bits + opaque-pixel count of one tile art, cached � used to
-        /// carve piers/bridges/pads out of the water mask (count decides march-blocking).
-        /// The old "=60% of the opaque art is water-COLOURED ? wave overlay, don't carve"
-        /// bail-out is GONE (V4 D1: no colour guessing): it existed to keep unlabelled water
-        /// overlays from carving themselves, but it also waved through every blue-ish or
-        /// murky-toned STRUCTURE � the SVE crystal boulder in the Mountain lake and the
-        /// FarmCave plank both rippled because their art happened to pass a colour test.
-        /// Genuine water drawn on overlay layers is protected by its LABEL now (a label's
-        /// liquid pixels are removed from the carve); art nobody labelled carves by opacity,
-        /// so an unlabelled mod pond at worst goes calm instead of rippling its own rocks.</summary>
-        /// <summary>Textures that came from a tilesheet whose name says "shadow".</summary>
-        private readonly HashSet<Texture2D> _shadowTilesheets = new();
-        private static readonly bool[] _emptyTileBits = new bool[256];
-
-        private (bool[] bits, int count) SolidBits(Texture2D texture, Rectangle src)
-        {
-            var r = OpaqueBits(texture, src);
-            return (r.bits, r.count);
-        }
-
-        /// <summary>Opacity bits turned the way the map places the tile. The count is unchanged by
-        /// a turn, so only the bits move. Caching stays keyed on the upright art: one sheet tile
-        /// can appear on a map both plain and mirrored, and both readings come off the same entry.</summary>
-        private (bool[] bits, int count) SolidBits(Texture2D texture, Rectangle src, byte orient)
-        {
-            var r = SolidBits(texture, src);
-            return orient == 0 ? r : (MapLayers.Orient(r.bits, orient), r.count);
-        }
-
-        private bool[] AnyAlphaBits(Texture2D texture, Rectangle src, byte orient)
-            => MapLayers.Orient(AnyAlphaBits(texture, src), orient);
-
-        /// <summary>The same opacity bits WITHOUT the "mostly water-coloured ? not a structure"
-        /// bail-out. Only for art a label has explicitly called ground: that guess is right for a
-        /// wave overlay and wrong for a snow-covered bank ledge, whose pale blue reads as water
-        /// (winter_outdoorsTileSheet#211 is 189 of 220 opaque pixels water-coloured, so it carved
-        /// nothing at all and the mirror ran straight over the bank).</summary>
-        private (bool[] bits, int count, int water) OpaqueBits(Texture2D texture, Rectangle src)
-        {
-            if (_shadowTilesheets.Contains(texture))
-                return (_emptyTileBits, 0, 0);     // a whole sheet of cast shadows carves nothing
-            var key = (texture, src);
-            if (_tileSolidBitsCache.TryGetValue(key, out var entry))
-                return entry;
-            var bits = new bool[256];
-            int n = 0, w = 0;
-            _tileArtPixels ??= new Color[256];
-            try
-            {
-                ReadTileArt(texture, src);
-                for (int p = 0; p < 256; p++)
-                {
-                    if (bits[p] = _tileArtPixels[p].A >= 128 && !ShadowWash(_tileArtPixels[p]))
-                    {
-                        n++;
-                        if (WaterColor(_tileArtPixels[p])) w++;
-                    }
-                }
-            }
-            catch { /* leave all-false */ }
-            entry = (bits, n, w);
-            _tileSolidBitsCache[key] = entry;
-            return entry;
-        }
-
-        /// <summary>Pixels where this art draws ANYTHING visible (alpha >= 32), shadow washes
-        /// INCLUDED. Only for decisions a LABEL has already made, where no heuristic is left to
-        /// protect: a waterfall's spray is visibly water far below the 128-opaque bar, and a
-        /// bridge's painted shadow is part of the bridge when the label calls it ground. Fully
-        /// transparent pixels are still the layer below showing through, so they stay out.</summary>
-        private bool[] AnyAlphaBits(Texture2D texture, Rectangle src)
-        {
-            if (_shadowTilesheets.Contains(texture))
-                return _emptyTileBits;
-            var key = (texture, src);
-            if (_tileAnyAlphaBitsCache.TryGetValue(key, out var bits))
-                return bits;
-            bits = new bool[256];
-            _tileArtPixels ??= new Color[256];
-            try
-            {
-                ReadTileArt(texture, src);
-                for (int p = 0; p < 256; p++)
-                    bits[p] = _tileArtPixels[p].A >= 32;
-            }
-            catch { /* leave all-false */ }
-            _tileAnyAlphaBitsCache[key] = bits;
-            return bits;
-        }
-
-        /// <summary>8-way one-tile dilation of a tile flag grid (src ? dst).</summary>
-        private static void Dilate8(bool[] src, bool[] dst, int tilesW, int tilesH)
-        {
-            for (int j = 0; j < tilesH; j++)
-            {
-                for (int i = 0; i < tilesW; i++)
-                {
-                    int idx = j * tilesW + i;
-                    bool l = i > 0, r = i < tilesW - 1, u = j > 0, d = j < tilesH - 1;
-                    dst[idx] = src[idx]
-                        || (l && src[idx - 1]) || (r && src[idx + 1])
-                        || (u && src[idx - tilesW]) || (d && src[idx + tilesW])
-                        || (l && u && src[idx - tilesW - 1]) || (r && u && src[idx - tilesW + 1])
-                        || (l && d && src[idx + tilesW - 1]) || (r && d && src[idx + tilesW + 1]);
-                }
-            }
-        }
-
-        /// <summary>
-        /// Build (or reuse) the per-tile water mask for the visible area, aligned to the
-        /// viewport. Returns false (and skips the water stage) when the location has no
-        /// water on screen, so we never distort a waterless frame.
-        ///
-        /// The heavy pixel work runs on a WORKER thread (see RenderPipeline.WaterMask.Async.cs):
-        /// this method only gathers game-state inputs, launches/polls the compose job, and
-        /// uploads finished results � the 8-23 ms monolithic rebuild on every tile crossing
-        /// was THE walking-near-water stutter. While a job is in flight the old mask keeps
-        /// rendering (world-anchored content + padded window = no visible edge).
-        /// </summary>
         private GameLocation? _locationWaterLocation;
         private bool _locationHasWater;
 
@@ -405,6 +99,17 @@ namespace SDVRadiance
         private const int MaskPadTopTiles = 6;
         private const int MaskPadBottomTiles = 4;
 
+        /// <summary>
+        /// Build (or reuse) the per-tile water mask for the visible area, aligned to the
+        /// viewport. Returns false (and skips the water stage) when the location has no
+        /// water on screen, so we never distort a waterless frame.
+        ///
+        /// The heavy pixel work runs on a WORKER thread (see RenderPipeline.WaterMask.Async.cs):
+        /// this method only gathers game-state inputs, launches/polls the compose job, and
+        /// uploads finished results — the 8-23 ms monolithic rebuild on every tile crossing
+        /// was THE walking-near-water stutter. While a job is in flight the old mask keeps
+        /// rendering (world-anchored content + padded window = no visible edge).
+        /// </summary>
         private bool BuildWaterMask(int w, int h)
         {
             GameLocation? location = Game1.currentLocation;
@@ -415,15 +120,31 @@ namespace SDVRadiance
             // lands here (during the fade-covered location change) rather than hitching mid-walk.
             PrewarmSheetPixels(location);
 
+            (int startTileX, int startTileY, int tilesW, int tilesH) = ChooseMaskWindow(location);
+
+            if (PollPendingMaskJob(location, startTileX, startTileY, tilesW, tilesH))
+                return _hasWaterInMask;
+            if (CurrentMaskStillFits(location, startTileX, startTileY, tilesW, tilesH))
+                return _hasWaterInMask;
+
+            StartWaterMaskRebuild(location, startTileX, startTileY, tilesW, tilesH);
+            return _hasWaterInMask;   // old mask renders this frame; the swap lands when compose does
+        }
+
+        /// <summary>Where the mask window sits this frame, and the camera-follow params that go
+        /// with whatever mask is currently bound. Keeps the existing window while the view still
+        /// fits inside its padding, which is what turns a rebuild per tile into one every few.</summary>
+        private (int startTileX, int startTileY, int tilesW, int tilesH) ChooseMaskWindow(GameLocation location)
+        {
             int vx = Game1.viewport.X;
             int vy = Game1.viewport.Y;
             // The window is PADDED past the viewport: 2 tiles left/right, 4 above. A
             // column's waterline anchor (Pass D run-top) must stay WORLD-anchored while
-            // its shoreline scrolls just past the screen edge � anchored at the mask's
+            // its shoreline scrolls just past the screen edge — anchored at the mask's
             // own first row instead, the whole reflection re-based and vanished in ONE
             // step as the player walked away, rather than fading out.
             // Viewport-based (world px): w/64 is screen px and undercounts tiles when zoomed
-            // out � parts of the screen simply had no water mask (no ripple/reflection).
+            // out — parts of the screen simply had no water mask (no ripple/reflection).
             int tilesW = Math.Max(1, Game1.viewport.Width / 64 + 2 * MaskPadSideTiles);
             int tilesH = Math.Max(1, Game1.viewport.Height / 64 + MaskPadTopTiles + MaskPadBottomTiles);
             int startTileX = (int)Math.Floor(vx / 64f) - MaskPadSideTiles;
@@ -458,10 +179,17 @@ namespace SDVRadiance
             }
 
             // Camera-follow params are valid for WHATEVER mask is currently bound (old or
-            // new) � the mask content is tile-anchored; sub-tile scroll lives here.
+            // new) — the mask content is tile-anchored; sub-tile scroll lives here.
             _waterMaskTilesPerScreen = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
             _waterMaskWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
+            return (startTileX, startTileY, tilesW, tilesH);
+        }
 
+        /// <summary>Deal with a compose that is already running. True means this frame is done:
+        /// either the job belongs to another screen, or it is still going, or it just landed.</summary>
+        private bool PollPendingMaskJob(GameLocation location, int startTileX, int startTileY,
+                                        int tilesW, int tilesH)
+        {
             // Poll the in-flight compose FIRST: apply it if it finished and still matches
             // the wanted window; keep showing the old mask while it runs; discard it if
             // the camera crossed again mid-compose (fall through to a fresh gather).
@@ -479,9 +207,9 @@ namespace SDVRadiance
                 // and do not start a second one. One rebuild at a time is what lets the gather and
                 // compose buffers be shared without locks.
                 if (job.ScreenId != _activeScreenId)
-                    return _hasWaterInMask;
+                    return true;
                 if (!job.Done)
-                    return _hasWaterInMask;
+                    return true;
                 _pendingWaterMaskJob = null;
                 if (job.AnchorOnly)
                 {
@@ -498,13 +226,20 @@ namespace SDVRadiance
                     && job.TileWidth == tilesW && job.TileHeight == tilesH)
                 {
                     ApplyWaterMask(job);
-                    return _hasWaterInMask;
+                    return true;
                 }
             }
+            return false;
+        }
 
+        /// <summary>True when the mask we already hold is still the right one, so nothing needs
+        /// rebuilding at all.</summary>
+        private bool CurrentMaskStillFits(GameLocation location, int startTileX, int startTileY,
+                                          int tilesW, int tilesH)
+        {
             // The mask content is TILE-ANCHORED (sub-tile camera scroll is handled by the
             // WorldTileOffset shader param), so it only changes when the view crosses a tile
-            // boundary � rebuilding the pixel grid every frame was a walking-stutter tax.
+            // boundary — rebuilding the pixel grid every frame was a walking-stutter tax.
             // The 10 s safety refresh only exists to pick up rare map mutations (a bridge
             // built, ice melting); everything routine invalidates via location/origin keys,
             // and world EVENTS (a fish pond placed, a map re-patched) bump MaskEpoch so the
@@ -521,13 +256,20 @@ namespace SDVRadiance
                 && Game1.ticks - _lastWaterBuildTick < 600)
             {
                 _waterMaskPixelSize = new Vector2(tilesW, tilesH);
-                // The window is fresh and no job is in flight � the cheap moment to build
+                // The window is fresh and no job is in flight — the cheap moment to build
                 // this location's full-map waterline anchor if it doesn't have one yet.
                 if (_hasWaterInMask)
                     MaybeKickAnchorJob(location);
-                return _hasWaterInMask;
+                return true;
             }
+            return false;
+        }
 
+        /// <summary>Gather the window on this thread, then compose it on a task. The old mask keeps
+        /// rendering until the new one lands.</summary>
+        private void StartWaterMaskRebuild(GameLocation location, int startTileX, int startTileY,
+                                           int tilesW, int tilesH)
+        {
             long gatherStartTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
             var newWaterMaskJob = GatherWaterMask(location, startTileX, startTileY, tilesW, tilesH);
             newWaterMaskJob.ScreenId = _activeScreenId;
@@ -535,7 +277,7 @@ namespace SDVRadiance
             if (gatherDurationMilliseconds > 8)
                 _monitor.Log($"[diag] water gather={gatherDurationMilliseconds:0.0}ms ({(location == _lastWaterLocation ? "scroll" : "location change")})", LogLevel.Debug);
 
-            // On a LOCATION change the old mask is another map's content � turn the stage
+            // On a LOCATION change the old mask is another map's content — turn the stage
             // off until the new compose lands (1-2 frames, hidden inside the warp fade).
             // A same-map scroll/zoom keeps rendering the old mask: its content is
             // world-anchored, so the old origin+size still map correctly.
@@ -544,7 +286,7 @@ namespace SDVRadiance
             ShadowRenderer.WaterOnScreen = _hasWaterInMask;
 
             // The gather already knows, on this thread, whether the window it just read contains
-            // water � but `_hasWaterInMask` was only ever updated when a COMPOSE landed, and a compose
+            // water — but `_hasWaterInMask` was only ever updated when a COMPOSE landed, and a compose
             // is discarded whenever the view moved while it ran. Walk continuously and no job ever
             // matches on completion, so the flag keeps whatever it held the last time the player
             // stood still: the same tile measured wAny=1 on one pass and wAny=0 on another, which
@@ -571,36 +313,29 @@ namespace SDVRadiance
                 }
             });
             _pendingWaterMaskJob = newWaterMaskJob;
-            return _hasWaterInMask;   // old mask renders this frame; the swap lands when compose does
         }
-
-        // ---- per-frame sprite mask (things ON the water must not ripple) ----
-
-        private RenderTarget2D? _spriteMaskRenderTarget;
-        private SpriteBatch? _spriteMaskSpriteBatch;
-
-        /// <summary>Solid exclusion box in WORLD px, centre-top anchored � bubbles, emotes:
-        /// UI riding in the world layer that the water must never warp.</summary>
-        private void StampUiBox(SpriteBatch spriteBatch, int cx, int top, int w, int h)
-        {
-            Vector2 tl = Game1.GlobalToLocal(Game1.viewport, new Vector2(cx - w / 2f, top));
-            spriteBatch.Draw(Game1.staminaRect, new Rectangle((int)tl.X, (int)tl.Y, w, h), Color.White);
-        }
-
-        // NPC.textAboveHead / textAboveHeadTimer went protected in 1.6 � the bubble mask below
-        // needs to know a bubble is showing and how wide its text is, nothing more.
-        private static readonly System.Reflection.FieldInfo? _npcTextField =
-            HarmonyLib.AccessTools.Field(typeof(NPC), "textAboveHead");
-        private static readonly System.Reflection.FieldInfo? _npcTextTimerField =
-            HarmonyLib.AccessTools.Field(typeof(NPC), "textAboveHeadTimer");
-        internal bool SpriteMaskReady;
 
         /// <summary>Is there any water within <paramref name="radiusTiles"/> of this tile in the
         /// current mask window? Both the sprite mask and the reflection RT stamp EVERY body, tree
         /// and placed object on screen, but only the ones whose pixels can actually meet water
         /// change anything: on a map with water in one corner that is a screenful of draw calls
         /// per frame spent on sprites nowhere near it. Unknown state answers yes, so a missing
-        /// mask never silently drops an exclusion.</summary>
+        /// mask never silently drops an exclusion.
+        ///
+        /// <para>
+        /// Answered from a SUMMED-AREA TABLE over the window's water flags, which makes the test
+        /// four array reads whatever the radius is. The scan it replaces was the right shape for
+        /// the handful of characters it was written for, and the wrong one by the time every tree,
+        /// bush, grass tuft, building and placed object on screen asked the same question: the
+        /// widest caller (a building, radius 9) walks a 19x19 block, and on a map where the answer
+        /// is NO - which is the common case, and the case the gate exists to make cheap - it walks
+        /// all 361 cells before saying so. Hundreds of callers times hundreds of cells is where a
+        /// large part of the entity mirror's third of a millisecond of pure CPU was going.
+        /// </para>
+        ///
+        /// <para>The table is rebuilt when the mask window is, not per frame, and the answer it
+        /// gives is the same answer cell for cell - this changes what the test costs and nothing
+        /// about what it decides.</para></summary>
         private bool WaterWithinTiles(int tileX, int tileY, int radiusTiles)
         {
             bool[]? flags = _waterTilesInMask;
@@ -612,6 +347,18 @@ namespace SDVRadiance
             int cx = tileX - _lastWaterTileX, cy = tileY - _lastWaterTileY;
             int x0 = Math.Max(0, cx - radiusTiles), x1 = Math.Min(tilesW - 1, cx + radiusTiles);
             int y0 = Math.Max(0, cy - radiusTiles), y1 = Math.Min(tilesH - 1, cy + radiusTiles);
+            if (x1 < x0 || y1 < y0)
+                return false;
+
+            int[]? sums = WaterTilePrefix(flags, tilesW, tilesH);
+            if (sums != null)
+            {
+                int stride = tilesW + 1;
+                int total = sums[(y1 + 1) * stride + (x1 + 1)] - sums[y0 * stride + (x1 + 1)]
+                          - sums[(y1 + 1) * stride + x0] + sums[y0 * stride + x0];
+                return total > 0;
+            }
+
             for (int y = y0; y <= y1; y++)
             {
                 int row = y * tilesW;
@@ -622,383 +369,102 @@ namespace SDVRadiance
             return false;
         }
 
+        private int[]? _waterTilePrefix;
+        private int _waterTilePrefixVersion = -1;
+        private bool[]? _waterTilePrefixSource;
+        private int _waterTilePrefixWidth, _waterTilePrefixHeight;
+        /// <summary>The water's bounding box within the window, in window tiles, built with the
+        /// table below. x1 &lt; x0 means the window holds no water at all.</summary>
+        private int _waterBoxX0, _waterBoxX1, _waterBoxY0, _waterBoxY1;
+
         /// <summary>
-        /// Bake every sprite that could be standing ON water � NPCs, farm animals
-        /// (swimming ducks!), critters � into a screen-space mask, called from
-        /// Display.RenderingWorld (the only spot where a render-target swap is safe).
-        /// The water shader excludes these pixels from ripple/mirror so sprites never
-        /// distort, while the water beside them keeps animating. Positions mirror the
-        /// game's own draw math (bottom-centre at the collision box feet).
+        /// Narrow a viewport-wide tile walk to the tiles that could possibly pass
+        /// <see cref="WaterWithinTiles"/> with the given downward offset and radius.
+        ///
+        /// <para>
+        /// Both the sprite mask and the entity mirror sweep every tile the camera can see looking
+        /// for terrain features, and ask about water once per feature they find. On a 1280x720
+        /// window that sweep is around nine hundred tile lookups a frame, on a map where the water
+        /// may be a pond in one corner - and each lookup goes through the game's net-field
+        /// dictionary, which is not a plain one. The per-feature question is now cheap; the sweep
+        /// that leads to it was still paid in full.
+        /// </para>
+        ///
+        /// <para>
+        /// Water lives inside a box, so the answer is only ever yes inside that box grown by the
+        /// radius (and shifted by the offset the caller looks down by). Outside it the old code
+        /// walked, looked up, asked and was told no. This is the same set of tiles, reached without
+        /// visiting the ones that were always going to fail.
+        /// </para>
         /// </summary>
-        public void BakeWaterSpriteMask()
+        /// <returns>False when nothing in the walk can qualify, so the caller can skip it whole.</returns>
+        private bool ClampWalkToWater(int downOffsetTiles, int radiusTiles,
+            ref int x0, ref int x1, ref int y0, ref int y1)
         {
-            long t0 = FrameCost.Begin();
-            BakeWaterSpriteMaskCore();
-            double ms = FrameCost.End(FrameCost.Part.SpriteMask, t0);
-            if (_timingOn) AccumulateBuildMilliseconds(4, ms);
+            bool[]? flags = _waterTilesInMask;
+            if (flags == null || _waterMask == null)
+                return true;    // unknown answers yes, exactly as the per-tile test does
+            int tilesW = _waterMask.Width / 16, tilesH = _waterMask.Height / 16;
+            if (tilesW <= 0 || tilesH <= 0 || flags.Length < tilesW * tilesH)
+                return true;
+            if (WaterTilePrefix(flags, tilesW, tilesH) == null)
+                return true;
+            if (_waterBoxX1 < _waterBoxX0)
+                return false;   // no water in the window: nothing in the walk can pass
+
+            int bx0 = _waterBoxX0 + _lastWaterTileX, bx1 = _waterBoxX1 + _lastWaterTileX;
+            int by0 = _waterBoxY0 + _lastWaterTileY, by1 = _waterBoxY1 + _lastWaterTileY;
+            x0 = Math.Max(x0, bx0 - radiusTiles);
+            x1 = Math.Min(x1, bx1 + radiusTiles);
+            y0 = Math.Max(y0, by0 - radiusTiles - downOffsetTiles);
+            y1 = Math.Min(y1, by1 + radiusTiles - downOffsetTiles);
+            return x1 >= x0 && y1 >= y0;
         }
 
-        private void BakeWaterSpriteMaskCore()
+        /// <summary>The window's flags as a summed-area table, built on demand and reused until the
+        /// flags change. Version-keyed rather than reference-keyed because the flag array is
+        /// refilled in place, and split screen hands a different window back per screen - both of
+        /// which a reference test would call unchanged.</summary>
+        private int[]? WaterTilePrefix(bool[] flags, int tilesW, int tilesH)
         {
-            SpriteMaskReady = false;
-            GameLocation? location = Game1.currentLocation;
-            if (location == null || !_hasWaterInMask)
-                return;
+            if (_waterTilePrefix != null && _waterTilePrefixVersion == _waterTilesVersion
+                && ReferenceEquals(_waterTilePrefixSource, flags)
+                && _waterTilePrefixWidth == tilesW && _waterTilePrefixHeight == tilesH)
+                return _waterTilePrefix;
 
-            RenderTargetBinding[] prev = _device.GetRenderTargets();
-            int w = prev.Length > 0 && prev[0].RenderTarget is RenderTarget2D rt ? rt.Width : Game1.viewport.Width;
-            int h = prev.Length > 0 && prev[0].RenderTarget is RenderTarget2D rt2 ? rt2.Height : Game1.viewport.Height;
-            if (w <= 0 || h <= 0)
-                return;
-            if (_spriteMaskRenderTarget == null || _spriteMaskRenderTarget.Width != w || _spriteMaskRenderTarget.Height != h)
+            int stride = tilesW + 1, need = stride * (tilesH + 1);
+            if (_waterTilePrefix == null || _waterTilePrefix.Length < need)
+                _waterTilePrefix = new int[need];
+            int[] sums = _waterTilePrefix;
+            Array.Clear(sums, 0, need);
+            // The bounding box comes free with the scan, and the tile walks that consume it would
+            // otherwise need their own pass over the same flags to find it.
+            _waterBoxX0 = tilesW; _waterBoxX1 = -1;
+            _waterBoxY0 = tilesH; _waterBoxY1 = -1;
+            for (int y = 0; y < tilesH; y++)
             {
-                _spriteMaskRenderTarget?.Dispose();
-                _spriteMaskRenderTarget = VramTally.Track(new RenderTarget2D(_device, w, h, false, SurfaceFormat.Color, DepthFormat.None), "water sprite mask");
+                int src = y * tilesW, row = (y + 1) * stride, above = y * stride;
+                int running = 0;
+                for (int x = 0; x < tilesW; x++)
+                {
+                    if (flags[src + x])
+                    {
+                        running++;
+                        if (x < _waterBoxX0) _waterBoxX0 = x;
+                        if (x > _waterBoxX1) _waterBoxX1 = x;
+                        if (y < _waterBoxY0) _waterBoxY0 = y;
+                        if (y > _waterBoxY1) _waterBoxY1 = y;
+                    }
+                    sums[row + x + 1] = sums[above + x + 1] + running;
+                }
             }
-            _spriteMaskSpriteBatch ??= new SpriteBatch(_device);
-
-            try
-            {
-                _device.SetRenderTarget(_spriteMaskRenderTarget);
-                _device.Clear(Color.Transparent);
-                var spriteBatch = _spriteMaskSpriteBatch;
-                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
-
-                // NPCs + monsters: bottom-centre at the collision-box feet, scale 4 �
-                // the same anchor the game draws them at (small bob/jump offsets are
-                // sub-pixel enough for an exclusion mask).
-                foreach (NPC c in ShadowRenderer.CharactersIn(location))
-                {
-                    if (c?.Sprite?.Texture == null || c.IsInvisible)
-                        continue;
-                    // drawOffset is the shift the game applies at DRAW time and never writes back
-                    // into Position or the collision box � a character on a seat, in the bus, or
-                    // posed by an event is drawn somewhere its box does not admit to. Without it
-                    // the exclusion landed off the body: the sprite kept rippling and a hole was
-                    // punched into clean water beside it.
-                    Rectangle bb = c.GetBoundingBox();
-                    Vector2 off = c.drawOffset;
-                    if (off != Vector2.Zero)
-                        bb.Offset((int)off.X, (int)off.Y);
-                    if (!WaterWithinTiles(bb.Center.X / 64, bb.Bottom / 64, 3))
-                        continue;
-                    StampSprite(spriteBatch, c.Sprite.Texture, c.Sprite.SourceRect, bb);
-                    // A SPEECH BUBBLE is part of the world layer too (drawn above AlwaysFront),
-                    // so a fisherman chatting over the river had his bubble rippled and tinted
-                    // like the water behind it. Mask a generous box where vanilla draws it
-                    // (~3 tiles above the feet, scroll background included); over-covering is
-                    // harmless � the box only exists for the seconds the bubble does.
-                    if ((_npcTextTimerField?.GetValue(c) as int? ?? 0) > 0
-                        && _npcTextField?.GetValue(c) is string say && say.Length > 0)
-                    {
-                        int tw = (int)(StardewValley.BellsAndWhistles.SpriteText.getWidthOfString(say) * 1.1f) + 64;
-                        var world = new Rectangle(bb.Center.X - tw / 2, bb.Top - 260, tw, 176);
-                        Vector2 tl = Game1.GlobalToLocal(Game1.viewport, new Vector2(world.X, world.Y));
-                        spriteBatch.Draw(Game1.staminaRect, new Rectangle((int)tl.X, (int)tl.Y, world.Width, world.Height), Color.White);
-                    }
-                    // Emotes (the thought/exclamation balloon) live in the world layer too.
-                    if (c.isEmoting)
-                        StampUiBox(spriteBatch, bb.Center.X, bb.Top - 160, 80, 128);
-                }
-                // The player's own bubble/emote � their BODY is excluded via PlayerMask, but
-                // the balloon floats above the mask's reach.
-                var pw = Game1.player;
-                if (pw != null && pw.isEmoting)
-                {
-                    Rectangle pbb = pw.GetBoundingBox();
-                    StampUiBox(spriteBatch, pbb.Center.X, pbb.Top - 160, 80, 128);
-                }
-                // The OTHER players' bodies. Yours is excluded per pixel by the shader, which
-                // reads one texture and can only ever be about one farmer, so in co-op everybody
-                // else's legs rippled along with the water they were standing in. Their colour
-                // bake is the right stamp for it: it is their exact shape at full opacity, with
-                // none of the head fade the shadow silhouette carries.
-                foreach (var other in ShadowRenderer.OtherFarmerImages)
-                {
-                    if (other.Colour == null)
-                        continue;
-                    Rectangle obb = other.Who.GetBoundingBox();
-                    Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
-                        new Vector2(obb.Center.X, obb.Bottom - 10f + other.Who.yOffset));
-                    spriteBatch.Draw(other.Colour, feet - new Vector2(ShadowRenderer.PlayerRtW / 2f, ShadowRenderer.PlayerRtH - 8f),
-                        Color.White);
-                    if (other.Who.isEmoting)
-                        StampUiBox(spriteBatch, obb.Center.X, obb.Top - 160, 80, 128);
-                }
-                // EVERYTHING THE GAME DRAWS FOR THE PLAYER'S TOOL. All of it lives in the world
-                // layer, outside the PlayerMask bake (which is the body only) and outside the
-                // sprite stamps, so anything held or swung over water waved with the water under
-                // it. Each piece stamps ITSELF, the same way crab pots do: whatever the game
-                // draws lands in the exclusion pixel for pixel.
-                //
-                // Two reports, opposite failures of the same gap, and both are fixed by widening
-                // this from "the fishing rod" to "the tool".
-                //
-                // The cast power meter used to be covered by a generous 288x240 box rather than
-                // its own shape, on the reasoning that it only shows for a fraction of a second.
-                // Holding the button to charge keeps it up far longer than that, and 288x240 is
-                // four and a half tiles by nearly four of SOLID exclusion. This mask is also what
-                // holds sprites out of the REFLECTION, so charging a cast punched a square hole in
-                // the reflections around the farmer: "when I have the reflection options and water
-                // features enabled, and I go fishing, the reflections disappear within a square
-                // radius". The meter now stamps its own pixels like everything else here.
-                //
-                // A swung axe, pickaxe, hoe or watering can had the opposite problem: the stamp
-                // ran only for a FishingRod, so no other tool was excluded at all and the water
-                // drew straight over it. Reported as "when swinging a tool where the tool crosses
-                // water, the tool renders under the water".
-                bool timingCast = pw?.CurrentTool is StardewValley.Tools.FishingRod rodTiming
-                                  && rodTiming.isTimingCast;
-                if (pw != null && (pw.UsingTool || timingCast))
-                {
-                    // Game1.drawTool renders through Game1.spriteBatch rather than the batch it is
-                    // handed, and FishingRod.draw reaches for it too, so point it at the mask batch
-                    // for the duration and restore it no matter what happens in between.
-                    var gameBatch = Game1.spriteBatch;
-                    try
-                    {
-                        Game1.spriteBatch = spriteBatch;
-                        // The rod carries the line, the bobber and the cast meter.
-                        if (pw.CurrentTool is StardewValley.Tools.FishingRod heldRod)
-                            heldRod.draw(spriteBatch);
-                        Game1.drawTool(pw);
-                    }
-                    catch { }
-                    finally { Game1.spriteBatch = gameBatch; }
-                }
-                // Farm animals (ducks paddle straight into ponds).
-                foreach (var a in location.animals.Values)
-                {
-                    if (a?.Sprite?.Texture == null)
-                        continue;
-                    Rectangle abb = a.GetBoundingBox();
-                    if (!WaterWithinTiles(abb.Center.X / 64, abb.Bottom / 64, 3))
-                        continue;
-                    StampSprite(spriteBatch, a.Sprite.Texture, a.Sprite.SourceRect, abb);
-                }
-                // Critters (seagulls, birds, frogs). Critter.draw puts the frame's bottom edge at
-                // position.Y, centred on position.X, and lifts it by the flight offset:
-                //   position + (-64, -128 + yJumpOffset + yOffset), scale 4.
-                //
-                // That -64/-128 is half a 32x32 frame, and the stamp here was written for a 16x16
-                // one. Every critter in the game is 32x32 (Critter's own constructor says so), so
-                // the exclusion box was pinned a whole 32 px right of the bird and 64 px below it:
-                // the seagull itself was left inside the rippling water while a bird-shaped patch
-                // of empty sea beside it was held still. That is the "objects above water, such as
-                // seagulls, fail to render correctly" report - the bird was being displaced by the
-                // water it was sitting on.
-                //
-                // The offsets come off the SOURCE RECT rather than being written out again, so a
-                // mod's critter with a different frame size lands correctly too, and the flight
-                // offset is honoured: a gull on the wing is drawn well above its own position and
-                // was being excluded at ground level.
-                if (location.critters != null)
-                {
-                    foreach (var cr in location.critters)
-                    {
-                        if (cr?.sprite?.Texture == null)
-                            continue;
-                        if (!WaterWithinTiles((int)(cr.position.X / 64f), (int)(cr.position.Y / 64f), 3))
-                            continue;
-                        Rectangle crs = cr.sprite.SourceRect;
-                        Vector2 tl = Game1.GlobalToLocal(Game1.viewport, cr.position
-                            + new Vector2(-crs.Width * 2f, -crs.Height * 4f + cr.yJumpOffset + cr.yOffset));
-                        spriteBatch.Draw(cr.sprite.Texture, tl, crs, Color.White, 0f, Vector2.Zero, 4f,
-                            cr.flip ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
-                    }
-                }
-
-                // World OBJECTS standing on a water tile: beach forage in a tide pool, a crab pot,
-                // anything dropped. They are drawn on top of the water, so the ripple was warping
-                // them along with it (reported: a sea urchin in a tide pool rippling like liquid).
-                // Objects are tile-keyed, so walk the visible tile range rather than the whole
-                // dictionary, the same way the canopy pass below does.
-                var vpO = Game1.viewport;
-                int otx0 = (int)Math.Floor((vpO.X - 128) / 64f), otx1 = (int)Math.Floor((vpO.X + vpO.Width + 128) / 64f);
-                int oty0 = (int)Math.Floor((vpO.Y - 128) / 64f), oty1 = (int)Math.Floor((vpO.Y + vpO.Height + 192) / 64f);
-                for (int ovY = oty0; ovY <= oty1; ovY++)
-                for (int ovX = otx0; ovX <= otx1; ovX++)
-                {
-                    if (!location.objects.TryGetValue(new Vector2(ovX, ovY), out var obj) || obj == null)
-                        continue;
-                    if (!WaterWithinTiles(ovX, ovY, 2))
-                        continue;
-                    // Let the OBJECT draw itself. Reconstructing the placement here (centre-bottom
-                    // of the tile, nudged up a third) is right for an ordinary placed item and
-                    // wrong for anything with its own draw: a CRAB POT sits a tile higher and bobs
-                    // on the swell, so the hole landed beside the pot instead of on it — water
-                    // notched next to it, and the flat unrippled patch read as a shadow that did
-                    // not match. Only this stamp's ALPHA is read, so drawing it in its own colours
-                    // costs nothing and it is the game's own geometry by construction.
-                    try { obj.draw(spriteBatch, ovX, ovY, 1f); }
-                    catch { /* a mod's draw threw — skip this object's exclusion */ }
-                }
-
-                // Tree/bush canopies overhanging a pond are SPRITES (terrain features), not
-                // map art � Pass C can't carve them, so leaves at the water's edge rippled.
-                // Stamp them with the same geometry the shadow baker uses. Walk only the on-screen
-                // tile range (+ a canopy margin) and look each tile up, instead of enumerating EVERY
-                // terrain feature every frame and culling � the old full walk was O(all crops/trees)
-                // per frame on a mature farm.
-                var viewport = Game1.viewport;
-                var tfDict = location.terrainFeatures;
-                int ctx0 = (int)Math.Floor((viewport.X - 256) / 64f), ctx1 = (int)Math.Floor((viewport.X + viewport.Width + 256) / 64f);
-                int cty0 = (int)Math.Floor((viewport.Y - 512) / 64f), cty1 = (int)Math.Floor((viewport.Y + viewport.Height + 768) / 64f);
-                for (int cvY = cty0; cvY <= cty1; cvY++)
-                for (int cvX = ctx0; cvX <= ctx1; cvX++)
-                {
-                    Vector2 tile = new(cvX, cvY);
-                    if (!tfDict.TryGetValue(tile, out var tf))
-                        continue;
-                    // A canopy only matters where it overhangs water. A grown tree's crown is
-                    // 96 source rows — SIX tiles above its trunk — so the search is centred well
-                    // above the base and reaches far enough to cover the whole crown plus slack.
-                    // Anything tighter would drop the stamp for a tree whose top overhangs a pond
-                    // several tiles north of it, and the leaves would ripple.
-                    if (!WaterWithinTiles(cvX, cvY - 3, 6))
-                        continue;
-                    switch (tf)
-                    {
-                        // Grown tree: canopy (0,0,48,96) at tile*64+(32,64), origin (24,96) � Tree.draw's math.
-                        case StardewValley.TerrainFeatures.Tree tree when tree.growthStage.Value >= 5 && !tree.stump.Value && tree.texture?.Value != null:
-                            spriteBatch.Draw(tree.texture.Value,
-                                Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
-                                StardewValley.TerrainFeatures.Tree.treeTopSourceRect, Color.White, 0f, new Vector2(24f, 96f), 4f,
-                                tree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
-                            break;
-                        // Mature fruit tree: 48x64 seasonal foliage at tile*64+(32,64), origin (24,80).
-                        case StardewValley.TerrainFeatures.FruitTree ft when ft.growthStage.Value >= 4 && !ft.stump.Value && ft.texture != null:
-                            int season = Game1.GetSeasonIndexForLocation(ft.Location);
-                            var fsrc = new Rectangle((12 + season * 3) * 16, ft.GetSpriteRowNumber() * 5 * 16, 48, 64);
-                            spriteBatch.Draw(ft.texture,
-                                Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
-                                fsrc, Color.White, 0f, new Vector2(24f, 80f), 4f,
-                                ft.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
-                            break;
-                        // Bush: bottom-centre = (tile.X*64 + (eff+1)*32, (tile.Y+1)*64) � the shadow baker's anchor.
-                        case StardewValley.TerrainFeatures.Bush bush when !bush.sourceRect.Value.IsEmpty:
-                            StampBushMask(bush, tile);
-                            break;
-                        // Everything the game still draws as a tree BELOW canopy stage: seeds,
-                        // sprouts, saplings, bush-stage growth, stumps. The case above takes only
-                        // stage 5 and up, so a sapling growing at the water's edge was left inside
-                        // the ripple and the effect ran over the plant. The shadow pass has taken
-                        // every stage since it was written, which is the asymmetry to watch for
-                        // here: the same object is a THING to one half of the mod and scenery to
-                        // the other. Same split that left buildings and the big bushes out.
-                        case StardewValley.TerrainFeatures.Tree small when small.texture?.Value != null:
-                            StampSmallTreeMask(small, tile);
-                            break;
-                        // A planted crop is a plant standing on the soil like any of the above.
-                        // Crop.draw puts origin (8,24) at drawPosition, and mirrors the sprite at
-                        // random, so both have to be reproduced or the carve lands beside the
-                        // plant rather than on it.
-                        case StardewValley.TerrainFeatures.HoeDirt { crop: { } crop }
-                             when !crop.forageCrop.Value && !crop.IsErrorCrop()
-                                  && crop.DrawnCropTexture != null && !crop.sourceRect.IsEmpty:
-                            spriteBatch.Draw(crop.DrawnCropTexture,
-                                Game1.GlobalToLocal(Game1.viewport, crop.drawPosition),
-                                crop.sourceRect, Color.White, 0f, new Vector2(8f, 24f), 4f,
-                                crop.flip.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
-                            break;
-                    }
-                }
-
-                // The BIG bushes live in a different list, which is the same split the reflection
-                // stamp had to learn: terrainFeatures is tile-keyed and holds the small stuff, while
-                // the decorative bushes a map places - and everything a content pack adds as
-                // scenery - are largeTerrainFeatures. The mirror was taught both lists and this mask
-                // was not, so a big bush overhanging a bank stayed inside the ripple and shimmered
-                // like the water it was standing in, while the planted bush beside it, identical to
-                // look at, sat still. Same list, same anchor, same cull radius as the mirror.
-                foreach (var ltf in location.largeTerrainFeatures)
-                {
-                    if (ltf is not StardewValley.TerrainFeatures.Bush lbush || lbush.sourceRect.Value.IsEmpty)
-                        continue;
-                    Vector2 ltile = lbush.Tile;
-                    if (!WaterWithinTiles((int)ltile.X, (int)ltile.Y + 4, 7))
-                        continue;
-                    StampBushMask(lbush, ltile);
-                }
-
-                // Buildings. A shed or a coop at the water's edge is an entity drawn from its own
-                // texture, so nothing above could see it, and the ripple ran straight through the
-                // building: reported as "notice the effect on the water behind" with a before and
-                // after shot of placing a coop. The mirror learned buildings and this mask did not,
-                // the same split the bushes above had.
-                //
-                // Building.draw pins the art's bottom-LEFT corner at
-                // (tileX*64, (tileY + tilesHigh)*64) + DrawOffset*4 at scale 4, so the top-left the
-                // stamp needs is that base line minus the source height. One under construction or
-                // mid-move is not drawn, so it must not be masked either.
-                foreach (var bld in location.buildings)
-                {
-                    if (bld?.texture?.Value == null || bld.isMoving || bld.daysOfConstructionLeft.Value > 0)
-                        continue;
-                    Rectangle bsrcRect = bld.getSourceRect();
-                    if (bsrcRect.IsEmpty)
-                        continue;
-                    Vector2 bOffset = (bld.GetData()?.DrawOffset ?? Vector2.Zero) * 4f;
-                    float bLeftX = bld.tileX.Value * 64f + bOffset.X;
-                    float bBaseY = (bld.tileY.Value + bld.tilesHigh.Value) * 64f + bOffset.Y;
-                    // Same reach the mirror uses: a barn is six source tiles tall, so its art covers
-                    // water a long way above the tile it is filed under.
-                    if (!WaterWithinTiles((int)((bLeftX + bsrcRect.Width * 2f) / 64f), (int)(bBaseY / 64f) - 3, 9))
-                        continue;
-                    spriteBatch.Draw(bld.texture.Value,
-                        Game1.GlobalToLocal(Game1.viewport, new Vector2(bLeftX, bBaseY - bsrcRect.Height * 4f)),
-                        bsrcRect, Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
-                }
-
-                // Bush: bottom-centre = (tile.X*64 + (eff+1)*32, (tile.Y+1)*64), the shadow baker's anchor.
-                // Pre-canopy tree stages, from Tree.draw's own source rects (the same table the
-                // shadow baker reads). Bottom-centred on the tile's bottom edge rather than
-                // reproducing vanilla's per-stage pin: these sprites are 16x16 or 16x32, so at
-                // scale 4 the stamp covers its tile, and a carve that covers slightly more than
-                // the plant costs nothing while one that covers slightly less leaves the ripple
-                // running across a leaf, which is the thing being fixed.
-                void StampSmallTreeMask(StardewValley.TerrainFeatures.Tree t, Vector2 at)
-                {
-                    Rectangle src = t.stump.Value
-                        ? new Rectangle(32, 96, 16, 32)
-                        : t.growthStage.Value switch
-                        {
-                            0 => new Rectangle(32, 128, 16, 16),   // seed
-                            1 => new Rectangle(0, 128, 16, 16),    // sprout
-                            2 => new Rectangle(16, 128, 16, 16),   // sapling
-                            _ => new Rectangle(0, 96, 16, 32),     // bush stage (3-4)
-                        };
-                    spriteBatch.Draw(t.texture.Value,
-                        Game1.GlobalToLocal(Game1.viewport, new Vector2(at.X * 64f + 32f, (at.Y + 1) * 64f)),
-                        src, Color.White, 0f, new Vector2(src.Width / 2f, src.Height), 4f,
-                        t.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
-                }
-
-                void StampBushMask(StardewValley.TerrainFeatures.Bush b, Vector2 at)
-                {
-                    var bsrc = b.sourceRect.Value;
-                    int eff = b.size.Value switch { 3 => 0, 4 => 1, _ => b.size.Value };
-                    spriteBatch.Draw(StardewValley.TerrainFeatures.Bush.texture.Value,
-                        Game1.GlobalToLocal(Game1.viewport, new Vector2(at.X * 64f + (eff + 1) * 32f, (at.Y + 1) * 64f)),
-                        bsrc, Color.White, 0f, new Vector2(bsrc.Width / 2f, bsrc.Height), 4f,
-                        b.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
-                }
-
-                spriteBatch.End();
-                SpriteMaskReady = true;
-            }
-            finally
-            {
-                _device.SetRenderTargets(prev);
-            }
+            _waterTilePrefixVersion = _waterTilesVersion;
+            _waterTilePrefixSource = flags;
+            _waterTilePrefixWidth = tilesW;
+            _waterTilePrefixHeight = tilesH;
+            return sums;
         }
 
-        private static void StampSprite(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, Rectangle bb)
-        {
-            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(bb.Center.X, bb.Bottom));
-            spriteBatch.Draw(texture, feet, src, Color.White, 0f,
-                new Vector2(src.Width / 2f, src.Height), 4f, SpriteEffects.None, 0f);
-        }
 
         // ---- helpers -------------------------------------------------------
 
@@ -1015,12 +481,6 @@ namespace SDVRadiance
             string p1 = System.IO.Path.Combine(dir, "radiance-watermask.png");
             using (var fs = System.IO.File.Create(p1))
                 _waterMask.SaveAsPng(fs, _waterMask.Width, _waterMask.Height);
-            if (_waterMaskCore != null)
-            {
-                string p2 = System.IO.Path.Combine(dir, "radiance-watercore.png");
-                using (var fs = System.IO.File.Create(p2))
-                    _waterMaskCore.SaveAsPng(fs, _waterMaskCore.Width, _waterMaskCore.Height);
-            }
             return $"saved {p1} (origin tile {_lastWaterTileX},{_lastWaterTileY}, player tile {Game1.player?.TilePoint})";
         }
     }

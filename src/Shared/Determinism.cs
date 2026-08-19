@@ -64,6 +64,42 @@ namespace SDVRadiance
         /// call site instead of scattering `if (Frozen)` through the stages.</summary>
         internal static float Settle(float eased, float target) => Frozen ? target : eased;
 
+        /// <summary>Vector form of <see cref="Settle(float, float)"/>. Exists because the eased
+        /// colours (metered exposure, window daylight, light shafts) are Vector3, and without an
+        /// overload they were simply left out of freeze - which is what happened.</summary>
+        internal static Microsoft.Xna.Framework.Vector3 Settle(
+            Microsoft.Xna.Framework.Vector3 eased, Microsoft.Xna.Framework.Vector3 target)
+            => Frozen ? target : eased;
+
+        /// <summary>As above for a direction (the light shafts ease theirs).</summary>
+        internal static Microsoft.Xna.Framework.Vector2 Settle(
+            Microsoft.Xna.Framework.Vector2 eased, Microsoft.Xna.Framework.Vector2 target)
+            => Frozen ? target : eased;
+
+        /// <summary>
+        /// Hold the GAME clock still while frozen. Called every tick; does nothing unless frozen.
+        ///
+        /// <para>This is the one place the author tool writes to the game, and it is here because
+        /// without it two captures of the same spot are not comparable and the harness cannot
+        /// certify anything. Ten in-game minutes pass every seven real seconds, so a capture and
+        /// its recheck land in different ten-minute blocks and the verifier refuses the pair -
+        /// which it should, because the light really did change between them.</para>
+        ///
+        /// <para>Re-setting <c>timeOfDay</c> before each capture is NOT enough, and that was tried:
+        /// setting the time does not reset <c>gameTimeInterval</c>, so a block that was nearly
+        /// over rolls straight past the value just written. It also leaves the sub-block position
+        /// itself unpinned, and that position is an input to the light nothing records - captures
+        /// whose metadata matched on all 164 fields still differed on every lightmap cell.</para>
+        ///
+        /// <para>Pinning the interval at 0 fixes both: the clock cannot roll over, and every
+        /// capture is taken at the same point within the block.</para>
+        /// </summary>
+        internal static void HoldGameClock()
+        {
+            if (Frozen)
+                Game1.gameTimeInterval = 0;
+        }
+
         /// <summary>Pin the clock at <see cref="CanonicalTick"/>. Returns the pinned tick.</summary>
         internal static int Freeze()
         {

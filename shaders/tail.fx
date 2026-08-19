@@ -38,6 +38,51 @@ float NightAmt;         // 0 by day .. 1 deep night — a touch more vignette at
 
 static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
 
+// ---- 3D LUT ---------------------------------------------------------------
+// A 32x32x32 cube unrolled into a 1024x32 strip: 32 slices side by side, one per blue level,
+// each slice 32x32 with red across and green down. That is what every LUT tool exports, so an
+// artist's own file drops straight in.
+//
+// The horizontal and vertical filtering is the hardware's (the sampler is set to linear from
+// C#); only the blue axis is interpolated here, between the two neighbouring slices. Both taps
+// are inset by half a texel, because a linear tap at a slice's edge would otherwise reach into
+// the NEXT slice and read a completely unrelated blue level - the classic LUT seam.
+texture LutTexture;
+sampler2D LutSampler = sampler_state
+{
+    Texture = <LutTexture>;
+    // LINEAR, unlike every other sampler in this chain. A LUT is a lookup along three continuous
+    // axes; reading it with point sampling would quantise the whole picture to 32 levels per
+    // channel, which is visible banding across any sky.
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+
+// NOT `register(s1)` with the texture bound from C#: DrawFull calls SetRenderTarget, which
+// unbinds the texture slots, so a hand-bound slot 1 was empty by the time the shader ran and
+// every pixel sampled black. Declaring it as a texture parameter lets MonoGame own the slot and
+// bind it with the draw, which is how BlurTexture and BloomTexture already work here.
+float LutAmount;    // 0 = LUT off entirely (the shipped default)
+
+static const float LUT_N = 32.0;
+
+float3 SampleLut(float3 c)
+{
+    c = saturate(c);
+    float slice = c.b * (LUT_N - 1.0);
+    float s0 = floor(slice);
+    float f  = slice - s0;
+    float s1 = min(s0 + 1.0, LUT_N - 1.0);
+
+    float u = (c.r * (LUT_N - 1.0) + 0.5) / (LUT_N * LUT_N);
+    float v = (c.g * (LUT_N - 1.0) + 0.5) / LUT_N;
+    float sliceU = 1.0 / LUT_N;
+
+    float3 a = tex2D(LutSampler, float2(u + s0 * sliceU, v)).rgb;
+    float3 b = tex2D(LutSampler, float2(u + s1 * sliceU, v)).rgb;
+    return lerp(a, b, f);
+}
+
 struct PixelInput
 {
     float4 Position : SV_POSITION;
@@ -98,6 +143,13 @@ float4 TailPS(PixelInput input) : SV_TARGET
         col = saturate(col);
 
         float3 outc = lerp(src.rgb, col, saturate(Strength));
+
+        // The LUT is the LAST artistic step and sits AFTER the parametric grade, so the sliders keep
+        // meaning exactly what they meant and the LUT is a look laid over the result rather than a
+        // replacement for them. It stays ahead of the blue-light filter, which is eye comfort rather
+        // than art and has to survive whatever look is chosen.
+        if (LutAmount > 0.0)
+            outc = lerp(outc, SampleLut(outc), saturate(LutAmount));
 
         outc *= float3(1.0 + BlueLight * 0.06, 1.0 - BlueLight * 0.06, 1.0 - BlueLight * 0.28);
 

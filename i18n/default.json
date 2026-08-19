@@ -1,7 +1,6 @@
 {
   "config.enabled.name": "Enable SDV-Radiance",
   "config.enabled.tooltip": "Master switch for the whole post-processing pipeline.",
-
   "config.preset.hint": "Tip: presets and your saved custom looks live in the on-screen tuner (open with the tuner hotkey, default F6). It previews live and always stays in sync.",
   "config.preset.name": "Quick preset",
   "config.preset.tooltip": "Apply a ready-made look. This overwrites the bloom and color-grading settings below; reopen the menu to see the updated values.",
@@ -10,14 +9,12 @@
   "config.preset.subtle": "Subtle",
   "config.preset.cinematic": "Cinematic",
   "config.preset.vibrant": "Vibrant",
-
   "config.section.misc": "Hotkeys & diagnostics",
   "config.section.hotkeys": "Hotkeys",
   "config.togglekey.name": "Toggle effects on/off",
   "config.togglekey.tooltip": "Instantly turn the whole post-processing stack on or off (quick A/B compare while playing).",
   "config.tunerkey.name": "Open live tuner",
   "config.tunerkey.tooltip": "Open the on-screen tuner overlay to adjust the look while seeing the scene live.",
-
   "tuner.title": "SDV-Radiance Tuner",
   "tuner.mylooks": "My looks",
   "tuner.save": "+ Save",
@@ -37,13 +34,11 @@
   "tuner.naming": "Name this look",
   "tuner.ok": "OK",
   "tuner.cancel": "Cancel",
-
   "config.section.bloom": "Bloom",
   "config.bloom.enabled.name": "Enable bloom",
   "config.bloom.enabled.tooltip": "Glow around bright areas such as lamps and sunlight.",
   "config.bloom.threshold.name": "Bloom threshold",
   "config.bloom.intensity.name": "Bloom intensity",
-
   "config.section.colorgrade": "Color grading",
   "config.colorgrade.enabled.name": "Enable color grading",
   "config.colorgrade.enabled.tooltip": "Cinematic tone/palette adjustment (done in linear color space).",
@@ -59,14 +54,29 @@
   "config.colorgrade.tonemap.tooltip": "Off by default. The frame is already low-dynamic-range, so this mainly helps when Brightness is pushed above 1 — otherwise it can look muddy.",
   "config.colorgrade.bluelight.name": "Blue-light filter",
   "config.colorgrade.bluelight.tooltip": "Eye-comfort warm shift: cuts blue and lifts red a touch, like a night-light mode. 0 = off. Works even with color grading turned off.",
-
+  "tuner.lut": "Look",
+  "tuner.lutamount": "Look strength",
+  "help.lutamount": "How much of the chosen look to mix in. 0 is off; the look is laid over the grading sliders, not swapped in for them.",
+  "config.colorgrade.lut.name": "Look (colour LUT)",
+  "config.colorgrade.lut.tooltip": "A finished look laid over the grading sliders, not instead of them. Every look here keeps black black: the game draws 12% of its pixels pure black, and 70% of a night interior, so anything that lifted the shadows would turn a dark room grey. Drop your own 1024x32 LUT strip in radiance-luts, beside your save games, and it is listed here as yours the next time the game starts. That folder is yours rather than the mod's, so updating the mod cannot delete it.",
+  "config.colorgrade.lut.none": "None",
+  "config.colorgrade.lut.warm-film": "Warm film",
+  "config.colorgrade.lut.verdant": "Verdant",
+  "config.colorgrade.lut.autumn-gold": "Autumn gold",
+  "config.colorgrade.lut.moonlit": "Moonlit",
+  "config.colorgrade.lut.cool-night": "Cool night",
+  "config.colorgrade.lut.washed-linen": "Washed linen",
+  "config.colorgrade.lut.identity": "Identity (no change)",
+  "config.colorgrade.lut.yours": "yours",
+  "config.colorgrade.lut.missing": "file not found",
+  "config.colorgrade.lutamount.name": "Look strength",
+  "config.colorgrade.lutamount.tooltip": "How much of the look to apply. 0 is off.",
   "config.section.godrays": "God rays (light shafts)",
   "config.godrays.enabled.name": "Enable god rays",
   "config.godrays.enabled.tooltip": "Shafts of light spreading out from LAMPS, torches and fires, strongest in a dark room or after dusk. Shafts from the sun are the separate switch below, and each works without the other.",
   "config.godrays.intensity.name": "Intensity",
   "config.godrays.threshold.name": "Light threshold",
   "config.godrays.density.name": "Ray length",
-
   "config.section.fog": "Volumetric fog",
   "config.fog.sectionday": "Day fog",
   "config.fog.sectionnight": "Night mist",
@@ -83,7 +93,6 @@
   "config.fog.density.name": "Density",
   "config.fog.scale.name": "Mist scale",
   "config.fog.speed.name": "Drift speed",
-
   "tuner.section.godrays": "God rays",
   "tuner.godrays": "Lamp shafts",
   "tuner.godraysintensity": "Intensity",
@@ -146,13 +155,11 @@
   "tuner.waterreflectstrength": "Reflection strength",
   "tuner.waterhere": "Water in this room",
   "tuner.waterhere.always": "Water here: always on (outdoor / level water)",
-
   "tuner.section.finishing": "Finishing",
   "tuner.vignette": "Vignette",
   "tuner.vignettestrength": "Vignette strength",
   "tuner.ca": "Chromatic aberration",
   "tuner.castrength": "Aberration strength",
-
   "config.section.tiltshift": "Tilt-shift (depth blur)",
   "config.tiltshift.enabled.name": "Enable tilt-shift",
   "config.tiltshift.enabled.tooltip": "Keep a sharp band across the middle and blur the top and bottom (fake miniature / depth-of-field look).",
@@ -167,7 +174,6 @@
   "config.tiltshift.strength.name": "Blur strength",
   "config.tiltshift.top.name": "Top blur amount",
   "config.tiltshift.bottom.name": "Bottom blur amount",
-
   "config.section.cloudshadow": "Cloud shadows",
   "config.cloudshadow.hidevanilla.name": "Hide vanilla cloud shadows",
   "config.cloudshadow.hidevanilla.tooltip": "Remove the base game's drifting Cloud-critter shadows (so only this mod's cloud shadows show).",
@@ -179,7 +185,6 @@
   "config.cloudshadow.count.name": "Cloud count",
   "config.cloudshadow.count.tooltip": "How many separate cloud banks share the screen - low = a few big drifting banks, high = many small puffs.",
   "config.cloudshadow.speed.name": "Drift speed",
-
   "config.section.finishing": "Vignette & chromatic aberration",
   "config.section.lens": "Lens",
   "config.section.water": "Water",
@@ -201,7 +206,6 @@
   "config.ca.enabled.name": "Enable chromatic aberration",
   "config.ca.enabled.tooltip": "Subtle color fringing toward the edges, like a camera lens. Keep it low on pixel art.",
   "config.ca.strength.name": "Aberration strength",
-
   "config.section.lighting": "Dynamic lighting",
   "config.lighting.flood.name": "Flood GI lighting",
   "config.lighting.flood.tooltip": "Occlusion-aware global illumination: real light sources and skylight flood across the map tile-by-tile, so canopies and buildings cast soft shade, lamps pool warm coloured light around corners, and windows spill light at night. Replaces the classic dynamic lighting below when enabled.",
@@ -227,7 +231,6 @@
   "config.lighting.windoweffects.tooltip": "Everything this mod does with windows, in one switch: daylight coming into a room, and the warm glow on house windows outdoors after dark. Turn it off if another mod handles your windows. Rooms still darken and brighten through the day either way.",
   "config.lighting.windowbeam.name": "Window beam and glass",
   "config.lighting.windowbeam.tooltip": "The part of window daylight you can see: lit glass, a beam leaning with the sun, and the patch of sun it lays on the floor. Turn this off if another window mod already draws these. The room still fills with daylight from its windows either way: that half is lighting rather than art, and a mod painting window pictures cannot do it for you.",
-
   "config.section.shadows": "Directional shadows",
   "config.shadows.enabled.name": "Enable directional shadows",
   "config.shadows.enabled.tooltip": "Cast a soft, sheared silhouette of each character away from the sun, leaning by time of day (outdoors, daytime, clear weather only). Experimental.",
@@ -241,7 +244,6 @@
   "config.shadows.heightdrop.name": "Building & ledge shadows",
   "config.shadows.heightdrop.tooltip": "Project ground shadows from walls, buildings, and ledges (requires the Height Framework mod).",
   "config.shadows.heightlength.name": "Building shadow length",
-
   "tuner.section.shadows": "Directional shadows",
   "tuner.shadows": "Directional shadows",
   "tuner.shadowstrength": "Strength",
@@ -249,7 +251,6 @@
   "tuner.shadowblur": "Edge softness",
   "tuner.shadowobjects": "Trees & bushes too",
   "tuner.shadowcasts": "Shadows per character",
-
   "config.section.camera": "Camera",
   "config.camera.mode.name": "Camera mode",
   "config.camera.mode.tooltip": "Off = vanilla snap. Smooth = ease toward the player while moving, snap crisply when you stop.",
@@ -257,14 +258,14 @@
   "config.camera.mode.smooth": "Smooth follow",
   "config.smoothcam.speed.name": "Follow speed",
   "config.smoothcam.speed.tooltip": "Smooth mode only. How quickly the camera catches up while moving. Lower = smoother/more trailing; 1.0 = instant.",
-
   "config.section.perf": "Performance",
   "config.renderscale.name": "Effect resolution",
   "config.renderscale.tooltip": "Resolution the effects are computed at, as a fraction of your window. The game world is always drawn at full size; only the effects use a smaller image, so lowering this costs much less GPU work (0.5 is about a quarter). 1.0 = native. 0.5 is the cleanest lower setting for pixel art; values in between are softer and can shimmer slightly while the camera moves.",
-
+  "config.renderscaleauto.name": "Lower it automatically when needed",
+  "config.renderscaleauto.tooltip": "Lets the mod drop the effect resolution by itself when your frame rate is not keeping up, and put it back when the scene gets easier. The slider above stays the ceiling: this only ever asks for less than you chose, never more. It moves one step at a time and only after the frame has been slow for a while, so it does not flicker. If a step down does not actually make the frame shorter, it is given back and the mod stops trying for a minute, because then something other than the effects is the bottleneck.",
+  "help.renderscaleauto": "Drops the effect resolution when frames are slow, and gives it back when they are not. The slider above is the ceiling.",
   "config.rendersharpness.name": "Upscale sharpening",
   "config.rendersharpness.tooltip": "How much sharpening is applied while scaling the effects back up to your window. 0 turns it off, 1 is the tuned default (it already gets stronger as you lower the effect resolution), and higher is crisper still. Has no effect at 1.0 effect resolution, because nothing is being scaled up.",
-
   "tuner.desc.looks": "Pick a ready-made look, or save your own.",
   "tuner.desc.perf": "How much work the effects do. Lower it if the game stutters.",
   "tuner.desc.colorgrade": "The overall colour of the picture: warmth, contrast, richness.",
@@ -278,23 +279,35 @@
   "tuner.desc.fog": "Daytime fog and the thin mist that gathers at night.",
   "tuner.desc.camera": "How the camera follows you as you walk.",
   "tuner.desc.debug": "Troubleshooting only. Leave this off unless you are reporting a problem.",
-
   "config.perfpreset.section": "Quality presets",
   "config.perfpreset.quality": "Quality",
   "config.perfpreset.balanced": "Balanced",
   "config.perfpreset.performance": "Performance",
+  "config.perfpreset.lowspec": "Low spec",
   "config.bench.section": "Measure this machine",
   "config.bench.run": "Run benchmark (10s)",
   "config.bench.running": "Measuring...",
   "config.bench.apply": "Use the suggested setting",
-
+  "tuner.section.perfreadout": "Cost readout",
+  "tuner.perfhud": "Show the cost readout on screen",
+  "help.perfhud": "Shows what each part of this mod costs, updating as you play, in the corner of the screen. The top line is your whole frame rate, not this mod's share of it. Useful for finding the exact spot where the game stutters. It also warns you when the game window has lost focus, which by itself makes the frame rate look much worse than it is.",
+  "tuner.gputime": "Also measure the graphics card",
+  "help.gputime": "Adds a second column showing what the graphics card spends, next to what the game spends asking it. Some effects are cheap to ask for and expensive to draw, so the two can differ a lot. Off by default because it talks to the graphics driver directly; if anything goes wrong it switches itself off rather than retrying.",
   "config.section.debug": "Diagnostics",
   "config.debug.name": "Debug logging",
   "config.debug.tooltip": "Log render-pipeline info to the SMAPI console to help troubleshoot.",
-
+  "config.report.name": "Write a diagnostic report",
+  "config.report.tooltip": "Writes everything needed to diagnose what you are looking at right now: your version, where you are standing, the time and weather, every setting, and the mods installed. It goes to a file AND into the SMAPI log, so on a phone, where there is no console and no file you can easily reach, you can still upload the log and share the link. Stand where the problem is before you tick it. It untocks itself straight away, which is normal.",
   "config.section.wip": "Coming soon (in development)",
   "config.wip.text": "These effects are planned but not implemented yet, so they have no settings here:\n- High-quality texture upscaling\nEach effect will get its own options as it lands.",
-
+  "tuner.waterreflectdistort": "Reflection distortion",
+  "help.waterreflectdistort": "How much the water is allowed to bend what it reflects. At 0 the reflection is a flat mirror, exactly like the reflection of a person, which has never moved. The water itself keeps rippling and sparkling either way: this is the image in it, not the surface, so ripple strength stays a separate control.",
+  "config.water.reflectdistort.name": "Reflection distortion",
+  "config.water.reflectdistort.tooltip": "Scales everything that bends the reflection: both the sideways shear from the wave and the displacement from the ripple. 0 is a flat mirror whichever reflection look is chosen, 1 is that look as designed. Independent of ripple strength, so calming the reflection never means flattening the water.",
+  "tuner.waterreflectbanding": "Reflection banding",
+  "help.waterreflectbanding": "How tall a band of the reflection moves as one when the water ripples. At 0 the reflection bends smoothly. Higher values move the reflection in steps, which is the drawn pixel-art look, and also what slices a reflected building into horizontal strips sliding over each other. 4 is what this mod looked like up to 1.5.6.",
+  "config.water.reflectbanding.name": "Reflection banding",
+  "config.water.reflectbanding.tooltip": "How tall a band of the reflection shares one sideways shift as the water ripples, in pixels. 0 shears every row on its own, so the reflection bends instead of breaking into strips. 4 is the look this mod shipped with up to 1.5.6.",
   "tuner.reflstyle": "Reflection look",
   "tuner.reflstyle.still": "Still water",
   "tuner.reflstyle.natural": "Natural",
@@ -304,9 +317,7 @@
   "help.reflstyle.still": "The surface keeps rippling, but the reflection in it barely moves and sits lighter, so you can read what is being reflected. Useful in rain, where the game makes the water half again as choppy on its own.",
   "help.reflstyle.natural": "The reflection moves with the surface, which is what this mod has always shipped.",
   "help.reflstyle.choppy": "The reflection is broken up by the water and reads deeper. For open sea and weather.",
-
   "tuner.windowcompat": "Off: another window mod is drawing its own beam.",
-
   "//": "Plain-language notes shown when the pointer rests on a control in the on-screen tuner.",
   "help.master": "Turns every effect in this mod on or off at once. Nothing here touches your save.",
   "help.colorgrade": "Changes the colours of the whole picture: contrast, how strong colours are, and whether the light reads warm or cool. Off by default, so what you see is the game's own colour.",
@@ -355,7 +366,6 @@
   "help.tiltbottom": "How much of the bottom of the screen is blurred.",
   "help.vignette": "Darkens the corners of the screen, the way a camera lens does, so the eye settles in the middle.",
   "help.ca": "Splits colour slightly apart towards the corners of the screen, the way a real lens does. The middle of the screen is never affected. Aberration is the camera term for it.",
-
   "tuner.godrayssun": "Sun shafts",
   "config.godrays.sun.name": "Sun shafts",
   "config.godrays.sun.tooltip": "Sunlight falling on the ground where a canopy lets it through: bright banded patches leaning with the time of day, cut by trees and buildings, gone under an overcast sky. This is dappled light on the ground, not a beam hanging in the air - denser and hazier on a foggy morning, otherwise mostly a brightening of what it lands on. Forests and treelines show it best; open ground is lit evenly and shows none. Independent of the lamp shafts switch.",

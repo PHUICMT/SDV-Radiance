@@ -368,7 +368,20 @@ namespace SDVRadiance
             float dx = Math.Max(0f, Math.Max(-uv.X, uv.X - 1f)) * aspect;   // reach is in height units
             float dy = Math.Max(0f, Math.Max(-uv.Y, uv.Y - 1f));
             float outside = (float)Math.Sqrt(dx * dx + dy * dy);
-            float taper = MathHelper.Clamp(1f - outside / (reach * 2f), 0f, 1f);
+            // FULL STRENGTH while the light can still reach the screen; the taper is only the
+            // band beyond that, where it contributes nothing anyway.
+            //
+            // This used to fall away from the moment the light crossed the edge, reaching zero at
+            // twice its reach - so a lamp sitting exactly one reach outside, which is the last
+            // place it can still light the edge of the picture, was contributing HALF of what it
+            // should. Walk toward it and that half climbs to whole, which is the lamp getting
+            // brighter as you approach it. A lamp bolted to the map is not a lamp being turned up:
+            // it lit that corner before you looked and it should be lighting it at full when the
+            // corner comes into view.
+            //
+            // Past its reach the light cannot touch a visible pixel, so the remaining band exists
+            // only so the cull is not a step. Nothing visible is being faded there.
+            float taper = MathHelper.Clamp(1f - (outside - reach) / Math.Max(0.001f, reach), 0f, 1f);
             taper = taper * taper * (3f - 2f * taper);                      // smooth at both ends
             if (taper <= 0.001f)
                 return;
@@ -549,7 +562,19 @@ namespace SDVRadiance
                 _lightWanted.Add(cand.Id);
                 // Keep its place and colour current even on a frame where it gets no slot: the
                 // fade it will eventually run has to start from where the light actually is.
-                float ramp = _lightRamp.TryGetValue(cand.Id, out LightFade prev) ? prev.Ramp : (sameRoom ? 0f : 1f);
+                //
+                // A light seen for the first time in this room starts at NOTHING, and that is the
+                // queue, not an oversight. A newcomer cannot take a slot off a light that is still
+                // lit until it has faded up to match it, by which time the one leaving has faded
+                // down - which is what makes a handover a crossfade instead of a swap. Starting a
+                // camera-revealed light at full was tried on 18 Aug to stop lamps appearing to
+                // switch on as you walk up to them, and it made the flicker WORSE, because every
+                // light that came into view arrived able to evict a fully lit one immediately:
+                //   +790186620(new 0.694)  -790383231(was 0.694)
+                // The approaching-lamp problem is the TAPER's to solve, and it is solved there.
+                float ramp = _lightRamp.TryGetValue(cand.Id, out LightFade prev)
+                    ? prev.Ramp
+                    : (sameRoom ? 0f : 1f);
                 _lightRamp[cand.Id] = new LightFade { Ramp = ramp, Uv = cand.Uv, Data = cand.Data, Flick = cand.Flick, Fire = cand.Fire };
             }
 
@@ -566,7 +591,22 @@ namespace SDVRadiance
             foreach (var kv in _lightRamp)
             {
                 float lit = _lightWanted.Contains(kv.Key) ? Math.Max(kv.Value.Ramp, WaitingLightFloor) : kv.Value.Ramp;
-                _lightWrite.Add((kv.Key, kv.Value, lit * Relevance(kv.Value.Uv, kv.Value.Data)));
+                // The same margin the WANTED sort gives an incumbent, applied to the sort that
+                // hands out the actual slots. There are two rankings here and only one of them
+                // was protecting the light already in a slot, so a newcomer could be refused a
+                // place on the wanted list and still take the slot on this one.
+                //
+                // Measured in the Saloon, forty candidate lights for twenty-four slots, walking:
+                //   +790186621(new 0.677)   -790514303(was 0.693)
+                // A light sitting at sixty-nine percent left the array in one frame so a light at
+                // sixty-eight could have its place. Neither was doing anything wrong; they were
+                // simply next to each other in a ranking with no hysteresis in it, and a step in
+                // either direction flips which one wins. That swap is the flicker people see when
+                // they walk through a room with more lamps in it than the shader has slots.
+                float rank = lit * Relevance(kv.Value.Uv, kv.Value.Data);
+                if (_lightChosen.Contains(kv.Key))
+                    rank *= IncumbentMargin;
+                _lightWrite.Add((kv.Key, kv.Value, rank));
             }
             if (_lightWrite.Count > MaxLights)
             {
@@ -635,7 +675,7 @@ namespace SDVRadiance
             float Score((Vector2 Uv, Vector4 Data, int Id, Vector2 World, float Flick, bool Fire) c)
             {
                 float r = Relevance(c.Uv, c.Data);
-                return _lightChosen.Contains(c.Id) ? r * 1.3f : r;   // incumbent's margin
+                return _lightChosen.Contains(c.Id) ? r * IncumbentMargin : r;
             }
         }
 
@@ -698,6 +738,12 @@ namespace SDVRadiance
         /// anything, so it would wait for ever; this lets it claim the slot once the light leaving
         /// has faded to about two percent, which is well under what an eye picks up going out.</summary>
         private const float WaitingLightFloor = 0.02f;
+
+        /// <summary>How much better a newcomer has to be before it takes a slot off the
+        /// light already in it. Shared by BOTH rankings - which list a light is wanted on,
+        /// and which lights get the slots - because protecting an incumbent on one of them
+        /// and not the other is the same as not protecting it at all.</summary>
+        private const float IncumbentMargin = 1.3f;
 
         /// <summary>A light the shader is being told about: where it is, what it looks like, and
         /// how far through its fade it is. Kept for lights that have LOST their slot as well as
@@ -780,7 +826,9 @@ namespace SDVRadiance
         {
             if (_windowTiles.Count == 0)
                 return;
-            _windowEffectsEase = MathHelper.Lerp(_windowEffectsEase, config.WindowEffectsEnabled ? 1f : 0f, 0.03f);
+            float windowEffectsTarget = config.WindowEffectsEnabled ? 1f : 0f;
+            _windowEffectsEase = Determinism.Settle(
+                MathHelper.Lerp(_windowEffectsEase, windowEffectsTarget, 0.03f), windowEffectsTarget);
             if (_windowEffectsEase < 0.02f)
                 return;
             bool outdoors = _windowCacheLocation?.IsOutdoors ?? true;

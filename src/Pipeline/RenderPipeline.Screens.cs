@@ -35,12 +35,15 @@ namespace SDVRadiance
         {
             // ---- water mask window ----
             public Texture2D? WaterMask;
-            public Texture2D? WaterMaskCore;
             public Texture2D? WaterSignedDistance;
             /// <summary>Published copy of the composed water flags, for the "is there water near
             /// this sprite" test. A copy rather than the compose buffer itself: that one is written
             /// by a worker thread and belongs to whichever rebuild is running, not to a screen.</summary>
             public bool[]? WaterTilesInMask;
+            /// <summary>Which refill of the flags above this screen is holding, so the
+            /// summed-area cache can tell two screens' windows apart. Both are refilled in
+            /// place, so without this a screen switch reads as no change at all.</summary>
+            public int WaterTilesVersion;
             public GameLocation? LastWaterLocation;
             public int LastWaterTileX = int.MinValue, LastWaterTileY = int.MinValue, LastWaterBuildTick = int.MinValue;
             public int LastWaterHookVersion = -1, LastWaterLabelVersion = -1, LastWaterEpoch = -1;
@@ -93,7 +96,6 @@ namespace SDVRadiance
             public void Release()
             {
                 WaterMask?.Dispose();
-                WaterMaskCore?.Dispose();
                 WaterSignedDistance?.Dispose();
                 OccluderMask?.Dispose();
                 FloodOccluderMask?.Dispose();
@@ -138,9 +140,9 @@ namespace SDVRadiance
         private void SaveScreenState(ScreenState s)
         {
             s.WaterMask = _waterMask;
-            s.WaterMaskCore = _waterMaskCore;
             s.WaterSignedDistance = _waterSignedDistanceTexture;
             s.WaterTilesInMask = _waterTilesInMask;
+            s.WaterTilesVersion = _waterTilesVersion;
             s.LastWaterLocation = _lastWaterLocation;
             s.LastWaterTileX = _lastWaterTileX;
             s.LastWaterTileY = _lastWaterTileY;
@@ -207,9 +209,9 @@ namespace SDVRadiance
         private void LoadScreenState(ScreenState s)
         {
             _waterMask = s.WaterMask;
-            _waterMaskCore = s.WaterMaskCore;
             _waterSignedDistanceTexture = s.WaterSignedDistance;
             _waterTilesInMask = s.WaterTilesInMask;
+            _waterTilesVersion = s.WaterTilesVersion;
             _lastWaterLocation = s.LastWaterLocation;
             _lastWaterTileX = s.LastWaterTileX;
             _lastWaterTileY = s.LastWaterTileY;

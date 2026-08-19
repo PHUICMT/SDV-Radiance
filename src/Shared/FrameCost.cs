@@ -68,10 +68,15 @@ namespace SDVRadiance
             // suspect left in our code. A count in the report turns that suspicion into
             // arithmetic: N calls times nanoseconds is a number, not a maybe.
             ShimDraws,
+            // A sprite too big for the largest bake slot. It can never be baked, so it is not a
+            // miss waiting to resolve - it is a sprite that will draw as bands for the rest of the
+            // session. Forest read twenty "misses" a frame, dead flat, against a cache at 65 of 464
+            // slots with no evictions: every reading said thrash and none of it was.
+            BakeTooBig,
         }
 
         private const int PartCount = 10;
-        private const int CounterCount = 6;
+        private const int CounterCount = 7;
         private const int WindowFrames = 300;      // five seconds at 60 fps
 
         private static readonly string[] Names =
@@ -103,6 +108,7 @@ namespace SDVRadiance
             "bake evictions (over cap)",
             "shadow sprites drawn",
             "vanilla-draw shim calls",
+            "too big to bake (draws banded)",
         };
 
         private static readonly long[] _countSum = new long[CounterCount];
@@ -139,7 +145,95 @@ namespace SDVRadiance
         private static long _lastFrameStamp;
         private static double _frameSum, _frameMax, _frameWindowSum, _frameWindowMax;
 
-        internal static long Begin() => Stopwatch.GetTimestamp();
+        /// <summary>
+        /// Frames measured while the game window did not have focus.
+        ///
+        /// <para>
+        /// MonoGame sleeps for <c>InactiveSleepTime</c>, twenty milliseconds by default, on every
+        /// frame where the window is inactive. A measurement taken across those frames is a
+        /// measurement of that sleep: the whole frame reads around 25 ms and the frame rate reads
+        /// about 39, while every part of this mod reads exactly what it always does. That is
+        /// indistinguishable from a real stall unless something counts it, and it cost one
+        /// unexplained result already, on a run driven from a script with the window in the
+        /// background. It matters for other people's reports too, since a player alt-tabbing to
+        /// copy the file is exactly how the last frames before a report get taken.
+        /// </para>
+        /// </summary>
+        private static int _unfocusedFrames, _unfocusedWindowFrames;
+
+        /// <summary>Smoothed frame time for the on-screen readout. The window figures only move
+        /// every 300 frames, which is five seconds of a number that is supposed to react.</summary>
+        private static double _frameEmaMs;
+
+        /// <summary>The same smoothing over focused frames only. Read by anything that STEERS on
+        /// the frame time rather than reporting it - see the note where it is fed.</summary>
+        private static double _focusedFrameEmaMs;
+
+        /// <summary>GPU nanoseconds per part, collected three frames late by <see cref="GpuTimer"/>
+        /// and folded in here so both columns share one window and one set of rules about which
+        /// frames count.</summary>
+        private static readonly double[] _gpuSum = new double[PartCount];
+        private static readonly double[] _gpuMax = new double[PartCount];
+        private static readonly int[] _gpuSamples = new int[PartCount];
+        private static readonly double[] _gpuWindowSum = new double[PartCount];
+        private static readonly double[] _gpuWindowMax = new double[PartCount];
+        private static readonly int[] _gpuWindowSamples = new int[PartCount];
+
+        /// <summary>Whether the game window has focus right now. Wrapped rather than inlined
+        /// because it is read once a frame from a static and the game object is not always up.</summary>
+        private static bool IsWindowFocused()
+        {
+            try { return StardewValley.Game1.game1?.IsActive ?? true; }
+            catch { return true; }
+        }
+
+        // ---- what the on-screen readout reads. No allocation: it is drawn every frame ----
+
+        /// <summary>Short names for the on-screen readout. The long ones are written for a file
+        /// somebody reads once; on screen they collided with their own numbers, which is worse than
+        /// being vague because a number you cannot read is not a measurement.</summary>
+        private static readonly string[] ShortNames =
+        {
+            "shadow bakes",
+            "shadow draw",
+            "flood lightmap",
+            "flood occluders",
+            "light occluders",
+            "water mask",
+            "sprite mask",
+            "entity mirror",
+            "scenery mirror",
+            "effect chain",
+        };
+
+        internal static int PartTotal => PartCount;
+        internal static string PartName(int part) => Names[part];
+        internal static string PartShortName(int part) => ShortNames[part];
+        internal static double SmoothedFrameMs => _frameEmaMs;
+        internal static double SmoothedFocusedFrameMs => _focusedFrameEmaMs;
+        internal static int UnfocusedFramesInWindow => _windowFrameCount > 0 ? _unfocusedWindowFrames : _unfocusedFrames;
+        internal static int FramesInWindow => _windowFrameCount > 0 ? _windowFrameCount : _frames;
+
+        internal static double PartAverageMs(int part)
+        {
+            int frames = FramesInWindow;
+            if (frames <= 0) return 0;
+            return (_windowFrameCount > 0 ? _windowSum[part] : _sum[part]) / frames;
+        }
+
+        internal static bool TryPartGpuAverageMs(int part, out double milliseconds)
+        {
+            int samples = _windowFrameCount > 0 ? _gpuWindowSamples[part] : _gpuSamples[part];
+            if (samples <= 0) { milliseconds = 0; return false; }
+            milliseconds = (_windowFrameCount > 0 ? _gpuWindowSum[part] : _gpuSum[part]) / samples;
+            return true;
+        }
+
+        internal static long Begin(Part part)
+        {
+            GpuTimer.MarkBegin((int)part);
+            return Stopwatch.GetTimestamp();
+        }
 
         internal static void Count(Counter counter, int n = 1) => _countThisFrame[(int)counter] += n;
 
@@ -162,6 +256,7 @@ namespace SDVRadiance
         /// its own debug totals does not have to time the same call twice.</summary>
         internal static double End(Part part, long started, double subtractMilliseconds = 0)
         {
+            GpuTimer.MarkEnd((int)part);
             double ms = (Stopwatch.GetTimestamp() - started) * 1000.0 / Stopwatch.Frequency - subtractMilliseconds;
             if (ms < 0) ms = 0;
             int i = (int)part;
@@ -183,6 +278,27 @@ namespace SDVRadiance
                 if (_countThisFrame[i] > _countMax[i]) _countMax[i] = _countThisFrame[i];
                 _countThisFrame[i] = 0;
             }
+            // Collect the GPU marks from three frames back, then fold them in. The chain encloses
+            // the grid rebuilds on the card exactly as it does on the processor, so the same
+            // subtraction is applied here and the two columns stay addable in the same way.
+            GpuTimer.NextFrame();
+            double nestedGpu = 0;
+            for (int i = (int)Part.GridFlood; i <= (int)Part.GridWaterMask; i++)
+            {
+                if (GpuTimer.TryTakeLastFrame(i, out double nested))
+                    nestedGpu += nested;
+            }
+            for (int i = 0; i < PartCount; i++)
+            {
+                if (!GpuTimer.TryTakeLastFrame(i, out double gpuMs))
+                    continue;
+                if (i == (int)Part.Chain)
+                    gpuMs = Math.Max(0, gpuMs - nestedGpu);
+                _gpuSum[i] += gpuMs;
+                _gpuSamples[i]++;
+                if (gpuMs > _gpuMax[i]) _gpuMax[i] = gpuMs;
+            }
+
             long now = Stopwatch.GetTimestamp();
             if (_lastFrameStamp != 0)
             {
@@ -190,11 +306,25 @@ namespace SDVRadiance
                 // A frame straddling a load screen, an alt-tab or a menu is minutes long and would
                 // drag the average somewhere no real frame ever went. Anything past a quarter of a
                 // second is one of those, not a slow frame.
+                bool focused = IsWindowFocused();
                 if (frameMs < 250)
                 {
                     _frameSum += frameMs;
                     if (frameMs > _frameMax) _frameMax = frameMs;
+                    _frameEmaMs = _frameEmaMs <= 0 ? frameMs : _frameEmaMs * 0.9 + frameMs * 0.1;
+                    // The same smoothing over FOCUSED frames only, for anything that steers on it
+                    // rather than reports it. MonoGame sleeps 20 ms a frame while the window is
+                    // inactive, which reads as 40 fps with nothing wrong; a controller watching the
+                    // headline number would take an alt-tab as evidence the machine cannot cope and
+                    // ratchet the quality down for a player who was not even looking.
+                    if (focused)
+                        _focusedFrameEmaMs = _focusedFrameEmaMs <= 0
+                            ? frameMs : _focusedFrameEmaMs * 0.9 + frameMs * 0.1;
                 }
+                // Counted, never discarded. Throwing the frame away would leave an average that
+                // silently described a different set of frames than the one it claims to.
+                if (!focused)
+                    _unfocusedFrames++;
             }
             _lastFrameStamp = now;
             if (++_frames < WindowFrames)
@@ -203,14 +333,35 @@ namespace SDVRadiance
             Array.Copy(_max, _windowMax, PartCount);
             Array.Copy(_countSum, _countWindowSum, CounterCount);
             Array.Copy(_countMax, _countWindowMax, CounterCount);
+            Array.Copy(_gpuSum, _gpuWindowSum, PartCount);
+            Array.Copy(_gpuMax, _gpuWindowMax, PartCount);
+            Array.Copy(_gpuSamples, _gpuWindowSamples, PartCount);
             _frameWindowSum = _frameSum; _frameWindowMax = _frameMax;
             _frameSum = _frameMax = 0;
+            _unfocusedWindowFrames = _unfocusedFrames;
+            _unfocusedFrames = 0;
             _windowFrameCount = _frames;
             Array.Clear(_sum, 0, PartCount);
             Array.Clear(_max, 0, PartCount);
             Array.Clear(_countSum, 0, CounterCount);
             Array.Clear(_countMax, 0, CounterCount);
+            Array.Clear(_gpuSum, 0, PartCount);
+            Array.Clear(_gpuMax, 0, PartCount);
+            Array.Clear(_gpuSamples, 0, PartCount);
             _frames = 0;
+        }
+
+        /// <summary>Drop every GPU figure, live and windowed, so the report stops showing a column
+        /// that is no longer being measured. Called when GPU timing is switched off; the CPU side is
+        /// deliberately left alone, since nothing about it changed.</summary>
+        internal static void ForgetGpu()
+        {
+            Array.Clear(_gpuSum, 0, PartCount);
+            Array.Clear(_gpuMax, 0, PartCount);
+            Array.Clear(_gpuSamples, 0, PartCount);
+            Array.Clear(_gpuWindowSum, 0, PartCount);
+            Array.Clear(_gpuWindowMax, 0, PartCount);
+            Array.Clear(_gpuWindowSamples, 0, PartCount);
         }
 
         /// <summary>Discard everything measured so far. Used when a measurement would be a lie
@@ -227,6 +378,12 @@ namespace SDVRadiance
             Array.Clear(_countMax, 0, CounterCount);
             Array.Clear(_countWindowMax, 0, CounterCount);
             Array.Clear(_countThisFrame, 0, CounterCount);
+            Array.Clear(_gpuSum, 0, PartCount);
+            Array.Clear(_gpuMax, 0, PartCount);
+            Array.Clear(_gpuSamples, 0, PartCount);
+            Array.Clear(_gpuWindowSum, 0, PartCount);
+            Array.Clear(_gpuWindowMax, 0, PartCount);
+            Array.Clear(_gpuWindowSamples, 0, PartCount);
             _frameSum = _frameMax = _frameWindowSum = _frameWindowMax = 0;
             _lastFrameStamp = 0;
             _frames = _windowFrameCount = 0;
@@ -243,21 +400,45 @@ namespace SDVRadiance
             if (frames <= 0)
                 return "no frames measured yet. Load a save, play for a few seconds and run this again.";
 
+            double[] gpuSum = complete ? _gpuWindowSum : _gpuSum;
+            double[] gpuMax = complete ? _gpuWindowMax : _gpuMax;
+            int[] gpuSamples = complete ? _gpuWindowSamples : _gpuSamples;
+            bool anyGpu = false;
+            for (int i = 0; i < PartCount && !anyGpu; i++) anyGpu = gpuSamples[i] > 0;
+
             var text = new System.Text.StringBuilder();
             text.AppendLine($"CPU submission time per frame, averaged over the last {frames} frames"
                           + (complete ? "" : " (a partial window)") + ":");
-            double total = 0;
+            double total = 0, gpuTotal = 0;
             for (int i = 0; i < PartCount; i++)
             {
                 double avg = sum[i] / frames;
                 total += avg;
                 // A part that never ran is worth a line saying so: "shadow draw 0.00" is the
                 // fastest way to see that the setting is off, and half of what a report needs.
-                text.AppendLine($"  {Names[i],-26} avg {avg,6:0.000} ms   worst {max[i],6:0.000} ms");
+                string line = $"  {Names[i],-26} avg {avg,6:0.000} ms   worst {max[i],6:0.000} ms";
+                if (anyGpu)
+                {
+                    // Averaged over the frames whose result actually came back, not over every
+                    // frame: a result still in flight is dropped rather than waited for, so dividing
+                    // by the window would quietly scale every GPU figure down by the drop rate.
+                    if (gpuSamples[i] > 0)
+                    {
+                        double gpuAvg = gpuSum[i] / gpuSamples[i];
+                        gpuTotal += gpuAvg;
+                        line += $"   | GPU avg {gpuAvg,6:0.000} ms   worst {gpuMax[i],6:0.000} ms";
+                    }
+                    else
+                    {
+                        line += "   | GPU        -";
+                    }
+                }
+                text.AppendLine(line);
             }
             // The parts do not overlap: the chain subtracts the grid rebuilds that run inside it,
             // so the lines add up to the total instead of counting that time twice.
-            text.AppendLine($"  {"TOTAL",-26} avg {total,6:0.000} ms   = {total / 16.67 * 100:0.0}% of a 60 fps frame");
+            text.AppendLine($"  {"TOTAL",-26} avg {total,6:0.000} ms   = {total / 16.67 * 100:0.0}% of a 60 fps frame"
+                          + (anyGpu ? $"   | GPU avg {gpuTotal,6:0.000} ms" : ""));
 
             double frameAvg = (complete ? _frameWindowSum : _frameSum) / frames;
             double frameWorst = complete ? _frameWindowMax : _frameMax;
@@ -269,11 +450,34 @@ namespace SDVRadiance
                 text.AppendLine($"  {"...of which measured above",-26}     {(frameAvg > 0 ? total / frameAvg * 100 : 0),5:0.0}%");
                 if (frameAvg < 17.2)
                     text.AppendLine("  The frame rate is at its cap here, so this scene has no problem to find.");
+                int unfocused = complete ? _unfocusedWindowFrames : _unfocusedFrames;
+                if (unfocused > 0)
+                {
+                    text.AppendLine();
+                    text.AppendLine($"  READ THE FRAME TIME WITH CARE: {unfocused} of these {frames} frames were drawn");
+                    text.AppendLine("  while the game window did not have focus. The game sleeps 20 ms on every one of");
+                    text.AppendLine("  those, so the whole-frame figure above is partly that sleep and not work anyone");
+                    text.AppendLine("  did. The per-part numbers are unaffected. Click the window and measure again.");
+                }
             }
             text.AppendLine();
-            text.AppendLine("This is the time spent SUBMITTING work, not the time the GPU spends doing it, so");
-            text.AppendLine("treat it as a floor. If these numbers are small and the game still runs slow, the");
-            text.AppendLine("bound is fill rate: run the benchmark on the Performance tab, which measures that.");
+            if (anyGpu)
+            {
+                text.AppendLine("The first column is the time spent SUBMITTING work; the GPU column is the time the");
+                text.AppendLine("card spent doing it, read back three frames late so asking never stalls anything.");
+                text.AppendLine("Where they disagree, the larger one is the cost: a part can be almost free to submit");
+                text.AppendLine("and expensive to draw, which is exactly how object shadows once read as a rounding");
+                text.AppendLine("error while costing 1.80 ms. A GPU line of '-' means no result came back for that");
+                text.AppendLine("part in this window, usually because the part did not run.");
+            }
+            else
+            {
+                text.AppendLine("This is the time spent SUBMITTING work, not the time the GPU spends doing it, so");
+                text.AppendLine("treat it as a floor. If these numbers are small and the game still runs slow, the");
+                text.AppendLine("bound is fill rate: run the benchmark on the Performance tab, which measures that.");
+                text.AppendLine($"GPU timing is {GpuTimer.Status}. Run radiance_gputime on to measure the card itself,");
+                text.AppendLine("then play for five seconds and run this again.");
+            }
             text.AppendLine("Shadow draw is the part that grows with how much scenery is on screen, so a heavily");
             text.AppendLine("modded map is where it shows. Turning off shadows for objects is the setting for it.");
 
@@ -292,6 +496,10 @@ namespace SDVRadiance
             text.AppendLine("screen than the cache holds and every one of them is re-baked as it scrolls. That");
             text.AppendLine("is what a foliage or map pack with hundreds of variants does, and the setting that");
             text.AppendLine("stops it is shadows for objects.");
+            text.AppendLine("'Too big to bake' is a different thing and does not resolve: those sprites are");
+            text.AppendLine("larger than the biggest slot, so they draw as a banded gradient rather than a");
+            text.AppendLine("silhouette, and they will keep doing so. A steady count there is art, usually from");
+            text.AppendLine("a map or foliage pack, drawn at a size the bake slots were not built for.");
             return text.ToString().TrimEnd();
         }
     }

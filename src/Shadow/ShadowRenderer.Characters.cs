@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
@@ -115,6 +114,45 @@ namespace SDVRadiance
         /// </summary>
         private void DrawLightShadows(SpriteBatch spriteBatch, GameLocation location, ModConfig config, float strength, float blur)
         {
+            CollectCastingLights(location);
+            TrimLightsToScreenBudget();
+
+            if (DiagnosticMonitor != null && _diagnosticFrameCount < 3)
+            {
+                _diagnosticFrameCount++;
+                DiagnosticMonitor.Log($"[shadow] light path: lights on-screen={_nearbyLightSources.Count}, ambient contact on", LogLevel.Debug);
+            }
+
+            _castsPerCaster = Math.Clamp(config.ShadowCastsPerCharacter, ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax);
+            float lenCfg = Math.Max(0.1f, config.DirectionalShadowLength);
+            float ambAlpha = strength * 0.4f;   // soft grounding pool; directional cast adds on top
+            // OUTDOORS AT NIGHT a lamp is the only light on a dark ground, so its cast shadow
+            // should read boldly (indoors stays subtle — bright rooms, tuned look). Boost only
+            // the directional CAST strength here, not the ambient pool (a dark blob under
+            // everyone far from any lamp would look wrong).
+            // Eased over ±10 game-minutes around dark - the 1.9x lamp-shadow boost used to
+            // land in a single tick, visibly thickening every cast shadow at once.
+            float nightBoost = location.IsOutdoors ? GameClock.RampAt(TrulyDark()) : 0f;
+            float castStrength = strength * MathHelper.Lerp(1.0f, 1.9f, nightBoost);
+
+            CastNpcShadows(spriteBatch, location, castStrength, lenCfg, ambAlpha, blur);
+            CastAnimalShadows(spriteBatch, location, castStrength, lenCfg, ambAlpha, blur);
+            CastPlayerShadows(spriteBatch, location, castStrength, lenCfg, ambAlpha, blur);
+
+            // Co-op partners, through the same two branches. They were absent from every caster
+            // list this class walks, which is why nobody but you ever cast a shadow indoors.
+            DrawOtherFarmerLightShadows(spriteBatch, location, castStrength, lenCfg, ambAlpha, blur);
+
+            // Furniture / big craftables / forage get a light ambient contact pool too (no per-light
+            // silhouette — a room full of overlapping cast copies reads as clutter).
+            if (config.DirectionalShadowObjects)
+                DrawObjectContactShadows(spriteBatch, location, ambAlpha * 0.85f, blur);
+        }
+
+        /// <summary>Fill <c>_nearbyLightSources</c> with the lights on screen that may cast:
+        /// real point lights and window lights, minus the drifting decorative ones.</summary>
+        private void CollectCastingLights(GameLocation location)
+        {
             // Build the on-screen light list — may be EMPTY (a room with no lamps/windows). We no
             // longer bail on empty: an always-present ambient CONTACT pool grounds every caster
             // even in a lightless room, and point lights ADD their directional shadow on top.
@@ -209,16 +247,23 @@ namespace SDVRadiance
             // right under its light) and the grounding pool halved itself because the code
             // believed a real cast existed. Feeding them needs a light BUDGET that clusters tiles
             // into sources and ranks by contribution, the way SelectLights does for the shader.
-            if (_lightPreviousPositions.Count > _activeLightIds.Count)
-                _lightPreviousPositions.Keys.Where(k => !_activeLightIds.Contains(k)).ToList().ForEach(k => _lightPreviousPositions.Remove(k));
             // The drift memory and the settle counters live and die with the position memory: a
             // firefly mod spawns and retires lights all night, and a set that only ever grew would
             // be a leak as well as a way for a reused id to inherit a stranger's verdict.
-            if (_driftingLightIds.Count > _activeLightIds.Count)
-                _driftingLightIds.Where(k => !_activeLightIds.Contains(k)).ToList().ForEach(k => _driftingLightIds.Remove(k));
-            if (_lightSteadyFrames.Count > _activeLightIds.Count)
-                _lightSteadyFrames.Keys.Where(k => !_activeLightIds.Contains(k)).ToList().ForEach(k => _lightSteadyFrames.Remove(k));
+            //
+            // Through a reused list rather than Where().ToList().ForEach(): that spelling allocates
+            // a list, an enumerator, a closure and two delegates EACH TIME, three times over, on a
+            // path that runs every frame. This file already carries a note about method-group
+            // conversion allocating per call for the same reason.
+            DropRetiredLightIds(_lightPreviousPositions);
+            DropRetiredLightIds(_driftingLightIds);
+            DropRetiredLightIds(_lightSteadyFrames);
+        }
 
+        /// <summary>Runaway guard: keep the lights nearest the screen centre when a location
+        /// carries an absurd number of them.</summary>
+        private void TrimLightsToScreenBudget()
+        {
             // A RUNAWAY GUARD, not a look choice. Every light on screen casts from every caster
             // now; this only stops a location carrying an absurd number of lights from turning one
             // frame into thousands of soft draws. It is the same 24 the lighting shader budgets,
@@ -239,25 +284,13 @@ namespace SDVRadiance
                 _nearbyLightSources.Sort((lightA, lightB) => Vector2.DistanceSquared(lightA.pos, mid).CompareTo(Vector2.DistanceSquared(lightB.pos, mid)));
                 _nearbyLightSources.RemoveRange(ScreenLightBudget, _nearbyLightSources.Count - ScreenLightBudget);
             }
+        }
 
-            if (DiagnosticMonitor != null && _diagnosticFrameCount < 3)
-            {
-                _diagnosticFrameCount++;
-                DiagnosticMonitor.Log($"[shadow] light path: lights on-screen={_nearbyLightSources.Count}, ambient contact on", LogLevel.Debug);
-            }
-
-            _castsPerCaster = Math.Clamp(config.ShadowCastsPerCharacter, ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax);
-            float lenCfg = Math.Max(0.1f, config.DirectionalShadowLength);
-            float ambAlpha = strength * 0.4f;   // soft grounding pool; directional cast adds on top
-            // OUTDOORS AT NIGHT a lamp is the only light on a dark ground, so its cast shadow
-            // should read boldly (indoors stays subtle — bright rooms, tuned look). Boost only
-            // the directional CAST strength here, not the ambient pool (a dark blob under
-            // everyone far from any lamp would look wrong).
-            // Eased over ±10 game-minutes around dark - the 1.9x lamp-shadow boost used to
-            // land in a single tick, visibly thickening every cast shadow at once.
-            float nightBoost = location.IsOutdoors ? GameClock.RampAt(TrulyDark()) : 0f;
-            float castStrength = strength * MathHelper.Lerp(1.0f, 1.9f, nightBoost);
-
+        /// <summary>Every NPC and monster the game is drawing: a grounding pool, plus one cast
+        /// silhouette per light that reaches them.</summary>
+        private void CastNpcShadows(SpriteBatch spriteBatch, GameLocation location, float castStrength,
+                                    float lenCfg, float ambAlpha, float blur)
+        {
             foreach (NPC npc in CharactersIn(location))
             {
                 if (npc == null || npc.IsInvisible || ShadowHiddenFor(npc) || npc.swimming.Value || npc.Sprite?.Texture == null)
@@ -280,7 +313,12 @@ namespace SDVRadiance
                 foreach (var (rot, st, a, _) in _lightShadowCasts)
                     DrawNpcShadow(spriteBatch, npc, rot, st, a, blur);
             }
+        }
 
+        /// <summary>The farm animals, through the same pool-plus-cast pair.</summary>
+        private void CastAnimalShadows(SpriteBatch spriteBatch, GameLocation location, float castStrength,
+                                       float lenCfg, float ambAlpha, float blur)
+        {
             foreach (FarmAnimal animal in AnimalsIn(location))
             {
                 if (animal?.Sprite?.Texture == null)
@@ -294,7 +332,13 @@ namespace SDVRadiance
                 foreach (var (rot, st, a, _) in _lightShadowCasts)
                     DrawAnimalShadow(spriteBatch, animal, rot, st, a, blur);
             }
+        }
 
+        /// <summary>The local player, through the same two branches the NPCs use: seated gets the
+        /// pool alone, standing gets the baked silhouette per light.</summary>
+        private void CastPlayerShadows(SpriteBatch spriteBatch, GameLocation location, float castStrength,
+                                       float lenCfg, float ambAlpha, float blur)
+        {
             // The player, through the same two branches the NPCs above use.
             {
                 Farmer sp = Game1.player;
@@ -318,15 +362,6 @@ namespace SDVRadiance
                             new Vector2(1f, st), depth, SpriteEffects.None, blur);
                 }
             }
-
-            // Co-op partners, through the same two branches. They were absent from every caster
-            // list this class walks, which is why nobody but you ever cast a shadow indoors.
-            DrawOtherFarmerLightShadows(spriteBatch, location, castStrength, lenCfg, ambAlpha, blur);
-
-            // Furniture / big craftables / forage get a light ambient contact pool too (no per-light
-            // silhouette — a room full of overlapping cast copies reads as clutter).
-            if (config.DirectionalShadowObjects)
-                DrawObjectContactShadows(spriteBatch, location, ambAlpha * 0.85f, blur);
         }
 
         /// <summary>Draw a soft dark contact pool (grounding shadow) centred at a screen point.</summary>
@@ -422,6 +457,44 @@ namespace SDVRadiance
         /// count. A light with no history is at zero, which is what keeps a firefly from casting
         /// on the frame it spawns, before its first movement can be measured.</summary>
         private readonly System.Collections.Generic.Dictionary<string, int> _lightSteadyFrames = new();
+
+        /// <summary>Scratch for <see cref="DropRetiredLightIds"/>: a dictionary cannot be written
+        /// while it is being enumerated, so the doomed keys are collected first. Reused, because
+        /// this happens every frame.</summary>
+        private readonly System.Collections.Generic.List<string> _retiredLightIdScratch = new();
+
+        /// <summary>Forget every id that is no longer among the lights on screen. Cheap when there
+        /// is nothing to do, which is the common case: the count test skips it entirely.</summary>
+        private void DropRetiredLightIds(System.Collections.Generic.Dictionary<string, Vector2> memory)
+        {
+            if (memory.Count <= _activeLightIds.Count)
+                return;
+            _retiredLightIdScratch.Clear();
+            foreach (string id in memory.Keys)
+                if (!_activeLightIds.Contains(id))
+                    _retiredLightIdScratch.Add(id);
+            foreach (string id in _retiredLightIdScratch)
+                memory.Remove(id);
+        }
+
+        private void DropRetiredLightIds(System.Collections.Generic.Dictionary<string, int> memory)
+        {
+            if (memory.Count <= _activeLightIds.Count)
+                return;
+            _retiredLightIdScratch.Clear();
+            foreach (string id in memory.Keys)
+                if (!_activeLightIds.Contains(id))
+                    _retiredLightIdScratch.Add(id);
+            foreach (string id in _retiredLightIdScratch)
+                memory.Remove(id);
+        }
+
+        private void DropRetiredLightIds(System.Collections.Generic.HashSet<string> memory)
+        {
+            if (memory.Count <= _activeLightIds.Count)
+                return;
+            memory.IntersectWith(_activeLightIds);   // a set can prune itself in one pass
+        }
         /// <summary>How long a small light must stand still before it is allowed to cast. Three
         /// frames is fifty milliseconds: a planted lamp clears it on the way in and nobody can see
         /// that it did, and a firefly never clears it because it moves first.</summary>

@@ -48,13 +48,35 @@ namespace SDVRadiance
 
         // Dynamic lighting: per-frame light list read from Game1.currentLightSources.
         /// <summary>Lights the shader can show at once: the flood path draws eight with a
-        /// shadow ray plus sixteen pool-only, so this is also the number of slots the ranking
+        /// shadow ray plus forty pool-only, so this is also the number of slots the ranking
         /// and the entry ramp have to guard. It must never exceed what a shader actually
         /// renders - when it did (16 here against the flood's 8) the ramp guarded a boundary
-        /// nobody could see, and a light crossing the REAL one still vanished in a frame.</summary>
-        private const int MaxLights = 24;
-        /// <summary>The classic lighting shader's own array size (MAX_LIGHTS in lighting.fx).</summary>
-        private const int ClassicLightSlots = 16;
+        /// nobody could see, and a light crossing the REAL one still vanished in a frame.
+        ///
+        /// <para>Forty-eight, up from twenty-four, because the cap was binding in ordinary rooms.
+        /// Marked frame by frame while walking: the saloon offers 29 to 32 lights and town at
+        /// night 30 to 50, and with 24 slots the lowest-ranked of them - big off-screen lamps
+        /// whose pools still cover a third of the screen - were evicted and re-admitted with
+        /// every few tiles walked, each time fading a screen-sized pool out and back in over a
+        /// third of a second. No ranking can make that invisible; only a budget the scene does
+        /// not fill can, so that the array changes only where a pool has already tapered to
+        /// nothing. The shader skips a slot in one branch where its pool cannot reach the pixel,
+        /// so the extra slots cost a distance test each, not a light each.</para></summary>
+        private const int MaxLights = 48;
+        /// <summary>The lighting shader's own array size. MUST EQUAL <c>MAX_LIGHTS</c> in
+        /// shaders/lighting.fx, and editing that file means recompiling it by hand with mgfxc -
+        /// dotnet build only copies the .mgfxo, so a shader change that is only made in the .fx
+        /// ships as the old binary.
+        ///
+        /// <para>This sat at 16 while <see cref="MaxLights"/> was 24, which is the very mistake
+        /// the comment above it describes as already learned. Lights ranked seventeenth to
+        /// twenty-fourth were ramped, counted as holding a slot, and reported by
+        /// radiance_lightwatch as on screen, while the upload truncated them away: the visible cut
+        /// was at 16 and every fade guarded 24. Walking moved lights across the real boundary with
+        /// no fade at all, which is the flicker people reported while walking through a lit room,
+        /// and it is invisible to the diagnostic because the diagnostic believed the wrong
+        /// number.</para></summary>
+        private const int ClassicLightSlots = MaxLights;
         private readonly Vector2[] _lightPositions = new Vector2[MaxLights];
         private readonly Vector4[] _lightShaderData = new Vector4[MaxLights]; // xyz = colour*boost, w = radiusUV
         /// <summary>1 where the light in that slot is an actual FLAME, 0 for everything else.
@@ -67,15 +89,17 @@ namespace SDVRadiance
         private Texture2D? _waterMask;         // PIXEL-accurate water mask (16 texels/tile): true water tiles + the painted
                                                // water inside shore-tile art, minus opaque Buildings/Front art (pier posts,
                                                // bridges, lily pads). Effects end exactly at the real waterline.
-        private Texture2D? _waterMaskCore;     // undilated per-TILE mask — true water bodies, used for the reflection's shoreline search
         private Texture2D? _waterSignedDistanceTexture;          // Alpha8 signed shore distance (Pass F): 128 = waterline, ±4/texel
-        private Color[]? _waterMaskCorePixels;
         private bool[]? _waterTileFlags;         // pre-dilation water flags — GATHER/COMPOSE scratch, owned by the
                                                  // rebuild in flight, not by any screen
         /// <summary>The composed water flags for the mask currently on screen. A copy taken when a
         /// rebuild lands, because <see cref="_waterTileFlags"/> belongs to whatever rebuild is
         /// running next and a worker thread is writing it.</summary>
         private bool[]? _waterTilesInMask;
+        /// <summary>Bumped every time <see cref="_waterTilesInMask"/> is refilled. The array is
+        /// reused in place, so nothing downstream can tell it changed by looking at it; the
+        /// summed-area table that answers "is there water near here" keys its cache off this.</summary>
+        private int _waterTilesVersion;
         private Color[]? _waterMaskPixels;         // pixel-mask upload buffer (tilesW*16 × tilesH*16)
         private bool[]? _waterEffectBits;         // scratch bits for the close/carve passes (effect channel)
         private bool[]? _waterMarchBits;        // march-channel bits (wider close: floats never block)
@@ -219,10 +243,6 @@ namespace SDVRadiance
         // they check last frame's DebugLogging instead of taking a config they don't need.
         private bool _timingOn;
 
-        private void AccumulateBuildTime(int idx, long t0)
-            => AccumulateBuildMilliseconds(idx,
-                (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
-
         private void AccumulateBuildMilliseconds(int idx, double ms)
         {
             _buildMilliseconds[idx] += ms;
@@ -241,7 +261,7 @@ namespace SDVRadiance
 
         private bool TimedBuild(ModConfig config, int idx, Func<bool> fn)
         {
-            long t0 = FrameCost.Begin();
+            long t0 = FrameCost.Begin(_gridCostParts[idx]);
             bool r = fn();
             double ms = FrameCost.End(_gridCostParts[idx], t0);
             if (config.DebugLogging) AccumulateBuildMilliseconds(idx, ms);
@@ -560,6 +580,27 @@ namespace SDVRadiance
             }
         }
 
+        /// <summary>Load a PNG by its full path, for the files that are not ours to place.</summary>
+        /// <remarks>Separate from <see cref="LoadTexture"/> rather than leaning on Path.Combine
+        /// quietly discarding its first argument when the second is absolute: a reader has to know
+        /// that rule to see that an absolute path even works, and a caller passing a relative one
+        /// by mistake would silently read from somewhere else.</remarks>
+        internal Texture2D? LoadTextureAt(string? fullPath)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(fullPath) || !File.Exists(fullPath))
+                    return null;
+                using var stream = File.OpenRead(fullPath);
+                return Texture2D.FromStream(_device, stream);
+            }
+            catch (Exception ex)
+            {
+                _monitor.Log($"Failed to load {fullPath}: {ex.Message}", LogLevel.Trace);
+                return null;
+            }
+        }
+
         private Effect? LoadEffect(string file)
         {
             try
@@ -686,6 +727,213 @@ namespace SDVRadiance
             VramTally.Track(new RenderTarget2D(_device, w, h, false, format, DepthFormat.None, 0,
                 RenderTargetUsage.PreserveContents), "effect chain buffers");
 
+        /// <summary>The stages that will run this frame, in their fixed order.
+        ///
+        /// <para>This is where a stage EARNS its place: each one is gated on its setting, on
+        /// what the scene actually contains, and on a presence fade that is still above zero,
+        /// so a stage that has just been switched off keeps rendering until it has faded out.
+        /// Splitting it out of Apply is what makes that readable: Apply is now the shape of a
+        /// frame, and the question "why is this effect not running" has one place to look.</para>
+        ///
+        /// <para>Returns the pipeline's own reused list, not a new one - a fresh list per frame
+        /// is 60 allocations a second for no reason. Nothing outside a frame may hold on to it.</para>
+        /// </summary>
+        private List<Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>> BuildStageList(
+            ModConfig config, int w, int h)
+        {
+            // Build the active stage list (fixed order), then run them ping-pong so
+            // the last stage writes straight back into the game's target.
+            bool outdoors = Game1.currentLocation?.IsOutdoors ?? false;
+
+            // PRESENCE fades: any stage that (re)appears mid-play — a warp, water coming
+            // on screen, stepping outdoors, a cutscene ending — eases in over ~0.5 s
+            // instead of popping. A stage that is OFF this frame resets to 0 so its next
+            // appearance fades again. (God rays and fog have their own eases already.)
+            // A WARP is the one place a hard reset is right: the new map's frame has nothing
+            // in common with the old one, and the game's own fade-to-black covers it.
+            if (!ReferenceEquals(Game1.currentLocation, _fadeLocation))
+            {
+                _fadeLocation = Game1.currentLocation;
+                _fadeWater = _fadeCloud = _fadeLighting = _fadeFlood = _fadeTilt = 0f;
+            }
+
+            // Reused list + cached delegates: method-group conversion allocates a new
+            // delegate per call, which at 60fps × up to 9 stages is constant GC churn.
+            var stages = _stages;
+            stages.Clear();
+            _stageNameIndices.Clear();
+            _lightingStageDelegate ??= RenderLighting; _waterStageDelegate ??= RenderWater; _cloudShadowStageDelegate ??= RenderCloudShadow;
+            _godRaysStageDelegate ??= RenderGodRays; _bloomStageDelegate ??= RenderBloom; _fogStageDelegate ??= RenderFog;
+            _colorGradeStageDelegate ??= ColorGrade; _tiltShiftStageDelegate ??= RenderTiltShift; _finishingStageDelegate ??= RenderFinishing;
+            _floodStageDelegate ??= RenderFloodLight;
+            // Lighting first, so everything downstream (bloom/god rays/grade) sees the
+            // lit result. FLOOD lighting (occlusion-aware GI lightmap) supersedes the
+            // old screen-space lighting stage when enabled — they model the same thing.
+            // The two lighting models are mutually exclusive, so a config switch is a
+            // CROSS-fade: the outgoing one keeps rendering (and keeps its inputs built)
+            // until its presence reaches zero, or the room would flash unlit for ~0.5 s.
+            bool floodOn = config.FloodLightingEnabled && _floodEffect != null
+                && TimedBuild(config, 0, () => _flood.Build(_device, w, h, config));
+            bool classicOn = !floodOn && config.LightingEnabled && _lighting != null;
+            if (floodOn)
+            {
+                BuildLightList(w, h, config);       // direct-light pools (shader term)
+                _isFloodOcclusionReady = TimedBuild(config, 1, () => BuildFloodOccluders(w, h));
+            }
+            else if (classicOn)
+                classicOn = BuildLightList(w, h, config);
+            if (classicOn)
+                _shadowsReady = config.LightingShadows && TimedBuild(config, 2, () => BuildOccluderMask(w, h));
+            _fadeFlood = floodOn ? Ease01(_fadeFlood) : Ease0(_fadeFlood);
+            _fadeLighting = classicOn ? Ease01(_fadeLighting) : Ease0(_fadeLighting);
+            if (_fadeFlood > FadeGone) AddStage(_floodStageDelegate!, 0);
+            if (_fadeLighting > FadeGone) AddStage(_lightingStageDelegate!, 1);
+            // Water ripple first (only if the current location actually has visible
+            // water tiles), so everything downstream sees the refracted result.
+            // Reflection is independent of the shimmer toggle: either switch keeps
+            // the stage alive (the other's params are zeroed inside RenderWater).
+            bool waterAllowedHere = WaterAllowedIn(Game1.currentLocation, config);
+            // The mask is still rebuilt every frame it needs to be; what changed is that its
+            // window-local answer no longer decides whether the STAGE exists. That answer flips
+            // every few tiles as the player walks, and each flip is a chance for the presence
+            // fade to be wrong - which it was, twice, both times reading as a flash near water.
+            // The location's answer changes only on a warp, behind the game's own fade.
+            // With every water switch off, skip the build entirely: gather+compose ran on each
+            // tile crossing for a result nothing rendered (reported as stutter near water with
+            // water disabled). Gated on the GLOBAL flags and the fade only - never the
+            // window-local answer above - and kept alive through the fade-out so a toggle
+            // still decays instead of popping.
+            bool waterConfigOn = config.WaterEnabled || config.WaterReflection;
+            if ((waterConfigOn && waterAllowedHere) || _fadeWater > FadeGone)
+                TimedBuild(config, 3, () => BuildWaterMask(w, h));
+            bool waterOn = waterConfigOn && _water != null && waterAllowedHere
+                && Game1.currentLocation is { } wloc && LocationHasWater(wloc);
+            _fadeWater = waterOn ? Ease01(_fadeWater) : Ease0(_fadeWater);
+            // Still rendered while fading: the mask is world-anchored, so the last one built
+            // stays correct for the decay frames. Switching the water effect off (or opting a
+            // room out from the tuner) used to drop the whole surface in one frame.
+            // With ZERO water pixels in the mask window the whole pass is a pixel-identical
+            // copy (every shader term is mask-gated), so skip the full-screen draw. This is
+            // NOT the twice-reverted flash-near-water mistake: the presence fade above stays
+            // driven by the LOCATION answer, so when water scrolls back into the window the
+            // stage rejoins at full fade and the surface simply enters at the screen edge -
+            // no ramp, no flash. Verified pixel-identical on the perfbase tour dumps.
+            // SKIPPING THE PASS IS A VISIBLE CHANGE, so it has to fade like everything else.
+            // Dropping it the moment the mask window holds no water was measured as
+            // pixel-identical at the tour's frozen spots and shipped on that basis - but a
+            // frozen spot is never standing ON the boundary. Walking across it in Town, the
+            // whole frame changed by about 4% in the frame the pass joined or left (Town
+            // x=29 walking south, y=86 to y=88; and y=90 walking east, x=35 to x=37), which
+            // is the "lighting spontaneously gets dimmer and brighter" report. With the pass
+            // forced off the same step measures 0.3%, so it belongs entirely to this gate.
+            // The presence blend below already exists to fade this pass; the skip simply
+            // jumped over it. Now the gate eases, and the pass is only dropped once the ease
+            // has reached zero - by which point there is nothing left to drop.
+            _waterInMaskEase = _hasWaterInMask ? Ease01(_waterInMaskEase) : Ease0(_waterInMaskEase);
+            ReportWaterWatch();
+            if (_fadeWater > FadeGone && _water != null && _waterMask != null && _waterInMaskEase > FadeGone) AddStage(_waterStageDelegate!, 2);
+            // Cloud shadows drift over the ground — outdoors only, and first so later
+            // effects (bloom/grade) see the shadowed scene. They are SUNLIGHT (or moonlight)
+            // being blocked, so they fade with dusk and at night exist only under a bright
+            // moon — never stamped over lamp-lit ground on a dark night.
+            // Rain, storm and snow put a solid overcast between the sun and the ground: no
+            // direct beam is left for a cloud to punch a crisp gap in, so the sharp drifting
+            // banks of a clear day must not roll across a rainy one. Cutting them entirely
+            // read as the effect being broken though (reported as "cloud shadows do not
+            // appear"), and a real overcast is not uniform either — it is slow, heavy mass
+            // with soft variation. So keep a fraction of the strength and reshape the field:
+            // fewer, larger, slower banks covering most of the ground (see RenderCloudShadow,
+            // which reads _cloudOvercastBlend). God rays and the night mist still bow out of
+            // this weather completely; they are direct-beam effects with nothing to soften to.
+            //
+            // Eased rather than switched: weather mods (Cloudy Skies) can flip this mid-day, and
+            // the presence fade only ramps a stage back IN, so a hard cut here would pop.
+            bool cloudOvercast = Game1.isRaining || Game1.isSnowing || Game1.isLightning;
+            Approach(ref _cloudWeatherAmount, cloudOvercast ? 0f : 1f, 0.05f);   // ~1s
+            _cloudOvercastBlend = 1f - _cloudWeatherAmount;
+            _cloudDayFactor = CloudDayFactor() * MathHelper.Lerp(OvercastCloudStrength, 1f, _cloudWeatherAmount);
+            bool cloudOn = config.CloudShadowEnabled && _cloudShadow != null && outdoors && _cloudDayFactor > 0.02f;
+            _fadeCloud = cloudOn ? Ease01(_fadeCloud) : Ease0(_fadeCloud);
+            if (_fadeCloud > FadeGone && _cloudShadow != null) AddStage(_cloudShadowStageDelegate!, 3);
+            // God rays only when there's a real light source on screen (lamp/torch/fire).
+            // Every on-screen lamp (up to MaxRayLights) is its own beam origin now — the
+            // old single pick either glided the one beam across the screen to the next
+            // lamp or had to fade through black to jump; per-light origins make both
+            // workarounds unnecessary, so the presence ease below only handles weather,
+            // daylight and lights entering/leaving the screen.
+            if (config.GodRaysEnabled && _godRays != null)
+            {
+                bool hasLight = UpdateRayLights(config);
+                // Rain/snow: the overcast sky kills visible shafts — fade the rays out (and
+                // back in when it clears). Eased through _godRayAmount so it never pops.
+                bool overcast = outdoors && (Game1.isRaining || Game1.isSnowing || Game1.isLightning);
+                // Shafts are a LOW-LIGHT phenomenon: they exist where a bright source beats a
+                // dim surround. At high noon outdoors nothing on screen is dim, so the same
+                // pass read as a wash hanging off every bright object ("a glow, not god rays").
+                // Ride the presence down to 30% at midday and back to full by
+                // 08:00 / 17:00 — golden hour and night keep the full look. Indoors untouched:
+                // a lamp in a dark room is exactly what rays are for.
+                float rayDay = 1f;
+                if (outdoors)
+                {
+                    int rm = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
+                    rayDay = 1f - 0.7f * (1f - MathHelper.Clamp(Math.Abs(rm - 750) / 270f, 0f, 1f));
+                }
+                float rayTarget = (hasLight && !overcast) ? rayDay : 0f;
+                Approach(ref _godRayAmount, rayTarget, 0.05f); // ~0.5s fade
+                if (_godRayAmount > 0.01f && _godRayLights.Count > 0) AddStage(_godRaysStageDelegate!, 4);
+            }
+            if (config.BloomEnabled && _bloom != null) AddStage(_bloomStageDelegate!, 5);
+            // Fog is a weak, patchy effect indoors (and covers the black border), so outdoors only.
+            // DAY fog and NIGHT mist are separate effects with separate toggles: day fog
+            // fades out over dusk exactly as the night mist (sparse blue wisps, clear
+            // weather only) fades in. Both amounts are EASED so toggling never pops.
+            float night = NightFactorNow();
+            float dayTarget = (config.FogEnabled && outdoors) ? config.FogDensity * (1f - night) : 0f;
+            float mistTarget = (config.FogNightMist && outdoors && !Game1.isRaining && !Game1.isSnowing)
+                ? config.FogNightMistDensity * night : 0f;
+            Approach(ref _fogDayAmount, dayTarget, 0.035f);    // ~0.5-1s ease
+            Approach(ref _fogMistAmount, mistTarget, 0.035f);
+            if (Math.Abs(dayTarget - _fogDayAmount) < 0.003f) _fogDayAmount = dayTarget;
+            if (Math.Abs(mistTarget - _fogMistAmount) < 0.003f) _fogMistAmount = mistTarget;
+            if ((_fogDayAmount > 0.004f || _fogMistAmount > 0.004f) && _fogEffect != null && outdoors) AddStage(_fogStageDelegate!, 6);
+            // Grade / finishing eases live HERE (not in the stage bodies) so the fused
+            // tail path and the fallback path advance them exactly once per frame each.
+            bool eventNow = Game1.eventUp || Game1.CurrentEvent != null;
+            Approach(ref _toneMapEase, config.ColorGradeEnabled && config.ColorGradeToneMap ? 1f : 0f, 0.08f);
+            Approach(ref _vignetteEase, config.VignetteEnabled ? 1f : 0f, 0.08f);
+            Approach(ref _caEase, config.ChromaticAberrationEnabled && !eventNow ? 1f : 0f, 0.15f);
+            bool gradeWanted = (config.ColorGradeEnabled || config.BlueLightFilter > 0.001f) && _colorGrade != null;
+            bool finishWanted = (config.VignetteEnabled || config.ChromaticAberrationEnabled) && _finishing != null;
+            // Tilt-shift presence first (its fade must be updated before the tail decision):
+            // NOT during events - the game draws the event UI (SKIP button) as part of the
+            // world frame, and the bottom blur band smears it unreadable. Cutscenes keep
+            // the rest of the stack (grade/bloom/fog/clouds) for the cinematic look.
+            bool tiltOn = config.TiltShiftEnabled && _tiltShift != null && !eventNow;
+            _fadeTilt = tiltOn ? Ease01(_fadeTilt) : Ease0(_fadeTilt);
+            bool tiltLive = _fadeTilt > FadeGone && _tiltShift != null;
+            // Fused tail: ONE draw instead of grade + finishing whenever both are wanted,
+            // CA is dormant, and tilt-shift is not in the chain. With CA live the fused
+            // pass cannot match the separate passes exactly (it needs neighbour samples of
+            // the graded image); with tilt live the order grade -> tilt -> finishing has a
+            // stage in the middle, so fusing the ends would change what gets blurred. Both
+            // fall back to the old chain; at the CA swap boundary its contribution is
+            // below the FadeGone floor, well under a pixel of channel split.
+            bool useTail = _tail != null && gradeWanted && finishWanted && _caEase <= FadeGone && !tiltLive;
+            if (!useTail && gradeWanted)
+                AddStage(_colorGradeStageDelegate!, 7);
+            // Kept in the list while it decays, so a cutscene STARTING pulls the blur out
+            // smoothly instead of snapping the frame sharp (it already eased back in).
+            if (tiltLive) AddStage(_tiltShiftStageDelegate!, 8);
+            // Finishing (vignette + chromatic aberration): true camera-lens pass, last.
+            // (CA is zeroed inside during events — it fringes the SKIP button's text.)
+            if (useTail)
+                AddStage(_tailStageDelegate ??= RenderTail, 10);
+            else if (finishWanted)
+                AddStage(_finishingStageDelegate!, 9);
+            return stages;
+        }
+
         public void Apply(SpriteBatch spriteBatch, ModConfig config)
         {
             if (!AnyEffectActive(config))
@@ -700,7 +948,7 @@ namespace SDVRadiance
             }
 
             _timingOn = config.DebugLogging;
-            _chainCostStarted = FrameCost.Begin();
+            _chainCostStarted = FrameCost.Begin(FrameCost.Part.Chain);
             _chainCostGridsAtStart = FrameCost.RunningGrids();
             if (config.DebugLogging) { _frameCount++; _performanceStopwatch.Restart(); }
 
@@ -712,43 +960,24 @@ namespace SDVRadiance
             }
 
             int w = target.Width, h = target.Height;
-            // RENDER SCALE: the game's own frame stays full size; only our chain works on a
-            // smaller image, which is a quadratic saving on the fill rate that actually bounds
-            // this mod. Every builder is anchored to Game1.viewport (tiles/world px) rather
-            // than the render target, and every shader input is UV or tile space, so nothing
-            // downstream has to learn about the smaller buffers - see EnsureTargets.
-            float renderScale = MathHelper.Clamp(config.RenderScale, 0.5f, 1f);
-            // ZOOMED OUT. The game does not shrink the world when you zoom out - it draws the same
-            // world pixels into a BIGGER buffer (window size / zoom) and then scales that whole
-            // buffer down onto the window. At 50% zoom on a 1280x720 window that is a 2560x1440
-            // frame: four times the pixels, every one of them averaged away on the way to the
-            // screen. Our chain was sized from that frame, so zooming out quadrupled the fill rate
-            // of every pass for a picture nobody could see any more of.
-            //
-            // Measured on an RTX 5080 in Town: the chain went 0.17 ms at 100% zoom to 0.45 ms at
-            // 50%, and the report showed "frame 2560x1440, effects computed at 2560x1440" behind a
-            // 1280x720 window. On a slower machine that multiplier is the whole of the "zooming out
-            // killed my frame rate below 15 fps, snowball effect" report.
-            //
-            // Working at the buffer's ON-SCREEN size costs nothing visible, because the game's own
-            // downscale is about to throw the difference away. It only ever lowers the number the
-            // player chose, so someone who has already turned the resolution down keeps their
-            // setting. A map screenshot is exempt: that frame is written to a file at full size and
-            // never goes near the window.
-            float zoomOut = Game1.options?.zoomLevel ?? 1f;
-            if (zoomOut > 0.05f && zoomOut < 0.999f && !Game1.game1.takingMapScreenshot)
-                renderScale = Math.Max(0.25f, Math.Min(renderScale, zoomOut));
-            int sw = Math.Max(1, (int)Math.Round(w * renderScale));
-            int sh = Math.Max(1, (int)Math.Round(h * renderScale));
-            bool scaled = sw != w || sh != h;
-            _lastScaledWidth = sw; _lastScaledHeight = sh;
-            _frameWidth = w; _frameHeight = h;
-            EnsureTargets(sw, sh, target.Format);
+            ChooseRenderSize(config, target, w, h, out int sw, out int sh,
+                             out bool scaled, out float renderScale);
+
+            // Tracked whatever the logging setting says. radiance_bench prints this size to any
+            // player who runs it, and with the tracking behind DebugLogging it printed -1x-1 to
+            // everyone who had not turned debug logging on, which is a diagnostic reporting that
+            // it does not know where it is.
+            if (w != _lastViewportWidth || h != _lastViewportHeight)
+            {
+                if (_lastViewportWidth != -1)
+                    _renderTargetResizeCount++;
+                _lastViewportWidth = w;
+                _lastViewportHeight = h;
+            }
 
             if (config.DebugLogging)
             {
                 _appliedFrameCount++;
-                if (w != _lastViewportWidth || h != _lastViewportHeight) { if (_lastViewportWidth != -1) _renderTargetResizeCount++; _lastViewportWidth = w; _lastViewportHeight = h; }
                 if (!_loggedOnce) { _monitor.Log($"Post-process {w}x{h}, format={target.Format}.", LogLevel.Debug); _loggedOnce = true; }
                 MaybeLogDiag(config);
             }
@@ -756,367 +985,43 @@ namespace SDVRadiance
             // Flush SMAPI's pending world draws into `target`.
             spriteBatch.End();
 
+            // Declared out here so the recovery path below can tell whether the scene buffer holds
+            // THIS frame. Redrawing a capture that was never taken would put an old frame on
+            // screen, which is worse than the half-processed one it was meant to rescue.
+            bool captureTaken = false;
+
             try
             {
-                _device.SetRenderTarget(_sceneRenderTarget);
-                // Filtering for the scale round trip, decided by measuring real captures rather
-                // than by argument (scratch script, three spots): against the full-res frame,
-                // linear down+up leaves roughly HALF the visibly-wrong pixels that point does
-                // (5-11% vs 11-24% off by more than 16/255). Point keeps edges hard but puts
-                // them in the wrong place, because a game pixel is 4 x zoom screen pixels and
-                // that is not a whole number at most zoom levels - so the blocks come back
-                // uneven, which also shimmers as the camera moves. Linear is slightly soft but
-                // lands the edges where they belong and stays still. Unscaled keeps Point so
-                // the 1:1 path is exactly the byte-identical one that was verified.
-                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque,
-                    scaled ? SamplerState.LinearClamp : SamplerState.PointClamp);
-                spriteBatch.Draw(target, new Rectangle(0, 0, sw, sh), Color.White);
-                spriteBatch.End();
+                // The CAPTURE is decided further down, once the stage list is known: at full
+                // resolution it is a byte-for-byte copy of a frame the chain could simply have
+                // read where it lay, and it measured as a third of the chain's own GPU time
+                // together with the upscale. See the comment at the capture itself.
 
-                // Auto-exposure meters the captured scene and eases the exposure.
+                var stages = BuildStageList(config, w, h);
+
+                Texture2D chainSource = CaptureSceneForChain(spriteBatch, target, stages, sw, sh, scaled, ref captureTaken);
+
+
+                // Auto-exposure meters the scene the chain is about to work on and eases the
+                // exposure. It reads whichever image that is, rather than the capture buffer by
+                // name, or a skipped capture would leave it metering a frozen frame forever.
                 if (config.ColorGradeEnabled && config.ColorGradeAuto)
-                    UpdateAutoExposure(spriteBatch);
+                    UpdateAutoExposure(spriteBatch, chainSource);
 
-                // Build the active stage list (fixed order), then run them ping-pong so
-                // the last stage writes straight back into the game's target.
-                bool outdoors = Game1.currentLocation?.IsOutdoors ?? false;
+                RunBenchExtraChains(spriteBatch, chainSource, stages, config);
 
-                // PRESENCE fades: any stage that (re)appears mid-play — a warp, water coming
-                // on screen, stepping outdoors, a cutscene ending — eases in over ~0.5 s
-                // instead of popping. A stage that is OFF this frame resets to 0 so its next
-                // appearance fades again. (God rays and fog have their own eases already.)
-                // A WARP is the one place a hard reset is right: the new map's frame has nothing
-                // in common with the old one, and the game's own fade-to-black covers it.
-                if (!ReferenceEquals(Game1.currentLocation, _fadeLocation))
-                {
-                    _fadeLocation = Game1.currentLocation;
-                    _fadeWater = _fadeCloud = _fadeLighting = _fadeFlood = _fadeTilt = 0f;
-                }
-
-                // Reused list + cached delegates: method-group conversion allocates a new
-                // delegate per call, which at 60fps × up to 9 stages is constant GC churn.
-                var stages = _stages;
-                stages.Clear();
-                _stageNameIndices.Clear();
-                _lightingStageDelegate ??= RenderLighting; _waterStageDelegate ??= RenderWater; _cloudShadowStageDelegate ??= RenderCloudShadow;
-                _godRaysStageDelegate ??= RenderGodRays; _bloomStageDelegate ??= RenderBloom; _fogStageDelegate ??= RenderFog;
-                _colorGradeStageDelegate ??= ColorGrade; _tiltShiftStageDelegate ??= RenderTiltShift; _finishingStageDelegate ??= RenderFinishing;
-                _floodStageDelegate ??= RenderFloodLight;
-                // Lighting first, so everything downstream (bloom/god rays/grade) sees the
-                // lit result. FLOOD lighting (occlusion-aware GI lightmap) supersedes the
-                // old screen-space lighting stage when enabled — they model the same thing.
-                // The two lighting models are mutually exclusive, so a config switch is a
-                // CROSS-fade: the outgoing one keeps rendering (and keeps its inputs built)
-                // until its presence reaches zero, or the room would flash unlit for ~0.5 s.
-                bool floodOn = config.FloodLightingEnabled && _floodEffect != null
-                    && TimedBuild(config, 0, () => _flood.Build(_device, w, h, config));
-                bool classicOn = !floodOn && config.LightingEnabled && _lighting != null;
-                if (floodOn)
-                {
-                    BuildLightList(w, h, config);       // direct-light pools (shader term)
-                    _isFloodOcclusionReady = TimedBuild(config, 1, () => BuildFloodOccluders(w, h));
-                }
-                else if (classicOn)
-                    classicOn = BuildLightList(w, h, config);
-                if (classicOn)
-                    _shadowsReady = config.LightingShadows && TimedBuild(config, 2, () => BuildOccluderMask(w, h));
-                _fadeFlood = floodOn ? Ease01(_fadeFlood) : Ease0(_fadeFlood);
-                _fadeLighting = classicOn ? Ease01(_fadeLighting) : Ease0(_fadeLighting);
-                if (_fadeFlood > FadeGone) AddStage(_floodStageDelegate!, 0);
-                if (_fadeLighting > FadeGone) AddStage(_lightingStageDelegate!, 1);
-                // Water ripple first (only if the current location actually has visible
-                // water tiles), so everything downstream sees the refracted result.
-                // Reflection is independent of the shimmer toggle: either switch keeps
-                // the stage alive (the other's params are zeroed inside RenderWater).
-                bool waterAllowedHere = WaterAllowedIn(Game1.currentLocation, config);
-                // The mask is still rebuilt every frame it needs to be; what changed is that its
-                // window-local answer no longer decides whether the STAGE exists. That answer flips
-                // every few tiles as the player walks, and each flip is a chance for the presence
-                // fade to be wrong - which it was, twice, both times reading as a flash near water.
-                // The location's answer changes only on a warp, behind the game's own fade.
-                // With every water switch off, skip the build entirely: gather+compose ran on each
-                // tile crossing for a result nothing rendered (reported as stutter near water with
-                // water disabled). Gated on the GLOBAL flags and the fade only - never the
-                // window-local answer above - and kept alive through the fade-out so a toggle
-                // still decays instead of popping.
-                bool waterConfigOn = config.WaterEnabled || config.WaterReflection;
-                if ((waterConfigOn && waterAllowedHere) || _fadeWater > FadeGone)
-                    TimedBuild(config, 3, () => BuildWaterMask(w, h));
-                bool waterOn = waterConfigOn && _water != null && waterAllowedHere
-                    && Game1.currentLocation is { } wloc && LocationHasWater(wloc);
-                _fadeWater = waterOn ? Ease01(_fadeWater) : Ease0(_fadeWater);
-                // Still rendered while fading: the mask is world-anchored, so the last one built
-                // stays correct for the decay frames. Switching the water effect off (or opting a
-                // room out from the tuner) used to drop the whole surface in one frame.
-                // With ZERO water pixels in the mask window the whole pass is a pixel-identical
-                // copy (every shader term is mask-gated), so skip the full-screen draw. This is
-                // NOT the twice-reverted flash-near-water mistake: the presence fade above stays
-                // driven by the LOCATION answer, so when water scrolls back into the window the
-                // stage rejoins at full fade and the surface simply enters at the screen edge -
-                // no ramp, no flash. Verified pixel-identical on the perfbase tour dumps.
-                // SKIPPING THE PASS IS A VISIBLE CHANGE, so it has to fade like everything else.
-                // Dropping it the moment the mask window holds no water was measured as
-                // pixel-identical at the tour's frozen spots and shipped on that basis - but a
-                // frozen spot is never standing ON the boundary. Walking across it in Town, the
-                // whole frame changed by about 4% in the frame the pass joined or left (Town
-                // x=29 walking south, y=86 to y=88; and y=90 walking east, x=35 to x=37), which
-                // is the "lighting spontaneously gets dimmer and brighter" report. With the pass
-                // forced off the same step measures 0.3%, so it belongs entirely to this gate.
-                // The presence blend below already exists to fade this pass; the skip simply
-                // jumped over it. Now the gate eases, and the pass is only dropped once the ease
-                // has reached zero - by which point there is nothing left to drop.
-                _waterInMaskEase = _hasWaterInMask ? Ease01(_waterInMaskEase) : Ease0(_waterInMaskEase);
-                ReportWaterWatch();
-                if (_fadeWater > FadeGone && _water != null && _waterMask != null && _waterInMaskEase > FadeGone) AddStage(_waterStageDelegate!, 2);
-                // Cloud shadows drift over the ground — outdoors only, and first so later
-                // effects (bloom/grade) see the shadowed scene. They are SUNLIGHT (or moonlight)
-                // being blocked, so they fade with dusk and at night exist only under a bright
-                // moon — never stamped over lamp-lit ground on a dark night.
-                // Rain, storm and snow put a solid overcast between the sun and the ground: no
-                // direct beam is left for a cloud to punch a crisp gap in, so the sharp drifting
-                // banks of a clear day must not roll across a rainy one. Cutting them entirely
-                // read as the effect being broken though (reported as "cloud shadows do not
-                // appear"), and a real overcast is not uniform either — it is slow, heavy mass
-                // with soft variation. So keep a fraction of the strength and reshape the field:
-                // fewer, larger, slower banks covering most of the ground (see RenderCloudShadow,
-                // which reads _cloudOvercastBlend). God rays and the night mist still bow out of
-                // this weather completely; they are direct-beam effects with nothing to soften to.
-                //
-                // Eased rather than switched: weather mods (Cloudy Skies) can flip this mid-day, and
-                // the presence fade only ramps a stage back IN, so a hard cut here would pop.
-                bool cloudOvercast = Game1.isRaining || Game1.isSnowing || Game1.isLightning;
-                Approach(ref _cloudWeatherAmount, cloudOvercast ? 0f : 1f, 0.05f);   // ~1s
-                _cloudOvercastBlend = 1f - _cloudWeatherAmount;
-                _cloudDayFactor = CloudDayFactor() * MathHelper.Lerp(OvercastCloudStrength, 1f, _cloudWeatherAmount);
-                bool cloudOn = config.CloudShadowEnabled && _cloudShadow != null && outdoors && _cloudDayFactor > 0.02f;
-                _fadeCloud = cloudOn ? Ease01(_fadeCloud) : Ease0(_fadeCloud);
-                if (_fadeCloud > FadeGone && _cloudShadow != null) AddStage(_cloudShadowStageDelegate!, 3);
-                // God rays only when there's a real light source on screen (lamp/torch/fire).
-                // Every on-screen lamp (up to MaxRayLights) is its own beam origin now — the
-                // old single pick either glided the one beam across the screen to the next
-                // lamp or had to fade through black to jump; per-light origins make both
-                // workarounds unnecessary, so the presence ease below only handles weather,
-                // daylight and lights entering/leaving the screen.
-                if (config.GodRaysEnabled && _godRays != null)
-                {
-                    bool hasLight = UpdateRayLights(config);
-                    // Rain/snow: the overcast sky kills visible shafts — fade the rays out (and
-                    // back in when it clears). Eased through _godRayAmount so it never pops.
-                    bool overcast = outdoors && (Game1.isRaining || Game1.isSnowing || Game1.isLightning);
-                    // Shafts are a LOW-LIGHT phenomenon: they exist where a bright source beats a
-                    // dim surround. At high noon outdoors nothing on screen is dim, so the same
-                    // pass read as a wash hanging off every bright object ("a glow, not god rays").
-                    // Ride the presence down to 30% at midday and back to full by
-                    // 08:00 / 17:00 — golden hour and night keep the full look. Indoors untouched:
-                    // a lamp in a dark room is exactly what rays are for.
-                    float rayDay = 1f;
-                    if (outdoors)
-                    {
-                        int rm = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
-                        rayDay = 1f - 0.7f * (1f - MathHelper.Clamp(Math.Abs(rm - 750) / 270f, 0f, 1f));
-                    }
-                    float rayTarget = (hasLight && !overcast) ? rayDay : 0f;
-                    Approach(ref _godRayAmount, rayTarget, 0.05f); // ~0.5s fade
-                    if (_godRayAmount > 0.01f && _godRayLights.Count > 0) AddStage(_godRaysStageDelegate!, 4);
-                }
-                if (config.BloomEnabled && _bloom != null) AddStage(_bloomStageDelegate!, 5);
-                // Fog is a weak, patchy effect indoors (and covers the black border), so outdoors only.
-                // DAY fog and NIGHT mist are separate effects with separate toggles: day fog
-                // fades out over dusk exactly as the night mist (sparse blue wisps, clear
-                // weather only) fades in. Both amounts are EASED so toggling never pops.
-                float night = NightFactorNow();
-                float dayTarget = (config.FogEnabled && outdoors) ? config.FogDensity * (1f - night) : 0f;
-                float mistTarget = (config.FogNightMist && outdoors && !Game1.isRaining && !Game1.isSnowing)
-                    ? config.FogNightMistDensity * night : 0f;
-                Approach(ref _fogDayAmount, dayTarget, 0.035f);    // ~0.5-1s ease
-                Approach(ref _fogMistAmount, mistTarget, 0.035f);
-                if (Math.Abs(dayTarget - _fogDayAmount) < 0.003f) _fogDayAmount = dayTarget;
-                if (Math.Abs(mistTarget - _fogMistAmount) < 0.003f) _fogMistAmount = mistTarget;
-                if ((_fogDayAmount > 0.004f || _fogMistAmount > 0.004f) && _fogEffect != null && outdoors) AddStage(_fogStageDelegate!, 6);
-                // Grade / finishing eases live HERE (not in the stage bodies) so the fused
-                // tail path and the fallback path advance them exactly once per frame each.
-                bool eventNow = Game1.eventUp || Game1.CurrentEvent != null;
-                Approach(ref _toneMapEase, config.ColorGradeEnabled && config.ColorGradeToneMap ? 1f : 0f, 0.08f);
-                Approach(ref _vignetteEase, config.VignetteEnabled ? 1f : 0f, 0.08f);
-                Approach(ref _caEase, config.ChromaticAberrationEnabled && !eventNow ? 1f : 0f, 0.15f);
-                bool gradeWanted = (config.ColorGradeEnabled || config.BlueLightFilter > 0.001f) && _colorGrade != null;
-                bool finishWanted = (config.VignetteEnabled || config.ChromaticAberrationEnabled) && _finishing != null;
-                // Tilt-shift presence first (its fade must be updated before the tail decision):
-                // NOT during events - the game draws the event UI (SKIP button) as part of the
-                // world frame, and the bottom blur band smears it unreadable. Cutscenes keep
-                // the rest of the stack (grade/bloom/fog/clouds) for the cinematic look.
-                bool tiltOn = config.TiltShiftEnabled && _tiltShift != null && !eventNow;
-                _fadeTilt = tiltOn ? Ease01(_fadeTilt) : Ease0(_fadeTilt);
-                bool tiltLive = _fadeTilt > FadeGone && _tiltShift != null;
-                // Fused tail: ONE draw instead of grade + finishing whenever both are wanted,
-                // CA is dormant, and tilt-shift is not in the chain. With CA live the fused
-                // pass cannot match the separate passes exactly (it needs neighbour samples of
-                // the graded image); with tilt live the order grade -> tilt -> finishing has a
-                // stage in the middle, so fusing the ends would change what gets blurred. Both
-                // fall back to the old chain; at the CA swap boundary its contribution is
-                // below the FadeGone floor, well under a pixel of channel split.
-                bool useTail = _tail != null && gradeWanted && finishWanted && _caEase <= FadeGone && !tiltLive;
-                if (!useTail && gradeWanted)
-                    AddStage(_colorGradeStageDelegate!, 7);
-                // Kept in the list while it decays, so a cutscene STARTING pulls the blur out
-                // smoothly instead of snapping the frame sharp (it already eased back in).
-                if (tiltLive) AddStage(_tiltShiftStageDelegate!, 8);
-                // Finishing (vignette + chromatic aberration): true camera-lens pass, last.
-                // (CA is zeroed inside during events — it fringes the SKIP button's text.)
-                if (useTail)
-                    AddStage(_tailStageDelegate ??= RenderTail, 10);
-                else if (finishWanted)
-                    AddStage(_finishingStageDelegate!, 9);
-
-                // Benchmark amplification: run the whole chain a few extra times into scratch
-                // and throw the result away. Only the COST is wanted - the slope between one
-                // chain and many is what survives after the game's own drawing and the probe's
-                // own overhead cancel out. (Stage bodies that ease a value advance faster
-                // while this runs; the benchmark lasts seconds and warns that it flickers.)
-                for (int rep = 0; rep < _benchExtraChains && stages.Count > 0; rep++)
-                {
-                    Texture2D scratch = _sceneRenderTarget!;
-                    for (int i = 0; i < stages.Count; i++)
-                    {
-                        RenderTarget2D d = ReferenceEquals(scratch, _fullResolutionPingA) ? _fullResolutionPingB! : _fullResolutionPingA!;
-                        stages[i](spriteBatch, scratch, d, config);
-                        scratch = d;
-                    }
-                }
-
-                Texture2D current = _sceneRenderTarget!;
-                if (_timingOn) _stageCountTotal += stages.Count;
-                for (int i = 0; i < stages.Count; i++)
-                {
-                    // Scaled: even the last stage stays in the small buffers, and one plain quad
-                    // blows the finished frame back up. That extra full-size write is cheaper
-                    // than letting the last shader pass do the upscale, and it keeps the
-                    // upscale filter under our control instead of the stage's sampler.
-                    RenderTarget2D dest = i == stages.Count - 1 && !scaled
-                        ? target
-                        : (ReferenceEquals(current, _fullResolutionPingA) ? _fullResolutionPingB! : _fullResolutionPingA!);
-                    if (_timingOn)
-                    {
-                        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
-                        stages[i](spriteBatch, current, dest, config);
-                        int si = _stageNameIndices[i];
-                        double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-                        _stageMilliseconds[si] += ms;
-                        if (ms > _stageMaxMilliseconds[si]) _stageMaxMilliseconds[si] = ms;
-                        _stageRunFrames[si]++;
-                    }
-                    else
-                        stages[i](spriteBatch, current, dest, config);
-                    current = dest;
-                }
-
-                // Upscale back to the window, linear for the reason above, with RCAS
-                // sharpening folded into the same draw (see upscale.fx) so the stretch costs
-                // no more than it did while giving most of the softness back. Sharpen harder
-                // the further the image was scaled down, matching where the measurements put
-                // the best value at each step.
-                if (scaled && stages.Count > 0)
-                {
-                    if (_upscale != null)
-                    {
-                        GetParam(_upscale, "OutputTexel")?.SetValue(new Vector2(1f / w, 1f / h));
-                        float autoSharpen = MathHelper.Lerp(0.5f, 0.25f, (renderScale - 0.5f) / 0.5f);
-                        GetParam(_upscale, "Sharpness")?.SetValue(autoSharpen * MathHelper.Clamp(config.RenderSharpness, 0f, 2f));
-                        _upscale.CurrentTechnique = _upscale.Techniques["Upscale"];
-                        DrawFull(spriteBatch, current, target, _upscale);
-                    }
-                    else
-                    {
-                        _device.SetRenderTarget(target);
-                        spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp);
-                        spriteBatch.Draw(current, new Rectangle(0, 0, w, h), Color.White);
-                        spriteBatch.End();
-                    }
-                    current = target;
-                }
-
-                // Both ends of the chain, from the same frame, with the device put back where it
-                // was. The scene target still holds the captured frame: stages read it but write
-                // to the ping buffers, so it is untouched by the time we get here.
-                if (GainProbe && stages.Count > 0)
-                {
-                    ProbeSceneMean = ProbeMean(spriteBatch, _sceneRenderTarget!, target);
-                    ProbeOutMean = ProbeMean(spriteBatch, target, target);
-                    ProbeGates = $"n{stages.Count}"
-                        + $" occ{(_isFloodOcclusionReady ? 1 : 0)}"
-                        + $" shd{(_shadowsReady ? 1 : 0)}"
-                        + $" wmask{(_hasWaterInMask ? 1 : 0)}"
-                        + $" fW{_fadeWater:F2} fF{_fadeFlood:F2} fL{_fadeLighting:F2}"
-                        + $" fC{_fadeCloud:F2} fT{_fadeTilt:F2} lights{_lightCount}"
-                        + $" expo{_meteredExposure:F3}";
-                }
-
-                // Every config-enabled stage can still bail at runtime (indoors, no water,
-                // no lights, rays faded out). If none ran, the device is still on _sceneRenderTarget
-                // from the capture — restore the game's target or everything drawn after
-                // us this frame lands in our scratch buffer.
-                if (stages.Count == 0)
-                    _device.SetRenderTarget(target);
-
-                // Ease the whole stack in: blend the untouched scene back over the
-                // result and let it fade out, so effects don't pop on when enabled
-                // or after a load. `current` is the game's target at this point.
-                _masterFade = Determinism.Settle(Math.Min(1f, _masterFade + 0.045f), 1f);
-                if (_masterFade < 1f && stages.Count > 0)
-                {
-                    _device.SetRenderTarget(target);
-                    spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
-                    spriteBatch.Draw(_sceneRenderTarget, new Rectangle(0, 0, w, h), Color.White * (1f - _masterFade));
-                    spriteBatch.End();
-                }
-
-                RedrawEventSkipButton(spriteBatch, target);
-
-                if (GpuProbe)
-                {
-                    double gpuMs = ProbeGpuTime(spriteBatch, target, w, h);
-                    if (BenchRunning)
-                        BenchTick(config, gpuMs);
-                    else if (EffectCostRunning)
-                        EffectCostTick(config, gpuMs);
-                }
-
-                // Last thing in the frame, so the capture is the finished picture (skip button
-                // included). A failed dump must not cost the player their frame, so it carries
-                // its own guard.
-                if (_pendingDump != null)
-                {
-                    try { WriteDump(spriteBatch, target, w, h, config); }
-                    catch (Exception ex) { _monitor.Log($"radiance_dump failed: {ex.Message}", LogLevel.Warn); }
-                    finally { _pendingDump = null; }
-                }
+                Texture2D current = RunStageChain(spriteBatch, chainSource, target, stages, scaled, config);
+                current = UpscaleToWindow(spriteBatch, current, target, stages.Count, scaled, config, w, h, renderScale);
+                FillGainProbe(spriteBatch, target, stages.Count);
+                FinishFrame(spriteBatch, target, stages.Count, w, h, config);
+                // After every stage has had its say, so the columns are the values the frame was
+                // actually built from rather than the ones it started with.
+                ReportBrightWatch(config);
+                ReportMark(config);
             }
             catch (Exception ex)
             {
-                _monitor.Log($"Post-process failed, leaving frame unmodified this frame: {ex.Message}", LogLevel.Warn);
-                // The message ALONE is useless. "Index was out of range" repeated forty times named
-                // neither the list nor the pass, and finding it meant reading the light code by eye
-                // looking for a plausible index - which is exactly the guessing this mod's
-                // diagnostics exist to replace. Once per session, on the first failure, the whole
-                // exception goes in at Error so the SMAPI log a reporter attaches already carries
-                // the line number. Once, because a per-frame fault would otherwise write a stack
-                // trace sixty times a second into their log file.
-                if (!_loggedPostProcessFailure)
-                {
-                    _loggedPostProcessFailure = true;
-                    _monitor.Log("First failure in full (this is logged once per session):\n" + ex, LogLevel.Error);
-                }
-                // A stage may have thrown between a Begin and its End — close the batch
-                // first, or the recovery Begin below throws too (and would escape).
-                try { spriteBatch.End(); } catch { }
-                try
-                {
-                    _device.SetRenderTarget(target);
-                    spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
-                    if (_sceneRenderTarget != null) spriteBatch.Draw(_sceneRenderTarget, new Rectangle(0, 0, w, h), Color.White);
-                    spriteBatch.End();
-                }
-                catch { /* give up this frame */ }
+                RecoverFromChainFailure(spriteBatch, target, ex, captureTaken, w, h);
             }
             finally
             {
@@ -1152,6 +1057,280 @@ namespace SDVRadiance
                 double ms = _performanceStopwatch.Elapsed.TotalMilliseconds;
                 _performanceTotalMilliseconds += ms;
                 if (ms > _performanceMaxMilliseconds) _performanceMaxMilliseconds = ms;
+            }
+        }
+
+        /// <summary>
+        /// The chain threw. Say why in a way a reporter's log can be read from, then put the
+        /// captured frame back on screen so the player sees the game rather than half of ours.
+        /// </summary>
+        private void RecoverFromChainFailure(SpriteBatch spriteBatch, RenderTarget2D target,
+                                             Exception ex, bool captureTaken, int w, int h)
+        {
+                _monitor.Log($"Post-process failed, leaving frame unmodified this frame: {ex.Message}", LogLevel.Warn);
+                // The message ALONE is useless. "Index was out of range" repeated forty times named
+                // neither the list nor the pass, and finding it meant reading the light code by eye
+                // looking for a plausible index - which is exactly the guessing this mod's
+                // diagnostics exist to replace. Once per session, on the first failure, the whole
+                // exception goes in at Error so the SMAPI log a reporter attaches already carries
+                // the line number. Once, because a per-frame fault would otherwise write a stack
+                // trace sixty times a second into their log file.
+                if (!_loggedPostProcessFailure)
+                {
+                    _loggedPostProcessFailure = true;
+                    _monitor.Log("First failure in full (this is logged once per session):\n" + ex, LogLevel.Error);
+                }
+                // A stage may have thrown between a Begin and its End — close the batch
+                // first, or the recovery Begin below throws too (and would escape).
+                try { spriteBatch.End(); } catch { }
+                try
+                {
+                    _device.SetRenderTarget(target);
+                    spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
+                    if (captureTaken && _sceneRenderTarget != null) spriteBatch.Draw(_sceneRenderTarget, new Rectangle(0, 0, w, h), Color.White);
+                    spriteBatch.End();
+                }
+                catch { /* give up this frame */ }
+        }
+
+        /// <summary>
+        /// How big the chain's own buffers are for this frame, and the targets to match.
+        /// <para>The game's frame stays full size; only our passes work smaller, which is a
+        /// quadratic saving on the fill rate that actually bounds this mod.</para>
+        /// </summary>
+        private void ChooseRenderSize(ModConfig config, RenderTarget2D target, int w, int h,
+                                      out int sw, out int sh, out bool scaled, out float renderScale)
+        {
+                // RENDER SCALE: the game's own frame stays full size; only our chain works on a
+                // smaller image, which is a quadratic saving on the fill rate that actually bounds
+                // this mod. Every builder is anchored to Game1.viewport (tiles/world px) rather
+                // than the render target, and every shader input is UV or tile space, so nothing
+                // downstream has to learn about the smaller buffers - see EnsureTargets.
+                // The player's setting is the CEILING; the controller may ask for less when the frame
+                // is not keeping up, and gives it back when it is (RenderPipeline.AutoScale.cs).
+                renderScale = AutoRenderScale(config, MathHelper.Clamp(config.RenderScale, 0.5f, 1f));
+                // ZOOMED OUT. The game does not shrink the world when you zoom out - it draws the same
+                // world pixels into a BIGGER buffer (window size / zoom) and then scales that whole
+                // buffer down onto the window. At 50% zoom on a 1280x720 window that is a 2560x1440
+                // frame: four times the pixels, every one of them averaged away on the way to the
+                // screen. Our chain was sized from that frame, so zooming out quadrupled the fill rate
+                // of every pass for a picture nobody could see any more of.
+                //
+                // Measured on an RTX 5080 in Town: the chain went 0.17 ms at 100% zoom to 0.45 ms at
+                // 50%, and the report showed "frame 2560x1440, effects computed at 2560x1440" behind a
+                // 1280x720 window. On a slower machine that multiplier is the whole of the "zooming out
+                // killed my frame rate below 15 fps, snowball effect" report.
+                //
+                // Working at the buffer's ON-SCREEN size costs nothing visible, because the game's own
+                // downscale is about to throw the difference away. It only ever lowers the number the
+                // player chose, so someone who has already turned the resolution down keeps their
+                // setting. A map screenshot is exempt: that frame is written to a file at full size and
+                // never goes near the window.
+                float zoomOut = Game1.options?.zoomLevel ?? 1f;
+                if (zoomOut > 0.05f && zoomOut < 0.999f && !Game1.game1.takingMapScreenshot)
+                    renderScale = Math.Max(0.25f, Math.Min(renderScale, zoomOut));
+                sw = Math.Max(1, (int)Math.Round(w * renderScale));
+                sh = Math.Max(1, (int)Math.Round(h * renderScale));
+                scaled = sw != w || sh != h;
+                _lastScaledWidth = sw; _lastScaledHeight = sh;
+                _frameWidth = w; _frameHeight = h;
+                EnsureTargets(sw, sh, target.Format);
+        }
+
+        /// <summary>Copy the game's frame into the chain's own buffer, but only for the four reasons that still
+        /// earn it. Returns whatever the chain should read - the copy, or the game's target where the
+        /// copy was skipped.</summary>
+        private Texture2D CaptureSceneForChain(SpriteBatch spriteBatch, RenderTarget2D target, List<Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>> stages, int sw, int sh, bool scaled, ref bool captureTaken)
+        {
+            // THE CAPTURE, and the four reasons to still take one.
+            //
+            // The chain used to open by copying the game's frame into a buffer of its own and
+            // reading the copy. At a render scale below 1 that copy is the downscale and earns
+            // its place; at 1.0 it is a byte-for-byte duplicate of an image already sitting in
+            // memory, which the first pass could have read where it lay. Measured with the
+            // per-pass GPU timer, the capture and the upscale together came to 0.125-0.152 ms
+            // against 0.23-0.30 ms for every effect in the chain put together: a third of what
+            // the chain costs, spent on moving a picture rather than on changing one.
+            //
+            // Reading the game's target directly is only safe while nothing writes to it before
+            // the chain is finished with it, so the capture is still taken when:
+            //   - the chain is SCALED (the copy is the downscale, not a copy)
+            //   - fewer than two passes will run (a lone pass would read and write one target)
+            //   - the master fade is still lifting, which blends the untouched scene back over
+            //     the result and so needs the untouched scene to still exist
+            //   - a gain probe or a dump is pending; both compare the two ends of the chain
+            // Where it is skipped the result is identical by construction: at 1.0 the sampler
+            // is Point and the rectangle is the same size, so the copy could only ever have
+            // produced the bytes already there.
+            bool captureNeeded = scaled || stages.Count < 2 || _masterFade < 1f
+                                 || GainProbe || _pendingDump != null;
+            if (captureNeeded)
+            {
+                _device.SetRenderTarget(_sceneRenderTarget);
+                // Filtering for the scale round trip, decided by measuring real captures rather
+                // than by argument (scratch script, three spots): against the full-res frame,
+                // linear down+up leaves roughly HALF the visibly-wrong pixels that point does
+                // (5-11% vs 11-24% off by more than 16/255). Point keeps edges hard but puts
+                // them in the wrong place, because a game pixel is 4 x zoom screen pixels and
+                // that is not a whole number at most zoom levels - so the blocks come back
+                // uneven, which also shimmers as the camera moves. Linear is slightly soft but
+                // lands the edges where they belong and stays still. Unscaled keeps Point so
+                // the 1:1 path is exactly the byte-identical one that was verified.
+                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque,
+                    scaled ? SamplerState.LinearClamp : SamplerState.PointClamp);
+                spriteBatch.Draw(target, new Rectangle(0, 0, sw, sh), Color.White);
+                spriteBatch.End();
+                captureTaken = true;
+            }
+            return captureNeeded ? _sceneRenderTarget! : target;
+        }
+
+        /// <summary>Run the whole chain a few extra times into scratch and throw the result away. Only the slope
+        /// between one chain and many survives the game's own drawing and the probe's own overhead.</summary>
+        private void RunBenchExtraChains(SpriteBatch spriteBatch, Texture2D chainSource, List<Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>> stages, ModConfig config)
+        {
+            // Benchmark amplification: run the whole chain a few extra times into scratch
+            // and throw the result away. Only the COST is wanted - the slope between one
+            // chain and many is what survives after the game's own drawing and the probe's
+            // own overhead cancel out. (Stage bodies that ease a value advance faster
+            // while this runs; the benchmark lasts seconds and warns that it flickers.)
+            for (int rep = 0; rep < _benchExtraChains && stages.Count > 0; rep++)
+            {
+                Texture2D scratch = chainSource;
+                for (int i = 0; i < stages.Count; i++)
+                {
+                    RenderTarget2D d = ReferenceEquals(scratch, _fullResolutionPingA) ? _fullResolutionPingB! : _fullResolutionPingA!;
+                    stages[i](spriteBatch, scratch, d, config);
+                    scratch = d;
+                }
+            }
+        }
+
+        /// <summary>The chain itself: every stage in turn, ping-ponging between the two buffers, each one timed.</summary>
+        private Texture2D RunStageChain(SpriteBatch spriteBatch, Texture2D chainSource, RenderTarget2D target, List<Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>> stages, bool scaled, ModConfig config)
+        {
+            Texture2D current = chainSource;
+            if (_timingOn) _stageCountTotal += stages.Count;
+            for (int i = 0; i < stages.Count; i++)
+            {
+                // Scaled: even the last stage stays in the small buffers, and one plain quad
+                // blows the finished frame back up. That extra full-size write is cheaper
+                // than letting the last shader pass do the upscale, and it keeps the
+                // upscale filter under our control instead of the stage's sampler.
+                RenderTarget2D dest = i == stages.Count - 1 && !scaled
+                    ? target
+                    : (ReferenceEquals(current, _fullResolutionPingA) ? _fullResolutionPingB! : _fullResolutionPingA!);
+                // Timed unconditionally now (see RenderPipeline.StageCost.cs): the chain is the
+                // mod's largest GPU cost and the per-pass split is what a report has to carry
+                // to be worth reading. Two Stopwatch reads per pass against a 16.67 ms budget.
+                int si = _stageNameIndices[i];
+                BeginStageCost(si);
+                stages[i](spriteBatch, current, dest, config);
+                double ms = EndStageCost();
+                if (_timingOn)
+                {
+                    _stageMilliseconds[si] += ms;
+                    if (ms > _stageMaxMilliseconds[si]) _stageMaxMilliseconds[si] = ms;
+                    _stageRunFrames[si]++;
+                }
+                current = dest;
+            }
+            EndStageCostFrame(stages.Count);
+            return current;
+        }
+
+        /// <summary>Stretch the small buffer back to the window, with the sharpening folded into the same draw.</summary>
+        private Texture2D UpscaleToWindow(SpriteBatch spriteBatch, Texture2D current, RenderTarget2D target, int stageCount, bool scaled, ModConfig config, int w, int h, float renderScale)
+        {
+            // Upscale back to the window, linear for the reason above, with RCAS
+            // sharpening folded into the same draw (see upscale.fx) so the stretch costs
+            // no more than it did while giving most of the softness back. Sharpen harder
+            // the further the image was scaled down, matching where the measurements put
+            // the best value at each step.
+            if (scaled && stageCount > 0)
+            {
+                if (_upscale != null)
+                {
+                    GetParam(_upscale, "OutputTexel")?.SetValue(new Vector2(1f / w, 1f / h));
+                    float autoSharpen = MathHelper.Lerp(0.5f, 0.25f, (renderScale - 0.5f) / 0.5f);
+                    GetParam(_upscale, "Sharpness")?.SetValue(autoSharpen * MathHelper.Clamp(config.RenderSharpness, 0f, 2f));
+                    _upscale.CurrentTechnique = _upscale.Techniques["Upscale"];
+                    DrawFull(spriteBatch, current, target, _upscale);
+                }
+                else
+                {
+                    _device.SetRenderTarget(target);
+                    spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp);
+                    spriteBatch.Draw(current, new Rectangle(0, 0, w, h), Color.White);
+                    spriteBatch.End();
+                }
+                current = target;
+            }
+            return current;
+        }
+
+        /// <summary>Both ends of the chain from the same frame, for the author gain probe.</summary>
+        private void FillGainProbe(SpriteBatch spriteBatch, RenderTarget2D target, int stageCount)
+        {
+            // Both ends of the chain, from the same frame, with the device put back where it
+            // was. The scene target still holds the captured frame: stages read it but write
+            // to the ping buffers, so it is untouched by the time we get here.
+            if (GainProbe && stageCount > 0)
+            {
+                ProbeSceneMean = ProbeMean(spriteBatch, _sceneRenderTarget!, target);
+                ProbeOutMean = ProbeMean(spriteBatch, target, target);
+                ProbeGates = $"n{stageCount}"
+                    + $" occ{(_isFloodOcclusionReady ? 1 : 0)}"
+                    + $" shd{(_shadowsReady ? 1 : 0)}"
+                    + $" wmask{(_hasWaterInMask ? 1 : 0)}"
+                    + $" fW{_fadeWater:F2} fF{_fadeFlood:F2} fL{_fadeLighting:F2}"
+                    + $" fC{_fadeCloud:F2} fT{_fadeTilt:F2} lights{_lightCount}"
+                    + $" expo{_meteredExposure:F3}";
+            }
+        }
+
+        /// <summary>Put the device back, ease the whole stack in, redraw the skip button, then take the GPU probe
+        /// and any pending dump - which has to be last, so the dump is the finished picture.</summary>
+        private void FinishFrame(SpriteBatch spriteBatch, RenderTarget2D target, int stageCount, int w, int h, ModConfig config)
+        {
+            // Every config-enabled stage can still bail at runtime (indoors, no water,
+            // no lights, rays faded out). If none ran, the device is still on _sceneRenderTarget
+            // from the capture — restore the game's target or everything drawn after
+            // us this frame lands in our scratch buffer.
+            if (stageCount == 0)
+                _device.SetRenderTarget(target);
+
+            // Ease the whole stack in: blend the untouched scene back over the
+            // result and let it fade out, so effects don't pop on when enabled
+            // or after a load. `current` is the game's target at this point.
+            _masterFade = Determinism.Settle(Math.Min(1f, _masterFade + 0.045f), 1f);
+            if (_masterFade < 1f && stageCount > 0)
+            {
+                _device.SetRenderTarget(target);
+                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+                spriteBatch.Draw(_sceneRenderTarget, new Rectangle(0, 0, w, h), Color.White * (1f - _masterFade));
+                spriteBatch.End();
+            }
+
+            RedrawEventSkipButton(spriteBatch, target);
+
+            if (GpuProbe)
+            {
+                double gpuMs = ProbeGpuTime(spriteBatch, target, w, h);
+                if (BenchRunning)
+                    BenchTick(config, gpuMs);
+                else if (EffectCostRunning)
+                    EffectCostTick(config, gpuMs);
+            }
+
+            // Last thing in the frame, so the capture is the finished picture (skip button
+            // included). A failed dump must not cost the player their frame, so it carries
+            // its own guard.
+            if (_pendingDump != null)
+            {
+                try { WriteDump(spriteBatch, target, w, h, config); }
+                catch (Exception ex) { _monitor.Log($"radiance_dump failed: {ex.Message}", LogLevel.Warn); }
+                finally { _pendingDump = null; }
             }
         }
 
@@ -1368,13 +1547,13 @@ namespace SDVRadiance
             ReleaseScreenStates();
             _mirrorSceneCache?.Dispose(); _mirrorSceneCache = null;
             _waterSignedDistanceTexture?.Dispose(); _waterSignedDistanceTexture = null;
-            _sceneRenderTarget?.Dispose(); _fullResolutionPingA?.Dispose(); _fullResolutionPingB?.Dispose(); _halfResolutionScratchA?.Dispose(); _halfResolutionScratchB?.Dispose(); _cloudMaskKeep?.Dispose(); _cloudMaskKeep = null; _waterMask?.Dispose(); _waterMaskCore?.Dispose(); _occluderMask?.Dispose(); _floodOccluderMask?.Dispose(); _luminanceRenderTarget?.Dispose(); _noiseTexture?.Dispose(); _noiseTexture = null;
+            _sceneRenderTarget?.Dispose(); _fullResolutionPingA?.Dispose(); _fullResolutionPingB?.Dispose(); _halfResolutionScratchA?.Dispose(); _halfResolutionScratchB?.Dispose(); _cloudMaskKeep?.Dispose(); _cloudMaskKeep = null; _waterMask?.Dispose(); _occluderMask?.Dispose(); _floodOccluderMask?.Dispose(); _luminanceRenderTarget?.Dispose(); _noiseTexture?.Dispose(); _noiseTexture = null;
             _spriteMaskRenderTarget?.Dispose(); _spriteMaskSpriteBatch?.Dispose();
             _maskDebugTexture?.Dispose(); _maskDebugTexture = null;
             _bloom?.Dispose(); _colorGrade?.Dispose(); _godRays?.Dispose(); _fogEffect?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
             _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose(); _floodEffect?.Dispose(); _flood.Dispose();
             _sceneRenderTarget = _fullResolutionPingA = _fullResolutionPingB = _halfResolutionScratchA = _halfResolutionScratchB = null;
-            _waterMask = null; _waterMaskCore = null; _occluderMask = null; _floodOccluderMask = null; _luminanceRenderTarget = null;
+            _waterMask = null; _occluderMask = null; _floodOccluderMask = null; _luminanceRenderTarget = null;
             _spriteMaskRenderTarget = null; _spriteMaskSpriteBatch = null;
             _bloom = _colorGrade = _godRays = _fogEffect = _cloudShadow = _tiltShift = _water = _finishing = _lighting = _floodEffect = null;
             _fxParamCache.Clear(); // parameter cache keys pin the disposed Effects otherwise

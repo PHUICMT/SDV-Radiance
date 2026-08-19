@@ -87,6 +87,8 @@ namespace SDVRadiance
         }
         private Vector3[] _lightCells = Array.Empty<Vector3>();
         private Vector3[] _blurredLightCells = Array.Empty<Vector3>();
+        /// <summary>Row pass of the separable bounce blur; see where it is filled.</summary>
+        private Vector3[] _blurRowScratch = Array.Empty<Vector3>();
         private float[] _lightDecay = Array.Empty<float>();
         private Color[] _lightmapPixels = Array.Empty<Color>();
         private Texture2D? _lightmapTexture;
@@ -111,6 +113,45 @@ namespace SDVRadiance
             float v = c.R / 255f / TexScale;   // stored ×TexScale (0.5); scale back for display
             return v.ToString("F2");
         }
+
+        /// <summary>
+        /// What the location IS, as every seed pass needs to know it: whether the sky is overhead,
+        /// whether the game itself renders this place dark, and what an unoccluded cell starts at.
+        /// Carried as one value because four separate answers escaping one block is four
+        /// out-parameters, and nobody can read those at the call site.
+        /// </summary>
+        private readonly struct SceneSeed
+        {
+            public readonly bool Outdoors;
+            /// <summary>Places the game renders dark BY DESIGN (mines, volcano): strictly add-only,
+            /// because multiplying on top of vanilla dark read as pitch black.</summary>
+            public readonly bool ScriptedDark;
+            /// <summary>The game already darkens this location, so the flood may only add light.</summary>
+            public readonly bool VanillaDark;
+            /// <summary>Flat seed for a vanilla-dark room, driven by the night-darkness slider.</summary>
+            public readonly float NightSeed;
+            /// <summary>Colour and strength an open cell receives from the sky.</summary>
+            public readonly Vector3 Sky;
+
+            public SceneSeed(bool outdoors, bool scriptedDark, bool vanillaDark, float nightSeed, Vector3 sky)
+            {
+                Outdoors = outdoors;
+                ScriptedDark = scriptedDark;
+                VanillaDark = vanillaDark;
+                NightSeed = nightSeed;
+                Sky = sky;
+            }
+        }
+
+        /// <summary>The tile rectangle this build covers: its top-left world tile and its size in
+        /// cells. One parameter in place of the four that were threaded through every phase.</summary>
+        private readonly struct TileWindow
+        {
+            public readonly int X0, Y0, W, H;
+            public TileWindow(int x0, int y0, int w, int h) { X0 = x0; Y0 = y0; W = w; H = h; }
+            public int Count => W * H;
+        }
+
 
         internal bool Build(GraphicsDevice graphicsDevice, int width, int height, ModConfig config)
         {
@@ -161,10 +202,34 @@ namespace SDVRadiance
             {
                 _lightCells = new Vector3[count];
                 _blurredLightCells = new Vector3[count];
+                _blurRowScratch = new Vector3[count];
                 _lightDecay = new float[count];
                 _lightmapPixels = new Color[count];
             }
 
+            SceneSeed scene = DescribeScene(location, config);
+            var win = new TileWindow(tx0, ty0, tw, th);
+            SeedSkyExposure(location, scene, win);
+            SeedLightSources(location, scene, win);
+            SeedWindowGlows(location, scene, win);
+            FloodSweeps(win);
+            BounceBlur(win);
+            ComposeLightmapPixels(scene, win);
+
+            if (_lightmapTexture == null || _lightmapTexture.Width != tw || _lightmapTexture.Height != th)
+            {
+                _lightmapTexture?.Dispose();
+                _lightmapTexture = VramTally.Track(new Texture2D(graphicsDevice, tw, th, false, SurfaceFormat.Color), "flood lightmap");
+            }
+            _lightmapTexture.SetData(_lightmapPixels, 0, count);
+            Origin = new Vector2(tx0, ty0);
+            MapSize = new Vector2(tw, th);
+            return true;
+        }
+
+        /// <summary>Read the location once: what the seed passes below all need to agree on.</summary>
+        private static SceneSeed DescribeScene(GameLocation location, ModConfig config)
+        {
             // ---- Seed pass: sky exposure + per-cell decay from the occluder grid ----
             // The flood is RELATIVE lighting: the game's own day/night & scripted darkness
             // stay in charge of the global level. Locations the game already darkens
@@ -194,30 +259,75 @@ namespace SDVRadiance
                 ? MathHelper.Clamp(1f - config.LightingNightDarkness * 0.38f, 0.45f, 1f)
                 : 1f;
             Vector3 sky = SkyColor(outdoors, config);
+            return new SceneSeed(outdoors, scriptedDark, vanillaDark, nightSeed, sky);
+        }
+
+        /// <summary>Sky exposure and per-cell decay, read off the occluder grid.</summary>
+        private void SeedSkyExposure(GameLocation location, in SceneSeed scene, in TileWindow win)
+        {
             var surf = SurfaceMap.For(location);
-            for (int j = 0; j < th; j++)
+            for (int j = 0; j < win.H; j++)
             {
-                for (int i = 0; i < tw; i++)
+                for (int i = 0; i < win.W; i++)
                 {
-                    int idx = j * tw + i;
+                    int idx = j * win.W + i;
                     bool solid = false;
                     // Sky occlusion only makes sense OUTDOORS. Interiors are already under a roof,
                     // and every interior tile carries Front-layer art (upper walls), which the
-                    // height classifier reports as Roof — treating those as sky occluders zeroed
+                    // height classifier reports as Roof — treating those as scene.Sky occluders zeroed
                     // the whole room's lightmap (black scene, then the warm lamp seed flooded it
                     // orange). Indoors, leave every cell open so ambient + lamps light it normally.
-                    // Only WALLS and ROOF/canopy block sky light. Decks (piers, bridges) have
-                    // height 1 but are walk-on-top surfaces OPEN to the sky — treating them as
+                    // Only WALLS and ROOF/canopy block scene.Sky light. Decks (piers, bridges) have
+                    // height 1 but are walk-on-top surfaces OPEN to the scene.Sky — treating them as
                     // solid turned the whole beach pier into a giant dark pool. Water is open too.
-                    if (surf != null && outdoors)
-                        solid = surf.BlocksLight(tx0 + i, ty0 + j);
+                    if (surf != null && scene.Outdoors)
+                        solid = surf.BlocksLight(win.X0 + i, win.Y0 + j);
                     _lightDecay[idx] = solid ? SolidDecay : AirDecay;
-                    // Open cells receive direct sky light; occluded cells only what floods in
+                    // Open cells receive direct scene.Sky light; occluded cells only what floods in
                     // from their surroundings → soft shade under trees/buildings for free.
-                    _lightCells[idx] = vanillaDark ? new Vector3(nightSeed) : (solid ? sky * OccludedSeed : sky);
+                    _lightCells[idx] = scene.VanillaDark ? new Vector3(scene.NightSeed) : (solid ? scene.Sky * OccludedSeed : scene.Sky);
                 }
             }
 
+        }
+
+        /// <summary>
+        /// Where a light OUTSIDE the grid seeds, and how much of it arrives: the nearest cell on
+        /// the grid's edge, carrying what the sweep would have carried across the missing cells.
+        /// </summary>
+        /// <remarks>
+        /// <para>The grid is the visible tiles plus <see cref="Pad"/>, and a light beyond it used to
+        /// be skipped. Every seed then depended on where the camera stood, and the camera moves in
+        /// whole tiles: a lamp entering the padding fed nothing one frame and its full seed the
+        /// next, or, after the first attempt at this (a fade across the padding), a quarter of it
+        /// per tile crossed - which was still a step, and one that now landed on the visible
+        /// columns instead of six tiles outside them. Simulated cell for cell before this was
+        /// written: in a night town the fade produced a step on eighteen of forty crossings, up to
+        /// eleven of 255 on screen, where the plain cut produced one; and seeding every light,
+        /// clamped, produced none.</para>
+        /// <para>Clamped is exact for the sweep this grid runs. Propagation is a max over
+        /// axis-aligned paths with one factor of <see cref="AirDecay"/> per cell, so the value a
+        /// light would have handed the edge cell across open ground is its seed times the decay
+        /// raised to the Manhattan distance, and the sweep carries on inward from there exactly as
+        /// it would have. Nothing about the result depends on where the edge is, which is the
+        /// whole point: the grid can be rebuilt at any origin and read the same in the world.
+        /// Occluders outside the grid are treated as air, which is the far tail of a pool the
+        /// grid never showed at all before.</para>
+        /// </remarks>
+        private static bool ClampSeed(ref int ci, ref int cj, ref float inten, in TileWindow win)
+        {
+            int cx = Math.Clamp(ci, 0, win.W - 1);
+            int cy = Math.Clamp(cj, 0, win.H - 1);
+            int away = Math.Abs(ci - cx) + Math.Abs(cj - cy);
+            if (away > 0)
+                inten *= (float)Math.Pow(AirDecay, away);
+            ci = cx;
+            cj = cy;
+            return inten > 0.002f;
+        }
+
+        private void SeedLightSources(GameLocation location, in SceneSeed scene, in TileWindow win)
+        {
             // ---- Seed the game's real light sources (lamps, torches, fires, windows) ----
             var lights = Game1.currentLightSources;
             if (lights != null)
@@ -227,10 +337,12 @@ namespace SDVRadiance
                     var ls = kv;
                     if (!ShadowRenderer.WindowGlowing(location, ls))   // stale/dark window: not emitting
                         continue;
-                    int ci = (int)(ls.position.Value.X / 64f) - tx0;
-                    int cj = (int)(ls.position.Value.Y / 64f) - ty0;
-                    if (ci < 0 || ci >= tw || cj < 0 || cj >= th)
-                        continue;
+                    // The TRUE cell, which may lie outside the grid; the columns below are laid
+                    // from it so their cells stay where they are in the world. The seed itself is
+                    // clamped onto the grid, decayed for the distance (see ClampSeed).
+                    int trueCi = (int)(ls.position.Value.X / 64f) - win.X0;
+                    int trueCj = (int)(ls.position.Value.Y / 64f) - win.Y0;
+                    int ci = trueCi, cj = trueCj;
                     // INDIRECT spill (~half strength): the crisp direct pool + its per-light shadows
                     // are computed analytically in floodlight.effect; the flood carries the bounce-like
                     // glow that bends around corners and through doorways. Outdoors it sits above 1.0
@@ -245,21 +357,23 @@ namespace SDVRadiance
                     // is light that has crossed the room and come back off a wall. The flame still
                     // breathes where it is visible, in the direct pool (RenderPipeline.Lighting)
                     // and in the shadows it casts, both of which are per-frame and free.
-                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * (outdoors ? 1.25f : 0.5f);
+                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * (scene.Outdoors ? 1.25f : 0.5f);
+                    if (!ClampSeed(ref ci, ref cj, ref inten, win))
+                        continue;
                     // The same midday sink the DIRECT pools got ("a street lamp at noon reads as
                     // glass"): these seeds never had it, which went unnoticed while the flat bounce
                     // held the whole outdoor field near 1.28 — every cell glowed a little, so lamp
                     // cells did not stand out. With the bounce weighted (open ground now sits at
-                    // exactly sky), a daylight lantern's >1.0 seed became the only thing feeding
+                    // exactly scene.Sky), a daylight lantern's >1.0 seed became the only thing feeding
                     // the shader's glow term, and it read as a bright pool at two in the afternoon.
                     // Full strength returns by 08:00/17:00; night and indoors are untouched.
-                    if (outdoors)
+                    if (scene.Outdoors)
                         inten *= 1f - 0.65f * (1f - MathHelper.Clamp(Math.Abs(GameClock.MinutesNow() - 750f) / 270f, 0f, 1f));
                     // TWO-TONE rooms: an indoor window is DAYLIGHT (cool, slightly blue) while
                     // lamps and fires stay warm — the warm-vs-cool split across a room is what
                     // makes it read as cinematic instead of uniformly orange. Outdoor window
                     // lights (town houses at night) are lamp-lit from inside, so they stay warm.
-                    bool coolDaylight = !outdoors && ls.lightContext.Value == LightSource.LightContext.WindowLight;
+                    bool coolDaylight = !scene.Outdoors && ls.lightContext.Value == LightSource.LightContext.WindowLight;
                     // A LIGHT'S BOUNCE IS THE LIGHT'S OWN COLOUR. This was one fixed warm constant
                     // for every source in the game, which is where the saloon's orange came from and
                     // had been coming from for a long time: all 66 of that room's map lights are
@@ -277,7 +391,7 @@ namespace SDVRadiance
                         : new Vector3(1.00f, 0.83f, 0.58f);   // a light with no colour at all: warm, as before
                     if (coolDaylight)
                     {
-                        // The sky is what is on the other side of this window, so it follows the
+                        // The scene.Sky is what is on the other side of this window, so it follows the
                         // clock and the calendar instead of being one fixed daylight colour (see
                         // WindowDaylight - that constant is why rooms stayed daylit at 2am).
                         ShadowRenderer.WindowDaylight(out Vector3 sunColour, out float sunStrength);
@@ -290,7 +404,7 @@ namespace SDVRadiance
                     // One seed cell; the bilinear upsample + the 5×5 bounce spread it into a soft
                     // pool. (A wide radial seed disc was tried to force a bigger pool but never read
                     // as wider on the coarse grid — reverted to keep it simple.)
-                    int idx = cj * tw + ci;
+                    int idx = cj * win.W + ci;
                     _lightCells[idx] = Vector3.Max(_lightCells[idx], seedColor * inten);
 
                     // SUN SHAFT: daylight through a window falls onto the floor below it — seed a
@@ -311,42 +425,53 @@ namespace SDVRadiance
                         int steps = Math.Max(1, (int)Math.Round(reach));
                         for (int k = 1; k <= steps; k++)
                         {
-                            int jj = cj + k;
-                            int ii = ci + (int)Math.Round(lean * k);
-                            if (jj >= th || ii < 0 || ii >= tw)
+                            int jj = trueCj + k;
+                            int ii = trueCi + (int)Math.Round(lean * k);
+                            if (jj >= win.H)
                                 break;
+                            if (jj < 0 || ii < 0 || ii >= win.W)
+                                continue;
                             float f = 1.0f - 0.85f * (k / (float)(steps + 1));
-                            int sIdx = jj * tw + ii;
+                            int sIdx = jj * win.W + ii;
                             _lightCells[sIdx] = Vector3.Max(_lightCells[sIdx], shaft * f);
                         }
                     }
                     // OUTDOOR lit storefronts/windows at night pour WARM light DOWN onto the
                     // path in front (a saloon's windows lighting the ground). Short fading
                     // column, softened afterwards by the bilinear sample + the wide bounce.
-                    else if (outdoors && ls.lightContext.Value == LightSource.LightContext.WindowLight)
+                    else if (scene.Outdoors && ls.lightContext.Value == LightSource.LightContext.WindowLight)
                     {
                         var spill = new Vector3(1.00f, 0.84f, 0.60f);
                         for (int k = 1; k <= 4; k++)
                         {
-                            int jj = cj + k;
-                            if (jj >= th)
+                            int jj = trueCj + k;
+                            if (jj >= win.H)
                                 break;
+                            if (jj < 0 || trueCi < 0 || trueCi >= win.W)
+                                continue;
                             float f = (1.0f - 0.22f * k) * inten * 2.2f;
-                            int sIdx = jj * tw + ci;
+                            int sIdx = jj * win.W + trueCi;
                             _lightCells[sIdx] = Vector3.Max(_lightCells[sIdx], spill * f);
                         }
                     }
                 }
             }
 
+        }
+
+        /// <summary>Seed window daylight from the room's glow sprites, for the interiors that
+        /// publish their windows no other way.</summary>
+        private void SeedWindowGlows(GameLocation location, in SceneSeed scene, in TileWindow win)
+        {
+            var lights = Game1.currentLightSources;
             // ---- Seed window daylight from the room's window glow sprites ----
             // Some interiors publish their windows only as lightGlows (no WindowLight source and
             // no DayTiles property - the vanilla farmhouse is one), so the loop above never
             // touches them. A glow sprite IS the game saying "this window is lit", so seed the
             // same cool daylight there; otherwise the flood leaves the floor beside a real
-            // window at bare sky and it reads as a dark strip in front of the glass.
+            // window at bare scene.Sky and it reads as a dark strip in front of the glass.
             int glowCount = location.lightGlows is { } lg ? lg.Count : -1;
-            bool glowGate = !outdoors && !scriptedDark && WindowRoomScale > 0.01f && glowCount > 0;
+            bool glowGate = !scene.Outdoors && !scene.ScriptedDark && WindowRoomScale > 0.01f && glowCount > 0;
             if (glowGate)
             {
                 ShadowRenderer.WindowDaylight(out Vector3 sunColour, out float sunStrength);
@@ -355,22 +480,23 @@ namespace SDVRadiance
                 {
                     foreach (Vector2 gp in location.lightGlows)
                     {
-                        int ci = (int)(gp.X / 64f) - tx0;
-                        int cj = (int)(gp.Y / 64f) - ty0;
-                        if (ci < 0 || ci >= tw || cj < 0 || cj >= th)
-                            continue;
+                        int trueCi = (int)(gp.X / 64f) - win.X0;
+                        int trueCj = (int)(gp.Y / 64f) - win.Y0;
+                        int ci = trueCi, cj = trueCj;
                         // Skip any spot a real window light source already covered above.
                         bool covered = false;
                         if (lights != null)
                             foreach (var ls in lights.Values)
                                 if (ls.lightContext.Value == LightSource.LightContext.WindowLight
-                                    && Math.Abs((int)(ls.position.Value.X / 64f) - (tx0 + ci)) <= 1
-                                    && Math.Abs((int)(ls.position.Value.Y / 64f) - (ty0 + cj)) <= 1)
+                                    && Math.Abs((int)(ls.position.Value.X / 64f) - (win.X0 + trueCi)) <= 1
+                                    && Math.Abs((int)(ls.position.Value.Y / 64f) - (win.Y0 + trueCj)) <= 1)
                                 { covered = true; break; }
                         if (covered)
                             continue;
                         float glowInten = 1.35f * sunStrength * WindowRoomScale;
-                        int sIdx = cj * tw + ci;
+                        if (!ClampSeed(ref ci, ref cj, ref glowInten, win))
+                            continue;
+                        int sIdx = cj * win.W + ci;
                         _lightCells[sIdx] = Vector3.Max(_lightCells[sIdx], sunColour * glowInten);
                         // Spread the daylight down the first cells INTO the room, so the patch
                         // reads as light pooling in front of the glass rather than a single-cell
@@ -379,10 +505,12 @@ namespace SDVRadiance
                         // old seed read as nothing next to the room's exposure.
                         for (int k = 1; k <= 3; k++)
                         {
-                            int jj = cj + k;
-                            if (jj >= th)
+                            int jj = trueCj + k;
+                            if (jj >= win.H)
                                 break;
-                            _lightCells[jj * tw + ci] = Vector3.Max(_lightCells[jj * tw + ci],
+                            if (jj < 0 || trueCi < 0 || trueCi >= win.W)
+                                continue;
+                            _lightCells[jj * win.W + trueCi] = Vector3.Max(_lightCells[jj * win.W + trueCi],
                                 sunColour * glowInten * (1f - 0.25f * k));
                         }
                         seeded++;
@@ -392,58 +520,83 @@ namespace SDVRadiance
             }
             else
             {
-                LastWindowSeed = $"seed: GATE (out={outdoors} scripted={scriptedDark} scale={WindowRoomScale:F2} glows={glowCount})";
+                LastWindowSeed = $"seed: GATE (out={scene.Outdoors} scripted={scene.ScriptedDark} scale={WindowRoomScale:F2} glows={glowCount})";
             }
 
+        }
+
+        /// <summary>Two rounds of four directional sweeps: the propagation itself.</summary>
+        private void FloodSweeps(in TileWindow win)
+        {
             // ---- Flood: two rounds of 4 directional sweeps (Terraria-style) ----
             for (int round = 0; round < 2; round++)
             {
-                for (int j = 0; j < th; j++)          // left → right, then right → left
+                for (int j = 0; j < win.H; j++)          // left → right, then right → left
                 {
                     Vector3 carry = Vector3.Zero;
-                    for (int i = 0; i < tw; i++) Propagate(ref carry, j * tw + i);
+                    for (int i = 0; i < win.W; i++) Propagate(ref carry, j * win.W + i);
                     carry = Vector3.Zero;
-                    for (int i = tw - 1; i >= 0; i--) Propagate(ref carry, j * tw + i);
+                    for (int i = win.W - 1; i >= 0; i--) Propagate(ref carry, j * win.W + i);
                 }
-                for (int i = 0; i < tw; i++)          // top → bottom, then bottom → top
+                for (int i = 0; i < win.W; i++)          // top → bottom, then bottom → top
                 {
                     Vector3 carry = Vector3.Zero;
-                    for (int j = 0; j < th; j++) Propagate(ref carry, j * tw + i);
+                    for (int j = 0; j < win.H; j++) Propagate(ref carry, j * win.W + i);
                     carry = Vector3.Zero;
-                    for (int j = th - 1; j >= 0; j--) Propagate(ref carry, j * tw + i);
+                    for (int j = win.H - 1; j >= 0; j--) Propagate(ref carry, j * win.W + i);
                 }
             }
 
-            // ---- Fake one indirect bounce: 3×3 blur folded back in softly ----
-            for (int j = 0; j < th; j++)
+        }
+
+        /// <summary>The fake indirect bounce, as a separated 5x5 box blur.</summary>
+        private void BounceBlur(in TileWindow win)
+        {
+            // ---- Fake one indirect bounce: 5×5 blur folded back in softly ----
+            // 5×5 (was 3×3): a wider bounce spreads each light into a softer, fluffier pool that
+            // fades out gradually instead of ending within one tile.
+            //
+            // SEPARATED into a row pass and a column pass: 25 reads per cell became 10. A box blur
+            // separates exactly, and so does THIS one despite clamping at the edges, because the
+            // clamped window stays a rectangle - the divisor is validColumns × validRows, a product
+            // of one term per axis, so dividing by each axis in its own pass gives the same number.
+            // Worth doing where it is: the grid is the viewport in tiles, so it grows quadratically
+            // as the player zooms out, which is exactly the case the reports are about.
+            for (int j = 0; j < win.H; j++)
             {
-                for (int i = 0; i < tw; i++)
+                int row = j * win.W;
+                for (int i = 0; i < win.W; i++)
                 {
+                    int i0 = Math.Max(0, i - 2), i1 = Math.Min(win.W - 1, i + 2);
                     var acc = Vector3.Zero;
-                    int n = 0;
-                    // 5×5 (was 3×3): a wider bounce spreads each light into a softer, fluffier
-                    // pool that fades out gradually instead of ending within one tile.
-                    for (int dj = -2; dj <= 2; dj++)
-                    {
-                        int jj = j + dj;
-                        if (jj < 0 || jj >= th) continue;
-                        for (int di = -2; di <= 2; di++)
-                        {
-                            int ii = i + di;
-                            if (ii < 0 || ii >= tw) continue;
-                            acc += _lightCells[jj * tw + ii];
-                            n++;
-                        }
-                    }
-                    _blurredLightCells[j * tw + i] = acc / Math.Max(1, n);
+                    for (int ii = i0; ii <= i1; ii++)
+                        acc += _lightCells[row + ii];
+                    _blurRowScratch[row + i] = acc / (i1 - i0 + 1);
                 }
             }
+            for (int j = 0; j < win.H; j++)
+            {
+                int j0 = Math.Max(0, j - 2), j1 = Math.Min(win.H - 1, j + 2);
+                int row = j * win.W;
+                for (int i = 0; i < win.W; i++)
+                {
+                    var acc = Vector3.Zero;
+                    for (int jj = j0; jj <= j1; jj++)
+                        acc += _blurRowScratch[jj * win.W + i];
+                    _blurredLightCells[row + i] = acc / (j1 - j0 + 1);
+                }
+            }
+        }
+
+        /// <summary>Fold the bounce back in, lift elevated surfaces, and pack to bytes.</summary>
+        private void ComposeLightmapPixels(in SceneSeed scene, in TileWindow win)
+        {
             // Walls/roofs are ELEVATED surfaces in a top-down view: the dark cell value models
             // light blocked at ground level, but the pixels DRAWN there are facades and rooftops
             // in full daylight — lift them to ambient so buildings never render dimmer than the
             // ground they stand on (dark cells still attenuate propagation for the spill/shade).
-            Vector3 lift = sky * (outdoors ? 0.92f : 0.85f);
-            for (int idx = 0; idx < count; idx++)
+            Vector3 lift = scene.Sky * (scene.Outdoors ? 0.92f : 0.85f);
+            for (int idx = 0; idx < win.Count; idx++)
             {
                 // The bounce FILLS SHADE. It used to be a flat add, which put every open outdoor
                 // cell at ~1.28 in broad daylight — and floodlight.effect reads anything over 1.0 as a
@@ -451,7 +604,7 @@ namespace SDVRadiance
                 // it was never meant to have. On a winter beach, where snow is already close to
                 // white and most of the screen is open, that pushed the whole field past clipping
                 // and the detail in the snow disappeared. Weighting the bounce by how far the cell
-                // is BELOW full light leaves open ground at exactly sky, still lifts real shade,
+                // is BELOW full light leaves open ground at exactly scene.Sky, still lifts real shade,
                 // and leaves lamp cells (seeded above 1.0) free to glow as intended.
                 Vector3 c = _lightCells[idx];
                 Vector3 room = new(
@@ -467,15 +620,6 @@ namespace SDVRadiance
                     (byte)MathHelper.Clamp(v.Z * 255f * TexScale, 0f, 255f), (byte)255);
             }
 
-            if (_lightmapTexture == null || _lightmapTexture.Width != tw || _lightmapTexture.Height != th)
-            {
-                _lightmapTexture?.Dispose();
-                _lightmapTexture = VramTally.Track(new Texture2D(graphicsDevice, tw, th, false, SurfaceFormat.Color), "flood lightmap");
-            }
-            _lightmapTexture.SetData(_lightmapPixels, 0, count);
-            Origin = new Vector2(tx0, ty0);
-            MapSize = new Vector2(tw, th);
-            return true;
         }
 
         private void Propagate(ref Vector3 carry, int idx)

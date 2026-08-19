@@ -268,19 +268,19 @@ namespace SDVRadiance
         /// re-allocates them at window size.</summary>
         private void FreeOversizedScratch()
         {
-            _waterMaskCorePixels = null; _waterTileFlags = null; _waterMaskPixels = null;
+            _waterTileFlags = null; _waterMaskPixels = null;
             _waterEffectBits = null; _waterMarchBits = null;
             _tileNearSolidFlags = null; _tileLandConnectedFlags = null;
             _waterlineTopRowByPixel = null; _waterlineRowPrefixSums = null; _waterlineRowSampleCounts = null;
-            _tileEffectBits = null; _tileWaterKeepBits = null; _tileBuildingCarveBits = null; _tileFrontCarveBits = null;
-            _tileLargeSolidFlags = null; _tileDeckFlags = null; _tileLabeledLiquidFlags = null; _tileHasBuildingArtFlags = null;
-            _tileBuildingGroundOverlayFlags = null; _tileFrontGroundOverlayFlags = null;
-            _tileIceBits = null; _tileLavaBits = null; _tileFlowBits = null;
-            _marchOutsideFlags = null; _marchFloodStack = null; _speckVisitedFlags = null; _speckComponentMembers = null;
-            _tileNearLandFlags = null; _tileHasFrontArtFlags = null;
-            _tileIceFlags = null; _tileFlowFlags = null; _tileLavaFlags = null;
-            _tileHasEffectWaterFlags = null; _tileCalmnessValues = null;
-            _waterSignedDistancePixels = null; _distanceToLandScratch = null; _distanceToWaterScratch = null;
+            _maskScratch.TileEffectBits = null; _maskScratch.TileWaterKeepBits = null; _maskScratch.TileBuildingCarveBits = null; _maskScratch.TileFrontCarveBits = null;
+            _maskScratch.TileLargeSolidFlags = null; _maskScratch.TileDeckFlags = null; _maskScratch.TileLabeledLiquidFlags = null; _maskScratch.TileHasBuildingArtFlags = null;
+            _maskScratch.TileBuildingGroundOverlayFlags = null; _maskScratch.TileFrontGroundOverlayFlags = null;
+            _maskScratch.TileIceBits = null; _maskScratch.TileLavaBits = null; _maskScratch.TileFlowBits = null;
+            _maskScratch.MarchOutsideFlags = null; _maskScratch.MarchFloodStack = null; _maskScratch.SpeckVisitedFlags = null; _maskScratch.SpeckComponentMembers = null;
+            _maskScratch.TileNearLandFlags = null; _maskScratch.TileHasFrontArtFlags = null;
+            _maskScratch.TileIceFlags = null; _maskScratch.TileFlowFlags = null; _maskScratch.TileLavaFlags = null;
+            _maskScratch.TileHasEffectWaterFlags = null; _maskScratch.TileCalmnessValues = null;
+            _maskScratch.WaterSignedDistancePixels = null; _maskScratch.DistanceToLand = null; _maskScratch.DistanceToWater = null;
         }
 
         /// <summary>Kick the full-map anchor job if this location still needs one and the

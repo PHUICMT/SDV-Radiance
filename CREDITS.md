@@ -9,6 +9,21 @@ listed here with its license.
 - **MonoGame** — rendering framework. https://www.monogame.net
 - **Generic Mod Config Menu** by spacechase0 — in-game config UI (optional dependency). https://www.nexusmods.com/stardewvalley/mods/5098
 
+## Translations
+The mod's text changes often while it is still settling, so a translation is not
+a one-off gift: every one of these has been resynced against a moving key set.
+
+Bundled with the mod:
+- **Simplified Chinese** by Rime961, included since 1.2.2 and kept in sync through every release since.
+- **Thai** by the author.
+
+Contributed, not bundled yet:
+- **Italian** by 7Kana, partly complete, waiting on the remaining keys.
+
+Published separately on the Nexus by their authors, with thanks:
+- **Korean** by jjongleee. https://www.nexusmods.com/stardewvalley/mods/49448
+- **Simplified Chinese** by Rubbish404. https://www.nexusmods.com/stardewvalley/mods/49647
+
 ## Reference / inspiration (features reimplemented independently)
 - **DynamicShader** by Nook — cloud shadows and tilt-shift are reimplemented from scratch; no code or assets copied. https://www.nexusmods.com/stardewvalley/mods/40775
 

@@ -19,6 +19,10 @@ namespace SDVRadiance
         /// <summary>Space reserved on the left for an icon, so the label centres in what is
         /// left rather than underneath it.</summary>
         public int LeftInset;
+        /// <summary>Whether this button is the currently chosen one, for a row of choices where
+        /// exactly one is in effect. Asked every frame rather than stamped once: the value can be
+        /// changed from GMCM or the console while this menu is open.</summary>
+        public Func<bool>? IsChosen;
 
         public TunerTextButton(string label, Rectangle bounds, Action onClick)
         {

@@ -41,11 +41,7 @@ namespace SDVRadiance
                 && StardewModdingAPI.Context.IsWorldReady && Game1.currentLocation != null;
             if (!shadowsOn && !reflectionNeedsPlayer)
             {
-                _playerReady = false;
-                _playerMaskFresh = false;
-                _playerColorFresh = false;
-                PlayerMask = null;
-                PlayerColor = null;
+                ForgetPlayerBake();
                 return;
             }
             if (_renderDepth > 0)
@@ -56,11 +52,57 @@ namespace SDVRadiance
             _renderDepth++;
             try
             {
+            EnsureBakeResources(graphicsDevice);
+            TrimBakeCaches();
+            RunSceneBakes(graphicsDevice, config, shadowsOn);
+
+            // Sitting still casts (the bake captures the current SEATED animation frame, so the
+            // silhouette matches the pose); horseback skips — the horse's own shadow covers the
+            // rider. SWIMMING keeps the bake but drops _playerReady: the shadow consumers gate
+            // on _playerReady (a swimmer casts no shadow), while the water shader's exclusion
+            // gate reads PlayerMask — without it the ripple displacement warped the swimmer's
+            // own pixels (the bathhouse "wavy body").
+            Farmer who = Game1.player;
+            bool swim = who != null && who.swimming.Value;
+            if (who == null || who.currentLocation != Game1.currentLocation || who.isRidingHorse())
+            {
+                ForgetPlayerBake();
+                return;
+            }
+
+            BakePlayerPose(graphicsDevice, who, swim, reflectionNeedsPlayer);
+            }
+            finally
+            {
+                _renderDepth--;
+            }
+        }
+
+        /// <summary>Forget the player silhouette: nothing may read a target whose pose no
+        /// longer matches the farmer on screen.</summary>
+        private void ForgetPlayerBake()
+        {
+            _playerReady = false;
+            _playerMaskFresh = false;
+            _playerColorFresh = false;
+            PlayerMask = null;
+            PlayerColor = null;
+        }
+
+        /// <summary>Create the one-off drawing kit every bake path shares. Cheap after the
+        /// first frame: each field is created once and lives for the mod's lifetime.</summary>
+        private void EnsureBakeResources(GraphicsDevice graphicsDevice)
+        {
             _renderTargetSpriteBatch ??= new SpriteBatch(graphicsDevice);
             _gradientTexture ??= BuildGradient(graphicsDevice);
             _propGradientTexture ??= BuildGradient(graphicsDevice, 0f);
             _contactBlobTexture ??= BuildBlob(graphicsDevice);
+        }
 
+        /// <summary>Drop the coldest bakes when a cache outgrows its cap, then report what
+        /// the caches hold going into this frame.</summary>
+        private void TrimBakeCaches()
+        {
             // ---- Persistent bake caches (the old clear-everything-every-frame here cost
             // 50-150 render-target switches per frame — the single biggest stutter source) ----
             // CHARACTER bakes are upright silhouettes keyed by (texture, frame): valid forever.
@@ -75,7 +117,13 @@ namespace SDVRadiance
             // Report occupancy AFTER eviction: what the caches actually hold going into this
             // frame is the number that pairs with the miss count below it.
             FrameCost.CacheOccupancy(_bakedObjectCache.Count, ObjectBakeCapTotal, _casterBakeCache.Count, CasterBakeCap);
+        }
 
+        /// <summary>Bake the scene's silhouettes for this frame: characters every frame,
+        /// objects on arrival in a location and then only what the draw pass reported
+        /// missing or stale.</summary>
+        private void RunSceneBakes(GraphicsDevice graphicsDevice, ModConfig config, bool shadowsOn)
+        {
             _bakeBlurPx = config.DirectionalShadowBlur;
             bool objectsOn = shadowsOn && SunCasts() && config.DirectionalShadowObjects;
             float sunRotation = 0f, sunStretch = 0f;
@@ -117,7 +165,7 @@ namespace SDVRadiance
             // runs on arrival in a location and never again. On every other frame it used to run
             // anyway, in bake mode, and on a warm frame that is a second complete walk of the
             // scene per frame whose every lookup answers "already baked". The draw pass now
-            // reports what it found missing OR stale (see EmitObj), and a warm bake pass does
+            // reports what it found missing OR stale (see EmitObject), and a warm bake pass does
             // exactly that list, which on a still screen under a still sun is nothing. A
             // brand-new sprite pays one frame of the banded stand-in — at the screen edge it is
             // scrolling in over, not the 15 ticks of it that got the old heartbeat attempt
@@ -130,7 +178,7 @@ namespace SDVRadiance
                 try
                 {
                     if (locationChanged || _bakedObjectCache.Count == 0)
-                        DrawObjectShadows(_renderTargetSpriteBatch, objectLocation, sunRotation, sunStretch, 0f, 0f);
+                        DrawObjectShadows(_renderTargetSpriteBatch!, objectLocation, sunRotation, sunStretch, 0f, 0f);
                     else
                         BakeQueuedObjectSprites(graphicsDevice);
                 }
@@ -142,25 +190,13 @@ namespace SDVRadiance
             // frame, so the draw pass simply asks again, and dropping the list keeps a request
             // from outliving the shear it was recorded under.
             _objectBakeQueue.Clear();
+        }
 
-            // Sitting still casts (the bake captures the current SEATED animation frame, so the
-            // silhouette matches the pose); horseback skips — the horse's own shadow covers the
-            // rider. SWIMMING keeps the bake but drops _playerReady: the shadow consumers gate
-            // on _playerReady (a swimmer casts no shadow), while the water shader's exclusion
-            // gate reads PlayerMask — without it the ripple displacement warped the swimmer's
-            // own pixels (the bathhouse "wavy body").
-            Farmer who = Game1.player;
-            bool swim = who != null && who.swimming.Value;
-            if (who == null || who.currentLocation != Game1.currentLocation || who.isRidingHorse())
-            {
-                _playerReady = false;
-                _playerMaskFresh = false;
-                _playerColorFresh = false;
-                PlayerMask = null;
-                PlayerColor = null;
-                return;
-            }
-
+        /// <summary>Render the player's current pose to the persistent silhouette target (and
+        /// its full-colour twin when the reflection wants it), reusing the last bake when the
+        /// pose has not moved.</summary>
+        private void BakePlayerPose(GraphicsDevice graphicsDevice, Farmer who, bool swim, bool reflectionNeedsPlayer)
+        {
             // PreserveContents is REQUIRED for every persistent bake target: the default
             // DiscardContents only guarantees the pixels until the next target swap/present,
             // which was fine when everything re-baked per frame — cached across frames, the
@@ -177,8 +213,19 @@ namespace SDVRadiance
             // perfectly still was re-baked 7.5 times a second on every install, for layers that
             // in a vanilla-appearance game do not exist. This bake measured as the single most
             // expensive part of the mod, ahead of drawing every shadow on screen.
+            //
+            // Held back while the author clock is frozen. Freeze exists so the same scene captures
+            // to the same bytes twice, and this refresh is a hole straight through it: Game1.ticks
+            // keeps counting while frozen, so every eighth frame the player was re-baked and
+            // whatever Fashion Sense had animated in the meantime came with it. Three seconds
+            // between two captures of one "frozen" scene is about 22 re-bakes, which showed up as
+            // a couple of swaying hair pixels reflected into the water - an 8x10 patch of changed
+            // colour inside an otherwise byte-identical silhouette, at the same place on every map,
+            // which is what a fixed character with fixed hair cycling two phases looks like. It
+            // failed the harness gate, so nothing could be verified through it at all.
             var sig = (who.FarmerSprite.CurrentFrame, (int)who.FacingDirection, src);
-            bool accessoryRefreshDue = PlayerAccessoriesAnimate && Game1.ticks % 8 == 0;
+            bool accessoryRefreshDue = PlayerAccessoriesAnimate && Game1.ticks % 8 == 0
+                                       && !Determinism.Frozen;
             if (_playerMaskFresh && sig == _playerBakeSignature && !accessoryRefreshDue
                 && (!reflectionNeedsPlayer || _playerColorFresh))
             {
@@ -198,7 +245,7 @@ namespace SDVRadiance
             {
                 graphicsDevice.SetRenderTarget(_playerRenderTarget);
                 graphicsDevice.Clear(Color.Transparent);
-                _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+                _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
                 who.FarmerRenderer.draw(_renderTargetSpriteBatch, who.FarmerSprite.CurrentAnimationFrame, who.FarmerSprite.CurrentFrame,
                     src, pos, Vector2.Zero, 0f, who.FacingDirection, Color.Black, 0f, 1f, who);
                 _renderTargetSpriteBatch.End();
@@ -245,17 +292,12 @@ namespace SDVRadiance
             }
             catch (Exception ex)
             {
-                try { _renderTargetSpriteBatch.End(); } catch { }
+                try { _renderTargetSpriteBatch!.End(); } catch { }
                 if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log($"[shadow] player RT prep threw: {ex}", LogLevel.Warn); }
             }
             finally
             {
                 graphicsDevice.SetRenderTargets(prev);
-            }
-            }
-            finally
-            {
-                _renderDepth--;
             }
         }
 
@@ -511,9 +553,9 @@ namespace SDVRadiance
         /// </summary>
         private void EvictColdObjectBakes()
         {
-            for (int cls = 0; cls < ObjSlotClasses.Length; cls++)
+            for (int cls = 0; cls < ObjectSlotClasses.Length; cls++)
             {
-                int cap = ObjSlotClasses[cls].Cap;
+                int cap = ObjectSlotClasses[cls].Cap;
                 int live = 0;
                 foreach (var kv in _bakedObjectCache)
                     if (kv.Value.SlotClass == cls) live++;

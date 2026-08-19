@@ -2,13 +2,208 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.5.7 (in progress)
+
+### Added
+
+- **Looks (colour LUTs).** A finished look laid over the grading sliders rather than instead of
+  them: pick one under Color grading and set how strongly it applies. Seven ship with the mod, and
+  a 1024x32 LUT strip of your own goes in a `radiance-luts` folder beside your save games, where it
+  is picked up on the next launch and listed after them, marked as yours. That folder is yours
+  rather than the mod's, so updating Radiance cannot delete what you put there, and neither can a
+  mod manager that installs clean. Off by default, so nothing changes until you ask for it.
+
+  Both the look and its strength are on the F6 tuner as well as in the config menu, because a
+  colour look is judged by eye and the tuner leaves the scene visible while you change it.
+
+  The looks were designed against measurements of what the game actually puts on screen, not
+  against general advice about film. Three of those measurements shaped every one of them:
+
+  - **12% of all pixels are pure black, and 70% of a night interior is.** The first thing a film
+    look usually does is lift the shadows, which here would turn most of a dark room grey. Every
+    look fades back to no change through the deep shadows, so black stays black.
+  - **99% of the picture sits below 237 of 255, and under 1% goes above 240.** A filmic highlight
+    rolloff has almost nothing to act on, so the looks work in the midtones, where the picture is.
+  - **Blue, cyan and green are 79% of the colour in daylight; red, orange and yellow are 19%.**
+    Warming the picture by pushing red would touch a fifth of it, so the warm looks move the blues
+    and greens instead. At night the balance inverts (65% of the colour is lamplight red), so the
+    cool looks protect the reds rather than draining them the way the textbook says.
+
+### Changed
+
+- A reflected building no longer comes apart into horizontal strips sliding over each other. The
+  ripple pushes a reflection sideways by an amount that depended on the row, and the row was
+  rounded to a step four pixels tall, so a band of pixels moved together and then jumped at the
+  boundary. That was not a side effect of the wave, it was the wave: a staircase cannot shear
+  anything smoothly. The shear is now computed per row, so the reflection bends instead of
+  breaking. The banding was deliberate once, as a drawn pixel-art look, so it is a setting rather
+  than a deletion: **Reflection banding**, 0 for a surface that bends and 4 for exactly what this
+  looked like up to 1.5.6.
+- The second harmonic of the ripple drops from a period of 6.6 world pixels to 20.1. At one sample
+  every four pixels it could never appear as itself and folded into a slow beat that crawled across
+  the reflection, which is the streaking that was reported.
+
+- The water behind a see-through tree is water again. Walk behind a tree standing at a pond and
+  the game fades it so you can see yourself through the leaves; what showed through was a
+  canopy-shaped patch of completely untouched water. The mask that stops leaves rippling was
+  stamping every canopy at full strength no matter how faded the tree actually was, and the shader
+  read that mask as all-or-nothing. Both halves now carry the opacity through, so a half
+  see-through thing hides half the effect.
+- A butterfly flying over water no longer ripples with it. The exclusion mask was rebuilding each
+  critter's placement by hand instead of letting the sprite draw itself, so the still patch landed
+  beside the butterfly rather than on it, and the reach test asked about the ground under it rather
+  than the row it flies at.
+- The left and right edge of a reflection no longer has a fine sawtooth along it. Where a column of
+  water sits inside a shore tile there is no open water directly above it, so the mirror borrows the
+  neighbouring column to find the real waterline. That borrow was all or nothing and it switched the
+  moment the column crossed a texel, so on a diagonal shore each row switched on a different column
+  and the edge stepped in and out by a quarter tile from one row to the next. The borrow now scales
+  with how much water is actually there, so the edge follows the shoreline.
+
+### Added
+
+- Reflection reach and reflection fade steps are set by the performance preset now, instead of
+  being two sliders of their own. Both buy frames without changing how the water looks, which
+  makes them the worst kind of setting to put in front of someone: you move it, nothing happens,
+  and you conclude the mod is broken. Quality keeps everything reflected and fades it finely,
+  Balanced fades it in coarser steps, Performance halves how far from the water something can
+  stand and still be mirrored, and Low spec keeps reflections at all rather than turning them off.
+  Both are still in `config.json` and reachable with `radiance_config` for anyone measuring.
+
+- **Reflection distortion**, a slider from a flat mirror to more than the water's own movement. It
+  scales both of the things that bend a reflection: the sideways shear from the wave, and the
+  displacement from the ripple. The named reflection looks only ever touched the second, which is
+  why Still Water could never reach a mirror however far it was turned down. At 0 the image in the
+  water is held still while the surface keeps rippling and sparkling, matching the reflection of a
+  person, which has never moved. Ripple strength stays a separate control.
+- **radiance_perfhud** shows what each part of this mod costs, live, in the corner of the screen,
+  and the same switch is on the Performance tab of the tuner. The report already held these
+  numbers, but a file cannot answer "what did I just do that made it stutter".
+- **radiance_gputime** adds what the graphics card spends beside what the game spends asking it.
+  Some effects are cheap to ask for and expensive to draw: the effect chain measures about twice
+  its submission cost. Off by default.
+- The report and the readout now say when frames were drawn while the game window did not have
+  focus. The game sleeps 20 ms on every one of those, which on its own turns a capped 16.7 ms frame
+  into 24.6 ms and 40 fps with nothing actually wrong. The per-part numbers are unaffected.
+- **radiance_tuner** opens the tuner from the console, optionally on a named tab.
+- **Lower it automatically when needed**, under the effect resolution slider. The mod watches its
+  own frame time and drops the effect resolution a step when the frame has been missing its budget
+  for a second and a half, then gives it back when the scene gets easier. What you set stays the
+  ceiling; this only ever asks for less. It is off by default and on in the Performance and Low
+  spec presets, because the effect resolution is the one setting here with a quadratic effect and
+  the one nobody reporting a slow game has ever mentioned finding.
+  It holds still while the window is in the background, where the game sleeps 20 ms a frame and
+  every frame looks slow. And a step down that does not actually shorten the frame is given back
+  within three seconds, with the controller standing down for a minute afterwards: a machine held
+  up by its CPU gets nothing from a smaller buffer, and should not be left with a softer picture
+  for it.
+- **radiance_autoscale** prints what that controller is doing, and can pretend the frame budget is
+  shorter than it is so the whole path can be watched working on a machine that never misses its
+  own budget.
+
+### Fixed
+
+- The light that seemed to switch on as you walked up to it, and the pulse of brightness while
+  walking through a lit room or a lit street at night, are gone. Both were the same thing. The
+  shader had twenty-four light slots and an ordinary scene offers more: the saloon holds about
+  thirty lights once its wall lamps are merged, and a town street at night thirty to fifty with
+  the house windows counted. The lights that lost the last slots were the big off-screen ones
+  whose pools still covered a third of the picture, and walking a few tiles evicted and re-admitted
+  them, each time fading a screen-sized pool out and back in over a third of a second. No ranking
+  can hide that; only a budget the scene does not fill can. There are forty-eight slots now, and
+  the extra ones cost a distance test each rather than a light each. Turning flood GI off, which
+  hands lighting to the older per-light pass, costs what it did before: that pass was measured at
+  three milliseconds while this was being changed and brought back down before it shipped.
+- Map scenery that a map turns - mirrored or rotated tiles, which .tmx maps use freely (one
+  farm map turns 2,798 of its cells) - is no longer redrawn the plain way round by the shadow
+  pass, which read as tiles going "misaligned and flipped" the moment the mod was switched on. The
+  water pass had been reading the tile's orientation for a while; the shadow pass now does too,
+  in the visible redraw, in the shape it bakes, and in the cache key that tells two shapes apart.
+  Reported from Waterfall Forest Farms; the fix is verified pixel for pixel on this side but the
+  reported spot itself has not been reproduced here, so please say if it is still wrong.
+- The bounce light of a lamp just past the edge of the screen no longer steps as you walk. The
+  bounce grid covers the visible tiles and a margin, and a lamp beyond the margin fed it nothing,
+  so the grid changed each time the camera crossed a tile. Every lamp in the location now feeds
+  the grid, clamped to its edge with the falloff it would have had crossing the missing tiles, so
+  the grid reads the same in the world wherever the camera stands.
+
+### Performance
+
+- The water proximity test, which every tree, bush, grass tuft, building, animal and character on
+  screen runs before it draws itself into a reflection or a mask, was walking the block of tiles
+  around itself and could look at 361 of them to answer no. It now reads four numbers out of a
+  table built once per mask rebuild. Same answer, cell for cell.
+- Both of those sweeps also visited every tile the camera could see, around nine hundred a frame,
+  most of them nowhere near water. They now start narrowed to the water's own bounding box. The
+  sprite mask fell 14 to 24 per cent at two spots; the entity mirror did not move, which says its
+  cost is in the stamps rather than in finding them, and that is where the next attempt goes.
+- The effect chain no longer copies the game's frame into a buffer of its own before reading it,
+  at resolutions where that copy was a duplicate rather than a downscale. Measured, this bought
+  almost nothing on the machine it was measured on - it is kept because it is less work for an
+  identical picture, and the measurement is written down so nobody budgets for a saving that is
+  not there.
+- **Reflection reach** and **Reflection fade steps**, two new sliders on the water tab, because
+  the only control this mod shipped for its most expensive feature was a switch and the presets
+  aimed at slow machines were using it. Reach decides how far from the water a tree, bush, grass
+  tuft or building may stand and still be mirrored: measured, the shortest setting took 34% off
+  the reflection pass at one wooded shore and 48% at another, while a bare shore with plenty of
+  water did not move at all, which is the control saying the cut lands on scenery and nothing
+  else. People, animals and critters always reflect at full reach.
+  Fade steps is the cheaper of the two to accept. A reflection is drawn in slices so it can fade
+  toward its far end, and taller slices mean fewer of them: 8 measured 31 to 37 per cent cheaper
+  than the shipped 4 and loses no reflection at all, only the smoothness of the gradient. Past 8
+  there is very little left to save, because the draw count turns out to be only about a third of
+  what this pass costs. The two stack.
+- **Low spec no longer turns reflections off.** It was the preset most likely to be chosen by
+  somebody having trouble, and it threw away the reason most people install this mod, because the
+  only control was a switch. It now keeps them at the shortest reach with the coarser fade: only
+  the scenery standing at the water still mirrors, and people and animals are never cut by reach
+  at all. Performance uses half reach, Balanced keeps every reflection and only takes the coarser
+  fade. This is not free, and Low spec now pays a little where it used to pay nothing.
+- The report now breaks the effect chain into one line per full-screen pass, with the GPU column
+  beside the CPU one. That is what said the three cheapest passes were not worth fusing and that a
+  third of the chain's time is in the gaps between passes rather than in any of them.
+
+### For translators
+
+Thirty-six new keys:
+
+- `tuner.waterreflectdistort`, `help.waterreflectdistort`, `config.water.reflectdistort.name` and
+  `config.water.reflectdistort.tooltip` for the reflection distortion slider
+- `tuner.waterreflectbanding`, `help.waterreflectbanding`, `config.water.reflectbanding.name` and
+  `config.water.reflectbanding.tooltip` for the banding slider
+- `tuner.section.perfreadout`, `tuner.perfhud`, `help.perfhud`, `tuner.gputime` and `help.gputime`
+  for the cost readout on the Performance tab
+- `config.renderscaleauto.name`, `config.renderscaleauto.tooltip` and `help.renderscaleauto` for
+  the automatic effect resolution
+- `config.perfpreset.lowspec` for the Low spec performance preset
+- `config.report.name` and `config.report.tooltip` for the report button
+- `config.colorgrade.lut.name`, `config.colorgrade.lut.tooltip`, `config.colorgrade.lutamount.name`
+  and `config.colorgrade.lutamount.tooltip` for the colour LUT controls
+- `config.colorgrade.lut.none` and one key per shipped look: `config.colorgrade.lut.warm-film`,
+  `.verdant`, `.autumn-gold`, `.moonlit`, `.cool-night`, `.washed-linen`, `.identity`. These are
+  the names shown in the dropdown, not file names, so they should read naturally in your language
+- `tuner.lut`, `tuner.lutamount` and `help.lutamount` for the same two controls on the F6 tuner.
+  The look names themselves are not repeated there: the tuner shows the file name for a look you
+  added and reuses the `config.colorgrade.lut.*` names for the ones that ship
+- `config.colorgrade.lut.yours` and `config.colorgrade.lut.missing`, two words shown in brackets
+  after a look's file name: one marks a look the player added themselves, the other a look named in
+  config.json whose file is no longer there. Both sit inside brackets after a name, so short is
+  better than descriptive
+
+Nothing was removed, and no key that existed in 1.5.6 changed its meaning. (`config.colorgrade
+.lut.tooltip` was reworded once while this version was being written, before it had ever shipped,
+so there is nothing to re-check there either.)
+
 ## 1.5.6
 
 ### Added
 
-- Morning darkness, on the lighting tab and in GMCM. It sets how much of the night's darkness is
-  still in the room when you wake, so the sun coming up is something you watch happen rather than
-  a light switch. Set it to zero for vanilla's fully lit morning.
+- Morning darkness is now a slider, on the lighting tab and in GMCM. The dim morning itself is not
+  new: 1.5.5 already held a quarter of the night's darkening through 06:00 and lifted it over the
+  next two hours, but the quarter was a constant nobody could reach. It is the same quarter by
+  default, so nothing changes unless you move it. Set it to zero for vanilla's fully lit morning,
+  or higher if you want the sun coming up to be something you watch happen.
 
 ### Performance
 

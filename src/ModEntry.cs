@@ -83,6 +83,7 @@ namespace SDVRadiance
 
         public override void Entry(IModHelper helper)
         {
+            LutCatalog.Initialise(helper.DirectoryPath);
             _config = helper.ReadConfig<ModConfig>();
             ApplyConfigMigrations(helper);
             _config.Clamp();
@@ -105,6 +106,9 @@ namespace SDVRadiance
             helper.Events.Display.RenderingWorld += OnRenderingWorld;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
             helper.Events.Display.RenderingStep += OnRenderingStep;
+            // Over the UI, not under it: the readout has to stay visible while a menu is open,
+            // because "it stutters when I open my inventory" is one of the things it is for.
+            helper.Events.Display.RenderedHud += (_, e) => PerfHud.Draw(e.SpriteBatch);
 
             // Surface grids are inferred per location and cached for the visit. A save load means
             // a whole new world, and placing/removing a farm building changes a map in place.
@@ -158,7 +162,7 @@ namespace SDVRadiance
             SurfaceMap.DiagnosticMonitor = this.Monitor;
             MapDump.BridgeMonitor = this.Monitor;
             MapDump.BridgeHelper = helper;
-            ConsoleCommands.RegisterAll(helper, this.Monitor, () => _config, () => _pipeline);
+            ConsoleCommands.RegisterAll(helper, this.Monitor, () => _config, () => _pipeline, this.ToggleTuner);
 
             _harmony = new Harmony(this.ModManifest.UniqueID);
             HarmonyPatcher.InstallAll(_harmony, this.Monitor);
@@ -273,7 +277,7 @@ namespace SDVRadiance
                 _shadows ??= new ShadowRenderer();
                 ShadowRenderer.DiagnosticMonitor = _config.DebugLogging ? this.Monitor : null;
                 ShadowRenderer.SharedMonitor = this.Monitor;
-                long t0 = FrameCost.Begin();
+                long t0 = FrameCost.Begin(FrameCost.Part.ShadowPrepare);
                 _shadows.PreparePlayer(Game1_GraphicsDevice, _config);
                 // Co-op partners get their own silhouette, baked in the same window where a
                 // render-target swap is legal. Costs nothing in single player: the list is empty.
@@ -292,7 +296,7 @@ namespace SDVRadiance
                 // by construction instead of trusting whatever sits above on screen.
                 if (_config.WaterReflection)
                 {
-                    _pipeline?.BakeWaterReflection();
+                    _pipeline?.BakeWaterReflection(_config);
                     // P3c: sprite-free map render — the mirror's source, so an excluded
                     // sprite shows the true map pixels behind it instead of a sky hole.
                     _pipeline?.BakeSceneryReflection();
@@ -390,7 +394,7 @@ namespace SDVRadiance
                 return;
             _shadows ??= new ShadowRenderer();
             ShadowRenderer.DiagnosticMonitor = _config.DebugLogging ? this.Monitor : null;
-            long t0 = FrameCost.Begin();
+            long t0 = FrameCost.Begin(FrameCost.Part.ShadowDraw);
             _shadows.DrawInto(e.SpriteBatch, _config);
             double ms = FrameCost.End(FrameCost.Part.ShadowDraw, t0);
             if (_config.DebugLogging)
@@ -408,6 +412,8 @@ namespace SDVRadiance
 
         private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
         {
+            Determinism.HoldGameClock();
+
             // Resource maintenance lives HERE, on the game's own tick, and not on any render
             // path, because every render path in this mod is gated on the mod being switched on.
             // Both earlier attempts put the release behind such a gate and both measured as
@@ -463,16 +469,24 @@ namespace SDVRadiance
             }
 
             if (_config.TunerKey.JustPressed())
-            {
-                if (Game1.activeClickableMenu is RadianceTunerMenu tuner)
-                    tuner.exitThisMenu();
-                else if (Context.IsPlayerFree)
-                    Game1.activeClickableMenu = new RadianceTunerMenu(
-                        _config,
-                        translate: this.I18n,
-                        onChange: () => HarmonyPatcher.ForceBufferDraw = EffectsActive,
-                        onSave: () => this.Helper.WriteConfig(_config));
-            }
+                ToggleTuner();
+        }
+
+        /// <summary>Open the tuner, or close it if it is already open. Behind a method because the
+        /// key is not the only way in any more: a console command opens it too, which is the only
+        /// way to reach it from a script. The game reads input through SDL rather than through
+        /// window messages, so a synthesised keypress never arrives, and checking a UI change meant
+        /// asking a person to press F6.</summary>
+        internal void ToggleTuner()
+        {
+            if (Game1.activeClickableMenu is RadianceTunerMenu tuner)
+                tuner.exitThisMenu();
+            else if (Context.IsPlayerFree)
+                Game1.activeClickableMenu = new RadianceTunerMenu(
+                    _config,
+                    translate: this.I18n,
+                    onChange: () => HarmonyPatcher.ForceBufferDraw = EffectsActive,
+                    onSave: () => this.Helper.WriteConfig(_config));
         }
 
         private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
@@ -480,7 +494,8 @@ namespace SDVRadiance
             GmcmRegistration.Register(this.Helper, this.ModManifest, this.Monitor, this.I18n,
                 config: () => _config,
                 replaceConfig: fresh => _config = fresh,
-                refreshForceBufferDraw: () => HarmonyPatcher.ForceBufferDraw = EffectsActive);
+                refreshForceBufferDraw: () => HarmonyPatcher.ForceBufferDraw = EffectsActive,
+                getPipeline: () => _pipeline);
 
             // Hand-painted liquid ground truth, shipped in labels/ and read ONCE. It is versioned
             // data, not live state: it changes when this mod updates, so there is no file watching.

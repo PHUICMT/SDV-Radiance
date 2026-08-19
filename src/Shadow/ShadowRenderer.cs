@@ -109,8 +109,8 @@ namespace SDVRadiance
         // baked in): a wide sprite ROTATED about its feet dips one bottom corner under the ground
         // line (the "bush shadow droops down-left" artifact); a shear keeps the whole bottom edge
         // glued to the ground, so baked objects composite with NO rotation at all.
-        private const int ObjRtW = 400;
-        private const int ObjRtH = TallestColumnPx + 8 + 8;   // column + feet margin + max blur (5, rounded up)
+        private const int ObjectRtW = 400;
+        private const int ObjectRtH = TallestColumnPx + 8 + 8;   // column + feet margin + max blur (5, rounded up)
 
         /// <summary>
         /// Slot sizes, smallest first. One size fits nobody: a crop is 64 pixels of shadow in a
@@ -124,11 +124,11 @@ namespace SDVRadiance
         /// memory, because the many small ones stop paying tree prices. The classes are coarse on
         /// purpose - three pools reuse well, a pool per exact size would fragment.</para>
         /// </summary>
-        private static readonly (int W, int H, int Cap)[] ObjSlotClasses =
+        private static readonly (int W, int H, int Cap)[] ObjectSlotClasses =
         {
             (128, 160, 320),     // crops, grass, forage, small craftables  -  0.08 MB each
             (256, 288, 96),      // bushes, furniture, medium props         -  0.29 MB each
-            (ObjRtW, ObjRtH, 48) // trees, buildings, tall tile columns     -  0.74 MB each
+            (ObjectRtW, ObjectRtH, 48) // trees, buildings, tall tile columns     -  0.74 MB each
         };
 
         /// <summary>
@@ -180,6 +180,9 @@ namespace SDVRadiance
             /// the scan that found them.</summary>
             public Rectangle[]? ColumnSources;
             public int[]? ColumnLevels;
+            /// <summary>How the map turns each of those sources; without it a queued re-bake
+            /// would replay the column unturned and the shadow shape would not match the art.</summary>
+            public byte[]? ColumnOrients;
         }
         private bool _isBakingObjects;
         private GraphicsDevice? _objectGraphicsDevice;
@@ -223,15 +226,21 @@ namespace SDVRadiance
             /// the right free list. A small slot returned to the large pool is a target nobody can
             /// use for what the pool promises.</summary>
             public int SlotClass;
+            /// <summary>Screen pixels of silhouette stored in one slot texel. Four is one texel per
+            /// screen pixel and what everything that fits a slot gets; a sprite too big for the
+            /// largest slot at four bakes at two or one instead, and the draw scales the slot back
+            /// up by 4/this. Defaulted rather than required so the character caches, which are
+            /// always 4×, need not say so.</summary>
+            public float BakedScale = 4f;
         }
 
         /// <summary>Distinct object silhouettes kept alive. Slots are 400×456 (~0.73 MB each), so
         /// this is the VRAM ceiling: 128 slots is about 93 MB.</summary>
         /// <summary>Sprites all three pools can hold together, for the report and the over-cap
-        /// warning. The real limits are per class (see ObjSlotClasses); this is their sum.</summary>
+        /// warning. The real limits are per class (see ObjectSlotClasses); this is their sum.</summary>
         private static int ObjectBakeCapTotal
         {
-            get { int n = 0; foreach (var c in ObjSlotClasses) n += c.Cap; return n; }
+            get { int n = 0; foreach (var c in ObjectSlotClasses) n += c.Cap; return n; }
         }
         /// <summary>Distinct character/animal frames kept alive. Slots are 160×224 (~0.14 MB).</summary>
         private const int CasterBakeCap = 192;

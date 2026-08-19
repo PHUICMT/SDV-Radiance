@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewValley;
@@ -88,6 +89,30 @@ namespace SDVRadiance
         // Tabs: (label key, one-line description key, content builder). Remembered across reopens.
         private readonly (string key, string desc, Action build)[] _tabDefinitions;
         private static int _lastTab;
+
+        /// <summary>Which tab the next open should land on, by the KEY of the tab rather than by
+        /// its position, so inserting a tab does not silently repoint every caller. Used by the
+        /// console command: the game takes input from SDL, so nothing outside the process can
+        /// click a tab, and checking a change on one meant asking a person to do it.</summary>
+        internal static void OpenAtTab(string keyFragment)
+        {
+            string[] keys =
+            {
+                "tuner.tab.looks", "config.section.perf", "tuner.section.colorgrade",
+                "tuner.section.bloom", "tuner.tab.lens", "tuner.section.lighting",
+                "tuner.section.shadows", "tuner.section.godrays", "tuner.section.water",
+                "tuner.section.cloudshadow", "tuner.tab.fog", "config.section.camera",
+                "config.section.debug",
+            };
+            for (int i = 0; i < keys.Length; i++)
+            {
+                if (keys[i].IndexOf(keyFragment, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    _lastTab = i;
+                    return;
+                }
+            }
+        }
         private int _activeTab;
 
         private int _scroll, _maxScroll, _bodyTop, _bodyBottom, _hintY, _contentX;
@@ -291,9 +316,46 @@ namespace SDVRadiance
             Tog("tuner.master", () => _config.Enabled, v => _config.Enabled = v, "help.master");
         }
 
+        /// <summary>The colour looks, as a row of buttons, with the strength of the chosen one.
+        ///
+        /// <para>Here and not only in GMCM because a look is judged by eye: this panel leaves the
+        /// scene visible, and a config menu does not. Looks found in the player's own folder are
+        /// listed after the ones that ship, and when there are none the row is just the shipped
+        /// set, so nothing appears for a case that is almost everyone's.</para>
+        /// </summary>
+        private void BuildLutPicker()
+        {
+            Section("tuner.lut");
+            string[] looks = ModConfig.ShippedLuts.Concat(LutCatalog.Discover()).ToArray();
+            int x = _contentCursorX;
+            foreach (string look in looks)
+            {
+                string label = look.Length == 0 ? _translate("config.colorgrade.lut.none") : look;
+                int w = Math.Min(180, 28 + (int)(Game1.smallFont.MeasureString(label).X * 0.7f));
+                if (x + w > _contentCursorX + _contentColumnWidth) { x = _contentCursorX; _contentCursorY += S(44); }
+                string chosen = look;
+                var button = Btn(label, new Rectangle(x, _contentCursorY, w, S(38)), () =>
+                {
+                    _config.ColorGradeLut = chosen;
+                    // Choosing a look with the strength at zero would do nothing at all and read
+                    // as the look being broken. Zero is where the slider lands after picking None,
+                    // so it is a state a player arrives at without meaning to.
+                    if (chosen.Length > 0 && _config.ColorGradeLutAmount <= 0f)
+                        _config.ColorGradeLutAmount = 1f;
+                    _onChange(); _onSave(); Reflow();
+                });
+                button.IsChosen = () => string.Equals(_config.ColorGradeLut, chosen, StringComparison.OrdinalIgnoreCase);
+                x += w + S(8);
+            }
+            _contentCursorY += S(46);
+            Sld("tuner.lutamount", 0f, 1f, () => _config.ColorGradeLutAmount,
+                v => _config.ColorGradeLutAmount = v, "help.lutamount");
+        }
+
         private void BuildColorGrade()
         {
             Tog("tuner.colorgrade", () => _config.ColorGradeEnabled, v => _config.ColorGradeEnabled = v, "help.colorgrade");
+            BuildLutPicker();
             Tog("tuner.automood", () => _config.ColorGradeAuto, v => _config.ColorGradeAuto = v, "help.automood");
             Sld("tuner.strength", 0f, 1f, () => _config.ColorGradeStrength, v => _config.ColorGradeStrength = v);
             Sld("tuner.contrast", 0.5f, 1.5f, () => _config.ColorGradeContrast, v => _config.ColorGradeContrast = v, "help.contrast");
@@ -390,6 +452,15 @@ namespace SDVRadiance
             Sld("tuner.waterspeed", 0f, 3f, () => _config.WaterSpeed, v => _config.WaterSpeed = v);
             Tog("tuner.waterreflection", () => _config.WaterReflection, v => _config.WaterReflection = v, "help.waterreflection");
             Sld("tuner.waterreflectstrength", 0f, 1f, () => _config.WaterReflectStrength, v => _config.WaterReflectStrength = v);
+            Sld("tuner.waterreflectdistort", 0f, 1.5f, () => _config.WaterReflectDistort,
+                v => _config.WaterReflectDistort = v, "help.waterreflectdistort");
+            Sld("tuner.waterreflectbanding", 0f, 16f, () => _config.WaterReflectBanding,
+                v => _config.WaterReflectBanding = v, "help.waterreflectbanding");
+            // Reach and fade rows used to sit here, and they were the wrong kind of control for a
+            // panel you open to look at something. Both buy frames without changing how the water
+            // looks, which is exactly the setting a player moves, sees nothing, and files as
+            // broken. The performance preset sets them by name instead - Quality through Low spec
+            // - and radiance_config still reaches them for an A/B.
             // Three named looks rather than another slider: the two things they move together
             // (how much the surface's ripple displaces the mirror, and how deep the water reads)
             // have no meaning apart, and a picked look is something a player can see the point of
@@ -401,7 +472,7 @@ namespace SDVRadiance
                 (WaterReflectionStyle.Natural, "natural"),
                 (WaterReflectionStyle.Choppy, "choppy"),
             };
-            int rw = (_contentColumnWidth - 12) / 3;
+            int rw = (_contentColumnWidth - 12) / reflStyles.Length;
             for (int i = 0; i < reflStyles.Length; i++)
             {
                 var (style, key) = reflStyles[i];
@@ -460,9 +531,10 @@ namespace SDVRadiance
             Section("config.perfpreset.section");
             (PerfPreset preset, string key)[] perfPresets =
             {
-                (PerfPreset.Quality, "quality"), (PerfPreset.Balanced, "balanced"), (PerfPreset.Performance, "performance")
+                (PerfPreset.Quality, "quality"), (PerfPreset.Balanced, "balanced"),
+                (PerfPreset.Performance, "performance"), (PerfPreset.LowSpec, "lowspec")
             };
-            int pw = (_contentColumnWidth - 12) / 3;
+            int pw = (_contentColumnWidth - 12) / perfPresets.Length;
             for (int i = 0; i < perfPresets.Length; i++)
             {
                 var (preset, key) = perfPresets[i];
@@ -475,7 +547,21 @@ namespace SDVRadiance
             _contentCursorY += 56;
 
             Sld("config.renderscale.name", 0.5f, 1f, () => _config.RenderScale, v => _config.RenderScale = v);
+            // Directly under the slider it steers, because it is that slider becoming automatic
+            // rather than a separate feature, and because the slider is then read as the ceiling.
+            Tog("config.renderscaleauto.name", () => _config.RenderScaleAuto,
+                v => _config.RenderScaleAuto = v, "help.renderscaleauto");
             Sld("config.rendersharpness.name", 0f, 2f, () => _config.RenderSharpness, v => _config.RenderSharpness = v);
+
+            // Neither of these is saved to config, and that is deliberate: they are instruments,
+            // not settings. A diagnostic overlay that survives a restart is one somebody forgets
+            // they left on, and the GPU column reaches into the graphics driver, which is not a
+            // state to inherit silently from a session three days ago.
+            Section("tuner.section.perfreadout");
+            Tog("tuner.perfhud", () => PerfHud.Visible, v => PerfHud.Visible = v, "help.perfhud");
+            Tog("tuner.gputime", () => GpuTimer.Ready, GpuTimer.SetWanted, "help.gputime");
+            if (PerfHud.Visible && !GpuTimer.Ready && GpuTimer.Status != "off")
+                Info(() => GpuTimer.Status);
 
             // Measure this machine instead of guessing at it.
             Section("config.bench.section");
@@ -696,7 +782,7 @@ namespace SDVRadiance
                 var r = new Rectangle(_contentX + S(16), cy, _contentColumnWidth, S(22));
                 if (Visible(r)) TunerText.DrawFit(spriteBatch, text(), new Vector2(_contentX + S(16), cy + dy), _contentColumnWidth, Game1.textColor * 0.7f, 0.72f * _ui);
             }
-            foreach (var btn in _buttons) if (Visible(btn.Bounds)) btn.Draw(spriteBatch, dy);
+            foreach (var btn in _buttons) if (Visible(btn.Bounds)) btn.Draw(spriteBatch, dy, btn.IsChosen?.Invoke() == true);
             foreach (var c in _chips)
                 if (Visible(c.Load.Bounds))
                 {

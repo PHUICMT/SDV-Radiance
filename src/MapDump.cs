@@ -41,8 +41,13 @@ namespace SDVRadiance
                 return null;
             }
 
-            var locations = new Dictionary<string, object>();
-            var artSources = new Dictionary<string, string>();   // normalized sheet name -> content path
+            var locations = new Dictionary<string, Dictionary<string, object?>>();
+            // Normalized sheet name -> EVERY distinct content path seen under that name, in the
+            // order they were met. It used to be one path per name, first one wins, which quietly
+            // threw away the fact that different mods ship different art under one file name; the
+            // art written for the name was then whichever map happened to load first, and every
+            // other map that names the same sheet drew from a picture it was never built against.
+            var artSources = new Dictionary<string, List<string>>();
             // Ground-truth water: normalized sheet name -> tile indices the GAME reports as water
             // (isWaterTile / Back "Water" property) anywhere across every loaded location, vanilla
             // or mod. HF Studio uses this to auto-fill water far more accurately than a colour guess.
@@ -58,7 +63,7 @@ namespace SDVRadiance
             {
                 try
                 {
-                    object? entry = DumpLocation(location, artSources, water, animSigs, animGroups);
+                    Dictionary<string, object?>? entry = DumpLocation(location, artSources, water, animSigs, animGroups);
                     if (entry != null)
                         locations[location.NameOrUniqueName] = entry;
                 }
@@ -78,25 +83,28 @@ namespace SDVRadiance
             // path — no need to change the in-game date/season (that would mutate the save and
             // is risky). So one dump, run in any season, yields art for all four.
             var seasons = new[] { "spring", "summer", "fall", "winter" };
-            var artPaths = new Dictionary<string, string>();   // normalized name -> content path
-            foreach ((string name, string src) in artSources)
+            var artPaths = new Dictionary<string, List<string>>();   // normalized name -> every content path
+            foreach ((string name, List<string> srcs) in artSources)
             {
-                artPaths[name] = src;
-                foreach (string se in seasons)
+                foreach (string src in srcs)
                 {
-                    if (src.IndexOf(se, StringComparison.OrdinalIgnoreCase) < 0)
-                        continue;
-                    foreach (string other in seasons)
+                    AddArtSource(artPaths, name, src);
+                    foreach (string se in seasons)
                     {
-                        if (other == se)
+                        if (src.IndexOf(se, StringComparison.OrdinalIgnoreCase) < 0)
                             continue;
-                        // swap the season token in both the path and the display name
-                        string sibPath = System.Text.RegularExpressions.Regex.Replace(src, se, other, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                        string sibName = LabelStore.NormalizeSheet(sibPath);
-                        if (!artPaths.ContainsKey(sibName))
-                            artPaths[sibName] = sibPath;
+                        foreach (string other in seasons)
+                        {
+                            if (other == se)
+                                continue;
+                            // swap the season token in both the path and the display name
+                            string sibPath = System.Text.RegularExpressions.Regex.Replace(src, se, other, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                            string sibName = LabelStore.NormalizeSheet(sibPath);
+                            if (!artPaths.ContainsKey(sibName))
+                                AddArtSource(artPaths, sibName, sibPath);
+                        }
+                        break;   // one season token per path is enough
                     }
-                    break;   // one season token per path is enough
                 }
             }
 
@@ -126,52 +134,75 @@ namespace SDVRadiance
             // in the first place; a blob URL from a handle does not taint either.
             var art = new Dictionary<string, string>();          // legacy embed (embedArt only)
             var artPng = new Dictionary<string, string>();        // name -> "sheets/<file>.png"
-            var usedFileNames = new HashSet<string>();            // case-insensitive, see SafeFileName
+            // The same PNG list keyed by the FULL content path instead of the sheet's bare name.
+            // Two mods may ship different art under one file name - "spring_outdoorsTileSheet2"
+            // exists in the base game, in three recolours and in two foliage packs on this install,
+            // at four different sizes - and the bare name cannot tell them apart. A map names the
+            // full path of the sheet it places, so this is the lookup that returns the art the map
+            // actually draws with, rather than whichever mod happened to be read first.
+            var artPngBySrc = new Dictionary<string, string>();
+            // What the art turned out to be, in tiles-of-16: name -> [width, height]. A labeller
+            // laying tile indices out over the PNG has to divide by the sheet's width, and when the
+            // art it holds is a different size from the art the map was built against, every index
+            // past the first row lands on the wrong tile. Recorded so that mismatch is visible
+            // instead of silently drawing the wrong picture.
+            var artDim = new Dictionary<string, int[]>();
+            var usedLocationFiles = new HashSet<string>();        // a separate pool: a location and a sheet may share a name
             string sheetDir = Path.Combine(HfStudioDir(), "sheets");
             if (!embedArt)
             {
                 try { Directory.CreateDirectory(sheetDir); }
                 catch (Exception ex) { monitor.Log($"mapdump: cannot create {sheetDir}: {ex.Message}", LogLevel.Warn); }
             }
-            foreach ((string name, string src) in artPaths)
+            foreach ((string name, List<string> srcs) in artPaths)
             {
-                try
+                foreach (string src in srcs)
                 {
-                    // Two kinds of source now share this list: an asset key the content pipeline
-                    // knows, and a plain file on disk for a sheet nothing has loaded. A rooted path
-                    // is never a valid asset key, so the two cannot be confused.
-                    bool fromDisk = Path.IsPathRooted(src);
-                    var texture = fromDisk
-                        ? LoadFromDisk(src)
-                        : Game1.content.Load<Microsoft.Xna.Framework.Graphics.Texture2D>(src);
                     try
                     {
-                        if (embedArt)
+                        // Two kinds of source now share this list: an asset key the content pipeline
+                        // knows, and a plain file on disk for a sheet nothing has loaded. A rooted path
+                        // is never a valid asset key, so the two cannot be confused.
+                        bool fromDisk = Path.IsPathRooted(src);
+                        var texture = fromDisk ? LoadFromDisk(src) : LoadAsset(helper, src);
+                        try
                         {
-                            using var ms = new MemoryStream();
-                            texture.SaveAsPng(ms, texture.Width, texture.Height);
-                            art[name] = "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
+                            if (embedArt)
+                            {
+                                using var ms = new MemoryStream();
+                                texture.SaveAsPng(ms, texture.Width, texture.Height);
+                                art[name] = "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
+                            }
+                            else
+                            {
+                                string file = ArtFileName(name, src) + ".png";
+                                using (var fs = File.Create(Path.Combine(sheetDir, file)))
+                                    texture.SaveAsPng(fs, texture.Width, texture.Height);
+                                artPngBySrc[src] = "sheets/" + file;
+                                // First source wins the bare name, and the first is the one a loaded
+                                // map placed: DumpLocation fills artSources before the season siblings
+                                // and the disk sweep are added to it. A map that places a DIFFERENT
+                                // file under this name resolves through artPngBySrc instead.
+                                if (!artPng.ContainsKey(name))
+                                {
+                                    artPng[name] = "sheets/" + file;
+                                    artDim[name] = new[] { texture.Width, texture.Height };
+                                }
+                            }
                         }
-                        else
+                        finally
                         {
-                            string file = SafeFileName(name, usedFileNames) + ".png";
-                            using (var fs = File.Create(Path.Combine(sheetDir, file)))
-                                texture.SaveAsPng(fs, texture.Width, texture.Height);
-                            artPng[name] = "sheets/" + file;
+                            // Only the ones we opened ourselves. A texture from the content pipeline is
+                            // the game's and is still in use; one read off disk here belongs to nobody
+                            // else, and `all` reads several hundred of them, so holding every one until
+                            // the dump finished was hundreds of megabytes of video memory for nothing.
+                            if (fromDisk) texture.Dispose();
                         }
                     }
-                    finally
+                    catch (Exception ex)
                     {
-                        // Only the ones we opened ourselves. A texture from the content pipeline is
-                        // the game's and is still in use; one read off disk here belongs to nobody
-                        // else, and `all` reads several hundred of them, so holding every one until
-                        // the dump finished was hundreds of megabytes of video memory for nothing.
-                        if (fromDisk) texture.Dispose();
+                        monitor.Log($"mapdump: no art for {name} ({src}): {ex.Message}", LogLevel.Trace);
                     }
-                }
-                catch (Exception ex)
-                {
-                    monitor.Log($"mapdump: no art for {name} ({src}): {ex.Message}", LogLevel.Trace);
                 }
             }
 
@@ -190,15 +221,45 @@ namespace SDVRadiance
             // group sheets by mod the way it groups locations. Additive field: older builds ignore
             // it, and only sheets we managed to load art for are listed.
             var artSrc = new Dictionary<string, string>();
-            foreach ((string name, string src) in artPaths)
+            foreach ((string name, List<string> srcs) in artPaths)
             {
                 if (art.ContainsKey(name) || artPng.ContainsKey(name))
-                    artSrc[name] = src;
+                    artSrc[name] = srcs[0];
             }
 
+            // ONE FILE PER LOCATION, and an index that names them.
+            //
+            // The single file grew to 224 MB of which 222 MB is the locations' cell data, and the
+            // labeller has to JSON.parse ALL of it before it can show anything: several seconds of
+            // a frozen tab at boot, and a heap big enough that every later allocation risks a
+            // garbage-collection pause in the middle of a brush stroke. None of that data is needed
+            // until a map is actually opened, and only one map is ever open.
+            //
+            // So the index carries what the sidebar needs about every location (its name, whether
+            // it is outdoors, and the sheets it places - that last one is what "which sheet covers
+            // the most maps" is counted from) plus the file to read for the rest. A labeller that
+            // predates this reads `hf-mapdump-v2` as unknown and refuses the file, which is the
+            // honest failure: the maps really are not in it.
+            var index = new Dictionary<string, object?>();
+            foreach ((string locName, Dictionary<string, object?> entry) in locations)
+                index[locName] = new Dictionary<string, object?>
+                {
+                    ["outdoors"] = entry.TryGetValue("outdoors", out object? o) ? o : null,
+                    ["cls"] = entry.TryGetValue("cls", out object? c) ? c : null,
+                    ["locSeason"] = entry.TryGetValue("locSeason", out object? ls) ? ls : null,
+                    ["sheets"] = entry.TryGetValue("sheets", out object? sh) ? sh : null,
+                    // The DISTINCT (sheet, tile) pairs this location draws. The labeller answers
+                    // "which maps contain lava" from the tiles a map uses, and that question is
+                    // asked about every map at once - it cannot wait for each file to be opened.
+                    // Distinct pairs are a fraction of the cell grid (a map repeats a few hundred
+                    // tiles across thousands of cells), so this stays in the index while the grid
+                    // itself does not.
+                    ["used"] = DistinctCells(entry),
+                    ["file"] = "maps/" + SafeFileName(locName, usedLocationFiles) + ".json",
+                };
             // artPng is additive: a labeller that only knows `art` still works against an
             // embedded dump, and one that knows both prefers the files.
-            var doc = new { format = "hf-mapdump-v1", season = Game1.currentSeason, locations, art, artPng, artSrc, water = waterOut, animGroups };
+            var doc = new { format = "hf-mapdump-v2", season = Game1.currentSeason, locations = index, art, artPng, artPngBySrc, artDim, artSrc, water = waterOut, animGroups };
             string json = JsonSerializer.Serialize(doc);
 
             // Primary target: Documents\HF-Studio. The mod folder lives under Program Files,
@@ -211,6 +272,7 @@ namespace SDVRadiance
             {
                 string sdir = HfStudioDir();
                 Directory.CreateDirectory(sdir);
+                WriteLocationFiles(sdir, locations, index, monitor);
                 primary = Path.Combine(sdir, "maps.json");
                 File.WriteAllText(primary, json);
                 // Season-suffixed copy so four dumps (one per in-game season) can coexist for
@@ -261,7 +323,7 @@ namespace SDVRadiance
         /// <summary>Record every frame of an animated tile as "&lt;sheet&gt;:&lt;index&gt;", deduplicated
         /// across the whole dump. A frame's own sheet is registered for art embedding too: a cycle
         /// can step onto a sheet no static cell references, and HF Studio needs its art to paint it.</summary>
-        private static void RecordAnim(AnimatedTile anim, Dictionary<string, string> artSources,
+        private static void RecordAnim(AnimatedTile anim, Dictionary<string, List<string>> artSources,
                                       HashSet<string> sigs, List<string[]> groups)
         {
             var frames = new List<string>();
@@ -271,8 +333,8 @@ namespace SDVRadiance
                     continue;
                 string sn = LabelStore.NormalizeSheet(f.TileSheet.ImageSource ?? f.TileSheet.Id);
                 frames.Add(sn + ":" + f.TileIndex);
-                if (!artSources.ContainsKey(sn) && f.TileSheet.ImageSource is { } src)
-                    artSources[sn] = src;
+                if (f.TileSheet.ImageSource is { } src)
+                    AddArtSource(artSources, sn, src);
             }
             if (frames.Count < 2)
                 return;   // a one-frame "animation" has nothing to fan out to
@@ -313,6 +375,57 @@ namespace SDVRadiance
         /// map in maps.json carries the real name, so nothing downstream has to guess.
         /// </para>
         /// </summary>
+        /// <summary>Record one more content path under a sheet name, keeping discovery order and
+        /// never listing the same path twice. The FIRST path recorded for a name is the one a
+        /// loaded map placed, and the rest are the season siblings and the disk sweep, so order
+        /// here is what decides which art the bare name resolves to.</summary>
+        private static void AddArtSource(Dictionary<string, List<string>> sources, string name, string src)
+        {
+            if (!sources.TryGetValue(name, out List<string>? list))
+                sources[name] = list = new List<string>();
+            foreach (string had in list)
+                if (string.Equals(had, src, StringComparison.OrdinalIgnoreCase))
+                    return;
+            list.Add(src);
+        }
+
+        /// <summary>
+        /// The PNG file a sheet's art is written to: its name, plus a short hash of the content
+        /// path it came from.
+        /// <para>
+        /// The hash is what makes two dumps agree. The old name was the sheet name with a ~2, ~3
+        /// suffix handed out in the order the sheets happened to be met, so the same art landed in
+        /// a different file depending on which mods were loaded, and merging two profiles' dumps
+        /// mixed the art up rather than combining it. A name derived from the path alone is the
+        /// same in every run, on every profile, whatever order things arrive in - and two genuinely
+        /// different files under one sheet name now get one file each instead of overwriting.
+        /// </para>
+        /// </summary>
+        private static string ArtFileName(string name, string src)
+        {
+            var sb = new System.Text.StringBuilder(name.Length + 9);
+            foreach (char c in name)
+                sb.Append(Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c);
+            // FNV-1a over the path, lowercased so a case-different spelling of one file agrees
+            // with itself. Eight hex digits: collisions are a curiosity here, not a hazard.
+            uint hash = 2166136261;
+            foreach (char c in src.ToLowerInvariant())
+                hash = (hash ^ c) * 16777619;
+            return sb.Append('_').Append(hash.ToString("x8")).ToString();
+        }
+
+        /// <summary>
+        /// Load a tilesheet by asset key through SMAPI's content view, so the art is what the game
+        /// is really drawing rather than what shipped in the box. Content Patcher's recolours and
+        /// map packs replace these assets, and reading them any other way hands the labeller the
+        /// base game's picture for a sheet the maps were built against at a different size.
+        /// </summary>
+        private static Microsoft.Xna.Framework.Graphics.Texture2D LoadAsset(IModHelper helper, string src)
+        {
+            try { return helper.GameContent.Load<Microsoft.Xna.Framework.Graphics.Texture2D>(src); }
+            catch { return Game1.content.Load<Microsoft.Xna.Framework.Graphics.Texture2D>(src); }
+        }
+
         private static string SafeFileName(string name, HashSet<string> used)
         {
             var sb = new System.Text.StringBuilder(name.Length);
@@ -325,6 +438,62 @@ namespace SDVRadiance
             return candidate;
         }
 
+        /// <summary>Every distinct cell value a location draws, across all its rendered layers.
+        /// The cell encoding is the dump's own: sheetIndex * 0x100000 + tileIndex, -1 = empty.</summary>
+        private static int[] DistinctCells(Dictionary<string, object?> entry)
+        {
+            var seen = new HashSet<int>();
+            if (entry.TryGetValue("layers", out object? lo) && lo is List<object> layers)
+                foreach (object layer in layers)
+                {
+                    // The layer objects are anonymous types built in PackRenderedLayers, so the
+                    // cells come back out through reflection rather than a cast.
+                    object? cellsObj = layer.GetType().GetProperty("cells")?.GetValue(layer);
+                    if (cellsObj is not string b64)
+                        continue;
+                    byte[] bytes = Convert.FromBase64String(b64);
+                    for (int i = 0; i + 3 < bytes.Length; i += 4)
+                    {
+                        int v = BitConverter.ToInt32(bytes, i);
+                        if (v >= 0)
+                            seen.Add(v);
+                    }
+                }
+            var arr = new int[seen.Count];
+            seen.CopyTo(arr);
+            Array.Sort(arr);
+            return arr;
+        }
+
+        /// <summary>Write one file per location under <c>maps/</c>, named by the index. Whatever the
+        /// index says a location's file is called is what gets written, so the two cannot drift.
+        /// Best effort per file: one location that fails to write must not lose the other 2,900.</summary>
+        private static void WriteLocationFiles(string studioDir, Dictionary<string, Dictionary<string, object?>> locations,
+                                               Dictionary<string, object?> index, IMonitor monitor)
+        {
+            string dir = Path.Combine(studioDir, "maps");
+            Directory.CreateDirectory(dir);
+            int written = 0, failed = 0;
+            foreach ((string name, Dictionary<string, object?> entry) in locations)
+            {
+                if (index[name] is not Dictionary<string, object?> idx || idx["file"] is not string rel)
+                    continue;
+                try
+                {
+                    File.WriteAllText(Path.Combine(studioDir, rel.Replace('/', Path.DirectorySeparatorChar)),
+                                      JsonSerializer.Serialize(entry));
+                    written++;
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    monitor.Log($"mapdump: could not write {rel}: {ex.Message}", LogLevel.Trace);
+                }
+            }
+            monitor.Log($"mapdump: {written} location files in {dir}"
+                        + (failed > 0 ? $" ({failed} failed)" : ""), LogLevel.Trace);
+        }
+
         /// <summary>A PNG the content pipeline has never heard of, read straight off disk.</summary>
         private static Microsoft.Xna.Framework.Graphics.Texture2D LoadFromDisk(string path)
         {
@@ -332,7 +501,7 @@ namespace SDVRadiance
             return Microsoft.Xna.Framework.Graphics.Texture2D.FromStream(Game1.graphics.GraphicsDevice, fs);
         }
 
-        private static void AddUnplacedSheetArt(IModHelper helper, IMonitor monitor, Dictionary<string, string> artPaths)
+        private static void AddUnplacedSheetArt(IModHelper helper, IMonitor monitor, Dictionary<string, List<string>> artPaths)
         {
             string? mods = helper.DirectoryPath;
             while (mods != null && !string.Equals(Path.GetFileName(mods), "Mods", StringComparison.OrdinalIgnoreCase))
@@ -379,14 +548,14 @@ namespace SDVRadiance
                             continue;
                     }
                     catch { continue; }
-                    artPaths[name] = file;
+                    AddArtSource(artPaths, name, file);
                     added++;
                 }
             }
             monitor.Log($"mapdump: {added} tilesheet(s) found on disk that no loaded map places.", LogLevel.Info);
         }
 
-        private static object? DumpLocation(GameLocation location, Dictionary<string, string> artSources, Dictionary<string, HashSet<int>> water,
+        private static Dictionary<string, object?>? DumpLocation(GameLocation location, Dictionary<string, List<string>> artSources, Dictionary<string, HashSet<int>> water,
                                            HashSet<string> animSigs, List<string[]> animGroups)
         {
             xTile.Map? map = location.Map;
@@ -396,14 +565,95 @@ namespace SDVRadiance
             var sheetIndex = new Dictionary<TileSheet, int>();
             var sheets = new List<string>();
             var sheetRefs = new List<TileSheet>();
+            // The full path of each sheet, and how many tiles across and down the MAP believes it
+            // is. Both are needed to draw a cell correctly and neither could be recovered from the
+            // bare name: the name cannot say which of several same-named files this map places,
+            // and the art's own pixel size is not the layout the map indexes against - a recolour
+            // that ships a taller sheet than the one a map was built for shifts every index past
+            // the first row if the width is read off the picture.
+            var sheetSrc = new List<string?>();
+            var sheetWH = new List<int[]>();
             foreach (TileSheet ts in map.TileSheets)
             {
                 sheetIndex[ts] = sheets.Count;
                 sheets.Add(LabelStore.NormalizeSheet(ts.ImageSource ?? ts.Id));
+                sheetSrc.Add(ts.ImageSource);
+                sheetWH.Add(new[] { ts.SheetWidth, ts.SheetHeight });
                 sheetRefs.Add(ts);
             }
             var used = new bool[sheets.Count];
 
+            List<object> layers = PackRenderedLayers(location, map, sheetIndex, sheets, used,
+                                                     artSources, water, animSigs, animGroups);
+            if (layers.Count == 0)
+                return null;
+            for (int i = 0; i < sheets.Count; i++)
+                if (used[i] && sheetRefs[i].ImageSource is { } src)
+                    AddArtSource(artSources, sheets[i], src);
+
+            // --- V4 ground-truth extras (additive; HF Studio builds that predate them ignore them) ---
+
+            // Per-location water grid straight from the game's own baked array, because the
+            // per-sheet 'water' map above cannot express two things: WHERE the water is on this
+            // map, and Water="I" tiles (water for gameplay that the game never draws an overlay
+            // on — waterfall bases, decorative edges). wgrid = row-major bitmask of isWater;
+            // wI = packed y*w+x indices of the invisible subset.
+            (string? wgrid, List<int> wI) = PackWaterGrid(location);
+
+            // One property sweep, four packed index lists (y*w+x):
+            //   wBld  = "Water" on Buildings — fishable-under-bridge, NOT in waterTiles, never mirror
+            //   wSrc  = "WaterSource" on Back — watering-can refill, must NOT be treated as water
+            //   pBld  = "Passable" on Buildings — bridge planks etc., occluders that stay walkable
+            //   noFish= "NoFishing" on Back — water where fishing is off (festival edges etc.)
+            (List<int> wBld, List<int> wSrc, List<int> pBld, List<int> noFish) = PackTileProperties(location, map);
+
+            // Every building = a potential occluder (footprint + sprite height feed the V4
+            // reflection height gate). Fish ponds additionally draw their own water
+            // (World_Sorted pass, not drawWater) on the interior 3x3 of a 5x5 footprint,
+            // tinted per FishPondData — none of it visible to waterTiles.
+            (List<object> buildings, List<object> fishPonds) = PackBuildings(location);
+
+            // Raw map properties (indoorWater, ambient sounds, custom framework flags ...) and
+            // the location's own class + per-location season (Ginger Island stays summer).
+            (Dictionary<string, string> mapProps, string? locSeason) = PackMapMetadata(location, map);
+
+            var wc = location.waterColor.Value;
+            var layersAll = new List<string>();
+            foreach (Layer l in map.Layers)
+                layersAll.Add(l.Id);
+
+            // A DICTIONARY rather than an anonymous type, and in the same key order, so the JSON is
+            // byte for byte what it was. The split writer has to read `sheets` and `outdoors` back
+            // out to build the index, and an anonymous type can only be read by serialising it.
+            return new Dictionary<string, object?>
+            {
+                ["outdoors"] = location.IsOutdoors, ["sheets"] = sheets,
+                ["sheetSrc"] = sheetSrc, ["sheetWH"] = sheetWH, ["layers"] = layers,
+                ["cls"] = location.GetType().FullName,
+                ["locSeason"] = locSeason,
+                ["waterColor"] = new[] { (int)wc.R, (int)wc.G, (int)wc.B, (int)wc.A },
+                ["indoorWater"] = location.HasMapPropertyWithValue("indoorWater"),
+                ["mapProps"] = mapProps.Count > 0 ? mapProps : null,
+                ["layersAll"] = layersAll,
+                ["wgrid"] = wgrid,
+                ["wI"] = wI.Count > 0 ? wI.ToArray() : null,
+                ["wBld"] = wBld.Count > 0 ? wBld.ToArray() : null,
+                ["wSrc"] = wSrc.Count > 0 ? wSrc.ToArray() : null,
+                ["pBld"] = pBld.Count > 0 ? pBld.ToArray() : null,
+                ["noFish"] = noFish.Count > 0 ? noFish.ToArray() : null,
+                ["buildings"] = buildings.Count > 0 ? buildings : null,
+                ["fishPonds"] = fishPonds.Count > 0 ? fishPonds : null,
+            };
+        }
+
+        /// <summary>Pack every layer the game actually renders into the dump: its cells, its
+        /// animated cells, and the per-cell orientation when anything on it is turned.</summary>
+        private static List<object> PackRenderedLayers(GameLocation location, xTile.Map map,
+                                                       Dictionary<TileSheet, int> sheetIndex, List<string> sheets,
+                                                       bool[] used, Dictionary<string, List<string>> artSources,
+                                                       Dictionary<string, HashSet<int>> water,
+                                                       HashSet<string> animSigs, List<string[]> animGroups)
+        {
             var layers = new List<object>();
             foreach (Layer layer in map.Layers)
             {
@@ -490,19 +740,13 @@ namespace SDVRadiance
                     orient = layerHasOrient ? Convert.ToBase64String(orient) : null,
                 });
             }
-            if (layers.Count == 0)
-                return null;
-            for (int i = 0; i < sheets.Count; i++)
-                if (used[i] && !artSources.ContainsKey(sheets[i]) && sheetRefs[i].ImageSource is { } src)
-                    artSources[sheets[i]] = src;
+            return layers;
+        }
 
-            // --- V4 ground-truth extras (additive; HF Studio builds that predate them ignore them) ---
-
-            // Per-location water grid straight from the game's own baked array, because the
-            // per-sheet 'water' map above cannot express two things: WHERE the water is on this
-            // map, and Water="I" tiles (water for gameplay that the game never draws an overlay
-            // on — waterfall bases, decorative edges). wgrid = row-major bitmask of isWater;
-            // wI = packed y*w+x indices of the invisible subset.
+        /// <summary>The game's own baked water array, as a bitmask plus the indices of the
+        /// invisible subset.</summary>
+        private static (string? Grid, List<int> Invisible) PackWaterGrid(GameLocation location)
+        {
             string? wgrid = null;
             var wI = new List<int>();
             if (location.waterTiles?.waterTiles is { } wt)
@@ -526,12 +770,14 @@ namespace SDVRadiance
                 if (anyW)
                     wgrid = Convert.ToBase64String(bits);
             }
+            return (wgrid, wI);
+        }
 
-            // One property sweep, four packed index lists (y*w+x):
-            //   wBld  = "Water" on Buildings — fishable-under-bridge, NOT in waterTiles, never mirror
-            //   wSrc  = "WaterSource" on Back — watering-can refill, must NOT be treated as water
-            //   pBld  = "Passable" on Buildings — bridge planks etc., occluders that stay walkable
-            //   noFish= "NoFishing" on Back — water where fishing is off (festival edges etc.)
+        /// <summary>One sweep of the map for the four tile properties the labeler needs, each
+        /// as a packed index list.</summary>
+        private static (List<int> WaterOnBuildings, List<int> WaterSource, List<int> PassableBuildings, List<int> NoFishing)
+            PackTileProperties(GameLocation location, xTile.Map map)
+        {
             var wBld = new List<int>();
             var wSrc = new List<int>();
             var pBld = new List<int>();
@@ -551,11 +797,13 @@ namespace SDVRadiance
                     }
                 }
             }
+            return (wBld, wSrc, pBld, noFish);
+        }
 
-            // Every building = a potential occluder (footprint + sprite height feed the V4
-            // reflection height gate). Fish ponds additionally draw their own water
-            // (World_Sorted pass, not drawWater) on the interior 3x3 of a 5x5 footprint,
-            // tinted per FishPondData — none of it visible to waterTiles.
+        /// <summary>Buildings as occluders, and the fish ponds among them, which draw water of
+        /// their own that the game's water array never sees.</summary>
+        private static (List<object> All, List<object> FishPonds) PackBuildings(GameLocation location)
+        {
             var buildings = new List<object>();
             var fishPonds = new List<object>();
             foreach (var b in location.buildings)
@@ -581,9 +829,13 @@ namespace SDVRadiance
                     });
                 }
             }
+            return (buildings, fishPonds);
+        }
 
-            // Raw map properties (indoorWater, ambient sounds, custom framework flags ...) and
-            // the location's own class + per-location season (Ginger Island stays summer).
+        /// <summary>The raw map properties and the location's own season, both of which can
+        /// throw on a malformed map and are worth nothing rather than everything.</summary>
+        private static (Dictionary<string, string> Props, string? Season) PackMapMetadata(GameLocation location, xTile.Map map)
+        {
             var mapProps = new Dictionary<string, string>();
             try
             {
@@ -593,30 +845,7 @@ namespace SDVRadiance
             catch { }
             string? locSeason = null;
             try { locSeason = location.GetSeason().ToString(); } catch { }
-
-            var wc = location.waterColor.Value;
-            var layersAll = new List<string>();
-            foreach (Layer l in map.Layers)
-                layersAll.Add(l.Id);
-
-            return new
-            {
-                outdoors = location.IsOutdoors, sheets, layers,
-                cls = location.GetType().FullName,
-                locSeason,
-                waterColor = new[] { (int)wc.R, (int)wc.G, (int)wc.B, (int)wc.A },
-                indoorWater = location.HasMapPropertyWithValue("indoorWater"),
-                mapProps = mapProps.Count > 0 ? mapProps : null,
-                layersAll,
-                wgrid,
-                wI = wI.Count > 0 ? wI.ToArray() : null,
-                wBld = wBld.Count > 0 ? wBld.ToArray() : null,
-                wSrc = wSrc.Count > 0 ? wSrc.ToArray() : null,
-                pBld = pBld.Count > 0 ? pBld.ToArray() : null,
-                noFish = noFish.Count > 0 ? noFish.ToArray() : null,
-                buildings = buildings.Count > 0 ? buildings : null,
-                fishPonds = fishPonds.Count > 0 ? fishPonds : null,
-            };
+            return (mapProps, locSeason);
         }
     }
 }

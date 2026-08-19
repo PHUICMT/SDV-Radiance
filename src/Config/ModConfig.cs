@@ -61,7 +61,20 @@ namespace SDVRadiance
         Balanced,
         /// <summary>Half resolution and the expensive extras off. Water reflections stay -
         /// they are the point of the mod, and the scenery cache already made them cheap.</summary>
-        Performance
+        Performance,
+        /// <summary>
+        /// For a machine that cannot hold its frame rate on Performance: a phone, an old laptop,
+        /// an install already carrying two hundred other mods.
+        ///
+        /// <para>
+        /// Performance keeps reflections because they are the reason to run this mod at all. This
+        /// one gives them up, along with the ray marches, and keeps only what costs a full-screen
+        /// pass or less: bloom, colour grading and the surface shimmer. The result still does not
+        /// look like vanilla, which is the point of having it rather than telling somebody to
+        /// uninstall.
+        /// </para>
+        /// </summary>
+        LowSpec
     }
 
     /// <summary>A user-saved look: a named snapshot of the effect settings.</summary>
@@ -82,6 +95,8 @@ namespace SDVRadiance
         public float ColorGradeSaturation { get; set; }
         public float ColorGradeTemperature { get; set; }
         public float ColorGradeBrightness { get; set; }
+        public string ColorGradeLut { get; set; } = "";
+        public float ColorGradeLutAmount { get; set; }
         public bool GodRaysEnabled { get; set; }
         public float GodRaysIntensity { get; set; }
         public bool FogEnabled { get; set; }
@@ -122,6 +137,16 @@ namespace SDVRadiance
         /// pixel and the blocks come back intact. Values between the two are a genuine resample -
         /// softer, and the block grid can shimmer while the camera moves.</summary>
         public float RenderScale { get; set; } = 1f;
+
+        /// <summary>Let the mod lower the render scale by itself when the frame is not keeping up,
+        /// and give it back when it is. <see cref="RenderScale"/> stays the ceiling: this only ever
+        /// asks for less than was chosen.
+        ///
+        /// <para>Off by default, and turned on by the Performance and Low spec presets. This is the
+        /// one setting with a quadratic effect and the one nobody in a performance report has
+        /// mentioned finding, so the presets aimed at slow machines now reach for it on their
+        /// behalf. See RenderPipeline.AutoScale.cs for what it will and will not do.</para></summary>
+        public bool RenderScaleAuto { get; set; }
 
         /// <summary>How much of the upscale sharpening to apply, as a multiple of the tuned
         /// amount: 0 turns it off (plain bilinear stretch), 1 is the measured default, and the
@@ -173,6 +198,29 @@ namespace SDVRadiance
         public float ColorGradeTemperature { get; set; } = 0.05f;
         public float ColorGradeBrightness { get; set; } = 1f;
         public bool ColorGradeToneMap { get; set; } = false;
+        /// <summary>The LUT files that ship with the mod, in the order the dropdown offers them.
+        /// An empty first entry is "no LUT". Anything else found in <c>assets/luts</c> is taken to
+        /// be the player's own and offered after these - see <see cref="LutCatalog"/> - so this
+        /// list is what SHIPPED, not the limit of what can be chosen.</summary>
+        public static readonly string[] ShippedLuts =
+        {
+            "", "warm-film", "verdant", "autumn-gold", "moonlit", "cool-night", "washed-linen", "identity",
+        };
+
+        /// <summary>
+        /// A colour lookup table laid over the finished grade: the name of a PNG in
+        /// <c>assets/luts/</c>, without the extension. Empty means no LUT, which is the default,
+        /// so nobody's picture changes until they ask for one.
+        /// <para>
+        /// The file is a 32x32x32 cube unrolled into a 1024x32 strip - what every LUT tool
+        /// exports - so a player can drop their own in beside the seven that ship, one of which is
+        /// <c>identity</c>: it changes nothing, and exists to prove the sampling is right.
+        /// </para>
+        /// </summary>
+        public string ColorGradeLut { get; set; } = "";
+        /// <summary>How much of the LUT to apply, 0..1. The sliders keep their meaning either
+        /// way: the LUT is laid over the graded result, not swapped in for it.</summary>
+        public float ColorGradeLutAmount { get; set; } = 1f;
         /// <summary>Auto-shift temperature/saturation by time of day, weather, and season.</summary>
         public bool ColorGradeAuto { get; set; } = true;
         /// <summary>Blue-light / eye-comfort filter: 0 = off .. 1 = strong warm shift (cuts blue,
@@ -246,6 +294,73 @@ namespace SDVRadiance
         public float WaterReflectStrength { get; set; } = 0.71f;
         /// <summary>Which of the named reflection looks is in use (see WaterReflectionStyle).</summary>
         public WaterReflectionStyle WaterReflectStyle { get; set; } = WaterReflectionStyle.Natural;
+        /// <summary>
+        /// How tall a band of the reflection shares one sideways displacement, in world pixels.
+        /// Zero shears every row on its own.
+        ///
+        /// <para>
+        /// The ripple pushes the reflection sideways by an amount that depends on the row. Rounding
+        /// that row to a step makes a band of pixels move together and then jump at the boundary,
+        /// which is the drawn-water look pixel art usually wants, and is also what cuts a reflected
+        /// building into horizontal slices sliding over each other. Which of those two descriptions
+        /// you use is a matter of taste, so it is a setting: 0 for a surface that bends, 4 for the
+        /// banding this mod shipped with through 1.5.6, more for a coarser stagger.
+        /// </para>
+        /// </summary>
+        /// <summary>How far from the water a piece of SCENERY may stand and still be mirrored, as
+        /// a fraction of the full reach. 1 = everything that can reach the surface; lower keeps the
+        /// things at the water's edge and drops the distant ones.
+        ///
+        /// <para>
+        /// This is the reflection's cost dial, and it exists because the only control we shipped was
+        /// a switch. The mirror is stamped in four-source-row slices so the head fade can be drawn
+        /// at all, which makes a tree canopy twenty-four draws and a tuft of grass twenty: a wooded
+        /// shore is over a thousand draws a frame, and it measured as a third of a millisecond of
+        /// pure CPU submission. Cutting the reach cuts entities, which cuts slices in proportion,
+        /// and everything still mirrored looks exactly as it did.
+        /// </para>
+        ///
+        /// <para>People, animals and critters are NOT scaled by this. They are few, they are what
+        /// anyone looks at, and they are not where the cost is.</para></summary>
+        /// <summary>Source rows per slice of a mirrored sprite: 4 is the smoothest fade and the
+        /// most work, 16 is a visibly stepped one for about a third less.
+        ///
+        /// <para>
+        /// A reflection is drawn in slices because that is how the fade toward its far end is
+        /// produced: each slice carries its own alpha. Measured at two wooded shores, going from
+        /// four rows to eight took 31-37% off the mirror, and going on to sixteen took almost
+        /// nothing more - so about a third of this pass is the draw count and the rest is the
+        /// per-entity work behind it. Eight is where the trade is, not sixteen.
+        /// </para>
+        ///
+        /// <para>This is the cheaper of the two reflection dials to accept: it loses no reflection,
+        /// only the smoothness of the gradient, where <see cref="WaterReflectReach"/> removes
+        /// distant ones outright. They compose.</para></summary>
+        public int WaterReflectFadeRows { get; set; } = 4;
+
+        public float WaterReflectReach { get; set; } = 1f;
+
+        public float WaterReflectBanding { get; set; } = 0f;
+        /// <summary>
+        /// How much the reflection is allowed to be distorted at all, scaling BOTH sources of it.
+        /// At zero the reflection is a flat mirror.
+        ///
+        /// <para>
+        /// The scenery's reflection is pushed about by two separate things: the wave shears it
+        /// sideways one row at a time, and the ripple displaces the sample again. The named looks
+        /// only ever touched the second, which is why Still Water could never reach a flat mirror
+        /// however far it was turned down. This scales both, so the whole axis runs from a perfect
+        /// mirror to more than the surface's own movement.
+        /// </para>
+        ///
+        /// <para>
+        /// Deliberately NOT the same control as ripple strength: how rough the water looks and how
+        /// broken its reflection is were one number once, and separating them is the whole point of
+        /// the named looks. Turning this to zero leaves the surface rippling and sparkling exactly
+        /// as it did; only the image held in it stops moving.
+        /// </para>
+        /// </summary>
+        public float WaterReflectDistort { get; set; } = 1f;
         /// <summary>Apply the water effect inside building interiors (farmhouse, cabins, custom
         /// home mods). Off = skip it there — some house mods have decorative rivers/ponds inside
         /// the user may not want rippling. Real level water ALWAYS keeps the effect regardless of
@@ -378,6 +493,8 @@ namespace SDVRadiance
             ColorGradeContrast = ClampToRange(ColorGradeContrast, 0.5f, 1.5f);
             ColorGradeSaturation = ClampToRange(ColorGradeSaturation, 0f, 2f);
             ColorGradeTemperature = ClampToRange(ColorGradeTemperature, -1f, 1f);
+            ColorGradeLutAmount = ClampToRange(ColorGradeLutAmount, 0f, 1f);
+            ColorGradeLut = ColorGradeLut ?? "";
             ColorGradeBrightness = ClampToRange(ColorGradeBrightness, 0.5f, 1.5f);
             GodRaysIntensity = ClampToRange(GodRaysIntensity, 0f, 1.5f);
             GodRaysThreshold = ClampToRange(GodRaysThreshold, 0f, 1f);
@@ -406,6 +523,10 @@ namespace SDVRadiance
             WaterSparkle = ClampToRange(WaterSparkle, 0f, 1f);
             WaterSparkleDensity = ClampToRange(WaterSparkleDensity, 0.2f, 2f);
             WaterReflectStrength = ClampToRange(WaterReflectStrength, 0f, 1f);
+            WaterReflectBanding = ClampToRange(WaterReflectBanding, 0f, 16f);
+            WaterReflectReach = ClampToRange(WaterReflectReach, 0.2f, 1f);
+            WaterReflectFadeRows = Math.Clamp(WaterReflectFadeRows, 4, 16);
+            WaterReflectDistort = ClampToRange(WaterReflectDistort, 0f, 1.5f);
             VignetteStrength = ClampToRange(VignetteStrength, 0f, 1f);
             ChromaticAberrationStrength = ClampToRange(ChromaticAberrationStrength, 0f, 1f);
             BlueLightFilter = ClampToRange(BlueLightFilter, 0f, 1f);
@@ -529,6 +650,10 @@ namespace SDVRadiance
             {
                 case PerfPreset.Quality:
                     RenderScale = 1f;
+                    // Quality means what it says: nothing here lowers itself behind your back.
+                    RenderScaleAuto = false;
+                    WaterReflectReach = 1f;
+                    WaterReflectFadeRows = 4;
                     TiltShiftEnabled = true;
                     ChromaticAberrationEnabled = true;
                     FloodLightingEnabled = true;
@@ -539,6 +664,12 @@ namespace SDVRadiance
 
                 case PerfPreset.Balanced:
                     RenderScale = 0.75f;
+                    RenderScaleAuto = false;
+                    // Every reflection still there, just fading in eight-row steps instead of
+                    // four: measured at 31-37% off the reflection pass for nothing lost but the
+                    // smoothness of a gradient, which is the best cost-to-look trade in the mod.
+                    WaterReflectReach = 1f;
+                    WaterReflectFadeRows = 8;
                     // Both are lens dressing, and turning CA off also merges the grade and
                     // finishing passes into one (see the tail pass) - two savings for one loss.
                     TiltShiftEnabled = false;
@@ -553,6 +684,10 @@ namespace SDVRadiance
 
                 case PerfPreset.Performance:
                     RenderScale = 0.5f;
+                    // The one setting with a quadratic effect, and the one no performance report
+                    // has ever mentioned finding. A preset picked BY somebody having trouble is
+                    // the right place to reach for it on their behalf.
+                    RenderScaleAuto = true;
                     TiltShiftEnabled = false;
                     ChromaticAberrationEnabled = false;
                     // Flood GI is the pricier of the two lighting models; classic lighting
@@ -567,9 +702,52 @@ namespace SDVRadiance
                     // work of the default, which matters most in exactly the scene that hurts:
                     // a town at night, where the lamps are many and so are the people.
                     ShadowCastsPerCharacter = 1;
-                    // Reflections stay: they are the reason to run this mod, and the scenery
-                    // cache already took most of their cost away.
+                    // Reflections stay: they are the reason to run this mod, and they are now a
+                    // dial rather than a switch. Half reach drops the scenery standing well back
+                    // from the water and keeps what is at its edge, which is what anyone is
+                    // actually looking at; people and animals are never cut by reach at all.
                     WaterReflection = true;
+                    WaterReflectReach = 0.5f;
+                    WaterReflectFadeRows = 8;
+                    break;
+
+                case PerfPreset.LowSpec:
+                    RenderScale = 0.5f;
+                    RenderScaleAuto = true;
+                    TiltShiftEnabled = false;
+                    ChromaticAberrationEnabled = false;
+                    FloodLightingEnabled = false;
+                    LightingEnabled = true;
+                    DirectionalShadowObjects = false;
+                    ShadowCastsPerCharacter = 1;
+                    // The three Performance keeps and this one cannot. Each is a per-light or
+                    // per-pixel march rather than a single pass, so each is priced by how much of
+                    // the screen it covers, which is the wrong shape of cost for a weak machine.
+                    GodRaysEnabled = false;
+                    GodRaysSun = false;
+                    // REFLECTIONS STAY ON HERE TOO, at the shortest reach and the coarser fade.
+                    //
+                    // They used to be switched off, and switching them off is what prompted this
+                    // whole line of work: it is the reason most people install this mod, and the
+                    // preset most likely to be chosen by somebody having trouble was the one that
+                    // threw it away. There was no middle setting to reach for because the only
+                    // control was a switch.
+                    //
+                    // There is one now, and this is what it costs. At the shortest reach only the
+                    // scenery standing AT the water still mirrors, and people and animals are
+                    // never cut by reach at all - so what is left is what anyone looks at. It is
+                    // not free: this preset now pays somewhere around 0.15 ms of submission it
+                    // used to pay nothing for. That is the trade, and it is a judgement rather
+                    // than a measurement, so it is written down as one.
+                    WaterReflection = true;
+                    WaterReflectReach = 0.2f;
+                    WaterReflectFadeRows = 8;
+                    // What is left is a full-screen pass each, and between them they are most of
+                    // what makes the picture look different from vanilla: bright things glow, the
+                    // palette has a time of day, and water moves.
+                    BloomEnabled = true;
+                    ColorGradeEnabled = true;
+                    WaterEnabled = true;
                     break;
             }
             Clamp();

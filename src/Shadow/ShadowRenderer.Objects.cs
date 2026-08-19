@@ -13,13 +13,12 @@ namespace SDVRadiance
 {
     /// <summary>
     /// ShadowRenderer — OBJECT shadows: one silhouette per tree/bush/crop/clump/furniture/
-    /// craftable/critter and per map-tile prop (fences, posts, pier deco — classified from
-    /// the actual tile art). EmitObj routes each sprite through the shared bake cache;
-    /// DrawTilePropShadows is the map-art classifier.
+    /// craftable/critter, each of which the game hands us as an entity we can ask for its sprite.
+    /// EmitObject routes every one of them through the shared bake cache.
+    /// Props painted into the map instead of placed as entities live in ShadowRenderer.TileProps.cs.
     /// </summary>
     internal sealed partial class ShadowRenderer
     {
-        /// <summary>Trees and bushes cast the same kind of leaning, fading silhouette as characters.</summary>
         /// <summary>
         /// One entry point for object shadows: during the BAKE pass (RenderingWorld) it renders the
         /// sprite+gradient to a pooled RT keyed by the SPRITE (texture+src+flip — every identical
@@ -27,7 +26,7 @@ namespace SDVRadiance
         /// by the sun (smooth, no bands). Falls back to <see cref="DrawBandedGradient"/> only when
         /// the sprite is too big for a slot or wasn't baked.
         /// </summary>
-        private void EmitObj(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, Vector2 feet,
+        private void EmitObject(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, Vector2 feet,
             Vector2 baseOrigin, float alpha, float rot, float stretch, float depth, float blur,
             float headFade = HeadFade, SpriteEffects effects = SpriteEffects.None)
         {
@@ -42,8 +41,8 @@ namespace SDVRadiance
             if (_isBakingObjects)
             {
                 if (_objectGraphicsDevice != null && !_bakedObjectCache.ContainsKey(key)
-                    && BakeObjSprite(_objectGraphicsDevice, texture, src, baseOrigin, effects, shear, out RenderTarget2D rt, out Vector2 feetInRT))
-                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedShear = shear, BakedBlur = _bakeBlurPx, Content = _lastBakeContent, SlotClass = _lastBakeClass, LastUsedTick = Game1.ticks };
+                    && BakeObjectSprite(_objectGraphicsDevice, texture, src, baseOrigin, effects, shear, out RenderTarget2D rt, out Vector2 feetInRT))
+                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedShear = shear, BakedBlur = _bakeBlurPx, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = Game1.ticks };
                 return;
             }
             if (_bakedObjectCache.TryGetValue(key, out SpriteBake? bakedEntry))
@@ -68,23 +67,46 @@ namespace SDVRadiance
                 // acres of transparent padding (see ContentBounds). Origin re-anchors because a
                 // source rect makes the draw's coordinates content-relative.
                 Rectangle content = bakedEntry.Content.IsEmpty ? new Rectangle(0, 0, bakedEntry.Rt.Width, bakedEntry.Rt.Height) : bakedEntry.Content;
+                // One slot texel is BakedScale screen pixels of silhouette, so the draw undoes the
+                // bake's scale. Everything that fits a slot bakes at 4 and this is 1, exactly as
+                // before; only the sprites that used to draw as bands come back magnified.
+                float unbake = 4f / bakedEntry.BakedScale;
                 DrawSoft(spriteBatch, Taps9, bakedEntry.Rt, content, feet,
                     Color.White, alpha, 0f, bakedEntry.FeetInRt - new Vector2(content.X, content.Y),
-                    new Vector2(1f, shearScaleY), depth, SpriteEffects.None, 0f);
+                    new Vector2(unbake, unbake * shearScaleY), depth, SpriteEffects.None, 0f);
             }
             else
             {
-                // Ask the NEXT bake pass for exactly this sprite, so the banded stand-in below
-                // lasts one frame (a sprite scrolling in, a machine changing frame) instead of
-                // waiting for something else to trigger a full enumeration.
-                if (_objectBakeQueue.Count < ObjectBakeQueueCap)
+                // A sprite too big for the largest slot can never be baked, so asking for it is a
+                // request that fails every frame for the rest of the session. Forest reported
+                // twenty bake misses per frame, dead flat - not twenty this frame and eleven the
+                // next, the SAME twenty forever - with the cache at 65 of 464 slots and no
+                // evictions. That is not a cache under pressure, which is what a miss count is
+                // there to catch; it is the same handful of sprites being queued, attempted,
+                // refused and redrawn as bands, over and over.
+                //
+                // The fit test is a pure function of the sprite and the sun, so it can be asked
+                // here for nothing instead of being discovered inside a bake that then throws its
+                // work away. It also un-asks itself: the need grows with the lean, so a sprite too
+                // big at a low sun fits again as the sun rises, with no state to go stale.
+                bool tooBig = !ObjectBakeCouldFit(src, shear);
+                // Named here, once each. The refusal used to be logged inside the bake, which the
+                // pre-check now means these sprites never reach: the counter would say twenty and
+                // nothing anywhere would say WHICH twenty.
+                if (tooBig)
+                    NoteOversize(src, shear);
+                if (!tooBig && _objectBakeQueue.Count < ObjectBakeQueueCap)
                     _objectBakeQueue[key] = new ObjectBakeRequest { BaseOrigin = baseOrigin, Shear = shear };
                 // Counted here rather than at the queue insert: the queue is a dictionary keyed by
                 // sprite, so two misses of the SAME sprite in one frame collapse into one entry and
                 // the count would under-report exactly the case it exists to catch. A miss is a
                 // drawing that came out as bands instead of a silhouette, and every one of them is
                 // worth knowing about.
-                FrameCost.Count(FrameCost.Counter.BakeMisses);
+                //
+                // Counted apart from the misses, because they need opposite readings. A miss says
+                // wait, the picture is about to improve; this says it is not going to, and the two
+                // were indistinguishable in the report while one of them was almost all of it.
+                FrameCost.Count(tooBig ? FrameCost.Counter.BakeTooBig : FrameCost.Counter.BakeMisses);
                 FrameCost.Count(FrameCost.Counter.ShadowSprites);
                 DrawBandedGradient(spriteBatch, texture, src, feet, baseOrigin, alpha, rot,
                     new Vector2(4f, 4f * stretch), depth, blur, headFade, effects);
@@ -106,48 +128,44 @@ namespace SDVRadiance
         /// <summary>Bake a sprite (black + feet→head gradient) to a pooled object RT, its baseOrigin
         /// pinned at the RT's feet point and the sun lean pre-baked as a shear about that row
         /// (x' = x + shear·(y − feetY): bottom edge stays put, higher rows slide sideways).
-        /// Returns false (→ banded fallback) if it won't fit a slot.</summary>
-        private bool BakeObjSprite(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle src, Vector2 baseOrigin,
+        /// Returns false (→ banded fallback) only if it fits no slot at any bake scale.</summary>
+        private bool BakeObjectSprite(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle src, Vector2 baseOrigin,
             SpriteEffects effects, float shear, out RenderTarget2D rt, out Vector2 feetInRT, RenderTarget2D? into = null)
         {
             rt = null!;
             feetInRT = default;
             if (texture == null || src.IsEmpty)
                 return false;
-            float spriteWidth = src.Width * 4f, spriteHeight = src.Height * 4f;
             // The bake-time blur stamps the silhouette shifted by up to the blur radius in every
             // direction, so the fit test keeps that much slack or the soft edge clips at the slot.
-            float needW = spriteWidth + Math.Abs(shear) * spriteHeight + 2f * _bakeBlurPx;
-            float needH = spriteHeight + _bakeBlurPx;
             // A refresh re-renders the slot the entry already owns and must keep its size; a first
             // bake takes the smallest class the silhouette fits, which is what stops a crop from
             // being handed a tree's slot.
-            int slotClass = into != null ? ClassOfSlot(into) : ObjSlotClassFor(needW, needH);
-            if (slotClass < 0)
+            if (!ChooseBakeFit(src, shear, into, out int slotClass, out float scale, out float blurTexels))
             {
-                NoteOversize(src, needW, needH);
-                return false;
+                NoteOversize(src, shear);
+                return false;   // nothing fits, at any scale (a refresh: the lean grew past its own slot)
             }
-            if (into != null && (needW > into.Width || needH > into.Height - 8f))
-                return false;   // the lean grew past the slot it already owns
+            float spriteWidth = src.Width * scale, spriteHeight = src.Height * scale;
             _lastBakeClass = slotClass;
-            rt = into ?? RentObjRT(graphicsDevice, slotClass);
+            _lastBakeScale = scale;
+            rt = into ?? RentObjectRT(graphicsDevice, slotClass);
             feetInRT = new Vector2(rt.Width / 2f, rt.Height - 8f);
-            Vector2 pos = feetInRT - baseOrigin * 4f;      // so baseOrigin maps to the feet point
+            Vector2 pos = feetInRT - baseOrigin * scale;      // so baseOrigin maps to the feet point
             Matrix lean = ShearAbout(feetInRT, shear);
             try
             {
                 graphicsDevice.SetRenderTarget(rt);
                 graphicsDevice.Clear(Color.Transparent);
                 _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, RasterizerState.CullNone, null, lean);
-                _renderTargetSpriteBatch.Draw(texture, pos, src, Color.Black, 0f, Vector2.Zero, 4f, effects, 0f);
+                _renderTargetSpriteBatch.Draw(texture, pos, src, Color.Black, 0f, Vector2.Zero, scale, effects, 0f);
                 _renderTargetSpriteBatch.End();
                 // Continuous feet(full)→head(faint) gradient over the sprite's vertical extent.
                 _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
                 _renderTargetSpriteBatch.Draw(_gradientTexture!, new Rectangle(0, (int)pos.Y, rt.Width, (int)spriteHeight), Color.White);
                 _renderTargetSpriteBatch.End();
-                BlurSlotInPlace(graphicsDevice, rt);
-                _lastBakeContent = ContentBounds(pos, spriteWidth, spriteHeight, feetInRT, shear, _bakeBlurPx, rt.Width, rt.Height);
+                BlurSlotInPlace(graphicsDevice, rt, blurTexels);
+                _lastBakeContent = ContentBounds(pos, spriteWidth, spriteHeight, feetInRT, shear, blurTexels, rt.Width, rt.Height);
                 FrameCost.Count(FrameCost.Counter.ObjectBakes);
                 return true;
             }
@@ -181,7 +199,7 @@ namespace SDVRadiance
                 if (_bakedObjectCache.ContainsKey(key))
                     continue;
                 if (BakeRequest(graphicsDevice, key, req, null, out RenderTarget2D rt, out Vector2 feetInRT))
-                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedShear = req.Shear, BakedBlur = _bakeBlurPx, Content = _lastBakeContent, SlotClass = _lastBakeClass, LastUsedTick = Game1.ticks };
+                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedShear = req.Shear, BakedBlur = _bakeBlurPx, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = Game1.ticks };
             }
 
             // Then the leans the sun has moved off, re-rendered into the slot each entry already
@@ -203,6 +221,7 @@ namespace SDVRadiance
                     stale.BakedBlur = _bakeBlurPx;
                     stale.Content = _lastBakeContent;
                     stale.SlotClass = _lastBakeClass;
+                    stale.BakedScale = _lastBakeScale;
                     refreshBudget--;
                 }
                 else
@@ -250,17 +269,18 @@ namespace SDVRadiance
         /// that stores the cache entry. Single-threaded by construction (bakes run on the main
         /// thread inside RenderingWorld), so a field is safe where an out-param would have to be
         /// threaded through both funnels and the request plumbing.</summary>
-        private Rectangle _lastBakeContent = new(0, 0, ObjRtW, ObjRtH);
+        private Rectangle _lastBakeContent = new(0, 0, ObjectRtW, ObjectRtH);
         private int _lastBakeClass;
+        private float _lastBakeScale = 4f;
 
         /// <summary>Which pool a target came from, recovered from its size. Cheaper and less
         /// error-prone than threading the class through every refresh path.</summary>
         private static int ClassOfSlot(RenderTarget2D rt)
         {
-            for (int i = 0; i < ObjSlotClasses.Length; i++)
-                if (rt.Width == ObjSlotClasses[i].W && rt.Height == ObjSlotClasses[i].H)
+            for (int i = 0; i < ObjectSlotClasses.Length; i++)
+                if (rt.Width == ObjectSlotClasses[i].W && rt.Height == ObjectSlotClasses[i].H)
                     return i;
-            return ObjSlotClasses.Length - 1;
+            return ObjectSlotClasses.Length - 1;
         }
 
         /// <summary>
@@ -271,9 +291,9 @@ namespace SDVRadiance
         /// than the per-frame alpha-compositing trick this replaces, and it runs once per BAKE
         /// (a handful per second on a warm screen) instead of five times per sprite per frame.
         /// </summary>
-        private void BlurSlotInPlace(GraphicsDevice graphicsDevice, RenderTarget2D rt)
+        private void BlurSlotInPlace(GraphicsDevice graphicsDevice, RenderTarget2D rt, float blurTexels)
         {
-            if (_bakeBlurPx <= 0f)
+            if (blurTexels <= 0f)
                 return;
             int cls = ClassOfSlot(rt);
             _objectBlurScratches[cls] ??= VramTally.Track(new RenderTarget2D(graphicsDevice, rt.Width, rt.Height,
@@ -289,7 +309,7 @@ namespace SDVRadiance
             _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, SumTaps, SamplerState.LinearClamp);
             Color weight = Color.White * (1f / Taps9.Length);
             foreach (Vector2 tap in Taps9)
-                _renderTargetSpriteBatch.Draw(scratch, tap * _bakeBlurPx, weight);
+                _renderTargetSpriteBatch.Draw(scratch, tap * blurTexels, weight);
             _renderTargetSpriteBatch.End();
         }
 
@@ -299,8 +319,8 @@ namespace SDVRadiance
         {
             if (req.ColumnSources != null && req.ColumnLevels != null)
                 return BakeTileColumn(graphicsDevice, key.texture, req.ColumnSources, req.ColumnLevels,
-                    req.ColumnSources.Length, req.Shear, out rt, out feetInRT, into);
-            return BakeObjSprite(graphicsDevice, key.texture, key.src, req.BaseOrigin, key.effect,
+                    req.ColumnOrients, req.ColumnSources.Length, req.Shear, out rt, out feetInRT, into);
+            return BakeObjectSprite(graphicsDevice, key.texture, key.src, req.BaseOrigin, key.effect,
                 req.Shear, out rt, out feetInRT, into);
         }
 
@@ -354,27 +374,102 @@ namespace SDVRadiance
             DiagnosticMonitor.Log($"[shadow] tile column not baked: {why} - it draws banded.", LogLevel.Debug);
         }
 
-        private void NoteOversize(Rectangle src, float needW, float needH)
+        private void NoteOversize(Rectangle src, float shear)
         {
             if (DiagnosticMonitor == null || !_oversizeLogged.Add(src))
                 return;
-            DiagnosticMonitor.Log($"[shadow] sprite {src.Width}x{src.Height} needs a {needW:0}x{needH:0} slot - "
-                + $"larger than the biggest ({ObjSlotClasses[^1].W}x{ObjSlotClasses[^1].H}), so it draws banded.", LogLevel.Debug);
+            float coarsest = BakeScales[^1];
+            float needW = src.Width * coarsest + Math.Abs(shear) * src.Height * coarsest;
+            float needH = src.Height * coarsest;
+            DiagnosticMonitor.Log($"[shadow] sprite {src.Width}x{src.Height} needs {needW:0}x{needH:0} even baked at "
+                + $"{coarsest:0}x - larger than the biggest slot ({ObjectSlotClasses[^1].W}x{ObjectSlotClasses[^1].H}), "
+                + "so it draws banded.", LogLevel.Debug);
         }
 
-        /// <summary>The smallest slot class that fits a silhouette of this size, or -1 if even the
-        /// largest cannot take it (the caller falls back to the banded draw, as it always did for
-        /// oversized sprites).</summary>
-        private static int ObjSlotClassFor(float neededW, float neededH)
+        /// <summary>
+        /// Screen pixels of silhouette per slot texel, best first. Four is one texel per screen
+        /// pixel, which is what every sprite that fits a slot has always been given.
+        ///
+        /// <para>The coarser two exist for the sprites that fit nothing. Forest had twenty of
+        /// them, and a sprite the largest slot cannot take at 4× was not a sprite without a
+        /// shadow - it was a sprite drawing the BANDED fallback, permanently: seven flat steps of
+        /// opacity where every one of its neighbours has a smooth gradient, for the rest of the
+        /// session, since the fit test is the same every frame. Halving the bake resolution
+        /// quarters the slot a silhouette needs, and a shadow is a blurred black shape, so its
+        /// edge at half resolution is a thing nobody can point at. The banding was.</para>
+        ///
+        /// <para>Only reached after the largest slot has refused, so nothing that fits today
+        /// changes: 4× is tried first and produces exactly the pixels it always did.</para>
+        /// </summary>
+        private static readonly float[] BakeScales = { 4f, 2f, 1f };
+
+        /// <summary>
+        /// Pick the bake scale and slot for a silhouette: the finest scale that fits anything,
+        /// and at that scale the smallest class that takes it. Returns false only when even the
+        /// coarsest scale overflows the largest slot, which is the caller's cue to fall back to
+        /// the banded draw.
+        ///
+        /// <para>A refresh (<paramref name="into"/> set) must keep the slot the entry already
+        /// owns, so the class is fixed and only the scale is free - which is what lets a lean
+        /// that has grown past the slot drop a scale instead of losing its bake.</para>
+        ///
+        /// <para>The blur is in SCREEN pixels but stamped in slot texels, so it scales with
+        /// everything else; at 4× that multiplier is exactly one and the arithmetic is the
+        /// arithmetic this has always done.</para>
+        /// </summary>
+        private bool ChooseBakeFit(float sourceW, float sourceH, float shear, RenderTarget2D? into,
+            out int slotClass, out float scale, out float blurTexels)
         {
-            for (int i = 0; i < ObjSlotClasses.Length; i++)
-                if (neededW <= ObjSlotClasses[i].W && neededH <= ObjSlotClasses[i].H - 8f)
+            if (sourceW > 0f && sourceH > 0f)
+            {
+                foreach (float s in BakeScales)
+                {
+                    float texelBlur = _bakeBlurPx * (s / 4f);
+                    float spriteWidth = sourceW * s, spriteHeight = sourceH * s;
+                    float needW = spriteWidth + Math.Abs(shear) * spriteHeight + 2f * texelBlur;
+                    float needH = spriteHeight + texelBlur;
+                    int cls = into != null ? ClassOfSlot(into) : ObjectSlotClassFor(needW, needH);
+                    if (cls < 0)
+                        continue;
+                    if (into != null && (needW > into.Width || needH > into.Height - 8f))
+                        continue;
+                    slotClass = cls;
+                    scale = s;
+                    blurTexels = texelBlur;
+                    return true;
+                }
+            }
+            slotClass = -1;
+            scale = 0f;
+            blurTexels = 0f;
+            return false;
+        }
+
+        /// <summary>The same question for a sprite, whose silhouette is its source rect.</summary>
+        private bool ChooseBakeFit(Rectangle src, float shear, RenderTarget2D? into,
+            out int slotClass, out float scale, out float blurTexels)
+            => ChooseBakeFit(src.IsEmpty ? 0f : src.Width, src.IsEmpty ? 0f : src.Height, shear, into,
+                             out slotClass, out scale, out blurTexels);
+
+        /// <summary>Would a bake of this sprite, at this lean, fit any slot at any scale? The same
+        /// arithmetic <see cref="BakeObjectSprite"/> does before it commits to anything, asked by the
+        /// draw path so a hopeless request is never made rather than being made and refused every
+        /// frame.</summary>
+        private bool ObjectBakeCouldFit(Rectangle src, float shear)
+            => ChooseBakeFit(src, shear, null, out _, out _, out _);
+
+        /// <summary>The smallest slot class that fits a silhouette of this size, or -1 if even the
+        /// largest cannot take it.</summary>
+        private static int ObjectSlotClassFor(float neededW, float neededH)
+        {
+            for (int i = 0; i < ObjectSlotClasses.Length; i++)
+                if (neededW <= ObjectSlotClasses[i].W && neededH <= ObjectSlotClasses[i].H - 8f)
                     return i;
             return -1;
         }
 
         /// <summary>Lease a slot of the given class, reusing a returned one when there is one.</summary>
-        private RenderTarget2D RentObjRT(GraphicsDevice graphicsDevice, int slotClass)
+        private RenderTarget2D RentObjectRT(GraphicsDevice graphicsDevice, int slotClass)
         {
             var free = _objectFreeTargetsByClass[slotClass];
             if (free.Count > 0)
@@ -383,7 +478,7 @@ namespace SDVRadiance
                 free.RemoveAt(free.Count - 1);
                 return reused;
             }
-            (int w, int h, _) = ObjSlotClasses[slotClass];
+            (int w, int h, _) = ObjectSlotClasses[slotClass];
             // PreserveContents: these slots are CACHED across frames now (see PreparePlayer) —
             // the default DiscardContents decays into garbage after later target swaps.
             var renderTarget = VramTally.Track(new RenderTarget2D(graphicsDevice, w, h, false,
@@ -407,6 +502,45 @@ namespace SDVRadiance
             int tileX0 = viewport.X / 64 - 3, tileX1 = (viewport.X + viewport.Width) / 64 + 3;
             int tileY0 = viewport.Y / 64 - 3, tileY1 = (viewport.Y + viewport.Height) / 64 + 8; // extra bottom margin for tall trees
 
+            CastTerrainFeatureShadows(spriteBatch, location, rot, stretch, alpha, blur, tileX0, tileX1, tileY0, tileY1);
+            CastLargeTerrainShadows(spriteBatch, location, rot, stretch, alpha, blur, tileX0, tileX1, tileY0, tileY1);
+
+            // What an EVENT stops drawing. Trees, bushes, crops and large terrain features are drawn
+            // through the whole cutscene, but ground objects and furniture are not, so casting for
+            // them left shadows lying on bare ground with nothing above them (reported at a beach
+            // cutscene). Each test below is GameLocation.draw's own, and they are all different from
+            // each other, which is why they are three flags and not one:
+            //   objects    (!eventUp || currentEvent.showGroundObjects)
+            //   furniture  (!eventUp || Farm || FarmHouse)
+            //   clumps     only the Woods is gated, and by showGroundObjects
+            bool eventUp = Game1.eventUp;
+            bool showGround = location.currentEvent != null && location.currentEvent.showGroundObjects;
+            bool objectsDrawn = !eventUp || showGround;
+            bool furnitureDrawn = !eventUp || location is Farm || location is StardewValley.Locations.FarmHouse;
+            bool clumpsDrawn = !(location is StardewValley.Locations.Woods && eventUp && !showGround);
+
+            if (clumpsDrawn)
+                CastResourceClumpShadows(spriteBatch, location, rot, stretch, alpha, blur, tileX0, tileX1, tileY0, tileY1);
+            if (objectsDrawn)
+                CastPlacedObjectShadows(spriteBatch, location, rot, stretch, alpha, blur, tileX0, tileX1, tileY0, tileY1);
+            if (furnitureDrawn)
+                CastFurnitureShadows(spriteBatch, location, rot, stretch, alpha, blur, tileX0, tileX1, tileY0, tileY1);
+            CastCritterShadows(spriteBatch, location, rot, stretch, alpha, blur, tileX0, tileX1, tileY0, tileY1);
+
+            // Map-drawn props (street lamps, signs, poles…) aren't entities at all — they're tile
+            // columns painted on the map. Cast their shadow from the actual tile art.
+            DrawTilePropShadows(spriteBatch, location, rot, stretch, alpha, blur, tileX0, tileX1, tileY0, tileY1);
+
+            // Building shadows via the sprite-lean path stay DISABLED (leaning a whole-building
+            // sprite projects it up over itself). Their real ground projection is done separately
+            // in DrawHeightShadows using Height Framework data — see DrawSunShadows.
+        }
+
+        /// <summary>Trees, fruit trees, bushes, crops and grass: the tile-keyed terrain features, looked up
+        /// over the on-screen range rather than walked in full.</summary>
+        private void CastTerrainFeatureShadows(SpriteBatch spriteBatch, GameLocation location, float rot, float stretch, float alpha,
+            float blur, int tileX0, int tileX1, int tileY0, int tileY1)
+        {
             // Scan the ON-SCREEN tile range and look each tile up, instead of enumerating EVERY
             // terrain feature in the location and culling per item: a mature farm has thousands of
             // crops, so the old full walk was O(all crops) ×2 passes ×60 fps. terrainFeatures is a
@@ -460,7 +594,13 @@ namespace SDVRadiance
                         break;
                 }
             }
+        }
 
+        /// <summary>The decorative bushes a map places, which live in their own list rather than the
+        /// tile-keyed one.</summary>
+        private void CastLargeTerrainShadows(SpriteBatch spriteBatch, GameLocation location, float rot, float stretch, float alpha,
+            float blur, int tileX0, int tileX1, int tileY0, int tileY1)
+        {
             foreach (var ltf in location.largeTerrainFeatures)
             {
                 Vector2 ltile = ltf?.Tile ?? Vector2.Zero;
@@ -469,22 +609,12 @@ namespace SDVRadiance
                 if (ltf is Bush bush)
                     DrawBushShadow(spriteBatch, bush, rot, LengthCap(stretch, 0.8f), alpha, blur);
             }
+        }
 
-            // What an EVENT stops drawing. Trees, bushes, crops and large terrain features are drawn
-            // through the whole cutscene, but ground objects and furniture are not, so casting for
-            // them left shadows lying on bare ground with nothing above them (reported at a beach
-            // cutscene). Each test below is GameLocation.draw's own, and they are all different from
-            // each other, which is why they are three flags and not one:
-            //   objects    (!eventUp || currentEvent.showGroundObjects)
-            //   furniture  (!eventUp || Farm || FarmHouse)
-            //   clumps     only the Woods is gated, and by showGroundObjects
-            bool eventUp = Game1.eventUp;
-            bool showGround = location.currentEvent != null && location.currentEvent.showGroundObjects;
-            bool objectsDrawn = !eventUp || showGround;
-            bool furnitureDrawn = !eventUp || location is Farm || location is StardewValley.Locations.FarmHouse;
-            bool clumpsDrawn = !(location is StardewValley.Locations.Woods && eventUp && !showGround);
-
-            if (clumpsDrawn)
+        /// <summary>Boulders, stumps and logs.</summary>
+        private void CastResourceClumpShadows(SpriteBatch spriteBatch, GameLocation location, float rot, float stretch, float alpha,
+            float blur, int tileX0, int tileX1, int tileY0, int tileY1)
+        {
             foreach (ResourceClump clump in location.resourceClumps)
             {
                 if (clump == null)
@@ -494,11 +624,16 @@ namespace SDVRadiance
                     continue;
                 DrawResourceClumpShadow(spriteBatch, clump, rot, stretch, alpha, blur);
             }
+        }
 
+        /// <summary>Placed objects: machines, fences, torches, decor and forage, each through the caster
+        /// that suits how the game draws it.</summary>
+        private void CastPlacedObjectShadows(SpriteBatch spriteBatch, GameLocation location, float rot, float stretch, float alpha,
+            float blur, int tileX0, int tileX1, int tileY0, int tileY1)
+        {
             // Same viewport-bounded lookup for placed objects (machines, fences, decor): objects is
             // tile-keyed too, so we never walk the whole placed-object set to find the on-screen few.
             var objDict = location.objects;
-            if (objectsDrawn)
             for (int obY = tileY0; obY <= tileY1; obY++)
             for (int obX = tileX0; obX <= tileX1; obX++)
             {
@@ -544,8 +679,12 @@ namespace SDVRadiance
                     DrawGenericObjectShadow(spriteBatch, o, tile, rot, LengthCap(stretch, StandingStretchMax), alpha, blur);
                 }
             }
+        }
 
-            if (furnitureDrawn)
+        /// <summary>Furniture, minus the kinds that hang on a wall or lie flat on the floor.</summary>
+        private void CastFurnitureShadows(SpriteBatch spriteBatch, GameLocation location, float rot, float stretch, float alpha,
+            float blur, int tileX0, int tileX1, int tileY0, int tileY1)
+        {
             foreach (Furniture f in location.furniture)
             {
                 if (f == null || f.isTemporarilyInvisible)
@@ -559,7 +698,12 @@ namespace SDVRadiance
                     continue;
                 DrawFurnitureShadow(spriteBatch, f, type, rot, stretch, alpha, blur);
             }
+        }
 
+        /// <summary>Critters, fading with flight height exactly as their vanilla blob does.</summary>
+        private void CastCritterShadows(SpriteBatch spriteBatch, GameLocation location, float rot, float stretch, float alpha,
+            float blur, int tileX0, int tileX1, int tileY0, int tileY1)
+        {
             // Critters (birds, squirrels, butterflies, bunnies…) — replace their vanilla blob with
             // the same leaning silhouette as everything else, faded out with flight height exactly
             // like the vanilla blob so airborne critters keep a faint grounded shadow.
@@ -586,520 +730,13 @@ namespace SDVRadiance
                     Rectangle src = c.sprite.SourceRect;
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport, wpos + new Vector2(0f, -2f));
                     float depth = MathHelper.Clamp((wpos.Y - 1f) / 10000f, 0f, 1f);
-                    EmitObj(spriteBatch, c.sprite.Texture, src, feet, new Vector2(src.Width / 2f, src.Height),
+                    EmitObject(spriteBatch, c.sprite.Texture, src, feet, new Vector2(src.Width / 2f, src.Height),
                         ca, rot, LengthCap(stretch, 0.45f), depth, blur, ObjectHeadFade,
                         c.flip ? SpriteEffects.FlipHorizontally : SpriteEffects.None);
                 }
             }
-
-            // Map-drawn props (street lamps, signs, poles…) aren't entities at all — they're tile
-            // columns painted on the map. Cast their shadow from the actual tile art.
-            DrawTilePropShadows(spriteBatch, location, rot, stretch, alpha, blur, tileX0, tileX1, tileY0, tileY1);
-
-            // Building shadows via the sprite-lean path stay DISABLED (leaning a whole-building
-            // sprite projects it up over itself). Their real ground projection is done separately
-            // in DrawHeightShadows using Height Framework data — see DrawSunShadows.
         }
 
-        /// <summary>
-        /// Shadows for props painted INTO the map (street lamps, signposts, poles…): a Buildings-layer
-        /// base tile with Front-layer tiles stacked above it. Only 1-tile-wide, free-standing columns
-        /// cast — wider Front regions are house roofs/tree canopies, which must not (a leaning
-        /// house-wall shadow is exactly the artifact we removed). The silhouette is baked from the
-        /// column's REAL tile art, so whatever the prop looks like, its shadow matches.
-        /// </summary>
-        private void DrawTilePropShadows(SpriteBatch spriteBatch, GameLocation location, float rot, float stretch,
-            float alpha, float blur, int tileX0, int tileX1, int tileY0, int tileY1)
-        {
-            var front = location.map?.GetLayer("Front");
-            var always = location.map?.GetLayer("AlwaysFront");
-            var bldg = location.map?.GetLayer("Buildings");
-            if (front == null || bldg == null)
-                return;
-            int W = Math.Min(front.LayerWidth, bldg.LayerWidth), H = Math.Min(front.LayerHeight, bldg.LayerHeight);
-            tileX0 = Math.Max(0, tileX0); tileX1 = Math.Min(W - 1, tileX1);
-            tileY0 = Math.Max(1, tileY0); tileY1 = Math.Min(H - 1, tileY1);
-
-            float rotD = rot;
-            float stD = LengthCap(stretch, 0.6f);
-            float shear = -(float)Math.Sin(rotD) * stD;
-            float shearScaleY = Math.Max(0.15f, stD * (float)Math.Cos(rotD));
-
-            // Near-player prop diagnostics (DebugLogging): every ~3s log why Buildings tiles within
-            // 4 tiles of the player do or don't cast — the quick way to see why a fence stays bare.
-            bool pdiag = DiagnosticMonitor != null && !_isBakingObjects && Game1.ticks % 600 == 0;
-            Point ppt = Game1.player?.TilePoint ?? default;
-            void PD(int xx, int yy, string why)
-            {
-                if (pdiag && Math.Abs(xx - ppt.X) <= 4 && Math.Abs(yy - ppt.Y) <= 4)
-                    DiagnosticMonitor!.Log($"[shadow] prop({xx},{yy}) {why}", LogLevel.Debug);
-            }
-
-            // Which way the shadow leans decides which neighbouring column the wall guard has to
-            // look at, so it is the one part of the classification that cannot be answered without
-            // the sun. All three of its possible answers are cached instead.
-            int leanDir = shear > 0.01f ? -1 : (shear < -0.01f ? 1 : 0);
-
-            // Everything else here is a question about the MAP ART: which sheet a tile is on, how
-            // opaque it is, what stands beside and above it, whether the game calls it passable.
-            // None of that changes while you are standing there, and all of it was being worked out
-            // again for every tile on screen, in two passes, sixty times a second. Now it is worked
-            // out once per tile and kept until the map itself changes.
-            if (!ReferenceEquals(location, _propCacheLocation) || !ReferenceEquals(location.map, _propCacheMap)
-                || Game1.Date.TotalDays != _propCacheDay)
-            {
-                _propCache.Clear();
-                _propCacheLocation = location;
-                _propCacheMap = location.map;
-                _propCacheDay = Game1.Date.TotalDays;
-            }
-
-            for (int y = tileY0; y <= tileY1; y++)
-            {
-                for (int x = tileX0; x <= tileX1; x++)
-                {
-                    int cell = y * W + x;
-                    if (!_propCache.TryGetValue(cell, out TilePropCast? cast))
-                        _propCache[cell] = cast = ClassifyTileProp(location, bldg, front, always, x, y, W, H);
-                    if (!cast.Casts)
-                    {
-                        if (cast.Note != null)
-                            PD(x, y, cast.Note);
-                        continue;
-                    }
-                    if (cast.BlockedNorth || (leanDir < 0 ? cast.BlockedWest : leanDir > 0 && cast.BlockedEast))
-                    {
-                        PD(x, y, "skip: wall to the north (lean would paint onto it)");
-                        continue;
-                    }
-                    if (cast.Note != null)
-                        PD(x, y, cast.Note);
-
-                    var key = cast.Key;
-                    Texture2D texture = cast.Texture;
-                    int count = cast.Sources.Length;
-                    if (_isBakingObjects)
-                    {
-                        if (_objectGraphicsDevice != null && !_bakedObjectCache.ContainsKey(key)
-                            && BakeTileColumn(_objectGraphicsDevice, texture, cast.Sources, cast.Levels, count, shear,
-                                out RenderTarget2D rt, out Vector2 fInRT))
-                            _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = fInRT, BakedShear = shear, BakedBlur = _bakeBlurPx, Content = _lastBakeContent, SlotClass = _lastBakeClass, LastUsedTick = Game1.ticks };
-                        continue;
-                    }
-                    if (!_bakedObjectCache.TryGetValue(key, out SpriteBake? bakedEntry))
-                    {
-                        // A prop the bake pass has not seen yet (this map arrived after the last
-                        // full walk, or its slot was evicted). The classification already holds
-                        // the column, so the request is just a reference to it.
-                        FrameCost.Count(FrameCost.Counter.BakeMisses);
-                        QueueTileColumnBake(key, cast, shear);
-                        continue;
-                    }
-                    FrameCost.Count(FrameCost.Counter.ShadowSprites);
-                    bakedEntry.LastUsedTick = Game1.ticks;
-                    // Same per-sprite staleness rule as EmitObj: the lean lives in the pixels, so
-                    // the column earns a re-bake once the sun has moved its tip a pixel and a half.
-                    if (Math.Abs(shear - bakedEntry.BakedShear) * (cast.Height + 1) * 64f > ShearRefreshPixels
-                        || Math.Abs(_bakeBlurPx - bakedEntry.BakedBlur) > 0.3f)
-                        QueueTileColumnBake(key, cast, shear);
-                    Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(x * 64f + 32f, (y + 1f) * 64f - 2f));
-                    // A body ON this tile (someone sitting on a map bench, standing against a
-                    // fence) sorts at roughly y*64/10000 - a full tile BELOW this prop's normal
-                    // (y+1)*64 depth. Both the cast and the base redraw below therefore won over
-                    // the body and painted the bench across the sitter: proven by A/B, the exact
-                    // "we clip through the chair" report, and almost certainly the original
-                    // graveyard-bench one too (that bench is map art, so no furniture or
-                    // character-side change could ever have reached it). Sort from the prop's OWN
-                    // row when someone is there, so the body always wins.
-                    bool bodyHere = false;
-                    try
-                    {
-                        var tileV = new Vector2(x, y);
-                        bodyHere = location.isCharacterAtTile(tileV) != null
-                            || (Game1.player != null && Game1.player.currentLocation == location
-                                && Game1.player.TilePoint.X == x && Game1.player.TilePoint.Y == y);
-                    }
-                    catch { }
-                    float rowY = bodyHere ? y * 64f : (y + 1f) * 64f;
-                    float depth = MathHelper.Clamp(rowY / 10000f + x * 1e-5f - ShadowDepthBias, 0f, 1f);
-                    Rectangle propContent = bakedEntry.Content.IsEmpty ? new Rectangle(0, 0, bakedEntry.Rt.Width, bakedEntry.Rt.Height) : bakedEntry.Content;
-                    DrawSoft(spriteBatch, Taps9, bakedEntry.Rt, propContent,
-                        feet, Color.White, alpha, 0f, bakedEntry.FeetInRt - new Vector2(propContent.X, propContent.Y),
-                        new Vector2(1f, shearScaleY), depth, SpriteEffects.None, 0f);
-                    // Redraw the base tile OVER its own shadow: the map layer painted before this
-                    // batch, so without this the near end of the cast darkens the prop itself
-                    // (the "shadow on the lamp post" complaint). Front-stack tiles need no redraw —
-                    // the Front layer paints after us anyway.
-                    spriteBatch.Draw(texture, Game1.GlobalToLocal(Game1.viewport, new Vector2(x * 64f, y * 64f)), cast.BaseSrc,
-                        Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, Math.Min(1f, depth + 5e-4f));
-                }
-            }
-        }
-
-        /// <summary>
-        /// Decide, once, whether the map art at one tile is a free-standing prop that should cast,
-        /// and if so what its column is made of. Everything it reads is fixed for the map, so the
-        /// answer is kept until the map changes underneath it (see the cache in the caller).
-        /// </summary>
-        private TilePropCast ClassifyTileProp(GameLocation location, xTile.Layers.Layer bldg,
-            xTile.Layers.Layer front, xTile.Layers.Layer? always, int x, int y, int W, int H)
-        {
-            // Reasons are only worth building when someone is reading them.
-            TilePropCast NoCast(string why) => new() { Note = DiagnosticMonitor != null ? why : null };
-
-            // Some maps paint the pole top on AlwaysFront instead of Front — treat them as one layer.
-            xTile.Tiles.Tile? Ft(int xx, int yy)
-            {
-                var t = front.Tiles[xx, yy];
-                if (t == null && always != null && xx < always.LayerWidth && yy < always.LayerHeight)
-                    t = always.Tiles[xx, yy];
-                return t;
-            }
-
-            var bt = bldg.Tiles[x, y];
-            if (bt == null)
-                return new TilePropCast();
-            // A prop base is a Buildings tile. Front art on the SAME row is normal for
-            // fences (their upper half is painted there so the player walks behind it) —
-            // it joins the silhouette as a level-0 overlay rather than disqualifying the
-            // cell. Animated tiles are skipped — a frozen frame would cast a lie.
-            if (bt is xTile.Tiles.AnimatedTile || bt.TileSheet == null)
-                return NoCast(bt is xTile.Tiles.AnimatedTile ? "skip: animated tile" : "skip: no tilesheet");
-            Texture2D? texture = LoadCached(bt.TileSheet.ImageSource);
-            if (texture == null)
-                return new TilePropCast();
-            var ibB = bt.TileSheet.GetTileImageBounds(bt.TileIndex);
-            var baseSrc = new Rectangle(ibB.X, ibB.Y, ibB.Width, ibB.Height);
-            float cov = TileCoverage(texture, baseSrc);
-
-            // Fences paint their upper half on Front at the SAME row (so the player can
-            // walk behind them). Fold that art into the prop: classification uses the
-            // union coverage, and the silhouette gets it as a level-0 overlay. When the
-            // Buildings tile is a bare INVISIBLE collision tile (cov≈0) under Front-drawn
-            // art on another sheet, the Front art IS the prop — adopt its sheet instead.
-            Rectangle? sameSrc = null;
-            int sameIdx = 0, baseIdx = bt.TileIndex;
-            {
-                var st = Ft(x, y);
-                if (st != null && st is not xTile.Tiles.AnimatedTile && st.TileSheet != null
-                    && LoadCached(st.TileSheet.ImageSource) is { } stex)
-                {
-                    var ibS = st.TileSheet.GetTileImageBounds(st.TileIndex);
-                    var srcS = new Rectangle(ibS.X, ibS.Y, ibS.Width, ibS.Height);
-                    if (ReferenceEquals(stex, texture))
-                    {
-                        sameSrc = srcS;
-                        sameIdx = st.TileIndex;
-                        cov = Math.Max(cov, TileCoverage(texture, srcS));
-                    }
-                    else if (cov < 0.04f)
-                    {
-                        texture = stex;
-                        baseSrc = srcS;
-                        baseIdx = st.TileIndex;
-                        cov = TileCoverage(stex, srcS);
-                    }
-                }
-            }
-
-            // Is this a thing standing on the ground, or the ground itself?
-            //
-            // Coverage alone cannot answer that, and treating it as if it could is what
-            // left every desert cactus bare: a cactus reads 0.97 opaque, exactly like the
-            // cliff behind it, because BOTH are solid art — one is just small. What
-            // actually separates them is SPAN. A prop is a narrow island of map art;
-            // terrain is a mass. So coverage now only rejects art too faint to be
-            // anything (a bare collision tile), and span decides the rest.
-            //
-            // Measured on the Buildings layer in both axes, because one axis is not
-            // enough on its own: a cliff's bottom row is wide, but a one-tile-wide
-            // vertical spur of that same cliff is not.
-            bool aProp = cov >= 0.04f && cov <= 0.95f;
-            int spanW = 1, spanH = 1;
-            if (!aProp && cov > 0.04f)
-            {
-                for (int i = x - 1; i >= 0 && spanW <= MaxPropSpan && bldg.Tiles[i, y] != null; i--) spanW++;
-                for (int i = x + 1; i < W && spanW <= MaxPropSpan && bldg.Tiles[i, y] != null; i++) spanW++;
-                for (int j = y - 1; j >= 0 && spanH <= MaxPropSpan && bldg.Tiles[x, j] != null; j--) spanH++;
-                for (int j = y + 1; j < H && spanH <= MaxPropSpan && bldg.Tiles[x, j] != null; j++) spanH++;
-            }
-            bool bProp = !aProp && cov > 0.04f && spanW <= MaxPropSpan && spanH <= MaxPropSpan;
-            if (!aProp && !bProp)
-                return NoCast($"skip: cov={cov:0.00} span={spanW}x{spanH} → not a prop");
-            // A "prop" sitting ON opaque art below is wall decor — a window halfway up a
-            // house wall must not cast.
-            if (OpaqueMapTile(bldg, x, y + 1, H))
-                return NoCast("skip: sits on opaque art (wall decor)");
-            // A transparent tile BESIDE opaque art is the fringe of a big structure (the
-            // truck's edge tiles, awning ends…), not a free-standing prop — its lone-column
-            // cast reads as a stray dark line. Real fences/posts never hug opaque art.
-            if (aProp && (OpaqueMapTile(bldg, x - 1, y, H) || OpaqueMapTile(bldg, x + 1, y, H)))
-                return NoCast("skip: opaque neighbour beside (structure fringe)");
-            // Skip only when the prop itself (or the tile its lean lands on) is open WATER
-            // SURFACE — pier decks over water are solid ground (Height Framework separates
-            // deck from water), so dock ropes / mooring posts / lanterns cast onto the pier.
-            // Also check BELOW the base: a pier post's baked shadow pools onto the water
-            // under the dock, fighting the screen-space mirror (the water already reflects
-            // the post — a ground-shadow smear on top reads as a ghost double).
-            if (OnWater(location, new Point(x, y)) || OnWater(location, new Point(x, y - 1))
-                || OnWater(location, new Point(x, y + 1)))
-                return NoCast("skip: on/over open water");
-            // A PASSABLE Buildings tile is the game's own word for "you walk on top of
-            // this": a plank bridge, a pier deck, a boardwalk. That is a horizontal
-            // SURFACE, not a standing prop, and it must never reach the cast below.
-            //
-            // A log bridge otherwise sails through every gate above — it is not open
-            // water (it has a Buildings tile, so the OnWater fallback says no), and its
-            // art has gaps between the planks, so its coverage lands in the same 0.04–0.95
-            // band as a picket fence. It then gets a fence's treatment: a sheared
-            // silhouette leaning up-screen, plus the base tile REDRAWN opaque on top of
-            // that shadow at depth + 5e-4. Both land on the tile a character standing on
-            // the bridge occupies, so the planks are drawn over their legs and the sheared
-            // copy sits offset beside the real bridge. Reported as "character texture is
-            // covered" and "texture misaligned", and as players sinking into bridges.
-            if (location.doesTileHaveProperty(x, y, "Passable", "Buildings") != null)
-                return NoCast("skip: passable Buildings tile (walk-on deck / bridge)");
-
-            // Gather the column bottom→top: the base tile, its same-row Front overlay
-            // (level 0 too), then any Front stack above (level = tiles above the base).
-            _tileColumnSourceRects[0] = baseSrc;
-            _tileColumnLevels[0] = 0;
-            int count = 1, levels = 1, keyHash = 17 * 31 + baseIdx;
-            if (sameSrc is Rectangle sr)
-            {
-                _tileColumnSourceRects[count] = sr;
-                _tileColumnLevels[count++] = 0;
-                keyHash = keyHash * 31 + sameIdx;
-            }
-            for (int i = 1; count < _tileColumnSourceRects.Length && y - i >= 0; i++)
-            {
-                var t = Ft(x, y - i);
-                if (t == null || t is xTile.Tiles.AnimatedTile || t.TileSheet == null
-                    || !ReferenceEquals(LoadCached(t.TileSheet.ImageSource), texture))
-                    break;
-                var ib = t.TileSheet.GetTileImageBounds(t.TileIndex);
-                _tileColumnSourceRects[count] = new Rectangle(ib.X, ib.Y, ib.Width, ib.Height);
-                _tileColumnLevels[count++] = i;
-                levels = i + 1;
-                keyHash = keyHash * 31 + t.TileIndex;
-            }
-
-            // Wall guard, scaled to the prop's height: the up-lean cast occupies the tiles
-            // north of the base (and one column toward the lean side) — if any of those is
-            // opaque wall art, the shadow would paint onto the wall ("through the house").
-            // All three lean directions are answered here so the draw pass can just pick one.
-            var result = new TilePropCast
-            {
-                Casts = true,
-                Texture = texture,
-                BaseSrc = baseSrc,
-                Height = levels,
-                Sources = new Rectangle[count],
-                Levels = new int[count],
-                Key = (texture, new Rectangle(keyHash, count, -1, -1), SpriteEffects.None),   // width −1 can never collide with a real source rect
-                Note = DiagnosticMonitor != null ? $"cast: col={count} cov={cov:0.00}" : null,
-            };
-            Array.Copy(_tileColumnSourceRects, result.Sources, count);
-            Array.Copy(_tileColumnLevels, result.Levels, count);
-            for (int i = 1; i <= levels; i++)
-            {
-                result.BlockedNorth |= OpaqueMapTile(bldg, x, y - i, H);
-                result.BlockedWest |= OpaqueMapTile(bldg, x - 1, y - i, H);
-                result.BlockedEast |= OpaqueMapTile(bldg, x + 1, y - i, H);
-            }
-            return result;
-        }
-
-        /// <summary>True when a Buildings tile exists at (x,y) and its art is essentially opaque
-        /// (terrain/wall art, not a see-through prop). Out-of-range or empty → false.</summary>
-        private bool OpaqueMapTile(xTile.Layers.Layer bldg, int x, int y, int H)
-        {
-            if (y < 0 || y >= H || x < 0 || x >= bldg.LayerWidth)
-                return false;
-            var t = bldg.Tiles[x, y];
-            if (t == null || t.TileSheet == null)
-                return false;
-            if (t is xTile.Tiles.AnimatedTile)
-                return true;   // animated map art next to a prop → treat as solid, don't cast
-            Texture2D? texture = LoadCached(t.TileSheet.ImageSource);
-            if (texture == null)
-                return true;
-            var ib = t.TileSheet.GetTileImageBounds(t.TileIndex);
-            // Same bound as the aProp cast test (0.95). With a LOWER bound here, dense fence
-            // tiles at cov 0.91–0.95 counted as "walls" and poisoned their own neighbours —
-            // every tile of the row skipped as "structure fringe" and no fence ever cast.
-            return TileCoverage(texture, new Rectangle(ib.X, ib.Y, ib.Width, ib.Height)) > 0.95f;
-        }
-
-        /// <summary>Fraction of a tile's art that is opaque (alpha > 48). Sampled once per
-        /// (sheet, rect) and cached — this is the "look at the actual image" prop test.</summary>
-        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle src), float> _tileCovCache = new();
-        private Color[] _tileCoveragePixels = new Color[1024];
-        // Whole-tilesheet pixel cache: reading each prop tile with its own texture.GetData is a separate
-        // GPU readback (pipeline flush); walking into a prop-heavy screen fired a burst of them in one
-        // frame. Read each sheet back ONCE, then count coverage from the CPU array (zero GPU work).
-        private readonly System.Collections.Generic.Dictionary<Texture2D, Color[]?> _tilesheetCoveragePixels = new();
-        // Refusal bound for absurd sheets only — see the note on RenderPipeline.SheetPixCap. The
-        // old 8 Mpx ceiling landed under real modded tilesheets, and the fallback beneath it is a
-        // GPU readback per tile.
-        private const int CovSheetCap = 64_000_000;
-        private const int CovStripRows = 512;
-
-        private Color[]? CovSheetPixels(Texture2D texture)
-        {
-            if (_tilesheetCoveragePixels.TryGetValue(texture, out Color[]? px))
-                return px;
-            long n = (long)texture.Width * texture.Height;
-            if (n <= CovSheetCap)
-            {
-                try
-                {
-                    px = new Color[n];
-                    for (int y0 = 0; y0 < texture.Height; y0 += CovStripRows)
-                    {
-                        int rows = Math.Min(CovStripRows, texture.Height - y0);
-                        texture.GetData(0, new Rectangle(0, y0, texture.Width, rows),
-                            px, y0 * texture.Width, rows * texture.Width);
-                    }
-                }
-                catch { px = null; }
-            }
-            _tilesheetCoveragePixels[texture] = px;
-            return px;
-        }
-
-        private float TileCoverage(Texture2D texture, Rectangle src)
-        {
-            if (_tileCovCache.TryGetValue((texture, src), out float cov))
-                return cov;
-            int len = src.Width * src.Height;
-            if (len <= 0 || src.X < 0 || src.Y < 0 || src.Right > texture.Width || src.Bottom > texture.Height)
-                return _tileCovCache[(texture, src)] = 1f;
-            int solid = 0;
-            Color[]? sheet = CovSheetPixels(texture);
-            if (sheet != null)
-            {
-                int tw = texture.Width;
-                for (int row = 0; row < src.Height; row++)
-                {
-                    int soff = (src.Y + row) * tw + src.X;
-                    for (int c = 0; c < src.Width; c++)
-                        if (sheet[soff + c].A > 48) solid++;
-                }
-            }
-            else
-            {
-                if (_tileCoveragePixels.Length < len)
-                    _tileCoveragePixels = new Color[len];
-                try { texture.GetData(0, src, _tileCoveragePixels, 0, len); }
-                catch { return _tileCovCache[(texture, src)] = 1f; }
-                for (int i = 0; i < len; i++)
-                    if (_tileCoveragePixels[i].A > 48) solid++;
-            }
-            return _tileCovCache[(texture, src)] = (float)solid / len;
-        }
-
-        /// <summary>Record a map-tile column for the next bake pass. The classification owns the
-        /// column arrays and outlives the frame, so the request just points at them.</summary>
-        private void QueueTileColumnBake((Texture2D texture, Rectangle src, SpriteEffects effect) key, TilePropCast cast, float shear)
-        {
-            if (_objectBakeQueue.Count >= ObjectBakeQueueCap || cast.Sources.Length == 0)
-                return;
-            _objectBakeQueue[key] = new ObjectBakeRequest { Shear = shear, ColumnSources = cast.Sources, ColumnLevels = cast.Levels };
-        }
-
-        /// <summary>
-        /// What the map art at one tile means for shadows: whether it is a free-standing prop at
-        /// all, and if so which tiles make up its column and which directions the lean is walled
-        /// off in. Fixed for a given map, so it is worked out once per tile rather than per frame.
-        /// </summary>
-        private sealed class TilePropCast
-        {
-            public bool Casts;
-            /// <summary>Why not, for the near-player diagnostic. Only filled when it will be read.</summary>
-            public string? Note;
-            public Texture2D Texture = null!;
-            public Rectangle BaseSrc;
-            /// <summary>Tiles the column occupies above its base row, for the lean-drift test.</summary>
-            public int Height;
-            public Rectangle[] Sources = System.Array.Empty<Rectangle>();
-            public int[] Levels = System.Array.Empty<int>();
-            public (Texture2D texture, Rectangle src, SpriteEffects effect) Key;
-            /// <summary>Is there opaque art where the cast would land, leaning each of the three
-            /// ways the sun can take it? Answered here because the sun is the only part of this
-            /// that changes, and it changes between three fixed choices.</summary>
-            public bool BlockedNorth, BlockedWest, BlockedEast;
-        }
-
-        private readonly System.Collections.Generic.Dictionary<int, TilePropCast> _propCache = new();
-        private GameLocation? _propCacheLocation;
-        private xTile.Map? _propCacheMap;
-        /// <summary>Day the classification was taken on. Map art is edited by content packs at the
-        /// day boundary (seasonal sheets, festival layouts) and buildings finish overnight, so a
-        /// new day is the one moment the answers can change without the map object being replaced.</summary>
-        private int _propCacheDay = -1;
-
-        /// <summary>Per-column tile source rects, filled by the scan then baked.</summary>
-        private readonly Rectangle[] _tileColumnSourceRects = new Rectangle[7];
-        /// <summary>Height level (tiles above the base row) for each entry of <see cref="_tileColumnSourceRects"/> —
-        /// a same-row Front overlay shares level 0 with the base tile.</summary>
-        private readonly int[] _tileColumnLevels = new int[7];
-
-        /// <summary>Bake a stacked tile column (black + feet→tip gradient, sun lean pre-baked as a
-        /// shear about the feet row) into a pooled object RT. The sources and their heights are
-        /// passed in rather than read from the scan's scratch arrays, so a queued re-bake a frame
-        /// later replays the same column without redoing the scan that found it.</summary>
-        private bool BakeTileColumn(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle[] sources, int[] tileLevels,
-            int count, float shear, out RenderTarget2D renderTarget, out Vector2 feetInRT, RenderTarget2D? into = null)
-        {
-            renderTarget = null!;
-            feetInRT = default;
-            int levels = 0;
-            for (int i = 0; i < count; i++)
-                levels = Math.Max(levels, tileLevels[i] + 1);
-            float columnHeight = levels * 64f;
-            int colClass = into != null ? ClassOfSlot(into)
-                : ObjSlotClassFor(64f + Math.Abs(shear) * columnHeight + 2f * _bakeBlurPx, columnHeight + _bakeBlurPx);
-            if (colClass < 0)
-            {
-                NoteColumnRefusal($"no slot fits a {columnHeight:0}px column with shear {shear:0.00}");
-                return false;
-            }
-            _lastBakeClass = colClass;
-            if (count <= 0 || columnHeight > ObjSlotClasses[colClass].H - 8f
-                || 64f + Math.Abs(shear) * columnHeight > ObjSlotClasses[colClass].W)
-            {
-                NoteColumnRefusal($"column {columnHeight:0}px shear {shear:0.00} count {count} "
-                    + $"refused by class {colClass} ({ObjSlotClasses[colClass].W}x{ObjSlotClasses[colClass].H})");
-                return false;
-            }
-            renderTarget = into ?? RentObjRT(graphicsDevice, colClass);
-            feetInRT = new Vector2(renderTarget.Width / 2f, renderTarget.Height - 8f);
-            Matrix lean = ShearAbout(feetInRT, shear);
-            try
-            {
-                graphicsDevice.SetRenderTarget(renderTarget);
-                graphicsDevice.Clear(Color.Transparent);
-                _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, RasterizerState.CullNone, null, lean);
-                for (int i = 0; i < count; i++)
-                    _renderTargetSpriteBatch.Draw(texture, new Vector2(feetInRT.X - 32f, feetInRT.Y - 64f * (tileLevels[i] + 1)),
-                        sources[i], Color.Black, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
-                _renderTargetSpriteBatch.End();
-                _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
-                _renderTargetSpriteBatch.Draw(_propGradientTexture!, new Rectangle(0, (int)(feetInRT.Y - columnHeight), renderTarget.Width, (int)columnHeight), Color.White);
-                _renderTargetSpriteBatch.End();
-                BlurSlotInPlace(graphicsDevice, renderTarget);
-                _lastBakeContent = ContentBounds(new Vector2(feetInRT.X - 32f, feetInRT.Y - columnHeight),
-                    64f, columnHeight, feetInRT, shear, _bakeBlurPx, renderTarget.Width, renderTarget.Height);
-                FrameCost.Count(FrameCost.Counter.ObjectBakes);
-                return true;
-            }
-            catch
-            {
-                try { _renderTargetSpriteBatch!.End(); } catch { }
-                return false;
-            }
-        }
 
         /// <summary>
         /// Generic silhouette for ANY tile-placed object, drawn from the item's own sprite
@@ -1113,7 +750,7 @@ namespace SDVRadiance
                 return;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 6f));
             float depth = MathHelper.Clamp(((tile.Y + 1f) * 64f) / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
-            EmitObj(spriteBatch, texture, src, feet, new Vector2(src.Width / 2f, src.Height),
+            EmitObject(spriteBatch, texture, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, stretch, depth, blur, ObjectHeadFade);
         }
 
@@ -1151,7 +788,7 @@ namespace SDVRadiance
             float rot, float stretch, float alpha, float blur)
         {
             // ONE shadow per tuft, not one per blade. The per-blade version was the single
-            // largest sprite-count driver in the mod: up to four EmitObj calls per grass tile
+            // largest sprite-count driver in the mod: up to four EmitObject calls per grass tile
             // put a meadow at four times the draws, four times the bake-cache keys (the cache
             // sits within a handful of slots of its cap on an ordinary profile), and four
             // times the fill - for four near-identical smudges stacked within a few pixels of
@@ -1170,7 +807,7 @@ namespace SDVRadiance
             for (int i = 0; i < blades; i++)
                 at += GrassArt.BladeAt(tile, i, ox, oy);
             at /= blades;
-            EmitObj(spriteBatch, texture, GrassArt.BladeShadowSource(grass, 0, which),
+            EmitObject(spriteBatch, texture, GrassArt.BladeShadowSource(grass, 0, which),
                 Game1.GlobalToLocal(Game1.viewport, at), GrassArt.BladeOrigin,
                 alpha, rot, stretch, depth, blur, ObjectHeadFade);
         }
@@ -1183,7 +820,7 @@ namespace SDVRadiance
             // Forage rests near the tile's bottom edge; small lift so the shadow base meets the item.
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 12f));
             float depth = MathHelper.Clamp(((tile.Y + 1f) * 64f) / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
-            EmitObj(spriteBatch, texture, src, feet, new Vector2(src.Width / 2f, src.Height),
+            EmitObject(spriteBatch, texture, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, stretch, depth, blur, ObjectHeadFade);
         }
 
@@ -1232,7 +869,7 @@ namespace SDVRadiance
             // tile's bottom edge, so anchor the shadow's dark base slightly up from (tile.Y+1)*64.
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 20f));
             float depth = MathHelper.Clamp(Math.Max(0f, ((tile.Y + 1f) * 64f - 24f) / 10000f) + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
-            EmitObj(spriteBatch, texture, src, feet, new Vector2(src.Width / 2f, src.Height),
+            EmitObject(spriteBatch, texture, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, stretch, depth, blur);
         }
 
@@ -1285,7 +922,7 @@ namespace SDVRadiance
             // RT-baked like everything else — the sprite-keyed dedup means a whole field of the
             // same crop/phase shares ONE bake, so this is cheap even with hundreds planted.
             SpriteEffects effect = crop.flip.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
-            EmitObj(spriteBatch, texture, crop.sourceRect, feet, CropOrigin,
+            EmitObject(spriteBatch, texture, crop.sourceRect, feet, CropOrigin,
                 alpha, rot, stretch, depth, blur, ObjectHeadFade, effect);
         }
 
@@ -1310,7 +947,7 @@ namespace SDVRadiance
             // draws over the ground, it just can never win against a body at the same row.
             bool seat = type is 0 or 1 or 2 or 3;   // chair / bench / couch / armchair
             float depth = MathHelper.Clamp((box.Bottom - (seat ? 72f : 8f)) / 10000f - ShadowDepthBias, 0f, 1f);
-            EmitObj(spriteBatch, texture, src, feet, new Vector2(src.Width / 2f, src.Height),
+            EmitObject(spriteBatch, texture, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, stretch, depth, blur);
         }
 
@@ -1370,7 +1007,7 @@ namespace SDVRadiance
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, worldFeet);
             var baseOrigin = new Vector2(src.Width / 2f, src.Height);
             float depth = MathHelper.Clamp((tile.Y + 1f) * 64f / 10000f + tile.X / 100000f - ShadowDepthBias, 0f, 1f);
-            EmitObj(spriteBatch, texture, src, feet, baseOrigin, alpha, rot, stretch, depth, blur, ObjectHeadFade);
+            EmitObject(spriteBatch, texture, src, feet, baseOrigin, alpha, rot, stretch, depth, blur, ObjectHeadFade);
         }
 
         private void DrawTreeShadow(SpriteBatch spriteBatch, Tree tree, Vector2 tile, float rot, float stretch, float alpha, float blur)
@@ -1392,10 +1029,10 @@ namespace SDVRadiance
             // A shadow that starts where the wood meets the ground stays attached at any sun angle,
             // which is the honest fix rather than shortening the lean until the seam is covered.
             Rectangle trunk = Tree.stumpSourceRect;                  // (32,96,16,32)
-            EmitObj(spriteBatch, tree.texture.Value, trunk, feet, new Vector2(trunk.Width / 2f, trunk.Height),
+            EmitObject(spriteBatch, tree.texture.Value, trunk, feet, new Vector2(trunk.Width / 2f, trunk.Height),
                 alpha, rot, stretch, depth, blur, ObjectHeadFade, effects);
             // Tree canopy draws with origin (24, 96); fade about the trunk base.
-            EmitObj(spriteBatch, tree.texture.Value, src, feet, new Vector2(24f, 96f),
+            EmitObject(spriteBatch, tree.texture.Value, src, feet, new Vector2(24f, 96f),
                 alpha, rot, stretch, depth, blur, ObjectHeadFade, effects);
         }
 
@@ -1425,7 +1062,7 @@ namespace SDVRadiance
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1) * 64f));
             float depth = MathHelper.Clamp((tree.getBoundingBox().Bottom + 2f) / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
             SpriteEffects effect = tree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
-            EmitObj(spriteBatch, tree.texture.Value, src, feet, new Vector2(src.Width / 2f, src.Height),
+            EmitObject(spriteBatch, tree.texture.Value, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, stretch, depth, blur, ObjectHeadFade, effect);
         }
 
@@ -1441,9 +1078,9 @@ namespace SDVRadiance
             SpriteEffects effects = ft.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
             // Its trunk is a separate crop too (FruitTree.draw: 48x32 at x=384, origin (24,32)),
             // and it was missing for the same reason and with the same result.
-            EmitObj(spriteBatch, ft.texture, new Rectangle(384, row * 5 * 16 + 48, 48, 32), feet,
+            EmitObject(spriteBatch, ft.texture, new Rectangle(384, row * 5 * 16 + 48, 48, 32), feet,
                 new Vector2(24f, 32f), alpha, rot, stretch, depth, blur, ObjectHeadFade, effects);
-            EmitObj(spriteBatch, ft.texture, src, feet, new Vector2(24f, 80f),
+            EmitObject(spriteBatch, ft.texture, src, feet, new Vector2(24f, 80f),
                 alpha, rot, stretch, depth, blur, ObjectHeadFade, effects);
         }
 
@@ -1464,7 +1101,7 @@ namespace SDVRadiance
             var baseOrigin = new Vector2(src.Width / 2f, src.Height);
             float depth = MathHelper.Clamp((bush.getBoundingBox().Center.Y + 48f) / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
             SpriteEffects effect = bush.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
-            EmitObj(spriteBatch, Bush.texture.Value, src, feet, baseOrigin,
+            EmitObject(spriteBatch, Bush.texture.Value, src, feet, baseOrigin,
                 alpha, rot, stretch, depth, blur, ObjectHeadFade, effect);
         }
 

@@ -139,7 +139,6 @@ namespace SDVRadiance
             Add("frame_out", capture);
             Add("frame_in", _sceneRenderTarget);
             Add("mask_water", _waterMask);
-            Add("mask_water_core", _waterMaskCore);
             Add("mask_water_sdf", _waterSignedDistanceTexture);
             Add("mask_occluder", _occluderMask);
             Add("mask_sprite", _spriteMaskRenderTarget);

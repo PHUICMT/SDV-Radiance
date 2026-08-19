@@ -170,6 +170,39 @@ namespace SDVRadiance
         /// per pixel instead.</summary>
         private const int DeckOwnsTile = 128;
 
+        /// <summary>
+        /// The layers one map exposes, looked up once. The per-tile sweep consults eight of them
+        /// plus the label pack, and eight parameters on a 150-line loop is a signature nobody
+        /// reads - the same reason the water gather carries a context rather than a parameter list.
+        /// </summary>
+        private readonly struct MapLayerSet
+        {
+            public readonly Layer? Back;
+            public readonly Layer? Buildings;
+            public readonly Layer? Front;
+            /// <summary>Layers the canonical trio never covers: SVE puts water art on Back2, and
+            /// vanilla waterfalls live on AlwaysFront.</summary>
+            public readonly Layer? Back2;
+            public readonly Layer? Front2;
+            public readonly Layer? AlwaysFront;
+            public readonly Layer? AlwaysFront2;
+            /// <summary>EVERY Buildings-family layer, topmost first - a deck plank sits over the
+            /// Back tile no matter which numbered layer carries it.</summary>
+            public readonly List<Layer> BuildingsTopDown;
+            public readonly LabelStore? Labels;
+
+            public MapLayerSet(Layer? back, Layer? buildings, Layer? front, Layer? back2,
+                Layer? front2, Layer? alwaysFront, Layer? alwaysFront2,
+                List<Layer> buildingsTopDown, LabelStore? labels)
+            {
+                Back = back; Buildings = buildings; Front = front;
+                Back2 = back2; Front2 = front2;
+                AlwaysFront = alwaysFront; AlwaysFront2 = alwaysFront2;
+                BuildingsTopDown = buildingsTopDown; Labels = labels;
+            }
+        }
+
+
         private static SurfaceMap? Build(GameLocation location)
         {
             var map = location.Map;
@@ -208,97 +241,38 @@ namespace SDVRadiance
             // Which tiles a painted label decided. The span pass below must never overrule them
             // (iron rule: a label beats every heuristic, including the ones that run after it).
             bool[] labelled = new bool[w * h];
+            var layers = new MapLayerSet(back, buildings, front, back2, front2,
+                alwaysFront, alwaysFront2, bldsTopDown, labels);
+            ClassifyTiles(sm, labelled, w, h, location, layers);
+
+            SpanDecks(sm, labelled, w, h);
+            ThinRoofs(sm, labelled, w, h);
+            StampBuildingFootprints(sm, location, w);
+
+            return sm;
+        }
+
+        /// <summary>Read every tile once and give it a class and a height: the classifier itself.
+        /// <paramref name="labelled"/> comes back marking the tiles a painted label decided, which
+        /// the span passes afterwards must never overrule.</summary>
+        private static void ClassifyTiles(SurfaceMap sm, bool[] labelled, int w, int h,
+            GameLocation location, MapLayerSet layers)
+        {
             for (int y = 0; y < h; y++)
             {
                 for (int x = 0; x < w; x++)
                 {
                     int i = y * w + x;
-                    bool hasBuildings = buildings?.Tiles[x, y] != null;
-                    bool hasFront = front?.Tiles[x, y] != null;
+                    bool hasBuildings = layers.Buildings?.Tiles[x, y] != null;
+                    bool hasFront = layers.Front?.Tiles[x, y] != null;
 
                     // ---- LABELS FIRST: painted ground truth beats every heuristic below. ----
                     // Buildings decides first (a deck plank or fountain rim sits OVER the Back
                     // tile), then Back, then Front (overhead art).
-                    bool anyLabel = false;
-                    if (labels != null)
+                    SurfaceClass? painted = ResolvePaintedClass(location, layers, x, y, hasBuildings,
+                        out bool anyLabel);
+                    if (painted is { } decided)
                     {
-                        SurfaceClass? lc = null;
-                        // The Buildings family decides first, topmost layer down: the layer the
-                        // player sees is the layer whose label should answer for the tile.
-                        foreach (Layer bLayer in bldsTopDown)
-                        {
-                            if (labels.Get(bLayer, x, y) is not { } bb)
-                                continue;
-                            anyLabel = true;
-                            lc = ClassFromLabels(bb, overlay: true, out int bldDeck);
-                            // A PLANK THAT ONLY CLIPS ITS TILE must not delete the tile's water.
-                            // Deck wins at a quarter of the tile, which is the right bar for "is
-                            // there a walkable surface drawn here" and much too low for "is this
-                            // tile still water": a bridge parapet or a plank end overlapping the
-                            // edge of a water tile took the whole tile out of the mask, and the
-                            // water stopped dead at a straight line beside the bridge (Mountain
-                            // 46,4 and its neighbours, reported as a bridge outline, 256 of 256
-                            // pixels missing on tiles the labels call water end to end).
-                            //
-                            // Handing the tile back to the water it is mostly made of loses
-                            // nothing, because the planks are carved out again PER PIXEL further
-                            // down the pipeline by the Buildings opacity carve. The whole-tile
-                            // Deck verdict is only needed when the deck really does own the tile.
-                            if (lc == SurfaceClass.Deck && bldDeck < DeckOwnsTile
-                                && labels.Get(back, x, y) is { } underneath
-                                && ClassFromLabels(underneath, overlay: false) == SurfaceClass.Water)
-                                lc = SurfaceClass.Water;
-                            if (lc != null)
-                                break;
-                        }
-                        if (lc == null && labels.Get(back, x, y) is { } gb) { anyLabel = true; lc = ClassFromLabels(gb, overlay: false); }
-                        if (lc == null && labels.Get(front, x, y) is { } fb) { anyLabel = true; lc = ClassFromLabels(fb, overlay: true); }
-                        // Additive fallback to the layers above — a Town waterfall labelled
-                        // flow:256 on AlwaysFront was never declared water at all, so its
-                        // liquid never reached the mask (the compose already honours these
-                        // labels for the carve and sub-type; classification was the gap).
-                        if (lc == null && labels.Get(back2, x, y) is { } g2) { anyLabel = true; lc = ClassFromLabels(g2, overlay: false); }
-                        if (lc == null && labels.Get(front2, x, y) is { } f2) { anyLabel = true; lc = ClassFromLabels(f2, overlay: true); }
-                        if (lc == null && labels.Get(alwaysFront, x, y) is { } af) { anyLabel = true; lc = ClassFromLabels(af, overlay: true); }
-                        if (lc == null && labels.Get(alwaysFront2, x, y) is { } af2) { anyLabel = true; lc = ClassFromLabels(af2, overlay: true); }
-                        // A liquid OVERLAY beats a dry base verdict: a falls' base tile carries
-                        // Back "ground" (the cliff) under a Front/AlwaysFront falls labelled
-                        // flow, and what the player sees there is falling water — the Ground
-                        // verdict blocked the whole tile from ever entering the mask (256/256
-                        // missing at every falls base). Only Ground gives way; Deck/Wall/Roof
-                        // keep their say, so a plank over water still reads as a deck.
-                        if (lc is null or SurfaceClass.Ground)
-                        {
-                            foreach (var overlayLayer in new[] { front, front2, alwaysFront, alwaysFront2 })
-                            {
-                                if (overlayLayer == null || labels.Get(overlayLayer, x, y) is not { } ol)
-                                    continue;
-                                if (ClassFromLabels(ol, overlay: true) == SurfaceClass.Water)
-                                {
-                                    anyLabel = true;
-                                    lc = SurfaceClass.Water;
-                                    break;
-                                }
-                            }
-                        }
-                        // A DECK is the surface you stand on, even when the tile beneath it is
-                        // labelled water — and the plank itself often carries no label at all, so
-                        // the lookup falls through to the Back tile below and answers for the
-                        // wrong thing. The Beach bridge reads Buildings.Passable=T Type=Wood over
-                        // Back water:256: standing on it counted as standing on open water, which
-                        // costs the player their shadow outright, and cut the bridge's own shadow
-                        // wherever the water under it was open on all sides.
-                        //
-                        // The animated case is left alone: an ANIMATED passable Buildings tile
-                        // over water is the surf wash, which really is the water surface.
-                        if (lc == SurfaceClass.Water && hasBuildings
-                            && buildings!.Tiles[x, y] is not xTile.Tiles.AnimatedTile
-                            && (location.doesTileHaveProperty(x, y, "Passable", "Buildings") != null
-                                || location.doesTileHaveProperty(x, y, "Type", "Buildings") == "Wood"))
-                            lc = SurfaceClass.Deck;
-
-                        if (lc is { } decided)
-                        {
                             Set(sm, i, decided, decided switch
                             {
                                 SurfaceClass.Water => (sbyte)-1,
@@ -306,9 +280,8 @@ namespace SDVRadiance
                                 SurfaceClass.Void => (sbyte)0,
                                 _ => (sbyte)1,
                             });
-                            labelled[i] = true;
-                            continue;
-                        }
+                        labelled[i] = true;
+                        continue;
                     }
                     // A PAINTED but mixed tile (a tide pool's rock rim: water:99 + ground:157,
                     // decisive for neither) still protects itself from the span pass — the author
@@ -318,55 +291,152 @@ namespace SDVRadiance
                     if (anyLabel)
                         labelled[i] = true;
 
-                    SurfaceClass cls;
-                    sbyte height;
-                    bool passableB = hasBuildings && location.doesTileHaveProperty(x, y, "Passable", "Buildings") != null;
-                    if (passableB && buildings!.Tiles[x, y] is xTile.Tiles.AnimatedTile && location.isWaterTile(x, y))
-                    {
-                        // An ANIMATED passable Buildings tile over water IS the water surface —
-                        // the beach surf wash. The deck rule below used to call it a pier and ate
-                        // the whole tide line. Real decks are static art.
-                        cls = SurfaceClass.Water;
-                        height = -1;
-                    }
-                    else if (passableB)
-                    {
-                        cls = SurfaceClass.Deck;      // walk-on-top raised platform: pier / bridge
-                        height = 1;
-                    }
-                    else if (location.doesTileHaveProperty(x, y, "Type", "Back") == "Wood")
-                    {
-                        cls = SurfaceClass.Deck;      // Back-layer planking: pier / bridge / porch
-                        height = 1;
-                    }
-                    else if (hasBuildings && location.doesTileHaveProperty(x, y, "Shadow", "Buildings") == null)
-                    {
-                        cls = SurfaceClass.Wall;      // blocking Buildings tile that isn't decorative shadow art
-                        height = 1;
-                    }
-                    else if (location.isWaterTile(x, y))
-                    {
-                        cls = SurfaceClass.Water;
-                        height = -1;
-                    }
-                    else if (hasFront)
-                    {
-                        cls = SurfaceClass.Roof;      // tall overhead art with no blocking base
-                        height = 1;
-                    }
-                    else
-                    {
-                        cls = SurfaceClass.Ground;
-                        height = 0;
-                    }
-
+                    SurfaceClass cls = ClassifyFromMapProperties(location, layers, x, y, hasBuildings,
+                        hasFront, out sbyte height);
                     Set(sm, i, cls, height);
                 }
             }
+        }
 
-            SpanDecks(sm, labelled, w, h);
-            ThinRoofs(sm, labelled, w, h);
+        /// <summary>What the PAINTED labels say this tile is, or null when nothing painted has an
+        /// opinion. <paramref name="anyLabel"/> comes back true even for a mixed verdict, because a
+        /// tile an author painted must still protect itself from the span passes.</summary>
+        private static SurfaceClass? ResolvePaintedClass(GameLocation location, MapLayerSet layers,
+                                                        int x, int y, bool hasBuildings, out bool anyLabel)
+        {
+            anyLabel = false;
+            if (layers.Labels == null)
+                return null;
+            SurfaceClass? lc = null;
+            // The Buildings family decides first, topmost layer down: the layer the
+            // player sees is the layer whose label should answer for the tile.
+            foreach (Layer bLayer in layers.BuildingsTopDown)
+            {
+                if (layers.Labels.Get(bLayer, x, y) is not { } bb)
+                    continue;
+                anyLabel = true;
+                lc = ClassFromLabels(bb, overlay: true, out int bldDeck);
+                // A PLANK THAT ONLY CLIPS ITS TILE must not delete the tile's water.
+                // Deck wins at a quarter of the tile, which is the right bar for "is
+                // there a walkable surface drawn here" and much too low for "is this
+                // tile still water": a bridge parapet or a plank end overlapping the
+                // edge of a water tile took the whole tile out of the mask, and the
+                // water stopped dead at a straight line beside the bridge (Mountain
+                // 46,4 and its neighbours, reported as a bridge outline, 256 of 256
+                // pixels missing on tiles the layers.Labels call water end to end).
+                //
+                // Handing the tile layers.Back to the water it is mostly made of loses
+                // nothing, because the planks are carved out again PER PIXEL further
+                // down the pipeline by the Buildings opacity carve. The whole-tile
+                // Deck verdict is only needed when the deck really does own the tile.
+                if (lc == SurfaceClass.Deck && bldDeck < DeckOwnsTile
+                    && layers.Labels.Get(layers.Back, x, y) is { } underneath
+                    && ClassFromLabels(underneath, overlay: false) == SurfaceClass.Water)
+                    lc = SurfaceClass.Water;
+                if (lc != null)
+                    break;
+            }
+            if (lc == null && layers.Labels.Get(layers.Back, x, y) is { } gb) { anyLabel = true; lc = ClassFromLabels(gb, overlay: false); }
+            if (lc == null && layers.Labels.Get(layers.Front, x, y) is { } fb) { anyLabel = true; lc = ClassFromLabels(fb, overlay: true); }
+            // Additive fallback to the layers above — a Town waterfall labelled
+            // flow:256 on AlwaysFront was never declared water at all, so its
+            // liquid never reached the mask (the compose already honours these
+            // layers.Labels for the carve and sub-type; classification was the gap).
+            if (lc == null && layers.Labels.Get(layers.Back2, x, y) is { } g2) { anyLabel = true; lc = ClassFromLabels(g2, overlay: false); }
+            if (lc == null && layers.Labels.Get(layers.Front2, x, y) is { } f2) { anyLabel = true; lc = ClassFromLabels(f2, overlay: true); }
+            if (lc == null && layers.Labels.Get(layers.AlwaysFront, x, y) is { } af) { anyLabel = true; lc = ClassFromLabels(af, overlay: true); }
+            if (lc == null && layers.Labels.Get(layers.AlwaysFront2, x, y) is { } af2) { anyLabel = true; lc = ClassFromLabels(af2, overlay: true); }
+            // A liquid OVERLAY beats a dry base verdict: a falls' base tile carries
+            // Back "ground" (the cliff) under a Front/AlwaysFront falls labelled
+            // flow, and what the player sees there is falling water — the Ground
+            // verdict blocked the whole tile from ever entering the mask (256/256
+            // missing at every falls base). Only Ground gives way; Deck/Wall/Roof
+            // keep their say, so a plank over water still reads as a deck.
+            if (lc is null or SurfaceClass.Ground)
+            {
+                foreach (var overlayLayer in new[] { layers.Front, layers.Front2, layers.AlwaysFront, layers.AlwaysFront2 })
+                {
+                    if (overlayLayer == null || layers.Labels.Get(overlayLayer, x, y) is not { } ol)
+                        continue;
+                    if (ClassFromLabels(ol, overlay: true) == SurfaceClass.Water)
+                    {
+                        anyLabel = true;
+                        lc = SurfaceClass.Water;
+                        break;
+                    }
+                }
+            }
+            // A DECK is the surface you stand on, even when the tile beneath it is
+            // labelled water — and the plank itself often carries no label at all, so
+            // the lookup falls through to the Back tile below and answers for the
+            // wrong thing. The Beach bridge reads Buildings.Passable=T Type=Wood over
+            // Back water:256: standing on it counted as standing on open water, which
+            // costs the player their shadow outright, and cut the bridge's own shadow
+            // wherever the water under it was open on all sides.
+            //
+            // The animated case is left alone: an ANIMATED passable Buildings tile
+            // over water is the surf wash, which really is the water surface.
+            if (lc == SurfaceClass.Water && hasBuildings
+                && layers.Buildings!.Tiles[x, y] is not xTile.Tiles.AnimatedTile
+                && (location.doesTileHaveProperty(x, y, "Passable", "Buildings") != null
+                    || location.doesTileHaveProperty(x, y, "Type", "Buildings") == "Wood"))
+                lc = SurfaceClass.Deck;
+            return lc;
+        }
 
+        /// <summary>No painted opinion: read the tile the way the game does, from its layers and
+        /// its map properties.</summary>
+        private static SurfaceClass ClassifyFromMapProperties(GameLocation location, MapLayerSet layers,
+                                                             int x, int y, bool hasBuildings, bool hasFront,
+                                                             out sbyte height)
+        {
+            SurfaceClass cls;
+            bool passableB = hasBuildings && location.doesTileHaveProperty(x, y, "Passable", "Buildings") != null;
+            if (passableB && layers.Buildings!.Tiles[x, y] is xTile.Tiles.AnimatedTile && location.isWaterTile(x, y))
+            {
+                // An ANIMATED passable Buildings tile over water IS the water surface —
+                // the beach surf wash. The deck rule below used to call it a pier and ate
+                // the whole tide line. Real decks are static art.
+                cls = SurfaceClass.Water;
+                height = -1;
+            }
+            else if (passableB)
+            {
+                cls = SurfaceClass.Deck;      // walk-on-top raised platform: pier / bridge
+                height = 1;
+            }
+            else if (location.doesTileHaveProperty(x, y, "Type", "Back") == "Wood")
+            {
+                cls = SurfaceClass.Deck;      // Back-layer planking: pier / bridge / porch
+                height = 1;
+            }
+            else if (hasBuildings && location.doesTileHaveProperty(x, y, "Shadow", "Buildings") == null)
+            {
+                cls = SurfaceClass.Wall;      // blocking Buildings tile that isn't decorative shadow art
+                height = 1;
+            }
+            else if (location.isWaterTile(x, y))
+            {
+                cls = SurfaceClass.Water;
+                height = -1;
+            }
+            else if (hasFront)
+            {
+                cls = SurfaceClass.Roof;      // tall overhead art with no blocking base
+                height = 1;
+            }
+            else
+            {
+                cls = SurfaceClass.Ground;
+                height = 0;
+            }
+            return cls;
+        }
+
+        /// <summary>Farm buildings are Building ENTITIES, not Buildings-layer tiles, so the
+        /// per-tile pass misses them entirely.</summary>
+        private static void StampBuildingFootprints(SurfaceMap sm, GameLocation location, int w)
+        {
             // Farm buildings (coops, barns, cabins, the farmhouse) are Building ENTITIES, not
             // Buildings-layer tiles, so the per-tile pass misses them. The footprint rows are the
             // solid Wall base; the sprite is usually TALLER than the footprint and the game draws
@@ -406,8 +476,6 @@ namespace SDVRadiance
                         Set(sm, i2, y >= by ? SurfaceClass.Wall : SurfaceClass.Roof, (sbyte)2);
                     }
             }
-
-            return sm;
         }
 
         /// <summary>Longest run of non-water tiles that still counts as a bridge. Town's stone

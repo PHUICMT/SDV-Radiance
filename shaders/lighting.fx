@@ -22,7 +22,7 @@
     #define PS_SHADERMODEL ps_4_0_level_9_1
 #endif
 
-#define MAX_LIGHTS 16
+#define MAX_LIGHTS 48
 
 sampler2D SourceSampler : register(s0);
 
@@ -44,6 +44,7 @@ float4 LightData[MAX_LIGHTS]; // xyz = light colour * boost, w = radius (UV, hei
 float  ShadowStrength;        // 0 = no shadows; 1 = full occluder shadows
 float  Overbright;            // max light accumulation (>1 allows glow near lamps)
 float  Presence;              // 0..1 whole-pass presence fade (see the tail of LightingPS)
+int    LightCount;            // how many entries of the arrays are live; the loop stops there
 float2 OccTilesPerScreen;     // world tiles spanning the buffer (w/64, h/64)
 float2 OccWorldTileOffset;    // viewport origin in world tiles (continuous)
 float2 OccMaskSize;           // occluder mask size in texels (tiles)
@@ -85,12 +86,17 @@ float ShadowFactor(float2 uv, float2 lightUv)
     const int STEPS = 14;
     float2 delta = (lightUv - uv) / STEPS;
     float occ = 0.0;
-    [unroll]
+    // A real loop with tex2Dlod (no gradients inside dynamic flow), so the LIGHT loop outside
+    // can stay unrolled at forty-eight without running out of temporaries. The other way round -
+    // light loop dynamic, march unrolled - compiled, and cost 3 ms: every array read became a
+    // dynamically indexed uniform, which the driver spills. Constant light indices are the
+    // cheap half; the march is the half that can afford a counter.
+    [loop]
     for (int s = 2; s <= STEPS; s++)   // start past the pixel to avoid self-shadow
     {
         float2 p = uv + delta * s;
         float nearLight = smoothstep(0.0, 0.07, distance(p, lightUv)); // 0 at the light
-        occ = max(occ, tex2D(OccluderSampler, OccUV(p)).r * nearLight);
+        occ = max(occ, tex2Dlod(OccluderSampler, float4(OccUV(p), 0.0, 0.0)).r * nearLight);
     }
     return 1.0 - occ * ShadowStrength;
 }
@@ -102,9 +108,16 @@ float4 LightingPS(PixelInput input) : SV_TARGET
 
     float3 accum = AmbientColor;
 
+    // Unrolled, so every LightPos[i] / LightData[i] read is a constant register: as a real loop
+    // the same code priced at 2 to 3 ms in every scene measured (dynamically indexed uniforms
+    // spill), and the classic pass runs whenever flood GI is switched off. Unrolling forty-eight
+    // with the march unrolled too overflowed the temporaries (X4505), so the march is the loop.
+    // LightCount still bounds the work: slots past it hold radius 0 and leave in one compare.
     [unroll]
     for (int i = 0; i < MAX_LIGHTS; i++)
     {
+        if (i >= LightCount)
+            break;
         float radius = LightData[i].w;
         if (radius <= 0.0)
             continue;

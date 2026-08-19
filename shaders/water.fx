@@ -26,23 +26,10 @@ sampler2D MaskSampler = sampler_state
     MinFilter = Point; MagFilter = Point; MipFilter = None; // point = crisp per-tile, no bleed onto land
     AddressU = Clamp; AddressV = Clamp;
 };
-// UNDILATED mask — true water bodies only. The effect-coverage mask above is dilated
-// two tiles (bank rings), which swallows bridges/piers; anything that reasons about
-// WHERE WATER REALLY IS (shoreline search, water-on-water damping, the grey-pool
-// pixel gate) must use this one.
-texture MaskCoreTexture;
-sampler2D MaskCoreSampler = sampler_state
-{
-    Texture = <MaskCoreTexture>;
-    MinFilter = Point; MagFilter = Point; MipFilter = None;
-    AddressU = Clamp; AddressV = Clamp;
-};
-sampler2D MaskCoreLinearSampler = sampler_state
-{
-    Texture = <MaskCoreTexture>;
-    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
-    AddressU = Clamp; AddressV = Clamp;
-};
+// (MaskCoreTexture and its two samplers lived here. They fed the old 34-tap shoreline
+// march, which was replaced by a single lookup into the precomputed waterline map -
+// see EdgeDistAt below. Nothing has read them since, so the whole chain that built and
+// uploaded that texture every mask rebuild has gone with them.)
 sampler2D MaskLinearSampler = sampler_state
 {
     Texture = <MaskTexture>;
@@ -147,6 +134,14 @@ float SceneSidePad;
 //   ReflTint   - the cool darkening that makes a reflection read as being IN the water rather
 //     than painted on it. Still water sits lighter and cooler, choppy water deeper.
 float ReflWobble;
+// How many steps per tile the sideways shear is rounded to, or 0 to shear every row on its own.
+// 16 is the 4 px banding this shipped with through 1.5.6. See the note at the wave itself: this
+// is what decides whether a reflected building bends or comes apart into sliding horizontal bands.
+float ShearSteps;
+// 1 for the wave shear as designed, 0 for a flat mirror. Applied ONLY where the reflection is
+// sampled: the shoreline search below keeps the full wave, because its jitter is what breaks a
+// diagonal bank out of 64 px staircase blocks.
+float MirrorShear;
 float3 ReflTint;
 float3 SceneAmbient;     // lighting-stage ambient: the raw layer render carries no
                          // lighting, so the mirror scales it to match the lit scene
@@ -296,7 +291,15 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float ringGate = 1.0 - inPlayer;
     // Sprites ON the water (ducks, NPCs, critters — per-frame bake): their own pixels
     // never ripple / mirror. Water beside them keeps animating (pixel-accurate mask).
-    float inSprite = SpriteMaskOn * step(0.05, tex2D(SpriteMaskSampler, uv).a);
+    //
+    // PROPORTIONAL, not a threshold. This was step(0.05, a), which made any stamp above five
+    // per cent opacity remove the effect completely - fine while everything stamped was solid,
+    // and wrong the moment something is not. The game fades a tree out while the player stands
+    // behind it, the canopy went into the mask at full strength regardless, and what the player
+    // saw through the see-through tree was a canopy-shaped patch of untouched vanilla water.
+    // A half-transparent thing should hide half the effect, which is what an alpha already
+    // means and what the threshold was throwing away.
+    float inSprite = SpriteMaskOn * saturate(tex2D(SpriteMaskSampler, uv).a);
     ringGate *= 1.0 - inSprite;
     // V4: the pixel mask is the ONLY authority on coverage. Every colour test that used to
     // grade or veto here (blueness/greyness/cyan boosts, the 0.75 floor, the warm+saturated
@@ -374,9 +377,38 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // The reflection sways with the surface — computed FIRST because the same jitter
         // feeds the shoreline search below (dithers the per-tile-column edge steps into
         // organic wavy seams instead of hard 64px vertical banding).
-        float rowY = floor(worldTile.y * 16.0) / 16.0;
+        // This value shears the reflection SIDEWAYS, one horizontal offset per row, so whatever
+        // shape it has in y is the shape the reflection is cut into.
+        //
+        // It used to be sampled on a quantised row, floor(worldTile.y * 16) / 16, which is one
+        // step every four world pixels. Every row inside a step shifted by exactly the same
+        // amount and then the whole thing jumped at the boundary, so a reflected building came
+        // apart into horizontal bands sliding over each other. That was not a side effect of the
+        // wave, it WAS the wave: a staircase cannot shear anything smoothly. The banding was
+        // deliberate once, to read as drawn pixel-art water rather than per-pixel noise, and the
+        // author has since asked for the opposite. Sampled continuously, the shear varies by a
+        // fraction of a pixel from one row to the next and the reflection bends instead of
+        // breaking.
+        //
+        // The frequencies matter for the same reason they did while it was quantised. A sine of
+        // frequency k has a period of 402/k world pixels:
+        //
+        //   k = 34   11.8 px
+        //   k = 20   20.1 px
+        //   k = 61    6.6 px   was here, and at one sample per four pixels it could never appear
+        //                      as itself: it folded into a slow beat that crawled with t, which
+        //                      is the streaking that was reported
+        //
+        // 61 stays gone even now that sampling is per row. It resolves cleanly, but a shear that
+        // reverses every 6.6 pixels is a finer comb than the reflection has detail to survive,
+        // and the request was for less of this, not more.
+        //
+        // ShearSteps is the setting: steps per tile, or 0 for none. 16 reproduces the 4 px banding
+        // this shipped with through 1.5.6 exactly, so the old look is a slider away rather than a
+        // rebuild away.
+        float rowY = ShearSteps > 0.5 ? floor(worldTile.y * ShearSteps) / ShearSteps : worldTile.y;
         float wave = sin(rowY * 34.0 + t * 2.6)
-                   + 0.45 * sin(rowY * 61.0 - t * 3.9 + worldTile.x * 0.9);
+                   + 0.45 * sin(rowY * 20.0 - t * 3.9 + worldTile.x * 0.9);
         float waveAmp = Strength * 0.0035 + 0.0012;
         // Static per-16px-block dither on the march column: a diagonal shoreline otherwise
         // quantises the mirror into 64px staircase bands; this breaks the steps into ragged
@@ -393,10 +425,19 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // left/right waterline. If this column isn't over core water, borrow the neighbour
         // column on whichever side the real water is.
         // Borrow at TEXEL scale: a full-tile hop was itself quantising the mirror into 64px columns.
+        // SMOOTH taps, not point ones. As point samples all three terms are hard 0 or 1, so the
+        // borrow is exactly 0 or a whole quarter-tile and it switches the instant the column
+        // crosses a texel boundary. On a diagonal shore each screen row crosses on a different
+        // column, and the mirror's left/right edge steps in and out by 16 px from row to row -
+        // the fine sawtooth along a reflection edge. Read through the linear sampler and a
+        // half-covered column borrows half as far, so the edge ramps instead of snapping.
+        // This is the same fix, for the same reason, that EdgeDistAt already documents.
+        // Only the SAMPLE COLUMN moves. Whether a pixel reflects at all is still decided by the
+        // point-sampled `found` below, so nothing here can bleed the mirror onto land.
         float tileW = 4.0 / (TilesPerScreen.x * 16.0);
-        float coreC = WaterAt(float2(mx, uv.y));
-        float coreL = WaterAt(float2(mx - tileW, uv.y));
-        float coreR = WaterAt(float2(mx + tileW, uv.y));
+        float coreC = WaterAtSmooth(float2(mx, uv.y));
+        float coreL = WaterAtSmooth(float2(mx - tileW, uv.y));
+        float coreR = WaterAtSmooth(float2(mx + tileW, uv.y));
         mx += (1.0 - coreC) * (coreR - coreL) * tileW;
 
         // Shoreline from the precomputed WATERLINE MAP (one sample replaces the old 34-tap
@@ -418,7 +459,12 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // CARVED out of the pixel mask (the march stops at their base), so the mirror can start
         // right at the painted waterline — bank rims, bridge arches and a player standing at
         // the pond's edge all appear pressed against the water.
-        float2 reflUv = float2(mx + ripple.x * 3.0 * ReflWobble,
+        // The mirror reads from its own column. mx carries the full wave because the shoreline
+        // search needs the jitter; the reflection takes as much or as little of that shear as the
+        // chosen look asks for, so Mirror can be flat without straightening the waterline.
+        float mirrorX = uv.x + wave * waveAmp * MirrorShear + dith
+                      + (1.0 - coreC) * (coreR - coreL) * tileW;
+        float2 reflUv = float2(mirrorX + ripple.x * 3.0 * ReflWobble,
                                edgeV - depth * 1.25 - 0.08 / TilesPerScreen.y + abs(ripple.y) * 2.0 * ReflWobble);
         // Keep the UNCLAMPED coordinate for the scenery source, which reaches past the top of
         // the screen; the composed-screen fallback and the mask lookups have nothing up there

@@ -36,6 +36,22 @@ SCENE_KEYS = ["location", "timeOfDay", "season", "dayOfMonth", "weather", "playe
 # counterpart's, the clock was frozen but the scene had not converged when it was taken.
 PRESENCE_TOL = 1e-4
 
+# Buffers that are COPIES of the game's own frame rather than something the mod computed. They
+# inherit vanilla drift exactly as frame_out does - a critter that moved moves in the copy too.
+#
+# frame_out gets that drift subtracted pixel by pixel, but these cannot: they are held at other
+# resolutions and offsets (mirror_source is the chain buffer plus a fixed side/top reach, the
+# chain buffer is the window scaled by 1/zoom), so the drift mask does not line up and a
+# hand-rolled rescale would hide real regressions in the slop.
+#
+# So the rule here is about what can be CONCLUDED rather than about geometry: if the game's own
+# frame is identical, a copy of it must be identical too, and a difference is real and counts. If
+# the game's frame drifted, a difference in the copy is inherited, cannot be separated at this
+# resolution, and is reported without deciding the verdict on its own. Without this, every outdoor
+# revisit reports mirror_source changed forever, and a verifier that always complains is one
+# people stop reading.
+SCENE_COPY_BUFFERS = {"mirror_source"}
+
 
 def load(path):
     meta_path = os.path.join(path, "metadata.json")
@@ -239,6 +255,18 @@ def cmd_compare(dir_a, dir_b, png, allow_settings=()):
     # smoke and animated map tiles run on game logic the freeze deliberately leaves alone.
     # Where frame_in moved, frame_out moving is the game's doing, not the mod's — so those
     # pixels (plus a halo for effect spread) are excluded from the frame_out verdict.
+    #
+    # ⚠️ frame_in IS NOT THE GAME UNTOUCHED. The mod's SHADOWS are already in it: they are drawn
+    # at the World_Sorted render step and _sceneRenderTarget is captured afterwards, in
+    # RenderedWorld. So for a change that only moves shadows, the drift mask below is built FROM
+    # that change and then forgives it. Measured 2026-08-17, in the strongest possible form:
+    # a pair captured with DirectionalShadowsEnabled True vs False — every shadow in the room
+    # switched off — differed by 2,935 px in frame_in and 5,341 in frame_out, no internal buffer
+    # moved, and the verdict below read "IDENTICAL apart from vanilla drift. Not a mod regression."
+    #
+    # Hence the shadow-path line printed after the buffer table: for shadow work, only a
+    # BYTE-IDENTICAL frame_in is evidence. An exit code cannot carry this, because frame_in drifts
+    # at nearly every outdoor spot and failing on that would make the tool useless.
     vanilla_moved = None
     if "frame_in" in buffers_a and "frame_in" in buffers_b:
         fa = read_buffer(dir_a, buffers_a["frame_in"])
@@ -269,14 +297,29 @@ def cmd_compare(dir_a, dir_b, png, allow_settings=()):
             print(f"  {'':16s} vanilla drift: frame_in moved {int(vanilla_moved.sum()):,} px; "
                   f"frame_out pixels OUTSIDE the {VANILLA_DRIFT_HALO_PX}px drift halo: "
                   f"{frame_out_outside_halo:,}")
+        if name in SCENE_COPY_BUFFERS and vanilla_moved is not None:
+            print(f"  {'':16s} inherited drift: this buffer is a copy of the game's frame, which "
+                  f"moved. Not assessable at this resolution; not counted.")
         if png:
             out = write_png(os.path.join(dir_b, f"diff_{name}.png"), ba, bb)
             if out:
                 print(f"  {'':16s} -> {out}")
 
+    # Said out loud, every run, because the buffer table cannot say it: the mod's shadows live
+    # inside frame_in (see the note above), so a shadow change is inside the thing that excuses it.
+    if "frame_in" in buffers_a and "frame_in" in buffers_b:
+        if vanilla_moved is None:
+            print("shadow path: frame_in is BYTE-IDENTICAL, so shadows are certified here.")
+        else:
+            print(f"shadow path: frame_in differs ({int(vanilla_moved.sum()):,} px), and the mod's "
+                  "shadows are inside frame_in, so a shadow-only change CANNOT be certified at this "
+                  "spot, whatever the verdict below says.")
     print()
     if changed or only_a or only_b:
-        internal = [c for c in changed if c not in ("frame_in", "frame_out")]
+        # A scene copy only counts when the game's own frame held still; see SCENE_COPY_BUFFERS.
+        internal = [c for c in changed
+                    if c not in ("frame_in", "frame_out")
+                    and not (c in SCENE_COPY_BUFFERS and vanilla_moved is not None)]
         frame_out_is_real = "frame_out" in changed and (
             vanilla_moved is None or frame_out_outside_halo > 0)
         # frame_out is the one the player would notice; the masks say which stage moved it.

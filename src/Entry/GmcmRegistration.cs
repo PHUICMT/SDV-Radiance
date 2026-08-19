@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using SDVRadiance.Integrations;
 using StardewModdingAPI;
 
@@ -16,7 +18,7 @@ namespace SDVRadiance
         /// <param name="refreshForceBufferDraw">Re-sync <see cref="HarmonyPatcher.ForceBufferDraw"/> with live config.</param>
         internal static void Register(IModHelper helper, IManifest manifest, IMonitor monitor,
             Func<string, string> i18n, Func<ModConfig> config, Action<ModConfig> replaceConfig,
-            Action refreshForceBufferDraw)
+            Action refreshForceBufferDraw, Func<RenderPipeline?> getPipeline)
         {
             var api = helper.ModRegistry.GetApi<IGenericModConfigMenuApi>("spacechase0.GenericModConfigMenu");
             if (api is null)
@@ -39,6 +41,24 @@ namespace SDVRadiance
                 refreshForceBufferDraw();
             }, Save);
 
+            RegisterLandingPage(api, manifest, i18n, config, monitor, refreshForceBufferDraw);
+            RegisterBloomPage(api, manifest, i18n, config);
+            RegisterColourGradePage(api, manifest, i18n, config, LutCatalog.Discover());
+            RegisterGodRaysPage(api, manifest, i18n, config);
+            RegisterFogPage(api, manifest, i18n, config);
+            RegisterCloudShadowPage(api, manifest, i18n, config);
+            RegisterLensPage(api, manifest, i18n, config);
+            RegisterWaterPage(api, manifest, i18n, config);
+            RegisterLightingPage(api, manifest, i18n, config);
+            RegisterShadowsPage(api, manifest, i18n, config);
+            RegisterCameraPage(api, manifest, i18n, config);
+            RegisterPerformancePage(api, manifest, i18n, config);
+            RegisterMiscPage(api, manifest, i18n, config, helper, monitor, getPipeline);
+        }
+
+        /// <summary>Master switch, the one-click look preset, and the links to every other page.</summary>
+        private static void RegisterLandingPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config, IMonitor monitor, Action refreshForceBufferDraw)
+        {
             // --- Landing page: master switch, a one-click look preset, and links to each
             // effect's own page so the top level stays short instead of one giant scroll. ---
             api.AddBoolOption(manifest, () => config().Enabled, v => config().Enabled = v,
@@ -86,6 +106,11 @@ namespace SDVRadiance
             api.AddPageLink(manifest, "misc", () => i18n("config.section.misc"));
 
             // --- Bloom (implemented) ---
+        }
+
+        /// <summary>Bloom.</summary>
+        private static void RegisterBloomPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        {
             api.AddPage(manifest, "bloom", () => i18n("config.section.bloom"));
             api.AddBoolOption(manifest, () => config().BloomEnabled, v => config().BloomEnabled = v,
                 () => i18n("config.bloom.enabled.name"), () => i18n("config.bloom.enabled.tooltip"));
@@ -95,6 +120,13 @@ namespace SDVRadiance
                 () => i18n("config.bloom.intensity.name"), null, 0f, 2f, 0.05f);
 
             // --- Color grading (implemented) ---
+        }
+
+        /// <summary>Colour grading, tonemapping and the blue-light filter.</summary>
+        /// <param name="userLuts">Looks found in assets/luts that did not ship with the mod. Empty
+        /// for almost everyone, and when it is empty the dropdown is exactly what it always was.</param>
+        private static void RegisterColourGradePage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config, string[] userLuts)
+        {
             api.AddPage(manifest, "colorgrade", () => i18n("config.section.colorgrade"));
             api.AddBoolOption(manifest, () => config().ColorGradeEnabled, v => config().ColorGradeEnabled = v,
                 () => i18n("config.colorgrade.enabled.name"), () => i18n("config.colorgrade.enabled.tooltip"));
@@ -112,10 +144,41 @@ namespace SDVRadiance
                 () => i18n("config.colorgrade.brightness.name"), null, 0.5f, 1.5f, 0.05f);
             api.AddBoolOption(manifest, () => config().ColorGradeToneMap, v => config().ColorGradeToneMap = v,
                 () => i18n("config.colorgrade.tonemap.name"), () => i18n("config.colorgrade.tonemap.tooltip"));
+            // A LOOK, on top of the sliders rather than instead of them. The list is the files
+            // that ship in assets/luts; anyone who drops their own PNG in there can name it in
+            // config.json, which the dropdown cannot offer but the shader loads all the same.
+            // The shipped looks, then anything the player put in the folder themselves, then -
+            // only if it is still missing - whatever config.json currently names. That last case
+            // is a look whose file has been deleted or renamed: leaving it out of the list makes
+            // GMCM snap the setting to the first entry the moment the page is opened, changing a
+            // player's picture because a file was moved.
+            string current = config().ColorGradeLut ?? "";
+            var choices = new List<string>(ModConfig.ShippedLuts);
+            choices.AddRange(userLuts);
+            if (!choices.Contains(current, StringComparer.OrdinalIgnoreCase))
+                choices.Add(current);
+            var mine = new HashSet<string>(userLuts, StringComparer.OrdinalIgnoreCase);
+            api.AddTextOption(manifest,
+                () => config().ColorGradeLut,
+                v => config().ColorGradeLut = v ?? "",
+                () => i18n("config.colorgrade.lut.name"), () => i18n("config.colorgrade.lut.tooltip"),
+                choices.ToArray(),
+                v => v.Length == 0 ? i18n("config.colorgrade.lut.none")
+                     : mine.Contains(v) ? $"{v} ({i18n("config.colorgrade.lut.yours")})"
+                     : Array.IndexOf(ModConfig.ShippedLuts, v) >= 0 ? i18n($"config.colorgrade.lut.{v}")
+                     : $"{v} ({i18n("config.colorgrade.lut.missing")})");
+            api.AddNumberOption(manifest, () => config().ColorGradeLutAmount, v => config().ColorGradeLutAmount = v,
+                () => i18n("config.colorgrade.lutamount.name"), () => i18n("config.colorgrade.lutamount.tooltip"), 0f, 1f, 0.05f);
+
             api.AddNumberOption(manifest, () => config().BlueLightFilter, v => config().BlueLightFilter = v,
                 () => i18n("config.colorgrade.bluelight.name"), () => i18n("config.colorgrade.bluelight.tooltip"), 0f, 1f, 0.05f);
 
             // --- God rays (implemented) ---
+        }
+
+        /// <summary>God rays. Ships off by default.</summary>
+        private static void RegisterGodRaysPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        {
             api.AddPage(manifest, "godrays", () => i18n("config.section.godrays"));
             api.AddBoolOption(manifest, () => config().GodRaysEnabled, v => config().GodRaysEnabled = v,
                 () => i18n("config.godrays.enabled.name"), () => i18n("config.godrays.enabled.tooltip"));
@@ -129,6 +192,11 @@ namespace SDVRadiance
                 () => i18n("config.godrays.density.name"), null, 0.1f, 1f, 0.05f);
 
             // --- Volumetric fog (implemented) ---
+        }
+
+        /// <summary>Fog, and the separate night mist that runs on the same machinery.</summary>
+        private static void RegisterFogPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        {
             api.AddPage(manifest, "fog", () => i18n("config.section.fog"));
             api.AddSectionTitle(manifest, () => i18n("config.fog.sectionday"));
             api.AddBoolOption(manifest, () => config().FogEnabled, v => config().FogEnabled = v,
@@ -152,6 +220,11 @@ namespace SDVRadiance
                 () => i18n("config.fog.nightmistspeed.name"), null, 0f, 0.1f, 0.002f);
 
             // --- Cloud shadows (implemented) ---
+        }
+
+        /// <summary>Cloud shadows, including hiding the vanilla ones.</summary>
+        private static void RegisterCloudShadowPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        {
             api.AddPage(manifest, "cloudshadow", () => i18n("config.section.cloudshadow"));
             api.AddBoolOption(manifest, () => config().SuppressVanillaCloudShadow, v => config().SuppressVanillaCloudShadow = v,
                 () => i18n("config.cloudshadow.hidevanilla.name"), () => i18n("config.cloudshadow.hidevanilla.tooltip"));
@@ -169,6 +242,11 @@ namespace SDVRadiance
                 () => i18n("config.cloudshadow.speed.name"), null, 0f, 0.1f, 0.005f);
 
             // --- Lens: the camera-glass effects, grouped as the F6 tuner groups them ---
+        }
+
+        /// <summary>Lens effects: tilt shift, vignette, chromatic aberration.</summary>
+        private static void RegisterLensPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        {
             api.AddPage(manifest, "lens", () => i18n("config.section.lens"));
             api.AddBoolOption(manifest, () => config().TiltShiftEnabled, v => config().TiltShiftEnabled = v,
                 () => i18n("config.tiltshift.enabled.name"), () => i18n("config.tiltshift.enabled.tooltip"));
@@ -199,6 +277,11 @@ namespace SDVRadiance
                 () => i18n("config.ca.strength.name"), null, 0f, 1f, 0.05f);
 
             // --- Water (implemented) ---
+        }
+
+        /// <summary>Water surface and reflections.</summary>
+        private static void RegisterWaterPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        {
             api.AddPage(manifest, "water", () => i18n("config.section.water"));
             api.AddBoolOption(manifest, () => config().WaterEnabled, v => config().WaterEnabled = v,
                 () => i18n("config.water.enabled.name"), () => i18n("config.water.enabled.tooltip"));
@@ -214,6 +297,16 @@ namespace SDVRadiance
                 () => i18n("config.water.reflection.name"), () => i18n("config.water.reflection.tooltip"));
             api.AddNumberOption(manifest, () => config().WaterReflectStrength, v => config().WaterReflectStrength = v,
                 () => i18n("config.water.reflectstrength.name"), null, 0f, 1f, 0.05f);
+            api.AddNumberOption(manifest, () => config().WaterReflectDistort, v => config().WaterReflectDistort = v,
+                () => i18n("config.water.reflectdistort.name"), () => i18n("config.water.reflectdistort.tooltip"),
+                0f, 1.5f, 0.05f);
+            api.AddNumberOption(manifest, () => config().WaterReflectBanding, v => config().WaterReflectBanding = v,
+                () => i18n("config.water.reflectbanding.name"), () => i18n("config.water.reflectbanding.tooltip"),
+                0f, 16f, 1f);
+            // Reflection REACH and FADE ROWS are not offered here. They buy frames, they do not
+            // change how anything looks, and the performance preset already sets both: a player
+            // who moves them sees nothing happen and concludes the mod is broken. The settings
+            // still exist for radiance_config, which is where an A/B belongs.
             api.AddTextOption(manifest,
                 () => config().WaterReflectStyle.ToString(),
                 v => config().WaterReflectStyle = Enum.TryParse<WaterReflectionStyle>(v, out var rs) ? rs : WaterReflectionStyle.Natural,
@@ -223,6 +316,11 @@ namespace SDVRadiance
                 () => i18n("config.water.indoors.name"), () => i18n("config.water.indoors.tooltip"));
 
             // --- Dynamic lighting (implemented) ---
+        }
+
+        /// <summary>The flood grid, the light pools and the window effects.</summary>
+        private static void RegisterLightingPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        {
             api.AddPage(manifest, "lighting", () => i18n("config.section.lighting"));
             api.AddBoolOption(manifest, () => config().FloodLightingEnabled, v => config().FloodLightingEnabled = v,
                 () => i18n("config.lighting.flood.name"), () => i18n("config.lighting.flood.tooltip"));
@@ -254,6 +352,11 @@ namespace SDVRadiance
                 () => i18n("config.lighting.windowbeam.name"), () => i18n("config.lighting.windowbeam.tooltip"));
 
             // --- Directional sprite shadows ---
+        }
+
+        /// <summary>Directional sprite shadows.</summary>
+        private static void RegisterShadowsPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        {
             api.AddPage(manifest, "shadows", () => i18n("config.section.shadows"));
             api.AddBoolOption(manifest, () => config().DirectionalShadowsEnabled, v => config().DirectionalShadowsEnabled = v,
                 () => i18n("config.shadows.enabled.name"), () => i18n("config.shadows.enabled.tooltip"));
@@ -270,6 +373,11 @@ namespace SDVRadiance
                 ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax, 1);
 
             // --- Camera (implemented) ---
+        }
+
+        /// <summary>Camera smoothing.</summary>
+        private static void RegisterCameraPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        {
             api.AddPage(manifest, "camera", () => i18n("config.section.camera"));
             api.AddTextOption(manifest,
                 () => config().CameraMode.ToString(),
@@ -281,13 +389,25 @@ namespace SDVRadiance
                 () => i18n("config.smoothcam.speed.name"), () => i18n("config.smoothcam.speed.tooltip"), 0.05f, 1f, 0.05f);
 
             // --- Performance page: what the picture costs, kept away from the look settings ---
+        }
+
+        /// <summary>Render scale and sharpening.</summary>
+        private static void RegisterPerformancePage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        {
             api.AddPage(manifest, "perf", () => i18n("config.section.perf"));
             api.AddNumberOption(manifest, () => config().RenderScale, v => config().RenderScale = v,
                 () => i18n("config.renderscale.name"), () => i18n("config.renderscale.tooltip"), 0.5f, 1f, 0.05f);
+            api.AddBoolOption(manifest, () => config().RenderScaleAuto, v => config().RenderScaleAuto = v,
+                () => i18n("config.renderscaleauto.name"), () => i18n("config.renderscaleauto.tooltip"));
             api.AddNumberOption(manifest, () => config().RenderSharpness, v => config().RenderSharpness = v,
                 () => i18n("config.rendersharpness.name"), () => i18n("config.rendersharpness.tooltip"), 0f, 2f, 0.1f);
 
             // --- Misc page: hotkeys + diagnostics + roadmap ---
+        }
+
+        /// <summary>Hotkeys, the debug switches, and the roadmap section.</summary>
+        private static void RegisterMiscPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config, IModHelper helper, IMonitor monitor, Func<RenderPipeline?> getPipeline)
+        {
             api.AddPage(manifest, "misc", () => i18n("config.section.misc"));
             api.AddSectionTitle(manifest, () => i18n("config.section.hotkeys"));
             api.AddKeybindList(manifest, () => config().ToggleKey, v => config().ToggleKey = v,
@@ -296,9 +416,25 @@ namespace SDVRadiance
                 () => i18n("config.tunerkey.name"), () => i18n("config.tunerkey.tooltip"));
 
             // --- Diagnostics ---
+            //
+            // Everything here also exists as a console command, and on a phone the console does not
+            // exist: SMAPI on Android has no command line and no keyboard to open the tuner with
+            // either. That leaves this menu and config.json as the whole reachable surface, so the
+            // three diagnostics a reporter is ever asked for are duplicated into it. It is not only
+            // for phones - plenty of people on a desktop have never opened the SMAPI console.
             api.AddSectionTitle(manifest, () => i18n("config.section.debug"));
             api.AddBoolOption(manifest, () => config().DebugLogging, v => config().DebugLogging = v,
                 () => i18n("config.debug.name"), () => i18n("config.debug.tooltip"));
+            api.AddBoolOption(manifest, () => PerfHud.Visible, v => PerfHud.Visible = v,
+                () => i18n("tuner.perfhud"), () => i18n("help.perfhud"));
+            api.AddBoolOption(manifest, () => GpuTimer.Ready, GpuTimer.SetWanted,
+                () => i18n("tuner.gputime"), () => i18n("help.gputime"));
+            // A tick box rather than a button, because the API we bind has no button. It reads back
+            // as unticked immediately, which is right: it is an action, not a state.
+            api.AddBoolOption(manifest,
+                () => false,
+                v => { if (v) ConsoleCommands.WriteReport(helper, monitor, getPipeline(), config(), alsoLog: true); },
+                () => i18n("config.report.name"), () => i18n("config.report.tooltip"));
 
             // --- Not yet implemented: shown as a roadmap so options don't imply working features ---
             api.AddSectionTitle(manifest, () => i18n("config.section.wip"));

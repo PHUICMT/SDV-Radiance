@@ -94,13 +94,13 @@ namespace SDVRadiance
         private const double EcSettleSeconds = 0.5;
         private const int EcSampleFrames = 24;
 
-        private int _ecIndex, _ecHalf, _ecFrame, _ecSamples;
-        private double _ecHalfStarted;
-        private double _ecAccumulator, _ecPendingBase;
-        private object? _ecSavedValue;
-        private bool _ecSavedProbe;
-        private float _ecSavedScale;
-        private readonly List<(string Label, double Cost, bool MeasuredByTurningOn)> _ecResults = new();
+        private int _effectCostIndex, _effectCostHalf, _effectCostFrame, _effectCostSamples;
+        private double _effectCostHalfStarted;
+        private double _effectCostAccumulator, _effectCostPendingBase;
+        private object? _effectCostSavedValue;
+        private bool _effectCostSavedProbe;
+        private float _effectCostSavedScale;
+        private readonly List<(string Label, double Cost, bool MeasuredByTurningOn)> _effectCostResults = new();
 
         /// <summary>Arm the per-effect sweep.</summary>
         public void StartEffectCost(ModConfig config, int amplify = 6)
@@ -117,13 +117,13 @@ namespace SDVRadiance
             }
             BenchAmplify = Math.Max(1, amplify);
             EffectCostRunning = true;
-            _ecSavedProbe = GpuProbe;
-            _ecSavedScale = config.RenderScale;
+            _effectCostSavedProbe = GpuProbe;
+            _effectCostSavedScale = config.RenderScale;
             GpuProbe = true;
-            _ecIndex = _ecHalf = _ecFrame = _ecSamples = 0;
-            _ecAccumulator = _ecPendingBase = 0;
-            _ecSavedValue = null;
-            _ecResults.Clear();
+            _effectCostIndex = _effectCostHalf = _effectCostFrame = _effectCostSamples = 0;
+            _effectCostAccumulator = _effectCostPendingBase = 0;
+            _effectCostSavedValue = null;
+            _effectCostResults.Clear();
             EffectCostSummary.Clear();
             _monitor.Log($"Pricing {EffectCostKeys.Length} effects at {Game1.currentLocation?.Name} by amplified slope - "
                 + "about thirty seconds. The picture will stutter and flicker; that is the measurement, not a fault. "
@@ -173,84 +173,84 @@ namespace SDVRadiance
             _benchExtraChains = BenchAmplify;
             BenchExtraShadowRuns = BenchAmplify;
 
-            if (_ecIndex >= EffectCostKeys.Length)
+            if (_effectCostIndex >= EffectCostKeys.Length)
             {
                 FinishEffectCost(config);
                 return;
             }
-            (string key, _) = EffectCostKeys[_ecIndex];
+            (string key, _) = EffectCostKeys[_effectCostIndex];
 
             // Entering the flipped half: flip once, on the first frame of it.
-            if (_ecHalf == 1 && _ecFrame == 0 && _ecSavedValue == null)
+            if (_effectCostHalf == 1 && _effectCostFrame == 0 && _effectCostSavedValue == null)
             {
-                if (!EcFlip(config, key, out _ecSavedValue, out bool on))
+                if (!EcFlip(config, key, out _effectCostSavedValue, out bool on))
                 {
                     // Nothing to measure here. Record it as skipped and move on rather than
                     // silently dropping a row - a missing line reads as "free".
-                    _ecResults.Add((EffectCostKeys[_ecIndex].Label + " (not measurable)", 0, false));
+                    _effectCostResults.Add((EffectCostKeys[_effectCostIndex].Label + " (not measurable)", 0, false));
                     NextEffect(config, key);
                     return;
                 }
-                _ecFlipTurnedOn = on;
+                _effectCostFlipTurnedOn = on;
             }
 
-            _ecFrame++;
-            if (_ecFrame == 1)
-                _ecHalfStarted = Game1.currentGameTime?.TotalGameTime.TotalSeconds ?? 0;
+            _effectCostFrame++;
+            if (_effectCostFrame == 1)
+                _effectCostHalfStarted = Game1.currentGameTime?.TotalGameTime.TotalSeconds ?? 0;
             double now = Game1.currentGameTime?.TotalGameTime.TotalSeconds ?? 0;
-            if (now - _ecHalfStarted < EcSettleSeconds)
+            if (now - _effectCostHalfStarted < EcSettleSeconds)
                 return;
-            _ecAccumulator += gpuMilliseconds;
-            _ecSamples++;
-            if (_ecSamples < EcSampleFrames)
+            _effectCostAccumulator += gpuMilliseconds;
+            _effectCostSamples++;
+            if (_effectCostSamples < EcSampleFrames)
                 return;
 
-            double avg = _ecAccumulator / _ecSamples;
-            _ecFrame = 0; _ecAccumulator = 0; _ecSamples = 0;
+            double avg = _effectCostAccumulator / _effectCostSamples;
+            _effectCostFrame = 0; _effectCostAccumulator = 0; _effectCostSamples = 0;
 
-            if (_ecHalf == 0)
+            if (_effectCostHalf == 0)
             {
-                _ecPendingBase = avg;
-                _ecHalf = 1;
+                _effectCostPendingBase = avg;
+                _effectCostHalf = 1;
                 return;
             }
 
             // Positive always means "running this effect makes the frame longer by this much".
-            double delta = _ecFlipTurnedOn ? avg - _ecPendingBase : _ecPendingBase - avg;
-            _ecResults.Add((EffectCostKeys[_ecIndex].Label, delta / (BenchAmplify + 1), _ecFlipTurnedOn));
+            double delta = _effectCostFlipTurnedOn ? avg - _effectCostPendingBase : _effectCostPendingBase - avg;
+            _effectCostResults.Add((EffectCostKeys[_effectCostIndex].Label, delta / (BenchAmplify + 1), _effectCostFlipTurnedOn));
             NextEffect(config, key);
         }
 
-        private bool _ecFlipTurnedOn;
+        private bool _effectCostFlipTurnedOn;
 
         private void NextEffect(ModConfig config, string key)
         {
-            EcRestore(config, key, _ecSavedValue);
-            _ecSavedValue = null;
-            _ecFlipTurnedOn = false;
-            _ecIndex++;
-            _ecHalf = 0;
-            _ecFrame = 0;
-            _ecAccumulator = 0;
-            _ecSamples = 0;
+            EcRestore(config, key, _effectCostSavedValue);
+            _effectCostSavedValue = null;
+            _effectCostFlipTurnedOn = false;
+            _effectCostIndex++;
+            _effectCostHalf = 0;
+            _effectCostFrame = 0;
+            _effectCostAccumulator = 0;
+            _effectCostSamples = 0;
         }
 
         private void FinishEffectCost(ModConfig config)
         {
             _benchExtraChains = 0;
             BenchExtraShadowRuns = 0;
-            GpuProbe = _ecSavedProbe;
-            config.RenderScale = _ecSavedScale;
+            GpuProbe = _effectCostSavedProbe;
+            config.RenderScale = _effectCostSavedScale;
             EffectCostRunning = false;
             // The amplified frames were nothing like normal play; leaving them in the rolling
             // meter would make the next report lie for five seconds.
             FrameCost.Reset();
 
-            _ecResults.Sort((a, b) => b.Cost.CompareTo(a.Cost));
+            _effectCostResults.Sort((a, b) => b.Cost.CompareTo(a.Cost));
             EffectCostSummary.Clear();
             EffectCostSummary.Add($"Per-effect GPU cost at {Game1.currentLocation?.Name}, "
                 + $"{Game1.timeOfDay:0000}, measured by amplified slope (x{BenchAmplify + 1}):");
-            foreach (var (label, cost, byOn) in _ecResults)
+            foreach (var (label, cost, byOn) in _effectCostResults)
                 EffectCostSummary.Add($"  {label,-24} {cost,7:0.000} ms{(byOn ? "   (measured by turning it ON)" : "")}");
             EffectCostSummary.Add("");
             EffectCostSummary.Add("Amplification is what makes these readable: each effect runs seven times per");
