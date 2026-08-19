@@ -2,7 +2,7 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
-## 1.5.7 (in progress)
+## 1.5.7
 
 ### Added
 
