@@ -25,6 +25,16 @@ namespace SDVRadiance
         // The question "is the flame being caught at all" has been answered by argument twice and
         // both answers were wrong, so it gets a picture instead.
         Emitter,
+        // Painted by water.fx: where the caustic term lands and how hard, as pure red on the bed.
+        // "I toggled it and saw nothing" cannot be argued with a number alone when the number
+        // says 0.41; this shows the shape or shows nothing, and either answer settles it.
+        Caustic,
+        // Painted by the window pass in world space: every pixel the labels call glass, in red,
+        // at the depth the reflection itself is drawn at. It answers the two questions that look
+        // identical from the street - "does the mod see a window here at all", which the pane
+        // count in radiance_report answers, and "is something drawn over it", which only a
+        // picture at the real depth can.
+        Window,
     }
 
     /// <summary>
@@ -408,7 +418,8 @@ namespace SDVRadiance
                     }
                     break;
                 case DebugOverlayChannel.Emitter:
-                    break;      // floodlight.fx already painted it; this just adds the caption
+                case DebugOverlayChannel.Caustic:
+                    break;      // the shader already painted it; this just adds the caption
                 default:
                     return;
             }

@@ -34,6 +34,77 @@ namespace SDVRadiance
         /// <summary>When true, the vanilla drifting Cloud critter shadow is hidden.</summary>
         internal static bool SuppressVanillaClouds;
 
+        /// <summary>
+        /// Art the game asked to read past the edge of, by texture name and how many times.
+        /// See <see cref="RepairSourceRect"/>; reported by radiance_report so the pack can be
+        /// named rather than guessed at.
+        /// </summary>
+        private static readonly System.Collections.Generic.Dictionary<string, int> _artReadPastItsEdge = new();
+
+        /// <summary>
+        /// Keep a draw inside its own texture.
+        ///
+        /// <para>
+        /// Stardew 1.6 added COLUMNS to several sheets - a tree gained a mossy variant at x=96,
+        /// for one - and an art pack written before 1.6 simply does not have them. The game still
+        /// asks for the new column, the graphics card reads past the right edge of the sheet, and
+        /// what comes back is the clamped edge pixel: a transparent margin, so the tree vanishes
+        /// entirely, or a smear of the last column, which reads as one tile at a quarter of the
+        /// resolution of its neighbours. A mossy oak in winter under one popular recolour is
+        /// invisible until the moss is knocked off it.
+        /// </para>
+        ///
+        /// <para>
+        /// Nothing about that is this mod's doing, and nothing about it is the player's to fix.
+        /// But every one of those draws passes through our shims on its way to the screen, so
+        /// stepping the rectangle back by whole columns until it lands inside the sheet costs a
+        /// couple of comparisons and turns an invisible tree into the same tree without its moss.
+        /// The name of the offending texture goes in the report either way: a repair that hides
+        /// the problem from the pack's author would be worse than the bug.
+        /// </para>
+        /// </summary>
+        internal static Rectangle? RepairSourceRect(Texture2D? texture, Rectangle? source)
+        {
+            if (texture == null || texture.IsDisposed || !source.HasValue)
+                return source;
+            Rectangle wanted = source.Value;
+            if (wanted.X >= 0 && wanted.Y >= 0
+                && wanted.Right <= texture.Width && wanted.Bottom <= texture.Height)
+                return source;
+
+            string name = string.IsNullOrEmpty(texture.Name) ? "an unnamed texture" : texture.Name;
+            _artReadPastItsEdge.TryGetValue(name, out int seen);
+            _artReadPastItsEdge[name] = seen + 1;
+
+            // Step back by whole rectangle widths first: the missing thing is a VARIANT column,
+            // so the column to its left is the same sprite without the variant, which is exactly
+            // what should be drawn instead. Clamping alone would have sliced one sprite in half.
+            int repairedWidth = System.Math.Min(wanted.Width, texture.Width);
+            int repairedHeight = System.Math.Min(wanted.Height, texture.Height);
+            int x = wanted.X;
+            while (x + repairedWidth > texture.Width && x - repairedWidth >= 0)
+                x -= repairedWidth;
+            int y = wanted.Y;
+            while (y + repairedHeight > texture.Height && y - repairedHeight >= 0)
+                y -= repairedHeight;
+            x = System.Math.Clamp(x, 0, System.Math.Max(0, texture.Width - repairedWidth));
+            y = System.Math.Clamp(y, 0, System.Math.Max(0, texture.Height - repairedHeight));
+            return new Rectangle(x, y, repairedWidth, repairedHeight);
+        }
+
+        /// <summary>What the repair above has had to do this session, for radiance_report.</summary>
+        internal static string DescribeRepairedArt()
+        {
+            if (_artReadPastItsEdge.Count == 0)
+                return "art bounds: every draw stayed inside its own sheet";
+            var report = new System.Text.StringBuilder("art bounds: ");
+            report.Append(_artReadPastItsEdge.Count).Append(" sheet(s) drawn past their edge and snapped back ");
+            report.Append("(art made before a game update that added sprite columns - not this mod, and not fixable in it):");
+            foreach (var pair in _artReadPastItsEdge)
+                report.Append("\n    ").Append(pair.Key).Append("  x").Append(pair.Value);
+            return report.ToString();
+        }
+
         /// <summary>Skip the game's blob shadow while our directional shadow is active.</summary>
         /// <remarks>
         /// Seated characters are NOT exempted here. Handing them back to vanilla was the first
@@ -65,7 +136,7 @@ namespace SDVRadiance
             if (SuppressVanillaObjectShadows && (layerDepth == VanillaCanopyShadowDepth || ReferenceEquals(texture, Game1.shadowTexture)))
                 return;
             FrameCost.Count(FrameCost.Counter.ShimDraws);
-            spriteBatch.Draw(texture, pos, src, color, rotation, origin, scale, effects, layerDepth);
+            spriteBatch.Draw(texture, pos, RepairSourceRect(texture, src), color, rotation, origin, scale, effects, layerDepth);
         }
 
         /// <summary>Vector2-scale twin of <see cref="Draw_SkipVanillaShadow"/>.</summary>
@@ -76,7 +147,7 @@ namespace SDVRadiance
             if (SuppressVanillaObjectShadows && (layerDepth == VanillaCanopyShadowDepth || ReferenceEquals(texture, Game1.shadowTexture)))
                 return;
             FrameCost.Count(FrameCost.Counter.ShimDraws);
-            spriteBatch.Draw(texture, pos, src, color, rotation, origin, scale, effects, layerDepth);
+            spriteBatch.Draw(texture, pos, RepairSourceRect(texture, src), color, rotation, origin, scale, effects, layerDepth);
         }
 
         /// <summary>Shim for Object.draw: drop the vanilla <see cref="Game1.shadowTexture"/> blob (big
@@ -88,7 +159,7 @@ namespace SDVRadiance
             if (SuppressVanillaBlobShadows && ReferenceEquals(texture, Game1.shadowTexture))
                 return;
             FrameCost.Count(FrameCost.Counter.ShimDraws);
-            spriteBatch.Draw(texture, pos, src, color, rotation, origin, scale, effects, layerDepth);
+            spriteBatch.Draw(texture, pos, RepairSourceRect(texture, src), color, rotation, origin, scale, effects, layerDepth);
         }
 
         /// <summary>Vector2-scale twin of <see cref="Draw_SkipBlobShadow"/>.</summary>
@@ -99,7 +170,7 @@ namespace SDVRadiance
             if (SuppressVanillaBlobShadows && ReferenceEquals(texture, Game1.shadowTexture))
                 return;
             FrameCost.Count(FrameCost.Counter.ShimDraws);
-            spriteBatch.Draw(texture, pos, src, color, rotation, origin, scale, effects, layerDepth);
+            spriteBatch.Draw(texture, pos, RepairSourceRect(texture, src), color, rotation, origin, scale, effects, layerDepth);
         }
 
         /// <summary>Shim for Critter draw methods: drop only their Game1.shadowTexture blob.</summary>
@@ -110,7 +181,7 @@ namespace SDVRadiance
             if (SuppressVanillaCritterShadows && ReferenceEquals(texture, Game1.shadowTexture))
                 return;
             FrameCost.Count(FrameCost.Counter.ShimDraws);
-            spriteBatch.Draw(texture, pos, src, color, rotation, origin, scale, effects, layerDepth);
+            spriteBatch.Draw(texture, pos, RepairSourceRect(texture, src), color, rotation, origin, scale, effects, layerDepth);
         }
 
         /// <summary>Vector2-scale twin of <see cref="Draw_SkipCritterShadow"/>.</summary>
@@ -121,7 +192,7 @@ namespace SDVRadiance
             if (SuppressVanillaCritterShadows && ReferenceEquals(texture, Game1.shadowTexture))
                 return;
             FrameCost.Count(FrameCost.Counter.ShimDraws);
-            spriteBatch.Draw(texture, pos, src, color, rotation, origin, scale, effects, layerDepth);
+            spriteBatch.Draw(texture, pos, RepairSourceRect(texture, src), color, rotation, origin, scale, effects, layerDepth);
         }
 
         /// <summary>Redirect a method's 9-arg SpriteBatch.Draw calls through <paramref name="shimName"/>.</summary>

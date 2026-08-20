@@ -2,6 +2,288 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.6.0
+
+### Added
+
+- **Rain, snow and windblown leaves drawn by this mod instead of the game.** The game draws
+  weather as one sheet of identical drops scrolling down the screen at a single speed, which is
+  why rain reads as a texture laid over the picture rather than as weather happening in it. This
+  draws it as three planes at three depths: the near streaks long, wide and bright, the far ones
+  short, thin and faint, each plane leaning and travelling at its own rate, so walking through a
+  storm the near rain crosses the screen while the far rain barely moves. Where a drop lands it
+  splashes, and the splash is water rather than the bright blue confetti on the game's own sheet.
+  Green rain is replaced too, in its own sickly lime with the heavier fall it deserves. Snow
+  becomes flakes in three sizes instead of a scrolling texture, and on a windy day the game's
+  flat fluttering chunks become blossom in spring, leaves in summer and autumn and white flecks
+  in winter, tumbling and riding the same wind the rain leans with, coloured by the season under
+  your feet rather than by the calendar alone.
+
+  Rain, snow and wind each have their own switch and their own three dials: **Amount**, **Size**
+  and **Visibility**, because too few, too small and too faint are three different complaints and
+  one slider cannot answer all three. On by default. If another mod has already claimed the
+  game's weather drawing, this one stands down rather than fighting it for the same slot.
+
+- **The scene answers lightning.** A storm used to be a white screen and a noise. Now, for a
+  blink after each strike, every shadow in the location kicks over as though the bolt were the
+  sun and leans away from the side it came from, this mod's own darkening lifts with the game's
+  flash instead of holding the scene down through it, and a short warm afterglow follows the way
+  a real strike leaves the air lit for a moment. It reads the game's flash rather than patching
+  it, so it works with vanilla rain and does not need the replacement weather above.
+
+  **Visible bolts** are a separate switch. The game only ever draws a bolt on the farm, and only
+  when a lightning rod or a crop was actually struck, so a storm anywhere else has thunder and no
+  lightning in it. This draws one in the sky on any map, using the game's own bolt art, and not
+  on every rumble: some strikes stay behind the clouds. If the game has already drawn its own,
+  this adds nothing on top. Both on by default.
+
+- **A wet world after the rain** (off, and not in the menus this release). Ground darkens and its colour deepens while it rains and for
+  about two in-game hours after it stops, on a clock the mod keeps itself because the game has no
+  notion of a surface that is still drying. Waking up after a rainy day starts the world half
+  wet. At night the lamps smear down the wet ground in long streaks the way they do on a real
+  street. Off by default.
+
+  **The wet ground is off and out of both menus for now.** It is written and it works, but where
+  standing water may honestly lie is a question about the map, and on a modded map the answer was
+  sometimes a roof or the top of a fence. Until that can be decided from the map rather than
+  guessed at, the whole of it stays out of the way rather than sitting in the menu inviting a
+  switch that has a known bad case. `radiance_config WetWorldEnabled true` still reaches it. The
+  screen-edge drops below are not part of this and are on their own switch.
+
+- **Drops on the edge of the screen, and breath on the glass.** While it rains a few drops cling
+  to the edges of the picture, never the middle of it. They are not circles: gravity drags the
+  bottom of a drop down and surface tension holds its shoulders, so each one is a little
+  lopsided, and drops that touch merge into one drop of the same total water rather than sitting
+  on top of each other. A drop that grows too heavy breaks loose and runs, taking the ones it
+  passes with it and speeding up as it collects them. In a snowfall they become frost instead.
+  Around them the edge of the screen mists over: condensation in rain, frost creeping in from the
+  corners in snow. Both the drop size and the misting have their own dial, and both clear shortly
+  after the weather does.
+
+- **Reflections in windows.** Walk past a window and you are in it. Glass reflects when what is
+  behind it is darker than what is in front, so the image is plain in daylight and thins to a
+  suggestion after dusk as the room lights up behind the pane, and a mirror returns you fully
+  where a house window returns a fifth of you. What is reflected is the part of you at the
+  window's own height, with the tool in your hand, keeping your stride. Alongside it the glass
+  gained the things that make a pane read as glass rather than as a picture of one: a wash of the
+  sky's own colour, stronger at the top; a soft blot of glare that travels across the pane as it
+  crosses the screen; the street in front of it standing in the lower half and fading out by the
+  frame; and after dark the lamps outside, each a small blot of its own colour in the panes
+  facing it, fading with distance, never its own glow in its own glass. Windows have their own
+  tab in the tuner and their own page in the settings menu, with a switch per effect. On by
+  default.
+
+- **Particles living in the world.** Dust hanging in the light through a window, indoors, while
+  the window is actually lit. Sparks rising off anything the game treats as a flame, found from
+  the furniture that owns the fire rather than guessed at from the sprite, so they leave the
+  hearth and not the brick above it. Fireflies over a summer field, added to the ones the game
+  already flies and only on the nights the game itself calls firefly nights, so a field never has
+  two opinions. Blossom and leaves drifting outdoors on the ordinary days the game leaves the air
+  completely empty, thinning to a quarter and riding the game's own wind on the days it does blow
+  something. Pale sparks turning around a player wearing a glow ring, left behind where they were
+  made rather than carried along, so standing still they circle you and walking they trail out
+  behind.
+
+  They are drawn into the world rather than over it, so they take the light, the weather and the
+  colour grading like everything else on the map. Every kind has its own switch, amount and size,
+  under one overall amount that turns all of them down together. On by default, at the amounts
+  this mod was tuned on, and every kind can be switched off on its own without touching the rest.
+
+- **Rain on the water has three dials.** How many places a drop strikes the surface, how wide
+  one ring grows before it dies, and how plainly the rings and their impact points stand out.
+  They are three separate questions and one slider could not answer them: a shower that reads as
+  too busy is not the same complaint as one that reads as too faint. At 0 rings the surface stays
+  unbroken in the rain; above 1 every part of the surface takes its turn and the pattern tightens.
+
+- **Caustics on shallow water.** The wobbling net of focused light on the bed of shallow water,
+  strongest along the shore where the bed is closest to the surface, fading out at night and in
+  bad weather. On by default at a strength set by eye against the water it lies on.
+
+- **Reflection softness.** How much the reflection is blurred with depth is now a slider. 1 is
+  exactly what the mod shipped with, so nothing changes until you move it; 0 is a single crisp
+  sample and 2 is twice the spread. Reflected people follow the same figure as the reflected
+  scenery, so the surface stays one surface.
+
+- **The things that appear and vanish reflect too.** A crab pot standing on the water, the splash
+  when something breaks the surface, an item tossed in, and the fishing bobber, which now hangs
+  from the float itself rather than from the bottom edge of the frame.
+
+- **Sunlight through a canopy gets its own two dials.** It had been sharing the lamp rays'
+  strength and reach, which the two have no business sharing: a lamp ray is a streak drawn out of
+  a bright pixel at night, a sun shaft is daylight cut by the trees it passes through. Strength
+  and reach are now separate settings, and the god rays page is split into the two things it was
+  always doing.
+
+- **Two dials that existed only in config.json are in both menus.** **Ray length** is how far a
+  ray reaches before it dies out, from a short stub at the light to a long streak across the
+  screen, and **Thicker toward the top** is how much heavier the fog sits at the top of the
+  picture than at the bottom, which is what makes it read as distance rather than as something
+  around your feet. Both were read every frame by their shaders and reachable only by hand
+  editing the file. Each is a shared value rather than one belonging to a section above it: the
+  ray falloff is set once for both the lamp streaks and the sunlight through a canopy, and day
+  fog and night mist are one shader pass, so each gets a heading of its own saying so.
+
+- **Art that reads past the edge of its own sheet is snapped back inside it.** Stardew 1.6 added
+  sprite columns to several sheets, a mossy tree variant among them, and not every sheet the
+  game asks one of has it. The game still asks, the graphics card reads
+  past the right edge of the sheet, and back comes the clamped edge pixel: a transparent margin,
+  so the tree is invisible, or a smear of the last column, which reads as a single tile at a
+  quarter of the resolution of its neighbours. Every one of those draws already passed through
+  this mod on its way to the screen, so the rectangle is now stepped back by whole columns until
+  it lands inside the sheet, which draws the same tree without its moss instead of nothing at
+  all. `radiance_report` names every sheet this has happened to, so the pack can be reported to
+  its own author rather than guessed at.
+
+### Changed
+
+- **A new install now starts from the settings this mod was actually tuned on**, not from the
+  cautious values that were only ever placeholders. Sixty eight defaults moved, including the
+  ones that decide the first impression: weather, particles, window effects and caustics all
+  start on. **An existing config.json is left completely alone**, which is the usual SMAPI
+  behaviour and is deliberate here: nobody's tuned game changes under them on update. To take
+  the new set, delete `config.json` and let the mod write a fresh one, or press F6 and pick a
+  preset. Two things deliberately did NOT move: the wet ground stays off, see above for why, and
+  **colour grading stays off with no look selected**, because 1.5.7 put "off by default, so
+  nothing changes until you ask for it" in writing and the colour of somebody's game is not a
+  default to change quietly. Both are one switch away.
+
+### Fixed
+
+- Water walled in on every side by drawn art no longer ripples. A pocket of water whose whole
+  boundary was taken by the carve is a gap inside something drawn, not a body of water, and the
+  ripple moves pixels far enough that a pocket a few texels across fills with whatever is around
+  it. Water with land around it is untouched, because land was never carved; so is anything
+  reaching the edge of the screen, which continues out of sight. This covers map art as well as
+  furniture, which the entry below does not.
+- Water no longer ripples inside the slot in a bench. The carve that keeps a piece of furniture
+  out of the water effect reads the sprite's own alpha, which is right at its outline and wrong
+  inside it: a gap with furniture all the way around it was left as water and the ripple ran
+  through it. A hole that reaches the edge of the sprite is still left alone, because that is not
+  a hole, it is the space beside the furniture. Only sprites this mod can read the art of are
+  affected.
+- A bridge across a river keeps a straight edge, and nothing standing in the water puts its own
+  colour into the water. The rule that a displaced sample must never land on a solid is not new;
+  what it did when it hit one was to stop that pixel moving at all. That is right about colour
+  and wrong about motion: a pixel within one wave of an edge froze, its neighbour did not, and
+  which of the two a pixel was changed as the wave passed, so the last few pixels along a
+  straight edge flickered in a travelling pattern and read as a wavy edge. A wave that meets
+  something solid turns back from it rather than stopping dead, so a blocked sample is now taken
+  the same distance the other way, where the water is. One rule now covers the map art, the
+  sprites and the player alike, so a bridge, a pier post, a boat and someone wading are all
+  answered the same way.
+- Lightning fades over the right length of time in split screen. The update handler is raised
+  once per screen, and everything the lightning response holds is on a clock, so with two
+  players the afterglow and the shadow flick were over in half the time they are written to
+  last. It keeps a tick stamp now, the way the wind and the ground wetness beside it already
+  did.
+- Your shadow is visible again while it snows. Overcast weather has always been a dimmer on the
+  sun rather than a switch, so a shadow stays soft and short instead of vanishing; snow was
+  taking the full dimmer, and on pale ground that put the shadow below what an eye can find. A
+  snowy sky is not a rain cloud: it is bright, and the ground under it is a reflector, so snow
+  now takes half the dimmer. Rain and lightning are unchanged.
+- Weather is asked of the place you are standing rather than of the valley. Three tests in the
+  shadow pass read the game statics, which mirror the Default context only, so rain on Ginger
+  Island left shadows and moonlight behaving as though the sky were clear.
+- A bird flying over water faces the same way in the water. Its sheet holds one direction only
+  and the game faces it the other way by flipping it, so a gull taking off to the left flew left
+  above the surface and right in the reflection. The mirror turns the picture over, not around.
+  Standing birds were right, which is what made it look like a problem with flight.
+- The reflection now changes frame when the world does rather than on a clock of its own. It had
+  been advancing on its own timer, so a reflected thing could be a frame behind the thing it
+  reflected, which showed up as the reflection stuttering while the world moved smoothly.
+- A hearth's light sits at the fire. The brightest part of a fireplace was the brick above the
+  flames, because the light was placed at the middle of the furniture rather than at the thing
+  burning in it, and the sparks left from the same wrong place.
+- A street lamp is not a hearth. It was being treated as one, which put its light low and gave it
+  a hearth's warmth and flicker; its light is at the bulb now.
+- A tuner note too long for the screen started off the left edge of it instead of wrapping.
+- The look buttons in the tuner speak the player's language. They were showing the internal name
+  of each look while the settings menu next door showed the translated one.
+- The two menus no longer disagree about what the player just did. Picking a look in the tuner
+  applied its numbers without recording which look it was, so the settings menu still read
+  Custom immediately after.
+- Two sliders that existed only in the settings menu, cloud size and mist scale, are on the tuner
+  too. Every setting is supposed to be in both.
+
+### Removed
+
+- **`MinShadowLightRadius` is gone from config.json.** It used to be the smallest light that was
+  allowed to cast a shadow, which is how tiny drifting lights from other mods were stopped from
+  throwing their own shadow on you. That test was rewritten to ask whether a light has moved
+  recently rather than how big it is, because real lamps are smaller than the old bound and were
+  only surviving it by accident. The setting has read nothing since, so moving it did nothing.
+  If it is in your config.json it will simply be dropped the next time the file is saved.
+
+### Diagnostics
+
+- `radiance_weather sun|rain|storm|snow|wind|greenrain` sets the weather outright, which the
+  game's own debug command cannot do. It is an absolute setting rather than a toggle, so asking
+  twice for the same weather is not a way to turn it off.
+- `radiance_report` gained a line for the window pass, a line for the wet world, and the
+  `art bounds:` line naming any sheet whose art was rescued.
+
+### Translations
+
+- Chinese is up to date through 1.5.7, from Rime961, including a name for the autumn gold look
+  chosen by its translator rather than translated from ours.
+
+### Known issues
+
+- **A mossy tree can be invisible in winter.** Knocking the moss off brings it back, which is
+  what made it look like a lighting problem to begin with. What is established is the mechanism:
+  the game asks for a sprite column that lies past the right edge of the winter tree sheet, and
+  the card returns the clamped edge pixel, which on these sheets is transparent. What is not
+  established is why it asks. The winter sheets are 48 pixels wide in the vanilla game as well,
+  so this is not something an art pack introduced, and it is not something this mod can fix at
+  the source. The rescue above turns it from an invisible tree into a tree drawn without its
+  moss, which is the most an outside observer of that draw can honestly do. If you can reproduce
+  it, `radiance_report` names the sheet, and that line is worth sending on.
+
+### For translators
+
+**186 new keys, nothing removed, and two whose meaning changed.** This is a large release and most of the new keys belong to one of six new
+feature groups. Every group follows the same shape the mod already uses: `config.*.name` and
+`config.*.tooltip` for the settings menu, `tuner.*` and `help.*` for the same control on the F6
+tuner, and `tuner.section.*` for a heading.
+
+- **Weather** (`config.section.weather`, `tuner.desc.weather`, `config.precipitation.*`,
+  `tuner.precipitation*`): the master switch, one switch each for rain, snow and windblown
+  leaves, and the shared **Amount** / **Size** / **Visibility** trio.
+  `config.precipitation.density`, `.size` and `.opacity` are written once and shown under all
+  three of rain, snow and wind, so they have to read sensibly for a streak, a flake and a leaf
+  alike. The same is true of `tuner.precipitationdensity`, `tuner.precipitationsize` and
+  `tuner.precipitationopacity`.
+- **Lightning** (`config.lightning.*`, `config.lightningbolts.*`, `tuner.lightning*`): the scene
+  response and the visible bolt.
+- **Wet world** (`config.wetworld.*`, `tuner.wetworld*`): the switch, wetness strength, puddles,
+  screen-edge drops, drop size and the misted edge.
+- **Windows** (`config.section.windows`, `config.windows.section*`,
+  `config.lighting.window{reflection,reflectionstrength,reflectionnight,sheen,glare,scene,lightglow}.*`,
+  `tuner.window*`, `tuner.section.window*`, `tuner.desc.windows`): the reflection and the four
+  daylight effects on the glass.
+- **Particles** (`config.section.particles`, `config.particles.*`, `tuner.particle*`,
+  `tuner.section.particle*`, `tuner.desc.particles`): the master switch, the overall amount, and
+  one switch per kind. `config.particles.amount` and `config.particles.size`, and their tuner
+  twins `tuner.particleamount` and `tuner.particlesize`, are each written once and reused under
+  every kind, so they must not name a particular one.
+- **Water** (`config.water.caustics*`, `config.water.reflectblur.*`, `tuner.watercaustics*`,
+  `tuner.waterreflectblur`, `help.*`): caustics, its strength, and reflection softness.
+- **God rays** (`config.godrays.section*`, `config.godrays.sun*`, `tuner.godrayssun*`): the two
+  new sun-shaft dials and the two section headings that split the page.
+- **Four loose ends**: `tuner.cloudscale`, `help.cloudscale`, `tuner.fogscale` and
+  `help.fogscale` for two sliders that had existed in the settings menu but not on the tuner, and
+  `config.godrays.decay.*`, `tuner.godraysdecay`, `help.godraysdecay`, `config.fog.topbias.*`,
+  `tuner.fogtopbias` and `help.fogtopbias` for two that had existed in neither. Their two new
+  headings, `config.godrays.sectionboth` / `tuner.section.godraysboth` and
+  `config.fog.sectionboth` / `tuner.section.fogboth`, both mean "this one applies to both of the
+  things above", so a literal "Both kinds" is closer than a repeat of the feature name.
+
+**Two keys changed meaning**, so an existing translation of them is now wrong rather than merely
+old: `tuner.windoweffects` and `config.lighting.windoweffects.name` were both "Window effects",
+one switch covering everything the mod did with windows. Windows now have several switches, so
+that one was narrowed to the daylight and the after-dark glow only, and reads "Window daylight
+and glow". Their tooltips are unchanged and were already accurate. Nothing was removed.
+
 ## 1.5.7
 
 ### Added

@@ -436,7 +436,8 @@ namespace SDVRadiance
         internal static float MoonStrength()
         {
             GameLocation? location = Game1.currentLocation;
-            if (location == null || !location.IsOutdoors || Game1.isRaining || Game1.isSnowing || Game1.isLightning)
+            if (location == null || !location.IsOutdoors
+                || location.IsRainingHere() || location.IsSnowingHere() || location.IsLightningHere())
                 return 0f;
             float phase = 1f - Math.Abs(Game1.dayOfMonth - 14.5f) / 13.5f;
             float season = Game1.season switch
@@ -481,8 +482,23 @@ namespace SDVRadiance
         /// raining.
         /// </para>
         /// </summary>
-        private static float OvercastNow() =>
-            (Game1.isRaining || Game1.isSnowing || Game1.isLightning) ? 1f : 0f;
+        private static float OvercastNow()
+        {
+            GameLocation? location = Game1.currentLocation;
+            if (location == null)
+                return 0f;
+            if (location.IsRainingHere() || location.IsLightningHere())
+                return 1f;
+            return location.IsSnowingHere() ? SnowOvercast : 0f;
+        }
+
+        /// <summary>How much of the full dimmer a SNOWFALL is worth.
+        /// <para>A snowy sky is not a rain cloud. It is bright, and the ground under it is a
+        /// reflector, so a shadow in falling snow is soft and short but nowhere near as faint.
+        /// At the full dimmer, a shadow on pale stone came out below what an eye can find, and
+        /// the report was that the sun shadow disappears when it snows. Half the dimmer keeps
+        /// the softening and gives the shadow back.</para></summary>
+        private const float SnowOvercast = 0.5f;
 
         /// <summary>What a shadow keeps of its strength, length and edge under a full overcast.
         /// Faint and short and soft: the light is coming from the whole sky, not from a point.</summary>
@@ -514,7 +530,8 @@ namespace SDVRadiance
             lean = 0f;
             height = 0f;
             GameLocation? location = Game1.currentLocation;
-            if (location == null || !location.IsOutdoors || Game1.isRaining || Game1.isSnowing || Game1.isLightning)
+            if (location == null || !location.IsOutdoors
+                || location.IsRainingHere() || location.IsSnowingHere() || location.IsLightningHere())
                 return false;
             float mins = GameClock.MinutesNow();
             if (mins < 360f || mins >= TrulyDarkMinutes())

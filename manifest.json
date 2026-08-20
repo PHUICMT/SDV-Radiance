@@ -1,8 +1,8 @@
 {
   "Name": "SDV-Radiance",
   "Author": "phuicmt",
-  "Version": "1.5.7",
-  "Description": "Graphics suite for Stardew Valley: bloom, color grading, god rays, fog, cloud & directional shadows, water reflections, and occlusion-aware GI lighting.",
+  "Version": "1.6.0",
+  "Description": "Graphics suite for Stardew Valley: bloom, color grading, god rays, fog, cloud & directional shadows, water reflections, window reflections, particles, layered rain and snow, and occlusion-aware GI lighting.",
   "UniqueID": "phuicmt.SDVRadiance",
   "EntryDll": "SDV-Radiance.dll",
   "MinimumApiVersion": "4.0.0",

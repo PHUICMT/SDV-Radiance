@@ -65,6 +65,20 @@ namespace SDVRadiance
 
         // ---- march (shoreline reachability) ----
 
+        /// <summary>Effect texels the map-art and entity carves actually removed. The pocket
+        /// pass may only act on water whose whole boundary sits in here, which is what tells a
+        /// gap inside drawn art apart from a small pond with land around it.</summary>
+        public bool[]? ArtCarvedFlags;
+        /// <summary>Pocket pass: texels the component walk has already reached.</summary>
+        public bool[]? PocketVisitedFlags;
+        /// <summary>The water as it would be if the art standing in it were not there: the
+        /// effect channel with every art carve filled back in. A bridge is a hole in the effect
+        /// mask, and a hole has an edge, which is how a bridge came to be treated as a shore.
+        /// The distance field built from THIS has an edge only where water meets real land.</summary>
+        public bool[]? RealShoreWaterBits;
+        /// <summary>Encoded exactly like WaterSignedDistancePixels, but measured to the real
+        /// shore only.</summary>
+        public byte[]? RealShoreDistancePixels;
         public bool[]? MarchOutsideFlags;
         public bool[]? MarchCarvedBits;
         public int[]? MarchFloodStack;

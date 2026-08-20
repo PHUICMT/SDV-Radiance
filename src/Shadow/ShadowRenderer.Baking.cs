@@ -37,7 +37,13 @@ namespace SDVRadiance
             // setting: the only reader of PlayerColor early-outs without water, so a farmhouse
             // frame that baked it anyway was doing a second FarmerRenderer draw for nobody. Both
             // sides read the same flag (last compose's answer), so they cannot disagree.
-            bool reflectionNeedsPlayer = config.Enabled && config.WaterReflection && WaterOnScreen
+            // Wet puddles mirror the player anywhere outdoors while the ground can pool; the
+            // water-on-screen gate was written when water was the only thing a mirror could
+            // land on, and it left every puddle on a riverless screen standing empty.
+            bool wetPuddlesNeedPlayer = config.Enabled && config.WetWorldEnabled
+                && !RenderPipeline.DynamicReflectionsPresent && config.WetWorldPuddles > 0.01f
+                && RenderPipeline.PuddleAmountNow > 0.05f && (Game1.currentLocation?.IsOutdoors ?? false);
+            bool reflectionNeedsPlayer = ((config.Enabled && config.WaterReflection && WaterOnScreen) || wetPuddlesNeedPlayer)
                 && StardewModdingAPI.Context.IsWorldReady && Game1.currentLocation != null;
             if (!shadowsOn && !reflectionNeedsPlayer)
             {
@@ -746,6 +752,7 @@ namespace SDVRadiance
                 rot = 1.15f * moonSkyOffset;
                 stretch = MathHelper.Lerp(0.3f, 1.1f, Math.Abs(moonSkyOffset));
                 alpha = 0.9f * 0.35f * MoonStrength() * MathHelper.Clamp((mins - m1) / 30f, 0f, 1f);
+                LightningEffects.OverrideShadowKey(ref rot, ref stretch, ref alpha);
                 return;
             }
             // Low sun (dawn/dusk) → long, far-leaning shadow; high sun (noon) → short & upright.
@@ -756,6 +763,9 @@ namespace SDVRadiance
             rot = 1.15f * sunSkyOffset;                                     // <0 morning lean-left, >0 evening lean-right
             stretch = MathHelper.Lerp(0.3f, 1.2f, Math.Abs(sunSkyOffset));  // stretched LONG when the sun is low
             alpha = 0.9f * TimeFade();                           // opacity at the feet (× strength; fades toward the tip)
+            // A lightning strike momentarily overrides both branches: every bake and draw path
+            // funnels through this method, so keying it here keys every shadow at once.
+            LightningEffects.OverrideShadowKey(ref rot, ref stretch, ref alpha);
         }
 
         /// <summary>

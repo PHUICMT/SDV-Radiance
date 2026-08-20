@@ -36,6 +36,7 @@ namespace SDVRadiance
             // ---- water mask window ----
             public Texture2D? WaterMask;
             public Texture2D? WaterSignedDistance;
+            public Texture2D? WaterRealShoreDistance;
             /// <summary>Published copy of the composed water flags, for the "is there water near
             /// this sprite" test. A copy rather than the compose buffer itself: that one is written
             /// by a worker thread and belongs to whichever rebuild is running, not to a screen.</summary>
@@ -72,6 +73,7 @@ namespace SDVRadiance
             public RenderTarget2D? MirrorSceneCache;
             public GameLocation? SceneCacheLocation;
             public int SceneCacheAnchorX, SceneCacheAnchorY, SceneCacheBuiltTick = -1;
+            public long SceneAnimStamp = -1;
 
             // ---- presence fades ----
             public GameLocation? FadeLocation;
@@ -89,6 +91,7 @@ namespace SDVRadiance
             public float RoomSaturationEase = 1f;
             public float PaneDaylightEase, WindowDaylightEase, WindowRoomLightEase;
             public float ShimmerEase, RainRingsEase;
+            public float FadeWet;
 
             // ---- bounce-light grid ----
             public FloodLightmap Flood = new();
@@ -97,6 +100,7 @@ namespace SDVRadiance
             {
                 WaterMask?.Dispose();
                 WaterSignedDistance?.Dispose();
+                WaterRealShoreDistance?.Dispose();
                 OccluderMask?.Dispose();
                 FloodOccluderMask?.Dispose();
                 MirrorSceneCache?.Dispose();
@@ -141,6 +145,7 @@ namespace SDVRadiance
         {
             s.WaterMask = _waterMask;
             s.WaterSignedDistance = _waterSignedDistanceTexture;
+            s.WaterRealShoreDistance = _waterRealShoreDistanceTexture;
             s.WaterTilesInMask = _waterTilesInMask;
             s.WaterTilesVersion = _waterTilesVersion;
             s.LastWaterLocation = _lastWaterLocation;
@@ -182,6 +187,7 @@ namespace SDVRadiance
             s.SceneCacheAnchorX = _sceneCacheAnchorX;
             s.SceneCacheAnchorY = _sceneCacheAnchorY;
             s.SceneCacheBuiltTick = _sceneCacheBuiltTick;
+            s.SceneAnimStamp = _sceneAnimationStamp;
 
             s.FadeLocation = _fadeLocation;
             s.FadeWater = _fadeWater;
@@ -202,6 +208,7 @@ namespace SDVRadiance
             s.WindowRoomLightEase = _windowRoomLightEase;
             s.ShimmerEase = _shimmerEase;
             s.RainRingsEase = _rainRingsEase;
+            s.FadeWet = _fadeWet;
 
             s.Flood = _flood;
         }
@@ -210,6 +217,7 @@ namespace SDVRadiance
         {
             _waterMask = s.WaterMask;
             _waterSignedDistanceTexture = s.WaterSignedDistance;
+            _waterRealShoreDistanceTexture = s.WaterRealShoreDistance;
             _waterTilesInMask = s.WaterTilesInMask;
             _waterTilesVersion = s.WaterTilesVersion;
             _lastWaterLocation = s.LastWaterLocation;
@@ -251,6 +259,7 @@ namespace SDVRadiance
             _sceneCacheAnchorX = s.SceneCacheAnchorX;
             _sceneCacheAnchorY = s.SceneCacheAnchorY;
             _sceneCacheBuiltTick = s.SceneCacheBuiltTick;
+            _sceneAnimationStamp = s.SceneAnimStamp;
 
             _fadeLocation = s.FadeLocation;
             _fadeWater = s.FadeWater;
@@ -271,6 +280,7 @@ namespace SDVRadiance
             _windowRoomLightEase = s.WindowRoomLightEase;
             _shimmerEase = s.ShimmerEase;
             _rainRingsEase = s.RainRingsEase;
+            _fadeWet = s.FadeWet;
 
             _flood = s.Flood;
 

@@ -338,6 +338,11 @@ namespace SDVRadiance
         /// about what it decides.</para></summary>
         private bool WaterWithinTiles(int tileX, int tileY, int radiusTiles)
         {
+            // Wet puddles mirror entities anywhere on the map, so while they are live the
+            // near-water cull must answer yes everywhere - it was written when water was the
+            // only thing a reflection could land on.
+            if (_wetPuddleMirrorWanted)
+                return true;
             bool[]? flags = _waterTilesInMask;
             if (flags == null || _waterMask == null)
                 return true;

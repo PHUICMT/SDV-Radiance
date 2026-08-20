@@ -146,7 +146,27 @@ icon("lighting", ((255, 226, 150), (226, 170, 70), (120, 84, 50)), [
     "..11..........11",
 ])
 
-# 7. Shadows - a figure and the shadow it throws.
+# 7. Windows - a four-light window in a frame, one pane catching the light.
+icon("windows", ((150, 200, 236), (96, 150, 200), (228, 244, 255)), [
+    "................",
+    "..oooooooooooo..",
+    "..o2222222222o..",
+    "..o2o11113111o..",
+    "..o2o11131111o..",
+    "..o2o11311111o..",
+    "..o2o13111111o..",
+    "..o2o11111111o..",
+    "..o2ooooooooooo.",
+    "..o2o11111111o..",
+    "..o2o11111111o..",
+    "..o2o11111111o..",
+    "..o2o11111111o..",
+    "..o2o11111111o..",
+    "..oooooooooooo..",
+    ".oooooooooooooo.",
+])
+
+# 8. Shadows - a figure and the shadow it throws.
 icon("shadows", ((120, 84, 50), (70, 48, 30), (60, 60, 70)), [
     "................",
     "......oooo......",
@@ -166,7 +186,7 @@ icon("shadows", ((120, 84, 50), (70, 48, 30), (60, 60, 70)), [
     "..333333333333..",
 ])
 
-# 8. God rays - beams fanning out of a light.
+# 9. God rays - beams fanning out of a light.
 # Beams need a saturated gold, not the pale core colour: the menu behind them is cream,
 # and the first pass rendered light-on-light where the icon needed to read at a glance.
 icon("godrays", ((250, 214, 110), (226, 166, 52), (255, 248, 214)), [
@@ -188,7 +208,7 @@ icon("godrays", ((250, 214, 110), (226, 166, 52), (255, 248, 214)), [
     "................",
 ])
 
-# 9. Water - a droplet over ripples.
+# 10. Water - a droplet over ripples.
 icon("water", ((90, 170, 220), (52, 120, 180), (200, 240, 255)), [
     "................",
     ".......oo.......",
@@ -208,7 +228,7 @@ icon("water", ((90, 170, 220), (52, 120, 180), (200, 240, 255)), [
     "................",
 ])
 
-# 10. Cloud shadows - a cloud and the patch it darkens.
+# 11. Cloud shadows - a cloud and the patch it darkens.
 icon("cloudshadow", ((248, 248, 252), (196, 202, 214), (110, 116, 130)), [
     "................",
     "......oooo......",
@@ -228,7 +248,7 @@ icon("cloudshadow", ((248, 248, 252), (196, 202, 214), (110, 116, 130)), [
     "................",
 ])
 
-# 11. Fog - drifting bands.
+# 12. Fog - drifting bands.
 icon("fog", ((226, 232, 240), (176, 186, 200), (140, 150, 166)), [
     "................",
     "................",
@@ -248,7 +268,48 @@ icon("fog", ((226, 232, 240), (176, 186, 200), (140, 150, 166)), [
     "................",
 ])
 
-# 12. Camera - a camera body with a lens.
+# 13. Weather - a rain cloud with wind-slanted streaks falling out of it.
+icon("weather", ((222, 230, 240), (168, 180, 196), (110, 170, 230)), [
+    "................",
+    ".....ooooo......",
+    "....o11111o.....",
+    "..oo1111111oo...",
+    ".o11111111111o..",
+    ".o11111111111o..",
+    "o1111111111111o.",
+    "o1122111221111o.",
+    ".oo111111111oo..",
+    "...ooooooooo....",
+    "....3...3...3...",
+    "...3...3...3....",
+    "..3...3...3.....",
+    ".....3...3...3..",
+    "....3...3...3...",
+    "................",
+])
+
+# 14. Particles - blossom and specks drifting through the frame.
+icon("particles", ((255, 196, 214), (214, 146, 172), (255, 240, 246)), [
+    "................",
+    "........oo......",
+    "...oo...22......",
+    "..o11o..........",
+    "..o13o..........",
+    "...oo......oo...",
+    "..........o11o..",
+    "..........o13o..",
+    ".oo........oo...",
+    ".22.............",
+    "......oo........",
+    ".....o11o.......",
+    ".....o13o....oo.",
+    "......oo.....22.",
+    "................",
+    "................",
+])
+
+
+# 14. Camera - a camera body with a lens.
 icon("camera", ((120, 132, 150), (70, 80, 96), (160, 200, 230)), [
     "................",
     ".....oooo.......",
@@ -268,7 +329,7 @@ icon("camera", ((120, 132, 150), (70, 80, 96), (160, 200, 230)), [
     "................",
 ])
 
-# 13. Diagnostics - a wrench.
+# 15. Diagnostics - a wrench.
 icon("debug", ((186, 194, 206), (130, 140, 155), (90, 98, 112)), [
     # Standing upright, not on the diagonal: a 45-degree shaft has to climb one pixel per
     # row, and that staircase is what read as bent however the ends were drawn.

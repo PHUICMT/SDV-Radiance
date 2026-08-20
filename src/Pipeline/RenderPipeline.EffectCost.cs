@@ -54,6 +54,8 @@ namespace SDVRadiance
             ("VignetteEnabled",            "vignette"),
             ("ChromaticAberrationEnabled", "chromatic aberration"),
             ("WaterEnabled",               "water ripple"),
+            ("WaterCausticsEnabled",       "water caustics"),
+            ("WindowReflectionEnabled",    "window reflection"),
             ("WaterReflection",            "water reflection"),
             ("LightingEnabled",            "lighting"),
             ("FloodLightingEnabled",       "flood GI"),
@@ -62,6 +64,16 @@ namespace SDVRadiance
             ("DirectionalShadowObjects",   "object shadows"),
             ("DirectionalShadowBlur",      "shadow blur"),
             ("WindowEffectsEnabled",       "window effects"),
+            // 1.6.0. These are the ones the frame-cost table cannot see. That table times CPU
+            // submission, and most of what this release added is fill and nothing else, so it
+            // reads there as drift: caustics measured NEGATIVE in five scenes out of six, which
+            // is the machine's own wobble and not a cost. They get priced here or not at all.
+            ("PrecipitationEnabled",       "rain and snow"),
+            ("ParticlesEnabled",           "particles"),
+            ("WetWorldEnabled",            "wet ground"),
+            ("WetWorldLensDrops",          "drops on the glass"),
+            ("WaterRainRingStrength",      "rings on the water"),
+            ("LightningEffectsEnabled",    "lightning response"),
         };
 
         internal static bool EffectCostRunning;

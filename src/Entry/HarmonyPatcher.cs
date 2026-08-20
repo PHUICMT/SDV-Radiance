@@ -44,6 +44,15 @@ namespace SDVRadiance
             harmony.Patch(
                 original: AccessTools.Method(typeof(GameLocation), nameof(GameLocation.updateWater)),
                 postfix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(UpdateWater_Postfix)));
+            // Replace the vanilla rain/snow draw on the days the player asked for ours. The
+            // prefix skips vanilla only when the PrecipitationSystem gate says this exact frame
+            // is ours; the postfix draws the replacement in the same slot (before the lightmap,
+            // under the effect chain) so it darkens at night and grades with the world.
+            harmony.Patch(
+                original: AccessTools.Method(typeof(Game1), nameof(Game1.drawWeather)),
+                prefix: new HarmonyMethod(typeof(PrecipitationSystem), nameof(PrecipitationSystem.DrawWeather_Prefix)),
+                postfix: new HarmonyMethod(typeof(PrecipitationSystem), nameof(PrecipitationSystem.DrawWeather_Postfix)));
+            PrecipitationSystem.Monitor = monitor;
             // Suppress the vanilla blob shadow while our directional shadow is casting,
             // so casters don't show both. Farmer overrides DrawShadow, so patch both.
             harmony.Patch(
@@ -96,6 +105,33 @@ namespace SDVRadiance
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Look for anyone else's prefix or transpiler on Game1.drawWeather and stand down if one
+        /// exists. Run at GameLaunched, after every mod has had its Entry: a mod that patches
+        /// later than that (SaveLoaded patching exists in the wild) is caught the hard way, by
+        /// the postfix's own failure trap.
+        /// </summary>
+        internal static void DetectForeignWeatherPatches(IMonitor monitor)
+        {
+            var patches = Harmony.GetPatchInfo(AccessTools.Method(typeof(Game1), nameof(Game1.drawWeather)));
+            if (patches == null)
+                return;
+            foreach (var patch in patches.Prefixes)
+                if (patch.owner != null && !patch.owner.Contains("Radiance", StringComparison.OrdinalIgnoreCase))
+                {
+                    PrecipitationSystem.AnotherModOwnsWeatherDraw = true;
+                    monitor.Log($"'{patch.owner}' also patches the weather draw; Radiance precipitation is yielding to it for this session.", LogLevel.Info);
+                    return;
+                }
+            foreach (var patch in patches.Transpilers)
+                if (patch.owner != null && !patch.owner.Contains("Radiance", StringComparison.OrdinalIgnoreCase))
+                {
+                    PrecipitationSystem.AnotherModOwnsWeatherDraw = true;
+                    monitor.Log($"'{patch.owner}' rewrites the weather draw; Radiance precipitation is yielding to it for this session.", LogLevel.Info);
+                    return;
+                }
         }
 
         /// <summary>Force the game to draw the world into its buffer so a render target is bound during graphics events.</summary>

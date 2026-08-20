@@ -53,9 +53,7 @@ namespace SDVRadiance
             // at noon reads as glass, not as a glowing pool (reported: light sources should
             // not be this bright in daylight).
             // 35% at midday, full again by 08:00/17:00 — indoors untouched.
-            float dayPool = 1f;
-            if (Game1.currentLocation?.IsOutdoors ?? false)
-                dayPool = 1f - 0.65f * (1f - MathHelper.Clamp(Math.Abs(GameClock.MinutesNow() - 750f) / 270f, 0f, 1f));
+            float dayPool = OutdoorLampDaylightDamping();
             _daylightPoolDamping = dayPool;    // emissive tiles ride the same daylight sink
 
             GameLocation? lightLocation = Game1.currentLocation;
@@ -84,7 +82,10 @@ namespace SDVRadiance
                 if (_lightCandidates.Count >= MaxLightCandidates)
                     break;
 
-                Vector2 local = Game1.GlobalToLocal(Game1.viewport, src.Position);
+                // A fireplace's flames are not where the game hangs its light: see FlameGlowOffset.
+                Vector2 glowPosition = src.Position
+                    + ShadowRenderer.FlameGlowOffset(lightLocation, src.Position, src.TextureIndex);
+                Vector2 local = Game1.GlobalToLocal(Game1.viewport, glowPosition);
                 float u = local.X / vw;
                 float v = local.Y / vh;
 
@@ -120,7 +121,7 @@ namespace SDVRadiance
                 // slider that would swell every porch lamp with it.
                 bool isFire = src.TextureIndex == 4 || src.TextureIndex == 5;
                 if (isFire)
-                    radiusUv *= 1.2f;
+                    radiusUv *= 1.35f;
                 AddLightCandidate(new Vector2(u, v), new Vector4(glow, Math.Max(0.02f, radiusUv)),
                     MathHelper.Lerp(1f, ShadowRenderer.FireFlicker(src.Position, src.TextureIndex), flickerShare), src.Id,
                     fire: isFire);
@@ -155,6 +156,20 @@ namespace SDVRadiance
             }
 
             return _lightCount > 0 || darkening;
+        }
+
+        /// <summary>
+        /// How much of a lamp survives the daylight outdoors, 1 to 0.35 and back.
+        /// </summary>
+        /// <remarks>A street lamp at noon reads as glass, not as a glowing pool, and it was
+        /// reported that way. Indoors nothing is damped. Its own method because the glass returns
+        /// the lamps as brightly as the ground shows them, and two copies of this ramp would drift
+        /// apart the first time either was tuned.</remarks>
+        private static float OutdoorLampDaylightDamping()
+        {
+            if (!(Game1.currentLocation?.IsOutdoors ?? false))
+                return 1f;
+            return 1f - 0.65f * (1f - MathHelper.Clamp(Math.Abs(GameClock.MinutesNow() - 750f) / 270f, 0f, 1f));
         }
 
         /// <summary>One light as the rest of this file sees it, which is not always one light as
@@ -1079,7 +1094,9 @@ namespace SDVRadiance
 
             // Cool moonlight-ish tint for the darkened room.
             Vector3 darkTint = new(0.45f, 0.48f, 0.62f);
-            return Vector3.Lerp(Vector3.One, darkTint, dark);
+            // A lightning flash lifts our darkening toward none for as long as the game's own
+            // flash lasts, so the scene answers the same white the player just saw.
+            return LightningEffects.LiftAmbient(Vector3.Lerp(Vector3.One, darkTint, dark));
         }
 
         /// <summary>

@@ -140,6 +140,7 @@ namespace SDVRadiance
             Add("frame_in", _sceneRenderTarget);
             Add("mask_water", _waterMask);
             Add("mask_water_sdf", _waterSignedDistanceTexture);
+            Add("mask_water_sdf_realshore", _waterRealShoreDistanceTexture);
             Add("mask_occluder", _occluderMask);
             Add("mask_sprite", _spriteMaskRenderTarget);
             Add("flood_lightmap", _flood.Texture);

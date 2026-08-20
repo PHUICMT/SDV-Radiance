@@ -90,6 +90,7 @@ namespace SDVRadiance
                                                // water inside shore-tile art, minus opaque Buildings/Front art (pier posts,
                                                // bridges, lily pads). Effects end exactly at the real waterline.
         private Texture2D? _waterSignedDistanceTexture;          // Alpha8 signed shore distance (Pass F): 128 = waterline, ±4/texel
+        private Texture2D? _waterRealShoreDistanceTexture;       // the same, measured with the art standing in the water put back
         private bool[]? _waterTileFlags;         // pre-dilation water flags — GATHER/COMPOSE scratch, owned by the
                                                  // rebuild in flight, not by any screen
         /// <summary>The composed water flags for the mask currently on screen. A copy taken when a
@@ -229,6 +230,7 @@ namespace SDVRadiance
         private bool _loggedOnce;
         private long _chainCostStarted;
         private double _chainCostGridsAtStart;   // grid rebuilds run INSIDE the chain; do not bill them twice
+        private double _chainCostParticlesAtStart;   // so does the particle pool, for the same reason
         private int _frameCount, _appliedFrameCount, _skippedNoTargetCount, _renderTargetResizeCount;
         private readonly System.Diagnostics.Stopwatch _performanceStopwatch = new();
         private double _performanceTotalMilliseconds, _performanceMaxMilliseconds;
@@ -272,10 +274,10 @@ namespace SDVRadiance
         // how many frames each pass actually ran — the pass-count number the 1.5.0 work is
         // judged against. GPU fill cost doesn't show here (measure that as FPS A/B); what this
         // pins down is WHICH passes ran and what their draw-call setup costs.
-        private static readonly string[] _stageNames = { "flood", "lighting", "water", "cloud", "rays", "bloom", "fog", "grade", "tilt", "finish", "tail" };
-        private readonly double[] _stageMilliseconds = new double[11];
-        private readonly double[] _stageMaxMilliseconds = new double[11];
-        private readonly int[] _stageRunFrames = new int[11];
+        private static readonly string[] _stageNames = { "flood", "lighting", "water", "cloud", "rays", "bloom", "fog", "grade", "tilt", "finish", "tail", "wet" };
+        private readonly double[] _stageMilliseconds = new double[_stageNames.Length];
+        private readonly double[] _stageMaxMilliseconds = new double[_stageNames.Length];
+        private readonly int[] _stageRunFrames = new int[_stageNames.Length];
         private readonly List<int> _stageNameIndices = new();
         private long _stageCountTotal;
         private int _lastScaledWidth, _lastScaledHeight;   // what the chain actually ran at
@@ -555,6 +557,7 @@ namespace SDVRadiance
             _finishing = LoadEffect("finishing.mgfxo");
             _lighting = LoadEffect("lighting.mgfxo");
             _tail = LoadEffect("tail.mgfxo");
+            _wetEffect = LoadEffect("wet.mgfxo");
             _upscale = LoadEffect("upscale.mgfxo");
         }
 
@@ -631,6 +634,10 @@ namespace SDVRadiance
             || ((c.ColorGradeEnabled || c.BlueLightFilter > 0.001f) && _colorGrade != null)
             || (c.TiltShiftEnabled && _tiltShift != null)
             || ((c.WaterEnabled || c.WaterReflection) && _water != null)
+            || c.WindowReflectionEnabled || _windowReflectEase > FadeGone
+            || c.ParticlesEnabled || _fadeParticles > FadeGone
+            || c.WetWorldEnabled || _fadeWet > FadeGone
+            || ScreenEdgeDrops.WantedNow(c)
             || ((c.VignetteEnabled || c.ChromaticAberrationEnabled) && _finishing != null)
             // Residual presence fades: switching the LAST enabled effect off used to stop the
             // whole Apply in that same frame, cutting the ~0.5 s fade-out short (the one hard
@@ -831,7 +838,22 @@ namespace SDVRadiance
             // has reached zero - by which point there is nothing left to drop.
             _waterInMaskEase = _hasWaterInMask ? Ease01(_waterInMaskEase) : Ease0(_waterInMaskEase);
             ReportWaterWatch();
-            if (_fadeWater > FadeGone && _water != null && _waterMask != null && _waterInMaskEase > FadeGone) AddStage(_waterStageDelegate!, 2);
+            bool waterStageRuns = _fadeWater > FadeGone && _water != null && _waterMask != null && _waterInMaskEase > FadeGone;
+            if (waterStageRuns) AddStage(_waterStageDelegate!, 2);
+            // Rain in the AIR must not ripple with the water under it: while the water stage
+            // runs, it carries the sky half of the precipitation on its own output instead.
+            PrecipitationSystem.DeferSkyDrawing(waterStageRuns);
+            // Wet world: after water so the puddled ground sits on the frame the ripple just
+            // left, before cloud shadows so overcast shade lands on already-wet ground, and
+            // early enough that bloom and the grade both see the wet look. The wetness scalar
+            // is the slow world truth; this fade is the half-second screen-side ease that
+            // covers toggles and doorways.
+            bool wetOn = config.WetWorldEnabled && _wetEffect != null && outdoors
+                && (WetnessNow > 0.004f || (Game1.currentLocation?.IsRainingHere() ?? false));
+            _fadeWet = wetOn ? Ease01(_fadeWet) : Ease0(_fadeWet);
+            _wetPuddleMirrorWanted = wetOn && !DynamicReflectionsPresent
+                && config.WetWorldPuddles > 0.01f && PuddleAmountNow > 0.05f;
+            if (_fadeWet > FadeGone && _wetEffect != null) AddStage(_wetStageDelegate ??= RenderWetWorld, 11);
             // Cloud shadows drift over the ground — outdoors only, and first so later
             // effects (bloom/grade) see the shadowed scene. They are SUNLIGHT (or moonlight)
             // being blocked, so they fade with dusk and at night exist only under a bright
@@ -950,6 +972,7 @@ namespace SDVRadiance
             _timingOn = config.DebugLogging;
             _chainCostStarted = FrameCost.Begin(FrameCost.Part.Chain);
             _chainCostGridsAtStart = FrameCost.RunningGrids();
+            _chainCostParticlesAtStart = FrameCost.Running(FrameCost.Part.Particles);
             if (config.DebugLogging) { _frameCount++; _performanceStopwatch.Restart(); }
 
             RenderTargetBinding[] bindings = _device.GetRenderTargets();
@@ -997,7 +1020,17 @@ namespace SDVRadiance
                 // read where it lay, and it measured as a third of the chain's own GPU time
                 // together with the upscale. See the comment at the capture itself.
 
+                // The wetness clock ticks with the frame whether or not the wet pass runs,
+                // so the ground is already wet when the player switches the feature on mid-storm.
+                AdvanceWetness(config);
+
                 var stages = BuildStageList(config, w, h);
+
+                // Into the game's own frame, before the chain copies it: particles drawn here are
+                // lit, rippled, bloomed and graded exactly like the map pixels around them. The
+                // stage list has to exist first because it says which lighting stage will carry
+                // the emissive half.
+                UpdateAndDrawAmbientParticles(spriteBatch, config, w);
 
                 Texture2D chainSource = CaptureSceneForChain(spriteBatch, target, stages, sw, sh, scaled, ref captureTaken);
 
@@ -1014,6 +1047,12 @@ namespace SDVRadiance
                 current = UpscaleToWindow(spriteBatch, current, target, stages.Count, scaled, config, w, h, renderScale);
                 FillGainProbe(spriteBatch, target, stages.Count);
                 FinishFrame(spriteBatch, target, stages.Count, w, h, config);
+                // The lightning afterglow rides over the finished frame: a ~200 ms warm lift
+                // after the game's white flash ends, the retina holding the image.
+                LightningEffects.DrawAfterglow(spriteBatch, w, h);
+                // Drops on the glass and frost in the corners, over the finished frame and
+                // under the UI - so a menu is never rained on and the world always is.
+                ScreenEdgeDrops.Draw(spriteBatch, config, w, h);
                 // After every stage has had its say, so the columns are the values the frame was
                 // actually built from rather than the ones it started with.
                 ReportBrightWatch(config);
@@ -1050,7 +1089,8 @@ namespace SDVRadiance
             // that to the meter would report a cost nobody pays while playing.
             if (_benchExtraChains == 0 && BenchExtraShadowRuns == 0)
                 FrameCost.End(FrameCost.Part.Chain, _chainCostStarted,
-                    FrameCost.RunningGrids() - _chainCostGridsAtStart);
+                    FrameCost.RunningGrids() - _chainCostGridsAtStart
+                    + FrameCost.Running(FrameCost.Part.Particles) - _chainCostParticlesAtStart);
             if (config.DebugLogging)
             {
                 _performanceStopwatch.Stop();
@@ -1547,6 +1587,7 @@ namespace SDVRadiance
             ReleaseScreenStates();
             _mirrorSceneCache?.Dispose(); _mirrorSceneCache = null;
             _waterSignedDistanceTexture?.Dispose(); _waterSignedDistanceTexture = null;
+            _waterRealShoreDistanceTexture?.Dispose(); _waterRealShoreDistanceTexture = null;
             _sceneRenderTarget?.Dispose(); _fullResolutionPingA?.Dispose(); _fullResolutionPingB?.Dispose(); _halfResolutionScratchA?.Dispose(); _halfResolutionScratchB?.Dispose(); _cloudMaskKeep?.Dispose(); _cloudMaskKeep = null; _waterMask?.Dispose(); _occluderMask?.Dispose(); _floodOccluderMask?.Dispose(); _luminanceRenderTarget?.Dispose(); _noiseTexture?.Dispose(); _noiseTexture = null;
             _spriteMaskRenderTarget?.Dispose(); _spriteMaskSpriteBatch?.Dispose();
             _maskDebugTexture?.Dispose(); _maskDebugTexture = null;
@@ -1557,6 +1598,7 @@ namespace SDVRadiance
             _spriteMaskRenderTarget = null; _spriteMaskSpriteBatch = null;
             _bloom = _colorGrade = _godRays = _fogEffect = _cloudShadow = _tiltShift = _water = _finishing = _lighting = _floodEffect = null;
             _fxParamCache.Clear(); // parameter cache keys pin the disposed Effects otherwise
+            _particles?.Dispose(); _particles = null;
             _labelDiffTexture?.Dispose(); _labelDiffTexture = null;
             _channelViewTexture?.Dispose(); _channelViewTexture = null;
             if (ReferenceEquals(Current, this)) Current = null;

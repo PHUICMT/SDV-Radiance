@@ -499,9 +499,9 @@ namespace SDVRadiance
         /// frames is fifty milliseconds: a planted lamp clears it on the way in and nobody can see
         /// that it did, and a firefly never clears it because it moves first.</summary>
         private const int FireflySettleFrames = 3;
-        /// <summary>The old MinShadowLightRadius default. Real lamps (Town's are ~0.6-0.9) sit
-        /// under this too, so this bound only matters ANDed with drift above — see the comment
-        /// at its use site.</summary>
+        /// <summary>One tile. Real lamps (Town's are ~0.6-0.9) sit under this too, so on its own
+        /// it would silence half the lamps in the game: it only means anything ANDed with the drift
+        /// test above — see the comment at its use site.</summary>
         private const float FireflyRadiusBound = 1.0f;
 
         /// <summary>Collect this caster's directional casts from every on-screen light into
@@ -580,6 +580,62 @@ namespace SDVRadiance
                             + Math.Sin(t * 23.7 + phase * 2.3) * 0.2);
             return 0.92f + 0.08f * s;
         }
+
+        /// <summary>
+        /// Where a flame actually IS, given the light the game hung for it.
+        ///
+        /// <para>
+        /// Returns the offset from the light's own position to the fire. Zero for anything that is
+        /// not a flame, and zero for a flame the game already put in the right place.
+        /// </para>
+        ///
+        /// <para>
+        /// Two fireplaces in the same game disagree about this, which is why the rule is looked up
+        /// rather than assumed. Measured with radiance_lights:
+        /// </para>
+        /// <list type="bullet">
+        ///   <item>the saloon's hearth is <c>Saloon_Fireplace_22_17</c> at tile (23.0, 17.0), which
+        ///   is the fire's own tile: the map put the light where the fire is;</item>
+        ///   <item>the farmhouse's is <c>Furniture_FarmHouse_8_4</c> at tile (8.5, 3.0), a whole
+        ///   tile above the furniture it belongs to.</item>
+        /// </list>
+        ///
+        /// <para>
+        /// The second one is not arbitrary: <c>Furniture.addLights</c> places its light at
+        /// <c>boundingBox.X + 32, boundingBox.Y - 64</c>. The minus sixty-four is why the brightest
+        /// part of a farmhouse hearth was the brick above the fire, and the PLUS THIRTY-TWO is the
+        /// other half of the same fault: it is the middle of the piece's leftmost tile, not the
+        /// middle of the piece, so on anything wider than one tile the glow and the sparks sat off
+        /// to the left. Both were reported, separately, in those words.
+        /// </para>
+        ///
+        /// <para>
+        /// So the furniture is found by that exact placement rule and its own box answers both
+        /// questions: the middle of the fire is the middle of the box, and the flames sit just
+        /// above the footprint the box describes. Anything not placed by that rule is left alone,
+        /// which is what keeps the saloon's hearth, a campfire and a street lamp where they are.
+        /// </para>
+        /// </summary>
+        internal static Vector2 FlameGlowOffset(GameLocation? location, Vector2 lightPosition, int textureIndex)
+        {
+            if (location == null || (textureIndex != 4 && textureIndex != 5))
+                return Vector2.Zero;
+            foreach (Furniture piece in location.furniture)
+            {
+                Rectangle box = piece.boundingBox.Value;
+                // The game's own placement, matched exactly rather than guessed at within a
+                // radius: a nearby chair must not be mistaken for the thing that is burning.
+                if (Math.Abs(box.X + 32 - lightPosition.X) > 1f || Math.Abs(box.Y - 64 - lightPosition.Y) > 1f)
+                    continue;
+                return new Vector2(box.Center.X - lightPosition.X,
+                                   box.Y - FlameHeightAboveFootprint - lightPosition.Y);
+            }
+            return Vector2.Zero;
+        }
+
+        /// <summary>How far above its own footprint a fireplace's flames burn, in world pixels.
+        /// Half a tile: the fire sits in the opening, just off the floor the piece stands on.</summary>
+        private const float FlameHeightAboveFootprint = 32f;
 
         /// <summary>Shadow direction/length/opacity for a caster lit by one point light. False if out of reach.</summary>
         private static bool LightCast(Vector2 feet, Vector2 lightPos, float reach, float strength, float lenCfg, float flick,

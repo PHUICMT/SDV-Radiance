@@ -40,6 +40,18 @@ sampler2D MaskLinearSampler = sampler_state
 // alpha = 128 at the waterline, +4 per texel into the water, -4 per texel onto land
 // (±31.75 texels of range). One field drives the quantized edge, the foam band and the
 // wet ground rim. Linear: the encoding is a distance, so interpolation is meaningful.
+// The same distance, measured on the water as it would be with nothing standing in it, so
+// its only edges are where water meets real land. Foam reads this one: a bridge is a hole in
+// the effect mask, a hole has an edge, and the foam band asks nothing except how far the
+// nearest edge is - which is how a bridge grew a drifting lap line down both its sides.
+texture RealShoreSdfTexture;
+sampler2D RealShoreSdfSampler = sampler_state
+{
+    Texture = <RealShoreSdfTexture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+
 texture SdfTexture;
 sampler2D SdfSampler = sampler_state
 {
@@ -47,6 +59,21 @@ sampler2D SdfSampler = sampler_state
     MinFilter = Linear; MagFilter = Linear; MipFilter = None;
     AddressU = Clamp; AddressV = Clamp;
 };
+
+// The caustic net, baked offline (tools/make-caustics.py): a tileable Voronoi ridge. Wrap
+// addressing because it is sampled in world space - the net is painted on the bed and the
+// camera merely looks at it.
+texture CausticTexture;
+sampler2D CausticSampler = sampler_state
+{
+    Texture = <CausticTexture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Wrap; AddressV = Wrap;
+};
+float CausticAmt;        // 0 = the term vanishes; strength, weather, night and the toggle's
+                         // ease all folded in on the CPU
+float CausticDeepFloor;  // what little survives in open water, far from any shore
+float DebugCaustic;      // 1 = paint the caustic term as pure red instead of adding it (radiance_debug caustic)
 
 float Presence;         // 0..1 whole-pass presence fade. The CPU already scales Strength,
                         // Sparkle, TintAmt and ReflectStrength by it, but several terms below
@@ -72,7 +99,10 @@ float SparkleDensity;   // ~0.2–2: glint count per area; glint size follows in
 float SunWarm;          // 0–1 golden-hour factor: sparkle + sheen turn warm at low sun
 float NightGlow;        // 0–1 after dusk: star reflections + lamp glimmer fade in
 float MoonGlow;         // 0–1 lunar phase × season × clouds: moonlit swell shimmer
-float RainAmt;          // 0–1 raining: expanding drop rings on the surface
+float RainAmt;
+float RainRingDensity;  // how many strikes, against the amount the rain brings on its own
+float RainRingSize;     // how wide one ring grows before it dies
+float RainRingStrength; // how plainly the rings and their impacts show          // 0–1 raining: expanding drop rings on the surface
 float4 Lights[8];       // xy = screen UV, z = radius (unused), w = intensity
 float LightCount;       // how many entries of Lights are live
 float PlayerInWater;    // 0..1 eased: the player's feet are on water pixels (wading). C# fades
@@ -108,10 +138,14 @@ float ReflectRTPlayer;   // 1 when the player was stamped into it (else the wadi
 // correct reflection by construction — right anchor, no hidden-surface errors, no
 // self-hits — where the screen flip can only guess from what happens to be above.
 texture ReflectRTTexture;
+// Filtered, like the scenery mirror below and for the same reason: the entity layer is read at
+// a rippled offset, and a nearest-neighbour read of a displaced sprite drops and doubles rows -
+// a reflected person came out notched and jagged beside a tree reflected soft. One surface,
+// one resample rule.
 sampler2D ReflectRTSampler = sampler_state
 {
     Texture = <ReflectRTTexture>;
-    MinFilter = Point; MagFilter = Point; MipFilter = None;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
     AddressU = Clamp; AddressV = Clamp;
 };
 float SceneOn;           // 1 when the sprite-free scenery source below is live
@@ -134,6 +168,8 @@ float SceneSidePad;
 //   ReflTint   - the cool darkening that makes a reflection read as being IN the water rather
 //     than painted on it. Still water sits lighter and cooler, choppy water deeper.
 float ReflWobble;
+float ReflSoftness;      // scales the depth-driven softening of the mirror: 1 = as shipped, 0 = a
+                         // single crisp tap, 2 = twice the spread. Taste, on a slider.
 // How many steps per tile the sideways shear is rounded to, or 0 to shear every row on its own.
 // 16 is the 4 px banding this shipped with through 1.5.6. See the note at the wave itself: this
 // is what decides whether a reflected building bends or comes apart into sliding horizontal bands.
@@ -183,6 +219,23 @@ float hash(float2 p)
     return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
 }
 
+
+// Everything a displaced tap must NOT land on, answered in one place: the map's own solid
+// art, a sprite standing in the water, and the player. 1 = this point is water and the
+// refraction may read it. Water is water, so nothing else may ever be read into it.
+float TapIsWater(float2 p, float2 playerSpan)
+{
+    float2 wt = p * TilesPerScreen + WorldTileOffset;
+    float mapWater = tex2D(MaskSampler, (wt - MaskOrigin) / MaskSize).r;
+    float onSprite = SpriteMaskOn * step(0.05, tex2D(SpriteMaskSampler, p).a);
+    float2 tuv = (p - PlayerRect.xy) / playerSpan;
+    float inBox = step(0.0, tuv.x) * step(tuv.x, 1.0) * step(0.0, tuv.y) * step(tuv.y, 1.0);
+    // 0.15, not 0.05: the bake fades a shadow penumbra toward the head and its faintest
+    // tail must not widen the exclusion past the sprite's visible pixels.
+    float onPlayer = step(0.15, tex2D(PlayerMaskSampler, saturate(tuv)).a) * inBox;
+    return step(0.02, mapWater) * (1.0 - max(onSprite, onPlayer));
+}
+
 // Point-sample the PIXEL-accurate water mask at any screen-UV point. The shoreline
 // march runs on this, so a reflection anchors at the PAINTED waterline (the real
 // curved pond edge), not at the tile boundary above it — and carved art (pier posts,
@@ -195,6 +248,17 @@ float WaterAt(float2 p)
     float2 wt = p * TilesPerScreen + WorldTileOffset;
     float2 muv = (wt - MaskOrigin) / MaskSize;
     return tex2D(MaskSampler, muv).g;
+}
+
+// Bilinear read of the EFFECT channel. Unlike the point sample it RAMPS across the mask's
+// boundary instead of switching, which is what the refraction needs: a yes/no answer there
+// makes a decision, and a decision that moves with the wave is a pattern travelling along
+// every edge. This is also the one texture the whole stage is built on, so unlike the
+// distance field it cannot quietly be absent.
+float EffectWaterSmooth(float2 p)
+{
+    float2 wt = p * TilesPerScreen + WorldTileOffset;
+    return tex2D(MaskLinearSampler, (wt - MaskOrigin) / MaskSize).r;
 }
 
 // Smooth (bilinear) sample of the same mask — soft gradient near the waterline.
@@ -333,25 +397,46 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // barely moves inside a 3-tile walk-through pool, which read as "no effect up close".
     float kind = WaterKind * step(0.95, tileWater);
     float2 ripple = lerp(pondRipple, oceanRipple, kind) * water * rippleGate;
-    // A displaced tap must never land ON a sprite (that smeared duck/player pixels
-    // sideways into the water next to them) — fall back to the undisplaced sample there.
-    float tapSprite = SpriteMaskOn * step(0.05, tex2D(SpriteMaskSampler, uv + ripple).a);
-    float tapPlayer = 0.0;
-    {
-        float2 tuv = ((uv + ripple) - PlayerRect.xy) / pmSpan;
-        float tin = step(0.0, tuv.x) * step(tuv.x, 1.0) * step(0.0, tuv.y) * step(tuv.y, 1.0);
-        tapPlayer = step(0.15, tex2D(PlayerMaskSampler, saturate(tuv)).a) * tin;
-    }
-    ripple *= 1.0 - max(tapSprite, tapPlayer);
-    // ...and it must not land on the MAP's art either. The rule above was written for sprites
-    // only, so a water pixel beside a boat, a pier post or a fountain statue still displaced its
-    // tap onto that art and dragged those pixels sideways with the wave - the whole object read
-    // as swaying, even though its own pixels were carved out of the mask perfectly. Reported for
+    // A displaced tap must never land on a sprite, on the player, or on the map's own solid
+    // art. That rule is old and right: a water pixel beside a boat, a pier post or a fountain
+    // statue used to drag those pixels sideways with the wave and the whole object read as
+    // swaying, even though its own pixels were carved out of the mask perfectly. Reported for
     // Willy's boat at the fish shop, for the boat in BoatTunnel, and visible on the fountain.
-    // Turning the ripple down only shortens the smear, which is why it never went away.
-    float2 tapWT = (uv + ripple) * TilesPerScreen + WorldTileOffset;
-    float tapWater = tex2D(MaskSampler, (tapWT - MaskOrigin) / MaskSize).r;
-    ripple *= step(0.02, tapWater);
+    //
+    // What is new is what happens WHEN the tap is blocked. It used to set the displacement to
+    // zero, which is correct about colour and wrong about motion, and the wrongness was
+    // visible: a pixel within one wave-amplitude of an edge froze, a pixel past that did not,
+    // and which side of that line a pixel fell on changed as the wave passed, because the test
+    // is made at uv + ripple and ripple is the thing oscillating. So the last few pixels along
+    // a straight edge flipped between two states in a travelling pattern, and a straight bridge
+    // read as a wavy one. Turning the ripple down never helped and never could: a smaller wave
+    // only moves the flicker closer to the edge.
+    //
+    // A wave that meets something solid turns BACK from it. It does not stop dead and it does
+    // not reach through. So a blocked tap is MIRRORED about the pixel: the same distance the
+    // other way, which is where the water is. Amplitude survives all the way to the edge, so
+    // there is no frozen fringe and no moving boundary between frozen and not. Only a sliver
+    // of water narrower than the wave itself, blocked in both directions, still holds still.
+    // How much of this displacement the water can actually hold, as a SMOOTH number rather
+    // than a yes or a no.
+    //
+    // Two versions of this were tried and both failed the same way. Zeroing a blocked
+    // displacement freezes a pixel while its neighbour still moves, and which of the two a
+    // pixel is changes as the wave passes, so the edge carries a travelling pattern. Mirroring
+    // a blocked displacement keeps everything moving but makes neighbouring pixels sample from
+    // opposite sides, and the boundary between the two moves with the wave as well: the same
+    // pattern, arrived at from the other direction. Anything that DECIDES per pixel does this.
+    //
+    // So do not decide. Fade the amplitude to nothing as the water runs out, sampled bilinearly
+    // at two points along the displacement so the ramp covers the wave's whole reach rather
+    // than the last texel of it. The pixel against the edge does not move at all, the one
+    // behind it moves a little, and there is no boundary anywhere for a pattern to live on.
+    float reach = min(EffectWaterSmooth(uv + ripple), EffectWaterSmooth(uv + ripple * 0.5));
+    ripple *= smoothstep(0.05, 0.85, reach);
+    // Backstop for a sliver of water narrower than the wave, where even the faded displacement
+    // can still land on art. It fires on almost nothing now, which is the point: a switch is
+    // only safe when it is not what shapes the picture.
+    ripple *= TapIsWater(uv + ripple, pmSpan);
     float4 col = tex2D(SourceSampler, uv + ripple);
 
     // Depth tint: cool + deepen for a wetter, more 3D surface. TintAmt drops to 0 when
@@ -365,6 +450,49 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     {
         float pulse = 0.6 + 0.4 * sin(Time * 0.5 + worldTile.x * 0.6 + worldTile.y * 0.4);
         col.rgb += float3(0.42, 0.14, 0.02) * pulse * water;
+    }
+
+    // Caustics: the net of focused light on a shallow bed. Two copies of the baked ridge
+    // texture scroll against each other and are multiplied, so the bright filaments wander
+    // and merge instead of translating rigidly. Everything is anchored the way the ripple
+    // is - world space, snapped to the world-pixel grid, on the same clock - so the net can
+    // neither swim when the camera pans nor slide at a speed of its own.
+    //
+    // Weighted by the shore distance: full on the first couple of tiles off a bank, fading
+    // to a small floor in open water, because a full-strength net across a whole lake reads
+    // as pattern, not light. It draws BEFORE the reflection blends, whose lerps then weigh
+    // it down exactly where a mirror image covers the bed - under the reflection is where a
+    // caustic lives.
+    [branch]
+    if (CausticAmt > 0.001)
+    {
+        float causticTime = Time * Speed;
+        float2 causticWorldTile = floor(worldTile * 64.0) / 64.0;
+        float2 causticUv1 = causticWorldTile * 0.22 + float2( causticTime * 0.020, -causticTime * 0.012);
+        float2 causticUv2 = causticWorldTile * 0.31 + float2(-causticTime * 0.014,  causticTime * 0.017);
+        // tex2Dlod, not tex2D: an implicit-gradient fetch cannot live inside a real branch,
+        // and the texture has no mips for the gradient to choose between anyway.
+        float causticNet = tex2Dlod(CausticSampler, float4(causticUv1, 0.0, 0.0)).r
+                         * tex2Dlod(CausticSampler, float4(causticUv2, 0.0, 0.0)).r;
+        // The baked web is broad; the sharpening lives here, AFTER the product, so the
+        // result is an evolving net and not dots at the crossings of two thin ones.
+        causticNet = pow(saturate(causticNet * 1.9), 2.2);
+        // How far off the bank the shelf reaches depends on what the water IS. The sea
+        // (WaterKind 1) gets a real shallow shelf, a tile and a half of sloping sand; a
+        // river or pond keeps a ribbon that dies inside the first tile, because a 2-tile
+        // stream wearing a full shelf is lit bank to bank and reads as pattern, not light.
+        // (16 texels = one tile.)
+        float shelfFadeStart = lerp(8.0, 16.0, WaterKind);
+        float shelfGone = lerp(14.0, 26.0, WaterKind);
+        float shallowBand = smoothstep(0.5, 2.0, sdfT) * (1.0 - smoothstep(shelfFadeStart, shelfGone, sdfT));
+        float causticWeight = max(shallowBand, CausticDeepFloor) * water * rippleGate * (1.0 - isLava);
+        float causticTerm = causticNet * CausticAmt * causticWeight;
+        col.rgb += causticTerm * float3(0.75, 0.95, 0.88);
+        // The debug view paints the WEIGHT, not the net: a solid red that is strong where the
+        // shelf is strong and faint where the floor is, so the shore band shows as a gradient
+        // instead of hiding inside the pattern. (Painting the term itself was tried first, and
+        // two nets of different brightness look the same once both are red lines.)
+        col.rgb = lerp(col.rgb, float3(1.0, 0.0, 0.0), DebugCaustic * saturate(causticWeight * step(0.001, CausticAmt)));
     }
 
     // Screen-space reflection: a true vertical mirror. March UP the water mask to
@@ -481,7 +609,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // source pixel and the reflection stays crisp, and out in open water they merge. This is
         // both the fix for the stair-stepping and the reason the far end of a reflection now reads
         // as distance rather than as a low-resolution copy.
-        float reflSoft = (0.25 + depth * TilesPerScreen.y * 0.10) / max(1.0, TilesPerScreen.y) / 16.0;
+        float reflSoft = (0.25 + depth * TilesPerScreen.y * 0.10) / max(1.0, TilesPerScreen.y) / 16.0 * ReflSoftness;
         float2 sceneUvC = clamp(sceneUv, float2(0.0, 0.0), float2(1.0, 1.0));
         float3 refl = SceneOn > 0.5
             ? (tex2D(SceneSmoothSampler, sceneUvC).rgb * 0.5
@@ -619,7 +747,15 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         {
             // Wobble kept SMALL (was 1.8): a hard sway made the visible scrap of an
             // occluded reflection drift sideways and read as a separate floating blob.
-            float4 ent = tex2D(ReflectRTSampler, saturate(uv + ripple * 0.9 * ReflWobble));
+            // Three taps up the same axis the scenery mirror softens on, spread by the same
+            // slider, so both halves of one reflection blur together. The spread is a fixed
+            // sliver of a screen (there is no shoreline depth to grow it by): at 1 it is under a
+            // pixel and reads as filtering, at 2 it is a visible haze.
+            float2 entUv = saturate(uv + ripple * 0.9 * ReflWobble);
+            float entSoft = 0.6 / max(1.0, TilesPerScreen.y * 64.0) * ReflSoftness;
+            float4 ent = tex2D(ReflectRTSampler, entUv) * 0.5
+                       + tex2D(ReflectRTSampler, saturate(entUv + float2(0.0, entSoft))) * 0.25
+                       + tex2D(ReflectRTSampler, saturate(entUv - float2(0.0, entSoft))) * 0.25;
             // Entities also mirror on the WET FRINGE (effect-only band: beach surf wash, the
             // strip under a bank's overlay art) — the march channel stops there, and clipping
             // a body's shallow half against it left the deep half floating detached below an
@@ -684,8 +820,9 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // water plus ONE drifting lap line, posterised to read as pixels (never a smooth wash).
     // World-anchored phase jitter per texel so the line breaks up instead of tracing the
     // grid. Ice doesn't lap; lava's edge glows on its own; rain roughens the lap line away.
-    float foamBand = (1.0 - smoothstep(0.5, 5.0, sdfT)) * step(0.0, sdfT);
-    float lapPhase = frac(sdfT * 0.45 - Time * 0.30 + hash(floor(worldTile * 16.0) / 16.0) * 0.25);
+    float shoreT = (tex2D(RealShoreSdfSampler, maskUV).a - 0.501961) * 63.75;
+    float foamBand = (1.0 - smoothstep(0.5, 5.0, shoreT)) * step(0.0, shoreT);
+    float lapPhase = frac(shoreT * 0.45 - Time * 0.30 + hash(floor(worldTile * 16.0) / 16.0) * 0.25);
     float lap = step(0.62, lapPhase);
     float foam = foamBand * (0.30 + 0.70 * lap) * water * (1.0 - isIce) * (1.0 - isLava) * (1.0 - RainAmt * 0.5);
     foam = floor(foam * 3.0 + 0.5) / 3.0;
@@ -767,16 +904,48 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         }
     }
 
-    // ---- Rain: expanding drop rings, one per cell, staggered by a random phase ----
+    // ---- Rain striking the surface: an impact, then a ring that widens and dies ----
+    //
+    // The old version gave every cell a ring on the same clock, which read as a grid of
+    // sonar pings rather than as weather. Real rain lands in scattered points: each cell
+    // keeps its own clock at its own rate, only fires on some of its cycles, and drops
+    // somewhere other than the middle. Two scales overlap so the surface never shows the
+    // spacing of either one.
     if (RainAmt > 0.001)
     {
-        float2 rg = worldTile * 2.2;
-        float2 rc = floor(rg);
-        float rr = hash(rc + 7.7);
-        float ph = frac(t * 0.7 + rr);
-        float2 dropAt = (float2(rr, frac(rr * 9.3)) - 0.5) * 0.35;
-        float ring = smoothstep(0.035, 0.0, abs(length(frac(rg) - 0.5 + dropAt) - ph * 0.42));
-        col.rgb += ring * (1.0 - ph) * RainAmt * water * 0.10;
+        float rings = 0.0;
+        float impacts = 0.0;
+        // The dial does two different things either side of 1. Below it, fewer cells take
+        // their turn; above it, every cell does AND the grid gets finer, because once they
+        // all fire there is no more rain to be had out of the same number of cells.
+        float fireChance = saturate(0.6 * RainRingDensity);
+        float cellCrowding = 1.0 + 0.45 * max(0.0, RainRingDensity - 1.0);
+        [unroll]
+        for (int ri = 0; ri < 2; ri++)
+        {
+            float cellScale = ((ri == 0) ? 2.0 : 3.4) * cellCrowding;
+            float2 layerOffset = (ri == 0) ? float2(0.0, 0.0) : float2(0.41, 0.77);
+            float2 ringGrid = (worldTile + layerOffset) * cellScale;
+            float2 ringCell = floor(ringGrid);
+            float cellRandom = hash(ringCell + 7.7);
+            float rateRandom = hash(ringCell + 3.1);
+            float placeRandom = hash(ringCell + 19.4);
+            float cycle = t * (0.55 + 0.5 * rateRandom) + cellRandom * 7.0;
+            float phase = frac(cycle);
+            // A different draw every cycle, so a cell that just rang may sit the next one out.
+            float fires = step(1.0 - fireChance, hash(ringCell + floor(cycle) * 0.137 + 5.3));
+            float2 dropAt = (float2(rateRandom, placeRandom) - 0.5) * 0.7;
+            float toDrop = length(frac(ringGrid) - 0.5 - dropAt);
+            float radius = phase * 0.46 * RainRingSize;
+            // The wall grows with the ring: a big ring drawn with a thin wall reads as a wire
+            // circle rather than as water moving.
+            float thickness = (0.018 + 0.055 * phase) * RainRingSize;
+            float fade = (1.0 - phase) * (1.0 - phase);
+            rings += smoothstep(thickness, 0.0, abs(toDrop - radius)) * fade * fires;
+            // The strike itself: a hard bright point for an instant before the ring leaves it.
+            impacts += smoothstep(0.055 * RainRingSize, 0.0, toDrop) * smoothstep(0.14, 0.0, phase) * fires;
+        }
+        col.rgb += (rings * 0.15 + impacts * 0.30) * RainAmt * water * RainRingStrength;
     }
 
     // Whole-pass presence: fade the finished surface back to the pixel the game drew, so the

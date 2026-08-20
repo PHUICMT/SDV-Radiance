@@ -46,10 +46,13 @@ namespace SDVRadiance
             RegisterColourGradePage(api, manifest, i18n, config, LutCatalog.Discover());
             RegisterGodRaysPage(api, manifest, i18n, config);
             RegisterFogPage(api, manifest, i18n, config);
+            RegisterWeatherPage(api, manifest, i18n, config);
+            RegisterParticlesPage(api, manifest, i18n, config);
             RegisterCloudShadowPage(api, manifest, i18n, config);
             RegisterLensPage(api, manifest, i18n, config);
             RegisterWaterPage(api, manifest, i18n, config);
             RegisterLightingPage(api, manifest, i18n, config);
+            RegisterWindowsPage(api, manifest, i18n, config);
             RegisterShadowsPage(api, manifest, i18n, config);
             RegisterCameraPage(api, manifest, i18n, config);
             RegisterPerformancePage(api, manifest, i18n, config);
@@ -97,11 +100,14 @@ namespace SDVRadiance
             api.AddPageLink(manifest, "bloom", () => i18n("config.section.bloom"));
             api.AddPageLink(manifest, "lens", () => i18n("config.section.lens"));
             api.AddPageLink(manifest, "lighting", () => i18n("config.section.lighting"));
+            api.AddPageLink(manifest, "windows", () => i18n("config.section.windows"));
             api.AddPageLink(manifest, "shadows", () => i18n("config.section.shadows"));
             api.AddPageLink(manifest, "godrays", () => i18n("config.section.godrays"));
             api.AddPageLink(manifest, "water", () => i18n("config.section.water"));
             api.AddPageLink(manifest, "cloudshadow", () => i18n("config.section.cloudshadow"));
             api.AddPageLink(manifest, "fog", () => i18n("config.section.fog"));
+            api.AddPageLink(manifest, "weather", () => i18n("config.section.weather"));
+            api.AddPageLink(manifest, "particles", () => i18n("config.section.particles"));
             api.AddPageLink(manifest, "camera", () => i18n("config.section.camera"));
             api.AddPageLink(manifest, "misc", () => i18n("config.section.misc"));
 
@@ -180,16 +186,28 @@ namespace SDVRadiance
         private static void RegisterGodRaysPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
         {
             api.AddPage(manifest, "godrays", () => i18n("config.section.godrays"));
+            api.AddSectionTitle(manifest, () => i18n("config.godrays.sectionlamps"));
             api.AddBoolOption(manifest, () => config().GodRaysEnabled, v => config().GodRaysEnabled = v,
                 () => i18n("config.godrays.enabled.name"), () => i18n("config.godrays.enabled.tooltip"));
-            api.AddBoolOption(manifest, () => config().GodRaysSun, v => config().GodRaysSun = v,
-                () => i18n("config.godrays.sun.name"), () => i18n("config.godrays.sun.tooltip"));
             api.AddNumberOption(manifest, () => config().GodRaysIntensity, v => config().GodRaysIntensity = v,
                 () => i18n("config.godrays.intensity.name"), null, 0f, 1.5f, 0.05f);
             api.AddNumberOption(manifest, () => config().GodRaysThreshold, v => config().GodRaysThreshold = v,
                 () => i18n("config.godrays.threshold.name"), null, 0f, 1f, 0.05f);
             api.AddNumberOption(manifest, () => config().GodRaysDensity, v => config().GodRaysDensity = v,
                 () => i18n("config.godrays.density.name"), null, 0.1f, 1f, 0.05f);
+            api.AddSectionTitle(manifest, () => i18n("config.godrays.sectionsun"));
+            api.AddBoolOption(manifest, () => config().GodRaysSun, v => config().GodRaysSun = v,
+                () => i18n("config.godrays.sun.name"), () => i18n("config.godrays.sun.tooltip"));
+            api.AddNumberOption(manifest, () => config().GodRaysSunIntensity, v => config().GodRaysSunIntensity = v,
+                () => i18n("config.godrays.sunintensity.name"), () => i18n("config.godrays.sunintensity.tooltip"), 0f, 1.5f, 0.05f);
+            api.AddNumberOption(manifest, () => config().GodRaysSunReach, v => config().GodRaysSunReach = v,
+                () => i18n("config.godrays.sunreach.name"), () => i18n("config.godrays.sunreach.tooltip"), 0.1f, 1f, 0.05f);
+            // Falloff is set once for the whole light loop, so it shapes the lamp streaks and the
+            // sun's dapple alike. Its own heading rather than a place in either section above,
+            // because a shared dial filed under one of them claims to belong to that one.
+            api.AddSectionTitle(manifest, () => i18n("config.godrays.sectionboth"));
+            api.AddNumberOption(manifest, () => config().GodRaysDecay, v => config().GodRaysDecay = v,
+                () => i18n("config.godrays.decay.name"), () => i18n("config.godrays.decay.tooltip"), 0.5f, 0.99f, 0.01f);
 
             // --- Volumetric fog (implemented) ---
         }
@@ -216,10 +234,116 @@ namespace SDVRadiance
                 () => i18n("config.fog.nightmistcoverage.name"), () => i18n("config.fog.coverage.tooltip"), 0f, 1f, 0.05f);
             api.AddNumberOption(manifest, () => config().FogNightMistDensity, v => config().FogNightMistDensity = v,
                 () => i18n("config.fog.nightmistdensity.name"), () => i18n("config.fog.density.tooltip"), 0f, 1f, 0.05f);
+            api.AddSectionTitle(manifest, () => i18n("config.fog.sectionboth"));
+            api.AddNumberOption(manifest, () => config().FogTopBias, v => config().FogTopBias = v,
+                () => i18n("config.fog.topbias.name"), () => i18n("config.fog.topbias.tooltip"), 0f, 1f, 0.05f);
             api.AddNumberOption(manifest, () => config().FogNightMistSpeed, v => config().FogNightMistSpeed = v,
                 () => i18n("config.fog.nightmistspeed.name"), null, 0f, 0.1f, 0.002f);
 
             // --- Cloud shadows (implemented) ---
+        }
+
+        /// <summary>Weather: the replacement rain and snow, drawn in the game's own weather slot.</summary>
+        private static void RegisterWeatherPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        {
+            api.AddPage(manifest, "weather", () => i18n("config.section.weather"));
+            api.AddBoolOption(manifest, () => config().PrecipitationEnabled, v => config().PrecipitationEnabled = v,
+                () => i18n("config.precipitation.enabled.name"), () => i18n("config.precipitation.enabled.tooltip"));
+            api.AddSectionTitle(manifest, () => i18n("config.precipitation.rain.name"));
+            api.AddBoolOption(manifest, () => config().PrecipitationRain, v => config().PrecipitationRain = v,
+                () => i18n("config.precipitation.rain.name"), () => i18n("config.precipitation.rain.tooltip"));
+            api.AddNumberOption(manifest, () => config().PrecipitationRainDensity, v => config().PrecipitationRainDensity = v,
+                () => i18n("config.precipitation.density.name"), () => i18n("config.precipitation.density.tooltip"), 0.25f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().PrecipitationRainSize, v => config().PrecipitationRainSize = v,
+                () => i18n("config.precipitation.size.name"), () => i18n("config.precipitation.size.tooltip"), 0.5f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().PrecipitationRainOpacity, v => config().PrecipitationRainOpacity = v,
+                () => i18n("config.precipitation.opacity.name"), () => i18n("config.precipitation.opacity.tooltip"), 0.25f, 2f, 0.05f);
+            api.AddSectionTitle(manifest, () => i18n("config.precipitation.snow.name"));
+            api.AddBoolOption(manifest, () => config().PrecipitationSnow, v => config().PrecipitationSnow = v,
+                () => i18n("config.precipitation.snow.name"), () => i18n("config.precipitation.snow.tooltip"));
+            api.AddNumberOption(manifest, () => config().PrecipitationSnowDensity, v => config().PrecipitationSnowDensity = v,
+                () => i18n("config.precipitation.density.name"), () => i18n("config.precipitation.density.tooltip"), 0.25f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().PrecipitationSnowSize, v => config().PrecipitationSnowSize = v,
+                () => i18n("config.precipitation.size.name"), () => i18n("config.precipitation.size.tooltip"), 0.5f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().PrecipitationSnowOpacity, v => config().PrecipitationSnowOpacity = v,
+                () => i18n("config.precipitation.opacity.name"), () => i18n("config.precipitation.opacity.tooltip"), 0.25f, 2f, 0.05f);
+            api.AddSectionTitle(manifest, () => i18n("config.precipitation.wind.name"));
+            api.AddBoolOption(manifest, () => config().PrecipitationWind, v => config().PrecipitationWind = v,
+                () => i18n("config.precipitation.wind.name"), () => i18n("config.precipitation.wind.tooltip"));
+            api.AddNumberOption(manifest, () => config().PrecipitationWindDensity, v => config().PrecipitationWindDensity = v,
+                () => i18n("config.precipitation.density.name"), () => i18n("config.precipitation.density.tooltip"), 0.25f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().PrecipitationWindSize, v => config().PrecipitationWindSize = v,
+                () => i18n("config.precipitation.size.name"), () => i18n("config.precipitation.size.tooltip"), 0.5f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().PrecipitationWindOpacity, v => config().PrecipitationWindOpacity = v,
+                () => i18n("config.precipitation.opacity.name"), () => i18n("config.precipitation.opacity.tooltip"), 0.25f, 2f, 0.05f);
+            api.AddSectionTitle(manifest, () => i18n("config.lightning.name"));
+            api.AddBoolOption(manifest, () => config().LightningEffectsEnabled, v => config().LightningEffectsEnabled = v,
+                () => i18n("config.lightning.name"), () => i18n("config.lightning.tooltip"));
+            api.AddBoolOption(manifest, () => config().LightningBoltsEnabled, v => config().LightningBoltsEnabled = v,
+                () => i18n("config.lightningbolts.name"), () => i18n("config.lightningbolts.tooltip"));
+            // See the note in the tuner: the wet GROUND is off and out of both menus until its
+            // puddles can be placed from the map rather than guessed at.
+            api.AddSectionTitle(manifest, () => i18n("config.wetworld.sectiondrops"));
+            api.AddBoolOption(manifest, () => config().WetWorldLensDrops, v => config().WetWorldLensDrops = v,
+                () => i18n("config.wetworld.lensdrops.name"), () => i18n("config.wetworld.lensdrops.tooltip"));
+            api.AddNumberOption(manifest, () => config().WetWorldLensDropSize, v => config().WetWorldLensDropSize = v,
+                () => i18n("config.wetworld.lensdropsize.name"), () => i18n("config.wetworld.lensdropsize.tooltip"), 0.5f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().WetWorldEdgeHaze, v => config().WetWorldEdgeHaze = v,
+                () => i18n("config.wetworld.edgehaze.name"), () => i18n("config.wetworld.edgehaze.tooltip"), 0f, 2f, 0.05f);
+        }
+
+        /// <summary>Particles: the pool that drifts, rises and glows in the world itself.</summary>
+        private static void RegisterParticlesPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        {
+            api.AddPage(manifest, "particles", () => i18n("config.section.particles"));
+            api.AddBoolOption(manifest, () => config().ParticlesEnabled, v => config().ParticlesEnabled = v,
+                () => i18n("config.particles.enabled.name"), () => i18n("config.particles.enabled.tooltip"));
+            api.AddNumberOption(manifest, () => config().ParticleDensity, v => config().ParticleDensity = v,
+                () => i18n("config.particles.density.name"), () => i18n("config.particles.density.tooltip"), 0.25f, 2f, 0.05f);
+
+            AddParticleEmitter(api, manifest, i18n, "dust",
+                () => config().ParticleDust, v => config().ParticleDust = v,
+                () => config().ParticleDustAmount, v => config().ParticleDustAmount = v,
+                () => config().ParticleDustSize, v => config().ParticleDustSize = v);
+            AddParticleEmitter(api, manifest, i18n, "embers",
+                () => config().ParticleEmbers, v => config().ParticleEmbers = v,
+                () => config().ParticleEmbersAmount, v => config().ParticleEmbersAmount = v,
+                () => config().ParticleEmbersSize, v => config().ParticleEmbersSize = v);
+            AddParticleEmitter(api, manifest, i18n, "fireflies",
+                () => config().ParticleFireflies, v => config().ParticleFireflies = v,
+                () => config().ParticleFirefliesAmount, v => config().ParticleFirefliesAmount = v,
+                () => config().ParticleFirefliesSize, v => config().ParticleFirefliesSize = v);
+            AddParticleEmitter(api, manifest, i18n, "petals",
+                () => config().ParticlePetals, v => config().ParticlePetals = v,
+                () => config().ParticlePetalsAmount, v => config().ParticlePetalsAmount = v,
+                () => config().ParticlePetalsSize, v => config().ParticlePetalsSize = v);
+            AddParticleEmitter(api, manifest, i18n, "ringsparkles",
+                () => config().ParticleRingSparkles, v => config().ParticleRingSparkles = v,
+                () => config().ParticleRingSparklesAmount, v => config().ParticleRingSparklesAmount = v,
+                () => config().ParticleRingSparklesSize, v => config().ParticleRingSparklesSize = v);
+
+            // --- Cloud shadows (implemented) ---
+        }
+
+        /// <summary>One emitter's three settings: whether it runs, how much of it there is, and
+        /// how big each piece is. Every emitter gets the same three, so adding one is a call here
+        /// rather than another dozen lines that have to agree with the other dozen.
+        /// <para>The amount and size labels are shared across emitters on purpose: they mean
+        /// exactly the same thing every time, and a translator should not be asked to write "how
+        /// many" six times.</para></summary>
+        private static void AddParticleEmitter(IGenericModConfigMenuApi api, IManifest manifest,
+            Func<string, string> i18n, string emitter,
+            Func<bool> getOn, Action<bool> setOn,
+            Func<float> getAmount, Action<float> setAmount,
+            Func<float> getSize, Action<float> setSize)
+        {
+            api.AddSectionTitle(manifest, () => i18n($"config.particles.{emitter}.name"));
+            api.AddBoolOption(manifest, getOn, setOn,
+                () => i18n($"config.particles.{emitter}.name"), () => i18n($"config.particles.{emitter}.tooltip"));
+            api.AddNumberOption(manifest, getAmount, setAmount,
+                () => i18n("config.particles.amount.name"), () => i18n("config.particles.amount.tooltip"), 0f, 2f, 0.05f);
+            api.AddNumberOption(manifest, getSize, setSize,
+                () => i18n("config.particles.size.name"), () => i18n("config.particles.size.tooltip"), 0.5f, 2f, 0.05f);
         }
 
         /// <summary>Cloud shadows, including hiding the vanilla ones.</summary>
@@ -293,6 +417,10 @@ namespace SDVRadiance
                 () => i18n("config.water.sparkle.name"), null, 0f, 1f, 0.05f);
             api.AddNumberOption(manifest, () => config().WaterSparkleDensity, v => config().WaterSparkleDensity = v,
                 () => i18n("config.water.sparkledensity.name"), () => i18n("config.water.sparkledensity.tooltip"), 0.2f, 2f, 0.05f);
+            api.AddBoolOption(manifest, () => config().WaterCausticsEnabled, v => config().WaterCausticsEnabled = v,
+                () => i18n("config.water.caustics.name"), () => i18n("config.water.caustics.tooltip"));
+            api.AddNumberOption(manifest, () => config().WaterCausticsStrength, v => config().WaterCausticsStrength = v,
+                () => i18n("config.water.causticsstrength.name"), null, 0f, 1f, 0.05f);
             api.AddBoolOption(manifest, () => config().WaterReflection, v => config().WaterReflection = v,
                 () => i18n("config.water.reflection.name"), () => i18n("config.water.reflection.tooltip"));
             api.AddNumberOption(manifest, () => config().WaterReflectStrength, v => config().WaterReflectStrength = v,
@@ -303,6 +431,19 @@ namespace SDVRadiance
             api.AddNumberOption(manifest, () => config().WaterReflectBanding, v => config().WaterReflectBanding = v,
                 () => i18n("config.water.reflectbanding.name"), () => i18n("config.water.reflectbanding.tooltip"),
                 0f, 16f, 1f);
+            api.AddNumberOption(manifest, () => config().WaterReflectBlur, v => config().WaterReflectBlur = v,
+                () => i18n("config.water.reflectblur.name"), () => i18n("config.water.reflectblur.tooltip"),
+                0f, 2f, 0.05f);
+            api.AddSectionTitle(manifest, () => i18n("config.water.sectionrain"));
+            api.AddNumberOption(manifest, () => config().WaterRainRingDensity, v => config().WaterRainRingDensity = v,
+                () => i18n("config.water.rainringdensity.name"), () => i18n("config.water.rainringdensity.tooltip"),
+                0f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().WaterRainRingSize, v => config().WaterRainRingSize = v,
+                () => i18n("config.water.rainringsize.name"), () => i18n("config.water.rainringsize.tooltip"),
+                0.4f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().WaterRainRingStrength, v => config().WaterRainRingStrength = v,
+                () => i18n("config.water.rainringstrength.name"), () => i18n("config.water.rainringstrength.tooltip"),
+                0f, 2f, 0.05f);
             // Reflection REACH and FADE ROWS are not offered here. They buy frames, they do not
             // change how anything looks, and the performance preset already sets both: a player
             // who moves them sees nothing happen and concludes the mod is broken. The settings
@@ -346,15 +487,48 @@ namespace SDVRadiance
                 () => i18n("config.lighting.shadows.name"), () => i18n("config.lighting.shadows.tooltip"));
             api.AddNumberOption(manifest, () => config().LightingShadowStrength, v => config().LightingShadowStrength = v,
                 () => i18n("config.lighting.shadowstrength.name"), null, 0f, 1f, 0.05f);
-            api.AddBoolOption(manifest, () => config().WindowEffectsEnabled, v => config().WindowEffectsEnabled = v,
-                () => i18n("config.lighting.windoweffects.name"), () => i18n("config.lighting.windoweffects.tooltip"));
-            api.AddBoolOption(manifest, () => config().WindowBeamEnabled, v => config().WindowBeamEnabled = v,
-                () => i18n("config.lighting.windowbeam.name"), () => i18n("config.lighting.windowbeam.tooltip"));
 
             // --- Directional sprite shadows ---
         }
 
         /// <summary>Directional sprite shadows.</summary>
+        /// <summary>Everything the mod does with a window, on one page: the daylight it lets in,
+        /// the beam you can see, the glow after dusk, and the people in the glass by day. It lived
+        /// inside Lighting, where four window rows among fifteen lighting rows were easy to miss
+        /// and hard to explain as one thing.</summary>
+        private static void RegisterWindowsPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        {
+            api.AddPage(manifest, "windows", () => i18n("config.section.windows"));
+            // Two things a window does, kept apart on the page: the light it lets through, and
+            // the picture it returns.
+            api.AddSectionTitle(manifest, () => i18n("config.windows.sectionlight"));
+            api.AddBoolOption(manifest, () => config().WindowEffectsEnabled, v => config().WindowEffectsEnabled = v,
+                () => i18n("config.lighting.windoweffects.name"), () => i18n("config.lighting.windoweffects.tooltip"));
+            api.AddBoolOption(manifest, () => config().WindowBeamEnabled, v => config().WindowBeamEnabled = v,
+                () => i18n("config.lighting.windowbeam.name"), () => i18n("config.lighting.windowbeam.tooltip"));
+            api.AddSectionTitle(manifest, () => i18n("config.windows.sectionreflection"));
+            api.AddBoolOption(manifest, () => config().WindowReflectionEnabled, v => config().WindowReflectionEnabled = v,
+                () => i18n("config.lighting.windowreflection.name"), () => i18n("config.lighting.windowreflection.tooltip"));
+            api.AddNumberOption(manifest, () => config().WindowReflectionStrength, v => config().WindowReflectionStrength = v,
+                () => i18n("config.lighting.windowreflectionstrength.name"),
+                () => i18n("config.lighting.windowreflectionstrength.tooltip"), 0f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().WindowReflectionNightStrength, v => config().WindowReflectionNightStrength = v,
+                () => i18n("config.lighting.windowreflectionnight.name"),
+                () => i18n("config.lighting.windowreflectionnight.tooltip"), 0f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().WindowSheenStrength, v => config().WindowSheenStrength = v,
+                () => i18n("config.lighting.windowsheen.name"),
+                () => i18n("config.lighting.windowsheen.tooltip"), 0f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().WindowSceneReflectionStrength, v => config().WindowSceneReflectionStrength = v,
+                () => i18n("config.lighting.windowscene.name"),
+                () => i18n("config.lighting.windowscene.tooltip"), 0f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().WindowGlareStrength, v => config().WindowGlareStrength = v,
+                () => i18n("config.lighting.windowglare.name"),
+                () => i18n("config.lighting.windowglare.tooltip"), 0f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().WindowLightGlowStrength, v => config().WindowLightGlowStrength = v,
+                () => i18n("config.lighting.windowlightglow.name"),
+                () => i18n("config.lighting.windowlightglow.tooltip"), 0f, 2f, 0.05f);
+        }
+
         private static void RegisterShadowsPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
         {
             api.AddPage(manifest, "shadows", () => i18n("config.section.shadows"));

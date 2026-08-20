@@ -305,7 +305,9 @@ namespace SDVRadiance
             GetParam(effect, "Time")?.SetValue(Time());
             GetParam(effect, "Speed")?.SetValue(MathHelper.Lerp(config.FogSpeed, config.FogNightMistSpeed, mistW));
             GetParam(effect, "Scale")?.SetValue(MathHelper.Lerp(config.FogScale, 3.2f, mistW));
-            GetParam(effect, "Density")?.SetValue(total);
+            // Our rain thickens the air a touch: one scalar into the stage that already exists,
+            // gated on the replacement being live so vanilla days cannot change by a wisp.
+            GetParam(effect, "Density")?.SetValue(total * (1f + 0.15f * PrecipitationSystem.ActiveRainPresence));
             GetParam(effect, "Patchiness")?.SetValue(1f);
             GetParam(effect, "Coverage")?.SetValue(MathHelper.Lerp(config.FogCoverage, config.FogNightMistCoverage, mistW));
             GetParam(effect, "TopBias")?.SetValue(config.FogTopBias);
@@ -584,6 +586,9 @@ namespace SDVRadiance
 
             effect.CurrentTechnique = effect.Techniques["FloodLight"];
             DrawFull(spriteBatch, source, dest, effect);
+            // After the multiply, in the target it just wrote: a spark is what makes light, so
+            // being darkened by the lightmap is exactly backwards for it.
+            DrawEmissiveParticlesOnLighting(spriteBatch, dest, EmissiveParticleHost.Flood);
         }
 
         /// <summary>The lightmap itself: which texture, where it sits in the world, and how much of it carries.
@@ -645,9 +650,10 @@ namespace SDVRadiance
                 ShadowRenderer.WindowDaylight(out Vector3 sunColour, out float sunStrength);
                 shaftDir = Vector2.Normalize(new Vector2(shaftLean, 1f));
                 shaftColour = sunColour;
-                // The intensity slider players already own scales it; 0.30 at the default 0.68
-                // keeps the shafts a garnish rather than a filter.
-                shaftTarget = 0.45f * sunStrength * MathHelper.Clamp(config.GodRaysIntensity, 0f, 1.5f) * _fadeFlood;
+                // The sun's OWN intensity, not the lamp rays'. They shared one for a while and
+                // that meant turning the lamps down at night also thinned the morning through the
+                // trees, which is two different pictures behind one slider.
+                shaftTarget = 0.45f * sunStrength * MathHelper.Clamp(config.GodRaysSunIntensity, 0f, 1.5f) * _fadeFlood;
             }
             // Every gate on the shafts is a hard flip - rain starting, the toggle, a warp - and a
             // hard flip on a whole-screen effect is a pop. Ease over about a second, both ways,
@@ -671,12 +677,12 @@ namespace SDVRadiance
             GetParam(effect, "SunShaftColour")?.SetValue(shaftColour);
             GetParam(effect, "SunShaftStrength")?.SetValue(shaftStrength);
             GetParam(effect, "SunShaftDrift")?.SetValue((float)(Determinism.Seconds * 0.35 % 6283.185) );
-            // The density slider players already own also sets how far the dapple stretches from
-            // its canopy. Normalised so the DEFAULT (0.6) is exactly the tuned look - binding the
-            // raw slider would have silently shortened every shaft by 40% at defaults - and capped
-            // at 1.1 because the occluder mask is padded 8 tiles (FloodOccPad): march past the
-            // padding and shafts appear as you walk, the exact bug the padding was added to fix.
-            GetParam(effect, "SunShaftReach")?.SetValue(MathHelper.Clamp(config.GodRaysDensity / 0.6f, 0.15f, 1.1f));
+            // How far the dapple stretches from its canopy, on the sun's own dial. Normalised
+            // so the DEFAULT (0.6) is exactly the tuned look - binding the raw slider would have
+            // silently shortened every shaft by 40% at defaults - and capped at 1.1 because the
+            // occluder mask is padded 8 tiles (FloodOccPad): march past the padding and shafts
+            // appear as you walk, the exact bug the padding was added to fix.
+            GetParam(effect, "SunShaftReach")?.SetValue(MathHelper.Clamp(config.GodRaysSunReach / 0.6f, 0.15f, 1.1f));
             // The fog stage's own eased amount, so a misty morning thickens the shafts in step
             // with the haze it is already drawing, and both fade together when the mist lifts.
             GetParam(effect, "SunShaftHaze")?.SetValue(MathHelper.Clamp(_fogDayAmount, 0f, 1f));
@@ -851,7 +857,8 @@ namespace SDVRadiance
             FloodLightmap.WindowRoomScale = _windowRoomLightEase;
             // The stage's own fade still applies: while the flood is easing in/out the
             // exposure walks back to neutral with it, so toggling never steps the room.
-            GetParam(effect, "Exposure")?.SetValue(Vector3.Lerp(Vector3.One, _exposureEase, _fadeFlood));
+            GetParam(effect, "Exposure")?.SetValue(Vector3.Lerp(Vector3.One, _exposureEase, _fadeFlood)
+                * (1f + LightningEffects.FloodExposureLift * LightningEffects.Burst01));
             GetParam(effect, "RoomSaturation")?.SetValue(MathHelper.Lerp(1f, _roomSaturationEase, _fadeFlood));
             // ...and the switch that says the saturation lift may run at all. See the shader's
             // RoomLookOn note: handing it a neutral 1.0 outdoors was supposed to make the block an
@@ -940,9 +947,10 @@ namespace SDVRadiance
             SetMirrorSourceParams(effect);
             SetReflectionStyleParams(effect, config);
             SetPlayerExclusionParams(effect, who);
-            (float sunWarm, float nightGlow) = SetTimeOfDayParams(effect);
+            (float sunWarm, float nightGlow) = SetTimeOfDayParams(effect, config);
             SetSkyParams(effect, config, sunWarm, nightGlow);
             SetGlimmerLights(effect, nightGlow);
+            SetCausticParams(effect, config, nightGlow);
             SetWadingParam(effect, who);
 
             effect.CurrentTechnique = effect.Techniques["Water"];
@@ -954,6 +962,10 @@ namespace SDVRadiance
             // the shader, including its early returns, so folding the window fade in here is what
             // makes the pass leave gradually instead of being cut out from under the frame.
             BlendBackSource(spriteBatch, source, dest, _fadeWater * MathHelper.Clamp(_waterInMaskEase, 0f, 1f));
+            // The sky half of the precipitation lands here, on the rippled result, so streaks
+            // hang straight over the river instead of waving with it. This side of the capture
+            // never meets the vanilla lightmap, so the particles' own ambient dims it instead.
+            PrecipitationSystem.DrawSkyForChain(spriteBatch, dest, _frameWidth, AmbientLightOnParticles());
         }
 
         /// <summary>How agitated the surface is this frame: weather, season, the shimmer toggle's ease, the
@@ -962,7 +974,7 @@ namespace SDVRadiance
         {
             // Weather/season drive how agitated the water is: choppier & faster in
             // rain/storm, sluggish in winter; sparkle fades when there's no sun.
-            ComputeWaterDynamics(out float strengthMul, out float speedMul, out float sparkleMul);
+            ComputeWaterDynamics(out float strengthMul, out float speedMul, out float sparkleMul, out _causticWeatherMultiplier);
             // The stage can run for the REFLECTION alone (shimmer toggled off): ripple,
             // sparkle, tint and rim all zero out; the mirror keeps working independently.
             // The toggle itself eases too: with the reflection keeping the stage alive,
@@ -995,6 +1007,60 @@ namespace SDVRadiance
             GetParam(effect, "Sparkle")?.SetValue(config.WaterSparkle * sparkleMul * shimmer * inSpark);
             GetParam(effect, "TintAmt")?.SetValue(0.35f * shimmer * inTint);
             GetParam(effect, "ReflectStrength")?.SetValue((config.WaterReflection ? config.WaterReflectStrength : 0f) * _fadeWater * inRefl);
+        }
+
+        private float _causticWeatherMultiplier = 1f;
+        private float _causticEase;
+        /// <summary>What the shader was actually handed this frame, for the report: the one
+        /// number that says whether the term is alive without anyone squinting at a lake.</summary>
+        internal float _causticAmountUploaded;
+        internal float _causticDaylight = 1f;
+        internal bool CausticTextureMissing => _causticTextureMissing;
+        internal float CausticEase => _causticEase;
+        internal float CausticWeatherMultiplier => _causticWeatherMultiplier;
+        internal float ShimmerEase => _shimmerEase;
+        internal float FadeWaterForReport => _fadeWater;
+        private Texture2D? _causticTexture;
+        private bool _causticTextureMissing;
+
+        /// <summary>The caustic net on shallow beds: strength folded down to one uniform.</summary>
+        /// <remarks>
+        /// The shader runs after lighting and has no lightmap, so an ungated additive would glow
+        /// in the dark. Night is therefore multiplied out HERE, on the same 90-minute nightGlow
+        /// ramp the glimmer lights ride, and the toggle gets its own ease so flipping it in the
+        /// tuner fades rather than pops. Indoors is halved, not killed: a hot spring under a roof
+        /// still catches lamplight, just not the sun.
+        /// </remarks>
+        private void SetCausticParams(Effect effect, ModConfig config, float nightGlow)
+        {
+            Approach(ref _causticEase, config.WaterCausticsEnabled ? 1f : 0f, 0.08f);
+            float causticAmount = 0f;
+            _causticDaylight = 1f - nightGlow;
+            if (_causticEase > 0.001f && !_causticTextureMissing)
+            {
+                if (_causticTexture == null)
+                {
+                    _causticTexture = LoadTexture("caustics.png");
+                    _causticTextureMissing = _causticTexture == null;
+                }
+                if (_causticTexture != null)
+                {
+                    GetParam(effect, "CausticTexture")?.SetValue(_causticTexture);
+                    bool indoors = !(Game1.currentLocation?.IsOutdoors ?? true);
+                    float daylight = 1f - nightGlow;
+                    float indoorSoften = indoors ? 0.5f : 1f;
+                    causticAmount = config.WaterCausticsStrength * 0.9f * _causticWeatherMultiplier
+                        * _causticEase * _shimmerEase * _fadeWater * daylight * indoorSoften;
+                }
+            }
+            GetParam(effect, "CausticAmt")?.SetValue(causticAmount);
+            // One: the net covers the whole surface evenly, by decision (19/8). The shore shelf
+            // was tried at several widths and floors and either vanished under the foam band or
+            // read as no different from the open water; the shader keeps the shelf math so a
+            // future floor below 1 brings it back, but for now even is the look.
+            GetParam(effect, "CausticDeepFloor")?.SetValue(1f);
+            GetParam(effect, "DebugCaustic")?.SetValue(DebugChannel == DebugOverlayChannel.Caustic ? 1f : 0f);
+            _causticAmountUploaded = causticAmount;
         }
 
         /// <summary>The textures the mirror reads: the sprite exclusion mask, the flipped-entity layer and
@@ -1040,6 +1106,7 @@ namespace SDVRadiance
             float reflDistort = config.WaterReflectDistort;
             GetParam(effect, "MirrorShear")?.SetValue(reflDistort);
             GetParam(effect, "ReflWobble")?.SetValue(reflWobble * config.WaterReflectDistort);
+            GetParam(effect, "ReflSoftness")?.SetValue(config.WaterReflectBlur);
             // Passed as steps per TILE, which is what the shader needs to round with, rather than
             // as the pixel height the setting is written in. Zero means do not round at all.
             GetParam(effect, "ShearSteps")?.SetValue(
@@ -1053,6 +1120,9 @@ namespace SDVRadiance
             GetParam(effect, "MaskOrigin")?.SetValue(new Vector2(_lastWaterTileX, _lastWaterTileY));
             GetParam(effect, "MaskTexture")?.SetValue(_waterMask);
             GetParam(effect, "SdfTexture")?.SetValue(_waterSignedDistanceTexture);
+            // Foam reads this one instead: same encoding, but it only has an edge where water
+            // meets real land, so a bridge stops growing a shoreline of its own.
+            GetParam(effect, "RealShoreSdfTexture")?.SetValue(_waterRealShoreDistanceTexture ?? _waterSignedDistanceTexture);
             GetParam(effect, "SparkleDensity")?.SetValue(config.WaterSparkleDensity);
         }
 
@@ -1088,11 +1158,31 @@ namespace SDVRadiance
 
         /// <summary>Golden hour, night glow, moonlight and raindrop rings. Returns the two amounts the sky
         /// tint below is built from.</summary>
-        private (float SunWarm, float NightGlow) SetTimeOfDayParams(Effect effect)
+        private (float SunWarm, float NightGlow) SetTimeOfDayParams(Effect effect, ModConfig config)
         {
             // Time-of-day / weather dressing: golden-hour sparkle, star reflections and
             // lamp glimmer after dusk, raindrop rings while raining.
-            int tnow = Game1.timeOfDay;
+            var (sunWarm, nightGlow) = TimeOfDayAmounts();
+            GetParam(effect, "SunWarm")?.SetValue(sunWarm);
+            GetParam(effect, "NightGlow")?.SetValue(nightGlow);
+            GetParam(effect, "MoonGlow")?.SetValue(ShadowRenderer.MoonStrength());
+            // Raindrop rings ease in rather than covering the surface the frame a rain
+            // totem (or a weather mod) flips the flag.
+            // IsRainingHere, not the legacy static: that one mirrors the Default context only,
+            // so rain on Ginger Island rang no rings at all while a dry valley rang them.
+            bool rainingHere = Game1.currentLocation?.IsRainingHere() ?? false;
+            Approach(ref _rainRingsEase, rainingHere ? 1f : 0f, 0.04f);
+            GetParam(effect, "RainAmt")?.SetValue(_rainRingsEase);
+            GetParam(effect, "RainRingDensity")?.SetValue(config.WaterRainRingDensity);
+            GetParam(effect, "RainRingSize")?.SetValue(config.WaterRainRingSize);
+            GetParam(effect, "RainRingStrength")?.SetValue(config.WaterRainRingStrength);
+            return (sunWarm, nightGlow);
+        }
+
+        /// <summary>How much golden hour and how much dusk there is right now, 0 to 1 each. Its own
+        /// method because the glass wants the same two numbers with no effect to set them on.</summary>
+        private static (float SunWarm, float NightGlow) TimeOfDayAmounts()
+        {
             float mins = ClockMinutes();
             // Golden hour, on the clock and without a cliff. This read the raw HHMM value (so it
             // lurched at every hour boundary) and then cut to zero the instant the clock passed
@@ -1107,13 +1197,6 @@ namespace SDVRadiance
                 sunWarm *= MathHelper.Clamp((19 * 60 - mins) / 30f, 0f, 1f);
             }
             float nightGlow = MathHelper.Clamp((mins - 1140) / 90f, 0f, 1f);   // 19:00 → 20:30
-            GetParam(effect, "SunWarm")?.SetValue(sunWarm);
-            GetParam(effect, "NightGlow")?.SetValue(nightGlow);
-            GetParam(effect, "MoonGlow")?.SetValue(ShadowRenderer.MoonStrength());
-            // Raindrop rings ease in rather than covering the surface the frame a rain
-            // totem (or a weather mod) flips the flag.
-            Approach(ref _rainRingsEase, Game1.isRaining ? 1f : 0f, 0.04f);
-            GetParam(effect, "RainAmt")?.SetValue(_rainRingsEase);
             return (sunWarm, nightGlow);
         }
 
@@ -1126,6 +1209,16 @@ namespace SDVRadiance
             // the ripple breakup — never strength-by-distance. Stardew has no sky to sample
             // top-down, so it is synthesised from time and weather, then scaled by the lighting
             // stage's ambient so water never stays bright inside a darkened scene.
+            Vector3 sky = SynthesisedSkyColour(sunWarm, nightGlow);
+            sky *= Vector3.Lerp(Vector3.One, ComputeLightingAmbient(config), _fadeLighting);
+            GetParam(effect, "SkyColor")?.SetValue(sky);
+        }
+
+        /// <summary>The colour of the sky itself at this hour and in this weather, before the
+        /// lighting stage's ambient is applied. Water takes it dimmed by that ambient; the glass
+        /// takes it plain, because a reflection drawn into the world batch is lit with the world.</summary>
+        private static Vector3 SynthesisedSkyColour(float sunWarm, float nightGlow)
+        {
             Vector3 sky = new(0.62f, 0.78f, 0.96f);                                  // open daylight
             sky = Vector3.Lerp(sky, new Vector3(0.98f, 0.72f, 0.45f), sunWarm);      // golden hour
             sky = Vector3.Lerp(sky, new Vector3(0.08f, 0.12f, 0.28f), nightGlow);    // dusk → night
@@ -1133,8 +1226,7 @@ namespace SDVRadiance
                 sky = Vector3.Lerp(sky, new Vector3(0.52f, 0.56f, 0.62f), 0.75f);    // overcast
             if (!(Game1.currentLocation?.IsOutdoors ?? true))
                 sky = Vector3.Lerp(sky, new Vector3(0.30f, 0.33f, 0.40f), 0.7f);     // no sky indoors
-            sky *= Vector3.Lerp(Vector3.One, ComputeLightingAmbient(config), _fadeLighting);
-            GetParam(effect, "SkyColor")?.SetValue(sky);
+            return sky;
         }
 
         /// <summary>Lamp glimmer after dusk: up to eight on-screen lights, in frame UV.</summary>
@@ -1245,6 +1337,9 @@ namespace SDVRadiance
             // Same out-of-shader presence as the water pass: the light POOLS never rode the
             // fade, so this stage popped its full contribution in and out with the light list.
             BlendBackSource(spriteBatch, source, dest, _fadeLighting);
+            // Last, after the blend-back as well as after the multiply: this stage runs behind
+            // the flood one during a crossfade, so it is the one that owns the sparks.
+            DrawEmissiveParticlesOnLighting(spriteBatch, dest, EmissiveParticleHost.Classic);
         }
 
         /// <summary>Character head anchors (centreX, boxTop), refilled once per light query so the
@@ -1621,15 +1716,18 @@ namespace SDVRadiance
         }
 
         /// <summary>Weather/season multipliers for ripple strength, speed, and sparkle.</summary>
-        private static void ComputeWaterDynamics(out float strength, out float speed, out float sparkle)
+        private static void ComputeWaterDynamics(out float strength, out float speed, out float sparkle,
+            out float caustic)
         {
-            strength = 1f; speed = 1f; sparkle = 1f;
+            strength = 1f; speed = 1f; sparkle = 1f; caustic = 1f;
 
-            if (Game1.isLightning) { strength *= 2.0f; speed *= 1.7f; sparkle *= 0.25f; }   // storm
-            else if (Game1.isRaining) { strength *= 1.5f; speed *= 1.4f; sparkle *= 0.4f; } // rain: choppy, no sun glints
-            if (Game1.isSnowing) { strength *= 0.8f; speed *= 0.7f; sparkle *= 0.5f; }       // sluggish, overcast
+            // Caustics are FOCUSED sunlight: everything that scatters the sun scatters them
+            // harder than it scatters a glint, and a churned storm surface focuses nothing.
+            if (Game1.isLightning) { strength *= 2.0f; speed *= 1.7f; sparkle *= 0.25f; caustic *= 0.25f; }   // storm
+            else if (Game1.isRaining) { strength *= 1.5f; speed *= 1.4f; sparkle *= 0.4f; caustic *= 0.4f; } // rain: choppy, no sun glints
+            if (Game1.isSnowing) { strength *= 0.8f; speed *= 0.7f; sparkle *= 0.5f; caustic *= 0.5f; }       // sluggish, overcast
 
-            if (Game1.season == Season.Winter) { speed *= 0.8f; sparkle *= 0.8f; }           // cold, calmer
+            if (Game1.season == Season.Winter) { speed *= 0.8f; sparkle *= 0.8f; caustic *= 0.8f; }           // cold, calmer
             else if (Game1.season == Season.Summer) sparkle *= 1.2f;                          // bright sun, more glint
         }
     }

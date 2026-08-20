@@ -92,12 +92,72 @@ namespace SDVRadiance
                 var bits = new bool[px.Length];
                 for (int i = 0; i < px.Length; i++)
                     bits[i] = px[i].A >= 128;
+                CarveEnclosedHoles(bits, src.Width, src.Height);
                 entry = (bits, src.Width, src.Height);
             }
             catch { /* keep null — whole-rect fallback */ }
             _entityOpaqueCache[key] = entry;
             return entry;
         }
+
+        /// <summary>
+        /// Treat a transparent hole with sprite all the way around it as part of the sprite.
+        ///
+        /// <para>The carve reads a sprite's own alpha, which is right at its outline and wrong
+        /// inside it. A bench has a slot between its back and its seat; the slot is transparent,
+        /// so it was not carved, so the ripple ran through it, and the reported symptom was water
+        /// moving inside a bench standing on a pier. Whatever is behind that slot, it is four
+        /// pixels of it seen through furniture, and a wave crossing a gap that narrow reads as a
+        /// fault however the map is labelled.</para>
+        ///
+        /// <para>A hole that reaches the edge of the sprite is left alone, because that is not a
+        /// hole: it is the space beside the sprite, and the water there is water. So a four-way
+        /// flood from the border through everything transparent separates the two in one sweep,
+        /// the same test <see cref="RestoreEnclosedMarch"/> makes about the march channel, and for
+        /// the same reason. Whatever the flood does not reach was enclosed and is carved.</para>
+        ///
+        /// <para>This runs once per (texture, source rect) and its answer is cached with the bits
+        /// it edits, so a bench pays for it on the frame it first appears and never again.</para>
+        /// </summary>
+        private static void CarveEnclosedHoles(bool[] opaque, int width, int height)
+        {
+            int count = width * height;
+            if (count <= 0 || width < 3 || height < 3)
+                return;
+            var reachedFromOutside = new bool[count];
+            var pending = new System.Collections.Generic.Stack<int>();
+            void Push(int index)
+            {
+                if (!opaque[index] && !reachedFromOutside[index])
+                {
+                    reachedFromOutside[index] = true;
+                    pending.Push(index);
+                }
+            }
+            for (int x = 0; x < width; x++)
+            {
+                Push(x);
+                Push((height - 1) * width + x);
+            }
+            for (int y = 0; y < height; y++)
+            {
+                Push(y * width);
+                Push(y * width + width - 1);
+            }
+            while (pending.Count > 0)
+            {
+                int index = pending.Pop();
+                int x = index % width, y = index / width;
+                if (x > 0) Push(index - 1);
+                if (x < width - 1) Push(index + 1);
+                if (y > 0) Push(index - width);
+                if (y < height - 1) Push(index + width);
+            }
+            for (int i = 0; i < count; i++)
+                if (!opaque[i] && !reachedFromOutside[i])
+                    opaque[i] = true;
+        }
+
 
         /// <summary>Label-set identity for the mask cache key (0 = no labels loaded). Labels are
         /// read once at startup, so this is constant for a session — it exists so a build with no
@@ -1423,6 +1483,7 @@ namespace SDVRadiance
             CloseVerticalGaps(tilesW, tilesH);
             CarveMapArt(tilesW, tilesH);
             CarveEntityRects(job, tilesW, tilesH);
+            ClearPocketsInsideArt(tilesW, tilesH);
             // A full-map anchor job is finished inside pass D and must not reach E or F: those
             // write the WINDOW's mask, and letting a map-sized job write it moves the waterline.
             if (!BuildWaterlineHeightMap(job, tilesW, tilesH))
@@ -1665,6 +1726,13 @@ namespace SDVRadiance
         private void CarveMapArt(int tilesW, int tilesH)
         {
             int pw = tilesW * MaskTexelsPerTile;
+            // Write down which effect texels the carve takes away, so the pocket pass below can
+            // tell water trapped inside drawn art from water that simply has land around it.
+            int carveCount = pw * tilesH * MaskTexelsPerTile;
+            if (_maskScratch.ArtCarvedFlags == null || _maskScratch.ArtCarvedFlags.Length < carveCount)
+                _maskScratch.ArtCarvedFlags = new bool[carveCount];
+            Array.Clear(_maskScratch.ArtCarvedFlags, 0, carveCount);
+            var artCarved = _maskScratch.ArtCarvedFlags;
 
             for (int j = 0; j < tilesH; j++)
             {
@@ -1737,6 +1805,7 @@ namespace SDVRadiance
                             if (carveB != null && carveB[arow + px])
                             {
                                 _waterEffectBits![row + px] = false;
+                                artCarved[row + px] = true;
                                 // Labelled structure art breaks the march at its PAINTED shape
                                 // (the carve already had the label's liquid pixels removed), so a
                                 // rock rim hangs its reflection from its own outline instead of
@@ -1746,10 +1815,147 @@ namespace SDVRadiance
                             if (carveF != null && carveF[arow + px])
                             {
                                 _waterEffectBits![row + px] = false;
+                                artCarved[row + px] = true;
                                 if (pixelCarveMarch || groundFrontMarch) _waterMarchBits![row + px] = false;
                             }
                         }
                     }
+                }
+            }
+        }
+
+
+        /// <summary>How much water a pocket may hold and still be one. Four tiles: a slot across
+        /// the back of a bench is a couple of texels tall and a few tiles wide, and nothing that
+        /// deserves a ripple of its own is both this small and walled in by art.</summary>
+        private const int PocketTexelCap = 4 * MaskTexelsPerTile * MaskTexelsPerTile;
+
+        /// <summary>
+        /// Clear the water trapped INSIDE a piece of drawn art.
+        ///
+        /// <para>The carve reads art opacity, which is right at an outline and wrong inside one.
+        /// A bench painted into the Beach map's Buildings layer has a slot between its back and
+        /// its seat; the map underneath is open water, so the slot stayed water, and the ripple
+        /// animated inside the bench. Measured at Beach (42,33): a water tile carrying the
+        /// backrest, effect 96 of 256 texels, and part of that 96 is the slot.</para>
+        ///
+        /// <para>Displacement is why it reads so badly rather than merely oddly. The ripple moves
+        /// pixels a few across, and in a slot two or three texels tall there is no water to move
+        /// in from, so what arrives is the bench, and the bench appears to slosh.</para>
+        ///
+        /// <para>The test has to separate that slot from a small pond, which is also a little
+        /// water with something all around it. Connectivity alone cannot: both are enclosed. What
+        /// tells them apart is WHAT encloses them. A pond is bounded by texels that were never
+        /// water; the slot is bounded by texels that WERE water until art was carved out of them,
+        /// which <see cref="WaterMaskScratch.ArtCarvedFlags"/> records. So a pocket is cleared
+        /// only when every texel around it was taken by the carve.</para>
+        ///
+        /// <para>Anything reaching the window border is left alone whatever it is bounded by: it
+        /// continues off-screen and its real extent is unknown, the same rule
+        /// <see cref="DropSpeckComponents"/> follows. Only the effect channel is touched. The
+        /// march channel decides where a waterline is, and a pocket this size has no business
+        /// moving one either way.</para>
+        /// </summary>
+        private void ClearPocketsInsideArt(int tilesW, int tilesH)
+        {
+            var effect = _waterEffectBits;
+            var artCarved = _maskScratch.ArtCarvedFlags;
+            if (effect == null || artCarved == null)
+                return;
+            int pw = tilesW * MaskTexelsPerTile, ph = tilesH * MaskTexelsPerTile;
+            int n = pw * ph;
+            if (n <= 0 || effect.Length < n || artCarved.Length < n)
+                return;
+            if (_maskScratch.PocketVisitedFlags == null || _maskScratch.PocketVisitedFlags.Length < n)
+                _maskScratch.PocketVisitedFlags = new bool[n];
+            // These two are shared with the march passes, which is safe for the same reason the
+            // whole scratch is: one rebuild runs at a time and these passes are strictly ordered.
+            if (_maskScratch.MarchFloodStack == null || _maskScratch.MarchFloodStack.Length < n)
+                _maskScratch.MarchFloodStack = new int[n];
+            if (_maskScratch.SpeckComponentMembers == null || _maskScratch.SpeckComponentMembers.Length < n)
+                _maskScratch.SpeckComponentMembers = new int[n];
+            var visited = _maskScratch.PocketVisitedFlags;
+            var stack = _maskScratch.MarchFloodStack;
+            var members = _maskScratch.SpeckComponentMembers;
+            Array.Clear(visited, 0, n);
+
+            // Everything the border can reach through water continues off-screen. Claim it first
+            // so the walk below only ever meets water that is genuinely shut in.
+            int top = 0;
+            void Seed(int index)
+            {
+                if (effect[index] && !visited[index])
+                {
+                    visited[index] = true;
+                    stack[top++] = index;
+                }
+            }
+            for (int x = 0; x < pw; x++)
+            {
+                Seed(x);
+                Seed((ph - 1) * pw + x);
+            }
+            for (int y = 0; y < ph; y++)
+            {
+                Seed(y * pw);
+                Seed(y * pw + pw - 1);
+            }
+            while (top > 0)
+            {
+                int index = stack[--top];
+                int x = index % pw, y = index / pw;
+                if (x > 0) Seed(index - 1);
+                if (x < pw - 1) Seed(index + 1);
+                if (y > 0) Seed(index - pw);
+                if (y < ph - 1) Seed(index + pw);
+            }
+
+            for (int start = 0; start < n; start++)
+            {
+                if (!effect[start] || visited[start])
+                    continue;
+                int memberCount = 0;
+                bool wallsAreAllArt = true;
+                visited[start] = true;
+                stack[0] = start;
+                top = 1;
+                while (top > 0)
+                {
+                    int index = stack[--top];
+                    if (memberCount < members.Length)
+                        members[memberCount] = index;
+                    memberCount++;
+                    int x = index % pw, y = index / pw;
+                    for (int side = 0; side < 4; side++)
+                    {
+                        int nx = x + (side == 0 ? -1 : side == 1 ? 1 : 0);
+                        int ny = y + (side == 2 ? -1 : side == 3 ? 1 : 0);
+                        if (nx < 0 || nx >= pw || ny < 0 || ny >= ph)
+                            continue;               // a border component was claimed above
+                        int neighbour = ny * pw + nx;
+                        if (effect[neighbour])
+                        {
+                            if (!visited[neighbour])
+                            {
+                                visited[neighbour] = true;
+                                stack[top++] = neighbour;
+                            }
+                        }
+                        else if (!artCarved[neighbour])
+                        {
+                            wallsAreAllArt = false; // land, or a label's own carve: leave it alone
+                        }
+                    }
+                }
+                if (!wallsAreAllArt || memberCount > PocketTexelCap || memberCount > members.Length)
+                    continue;
+                for (int i = 0; i < memberCount; i++)
+                {
+                    effect[members[i]] = false;
+                    // The pocket counts as art from here on. It is walled in by art, so if the
+                    // real-shore field below did not fill it back in it would read as a little
+                    // island of land inside the water and grow a ring of foam around itself.
+                    artCarved[members[i]] = true;
                 }
             }
         }
@@ -1786,6 +1992,8 @@ namespace SDVRadiance
                         }
                         _waterEffectBits![row + x] = false;
                         _waterMarchBits![row + x] = false;
+                        if (_maskScratch.ArtCarvedFlags != null)
+                            _maskScratch.ArtCarvedFlags[row + x] = true;
                     }
                 }
             }
@@ -2042,6 +2250,30 @@ namespace SDVRadiance
                 float texels = _waterEffectBits![p] ? _maskScratch.DistanceToLand[p] / 3f : -(_maskScratch.DistanceToWater[p] / 3f);
                 _maskScratch.WaterSignedDistancePixels[p] = (byte)MathHelper.Clamp(128f + texels * 4f, 0f, 255f);
             }
+
+            // The SAME field again, measured on the water as it would be with nothing standing
+            // in it. Everything the art carve took is put back, so the only edges left are the
+            // ones where water meets real land.
+            //
+            // This exists because a bridge is a hole in the effect mask and a hole has an edge,
+            // and the foam band asks nothing except "how far is the nearest edge". So a bridge
+            // grew a drifting lap line down both its sides, which is the wavy edge that was
+            // reported and which nothing about the ripple was ever going to fix.
+            if (_maskScratch.RealShoreWaterBits == null || _maskScratch.RealShoreWaterBits.Length < pcount) _maskScratch.RealShoreWaterBits = new bool[pcount];
+            if (_maskScratch.RealShoreDistancePixels == null || _maskScratch.RealShoreDistancePixels.Length < pcount) _maskScratch.RealShoreDistancePixels = new byte[pcount];
+            var artCarved = _maskScratch.ArtCarvedFlags;
+            var filled = _maskScratch.RealShoreWaterBits;
+            for (int p = 0; p < pcount; p++)
+                filled[p] = _waterEffectBits![p] || (artCarved != null && p < artCarved.Length && artCarved[p]);
+            // The two chamfer buffers are finished with above, so they are reused rather than
+            // doubled: one rebuild runs at a time and these two passes are strictly ordered.
+            Chamfer34(filled, true, _maskScratch.DistanceToWater, pw, ph);
+            Chamfer34(filled, false, _maskScratch.DistanceToLand, pw, ph);
+            for (int p = 0; p < pcount; p++)
+            {
+                float texels = filled[p] ? _maskScratch.DistanceToLand[p] / 3f : -(_maskScratch.DistanceToWater[p] / 3f);
+                _maskScratch.RealShoreDistancePixels[p] = (byte)MathHelper.Clamp(128f + texels * 4f, 0f, 255f);
+            }
         }
 
 
@@ -2097,6 +2329,13 @@ namespace SDVRadiance
                 _waterSignedDistanceTexture = new Texture2D(_device, pw, ph, false, SurfaceFormat.Alpha8);
             }
             _waterSignedDistanceTexture.SetData(_maskScratch.WaterSignedDistancePixels, 0, pw * ph);
+            if (_waterRealShoreDistanceTexture == null || _waterRealShoreDistanceTexture.Width != pw || _waterRealShoreDistanceTexture.Height != ph)
+            {
+                _waterRealShoreDistanceTexture?.Dispose();
+                _waterRealShoreDistanceTexture = new Texture2D(_device, pw, ph, false, SurfaceFormat.Alpha8);
+            }
+            if (_maskScratch.RealShoreDistancePixels != null)
+                _waterRealShoreDistanceTexture.SetData(_maskScratch.RealShoreDistancePixels, 0, pw * ph);
             _waterMaskPixelSize = new Vector2(tilesW, tilesH);
 
             if (MaskView)
@@ -2147,6 +2386,12 @@ namespace SDVRadiance
                 _waterSignedDistanceTexture = new Texture2D(_device, pw, ph, false, SurfaceFormat.Alpha8);
             }
             _waterSignedDistanceTexture.SetData(_maskScratch.WaterSignedDistancePixels, 0, pcount);
+            if (_waterRealShoreDistanceTexture == null || _waterRealShoreDistanceTexture.Width != pw || _waterRealShoreDistanceTexture.Height != ph)
+            {
+                _waterRealShoreDistanceTexture?.Dispose();
+                _waterRealShoreDistanceTexture = new Texture2D(_device, pw, ph, false, SurfaceFormat.Alpha8);
+            }
+            _waterRealShoreDistanceTexture.SetData(_maskScratch.WaterSignedDistancePixels, 0, pcount);
             _waterMaskPixelSize = new Vector2(tilesW, tilesH);
         }
 

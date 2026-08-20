@@ -36,11 +36,24 @@ SETTLE_SECONDS = 7
 # comment. The daytime/night pair on the same map is the whole point: the reports say daytime
 # is the expensive half, which is backwards for a lighting mod and is the claim to test first.
 SCENES = [
-    ("farm-day",     "Farm",     64, 15, 1200),   # N1Zenma: near crops and structures, daytime
-    ("town-day",     "Town",     45, 55, 1200),   # nuupon: big map, daytime
-    ("town-night",   "Town",     45, 55, 2200),   # the 1.5.0 baseline spot, for comparison
-    ("beach-day",    "Beach",    30, 30, 1200),   # water on screen
-    ("indoor",       "SeedShop",  5, 18, 1200),   # nuupon: small maps do not lag
+    ("farm-day",     "Farm",     64, 15, 1200, None),   # N1Zenma: near crops and structures, daytime
+    ("town-day",     "Town",     45, 55, 1200, None),   # nuupon: big map, daytime
+    ("town-night",   "Town",     45, 55, 2200, None),   # the 1.5.0 baseline spot, for comparison
+    ("beach-day",    "Beach",    30, 30, 1200, None),   # water on screen
+    ("indoor",       "SeedShop",  5, 18, 1200, None),   # nuupon: small maps do not lag
+]
+
+# 1.6.0 added rain, snow, lightning, wet glass and rings on the water, and NONE of them draw a
+# pixel on a clear day. Measuring the release on the list above only would have reported that
+# the whole weather block is free, which is true and useless. Weather is set per location
+# context, after the warp, by the mod's own command: the game has no debug command for snow.
+WEATHER_SCENES = [
+    ("beach-rain",   "Beach",    30, 30, 1200, "rain"),   # water + rings + drops on the glass
+    ("town-storm",   "Town",     45, 55, 1200, "storm"),  # rain + lightning on the busiest map
+    ("town-snow",    "Town",     45, 55, 1200, "snow"),    # flakes instead of streaks
+    ("beach-day",    "Beach",    30, 30, 1200, None),      # the dry pair for beach-rain
+    ("town-night",   "Town",     45, 55, 2200, None),      # the 1.5.0 baseline spot
+    ("indoor",       "SeedShop",  5, 18, 1200, None),      # dust motes are indoors only
 ]
 
 # Every switch the tuner exposes, off. Enabled stays true because the question is what the mod
@@ -73,7 +86,56 @@ CONFIGS = {
     # true "mod absent" reading - it is "mod present, drawing nothing", which is the comparison
     # that isolates the patches themselves.
     "disabled": dict(ALL_OFF, Enabled=False),
+
+    # ---- 1.6.0. Each row turns off exactly one thing this version added, so the gap between
+    # it and `full` is that thing's cost and nothing else. Run them against WEATHER_SCENES.
+    "no-precip":  {"PrecipitationEnabled": False},
+    "no-particles": {"ParticlesEnabled": False},
+    "no-windowreflect": {"WindowReflectionEnabled": False},
+    "no-lensdrops": {"WetWorldLensDrops": False},
+    "no-caustics": {"WaterCausticsEnabled": False},
+    "no-lightning": {"LightningEffectsEnabled": False, "LightningBoltsEnabled": False},
+    # The rings are shader work inside a stage that was already running, so this row prices the
+    # branch rather than the stage: at 0 strength the whole block is still entered.
+    "no-rainrings": {"WaterRainRingStrength": 0.0},
+    # Everything 1.6.0 added, off together. Against `full` this is the release's whole bill,
+    # which is the number the question "did it get slower" actually wants.
+    "no-160": {
+        "PrecipitationEnabled": False, "ParticlesEnabled": False,
+        "WindowReflectionEnabled": False, "WetWorldLensDrops": False,
+        "WaterCausticsEnabled": False, "LightningEffectsEnabled": False,
+        "LightningBoltsEnabled": False, "WaterRainRingStrength": 0.0,
+    },
+
+    # ---- the two presets we tell people to reach for. Written out by value rather than by
+    # name so the bench is measuring a known config rather than whatever ApplyPerfPreset does
+    # this week, and with RenderScaleAuto OFF: it moves the scale mid-run, which is the right
+    # behaviour in a game and useless in a measurement.
+    "preset-performance": {
+        "RenderScale": 0.5, "RenderScaleAuto": False, "TiltShiftEnabled": False,
+        "ChromaticAberrationEnabled": False, "FloodLightingEnabled": False,
+        "LightingEnabled": True, "DirectionalShadowObjects": False,
+        "ShadowCastsPerCharacter": 1, "WaterReflection": True,
+        "WaterReflectReach": 0.5, "WaterReflectFadeRows": 8,
+    },
+    "preset-lowspec": {
+        "RenderScale": 0.5, "RenderScaleAuto": False, "TiltShiftEnabled": False,
+        "ChromaticAberrationEnabled": False, "FloodLightingEnabled": False,
+        "LightingEnabled": True, "DirectionalShadowObjects": False,
+        "ShadowCastsPerCharacter": 1, "GodRaysEnabled": False, "GodRaysSun": False,
+        "WaterReflection": True, "WaterReflectReach": 0.2, "WaterReflectFadeRows": 8,
+    },
+    # Render scale on its own, so the presets' biggest lever can be told apart from their
+    # feature cuts. Fill is quadratic in this number and nothing else here is.
+    "half-scale": {"RenderScale": 0.5, "RenderScaleAuto": False},
 }
+
+# The 1.6.0 rows are about weather, so they get the weather scene list.
+WEATHER_CONFIGS = {"no-precip", "no-particles", "no-windowreflect", "no-lensdrops",
+                   "no-caustics", "no-lightning", "no-rainrings", "no-160", "full",
+                   # The preset rows share the list so they can be read straight against `full`.
+                   # A preset measured on a different set of scenes answers a different question.
+                   "preset-performance", "preset-lowspec", "half-scale"}
 
 
 def rpc(tool, args=None, timeout=1800, tries=60):
@@ -216,7 +278,8 @@ def measure(cfg_name, base):
         pass    # only stops the game pausing while unfocused; not worth failing the run over
 
     results, frames = {}, {}
-    for scene, loc, x, y, tod in SCENES:
+    scenes = WEATHER_SCENES if cfg_name in WEATHER_CONFIGS else SCENES
+    for scene, loc, x, y, tod, weather in scenes:
         try:
             rpc("goto", {"location": loc, "x": x, "y": y}, timeout=120)
             # Re-assert uncapped every scene. Asking once at the start is not enough: a run came
@@ -226,6 +289,10 @@ def measure(cfg_name, base):
             # Indoors the game only refreshes window glow on ENTER, so a clock change while
             # standing inside leaves the room in its old light. Re-enter after setting it.
             rpc("goto", {"location": loc, "x": x, "y": y}, timeout=120)
+            # Weather is per location context and absolute, so it is set AFTER the warp and it
+            # is set every scene: the previous scene's storm does not follow you to the beach,
+            # and a scene that wants a clear sky has to say so rather than inherit one.
+            rpc("console", {"command": "radiance_weather " + (weather or "sun")}, timeout=60)
             time.sleep(SETTLE_SECONDS)
             # The bridge hands the command to SMAPI's queue and returns before it has run, so
             # "the call succeeded" says nothing about the file. Wait for the WRITE instead, or

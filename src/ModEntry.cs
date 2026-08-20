@@ -38,9 +38,11 @@ namespace SDVRadiance
         private bool EffectsActive => _config.Enabled &&
             (_config.BloomEnabled || _config.ColorGradeEnabled || _config.GodRaysEnabled
              || _config.FogEnabled || _config.FogNightMist || _config.CloudShadowEnabled || _config.TiltShiftEnabled
-             || _config.WaterEnabled || _config.WaterReflection
+             || _config.WaterEnabled || _config.WaterReflection || _config.WindowReflectionEnabled
              || _config.VignetteEnabled || _config.ChromaticAberrationEnabled
              || _config.LightingEnabled || _config.FloodLightingEnabled
+             || _config.ParticlesEnabled || _config.WetWorldEnabled
+             || ScreenEdgeDrops.WantedNow(_config)
              || _config.BlueLightFilter > 0.001f);
 
         /// <summary>Mods that draw daylight through windows themselves. Ours and theirs read the
@@ -165,6 +167,7 @@ namespace SDVRadiance
             ConsoleCommands.RegisterAll(helper, this.Monitor, () => _config, () => _pipeline, this.ToggleTuner);
 
             _harmony = new Harmony(this.ModManifest.UniqueID);
+            PrecipitationSystem.LiveConfig = () => _config;
             HarmonyPatcher.InstallAll(_harmony, this.Monitor);
 
             this.Monitor.Log("SDV-Radiance loaded (world post-processing via RenderedWorld).", LogLevel.Info);
@@ -287,21 +290,39 @@ namespace SDVRadiance
             }
 
 
+            // The player's frame for the glass, when it differs from the one the world draws.
+            // Same window: a render-target swap is only safe before the world batches open.
+            if (_config.WindowReflectionEnabled && Context.IsWorldReady)
+                _pipeline?.BakeWindowReflectionPlayer(_config);
+
             // Per-frame water sprite mask (ducks/NPCs/critters on water must not ripple).
             // Baked here because a render-target swap is only safe before the world batches open.
+            bool waterAskedForScenery = false;
+            // Wet puddles borrow the flipped-entity mirror, so the bake must also run when the
+            // water reflection itself is off, or a rainy lake-less farm shows empty pools.
+            bool wetWantsMirror = _pipeline?.WetWorldWantsEntityMirror == true;
             if ((_config.WaterEnabled || _config.WaterReflection) && Context.IsWorldReady)
             {
                 _pipeline?.BakeWaterSpriteMask();
                 // P3b: flipped-entity reflection layer (player/NPCs/animals/trees), built
                 // by construction instead of trusting whatever sits above on screen.
-                if (_config.WaterReflection)
+                if (_config.WaterReflection || wetWantsMirror)
                 {
                     _pipeline?.BakeWaterReflection(_config);
                     // P3c: sprite-free map render — the mirror's source, so an excluded
                     // sprite shows the true map pixels behind it instead of a sky hole.
                     _pipeline?.BakeSceneryReflection();
+                    waterAskedForScenery = true;
                 }
             }
+            // With water off entirely but puddles live, the entity mirror still has to exist.
+            if (!_config.WaterEnabled && !_config.WaterReflection && wetWantsMirror && Context.IsWorldReady)
+                _pipeline?.BakeWaterReflection(_config);
+            // The windows read the same source to show the street in the glass, and they are
+            // usually standing on a street with no water on it, so they ask for it themselves
+            // when the water pass had no reason to.
+            if (!waterAskedForScenery && _pipeline?.WindowsWantSceneryMirror == true)
+                _pipeline.BakeSceneryReflection();
 
             if (RenderPipeline.BenchExtraShadowRuns > 0)
                 RunBenchmarkShadowRepeats(RenderPipeline.BenchExtraShadowRuns);
@@ -390,7 +411,13 @@ namespace SDVRadiance
         {
             if (e.Step != StardewValley.Mods.RenderSteps.World_Sorted)
                 return;
-            if (!_config.Enabled || !_config.DirectionalShadowsEnabled)
+            if (!_config.Enabled)
+                return;
+            // The people in the glass go into the same sorted batch, at the sill's depth, so a
+            // body in front of a window covers its own reflection.
+            if (Context.IsWorldReady)
+                _pipeline?.DrawWindowReflections(e.SpriteBatch, _config);
+            if (!_config.DirectionalShadowsEnabled)
                 return;
             _shadows ??= new ShadowRenderer();
             ShadowRenderer.DiagnosticMonitor = _config.DebugLogging ? this.Monitor : null;
@@ -431,8 +458,10 @@ namespace SDVRadiance
             _shadows?.ReleaseIdleTargets(shadowsWanted);
             Pipeline.ReleaseIdleChainTargets(EffectsActive);
             Pipeline.ReleaseIdleWaterTargets(_config.Enabled
-                && (_config.WaterEnabled || _config.WaterReflection) && ShadowRenderer.WaterOnScreen);
+                && (((_config.WaterEnabled || _config.WaterReflection) && ShadowRenderer.WaterOnScreen)
+                    || Pipeline.WetWorldWantsEntityMirror));
             _camera.Update(_config);
+            LightningEffects.Update(_config);
             ShadowSuppression.SuppressVanillaShadows = ShadowRenderer.ShadowsActiveNow(_config);
             // Suppress the BUSH blob (fixed-direction, fights our cast); the TREE blob is kept
             // (not patched) as a base anchor under the canopy.
@@ -519,6 +548,15 @@ namespace SDVRadiance
             // Draw-call-accurate water discovery: patch drawWaterTile on GameLocation AND every
             // loaded override (mod location classes included) — hence GameLaunched, not Entry.
             WaterDrawHook.Install(_harmony!, this.Monitor);
+
+            // If another mod also rewrites the weather draw, two replacements fight over one
+            // slot and the player cannot tell whose rain is broken. Yield for the session and
+            // say so once; the config value itself is left alone.
+            HarmonyPatcher.DetectForeignWeatherPatches(this.Monitor);
+
+            RenderPipeline.DynamicReflectionsPresent = this.Helper.ModRegistry.IsLoaded("PeacefulEnd.DynamicReflections");
+            if (RenderPipeline.DynamicReflectionsPresent)
+                this.Monitor.Log("Dynamic Reflections found: its puddles win, ours stay off. Wet-ground dampness and night streaks are unaffected.", LogLevel.Info);
         }
 
         private string I18n(string key) => this.Helper.Translation.Get(key);

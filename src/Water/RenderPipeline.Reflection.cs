@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewValley;
+using StardewValley.ItemTypeDefinitions;
 
 namespace SDVRadiance
 {
@@ -186,7 +187,7 @@ namespace SDVRadiance
             ReflectRTReady = false;
             ReflectRTHasPlayer = false;
             GameLocation? location = Game1.currentLocation;
-            if (location == null || !_hasWaterInMask || Game1.game1.takingMapScreenshot)
+            if (location == null || (!_hasWaterInMask && !_wetPuddleMirrorWanted) || Game1.game1.takingMapScreenshot)
                 return;
 
             RenderTargetBinding[] prev = _device.GetRenderTargets();
@@ -217,6 +218,9 @@ namespace SDVRadiance
                 MirrorFarmers(spriteBatch, toolBaked);
                 MirrorCharacters(spriteBatch, location);
                 MirrorAnimalsAndCritters(spriteBatch, location);
+                MirrorPlacedObjects(spriteBatch, location);
+                MirrorTemporarySprites(spriteBatch, location);
+                MirrorFishingBobbers(spriteBatch, location);
 
                 // How far from the water a piece of SCENERY may stand and still be mirrored. The
                 // mirror is stamped in four-row slices to get its head fade, so one tree canopy is
@@ -336,9 +340,218 @@ namespace SDVRadiance
                     Rectangle crs = cr.sprite.SourceRect;
                     var crBox = new Rectangle((int)cr.position.X - crs.Width * 2,
                         (int)cr.position.Y - crs.Height * 4, crs.Width * 4, crs.Height * 4);
-                    StampFlipped(spriteBatch, cr.sprite.Texture, crs, crBox);
+                    // A bird's sheet only holds one direction; the game faces it the other way by
+                    // flipping it, and the mirror has to be told, or a bird taking off to the left
+                    // flies left over the water and right in it. The shadow pass already asks the
+                    // critter this same question.
+                    StampFlipped(spriteBatch, cr.sprite.Texture, crs, crBox, default, cr.flip);
                 }
             }
+        }
+
+        /// <summary>
+        /// Mirror the objects a player has placed ON the water: a crab pot, forage bobbing in a
+        /// tide pool.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// This was written once before and taken back out the same afternoon, because the images
+        /// landed in the wrong place. The reason is worth keeping: an object's art does not tell
+        /// you where the object MEETS the surface. A chest occupies its tile and rests on the
+        /// bottom of it; a crab pot is drawn from a different sheet, half sunk, and bobs on a sine
+        /// of its own. One anchor for all of them is what put a pot's image across the bridge
+        /// behind it.
+        /// </para>
+        /// <para>
+        /// So each kind is mirrored around the line vanilla actually draws it standing on, and
+        /// only things standing on water are mirrored at all: something on the bank has its feet
+        /// on the bank, and hanging its image in whatever water lies below the tile paints over
+        /// the reflection that belongs there.
+        /// </para>
+        /// </remarks>
+        private void MirrorPlacedObjects(SpriteBatch spriteBatch, GameLocation location)
+        {
+            var viewport = Game1.viewport;
+            int objectTileX0 = (int)Math.Floor((viewport.X - 128) / 64f), objectTileX1 = (int)Math.Floor((viewport.X + viewport.Width + 128) / 64f);
+            int objectTileY0 = (int)Math.Floor((viewport.Y - 128) / 64f), objectTileY1 = (int)Math.Floor((viewport.Y + viewport.Height + 192) / 64f);
+            // An object is one tile tall and its mirror hangs a tile or two under it, so the walk
+            // needs far less slack than a tree's.
+            if (!ClampWalkToWater(1, 2, ref objectTileX0, ref objectTileX1, ref objectTileY0, ref objectTileY1))
+                return;
+            var surfaceMap = SurfaceMap.For(location);
+            for (int tileY = objectTileY0; tileY <= objectTileY1; tileY++)
+            for (int tileX = objectTileX0; tileX <= objectTileX1; tileX++)
+            {
+                if (!location.objects.TryGetValue(new Vector2(tileX, tileY), out var obj) || obj == null)
+                    continue;
+                bool standsOnWater = surfaceMap != null ? surfaceMap.IsWater(tileX, tileY) : location.isWaterTile(tileX, tileY);
+                if (!standsOnWater || !WaterWithinTiles(tileX, tileY + 1, 2))
+                    continue;
+
+                // A crab pot: its own sheet, its own frame while it holds a catch, and its own
+                // bob. Reflecting the inventory sprite at the tile line instead gives the wrong
+                // picture in the wrong place, which is exactly what was seen the first time.
+                if (obj is StardewValley.Objects.CrabPot crabPot)
+                {
+                    int crabPotFrame = crabPot.tileIndexToShow != 0 ? crabPot.tileIndexToShow : crabPot.ParentSheetIndex;
+                    var crabPotSourceRect = Game1.getSourceRectForStandardTileSheet(Game1.objectSpriteSheet, crabPotFrame, 16, 16);
+                    int crabPotWorldX = (int)(tileX * 64 + crabPot.directionOffset.X + crabPot.shake.X);
+                    int crabPotWorldY = (int)(tileY * 64 + crabPot.directionOffset.Y + (int)crabPot.yBob + crabPot.shake.Y);
+                    StampFlipped(spriteBatch, Game1.objectSpriteSheet, crabPotSourceRect, new Rectangle(crabPotWorldX, crabPotWorldY, 64, 64));
+                    continue;
+                }
+
+                ParsedItemData objectData;
+                try { objectData = ItemRegistry.GetDataOrErrorItem(obj.QualifiedItemId); }
+                catch { continue; }
+                Texture2D? objectTexture = objectData.GetTexture();
+                if (objectTexture == null)
+                    continue;
+                // Vanilla draws an ordinary object filling its tile and a big craftable standing a
+                // tile taller, both ending on the tile's bottom edge. StampFlipped lifts its
+                // anchor ten pixels the way a body's collision box sits below the shoes, and that
+                // lift lands the axis on the shadow the game draws under the object.
+                bool isBigCraftable = obj.bigCraftable.Value;
+                Rectangle objectSourceRect = isBigCraftable
+                    ? objectData.GetSourceRect(obj.showNextIndex.Value ? 1 : 0, obj.ParentSheetIndex)
+                    : objectData.GetSourceRect();
+                var objectBox = new Rectangle(tileX * 64, tileY * 64 + 64 - objectSourceRect.Height * 4,
+                    objectSourceRect.Width * 4, objectSourceRect.Height * 4);
+                StampFlipped(spriteBatch, objectTexture, objectSourceRect, objectBox);
+            }
+        }
+
+        /// <summary>
+        /// Mirror the things that move and vanish: splashes, tossed items, sparkles, the fish that
+        /// jumps, the dust a shovel raises on the bank.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// None of these ever reflected, so the water read as a still photograph with live things
+        /// pasted over it: a fish leapt and the surface below it did not know. The game keeps
+        /// them in one flat list, each with its texture, frame, position and colour, so mirroring
+        /// them is one loop and one stamp.
+        /// </para>
+        /// <para>
+        /// Left out on purpose: sprites drawn in screen space (interface, not world), text,
+        /// anything that follows a character (the character itself is already mirrored), and
+        /// anything flagged to draw above the always-front layer, which is where the weather-like
+        /// effects sit. Rain does not reflect in the water it is falling into.
+        /// </para>
+        /// </remarks>
+        private void MirrorTemporarySprites(SpriteBatch spriteBatch, GameLocation location)
+        {
+            var sprites = location.temporarySprites;
+            if (sprites == null || sprites.Count == 0)
+                return;
+            foreach (var sprite in sprites)
+            {
+                if (sprite == null || sprite.local || sprite.text != null || sprite.swordswipe
+                    || sprite.drawAboveAlwaysFront || sprite.attachedCharacter != null
+                    || sprite.currentParentTileIndex < 0
+                    || sprite.delayBeforeAnimationStart > 0 || sprite.ticksBeforeAnimationStart > 0)
+                    continue;
+                float alpha = sprite.alpha;
+                if (alpha <= 0.02f)
+                    continue;
+
+                Texture2D texture;
+                Rectangle sourceRect;
+                float scale;
+                Color tint;
+                if (sprite.Texture != null)
+                {
+                    texture = sprite.Texture;
+                    sourceRect = sprite.sourceRect;
+                    // A per-axis scale is rare and never square; take the vertical, which is
+                    // the axis a mirror cares about.
+                    scale = sprite.vectorScale != Vector2.Zero ? sprite.vectorScale.Y : sprite.scale;
+                    tint = sprite.color;
+                }
+                else if (!sprite.bigCraftable)
+                {
+                    // An item sprite off the object sheet: vanilla draws it at four times, tinted
+                    // light blue while it flashes.
+                    texture = Game1.objectSpriteSheet;
+                    sourceRect = GameLocation.getSourceRectForObject(sprite.currentParentTileIndex);
+                    scale = 4f * sprite.scale;
+                    tint = sprite.flash ? Color.LightBlue * 0.85f : sprite.color;
+                }
+                else
+                    continue;
+                if (scale <= 0.01f)
+                    continue;
+
+                // Vanilla places the sprite's top-left at Position and rotates it about its own
+                // centre; its feet are the bottom edge of the unrotated frame.
+                float drawnWidth = sourceRect.Width * scale, drawnHeight = sourceRect.Height * scale;
+                float centerX = sprite.Position.X + drawnWidth / 2f;
+                float feetY = sprite.Position.Y + drawnHeight;
+                if (!WaterWithinTiles((int)(centerX / 64f), (int)(feetY / 64f) + 1, 2))
+                    continue;
+                StampFlippedSprite(spriteBatch, texture, sourceRect, centerX, feetY, scale,
+                    tint * alpha, sprite.rotation, sprite.flipped, sprite.verticalFlipped);
+            }
+        }
+
+        /// <summary>
+        /// Mirror the bobber of every rod that has one in the water: it is the one thing on the
+        /// surface a fishing player stares at, and it floated with no reflection under it.
+        /// </summary>
+        /// <remarks>Same rule for every farmer in the location, not only the one at the keyboard:
+        /// a co-op partner's line is as real as yours. The rod draws its floating frame - the
+        /// lower half of the bobber art - centred on the bobber point at four times, jittering when
+        /// a fish nibbles; the mirror follows the same point, so it jitters with it.</remarks>
+        /// <summary>How many of the floating frame's 16 source rows hold the float itself; the
+        /// rest is the water it sits in, which must not be mirrored.</summary>
+        private const int BobberFloatRows = 9;
+
+        private void MirrorFishingBobbers(SpriteBatch spriteBatch, GameLocation location)
+        {
+            foreach (var farmer in location.farmers)
+            {
+                if (farmer?.CurrentTool is not StardewValley.Tools.FishingRod rod || !rod.isFishing)
+                    continue;
+                Vector2 bobber = rod.bobber.Value;
+                if (bobber == Vector2.Zero)
+                    continue;
+                if (!WaterWithinTiles((int)(bobber.X / 64f), (int)(bobber.Y / 64f) + 1, 2))
+                    continue;
+                // The floating frame is the lower half of a 16x32 bobber, drawn about an (8,8)
+                // origin at four times: a 64 px square centred on the point, the float itself in
+                // the frame's upper rows and open water below it. The mirror hangs from where the
+                // FLOAT meets the water, not from the frame's bottom edge - anchored there it
+                // floated a hand's width under its own bobber, detached.
+                var bobberSourceRect = Game1.getSourceRectForStandardTileSheet(Game1.bobbersTexture, rod.getBobberStyle(farmer), 16, 32);
+                bobberSourceRect.Y += 16;
+                bobberSourceRect.Height = BobberFloatRows;
+                float floatWaterlineY = bobber.Y - 32f + BobberFloatRows * 4f;
+                StampFlippedSprite(spriteBatch, Game1.bobbersTexture, bobberSourceRect,
+                    bobber.X, floatWaterlineY, 4f, Color.White, 0f,
+                    farmer.FacingDirection == 1, false);
+            }
+        }
+
+        /// <summary>
+        /// The general flipped stamp: any texture, any scale, tinted, rotated, in one draw. The
+        /// body stamps slice their sprites to fade feet to head; these sprites are small and
+        /// short-lived, so one draw at the fade's average is the same look for a fraction of the
+        /// calls.
+        /// </summary>
+        /// <param name="centerX">World x of the sprite's centre.</param>
+        /// <param name="feetY">World y of the line the sprite meets the surface: its bottom edge.</param>
+        private void StampFlippedSprite(SpriteBatch spriteBatch, Texture2D texture, Rectangle sourceRect,
+            float centerX, float feetY, float scale, Color tint, float rotation, bool flipHorizontal, bool flipVertical)
+        {
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(centerX, feetY));
+            // A mirror about a horizontal line negates the rotation, and the vertical flip the
+            // mirror IS cancels against a sprite that was already drawn upside down.
+            SpriteEffects effects = (flipVertical ? SpriteEffects.None : SpriteEffects.FlipVertically)
+                | (flipHorizontal ? SpriteEffects.FlipHorizontally : SpriteEffects.None);
+            float averageFade = (1f + ReflHeadFade) * 0.5f;
+            spriteBatch.Draw(texture, feet, sourceRect, tint * averageFade, -rotation,
+                new Vector2(sourceRect.Width / 2f, 0f), new Vector2(scale, scale * MirrorSquash),
+                effects, StampDepth(feetY));
         }
 
         /// <summary>Mirror the planted scenery: trees, fruit trees, grass, and bushes from both
@@ -476,19 +689,22 @@ namespace SDVRadiance
         /// the sprite hangs downward from the feet, squashed like the scenery mirror —
         /// drawn in 4-source-row slices so the opacity can fall feet→head (see
         /// <see cref="ReflHeadFade"/>); one draw per slice, same depth, no overlap.</summary>
-        private void StampFlipped(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, Rectangle bb, Vector2 drawOffset = default)
+        private void StampFlipped(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, Rectangle bb,
+            Vector2 drawOffset = default, bool flipHorizontal = false)
         {
             // The SAME feet rule the player's stamp uses: the 10 px lift (a collision box sits a
             // little below the drawn shoes) and the sprite's own draw offset. Without them an NPC
             // mirrored 10 px lower than the player standing beside it, and a seated one mirrored
             // where it was not drawn. House rule: an NPC and the player get identical treatment.
-            StampFlippedAt(spriteBatch, texture, src, bb.Center.X + drawOffset.X, bb.Bottom - 10f + drawOffset.Y, 0);
+            StampFlippedAt(spriteBatch, texture, src, bb.Center.X + drawOffset.X, bb.Bottom - 10f + drawOffset.Y, 0,
+                flipHorizontal);
         }
 
         /// <summary>Core of the flipped stamp: explicit feet anchor, plus how many source rows
         /// at the frame's bottom sit BELOW the feet (tall festival frames) and stay out of the
         /// mirror - the flip axis is the feet, those rows live under it.</summary>
-        private void StampFlippedAt(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, float centerX, float feetY, int belowFeetRows)
+        private void StampFlippedAt(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, float centerX, float feetY,
+            int belowFeetRows, bool flipHorizontal = false)
         {
             if (belowFeetRows > 0)
                 src.Height = Math.Max(1, src.Height - belowFeetRows);
@@ -496,6 +712,11 @@ namespace SDVRadiance
             float depth = StampDepth(feetY);
             var origin = new Vector2(src.Width / 2f, 0f);
             var scale = new Vector2(4f, 4f * MirrorSquash);
+            // A mirror in the surface turns the picture over, it does not turn it around, so a
+            // sprite the game drew facing left has to be facing left in the water too. The flip
+            // is about the origin, which is already the sprite's centre, so nothing moves sideways.
+            SpriteEffects effects = SpriteEffects.FlipVertically
+                | (flipHorizontal ? SpriteEffects.FlipHorizontally : SpriteEffects.None);
             int hs = Math.Max(1, _mirrorSliceRows);        // source rows per slice
             int n = (src.Height + hs - 1) / hs;
             for (int i = 0; i < n; i++)
@@ -506,7 +727,7 @@ namespace SDVRadiance
                 var srcR = new Rectangle(src.X, src.Y + src.Height - i * hs - rows, src.Width, rows);
                 float a = MathHelper.Lerp(1f, ReflHeadFade, (i + 0.5f) / n);
                 spriteBatch.Draw(texture, feet + new Vector2(0f, i * hs * scale.Y), srcR, Color.White * a,
-                    0f, origin, scale, SpriteEffects.FlipVertically, depth);
+                    0f, origin, scale, effects, depth);
             }
         }
 
@@ -667,12 +888,22 @@ namespace SDVRadiance
         /// </para>
         ///
         /// <para>
-        /// Worth knowing either way: <c>radiance_anim</c> measured Forest and Town at an animation
-        /// interval of exactly 6.0 ticks, which is exactly this TTL. Two periodic things at the
-        /// same period with no phase lock do not track each other, they beat.
+        /// And the refresh no longer runs on a clock of its own. <c>radiance_anim</c> measured
+        /// Forest and Town animating at exactly 6.0 ticks, which was exactly the TTL: two periodic
+        /// things at the same period with no phase lock do not track each other, they beat, and
+        /// that beat is the judder people saw in a reflected waterfall. So the trigger is now the
+        /// game's own animation clock instead - see <see cref="AnimationStamp"/>. The reflection
+        /// changes frame on the same frame the world does, which is both smooth and cheaper than
+        /// asking every tick, because a map whose art advances five times a second is redrawn five
+        /// times a second and not sixty.
         /// </para>
         /// </summary>
         private readonly List<Point> _sceneAnimatedTiles = new();
+        /// <summary>The distinct frame intervals of the animated tiles on this map, in ms. Small:
+        /// most maps have one, a few have two.</summary>
+        private readonly List<long> _sceneAnimatedIntervals = new();
+        /// <summary>The animation clock reading the cache was last drawn at.</summary>
+        private long _sceneAnimationStamp = -1;
         private GameLocation? _sceneAnimatedFor;
         private int _sceneAnimatedEpoch = -1;
         /// <summary>Set when the map could not be read. Falls back to the old whole-map rebuild
@@ -688,6 +919,7 @@ namespace SDVRadiance
             _sceneAnimatedFor = location;
             _sceneAnimatedEpoch = MaskEpoch;
             _sceneAnimatedTiles.Clear();
+            _sceneAnimatedIntervals.Clear();
             _sceneAnimatedUnknown = false;
             var seen = new HashSet<Point>();
             try
@@ -699,13 +931,42 @@ namespace SDVRadiance
                     for (int ty = 0; ty < layer.LayerHeight; ty++)
                     for (int tx = 0; tx < layer.LayerWidth; tx++)
                     {
-                        if (layer.Tiles[tx, ty] is xTile.Tiles.AnimatedTile && seen.Add(new Point(tx, ty)))
+                        if (layer.Tiles[tx, ty] is not xTile.Tiles.AnimatedTile at)
+                            continue;
+                        if (at.FrameInterval > 0 && !_sceneAnimatedIntervals.Contains(at.FrameInterval))
+                            _sceneAnimatedIntervals.Add(at.FrameInterval);
+                        if (seen.Add(new Point(tx, ty)))
                             _sceneAnimatedTiles.Add(new Point(tx, ty));
                     }
                 }
             }
             catch { _sceneAnimatedUnknown = true; }
             return _sceneAnimatedTiles;
+        }
+
+        /// <summary>
+        /// A number that changes exactly when the map's animated art changes frame, and does not
+        /// change in between.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// An <c>AnimatedTile</c> picks its frame as <c>(map.ElapsedTime % (interval * frames)) /
+        /// interval</c>, so its frame ordinal steps precisely when <c>ElapsedTime / interval</c>
+        /// steps. Summing that quotient over the intervals present gives one value that only ever
+        /// rises, and rises on exactly the frames at least one tile has new art to show.
+        /// </para>
+        /// <para>
+        /// Which is the whole trick: the mirror redraws when the world redraws rather than on a
+        /// timer that happens to run at the same rate out of phase.
+        /// </para>
+        /// </remarks>
+        private long AnimationStamp(GameLocation location)
+        {
+            long elapsed = location.map?.ElapsedTime ?? 0L;
+            long stamp = 0L;
+            for (int i = 0; i < _sceneAnimatedIntervals.Count; i++)
+                stamp += elapsed / _sceneAnimatedIntervals[i];
+            return stamp;
         }
 
         /// <summary>
@@ -817,7 +1078,10 @@ namespace SDVRadiance
         {
             SceneRTReady = false;
             GameLocation? location = Game1.currentLocation;
-            if (location?.map == null || !_hasWaterInMask || Game1.game1.takingMapScreenshot)
+            // Water is not the only reader any more: a window returns the street from this same
+            // source, and a street full of windows usually has no water on it at all.
+            if (location?.map == null || (!_hasWaterInMask && !WindowsWantSceneryMirror)
+                || Game1.game1.takingMapScreenshot)
                 return;
 
             RenderTargetBinding[] prev = _device.GetRenderTargets();
@@ -850,6 +1114,9 @@ namespace SDVRadiance
             // A map this cannot read keeps the old behaviour, because a frozen waterfall in the
             // reflection is a worse failure than a wasted rebuild.
             List<Point> animated = AnimatedMirrorTiles(location);
+            long animationStamp = AnimationStamp(location);
+            // A map we could not read has no interval list to lock onto, so that one path keeps
+            // the old timer rather than never refreshing at all.
             bool timeExpired = Game1.ticks - _sceneCacheBuiltTick >= SceneCacheTtlTicks;
             bool cacheValid = _mirrorSceneCache != null
                 && ReferenceEquals(_sceneCacheLocation, location)
@@ -875,6 +1142,7 @@ namespace SDVRadiance
                     _sceneCacheAnchorX = wantX - SceneCachePadPx;
                     _sceneCacheAnchorY = wantY - SceneCachePadPx;
                     _sceneCacheBuiltTick = Game1.ticks;
+                    _sceneAnimationStamp = animationStamp;
 
                     _device.SetRenderTarget(_mirrorSceneCache);
                     _device.Clear(Color.Black);
@@ -903,10 +1171,12 @@ namespace SDVRadiance
                     dd.EndScene();
                     spriteBatch.End();
                 }
-                else if (timeExpired && animated.Count > 0)
+                else if (animated.Count > 0 && animationStamp != _sceneAnimationStamp)
                 {
                     // The whole reason the timer existed, now costing what it is worth: a handful
-                    // of tiles rather than every layer of the padded window.
+                    // of tiles rather than every layer of the padded window, and only on the
+                    // frames the art actually turns over.
+                    _sceneAnimationStamp = animationStamp;
                     RefreshAnimatedTilesIntoCache(location, spriteBatch, animated, cacheW, cacheH);
                 }
 

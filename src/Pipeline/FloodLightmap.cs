@@ -340,8 +340,12 @@ namespace SDVRadiance
                     // The TRUE cell, which may lie outside the grid; the columns below are laid
                     // from it so their cells stay where they are in the world. The seed itself is
                     // clamped onto the grid, decayed for the distance (see ClampSeed).
-                    int trueCi = (int)(ls.position.Value.X / 64f) - win.X0;
-                    int trueCj = (int)(ls.position.Value.Y / 64f) - win.Y0;
+                    // The same drop the direct pool takes, or the bounce would sit a tile above
+                    // the pool it is supposed to be the bounce of. See ShadowRenderer.FlameGlowOffset.
+                    Vector2 glowPosition = ls.position.Value
+                        + ShadowRenderer.FlameGlowOffset(location, ls.position.Value, ls.textureIndex.Value);
+                    int trueCi = (int)(glowPosition.X / 64f) - win.X0;
+                    int trueCj = (int)(glowPosition.Y / 64f) - win.Y0;
                     int ci = trueCi, cj = trueCj;
                     // INDIRECT spill (~half strength): the crisp direct pool + its per-light shadows
                     // are computed analytically in floodlight.effect; the flood carries the bounce-like

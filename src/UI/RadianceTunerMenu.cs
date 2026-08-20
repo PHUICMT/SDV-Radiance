@@ -39,8 +39,10 @@ namespace SDVRadiance
         private float _ui = 1f;
         private int S(int v) => (int)Math.Round(v * _ui);
         private const int BodyPad = 12;   // breathing room at the top/bottom of the scrolling content
-        private const int NaturalTabPitch = 54;   // rail button spacing when there is room for it
-        private const int MinTabPitch = 36;       // squeezed spacing that still reads (see Reflow)
+        private const int NaturalTabPitch = 54;   // rail button spacing, now always honoured
+        /// <summary>How wide the rail's own scrollbar is, when the rail has more tabs than
+        /// the window can show at once.</summary>
+        private const int RailBarWidth = 4;
         private static readonly Rectangle DeleteSource = new(192, 256, 64, 64); // red X in mouseCursors
         private static readonly RasterizerState _scissorRaster = new() { ScissorTestEnable = true, CullMode = CullMode.None };
 
@@ -74,6 +76,20 @@ namespace SDVRadiance
         /// </summary>
         private readonly List<(Rectangle row, string text)> _help = new();
         private string? _hoverText;
+
+        /// <summary>The hover note with line breaks put in, and what it was made from.
+        ///
+        /// <para>The game's hover box measures whatever string it is handed and never breaks one:
+        /// it lays the whole note out as a single line and then slides the box left until its
+        /// right edge is on screen, so a note longer than the window starts somewhere off the left
+        /// of it. Every note here is a sentence or three on purpose - the whole reason they exist
+        /// is that a name is not an explanation - so they are exactly the strings that overflow.</para>
+        ///
+        /// <para>Kept rather than rebuilt each frame because the hover runs at sixty frames a
+        /// second and the wrap allocates a string.</para></summary>
+        private string? _hoverTextWrapped;
+        private string? _hoverTextWrappedFrom;
+        private int _hoverTextWrappedWidth;
         private int _seenBenchStamp = -1;
 
         /// <summary>Tab icons: one 16x16 cell per tab, in tab order (assets/tuner-icons.png,
@@ -100,9 +116,9 @@ namespace SDVRadiance
             {
                 "tuner.tab.looks", "config.section.perf", "tuner.section.colorgrade",
                 "tuner.section.bloom", "tuner.tab.lens", "tuner.section.lighting",
-                "tuner.section.shadows", "tuner.section.godrays", "tuner.section.water",
-                "tuner.section.cloudshadow", "tuner.tab.fog", "config.section.camera",
-                "config.section.debug",
+                "tuner.section.windows", "tuner.section.shadows", "tuner.section.godrays", "tuner.section.water",
+                "tuner.section.cloudshadow", "tuner.tab.fog", "config.section.weather",
+                "config.section.particles", "config.section.camera", "config.section.debug",
             };
             for (int i = 0; i < keys.Length; i++)
             {
@@ -116,6 +132,9 @@ namespace SDVRadiance
         private int _activeTab;
 
         private int _scroll, _maxScroll, _bodyTop, _bodyBottom, _hintY, _contentX;
+        /// <summary>First tab shown in the rail, and how far it may be pushed. Counted in TABS
+        /// rather than pixels so a button can never be left half off the bottom of the frame.</summary>
+        private int _railScroll, _maxRailScroll;
         // content-column layout cursor (build helpers advance it)
         private int _contentCursorX, _contentCursorY, _contentColumnWidth;
 
@@ -139,11 +158,14 @@ namespace SDVRadiance
                 ("tuner.section.bloom",   "tuner.desc.bloom",      BuildBloom),
                 ("tuner.tab.lens",        "tuner.desc.lens",       BuildLens),
                 ("tuner.section.lighting", "tuner.desc.lighting",  BuildLighting),
+                ("tuner.section.windows", "tuner.desc.windows",    BuildWindows),
                 ("tuner.section.shadows", "tuner.desc.shadows",    BuildShadows),
                 ("tuner.section.godrays", "tuner.desc.godrays",    BuildGodRays),
                 ("tuner.section.water",   "tuner.desc.water",      BuildWater),
                 ("tuner.section.cloudshadow", "tuner.desc.cloudshadow", BuildCloud),
                 ("tuner.tab.fog",         "tuner.desc.fog",        BuildFog),
+                ("config.section.weather", "tuner.desc.weather",   BuildWeather),
+                ("config.section.particles", "tuner.desc.particles", BuildParticles),
                 ("config.section.camera", "tuner.desc.camera",     BuildCamera),
                 ("config.section.debug",  "tuner.desc.debug",      BuildDiagnostics),
             };
@@ -208,16 +230,24 @@ namespace SDVRadiance
 
             int contentTop = yPositionOnScreen + HeaderH;
 
-            // ---- left rail: one button per tab (fixed; never scrolls) ----
+            // ---- left rail: one button per tab, scrolled when there are more than fit ----
             // The rail is what sets the panel height, so its pitch has to be settled FIRST.
-            // At the natural pitch a long enough rail (or a short window) runs past the
-            // bottom of the frame and the last tabs get drawn outside it, because the frame
-            // is capped to the view while the buttons were not. Squeeze the pitch to fit
-            // instead, down to a floor that still reads.
+            // The pitch used to be SQUEEZED to make every tab fit at once, which worked at
+            // twelve tabs and stopped working at fifteen: every button got shorter, the icons
+            // shrank with them, and the rail turned into a stack of thin slivers. A list too
+            // long for its window is what scrolling is for, so the pitch is fixed now and the
+            // rail carries whatever it can, one whole tab at a time.
             int maxBody = (vh - S(40)) - HeaderH - FooterH;
             int tabPitch = S(NaturalTabPitch);
-            if (_tabDefinitions.Length * tabPitch > maxBody)
-                tabPitch = Math.Clamp(maxBody / Math.Max(1, _tabDefinitions.Length), S(MinTabPitch), S(NaturalTabPitch));
+            int railVisibleTabs = Math.Max(1, Math.Min(_tabDefinitions.Length, maxBody / tabPitch));
+            _maxRailScroll = _tabDefinitions.Length - railVisibleTabs;
+            // Never leave the chosen tab off the end of what is showing: opening the menu on a
+            // tab near the bottom, or being sent to one by name, has to bring it into view.
+            _railScroll = Math.Clamp(_railScroll, 0, _maxRailScroll);
+            if (_activeTab < _railScroll)
+                _railScroll = _activeTab;
+            else if (_activeTab >= _railScroll + railVisibleTabs)
+                _railScroll = _activeTab - railVisibleTabs + 1;
 
             if (!_iconsTried)
             {
@@ -231,10 +261,12 @@ namespace SDVRadiance
             // a fixed icon size would poke out of the top and bottom of its own button.
             _iconScale = _icons != null ? Math.Min(2f * _ui, (tabPitch - S(10)) / (float)IconSize) : 0f;
             int iconInset = _icons != null ? (int)(IconSize * _iconScale) + S(10) : 0;
-            for (int i = 0; i < _tabDefinitions.Length; i++)
+            // Only the tabs on screen become buttons at all, so drawing and clicking are both
+            // clipped to the rail by construction rather than by a second bounds test.
+            for (int i = _railScroll; i < _railScroll + railVisibleTabs; i++)
             {
                 int idx = i;
-                var rect = new Rectangle(railX, contentTop + i * tabPitch, railW, tabPitch - S(4));
+                var rect = new Rectangle(railX, contentTop + (i - _railScroll) * tabPitch, railW, tabPitch - S(4));
                 _tabRailButtons.Add((new TunerTextButton(_translate(_tabDefinitions[i].key), rect, () =>
                 {
                     _activeTab = idx; _lastTab = idx; _scroll = 0; Reflow();
@@ -258,8 +290,7 @@ namespace SDVRadiance
             // CONSISTENT panel height across tabs: the frame is sized to the tab rail, capped
             // to the view. Switching tabs never resizes the panel; a tab whose content is
             // taller than the frame scrolls inside it (mouse wheel) instead of growing it.
-            int railHeight = _tabDefinitions.Length * tabPitch;
-            int bodyHeight = Math.Min(railHeight, maxBody);
+            int bodyHeight = railVisibleTabs * tabPitch;
             height = HeaderH + bodyHeight + FooterH;
 
             _bodyTop = contentTop + S(BodyPad);
@@ -289,6 +320,10 @@ namespace SDVRadiance
                 var rect = new Rectangle(_contentCursorX + i * (bw + 6), _contentCursorY, bw, 44);
                 _buttons.Add(new TunerTextButton(_translate($"config.preset.{key}"), rect, () =>
                 {
+                    // Record WHICH look was picked, not only its numbers. Without this the
+                    // settings menu still read "Custom" after a preset was chosen here, so the
+                    // two menus disagreed about a thing the player had just done.
+                    _config.ActivePreset = preset;
                     _config.ApplyPreset(preset); _onChange(); _onSave(); Reflow();
                 }));
             }
@@ -323,6 +358,26 @@ namespace SDVRadiance
         /// listed after the ones that ship, and when there are none the row is just the shipped
         /// set, so nothing appears for a case that is almost everyone's.</para>
         /// </summary>
+        /// <summary>
+        /// What a look is called on the button, by the same rule the GMCM dropdown uses.
+        ///
+        /// <para>The buttons showed their file names, so every language read "warm-film" while
+        /// the settings menu next door read "Warm film" in that language. Reported by a
+        /// translator who had already written the keys and could not work out why nothing
+        /// consumed them: they were consumed, just not here.</para>
+        ///
+        /// <para>A look the player dropped in the folder themselves keeps its file name, marked
+        /// as theirs. Only they know what it is, and there is no key to translate.</para>
+        /// </summary>
+        private string LutLabel(string look)
+        {
+            if (look.Length == 0)
+                return _translate("config.colorgrade.lut.none");
+            return Array.IndexOf(ModConfig.ShippedLuts, look) >= 0
+                ? _translate($"config.colorgrade.lut.{look}")
+                : $"{look} ({_translate("config.colorgrade.lut.yours")})";
+        }
+
         private void BuildLutPicker()
         {
             Section("tuner.lut");
@@ -330,7 +385,7 @@ namespace SDVRadiance
             int x = _contentCursorX;
             foreach (string look in looks)
             {
-                string label = look.Length == 0 ? _translate("config.colorgrade.lut.none") : look;
+                string label = LutLabel(look);
                 int w = Math.Min(180, 28 + (int)(Game1.smallFont.MeasureString(label).X * 0.7f));
                 if (x + w > _contentCursorX + _contentColumnWidth) { x = _contentCursorX; _contentCursorY += S(44); }
                 string chosen = look;
@@ -399,8 +454,29 @@ namespace SDVRadiance
             Tog("tuner.floodgi", () => _config.FloodLightingEnabled, v => _config.FloodLightingEnabled = v, "help.floodgi");
             Sld("tuner.floodstrength", 0f, 1.5f, () => _config.FloodLightingStrength, v => _config.FloodLightingStrength = v, "help.floodstrength");
             Sld("tuner.floodshadow", 0f, 1f, () => _config.FloodShadowStrength, v => _config.FloodShadowStrength = v, "help.floodshadow");
+        }
+
+        /// <summary>Everything the mod does with a window, on its own tab: the daylight it lets in,
+        /// the beam you can see, the glow after dusk, and the people in the glass by day.</summary>
+        private void BuildWindows()
+        {
+            Section("tuner.section.windowlight");
             Tog("tuner.windoweffects", () => _config.WindowEffectsEnabled, v => _config.WindowEffectsEnabled = v, "help.windoweffects");
             Tog("tuner.windowbeam", () => _config.WindowBeamEnabled, v => _config.WindowBeamEnabled = v, "help.windowbeam");
+            Section("tuner.section.windowreflection");
+            Tog("tuner.windowreflection", () => _config.WindowReflectionEnabled, v => _config.WindowReflectionEnabled = v, "help.windowreflection");
+            Sld("tuner.windowreflectionstrength", 0f, 2f, () => _config.WindowReflectionStrength,
+                v => _config.WindowReflectionStrength = v, "help.windowreflectionstrength");
+            Sld("tuner.windowreflectionnight", 0f, 2f, () => _config.WindowReflectionNightStrength,
+                v => _config.WindowReflectionNightStrength = v, "help.windowreflectionnight");
+            Sld("tuner.windowsheen", 0f, 2f, () => _config.WindowSheenStrength,
+                v => _config.WindowSheenStrength = v, "help.windowsheen");
+            Sld("tuner.windowscene", 0f, 2f, () => _config.WindowSceneReflectionStrength,
+                v => _config.WindowSceneReflectionStrength = v, "help.windowscene");
+            Sld("tuner.windowglare", 0f, 2f, () => _config.WindowGlareStrength,
+                v => _config.WindowGlareStrength = v, "help.windowglare");
+            Sld("tuner.windowlightglow", 0f, 2f, () => _config.WindowLightGlowStrength,
+                v => _config.WindowLightGlowStrength = v, "help.windowlightglow");
             // The beam switches itself off when a mod that draws its own is installed, and until
             // now it did that in the startup log only. On screen it read as a feature that simply
             // does not work, with a switch that appears to do nothing when you turn it back on and
@@ -411,11 +487,22 @@ namespace SDVRadiance
 
         private void BuildGodRays()
         {
+            Section("tuner.section.godrayslamps");
             Tog("tuner.godrays", () => _config.GodRaysEnabled, v => _config.GodRaysEnabled = v, "help.godrays");
-            Tog("tuner.godrayssun", () => _config.GodRaysSun, v => _config.GodRaysSun = v, "help.godrayssun");
             Sld("tuner.godraysintensity", 0f, 1.5f, () => _config.GodRaysIntensity, v => _config.GodRaysIntensity = v);
             Sld("tuner.godraysthreshold", 0f, 1f, () => _config.GodRaysThreshold, v => _config.GodRaysThreshold = v, "help.godraysthreshold");
             Sld("tuner.godraysdensity", 0.1f, 1f, () => _config.GodRaysDensity, v => _config.GodRaysDensity = v, "help.godraysdensity");
+            _contentCursorY += 12;
+            Section("tuner.section.godrayssun");
+            Tog("tuner.godrayssun", () => _config.GodRaysSun, v => _config.GodRaysSun = v, "help.godrayssun");
+            Sld("tuner.godrayssunintensity", 0f, 1.5f, () => _config.GodRaysSunIntensity,
+                v => _config.GodRaysSunIntensity = v, "help.godrayssunintensity");
+            Sld("tuner.godrayssunreach", 0.1f, 1f, () => _config.GodRaysSunReach,
+                v => _config.GodRaysSunReach = v, "help.godrayssunreach");
+            _contentCursorY += 12;
+            Section("tuner.section.godraysboth");
+            Sld("tuner.godraysdecay", 0.5f, 0.99f, () => _config.GodRaysDecay,
+                v => _config.GodRaysDecay = v, "help.godraysdecay");
         }
 
         private void BuildCloud()
@@ -426,6 +513,7 @@ namespace SDVRadiance
             Sld("tuner.cloudcount", 0f, 1f, () => _config.CloudShadowCount, v => _config.CloudShadowCount = v, "help.cloudcount");
             Sld("tuner.cloudopacity", 0f, 0.7f, () => _config.CloudShadowOpacity, v => _config.CloudShadowOpacity = v);
             Sld("tuner.cloudspeed", 0f, 0.06f, () => _config.CloudShadowSpeed, v => _config.CloudShadowSpeed = v);
+            Sld("tuner.cloudscale", 1f, 5f, () => _config.CloudShadowScale, v => _config.CloudShadowScale = v, "help.cloudscale");
         }
 
         private void BuildFog()
@@ -435,12 +523,101 @@ namespace SDVRadiance
             Sld("tuner.fogcoverage", 0f, 1f, () => _config.FogCoverage, v => _config.FogCoverage = v);
             Sld("tuner.fogdensity", 0f, 1f, () => _config.FogDensity, v => _config.FogDensity = v);
             Sld("tuner.fogspeed", 0f, 0.1f, () => _config.FogSpeed, v => _config.FogSpeed = v);
+            Sld("tuner.fogscale", 1f, 8f, () => _config.FogScale, v => _config.FogScale = v, "help.fogscale");
             _contentCursorY += 12;
             Section("tuner.section.fognight");
             Tog("tuner.fognightmist", () => _config.FogNightMist, v => _config.FogNightMist = v, "help.fognightmist");
             Sld("tuner.fognightmistcoverage", 0f, 1f, () => _config.FogNightMistCoverage, v => _config.FogNightMistCoverage = v);
             Sld("tuner.fognightmistdensity", 0f, 1f, () => _config.FogNightMistDensity, v => _config.FogNightMistDensity = v);
             Sld("tuner.fognightmistspeed", 0f, 0.1f, () => _config.FogNightMistSpeed, v => _config.FogNightMistSpeed = v);
+            _contentCursorY += 12;
+            Section("tuner.section.fogboth");
+            Sld("tuner.fogtopbias", 0f, 1f, () => _config.FogTopBias,
+                v => _config.FogTopBias = v, "help.fogtopbias");
+        }
+
+        private void BuildWeather()
+        {
+            Tog("tuner.precipitation", () => _config.PrecipitationEnabled, v => _config.PrecipitationEnabled = v, "help.precipitation");
+            _contentCursorY += 12;
+            Section("tuner.section.precipitationrain");
+            Tog("tuner.precipitationrain", () => _config.PrecipitationRain, v => _config.PrecipitationRain = v, "help.precipitationrain");
+            Sld("tuner.precipitationdensity", 0.25f, 2f, () => _config.PrecipitationRainDensity,
+                v => _config.PrecipitationRainDensity = v, "help.precipitationdensity");
+            Sld("tuner.precipitationsize", 0.5f, 2f, () => _config.PrecipitationRainSize,
+                v => _config.PrecipitationRainSize = v, "help.precipitationsize");
+            Sld("tuner.precipitationopacity", 0.25f, 2f, () => _config.PrecipitationRainOpacity,
+                v => _config.PrecipitationRainOpacity = v, "help.precipitationopacity");
+            _contentCursorY += 12;
+            Section("tuner.section.precipitationsnow");
+            Tog("tuner.precipitationsnow", () => _config.PrecipitationSnow, v => _config.PrecipitationSnow = v, "help.precipitationsnow");
+            Sld("tuner.precipitationdensity", 0.25f, 2f, () => _config.PrecipitationSnowDensity,
+                v => _config.PrecipitationSnowDensity = v, "help.precipitationdensity");
+            Sld("tuner.precipitationsize", 0.5f, 2f, () => _config.PrecipitationSnowSize,
+                v => _config.PrecipitationSnowSize = v, "help.precipitationsize");
+            Sld("tuner.precipitationopacity", 0.25f, 2f, () => _config.PrecipitationSnowOpacity,
+                v => _config.PrecipitationSnowOpacity = v, "help.precipitationopacity");
+            _contentCursorY += 12;
+            Section("tuner.section.precipitationwind");
+            Tog("tuner.precipitationwind", () => _config.PrecipitationWind, v => _config.PrecipitationWind = v, "help.precipitationwind");
+            Sld("tuner.precipitationdensity", 0.25f, 2f, () => _config.PrecipitationWindDensity,
+                v => _config.PrecipitationWindDensity = v, "help.precipitationdensity");
+            Sld("tuner.precipitationsize", 0.5f, 2f, () => _config.PrecipitationWindSize,
+                v => _config.PrecipitationWindSize = v, "help.precipitationsize");
+            Sld("tuner.precipitationopacity", 0.25f, 2f, () => _config.PrecipitationWindOpacity,
+                v => _config.PrecipitationWindOpacity = v, "help.precipitationopacity");
+            _contentCursorY += 12;
+            Section("tuner.section.lightning");
+            Tog("tuner.lightning", () => _config.LightningEffectsEnabled, v => _config.LightningEffectsEnabled = v, "help.lightning");
+            Tog("tuner.lightningbolts", () => _config.LightningBoltsEnabled, v => _config.LightningBoltsEnabled = v, "help.lightningbolts");
+            _contentCursorY += 12;
+            // The wet GROUND is not offered here. It is written and it works, but where
+            // standing water may honestly lie is a question about the map and on a modded map
+            // the answer was sometimes a roof. Until that is decided from the map rather than
+            // guessed at, the whole of it stays off and out of the way; radiance_config still
+            // reaches WetWorldEnabled for anyone who wants to look at it.
+            Section("tuner.section.screendrops");
+            Tog("tuner.wetworldlensdrops", () => _config.WetWorldLensDrops, v => _config.WetWorldLensDrops = v, "help.wetworldlensdrops");
+            Sld("tuner.wetworldlensdropsize", 0.5f, 2f, () => _config.WetWorldLensDropSize,
+                v => _config.WetWorldLensDropSize = v, "help.wetworldlensdropsize");
+            Sld("tuner.wetworldedgehaze", 0f, 2f, () => _config.WetWorldEdgeHaze,
+                v => _config.WetWorldEdgeHaze = v, "help.wetworldedgehaze");
+        }
+
+        private void BuildParticles()
+        {
+            Tog("tuner.particles", () => _config.ParticlesEnabled, v => _config.ParticlesEnabled = v, "help.particles");
+            Sld("tuner.particledensity", 0.25f, 2f, () => _config.ParticleDensity,
+                v => _config.ParticleDensity = v, "help.particledensity");
+            Emitter("dust", () => _config.ParticleDust, v => _config.ParticleDust = v,
+                () => _config.ParticleDustAmount, v => _config.ParticleDustAmount = v,
+                () => _config.ParticleDustSize, v => _config.ParticleDustSize = v);
+            Emitter("embers", () => _config.ParticleEmbers, v => _config.ParticleEmbers = v,
+                () => _config.ParticleEmbersAmount, v => _config.ParticleEmbersAmount = v,
+                () => _config.ParticleEmbersSize, v => _config.ParticleEmbersSize = v);
+            Emitter("fireflies", () => _config.ParticleFireflies, v => _config.ParticleFireflies = v,
+                () => _config.ParticleFirefliesAmount, v => _config.ParticleFirefliesAmount = v,
+                () => _config.ParticleFirefliesSize, v => _config.ParticleFirefliesSize = v);
+            Emitter("petals", () => _config.ParticlePetals, v => _config.ParticlePetals = v,
+                () => _config.ParticlePetalsAmount, v => _config.ParticlePetalsAmount = v,
+                () => _config.ParticlePetalsSize, v => _config.ParticlePetalsSize = v);
+            Emitter("ringsparkles", () => _config.ParticleRingSparkles, v => _config.ParticleRingSparkles = v,
+                () => _config.ParticleRingSparklesAmount, v => _config.ParticleRingSparklesAmount = v,
+                () => _config.ParticleRingSparklesSize, v => _config.ParticleRingSparklesSize = v);
+        }
+
+        /// <summary>One emitter's block: its own heading, its own switch, and its own amount and
+        /// size. Every emitter has the same three, so the ones that come after this are one line
+        /// each rather than another block that has to be kept in step by hand.</summary>
+        private void Emitter(string emitter, Func<bool> getOn, Action<bool> setOn,
+                             Func<float> getAmount, Action<float> setAmount,
+                             Func<float> getSize, Action<float> setSize)
+        {
+            _contentCursorY += 12;
+            Section($"tuner.section.particle{emitter}");
+            Tog($"tuner.particle{emitter}", getOn, setOn, $"help.particle{emitter}");
+            Sld("tuner.particleamount", 0f, 2f, getAmount, setAmount, "help.particleamount");
+            Sld("tuner.particlesize", 0.5f, 2f, getSize, setSize, "help.particlesize");
         }
 
         private void BuildWater()
@@ -449,6 +626,8 @@ namespace SDVRadiance
             Sld("tuner.waterstrength", 0f, 2f, () => _config.WaterStrength, v => _config.WaterStrength = v, "help.waterstrength");
             Sld("tuner.watersparkle", 0f, 1f, () => _config.WaterSparkle, v => _config.WaterSparkle = v, "help.watersparkle");
             Sld("tuner.watersparkledensity", 0.2f, 2f, () => _config.WaterSparkleDensity, v => _config.WaterSparkleDensity = v);
+            Tog("tuner.watercaustics", () => _config.WaterCausticsEnabled, v => _config.WaterCausticsEnabled = v, "help.watercaustics");
+            Sld("tuner.watercausticsstrength", 0f, 1f, () => _config.WaterCausticsStrength, v => _config.WaterCausticsStrength = v);
             Sld("tuner.waterspeed", 0f, 3f, () => _config.WaterSpeed, v => _config.WaterSpeed = v);
             Tog("tuner.waterreflection", () => _config.WaterReflection, v => _config.WaterReflection = v, "help.waterreflection");
             Sld("tuner.waterreflectstrength", 0f, 1f, () => _config.WaterReflectStrength, v => _config.WaterReflectStrength = v);
@@ -456,6 +635,16 @@ namespace SDVRadiance
                 v => _config.WaterReflectDistort = v, "help.waterreflectdistort");
             Sld("tuner.waterreflectbanding", 0f, 16f, () => _config.WaterReflectBanding,
                 v => _config.WaterReflectBanding = v, "help.waterreflectbanding");
+            Sld("tuner.waterreflectblur", 0f, 2f, () => _config.WaterReflectBlur,
+                v => _config.WaterReflectBlur = v, "help.waterreflectblur");
+            _contentCursorY += 12;
+            Section("tuner.section.waterrain");
+            Sld("tuner.waterrainringdensity", 0f, 2f, () => _config.WaterRainRingDensity,
+                v => _config.WaterRainRingDensity = v, "help.waterrainringdensity");
+            Sld("tuner.waterrainringsize", 0.4f, 2f, () => _config.WaterRainRingSize,
+                v => _config.WaterRainRingSize = v, "help.waterrainringsize");
+            Sld("tuner.waterrainringstrength", 0f, 2f, () => _config.WaterRainRingStrength,
+                v => _config.WaterRainRingStrength = v, "help.waterrainringstrength");
             // Reach and fade rows used to sit here, and they were the wrong kind of control for a
             // panel you open to look at something. Both buy frames without changing how the water
             // looks, which is exactly the setting a player moves, sees nothing, and files as
@@ -658,8 +847,34 @@ namespace SDVRadiance
             }
         }
 
+        /// <summary>The hover note, broken to a width that fits the window. Half the window so the
+        /// box never covers the control it is describing, held between a readable measure and a
+        /// width no single word can overflow.</summary>
+        private string WrappedHoverText()
+        {
+            int wrapWidth = Math.Clamp(Game1.uiViewport.Width / 2, 320, 640);
+            if (!ReferenceEquals(_hoverTextWrappedFrom, _hoverText) || _hoverTextWrappedWidth != wrapWidth)
+            {
+                _hoverTextWrappedFrom = _hoverText;
+                _hoverTextWrappedWidth = wrapWidth;
+                _hoverTextWrapped = Game1.parseText(_hoverText, Game1.smallFont, wrapWidth);
+            }
+            return _hoverTextWrapped ?? _hoverText!;
+        }
+
         public override void receiveScrollWheelAction(int direction)
         {
+            // The rail takes the wheel when the pointer is over it. It also takes it when the
+            // content has nothing to scroll, so a tall rail is still reachable on a tab whose
+            // own column fits: otherwise the wheel would do nothing at all and the tabs below
+            // the fold would look unreachable.
+            bool overRail = Game1.getMouseX() < xPositionOnScreen + RailWidth;
+            if (_maxRailScroll > 0 && (overRail || _maxScroll == 0))
+            {
+                _railScroll = Math.Clamp(_railScroll - Math.Sign(direction), 0, _maxRailScroll);
+                Reflow();
+                return;
+            }
             if (_maxScroll > 0)
                 _scroll = Math.Clamp(_scroll - Math.Sign(direction) * 48, 0, _maxScroll);
         }
@@ -746,7 +961,18 @@ namespace SDVRadiance
             foreach (var (btn, idx) in _tabRailButtons)
             {
                 if (idx == _activeTab)
-                    spriteBatch.Draw(Game1.staminaRect, new Rectangle(btn.Bounds.X - S(4), btn.Bounds.Y - S(2), btn.Bounds.Width + S(8), btn.Bounds.Height + S(4)), new Color(196, 130, 66) * 0.55f);
+                {
+                    // The old highlight was a warm orange wash over a warm orange menu, which
+                    // is to say it was invisible: on screen the chosen tab looked exactly like
+                    // the fourteen that were not. A DARK wash reads against this panel, and the
+                    // bar down the left edge says which one it is even at a glance.
+                    spriteBatch.Draw(Game1.staminaRect,
+                        new Rectangle(btn.Bounds.X - S(4), btn.Bounds.Y - S(2), btn.Bounds.Width + S(8), btn.Bounds.Height + S(4)),
+                        new Color(72, 38, 12) * 0.34f);
+                    spriteBatch.Draw(Game1.staminaRect,
+                        new Rectangle(btn.Bounds.X - S(4), btn.Bounds.Y - S(2), S(5), btn.Bounds.Height + S(4)),
+                        new Color(96, 48, 14));
+                }
                 btn.Draw(spriteBatch, 0, idx == _activeTab);
                 if (_icons != null && _iconScale > 0f && idx < _icons.Width / IconSize)
                 {
@@ -759,6 +985,20 @@ namespace SDVRadiance
                         idx == _activeTab ? Color.White : Color.White * 0.72f,
                         0f, Vector2.Zero, iconScale, SpriteEffects.None, 0.9f);
                 }
+            }
+
+            // A rail longer than the window says so, or the tabs past the fold are a secret.
+            if (_maxRailScroll > 0)
+            {
+                int barX = xPositionOnScreen + RailWidth - S(10);
+                int trackTop = _bodyTop - S(4), trackHeight = (_bodyBottom - _bodyTop) + S(8);
+                spriteBatch.Draw(Game1.staminaRect, new Rectangle(barX, trackTop, S(RailBarWidth), trackHeight),
+                    new Color(72, 38, 12) * 0.22f);
+                int shown = _tabDefinitions.Length - _maxRailScroll;
+                int thumbHeight = Math.Max(S(16), trackHeight * shown / Math.Max(1, _tabDefinitions.Length));
+                int thumbTop = trackTop + (trackHeight - thumbHeight) * _railScroll / _maxRailScroll;
+                spriteBatch.Draw(Game1.staminaRect, new Rectangle(barX, thumbTop, S(RailBarWidth), thumbHeight),
+                    new Color(96, 48, 14) * 0.85f);
             }
 
             // Clip the scrolling content to the body rect so a half-scrolled row can't draw
@@ -810,7 +1050,7 @@ namespace SDVRadiance
 
             base.draw(spriteBatch);
             if (!string.IsNullOrEmpty(_hoverText))
-                drawHoverText(spriteBatch, _hoverText, Game1.smallFont);
+                drawHoverText(spriteBatch, WrappedHoverText(), Game1.smallFont);
             drawMouse(spriteBatch);
         }
 

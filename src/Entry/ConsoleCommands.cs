@@ -203,15 +203,17 @@ namespace SDVRadiance
                     monitor.Log($"Water mask overlay: {(RenderPipeline.MaskView ? "ON" : "OFF")} (rebuilds on next tile crossing / within 10s)", LogLevel.Info);
                 });
             helper.ConsoleCommands.Add("radiance_debug",
-                "Show one internal buffer over the world. Channels: off | water | labeldiff | sdf | subtype | sprite | reflect | mirror | emitter. "
+                "Show one internal buffer over the world. Channels: off | water | labeldiff | sdf | subtype | sprite | reflect | mirror | emitter | caustic | window. "
                 + "emitter paints the lighting pass's answer to 'which pixels ARE a light': RED = treated as the light "
                 + "itself and spared the room's dimming, GREEN = close enough to a light but not bright enough in the art to count. "
-                + "labeldiff paints the radiance_verify verdict: RED = label says liquid but the mask has none, YELLOW = the mask ripples where the label says solid.",
+                + "labeldiff paints the radiance_verify verdict: RED = label says liquid but the mask has none, YELLOW = the mask ripples where the label says solid. "
+                + "window paints every pixel the labels call glass in RED, at the depth the reflection is drawn at: red visible = the pane is seen and reaches the screen, "
+                + "no red with panes>0 in radiance_report = the map draws its own art over it.",
                 (_, args) =>
                 {
                     if (args.Length < 1 || !Enum.TryParse(args[0], ignoreCase: true, out DebugOverlayChannel channel))
                     {
-                        monitor.Log("usage: radiance_debug off|water|labeldiff|sdf|subtype|sprite|reflect|mirror|flood|emitter "
+                        monitor.Log("usage: radiance_debug off|water|labeldiff|sdf|subtype|sprite|reflect|mirror|flood|emitter|caustic|window "
                             + $"(now: {RenderPipeline.DebugChannel})", LogLevel.Info);
                         return;
                     }
@@ -281,6 +283,38 @@ namespace SDVRadiance
                     }
                     monitor.Log(getPipeline()?.ReflectionDiag() ?? "pipeline not ready", LogLevel.Info);
                 });
+
+            helper.ConsoleCommands.Add("radiance_particles",
+                "What the particle pool is doing. No args = report. 'test [seconds]' runs a fountain at the "
+                + "player that is half drifting petals and half rising sparks, which is the one-glance check "
+                + "that BOTH draw paths reached the screen: the petals go through the lighting and the grade "
+                + "with the rest of the world, the sparks are added on top of the lighting. 'clear' empties "
+                + "the pool. Particles are off by default - switch them on in the config menu or on the F6 "
+                + "tuner's Particles tab first, or the fountain has nothing to draw into.",
+                (_, args) =>
+                {
+                    RenderPipeline? pipeline = getPipeline();
+                    if (pipeline == null) { monitor.Log("pipeline not ready", LogLevel.Info); return; }
+                    if (args.Length >= 1 && args[0].Equals("clear", StringComparison.OrdinalIgnoreCase))
+                    {
+                        pipeline.ClearParticles();
+                        monitor.Log("Particle pool emptied.", LogLevel.Info);
+                        return;
+                    }
+                    if (args.Length >= 1 && args[0].Equals("test", StringComparison.OrdinalIgnoreCase))
+                    {
+                        int seconds = args.Length >= 2 && int.TryParse(args[1], out int typed)
+                            ? Math.Clamp(typed, 1, 60) : 5;
+                        pipeline.StartParticleTest(seconds * 60);
+                        monitor.Log(getConfig().ParticlesEnabled
+                            ? $"Fountain running at the player for {seconds}s."
+                            : $"Fountain running at the player for {seconds}s, but Particles are switched OFF, "
+                              + "so nothing will be drawn. Turn them on (F6, Particles tab) and run this again.",
+                            LogLevel.Info);
+                        return;
+                    }
+                    monitor.Log(pipeline.ParticleDiag(), LogLevel.Info);
+                });
         }
 
         /// <summary>What this machine actually pays, per stage and per effect.</summary>
@@ -342,6 +376,56 @@ namespace SDVRadiance
         /// <summary>Open the tuner, drive the on-screen HUDs, and flip the author-only switches.</summary>
         private static void RegisterOverlaysAndSwitches(IModHelper helper, IMonitor monitor)
         {
+            helper.ConsoleCommands.Add("radiance_weather",
+                "Set the CURRENT location context's weather for testing: radiance_weather sun|rain|storm|snow|wind|greenrain. "
+                + "Absolute, not a toggle (the game's own 'debug rain' flips). Storm = rain + lightning. Exists because "
+                + "vanilla has no debug command at all for snow, storm or wind. Weather is per context, so set it while "
+                + "standing in the region you want to test. Not saved; the next day's roll overwrites it.",
+                (_, args) =>
+                {
+                    if (Game1.netWorldState?.Value == null || Game1.player?.currentLocation == null)
+                    {
+                        monitor.Log("Load a save first.", LogLevel.Warn);
+                        return;
+                    }
+                    string wanted = args.Length > 0 ? args[0].ToLowerInvariant() : "";
+                    if (wanted is not ("sun" or "rain" or "storm" or "snow" or "wind" or "greenrain"))
+                    {
+                        monitor.Log("Usage: radiance_weather sun|rain|storm|snow|wind|greenrain", LogLevel.Info);
+                        return;
+                    }
+                    string contextId = Game1.player.currentLocation.GetLocationContextId();
+                    StardewValley.Network.LocationWeather weather = Game1.netWorldState.Value.GetWeatherForLocation(contextId);
+                    // Clear everything first: the game treats the flags as one-per-day exclusive
+                    // (storm being the rain+lightning pair), and IsGreenRain's setter forces
+                    // IsRaining back on, so green rain must be cleared before rain is written.
+                    weather.IsGreenRain = false;
+                    weather.IsRaining = false;
+                    weather.IsLightning = false;
+                    weather.IsSnowing = false;
+                    weather.IsDebrisWeather = false;
+                    switch (wanted)
+                    {
+                        case "rain": weather.IsRaining = true; break;
+                        case "storm": weather.IsRaining = true; weather.IsLightning = true; break;
+                        case "snow": weather.IsSnowing = true; break;
+                        case "wind": weather.IsDebrisWeather = true; break;
+                        case "greenrain": weather.IsGreenRain = true; break;
+                    }
+                    if (contextId == "Default")
+                    {
+                        // The legacy statics mirror only the Default context; the game refreshes
+                        // them once per day, so a mid-day change has to write them by hand or
+                        // half the code base keeps seeing yesterday's weather.
+                        Game1.isRaining = weather.IsRaining;
+                        Game1.isLightning = weather.IsLightning;
+                        Game1.isSnowing = weather.IsSnowing;
+                        Game1.isDebrisWeather = weather.IsDebrisWeather;
+                        Game1.isGreenRain = weather.IsGreenRain;
+                    }
+                    monitor.Log($"Weather for context '{contextId}': {wanted}. Ambient light follows on the next clock "
+                        + "tick; indoor window glow only refreshes when a location is entered.", LogLevel.Info);
+                });
             helper.ConsoleCommands.Add("radiance_tuner",
                 "Open the on-screen tuner, the same panel the tuner hotkey opens (F6 by default). Exists because "
                 + "the game takes keyboard input straight from SDL, so a keypress sent by a script never arrives "
@@ -707,7 +791,7 @@ namespace SDVRadiance
                 t = new Point(ax, ay);
             write($"=== Tile ({t.X},{t.Y}) in {location?.NameOrUniqueName} ===");
             if (location == null) return;
-            WriteSceneHeader(write, location, config);
+            WriteSceneHeader(write, location, config, pipeline);
             var surf = SurfaceMap.For(location);
             WriteTileVerdict(write, location, t, surf, pipeline);
             WriteLayerTiles(write, location, t);
@@ -721,7 +805,7 @@ namespace SDVRadiance
 
         /// <summary>Everything needed to reproduce the scene, first, because this output gets
         /// pasted into a bug report by someone who will not be asked a second question.</summary>
-        private static void WriteSceneHeader(Action<string> write, GameLocation location, ModConfig config)
+        private static void WriteSceneHeader(Action<string> write, GameLocation location, ModConfig config, RenderPipeline? pipeline = null)
         {
             // HEADER FIRST, and complete. This output gets pasted into a bug report by someone who
             // will not be asked a second question, so everything needed to reproduce the scene has
@@ -735,6 +819,40 @@ namespace SDVRadiance
             write($"config: enabled={config.Enabled} water={config.WaterEnabled} reflection={config.WaterReflection} "
                       + $"lighting={config.FloodLightingEnabled} shadows={config.DirectionalShadowsEnabled} "
                       + $"renderScale={config.RenderScale:0.00} labels=v{LabelStore.Instance?.Version ?? 0}");
+            // The caustic term, spelled out as the number the shader received and every factor
+            // that made it. "I toggled it and saw nothing" is answered here in one line: an
+            // uploaded amount of zero with the toggle on names the factor that killed it.
+            if (pipeline != null)
+                write($"caustics: uploaded={pipeline._causticAmountUploaded:0.000} (toggle={config.WaterCausticsEnabled} "
+                    + $"strength={config.WaterCausticsStrength:0.00} ease={pipeline.CausticEase:0.00} shimmer={pipeline.ShimmerEase:0.00} "
+                    + $"presence={pipeline.FadeWaterForReport:0.00} daylight={pipeline._causticDaylight:0.00} "
+                    + $"weather={pipeline.CausticWeatherMultiplier:0.00} indoors={!location.IsOutdoors} "
+                    + $"texture={(pipeline.CausticTextureMissing ? "MISSING" : "loaded")})");
+            // The window pass, spelled out the same way and for the same reason. A street where
+            // nothing shows in the glass is either a street whose windows nobody has labelled
+            // (panes=0) or a street whose windows are drawn over by the map's own front layer
+            // (panes>0, onScreen>0, and radiance_debug window paints nothing).
+            if (pipeline != null)
+                write($"windows: panes={pipeline.WindowPanesInLocation} onScreen={pipeline.WindowPanesOnScreen} "
+                    + $"(toggle={config.WindowReflectionEnabled} reflect={pipeline.WindowReflectUploaded:0.000} "
+                    + $"sheen={pipeline.WindowSheenUploaded:0.000} glare={pipeline.WindowGlareUploaded:0.000} "
+                    + $"street={pipeline.WindowSceneUploaded:0.000} lamps={pipeline.WindowLampGlowUploaded:0.000} lampsDrawn={pipeline.WindowLampsDrawn}/{pipeline.WindowLampsConsidered} "
+                    + $"day={config.WindowReflectionStrength:0.00} night={config.WindowReflectionNightStrength:0.00} "
+                    + $"sky={config.WindowSheenStrength:0.00} glareDial={config.WindowGlareStrength:0.00} "
+                    + $"scene={config.WindowSceneReflectionStrength:0.00} lamp={config.WindowLightGlowStrength:0.00} "
+                    + $"sceneSource={(pipeline.SceneRTReady ? "ready" : "not baked")} "
+                    + $"glowTexture={(pipeline.GlassGlowTextureMissing ? "MISSING" : "loaded")})");
+            // The particle pool, spelled out the same way. "I see no petals" has as many
+            // separate causes as "I see nothing in the glass" did: the system off, the presence
+            // still lifting, an empty pool, or a pool that is full and entirely off screen.
+            if (pipeline != null)
+                write($"{pipeline.ParticleDiag()} (toggle={config.ParticlesEnabled} density={config.ParticleDensity:0.00})");
+            write(PrecipitationSystem.Diag());
+            // Art drawn past the edge of its own sheet: names the pack, so an invisible tree or a
+            // single blurred tile can be answered instead of argued about.
+            write(ShadowSuppression.DescribeRepairedArt());
+            if (pipeline != null)
+                write(pipeline.WetWorldDiag(config));
             // WHERE THIS PLACE CAME FROM. "Which map or mod is that bridge from" is the question
             // every water report needs answered and no reporter can answer, because from inside the
             // game a modded map looks exactly like a vanilla one.

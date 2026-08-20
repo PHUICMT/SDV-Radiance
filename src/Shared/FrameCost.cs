@@ -42,6 +42,9 @@ namespace SDVRadiance
             EntityReflection,    // flipped entity layer
             SceneryReflection,   // sprite-free map render for the mirror
             Chain,               // the full-screen effect chain
+            Particles,           // the particle pool: one step of the simulation plus both draws
+            Precipitation,       // replacement rain/snow: per-screen step plus the weather-slot draw
+            WetWorld,            // wetness state + the wet-ground pass
         }
 
         /// <summary>
@@ -75,7 +78,7 @@ namespace SDVRadiance
             BakeTooBig,
         }
 
-        private const int PartCount = 10;
+        private const int PartCount = 13;
         private const int CounterCount = 7;
         private const int WindowFrames = 300;      // five seconds at 60 fps
 
@@ -91,6 +94,9 @@ namespace SDVRadiance
             "water entity mirror",
             "water scenery mirror",
             "effect chain",
+            "particles",
+            "precipitation (rain/snow)",
+            "wet world",
         };
 
         private static readonly double[] _sum = new double[PartCount];
@@ -204,6 +210,9 @@ namespace SDVRadiance
             "entity mirror",
             "scenery mirror",
             "effect chain",
+            "particles",
+            "precipitation",
+            "wet world",
         };
 
         internal static int PartTotal => PartCount;

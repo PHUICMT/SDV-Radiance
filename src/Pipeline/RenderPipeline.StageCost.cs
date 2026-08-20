@@ -35,15 +35,19 @@ namespace SDVRadiance
     {
         private const int StageWindowFrames = 300;      // five seconds at 60 fps, same as FrameCost
 
-        private readonly double[] _stageCpuAccumulated = new double[11];
-        private readonly double[] _stageGpuAccumulated = new double[11];
-        private readonly int[] _stageCpuFrames = new int[11];
-        private readonly int[] _stageGpuFrames = new int[11];
+        // Sized from the stage-name list, never by hand: the wet stage arrived as index 11
+        // against eight of these still sized [11], and the chain threw its way through three
+        // frames before the recovery path caught it. A count that exists in one place cannot
+        // disagree with itself.
+        private readonly double[] _stageCpuAccumulated = new double[_stageNames.Length];
+        private readonly double[] _stageGpuAccumulated = new double[_stageNames.Length];
+        private readonly int[] _stageCpuFrames = new int[_stageNames.Length];
+        private readonly int[] _stageGpuFrames = new int[_stageNames.Length];
 
-        private readonly double[] _stageCpuAverage = new double[11];
-        private readonly double[] _stageGpuAverage = new double[11];
-        private readonly bool[] _stageGpuKnown = new bool[11];
-        private readonly int[] _stageRanFrames = new int[11];
+        private readonly double[] _stageCpuAverage = new double[_stageNames.Length];
+        private readonly double[] _stageGpuAverage = new double[_stageNames.Length];
+        private readonly bool[] _stageGpuKnown = new bool[_stageNames.Length];
+        private readonly int[] _stageRanFrames = new int[_stageNames.Length];
 
         /// <summary>How many passes the chain ran, averaged over the window. The count is the
         /// number a fill-bound machine pays for most directly, and it moves with the scene (water
