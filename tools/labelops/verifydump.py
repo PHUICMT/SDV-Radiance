@@ -4,7 +4,7 @@ Ground truth is the .tmx gid (index + flip bits), decoded here independently of 
 Only maps loaded wholesale from a .tmx are comparable - a map CP patches with EditMap will
 legitimately differ, so those are reported separately rather than counted as errors.
 """
-import base64, json, os, struct, sys
+import base64, io, json, os, struct, sys
 import xml.etree.ElementTree as ET
 from collections import Counter
 
@@ -72,12 +72,31 @@ for dp, _, fns in os.walk(os.path.join(GAME, "Mods")):
 
 D_ = json.load(open(HF, encoding="utf-8"))
 locs = D_["locations"]
-print(f"dump: {len(locs)} locations, {len(D_.get('art', {}))} sheets, season={D_.get('season')}")
+HFDIR = os.path.dirname(HF)
+print(f"dump: {len(locs)} version(s) of {len({v.get('name', k) for k, v in locs.items()})} place(s), "
+      f"{len(D_.get('artPng', {}))} sheet art file(s), season={D_.get('season')}")
+
+
+def layers_of(entry):
+    """A version's layer data, which v3 keeps in its own file beside the index.
+
+    The index holds only what is needed to tell versions apart, because the dump now carries
+    thousands of them and every byte of a location is repeated per version otherwise.
+    """
+    path = entry.get("file")
+    if not path:
+        return entry.get("layers") or []          # a v1 document, read in place
+    try:
+        with io.open(os.path.join(HFDIR, path), encoding="utf-8") as handle:
+            return json.load(handle).get("layers") or []
+    except OSError:
+        return []
 
 checked = cell_bad = ori_bad = cells_tot = turned_tot = 0
 skipped = []
 detail = Counter()
-for locname, L in locs.items():
+for verkey, L in locs.items():
+    locname = L.get("name", verkey)
     cands = tmx_by_name.get(locname)
     if not cands:
         continue
@@ -85,10 +104,11 @@ for locname, L in locs.items():
     if not parsed:
         continue
     ts, tlayers = parsed
-    if not any(l["id"] in tlayers for l in L["layers"]):
+    dumped_layers = layers_of(L)
+    if not any(l["id"] in tlayers for l in dumped_layers):
         continue
     cb = ob = 0
-    for lay in L["layers"]:
+    for lay in dumped_layers:
         if lay["id"] not in tlayers:
             continue
         w, h, gids = tlayers[lay["id"]]
@@ -115,7 +135,7 @@ for locname, L in locs.items():
                 detail[(flags, ori[i], EXPECT[flags])] += 1
     if cb or ob:
         # a CP EditMap patch legitimately changes cells; orientation errors are ours
-        skipped.append((locname, cb, ob))
+        skipped.append((verkey, cb, ob))
     checked += 1
     cell_bad += cb
     ori_bad += ob

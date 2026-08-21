@@ -38,11 +38,12 @@ namespace SDVRadiance
             //   shear = −sin(rot)·stretch (sideways per px of height), sy = cos(rot)·stretch.
             float shear = -(float)Math.Sin(rot) * stretch;
             float shearScaleY = Math.Max(0.15f, stretch * (float)Math.Cos(rot));
+            float narrow = NarrowForLean(src.Width, src.Height, shear, _leanClarity);
             if (_isBakingObjects)
             {
                 if (_objectGraphicsDevice != null && !_bakedObjectCache.ContainsKey(key)
-                    && BakeObjectSprite(_objectGraphicsDevice, texture, src, baseOrigin, effects, shear, out RenderTarget2D rt, out Vector2 feetInRT))
-                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedShear = shear, BakedBlur = _bakeBlurPx, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = Game1.ticks };
+                    && BakeObjectSprite(_objectGraphicsDevice, texture, src, baseOrigin, effects, shear, blur, narrow, out RenderTarget2D rt, out Vector2 feetInRT))
+                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedShear = shear, BakedBlur = blur, BakedNarrow = narrow, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = Game1.ticks };
                 return;
             }
             if (_bakedObjectCache.TryGetValue(key, out SpriteBake? bakedEntry))
@@ -58,9 +59,10 @@ namespace SDVRadiance
                 // crop goes minutes without one, which is both correct and an order of magnitude
                 // less work than the old sweep.
                 if ((Math.Abs(shear - bakedEntry.BakedShear) * src.Height * 4f > ShearRefreshPixels
-                        || Math.Abs(_bakeBlurPx - bakedEntry.BakedBlur) > 0.3f)
+                        || Math.Abs(blur - bakedEntry.BakedBlur) > 0.3f
+                        || Math.Abs(narrow - bakedEntry.BakedNarrow) > 0.05f)
                     && _objectBakeQueue.Count < ObjectBakeQueueCap)
-                    _objectBakeQueue[key] = new ObjectBakeRequest { BaseOrigin = baseOrigin, Shear = shear };
+                    _objectBakeQueue[key] = new ObjectBakeRequest { BaseOrigin = baseOrigin, Shear = shear, Blur = blur, Narrow = narrow };
                 FrameCost.Count(FrameCost.Counter.ShadowSprites);
                 // ONE draw of ONLY the content: the soft edge is in the baked pixels (see
                 // SpriteBake.BakedBlur) and the source rect stops the card blending the slot's
@@ -89,14 +91,14 @@ namespace SDVRadiance
                 // here for nothing instead of being discovered inside a bake that then throws its
                 // work away. It also un-asks itself: the need grows with the lean, so a sprite too
                 // big at a low sun fits again as the sun rises, with no state to go stale.
-                bool tooBig = !ObjectBakeCouldFit(src, shear);
+                bool tooBig = !ObjectBakeCouldFit(src, shear, blur, narrow);
                 // Named here, once each. The refusal used to be logged inside the bake, which the
                 // pre-check now means these sprites never reach: the counter would say twenty and
                 // nothing anywhere would say WHICH twenty.
                 if (tooBig)
                     NoteOversize(src, shear);
                 if (!tooBig && _objectBakeQueue.Count < ObjectBakeQueueCap)
-                    _objectBakeQueue[key] = new ObjectBakeRequest { BaseOrigin = baseOrigin, Shear = shear };
+                    _objectBakeQueue[key] = new ObjectBakeRequest { BaseOrigin = baseOrigin, Shear = shear, Blur = blur, Narrow = narrow };
                 // Counted here rather than at the queue insert: the queue is a dictionary keyed by
                 // sprite, so two misses of the SAME sprite in one frame collapse into one entry and
                 // the count would under-report exactly the case it exists to catch. A miss is a
@@ -130,7 +132,8 @@ namespace SDVRadiance
         /// (x' = x + shear·(y − feetY): bottom edge stays put, higher rows slide sideways).
         /// Returns false (→ banded fallback) only if it fits no slot at any bake scale.</summary>
         private bool BakeObjectSprite(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle src, Vector2 baseOrigin,
-            SpriteEffects effects, float shear, out RenderTarget2D rt, out Vector2 feetInRT, RenderTarget2D? into = null)
+            SpriteEffects effects, float shear, float blurPx, float narrow, out RenderTarget2D rt, out Vector2 feetInRT,
+            RenderTarget2D? into = null)
         {
             rt = null!;
             feetInRT = default;
@@ -141,24 +144,29 @@ namespace SDVRadiance
             // A refresh re-renders the slot the entry already owns and must keep its size; a first
             // bake takes the smallest class the silhouette fits, which is what stops a crop from
             // being handed a tree's slot.
-            if (!ChooseBakeFit(src, shear, into, out int slotClass, out float scale, out float blurTexels))
+            if (!ChooseBakeFit(src.IsEmpty ? 0f : src.Width * narrow, src.IsEmpty ? 0f : src.Height, shear, blurPx, into,
+                               out int slotClass, out float scale, out float blurTexels))
             {
                 NoteOversize(src, shear);
                 return false;   // nothing fits, at any scale (a refresh: the lean grew past its own slot)
             }
-            float spriteWidth = src.Width * scale, spriteHeight = src.Height * scale;
+            // The narrowing is part of the silhouette, so every measurement below is of the
+            // NARROWED sprite: the slot it has to fit, where its origin lands, and the content
+            // rectangle the draw pass reads back.
+            float spriteWidth = src.Width * scale * narrow, spriteHeight = src.Height * scale;
             _lastBakeClass = slotClass;
             _lastBakeScale = scale;
             rt = into ?? RentObjectRT(graphicsDevice, slotClass);
             feetInRT = new Vector2(rt.Width / 2f, rt.Height - 8f);
-            Vector2 pos = feetInRT - baseOrigin * scale;      // so baseOrigin maps to the feet point
+            var bakeScale = new Vector2(scale * narrow, scale);
+            Vector2 pos = feetInRT - baseOrigin * bakeScale;  // so baseOrigin maps to the feet point
             Matrix lean = ShearAbout(feetInRT, shear);
             try
             {
                 graphicsDevice.SetRenderTarget(rt);
                 graphicsDevice.Clear(Color.Transparent);
                 _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, RasterizerState.CullNone, null, lean);
-                _renderTargetSpriteBatch.Draw(texture, pos, src, Color.Black, 0f, Vector2.Zero, scale, effects, 0f);
+                _renderTargetSpriteBatch.Draw(texture, pos, src, Color.Black, 0f, Vector2.Zero, bakeScale, effects, 0f);
                 _renderTargetSpriteBatch.End();
                 // Continuous feet(full)→head(faint) gradient over the sprite's vertical extent.
                 _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
@@ -199,7 +207,7 @@ namespace SDVRadiance
                 if (_bakedObjectCache.ContainsKey(key))
                     continue;
                 if (BakeRequest(graphicsDevice, key, req, null, out RenderTarget2D rt, out Vector2 feetInRT))
-                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedShear = req.Shear, BakedBlur = _bakeBlurPx, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = Game1.ticks };
+                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedShear = req.Shear, BakedBlur = req.Blur, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = Game1.ticks };
             }
 
             // Then the leans the sun has moved off, re-rendered into the slot each entry already
@@ -212,13 +220,16 @@ namespace SDVRadiance
                     break;
                 var key = kv.Key;
                 ObjectBakeRequest req = kv.Value;
-                if (!_bakedObjectCache.TryGetValue(key, out SpriteBake? stale) || stale.BakedShear == req.Shear)
+                if (!_bakedObjectCache.TryGetValue(key, out SpriteBake? stale)
+                    || (stale.BakedShear == req.Shear && stale.BakedBlur == req.Blur
+                        && stale.BakedNarrow == req.Narrow))
                     continue;
                 if (BakeRequest(graphicsDevice, key, req, stale.Rt, out _, out Vector2 refreshedFeet))
                 {
                     stale.FeetInRt = refreshedFeet;
                     stale.BakedShear = req.Shear;
-                    stale.BakedBlur = _bakeBlurPx;
+                    stale.BakedBlur = req.Blur;
+                    stale.BakedNarrow = req.Narrow;
                     stale.Content = _lastBakeContent;
                     stale.SlotClass = _lastBakeClass;
                     stale.BakedScale = _lastBakeScale;
@@ -319,9 +330,9 @@ namespace SDVRadiance
         {
             if (req.ColumnSources != null && req.ColumnLevels != null)
                 return BakeTileColumn(graphicsDevice, key.texture, req.ColumnSources, req.ColumnLevels,
-                    req.ColumnOrients, req.ColumnSources.Length, req.Shear, out rt, out feetInRT, into);
+                    req.ColumnOrients, req.ColumnSources.Length, req.Shear, req.Blur, out rt, out feetInRT, into);
             return BakeObjectSprite(graphicsDevice, key.texture, key.src, req.BaseOrigin, key.effect,
-                req.Shear, out rt, out feetInRT, into);
+                req.Shear, req.Blur, req.Narrow, out rt, out feetInRT, into);
         }
 
         /// <summary>Shear about a pivot row: x' = x + k·(y − pivot.Y), y unchanged — the horizontal
@@ -336,6 +347,204 @@ namespace SDVRadiance
         /// <summary>The player's shadow-length setting, remembered when the sun is computed so the
         /// object pass can reach it. Both callers of <see cref="DrawObjectShadows"/> set it.</summary>
         private float _sunLengthScale = 1f;
+
+        /// <summary>How hard to squeeze a shadow across the sun so its lean reads, this pass.</summary>
+        private float _leanClarity = 1f;
+
+        /// <summary>A shadow no narrower than this fraction of the thing casting it. Past about a
+        /// third it stops looking like a shadow of that object and starts looking like a crack.</summary>
+        private const float MinShadowNarrow = 0.30f;
+
+        /// <summary>The lean at which narrowing is fully in. Below it the effect eases off, so
+        /// nothing snaps as the sun crosses noon and there is no direction to show anyway.</summary>
+        private const float NarrowFadeShear = 0.30f;
+
+        /// <summary>How far a shadow must reach compared with its own width before its shape reads
+        /// as a direction rather than as a blob. A person's is about two to one and looks right, so
+        /// that is the number everything else is measured against.</summary>
+        /// <summary>
+        /// The source rect a tree's canopy is really drawn from, which is not always the first
+        /// column of its sheet.
+        /// </summary>
+        /// <remarks>
+        /// Tree.draw picks between three columns of the same 48x96 rect: the plain one, the one at
+        /// x=48 for a tree carrying seed or not yet shaken today, and the one at x=96 for a mossy
+        /// tree. Everything here that draws a tree - its shadow, its reflection, and the stencil
+        /// that keeps the water effect off it - took the first column unconditionally, so a desert
+        /// palm holding a coconut was masked with the shape of a palm holding nothing. Reported as
+        /// the water effect running over the palm fronds around the oasis, which is exactly what a
+        /// mis-shaped stencil looks like from above.
+        /// </remarks>
+        internal static Rectangle TreeCanopySourceRect(Tree tree)
+        {
+            Rectangle rect = Tree.treeTopSourceRect;
+            var data = tree.GetData();
+            rect.X = tree.hasMoss.Value ? 96
+                   : (data != null
+                      && ((data.UseAlternateSpriteWhenSeedReady && tree.hasSeed.Value)
+                          || (data.UseAlternateSpriteWhenNotShaken && !tree.wasShakenToday.Value)))
+                     ? 48
+                     : 0;
+            return rect;
+        }
+
+        private const float PersonLeanDominance = 3.0f;
+
+        /// <summary>The biggest sprite, in source pixels either way, whose shadow is narrowed.
+        ///
+        /// <para>
+        /// One tile. That is the seed, sprout and sapling frames and nothing else: a stump, a
+        /// bush-stage tree and a crop are all 16x32 and stay as they were, a canopy is 48x96.
+        /// </para>
+        ///
+        /// <para>
+        /// Both earlier builds of this were too broad and both were caught on screen. Narrowing
+        /// everything turned a tree's shadow into a walking stick; narrowing everything a tile
+        /// wide took the shadow off stumps, which are as fat as they are tall and have nothing
+        /// left once a third of their width is gone. What is left is the case the narrowing was
+        /// actually for, a caster so small its shadow is a few pixels that must carry a direction
+        /// on their own.
+        /// </para>
+        /// </summary>
+        private const int MaxNarrowSpriteSize = 16;
+
+        /// <summary>
+        /// How wide to draw this shadow, as a fraction of the sprite's width.
+        ///
+        /// <para>
+        /// The tip of a sheared shadow always lands at the sun's angle. What the eye reads is the
+        /// shape, and the arithmetic is blunt about this: a shadow's bounding box can only sit at
+        /// the sun's own angle when the shadow has no width at all. A person's shadow looks right
+        /// not because its box matches but because it is a long thin bar, about twice as long as it
+        /// is wide, and a bar carries its direction in its own shape.
+        /// </para>
+        ///
+        /// <para>
+        /// So the test is that ratio, not the lean on its own. A crop reaches about six tenths of
+        /// its own width and reads as a flat smear; narrowing it until it reaches as far as a person
+        /// does, relatively, is what makes the same angle visible. Nothing is widened, nothing goes
+        /// below <see cref="MinShadowNarrow"/>, and it eases in with the lean so that noon, where
+        /// there is no direction to show, is untouched.
+        /// </para>
+        ///
+        /// <para>
+        /// The height here is the SOURCE rect's, which for a crop is half transparent padding, so
+        /// the reach is over-stated by whatever a sprite does not fill. That is why the target is a
+        /// setting and not a constant: reading the real silhouette would mean a per-sprite pixel
+        /// readback, and this mod has been bitten by that before.
+        /// </para>
+        /// </summary>
+        private static float NarrowForLean(float spriteWidth, float spriteHeight, float shear, float clarity)
+        {
+            if (clarity <= 0f || spriteWidth <= 0f || spriteHeight <= 0f)
+                return 1f;
+            if (spriteWidth > MaxNarrowSpriteSize || spriteHeight > MaxNarrowSpriteSize)
+                return 1f;                                  // big enough that its shadow is a shape
+            float lean = Math.Abs(shear) * spriteHeight;
+            float target = spriteWidth * MathHelper.Lerp(1f, PersonLeanDominance, clarity);
+            if (lean >= target)
+                return 1f;                                  // already reaches as far as a person's
+            float needed = Math.Max(MinShadowNarrow, lean / target);
+            float leaning = Math.Min(1f, Math.Abs(shear) / NarrowFadeShear);
+            return MathHelper.Lerp(1f, needed, leaning);
+        }
+
+        /// <summary>The kinds of caster that carry their own shadow length and softness. The split
+        /// is the one the draw pass already made when the numbers were constants; naming it is what
+        /// lets a player reach them.</summary>
+        internal enum ShadowKind { Trees, SmallTrees, Bushes, Crops, Grass, Objects }
+
+        /// <summary>Per-kind length ceilings and softness multipliers, read from config once per
+        /// pass rather than per caster. Sized from the enum so adding a kind cannot leave a hole.</summary>
+        private readonly float[] _kindLengthCaps = new float[Enum.GetValues<ShadowKind>().Length];
+        private readonly float[] _kindSoftness = new float[Enum.GetValues<ShadowKind>().Length];
+        private readonly float[] _kindLean = new float[Enum.GetValues<ShadowKind>().Length];
+
+        /// <summary>Which setting holds this kind's length ceiling. The one place the mapping is
+        /// written down: the draw pass and the diagnostic both come here, so a report can no longer
+        /// quote a number the renderer stopped using.</summary>
+        internal static float LengthCapFor(ModConfig config, ShadowKind kind) => kind switch
+        {
+            ShadowKind.Trees => config.ShadowLengthTrees,
+            ShadowKind.SmallTrees => config.ShadowLengthSmallTrees,
+            ShadowKind.Bushes => config.ShadowLengthBushes,
+            ShadowKind.Crops => config.ShadowLengthCrops,
+            ShadowKind.Grass => config.ShadowLengthGrass,
+            _ => config.ShadowLengthObjects,
+        };
+
+        /// <summary>Which setting holds this kind's lean, as a fraction of the sun's angle.</summary>
+        internal static float LeanFor(ModConfig config, ShadowKind kind) => kind switch
+        {
+            ShadowKind.Trees => config.ShadowLeanTrees,
+            ShadowKind.SmallTrees => config.ShadowLeanSmallTrees,
+            ShadowKind.Bushes => config.ShadowLeanBushes,
+            ShadowKind.Crops => config.ShadowLeanCrops,
+            ShadowKind.Grass => config.ShadowLeanGrass,
+            _ => config.ShadowLeanObjects,
+        };
+
+        /// <summary>Which setting holds this kind's softness multiplier.</summary>
+        internal static float SoftnessFor(ModConfig config, ShadowKind kind) => kind switch
+        {
+            ShadowKind.Trees => config.ShadowSoftnessTrees,
+            ShadowKind.SmallTrees => config.ShadowSoftnessSmallTrees,
+            ShadowKind.Bushes => config.ShadowSoftnessBushes,
+            ShadowKind.Crops => config.ShadowSoftnessCrops,
+            ShadowKind.Grass => config.ShadowSoftnessGrass,
+            _ => config.ShadowSoftnessObjects,
+        };
+
+        /// <summary>Take this frame's per-kind settings, so the draw pass reads an array rather than
+        /// walking a switch per caster. Called wherever <see cref="_sunLengthScale"/> is set, which
+        /// is both entries into the object pass.</summary>
+        private void CaptureKindTuning(ModConfig config)
+        {
+            foreach (ShadowKind kind in Enum.GetValues<ShadowKind>())
+            {
+                _kindLengthCaps[(int)kind] = LengthCapFor(config, kind);
+                _kindSoftness[(int)kind] = SoftnessFor(config, kind);
+                _kindLean[(int)kind] = LeanFor(config, kind);
+            }
+            _leanClarity = config.ShadowLeanClarity;
+        }
+
+        /// <summary>This caster's own reach: its kind's ceiling, scaled by the overall length slider.
+        ///
+        /// <para>
+        /// The ceiling is the ONLY lever that may be pulled to stop a canopy cast detaching from its
+        /// own trunk. Two constants used to damp the tree's and the props' sun ANGLE instead, at 0.38
+        /// and 0.6 of the character angle, and that is a different sun for each of them. The geometry
+        /// says so plainly: the silhouette is sheared by <c>-sin(rot)&#183;stretch</c> sideways and
+        /// <c>cos(rot)&#183;stretch</c> upward, so the tip lands at an angle of exactly <c>-rot</c>
+        /// and the stretch cancels out of it. Shortening a shadow leaves its direction alone; damping
+        /// the angle moves the sun.
+        /// </para>
+        ///
+        /// <para>
+        /// Reported, correctly, as two suns: at six in the morning the player's shadow pointed one
+        /// way and every tree's pointed another, and the reporter had measured the difference in
+        /// clock hours before writing in. Everything the sun casts takes one angle, and these
+        /// ceilings decide only how far each thing reaches.
+        /// </para></summary>
+        private float LengthOf(float stretch, ShadowKind kind) => LengthCap(stretch, _kindLengthCaps[(int)kind]);
+
+        /// <summary>This caster's own soft edge: the overall blur times its kind's softness.
+        ///
+        /// <para>A blur radius is in screen pixels, so the same number is a soft edge on a short
+        /// shadow and a hard one on a long one. That is why raising the crop ceiling in 1.5.4 read
+        /// as "sharper" without anything about the blur changing: the same five pixels were now
+        /// sitting on a shadow nearly twice as long.</para></summary>
+        private float SoftnessOf(float blur, ShadowKind kind) => blur * _kindSoftness[(int)kind];
+
+        /// <summary>This caster's own lean. 1 is the sun; less is a shorter, more upright shadow
+        /// that no longer points where the sun says, which is a look rather than a correction.
+        ///
+        /// <para>Length and lean are not interchangeable. The ceiling decides how far a shadow
+        /// reaches, the lean decides its shape: at a sun 64 degrees off vertical, a crop capped at
+        /// 0.55 puts its tip 9.9 px sideways and 4.8 px down at full lean, and 6.8 by 8.6 at 0.6.
+        /// Same ceiling, and only the second one reads as a plant standing on soil.</para></summary>
+        private float LeanOf(float rot, ShadowKind kind) => rot * _kindLean[(int)kind];
 
         /// <summary>
         /// How far a shadow of this KIND may reach, as a fraction of the sprite's own height.
@@ -417,14 +626,14 @@ namespace SDVRadiance
         /// everything else; at 4× that multiplier is exactly one and the arithmetic is the
         /// arithmetic this has always done.</para>
         /// </summary>
-        private bool ChooseBakeFit(float sourceW, float sourceH, float shear, RenderTarget2D? into,
+        private bool ChooseBakeFit(float sourceW, float sourceH, float shear, float blurPx, RenderTarget2D? into,
             out int slotClass, out float scale, out float blurTexels)
         {
             if (sourceW > 0f && sourceH > 0f)
             {
                 foreach (float s in BakeScales)
                 {
-                    float texelBlur = _bakeBlurPx * (s / 4f);
+                    float texelBlur = blurPx * (s / 4f);
                     float spriteWidth = sourceW * s, spriteHeight = sourceH * s;
                     float needW = spriteWidth + Math.Abs(shear) * spriteHeight + 2f * texelBlur;
                     float needH = spriteHeight + texelBlur;
@@ -446,17 +655,18 @@ namespace SDVRadiance
         }
 
         /// <summary>The same question for a sprite, whose silhouette is its source rect.</summary>
-        private bool ChooseBakeFit(Rectangle src, float shear, RenderTarget2D? into,
+        private bool ChooseBakeFit(Rectangle src, float shear, float blurPx, RenderTarget2D? into,
             out int slotClass, out float scale, out float blurTexels)
-            => ChooseBakeFit(src.IsEmpty ? 0f : src.Width, src.IsEmpty ? 0f : src.Height, shear, into,
+            => ChooseBakeFit(src.IsEmpty ? 0f : src.Width, src.IsEmpty ? 0f : src.Height, shear, blurPx, into,
                              out slotClass, out scale, out blurTexels);
 
         /// <summary>Would a bake of this sprite, at this lean, fit any slot at any scale? The same
         /// arithmetic <see cref="BakeObjectSprite"/> does before it commits to anything, asked by the
         /// draw path so a hopeless request is never made rather than being made and refused every
         /// frame.</summary>
-        private bool ObjectBakeCouldFit(Rectangle src, float shear)
-            => ChooseBakeFit(src, shear, null, out _, out _, out _);
+        private bool ObjectBakeCouldFit(Rectangle src, float shear, float blurPx, float narrow)
+            => ChooseBakeFit(src.IsEmpty ? 0f : src.Width * narrow, src.IsEmpty ? 0f : src.Height,
+                             shear, blurPx, null, out _, out _, out _);
 
         /// <summary>The smallest slot class that fits a silhouette of this size, or -1 if even the
         /// largest cannot take it.</summary>
@@ -561,19 +771,23 @@ namespace SDVRadiance
                     // trunk (its vanilla contact blob is kept to fill the base). Bushes are
                     // short → full lean, matching the character direction, blob suppressed.
                     case Tree tree when tree.growthStage.Value >= 5 && !tree.stump.Value && tree.texture?.Value != null:
-                        DrawTreeShadow(spriteBatch, tree, tile, rot, LengthCap(stretch, TreeStretchMax), alpha, blur);
+                        DrawTreeShadow(spriteBatch, tree, tile, LeanOf(rot, ShadowKind.Trees), LengthOf(stretch, ShadowKind.Trees), alpha,
+                            SoftnessOf(blur, ShadowKind.Trees));
                         break;
                     // Everything else the game still DRAWS as a tree: seeds, sprouts, saplings,
                     // bush-stage growth and stumps. They are short, so they take the full lean a
                     // bush does rather than the damped canopy lean above.
                     case Tree small when small.texture?.Value != null:
-                        DrawSmallTreeShadow(spriteBatch, small, tile, rot, LengthCap(stretch, 0.8f), alpha, blur);
+                        DrawSmallTreeShadow(spriteBatch, small, tile, LeanOf(rot, ShadowKind.SmallTrees), LengthOf(stretch, ShadowKind.SmallTrees), alpha,
+                            SoftnessOf(blur, ShadowKind.SmallTrees));
                         break;
                     case FruitTree ft when ft.growthStage.Value >= 4 && !ft.stump.Value && ft.texture != null:
-                        DrawFruitTreeShadow(spriteBatch, ft, tile, rot, LengthCap(stretch, TreeStretchMax), alpha, blur);
+                        DrawFruitTreeShadow(spriteBatch, ft, tile, LeanOf(rot, ShadowKind.Trees), LengthOf(stretch, ShadowKind.Trees), alpha,
+                            SoftnessOf(blur, ShadowKind.Trees));
                         break;
                     case Bush bush:
-                        DrawBushShadow(spriteBatch, bush, rot, LengthCap(stretch, 0.8f), alpha, blur);
+                        DrawBushShadow(spriteBatch, bush, LeanOf(rot, ShadowKind.Bushes), LengthOf(stretch, ShadowKind.Bushes), alpha,
+                            SoftnessOf(blur, ShadowKind.Bushes));
                         break;
                     // DEAD crops cast too. They were excluded, and a withered plant is still a
                     // plant standing on the soil: the game keeps drawing it, from art it keeps
@@ -584,13 +798,15 @@ namespace SDVRadiance
                     // keeps its texture, its source rect, its draw position and its flip through
                     // dying, so the same call handles it.
                     case HoeDirt { crop: { } crop } hd when !crop.forageCrop.Value && !crop.IsErrorCrop():
-                        DrawCropShadow(spriteBatch, crop, tile, rot, LengthCap(stretch, StandingStretchMax), alpha, blur);
+                        DrawCropShadow(spriteBatch, crop, tile, LeanOf(rot, ShadowKind.Crops), LengthOf(stretch, ShadowKind.Crops), alpha,
+                            SoftnessOf(blur, ShadowKind.Crops));
                         break;
                     // Grass. It stands on the ground like everything else here and was the only
                     // thing on a meadow not casting, which reads as the grass being printed on the
                     // dirt while the fence beside it stands on it.
                     case StardewValley.TerrainFeatures.Grass grass when grass.texture?.Value != null:
-                        DrawGrassShadow(spriteBatch, grass, tile, rot, LengthCap(stretch, 0.35f), alpha, blur);
+                        DrawGrassShadow(spriteBatch, grass, tile, LeanOf(rot, ShadowKind.Grass), LengthOf(stretch, ShadowKind.Grass), alpha,
+                            SoftnessOf(blur, ShadowKind.Grass));
                         break;
                 }
             }
@@ -607,7 +823,8 @@ namespace SDVRadiance
                 if (ltf == null || ltile.X < tileX0 || ltile.X > tileX1 || ltile.Y < tileY0 || ltile.Y > tileY1)
                     continue;
                 if (ltf is Bush bush)
-                    DrawBushShadow(spriteBatch, bush, rot, LengthCap(stretch, 0.8f), alpha, blur);
+                    DrawBushShadow(spriteBatch, bush, LeanOf(rot, ShadowKind.Bushes), LengthOf(stretch, ShadowKind.Bushes), alpha,
+                        SoftnessOf(blur, ShadowKind.Bushes));
             }
         }
 
@@ -661,14 +878,16 @@ namespace SDVRadiance
                     if (o.Fragility == 2)
                         continue;
                     // A keg or a machine stands on the ground at its own height, so it takes the
-                    // same sun a person does (see StandingStretchMax).
-                    DrawBigCraftableShadow(spriteBatch, o, tile, rot, LengthCap(stretch, StandingStretchMax), alpha, blur);
+                    // same sun a person does unless ShadowLengthObjects is turned down.
+                    DrawBigCraftableShadow(spriteBatch, o, tile, LeanOf(rot, ShadowKind.Objects), LengthOf(stretch, ShadowKind.Objects), alpha,
+                        SoftnessOf(blur, ShadowKind.Objects));
                 }
                 else if (o.IsSpawnedObject)
                 {
                     // Small forage lying on the ground (beach shells, mushrooms, coral…). Short,
                     // strongly-damped shadow.
-                    DrawSmallObjectShadow(spriteBatch, o, tile, rot, LengthCap(stretch, StandingStretchMax), alpha, blur);
+                    DrawSmallObjectShadow(spriteBatch, o, tile, LeanOf(rot, ShadowKind.Objects), LengthOf(stretch, ShadowKind.Objects), alpha,
+                        SoftnessOf(blur, ShadowKind.Objects));
                 }
                 else if (!o.isPassable() && o.QualifiedItemId != "(O)590" && o.QualifiedItemId != "(O)SeedSpot")
                 {
@@ -676,7 +895,8 @@ namespace SDVRadiance
                     // decor…) gets a real leaning silhouette too — drawn generically from the item's
                     // own sprite via ItemRegistry, so no per-type method is needed. Skip flat passable
                     // items and the ground-mark spots (artifact / seed) that shouldn't cast.
-                    DrawGenericObjectShadow(spriteBatch, o, tile, rot, LengthCap(stretch, StandingStretchMax), alpha, blur);
+                    DrawGenericObjectShadow(spriteBatch, o, tile, LeanOf(rot, ShadowKind.Objects), LengthOf(stretch, ShadowKind.Objects), alpha,
+                        SoftnessOf(blur, ShadowKind.Objects));
                 }
             }
         }
@@ -830,27 +1050,6 @@ namespace SDVRadiance
         /// not. This is the test that opacity was standing in for, badly.</summary>
         private const int MaxPropSpan = 2;
 
-        /// <summary>
-        /// How long a tree's shadow may get, as a fraction of the trunk-to-crown height.
-        ///
-        /// <para>
-        /// This is the ONLY lever that may be pulled to stop a canopy cast detaching from its own
-        /// trunk. Two constants used to damp the tree's and the props' sun ANGLE instead — 0.38 and
-        /// 0.6 of the character angle — and that is a different sun for each of them. The geometry
-        /// says so plainly: the silhouette is sheared by <c>-sin(rot)·stretch</c> sideways and
-        /// <c>cos(rot)·stretch</c> upward, so the tip lands at an angle of exactly <c>-rot</c> and
-        /// the stretch cancels out of it. Shortening a shadow leaves its direction alone; damping
-        /// the angle moves the sun.
-        /// </para>
-        ///
-        /// <para>
-        /// Reported, correctly, as two suns: at six in the morning the player's shadow pointed one
-        /// way and every tree's pointed another, and the reporter had measured the difference in
-        /// clock hours before writing in. Everything the sun casts now takes one angle, and the
-        /// caps below decide only how far each thing reaches.
-        /// </para>
-        /// </summary>
-        private const float TreeStretchMax = 0.6f;
         /// <summary>Lift the character/animal feet anchor a touch so the shadow base sits at the
         /// visual feet rather than a few px below (the bounding-box bottom overshoots).</summary>
         private const float FeetLift = 10f;
@@ -882,29 +1081,6 @@ namespace SDVRadiance
         /// </summary>
         private static readonly Vector2 CropOrigin = new(8f, 32f);
 
-        /// <summary>
-        /// How long the shadow of a thing STANDING on the ground may get, as a fraction of its
-        /// own height. Crops, forage, fences, signs, kegs, machines.
-        ///
-        /// <para>
-        /// A shadow has to clear the thing casting it or it is not read as a shadow. The lean
-        /// slides the silhouette sideways by <c>sin(rot)·stretch</c> per pixel of height, so at a
-        /// sun 50 degrees off vertical a plant twelve pixels tall needed a stretch near 0.85 for
-        /// its shadow to escape its own eight-pixel half-width. The old ceiling of 0.55 put it at
-        /// 0.51, and the shadow of every dead crop landed ON the plant. Reported as exactly that:
-        /// the shadow is on top of the plant, it should be behind it, with an A/B screenshot.
-        /// Forage (0.4) and fences (0.5) were the same failure at other numbers, and were reported
-        /// too: "a hint of shadow but nothing deserving to be called one".
-        /// </para>
-        ///
-        /// <para>
-        /// A standing sprite's height IS the thing's height, so there was never a reason for any
-        /// of these to take a shorter sun than a person does. The ceilings that remain are for
-        /// sprites whose height is not a height: a tree's canopy, a bush's mass, a painted-on map
-        /// prop's tile column.
-        /// </para>
-        /// </summary>
-        private const float StandingStretchMax = 1.0f;
 
         private void DrawCropShadow(SpriteBatch spriteBatch, Crop crop, Vector2 tile, float rot, float stretch, float alpha, float blur)
         {
@@ -1012,7 +1188,7 @@ namespace SDVRadiance
 
         private void DrawTreeShadow(SpriteBatch spriteBatch, Tree tree, Vector2 tile, float rot, float stretch, float alpha, float blur)
         {
-            Rectangle src = Tree.treeTopSourceRect;                 // (0,0,48,96) standard canopy
+            Rectangle src = TreeCanopySourceRect(tree);             // 48x96, in whichever column this tree is drawn from
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f));
             float depth = MathHelper.Clamp((tree.getBoundingBox().Bottom + 2f) / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
             SpriteEffects effects = tree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None;

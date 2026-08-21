@@ -51,8 +51,11 @@ def installed_ids():
         if not os.path.isdir(root):
             continue
         for dp, dns, fns in os.walk(root):
-            if dp.count(os.sep) - root.count(os.sep) > 4:
-                dns[:] = []
+            # Walked in full: a manifest sits up to four folders below a mod's own folder
+            # in this library, and a bundle legitimately carries several. A depth cap here
+            # under-counts what is installed, which is how a re-download of something already
+            # on disk gets planned.
+            dns[:] = [d for d in dns if d not in (".git", "node_modules", "__pycache__")]
             for fn in fns:
                 if fn != "manifest.json":
                     continue
@@ -159,7 +162,17 @@ def main():
     args = sys.argv[2:]
     plan = []                                  # (id, folder)
     if args[0] == "--from":
-        rows = json.load(open(os.path.join(HERE, args[1]), encoding="utf-8"))
+        # Beside the script, or beside you, or wherever you actually said. Resolving only
+        # against HERE meant a list built in one folder could not be fed to the downloader
+        # from another, and the error it gave named a path nobody had typed.
+        listed = args[1]
+        for candidate in (listed, os.path.join(os.getcwd(), listed), os.path.join(HERE, listed)):
+            if os.path.exists(candidate):
+                listed = candidate
+                break
+        else:
+            sys.exit(f"no such list: {args[1]} (looked beside you and beside {HERE})")
+        rows = json.load(open(listed, encoding="utf-8"))
         limit = int(args[args.index("--limit") + 1]) if "--limit" in args else 25
         # "auto" routes each row by its own Nexus category; a literal name forces one folder.
         junked = 0

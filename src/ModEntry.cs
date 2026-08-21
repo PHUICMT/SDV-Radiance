@@ -159,6 +159,10 @@ namespace SDVRadiance
                 }
                 if (anyMap)
                     SurfaceMap.Clear();
+                // Every reload, map or tilesheet: a label's verdict is an answer about ART, and
+                // this is the event that says the art may have been swapped. Cheap to throw away
+                // (a few dozen fingerprints per map) and wrong to keep.
+                LabelStore.Instance?.ForgetArtVerdicts();
             };
 
             SurfaceMap.DiagnosticMonitor = this.Monitor;
@@ -205,7 +209,16 @@ namespace SDVRadiance
         {
             get
             {
-                _pipeline ??= new RenderPipeline(Game1_GraphicsDevice, this.Monitor, this.Helper.DirectoryPath);
+                if (_pipeline == null)
+                {
+                    _pipeline = new RenderPipeline(Game1_GraphicsDevice, this.Monitor, this.Helper.DirectoryPath);
+                    // The labels have to be able to ask what art is really on a tile before they
+                    // hand out paint that was made for a different picture, and the pipeline is
+                    // what already holds every tilesheet's pixels. Wired here rather than in the
+                    // constructor so the store keeps working, unguarded, if the pipeline never
+                    // starts at all.
+                    LabelStore.ArtFingerprintReader = _pipeline.TryFingerprintTileArt;
+                }
                 return _pipeline;
             }
         }

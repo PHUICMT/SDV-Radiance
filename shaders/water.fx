@@ -170,6 +170,10 @@ float SceneSidePad;
 float ReflWobble;
 float ReflSoftness;      // scales the depth-driven softening of the mirror: 1 = as shipped, 0 = a
                          // single crisp tap, 2 = twice the spread. Taste, on a slider.
+// How deep a scene reflection reaches before it resolves to sky, as a multiplier on the bounds
+// below. 1 is what shipped from 1.5.4 on; about 0.56 is the shallower 1.5.3 bound, which suits a
+// narrow stream where sixteen tiles of mirrored cliff is more water than there is.
+float ReflDepthScale;
 // How many steps per tile the sideways shear is rounded to, or 0 to shear every row on its own.
 // 16 is the 4 px banding this shipped with through 1.5.6. See the note at the wave itself: this
 // is what decides whether a reflected building bends or comes apart into sliding horizontal bands.
@@ -691,8 +695,13 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // again). Resolving to sky suppresses the same upstream-water streaks with no seam, and
         // it engages at 2..4 tiles so a bridge plus a person standing on it (~2 tiles of genuine
         // reflection) keeps its full band.
-        float toSky = max(smoothstep(9.0, 16.0, depthTiles),
-                          srcWater * smoothstep(4.0, 8.0, depthTiles));
+        // Both bounds move together on one dial: the general one and the shallower one that
+        // applies when the mirrored source is itself water. Scaling only the first would let a
+        // river's own surface out-reach the bank above it, which is the streaking these two were
+        // balanced against in the first place.
+        float depthScale = max(0.1, ReflDepthScale);
+        float toSky = max(smoothstep(9.0 * depthScale, 16.0 * depthScale, depthTiles),
+                          srcWater * smoothstep(4.0 * depthScale, 8.0 * depthScale, depthTiles));
         // P3b — sprites already reflect via the flipped-entity RT (composited below); the
         // same sprite left in the screen-flip SOURCE would mirror twice at a different
         // offset. With the sprite-free scenery source (P3c) live there is nothing to

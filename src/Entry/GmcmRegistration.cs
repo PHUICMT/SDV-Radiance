@@ -434,6 +434,14 @@ namespace SDVRadiance
             api.AddNumberOption(manifest, () => config().WaterReflectBlur, v => config().WaterReflectBlur = v,
                 () => i18n("config.water.reflectblur.name"), () => i18n("config.water.reflectblur.tooltip"),
                 0f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().WaterReflectDepth, v => config().WaterReflectDepth = v,
+                () => i18n("config.water.reflectdepth.name"), () => i18n("config.water.reflectdepth.tooltip"),
+                0.3f, 1.5f, 0.05f);
+            // Reach has been in the config file since 1.5.6 and in no menu, which is the same as
+            // not existing for almost everybody who might want it.
+            api.AddNumberOption(manifest, () => config().WaterReflectReach, v => config().WaterReflectReach = v,
+                () => i18n("config.water.reflectreach.name"), () => i18n("config.water.reflectreach.tooltip"),
+                0.2f, 1f, 0.05f);
             api.AddSectionTitle(manifest, () => i18n("config.water.sectionrain"));
             api.AddNumberOption(manifest, () => config().WaterRainRingDensity, v => config().WaterRainRingDensity = v,
                 () => i18n("config.water.rainringdensity.name"), () => i18n("config.water.rainringdensity.tooltip"),
@@ -542,9 +550,75 @@ namespace SDVRadiance
                 () => i18n("config.shadows.blur.name"), null, 0f, 5f, 0.5f);
             api.AddBoolOption(manifest, () => config().DirectionalShadowObjects, v => config().DirectionalShadowObjects = v,
                 () => i18n("config.shadows.objects.name"), () => i18n("config.shadows.objects.tooltip"));
+            api.AddNumberOption(manifest, () => config().ShadowLeanClarity, v => config().ShadowLeanClarity = v,
+                () => i18n("config.shadows.leanclarity.name"), () => i18n("config.shadows.leanclarity.tooltip"),
+                0f, 1f, 0.05f);
             api.AddNumberOption(manifest, () => config().ShadowCastsPerCharacter, v => config().ShadowCastsPerCharacter = v,
                 () => i18n("config.shadows.casts.name"), () => i18n("config.shadows.casts.tooltip"),
                 ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax, 1);
+
+            // Per-kind length and softness. The overall two above still multiply these, so a player
+            // who only wants everything shorter never has to come down here.
+            api.AddSectionTitle(manifest, () => i18n("config.shadows.perkind.title"),
+                () => i18n("config.shadows.perkind.tooltip"));
+            api.AddNumberOption(manifest, () => config().ShadowLengthTrees, v => config().ShadowLengthTrees = v,
+                () => i18n("config.shadows.length.trees.name"), null,
+                ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax, 0.05f);
+            api.AddNumberOption(manifest, () => config().ShadowLengthSmallTrees, v => config().ShadowLengthSmallTrees = v,
+                () => i18n("config.shadows.length.smalltrees.name"), null,
+                ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax, 0.05f);
+            api.AddNumberOption(manifest, () => config().ShadowLengthBushes, v => config().ShadowLengthBushes = v,
+                () => i18n("config.shadows.length.bushes.name"), null,
+                ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax, 0.05f);
+            api.AddNumberOption(manifest, () => config().ShadowLengthCrops, v => config().ShadowLengthCrops = v,
+                () => i18n("config.shadows.length.crops.name"), null,
+                ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax, 0.05f);
+            api.AddNumberOption(manifest, () => config().ShadowLengthGrass, v => config().ShadowLengthGrass = v,
+                () => i18n("config.shadows.length.grass.name"), null,
+                ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax, 0.05f);
+            api.AddNumberOption(manifest, () => config().ShadowLengthObjects, v => config().ShadowLengthObjects = v,
+                () => i18n("config.shadows.length.objects.name"), null,
+                ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax, 0.05f);
+            api.AddSectionTitle(manifest, () => i18n("config.shadows.softness.title"),
+                () => i18n("config.shadows.softness.tooltip"));
+            api.AddNumberOption(manifest, () => config().ShadowSoftnessTrees, v => config().ShadowSoftnessTrees = v,
+                () => i18n("config.shadows.softness.trees.name"), null,
+                ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax, 0.1f);
+            api.AddNumberOption(manifest, () => config().ShadowSoftnessSmallTrees, v => config().ShadowSoftnessSmallTrees = v,
+                () => i18n("config.shadows.softness.smalltrees.name"), null,
+                ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax, 0.1f);
+            api.AddNumberOption(manifest, () => config().ShadowSoftnessBushes, v => config().ShadowSoftnessBushes = v,
+                () => i18n("config.shadows.softness.bushes.name"), null,
+                ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax, 0.1f);
+            api.AddNumberOption(manifest, () => config().ShadowSoftnessCrops, v => config().ShadowSoftnessCrops = v,
+                () => i18n("config.shadows.softness.crops.name"), null,
+                ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax, 0.1f);
+            api.AddNumberOption(manifest, () => config().ShadowSoftnessGrass, v => config().ShadowSoftnessGrass = v,
+                () => i18n("config.shadows.softness.grass.name"), null,
+                ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax, 0.1f);
+            api.AddNumberOption(manifest, () => config().ShadowSoftnessObjects, v => config().ShadowSoftnessObjects = v,
+                () => i18n("config.shadows.softness.objects.name"), null,
+                ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax, 0.1f);
+            api.AddSectionTitle(manifest, () => i18n("config.shadows.lean.title"),
+                () => i18n("config.shadows.lean.tooltip"));
+            api.AddNumberOption(manifest, () => config().ShadowLeanTrees, v => config().ShadowLeanTrees = v,
+                () => i18n("config.shadows.lean.trees.name"), null,
+                ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax, 0.05f);
+            api.AddNumberOption(manifest, () => config().ShadowLeanSmallTrees, v => config().ShadowLeanSmallTrees = v,
+                () => i18n("config.shadows.lean.smalltrees.name"), null,
+                ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax, 0.05f);
+            api.AddNumberOption(manifest, () => config().ShadowLeanBushes, v => config().ShadowLeanBushes = v,
+                () => i18n("config.shadows.lean.bushes.name"), null,
+                ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax, 0.05f);
+            api.AddNumberOption(manifest, () => config().ShadowLeanCrops, v => config().ShadowLeanCrops = v,
+                () => i18n("config.shadows.lean.crops.name"), null,
+                ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax, 0.05f);
+            api.AddNumberOption(manifest, () => config().ShadowLeanGrass, v => config().ShadowLeanGrass = v,
+                () => i18n("config.shadows.lean.grass.name"), null,
+                ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax, 0.05f);
+            api.AddNumberOption(manifest, () => config().ShadowLeanObjects, v => config().ShadowLeanObjects = v,
+                () => i18n("config.shadows.lean.objects.name"), null,
+                ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax, 0.05f);
 
             // --- Camera (implemented) ---
         }

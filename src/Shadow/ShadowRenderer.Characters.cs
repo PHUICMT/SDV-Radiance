@@ -31,6 +31,7 @@ namespace SDVRadiance
             blur += OvercastExtraBlur * _overcastBlend;
             _sunLengthScale = Math.Max(0.1f, config.DirectionalShadowLength)
                             * MathHelper.Lerp(1f, OvercastLength, _overcastBlend);
+            CaptureKindTuning(config);
             stretch *= _sunLengthScale;
 
             if (DiagnosticMonitor != null && _diagnosticFrameCount < 3)

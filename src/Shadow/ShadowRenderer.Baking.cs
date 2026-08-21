@@ -130,7 +130,6 @@ namespace SDVRadiance
         /// missing or stale.</summary>
         private void RunSceneBakes(GraphicsDevice graphicsDevice, ModConfig config, bool shadowsOn)
         {
-            _bakeBlurPx = config.DirectionalShadowBlur;
             bool objectsOn = shadowsOn && SunCasts() && config.DirectionalShadowObjects;
             float sunRotation = 0f, sunStretch = 0f;
             if (objectsOn)
@@ -138,6 +137,7 @@ namespace SDVRadiance
                 ComputeSun(out sunRotation, out sunStretch, out _);
                 _sunLengthScale = Math.Max(0.1f, config.DirectionalShadowLength);
                 sunStretch *= _sunLengthScale;
+                CaptureKindTuning(config);
             }
             // A location change no longer clears: the key is (texture, frame, flip), which is not
             // tied to a map, so warping back and forth used to re-bake everything both ways for
@@ -184,7 +184,11 @@ namespace SDVRadiance
                 try
                 {
                     if (locationChanged || _bakedObjectCache.Count == 0)
-                        DrawObjectShadows(_renderTargetSpriteBatch!, objectLocation, sunRotation, sunStretch, 0f, 0f);
+                        // The blur is an ARGUMENT now, not a field the bake reads behind the draw
+                        // pass's back, so the full enumeration has to hand over the real one. It
+                        // passed a zero here for as long as the bake had its own copy, which would
+                        // now mean every silhouette baked on arrival in a location came out crisp.
+                        DrawObjectShadows(_renderTargetSpriteBatch!, objectLocation, sunRotation, sunStretch, 0f, config.DirectionalShadowBlur);
                     else
                         BakeQueuedObjectSprites(graphicsDevice);
                 }

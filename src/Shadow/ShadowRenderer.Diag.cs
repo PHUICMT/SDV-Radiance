@@ -301,21 +301,52 @@ namespace SDVRadiance
                         + $"overcast={overcast:0.00}");
             report.AppendLine($"[shadows] geometry: character (rotated) angle={rot * Deg:0.0}deg stretch={sunStretch:0.00}");
 
-            void Kind(string name, float cap)
+            // Read from the live per-kind settings rather than repeating them. The numbers here
+            // were copied by hand and had drifted: it still printed a crop cap of 0.55 and an
+            // object cap of 0.5 long after the draw pass had moved both to 1.0, so the one tool
+            // for answering "why is this shadow that long" was answering about other code.
+            void Kind(ShadowKind kind)
+            {
+                float cap = LengthCapFor(config, kind);
+                // The lean this kind is drawn at, which is the sun's own only while its lean is 1.
+                // Reading rot straight here would have gone on printing one angle for everything
+                // while the screen showed several, and that is the report this table exists for.
+                float lean = LeanFor(config, kind);
+                float kindRot = rot * lean;
+                float st = Math.Min(sunStretch, cap * lengthScale);
+                float shear = -(float)Math.Sin(kindRot) * st;
+                float raw = st * (float)Math.Cos(kindRot);
+                float sy = Math.Max(0.15f, raw);
+                float angle = (float)Math.Atan2(-shear, sy) * Deg;
+                report.AppendLine($"[shadows]   {kind,-12} cap={cap:0.00} soft={SoftnessFor(config, kind):0.00}x lean={lean:0.00}x "
+                            + $"stretch={st:0.00} shear={shear:0.000} "
+                            + $"squash={sy:0.000}{(raw < 0.15f ? " floor" : "")} angle={angle:0.0}deg");
+            }
+            foreach (ShadowKind kind in Enum.GetValues<ShadowKind>())
+                Kind(kind);
+            // What the narrowing does to two sprites at opposite ends of the problem it exists for.
+            // A shadow reads as a direction only when its lean carries further than the sprite is
+            // wide, so this prints the lean and the width side by side and lets the reader see
+            // which one is winning.
+            void Narrowing(string what, float w, float h, float cap)
             {
                 float st = Math.Min(sunStretch, cap * lengthScale);
                 float shear = -(float)Math.Sin(rot) * st;
-                float raw = st * (float)Math.Cos(rot);
-                float sy = Math.Max(0.15f, raw);
-                float angle = (float)Math.Atan2(-shear, sy) * Deg;
-                report.AppendLine($"[shadows]   {name,-12} cap={cap:0.00} stretch={st:0.00} shear={shear:0.000} "
-                            + $"squash={sy:0.000}{(raw < 0.15f ? " floor" : "")} angle={angle:0.0}deg");
+                float lean = Math.Abs(shear) * h;
+                float narrow = NarrowForLean(w, h, shear, config.ShadowLeanClarity);
+                report.AppendLine($"[shadows]   {what,-12} {w:0}x{h:0} lean={lean:0.0}px width={w:0}px "
+                            + $"-> {narrow * 100f:0}% width, so it reaches {lean / Math.Max(1f, w * narrow):0.0}x its own width "
+                            + $"(a person: {PersonLeanDominance:0.0}x)"
+                            + (w > MaxNarrowSpriteSize || h > MaxNarrowSpriteSize
+                                ? "   [left alone: bigger than one tile]" : ""));
             }
-            Kind("tree", TreeStretchMax);
-            Kind("bush", 0.8f);
-            Kind("crop", 0.55f);
-            Kind("grass", 0.35f);
-            Kind("object", 0.5f);
+            report.AppendLine($"[shadows] lean clarity={config.ShadowLeanClarity:0.00}");
+            // The SOURCE rects the draw path really passes, not the visible plant inside them: a
+            // crop frame is 16x32 with the plant in its lower half, and the rule sees the 32.
+            Narrowing("a sapling", 16f, 16f, config.ShadowLengthSmallTrees);
+            Narrowing("a stump", 16f, 32f, config.ShadowLengthSmallTrees);
+            Narrowing("a crop", 16f, 32f, config.ShadowLengthCrops);
+            Narrowing("a tree", 48f, 96f, config.ShadowLengthTrees);
         }
     }
 }

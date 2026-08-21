@@ -46,16 +46,30 @@ namespace SDVRadiance
                 "Dump every location's layer/tile layout + sheet art to Documents\\HF-Studio\\maps.json for the label editor. "
                 + "Add 'all' to also embed tilesheets that no loaded map places: the water-heavy and bridge-heavy art ships "
                 + "as bare resource packs with no maps of their own, so walking the maps can never find it. "
-                + "Sheet art is written as one PNG per sheet beside maps.json; add 'embed' for the old single inlined file.",
+                + "Sheet art is written as one PNG per sheet beside maps.json; add 'embed' for the old single inlined file. "
+                + "Any other word names the MOD SET being dumped: runs add to the dump rather than replacing it, and a "
+                + "location that differs between mod sets is kept once per version with the names of the sets that produce it.",
                 (_, args) =>
                 {
                     bool all = false, embed = false;
+                    string profile = "";
                     foreach (string a in args)
                     {
                         if (a.Equals("all", StringComparison.OrdinalIgnoreCase)) all = true;
                         else if (a.Equals("embed", StringComparison.OrdinalIgnoreCase)) embed = true;
+                        else if (profile.Length == 0) profile = a;
                     }
-                    MapDump.Run(monitor, helper, allSheets: all, embedArt: embed);
+                    MapDump.Run(monitor, helper, allSheets: all, embedArt: embed, profile: profile);
+                });
+            helper.ConsoleCommands.Add("radiance_artfingerprint",
+                "Fingerprint the art behind every labelled tile, so a label can later tell whether the picture it "
+                + "was painted on is the one actually loaded. Name the set of art it is looking at, for example "
+                + "'radiance_artfingerprint vanilla' or 'radiance_artfingerprint elle-earthy'. Writes "
+                + "Documents\\HF-Studio\\fingerprints\\<name>.json.",
+                (_, args) =>
+                {
+                    string label = args.Length > 0 ? string.Join(" ", args) : "unnamed";
+                    ArtFingerprintDump.Run(monitor, helper, label);
                 });
             helper.ConsoleCommands.Add("radiance_lights",
                 "List every active light source in the current location (id, kind, tile, radius, color, distance from player).",

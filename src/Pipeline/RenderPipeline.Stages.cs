@@ -1107,6 +1107,7 @@ namespace SDVRadiance
             GetParam(effect, "MirrorShear")?.SetValue(reflDistort);
             GetParam(effect, "ReflWobble")?.SetValue(reflWobble * config.WaterReflectDistort);
             GetParam(effect, "ReflSoftness")?.SetValue(config.WaterReflectBlur);
+            GetParam(effect, "ReflDepthScale")?.SetValue(config.WaterReflectDepth);
             // Passed as steps per TILE, which is what the shader needs to round with, rather than
             // as the pixel height the setting is written in. Zero means do not round at all.
             GetParam(effect, "ShearSteps")?.SetValue(

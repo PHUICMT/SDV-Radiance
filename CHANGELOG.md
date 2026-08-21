@@ -2,6 +2,252 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.6.1
+
+### Added
+
+- **A label is only used on the art it was painted on.** This mod ships hand-painted labels
+  saying which tile of which tilesheet is water, glass, a mirror, a roof, and those labels are
+  painted on one picture. An art pack can replace that picture and leave the tile where it was,
+  and the label goes on describing art that is not there any more. Reported twice as bright
+  rectangles around doors and windows on buildings that have neither: the pane the label knew
+  about had been painted over by a building pack, and a reflection was still being drawn in it.
+
+  Before a glass label is used now, the picture the game is actually drawing is compared against
+  a fingerprint of the picture the label was painted on, and where the two disagree the glass is
+  taken back out.
+
+  Glass and nothing else, which was decided on a measurement rather than out of caution. Taking a
+  single recolour out of an otherwise identical profile changed the art under 11,216 of 20,202
+  labelled tiles, and 4,703 of those carry LIQUID labels, which is 82% of every liquid label that
+  ships. Liquid labels are what correct the water colour gate, so refusing them because a recolour
+  is installed would bring the rectangles-around-water reports straight back. A refused glass
+  label is a quiet pane and nothing else. A tile whose label carries no glass is never
+  fingerprinted at all, so the ordinary case costs nothing.
+
+  Two kinds of label are kept whatever the art says. One is the blank label, which adds nothing
+  and can only take something away: those are the snow vetoes that stop Four Corners reading as
+  water in winter, and dropping one would put an effect back rather than remove one. The other is
+  a label on art that cannot be read at all, because there is no reading to disagree with.
+
+  Three passes ship: the base game's own art, and two over the author's map mods. On art with no
+  fingerprint you lose window reflections on those sheets and nothing else changes.
+
+- **A label can be painted for art this mod does not ship against.** Where a pack repaints a
+  window without moving it, a label painted on that pack's picture can be tied to it and used
+  outright wherever that art is loaded, in preference to the guard: somebody looked at this
+  picture and said where its glass is, which is better evidence than a hash saying the shipped
+  label does not apply. Several fingerprints may share one painted label, because a pack with
+  four palettes draws the same window four times over. For one town sheet that is the difference
+  between painting 78 tiles and painting 312.
+
+  No variants ship in this release. The machinery is here so that a pack's own labels can be
+  added later without a code change, and `radiance_report` names any variant that matched,
+  because a variant that never matches looks exactly like one that was never installed.
+
+- **The bundled labels carry a week of painting.** The pack had not been rebuilt since 14 August
+  and 69 sheets that had been painted were not in it at all. It goes from 128 sheets to 197 and
+  from 29,358 tiles to 42,881, most of it water and windows on maps from other mods.
+
+- **Shadow length and softness, per kind of thing.** The ceilings that decide how far a shadow may
+  reach were always set per kind, because a tree may not reach as far as a person does: its canopy
+  is drawn well above the trunk that actually casts, so the full sun would tear the shadow off its
+  own tree. Those ceilings were constants, though, which meant a player who wanted their shadows
+  back the way an earlier version drew them had nothing to turn. They are settings now, six of
+  them, for trees, saplings and stumps, bushes, crops, grass, and forage/fences/machines. The
+  overall **Shadow length** slider still multiplies all six, so nothing has to be touched to make
+  everything shorter at once.
+
+  Alongside them, six softness multipliers on the overall **Edge softness**, which did not exist
+  before: the blur was one number for everything on the screen. A blur radius is measured in
+  pixels, so the same number is a soft edge on a short shadow and a hard one on a long shadow, and
+  short things generally want more of it than tall ones.
+
+- **A shadow narrows across the sun, so its lean is the thing you see.** A shadow's tip has
+  always landed at the sun's angle, and for a person that is what you read, because a person leans
+  further than they are wide. A crop is about as wide as it is tall, so the same lean moves its top
+  by less than its own width and the shadow comes out as a flat smear lying ACROSS the sun rather
+  than along it, at the same tip angle as everything else. Making crop shadows shorter made that
+  worse, because the lean shrank and the plant's width did not.
+
+  The arithmetic is blunt about this: a shadow's bounding box can sit at the sun's own angle only
+  when the shadow has no width at all. A person's shadow looks right not because its box matches
+  but because it is a long thin bar, and a bar carries its direction in its own shape. So the test
+  is that shape: how far a shadow reaches compared with its own width.
+
+  This applies to the smallest casters only, a single tile of sprite or less, which in practice
+  means seeds, sprouts and saplings. Their whole shadow is a handful of pixels and its own width
+  is enough to hide the angle. Everything bigger is left exactly as it was, because a stump, a
+  crop, a bush or a canopy already casts a shape you can read and narrowing it only makes it
+  worse. At noon nothing is narrowed at all, since there is no direction to show. One slider,
+  **Lean clarity**, from off to full.
+
+- **Lean, per kind of thing.** How far a shadow leans away from its caster, as a fraction of the
+  sun's own angle, for the same six kinds. Everything defaults to 1, which is the sun itself and
+  is the only setting at which a shadow points where the light says it should.
+
+  It exists because length and lean are not interchangeable and only one of them was reachable.
+  The ceiling decides how FAR a shadow reaches; the lean decides its SHAPE. At six in the morning
+  a crop capped at 0.55 lands its tip 9.9 pixels sideways and 4.8 down at full lean, and 6.8 by
+  8.6 at 0.6. Same ceiling, and only the second one reads as a plant standing on soil rather than
+  hovering beside its own shadow. Nothing about the length could produce the second picture.
+
+  Set below 1 a caster no longer agrees with the sun, and the people standing next to it will
+  point somewhere else. That is a real cost and it is why the default is 1.
+
+- **How deep a reflection reaches into the water is a setting, and so is how much of the scene
+  reflects at all.** The depth bound ran 5 to 9 tiles through 1.5.3. It was raised to 9 to 16 when
+  the mirror learned to read twelve tiles above the frame, because until then the middle of any
+  river or lake carried no reflection and read as flat paint. That is right for open water, where
+  a cliff really is that tall, and long for a stream a tile or two across, where the mirrored bank
+  runs on for more water than there is.
+
+  One dial moves both halves of the bound together, the general one and the shallower one that
+  applies when the mirrored source is itself water. Moving only the first would let a river's own
+  surface out-reach the bank above it, which is the streaking the two were balanced against. 1 is
+  the shipped depth; about 0.55 is 1.5.3's.
+
+  Reflection **reach**, which decides how much of the scene is mirrored at all, has been in the
+  config file since 1.5.6 and in no menu. It is in both now. A setting nobody can find is a
+  setting that does not exist.
+
+### Changed
+
+- **A tuner control that cannot do anything now looks like it.** Every slider sat at full
+  strength whether or not the thing it belongs to was switched on. Untick shadows and the eight
+  shadow sliders stayed bright and draggable: the value moved, nothing on the screen did, and the
+  only way to find that out was to try it and wonder what you had missed. Rows dim when what they
+  need is off, and they refuse the mouse as well, so a drag cannot start on one and a click
+  cannot flip it.
+
+  Dimmed rather than hidden, deliberately. Hiding re-flows everything below it on every toggle,
+  and a list that jumps under your hand while you are using it is harder to work with than one
+  that greys a row where it stands.
+
+- **Crop and sapling shadows go back to roughly the length they had in 1.5.3.** Two changes in
+  1.5.4 pushed the same way without either knowing about the other. One raised the crop ceiling
+  from 0.55 to 1.0 so a tall dead plant's shadow would clear the plant instead of landing on it.
+  The other stopped damping the lean of every short caster to 0.6 of the sun's angle, which on its
+  own widened their sideways reach by about half, and that was the thing the raised ceiling had
+  been meant to fix. Together they over-shot, and dense planting came out as a field of long
+  parallel diagonals. Crops go back to 0.55 and saplings to 0.52, which with the un-damped lean
+  still reaches further sideways than 1.5.3 ever managed, and both default to 1.6x the overall
+  edge softness. Every one of these is a slider now, so the longer look is one drag away.
+
+### Fixed
+
+- **The water effect ran over the palm fronds around the desert oasis.** Reported as a tree
+  being drawn over by water, and asked about as whether the tree came from another mod. It did
+  not, and it never had to. The game picks between three columns of the same rectangle when it
+  draws a tree's canopy: one for a tree carrying seed or one not yet shaken today, one for a
+  mossy tree, and one for everything else. Three places here drew a tree and all three took the
+  first column unconditionally: its shadow, its reflection, and the stencil that keeps the water
+  effect off it. A desert palm holding a coconut is exactly the first case, so it was being
+  stencilled with the shape of a palm holding nothing and the water ran over the fronds the wrong
+  shape left uncovered. Its shadow and its reflection were the wrong shape too, quietly, wherever
+  the same conditions held, which means a mossy tree has cast the wrong shadow since the game
+  added moss. One helper now answers the question the game answers, and all three ask it.
+
+- **Animals from companion mods rippled like the water they were standing in.** Reported twice
+  about the aquatic animals in a Custom Companions pack. A companion is a villager that draws
+  itself with its own origin, its own rotation and a scale taken per animal from its own model.
+  The water stencil was rebuilding all of that from a bounding box and a source rectangle, which
+  knows about none of it, so the shape landed near the animal rather than on it and the ripple
+  ran across whatever it missed. Villagers and farm animals are asked to draw themselves into the
+  stencil now, exactly as the small wildlife already was, with the old hand-built shape kept only
+  for when that fails. A villager comes out the same either way; anything that positions itself
+  differently only comes out right this way.
+
+- **`radiance_shadows` reported numbers the renderer had stopped using.** The geometry table
+  printed a crop ceiling of 0.55 and an object ceiling of 0.5 for two releases after the draw pass
+  moved both to 1.0, because the values were copied into the diagnostic by hand. The one tool for
+  answering "why is that shadow that long" was describing code that no longer ran. It and the draw
+  pass now read the same settings, and it prints the softness multiplier as well.
+
+- **Silhouettes baked on arrival in a location took the wrong edge.** The full bake that runs when
+  you walk into a new map passed a blur of zero and got away with it only because the bake read a
+  separate copy of the setting. Found while making the blur per-kind, which would have turned it
+  into a screen of crisp-edged shadows for as long as those bakes lived.
+
+### Diagnostics
+
+- `radiance_report` says how many labels were refused because the art under them had changed,
+  which sheet they were on, and which installed content packs declare that they repaint that
+  sheet, read from each pack's own manifest. "My reflections are missing" and "I am running an
+  art mod this has no labels for" are the same sentence, and nobody should have to work that out
+  unaided. Names never decide anything: what is drawn is settled by the fingerprint. They are
+  there to explain the decision.
+- `radiance_artfingerprint <name>` takes a fingerprint pass over the art currently loaded and
+  writes it out, which is how the shipped passes were made and how a variant for someone else's
+  art can be made.
+
+### Translations
+
+- **Chinese is complete for 1.6.0**, 557 of 557 keys, sent in by Rime961. No key the mod uses
+  falls back to English and nothing is a copy of the English. The 58 keys 1.6.1 adds are not
+  translated yet and fall back until they are.
+
+### Known issues
+
+- **Reflections at the beach can sit away from what casts them.** Reported with the shore in
+  view, where a reflection follows the player but not to the place the player is standing. The
+  shore is the one piece of water whose edge is a slope rather than a line, and the reflection
+  is anchored on feet, so the two disagree by however far the slope runs. Not diagnosed further
+  than that yet.
+
+- **A fish pond, or a pond built on the farm, reflects in pieces.** Reported as reflections that
+  are cut off partway. A built pond is not map art and carries no painted label, so what it is
+  has to be worked out from the object rather than looked up, and that path does not yet cover
+  the whole of one.
+
+- **The water surface can flicker, and show bands of colour.** Reported against 1.6.0 with the
+  reflection on, and since seen here as well, so it is a real thing and not a machine of its own.
+  What causes it has not been worked out yet and no attempt at it is in this release.
+
+- **A mossy tree can still be invisible in winter.** Unchanged from 1.6.0 and unchanged in what
+  is known about it: the game asks for a sprite column past the right edge of the winter tree
+  sheet and the card returns a transparent edge pixel. The canopy fix in this release makes the
+  shadow and the reflection of a mossy tree the right shape, which is a different half of the
+  same sheet layout and does not make the tree come back.
+
+### For translators
+
+**58 new keys, nothing removed, nothing whose meaning changed.** They are two groups of the same
+shape, one heading plus six labels each, and the six labels are the same six words in both groups.
+
+- **Length per kind** (`config.shadows.perkind.title`, `config.shadows.perkind.tooltip`,
+  `config.shadows.length.trees.name`, `.smalltrees.name`, `.bushes.name`, `.crops.name`,
+  `.grass.name`, `.objects.name`)
+- **Softness per kind** (`config.shadows.softness.title`, `config.shadows.softness.tooltip`,
+  `config.shadows.softness.trees.name`, `.smalltrees.name`, `.bushes.name`, `.crops.name`,
+  `.grass.name`, `.objects.name`)
+- **The same controls on the F6 tuner** (`tuner.shadowperkind`, `tuner.shadowsoftperkind`,
+  `tuner.shadowlength.trees` through `.objects`, `tuner.shadowsoftness.trees` through `.objects`).
+  These are the short forms: the tuner column is narrower than the settings menu, so
+  `config.shadows.length.objects.name` reads "Forage, fences & machines" while
+  `tuner.shadowlength.objects` is just "Forage & machines". Both may be shortened further if your
+  language needs the room; neither is used anywhere else.
+
+- **Lean clarity** (`config.shadows.leanclarity.name`, `config.shadows.leanclarity.tooltip`,
+  `tuner.shadowleanclarity`, `help.shadowleanclarity`). The word to carry is that this is about
+  what the eye reads, not about the angle being wrong: the angle is already the same for
+  everything, and this makes short wide things show it.
+
+- **Lean per kind** (`config.shadows.lean.title`, `config.shadows.lean.tooltip`,
+  `config.shadows.lean.trees.name` through `.objects.name`, `tuner.shadowleanperkind`,
+  `tuner.shadowlean.trees` through `.objects`, `help.shadowlean`). The six labels are the same
+  six words the other two groups use.
+
+- **Water** (`config.water.reflectdepth.name` and `.tooltip`, `config.water.reflectreach.name`
+  and `.tooltip`, `tuner.reflectdepth`, `tuner.reflectreach`, `help.reflectdepth`,
+  `help.reflectreach`). Depth is how far DOWN a reflection carries; reach is how much of the
+  scene reflects at all. Two different questions that both sound like "how much reflection", so
+  the two need to read differently in your language as well.
+
+`smalltrees` means saplings, seedlings, bush-stage growth and stumps, which the game draws as
+trees but which are short. `objects` covers anything standing on its own tile at its own height:
+forage on the ground, fences, signs, torches, kegs, machines.
+
 ## 1.6.0
 
 ### Added

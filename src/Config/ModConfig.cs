@@ -358,6 +358,21 @@ namespace SDVRadiance
         public int WaterReflectFadeRows { get; set; } = 8;
 
         public float WaterReflectReach { get; set; } = 0.53f;
+        /// <summary>
+        /// How deep a scene reflection reaches into the water before it resolves to sky, as a
+        /// multiplier on the bound the shader uses.
+        ///
+        /// <para>
+        /// The bound ran 5 to 9 tiles through 1.5.3 and was raised to 9 to 16 when the mirror
+        /// learned to read twelve tiles above the frame: before that the middle of any river or
+        /// lake carried no reflection at all and read as flat paint. It is right for open water
+        /// and long for a stream a tile or two across, where sixteen tiles of mirrored cliff is
+        /// more water than there is.
+        /// </para>
+        ///
+        /// <para>1 is the shipped bound; about 0.56 is the 1.5.3 one.</para>
+        /// </summary>
+        public float WaterReflectDepth { get; set; } = 1.0f;
 
         public float WaterReflectBanding { get; set; } = 5.87f;
         /// <summary>
@@ -652,6 +667,121 @@ namespace SDVRadiance
         public float DirectionalShadowBlur { get; set; } = 5.0f;
         /// <summary>Also cast directional shadows from trees and bushes (not just characters).</summary>
         public bool DirectionalShadowObjects { get; set; } = true;
+        /// <summary>
+        /// How hard a shadow is squeezed across the sun so that its lean is the thing you read.
+        /// 0 leaves every shadow as wide as the thing casting it; 1 narrows the ones that need it.
+        ///
+        /// <para>
+        /// A shadow's tip always lands at the sun's angle, and for a person that is what you see,
+        /// because a person is twice as tall as they are wide and the lean carries the shape. A
+        /// crop is as wide as it is tall, so the same lean moves its top by less than its own
+        /// width and the shadow reads as a flat smear lying across the sun rather than along it.
+        /// Reported as exactly that, with the two angles drawn on a screenshot, and the numbers
+        /// agreed with the report: identical tip angles, visibly different directions.
+        /// </para>
+        ///
+        /// <para>
+        /// Only shadows whose lean falls short of their own width are narrowed, and only as far as
+        /// the lean reaches, so a tree is left alone and a crop becomes a streak pointing the way
+        /// the sun says. It eases in with the lean itself: at noon there is no direction to show
+        /// and nothing is narrowed.
+        /// </para>
+        /// </summary>
+        public float ShadowLeanClarity { get; set; } = 1.0f;
+
+        // --- How long and how soft each kind of caster's shadow is ---
+        //
+        // How far a shadow may reach, as a fraction of the caster's own height, before the sun
+        // angle alone would take it further. DirectionalShadowLength multiplies all of them, so
+        // one slider still moves everything and these say how the kinds sit relative to each other.
+        //
+        // These were constants until 1.6.1 and the numbers here are the ones that shipped, with
+        // two exceptions noted on their own lines. A ceiling exists wherever a sprite's height is
+        // not a real height: a tree's canopy, a bush's mass, a painted-on map prop. Things that
+        // genuinely stand on the ground at their own height take the same sun a person does.
+
+        /// <summary>Mature trees and fruit trees. Low because a canopy is drawn well above the
+        /// trunk that actually casts, so the full sun would detach the shadow from its own tree.</summary>
+        public float ShadowLengthTrees { get; set; } = 0.6f;
+        /// <summary>Seeds, sprouts, saplings, bush-stage growth and stumps.
+        ///
+        /// <para>Shipped at 0.8 with the lean damped to 0.6 of the sun's angle. Un-damping the lean
+        /// (1.5.4) widened the sideways reach of the same ceiling by about half, which is most of
+        /// what "shadows are longer and sharper than 1.5.3, dense planting reads as diagonal
+        /// clutter" was describing. 0.52 is the ceiling that puts the sideways reach back where
+        /// 1.5.3 had it at a mid-morning sun.</para></summary>
+        public float ShadowLengthSmallTrees { get; set; } = 0.52f;
+        /// <summary>Bushes, both the terrain kind and the ones a map places. A bush is mostly
+        /// mass rather than height, so its sprite over-states what is standing there.</summary>
+        public float ShadowLengthBushes { get; set; } = 0.8f;
+        /// <summary>Crops, living and dead. Was 0.55, raised to 1.0 in 1.5.4 so a tall dead plant's
+        /// shadow would clear the plant instead of landing on it, at the same time as the lean
+        /// stopped being damped. Both changes pushed the same way and the pair over-shot; 0.55 is
+        /// the 1.5.3 ceiling, which with the un-damped lean still reaches further sideways than
+        /// 1.5.3 ever did.</summary>
+        public float ShadowLengthCrops { get; set; } = 0.55f;
+        /// <summary>Grass tufts. Short: a tuft is a few pixels of blade over a wide footprint.</summary>
+        public float ShadowLengthGrass { get; set; } = 0.35f;
+        /// <summary>Forage, fences, signs, torches, kegs, machines - anything standing on its tile
+        /// at its own height, which is why this one is not capped below a person's.</summary>
+        public float ShadowLengthObjects { get; set; } = 1.0f;
+
+        // Softness per kind, as a multiplier on DirectionalShadowBlur. A blur radius is in pixels,
+        // so the same radius reads as a soft edge on a short shadow and a hard one on a long
+        // shadow; these let the short things stay soft without blurring the tall ones into smudges.
+
+        /// <summary>Softness of tree and fruit-tree shadows, times the overall blur.</summary>
+        public float ShadowSoftnessTrees { get; set; } = 1.0f;
+        /// <summary>Softness of sapling and stump shadows, times the overall blur.</summary>
+        public float ShadowSoftnessSmallTrees { get; set; } = 1.6f;
+        /// <summary>Softness of bush shadows, times the overall blur.</summary>
+        public float ShadowSoftnessBushes { get; set; } = 1.0f;
+        /// <summary>Softness of crop shadows, times the overall blur.</summary>
+        public float ShadowSoftnessCrops { get; set; } = 1.6f;
+        /// <summary>Softness of grass shadows, times the overall blur.</summary>
+        public float ShadowSoftnessGrass { get; set; } = 1.0f;
+        /// <summary>Softness of shadows from forage, fences and machines, times the overall blur.</summary>
+        public float ShadowSoftnessObjects { get; set; } = 1.0f;
+
+        // How far each kind LEANS, as a fraction of the sun's angle. 1 is the sun itself and is
+        // the default for everything, because a shadow that leans less has moved the sun for its
+        // caster alone: at six in the morning a damped tree pointed one way while the player
+        // beside it pointed another, and that was reported as two suns, measured in clock hours.
+        //
+        // It is a setting because the same geometry is what made 1.5.3's crop shadows read as
+        // planted rather than floating, and no length can substitute for it. Length decides how
+        // far a shadow reaches; the lean decides its SHAPE. At 06:10 a crop capped at 0.55 lands
+        // its tip 9.9 px sideways and 4.8 px down at full lean, and 6.8 by 8.6 at 0.6 - the same
+        // ceiling, a completely different picture, and the second one is what was asked for.
+        //
+        // Below 1 a caster no longer agrees with the sun. That is the whole cost, and it is real.
+        /// <summary>How far tree and fruit-tree shadows lean, as a fraction of the sun's own angle.</summary>
+        public float ShadowLeanTrees { get; set; } = 1.0f;
+        /// <summary>How far sapling and stump shadows lean, as a fraction of the sun's own angle.</summary>
+        public float ShadowLeanSmallTrees { get; set; } = 1.0f;
+        /// <summary>How far bush shadows lean, as a fraction of the sun's own angle.</summary>
+        public float ShadowLeanBushes { get; set; } = 1.0f;
+        /// <summary>How far crop shadows lean, as a fraction of the sun's own angle.</summary>
+        public float ShadowLeanCrops { get; set; } = 1.0f;
+        /// <summary>How far grass shadows lean, as a fraction of the sun's own angle.</summary>
+        public float ShadowLeanGrass { get; set; } = 1.0f;
+        /// <summary>How far shadows from forage, fences and machines lean, as a fraction of the sun's own angle.</summary>
+        public float ShadowLeanObjects { get; set; } = 1.0f;
+
+        /// <summary>A shadow shorter than this is not a shadow, so nothing is allowed to reach zero
+        /// by way of a length slider; turn the whole feature off instead.</summary>
+        public const float ShadowKindLengthMin = 0.05f;
+        /// <summary>Twice a person's own height, which is as far as a low sun takes anything.</summary>
+        public const float ShadowKindLengthMax = 2f;
+        /// <summary>Zero softness is a crisp edge, which is a look some people want.</summary>
+        public const float ShadowKindSoftnessMin = 0f;
+        /// <summary>Double the overall blur. Past this the silhouette stops reading as a shape.</summary>
+        public const float ShadowKindSoftnessMax = 2f;
+        /// <summary>A shadow that leans this much less than the sun still reads as the same sun.
+        /// Lower and it is plainly its own; that is allowed, and it is what 1.5.3 did.</summary>
+        public const float ShadowKindLeanMin = 0.2f;
+        /// <summary>The sun's own angle. Nothing leans further than the light does.</summary>
+        public const float ShadowKindLeanMax = 1f;
         /// <summary>How many shadows one character may cast indoors and after dark, nearest light
         /// first. A look control and a cost control at once: each cast is a full soft silhouette,
         /// so this is a direct multiplier on what characters cost to shadow, and past about three
@@ -716,6 +846,7 @@ namespace SDVRadiance
             WaterReflectStrength = ClampToRange(WaterReflectStrength, 0f, 1f);
             WaterReflectBanding = ClampToRange(WaterReflectBanding, 0f, 16f);
             WaterReflectReach = ClampToRange(WaterReflectReach, 0.2f, 1f);
+            WaterReflectDepth = ClampToRange(WaterReflectDepth, 0.3f, 1.5f);
             WaterReflectFadeRows = Math.Clamp(WaterReflectFadeRows, 4, 16);
             WaterReflectDistort = ClampToRange(WaterReflectDistort, 0f, 1.5f);
             WaterReflectBlur = ClampToRange(WaterReflectBlur, 0f, 2f);
@@ -766,6 +897,25 @@ namespace SDVRadiance
             DirectionalShadowStrength = ClampToRange(DirectionalShadowStrength, 0f, 1f);
             DirectionalShadowLength = ClampToRange(DirectionalShadowLength, 0.2f, 2f);
             DirectionalShadowBlur = ClampToRange(DirectionalShadowBlur, 0f, 5f);
+            ShadowLeanClarity = ClampToRange(ShadowLeanClarity, 0f, 1f);
+            ShadowLengthTrees = ClampToRange(ShadowLengthTrees, ShadowKindLengthMin, ShadowKindLengthMax);
+            ShadowLengthSmallTrees = ClampToRange(ShadowLengthSmallTrees, ShadowKindLengthMin, ShadowKindLengthMax);
+            ShadowLengthBushes = ClampToRange(ShadowLengthBushes, ShadowKindLengthMin, ShadowKindLengthMax);
+            ShadowLengthCrops = ClampToRange(ShadowLengthCrops, ShadowKindLengthMin, ShadowKindLengthMax);
+            ShadowLengthGrass = ClampToRange(ShadowLengthGrass, ShadowKindLengthMin, ShadowKindLengthMax);
+            ShadowLengthObjects = ClampToRange(ShadowLengthObjects, ShadowKindLengthMin, ShadowKindLengthMax);
+            ShadowSoftnessTrees = ClampToRange(ShadowSoftnessTrees, ShadowKindSoftnessMin, ShadowKindSoftnessMax);
+            ShadowSoftnessSmallTrees = ClampToRange(ShadowSoftnessSmallTrees, ShadowKindSoftnessMin, ShadowKindSoftnessMax);
+            ShadowSoftnessBushes = ClampToRange(ShadowSoftnessBushes, ShadowKindSoftnessMin, ShadowKindSoftnessMax);
+            ShadowSoftnessCrops = ClampToRange(ShadowSoftnessCrops, ShadowKindSoftnessMin, ShadowKindSoftnessMax);
+            ShadowSoftnessGrass = ClampToRange(ShadowSoftnessGrass, ShadowKindSoftnessMin, ShadowKindSoftnessMax);
+            ShadowSoftnessObjects = ClampToRange(ShadowSoftnessObjects, ShadowKindSoftnessMin, ShadowKindSoftnessMax);
+            ShadowLeanTrees = ClampToRange(ShadowLeanTrees, ShadowKindLeanMin, ShadowKindLeanMax);
+            ShadowLeanSmallTrees = ClampToRange(ShadowLeanSmallTrees, ShadowKindLeanMin, ShadowKindLeanMax);
+            ShadowLeanBushes = ClampToRange(ShadowLeanBushes, ShadowKindLeanMin, ShadowKindLeanMax);
+            ShadowLeanCrops = ClampToRange(ShadowLeanCrops, ShadowKindLeanMin, ShadowKindLeanMax);
+            ShadowLeanGrass = ClampToRange(ShadowLeanGrass, ShadowKindLeanMin, ShadowKindLeanMax);
+            ShadowLeanObjects = ClampToRange(ShadowLeanObjects, ShadowKindLeanMin, ShadowKindLeanMax);
             ShadowCastsPerCharacter = Math.Clamp(ShadowCastsPerCharacter, ShadowCastsMin, ShadowCastsMax);
             CameraFollowSpeed = ClampToRange(CameraFollowSpeed, 0.05f, 1f);
         }

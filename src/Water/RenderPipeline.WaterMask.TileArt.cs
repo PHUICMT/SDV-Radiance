@@ -157,6 +157,15 @@ namespace SDVRadiance
         private void ReadTileArt(Texture2D texture, Rectangle src)
         {
             _tileArtPixels ??= new Color[256];
+            ReadTileArtInto(texture, src, _tileArtPixels);
+        }
+
+        /// <summary>The same read, into a buffer the caller owns. Split out because the label
+        /// guard's fingerprint read can land in the middle of a gather that is still holding
+        /// <see cref="_tileArtPixels"/>, and one shared scratch buffer with two readers is a
+        /// corruption that would get blamed on something else entirely.</summary>
+        private void ReadTileArtInto(Texture2D texture, Rectangle src, Color[] into)
+        {
             Color[]? sheet = EnsureSheetPixels(texture);
             if (sheet != null)
             {
@@ -164,28 +173,53 @@ namespace SDVRadiance
                 for (int row = 0; row < 16; row++)
                 {
                     int soff = (src.Y + row) * tw + src.X;
-                    if (soff < 0 || soff + 16 > sheet.Length) { Array.Clear(_tileArtPixels, row * 16, 16); continue; }
-                    Array.Copy(sheet, soff, _tileArtPixels, row * 16, 16);
+                    if (soff < 0 || soff + 16 > sheet.Length) { Array.Clear(into, row * 16, 16); continue; }
+                    Array.Copy(sheet, soff, into, row * 16, 16);
                 }
             }
             else if (_tileArtCache.TryGetValue((texture, src), out Color[]? tile))
             {
-                Array.Copy(tile, _tileArtPixels, 256);
+                Array.Copy(tile, into, 256);
             }
             else
             {
                 // A refused sheet still gets read at most ONCE per distinct tile: the gather walks
                 // every tile of the map, so an undeduped readback here is paid per painted cell,
                 // not per piece of art. Bounded so a pathological map cannot grow this without end.
-                try { texture.GetData(0, src, _tileArtPixels, 0, 256); } catch { Array.Clear(_tileArtPixels, 0, 256); }
+                try { texture.GetData(0, src, into, 0, 256); } catch { Array.Clear(into, 0, 256); }
                 if (_tileArtCache.Count < 16_384)
                 {
                     var copy = new Color[256];
-                    Array.Copy(_tileArtPixels, copy, 256);
+                    Array.Copy(into, copy, 256);
                     _tileArtCache[(texture, src)] = copy;
                 }
             }
         }
+
+        /// <summary>
+        /// The fingerprint of the art one map tile actually draws, for the label guard in
+        /// <see cref="LabelStore"/>.
+        /// </summary>
+        /// <remarks>
+        /// Reads through the same sheet cache the mask fills on entry, so asking costs a
+        /// dictionary hit and 256 multiplies rather than a trip to the graphics card. LabelStore
+        /// asks at most once per (sheet, tile index) and remembers the answer, so this runs a few
+        /// dozen times on entering a map and then not at all.
+        /// </remarks>
+        internal bool TryFingerprintTileArt(xTile.Layers.Layer layer, int x, int y, out ulong fingerprint)
+        {
+            fingerprint = 0;
+            if (!TryTileArt(layer, x, y, out Texture2D texture, out Rectangle src))
+                return false;
+            _fingerprintPixels ??= new Color[256];
+            ReadTileArtInto(texture, src, _fingerprintPixels);
+            fingerprint = ArtFingerprint.OfTilePixels(_fingerprintPixels);
+            return true;
+        }
+
+        /// <summary>The label guard's own scratch tile. Never shared with the gather's: see
+        /// <see cref="ReadTileArtInto"/>.</summary>
+        private Color[]? _fingerprintPixels;
 
         /// <summary>A CAST SHADOW, not a structure: near-black and translucent. Bridges, cliffs and
         /// trees drop these onto the water from the Buildings/Front/AlwaysFront layers, and carving

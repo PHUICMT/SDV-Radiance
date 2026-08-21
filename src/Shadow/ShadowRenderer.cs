@@ -147,11 +147,11 @@ namespace SDVRadiance
         /// round: 448 of column, 8 of feet margin, and the widest blur the slider allows.</para>
         /// </summary>
         private const int TallestColumnPx = 448;
-        /// <summary>One slot-sized scratch for the bake-time blur (see SpriteBake.BakedBlur), and
-        /// the blur radius the NEXT bake will use - refreshed from live config each frame so the
-        /// slider works, read at bake time so a queued bake uses the value of the frame it runs.</summary>
+        /// <summary>One slot-sized scratch per size class for the bake-time blur, which stamps the
+        /// silhouette aside and back again (see SpriteBake.BakedBlur). The radius itself travels with
+        /// the request rather than living here, so two kinds of caster can be softened differently
+        /// in the same frame.</summary>
         private readonly RenderTarget2D?[] _objectBlurScratches = new RenderTarget2D?[3];
-        private float _bakeBlurPx;
         /// <summary>Every slot ever allocated, and the idle ones ready to lease again, PER SIZE
         /// CLASS. A free small slot cannot serve a tree, so one shared free list would hand back
         /// a target the caller cannot use.</summary>
@@ -174,6 +174,14 @@ namespace SDVRadiance
         {
             public Vector2 BaseOrigin;
             public float Shear;
+            /// <summary>The soft edge this caster's kind asked for, in screen pixels. Carried
+            /// with the request because a bake queued this frame may not run until a later one,
+            /// by which time a single shared field would be describing some other kind.</summary>
+            public float Blur;
+            /// <summary>How wide to draw it, as a fraction of the sprite's own width. Depends on
+            /// the sprite AND the sun, so it cannot be worked out again at bake time from the key
+            /// alone.</summary>
+            public float Narrow;
             /// <summary>Set only for a stacked MAP-TILE column, which is several tiles drawn one
             /// above another and so has no single source rect. Copied out of the scan's scratch
             /// arrays at request time, so the bake can be replayed a frame later without redoing
@@ -208,6 +216,8 @@ namespace SDVRadiance
             public int LastUsedTick;
             /// <summary>Horizontal lean baked into the pixels. Characters bake upright (0).</summary>
             public float BakedShear;
+            /// <summary>The narrowing these pixels were baked with, so a change to it re-bakes.</summary>
+            public float BakedNarrow = 1f;
             /// <summary>Edge softness baked into the pixels, in pixels of the player's blur
             /// setting. Object shadows used to buy their soft edge per FRAME - five translucent
             /// copies of every silhouette, every frame, which on a mature farm at noon was ~2,900

@@ -381,6 +381,37 @@ namespace SDVRadiance
             // actionable if it names the pack that painted it.
             if (LabelStore.Instance != null)
                 sb.AppendLine($"label sources: {LabelStore.Instance.DescribeSources()}");
+            // "My reflections are missing" and "I am running an art mod this has no labels for"
+            // are the same sentence, and nobody should be expected to work that out unaided.
+            // Variants that actually matched. Worth a line of its own: a variant that never
+            // matches anything looks exactly like one that was never installed, and the two want
+            // very different answers.
+            if (LabelStore.Instance is { } store && store.VariantHits.Count > 0)
+            {
+                foreach (var hit in store.VariantHits)
+                    sb.AppendLine($"labels from a variant: {hit.Value} tile(s) here used labels painted for "
+                                + $"\"{hit.Key}\" rather than the shipped ones, because that is the art loaded.");
+            }
+            if (LabelStore.Instance is { GlassTilesRefusedForChangedArt: > 0 } guarded)
+            {
+                sb.AppendLine($"glass labels refused: {guarded.GlassTilesRefusedForChangedArt} tile(s) here are drawn "
+                            + "with art that is not the art their label was painted on, so their glass was not used. "
+                            + "That is a mod having repainted the tilesheet; those panes stay quiet rather than "
+                            + "reflecting in the wrong place. Nothing else about the label was touched.");
+                // Name the suspects. Which pack actually won a given tile is not knowable from
+                // here, but "these packs say they repaint this sheet" turns a number nobody can
+                // act on into a list somebody can check, and it is the question a bug report
+                // would otherwise cost three messages to answer.
+                foreach (var refused in guarded.RefusedBySheet)
+                {
+                    var claims = MapArtClaims.WhoPatches(refused.Key, _modDir, _monitor);
+                    sb.AppendLine($"  {refused.Key}: {refused.Value} tile(s)"
+                                + (claims.Count == 0
+                                    ? " (no installed content pack says it repaints this sheet, so the art came"
+                                      + " from somewhere this cannot see)"
+                                    : ", repainted by: " + string.Join(", ", claims)));
+                }
+            }
             sb.AppendLine("indoor light (windows, room level, what a lamp pool is worth):");
             sb.AppendLine(DescribeIndoorLight());
             sb.AppendLine(DescribeCameraKeyedCaches());

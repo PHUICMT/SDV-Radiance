@@ -177,17 +177,27 @@ namespace SDVRadiance
 
         // ---- content build helpers (append to lists, advance _contentCursorY) ----
         private void Section(string key) { _sectionTitles.Add((_translate(key), _contentCursorY)); _contentCursorY += S(30); }
+        /// <summary>The condition every row built from here on has to meet to be live. A tab sets it
+        /// once around the block its master switch owns, instead of every row repeating it, and
+        /// clears it after. Rows that pass their own condition ignore this.</summary>
+        private Func<bool>? _rowsEnabledWhen;
+
+        /// <summary>Everything between here and <see cref="EndDependsOn"/> is dead while this is false.</summary>
+        private void DependsOn(Func<bool> condition) => _rowsEnabledWhen = condition;
+        private void EndDependsOn() => _rowsEnabledWhen = null;
+
         private void Info(Func<string> text) { _infoLines.Add((text, _contentCursorY)); _contentCursorY += S(26); }
-        private void Tog(string key, Func<bool> g, Action<bool> s, string? help = null)
+        private void Tog(string key, Func<bool> g, Action<bool> s, string? help = null, Func<bool>? enabledWhen = null)
         {
             var row = new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, S(38));
-            _toggles.Add(new TunerToggle(_translate(key), row, g, s) { TextScale = _ui });
+            _toggles.Add(new TunerToggle(_translate(key), row, g, s) { TextScale = _ui, Enabled = enabledWhen ?? _rowsEnabledWhen });
             Help(row, help);
             _contentCursorY += S(44);
         }
-        private void Sld(string key, float min, float max, Func<float> g, Action<float> s, string? help = null)
+        private void Sld(string key, float min, float max, Func<float> g, Action<float> s, string? help = null, Func<bool>? enabledWhen = null)
         {
-            _sliders.Add(new TunerSlider(_translate(key), _contentCursorX, _contentCursorY, _contentColumnWidth, min, max, g, s, S(26), S(20)) { TextScale = _ui });
+            _sliders.Add(new TunerSlider(_translate(key), _contentCursorX, _contentCursorY, _contentColumnWidth, min, max, g, s, S(26), S(20))
+                { TextScale = _ui, Enabled = enabledWhen ?? _rowsEnabledWhen });
             // The label sits above the track, so the hover area is the whole row, not the bar.
             Help(new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, S(50)), help);
             _contentCursorY += S(50);
@@ -227,6 +237,7 @@ namespace SDVRadiance
             yPositionOnScreen = S(20);
 
             _sliders.Clear(); _toggles.Clear(); _buttons.Clear(); _chips.Clear(); _sectionTitles.Clear(); _tabRailButtons.Clear(); _infoLines.Clear(); _help.Clear();
+            _rowsEnabledWhen = null;   // a tab's dependency must not survive into the next one
 
             int contentTop = yPositionOnScreen + HeaderH;
 
@@ -424,13 +435,18 @@ namespace SDVRadiance
         private void BuildBloom()
         {
             Tog("tuner.bloom", () => _config.BloomEnabled, v => _config.BloomEnabled = v, "help.bloom");
+            // Bloom's own dials do nothing while bloom is off.
+            DependsOn(() => _config.BloomEnabled);
             Sld("tuner.intensity", 0f, 2f, () => _config.BloomIntensity, v => _config.BloomIntensity = v);
             Sld("tuner.bloomthreshold", 0f, 1f, () => _config.BloomThreshold, v => _config.BloomThreshold = v, "help.bloomthreshold");
+            EndDependsOn();
         }
 
         private void BuildShadows()
         {
             Tog("tuner.shadows", () => _config.DirectionalShadowsEnabled, v => _config.DirectionalShadowsEnabled = v, "help.shadows");
+            // Nothing below does anything while the shadows themselves are off.
+            DependsOn(() => _config.DirectionalShadowsEnabled);
             Sld("tuner.shadowstrength", 0f, 1f, () => _config.DirectionalShadowStrength, v => _config.DirectionalShadowStrength = v);
             Sld("tuner.shadowlength", 0.2f, 2f, () => _config.DirectionalShadowLength, v => _config.DirectionalShadowLength = v, "help.shadowlength");
             Sld("tuner.shadowblur", 0f, 5f, () => _config.DirectionalShadowBlur, v => _config.DirectionalShadowBlur = v, "help.shadowblur");
@@ -438,11 +454,55 @@ namespace SDVRadiance
                 () => _config.ShadowCastsPerCharacter,
                 v => _config.ShadowCastsPerCharacter = (int)MathF.Round(v), "help.shadowcasts");
             Tog("tuner.shadowobjects", () => _config.DirectionalShadowObjects, v => _config.DirectionalShadowObjects = v, "help.shadowobjects");
+            Sld("tuner.shadowleanclarity", 0f, 1f, () => _config.ShadowLeanClarity,
+                v => _config.ShadowLeanClarity = v, "help.shadowleanclarity");
+            Section("tuner.shadowperkind");
+            Sld("tuner.shadowlength.trees", ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax,
+                () => _config.ShadowLengthTrees, v => _config.ShadowLengthTrees = v);
+            Sld("tuner.shadowlength.smalltrees", ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax,
+                () => _config.ShadowLengthSmallTrees, v => _config.ShadowLengthSmallTrees = v);
+            Sld("tuner.shadowlength.bushes", ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax,
+                () => _config.ShadowLengthBushes, v => _config.ShadowLengthBushes = v);
+            Sld("tuner.shadowlength.crops", ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax,
+                () => _config.ShadowLengthCrops, v => _config.ShadowLengthCrops = v);
+            Sld("tuner.shadowlength.grass", ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax,
+                () => _config.ShadowLengthGrass, v => _config.ShadowLengthGrass = v);
+            Sld("tuner.shadowlength.objects", ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax,
+                () => _config.ShadowLengthObjects, v => _config.ShadowLengthObjects = v);
+            Section("tuner.shadowsoftperkind");
+            Sld("tuner.shadowsoftness.trees", ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax,
+                () => _config.ShadowSoftnessTrees, v => _config.ShadowSoftnessTrees = v);
+            Sld("tuner.shadowsoftness.smalltrees", ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax,
+                () => _config.ShadowSoftnessSmallTrees, v => _config.ShadowSoftnessSmallTrees = v);
+            Sld("tuner.shadowsoftness.bushes", ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax,
+                () => _config.ShadowSoftnessBushes, v => _config.ShadowSoftnessBushes = v);
+            Sld("tuner.shadowsoftness.crops", ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax,
+                () => _config.ShadowSoftnessCrops, v => _config.ShadowSoftnessCrops = v);
+            Sld("tuner.shadowsoftness.grass", ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax,
+                () => _config.ShadowSoftnessGrass, v => _config.ShadowSoftnessGrass = v);
+            Sld("tuner.shadowsoftness.objects", ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax,
+                () => _config.ShadowSoftnessObjects, v => _config.ShadowSoftnessObjects = v);
+            Section("tuner.shadowleanperkind");
+            Sld("tuner.shadowlean.trees", ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax,
+                () => _config.ShadowLeanTrees, v => _config.ShadowLeanTrees = v, "help.shadowlean");
+            Sld("tuner.shadowlean.smalltrees", ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax,
+                () => _config.ShadowLeanSmallTrees, v => _config.ShadowLeanSmallTrees = v, "help.shadowlean");
+            Sld("tuner.shadowlean.bushes", ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax,
+                () => _config.ShadowLeanBushes, v => _config.ShadowLeanBushes = v, "help.shadowlean");
+            Sld("tuner.shadowlean.crops", ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax,
+                () => _config.ShadowLeanCrops, v => _config.ShadowLeanCrops = v, "help.shadowlean");
+            Sld("tuner.shadowlean.grass", ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax,
+                () => _config.ShadowLeanGrass, v => _config.ShadowLeanGrass = v, "help.shadowlean");
+            Sld("tuner.shadowlean.objects", ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax,
+                () => _config.ShadowLeanObjects, v => _config.ShadowLeanObjects = v, "help.shadowlean");
+            EndDependsOn();
         }
 
         private void BuildLighting()
         {
             Tog("tuner.lighting", () => _config.LightingEnabled, v => _config.LightingEnabled = v, "help.lighting");
+            // Every light dial below belongs to the lighting pass.
+            DependsOn(() => _config.LightingEnabled);
             Sld("tuner.lightindoor", 0f, 0.95f, () => _config.LightingIndoorDarkness, v => _config.LightingIndoorDarkness = v, "help.lightindoor");
             Sld("tuner.lightnight", 0f, 0.95f, () => _config.LightingNightDarkness, v => _config.LightingNightDarkness = v, "help.lightnight");
             Sld("tuner.lightmorning", 0f, 0.95f, () => _config.LightingMorningDarkness, v => _config.LightingMorningDarkness = v, "help.lightmorning");
@@ -454,6 +514,7 @@ namespace SDVRadiance
             Tog("tuner.floodgi", () => _config.FloodLightingEnabled, v => _config.FloodLightingEnabled = v, "help.floodgi");
             Sld("tuner.floodstrength", 0f, 1.5f, () => _config.FloodLightingStrength, v => _config.FloodLightingStrength = v, "help.floodstrength");
             Sld("tuner.floodshadow", 0f, 1f, () => _config.FloodShadowStrength, v => _config.FloodShadowStrength = v, "help.floodshadow");
+            EndDependsOn();
         }
 
         /// <summary>Everything the mod does with a window, on its own tab: the daylight it lets in,
@@ -489,6 +550,8 @@ namespace SDVRadiance
         {
             Section("tuner.section.godrayslamps");
             Tog("tuner.godrays", () => _config.GodRaysEnabled, v => _config.GodRaysEnabled = v, "help.godrays");
+            // God rays' reach and strength need god rays.
+            DependsOn(() => _config.GodRaysEnabled);
             Sld("tuner.godraysintensity", 0f, 1.5f, () => _config.GodRaysIntensity, v => _config.GodRaysIntensity = v);
             Sld("tuner.godraysthreshold", 0f, 1f, () => _config.GodRaysThreshold, v => _config.GodRaysThreshold = v, "help.godraysthreshold");
             Sld("tuner.godraysdensity", 0.1f, 1f, () => _config.GodRaysDensity, v => _config.GodRaysDensity = v, "help.godraysdensity");
@@ -503,23 +566,29 @@ namespace SDVRadiance
             Section("tuner.section.godraysboth");
             Sld("tuner.godraysdecay", 0.5f, 0.99f, () => _config.GodRaysDecay,
                 v => _config.GodRaysDecay = v, "help.godraysdecay");
+            EndDependsOn();
         }
 
         private void BuildCloud()
         {
             Tog("tuner.cloudshadow", () => _config.CloudShadowEnabled, v => _config.CloudShadowEnabled = v, "help.cloudshadow");
+            // Cloud shadow settings need cloud shadows.
+            DependsOn(() => _config.CloudShadowEnabled);
             Tog("tuner.cloudhidevanilla", () => _config.SuppressVanillaCloudShadow, v => _config.SuppressVanillaCloudShadow = v);
             Sld("tuner.cloudcoverage", 0.1f, 0.9f, () => _config.CloudShadowCoverage, v => _config.CloudShadowCoverage = v, "help.cloudcoverage");
             Sld("tuner.cloudcount", 0f, 1f, () => _config.CloudShadowCount, v => _config.CloudShadowCount = v, "help.cloudcount");
             Sld("tuner.cloudopacity", 0f, 0.7f, () => _config.CloudShadowOpacity, v => _config.CloudShadowOpacity = v);
             Sld("tuner.cloudspeed", 0f, 0.06f, () => _config.CloudShadowSpeed, v => _config.CloudShadowSpeed = v);
             Sld("tuner.cloudscale", 1f, 5f, () => _config.CloudShadowScale, v => _config.CloudShadowScale = v, "help.cloudscale");
+            EndDependsOn();
         }
 
         private void BuildFog()
         {
             Section("tuner.section.fog");
             Tog("tuner.fog", () => _config.FogEnabled, v => _config.FogEnabled = v, "help.fog");
+            // Fog's dials need fog.
+            DependsOn(() => _config.FogEnabled);
             Sld("tuner.fogcoverage", 0f, 1f, () => _config.FogCoverage, v => _config.FogCoverage = v);
             Sld("tuner.fogdensity", 0f, 1f, () => _config.FogDensity, v => _config.FogDensity = v);
             Sld("tuner.fogspeed", 0f, 0.1f, () => _config.FogSpeed, v => _config.FogSpeed = v);
@@ -534,6 +603,7 @@ namespace SDVRadiance
             Section("tuner.section.fogboth");
             Sld("tuner.fogtopbias", 0f, 1f, () => _config.FogTopBias,
                 v => _config.FogTopBias = v, "help.fogtopbias");
+            EndDependsOn();
         }
 
         private void BuildWeather()
@@ -587,6 +657,8 @@ namespace SDVRadiance
         private void BuildParticles()
         {
             Tog("tuner.particles", () => _config.ParticlesEnabled, v => _config.ParticlesEnabled = v, "help.particles");
+            // Every particle kind below is off with the master switch.
+            DependsOn(() => _config.ParticlesEnabled);
             Sld("tuner.particledensity", 0.25f, 2f, () => _config.ParticleDensity,
                 v => _config.ParticleDensity = v, "help.particledensity");
             Emitter("dust", () => _config.ParticleDust, v => _config.ParticleDust = v,
@@ -604,6 +676,7 @@ namespace SDVRadiance
             Emitter("ringsparkles", () => _config.ParticleRingSparkles, v => _config.ParticleRingSparkles = v,
                 () => _config.ParticleRingSparklesAmount, v => _config.ParticleRingSparklesAmount = v,
                 () => _config.ParticleRingSparklesSize, v => _config.ParticleRingSparklesSize = v);
+            EndDependsOn();
         }
 
         /// <summary>One emitter's block: its own heading, its own switch, and its own amount and
@@ -623,6 +696,8 @@ namespace SDVRadiance
         private void BuildWater()
         {
             Tog("tuner.water", () => _config.WaterEnabled, v => _config.WaterEnabled = v, "help.water");
+            // The whole water tab hangs off the water effect itself.
+            DependsOn(() => _config.WaterEnabled);
             Sld("tuner.waterstrength", 0f, 2f, () => _config.WaterStrength, v => _config.WaterStrength = v, "help.waterstrength");
             Sld("tuner.watersparkle", 0f, 1f, () => _config.WaterSparkle, v => _config.WaterSparkle = v, "help.watersparkle");
             Sld("tuner.watersparkledensity", 0.2f, 2f, () => _config.WaterSparkleDensity, v => _config.WaterSparkleDensity = v);
@@ -636,7 +711,13 @@ namespace SDVRadiance
             Sld("tuner.waterreflectbanding", 0f, 16f, () => _config.WaterReflectBanding,
                 v => _config.WaterReflectBanding = v, "help.waterreflectbanding");
             Sld("tuner.waterreflectblur", 0f, 2f, () => _config.WaterReflectBlur,
-                v => _config.WaterReflectBlur = v, "help.waterreflectblur");
+                v => _config.WaterReflectBlur = v, "help.waterreflectblur",
+                () => _config.WaterEnabled && _config.WaterReflection);
+            Sld("tuner.reflectdepth", 0.3f, 1.5f, () => _config.WaterReflectDepth,
+                v => _config.WaterReflectDepth = v, "help.reflectdepth",
+                () => _config.WaterEnabled && _config.WaterReflection);
+            Sld("tuner.reflectreach", 0.2f, 1f, () => _config.WaterReflectReach,
+                v => _config.WaterReflectReach = v, "help.reflectreach");
             _contentCursorY += 12;
             Section("tuner.section.waterrain");
             Sld("tuner.waterrainringdensity", 0f, 2f, () => _config.WaterRainRingDensity,
@@ -690,6 +771,7 @@ namespace SDVRadiance
                     }));
                 _contentCursorY += 44;
             }
+            EndDependsOn();
         }
 
         private void BuildLens()
@@ -897,7 +979,7 @@ namespace SDVRadiance
                 foreach (var t in _toggles)
                     if (Visible(t.Row) && t.Hit(x, y + _scroll)) { t.Set(!t.Get()); Game1.playSound("drumkit6"); _onChange(); _onSave(); return; }
                 foreach (var s in _sliders)
-                    if (Visible(s.Track) && s.Track.Contains(x, y + _scroll)) { _dragging = s; s.SetFromX(x); _onChange(); return; }
+                    if (Visible(s.Track) && s.IsEnabled && s.Track.Contains(x, y + _scroll)) { _dragging = s; s.SetFromX(x); _onChange(); return; }
             }
             base.receiveLeftClick(x, y, playSound);
         }

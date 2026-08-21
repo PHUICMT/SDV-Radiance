@@ -100,6 +100,47 @@ namespace SDVRadiance
             finally { Game1.spriteBatch = gameBatch; }
         }
 
+        /// <summary>Let a character draw ITSELF into the exclusion mask, the way critters already do.
+        ///
+        /// <para>
+        /// Rebuilding where a character is drawn works for a villager and for nothing else. A
+        /// Custom Companions animal is an NPC that overrides draw and puts itself down with its own
+        /// origin, its own rotation and a per-companion Scale, none of which a bounding box knows
+        /// about, so the stencil landed off the animal and the ripple ran over it. Reported twice
+        /// in one day, about ducks on a pond.
+        /// </para>
+        ///
+        /// <para>
+        /// This is the third time the same lesson has been paid for here: butterflies, then map
+        /// props, now modded creatures. Anything that draws itself should be asked to.
+        /// </para></summary>
+        private static bool StampCharacterSelf(SpriteBatch spriteBatch, NPC character)
+        {
+            var gameBatch = Game1.spriteBatch;
+            try
+            {
+                Game1.spriteBatch = spriteBatch;
+                character.draw(spriteBatch);
+                return true;
+            }
+            catch { return false; }
+            finally { Game1.spriteBatch = gameBatch; }
+        }
+
+        /// <summary>The same for a farm animal, which also draws itself.</summary>
+        private static bool StampAnimalSelf(SpriteBatch spriteBatch, StardewValley.FarmAnimal animal)
+        {
+            var gameBatch = Game1.spriteBatch;
+            try
+            {
+                Game1.spriteBatch = spriteBatch;
+                animal.draw(spriteBatch);
+                return true;
+            }
+            catch { return false; }
+            finally { Game1.spriteBatch = gameBatch; }
+        }
+
         private static void StampAboveHead(SpriteBatch spriteBatch, Character c)
         {
             var gameBatch = Game1.spriteBatch;
@@ -208,7 +249,11 @@ namespace SDVRadiance
                     bb.Offset((int)off.X, (int)off.Y);
                 if (!WaterWithinTiles(bb.Center.X / 64, bb.Bottom / 64, 3))
                     continue;
-                StampSprite(spriteBatch, c.Sprite.Texture, c.Sprite.SourceRect, bb);
+                // Ask it to draw itself first, and only fall back to rebuilding its placement if
+                // that throws. A villager comes out the same either way; anything that positions
+                // itself differently only comes out right this way.
+                if (!StampCharacterSelf(spriteBatch, c))
+                    StampSprite(spriteBatch, c.Sprite.Texture, c.Sprite.SourceRect, bb);
                 // A SPEECH BUBBLE is part of the world layer too (drawn above AlwaysFront),
                 // so a fisherman chatting over the river had his bubble rippled and tinted
                 // like the water behind it. Mask a generous box where vanilla draws it
@@ -338,7 +383,11 @@ namespace SDVRadiance
                 Rectangle abb = a.GetBoundingBox();
                 if (!WaterWithinTiles(abb.Center.X / 64, abb.Bottom / 64, 3))
                     continue;
-                StampSprite(spriteBatch, a.Sprite.Texture, a.Sprite.SourceRect, abb);
+                // Same as the characters above: a farm animal draws itself, so ask it. A modded
+                // animal with its own size or draw offset is stamped where it really is instead of
+                // where a bounding box says it should be.
+                if (!StampAnimalSelf(spriteBatch, a))
+                    StampSprite(spriteBatch, a.Sprite.Texture, a.Sprite.SourceRect, abb);
             }
         }
 
@@ -446,7 +495,7 @@ namespace SDVRadiance
                     case StardewValley.TerrainFeatures.Tree tree when tree.growthStage.Value >= 5 && !tree.stump.Value && tree.texture?.Value != null:
                         spriteBatch.Draw(tree.texture.Value,
                             Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
-                            StardewValley.TerrainFeatures.Tree.treeTopSourceRect, Color.White * TreeMaskAlpha(tree), 0f, new Vector2(24f, 96f), 4f,
+                            ShadowRenderer.TreeCanopySourceRect(tree), Color.White * TreeMaskAlpha(tree), 0f, new Vector2(24f, 96f), 4f,
                             tree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
                         break;
                     // Mature fruit tree: 48x64 seasonal foliage at tile*64+(32,64), origin (24,80).

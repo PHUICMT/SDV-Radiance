@@ -24,16 +24,31 @@ namespace SDVRadiance
         internal static IMonitor? BridgeMonitor;
         internal static IModHelper? BridgeHelper;
 
-        public static string? RunFromBridge(bool allSheets)
-            => BridgeMonitor != null && BridgeHelper != null ? Run(BridgeMonitor, BridgeHelper, allSheets) : null;
+        /// <param name="profile">The mod set this run is looking at, so a sweep over several of
+        /// them can tell whose Town is whose.</param>
+        /// <remarks>
+        /// ONE method with a default argument, never two overloads. The bridge finds this by
+        /// reflection, and <c>Type.GetMethod(name, flags)</c> throws AmbiguousMatchException the
+        /// moment a second overload exists: adding one turned every dump into HTTP 500 and a
+        /// sweep ran eight passes recording nothing at all. A method that cannot be ambiguous
+        /// cannot do that again, whatever the caller asks for.
+        /// </remarks>
+        public static string? RunFromBridge(bool allSheets, string profile = "")
+            => BridgeMonitor != null && BridgeHelper != null
+                ? Run(BridgeMonitor, BridgeHelper, allSheets, profile: profile)
+                : null;
 
         /// <param name="allSheets">Also embed tilesheet art that NO loaded map places. Off by
         /// default because it reads every PNG under the Mods folder and roughly doubles the dump.</param>
         /// <param name="embedArt">Write the old single-file dump with every sheet inlined as a
         /// base64 data URI, instead of one PNG per sheet beside it. Only for a labeller build
         /// that has not learned about artPng yet.</param>
+        /// <param name="profile">What to call the mod set this run is looking at. A location
+        /// that differs between profiles is kept once per version rather than overwritten, and
+        /// this is the name recorded against each one. Blank means "unnamed", which still works
+        /// but leaves the versions unattributed.</param>
         public static string? Run(IMonitor monitor, IModHelper helper, bool allSheets = false,
-                                  bool embedArt = false)
+                                  bool embedArt = false, string profile = "")
         {
             if (!Context.IsWorldReady)
             {
@@ -175,9 +190,28 @@ namespace SDVRadiance
                             }
                             else
                             {
-                                string file = ArtFileName(name, src) + ".png";
-                                using (var fs = File.Create(Path.Combine(sheetDir, file)))
-                                    texture.SaveAsPng(fs, texture.Width, texture.Height);
+                                // Through memory rather than straight to the file: the name is
+                                // derived from the bytes, so the bytes have to exist first.
+                                byte[] png;
+                                using (var ms = new MemoryStream())
+                                {
+                                    texture.SaveAsPng(ms, texture.Width, texture.Height);
+                                    png = ms.ToArray();
+                                }
+                                string file = ArtFileName(name, src, png) + ".png";
+                                string full = Path.Combine(sheetDir, file);
+                                // Same name means same bytes, so a re-dump of art nothing changed
+                                // is a no-op instead of several hundred megabytes of rewriting.
+                                if (!File.Exists(full))
+                                    File.WriteAllBytes(full, png);
+                                // ...but "same name" is case-insensitive here, and the sheet's name
+                                // comes from whichever mod loaded it. Two mods spelling one sheet
+                                // differently (Lighthouse_TileSheet / Lighthouse_Tilesheet) share the
+                                // file and disagree about its name, and the index would then point at
+                                // a file that exists under a spelling it does not use. Take the name
+                                // the file actually has, so the index is readable somewhere that
+                                // cares about case - which the browser reading this corpus does.
+                                file = OnDiskName(sheetDir, file);
                                 artPngBySrc[src] = "sheets/" + file;
                                 // First source wins the bare name, and the first is the one a loaded
                                 // map placed: DumpLocation fills artSources before the season siblings
@@ -203,6 +237,21 @@ namespace SDVRadiance
                     {
                         monitor.Log($"mapdump: no art for {name} ({src}): {ex.Message}", LogLevel.Trace);
                     }
+                }
+            }
+
+            // Which FILE each location's sheets turned out to be. The art is content-addressed
+            // now, so this is the only lookup that survives a second profile: `artPngBySrc` is
+            // keyed by asset path, and every profile patches the same paths. A map that records
+            // its own files draws its own art whatever else has been dumped since.
+            foreach (Dictionary<string, object?> entry in locations.Values)
+            {
+                if (entry.TryGetValue("sheetSrc", out object? ss) && ss is List<string?> srcList)
+                {
+                    var files = new List<string?>(srcList.Count);
+                    foreach (string? one in srcList)
+                        files.Add(one != null && artPngBySrc.TryGetValue(one, out string? f) ? f : null);
+                    entry["sheetArt"] = files;
                 }
             }
 
@@ -240,10 +289,88 @@ namespace SDVRadiance
             // the most maps" is counted from) plus the file to read for the rest. A labeller that
             // predates this reads `hf-mapdump-v2` as unknown and refuses the file, which is the
             // honest failure: the maps really are not in it.
+            //
+            // ...and the index is CUMULATIVE. A run used to overwrite it, so the dump only ever
+            // held what the last profile happened to have loaded: 34 passes over the mod library
+            // left 221 locations behind, and a map pack's Town replaced the base game's under the
+            // one name Town. A location is kept once per VERSION it actually has - keyed by what
+            // it draws and what it draws it with - and every profile that produced that version
+            // is listed against it. Identical is identical: a location no pack touches is dumped
+            // once and merely gains another name in `from` on every later pass.
+            string studioDir = HfStudioDir();
+            string profileLabel = string.IsNullOrWhiteSpace(profile) ? "unnamed" : profile.Trim();
+            using JsonDocument? previous = ReadExistingDump(studioDir, monitor);
             var index = new Dictionary<string, object?>();
-            foreach ((string locName, Dictionary<string, object?> entry) in locations)
-                index[locName] = new Dictionary<string, object?>
+            var alreadyHeld = new Dictionary<string, List<(string Key, string Stamp)>>();
+            var profilesSeen = new List<string>();
+            if (previous != null)
+            {
+                JsonElement root = previous.RootElement;
+                if (root.TryGetProperty("locations", out JsonElement oldLocations)
+                    && oldLocations.ValueKind == JsonValueKind.Object)
                 {
+                    foreach (JsonProperty held in oldLocations.EnumerateObject())
+                    {
+                        var record = JsonSerializer.Deserialize<Dictionary<string, object?>>(held.Value.GetRawText());
+                        if (record == null)
+                            continue;
+                        index[held.Name] = record;
+                        // Its file name is spoken for, whatever this run decides to call anything.
+                        if (held.Value.TryGetProperty("file", out JsonElement fileEl) && fileEl.ValueKind == JsonValueKind.String)
+                            usedLocationFiles.Add(Path.GetFileNameWithoutExtension(fileEl.GetString() ?? "").ToLowerInvariant());
+                        string heldName = held.Value.TryGetProperty("name", out JsonElement ne) && ne.ValueKind == JsonValueKind.String
+                            ? ne.GetString()! : held.Name;
+                        string heldStamp = held.Value.TryGetProperty("variant", out JsonElement ve) && ve.ValueKind == JsonValueKind.String
+                            ? ve.GetString()! : "";
+                        if (!alreadyHeld.TryGetValue(heldName, out var versions))
+                            alreadyHeld[heldName] = versions = new List<(string, string)>();
+                        versions.Add((held.Name, heldStamp));
+                    }
+                }
+                if (root.TryGetProperty("profiles", out JsonElement oldProfiles) && oldProfiles.ValueKind == JsonValueKind.Array)
+                    foreach (JsonElement one in oldProfiles.EnumerateArray())
+                        if (one.ValueKind == JsonValueKind.String && one.GetString() is string s && !profilesSeen.Contains(s))
+                            profilesSeen.Add(s);
+                MergeInto(root, "art", art);
+                MergeInto(root, "artPng", artPng);
+                MergeInto(root, "artPngBySrc", artPngBySrc);
+                MergeInto(root, "artSrc", artSrc);
+                MergeDimensions(root, artDim);
+                MergeWater(root, waterOut);
+            }
+            if (!profilesSeen.Contains(profileLabel))
+                profilesSeen.Add(profileLabel);
+
+            int fresh = 0, samePicture = 0;
+            var toWrite = new Dictionary<string, Dictionary<string, object?>>();
+            foreach ((string locName, Dictionary<string, object?> entry) in locations)
+            {
+                string stamp = VariantStamp(entry);
+                string? key = null;
+                if (alreadyHeld.TryGetValue(locName, out var versions))
+                    foreach ((string heldKey, string heldStamp) in versions)
+                        if (heldStamp == stamp) { key = heldKey; break; }
+                if (key != null)
+                {
+                    // This exact map is already in the dump. Nothing to write; this profile just
+                    // joins the list of the ones that produce it.
+                    samePicture++;
+                    if (index[key] is Dictionary<string, object?> heldRecord)
+                        heldRecord["from"] = WithProfile(heldRecord.TryGetValue("from", out object? f) ? f : null, profileLabel);
+                    continue;
+                }
+                // A name is only free the first time. Every later VERSION of one place carries the
+                // stamp of what makes it different, so Town and Town~4b17e2 sit side by side and
+                // neither has quietly become the other.
+                key = locName;
+                for (int n = 2; index.ContainsKey(key); n++)
+                    key = n == 2 ? locName + "~" + stamp : locName + "~" + stamp + "-" + n;
+                fresh++;
+                index[key] = new Dictionary<string, object?>
+                {
+                    ["name"] = locName,
+                    ["variant"] = stamp,
+                    ["from"] = new List<string> { profileLabel },
                     ["outdoors"] = entry.TryGetValue("outdoors", out object? o) ? o : null,
                     ["cls"] = entry.TryGetValue("cls", out object? c) ? c : null,
                     ["locSeason"] = entry.TryGetValue("locSeason", out object? ls) ? ls : null,
@@ -255,11 +382,16 @@ namespace SDVRadiance
                     // tiles across thousands of cells), so this stays in the index while the grid
                     // itself does not.
                     ["used"] = DistinctCells(entry),
-                    ["file"] = "maps/" + SafeFileName(locName, usedLocationFiles) + ".json",
+                    ["file"] = "maps/" + SafeFileName(key, usedLocationFiles) + ".json",
                 };
+                toWrite[key] = entry;
+            }
+            monitor.Log($"mapdump: {profileLabel} contributed {fresh} new map version(s); "
+                        + $"{samePicture} were already in the dump. {index.Count} in total.", LogLevel.Info);
+
             // artPng is additive: a labeller that only knows `art` still works against an
             // embedded dump, and one that knows both prefers the files.
-            var doc = new { format = "hf-mapdump-v2", season = Game1.currentSeason, locations = index, art, artPng, artPngBySrc, artDim, artSrc, water = waterOut, animGroups };
+            var doc = new { format = "hf-mapdump-v3", season = Game1.currentSeason, profiles = profilesSeen, locations = index, art, artPng, artPngBySrc, artDim, artSrc, water = waterOut, animGroups };
             string json = JsonSerializer.Serialize(doc);
 
             // Primary target: Documents\HF-Studio. The mod folder lives under Program Files,
@@ -270,15 +402,11 @@ namespace SDVRadiance
             string primary;
             try
             {
-                string sdir = HfStudioDir();
+                string sdir = studioDir;
                 Directory.CreateDirectory(sdir);
-                WriteLocationFiles(sdir, locations, index, monitor);
+                WriteLocationFiles(sdir, toWrite, index, monitor);
                 primary = Path.Combine(sdir, "maps.json");
                 File.WriteAllText(primary, json);
-                // Season-suffixed copy so four dumps (one per in-game season) can coexist for
-                // coverage analysis; HF Studio keeps loading plain maps.json (the latest dump).
-                try { File.WriteAllText(Path.Combine(sdir, $"maps-{Game1.currentSeason}.json"), json); }
-                catch { /* best effort */ }
             }
             catch (Exception ex)
             {
@@ -360,7 +488,7 @@ namespace SDVRadiance
         /// </summary>
         /// <summary>Where the labeller reads its dump from: Documents\HF-Studio. The mod folder
         /// sits under Program Files, and Chrome refuses to hand out a directory handle there.</summary>
-        private static string HfStudioDir()
+        internal static string HfStudioDir()
             => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "HF-Studio");
 
         /// <summary>
@@ -401,9 +529,27 @@ namespace SDVRadiance
         /// different files under one sheet name now get one file each instead of overwriting.
         /// </para>
         /// </summary>
-        private static string ArtFileName(string name, string src)
+        /// <summary>The capitalisation this file really has on disk, given a name that matches it
+        /// case-insensitively. Windows answers File.Exists without caring about case, so this is the
+        /// only way to learn which spelling actually got written.</summary>
+        private static string OnDiskName(string directory, string fileName)
         {
-            var sb = new System.Text.StringBuilder(name.Length + 9);
+            try
+            {
+                foreach (string found in Directory.GetFiles(directory, fileName))
+                    return Path.GetFileName(found);
+            }
+            catch (Exception)
+            {
+                // A directory that cannot be listed is not worth failing a dump over: the name we
+                // were given is right on every filesystem but this exact clash.
+            }
+            return fileName;
+        }
+
+        private static string ArtFileName(string name, string src, byte[] png)
+        {
+            var sb = new System.Text.StringBuilder(name.Length + 18);
             foreach (char c in name)
                 sb.Append(Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c);
             // FNV-1a over the path, lowercased so a case-different spelling of one file agrees
@@ -411,7 +557,23 @@ namespace SDVRadiance
             uint hash = 2166136261;
             foreach (char c in src.ToLowerInvariant())
                 hash = (hash ^ c) * 16777619;
-            return sb.Append('_').Append(hash.ToString("x8")).ToString();
+            // ...and then over the PICTURE. The path alone is not an identity: every profile
+            // patches "Maps/spring_town" and every one of them meant a different town, so each
+            // run wrote its art over the last run's under one name, and the labeller drew
+            // whichever profile had dumped most recently for every map at once. Two mods that
+            // ship the SAME bytes still share one file, which is the point - a recolour nobody
+            // changed is not a second copy.
+            return sb.Append('_').Append(hash.ToString("x8"))
+                     .Append('_').Append(FnvOfBytes(png).ToString("x8")).ToString();
+        }
+
+        /// <summary>FNV-1a 32 over a byte run. Used for content identity, never for security.</summary>
+        private static uint FnvOfBytes(byte[] bytes)
+        {
+            uint hash = 2166136261;
+            foreach (byte b in bytes)
+                hash = (hash ^ b) * 16777619;
+            return hash;
         }
 
         /// <summary>
@@ -424,6 +586,116 @@ namespace SDVRadiance
         {
             try { return helper.GameContent.Load<Microsoft.Xna.Framework.Graphics.Texture2D>(src); }
             catch { return Game1.content.Load<Microsoft.Xna.Framework.Graphics.Texture2D>(src); }
+        }
+
+
+        /// <summary>The dump as it stands on disk, so a run can add to it rather than replace it.
+        /// Null when there is nothing there yet, which is an ordinary first run.</summary>
+        private static JsonDocument? ReadExistingDump(string studioDir, IMonitor monitor)
+        {
+            string path = Path.Combine(studioDir, "maps.json");
+            if (!File.Exists(path))
+                return null;
+            try { return JsonDocument.Parse(File.ReadAllText(path)); }
+            catch (Exception ex)
+            {
+                // A dump that cannot be read must not be silently thrown away: it is hours of
+                // profile switching, and the copy costs nothing next to losing it.
+                string keep = path + ".unreadable-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                try { File.Move(path, keep); } catch { /* then it stays and gets overwritten */ }
+                monitor.Log($"mapdump: the dump already there could not be read ({ex.Message}); "
+                            + $"kept as {Path.GetFileName(keep)} and this run starts fresh.", LogLevel.Warn);
+                return null;
+            }
+        }
+
+        /// <summary>Carry an existing string map forward. What is already there WINS: art files are
+        /// named by their contents, so a name that already points somewhere points at the right
+        /// bytes, and keeping the first answer means the base game holds the bare names.</summary>
+        private static void MergeInto(JsonElement root, string field, Dictionary<string, string> into)
+        {
+            if (!root.TryGetProperty(field, out JsonElement map) || map.ValueKind != JsonValueKind.Object)
+                return;
+            foreach (JsonProperty one in map.EnumerateObject())
+                if (one.Value.ValueKind == JsonValueKind.String && one.Value.GetString() is string value)
+                    into[one.Name] = value;
+        }
+
+        /// <inheritdoc cref="MergeInto"/>
+        private static void MergeDimensions(JsonElement root, Dictionary<string, int[]> into)
+        {
+            if (!root.TryGetProperty("artDim", out JsonElement map) || map.ValueKind != JsonValueKind.Object)
+                return;
+            foreach (JsonProperty one in map.EnumerateObject())
+            {
+                if (one.Value.ValueKind != JsonValueKind.Array)
+                    continue;
+                var size = new List<int>(2);
+                foreach (JsonElement n in one.Value.EnumerateArray())
+                    if (n.TryGetInt32(out int v))
+                        size.Add(v);
+                if (size.Count == 2)
+                    into[one.Name] = size.ToArray();
+            }
+        }
+
+        /// <summary>Water ground truth is a UNION, not a replacement: a tile the game called water
+        /// under one profile is still water, whether or not this profile loaded the map it was in.</summary>
+        private static void MergeWater(JsonElement root, Dictionary<string, int[]> into)
+        {
+            if (!root.TryGetProperty("water", out JsonElement map) || map.ValueKind != JsonValueKind.Object)
+                return;
+            foreach (JsonProperty one in map.EnumerateObject())
+            {
+                if (one.Value.ValueKind != JsonValueKind.Array)
+                    continue;
+                var union = new HashSet<int>(into.TryGetValue(one.Name, out int[]? had) ? had : Array.Empty<int>());
+                foreach (JsonElement n in one.Value.EnumerateArray())
+                    if (n.TryGetInt32(out int v))
+                        union.Add(v);
+                var arr = new int[union.Count];
+                union.CopyTo(arr);
+                Array.Sort(arr);
+                into[one.Name] = arr;
+            }
+        }
+
+        /// <summary>Add this run's profile to a location's list of the profiles that produce it,
+        /// without repeating one that is already there.</summary>
+        private static List<string> WithProfile(object? existing, string profile)
+        {
+            var names = new List<string>();
+            if (existing is JsonElement el && el.ValueKind == JsonValueKind.Array)
+                foreach (JsonElement one in el.EnumerateArray())
+                    if (one.ValueKind == JsonValueKind.String && one.GetString() is string s)
+                        names.Add(s);
+            else if (existing is List<string> had)
+                names.AddRange(had);
+            if (!names.Contains(profile))
+                names.Add(profile);
+            return names;
+        }
+
+        /// <summary>What makes one version of a location different from another: the cells it
+        /// draws, and the art files it draws them from. Two profiles that agree on both are
+        /// looking at the same map and it is only stored once.</summary>
+        private static string VariantStamp(Dictionary<string, object?> entry)
+        {
+            ulong hash = 14695981039346656037UL;
+            void Feed(string? text)
+            {
+                if (text != null)
+                    foreach (char c in text)
+                        hash = (hash ^ c) * 1099511628211UL;
+                hash = (hash ^ '\n') * 1099511628211UL;   // a separator, so "ab"+"c" != "a"+"bc"
+            }
+            if (entry.TryGetValue("layers", out object? layersObj) && layersObj is List<object> layers)
+                foreach (object layer in layers)
+                    Feed(layer.GetType().GetProperty("cells")?.GetValue(layer) as string);
+            if (entry.TryGetValue("sheetArt", out object? artObj) && artObj is List<string?> files)
+                foreach (string? one in files)
+                    Feed(one);
+            return hash.ToString("x16").Substring(0, 6);
         }
 
         private static string SafeFileName(string name, HashSet<string> used)

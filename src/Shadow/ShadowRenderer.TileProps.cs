@@ -97,9 +97,11 @@ namespace SDVRadiance
                     if (_isBakingObjects)
                     {
                         if (_objectGraphicsDevice != null && !_bakedObjectCache.ContainsKey(key)
-                            && BakeTileColumn(_objectGraphicsDevice, texture, cast.Sources, cast.Levels, cast.Orients, count, shear,
+                            && BakeTileColumn(_objectGraphicsDevice, texture, cast.Sources, cast.Levels, cast.Orients, count, shear, blur,
                                 out RenderTarget2D rt, out Vector2 fInRT))
-                            _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = fInRT, BakedShear = shear, BakedBlur = _bakeBlurPx, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = Game1.ticks };
+                            // A tile column is 16 px wide and as many tiles tall as the prop: its lean already carries
+                            // further than its width, so there is nothing for the narrowing to fix here.
+                            _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = fInRT, BakedShear = shear, BakedBlur = blur, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = Game1.ticks };
                         continue;
                     }
                     if (!_bakedObjectCache.TryGetValue(key, out SpriteBake? bakedEntry))
@@ -111,13 +113,13 @@ namespace SDVRadiance
                         // Unless it can never be baked at all, which is a request that fails for
                         // the rest of the session and reads as ordinary cache churn while it does.
                         // The sprite path stopped making those; this one had gone on making them.
-                        if (!ChooseBakeFit(16f, cast.Height * 16f, shear, null, out _, out _, out _))
+                        if (!ChooseBakeFit(16f, cast.Height * 16f, shear, blur, null, out _, out _, out _))
                         {
                             FrameCost.Count(FrameCost.Counter.BakeTooBig);
                             continue;
                         }
                         FrameCost.Count(FrameCost.Counter.BakeMisses);
-                        QueueTileColumnBake(key, cast, shear);
+                        QueueTileColumnBake(key, cast, shear, blur);
                         continue;
                     }
                     FrameCost.Count(FrameCost.Counter.ShadowSprites);
@@ -125,8 +127,8 @@ namespace SDVRadiance
                     // Same per-sprite staleness rule as EmitObject: the lean lives in the pixels, so
                     // the column earns a re-bake once the sun has moved its tip a pixel and a half.
                     if (Math.Abs(shear - bakedEntry.BakedShear) * (cast.Height + 1) * 64f > ShearRefreshPixels
-                        || Math.Abs(_bakeBlurPx - bakedEntry.BakedBlur) > 0.3f)
-                        QueueTileColumnBake(key, cast, shear);
+                        || Math.Abs(blur - bakedEntry.BakedBlur) > 0.3f)
+                        QueueTileColumnBake(key, cast, shear, blur);
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(x * 64f + 32f, (y + 1f) * 64f - 2f));
                     // A body ON this tile (someone sitting on a map bench, standing against a
                     // fence) sorts at roughly y*64/10000 - a full tile BELOW this prop's normal
@@ -472,11 +474,11 @@ namespace SDVRadiance
 
         /// <summary>Record a map-tile column for the next bake pass. The classification owns the
         /// column arrays and outlives the frame, so the request just points at them.</summary>
-        private void QueueTileColumnBake((Texture2D texture, Rectangle src, SpriteEffects effect) key, TilePropCast cast, float shear)
+        private void QueueTileColumnBake((Texture2D texture, Rectangle src, SpriteEffects effect) key, TilePropCast cast, float shear, float blurPx)
         {
             if (_objectBakeQueue.Count >= ObjectBakeQueueCap || cast.Sources.Length == 0)
                 return;
-            _objectBakeQueue[key] = new ObjectBakeRequest { Shear = shear, ColumnSources = cast.Sources, ColumnLevels = cast.Levels, ColumnOrients = cast.Orients };
+            _objectBakeQueue[key] = new ObjectBakeRequest { Shear = shear, Blur = blurPx, ColumnSources = cast.Sources, ColumnLevels = cast.Levels, ColumnOrients = cast.Orients };
         }
 
         /// <summary>
@@ -527,7 +529,7 @@ namespace SDVRadiance
         /// passed in rather than read from the scan's scratch arrays, so a queued re-bake a frame
         /// later replays the same column without redoing the scan that found it.</summary>
         private bool BakeTileColumn(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle[] sources, int[] tileLevels,
-            byte[]? orients, int count, float shear, out RenderTarget2D renderTarget, out Vector2 feetInRT, RenderTarget2D? into = null)
+            byte[]? orients, int count, float shear, float blurPx, out RenderTarget2D renderTarget, out Vector2 feetInRT, RenderTarget2D? into = null)
         {
             renderTarget = null!;
             feetInRT = default;
@@ -543,7 +545,7 @@ namespace SDVRadiance
             // nobody looked at. The ladder ends it the same way, and one fit test replaces two that
             // disagreed about whether the blur counts.
             const float tileSource = 16f;
-            if (count <= 0 || !ChooseBakeFit(tileSource, levels * tileSource, shear, into,
+            if (count <= 0 || !ChooseBakeFit(tileSource, levels * tileSource, shear, blurPx, into,
                                              out int colClass, out float scale, out float blurTexels))
             {
                 NoteColumnRefusal($"{levels}-tile column with shear {shear:0.00} fits no slot at any bake scale");

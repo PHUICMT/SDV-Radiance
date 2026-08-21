@@ -587,7 +587,7 @@ namespace SDVRadiance
                     case StardewValley.TerrainFeatures.Tree tree when tree.growthStage.Value >= 5 && !tree.stump.Value && tree.texture?.Value != null:
                         spriteBatch.Draw(tree.texture.Value,
                             Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
-                            StardewValley.TerrainFeatures.Tree.treeTopSourceRect, Color.White, 0f, new Vector2(24f, 0f), 4f,
+                            ShadowRenderer.TreeCanopySourceRect(tree), Color.White, 0f, new Vector2(24f, 0f), 4f,
                             SpriteEffects.FlipVertically | (tree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None),
                             StampDepth(tile.Y * 64f + 64f));
                         break;
