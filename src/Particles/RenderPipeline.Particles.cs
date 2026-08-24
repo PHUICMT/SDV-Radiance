@@ -36,6 +36,10 @@ namespace SDVRadiance
         /// half's origin on the second screen of a split.</summary>
         private Vector2 _particleScreenOffset;
         private int _particleAmbientDrawn, _particleEmissiveDrawn;
+        /// <summary>The surface wave a leaf or a petal is bent by, built once per frame from the
+        /// same numbers the water pass is about to be given, so the draw helpers do not each need
+        /// the config passed down. Same reason <see cref="_mirrorSliceRows"/> is kept this way.</summary>
+        private ParticleSystem.SurfaceWave _particleSurfaceWave;
 
         internal int ParticlesLive => _particles?.LiveCount ?? 0;
         internal int ParticleAmbientDrawn => _particleAmbientDrawn;
@@ -89,6 +93,15 @@ namespace SDVRadiance
 
             _particleWindowWidth = Math.Max(1, windowWidth);
             _particleScreenOffset = new Vector2(_device.Viewport.X, _device.Viewport.Y);
+            // The water's own wave, in the water's own units, so a leaf crossing the shoreline is
+            // bent by one field the whole way. The ripple is written in UV, so its amplitude is
+            // turned into screen pixels here; 0.0025 is water.fx's own pond constant.
+            float waveAmount = Math.Clamp(config.ParticlePetalsFlutter, 0f, 1f) * _fadeParticles;
+            var rippleUv = new Vector2(config.WaterStrength * 0.0025f);
+            // The water pass's own clock, phase for phase, so the two waves are one wave.
+            float waveTime = (Determinism.Ticks % 360000) / 60f * config.WaterSpeed;
+            _particleSurfaceWave = new ParticleSystem.SurfaceWave(waveAmount, waveTime,
+                new Vector2(rippleUv.X * Game1.viewport.Width, rippleUv.Y * Game1.viewport.Height));
             _emissiveParticleHost = _fadeLighting > FadeGone ? EmissiveParticleHost.Classic
                 : _fadeFlood > FadeGone ? EmissiveParticleHost.Flood
                 : EmissiveParticleHost.None;
@@ -142,7 +155,7 @@ namespace SDVRadiance
                 emissive ? ParticleSystem.PremultipliedAdditive : BlendState.AlphaBlend,
                 SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone);
             int drawn = _particles!.Draw(spriteBatch, emissive, _fadeParticles, screenOffset, pixelScale,
-                emissive ? Vector3.One : AmbientLightOnParticles());
+                emissive ? Vector3.One : AmbientLightOnParticles(), _particleSurfaceWave);
             spriteBatch.End();
             return drawn;
         }

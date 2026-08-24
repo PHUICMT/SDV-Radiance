@@ -198,7 +198,11 @@ namespace SDVRadiance
                     var sig = (who.FarmerSprite.CurrentFrame, (int)who.FacingDirection, src);
                     // Accessory layers that animate on their own clock get the same periodic
                     // refresh the local player gets, and only when a mod that has them is loaded.
-                    bool accessoryRefreshDue = PlayerAccessoriesAnimate && Game1.ticks % 8 == 0;
+                    // Frozen stops it for the same reason it stops the player's own refresh: the
+                    // verification harness needs two captures of one scene to be byte-identical,
+                    // and a re-bake lets accessory animation drift in between them.
+                    bool accessoryRefreshDue = PlayerAccessoriesAnimate && Game1.ticks % 8 == 0
+                                               && !Determinism.Frozen;
                     if (bake.HasSignature && bake.Signature == sig && !accessoryRefreshDue && bake.Mask != null
                         && (!reflectionNeedsFarmers || bake.ColorFresh))
                     {
@@ -369,7 +373,7 @@ namespace SDVRadiance
                     new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
                 float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 DrawSoft(spriteBatch, Taps9, bake.Mask, null, feet, Color.White, alpha, rot,
-                    bake.FeetInRenderTarget, new Vector2(1f, stretch), depth, SpriteEffects.None, blur);
+                    bake.FeetInRenderTarget, new Vector2(CharacterAcrossScale(rot, stretch), stretch), depth, SpriteEffects.None, blur);
             }
         }
 

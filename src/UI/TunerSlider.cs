@@ -31,6 +31,8 @@ namespace SDVRadiance
         }
 
         private readonly int _labelHeight;
+        private float _shownValue = float.NaN;
+        private string? _shownValueText;
 
         public void SetFromX(int mx)
         {
@@ -48,8 +50,14 @@ namespace SDVRadiance
             // a list that jumps as you use it is worse than one with a greyed row in it.
             float fade = IsEnabled ? 1f : 0.35f;
             TunerText.DrawFit(spriteBatch, _label, new Vector2(Track.X, Track.Y - _labelHeight + dy), Track.Width - (int)(70 * TextScale), Game1.textColor * fade, ts);
-            string val = v.ToString("0.00");
-            Vector2 vs = Game1.smallFont.MeasureString(val) * ts;
+            // The text and its width only change when the value does, which is a drag, not a frame.
+            if (v != _shownValue || _shownValueText == null)
+            {
+                _shownValue = v;
+                _shownValueText = v.ToString("0.00");
+            }
+            string val = _shownValueText;
+            Vector2 vs = TunerText.Measure(val) * ts;
             Utility.drawTextWithShadow(spriteBatch, val, Game1.smallFont, new Vector2(Track.Right - vs.X, Track.Y - _labelHeight + dy), Game1.textColor * 0.8f * fade, ts);
 
             var track = new Rectangle(Track.X, Track.Y + dy, Track.Width, Track.Height);

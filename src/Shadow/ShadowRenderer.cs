@@ -168,20 +168,141 @@ namespace SDVRadiance
         /// by sprite type, so it cannot be recomputed globally).</summary>
         private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle src, SpriteEffects effect), ObjectBakeRequest> _objectBakeQueue = new();
 
-        /// <summary>What the draw pass needs baked, recorded at draw time because the shear is
-        /// per-caller (damped by sprite type) and cannot be recomputed globally.</summary>
+        /// <summary>
+        /// What a caster IS, as far as its shadow is concerned: a flat card standing on its bottom
+        /// edge, or a solid standing on its footprint. The two cast different shapes from the same
+        /// sprite and the sun angle alone cannot tell them apart.
+        /// </summary>
+        /// <remarks>
+        /// A fence, a sign, a gate and a painted map wall are cards: the art is the object's one face
+        /// and its shadow is that face laid along the ground, every column still rooted where it
+        /// stands. A person, an animal, a tree, a bush, a crop and a machine are solids: the sun sees
+        /// them from the side, so what lands on the ground is the silhouette laid along the sun's
+        /// direction, its width running ACROSS that direction. Decided by the game's own class for
+        /// each thing, never by sprite or name, so anything a mod adds through those classes is
+        /// covered the same way.
+        /// </remarks>
+        internal enum ShadowGeometry { Solid, Card }
+
+        /// <summary>
+        /// The affine that lays a silhouette on the ground, about its feet: where one source pixel
+        /// of WIDTH lands (across) and where one source pixel of HEIGHT lands (along), both in
+        /// screen pixels per source pixel.
+        /// </summary>
+        /// <remarks>
+        /// <para>Along is the sun: a column of height h lands h times this away from the feet, and
+        /// it is the same for both geometries, so the tip of every shadow agrees with every other
+        /// about where the sun is.</para>
+        /// <para>Across is where the geometries part. A card keeps its width level on the screen,
+        /// which is the shear this mod always baked. A solid's width lies on the ground at right
+        /// angles to the sun's direction, and the ground is seen at a slant, so its across vector
+        /// is the ground's perpendicular put back on screen: level when the shadow points straight
+        /// up the screen, nearly vertical and foreshortened when it points sideways. With no
+        /// foreshortening at all a solid's projection is exactly a rotation, which is what
+        /// characters were always drawn with; the foreshortening is what makes a sideways shadow
+        /// lie down instead of standing on its edge.</para>
+        /// </remarks>
+        internal readonly struct ShadowProjection
+        {
+            public readonly float AcrossX, AcrossY, AlongX, AlongY;
+
+            public ShadowProjection(float acrossX, float acrossY, float alongX, float alongY)
+            {
+                AcrossX = acrossX;
+                AcrossY = acrossY;
+                AlongX = alongX;
+                AlongY = alongY;
+            }
+
+            /// <summary>The screen offset of one source pixel of height: up the screen at noon,
+            /// swung by the lean, as long as the stretch.</summary>
+            private static Vector2 Along(float rot, float stretch)
+                => new((float)Math.Sin(rot) * stretch, -(float)Math.Cos(rot) * stretch);
+
+            public static ShadowProjection ForCard(float rot, float stretch)
+            {
+                Vector2 along = Along(rot, stretch);
+                return new ShadowProjection(1f, 0f, along.X, along.Y);
+            }
+
+            public static ShadowProjection ForSolid(float rot, float stretch, float groundForeshortening)
+            {
+                float k = Math.Max(0.05f, groundForeshortening);
+                Vector2 along = Along(rot, stretch);
+                // The ground's perpendicular to the sun's direction, measured ON the ground (screen
+                // y un-squashed by k to get there), then put back on screen (squashed again).
+                float groundX = (float)Math.Cos(rot) / k, groundY = (float)Math.Sin(rot);
+                float length = (float)Math.Sqrt(groundX * groundX + groundY * groundY);
+                return new ShadowProjection(groundX / length, groundY * k / length, along.X, along.Y);
+            }
+
+            /// <summary>Where a source offset from the feet lands. <paramref name="dy"/> is the
+            /// sprite's own y, so it is negative above the feet, which is why along is subtracted.</summary>
+            public Vector2 Apply(float dx, float dy)
+                => new(dx * AcrossX - dy * AlongX, dx * AcrossY - dy * AlongY);
+
+            /// <summary>The same map as a SpriteBatch transform about a pivot, the feet.</summary>
+            public Matrix About(Vector2 pivot)
+                => Matrix.CreateTranslation(-pivot.X, -pivot.Y, 0f)
+                 * new Matrix(AcrossX, AcrossY, 0f, 0f, -AlongX, -AlongY, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 1f)
+                 * Matrix.CreateTranslation(pivot.X, pivot.Y, 0f);
+
+            /// <summary>The rectangle a sprite covers once laid down, relative to its feet: the four
+            /// corners mapped and bounded. The origin is where the feet sit inside the sprite.</summary>
+            public void Bounds(float width, float height, float originX, float originY,
+                out float left, out float right, out float top, out float bottom)
+            {
+                Vector2 a = Apply(-originX, -originY), b = Apply(width - originX, -originY);
+                Vector2 c = Apply(-originX, height - originY), d = Apply(width - originX, height - originY);
+                left = Math.Min(Math.Min(a.X, b.X), Math.Min(c.X, d.X));
+                right = Math.Max(Math.Max(a.X, b.X), Math.Max(c.X, d.X));
+                top = Math.Min(Math.Min(a.Y, b.Y), Math.Min(c.Y, d.Y));
+                bottom = Math.Max(Math.Max(a.Y, b.Y), Math.Max(c.Y, d.Y));
+            }
+
+            /// <summary>How far, in source pixels, the farthest point of a sprite this size moves
+            /// between this projection and another: the re-bake test.</summary>
+            public float Drift(ShadowProjection other, float width, float height)
+            {
+                float across = Math.Abs(AcrossX - other.AcrossX) + Math.Abs(AcrossY - other.AcrossY);
+                float along = Math.Abs(AlongX - other.AlongX) + Math.Abs(AlongY - other.AlongY);
+                return across * width * 0.5f + along * height;
+            }
+
+            public bool Same(ShadowProjection other)
+                => AcrossX == other.AcrossX && AcrossY == other.AcrossY && AlongX == other.AlongX && AlongY == other.AlongY;
+
+            /// <summary>The sideways scale of the rotate-and-scale draw a SpriteBatch can do directly
+            /// that comes closest to this projection: the along vector exactly, and the across
+            /// vector's part at right angles to it. What is dropped is the skew between the two,
+            /// which on a caster narrower than it is tall is a fraction of a pixel. Characters draw
+            /// this way so their baked frames need not re-bake as the sun moves.</summary>
+            public float AcrossScaleForRotation()
+            {
+                float alongLength = (float)Math.Sqrt(AlongX * AlongX + AlongY * AlongY);
+                if (alongLength < 1e-4f)
+                    return 1f;
+                // The unit at right angles to along, on the side the sprite's width points.
+                float nx = -AlongY / alongLength, ny = AlongX / alongLength;
+                return AcrossX * nx + AcrossY * ny;
+            }
+        }
+
+        /// <summary>What the draw pass needs baked, recorded at draw time because the projection is
+        /// per-caller (damped by sprite type, card or solid by class) and cannot be recomputed
+        /// globally.</summary>
         private sealed class ObjectBakeRequest
         {
             public Vector2 BaseOrigin;
+            /// <summary>The lean of a MAP-TILE column, which bakes as a plain shear. A sprite's
+            /// lean travels in <see cref="Projection"/> instead.</summary>
             public float Shear;
+            /// <summary>How a sprite is laid down, across and along.</summary>
+            public ShadowProjection Projection;
             /// <summary>The soft edge this caster's kind asked for, in screen pixels. Carried
             /// with the request because a bake queued this frame may not run until a later one,
             /// by which time a single shared field would be describing some other kind.</summary>
             public float Blur;
-            /// <summary>How wide to draw it, as a fraction of the sprite's own width. Depends on
-            /// the sprite AND the sun, so it cannot be worked out again at bake time from the key
-            /// alone.</summary>
-            public float Narrow;
             /// <summary>Set only for a stacked MAP-TILE column, which is several tiles drawn one
             /// above another and so has no single source rect. Copied out of the scan's scratch
             /// arrays at request time, so the bake can be replayed a frame later without redoing
@@ -214,10 +335,12 @@ namespace SDVRadiance
             public RenderTarget2D Rt = null!;
             public Vector2 FeetInRt;
             public int LastUsedTick;
-            /// <summary>Horizontal lean baked into the pixels. Characters bake upright (0).</summary>
+            /// <summary>Horizontal lean baked into the pixels of a MAP-TILE column. Characters bake
+            /// upright (0); a sprite's lean is in <see cref="BakedProjection"/>.</summary>
             public float BakedShear;
-            /// <summary>The narrowing these pixels were baked with, so a change to it re-bakes.</summary>
-            public float BakedNarrow = 1f;
+            /// <summary>The projection a sprite's pixels were laid down with, so the sun moving off
+            /// it, or the geometry changing under it, re-bakes.</summary>
+            public ShadowProjection BakedProjection;
             /// <summary>Edge softness baked into the pixels, in pixels of the player's blur
             /// setting. Object shadows used to buy their soft edge per FRAME - five translucent
             /// copies of every silhouette, every frame, which on a mature farm at noon was ~2,900

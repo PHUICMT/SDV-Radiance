@@ -94,9 +94,22 @@ namespace SDVRadiance
         /// the bottom are the walking slack (see BuildWaterMask); the TOP is also what a column's
         /// waterline anchor needs, because a shoreline scrolling just past the top edge must keep
         /// its world-anchored run top instead of re-basing on the mask's own first row - which made
-        /// a whole reflection vanish in one step as the player walked away from it.</summary>
+        /// a whole reflection vanish in one step as the player walked away from it.
+        ///
+        /// <para>The top is also how far the MIRROR reads: the shader asks the mask whether a
+        /// mirrored source is itself water, and with the mask ending six tiles up and the mirror
+        /// reading twelve, the six tiles between were answered by the mask's clamped edge row,
+        /// which moves with the window. The window now keeps the whole reach covered AT ALL
+        /// TIMES, not only on the frame it is built: <see cref="MaskTopCoverTiles"/> rows above
+        /// the view are guaranteed, and the slack beyond them is what the walk spends before a
+        /// rebuild. Covering the reach only when built was tried first, and a reflection that
+        /// reached past the window's top came and went every twelve tiles of walking.</para></summary>
         private const int MaskPadSideTiles = 4;
-        private const int MaskPadTopTiles = 6;
+        /// <summary>Rows above the view the mask must always hold: the mirror's reach plus the
+        /// one-tile fade the shader applies at the mask's top edge.</summary>
+        private const int MaskTopCoverTiles = MirrorTopReachPx / 64 + 1;
+        private const int MaskTopSlackTiles = 5;
+        private const int MaskPadTopTiles = MaskTopCoverTiles + MaskTopSlackTiles;
         private const int MaskPadBottomTiles = 4;
 
         /// <summary>
@@ -170,8 +183,12 @@ namespace SDVRadiance
                 int viewLeft = (int)Math.Floor(vx / 64f), viewTop = (int)Math.Floor(vy / 64f);
                 int viewRight = (int)Math.Floor((vx + Game1.viewport.Width) / 64f);
                 int viewBottom = (int)Math.Floor((vy + Game1.viewport.Height) / 64f);
+                // Above the view the window must keep the mirror's whole reach, not merely the
+                // view itself: the rows the mirror reads are up there, and a window that let the
+                // view walk up to its own top edge answered "is that source water" from its
+                // clamped edge row for the last twelve tiles of every walk north.
                 if (viewLeft >= _lastWaterTileX && viewRight <= _lastWaterTileX + tilesW - 1
-                    && viewTop >= _lastWaterTileY && viewBottom <= _lastWaterTileY + tilesH - 1)
+                    && viewTop - MaskTopCoverTiles >= _lastWaterTileY && viewBottom <= _lastWaterTileY + tilesH - 1)
                 {
                     startTileX = _lastWaterTileX;
                     startTileY = _lastWaterTileY;

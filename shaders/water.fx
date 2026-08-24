@@ -60,6 +60,18 @@ sampler2D SdfSampler = sampler_state
     AddressU = Clamp; AddressV = Clamp;
 };
 
+// Where this water stands to a waterfall, measured by the mask build. Red: how far below a
+// falling face, 0 right under the foam at the foot and 1 six tiles away or nowhere near one.
+// Green: how far above the face in this pixel's own column, 0 on the lip and 1 two tiles up
+// or with no fall beneath. Linear, because both are distances.
+texture PlungeChurnTexture;
+sampler2D PlungeChurnSampler = sampler_state
+{
+    Texture = <PlungeChurnTexture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+
 // The caustic net, baked offline (tools/make-caustics.py): a tileable Voronoi ridge. Wrap
 // addressing because it is sampled in world space - the net is painted on the bed and the
 // camera merely looks at it.
@@ -183,6 +195,27 @@ float ShearSteps;
 // diagonal bank out of 64 px staircase blocks.
 float MirrorShear;
 float3 ReflTint;
+// THE REALISTIC LOOK. ReflModel 1 hands the mirror to a second set of rules, and the classic
+// looks above never read any of these: their maths is untouched, and 0 is exactly the pass
+// this shipped with. The image is wobbled by a field of its own (ReflectionWobbleField below)
+// instead of by the surface's sine ripple, and that field is anchored at the contact line:
+// zero at the waterline, growing with depth, so a reflection stands on what casts it instead
+// of floating beside it as a sticker.
+float ReflModel;          // 0 classic, 1 realistic
+float ReflWobbleAmount;   // how far the field may displace the image: 1 is about four world pixels up and down
+float ReflChoppiness;     // how much of the two finer octaves joins the slow one: 0 glassy, 1 broken
+float ReflParallax;       // how much the image slides with its place on the screen, the way a virtual
+                          // image under the surface does for a camera that is not straight overhead
+float ReflFresnel;        // how strongly the reflection gives way to the water's own colour with
+                          // depth, and how far its contrast is folded toward a mid tone
+float ReflStretch;        // vertical elongation of the reflected scene: rough water draws
+                          // reflections long. 1 is the plain oblique mirror
+float ReflEdgeSoftness;   // how far, in world pixels, the reflected image is also sampled to
+                          // either side where the field is live: the bands the field cuts into
+                          // a sloping edge read as teeth, and this melts their tips. 0 is off
+float ReflPlungeChurn;    // how fully the mirror gives way to churned water under a waterfall, 0..1
+float ReflPlungeReach;    // tiles below the foot of a fall before the mirror is back in full
+float ReflLipFade;        // tiles above the top of a fall over which the mirror lets go before the edge
 float3 SceneAmbient;     // lighting-stage ambient: the raw layer render carries no
                          // lighting, so the mirror scales it to match the lit scene
 // P3c: the map's OWN layers (Back/Buildings/Front families) re-rendered with no
@@ -221,6 +254,63 @@ struct PixelInput
 float hash(float2 p)
 {
     return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+// A hash with no sine in it (Dave Hoskins' hash12). On this shader profile sin expands to a
+// sincos macro and doubles the cost of every noise corner; this is the same quality for half
+// the instructions. The classic looks keep hash() above, untouched.
+float HashNoSin(float2 cell)
+{
+    float3 p3 = frac(cell.xyx * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.x + p3.y) * p3.z);
+}
+
+// Value noise: the four corners of the cell hashed and blended along a Hermite curve, so the
+// field is continuous everywhere and nothing in it ever re-seeds.
+float ValueNoise(float2 p)
+{
+    float2 cell = floor(p);
+    float2 inside = frac(p);
+    inside = inside * inside * (3.0 - 2.0 * inside);
+    float bottomLeft = HashNoSin(cell);
+    float bottomRight = HashNoSin(cell + float2(1.0, 0.0));
+    float topLeft = HashNoSin(cell + float2(0.0, 1.0));
+    float topRight = HashNoSin(cell + float2(1.0, 1.0));
+    return lerp(lerp(bottomLeft, bottomRight, inside.x), lerp(topLeft, topRight, inside.x), inside.y);
+}
+
+// The displacement field the realistic look wobbles its reflection with. What makes a
+// deformation read as liquid is its amplitude spectrum, not its accuracy (Kawabe 2015: a
+// random phase costs nothing, a single sine reads as jelly): three octaves of value noise, the
+// slow wide one dominant and each finer one half the last, all TRAVELLING down the water
+// rather than swaying in place, at about 0.8, 2 and 4 cycles a second. The cells are eight
+// times wider than tall (Kingdom's water used 32 by 4), so what crosses the reflection is
+// horizontal strokes, which is the shape a ripple's flank re-images an object into.
+//
+// The displacement is mostly DOWN the screen, and only the slow octave moves sideways.
+// What a ripple does to a reflection is re-image each band of it a little higher or lower
+// (Kingdom's water moves y by twice x), so a horizontal edge, the underside of a bridge,
+// breaks into horizontal fragments, which is what a photograph shows. A sideways
+// displacement that changes every few rows does the wrong thing to a VERTICAL edge: the
+// reflected side of a bank became a sawtooth, teeth sixteen pixels apart, where the real
+// bank is a smooth line. Moved up and down instead, a vertical edge stays the shape it is.
+// The fine octave carries little and only with choppiness, because a y offset that turns
+// over every four rows tears a sharp edge into thin regular lines. Phase-continuous in world
+// space and in time: a re-seed is a flicker.
+float2 ReflectionWobbleField(float2 worldTile, float t, float choppiness)
+{
+    float2 slow = float2(worldTile.x * 0.5, worldTile.y * 4.0)  + float2(0.03, 1.0) * t;
+    float2 mid  = float2(worldTile.x * 1.0, worldTile.y * 8.0)  + float2(-0.1, 2.5) * t;
+    float2 fine = float2(worldTile.x * 2.0, worldTile.y * 16.0) + float2(0.25, 4.9) * t;
+    float slowAcross = ValueNoise(slow + float2(31.7, 17.3)) * 2.0 - 1.0;
+    float slowDown   = ValueNoise(slow) * 2.0 - 1.0;
+    float midDown    = ValueNoise(mid) * 2.0 - 1.0;
+    float fineDown   = ValueNoise(fine) * 2.0 - 1.0;
+    float down = slowDown
+               + midDown * lerp(0.25, 0.5, choppiness)
+               + fineDown * lerp(0.0, 0.2, choppiness);
+    return float2(slowAcross, down);
 }
 
 
@@ -596,8 +686,41 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // chosen look asks for, so Mirror can be flat without straightening the waterline.
         float mirrorX = uv.x + wave * waveAmp * MirrorShear + dith
                       + (1.0 - coreC) * (coreR - coreL) * tileW;
-        float2 reflUv = float2(mirrorX + ripple.x * 3.0 * ReflWobble,
-                               edgeV - depth * 1.25 - 0.08 / TilesPerScreen.y + abs(ripple.y) * 2.0 * ReflWobble);
+        // What displaces the image. The classic looks take the surface's own sine ripple, x more
+        // than y. The realistic look reads the travelling field instead, and ANCHORS it: zero at
+        // the contact line and full three tiles down (painters: a reflection holds unbroken for
+        // its first stretch and breaks further out; physically the ripple's lever arm grows with
+        // distance from the base). That one term is what keeps a reflection standing on the thing
+        // casting it instead of drifting beside it. Both layers, scene and bodies, read this SAME
+        // vector at the same amplitude, where the classic looks have always disagreed by 3 to 1.
+        float depthTilesHere = depth * TilesPerScreen.y;
+        float2 wobble = float2(ripple.x * 3.0 * ReflWobble, abs(ripple.y) * 2.0 * ReflWobble);
+        float compression = 1.25;
+        float anchor = 0.0;   // how much of the field this pixel gets (1.6.2 water only)
+        if (ReflModel > 0.5)
+        {
+            // The field holds unbroken for the first stretch below the contact line and is
+            // full a tile and a half down; the vertical part is held off for a whole tile, so
+            // a trunk or a post stays straight where it meets the water (the one place the
+            // eye checks) and only its far end breaks.
+            anchor = smoothstep(0.0, 1.5, depthTilesHere);
+            float anchorDown = saturate(depthTilesHere);
+            float2 field = ReflectionWobbleField(worldTile, t, ReflChoppiness);
+            // About four world pixels of vertical movement per unit at the far end, a third
+            // of that sideways; the vertical part is what breaks the image into bands, the
+            // sideways part only keeps the bands from lining up.
+            float amplitude = 0.06 * ReflWobbleAmount / TilesPerScreen.y;
+            wobble = field * float2(amplitude * 0.35, amplitude * anchorDown) * anchor;
+            // A reflection is a virtual image UNDER the surface, and for any camera that is not
+            // straight overhead such an image sits differently on the screen than the ground it
+            // lies in: it skews outward with its distance from the screen's centre, and it is
+            // drawn longer high on the screen (grazing) than low (steep). The cue is that the
+            // image answers the camera at all, which a flat screen-space flip never does.
+            mirrorX += (uv.x - 0.5) * depth * ReflParallax * 2.0;
+            compression = 1.25 / max(1.0, ReflStretch) * (1.0 + ReflParallax * (edgeV - 0.5));
+        }
+        float2 reflUv = float2(mirrorX + wobble.x,
+                               edgeV - depth * compression - 0.08 / TilesPerScreen.y + wobble.y);
         // Keep the UNCLAMPED coordinate for the scenery source, which reaches past the top of
         // the screen; the composed-screen fallback and the mask lookups have nothing up there
         // and still work on the clamped one.
@@ -620,17 +743,41 @@ float4 WaterPS(PixelInput input) : SV_TARGET
              + tex2D(SceneSmoothSampler, clamp(sceneUv + float2(0.0,  reflSoft), 0.0, 1.0)).rgb * 0.25
              + tex2D(SceneSmoothSampler, clamp(sceneUv - float2(0.0,  reflSoft), 0.0, 1.0)).rgb * 0.25) * SceneAmbient
             : tex2D(SourceSampler, reflUv).rgb;
+        // The 1.6.2 water can also soften SIDEWAYS, by a chosen number of pixels. Its bands
+        // shift the image a few pixels per band, and on a sloping edge that is a row of
+        // teeth; spread across about the same distance, the tips of the teeth melt while the
+        // bands themselves still read. Two more taps, only where the field is live, and none
+        // at the contact line.
+        if (ReflModel > 0.5 && SceneOn > 0.5 && ReflEdgeSoftness > 0.01)
+        {
+            float sideSoft = ReflEdgeSoftness / (TilesPerScreen.x * 64.0) * (0.3 + 0.7 * anchor);
+            float3 sideways = (tex2D(SceneSmoothSampler, clamp(sceneUv + float2(sideSoft, 0.0), 0.0, 1.0)).rgb
+                             + tex2D(SceneSmoothSampler, clamp(sceneUv - float2(sideSoft, 0.0), 0.0, 1.0)).rgb) * SceneAmbient;
+            refl = refl * 0.5 + sideways * 0.25;
+        }
 
         // Wide 5-tap smoothing: at pixel-mask resolution a single bilinear sample flips
         // land→water within ~4px, which drew a hard horizontal seam wherever the mirrored
         // source crossed onto upper water (bridges). Spread the mirror-to-sheen transition
         // over ~1.6 tiles so the reflection FADES out instead of ending on a ragged line.
         float tps = 1.0 / TilesPerScreen.y;
-        float srcWater = (WaterAtSmooth(reflUv)
-                        + WaterAtSmooth(reflUv + float2(0.0, -0.4 * tps))
-                        + WaterAtSmooth(reflUv + float2(0.0,  0.4 * tps))
-                        + WaterAtSmooth(reflUv + float2(0.0, -0.8 * tps))
-                        + WaterAtSmooth(reflUv + float2(0.0,  0.8 * tps))) * 0.2;
+        // Read at the UNCLAMPED source. This used the clamped coordinate, which for any source
+        // above the top of the screen is the screen's own top row: the question "is what I am
+        // mirroring itself water" was being answered by whatever happened to be scrolling past
+        // the top edge, and walking up a river swept bank and water across that edge in turn,
+        // so a reflection drawn from above the screen flipped between mirror and sky as the
+        // camera moved. The mask is padded above the screen as far as the mirror reaches, so
+        // the real answer is there; world-anchored, it does not move with the camera at all.
+        float srcWater = (WaterAtSmooth(reflUvRaw)
+                        + WaterAtSmooth(reflUvRaw + float2(0.0, -0.4 * tps))
+                        + WaterAtSmooth(reflUvRaw + float2(0.0,  0.4 * tps))
+                        + WaterAtSmooth(reflUvRaw + float2(0.0, -0.8 * tps))
+                        + WaterAtSmooth(reflUvRaw + float2(0.0,  0.8 * tps))) * 0.2;
+        // Past the top of the mask there is no answer, only the clamped edge row, and an
+        // answer that moves with the window is the flicker again. Let it go over the last
+        // tile before the edge rather than trusting the edge.
+        float2 srcWorldTile = reflUvRaw * TilesPerScreen + WorldTileOffset;
+        srcWater *= saturate(srcWorldTile.y - MaskOrigin.y);
 
         // Distance fade: defined near the shoreline, gone by ~0.75 screen below it. (An
         // always-on base mirrored far-upstream cliffs down entire rivers as dark streaks;
@@ -671,6 +818,27 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // nothing — the hard rectangles between mirrored and unmirrored water came from
         // those cuts, not from the mirror itself.
         float3 mirrorCol = refl * ReflTint;   // cool + darken: reads as "in the water"
+        // The realistic look treats the image the way water and a camera do, on one depth axis:
+        // light reflects darker and dark reflects LIGHTER (the veil of sky light over the
+        // surface folds contrast toward a mid tone), colour loses some of its saturation, and
+        // with depth the reflection gives way to the water's own colour, strong and sharp under
+        // the far bank and thinning toward the viewer, which is what a photograph of a lake shows.
+        float reflectance = 1.0;
+        if (ReflModel > 0.5)
+        {
+            float reflLum = dot(refl, float3(0.299, 0.587, 0.114));
+            float3 folded = lerp(reflLum.xxx, refl, 0.85);
+            folded = lerp(folded, SceneAmbient * 0.45, 0.22 * ReflFresnel);
+            mirrorCol = folded * ReflTint;
+            // Forty percent gone over the first four tiles and flat beyond: Kingdom's strip
+            // darkens 0 to 40% top to bottom, photographers put a reflection one to two stops
+            // under its subject, and the far reach is already the sky fade's business.
+            float depthFraction = saturate(depthTilesHere / 4.0);
+            // (1 - d)^1.5 written as x * sqrt(x): pow with a zero base has gone NaN on real
+            // hardware before and painted a room black.
+            float remaining = 1.0 - depthFraction;
+            reflectance = lerp(1.0, 0.6 + 0.4 * remaining * sqrt(remaining), ReflFresnel);
+        }
         // BOUNDED HEIGHT (see docs/water-v3-research). A mirrored sample deeper than the tallest
         // thing that can stand on a shore is not a reflection of anything — and flat ground
         // (height zero) mirrored across a pond is what read as the "green sheet". The honest end of
@@ -730,7 +898,23 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // The old nearSelf damping (x0.6 within ~2 texels of the waterline) is retired: with a
         // brighter sheen it rendered as a pale empty strip hugging every bank, and the physically
         // right content there is the bank's own dark rim reflection at full strength.
-        float mirrorness = found;
+        // Under a waterfall the pool is full of air and torn up: it mirrors nothing at the
+        // foot and settles back over the next few tiles. The mask build measured how far
+        // below the nearest falling face each texel sits; the 1.6.2 water reads that here
+        // and lets the mirror go by it. The classic looks never read it.
+        // And above a fall the stream lets its mirror go over the last stretch before the lip,
+        // rather than on the one texel where the face begins.
+        float churn = 0.0;
+        float lipHold = 1.0;
+        if (ReflModel > 0.5)
+        {
+            float2 fallDistance = tex2D(PlungeChurnSampler, maskUV).rg;
+            float fallTiles = fallDistance.r * 6.0;
+            churn = (1.0 - smoothstep(0.0, max(0.25, ReflPlungeReach), fallTiles)) * ReflPlungeChurn;
+            float lipTiles = fallDistance.g * 2.0;
+            lipHold = smoothstep(0.0, max(0.02, ReflLipFade), lipTiles);
+        }
+        float mirrorness = found * (1.0 - churn) * lipHold;
         float3 reflCol = lerp(sheenCol, mirrorCol, mirrorness);
         // The luminance gate keeps the mirror off water that is genuinely in shadow, but it was
         // reading THIS pixel alone, so anything dark drawn INSIDE the water — a submerged rock, a
@@ -745,8 +929,11 @@ float4 WaterPS(PixelInput input) : SV_TARGET
                       + dot(tex2D(SourceSampler, uv + float2(-0.35 * tps, 0.0)).rgb, float3(0.299, 0.587, 0.114))
                       + dot(tex2D(SourceSampler, uv + float2( 0.35 * tps, 0.0)).rgb, float3(0.299, 0.587, 0.114))) * 0.2;
         float amt = saturate(ReflectStrength) * water * fade * onScreen
-                  * saturate(max(srcLum, lumAvg) * 3.2) * lerp(0.5, 1.0, mirrorness);
+                  * saturate(max(srcLum, lumAvg) * 3.2) * lerp(0.5, 1.0, mirrorness) * reflectance;
         col.rgb = lerp(col.rgb, reflCol, amt);
+        // The churned water is itself paler than the pool around it, milky with air, and
+        // palest at the foot of the fall.
+        col.rgb = lerp(col.rgb, lerp(col.rgb, SkyColor * 0.5 + 0.5, 0.28), churn * water);
 
         // P3b — composite the flipped-entity layer. It is correct by construction, so it
         // rides neither the shoreline march nor the source-luminance gates: just the march
@@ -760,7 +947,9 @@ float4 WaterPS(PixelInput input) : SV_TARGET
             // slider, so both halves of one reflection blur together. The spread is a fixed
             // sliver of a screen (there is no shoreline depth to grow it by): at 1 it is under a
             // pixel and reads as filtering, at 2 it is a visible haze.
-            float2 entUv = saturate(uv + ripple * 0.9 * ReflWobble);
+            // Under the realistic look a body reads the same anchored field as the scenery, at
+            // the same amplitude, so the two halves of one reflection move as one surface.
+            float2 entUv = saturate(uv + (ReflModel > 0.5 ? wobble : ripple * 0.9 * ReflWobble));
             float entSoft = 0.6 / max(1.0, TilesPerScreen.y * 64.0) * ReflSoftness;
             float4 ent = tex2D(ReflectRTSampler, entUv) * 0.5
                        + tex2D(ReflectRTSampler, saturate(entUv + float2(0.0, entSoft))) * 0.25
@@ -773,7 +962,8 @@ float4 WaterPS(PixelInput input) : SV_TARGET
             float2 ewt = uv * TilesPerScreen + WorldTileOffset;
             float4 em = tex2D(MaskSampler, (ewt - MaskOrigin) / MaskSize);
             float entWater = max(em.g, em.r * step(0.9, em.a));
-            float entAmt = saturate(ReflectStrength) * entWater * ent.a * (1.0 - inSprite);
+            // A body standing in the plunge loses most of its reflection to the same churn.
+            float entAmt = saturate(ReflectStrength) * entWater * ent.a * (1.0 - inSprite) * (1.0 - churn * 0.7);
             // Opacity walked in two reports: 0.85 read as "too clear" (denser than the bushes
             // mirrored beside it), 0.66 as "a bit too faint" once the feet->head fade landed on
             // top of it. 0.74 with that fade puts the near-feet band back at the old presence
@@ -956,6 +1146,19 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         }
         col.rgb += (rings * 0.15 + impacts * 0.30) * RainAmt * water * RainRingStrength;
     }
+
+    // Dither, one LSB either way and triangular, before this surface is written to eight bits.
+    // A reflection is made of slow gradients (the depth fade, the sky, the fold toward the
+    // water's colour) and eight bits cannot hold a slow gradient without steps: those steps are
+    // the colour banding reported on water, and a per-pixel decision on a stepped value is
+    // also how a band edge flickers. Interleaved gradient noise (Jimenez 2014) is three
+    // instructions and no fetch; the triangular remap hides band EDGES where uniform noise
+    // leaves them visible. Static across frames on purpose: a pattern that changed per frame
+    // would be a shimmer of its own. Every look gets this; it is correctness, not a look.
+    float2 ditherPixel = uv * TilesPerScreen * 64.0;
+    float gradientNoise = frac(52.9829189 * frac(0.06711056 * ditherPixel.x + 0.00583715 * ditherPixel.y));
+    float triangular = gradientNoise < 0.5 ? sqrt(2.0 * gradientNoise) - 1.0 : 1.0 - sqrt(2.0 - 2.0 * gradientNoise);
+    col.rgb += triangular * (1.0 / 255.0) * water;
 
     // Whole-pass presence: fade the finished surface back to the pixel the game drew, so the
     // stage's total contribution is already zero by the time it is dropped from the stage list.

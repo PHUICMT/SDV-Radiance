@@ -35,7 +35,31 @@ namespace SDVRadiance
         /// <summary>The surface's own movement, unchanged. What the mod has always shipped.</summary>
         Natural,
         /// <summary>Broken up and deeper, for open sea and weather.</summary>
-        Choppy
+        Choppy,
+        /// <summary>Never a look of its own any more. For one build between 1.6.1 and 1.6.2 the
+        /// new water was a fourth entry here; it is <see cref="WaterReflectionModel.Modern"/>
+        /// now, and a config written by that build still parses because this member exists.
+        /// <see cref="ModConfig.Clamp"/> turns it into Modern plus Natural.</summary>
+        Realistic
+    }
+
+    /// <summary>
+    /// Which water the mirror is: the one that shipped through 1.6.1, or the one built for 1.6.2.
+    /// </summary>
+    /// <remarks>
+    /// The classic water keeps every line of its maths and its three looks
+    /// (<see cref="WaterReflectionStyle"/>), so a player who liked it keeps it. The modern one is
+    /// a different mirror: the image is moved by a travelling field of ripples rather than by the
+    /// surface's sine, anchored at the waterline and breaking further out, folded in contrast and
+    /// pulled toward the water's own colour with depth, stretched a little, and answering the
+    /// camera's place on the screen. Each has dials of its own; the menus show the chosen one's.
+    /// </remarks>
+    public enum WaterReflectionModel
+    {
+        /// <summary>The 1.6.2 water.</summary>
+        Modern,
+        /// <summary>The water of every release up to 1.6.1, with its three looks.</summary>
+        Classic
     }
 
     /// <summary>Quick look presets applied to the whole effect stack.</summary>
@@ -128,6 +152,9 @@ namespace SDVRadiance
         /// </para>
         /// </remarks>
         public LookPreset ActivePreset { get; set; } = LookPreset.Custom;
+        /// <summary>The quality preset picked last, or none. Only so the tuner can highlight it;
+        /// nothing reads it to decide how anything runs.</summary>
+        public PerfPreset? ActivePerfPreset { get; set; }
 
         /// <summary>Resolution the EFFECT chain runs at, as a fraction of the window. 1 = native.
         /// The game still draws the world at full size; only our passes work on a smaller image
@@ -311,7 +338,11 @@ namespace SDVRadiance
         public float WaterCausticsStrength { get; set; } = 0.15f;
         public bool WaterReflection { get; set; } = true;  // screen-space reflection on water
         public float WaterReflectStrength { get; set; } = 0.51f;
-        /// <summary>Which of the named reflection looks is in use (see WaterReflectionStyle).</summary>
+        /// <summary>Which water the mirror is, the 1.6.2 one or the classic one; see
+        /// <see cref="WaterReflectionModel"/>.</summary>
+        public WaterReflectionModel WaterReflectModel { get; set; } = WaterReflectionModel.Modern;
+        /// <summary>Which of the classic water's three looks is in use (see WaterReflectionStyle).
+        /// Read only while <see cref="WaterReflectModel"/> is Classic.</summary>
         public WaterReflectionStyle WaterReflectStyle { get; set; } = WaterReflectionStyle.Natural;
         /// <summary>
         /// How tall a band of the reflection shares one sideways displacement, in world pixels.
@@ -370,7 +401,10 @@ namespace SDVRadiance
         /// more water than there is.
         /// </para>
         ///
-        /// <para>1 is the shipped bound; about 0.56 is the 1.5.3 one.</para>
+        /// <para>1 is the shipped bound; about 0.56 is the 1.5.3 one. The floor is 0.1, where a
+        /// reflection is a hand's width of bank against the shore and everything past it is sky:
+        /// the shader holds that floor too, so the bound can never reach zero and take the
+        /// reflection with it.</para>
         /// </summary>
         public float WaterReflectDepth { get; set; } = 1.0f;
 
@@ -400,6 +434,44 @@ namespace SDVRadiance
         /// depth-driven haze of the scenery mirror and the filtering of reflected bodies together,
         /// so a person and the tree behind them stay one surface at any setting.</summary>
         public float WaterReflectBlur { get; set; } = 2.0f;
+
+        // --- The 1.6.2 water's own settings (WaterReflectionModel.Modern) ---
+        // None of these do anything under the classic water, and the classic water's
+        // distortion and banding do nothing under this one: the tuner shows whichever set the
+        // chosen water can use. The classic water keeps every line of its maths.
+        /// <summary>How far the travelling field may displace the image. 1 is about four world
+        /// pixels up and down at the far end, a third of that sideways; 0 is a still image that still obeys the contact anchor.</summary>
+        public float WaterModernWobble { get; set; } = 1.0f;
+        /// <summary>How much of the two finer, faster octaves joins the slow wide one: 0 is a
+        /// glassy pond with a single slow swell, 1 is a surface broken by wind.</summary>
+        public float WaterModernChoppiness { get; set; } = 0.35f;
+        /// <summary>How much the image slides with its place on the screen, the way a virtual
+        /// image under the surface does for a camera that is not straight overhead. 0 is the
+        /// flat screen-space flip the classic looks use.</summary>
+        public float WaterModernParallax { get; set; } = 0.08f;
+        /// <summary>How strongly the reflection gives way to the water's own colour with depth
+        /// and folds its contrast toward a mid tone. 0 keeps the classic looks' plain tint.</summary>
+        public float WaterModernFresnel { get; set; } = 0.7f;
+        /// <summary>Vertical elongation of the reflected scene. Rough water draws reflections
+        /// long; 1 is the plain oblique mirror, the same length as the classic water, and the
+        /// default, because a tall bank's reflection already reads as long enough.</summary>
+        public float WaterModernStretch { get; set; } = 1.0f;
+        /// <summary>How far, in world pixels, the 1.6.2 water also samples its reflection to
+        /// either side where the field is live. The field's bands cut a sloping reflected edge
+        /// into teeth; this melts their tips while the bands still read. 0 is off.</summary>
+        public float WaterModernEdgeSoftness { get; set; } = 2.5f;
+        /// <summary>How fully the 1.6.2 water's reflection gives way to churned water under a
+        /// waterfall. The pool at the foot of a fall is full of air and torn up and mirrors
+        /// nothing there; it settles back over the reach below. 0 keeps the mirror right up to
+        /// the foam.</summary>
+        public float WaterModernPlungeChurn { get; set; } = 0.85f;
+        /// <summary>How many tiles below the foot of a fall the churn runs before the mirror is
+        /// back in full.</summary>
+        public float WaterModernPlungeReach { get; set; } = 3f;
+        /// <summary>How many tiles above the top of a fall the stream's mirror lets go over,
+        /// so the reflection ends softly before the lip instead of on the lip's own texel.
+        /// 0 ends it sharp.</summary>
+        public float WaterModernLipFade { get; set; } = 0.5f;
         /// <summary>How many rings the rain strikes into open water, against the number the
         /// weather brings on its own. Below 1 fewer places on the surface take their turn;
         /// above it they all do and the pattern tightens.</summary>
@@ -550,6 +622,11 @@ namespace SDVRadiance
         public float ParticlePetalsAmount { get; set; } = 1.0f;
         /// <summary>How big one petal or leaf is, against its own size.</summary>
         public float ParticlePetalsSize { get; set; } = 1.0f;
+        /// <summary>How much a falling leaf or petal buckles as it turns through the air. A thin
+        /// thing does not fall flat, and one crossing our own water surface already bends because
+        /// the surface bends it; this carries the same bend everywhere. 0 is the flat fall of every
+        /// release before this one.</summary>
+        public float ParticlePetalsFlutter { get; set; } = 0.6f;
 
         /// <summary>Sparks turning around a player wearing a glow ring, so the light it casts has
         /// somewhere visible to have come from.</summary>
@@ -592,6 +669,19 @@ namespace SDVRadiance
         public float PrecipitationWindSize { get; set; } = 1.0f;
         /// <summary>How strongly the leaves show, against their own weight.</summary>
         public float PrecipitationWindOpacity { get; set; } = 1.0f;
+
+        /// <summary>How much heavier a thunderstorm's rain falls than plain rain: the number of
+        /// drops in the air, multiplied. The game itself draws one rain for every weather; this
+        /// is ours. 1 makes a storm look like rain.</summary>
+        public float PrecipitationStormDensity { get; set; } = 1.6f;
+        /// <summary>How much of the wind the rain feels. It leans the streaks and carries them
+        /// sideways by the same amount, so the angle they are drawn at is the angle they really
+        /// travel at. 1 is the wind as the game reports it; higher is a harder slant.</summary>
+        public float PrecipitationRainSlant { get; set; } = 1f;
+        /// <summary>How steeply wind-blown petals and leaves come down. It scales how fast they
+        /// sink while the wind carries them along, so higher is a steeper path and lower a
+        /// flatter one. 1 is the shipped fall.</summary>
+        public float PrecipitationWindSlant { get; set; } = 1f;
         /// <summary>The scene answering a lightning strike: shadows key toward the bolt for a
         /// blink, the mod's own darkening lifts with the game's flash, and a short warm afterglow
         /// follows. On by default, unlike the precipitation switch above: it adds nothing new to
@@ -668,26 +758,34 @@ namespace SDVRadiance
         /// <summary>Also cast directional shadows from trees and bushes (not just characters).</summary>
         public bool DirectionalShadowObjects { get; set; } = true;
         /// <summary>
-        /// How hard a shadow is squeezed across the sun so that its lean is the thing you read.
-        /// 0 leaves every shadow as wide as the thing casting it; 1 narrows the ones that need it.
-        ///
-        /// <para>
-        /// A shadow's tip always lands at the sun's angle, and for a person that is what you see,
-        /// because a person is twice as tall as they are wide and the lean carries the shape. A
-        /// crop is as wide as it is tall, so the same lean moves its top by less than its own
-        /// width and the shadow reads as a flat smear lying across the sun rather than along it.
-        /// Reported as exactly that, with the two angles drawn on a screenshot, and the numbers
-        /// agreed with the report: identical tip angles, visibly different directions.
-        /// </para>
-        ///
-        /// <para>
-        /// Only shadows whose lean falls short of their own width are narrowed, and only as far as
-        /// the lean reaches, so a tree is left alone and a crop becomes a streak pointing the way
-        /// the sun says. It eases in with the lean itself: at noon there is no direction to show
-        /// and nothing is narrowed.
-        /// </para>
+        /// How much the ground is foreshortened on screen: a circle drawn on the ground is an
+        /// oval this many times as tall as it is wide. 1 is a ground seen from straight above,
+        /// where nothing lies down. The default is the game's own answer: the oval it draws under
+        /// every character is 12 texels wide and 7 tall, read off <c>Game1.shadowTexture</c> in
+        /// game, and 7/12 is 0.58.
         /// </summary>
-        public float ShadowLeanClarity { get; set; } = 1.0f;
+        /// <remarks>
+        /// It shapes the shadow of a SOLID thing and nothing else. The tip of a shadow is where
+        /// the sun puts it whatever this is; this says how the width of a tree, a bush, a crop or
+        /// a person lies on the ground once the sun has laid it across its own direction. With the
+        /// shadow pointing up the screen the width is simply the width; pointing sideways, the
+        /// width runs up and down the screen and is this much of itself. A fence or a sign has no
+        /// width to lay down and is not touched. See <c>ShadowProjection</c>.
+        /// </remarks>
+        public float ShadowGroundForeshortening { get; set; } = 0.58f;
+
+        /// <summary>
+        /// The same oval, for people: the player, other players and every NPC. 1 lays a person
+        /// down at their full width, which is how characters were drawn before the ground had a
+        /// foreshortening at all.
+        /// </summary>
+        /// <remarks>
+        /// The ground has one flatness, so in principle one number should do. A person is the
+        /// exception the eye makes: a sixteen-texel figure laid down at the ground's 0.58 came out
+        /// as a thread at dawn and read as thinner than the figure casting it, so people get their
+        /// own. Farm animals are bulky and stay on <see cref="ShadowGroundForeshortening"/>.
+        /// </remarks>
+        public float ShadowCharacterGroundForeshortening { get; set; } = 1f;
 
         // --- How long and how soft each kind of caster's shadow is ---
         //
@@ -782,6 +880,11 @@ namespace SDVRadiance
         public const float ShadowKindLeanMin = 0.2f;
         /// <summary>The sun's own angle. Nothing leans further than the light does.</summary>
         public const float ShadowKindLeanMax = 1f;
+        /// <summary>A circle on the ground drawn a quarter as tall as it is wide: flatter than any
+        /// view the art implies, and past it a sideways shadow is a line.</summary>
+        public const float ShadowGroundForeshorteningMin = 0.25f;
+        /// <summary>The ground seen from straight above, where nothing lies down.</summary>
+        public const float ShadowGroundForeshorteningMax = 1f;
         /// <summary>How many shadows one character may cast indoors and after dark, nearest light
         /// first. A look control and a cost control at once: each cast is a full soft silhouette,
         /// so this is a direct multiplier on what characters cost to shadow, and past about three
@@ -846,10 +949,25 @@ namespace SDVRadiance
             WaterReflectStrength = ClampToRange(WaterReflectStrength, 0f, 1f);
             WaterReflectBanding = ClampToRange(WaterReflectBanding, 0f, 16f);
             WaterReflectReach = ClampToRange(WaterReflectReach, 0.2f, 1f);
-            WaterReflectDepth = ClampToRange(WaterReflectDepth, 0.3f, 1.5f);
+            WaterReflectDepth = ClampToRange(WaterReflectDepth, 0.1f, 1.5f);
             WaterReflectFadeRows = Math.Clamp(WaterReflectFadeRows, 4, 16);
             WaterReflectDistort = ClampToRange(WaterReflectDistort, 0f, 1.5f);
             WaterReflectBlur = ClampToRange(WaterReflectBlur, 0f, 2f);
+            // The one build that had the new water as a fourth classic look: carry it over.
+            if (WaterReflectStyle == WaterReflectionStyle.Realistic)
+            {
+                WaterReflectStyle = WaterReflectionStyle.Natural;
+                WaterReflectModel = WaterReflectionModel.Modern;
+            }
+            WaterModernWobble = ClampToRange(WaterModernWobble, 0f, 2f);
+            WaterModernChoppiness = ClampToRange(WaterModernChoppiness, 0f, 1f);
+            WaterModernParallax = ClampToRange(WaterModernParallax, 0f, 0.3f);
+            WaterModernFresnel = ClampToRange(WaterModernFresnel, 0f, 1f);
+            WaterModernStretch = ClampToRange(WaterModernStretch, 1f, 1.4f);
+            WaterModernEdgeSoftness = ClampToRange(WaterModernEdgeSoftness, 0f, 6f);
+            WaterModernPlungeChurn = ClampToRange(WaterModernPlungeChurn, 0f, 1f);
+            WaterModernPlungeReach = ClampToRange(WaterModernPlungeReach, 1f, 6f);
+            WaterModernLipFade = ClampToRange(WaterModernLipFade, 0f, 1.5f);
             WaterRainRingDensity = ClampToRange(WaterRainRingDensity, 0f, 2f);
             WaterRainRingSize = ClampToRange(WaterRainRingSize, 0.4f, 2f);
             WaterRainRingStrength = ClampToRange(WaterRainRingStrength, 0f, 2f);
@@ -868,6 +986,7 @@ namespace SDVRadiance
             ParticleFirefliesSize = ClampToRange(ParticleFirefliesSize, 0.5f, 2f);
             ParticlePetalsAmount = ClampToRange(ParticlePetalsAmount, 0f, 2f);
             ParticlePetalsSize = ClampToRange(ParticlePetalsSize, 0.5f, 2f);
+            ParticlePetalsFlutter = ClampToRange(ParticlePetalsFlutter, 0f, 1f);
             ParticleRingSparklesAmount = ClampToRange(ParticleRingSparklesAmount, 0f, 2f);
             ParticleRingSparklesSize = ClampToRange(ParticleRingSparklesSize, 0.5f, 2f);
             PrecipitationRainDensity = ClampToRange(PrecipitationRainDensity, 0.25f, 2f);
@@ -879,6 +998,9 @@ namespace SDVRadiance
             PrecipitationRainOpacity = ClampToRange(PrecipitationRainOpacity, 0.25f, 2f);
             PrecipitationSnowOpacity = ClampToRange(PrecipitationSnowOpacity, 0.25f, 2f);
             PrecipitationWindOpacity = ClampToRange(PrecipitationWindOpacity, 0.25f, 2f);
+            PrecipitationStormDensity = ClampToRange(PrecipitationStormDensity, 1f, 3f);
+            PrecipitationRainSlant = ClampToRange(PrecipitationRainSlant, 0f, 3f);
+            PrecipitationWindSlant = ClampToRange(PrecipitationWindSlant, 0.25f, 3f);
             WetWorldStrength = ClampToRange(WetWorldStrength, 0f, 1f);
             WetWorldPuddles = ClampToRange(WetWorldPuddles, 0f, 1f);
             WetWorldLensDropSize = ClampToRange(WetWorldLensDropSize, 0.5f, 2f);
@@ -897,7 +1019,8 @@ namespace SDVRadiance
             DirectionalShadowStrength = ClampToRange(DirectionalShadowStrength, 0f, 1f);
             DirectionalShadowLength = ClampToRange(DirectionalShadowLength, 0.2f, 2f);
             DirectionalShadowBlur = ClampToRange(DirectionalShadowBlur, 0f, 5f);
-            ShadowLeanClarity = ClampToRange(ShadowLeanClarity, 0f, 1f);
+            ShadowGroundForeshortening = ClampToRange(ShadowGroundForeshortening, ShadowGroundForeshorteningMin, ShadowGroundForeshorteningMax);
+            ShadowCharacterGroundForeshortening = ClampToRange(ShadowCharacterGroundForeshortening, ShadowGroundForeshorteningMin, ShadowGroundForeshorteningMax);
             ShadowLengthTrees = ClampToRange(ShadowLengthTrees, ShadowKindLengthMin, ShadowKindLengthMax);
             ShadowLengthSmallTrees = ClampToRange(ShadowLengthSmallTrees, ShadowKindLengthMin, ShadowKindLengthMax);
             ShadowLengthBushes = ClampToRange(ShadowLengthBushes, ShadowKindLengthMin, ShadowKindLengthMax);
@@ -968,6 +1091,24 @@ namespace SDVRadiance
             return prof;
         }
 
+        /// <summary>Whether the live config is still exactly what this profile holds, so the
+        /// tuner can show which saved look is the one in effect. Every value the profile
+        /// recorded must match; a profile from 1.0.0 that recorded nothing matches nothing.</summary>
+        public bool MatchesProfile(NamedProfile p)
+        {
+            if (p.Values is not { Count: > 0 })
+                return false;
+            foreach (PropertyInfo prop in TunableProps())
+            {
+                if (!p.Values.TryGetValue(prop.Name, out string? raw) || string.IsNullOrEmpty(raw))
+                    continue;
+                string live = Convert.ToString(prop.GetValue(this), CultureInfo.InvariantCulture) ?? "";
+                if (!string.Equals(live, raw, StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+            return true;
+        }
+
         /// <summary>Load a saved profile's settings into the live config.</summary>
         public void ApplyProfile(NamedProfile p)
         {
@@ -1020,6 +1161,9 @@ namespace SDVRadiance
         /// the temperature, or any other artistic control — so a chosen look survives it.</summary>
         public void ApplyPerfPreset(PerfPreset preset)
         {
+            // Remembered so the tuner can show which one was picked, the way ActivePreset does
+            // for the looks. It says which was picked last, not that nothing moved since.
+            ActivePerfPreset = preset;
             switch (preset)
             {
                 case PerfPreset.Quality:

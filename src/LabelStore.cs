@@ -69,17 +69,19 @@ namespace SDVRadiance
         /// has, so shipping this for one sheet at a time changes nothing about the rest.</summary>
         private readonly Dictionary<string, Dictionary<int, ulong[]>> _artBySheet = new(StringComparer.OrdinalIgnoreCase);
 
+
         /// <summary>The resolved label per (sheet, tile): the shipped one where the art agrees,
         /// a glass-free copy of it where it does not. Memoised because the mask gather asks about
         /// every tile of the map, and the art behind one tile index cannot change without an asset
         /// reload, which clears this.</summary>
         private readonly Dictionary<(string sheet, int index), byte[]> _artVerdict = new();
 
-        /// <summary>How many labelled tiles have had their GLASS taken back out because the art is
-        /// not the art it was painted on. Reported by radiance_report: "my window reflections are
-        /// missing" and "I am running an art mod this has no labels for" are the same sentence,
-        /// and a player cannot be expected to work that out unaided.</summary>
-        public int GlassTilesRefusedForChangedArt { get; private set; }
+        /// <summary>How many labelled tiles have had the art-bound part of their label taken back
+        /// out - the glass, the water, the light - because the tile is drawn from a different
+        /// DRAWING, not merely a repaint of the same one. Reported by radiance_report: "my window
+        /// reflections are missing" and "I am running an art mod this has no labels for" are the
+        /// same sentence, and a player cannot be expected to work that out unaided.</summary>
+        public int ArtBoundLabelsRefusedForChangedArt { get; private set; }
 
         /// <summary>Which sheets those refusals were on, and how many each. A count on its own
         /// says something is wrong; the sheet names are what let the report go on to name the
@@ -91,7 +93,8 @@ namespace SDVRadiance
         /// render pipeline, which already holds the tilesheet pixels; LabelStore has no business
         /// touching the graphics card itself. Null before the pipeline exists, which is treated as
         /// "cannot tell" rather than as a mismatch.</summary>
-        internal delegate bool TileArtFingerprintReader(Layer layer, int x, int y, out ulong fingerprint);
+        internal delegate bool TileArtFingerprintReader(Layer layer, int x, int y,
+            out ulong fingerprint);
         internal static TileArtFingerprintReader? ArtFingerprintReader;
 
         /// <summary>Throw away every art verdict, because a mod reloaded a tilesheet and the answer
@@ -99,12 +102,12 @@ namespace SDVRadiance
         /// every other consumer keyed on it rebuild.</summary>
         public void ForgetArtVerdicts()
         {
-            if (_artVerdict.Count == 0 && this.GlassTilesRefusedForChangedArt == 0)
+            if (_artVerdict.Count == 0 && this.ArtBoundLabelsRefusedForChangedArt == 0)
                 return;
             _artVerdict.Clear();
             _refusedBySheet.Clear();
             _variantHits.Clear();
-            this.GlassTilesRefusedForChangedArt = 0;
+            this.ArtBoundLabelsRefusedForChangedArt = 0;
             _artVerdictGeneration++;
         }
 
@@ -335,6 +338,32 @@ namespace SDVRadiance
             monitor.Log($"Art fingerprints loaded for {tiles} tiles across {_artBySheet.Count} sheets.", LogLevel.Trace);
         }
 
+        /// <summary>sheet -> tile -> hex values, the shape both the fingerprint and the outline
+        /// tables use. A tile whose list comes out empty is left out rather than stored empty: an
+        /// empty list would read as "painted on no art at all", which refuses everything.</summary>
+        private static void ReadHexTable(JsonElement table, Dictionary<string, Dictionary<int, ulong[]>> into)
+        {
+            foreach (JsonProperty sheet in table.EnumerateObject())
+            {
+                var byTile = new Dictionary<int, ulong[]>();
+                foreach (JsonProperty tile in sheet.Value.EnumerateObject())
+                {
+                    if (!int.TryParse(tile.Name, out int index))
+                        continue;
+                    var values = new List<ulong>();
+                    if (tile.Value.ValueKind == JsonValueKind.String)
+                        AddFingerprint(values, tile.Value.GetString());
+                    else if (tile.Value.ValueKind == JsonValueKind.Array)
+                        foreach (JsonElement one in tile.Value.EnumerateArray())
+                            AddFingerprint(values, one.ValueKind == JsonValueKind.String ? one.GetString() : null);
+                    if (values.Count > 0)
+                        byTile[index] = values.ToArray();
+                }
+                if (byTile.Count > 0)
+                    into[NormalizeSheet(sheet.Name)] = byTile;
+            }
+        }
+
         private static void AddFingerprint(List<ulong> into, string? text)
         {
             if (text != null && ulong.TryParse(text, System.Globalization.NumberStyles.HexNumber,
@@ -342,10 +371,26 @@ namespace SDVRadiance
                 into.Add(value);
         }
 
-        /// <summary>The three classes this guard has an opinion about: mirror, window and glass.
-        /// Everything else a label says is left alone; see <see cref="GuardAgainstChangedArt"/>
-        /// for the measurement behind that.</summary>
+        /// <summary>Mirror, window and glass: the classes whose whole meaning is a reflection
+        /// drawn at an exact place on the tile.</summary>
         private static bool IsGlassClass(byte one) => one == 8 || one == 12 || one == 13;
+
+        /// <summary>
+        /// The classes this guard may take back out. Glass, window and mirror, and only those.
+        /// </summary>
+        /// <remarks>
+        /// This was briefly widened to the liquids and the lit surfaces, on the strength of a
+        /// silhouette test that was supposed to make refusing them affordable. The test turned out
+        /// to rescue nothing at all, and without it guarding water means taking water off 6,732 of
+        /// the corpus's tile-and-picture pairs - a real change to the mod's headline effect, which
+        /// needs evidence from a game rather than a rider on a fix to something else.
+        ///
+        /// Glass is here because a pane of glass IS a place: a reflection drawn where a window no
+        /// longer is announces itself, and that report is what this guard was written for. Water
+        /// in the wrong place is just as wrong and stays unguarded for now, deliberately and on
+        /// the record.
+        /// </remarks>
+        private static bool IsArtBoundClass(byte one) => IsGlassClass(one);
 
         /// <summary>
         /// The shipped label for one tile, with its GLASS taken back out if the art on screen is
@@ -384,7 +429,7 @@ namespace SDVRadiance
                             && variantsHere.ContainsKey(index);
             // The fast path, and it is nearly every tile: nothing painted for other art, and a
             // label with no glass in it has nothing this guard can take away. No hashing at all.
-            if (!hasVariants && (_artBySheet.Count == 0 || !CarriesGlass(label)))
+            if (!hasVariants && (_artBySheet.Count == 0 || !CarriesArtBoundClass(label)))
                 return label;
 
             (string, int) memo = (key, index);
@@ -415,12 +460,21 @@ namespace SDVRadiance
                 }
             }
 
+            // The fingerprint decides, on its own. A silhouette tier was tried here and removed:
+            // it rescued NOTHING and it let real mismatches through. Every case a "same drawing,
+            // new paint" test would have saved is already saved, because artfingerprints.py lists
+            // the repaints beside the original - so of the pairs that still disagree, the ones an
+            // outline test forgave came to 1,124 and the ones it rescued came to 0. What it did
+            // do was pass every redrawn OPAQUE tile, whose silhouette is 256 solid pixels and
+            // therefore identical to every other opaque tile ever drawn. That is how a window
+            // reflection went on landing on a building Elle's Town Buildings had redrawn: the
+            // exact report this guard exists to answer.
             bool matches = wasPaintedOn != null && Array.IndexOf(wasPaintedOn, live) >= 0;
-            byte[] verdict = matches || wasPaintedOn == null ? label : WithoutGlass(label);
+            byte[] verdict = matches || wasPaintedOn == null ? label : WithoutArtBoundClasses(label);
             _artVerdict[memo] = verdict;
             if (!ReferenceEquals(verdict, label))
             {
-                this.GlassTilesRefusedForChangedArt++;
+                this.ArtBoundLabelsRefusedForChangedArt++;
                 _refusedBySheet[key] = _refusedBySheet.TryGetValue(key, out int already) ? already + 1 : 1;
             }
             return verdict;
@@ -483,10 +537,10 @@ namespace SDVRadiance
                             LogLevel.Info);
         }
 
-        private static bool CarriesGlass(byte[] label)
+        private static bool CarriesArtBoundClass(byte[] label)
         {
             foreach (byte one in label)
-                if (IsGlassClass(one))
+                if (IsArtBoundClass(one))
                     return true;
             return false;
         }
@@ -494,11 +548,11 @@ namespace SDVRadiance
         /// <summary>A copy of the label with every glass pixel returned to plain ground. A copy
         /// rather than an edit: the original is the shipped data and is handed to every other
         /// tile that draws the same art.</summary>
-        private static byte[] WithoutGlass(byte[] label)
+        private static byte[] WithoutArtBoundClasses(byte[] label)
         {
             var stripped = new byte[label.Length];
             for (int i = 0; i < label.Length; i++)
-                stripped[i] = IsGlassClass(label[i]) ? (byte)0 : label[i];
+                stripped[i] = IsArtBoundClass(label[i]) ? (byte)0 : label[i];
             return stripped;
         }
 

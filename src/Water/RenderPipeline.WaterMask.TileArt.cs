@@ -206,7 +206,8 @@ namespace SDVRadiance
         /// asks at most once per (sheet, tile index) and remembers the answer, so this runs a few
         /// dozen times on entering a map and then not at all.
         /// </remarks>
-        internal bool TryFingerprintTileArt(xTile.Layers.Layer layer, int x, int y, out ulong fingerprint)
+        internal bool TryFingerprintTileArt(xTile.Layers.Layer layer, int x, int y,
+            out ulong fingerprint)
         {
             fingerprint = 0;
             if (!TryTileArt(layer, x, y, out Texture2D texture, out Rectangle src))

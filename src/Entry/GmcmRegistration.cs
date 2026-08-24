@@ -258,6 +258,10 @@ namespace SDVRadiance
                 () => i18n("config.precipitation.size.name"), () => i18n("config.precipitation.size.tooltip"), 0.5f, 2f, 0.05f);
             api.AddNumberOption(manifest, () => config().PrecipitationRainOpacity, v => config().PrecipitationRainOpacity = v,
                 () => i18n("config.precipitation.opacity.name"), () => i18n("config.precipitation.opacity.tooltip"), 0.25f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().PrecipitationStormDensity, v => config().PrecipitationStormDensity = v,
+                () => i18n("config.precipitation.stormdensity.name"), () => i18n("config.precipitation.stormdensity.tooltip"), 1f, 3f, 0.05f);
+            api.AddNumberOption(manifest, () => config().PrecipitationRainSlant, v => config().PrecipitationRainSlant = v,
+                () => i18n("config.precipitation.rainslant.name"), () => i18n("config.precipitation.rainslant.tooltip"), 0f, 3f, 0.05f);
             api.AddSectionTitle(manifest, () => i18n("config.precipitation.snow.name"));
             api.AddBoolOption(manifest, () => config().PrecipitationSnow, v => config().PrecipitationSnow = v,
                 () => i18n("config.precipitation.snow.name"), () => i18n("config.precipitation.snow.tooltip"));
@@ -276,6 +280,8 @@ namespace SDVRadiance
                 () => i18n("config.precipitation.size.name"), () => i18n("config.precipitation.size.tooltip"), 0.5f, 2f, 0.05f);
             api.AddNumberOption(manifest, () => config().PrecipitationWindOpacity, v => config().PrecipitationWindOpacity = v,
                 () => i18n("config.precipitation.opacity.name"), () => i18n("config.precipitation.opacity.tooltip"), 0.25f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().PrecipitationWindSlant, v => config().PrecipitationWindSlant = v,
+                () => i18n("config.precipitation.windslant.name"), () => i18n("config.precipitation.windslant.tooltip"), 0.25f, 3f, 0.05f);
             api.AddSectionTitle(manifest, () => i18n("config.lightning.name"));
             api.AddBoolOption(manifest, () => config().LightningEffectsEnabled, v => config().LightningEffectsEnabled = v,
                 () => i18n("config.lightning.name"), () => i18n("config.lightning.tooltip"));
@@ -317,6 +323,11 @@ namespace SDVRadiance
                 () => config().ParticlePetals, v => config().ParticlePetals = v,
                 () => config().ParticlePetalsAmount, v => config().ParticlePetalsAmount = v,
                 () => config().ParticlePetalsSize, v => config().ParticlePetalsSize = v);
+            // Only the flat things buckle, so this one setting sits with them rather than with the
+            // particles as a whole.
+            api.AddNumberOption(manifest, () => config().ParticlePetalsFlutter, v => config().ParticlePetalsFlutter = v,
+                () => i18n("config.particles.petalsflutter.name"), () => i18n("config.particles.petalsflutter.tooltip"),
+                0f, 1f, 0.05f);
             AddParticleEmitter(api, manifest, i18n, "ringsparkles",
                 () => config().ParticleRingSparkles, v => config().ParticleRingSparkles = v,
                 () => config().ParticleRingSparklesAmount, v => config().ParticleRingSparklesAmount = v,
@@ -436,7 +447,7 @@ namespace SDVRadiance
                 0f, 2f, 0.05f);
             api.AddNumberOption(manifest, () => config().WaterReflectDepth, v => config().WaterReflectDepth = v,
                 () => i18n("config.water.reflectdepth.name"), () => i18n("config.water.reflectdepth.tooltip"),
-                0.3f, 1.5f, 0.05f);
+                0.1f, 1.5f, 0.05f);
             // Reach has been in the config file since 1.5.6 and in no menu, which is the same as
             // not existing for almost everybody who might want it.
             api.AddNumberOption(manifest, () => config().WaterReflectReach, v => config().WaterReflectReach = v,
@@ -456,11 +467,49 @@ namespace SDVRadiance
             // change how anything looks, and the performance preset already sets both: a player
             // who moves them sees nothing happen and concludes the mod is broken. The settings
             // still exist for radiance_config, which is where an A/B belongs.
+            // Which water, then the classic water's look. This menu cannot hide rows by the
+            // water in use the way the tuner does, so each water's dials sit under a heading
+            // that says when they apply.
+            api.AddTextOption(manifest,
+                () => config().WaterReflectModel.ToString(),
+                v => config().WaterReflectModel = Enum.TryParse<WaterReflectionModel>(v, out var model) ? model : WaterReflectionModel.Modern,
+                () => i18n("config.water.model.name"), () => i18n("config.water.model.tooltip"),
+                new[] { nameof(WaterReflectionModel.Modern), nameof(WaterReflectionModel.Classic) },
+                v => i18n($"config.water.model.{v.ToLowerInvariant()}"));
+            api.AddSectionTitle(manifest, () => i18n("config.water.classic.title"), () => i18n("config.water.classic.tooltip"));
             api.AddTextOption(manifest,
                 () => config().WaterReflectStyle.ToString(),
                 v => config().WaterReflectStyle = Enum.TryParse<WaterReflectionStyle>(v, out var rs) ? rs : WaterReflectionStyle.Natural,
                 () => i18n("config.water.reflstyle.name"), () => i18n("config.water.reflstyle.tooltip"),
                 new[] { "StillWater", "Natural", "Choppy" });
+            api.AddSectionTitle(manifest, () => i18n("config.water.modern.title"), () => i18n("config.water.modern.tooltip"));
+            api.AddNumberOption(manifest, () => config().WaterModernWobble, v => config().WaterModernWobble = v,
+                () => i18n("config.water.modernwobble.name"), () => i18n("config.water.modernwobble.tooltip"),
+                0f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().WaterModernChoppiness, v => config().WaterModernChoppiness = v,
+                () => i18n("config.water.modernchoppiness.name"), () => i18n("config.water.modernchoppiness.tooltip"),
+                0f, 1f, 0.05f);
+            api.AddNumberOption(manifest, () => config().WaterModernParallax, v => config().WaterModernParallax = v,
+                () => i18n("config.water.modernparallax.name"), () => i18n("config.water.modernparallax.tooltip"),
+                0f, 0.3f, 0.01f);
+            api.AddNumberOption(manifest, () => config().WaterModernFresnel, v => config().WaterModernFresnel = v,
+                () => i18n("config.water.modernfresnel.name"), () => i18n("config.water.modernfresnel.tooltip"),
+                0f, 1f, 0.05f);
+            api.AddNumberOption(manifest, () => config().WaterModernStretch, v => config().WaterModernStretch = v,
+                () => i18n("config.water.modernstretch.name"), () => i18n("config.water.modernstretch.tooltip"),
+                1f, 1.4f, 0.05f);
+            api.AddNumberOption(manifest, () => config().WaterModernEdgeSoftness, v => config().WaterModernEdgeSoftness = v,
+                () => i18n("config.water.modernedgesoftness.name"), () => i18n("config.water.modernedgesoftness.tooltip"),
+                0f, 6f, 0.25f);
+            api.AddNumberOption(manifest, () => config().WaterModernPlungeChurn, v => config().WaterModernPlungeChurn = v,
+                () => i18n("config.water.modernplungechurn.name"), () => i18n("config.water.modernplungechurn.tooltip"),
+                0f, 1f, 0.05f);
+            api.AddNumberOption(manifest, () => config().WaterModernPlungeReach, v => config().WaterModernPlungeReach = v,
+                () => i18n("config.water.modernplungereach.name"), () => i18n("config.water.modernplungereach.tooltip"),
+                1f, 6f, 0.5f);
+            api.AddNumberOption(manifest, () => config().WaterModernLipFade, v => config().WaterModernLipFade = v,
+                () => i18n("config.water.modernlipfade.name"), () => i18n("config.water.modernlipfade.tooltip"),
+                0f, 1.5f, 0.05f);
             api.AddBoolOption(manifest, () => config().WaterEffectIndoors, v => config().WaterEffectIndoors = v,
                 () => i18n("config.water.indoors.name"), () => i18n("config.water.indoors.tooltip"));
 
@@ -537,6 +586,19 @@ namespace SDVRadiance
                 () => i18n("config.lighting.windowlightglow.tooltip"), 0f, 2f, 0.05f);
         }
 
+        /// <summary>One slider per caster kind, named by the shared key pattern
+        /// <c>config.shadows.{family}.{kind}.name</c>. The three per-kind families (length,
+        /// softness, lean) are eighteen sliders of exactly this shape; the table keeps a kind
+        /// from being added to one family and forgotten in another.</summary>
+        private static void AddPerKindSliders(IGenericModConfigMenuApi api, IManifest manifest,
+            Func<string, string> i18n, string family, float min, float max, float interval,
+            params (string Kind, Func<float> Get, Action<float> Set)[] sliders)
+        {
+            foreach ((string kind, Func<float> get, Action<float> set) in sliders)
+                api.AddNumberOption(manifest, get, set,
+                    () => i18n($"config.shadows.{family}.{kind}.name"), null, min, max, interval);
+        }
+
         private static void RegisterShadowsPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
         {
             api.AddPage(manifest, "shadows", () => i18n("config.section.shadows"));
@@ -550,9 +612,12 @@ namespace SDVRadiance
                 () => i18n("config.shadows.blur.name"), null, 0f, 5f, 0.5f);
             api.AddBoolOption(manifest, () => config().DirectionalShadowObjects, v => config().DirectionalShadowObjects = v,
                 () => i18n("config.shadows.objects.name"), () => i18n("config.shadows.objects.tooltip"));
-            api.AddNumberOption(manifest, () => config().ShadowLeanClarity, v => config().ShadowLeanClarity = v,
-                () => i18n("config.shadows.leanclarity.name"), () => i18n("config.shadows.leanclarity.tooltip"),
-                0f, 1f, 0.05f);
+            api.AddNumberOption(manifest, () => config().ShadowGroundForeshortening, v => config().ShadowGroundForeshortening = v,
+                () => i18n("config.shadows.groundforeshortening.name"), () => i18n("config.shadows.groundforeshortening.tooltip"),
+                ModConfig.ShadowGroundForeshorteningMin, ModConfig.ShadowGroundForeshorteningMax, 0.05f);
+            api.AddNumberOption(manifest, () => config().ShadowCharacterGroundForeshortening, v => config().ShadowCharacterGroundForeshortening = v,
+                () => i18n("config.shadows.charactergroundforeshortening.name"), () => i18n("config.shadows.charactergroundforeshortening.tooltip"),
+                ModConfig.ShadowGroundForeshorteningMin, ModConfig.ShadowGroundForeshorteningMax, 0.05f);
             api.AddNumberOption(manifest, () => config().ShadowCastsPerCharacter, v => config().ShadowCastsPerCharacter = v,
                 () => i18n("config.shadows.casts.name"), () => i18n("config.shadows.casts.tooltip"),
                 ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax, 1);
@@ -561,64 +626,34 @@ namespace SDVRadiance
             // who only wants everything shorter never has to come down here.
             api.AddSectionTitle(manifest, () => i18n("config.shadows.perkind.title"),
                 () => i18n("config.shadows.perkind.tooltip"));
-            api.AddNumberOption(manifest, () => config().ShadowLengthTrees, v => config().ShadowLengthTrees = v,
-                () => i18n("config.shadows.length.trees.name"), null,
-                ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax, 0.05f);
-            api.AddNumberOption(manifest, () => config().ShadowLengthSmallTrees, v => config().ShadowLengthSmallTrees = v,
-                () => i18n("config.shadows.length.smalltrees.name"), null,
-                ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax, 0.05f);
-            api.AddNumberOption(manifest, () => config().ShadowLengthBushes, v => config().ShadowLengthBushes = v,
-                () => i18n("config.shadows.length.bushes.name"), null,
-                ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax, 0.05f);
-            api.AddNumberOption(manifest, () => config().ShadowLengthCrops, v => config().ShadowLengthCrops = v,
-                () => i18n("config.shadows.length.crops.name"), null,
-                ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax, 0.05f);
-            api.AddNumberOption(manifest, () => config().ShadowLengthGrass, v => config().ShadowLengthGrass = v,
-                () => i18n("config.shadows.length.grass.name"), null,
-                ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax, 0.05f);
-            api.AddNumberOption(manifest, () => config().ShadowLengthObjects, v => config().ShadowLengthObjects = v,
-                () => i18n("config.shadows.length.objects.name"), null,
-                ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax, 0.05f);
+            AddPerKindSliders(api, manifest, i18n, "length",
+                ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax, 0.05f,
+                ("trees", () => config().ShadowLengthTrees, v => config().ShadowLengthTrees = v),
+                ("smalltrees", () => config().ShadowLengthSmallTrees, v => config().ShadowLengthSmallTrees = v),
+                ("bushes", () => config().ShadowLengthBushes, v => config().ShadowLengthBushes = v),
+                ("crops", () => config().ShadowLengthCrops, v => config().ShadowLengthCrops = v),
+                ("grass", () => config().ShadowLengthGrass, v => config().ShadowLengthGrass = v),
+                ("objects", () => config().ShadowLengthObjects, v => config().ShadowLengthObjects = v));
             api.AddSectionTitle(manifest, () => i18n("config.shadows.softness.title"),
                 () => i18n("config.shadows.softness.tooltip"));
-            api.AddNumberOption(manifest, () => config().ShadowSoftnessTrees, v => config().ShadowSoftnessTrees = v,
-                () => i18n("config.shadows.softness.trees.name"), null,
-                ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax, 0.1f);
-            api.AddNumberOption(manifest, () => config().ShadowSoftnessSmallTrees, v => config().ShadowSoftnessSmallTrees = v,
-                () => i18n("config.shadows.softness.smalltrees.name"), null,
-                ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax, 0.1f);
-            api.AddNumberOption(manifest, () => config().ShadowSoftnessBushes, v => config().ShadowSoftnessBushes = v,
-                () => i18n("config.shadows.softness.bushes.name"), null,
-                ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax, 0.1f);
-            api.AddNumberOption(manifest, () => config().ShadowSoftnessCrops, v => config().ShadowSoftnessCrops = v,
-                () => i18n("config.shadows.softness.crops.name"), null,
-                ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax, 0.1f);
-            api.AddNumberOption(manifest, () => config().ShadowSoftnessGrass, v => config().ShadowSoftnessGrass = v,
-                () => i18n("config.shadows.softness.grass.name"), null,
-                ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax, 0.1f);
-            api.AddNumberOption(manifest, () => config().ShadowSoftnessObjects, v => config().ShadowSoftnessObjects = v,
-                () => i18n("config.shadows.softness.objects.name"), null,
-                ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax, 0.1f);
+            AddPerKindSliders(api, manifest, i18n, "softness",
+                ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax, 0.1f,
+                ("trees", () => config().ShadowSoftnessTrees, v => config().ShadowSoftnessTrees = v),
+                ("smalltrees", () => config().ShadowSoftnessSmallTrees, v => config().ShadowSoftnessSmallTrees = v),
+                ("bushes", () => config().ShadowSoftnessBushes, v => config().ShadowSoftnessBushes = v),
+                ("crops", () => config().ShadowSoftnessCrops, v => config().ShadowSoftnessCrops = v),
+                ("grass", () => config().ShadowSoftnessGrass, v => config().ShadowSoftnessGrass = v),
+                ("objects", () => config().ShadowSoftnessObjects, v => config().ShadowSoftnessObjects = v));
             api.AddSectionTitle(manifest, () => i18n("config.shadows.lean.title"),
                 () => i18n("config.shadows.lean.tooltip"));
-            api.AddNumberOption(manifest, () => config().ShadowLeanTrees, v => config().ShadowLeanTrees = v,
-                () => i18n("config.shadows.lean.trees.name"), null,
-                ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax, 0.05f);
-            api.AddNumberOption(manifest, () => config().ShadowLeanSmallTrees, v => config().ShadowLeanSmallTrees = v,
-                () => i18n("config.shadows.lean.smalltrees.name"), null,
-                ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax, 0.05f);
-            api.AddNumberOption(manifest, () => config().ShadowLeanBushes, v => config().ShadowLeanBushes = v,
-                () => i18n("config.shadows.lean.bushes.name"), null,
-                ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax, 0.05f);
-            api.AddNumberOption(manifest, () => config().ShadowLeanCrops, v => config().ShadowLeanCrops = v,
-                () => i18n("config.shadows.lean.crops.name"), null,
-                ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax, 0.05f);
-            api.AddNumberOption(manifest, () => config().ShadowLeanGrass, v => config().ShadowLeanGrass = v,
-                () => i18n("config.shadows.lean.grass.name"), null,
-                ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax, 0.05f);
-            api.AddNumberOption(manifest, () => config().ShadowLeanObjects, v => config().ShadowLeanObjects = v,
-                () => i18n("config.shadows.lean.objects.name"), null,
-                ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax, 0.05f);
+            AddPerKindSliders(api, manifest, i18n, "lean",
+                ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax, 0.05f,
+                ("trees", () => config().ShadowLeanTrees, v => config().ShadowLeanTrees = v),
+                ("smalltrees", () => config().ShadowLeanSmallTrees, v => config().ShadowLeanSmallTrees = v),
+                ("bushes", () => config().ShadowLeanBushes, v => config().ShadowLeanBushes = v),
+                ("crops", () => config().ShadowLeanCrops, v => config().ShadowLeanCrops = v),
+                ("grass", () => config().ShadowLeanGrass, v => config().ShadowLeanGrass = v),
+                ("objects", () => config().ShadowLeanObjects, v => config().ShadowLeanObjects = v));
 
             // --- Camera (implemented) ---
         }

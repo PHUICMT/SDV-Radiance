@@ -141,6 +141,8 @@ namespace SDVRadiance
             Add("mask_water", _waterMask);
             Add("mask_water_sdf", _waterSignedDistanceTexture);
             Add("mask_water_sdf_realshore", _waterRealShoreDistanceTexture);
+            Add("mask_water_churn", _waterPlungeChurnTexture);
+            Add("mirror_selfdrawn_atlas", _selfDrawnMirrorAtlas);
             Add("mask_occluder", _occluderMask);
             Add("mask_sprite", _spriteMaskRenderTarget);
             Add("flood_lightmap", _flood.Texture);

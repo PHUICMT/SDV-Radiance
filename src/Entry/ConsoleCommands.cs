@@ -525,7 +525,7 @@ namespace SDVRadiance
             {
                 var text = new System.Text.StringBuilder("Live config values (in-memory; not saved to config.json):\n");
                 foreach (var p in props)
-                    if (p.CanWrite && (p.PropertyType == typeof(bool) || p.PropertyType == typeof(float) || p.PropertyType == typeof(int) || p.PropertyType == typeof(string)))
+                    if (p.CanWrite && (p.PropertyType == typeof(bool) || p.PropertyType == typeof(float) || p.PropertyType == typeof(int) || p.PropertyType == typeof(string) || p.PropertyType.IsEnum))
                         text.AppendLine($"  {p.Name} = {p.GetValue(config)}");
                 monitor.Log(text.ToString().TrimEnd(), LogLevel.Info);
                 return;
@@ -547,6 +547,9 @@ namespace SDVRadiance
                     prop.PropertyType == typeof(bool) ? bool.Parse(args[1])
                     : prop.PropertyType == typeof(float) ? float.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture)
                     : prop.PropertyType == typeof(int) ? int.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture)
+                    // Named looks (the reflection style, the camera mode) are enums, and an A/B
+                    // between two looks is exactly what this command is for.
+                    : prop.PropertyType.IsEnum ? Enum.Parse(prop.PropertyType, args[1], ignoreCase: true)
                     : args[1];
                 prop.SetValue(config, value);
                 config.Clamp();

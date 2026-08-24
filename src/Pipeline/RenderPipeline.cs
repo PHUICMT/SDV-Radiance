@@ -91,6 +91,22 @@ namespace SDVRadiance
                                                // bridges, lily pads). Effects end exactly at the real waterline.
         private Texture2D? _waterSignedDistanceTexture;          // Alpha8 signed shore distance (Pass F): 128 = waterline, ±4/texel
         private Texture2D? _waterRealShoreDistanceTexture;       // the same, measured with the art standing in the water put back
+        private Texture2D? _waterPlungeChurnTexture;             // Color: R = distance below the nearest falling face (0 at the foot, 255 six tiles out),
+                                                                 // G = distance above the face in this column (0 on the lip, 255 two tiles up) (Pass E2)
+        private Texture2D? _fallDistanceFarTexture;              // one texel reading "far from any fall", bound when there is no field yet
+
+        /// <summary>The fall-distance slot must never sample black (that is "on the lip and under
+        /// the foam" at once, and the whole mirror would go); this one texel reads as far from
+        /// any fall above and below.</summary>
+        private Texture2D FallDistanceFarTexture()
+        {
+            if (_fallDistanceFarTexture == null || _fallDistanceFarTexture.IsDisposed)
+            {
+                _fallDistanceFarTexture = new Texture2D(_device, 1, 1, false, SurfaceFormat.Color);
+                _fallDistanceFarTexture.SetData(new[] { new Color(255, 255, 0, 255) });
+            }
+            return _fallDistanceFarTexture;
+        }
         private bool[]? _waterTileFlags;         // pre-dilation water flags — GATHER/COMPOSE scratch, owned by the
                                                  // rebuild in flight, not by any screen
         /// <summary>The composed water flags for the mask currently on screen. A copy taken when a
@@ -392,12 +408,13 @@ namespace SDVRadiance
                     sb.AppendLine($"labels from a variant: {hit.Value} tile(s) here used labels painted for "
                                 + $"\"{hit.Key}\" rather than the shipped ones, because that is the art loaded.");
             }
-            if (LabelStore.Instance is { GlassTilesRefusedForChangedArt: > 0 } guarded)
+            if (LabelStore.Instance is { ArtBoundLabelsRefusedForChangedArt: > 0 } guarded)
             {
-                sb.AppendLine($"glass labels refused: {guarded.GlassTilesRefusedForChangedArt} tile(s) here are drawn "
-                            + "with art that is not the art their label was painted on, so their glass was not used. "
-                            + "That is a mod having repainted the tilesheet; those panes stay quiet rather than "
-                            + "reflecting in the wrong place. Nothing else about the label was touched.");
+                sb.AppendLine($"labels refused: {guarded.ArtBoundLabelsRefusedForChangedArt} tile(s) here are drawn "
+                            + "from a picture their label was not painted on, so the glass in that label - the "
+                            + "window panes and mirrors, which are a PLACE on the tile - was not used. A pack that "
+                            + "merely repaints the sheet does not land here: labels/art-fingerprints.json lists the "
+                            + "repaints beside the original. Everything else the label says was kept."); 
                 // Name the suspects. Which pack actually won a given tile is not knowable from
                 // here, but "these packs say they repaint this sheet" turns a number nobody can
                 // act on into a list somebody can check, and it is the question a bug report
@@ -549,6 +566,25 @@ namespace SDVRadiance
         private readonly List<Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>> _stages = new();
         private Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>?
             _lightingStageDelegate, _waterStageDelegate, _cloudShadowStageDelegate, _godRaysStageDelegate, _bloomStageDelegate, _fogStageDelegate, _colorGradeStageDelegate, _tiltShiftStageDelegate, _finishingStageDelegate, _floodStageDelegate, _tailStageDelegate;
+
+        /// <summary>Scratch for the two per-frame "what is bound right now" queries in
+        /// <see cref="Apply"/>. The parameterless GetRenderTargets() allocates a fresh array on
+        /// every call, which at two calls per frame is steady garbage for a question whose answer
+        /// is almost always one element. Sized for the most targets MonoGame can bind at once.
+        /// Only Apply may use it: every other call site keeps its array alive to rebind later,
+        /// and those can nest.</summary>
+        private readonly RenderTargetBinding[] _boundTargetScratch = new RenderTargetBinding[4];
+
+        /// <summary>The render target currently bound, without allocating, or null when the
+        /// backbuffer (or anything that is not a RenderTarget2D) is bound.</summary>
+        private RenderTarget2D? CurrentlyBoundTarget()
+        {
+            int count = _device.RenderTargetCount;
+            if (count <= 0 || count > _boundTargetScratch.Length)
+                return null;
+            _device.GetRenderTargets(_boundTargetScratch);
+            return _boundTargetScratch[0].RenderTarget as RenderTarget2D;
+        }
 
         // Flood-propagation GI lightmap (see FloodLightmap.cs).
         private Effect? _floodEffect;
@@ -1006,8 +1042,7 @@ namespace SDVRadiance
             _chainCostParticlesAtStart = FrameCost.Running(FrameCost.Part.Particles);
             if (config.DebugLogging) { _frameCount++; _performanceStopwatch.Restart(); }
 
-            RenderTargetBinding[] bindings = _device.GetRenderTargets();
-            if (bindings.Length == 0 || bindings[0].RenderTarget is not RenderTarget2D target)
+            if (CurrentlyBoundTarget() is not RenderTarget2D target)
             {
                 if (config.DebugLogging) { _skippedNoTargetCount++; MaybeLogDiag(config); }
                 return;
@@ -1099,8 +1134,7 @@ namespace SDVRadiance
                 // hand the (reopened) batch back to SMAPI.
                 try
                 {
-                    var bound = _device.GetRenderTargets();
-                    if (bound.Length == 0 || !ReferenceEquals(bound[0].RenderTarget, target))
+                    if (!ReferenceEquals(CurrentlyBoundTarget(), target))
                         _device.SetRenderTarget(target);
                 }
                 catch { }
@@ -1619,6 +1653,8 @@ namespace SDVRadiance
             _mirrorSceneCache?.Dispose(); _mirrorSceneCache = null;
             _waterSignedDistanceTexture?.Dispose(); _waterSignedDistanceTexture = null;
             _waterRealShoreDistanceTexture?.Dispose(); _waterRealShoreDistanceTexture = null;
+            _waterPlungeChurnTexture?.Dispose(); _waterPlungeChurnTexture = null;
+            _fallDistanceFarTexture?.Dispose(); _fallDistanceFarTexture = null;
             _sceneRenderTarget?.Dispose(); _fullResolutionPingA?.Dispose(); _fullResolutionPingB?.Dispose(); _halfResolutionScratchA?.Dispose(); _halfResolutionScratchB?.Dispose(); _cloudMaskKeep?.Dispose(); _cloudMaskKeep = null; _waterMask?.Dispose(); _occluderMask?.Dispose(); _floodOccluderMask?.Dispose(); _luminanceRenderTarget?.Dispose(); _noiseTexture?.Dispose(); _noiseTexture = null;
             _spriteMaskRenderTarget?.Dispose(); _spriteMaskSpriteBatch?.Dispose();
             _maskDebugTexture?.Dispose(); _maskDebugTexture = null;

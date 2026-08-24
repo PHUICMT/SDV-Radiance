@@ -329,14 +329,16 @@ namespace SDVRadiance
             {
                 var (preset, key) = presets[i];
                 var rect = new Rectangle(_contentCursorX + i * (bw + 6), _contentCursorY, bw, 44);
-                _buttons.Add(new TunerTextButton(_translate($"config.preset.{key}"), rect, () =>
+                var presetButton = new TunerTextButton(_translate($"config.preset.{key}"), rect, () =>
                 {
                     // Record WHICH look was picked, not only its numbers. Without this the
                     // settings menu still read "Custom" after a preset was chosen here, so the
                     // two menus disagreed about a thing the player had just done.
                     _config.ActivePreset = preset;
                     _config.ApplyPreset(preset); _onChange(); _onSave(); Reflow();
-                }));
+                });
+                presetButton.IsChosen = () => _config.ActivePreset == preset;
+                _buttons.Add(presetButton);
             }
             _contentCursorY += 56;
 
@@ -348,9 +350,13 @@ namespace SDVRadiance
                 if (chipX + cw > _contentCursorX + _contentColumnWidth - 100) { chipX = _contentCursorX; _contentCursorY += 46; }
                 var rect = new Rectangle(chipX, _contentCursorY, cw, 40);
                 var captured = prof;
+                var load = new TunerTextButton(prof.Name, rect, () => { _config.ApplyProfile(captured); _onChange(); _onSave(); Reflow(); });
+                // Lit while the live settings are still exactly what this look holds, so the
+                // panel says which saved look is in effect; move any slider and it goes out.
+                load.IsChosen = () => _config.MatchesProfile(captured);
                 _chips.Add(new TunerChip
                 {
-                    Load = new TunerTextButton(prof.Name, rect, () => { _config.ApplyProfile(captured); _onChange(); _onSave(); Reflow(); }),
+                    Load = load,
                     Delete = new Rectangle(rect.Right - 14, rect.Y - 6, 24, 24),
                     Profile = captured
                 });
@@ -454,8 +460,10 @@ namespace SDVRadiance
                 () => _config.ShadowCastsPerCharacter,
                 v => _config.ShadowCastsPerCharacter = (int)MathF.Round(v), "help.shadowcasts");
             Tog("tuner.shadowobjects", () => _config.DirectionalShadowObjects, v => _config.DirectionalShadowObjects = v, "help.shadowobjects");
-            Sld("tuner.shadowleanclarity", 0f, 1f, () => _config.ShadowLeanClarity,
-                v => _config.ShadowLeanClarity = v, "help.shadowleanclarity");
+            Sld("tuner.shadowgroundforeshortening", ModConfig.ShadowGroundForeshorteningMin, ModConfig.ShadowGroundForeshorteningMax,
+                () => _config.ShadowGroundForeshortening, v => _config.ShadowGroundForeshortening = v, "help.shadowgroundforeshortening");
+            Sld("tuner.shadowcharactergroundforeshortening", ModConfig.ShadowGroundForeshorteningMin, ModConfig.ShadowGroundForeshorteningMax,
+                () => _config.ShadowCharacterGroundForeshortening, v => _config.ShadowCharacterGroundForeshortening = v, "help.shadowcharactergroundforeshortening");
             Section("tuner.shadowperkind");
             Sld("tuner.shadowlength.trees", ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax,
                 () => _config.ShadowLengthTrees, v => _config.ShadowLengthTrees = v);
@@ -618,6 +626,10 @@ namespace SDVRadiance
                 v => _config.PrecipitationRainSize = v, "help.precipitationsize");
             Sld("tuner.precipitationopacity", 0.25f, 2f, () => _config.PrecipitationRainOpacity,
                 v => _config.PrecipitationRainOpacity = v, "help.precipitationopacity");
+            Sld("tuner.precipitationstormdensity", 1f, 3f, () => _config.PrecipitationStormDensity,
+                v => _config.PrecipitationStormDensity = v, "help.precipitationstormdensity");
+            Sld("tuner.precipitationrainslant", 0f, 3f, () => _config.PrecipitationRainSlant,
+                v => _config.PrecipitationRainSlant = v, "help.precipitationrainslant");
             _contentCursorY += 12;
             Section("tuner.section.precipitationsnow");
             Tog("tuner.precipitationsnow", () => _config.PrecipitationSnow, v => _config.PrecipitationSnow = v, "help.precipitationsnow");
@@ -636,6 +648,8 @@ namespace SDVRadiance
                 v => _config.PrecipitationWindSize = v, "help.precipitationsize");
             Sld("tuner.precipitationopacity", 0.25f, 2f, () => _config.PrecipitationWindOpacity,
                 v => _config.PrecipitationWindOpacity = v, "help.precipitationopacity");
+            Sld("tuner.precipitationwindslant", 0.25f, 3f, () => _config.PrecipitationWindSlant,
+                v => _config.PrecipitationWindSlant = v, "help.precipitationwindslant");
             _contentCursorY += 12;
             Section("tuner.section.lightning");
             Tog("tuner.lightning", () => _config.LightningEffectsEnabled, v => _config.LightningEffectsEnabled = v, "help.lightning");
@@ -673,6 +687,10 @@ namespace SDVRadiance
             Emitter("petals", () => _config.ParticlePetals, v => _config.ParticlePetals = v,
                 () => _config.ParticlePetalsAmount, v => _config.ParticlePetalsAmount = v,
                 () => _config.ParticlePetalsSize, v => _config.ParticlePetalsSize = v);
+            // Only the flat things buckle, so this belongs to the petals and not to the whole set.
+            Sld("tuner.particlepetalsflutter", 0f, 1f, () => _config.ParticlePetalsFlutter,
+                v => _config.ParticlePetalsFlutter = v, "help.particlepetalsflutter",
+                () => _config.ParticlesEnabled && _config.ParticlePetals);
             Emitter("ringsparkles", () => _config.ParticleRingSparkles, v => _config.ParticleRingSparkles = v,
                 () => _config.ParticleRingSparklesAmount, v => _config.ParticleRingSparklesAmount = v,
                 () => _config.ParticleRingSparklesSize, v => _config.ParticleRingSparklesSize = v);
@@ -706,14 +724,84 @@ namespace SDVRadiance
             Sld("tuner.waterspeed", 0f, 3f, () => _config.WaterSpeed, v => _config.WaterSpeed = v);
             Tog("tuner.waterreflection", () => _config.WaterReflection, v => _config.WaterReflection = v, "help.waterreflection");
             Sld("tuner.waterreflectstrength", 0f, 1f, () => _config.WaterReflectStrength, v => _config.WaterReflectStrength = v);
-            Sld("tuner.waterreflectdistort", 0f, 1.5f, () => _config.WaterReflectDistort,
-                v => _config.WaterReflectDistort = v, "help.waterreflectdistort");
-            Sld("tuner.waterreflectbanding", 0f, 16f, () => _config.WaterReflectBanding,
-                v => _config.WaterReflectBanding = v, "help.waterreflectbanding");
+            // Which water, two buttons, and only then that water's own dials. A dial that does
+            // nothing under the water in use is a dial a player moves, sees nothing, and files
+            // as broken, so the classic water's three looks and its distortion and banding only
+            // appear once the classic water is the one picked.
+            Section("tuner.watermodel");
+            (WaterReflectionModel model, string key)[] waterModels =
+            {
+                (WaterReflectionModel.Modern, "modern"),
+                (WaterReflectionModel.Classic, "classic"),
+            };
+            int mw = (_contentColumnWidth - 6 * (waterModels.Length - 1)) / waterModels.Length;
+            for (int i = 0; i < waterModels.Length; i++)
+            {
+                var (model, key) = waterModels[i];
+                var rect = new Rectangle(_contentCursorX + i * (mw + 6), _contentCursorY, mw, S(40));
+                var btn = Btn(_translate($"tuner.watermodel.{key}"), rect, () =>
+                {
+                    _config.WaterReflectModel = model; _onChange(); _onSave(); Reflow();
+                });
+                btn.IsChosen = () => _config.WaterReflectModel == model;
+                Help(rect, $"help.watermodel.{key}");
+            }
+            _contentCursorY += S(50);
+            if (_config.WaterReflectModel == WaterReflectionModel.Modern)
+            {
+                Sld("tuner.watermodernwobble", 0f, 2f, () => _config.WaterModernWobble,
+                    v => _config.WaterModernWobble = v, "help.watermodernwobble");
+                Sld("tuner.watermodernchoppiness", 0f, 1f, () => _config.WaterModernChoppiness,
+                    v => _config.WaterModernChoppiness = v, "help.watermodernchoppiness");
+                Sld("tuner.watermodernparallax", 0f, 0.3f, () => _config.WaterModernParallax,
+                    v => _config.WaterModernParallax = v, "help.watermodernparallax");
+                Sld("tuner.watermodernfresnel", 0f, 1f, () => _config.WaterModernFresnel,
+                    v => _config.WaterModernFresnel = v, "help.watermodernfresnel");
+                Sld("tuner.watermodernstretch", 1f, 1.4f, () => _config.WaterModernStretch,
+                    v => _config.WaterModernStretch = v, "help.watermodernstretch");
+                Sld("tuner.watermodernedgesoftness", 0f, 6f, () => _config.WaterModernEdgeSoftness,
+                    v => _config.WaterModernEdgeSoftness = v, "help.watermodernedgesoftness");
+                Sld("tuner.watermodernplungechurn", 0f, 1f, () => _config.WaterModernPlungeChurn,
+                    v => _config.WaterModernPlungeChurn = v, "help.watermodernplungechurn");
+                Sld("tuner.watermodernplungereach", 1f, 6f, () => _config.WaterModernPlungeReach,
+                    v => _config.WaterModernPlungeReach = v, "help.watermodernplungereach");
+                Sld("tuner.watermodernlipfade", 0f, 1.5f, () => _config.WaterModernLipFade,
+                    v => _config.WaterModernLipFade = v, "help.watermodernlipfade");
+            }
+            else
+            {
+                // Three named looks rather than another slider: the things a look moves together
+                // have no meaning apart, and a picked look is something a player can see the
+                // point of without knowing what either number is.
+                Section("tuner.reflstyle");
+                (WaterReflectionStyle style, string key)[] reflStyles =
+                {
+                    (WaterReflectionStyle.StillWater, "still"),
+                    (WaterReflectionStyle.Natural, "natural"),
+                    (WaterReflectionStyle.Choppy, "choppy"),
+                };
+                int rw = (_contentColumnWidth - 6 * (reflStyles.Length - 1)) / reflStyles.Length;
+                for (int i = 0; i < reflStyles.Length; i++)
+                {
+                    var (style, key) = reflStyles[i];
+                    var rect = new Rectangle(_contentCursorX + i * (rw + 6), _contentCursorY, rw, S(40));
+                    var btn = Btn(_translate($"tuner.reflstyle.{key}"), rect, () =>
+                    {
+                        _config.WaterReflectStyle = style; _onChange(); _onSave(); Reflow();
+                    });
+                    btn.IsChosen = () => _config.WaterReflectStyle == style;
+                    Help(rect, $"help.reflstyle.{key}");
+                }
+                _contentCursorY += S(50);
+                Sld("tuner.waterreflectdistort", 0f, 1.5f, () => _config.WaterReflectDistort,
+                    v => _config.WaterReflectDistort = v, "help.waterreflectdistort");
+                Sld("tuner.waterreflectbanding", 0f, 16f, () => _config.WaterReflectBanding,
+                    v => _config.WaterReflectBanding = v, "help.waterreflectbanding");
+            }
             Sld("tuner.waterreflectblur", 0f, 2f, () => _config.WaterReflectBlur,
                 v => _config.WaterReflectBlur = v, "help.waterreflectblur",
                 () => _config.WaterEnabled && _config.WaterReflection);
-            Sld("tuner.reflectdepth", 0.3f, 1.5f, () => _config.WaterReflectDepth,
+            Sld("tuner.reflectdepth", 0.1f, 1.5f, () => _config.WaterReflectDepth,
                 v => _config.WaterReflectDepth = v, "help.reflectdepth",
                 () => _config.WaterEnabled && _config.WaterReflection);
             Sld("tuner.reflectreach", 0.2f, 1f, () => _config.WaterReflectReach,
@@ -731,30 +819,6 @@ namespace SDVRadiance
             // looks, which is exactly the setting a player moves, sees nothing, and files as
             // broken. The performance preset sets them by name instead - Quality through Low spec
             // - and radiance_config still reaches them for an A/B.
-            // Three named looks rather than another slider: the two things they move together
-            // (how much the surface's ripple displaces the mirror, and how deep the water reads)
-            // have no meaning apart, and a picked look is something a player can see the point of
-            // without knowing what either number is.
-            Section("tuner.reflstyle");
-            (WaterReflectionStyle style, string key)[] reflStyles =
-            {
-                (WaterReflectionStyle.StillWater, "still"),
-                (WaterReflectionStyle.Natural, "natural"),
-                (WaterReflectionStyle.Choppy, "choppy"),
-            };
-            int rw = (_contentColumnWidth - 12) / reflStyles.Length;
-            for (int i = 0; i < reflStyles.Length; i++)
-            {
-                var (style, key) = reflStyles[i];
-                var rect = new Rectangle(_contentCursorX + i * (rw + 6), _contentCursorY, rw, S(40));
-                var btn = Btn(_translate($"tuner.reflstyle.{key}"), rect, () =>
-                {
-                    _config.WaterReflectStyle = style; _onChange(); _onSave(); Reflow();
-                });
-                btn.TextScale = _ui * (_config.WaterReflectStyle == style ? 1f : 0.82f);
-                Help(rect, $"help.reflstyle.{key}");
-            }
-            _contentCursorY += S(50);
             Tog("tuner.waterindoors", () => _config.WaterEffectIndoors, v => _config.WaterEffectIndoors = v, "help.waterindoors");
 
             // Per-room water switch: only in gated building interiors (not outdoors / real level water).
@@ -810,10 +874,12 @@ namespace SDVRadiance
             {
                 var (preset, key) = perfPresets[i];
                 var rect = new Rectangle(_contentCursorX + i * (pw + 6), _contentCursorY, pw, 44);
-                _buttons.Add(new TunerTextButton(_translate($"config.perfpreset.{key}"), rect, () =>
+                var perfButton = new TunerTextButton(_translate($"config.perfpreset.{key}"), rect, () =>
                 {
                     _config.ApplyPerfPreset(preset); _onChange(); _onSave(); Reflow();
-                }));
+                });
+                perfButton.IsChosen = () => _config.ActivePerfPreset == preset;
+                _buttons.Add(perfButton);
             }
             _contentCursorY += 56;
 
@@ -1108,7 +1174,7 @@ namespace SDVRadiance
             foreach (var c in _chips)
                 if (Visible(c.Load.Bounds))
                 {
-                    c.Load.Draw(spriteBatch, dy);
+                    c.Load.Draw(spriteBatch, dy, c.Load.IsChosen?.Invoke() == true);
                     spriteBatch.Draw(Game1.mouseCursors, new Rectangle(c.Delete.X, c.Delete.Y + dy, c.Delete.Width, c.Delete.Height), DeleteSource, Color.White);
                 }
             foreach (var t in _toggles) if (Visible(t.Row)) t.Draw(spriteBatch, dy);

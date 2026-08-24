@@ -95,8 +95,8 @@ namespace SDVRadiance
 
         // ---- shared ---------------------------------------------------------------------------
 
-        /// <summary>Count and speed while a storm (rain + lightning) is overhead.</summary>
-        private const float StormCountMultiplier = 1.6f;
+        /// <summary>Speed while a storm (rain + lightning) is overhead. The count is the
+        /// player's, see <see cref="ModConfig.PrecipitationStormDensity"/>.</summary>
         private const float StormSpeedMultiplier = 1.25f;
         private const int MaximumSplashes = 96;
         /// <summary>Vanilla advances a splash frame every 70 ms; keeping the clock keeps the beat
@@ -355,7 +355,7 @@ namespace SDVRadiance
             EnsureSeeded(screen, viewportWidth, viewportHeight);
             ShiftWithCamera(screen, viewportWidth, viewportHeight);
 
-            float stormCount = 1f + (StormCountMultiplier - 1f) * screen.StormEase;
+            float stormCount = 1f + (Math.Max(1f, config.PrecipitationStormDensity) - 1f) * screen.StormEase;
             float stormSpeed = 1f + (StormSpeedMultiplier - 1f) * screen.StormEase;
             float area = viewportWidth * (float)viewportHeight;
 
@@ -370,9 +370,9 @@ namespace SDVRadiance
                 : 0;
             screen.WindPetals = location.GetSeason() == Season.Spring;
 
-            StepRain(screen, dt, rainTarget, stormSpeed, viewportWidth, viewportHeight, location);
+            StepRain(screen, dt, rainTarget, stormSpeed, config.PrecipitationRainSlant, viewportWidth, viewportHeight, location);
             StepSnow(screen, dt, snowTarget, viewportWidth, viewportHeight);
-            StepWind(screen, dt, windTarget, viewportWidth, viewportHeight, location);
+            StepWind(screen, dt, windTarget, config.PrecipitationWindSlant, viewportWidth, viewportHeight, location);
             StepSplashes(screen, dt);
 
             DrawAll(screen, viewportWidth, viewportHeight);
@@ -497,7 +497,7 @@ namespace SDVRadiance
         // ---- stepping ---------------------------------------------------------------------------
 
         private static void StepRain(ScreenPrecipitation screen, float dt, int targetCount,
-                                     float stormSpeed, int viewportWidth, int viewportHeight, GameLocation location)
+                                     float stormSpeed, float rainSlant, int viewportWidth, int viewportHeight, GameLocation location)
         {
             SurfaceMap? surface = targetCount > 0 ? SurfaceMap.For(location) : null;
             Random random = screen.Random;
@@ -510,7 +510,10 @@ namespace SDVRadiance
                     continue;
                 float speed = BaseFallPixelsPerSecond * RainLayerSpeed[drop.Layer] * stormSpeed;
                 float fall = speed * dt;
-                drop.Position.X += _windPixelsPerSecond * RainLayerSpeed[drop.Layer] * dt;
+                // The slant the player chose is applied to the TRAVEL, and the streak is drawn
+                // at the angle of that travel, so a harder slant is rain that really does cross
+                // the screen faster rather than a sprite leaning while it falls straight.
+                drop.Position.X += _windPixelsPerSecond * rainSlant * RainLayerSpeed[drop.Layer] * dt;
                 drop.Position.Y += fall;
                 drop.FallRemaining -= fall;
                 if (drop.Position.X < -64f) drop.Position.X += viewportWidth + 128;
@@ -594,7 +597,7 @@ namespace SDVRadiance
         /// A piece that leaves the screen comes back re-coloured from the season's palette, so
         /// warping from autumn to the always-summer island recolours the air within seconds.</summary>
         private static void StepWind(ScreenPrecipitation screen, float dt, int targetCount,
-                                     int viewportWidth, int viewportHeight, GameLocation location)
+                                     float windSlant, int viewportWidth, int viewportHeight, GameLocation location)
         {
             Random random = screen.Random;
             Color[] palette = location.GetSeason() switch
@@ -617,7 +620,8 @@ namespace SDVRadiance
                 piece.TumblePhase += piece.TumblePerSecond * dt;
                 float ride = WindLayerSpeed[piece.Layer];
                 piece.Position.X += _windPixelsPerSecond * WindDebrisRideMultiplier * ride * dt;
-                piece.Position.Y += (MathF.Sin(piece.FlutterPhase) * 26f + WindDebrisSinkPixelsPerSecond) * ride * dt;
+                piece.Position.Y += (MathF.Sin(piece.FlutterPhase) * 26f
+                    + WindDebrisSinkPixelsPerSecond * windSlant) * ride * dt;
                 bool wrapped = false;
                 if (piece.Position.X < -64f) { piece.Position.X += viewportWidth + 128; wrapped = true; }
                 else if (piece.Position.X > viewportWidth + 64f) { piece.Position.X -= viewportWidth + 128; wrapped = true; }
@@ -668,7 +672,7 @@ namespace SDVRadiance
             float windSize = dials?.PrecipitationWindSize ?? 1f;
             float windOpacity = dials?.PrecipitationWindOpacity ?? 1f;
             float fallSpeed = BaseFallPixelsPerSecond;
-            float streakAngle = MathF.Atan2(-_windPixelsPerSecond, fallSpeed);
+            float streakAngle = MathF.Atan2(-_windPixelsPerSecond * (dials?.PrecipitationRainSlant ?? 1f), fallSpeed);
             if (_streakTexture != null)
             {
                 Color streakTint = Shaded(Color.Lerp(RainTint, GreenRainTint, screen.GreenEase), ambient);

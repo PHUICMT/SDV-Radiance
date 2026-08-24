@@ -100,12 +100,12 @@ namespace SDVRadiance
             {
                 baked.LastUsedTick = Game1.ticks;
                 DrawSoft(spriteBatch, Taps9, baked.Rt, null, feet, Color.White, alpha, rot, baked.FeetInRt,
-                    new Vector2(1f, stretch), depth, SpriteEffects.None, blur);
+                    new Vector2(SolidAcrossScale(rot, stretch), stretch), depth, SpriteEffects.None, blur);
                 return;
             }
             Rectangle src = a.Sprite.SourceRect;
             DrawBandedGradient(spriteBatch, a.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, src.Height),
-                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
+                alpha, rot, new Vector2(4f * SolidAcrossScale(rot, stretch), 4f * stretch), depth, blur);
         }
 
         /// <summary>
@@ -125,6 +125,8 @@ namespace SDVRadiance
             }
 
             _castsPerCaster = Math.Clamp(config.ShadowCastsPerCharacter, ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax);
+            _groundForeshortening = config.ShadowGroundForeshortening;
+            _characterGroundForeshortening = config.ShadowCharacterGroundForeshortening;
             float lenCfg = Math.Max(0.1f, config.DirectionalShadowLength);
             float ambAlpha = strength * 0.4f;   // soft grounding pool; directional cast adds on top
             // OUTDOORS AT NIGHT a lamp is the only light on a dark ground, so its cast shadow
@@ -726,6 +728,21 @@ namespace SDVRadiance
         private static float SeatedDepth(Character c)
             => MathHelper.Clamp(c.StandingPixel.Y / 10000f - ShadowDepthBias * 2f, 0f, 1f);
 
+        /// <summary>The sideways scale that lays an upright frame down as a solid, for the
+        /// rotate-and-scale draw the baked frames use. A farm animal is a solid like a tree is: its
+        /// width lies across the sun's direction on the ground, and with the ground foreshortened a
+        /// sideways shadow lies down instead of standing on its edge. See
+        /// <see cref="ShadowProjection.AcrossScaleForRotation"/> for what the draw can and cannot
+        /// reproduce of that.</summary>
+        private float SolidAcrossScale(float rot, float stretch)
+            => ShadowProjection.ForSolid(rot, stretch, _groundForeshortening).AcrossScaleForRotation();
+
+        /// <summary>The same lay-down for a person, the player, another player or an NPC, at the
+        /// people's own foreshortening; see <see cref="ModConfig.ShadowCharacterGroundForeshortening"/>
+        /// for why they have one.</summary>
+        private float CharacterAcrossScale(float rot, float stretch)
+            => ShadowProjection.ForSolid(rot, stretch, _characterGroundForeshortening).AcrossScaleForRotation();
+
         private void DrawNpcShadow(SpriteBatch spriteBatch, NPC npc, float rot, float stretch, float alpha, float blur)
         {
             // The collision box is the anchor, with no drawOffset term. A stretched sprite and the
@@ -745,7 +762,7 @@ namespace SDVRadiance
             {
                 baked.LastUsedTick = Game1.ticks;
                 DrawSoft(spriteBatch, Taps9, baked.Rt, null, feet, Color.White, alpha, rot, baked.FeetInRt,
-                    new Vector2(1f, stretch), depth, SpriteEffects.None, blur);
+                    new Vector2(CharacterAcrossScale(rot, stretch), stretch), depth, SpriteEffects.None, blur);
                 return;
             }
             // Where the feet sit INSIDE the sprite, which is the sprite's bottom edge only when the
@@ -769,7 +786,7 @@ namespace SDVRadiance
             if (originY >= 1f && originY < src.Height - 0.5f)
                 src = new Rectangle(src.X, src.Y, src.Width, (int)Math.Round(originY));
             DrawBandedGradient(spriteBatch, npc.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, Math.Min(originY, src.Height)),
-                alpha, rot, new Vector2(4f, 4f * stretch), depth, blur);
+                alpha, rot, new Vector2(4f * CharacterAcrossScale(rot, stretch), 4f * stretch), depth, blur);
         }
     }
 }

@@ -1099,13 +1099,29 @@ namespace SDVRadiance
                 WaterReflectionStyle.Choppy     => (1.90f, new Vector3(0.60f, 0.72f, 0.90f)),
                 _                               => (1.00f, new Vector3(0.66f, 0.76f, 0.92f)),
             };
+            // The 1.6.2 water is a second set of rules in the shader, not a fourth pair of
+            // numbers: the classic shear and ripple terms are zeroed and the travelling field,
+            // the contact anchor, the parallax and the photographic operators take over. Its
+            // five settings of its own reach the shader whatever the water, and do nothing there
+            // until ReflModel is 1.
+            bool realistic = config.WaterReflectModel == WaterReflectionModel.Modern;
             // One amount scaling BOTH halves of the distortion. The named look above chooses the
             // character; this chooses how much of it there is, and at zero the reflection is a flat
             // mirror no matter which look is selected. The wave shear is the half the named looks
             // never touched, which is why none of them could reach a mirror on their own.
             float reflDistort = config.WaterReflectDistort;
-            GetParam(effect, "MirrorShear")?.SetValue(reflDistort);
+            GetParam(effect, "MirrorShear")?.SetValue(realistic ? 0f : reflDistort);
             GetParam(effect, "ReflWobble")?.SetValue(reflWobble * config.WaterReflectDistort);
+            GetParam(effect, "ReflModel")?.SetValue(realistic ? 1f : 0f);
+            GetParam(effect, "ReflWobbleAmount")?.SetValue(config.WaterModernWobble);
+            GetParam(effect, "ReflChoppiness")?.SetValue(config.WaterModernChoppiness);
+            GetParam(effect, "ReflParallax")?.SetValue(config.WaterModernParallax);
+            GetParam(effect, "ReflFresnel")?.SetValue(config.WaterModernFresnel);
+            GetParam(effect, "ReflStretch")?.SetValue(config.WaterModernStretch);
+            GetParam(effect, "ReflEdgeSoftness")?.SetValue(config.WaterModernEdgeSoftness);
+            GetParam(effect, "ReflPlungeChurn")?.SetValue(config.WaterModernPlungeChurn);
+            GetParam(effect, "ReflPlungeReach")?.SetValue(config.WaterModernPlungeReach);
+            GetParam(effect, "ReflLipFade")?.SetValue(config.WaterModernLipFade);
             GetParam(effect, "ReflSoftness")?.SetValue(config.WaterReflectBlur);
             GetParam(effect, "ReflDepthScale")?.SetValue(config.WaterReflectDepth);
             // Passed as steps per TILE, which is what the shader needs to round with, rather than
@@ -1124,6 +1140,9 @@ namespace SDVRadiance
             // Foam reads this one instead: same encoding, but it only has an edge where water
             // meets real land, so a bridge stops growing a shoreline of its own.
             GetParam(effect, "RealShoreSdfTexture")?.SetValue(_waterRealShoreDistanceTexture ?? _waterSignedDistanceTexture);
+            // Never unbound: an empty slot samples black, which is "on the lip and right under a
+            // fall" everywhere and would take the whole mirror away. One far texel stands in.
+            GetParam(effect, "PlungeChurnTexture")?.SetValue(_waterPlungeChurnTexture ?? FallDistanceFarTexture());
             GetParam(effect, "SparkleDensity")?.SetValue(config.WaterSparkleDensity);
         }
 

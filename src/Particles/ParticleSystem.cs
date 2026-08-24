@@ -290,8 +290,56 @@ namespace SDVRadiance
         /// this particle, which it cannot do to the particle itself: by the time we are handed the
         /// frame that multiply has happened. One for the emissive group, which is supposed to be
         /// its own light and not something the night can take away.</param>
+        /// <summary>The water's own surface wave, handed to the particles so a leaf can be bent by
+        /// the same field that bends it when it crosses a pond.
+        ///
+        /// <para>
+        /// The numbers are not a look-alike: they are the pond ripple out of water.fx, the same
+        /// frequencies against the same world-tile coordinate and the same clock, with its UV
+        /// amplitude turned into screen pixels. A leaf drifting over the shoreline is therefore bent
+        /// by one continuous field the whole way across, rather than changing character at the
+        /// water's edge.
+        /// </para></summary>
+        internal readonly struct SurfaceWave
+        {
+            /// <summary>0 leaves the sprite flat; 1 bends it exactly as much as the water does.</summary>
+            internal readonly float Amount;
+            internal readonly float Time;
+            /// <summary>The ripple's UV amplitude, already in screen pixels.</summary>
+            internal readonly Vector2 AmplitudePixels;
+
+            internal SurfaceWave(float amount, float time, Vector2 amplitudePixels)
+            {
+                Amount = amount;
+                Time = time;
+                AmplitudePixels = amplitudePixels;
+            }
+
+            internal bool Bends => Amount > 0.001f && (AmplitudePixels.X > 0f || AmplitudePixels.Y > 0f);
+
+            /// <summary>Where the surface pushes a point standing at this world pixel. Straight out
+            /// of water.fx: pond ripple, world-tile coordinates, x from the y wave and y from the x
+            /// wave, so the two never line up into one direction.</summary>
+            internal Vector2 OffsetAt(Vector2 worldPixels)
+            {
+                float tileX = worldPixels.X / 64f, tileY = worldPixels.Y / 64f;
+                float acrossWave = (float)(Math.Sin(tileY * 6.3 + Time * 6.0)
+                                         + 0.5 * Math.Sin(tileX * 4.1 - Time * 4.0));
+                float downWave = (float)(Math.Cos(tileX * 5.7 - Time * 5.0)
+                                       + 0.5 * Math.Cos(tileY * 4.7 + Time * 3.5));
+                return new Vector2(acrossWave * AmplitudePixels.X, downWave * AmplitudePixels.Y) * Amount;
+            }
+        }
+
+        /// <summary>How many bands a bent leaf is drawn in. The wave turns over about every half
+        /// tile, and a leaf is half a tile across, so eight bands carry roughly one crest from end
+        /// to end: fewer and the bend reads as two stiff halves hinged in the middle. It is eight
+        /// draws instead of one for a leaf, and only for leaves.</summary>
+        private const int SurfaceWaveBands = 8;
+
         internal int Draw(SpriteBatch spriteBatch, bool emissive, float systemPresence,
-                          Vector2 screenOffsetPixels, float pixelScale, Vector3 worldLight)
+                          Vector2 screenOffsetPixels, float pixelScale, Vector3 worldLight,
+                          SurfaceWave wave = default)
         {
             if (_atlas == null || systemPresence <= 0f || _liveCount == 0)
                 return 0;
@@ -319,12 +367,57 @@ namespace SDVRadiance
                 tint = new Color((byte)(tint.R * worldLight.X), (byte)(tint.G * worldLight.Y),
                                  (byte)(tint.B * worldLight.Z), tint.A);
                 float scale = particle.SizePixels / AtlasCellSizePixels * pixelScale;
-                spriteBatch.Draw(_atlas, (fromCamera + screenOffsetPixels) * pixelScale,
+                Vector2 screenPosition = (fromCamera + screenOffsetPixels) * pixelScale;
+                // Only the flat things bend. A spark is a point of light and a mote is dust:
+                // neither has a face for a wave to run along, and bending them reads as a fault.
+                bool flat = particle.Cell == AtlasCell.Petal || particle.Cell == AtlasCell.Leaf;
+                if (wave.Bends && flat)
+                {
+                    DrawBentByTheSurface(spriteBatch, ref particle, screenPosition, scale, tint, wave, pixelScale);
+                    drawn++;
+                    continue;
+                }
+                spriteBatch.Draw(_atlas, screenPosition,
                     CellSource(particle.Cell), tint, particle.Rotation, origin, scale,
                     SpriteEffects.None, 0f);
                 drawn++;
             }
             return drawn;
+        }
+
+        /// <summary>One leaf, drawn in bands so the surface wave can run along it the way it runs
+        /// along everything else the water covers.
+        ///
+        /// <para>
+        /// Each band is sampled at its OWN place in the world, so the field bends the leaf across
+        /// its length instead of shifting it as a block, and the band's origin is written relative
+        /// to the whole cell so every band still turns about the leaf's centre. The band's world
+        /// position is carried around the rotation as well: a leaf lying on its side is bent along
+        /// the direction it is actually pointing.
+        /// </para></summary>
+        private void DrawBentByTheSurface(SpriteBatch spriteBatch, ref Particle particle,
+                                          Vector2 screenPosition, float scale, Color tint,
+                                          in SurfaceWave wave, float pixelScale)
+        {
+            Rectangle cell = CellSource(particle.Cell);
+            int bandRows = AtlasCellSizePixels / SurfaceWaveBands;
+            float half = AtlasCellSizePixels * 0.5f;
+            float worldPerCellPixel = particle.SizePixels / AtlasCellSizePixels;
+            float turnSin = (float)Math.Sin(particle.Rotation), turnCos = (float)Math.Cos(particle.Rotation);
+            for (int band = 0; band < SurfaceWaveBands; band++)
+            {
+                int top = band * bandRows;
+                var source = new Rectangle(cell.X, cell.Y + top, cell.Width, bandRows);
+                // Origin measured from the BAND's own top-left but pointing at the whole leaf's
+                // centre, which is what keeps every band turning about one point.
+                var origin = new Vector2(half, half - top);
+                // Where this band sits in the world, along the leaf and turned with it.
+                float alongLeaf = (top + bandRows * 0.5f - half) * worldPerCellPixel;
+                var bandWorld = particle.WorldPosition + new Vector2(-turnSin * alongLeaf, turnCos * alongLeaf);
+                Vector2 push = wave.OffsetAt(bandWorld) * pixelScale;
+                spriteBatch.Draw(_atlas, screenPosition + push, source, tint,
+                    particle.Rotation, origin, scale, SpriteEffects.None, 0f);
+            }
         }
 
         internal void ForgetRefusals() => SpawnsRefused = 0;

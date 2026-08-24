@@ -43,18 +43,35 @@ ABORT_REASON = ""
 
 # ---- the bridge ------------------------------------------------------------------------------
 
-def rpc(tool, args=None, timeout=1800, tries=60):
+def rpc(tool, args=None, timeout=1800, tries=60, reconnects=20):
     """One bridge call, retried while the game's MAIN THREAD is still busy.
 
     The bridge answers `ping` from its listener thread, so "the bridge is up" says nothing about
     the game being able to RUN anything: with a hundred mods the main thread stays busy loading
     for a minute and every queued job comes back 500 "main-thread job timed out". Treating that
     as fatal is what once failed three passes whose profiles were perfectly fine.
+
+    THE PORT IS RE-READ EVERY ATTEMPT, because it is not a constant. The bridge walks
+    5757, 8757-8759, 47600-47601 and publishes whichever it could take, so a game launched while
+    the last one still holds 5757 comes up on a different port and rewrites port.txt underneath a
+    caller that read it once. Four passes of sixteen died that way in one run: the file still
+    named the port of a game that was shutting down, which answered the ping and then dropped the
+    connection mid-call (WinError 10054), or had already gone (10061). Neither is a bad profile,
+    and neither should end a pass.
     """
-    port = int(open(PORT_FILE).read().strip())
     body = json.dumps({"tool": tool, "args": args or {}}).encode()
     last = ""
+    dropped = 0
     for _ in range(tries):
+        try:
+            port = int(open(PORT_FILE).read().strip())
+        except (OSError, ValueError):
+            # No published port means no bridge to call yet, which is a wait and not a failure.
+            dropped += 1
+            if dropped > reconnects:
+                raise RuntimeError(f"{tool}: no bridge port was ever published")
+            time.sleep(3)
+            continue
         request = urllib.request.Request(f"http://127.0.0.1:{port}/rpc", data=body,
                                          headers={"Content-Type": "application/json"})
         try:
@@ -66,6 +83,14 @@ def rpc(tool, args=None, timeout=1800, tries=60):
                 time.sleep(5)
                 continue
             raise RuntimeError(f"{tool}: HTTP {error.code} {last[:300]}")
+        except (urllib.error.URLError, OSError) as error:
+            # Refused or reset: the port we dialled is not the bridge any more. Wait for the
+            # file to name a live one rather than calling the pass lost.
+            last = str(error)
+            dropped += 1
+            if dropped > reconnects:
+                raise RuntimeError(f"{tool}: the bridge never answered ({last[:200]})")
+            time.sleep(3)
     raise RuntimeError(f"{tool}: the main thread never freed up ({last[:200]})")
 
 
@@ -95,10 +120,37 @@ def wait_for_bridge_gone(deadline=60):
     return False
 
 
-def kill_game():
+def game_is_running():
+    listed = subprocess.run(["tasklist", "/FI", "IMAGENAME eq StardewModdingAPI.exe"],
+                            capture_output=True, text=True, errors="replace")
+    return "StardewModdingAPI.exe" in (listed.stdout or "")
+
+
+def kill_game(deadline=90):
+    """Kill it, WAIT for it to be gone, and unpublish the port it was answering on.
+
+    A fixed four-second sleep was not waiting: the process outlives the taskkill by longer than
+    that with two thousand mod folders loaded, and while it lives it still holds its port and
+    still answers a ping. The next pass then read port.txt, found a port that a dying game was
+    still listening on, and lost the pass the moment it died.
+
+    Deleting port.txt is what closes that door for good. The file can only be written by a bridge
+    that has just bound a port, so once it is gone there is no stale number left to dial, and the
+    wait below becomes a wait for the NEW game rather than a hopeful ping at the old one. This
+    matters more than it looks: the bridge does not always get the same port. It walks 5757,
+    8757-8759, 47600-47601 and takes the first one free, so a launch that overlaps a shutdown
+    comes up somewhere else entirely.
+    """
     subprocess.run(["taskkill", "/F", "/IM", "StardewModdingAPI.exe"], capture_output=True)
     subprocess.run(["taskkill", "/F", "/IM", "Stardew Valley.exe"], capture_output=True)
-    time.sleep(4)
+    started = time.time()
+    while game_is_running() and time.time() - started < deadline:
+        time.sleep(2)
+    time.sleep(2)                       # the sockets outlive the process by a moment
+    try:
+        os.remove(PORT_FILE)
+    except OSError:
+        pass
 
 
 def load_save_and_dump(profile, all_sheets):
@@ -257,9 +309,13 @@ def known_profiles():
     # Label-BaseArt for the base game's own maps, then the MapPass colouring, which is the set
     # that actually guarantees coverage: one colour per profile, no two clashing map mods
     # sharing one. The older Label-Wide profiles predate it and only overlap it.
-    wanted = [n for n in names if n.startswith("MapPass-")]
+    solos = in_pass_order(n for n in names if n.startswith("Solo-"))
+    batches = in_pass_order(n for n in names if n.startswith("Batch-"))
+    redos = in_pass_order(n for n in names if n.startswith("Redo-"))
+    wanted = (solos + batches + redos) if (solos or batches or redos) else in_pass_order(
+        n for n in names if n.startswith("MapPass-"))
     base = ["Label-BaseArt"] if "Label-BaseArt" in names else []
-    return base + in_pass_order(wanted)
+    return base + wanted
 
 
 # ---- one pass --------------------------------------------------------------------------------

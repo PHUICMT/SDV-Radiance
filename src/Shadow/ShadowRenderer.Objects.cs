@@ -28,22 +28,24 @@ namespace SDVRadiance
         /// </summary>
         private void EmitObject(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, Vector2 feet,
             Vector2 baseOrigin, float alpha, float rot, float stretch, float depth, float blur,
-            float headFade = HeadFade, SpriteEffects effects = SpriteEffects.None)
+            float headFade = HeadFade, SpriteEffects effects = SpriteEffects.None,
+            ShadowGeometry geometry = ShadowGeometry.Solid)
         {
             var key = (texture, src, effects);
-            // The lean is baked as a SHEAR about the feet row (not a rotation): a wide sprite
-            // rotated about its feet dips one bottom corner below the ground line, so bushes,
-            // benches and lamp heads "drooped down-left". Shearing keeps the whole bottom edge
-            // on the ground. Tip position matches the old rotated look exactly:
-            //   shear = −sin(rot)·stretch (sideways per px of height), sy = cos(rot)·stretch.
-            float shear = -(float)Math.Sin(rot) * stretch;
-            float shearScaleY = Math.Max(0.15f, stretch * (float)Math.Cos(rot));
-            float narrow = NarrowForLean(src.Width, src.Height, shear, _leanClarity);
+            // The lean is baked into the pixels as the projection that lays this caster down: a
+            // card keeps its width level on the screen (the shear this always was, and what a
+            // fence's shadow is), a solid lays its width across the sun's direction on the ground,
+            // foreshortened the way the ground is. The tip of a column of any height lands in the
+            // same place under both, so the two never disagree about where the sun is. See
+            // ShadowProjection for the geometry and why a solid's width has to lie down.
+            ShadowProjection projection = geometry == ShadowGeometry.Card
+                ? ShadowProjection.ForCard(rot, stretch)
+                : ShadowProjection.ForSolid(rot, stretch, _groundForeshortening);
             if (_isBakingObjects)
             {
                 if (_objectGraphicsDevice != null && !_bakedObjectCache.ContainsKey(key)
-                    && BakeObjectSprite(_objectGraphicsDevice, texture, src, baseOrigin, effects, shear, blur, narrow, out RenderTarget2D rt, out Vector2 feetInRT))
-                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedShear = shear, BakedBlur = blur, BakedNarrow = narrow, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = Game1.ticks };
+                    && BakeObjectSprite(_objectGraphicsDevice, texture, src, baseOrigin, effects, projection, blur, out RenderTarget2D rt, out Vector2 feetInRT))
+                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedProjection = projection, BakedBlur = blur, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = Game1.ticks };
                 return;
             }
             if (_bakedObjectCache.TryGetValue(key, out SpriteBake? bakedEntry))
@@ -53,16 +55,15 @@ namespace SDVRadiance
                 // gradually wrong. That used to be answered by throwing the whole cache away
                 // whenever a rounded sun angle changed, which on a continuous clock happens about
                 // twice a second: a hundred-sprite screen re-baked a hundred times a second, in
-                // bursts, all day. Now each sprite is judged on its own error. The shear is a
-                // sideways slide per pixel of height, so the tip moves by shear × the sprite's
-                // on-screen height: a tall tree earns a re-bake every second or so and a small
-                // crop goes minutes without one, which is both correct and an order of magnitude
-                // less work than the old sweep.
-                if ((Math.Abs(shear - bakedEntry.BakedShear) * src.Height * 4f > ShearRefreshPixels
-                        || Math.Abs(blur - bakedEntry.BakedBlur) > 0.3f
-                        || Math.Abs(narrow - bakedEntry.BakedNarrow) > 0.05f)
+                // bursts, all day. Now each sprite is judged on its own error: how far its
+                // farthest pixel has moved between the projection in the pixels and the one the
+                // sun asks for now, in screen pixels. A tall tree earns a re-bake every second or
+                // so and a small crop goes minutes without one, which is both correct and an order
+                // of magnitude less work than the old sweep.
+                if ((projection.Drift(bakedEntry.BakedProjection, src.Width, src.Height) * 4f > ShearRefreshPixels
+                        || Math.Abs(blur - bakedEntry.BakedBlur) > 0.3f)
                     && _objectBakeQueue.Count < ObjectBakeQueueCap)
-                    _objectBakeQueue[key] = new ObjectBakeRequest { BaseOrigin = baseOrigin, Shear = shear, Blur = blur, Narrow = narrow };
+                    _objectBakeQueue[key] = new ObjectBakeRequest { BaseOrigin = baseOrigin, Projection = projection, Blur = blur };
                 FrameCost.Count(FrameCost.Counter.ShadowSprites);
                 // ONE draw of ONLY the content: the soft edge is in the baked pixels (see
                 // SpriteBake.BakedBlur) and the source rect stops the card blending the slot's
@@ -75,7 +76,7 @@ namespace SDVRadiance
                 float unbake = 4f / bakedEntry.BakedScale;
                 DrawSoft(spriteBatch, Taps9, bakedEntry.Rt, content, feet,
                     Color.White, alpha, 0f, bakedEntry.FeetInRt - new Vector2(content.X, content.Y),
-                    new Vector2(unbake, unbake * shearScaleY), depth, SpriteEffects.None, 0f);
+                    new Vector2(unbake, unbake), depth, SpriteEffects.None, 0f);
             }
             else
             {
@@ -91,14 +92,14 @@ namespace SDVRadiance
                 // here for nothing instead of being discovered inside a bake that then throws its
                 // work away. It also un-asks itself: the need grows with the lean, so a sprite too
                 // big at a low sun fits again as the sun rises, with no state to go stale.
-                bool tooBig = !ObjectBakeCouldFit(src, shear, blur, narrow);
+                bool tooBig = !ObjectBakeCouldFit(src, baseOrigin, projection, blur);
                 // Named here, once each. The refusal used to be logged inside the bake, which the
                 // pre-check now means these sprites never reach: the counter would say twenty and
                 // nothing anywhere would say WHICH twenty.
                 if (tooBig)
-                    NoteOversize(src, shear);
+                    NoteOversize(src, baseOrigin, projection);
                 if (!tooBig && _objectBakeQueue.Count < ObjectBakeQueueCap)
-                    _objectBakeQueue[key] = new ObjectBakeRequest { BaseOrigin = baseOrigin, Shear = shear, Blur = blur, Narrow = narrow };
+                    _objectBakeQueue[key] = new ObjectBakeRequest { BaseOrigin = baseOrigin, Projection = projection, Blur = blur };
                 // Counted here rather than at the queue insert: the queue is a dictionary keyed by
                 // sprite, so two misses of the SAME sprite in one frame collapse into one entry and
                 // the count would under-report exactly the case it exists to catch. A miss is a
@@ -127,12 +128,11 @@ namespace SDVRadiance
         /// pixels off is not something anyone can see.</summary>
         private const int MaxShearRefreshesPerFrame = 12;
 
-        /// <summary>Bake a sprite (black + feet→head gradient) to a pooled object RT, its baseOrigin
-        /// pinned at the RT's feet point and the sun lean pre-baked as a shear about that row
-        /// (x' = x + shear·(y − feetY): bottom edge stays put, higher rows slide sideways).
+        /// <summary>Bake a sprite (black + feet→head gradient) to a pooled object RT, laid down by
+        /// its projection about the feet point so the sun's lean is in the pixels.
         /// Returns false (→ banded fallback) only if it fits no slot at any bake scale.</summary>
         private bool BakeObjectSprite(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle src, Vector2 baseOrigin,
-            SpriteEffects effects, float shear, float blurPx, float narrow, out RenderTarget2D rt, out Vector2 feetInRT,
+            SpriteEffects effects, ShadowProjection projection, float blurPx, out RenderTarget2D rt, out Vector2 feetInRT,
             RenderTarget2D? into = null)
         {
             rt = null!;
@@ -144,23 +144,27 @@ namespace SDVRadiance
             // A refresh re-renders the slot the entry already owns and must keep its size; a first
             // bake takes the smallest class the silhouette fits, which is what stops a crop from
             // being handed a tree's slot.
-            if (!ChooseBakeFit(src.IsEmpty ? 0f : src.Width * narrow, src.IsEmpty ? 0f : src.Height, shear, blurPx, into,
-                               out int slotClass, out float scale, out float blurTexels))
+            if (!ChooseBakeFit(src, baseOrigin, projection, blurPx, into,
+                               out int slotClass, out float scale, out float blurTexels,
+                               out float left, out float right, out float top, out float bottom))
             {
-                NoteOversize(src, shear);
+                NoteOversize(src, baseOrigin, projection);
                 return false;   // nothing fits, at any scale (a refresh: the lean grew past its own slot)
             }
-            // The narrowing is part of the silhouette, so every measurement below is of the
-            // NARROWED sprite: the slot it has to fit, where its origin lands, and the content
-            // rectangle the draw pass reads back.
-            float spriteWidth = src.Width * scale * narrow, spriteHeight = src.Height * scale;
+            float spriteWidth = src.Width * scale, spriteHeight = src.Height * scale;
             _lastBakeClass = slotClass;
             _lastBakeScale = scale;
             rt = into ?? RentObjectRT(graphicsDevice, slotClass);
-            feetInRT = new Vector2(rt.Width / 2f, rt.Height - 8f);
-            var bakeScale = new Vector2(scale * narrow, scale);
+            // The feet go wherever the laid-down silhouette, blur and all, sits inside the slot. A
+            // sideways shadow has as much to one side of its feet as the other, and a solid's near
+            // edge dips below the feet row, so neither the slot's centre column nor its bottom row
+            // can be assumed the way they were when only a shear was baked.
+            feetInRT = new Vector2(
+                (float)Math.Round(rt.Width * 0.5f - (left + right) * 0.5f),
+                (float)Math.Round(rt.Height - bottom - blurTexels - 1f));
+            var bakeScale = new Vector2(scale, scale);
             Vector2 pos = feetInRT - baseOrigin * bakeScale;  // so baseOrigin maps to the feet point
-            Matrix lean = ShearAbout(feetInRT, shear);
+            Matrix lean = projection.About(feetInRT);
             try
             {
                 graphicsDevice.SetRenderTarget(rt);
@@ -168,12 +172,16 @@ namespace SDVRadiance
                 _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, RasterizerState.CullNone, null, lean);
                 _renderTargetSpriteBatch.Draw(texture, pos, src, Color.Black, 0f, Vector2.Zero, bakeScale, effects, 0f);
                 _renderTargetSpriteBatch.End();
-                // Continuous feet(full)→head(faint) gradient over the sprite's vertical extent.
-                _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
-                _renderTargetSpriteBatch.Draw(_gradientTexture!, new Rectangle(0, (int)pos.Y, rt.Width, (int)spriteHeight), Color.White);
+                // Continuous feet(full)→head(faint) gradient over the sprite's vertical extent,
+                // laid down by the same projection so it follows the silhouette wherever that put
+                // it. Drawn upright over the sprite it would fade the wrong rows now that rows no
+                // longer stay where the sprite had them.
+                _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp, null, RasterizerState.CullNone, null, lean);
+                _renderTargetSpriteBatch.Draw(_gradientTexture!, pos, null, Color.White, 0f, Vector2.Zero,
+                    new Vector2(spriteWidth / _gradientTexture!.Width, spriteHeight / _gradientTexture.Height), SpriteEffects.None, 0f);
                 _renderTargetSpriteBatch.End();
                 BlurSlotInPlace(graphicsDevice, rt, blurTexels);
-                _lastBakeContent = ContentBounds(pos, spriteWidth, spriteHeight, feetInRT, shear, blurTexels, rt.Width, rt.Height);
+                _lastBakeContent = ContentBounds(feetInRT, left, right, top, bottom, blurTexels, rt.Width, rt.Height);
                 FrameCost.Count(FrameCost.Counter.ObjectBakes);
                 return true;
             }
@@ -207,7 +215,7 @@ namespace SDVRadiance
                 if (_bakedObjectCache.ContainsKey(key))
                     continue;
                 if (BakeRequest(graphicsDevice, key, req, null, out RenderTarget2D rt, out Vector2 feetInRT))
-                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedShear = req.Shear, BakedBlur = req.Blur, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = Game1.ticks };
+                    _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedShear = req.Shear, BakedProjection = req.Projection, BakedBlur = req.Blur, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = Game1.ticks };
             }
 
             // Then the leans the sun has moved off, re-rendered into the slot each entry already
@@ -221,15 +229,16 @@ namespace SDVRadiance
                 var key = kv.Key;
                 ObjectBakeRequest req = kv.Value;
                 if (!_bakedObjectCache.TryGetValue(key, out SpriteBake? stale)
-                    || (stale.BakedShear == req.Shear && stale.BakedBlur == req.Blur
-                        && stale.BakedNarrow == req.Narrow))
+                    || (stale.BakedBlur == req.Blur
+                        && (req.ColumnSources != null ? stale.BakedShear == req.Shear
+                                                      : stale.BakedProjection.Same(req.Projection))))
                     continue;
                 if (BakeRequest(graphicsDevice, key, req, stale.Rt, out _, out Vector2 refreshedFeet))
                 {
                     stale.FeetInRt = refreshedFeet;
                     stale.BakedShear = req.Shear;
+                    stale.BakedProjection = req.Projection;
                     stale.BakedBlur = req.Blur;
-                    stale.BakedNarrow = req.Narrow;
                     stale.Content = _lastBakeContent;
                     stale.SlotClass = _lastBakeClass;
                     stale.BakedScale = _lastBakeScale;
@@ -273,6 +282,17 @@ namespace SDVRadiance
             float bottom = Math.Max(feetInRT.Y, pos.Y + heightPx) + blurPx;
             int x0 = Math.Max(0, (int)left), y0 = Math.Max(0, (int)top);
             int x1 = Math.Min(slotW, (int)Math.Ceiling(right)), y1 = Math.Min(slotH, (int)Math.Ceiling(bottom));
+            return x1 <= x0 || y1 <= y0 ? new Rectangle(0, 0, slotW, slotH) : new Rectangle(x0, y0, x1 - x0, y1 - y0);
+        }
+
+        /// <summary>The same, for a sprite laid down by a projection: the bounds the fit test
+        /// already worked out, placed at the feet and pushed out by the blur.</summary>
+        private static Rectangle ContentBounds(Vector2 feetInRT, float left, float right, float top, float bottom, float blurPx, int slotW, int slotH)
+        {
+            int x0 = Math.Max(0, (int)Math.Floor(feetInRT.X + left - blurPx));
+            int y0 = Math.Max(0, (int)Math.Floor(feetInRT.Y + top - blurPx));
+            int x1 = Math.Min(slotW, (int)Math.Ceiling(feetInRT.X + right + blurPx));
+            int y1 = Math.Min(slotH, (int)Math.Ceiling(feetInRT.Y + bottom + blurPx));
             return x1 <= x0 || y1 <= y0 ? new Rectangle(0, 0, slotW, slotH) : new Rectangle(x0, y0, x1 - x0, y1 - y0);
         }
 
@@ -332,7 +352,7 @@ namespace SDVRadiance
                 return BakeTileColumn(graphicsDevice, key.texture, req.ColumnSources, req.ColumnLevels,
                     req.ColumnOrients, req.ColumnSources.Length, req.Shear, req.Blur, out rt, out feetInRT, into);
             return BakeObjectSprite(graphicsDevice, key.texture, key.src, req.BaseOrigin, key.effect,
-                req.Shear, req.Blur, req.Narrow, out rt, out feetInRT, into);
+                req.Projection, req.Blur, out rt, out feetInRT, into);
         }
 
         /// <summary>Shear about a pivot row: x' = x + k·(y − pivot.Y), y unchanged — the horizontal
@@ -348,20 +368,14 @@ namespace SDVRadiance
         /// object pass can reach it. Both callers of <see cref="DrawObjectShadows"/> set it.</summary>
         private float _sunLengthScale = 1f;
 
-        /// <summary>How hard to squeeze a shadow across the sun so its lean reads, this pass.</summary>
-        private float _leanClarity = 1f;
+        /// <summary>How much the ground is foreshortened on screen, this pass; see
+        /// <see cref="ModConfig.ShadowGroundForeshortening"/>.</summary>
+        private float _groundForeshortening = 0.58f;
 
-        /// <summary>A shadow no narrower than this fraction of the thing casting it. Past about a
-        /// third it stops looking like a shadow of that object and starts looking like a crack.</summary>
-        private const float MinShadowNarrow = 0.30f;
+        /// <summary>The people's own, this pass; see
+        /// <see cref="ModConfig.ShadowCharacterGroundForeshortening"/>.</summary>
+        private float _characterGroundForeshortening = 1f;
 
-        /// <summary>The lean at which narrowing is fully in. Below it the effect eases off, so
-        /// nothing snaps as the sun crosses noon and there is no direction to show anyway.</summary>
-        private const float NarrowFadeShear = 0.30f;
-
-        /// <summary>How far a shadow must reach compared with its own width before its shape reads
-        /// as a direction rather than as a blob. A person's is about two to one and looks right, so
-        /// that is the number everything else is measured against.</summary>
         /// <summary>
         /// The source rect a tree's canopy is really drawn from, which is not always the first
         /// column of its sheet.
@@ -386,67 +400,6 @@ namespace SDVRadiance
                      ? 48
                      : 0;
             return rect;
-        }
-
-        private const float PersonLeanDominance = 3.0f;
-
-        /// <summary>The biggest sprite, in source pixels either way, whose shadow is narrowed.
-        ///
-        /// <para>
-        /// One tile. That is the seed, sprout and sapling frames and nothing else: a stump, a
-        /// bush-stage tree and a crop are all 16x32 and stay as they were, a canopy is 48x96.
-        /// </para>
-        ///
-        /// <para>
-        /// Both earlier builds of this were too broad and both were caught on screen. Narrowing
-        /// everything turned a tree's shadow into a walking stick; narrowing everything a tile
-        /// wide took the shadow off stumps, which are as fat as they are tall and have nothing
-        /// left once a third of their width is gone. What is left is the case the narrowing was
-        /// actually for, a caster so small its shadow is a few pixels that must carry a direction
-        /// on their own.
-        /// </para>
-        /// </summary>
-        private const int MaxNarrowSpriteSize = 16;
-
-        /// <summary>
-        /// How wide to draw this shadow, as a fraction of the sprite's width.
-        ///
-        /// <para>
-        /// The tip of a sheared shadow always lands at the sun's angle. What the eye reads is the
-        /// shape, and the arithmetic is blunt about this: a shadow's bounding box can only sit at
-        /// the sun's own angle when the shadow has no width at all. A person's shadow looks right
-        /// not because its box matches but because it is a long thin bar, about twice as long as it
-        /// is wide, and a bar carries its direction in its own shape.
-        /// </para>
-        ///
-        /// <para>
-        /// So the test is that ratio, not the lean on its own. A crop reaches about six tenths of
-        /// its own width and reads as a flat smear; narrowing it until it reaches as far as a person
-        /// does, relatively, is what makes the same angle visible. Nothing is widened, nothing goes
-        /// below <see cref="MinShadowNarrow"/>, and it eases in with the lean so that noon, where
-        /// there is no direction to show, is untouched.
-        /// </para>
-        ///
-        /// <para>
-        /// The height here is the SOURCE rect's, which for a crop is half transparent padding, so
-        /// the reach is over-stated by whatever a sprite does not fill. That is why the target is a
-        /// setting and not a constant: reading the real silhouette would mean a per-sprite pixel
-        /// readback, and this mod has been bitten by that before.
-        /// </para>
-        /// </summary>
-        private static float NarrowForLean(float spriteWidth, float spriteHeight, float shear, float clarity)
-        {
-            if (clarity <= 0f || spriteWidth <= 0f || spriteHeight <= 0f)
-                return 1f;
-            if (spriteWidth > MaxNarrowSpriteSize || spriteHeight > MaxNarrowSpriteSize)
-                return 1f;                                  // big enough that its shadow is a shape
-            float lean = Math.Abs(shear) * spriteHeight;
-            float target = spriteWidth * MathHelper.Lerp(1f, PersonLeanDominance, clarity);
-            if (lean >= target)
-                return 1f;                                  // already reaches as far as a person's
-            float needed = Math.Max(MinShadowNarrow, lean / target);
-            float leaning = Math.Min(1f, Math.Abs(shear) / NarrowFadeShear);
-            return MathHelper.Lerp(1f, needed, leaning);
         }
 
         /// <summary>The kinds of caster that carry their own shadow length and softness. The split
@@ -506,7 +459,8 @@ namespace SDVRadiance
                 _kindSoftness[(int)kind] = SoftnessFor(config, kind);
                 _kindLean[(int)kind] = LeanFor(config, kind);
             }
-            _leanClarity = config.ShadowLeanClarity;
+            _groundForeshortening = config.ShadowGroundForeshortening;
+            _characterGroundForeshortening = config.ShadowCharacterGroundForeshortening;
         }
 
         /// <summary>This caster's own reach: its kind's ceiling, scaled by the overall length slider.
@@ -583,13 +537,15 @@ namespace SDVRadiance
             DiagnosticMonitor.Log($"[shadow] tile column not baked: {why} - it draws banded.", LogLevel.Debug);
         }
 
-        private void NoteOversize(Rectangle src, float shear)
+        private void NoteOversize(Rectangle src, Vector2 baseOrigin, ShadowProjection projection)
         {
             if (DiagnosticMonitor == null || !_oversizeLogged.Add(src))
                 return;
             float coarsest = BakeScales[^1];
-            float needW = src.Width * coarsest + Math.Abs(shear) * src.Height * coarsest;
-            float needH = src.Height * coarsest;
+            projection.Bounds(src.Width * coarsest, src.Height * coarsest, baseOrigin.X * coarsest, baseOrigin.Y * coarsest,
+                out float left, out float right, out float top, out float bottom);
+            float needW = right - left;
+            float needH = bottom - top;
             DiagnosticMonitor.Log($"[shadow] sprite {src.Width}x{src.Height} needs {needW:0}x{needH:0} even baked at "
                 + $"{coarsest:0}x - larger than the biggest slot ({ObjectSlotClasses[^1].W}x{ObjectSlotClasses[^1].H}), "
                 + "so it draws banded.", LogLevel.Debug);
@@ -654,19 +610,46 @@ namespace SDVRadiance
             return false;
         }
 
-        /// <summary>The same question for a sprite, whose silhouette is its source rect.</summary>
-        private bool ChooseBakeFit(Rectangle src, float shear, float blurPx, RenderTarget2D? into,
-            out int slotClass, out float scale, out float blurTexels)
-            => ChooseBakeFit(src.IsEmpty ? 0f : src.Width, src.IsEmpty ? 0f : src.Height, shear, blurPx, into,
-                             out slotClass, out scale, out blurTexels);
+        /// <summary>The same question for a sprite laid down by a projection. The laid-down
+        /// bounds come back with the answer, because the bake places the feet from them and the
+        /// content rect is read off them, and they are not worth computing twice.</summary>
+        private bool ChooseBakeFit(Rectangle src, Vector2 baseOrigin, ShadowProjection projection, float blurPx, RenderTarget2D? into,
+            out int slotClass, out float scale, out float blurTexels,
+            out float left, out float right, out float top, out float bottom)
+        {
+            left = right = top = bottom = 0f;
+            if (!src.IsEmpty)
+            {
+                foreach (float s in BakeScales)
+                {
+                    float texelBlur = blurPx * (s / 4f);
+                    projection.Bounds(src.Width * s, src.Height * s, baseOrigin.X * s, baseOrigin.Y * s,
+                        out left, out right, out top, out bottom);
+                    float needW = right - left + 2f * texelBlur;
+                    float needH = bottom - top + 2f * texelBlur + 1f;
+                    int cls = into != null ? ClassOfSlot(into) : ObjectSlotClassFor(needW, needH);
+                    if (cls < 0)
+                        continue;
+                    if (into != null && (needW > into.Width || needH > into.Height - 8f))
+                        continue;
+                    slotClass = cls;
+                    scale = s;
+                    blurTexels = texelBlur;
+                    return true;
+                }
+            }
+            slotClass = -1;
+            scale = 0f;
+            blurTexels = 0f;
+            return false;
+        }
 
-        /// <summary>Would a bake of this sprite, at this lean, fit any slot at any scale? The same
-        /// arithmetic <see cref="BakeObjectSprite"/> does before it commits to anything, asked by the
-        /// draw path so a hopeless request is never made rather than being made and refused every
-        /// frame.</summary>
-        private bool ObjectBakeCouldFit(Rectangle src, float shear, float blurPx, float narrow)
-            => ChooseBakeFit(src.IsEmpty ? 0f : src.Width * narrow, src.IsEmpty ? 0f : src.Height,
-                             shear, blurPx, null, out _, out _, out _);
+        /// <summary>Would a bake of this sprite, laid down like this, fit any slot at any scale? The
+        /// same arithmetic <see cref="BakeObjectSprite"/> does before it commits to anything, asked
+        /// by the draw path so a hopeless request is never made rather than being made and refused
+        /// every frame.</summary>
+        private bool ObjectBakeCouldFit(Rectangle src, Vector2 baseOrigin, ShadowProjection projection, float blurPx)
+            => ChooseBakeFit(src, baseOrigin, projection, blurPx, null, out _, out _, out _, out _, out _, out _, out _);
 
         /// <summary>The smallest slot class that fits a silhouette of this size, or -1 if even the
         /// largest cannot take it.</summary>
@@ -971,8 +954,14 @@ namespace SDVRadiance
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 6f));
             float depth = MathHelper.Clamp(((tile.Y + 1f) * 64f) / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
             EmitObject(spriteBatch, texture, src, feet, new Vector2(src.Width / 2f, src.Height),
-                alpha, rot, stretch, depth, blur, ObjectHeadFade);
+                alpha, rot, stretch, depth, blur, ObjectHeadFade, SpriteEffects.None, GeometryOf(o));
         }
+
+        /// <summary>What a placed object is for its shadow: a fence, a gate or a sign is a flat
+        /// face standing on its edge, and everything else placed on a tile stands on a footprint.
+        /// By the game's own class, so a mod's fence is a fence.</summary>
+        private static ShadowGeometry GeometryOf(SObject o)
+            => o is Fence || o is Sign ? ShadowGeometry.Card : ShadowGeometry.Solid;
 
         /// <summary>
         /// Buildings are too tall for an upright silhouette (it juts up over the building itself),
@@ -1041,7 +1030,7 @@ namespace SDVRadiance
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 12f));
             float depth = MathHelper.Clamp(((tile.Y + 1f) * 64f) / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
             EmitObject(spriteBatch, texture, src, feet, new Vector2(src.Width / 2f, src.Height),
-                alpha, rot, stretch, depth, blur, ObjectHeadFade);
+                alpha, rot, stretch, depth, blur, ObjectHeadFade, SpriteEffects.None, GeometryOf(o));
         }
 
         /// <summary>How wide and how tall a mass of opaque Buildings art may be and still be a
@@ -1310,7 +1299,7 @@ namespace SDVRadiance
             // The baked silhouette is one cohesive image — flatten it vertically and lean it
             // about the feet as a single unit (no per-layer fragmenting), softened at the edges.
             DrawSoft(spriteBatch, Taps9, _playerRenderTarget, null, feet, Color.White, alpha, rot, _playerFeetInRenderTarget,
-                new Vector2(1f, stretch), depth, SpriteEffects.None, blur);
+                new Vector2(CharacterAcrossScale(rot, stretch), stretch), depth, SpriteEffects.None, blur);
         }
     }
 }

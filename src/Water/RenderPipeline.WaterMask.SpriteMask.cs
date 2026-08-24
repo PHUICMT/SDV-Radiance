@@ -186,6 +186,8 @@ namespace SDVRadiance
 
         private void BakeWaterSpriteMaskCore()
         {
+            // Close off what the location drew for itself last frame before anything reads it.
+            LocationDrawHook.BeginFrame();
             SpriteMaskReady = false;
             GameLocation? location = Game1.currentLocation;
             if (location == null || !_hasWaterInMask)
@@ -220,12 +222,41 @@ namespace SDVRadiance
                 StampTerrainFeatures(spriteBatch, location);
                 StampLargeTerrainFeatures(spriteBatch, location);
                 StampBuildings(spriteBatch, location);
+                StampLocationsOwnArt(spriteBatch, location);
                 spriteBatch.End();
                 SpriteMaskReady = true;
             }
             finally
             {
                 _device.SetRenderTargets(prev);
+            }
+        }
+
+        /// <summary>Whatever the location painted for itself last frame, from the rectangles its
+        /// own draw calls used.</summary>
+        /// <remarks>
+        /// Ginger Island's boat is the case this exists for: it lives in the location's fields, so
+        /// no layer, label, entity list or building carries it, and the ripple ran over the hull.
+        /// The rectangles come from the game's draw rather than from anything measured here - see
+        /// <see cref="LocationDrawHook"/> for why guessing the source rect was not an option. They
+        /// are kept in world pixels and brought back to this frame's camera here, so a panning
+        /// camera reads the carve on the hull rather than one frame behind it.
+        /// </remarks>
+        private void StampLocationsOwnArt(SpriteBatch spriteBatch, GameLocation location)
+        {
+            // The art itself, not a box around it: the mask is read by alpha, so the sea keeps
+            // its ripple everywhere the boat's own sprite is transparent. A solid rectangle here
+            // cut a visible square out of the water around the mast on the first try.
+            foreach (LocationDrawHook.Stamp stamp in LocationDrawHook.Stamps)
+            {
+                if (!ReferenceEquals(stamp.Owner, location))
+                    continue;
+                if (stamp.Texture == null || stamp.Texture.IsDisposed)
+                    continue;
+                Vector2 topLeftOnScreen = new(stamp.WorldTopLeft.X - Game1.viewport.X,
+                                              stamp.WorldTopLeft.Y - Game1.viewport.Y);
+                spriteBatch.Draw(stamp.Texture, topLeftOnScreen, stamp.Source, Color.White, 0f,
+                                 Vector2.Zero, stamp.Scale, stamp.Effects, 0f);
             }
         }
 

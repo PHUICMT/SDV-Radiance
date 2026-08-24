@@ -85,6 +85,15 @@ namespace SDVRadiance
         public bool[]? SpeckVisitedFlags;
         public int[]? SpeckComponentMembers;
 
+        // ---- Pass E2 (plunge churn) ----
+
+        /// <summary>Four bytes per texel. Red: how far below a falling face the water sits, 0 at
+        /// the foot of the fall to 255 six tiles away or nowhere near one. Green: how far above
+        /// the face in its own column, 0 on the lip to 255 two tiles up or with no fall below.</summary>
+        public byte[]? PlungeChurnPixels;
+        /// <summary>Vertical scratch for the same pass: rows since the last falling texel above.</summary>
+        public int[]? PlungeRowsSinceFall;
+
         // ---- Pass F (SDF) ----
 
         /// <summary>Signed shore distance, 128 = waterline, ±4 per texel.</summary>

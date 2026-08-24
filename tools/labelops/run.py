@@ -85,10 +85,21 @@ def status(done, total, started, versions, label):
 # ---- what is done already ---------------------------------------------------------------------
 
 def profiles_on_disk():
+    """The sweep plan, in run order: Solo passes (one vanilla-map editor each, outdoor maps
+    first as gensoloprofiles.py numbered them), then the Batch passes of map adders. MapPass
+    profiles from the older colouring are ignored once a Solo plan exists; with no Solo plan
+    they are the plan, so an old run can still be resumed."""
     if not os.path.isdir(PROFILE_DIR):
         return []
-    return sweep.in_pass_order(os.path.splitext(f)[0] for f in os.listdir(PROFILE_DIR)
-                              if f.startswith("MapPass-") and f.endswith(".json"))
+    names = [os.path.splitext(f)[0] for f in os.listdir(PROFILE_DIR) if f.endswith(".json")]
+    solos = sweep.in_pass_order(n for n in names if n.startswith("Solo-"))
+    batches = sweep.in_pass_order(n for n in names if n.startswith("Batch-"))
+    # Redo passes go LAST: they are a correction to passes already in the dump, and the dump
+    # keeps a location once per version, so a redo can only ever add what its original missed.
+    redos = sweep.in_pass_order(n for n in names if n.startswith("Redo-"))
+    if solos or batches or redos:
+        return solos + batches + redos
+    return sweep.in_pass_order(n for n in names if n.startswith("MapPass-"))
 
 
 def run_stage(name, script, arguments=()):
@@ -119,7 +130,7 @@ def move_aside():
 def do_sweep():
     wanted = profiles_on_disk()
     if not wanted:
-        print(paint("  no MapPass profiles: run the profiles stage first", "31"))
+        print(paint("  no Solo/Batch/MapPass profiles: run the profiles stage first", "31"))
         return False
     wanted = (["Label-BaseArt"] if os.path.exists(os.path.join(PROFILE_DIR, "Label-BaseArt.json"))
               else []) + wanted
@@ -198,7 +209,7 @@ def main():
     rule("SDV-Radiance label corpus")
     done, versions = sweep.dump_state()
     print(f"  dump      : {versions:,} map version(s) from {len(done)} pass(es)")
-    print(f"  profiles  : {len(profiles_on_disk())} MapPass on disk")
+    print(f"  profiles  : {len(profiles_on_disk())} passes planned on disk")
     print(f"  stages    : {' -> '.join(plan)}")
 
     if arguments.fresh:
@@ -223,8 +234,9 @@ def main():
             if done and not arguments.fresh:
                 sys.exit(paint("refusing to recolour: the dump already holds "
                                f"{len(done)} pass(es) named by position. Use --fresh.", "31"))
-            if not run_stage("1  profiles - colouring the library into passes", "genmapprofiles.py"):
-                sys.exit("the colouring failed")
+            if not run_stage("1  profiles - one pass per vanilla-map editor, batches for the rest",
+                             "gensoloprofiles.py"):
+                sys.exit("the profile plan failed")
 
         elif stage == "sweep":
             rule("2  sweep - one game session per pass")
@@ -243,6 +255,22 @@ def main():
 
         elif stage == "attribute":
             run_stage("4  attribute - which mod made each version", "whoowns.py")
+            # What the labeller actually reads. Left as a manual step it is the one thing
+            # between a finished sweep and a usable tool, and a sweep that ends at five in the
+            # morning should not need somebody awake to finish it.
+            run_stage("4b attribute - which mod uses which sheet, and what is left",
+                      "modsheets.py")
+            # Suggestions only. Nothing is written into the labels here: copying a label onto a
+            # tile is twinlabels.py --apply, and that is a decision for a person to make with
+            # the report in front of them. --recolour widens the same report to the sheets that
+            # are a base-game sheet repainted, whose tiles match by shading rather than by pixel.
+            run_stage("4c twins - tiles that are pixel-for-pixel one already labelled",
+                      "twinlabels.py", ["--suggest", "--recolour"])
+            # And the queue the whole vanilla-first argument rests on: how much mod work each
+            # base-game tile would finish. Written here because it is read straight off the sheet
+            # rows in the labeller, and a number nobody can see decides nothing.
+            run_stage("4d vanilla - what painting each base-game tile would finish",
+                      "vanillacopies.py", ["--write"])
 
     done, versions = sweep.dump_state()
     rule("done")

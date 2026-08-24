@@ -2,6 +2,254 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.6.2 (in progress)
+
+### Added
+
+- **A new water.** The water page now opens with one choice, **1.6.2 water** or **Classic**,
+  and shows only the chosen water's own dials. Classic is the water of every release up to
+  1.6.1, untouched, with its three looks and their distortion and banding underneath it, so a
+  player who liked it keeps it. The 1.6.2 water is a different mirror, built from what water
+  and a camera actually do rather than a fourth pair of numbers for the old one. The image is moved by a field of three
+  travelling ripple octaves, the slow wide one dominant, instead of by the surface's single
+  sine, because what the eye reads as liquid is that spectrum of movement, not the accuracy of
+  the image (one sine reads as jelly). The movement is anchored at the contact line: nothing
+  moves at the waterline and it grows over the first tiles of depth, which is what keeps a
+  reflection standing on the thing casting it instead of drifting beside it like a sticker.
+  Reflected people and reflected scenery read the same field at the same amplitude, where the
+  classic looks have always moved them by different amounts. With depth the reflection gives
+  way to the water's own colour, sharp under the far bank and thinning toward you, its contrast
+  folds toward a mid tone (light reflects darker, dark reflects lighter, as a photograph of a
+  lake shows), it loses a little saturation, it can be drawn longer than a flat mirror
+  would (Vertical stretch, 1 by default), and it answers the camera: the image skews with its place on the screen the way an
+  image under the surface does for a camera that is not straight overhead, so the reflection
+  shifts against the ground as you walk instead of being a static flip.
+
+  Its nine settings, Wobble, Choppiness, Parallax, Depth fade, Vertical stretch, Edge
+  softness (the ripples' bands cut a sloping reflected edge into teeth; this melts their tips),
+  Waterfall churn, Churn reach and Fade before the lip,
+  are in the settings menu under their own heading and in the tuner under its button. Softness, depth and
+  reach apply to both waters.
+
+- **The pool under a waterfall is churn, not a mirror.** The water at the foot of a fall is
+  full of air and torn up; it reflects nothing there and settles back over the next few
+  tiles. The mirror used to run right up to the foam, and what it showed was the cliff and
+  the falling column above, a flat grey sheet laid across the pool. The mask build now
+  measures how far below the nearest falling face each texel of water sits, and the 1.6.2
+  water lets its reflection go by that distance: none at the foot, back in full three tiles
+  down by default, the churned water itself a little paler and milkier than the pool around
+  it, and a body standing in the plunge loses most of its reflection the same way. Two
+  settings, **Waterfall churn** (how fully the mirror gives way) and **Churn reach** (how many
+  tiles it takes to come back). The same field holds how far above a fall's lip each texel of
+  the stream sits, and the stream's reflection now lets go over the last stretch before the
+  edge, half a tile by default (**Fade before the lip**), instead of stopping on the one pixel
+  row where the face begins. The classic water is untouched.
+
+- **A falling leaf is bent by the water's own wave.** Petals and leaves already bent as they
+  crossed a pond, because the surface bends everything drawn over it, and that turned out to be
+  the nicest thing about them. It is no longer only over water. The leaf is drawn in eight bands
+  and each band asks the same ripple field the water pass asks, at its own place in the world and
+  off the same clock, so the wave runs along the leaf rather than shifting it as a block, and a
+  leaf drifting across the shoreline is bent by one continuous wave the whole way instead of
+  changing character at the water's edge. The bands turn with the leaf, so one lying on its side
+  bends along the way it is pointing.
+
+  One setting, **Flutter**, under Blossom and leaves in the settings menu and the tuner: 1 bends a
+  leaf exactly as much as the water does, and 0 is the flat fall of every release before this one.
+  It ships at 0.6. Where a leaf goes and how fast it falls are untouched. Only petals and leaves
+  bend; sparks, motes and fireflies are points of light with no face for a wave to run along, and
+  they are drawn exactly as they were.
+
+- **Storms, and which way the weather falls.** Three settings in the weather page. A storm's
+  rain is now thicker than plain rain, by a chosen amount (**Storm density**, 1.6 times by
+  default, eased in and out with the storm itself); **Rain slant** sets how far the wind
+  leans the rain and its streaks; and **Petal fall angle** does the same for the leaves and
+  petals the wind carries, which used to share the rain's number.
+
+- **The tuner shows what is chosen.** Every row of choices, the look presets, your saved
+  looks, the quality presets, the water and the classic water's look, now draws the one in
+  effect as a gold box with a dark rim. A saved look stays lit only while the live settings
+  are still exactly what it holds. The quality presets remember which one was picked last.
+
+- **Water is dithered before it is written.** A reflection is made of slow gradients, and eight
+  bits cannot hold a slow gradient without steps: those steps were the colour banding reported
+  on water, and a band edge is also where a surface flickers. One LSB of triangular
+  interleaved-gradient noise at the end of the water pass, static across frames, for every
+  look. It is correctness rather than a look, so it has no setting.
+
+- **Ground foreshortening for people.** The solid projection below lays a person down at the
+  ground's own flatness, and a person is a thin figure: at 0.58 a sixteen-texel sprite came out
+  as a thread at dawn, thinner than the figure casting it reads. People, the player, other
+  players and every NPC, now have their own number, in the settings menu and the tuner beside
+  the general one. It ships at 1, which lays a person down at their full width, the way
+  characters were drawn in every release before this one; lower it to bring them nearer to the
+  trees. Farm animals are bulky and follow the general setting.
+
+### Changed
+
+- **A solid thing's shadow lies down the way a solid thing's shadow does.** Every shadow this
+  mod casts is a sprite laid on the ground by the sun, and until now every sprite was laid down
+  as if it were a flat card standing on its bottom edge: the card's width stays level on the
+  screen and only its height leans away from the sun. That is exactly right for a fence, a gate
+  or a sign, whose art is the object's one face. It is wrong for a bush, a tree, a crop or a
+  person, which the sun sees from the side, not from where the camera stands. What lands on the
+  ground behind a bush is the bush's silhouette lying ALONG the sun's direction with its width
+  running across that direction, and the ground itself is seen at a slant, so that width is
+  foreshortened the way everything lying on the ground is.
+
+  Each caster is now laid down as what it is. Fences, gates, signs and props painted into the
+  map keep the card projection. Everything that stands on a footprint, people and animals,
+  trees, bushes, crops, grass, forage, machines and furniture, gets the solid one. The tip of
+  every shadow lands where it always did, because that is the sun and it is the same for both,
+  so nothing points a different way; what changes is the shape between the feet and the tip. A
+  crop at a low sun used to be a wide smear lying across the light; it is now a shape lying
+  along it, because that is the shape a crop's shadow has. Nothing is narrowed or squeezed to
+  get there: the width is the sprite's own width, lying where the ground puts it.
+
+  Decided by the game's own class for each thing, never by its sprite or its name, so anything
+  a mod adds through those classes is laid down the same way.
+
+  One new setting, **Ground foreshortening**: how much flatter than wide a circle drawn on the
+  ground looks. 1 is a ground seen from straight above, where a sideways shadow stands on its
+  edge, which is how characters were always drawn and why a dawn shadow could read as someone
+  lying down rather than as a shadow. The default is 0.58, which is not a taste: the oval the
+  game itself draws under every character is 12 texels wide and 7 tall, and 7 over 12 is the
+  one statement the art makes about how flat its ground is.
+
+- **Less garbage per frame.** An audit pass over the whole pipeline removed the small
+  allocations that ran every frame: the twice-a-frame query for the bound render target, the
+  reflection pass's two gather lists on every frame a creature is near water, and the tuner
+  measuring every label's width on every frame it is open (it now measures each string once).
+  None of it changes a pixel; it is work the garbage collector no longer has to clean up
+  behind the mod.
+
+### Fixed
+
+- **The boat at Ginger Island, and the parrots over it, are not water.** A boat drawn at a dock
+  had the ripple running over its hull, and a parrot flying past was warped with the sea below
+  it. Neither is a tile, a building or a terrain feature: the location keeps them in fields of
+  its own and paints them itself, so nothing the water could read knew they were there. Every
+  location that draws something of its own is now watched while it does it, and whatever it
+  paints keeps its own shape out of the effect. This covers Willy's boat as well, reported since
+  1.3.0. A boat that a map places as ordinary tiles is a separate case and still needs a label:
+  the pirate ships in East Scarp and a boat in Stardew Meadows are not covered yet.
+
+- **A creature that swims below the surface no longer has a reflection on it.** A duck floats
+  and must be mirrored; a jellyfish is under the water and must not be, and the reflection pass
+  had no way to tell them apart, so modded sea life was reflected off the water it was inside.
+  A creature that declares itself underwater is now believed and left out. Anything that says
+  nothing keeps the reflection it always had.
+
+- **The surf that runs up a beach no longer sways or reflects.** A shoreline crest is drawn by
+  the map on its own frames, and the horizontal ripple was swinging it while the water below
+  mirrored it back. The crests on the beach and island sheets are labelled as falling water,
+  which takes no surface wave and mirrors nothing.
+
+- **Window reflections come back on repainted buildings.** The art guard added in 1.6.1 stopped
+  glass being reflected in the wrong place on a repainted sheet, but it could not put it in the
+  right one, so a town running several art packs at once had quiet windows. Labels painted
+  against those packs' own pictures now ship with the mod: on the tested profile, panes on
+  screen at Pierre's went from 3 to 11 and the tiles the guard had to refuse from 63 to 1.
+
+- **A creature's reflection is drawn by the creature, not guessed at.** A modded animal is
+  usually a character that draws itself its own way, with its own origin, its own scale and its
+  own offsets, and the mirror was rebuilding all of that from a collision box that knows none of
+  it. The reflection came out beside the animal instead of under it, and stayed behind when it
+  swam; it was reported about the ducks of SH's Wild Animals, and the sprite mask had already been
+  fixed the same way in 1.6.1, so this is the half that was missed.
+
+  Any character whose draw is its own is now asked to draw its own mirror. Where its body ends is
+  read from that drawing rather than assumed, once per creature, sheet and animation frame, so the
+  reflection turns over on the line where the animal meets the water. Measured at the forest pond,
+  a duck's reflection sat 33 px below the duck before and touches it now.
+
+  Nothing here names a mod: the test is whether the character draws itself, so a creature from a
+  mod that does not exist yet comes out right for the same reason. Up to sixteen bodies near water
+  at once, after which the rest fall back to the old built stamp and the log says how many.
+
+  `radiance_reflect` now lists the characters near water and says, for each, whether its mirror is
+  drawn or predicted.
+
+  A creature can still sit a few pixels above its own reflection, and where it does, the reason is
+  in its art: the mirror turns the image over on the lowest solid row the creature drew, and some
+  sprites paint splash or feet below the line the eye reads as the waterline. There is no way to
+  tell those apart from a tail or a pair of legs without guessing, and guessing there would cut the
+  legs off somebody else, so the few pixels stay.
+
+- **A farm animal's reflection is drawn by the animal too.** The fix above covered the creatures
+  that come from mods and left the farm's own animals on the guessed path, where the mirror was
+  rebuilt from a sheet rectangle at a fixed size. That path cannot see anything the animal decides
+  for itself: a baby is drawn smaller than its frame, a duck in the water is drawn with its
+  underside cut away and a splash beneath it, and an animal in a hat is wearing one. The
+  reflections were the wrong size, and a paddling duck was mirrored as a whole duck standing on
+  the pond. Every farm animal now draws its own mirror, on the same frame and by the same
+  question the water mask has been asking them since 1.6.1, and its reflection turns over on the
+  line where its body really ends. `radiance_reflect` lists the animals near water with the same
+  drawn-or-predicted answer it gives for characters.
+
+- **A reflection ends on a waterfall's painted lip, not on a line above it.** The falling
+  face of a waterfall takes the mirror away from the water it covers, and it used to take it
+  from every row the face touches across the whole tile, which at the top of a fall cut the
+  stream's reflection off on a straight line a tile above the lip: the spray painted above
+  the edge was enough to claim the rows under it. Each column is now read for what the fall
+  does there. Where the face starts inside the tile the mirror runs down to the face's own
+  first row, which is the painted edge; where the fall comes in from the tile above it is
+  scrubbed from the top as before, and the water beside the fall at the foot is still the
+  churn it always was. The foam at the foot keeps its painted bottom edge the same way.
+
+### Removed
+
+- **Lean clarity.** It squeezed the smallest shadows across the sun so that their direction
+  would read. That was standing in for the geometry above: a seedling's shadow lies along the
+  sun because that is where a seedling's shadow lies, not because it was narrowed, and with the
+  projection right there is nothing left for the squeeze to do. Gone from the config file, the
+  settings menu and the tuner; a `ShadowLeanClarity` line in an existing config.json is ignored
+  and dropped the next time the file is saved.
+
+### For translators
+
+**The new water adds 49 keys and rewords 2.** The choice of water: `tuner.watermodel`,
+`tuner.watermodel.modern`, `tuner.watermodel.classic`, `help.watermodel.modern`,
+`help.watermodel.classic`, `config.water.model.name`, `config.water.model.tooltip`,
+`config.water.model.modern` and `config.water.model.classic`; the two headings
+`config.water.classic.title` and `.tooltip`, `config.water.modern.title` and `.tooltip`; and
+for each of the 1.6.2 water's nine settings, `wobble`, `choppiness`, `parallax`, `fresnel`,
+`stretch`, `edgesoftness`, `plungechurn`, `plungereach` and `lipfade`, the four keys `config.water.modern<name>.name`, `config.water.modern<name>.tooltip`,
+`tuner.watermodern<name>` and `help.watermodern<name>`. The reworded two each gained one
+sentence at the end, so an existing translation can be kept and added to:
+`config.water.reflstyle.tooltip` now says it applies to the classic water only, and
+`config.water.reflectdepth.tooltip` now names what 0.1 of the depth dial leaves, since the dial
+reaches that far in this release. "Modern"
+and "fresnel" are key names only: the player-facing words are "1.6.2 water" and "Depth fade",
+and "Parallax" may be carried as the loan word or as "the image moves with the camera".
+"Plunge" is the pool a waterfall lands in and "churn" is that water torn up and full of air;
+the player-facing words are "Waterfall churn" and "Churn reach". The "lip" is the edge a
+stream goes over to become the fall.
+
+**The creature-reflection fix and the waterfall lip work add no keys.** They change what is drawn
+and what `radiance_reflect` prints, and the console is not translated.
+
+**Particles: 4 new keys.** `config.particles.petalsflutter.name`, `.tooltip`,
+`tuner.particlepetalsflutter` and `help.particlepetalsflutter`. "Flutter" is the leaf bending as
+it turns in the air, not the path it takes: the setting changes the shape only.
+
+**Weather: 12 new keys.** For each of `stormdensity`, `rainslant` and `windslant`, the four
+keys `config.precipitation.<name>.name`, `config.precipitation.<name>.tooltip`,
+`tuner.precipitation<name>` and `help.precipitation<name>`. "Wind slant" is the angle the
+petals and leaves fall at, not the wind's own direction: the player-facing word is "Petal
+fall angle".
+
+**Shadows: 8 new keys, 4 removed.** The removed ones are `config.shadows.leanclarity.name`,
+`config.shadows.leanclarity.tooltip`, `tuner.shadowleanclarity` and `help.shadowleanclarity`.
+The new ones take their places: `config.shadows.groundforeshortening.name` and `.tooltip`,
+`tuner.shadowgroundforeshortening` and `help.shadowgroundforeshortening`, and the people's own
+set beside them, `config.shadows.charactergroundforeshortening.name` and `.tooltip`,
+`tuner.shadowcharactergroundforeshortening` and `help.shadowcharactergroundforeshortening`.
+The word to carry is that this is about how flat the GROUND looks, not about the shadow's
+length or darkness: a circle on the ground drawn as an oval, and how much shorter than wide that
+oval is. The ground's own tooltip does not list a person among what it shapes; it points at the
+people's setting instead.
+
 ## 1.6.1
 
 ### Added

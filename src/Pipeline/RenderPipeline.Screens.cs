@@ -37,6 +37,7 @@ namespace SDVRadiance
             public Texture2D? WaterMask;
             public Texture2D? WaterSignedDistance;
             public Texture2D? WaterRealShoreDistance;
+            public Texture2D? WaterPlungeChurn;
             /// <summary>Published copy of the composed water flags, for the "is there water near
             /// this sprite" test. A copy rather than the compose buffer itself: that one is written
             /// by a worker thread and belongs to whichever rebuild is running, not to a screen.</summary>
@@ -101,6 +102,7 @@ namespace SDVRadiance
                 WaterMask?.Dispose();
                 WaterSignedDistance?.Dispose();
                 WaterRealShoreDistance?.Dispose();
+                WaterPlungeChurn?.Dispose();
                 OccluderMask?.Dispose();
                 FloodOccluderMask?.Dispose();
                 MirrorSceneCache?.Dispose();
@@ -146,6 +148,7 @@ namespace SDVRadiance
             s.WaterMask = _waterMask;
             s.WaterSignedDistance = _waterSignedDistanceTexture;
             s.WaterRealShoreDistance = _waterRealShoreDistanceTexture;
+            s.WaterPlungeChurn = _waterPlungeChurnTexture;
             s.WaterTilesInMask = _waterTilesInMask;
             s.WaterTilesVersion = _waterTilesVersion;
             s.LastWaterLocation = _lastWaterLocation;
@@ -218,6 +221,7 @@ namespace SDVRadiance
             _waterMask = s.WaterMask;
             _waterSignedDistanceTexture = s.WaterSignedDistance;
             _waterRealShoreDistanceTexture = s.WaterRealShoreDistance;
+            _waterPlungeChurnTexture = s.WaterPlungeChurn;
             _waterTilesInMask = s.WaterTilesInMask;
             _waterTilesVersion = s.WaterTilesVersion;
             _lastWaterLocation = s.LastWaterLocation;

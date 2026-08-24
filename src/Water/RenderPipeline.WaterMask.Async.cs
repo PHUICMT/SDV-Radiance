@@ -1490,7 +1490,127 @@ namespace SDVRadiance
                 return;
 
             SmoothShorelineAndEmit(tilesW, tilesH);
+            BuildPlungeChurnField(tilesW, tilesH);
             BuildShorelineDistanceField(tilesW, tilesH);
+        }
+
+        /// <summary>Six tiles: the farthest a falling face is felt below it, and the scale of the red byte.</summary>
+        private const int PlungeChurnRangeTexels = 6 * MaskTexelsPerTile;
+        /// <summary>Two tiles: the farthest a falling face is felt above it, and the scale of the green byte.</summary>
+        private const int LipApproachRangeTexels = 2 * MaskTexelsPerTile;
+        /// <summary>How far to either side of a texel the nearest falling face is looked for.</summary>
+        private const int PlungeChurnSideTexels = 24;
+        /// <summary>Bytes per texel of the fall-distance texture (Color: red below, green above).</summary>
+        private const int FallDistanceBytesPerTexel = 4;
+
+        /// <summary>Pass E2 - how far below, and how far above, a falling face each water texel sits.</summary>
+            // Pass E2 — the PLUNGE and the LIP. The pool at the foot of a waterfall is aerated
+            // and torn up and mirrors nothing there; it settles back over the next few tiles. And
+            // the stream above a fall's lip should let its mirror go gently over the last stretch
+            // before the edge rather than on the one texel where the face begins. The shader
+            // cannot find the fall from a pixel (the face is above or below it, out of any single
+            // tap's reach), so both distances are measured here, once per rebuild, and handed
+            // over as two bytes per texel: red is the distance BELOW the nearest face, 0 right
+            // under the foam and 255 six tiles away or nowhere near a fall; green is the distance
+            // ABOVE the face in this texel's own column, 0 on the lip and 255 two tiles up or
+            // with no fall beneath.
+            //
+            // Down each column, count the rows since the last falling texel above, so only water
+            // BELOW a fall is reached for the red byte; up each column, the rows since the last
+            // falling texel below, for the green one. Then along each row, take the nearest of
+            // the downward counts within a tile and a half to either side as a straight-line
+            // distance, which rounds the plunge off under the column instead of cutting it to
+            // the column's own width. Rows with nothing in range are skipped, and a window with
+            // no falling water at all costs one fill.
+        private void BuildPlungeChurnField(int tilesW, int tilesH)
+        {
+            const int T = MaskTexelsPerTile;
+            int pw = tilesW * T, ph = tilesH * T, pcount = pw * ph;
+            if (_maskScratch.PlungeChurnPixels == null || _maskScratch.PlungeChurnPixels.Length < pcount * FallDistanceBytesPerTexel)
+                _maskScratch.PlungeChurnPixels = new byte[pcount * FallDistanceBytesPerTexel];
+            byte[] fall = _maskScratch.PlungeChurnPixels;
+
+            bool anyFall = false;
+            for (int ti = 0; ti < tilesW * tilesH && !anyFall; ti++)
+                anyFall = _maskScratch.TileFlowBits![ti] != null || _maskScratch.TileFlowFlags![ti];
+            if (!anyFall)
+            {
+                FillFallDistanceFar(fall, 0, pcount);
+                return;
+            }
+
+            if (_maskScratch.PlungeRowsSinceFall == null || _maskScratch.PlungeRowsSinceFall.Length < pcount)
+                _maskScratch.PlungeRowsSinceFall = new int[pcount];
+            int[] since = _maskScratch.PlungeRowsSinceFall;
+            const int Far = PlungeChurnRangeTexels + 1;
+            for (int x = 0; x < pw; x++)
+            {
+                int rows = Far;
+                for (int y = 0; y < ph; y++)
+                {
+                    int tileIdx = (y / T) * tilesW + (x / T);
+                    bool[]? flowB = _maskScratch.TileFlowBits![tileIdx];
+                    bool falling = flowB != null ? flowB[(y % T) * T + (x % T)] : _maskScratch.TileFlowFlags![tileIdx];
+                    rows = falling ? 0 : Math.Min(Far, rows + 1);
+                    since[y * pw + x] = rows;
+                }
+                int rowsAbove = LipApproachRangeTexels;
+                for (int y = ph - 1; y >= 0; y--)
+                {
+                    int p = y * pw + x;
+                    rowsAbove = since[p] == 0 ? 0 : Math.Min(LipApproachRangeTexels, rowsAbove + 1);
+                    fall[p * FallDistanceBytesPerTexel + 1] = _waterEffectBits![p]
+                        ? (byte)(rowsAbove * 255 / LipApproachRangeTexels)
+                        : (byte)255;
+                }
+            }
+
+            for (int y = 0; y < ph; y++)
+            {
+                int rowBase = y * pw;
+                bool anyInRange = false;
+                for (int x = 0; x < pw && !anyInRange; x++)
+                    anyInRange = since[rowBase + x] < Far;
+                for (int x = 0; x < pw; x++)
+                {
+                    int p = rowBase + x;
+                    int b = p * FallDistanceBytesPerTexel;
+                    fall[b + 2] = 0;
+                    fall[b + 3] = 255;
+                    if (!anyInRange || !_waterEffectBits![p])
+                    {
+                        fall[b] = 255;
+                        continue;
+                    }
+                    int nearest = Far * Far;
+                    int x0 = Math.Max(0, x - PlungeChurnSideTexels), x1 = Math.Min(pw - 1, x + PlungeChurnSideTexels);
+                    for (int sx = x0; sx <= x1; sx++)
+                    {
+                        int down = since[rowBase + sx];
+                        if (down >= Far)
+                            continue;
+                        int across = sx - x;
+                        int squared = down * down + across * across;
+                        if (squared < nearest)
+                            nearest = squared;
+                    }
+                    float distance = MathF.Sqrt(nearest);
+                    fall[b] = (byte)Math.Min(255f, distance * (255f / PlungeChurnRangeTexels));
+                }
+            }
+        }
+
+        /// <summary>Every texel in the range reads as far from any fall, above and below.</summary>
+        private static void FillFallDistanceFar(byte[] fall, int firstTexel, int texelCount)
+        {
+            int end = (firstTexel + texelCount) * FallDistanceBytesPerTexel;
+            for (int b = firstTexel * FallDistanceBytesPerTexel; b < end; b += FallDistanceBytesPerTexel)
+            {
+                fall[b] = 255;
+                fall[b + 1] = 255;
+                fall[b + 2] = 0;
+                fall[b + 3] = 255;
+            }
         }
 
 
@@ -2017,34 +2137,107 @@ namespace SDVRadiance
                                   && (_maskScratch.TileFlowFlags![ti] || _maskScratch.TileLavaFlags![ti]);
                     if (!wholeTile && flowB == null && lavaB == null)
                         continue;
-                    // The scrub spans the ROWS the flow/lava covers, across the whole tile — not
-                    // only the falling pixels. Water sitting BESIDE a fall, at the same height, is
-                    // the plunge churn: it carries no flow label of its own, so per-pixel scrubbing
-                    // left it mirroring, its column's run began at the top of the falls tile, and
-                    // Pass E's horizontal smoothing then dragged the pool's own shoreline up with
-                    // it — the reflection climbed into the waterfall. Water BELOW the band (the
-                    // pool sharing the tile) still mirrors, which is what per-pixel was for.
-                    int bandTop = MaskTexelsPerTile, bandBottom = -1;
-                    if (!wholeTile)
+                    if (wholeTile)
                     {
-                        for (int py = 0; py < MaskTexelsPerTile && bandTop == MaskTexelsPerTile; py++)
+                        for (int py = 0; py < MaskTexelsPerTile; py++)
+                        {
+                            int row = (j * MaskTexelsPerTile + py) * pw + i * MaskTexelsPerTile;
                             for (int px = 0; px < MaskTexelsPerTile; px++)
-                                if ((flowB != null && flowB[py * MaskTexelsPerTile + px]) || (lavaB != null && lavaB[py * MaskTexelsPerTile + px]))
-                                { bandTop = py; break; }
-                        for (int py = MaskTexelsPerTile - 1; py >= 0 && bandBottom < 0; py--)
-                            for (int px = 0; px < MaskTexelsPerTile; px++)
-                                if ((flowB != null && flowB[py * MaskTexelsPerTile + px]) || (lavaB != null && lavaB[py * MaskTexelsPerTile + px]))
-                                { bandBottom = py; break; }
-                    }
-                    for (int py = 0; py < MaskTexelsPerTile; py++)
-                    {
-                        int row = (j * MaskTexelsPerTile + py) * pw + i * MaskTexelsPerTile;
-                        bool inBand = py >= bandTop && py <= bandBottom;
-                        for (int px = 0; px < MaskTexelsPerTile; px++)
-                            if (wholeTile || inBand)
                                 _waterMarchBits![row + px] = false;
+                        }
+                        continue;
                     }
+                    ScrubFallingColumns(j, i, tilesW, pw, flowB, lavaB);
                 }
+        }
+
+        /// <summary>Whether the flow or lava bits of one tile mark the given texel.</summary>
+        private static bool LiquidFaceAt(bool[]? flowBits, bool[]? lavaBits, int texel)
+            => (flowBits != null && flowBits[texel]) || (lavaBits != null && lavaBits[texel]);
+
+        /// <summary>Pass C3, one tile: take the march channel away from a falling face, column by
+        /// column, so the reflection ends on the face's own painted edge.</summary>
+            // The scrub used to span the ROWS the flow covers across the whole tile, not only the
+            // falling pixels, and that was right at the bottom of a fall and wrong at its top. At
+            // the bottom, water sitting BESIDE the fall at the same height is the plunge churn: it
+            // carries no flow label of its own, so a pixel-exact scrub left it mirroring, its
+            // column's run began at the top of the falls tile, and Pass E's horizontal smoothing
+            // then dragged the pool's own shoreline up with it - the reflection climbed into the
+            // waterfall. At the TOP of a fall the same row band cut the stream's reflection off on
+            // a straight line a tile above the painted lip, which is drawn as a curve: the water
+            // above the curve is still the stream's surface and mirrors like the rest of it.
+            //
+            // So each column is read for what the fall does there. A column the fall enters from
+            // the tile above, or whose face starts on the top row, is scrubbed from the top down to
+            // where its face ends, so the foam at the foot keeps its painted bottom edge. A column
+            // whose face starts lower and runs out of the bottom of the tile is the lip: the scrub
+            // starts on the face's first row, which is the curve. A column with no face of its own
+            // is churn when the fall comes into this tile from above (the row band, as before) and
+            // upstream water when it does not (left alone). A face that starts and ends inside one
+            // column with nothing coming from above is a short cascade and is scrubbed as itself.
+        private void ScrubFallingColumns(int tileRow, int tileColumn, int tilesW, int pw, bool[]? flowB, bool[]? lavaB)
+        {
+            const int T = MaskTexelsPerTile;
+            int bandTop = T, bandBottom = -1;
+            for (int py = 0; py < T && bandTop == T; py++)
+                for (int px = 0; px < T; px++)
+                    if (LiquidFaceAt(flowB, lavaB, py * T + px)) { bandTop = py; break; }
+            for (int py = T - 1; py >= 0 && bandBottom < 0; py--)
+                for (int px = 0; px < T; px++)
+                    if (LiquidFaceAt(flowB, lavaB, py * T + px)) { bandBottom = py; break; }
+
+            bool[]? aboveFlowB = null, aboveLavaB = null;
+            bool aboveWhole = false;
+            if (tileRow > 0)
+            {
+                int aboveIndex = (tileRow - 1) * tilesW + tileColumn;
+                aboveFlowB = _maskScratch.TileFlowBits![aboveIndex];
+                aboveLavaB = _maskScratch.TileLavaBits![aboveIndex];
+                aboveWhole = aboveFlowB == null && aboveLavaB == null
+                          && (_maskScratch.TileFlowFlags![aboveIndex] || _maskScratch.TileLavaFlags![aboveIndex]);
+            }
+            Span<bool> fromAbove = stackalloc bool[T];
+            bool anyFromAbove = false;
+            for (int px = 0; px < T; px++)
+            {
+                fromAbove[px] = aboveWhole || LiquidFaceAt(aboveFlowB, aboveLavaB, (T - 1) * T + px);
+                anyFromAbove |= fromAbove[px];
+            }
+
+            for (int px = 0; px < T; px++)
+            {
+                int first = -1, last = -1;
+                for (int py = 0; py < T; py++)
+                    if (LiquidFaceAt(flowB, lavaB, py * T + px))
+                    {
+                        if (first < 0) first = py;
+                        last = py;
+                    }
+                int scrubTop, scrubBottom;
+                if (first < 0)
+                {
+                    if (!anyFromAbove) continue;
+                    scrubTop = bandTop; scrubBottom = bandBottom;
+                }
+                else if (fromAbove[px] || first == 0)
+                {
+                    scrubTop = 0; scrubBottom = last;
+                }
+                else if (last == T - 1)
+                {
+                    scrubTop = first; scrubBottom = T - 1;
+                }
+                else if (anyFromAbove)
+                {
+                    scrubTop = bandTop; scrubBottom = bandBottom;
+                }
+                else
+                {
+                    scrubTop = first; scrubBottom = last;
+                }
+                for (int py = scrubTop; py <= scrubBottom; py++)
+                    _waterMarchBits![(tileRow * T + py) * pw + tileColumn * T + px] = false;
+            }
         }
 
         /// <summary>Pass D - waterline height map: the top row of each march-water run, per column.</summary>
@@ -2336,6 +2529,13 @@ namespace SDVRadiance
             }
             if (_maskScratch.RealShoreDistancePixels != null)
                 _waterRealShoreDistanceTexture.SetData(_maskScratch.RealShoreDistancePixels, 0, pw * ph);
+            if (_waterPlungeChurnTexture == null || _waterPlungeChurnTexture.Width != pw || _waterPlungeChurnTexture.Height != ph)
+            {
+                _waterPlungeChurnTexture?.Dispose();
+                _waterPlungeChurnTexture = new Texture2D(_device, pw, ph, false, SurfaceFormat.Color);
+            }
+            if (_maskScratch.PlungeChurnPixels != null)
+                _waterPlungeChurnTexture.SetData(_maskScratch.PlungeChurnPixels, 0, pw * ph * FallDistanceBytesPerTexel);
             _waterMaskPixelSize = new Vector2(tilesW, tilesH);
 
             if (MaskView)
@@ -2392,6 +2592,16 @@ namespace SDVRadiance
                 _waterRealShoreDistanceTexture = new Texture2D(_device, pw, ph, false, SurfaceFormat.Alpha8);
             }
             _waterRealShoreDistanceTexture.SetData(_maskScratch.WaterSignedDistancePixels, 0, pcount);
+            // No water, so nothing is near a fall: the fall-distance field reads "far" everywhere.
+            if (_maskScratch.PlungeChurnPixels == null || _maskScratch.PlungeChurnPixels.Length < pcount * FallDistanceBytesPerTexel)
+                _maskScratch.PlungeChurnPixels = new byte[pcount * FallDistanceBytesPerTexel];
+            FillFallDistanceFar(_maskScratch.PlungeChurnPixels, 0, pcount);
+            if (_waterPlungeChurnTexture == null || _waterPlungeChurnTexture.Width != pw || _waterPlungeChurnTexture.Height != ph)
+            {
+                _waterPlungeChurnTexture?.Dispose();
+                _waterPlungeChurnTexture = new Texture2D(_device, pw, ph, false, SurfaceFormat.Color);
+            }
+            _waterPlungeChurnTexture.SetData(_maskScratch.PlungeChurnPixels, 0, pcount * FallDistanceBytesPerTexel);
             _waterMaskPixelSize = new Vector2(tilesW, tilesH);
         }
 

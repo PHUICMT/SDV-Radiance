@@ -101,6 +101,7 @@ namespace SDVRadiance
             HarmonyPatcher.ForceBufferDraw = EffectsActive;
             HarmonyPatcher.FreezeGameWater = _config.Enabled && _config.WaterEnabled;
             WaterDrawHook.Enabled = _config.Enabled && (_config.WaterEnabled || _config.WaterReflection);
+            LocationDrawHook.Enabled = WaterDrawHook.Enabled;
 
             helper.Events.GameLoop.GameLaunched += OnGameLaunched;
             helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
@@ -239,6 +240,7 @@ namespace SDVRadiance
             bool waterHere = RenderPipeline.WaterAllowedIn(Game1.currentLocation, _config);
             HarmonyPatcher.FreezeGameWater = _config.Enabled && _config.WaterEnabled && waterHere;
             WaterDrawHook.Enabled = _config.Enabled && (_config.WaterEnabled || _config.WaterReflection);
+            LocationDrawHook.Enabled = WaterDrawHook.Enabled;
             // SPLIT SCREEN TRACE (radiance_screenwatch). This handler runs once per SCREEN per
             // frame, and every expensive cache below it reuses its work while the camera has not
             // moved. With two cameras taking turns, each pass moves the origin the next pass is
@@ -561,6 +563,11 @@ namespace SDVRadiance
             // Draw-call-accurate water discovery: patch drawWaterTile on GameLocation AND every
             // loaded override (mod location classes included) — hence GameLaunched, not Entry.
             WaterDrawHook.Install(_harmony!, this.Monitor);
+
+            // A location that paints something of its own - Ginger Island's boat - draws it from
+            // fields no layer, label or entity list can see. Bracket those draws so the water
+            // knows where their art landed.
+            LocationDrawHook.Apply(_harmony!, this.Monitor);
 
             // If another mod also rewrites the weather draw, two replacements fight over one
             // slot and the player cannot tell whose rain is broken. Yield for the session and

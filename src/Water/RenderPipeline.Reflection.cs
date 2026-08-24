@@ -53,6 +53,74 @@ namespace SDVRadiance
         /// positioned so the flipped feet meet it. Sliced into 16-row bands to get the same
         /// feet-to-head fade every other body in here is given.
         /// </summary>
+        /// <summary>Scratch atlas that characters which put themselves on the screen their own way
+        /// are drawn into, before they are mirrored out of it. One slot each.
+        ///
+        /// <para>
+        /// Rebuilding where a character is drawn works for a villager and for nothing else. A
+        /// modded creature is usually an NPC that overrides draw and puts itself down with its own
+        /// origin, its own rotation and its own scale, none of which a bounding box knows about, so
+        /// a mirror built from the bounding box lands beside the animal instead of under it. It was
+        /// reported about the ducks of SH's Wild Animals, whose reflection floated a body's width
+        /// away from the duck; the sprite mask had already been fixed the same way, and this is the
+        /// half of it that was missed.
+        /// </para>
+        ///
+        /// <para>
+        /// Nothing here names a mod. Anything whose draw is its own gets asked to draw itself, so a
+        /// creature from a mod nobody here has installed comes out right for the same reason.
+        /// </para></summary>
+        private RenderTarget2D? _selfDrawnMirrorAtlas;
+        private const int SelfDrawnSlotWidth = 192;
+        private const int SelfDrawnSlotHeight = 224;
+        /// <summary>Slots in the atlas. Farm animals share it with the characters now, and a
+        /// duck pond holds more bodies than a bridge does, so eight was one flock away from
+        /// overflowing into the built stamp it replaced.</summary>
+        private const int SelfDrawnSlotCount = 16;
+        /// <summary>How many rows of a slot sit BELOW the contact line, for the part of a body that
+        /// is drawn under its own feet and stays out of the mirror.</summary>
+        private const int SelfDrawnRowsBelowContact = 32;
+        /// <summary>Who was baked into which slot this frame, where their contact point is in the
+        /// world, and how far above that point the body they drew actually ends, so the stamp can
+        /// turn the image over on the line where it meets the water.</summary>
+        private readonly List<(int Slot, float ContactWorldX, float ContactWorldY, float Lift)> _selfDrawnMirrorBakes = new();
+        /// <summary>Per creature and sheet, how far ABOVE the slot's contact row its drawn body
+        /// ends, in target pixels.
+        ///
+        /// <para>
+        /// The collision box is not the waterline. A duck's box bottom sits about fifteen pixels
+        /// under the duck, and turning the image over on that line left a band of open water
+        /// between the duck and its reflection - the "floating" that was reported. Where the body
+        /// really ends is a property of the creature, its sheet and the FRAME it is showing, not of
+        /// where it is standing, so it is read back from the bake once per frame of the animation
+        /// and then remembered. Keying it any coarser than that leaves a bobbing creature a few
+        /// pixels out for half of its cycle, which is what the first attempt did.
+        /// </para></summary>
+        private readonly Dictionary<(Type, Texture2D, Rectangle), float> _selfDrawnContactLift = new();
+        private static Color[]? _selfDrawnSlotReadback;
+        /// <summary>The bodies that got a slot, so the hand-built stamp skips exactly those and
+        /// still covers any that did not fit. Characters rather than NPCs, because a farm animal
+        /// is a Character and is baked here as well.</summary>
+        private readonly HashSet<Character> _selfDrawnMirrorTaken = new();
+        private int _selfDrawnMirrorOverflow;
+        private int _selfDrawnMirrorOverflowReported;
+        /// <summary>Scratch for <see cref="BakeSelfDrawnCharacterMirrors"/>, cleared and refilled
+        /// each frame a creature is near water. Fields rather than locals so the frames where the
+        /// bake actually runs - the busy ones - stop allocating two lists each.</summary>
+        private readonly List<Character> _selfDrawnMirrorWanted = new();
+        private readonly List<(int Slot, Type Kind, Texture2D Sheet, Rectangle Frame)> _selfDrawnMirrorMeasured = new();
+        /// <summary>Per type, whether its draw is its own. A type answers this the same way every
+        /// time, and the answer costs a reflection lookup, so it is asked once.</summary>
+        private static readonly Dictionary<Type, bool> PositionsItselfByType = new();
+        /// <summary>Every draw a character can override. Vanilla's own chain runs through all of
+        /// them, so any one of them being the type's own means it places itself.</summary>
+        private static readonly Type[][] DrawSignatures =
+        {
+            new[] { typeof(SpriteBatch) },
+            new[] { typeof(SpriteBatch), typeof(float) },
+            new[] { typeof(SpriteBatch), typeof(int), typeof(float) },
+        };
+
         /// <summary>Scratch target the held tool is drawn into before it is mirrored. Small: it
         /// only has to hold one swing around one body.</summary>
         private RenderTarget2D? _toolMirrorRenderTarget;
@@ -182,6 +250,306 @@ namespace SDVRadiance
             }
         }
 
+        /// <summary>Whether this character puts itself on the screen its own way, rather than the
+        /// way NPC.draw does.
+        ///
+        /// <para>
+        /// The test is the method, not the name: a type whose draw is its own is a type whose
+        /// position, origin, rotation and scale are its own, and no rule written here can predict
+        /// them. That covers a mod's creature, a mod's villager and anything a future mod adds,
+        /// without this file knowing that any of them exist.
+        /// </para></summary>
+        private static bool PositionsItself(NPC character)
+        {
+            Type type = character.GetType();
+            if (PositionsItselfByType.TryGetValue(type, out bool known))
+                return known;
+            bool ownDraw = false;
+            try
+            {
+                // ALL of the draw signatures, because the one a character overrides is its own
+                // choice. NPC.draw(SpriteBatch) forwards to draw(SpriteBatch, float), so a type
+                // that puts itself down its own way usually overrides the second and leaves the
+                // first alone - and asking only about the first says "vanilla" about a creature
+                // that is anything but. Missing that is what left the ducks floating after the
+                // first attempt at this fix.
+                foreach (Type[] signature in DrawSignatures)
+                {
+                    var draw = type.GetMethod("draw",
+                        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public
+                            | System.Reflection.BindingFlags.NonPublic,
+                        null, signature, null);
+                    if (draw != null && draw.DeclaringType != typeof(NPC) && draw.DeclaringType != typeof(Character))
+                    {
+                        ownDraw = true;
+                        break;
+                    }
+                }
+            }
+            catch
+            {
+                // A type that will not answer is left on the hand-built path, which is what it had.
+            }
+            PositionsItselfByType[type] = ownDraw;
+            return ownDraw;
+        }
+
+        /// <summary>Draw every character that positions itself into its own slot of the atlas, with
+        /// its ground contact pinned at a known row, so the mirror can be hung from that row without
+        /// anything here having to know how the character got where it is.</summary>
+        private void BakeSelfDrawnCharacterMirrors(GameLocation location)
+        {
+            _selfDrawnMirrorBakes.Clear();
+            _selfDrawnMirrorTaken.Clear();
+            _selfDrawnMirrorWanted.Clear();
+            _selfDrawnMirrorMeasured.Clear();
+            _selfDrawnMirrorOverflow = 0;
+            foreach (NPC c in ShadowRenderer.CharactersIn(location))
+            {
+                if (c?.Sprite?.Texture == null || c.IsInvisible || c.swimming.Value
+                    || DrawnUnderTheWater(c) || !PositionsItself(c))
+                    continue;
+                Rectangle bb = c.GetBoundingBox();
+                // The same reach gate the hand-built stamp uses: the mirror hangs downward, so only
+                // bodies whose mirror can land on water are worth a slot.
+                if (!WaterWithinTiles(bb.Center.X / 64, bb.Bottom / 64 + 2, 4))
+                    continue;
+                _selfDrawnMirrorWanted.Add(c);
+            }
+            // Every farm animal, not only the ones from mods. A farm animal draws itself in all the
+            // ways this file cannot predict - a baby is drawn smaller, a swimming duck is drawn with
+            // its underside cut away and a splash under it, an animal wearing a hat draws the hat -
+            // and none of that reaches a mirror rebuilt from a sheet rect at a fixed scale of 4.
+            // The sprite MASK has asked every animal to draw itself since the duck report; this is
+            // the same question, asked on the same frame, by the pass next door.
+            // Not gated on swimming: a duck in the pond is the whole reason this exists.
+            foreach (FarmAnimal a in location.animals.Values)
+            {
+                if (a?.Sprite?.Texture == null)
+                    continue;
+                Rectangle abb = a.GetBoundingBox();
+                if (!WaterWithinTiles(abb.Center.X / 64, abb.Bottom / 64 + 2, 4))
+                    continue;
+                _selfDrawnMirrorWanted.Add(a);
+            }
+            if (_selfDrawnMirrorWanted.Count == 0)
+                return;
+
+            // PreserveContents because this target is UNBOUND and then read twice: once on the CPU
+            // to find where each body ends, and again as a texture while the mirror target is bound.
+            // A DiscardContents target is undefined the moment it stops being the target, which is
+            // the trap the water masks carry the same note about.
+            _selfDrawnMirrorAtlas ??= VramTally.Track(new RenderTarget2D(_device,
+                SelfDrawnSlotWidth * SelfDrawnSlotCount, SelfDrawnSlotHeight, false,
+                SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents),
+                "self-drawn mirror atlas");
+
+            var batch = _spriteMaskSpriteBatch!;
+            var gameBatch = Game1.spriteBatch;
+            RenderTargetBinding[] prev = _device.GetRenderTargets();
+            Rectangle prevScissor = _device.ScissorRectangle;
+            try
+            {
+                _device.SetRenderTarget(_selfDrawnMirrorAtlas);
+                _device.Clear(Color.Transparent);
+                int contactRow = SelfDrawnSlotHeight - SelfDrawnRowsBelowContact;
+                for (int i = 0; i < _selfDrawnMirrorWanted.Count; i++)
+                {
+                    if (_selfDrawnMirrorBakes.Count >= SelfDrawnSlotCount)
+                    {
+                        _selfDrawnMirrorOverflow = _selfDrawnMirrorWanted.Count - _selfDrawnMirrorBakes.Count;
+                        break;
+                    }
+                    Character c = _selfDrawnMirrorWanted[i];
+                    Rectangle bb = c.GetBoundingBox();
+                    // The parity anchor every body in this file hangs from: the collision box's
+                    // bottom, lifted 10 px because a collision box sits a little below the drawn
+                    // shoes. The player, the NPCs and the farm animals all use it.
+                    float contactWorldX = bb.Center.X;
+                    float contactWorldY = bb.Bottom - 10f;
+                    Vector2 contactOnScreen = Game1.GlobalToLocal(Game1.viewport,
+                        new Vector2(contactWorldX, contactWorldY));
+                    int slot = _selfDrawnMirrorBakes.Count;
+                    var slotRect = new Rectangle(slot * SelfDrawnSlotWidth, 0, SelfDrawnSlotWidth, SelfDrawnSlotHeight);
+                    Matrix toSlot = Matrix.CreateTranslation(
+                        slotRect.X + SelfDrawnSlotWidth / 2f - contactOnScreen.X,
+                        contactRow - contactOnScreen.Y, 0f);
+                    // Scissored to its own slot: a body larger than a slot is cut off rather than
+                    // smeared into the neighbour's mirror.
+                    _device.ScissorRectangle = slotRect;
+                    try
+                    {
+                        batch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp,
+                            null, ScissoredRasterizer, null, toSlot);
+                        Game1.spriteBatch = batch;
+                        c.draw(batch);
+                        batch.End();
+                    }
+                    catch
+                    {
+                        // A mod's draw threw. Leave it to the hand-built stamp, which is what it had.
+                        try { batch.End(); } catch { }
+                        continue;
+                    }
+                    finally { Game1.spriteBatch = gameBatch; }
+                    _selfDrawnMirrorBakes.Add((slot, contactWorldX, contactWorldY, float.NaN));
+                    _selfDrawnMirrorTaken.Add(c);
+                    _selfDrawnMirrorMeasured.Add((slot, c.GetType(), c.Sprite.Texture, c.Sprite.SourceRect));
+                }
+            }
+            finally
+            {
+                Game1.spriteBatch = gameBatch;
+                _device.SetRenderTargets(prev);
+                _device.ScissorRectangle = prevScissor;
+            }
+
+            // Now that the atlas is off the device, ask it where each body actually ends. Only for
+            // a creature-and-sheet pair never seen before: the answer is the same every frame after
+            // that, and a readback stalls the pipeline, so paying it once per creature is the whole
+            // budget for this.
+            ResolveSelfDrawnContactLifts(_selfDrawnMirrorMeasured);
+
+            // No silent caps: a scene that runs out of slots says so once, rather than quietly
+            // mirroring some of its creatures and not others.
+            if (_selfDrawnMirrorOverflow > 0 && _selfDrawnMirrorOverflow != _selfDrawnMirrorOverflowReported)
+            {
+                _selfDrawnMirrorOverflowReported = _selfDrawnMirrorOverflow;
+                _monitor.Log($"[reflect] {_selfDrawnMirrorOverflow} self-drawing bodies over the "
+                    + $"{SelfDrawnSlotCount}-slot mirror atlas near water; they fall back to the built stamp.",
+                    StardewModdingAPI.LogLevel.Trace);
+            }
+            else if (_selfDrawnMirrorOverflow == 0)
+            {
+                _selfDrawnMirrorOverflowReported = 0;
+            }
+        }
+
+        /// <summary>A rasterizer that respects the scissor rectangle, so one slot's bake cannot
+        /// bleed into the next.</summary>
+        private static readonly RasterizerState ScissoredRasterizer = new() { ScissorTestEnable = true };
+
+        /// <summary>Fill in, for each slot baked this frame, how far above the slot's contact row
+        /// the body it drew ends. Reads the target back only for a creature-and-sheet pair that has
+        /// not been seen before; everything else is answered from the cache.</summary>
+        private void ResolveSelfDrawnContactLifts(List<(int Slot, Type Kind, Texture2D Sheet, Rectangle Frame)> measured)
+        {
+            var atlas = _selfDrawnMirrorAtlas;
+            if (atlas == null)
+                return;
+            int contactRow = SelfDrawnSlotHeight - SelfDrawnRowsBelowContact;
+            for (int i = 0; i < measured.Count; i++)
+            {
+                var (slot, kind, sheet, frame) = measured[i];
+                var key = (kind, sheet, frame);
+                if (!_selfDrawnContactLift.TryGetValue(key, out float lift))
+                {
+                    lift = MeasureSlotContactLift(atlas, slot, contactRow);
+                    _selfDrawnContactLift[key] = lift;
+                }
+                for (int b = 0; b < _selfDrawnMirrorBakes.Count; b++)
+                {
+                    var bake = _selfDrawnMirrorBakes[b];
+                    if (bake.Slot == slot)
+                    {
+                        _selfDrawnMirrorBakes[b] = (bake.Slot, bake.ContactWorldX, bake.ContactWorldY, lift);
+                        break;
+                    }
+                }
+            }
+        }
+
+        /// <summary>How solid a pixel has to be to count as the BODY rather than as the wake the
+        /// creature paints around itself.
+        ///
+        /// <para>
+        /// A swimming duck draws its splash on the water under itself, and it draws it faint: the
+        /// body comes out at alpha 203 to 255 and the splash at 75. The splash also GROWS through
+        /// the animation, four rows at a time, and resets when the loop does - so a contact taken
+        /// from the lowest pixel of any kind sank a little further every frame and then jumped
+        /// back, which is exactly the reflection "drifting away and returning, over and over" that
+        /// was reported. The body is what meets the water; the splash already is the water.
+        /// </para></summary>
+        private const byte SelfDrawnBodyAlpha = 128;
+
+        /// <summary>The distance from a slot's contact row up to the lowest pixel of the BODY the
+        /// creature drew there. NaN when the slot came out empty, which means nothing to mirror.</summary>
+        private static float MeasureSlotContactLift(RenderTarget2D atlas, int slot, int contactRow)
+        {
+            try
+            {
+                int count = SelfDrawnSlotWidth * SelfDrawnSlotHeight;
+                if (_selfDrawnSlotReadback == null || _selfDrawnSlotReadback.Length < count)
+                    _selfDrawnSlotReadback = new Color[count];
+                var slotRect = new Rectangle(slot * SelfDrawnSlotWidth, 0, SelfDrawnSlotWidth, SelfDrawnSlotHeight);
+                atlas.GetData(0, slotRect, _selfDrawnSlotReadback, 0, count);
+                int faintest = -1;
+                for (int y = SelfDrawnSlotHeight - 1; y >= 0; y--)
+                {
+                    int row = y * SelfDrawnSlotWidth;
+                    for (int x = 0; x < SelfDrawnSlotWidth; x++)
+                    {
+                        byte alpha = _selfDrawnSlotReadback[row + x].A;
+                        if (alpha >= SelfDrawnBodyAlpha)
+                            return contactRow - y;
+                        if (alpha > 8 && faintest < 0)
+                            faintest = y;
+                    }
+                }
+                // A creature drawn faint all over - a ghost, a fading spirit - has no solid row to
+                // find, so its lowest pixel of any kind is its body after all.
+                return faintest >= 0 ? contactRow - faintest : float.NaN;
+            }
+            catch
+            {
+                // A device that will not hand the target back leaves the contact where the
+                // collision box put it, which is what every body here had before.
+                return 0f;
+            }
+        }
+
+        /// <summary>Hang each baked slot below its own contact point, through the same banded fade
+        /// every other body here is given.</summary>
+        private void StampSelfDrawnCharacterMirrors(SpriteBatch spriteBatch)
+        {
+            var atlas = _selfDrawnMirrorAtlas;
+            if (atlas == null || _selfDrawnMirrorBakes.Count == 0)
+                return;
+            const int bandHeight = 16;
+            int slotContactRow = SelfDrawnSlotHeight - SelfDrawnRowsBelowContact;
+            foreach (var baked in _selfDrawnMirrorBakes)
+            {
+                // An empty bake has nothing to turn over.
+                if (float.IsNaN(baked.Lift))
+                    continue;
+                // The image is turned over on the line where the body ENDS, which is where it
+                // meets the water, not on the bottom of a collision box that sits under it.
+                int axisRow = slotContactRow - (int)Math.Round(baked.Lift);
+                axisRow = Math.Clamp(axisRow, bandHeight, SelfDrawnSlotHeight);
+                int bands = axisRow / bandHeight;
+                Vector2 contact = Game1.GlobalToLocal(Game1.viewport,
+                    new Vector2(baked.ContactWorldX, baked.ContactWorldY));
+                contact.Y -= baked.Lift;
+                float depth = StampDepth(baked.ContactWorldY);
+                int slotX = baked.Slot * SelfDrawnSlotWidth;
+                for (int i = 0; i < bands; i++)
+                {
+                    var srcR = new Rectangle(slotX, axisRow - (i + 1) * bandHeight, SelfDrawnSlotWidth, bandHeight);
+                    if (srcR.Y < 0)
+                    {
+                        srcR.Height += srcR.Y;
+                        srcR.Y = 0;
+                        if (srcR.Height <= 0)
+                            break;
+                    }
+                    float a = MathHelper.Lerp(1f, ReflHeadFade, (i + 0.5f) / bands);
+                    spriteBatch.Draw(atlas, contact + new Vector2(-SelfDrawnSlotWidth / 2f, i * bandHeight * MirrorSquash),
+                        srcR, Color.White * a, 0f, Vector2.Zero, new Vector2(1f, MirrorSquash),
+                        SpriteEffects.FlipVertically, depth);
+                }
+            }
+        }
+
         private void BakeWaterReflectionCore(ModConfig config)
         {
             ReflectRTReady = false;
@@ -202,6 +570,16 @@ namespace SDVRadiance
             }
             _spriteMaskSpriteBatch ??= new SpriteBatch(_device);
             // Before the mirror target is bound, because this one writes to a target of its own.
+            // Both bakes happen BEFORE the mirror target is bound: a render-target swap in the
+            // middle of the mirror pass would throw the pass's own target away.
+            //
+            // ORDER MATTERS, and it cost a black rectangle in the water to learn it. The tool bake
+            // leaves its target bound and is read later in the frame, and its target is a plain
+            // DiscardContents one, so ANY rebind between the bake and the read hands back
+            // undefined pixels - which is what a 192-square of black under a swinging pickaxe was.
+            // The creature bake, which does rebind (it has to read its own atlas back), therefore
+            // runs FIRST and is finished with the device before the tool is drawn at all.
+            BakeSelfDrawnCharacterMirrors(location);
             bool toolBaked = BakeHeldToolForMirror();
 
             try
@@ -216,6 +594,7 @@ namespace SDVRadiance
                 spriteBatch.Begin(SpriteSortMode.BackToFront, BlendState.AlphaBlend, SamplerState.PointClamp);
 
                 MirrorFarmers(spriteBatch, toolBaked);
+                StampSelfDrawnCharacterMirrors(spriteBatch);
                 MirrorCharacters(spriteBatch, location);
                 MirrorAnimalsAndCritters(spriteBatch, location);
                 MirrorPlacedObjects(spriteBatch, location);
@@ -286,7 +665,12 @@ namespace SDVRadiance
             // skips a screenful of stamps per frame (same gate the sprite mask uses).
             foreach (NPC c in ShadowRenderer.CharactersIn(location))
             {
-                if (c?.Sprite?.Texture == null || c.IsInvisible || c.swimming.Value)
+                if (c?.Sprite?.Texture == null || c.IsInvisible || c.swimming.Value
+                    || DrawnUnderTheWater(c))
+                    continue;
+                // Already mirrored from its own bake, which knows where it really put itself.
+                // Anything that positions itself but missed a slot falls through to here.
+                if (_selfDrawnMirrorTaken.Contains(c))
                     continue;
                 Rectangle cbb = c.GetBoundingBox();
                 if (!WaterWithinTiles(cbb.Center.X / 64, cbb.Bottom / 64 + 2, 4))
@@ -311,6 +695,109 @@ namespace SDVRadiance
             }
         }
 
+        /// <summary>Per creature TYPE, how to ask it whether it belongs under the surface, or null
+        /// when it has no answer to give. Built once per type and then a field read.</summary>
+        private static readonly Dictionary<Type, Func<object, bool>?> _underwaterAnswer = new();
+
+        /// <summary>
+        /// True when a creature says of itself that it is drawn UNDER the water.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// A duck floats on a pond and must have a reflection; a jellyfish swims below the surface
+        /// and must not, and no class the game ships tells the two apart. The NPC pass has always
+        /// had <c>swimming</c> to lean on, and the critter pass had no gate at all - anything near
+        /// water got a mirror - which is how a modded jellyfish came to be reflected off the water
+        /// it was inside. Reported with a picture of Ginger Island.
+        /// </para>
+        /// <para>
+        /// So the creature is ASKED rather than classified. Custom Companions writes
+        /// <c>AppearUnderwater</c> on a companion's model and the jellyfish sets it; anything else
+        /// that names a boolean the same way is believed too, and anything that says nothing keeps
+        /// the reflection it had. Located by shape, like the bridge's own lookups, so a framework
+        /// update that moves the field degrades to the old behaviour instead of throwing.
+        /// </para>
+        /// </remarks>
+        private static bool DrawnUnderTheWater(object? creature)
+        {
+            if (creature == null)
+                return false;
+            Type type = creature.GetType();
+            if (!_underwaterAnswer.TryGetValue(type, out Func<object, bool>? ask))
+                _underwaterAnswer[type] = ask = BuildUnderwaterAnswer(type);
+            if (ask == null)
+                return false;
+            try
+            {
+                if (!ask(creature))
+                    return false;
+                // Once per type, so a report of "my sea creature has no reflection" can be answered
+                // from a log rather than from a build.
+                if (_underwaterNamed.Add(type))
+                    Current?._monitor?.Log($"{type.Name} says it is drawn under the water, so it is "
+                                         + "given no reflection on it.", StardewModdingAPI.LogLevel.Trace);
+                return true;
+            }
+            catch (Exception) { return false; }
+        }
+
+        private static readonly HashSet<Type> _underwaterNamed = new();
+
+        private const string UnderwaterFlagName = "AppearUnderwater";
+
+        private static Func<object, bool>? BuildUnderwaterAnswer(Type type)
+        {
+            // The flag on the creature itself.
+            Func<object, bool>? direct = ReadsBool(type, UnderwaterFlagName);
+            if (direct != null)
+                return direct;
+            // Or on whatever it calls its model: a companion carries the content pack's definition
+            // there, and the definition is where the pack author wrote the flag.
+            foreach (string holder in new[] { "model", "Model" })
+            {
+                Func<object, object?>? reach = ReadsObject(type, holder);
+                if (reach == null)
+                    continue;
+                return creature =>
+                {
+                    object? inner = reach(creature);
+                    if (inner == null)
+                        return false;
+                    Type innerType = inner.GetType();
+                    if (!_underwaterAnswer.TryGetValue(innerType, out Func<object, bool>? innerAsk))
+                        _underwaterAnswer[innerType] = innerAsk = ReadsBool(innerType, UnderwaterFlagName);
+                    return innerAsk != null && innerAsk(inner);
+                };
+            }
+            return null;
+        }
+
+        private const System.Reflection.BindingFlags AnyMember =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public
+            | System.Reflection.BindingFlags.NonPublic;
+
+        private static Func<object, bool>? ReadsBool(Type type, string name)
+        {
+            var property = type.GetProperty(name, AnyMember);
+            if (property != null && property.PropertyType == typeof(bool) && property.CanRead)
+                return o => (bool)(property.GetValue(o) ?? false);
+            var field = type.GetField(name, AnyMember);
+            if (field != null && field.FieldType == typeof(bool))
+                return o => (bool)(field.GetValue(o) ?? false);
+            return null;
+        }
+
+        private static Func<object, object?>? ReadsObject(Type type, string name)
+        {
+            var property = type.GetProperty(name, AnyMember);
+            if (property != null && property.CanRead && !property.PropertyType.IsValueType)
+                return property.GetValue;
+            var field = type.GetField(name, AnyMember);
+            if (field != null && !field.FieldType.IsValueType)
+                return field.GetValue;
+            return null;
+        }
+
         /// <summary>Mirror farm animals and critters, both through the one stamp every body
         /// uses, so a butterfly fades from the water like everything else.</summary>
         private void MirrorAnimalsAndCritters(SpriteBatch spriteBatch, GameLocation location)
@@ -319,6 +806,11 @@ namespace SDVRadiance
             foreach (var a in location.animals.Values)
             {
                 if (a?.Sprite?.Texture == null)
+                    continue;
+                // Already mirrored from its own bake, which knows where it really put itself.
+                // What is left here is the animal that ran out of slots, or whose draw threw:
+                // the built stamp is its fallback, not its normal path.
+                if (_selfDrawnMirrorTaken.Contains(a))
                     continue;
                 Rectangle abb = a.GetBoundingBox();
                 if (!WaterWithinTiles(abb.Center.X / 64, abb.Bottom / 64 + 2, 4))
@@ -330,7 +822,7 @@ namespace SDVRadiance
             {
                 foreach (var cr in location.critters)
                 {
-                    if (cr?.sprite?.Texture == null)
+                    if (cr?.sprite?.Texture == null || DrawnUnderTheWater(cr))
                         continue;
                     // Same stamp every body uses (one anchor rule, the same feet->head
                     // fade): a butterfly's reflection was drawn at full opacity by its own
@@ -843,10 +1335,14 @@ namespace SDVRadiance
             try { _mirrorSourceRenderTarget?.Dispose(); } catch { }
             try { _reflectionRenderTarget?.Dispose(); } catch { }
             try { _spriteMaskRenderTarget?.Dispose(); } catch { }
+            try { _selfDrawnMirrorAtlas?.Dispose(); } catch { }
             _mirrorSceneCache = null;
             _mirrorSourceRenderTarget = null;
             _reflectionRenderTarget = null;
             _spriteMaskRenderTarget = null;
+            _selfDrawnMirrorAtlas = null;
+            _selfDrawnMirrorBakes.Clear();
+            _selfDrawnMirrorTaken.Clear();
             // Split screen keeps a saved copy of these fields per camera and restores them when
             // the screen changes, so nulling the live field is not enough: screen 0's state would
             // hand the disposed target straight back on the next BeginScreen. Single screen never
@@ -1265,6 +1761,65 @@ namespace SDVRadiance
             report.AppendLine($"[reflect] sceneRT mean 1.5 tiles ABOVE the feet (the mirror's source) = {(sceneMean.X < 0 ? "unreadable" : $"rgb({sceneMean.X:0.00},{sceneMean.Y:0.00},{sceneMean.Z:0.00}) a={sceneMean.W:0.00}")}");
             report.AppendLine($"[reflect] entityRT mean 0.5 tile BELOW the feet (your own reflection) = {(entMean.X < 0 ? "unreadable" : $"rgb({entMean.X:0.00},{entMean.Y:0.00},{entMean.Z:0.00}) a={entMean.W:0.00}")}");
             report.AppendLine("[reflect] a near-black sceneRT mean with lit map art on screen = the P3c source is the bug; run 'radiance_reflect scene off' and compare.");
+
+            // Which characters were asked to draw their own mirror and which had one built for
+            // them. A creature whose reflection floats beside it is answered here: if it says
+            // built=yes it is being predicted rather than drawn, and the prediction is what is
+            // wrong. Printed with the anchor both paths hang from, so the two can be compared
+            // against a screenshot without another build.
+            GameLocation? here = Game1.currentLocation;
+            if (here != null)
+            {
+                int listed = 0;
+                foreach (NPC c in ShadowRenderer.CharactersIn(here))
+                {
+                    if (c?.Sprite?.Texture == null || c.IsInvisible)
+                        continue;
+                    Rectangle cbb = c.GetBoundingBox();
+                    if (!WaterWithinTiles(cbb.Center.X / 64, cbb.Bottom / 64 + 2, 4))
+                        continue;
+                    if (listed++ == 0)
+                        report.AppendLine("[reflect] characters near water (drawsItself = its mirror is drawn by the character, not predicted):");
+                    Vector2 anchorOnScreen = Game1.GlobalToLocal(Game1.viewport,
+                        new Vector2(cbb.Center.X, cbb.Bottom - 10f));
+                    _selfDrawnContactLift.TryGetValue((c.GetType(), c.Sprite.Texture, c.Sprite.SourceRect), out float lift);
+                    Rectangle src = c.Sprite.SourceRect;
+                    report.AppendLine($"[reflect]   {c.Name,-16} {c.GetType().Name,-14} drawsItself={PositionsItself(c)} "
+                        + $"baked={_selfDrawnMirrorTaken.Contains(c)} bbBottom={cbb.Bottom} anchorScreenY={(int)anchorOnScreen.Y} "
+                        + $"src=({src.X},{src.Y},{src.Width},{src.Height}) frame={c.Sprite.CurrentFrame} lift={lift:0.#} "
+                        + $"drawOffsetY={c.drawOffset.Y} yJump={c.yJumpOffset} liftCache={_selfDrawnContactLift.Count}");
+                    if (listed >= 12)
+                    {
+                        report.AppendLine("[reflect]   (list capped at 12)");
+                        break;
+                    }
+                }
+                int animalsListed = 0;
+                foreach (FarmAnimal a in here.animals.Values)
+                {
+                    if (a?.Sprite?.Texture == null)
+                        continue;
+                    Rectangle abb = a.GetBoundingBox();
+                    if (!WaterWithinTiles(abb.Center.X / 64, abb.Bottom / 64 + 2, 4))
+                        continue;
+                    if (animalsListed++ == 0)
+                        report.AppendLine("[reflect] farm animals near water (baked=no means its mirror is predicted from the collision box):");
+                    Vector2 animalAnchor = Game1.GlobalToLocal(Game1.viewport,
+                        new Vector2(abb.Center.X, abb.Bottom - 10f));
+                    _selfDrawnContactLift.TryGetValue((a.GetType(), a.Sprite.Texture, a.Sprite.SourceRect), out float animalLift);
+                    Rectangle animalSrc = a.Sprite.SourceRect;
+                    report.AppendLine($"[reflect]   {a.Name,-16} {a.GetType().Name,-14} baked={_selfDrawnMirrorTaken.Contains(a)} "
+                        + $"bbBottom={abb.Bottom} anchorScreenY={(int)animalAnchor.Y} "
+                        + $"src=({animalSrc.X},{animalSrc.Y},{animalSrc.Width},{animalSrc.Height}) frame={a.Sprite.CurrentFrame} lift={animalLift:0.#}");
+                    if (animalsListed >= 12)
+                    {
+                        report.AppendLine("[reflect]   (list capped at 12)");
+                        break;
+                    }
+                }
+                if (listed == 0 && animalsListed == 0)
+                    report.AppendLine("[reflect] no characters or farm animals near water on this screen");
+            }
             return report.ToString().TrimEnd();
         }
     }

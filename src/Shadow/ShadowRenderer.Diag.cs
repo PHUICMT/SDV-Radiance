@@ -1,6 +1,7 @@
 using System;
 using System.Text;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 using StardewValley;
 using StardewValley.Objects;
 using StardewValley.TerrainFeatures;
@@ -324,29 +325,37 @@ namespace SDVRadiance
             }
             foreach (ShadowKind kind in Enum.GetValues<ShadowKind>())
                 Kind(kind);
-            // What the narrowing does to two sprites at opposite ends of the problem it exists for.
-            // A shadow reads as a direction only when its lean carries further than the sprite is
-            // wide, so this prints the lean and the width side by side and lets the reader see
-            // which one is winning.
-            void Narrowing(string what, float w, float h, float cap)
+            // What the two geometries make of the same sun: where one pixel of width and one of
+            // height land, and how wide and tall a sprite comes out once laid down. The game's own
+            // blob is printed beside the foreshortening so the default can be checked against the
+            // one oval the art itself commits to.
+            float foreshortening = config.ShadowGroundForeshortening;
+            float characterForeshortening = config.ShadowCharacterGroundForeshortening;
+            Texture2D? blob = Game1.shadowTexture;
+            report.AppendLine($"[shadows] ground foreshortening={foreshortening:0.00} for things, {characterForeshortening:0.00} for people"
+                        + (blob != null ? $" (the game's own blob is {blob.Width}x{blob.Height})" : ""));
+            void Laid(string what, ShadowGeometry geometry, float w, float h, float cap)
             {
                 float st = Math.Min(sunStretch, cap * lengthScale);
-                float shear = -(float)Math.Sin(rot) * st;
-                float lean = Math.Abs(shear) * h;
-                float narrow = NarrowForLean(w, h, shear, config.ShadowLeanClarity);
-                report.AppendLine($"[shadows]   {what,-12} {w:0}x{h:0} lean={lean:0.0}px width={w:0}px "
-                            + $"-> {narrow * 100f:0}% width, so it reaches {lean / Math.Max(1f, w * narrow):0.0}x its own width "
-                            + $"(a person: {PersonLeanDominance:0.0}x)"
-                            + (w > MaxNarrowSpriteSize || h > MaxNarrowSpriteSize
-                                ? "   [left alone: bigger than one tile]" : ""));
+                ShadowProjection projection = geometry == ShadowGeometry.Card
+                    ? ShadowProjection.ForCard(rot, st)
+                    : ShadowProjection.ForSolid(rot, st, foreshortening);
+                projection.Bounds(w, h, w / 2f, h, out float left, out float right, out float top, out float bottom);
+                report.AppendLine($"[shadows]   {what,-12} {geometry,-5} across=({projection.AcrossX:0.00},{projection.AcrossY:0.00}) "
+                            + $"along=({projection.AlongX:0.00},{projection.AlongY:0.00}) "
+                            + $"laid {right - left:0}x{bottom - top:0}px from {w:0}x{h:0}");
             }
-            report.AppendLine($"[shadows] lean clarity={config.ShadowLeanClarity:0.00}");
-            // The SOURCE rects the draw path really passes, not the visible plant inside them: a
-            // crop frame is 16x32 with the plant in its lower half, and the rule sees the 32.
-            Narrowing("a sapling", 16f, 16f, config.ShadowLengthSmallTrees);
-            Narrowing("a stump", 16f, 32f, config.ShadowLengthSmallTrees);
-            Narrowing("a crop", 16f, 32f, config.ShadowLengthCrops);
-            Narrowing("a tree", 48f, 96f, config.ShadowLengthTrees);
+            Laid("a crop", ShadowGeometry.Solid, 16f, 32f, config.ShadowLengthCrops);
+            Laid("a bush", ShadowGeometry.Solid, 32f, 32f, config.ShadowLengthBushes);
+            Laid("a tree", ShadowGeometry.Solid, 48f, 96f, config.ShadowLengthTrees);
+            Laid("a fence", ShadowGeometry.Card, 16f, 32f, config.ShadowLengthObjects);
+            // People are not baked through the projection; they are rotated and scaled by the
+            // nearest thing to it, so what to print is that scale, and what it would have been on
+            // the ground's own number.
+            float personAcross = ShadowProjection.ForSolid(rot, sunStretch, characterForeshortening).AcrossScaleForRotation();
+            float personAcrossOnGround = ShadowProjection.ForSolid(rot, sunStretch, foreshortening).AcrossScaleForRotation();
+            report.AppendLine($"[shadows]   a person     Solid rotate+scale, width x{personAcross:0.00} "
+                        + $"(x{personAcrossOnGround:0.00} on the ground's own)");
         }
     }
 }
