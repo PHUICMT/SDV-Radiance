@@ -53,6 +53,36 @@ namespace SDVRadiance
         /// included, was never recorded and the hull rippled again.</summary>
         private static int _drawDepth;
 
+        /// <summary>How many of the GAME'S OWN location draws are on the stack. GameLocation.draw is
+        /// where the game paints everything it already knows about: the characters, the animals,
+        /// the critters, the trees, the placed objects, the debris and every temporary sprite. None
+        /// of that is a location's own art, and all of it is already stamped by the mask from its
+        /// own lists, at this frame's positions. GameLocation declares a draw of its own, so the
+        /// bracket above wrapped it like any other, and a location's override calls it in the
+        /// middle: for one release everything a location drew was carved from the water a frame
+        /// late. Chimney smoke drifting over a lake came out as blocks, and a bird or a falling
+        /// leaf crossing a river cut a hole through the reflection under it as it went. While this
+        /// is above zero nothing is recorded; the override's own draws, before and after its call
+        /// to the base, still are.</summary>
+        private static int _baseDrawDepth;
+
+        /// <summary>How many draws of a thing that paints WATER for itself are on the stack. A fish
+        /// pond is a building, and a location draws its buildings inside its own draw, so everything
+        /// the pond painted - its bed, its water tiles, its net, the fish - was recorded as art over
+        /// water and the whole pond went untouched: no ripple, no mirror, the game's water animation
+        /// frozen by the freeze patch and nothing put in its place. While this is above zero the
+        /// draws that ARE the water (the tinted bed, the animated water tiles, the sparkle strip) are
+        /// skipped; the rim, the net, the sign and the bucket are recorded as before.</summary>
+        private static int _ownWaterDepth;
+
+        /// <summary>The three draws FishPond.draw makes that are the water itself rather than art
+        /// over it: the bed from its own sheet, the animated tiles from the cursors sheet, and the
+        /// sparkle strip. Anything else it draws stands on the rim and is carved as art.</summary>
+        private static bool IsFishPondWaterDraw(Texture2D texture, Rectangle source)
+            => ReferenceEquals(texture, Game1.mouseCursors)
+               || source == new Rectangle(0, 80, 80, 80)
+               || source == new Rectangle(16, 160, 48, 7);
+
         /// <summary>One draw the location made for itself, kept whole rather than reduced to a box.
         /// The art's own alpha is what decides where the water stops: a solid rectangle around the
         /// boat cut a visible square out of the sea around its mast and rigging.
@@ -108,9 +138,14 @@ namespace SDVRadiance
         {
             var prefix = new HarmonyMethod(typeof(LocationDrawHook), nameof(LocationDraw_Prefix));
             var postfix = new HarmonyMethod(typeof(LocationDrawHook), nameof(LocationDraw_Postfix));
+            // The base class's own draws PAUSE the recording instead of starting it: what they
+            // paint is the game's entity lists, not a location's own art (see _baseDrawDepth).
+            var basePrefix = new HarmonyMethod(typeof(LocationDrawHook), nameof(BaseDraw_Prefix));
+            var basePostfix = new HarmonyMethod(typeof(LocationDrawHook), nameof(BaseDraw_Postfix));
             int patched = 0;
             foreach (Type type in LocationTypesThatDrawThemselves())
             {
+                bool isBase = type == typeof(GameLocation);
                 foreach (string methodName in new[] { "draw", "drawAboveFrontLayer", "drawAboveAlwaysFrontLayer" })
                 {
                     MethodInfo? declared = type.GetMethod(
@@ -121,8 +156,11 @@ namespace SDVRadiance
                         continue;
                     try
                     {
-                        harmony.Patch(declared, prefix: prefix, postfix: postfix);
-                        patched++;
+                        harmony.Patch(declared,
+                            prefix: isBase ? basePrefix : prefix,
+                            postfix: isBase ? basePostfix : postfix);
+                        if (!isBase)
+                            patched++;
                     }
                     catch (Exception ex)
                     {
@@ -166,7 +204,33 @@ namespace SDVRadiance
                           + "own art cannot be recorded.", LogLevel.Trace);
                 return;
             }
+            // The one thing a location draws that IS water. Bracketed so its draws are skipped.
+            MethodInfo? pondDraw = AccessTools.Method(typeof(StardewValley.Buildings.FishPond), "draw", new[] { typeof(SpriteBatch) });
+            if (pondDraw != null)
+            {
+                try
+                {
+                    harmony.Patch(pondDraw,
+                        prefix: new HarmonyMethod(typeof(LocationDrawHook), nameof(OwnWaterDraw_Prefix)),
+                        postfix: new HarmonyMethod(typeof(LocationDrawHook), nameof(OwnWaterDraw_Postfix)));
+                }
+                catch (Exception ex)
+                {
+                    monitor.Log($"Could not bracket FishPond.draw: {ex.Message}. A fish pond will carry no water effect.", LogLevel.Trace);
+                }
+            }
             monitor.Log($"Watching {patched} location draw(s) for art the water must not touch.", LogLevel.Trace);
+        }
+
+        private static void OwnWaterDraw_Prefix()
+        {
+            _ownWaterDepth++;
+        }
+
+        private static void OwnWaterDraw_Postfix()
+        {
+            if (_ownWaterDepth > 0)
+                _ownWaterDepth--;
         }
 
         /// <summary>Every loaded type that IS a location and declares a draw of its own.</summary>
@@ -204,6 +268,19 @@ namespace SDVRadiance
                 _drawDepth--;
         }
 
+        private static void BaseDraw_Prefix()
+        {
+            if (!Enabled)
+                return;
+            _baseDrawDepth++;
+        }
+
+        private static void BaseDraw_Postfix()
+        {
+            if (_baseDrawDepth > 0)
+                _baseDrawDepth--;
+        }
+
         /// <summary>Record what one draw put on screen, art and all.</summary>
         private static void SpriteBatchDraw_Prefix(Texture2D texture, Vector2 position,
                                                    Rectangle? sourceRectangle, Vector2 origin,
@@ -219,9 +296,11 @@ namespace SDVRadiance
         private static void Record(Texture2D texture, Vector2 position, Rectangle? sourceRectangle,
                                    Vector2 origin, Vector2 scale, SpriteEffects effects)
         {
-            if (_drawDepth == 0 || texture == null || texture.IsDisposed)
+            if (_drawDepth == 0 || _baseDrawDepth > 0 || texture == null || texture.IsDisposed)
                 return;
             Rectangle source = sourceRectangle ?? new Rectangle(0, 0, texture.Width, texture.Height);
+            if (_ownWaterDepth > 0 && IsFishPondWaterDraw(texture, source))
+                return;
             if (source.Width * scale.X < SmallestWorthCarving || source.Height * scale.Y < SmallestWorthCarving)
                 return;
             // The draw was made in screen pixels; adding the camera back stores it in world pixels,
@@ -247,6 +326,8 @@ namespace SDVRadiance
             Stamps.AddRange(_collecting);
             _collecting.Clear();
             _drawDepth = 0;
+            _baseDrawDepth = 0;
+            _ownWaterDepth = 0;
         }
 
         /// <summary>Forget everything on a warp: the frame the stamps came from belongs to the
@@ -254,6 +335,8 @@ namespace SDVRadiance
         internal static void Reset()
         {
             _drawDepth = 0;
+            _baseDrawDepth = 0;
+            _ownWaterDepth = 0;
             _collecting.Clear();
             Stamps.Clear();
         }

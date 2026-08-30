@@ -63,6 +63,10 @@ namespace SDVRadiance
             SpawnFireflies(config);
             SpawnBlossom(config);
             SpawnRingSparkles(config);
+            ScanWaterBreathSources();
+            SpawnWaterfallMist(config);
+            SpawnHotSpringSteam(config);
+            SpawnLavaSparks(config);
         }
 
         /// <summary>How fast the player is moving and in which direction, in world pixels a second,

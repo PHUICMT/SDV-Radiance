@@ -20,11 +20,18 @@ namespace SDVRadiance
         Mirror,     // sprite-free scenery mirror source RT
         Flood,      // the flood GI lightmap texture itself (1 cell = 1 tile) - flick the room-light
                     // toggle and watch the window's cells brighten/darken without guessing from the scene
+        Normals,    // the sprite normal buffer the relief reads (RG = xy, B = z, A = coverage)
         // Not a water channel, and painted by floodlight.fx rather than by an overlay texture:
         // which pixels the lighting pass believes ARE a light source rather than lit by one.
         // The question "is the flame being caught at all" has been answered by argument twice and
         // both answers were wrong, so it gets a picture instead.
         Emitter,
+        // Also painted by floodlight.fx: the per-light shadow terms themselves, before they touch
+        // the picture. R = the deepest occlusion any shadowed light found on its ray to this pixel,
+        // G = the carve taken out of the game's own glow, B = the occluder mask under the pixel.
+        // A saw-toothed shadow edge, or a gap between a thing and its shadow, is either in these
+        // terms or in what they multiply, and a screenshot of the lit scene cannot say which.
+        LampShadow,
         // Painted by water.fx: where the caustic term lands and how hard, as pure red on the bed.
         // "I toggled it and saw nothing" cannot be argued with a number alone when the number
         // says 0.41; this shows the shape or shows nothing, and either answer settles it.
@@ -35,6 +42,18 @@ namespace SDVRadiance
         // count in radiance_report answers, and "is something drawn over it", which only a
         // picture at the real depth can.
         Window,
+        // Painted by water.fx over the water itself: what the MIRROR is reading. R = the source is
+        // flat ground, G = the source is water, B = how much of the mirror has already given way
+        // to sky there. A reflection that looks like the wrong thing is a question about its
+        // SOURCE, and a picture of the scene cannot answer it: the pale sheet over a forest stream
+        // was read as a reflected sand path for an hour, and this said water in one frame.
+        MirrorSource,
+        // Painted by water.fx over the whole frame, before any water gating: the sky glow's own
+        // inputs. R = the aurora amount the shader actually received, G = the curtain field's
+        // height here, B = the shooting star's envelope. Whether the aurora exists at all has now
+        // been answered by argument three times and every answer was wrong, including one built
+        // on a report line that proved only what the CPU computed, not what the shader got.
+        Sky,
     }
 
     /// <summary>
@@ -406,15 +425,24 @@ namespace SDVRadiance
                 case DebugOverlayChannel.Mirror:
                     DrawScreenTexture(spriteBatch, _mirrorSourceRenderTarget);
                     break;
+                case DebugOverlayChannel.Normals:
+                    DrawScreenTexture(spriteBatch, _normalRenderTarget);
+                    break;
                 case DebugOverlayChannel.Flood:
-                    if (_flood.Texture != null)
                     {
-                        // 1 cell = 1 world tile = 64 px, anchored to the flood map's world origin.
-                        float fx = _flood.Origin.X * 64f - Game1.viewport.X;
-                        float fy = _flood.Origin.Y * 64f - Game1.viewport.Y;
-                        var dest = new Rectangle((int)fx, (int)fy,
-                            (int)(_flood.MapSize.X * 64f), (int)(_flood.MapSize.Y * 64f));
-                        spriteBatch.Draw(_flood.Texture, dest, Color.White);
+                        // Whichever GI model is showing: the flood grid (1 cell = 1 tile = 64 px) or
+                        // the cascades' map (2 probes per tile), each anchored to its own world origin.
+                        bool cascades = _cascadeBlend > 0.5f && _cascades.Texture != null;
+                        Texture2D? map = cascades ? _cascades.Texture : _flood.Texture;
+                        Vector2 mapOrigin = cascades ? _cascades.Origin : _flood.Origin;
+                        Vector2 mapSize = cascades ? _cascades.MapSize : _flood.MapSize;
+                        if (map != null)
+                        {
+                            float fx = mapOrigin.X * 64f - Game1.viewport.X;
+                            float fy = mapOrigin.Y * 64f - Game1.viewport.Y;
+                            var dest = new Rectangle((int)fx, (int)fy, (int)(mapSize.X * 64f), (int)(mapSize.Y * 64f));
+                            spriteBatch.Draw(map, dest, Color.White);
+                        }
                     }
                     break;
                 case DebugOverlayChannel.Emitter:
@@ -425,6 +453,14 @@ namespace SDVRadiance
             }
             Utility.drawTextWithShadow(spriteBatch, $"radiance_debug: {DebugChannel}", Game1.smallFont,
                 new Vector2(12, 12), Color.White);
+            if (DebugChannel == DebugOverlayChannel.Normals)
+                Utility.drawTextWithShadow(spriteBatch,
+                    $"recorded {SpriteDrawRecorder.LastCount} draws ({SpriteDrawRecorder.PatchedOverloads} overloads patched), replayed {_normalPassDrawn}, ease={_reliefEase:F2}   {_sheetNormals.Describe()}",
+                    Game1.smallFont, new Vector2(12, 36), Color.Yellow);
+            if (DebugChannel == DebugOverlayChannel.Normals)
+                Utility.drawTextWithShadow(spriteBatch,
+                    $"sway strips {FoliageSway.StripDrawsThisFrame}   upscaled draws {SheetUpscaler.RedirectedThisFrame} ({SheetUpscaler.PatchedOverloads} overloads)   {SheetUpscaler.Cache.Describe()}",
+                    Game1.smallFont, new Vector2(12, 60), Color.Yellow);
             if (DebugChannel == DebugOverlayChannel.Flood && Game1.currentLocation != null)
             {
                 // Live read-back so toggling a light shows up as a NUMBER, not a hunch.
@@ -439,7 +475,8 @@ namespace SDVRadiance
                 Utility.drawTextWithShadow(spriteBatch,
                     $"cell@{pt} = {_flood.Probe(pt.X, pt.Y)}   glow {glowProbe}   "
                     + $"roomLight={FloodLightmap.WindowRoomScale:F2} patch={FloodLightmap.WindowPatchScale:F2}   "
-                    + FloodLightmap.LastWindowSeed,
+                    + FloodLightmap.LastWindowSeed
+                    + $"   blend={_cascadeBlend:F2} {_cascades.LastReport}",
                     Game1.smallFont, new Vector2(12, 36), Color.Yellow);
             }
         }

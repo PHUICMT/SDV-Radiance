@@ -30,7 +30,6 @@ namespace SDVRadiance
         private RenderTarget2D? _halfResolutionScratchB;       // half-res scratch
         private Effect? _bloom;
         private Effect? _colorGrade;
-        private Effect? _godRays;
         private Effect? _fogEffect;
         private Effect? _cloudShadow;
         private Effect? _tiltShift;
@@ -62,7 +61,7 @@ namespace SDVRadiance
         /// not fill can, so that the array changes only where a pool has already tapered to
         /// nothing. The shader skips a slot in one branch where its pool cannot reach the pixel,
         /// so the extra slots cost a distance test each, not a light each.</para></summary>
-        private const int MaxLights = 48;
+        internal const int MaxLights = 48;
         /// <summary>The lighting shader's own array size. MUST EQUAL <c>MAX_LIGHTS</c> in
         /// shaders/lighting.fx, and editing that file means recompiling it by hand with mgfxc -
         /// dotnet build only copies the .mgfxo, so a shader change that is only made in the .fx
@@ -370,7 +369,9 @@ namespace SDVRadiance
             sb.AppendLine($"ready: occluders={_isFloodOcclusionReady} shadows={_shadowsReady} waterOnScreen={_hasWaterInMask} "
                         + $"lights={_lightCount} meteredExposure={_meteredExposure:F3}");
             sb.AppendLine($"    sun shafts: strength={_dbgShaftStrength:F3} dir=({_dbgShaftDir.X:F2},{_dbgShaftDir.Y:F2}) "
-                        + $"(0 = a gate closed: god rays off, sun source off, indoors, or no sun)");
+                        + $"(0 = a gate closed: sun source off, indoors, or no sun)");
+            sb.AppendLine($"    lamp shafts: strength={_dbgLampShaftStrength:F3} presence={_godRayAmount:F2} "
+                        + $"(0 = switched off, flood lighting off, overcast outdoors, or still fading)");
             // A fade at 0 means the stage is listed but contributing nothing this frame, which
             // looks identical to "switched off" from the outside and is not the same problem.
             sb.AppendLine("presence (0 = contributing nothing this frame):");
@@ -382,9 +383,9 @@ namespace SDVRadiance
             // the player as "the mod is not working" with no error anywhere they would look.
             var missing = new List<string>();
             void Check(string name, Effect? fx) { if (fx == null) missing.Add(name); }
-            Check("bloom", _bloom); Check("colorgrade", _colorGrade); Check("godrays", _godRays);
+            Check("bloom", _bloom); Check("colorgrade", _colorGrade);
             Check("fog", _fogEffect); Check("cloudshadow", _cloudShadow); Check("tiltshift", _tiltShift);
-            Check("water", _water); Check("floodlight", _floodEffect); Check("finishing", _finishing);
+            Check("water", _water); Check("floodlight", _floodEffect); Check("cascades", _cascadesEffect); Check("normals", _normalsEffect); Check("finishing", _finishing);
             Check("lighting", _lighting); Check("tail", _tail); Check("upscale", _upscale);
             sb.AppendLine(missing.Count == 0
                 ? "shaders: all loaded"
@@ -565,7 +566,7 @@ namespace SDVRadiance
         // Reused per-frame stage list + cached stage delegates (see Apply).
         private readonly List<Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>> _stages = new();
         private Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>?
-            _lightingStageDelegate, _waterStageDelegate, _cloudShadowStageDelegate, _godRaysStageDelegate, _bloomStageDelegate, _fogStageDelegate, _colorGradeStageDelegate, _tiltShiftStageDelegate, _finishingStageDelegate, _floodStageDelegate, _tailStageDelegate;
+            _lightingStageDelegate, _waterStageDelegate, _cloudShadowStageDelegate, _bloomStageDelegate, _fogStageDelegate, _colorGradeStageDelegate, _tiltShiftStageDelegate, _finishingStageDelegate, _floodStageDelegate, _tailStageDelegate;
 
         /// <summary>Scratch for the two per-frame "what is bound right now" queries in
         /// <see cref="Apply"/>. The parameterless GetRenderTargets() allocates a fresh array on
@@ -591,6 +592,42 @@ namespace SDVRadiance
         /// <summary>Not readonly: in split screen each camera keeps its own grid, and this holds
         /// whichever screen's turn it currently is (see RenderPipeline.Screens.cs).</summary>
         private FloodLightmap _flood = new();
+        // Radiance cascades: the same lightmap computed on the GPU (see RadianceCascades.cs), per
+        // screen like the flood grid. The blend is the cross-fade between the two models' maps,
+        // eased in BuildStageList; the ready flag says the cascades' texture is fit to read.
+        private Effect? _cascadesEffect;
+        private RadianceCascades _cascades = new();
+        private float _cascadeBlend;
+        private bool _cascadesReady;
+        // Sprite relief: the sheet normal maps and the buffer this frame's recorded world draw
+        // is replayed into with them (see SpriteDrawRecorder, SheetNormalCache). Shared by the
+        // screens - each replays before its own chain reads it.
+        private Effect? _normalsEffect;
+        private readonly SheetDerivedCache _sheetNormals;
+
+        /// <summary>Set for the one call into the normals cache that is about to bake a map's own
+        /// tilesheet: both strengths go to zero, so the map comes out as a FLAT normal carrying the
+        /// art's own alpha. It still covers what stands behind it (which skipping the draw did not:
+        /// a farmer walking behind a building showed their bevelled outline through the wall), and
+        /// it wears no bevel of its own (which a real bake did: at a cell's border the Sobel reads
+        /// the next cell of the sheet, and every drawn tile got a hard seam).</summary>
+        private bool _bakeSheetFlat;
+        /// <summary>The three ways one sheet's normal map can be baked, and therefore three cache
+        /// keys. They shared two before, and a sheet baked under the wrong one kept answering for
+        /// the right one until the relief was switched off and on again.</summary>
+        private const int NormalBakeBevelled = 0;
+        private const int NormalBakeMirrored = 1;
+        private const int NormalBakeFlat = 2;
+        /// <summary>A one-texel flat normal (straight up, opaque) for sprites with no map.</summary>
+        private Texture2D? _flatNormalTexture;
+        private RenderTarget2D? _normalRenderTarget;
+        private SpriteBatch? _normalSpriteBatch;
+        private float _reliefEase;
+        private bool _normalPassReady;
+        /// <summary>Where the camera was when the sprite-normal buffer was last drawn. The buffer
+        /// is screen space, so a frame that cannot redraw it may only reuse it from the same view.</summary>
+        private Point _normalPassViewport;
+        private int _normalPassDrawn;
 
         // Metered auto-exposure: average the scene each frame (downsampled to a
         // tiny RT, read back a frame late so there's no GPU stall) and ease the
@@ -613,14 +650,30 @@ namespace SDVRadiance
             _device = device;
             _monitor = monitor;
             _modDir = modDir;
+            _sheetNormals = new SheetDerivedCache("sheet normal maps", 192L * 1024 * 1024, 64L * 1024 * 1024, 1, 6, "Normals",
+                (effect, sheet, variant) =>
+                {
+                    // Read from the variant, which is the cache's KEY, rather than from a field set
+                    // beside the call: a bake can be answered from the cache or made now, and the
+                    // two have to agree about which bake this is or the entry is filed under a
+                    // description it does not match.
+                    bool flat = variant == NormalBakeFlat;
+                    effect.Parameters["TexelSize"]?.SetValue(new Vector2(1f / sheet.Width, 1f / sheet.Height));
+                    effect.Parameters["BevelStrength"]?.SetValue(flat ? 0f : 2.0f);
+                    effect.Parameters["ReliefStrength"]?.SetValue(flat ? 0f : 0.6f);
+                    effect.Parameters["FlipX"]?.SetValue(variant == NormalBakeMirrored ? 1f : 0f);
+                });
             _bloom = LoadEffect("bloom.mgfxo");
             _colorGrade = LoadEffect("colorgrade.mgfxo");
-            _godRays = LoadEffect("godrays.mgfxo");
             _fogEffect = LoadEffect("fog.mgfxo");
             _cloudShadow = LoadEffect("cloudshadow.mgfxo");
             _tiltShift = LoadEffect("tiltshift.mgfxo");
             _water = LoadEffect("water.mgfxo");
             _floodEffect = LoadEffect("floodlight.mgfxo");
+            _cascadesEffect = LoadEffect("cascades.mgfxo");
+            _normalsEffect = LoadEffect("normals.mgfxo");
+            SheetUpscaler.Device = device;
+            SheetUpscaler.Effect = LoadEffect("sheetscale.mgfxo");
             _finishing = LoadEffect("finishing.mgfxo");
             _lighting = LoadEffect("lighting.mgfxo");
             _tail = LoadEffect("tail.mgfxo");
@@ -695,7 +748,6 @@ namespace SDVRadiance
             (c.FloodLightingEnabled && _floodEffect != null)
             || (c.LightingEnabled && _lighting != null)
             || (c.CloudShadowEnabled && _cloudShadow != null)
-            || (c.GodRaysEnabled && _godRays != null)
             || (c.BloomEnabled && _bloom != null)
             || ((c.FogEnabled || c.FogNightMist) && _fogEffect != null)
             || ((c.ColorGradeEnabled || c.BlueLightFilter > 0.001f) && _colorGrade != null)
@@ -829,6 +881,10 @@ namespace SDVRadiance
             {
                 _fadeLocation = Game1.currentLocation;
                 _fadeWater = _fadeCloud = _fadeLighting = _fadeFlood = _fadeTilt = 0f;
+                // Snapped rather than eased, because a door is the only way in or out of a room:
+                // easing it across the warp would ramp the outdoor amount of blur in over the
+                // same half second the tilt itself is fading in, then pull it back down again.
+                _tiltIndoorEase = outdoors ? 0f : 1f;
             }
 
             // Reused list + cached delegates: method-group conversion allocates a new
@@ -837,7 +893,7 @@ namespace SDVRadiance
             stages.Clear();
             _stageNameIndices.Clear();
             _lightingStageDelegate ??= RenderLighting; _waterStageDelegate ??= RenderWater; _cloudShadowStageDelegate ??= RenderCloudShadow;
-            _godRaysStageDelegate ??= RenderGodRays; _bloomStageDelegate ??= RenderBloom; _fogStageDelegate ??= RenderFog;
+            _bloomStageDelegate ??= RenderBloom; _fogStageDelegate ??= RenderFog;
             _colorGradeStageDelegate ??= ColorGrade; _tiltShiftStageDelegate ??= RenderTiltShift; _finishingStageDelegate ??= RenderFinishing;
             _floodStageDelegate ??= RenderFloodLight;
             // Lighting first, so everything downstream (bloom/god rays/grade) sees the
@@ -846,13 +902,27 @@ namespace SDVRadiance
             // The two lighting models are mutually exclusive, so a config switch is a
             // CROSS-fade: the outgoing one keeps rendering (and keeps its inputs built)
             // until its presence reaches zero, or the room would flash unlit for ~0.5 s.
+            // Which model computes the GI lightmap. The cascades are wanted by the setting, refused
+            // by a device without RGBA16F targets, and the switch between the two is a cross-fade
+            // in the shader (LightMapBlend): both maps are built while the blend is in between,
+            // and only the one that shows once it has settled. The cascades need the occluder
+            // window, so they run after it.
+            bool cascadesWanted = config.FloodGiModel == GiModel.Cascades && _cascadesEffect != null && !_cascades.Refused;
+            Approach(ref _cascadeBlend, cascadesWanted ? 1f : 0f, 0.08f);
+            bool floodMapWanted = _cascadeBlend < 0.999f;
             bool floodOn = config.FloodLightingEnabled && _floodEffect != null
-                && TimedBuild(config, 0, () => _flood.Build(_device, w, h, config));
+                && (!floodMapWanted || TimedBuild(config, 0, () => _flood.Build(_device, w, h, config)));
             bool classicOn = !floodOn && config.LightingEnabled && _lighting != null;
             if (floodOn)
             {
                 BuildLightList(w, h, config);       // direct-light pools (shader term)
-                _isFloodOcclusionReady = TimedBuild(config, 1, () => BuildFloodOccluders(w, h));
+                _isFloodOcclusionReady = TimedBuild(config, 1, () => BuildFloodOccluders(w, h, config));
+                _cascadesReady = _cascadeBlend > FadeGone && _isFloodOcclusionReady
+                    && TimedBuild(config, 0, () => BuildCascades(config));
+                // Nothing to show yet (first frame, or the device refused): the flood carries the
+                // frame alone. Not a pop, because the cascades' map was never on screen.
+                if (!_cascadesReady)
+                    _cascadeBlend = 0f;
             }
             else if (classicOn)
                 classicOn = BuildLightList(w, h, config);
@@ -944,33 +1014,25 @@ namespace SDVRadiance
             bool cloudOn = config.CloudShadowEnabled && _cloudShadow != null && outdoors && _cloudDayFactor > 0.02f;
             _fadeCloud = cloudOn ? Ease01(_fadeCloud) : Ease0(_fadeCloud);
             if (_fadeCloud > FadeGone && _cloudShadow != null) AddStage(_cloudShadowStageDelegate!, 3);
-            // God rays only when there's a real light source on screen (lamp/torch/fire).
-            // Every on-screen lamp (up to MaxRayLights) is its own beam origin now — the
-            // old single pick either glided the one beam across the screen to the next
-            // lamp or had to fade through black to jump; per-light origins make both
-            // workarounds unnecessary, so the presence ease below only handles weather,
-            // daylight and lights entering/leaving the screen.
-            if (config.GodRaysEnabled && _godRays != null)
+            // Lamp shafts are drawn INSIDE the flood pass now, from the same occluder mask the sun
+            // shafts march (floodlight.fx, LampShaftStrength); the bright-pass stage that used to
+            // sit here is gone with its shader. What is decided here is only their presence, eased
+            // so weather and daylight fade them rather than flip them.
             {
-                bool hasLight = UpdateRayLights(config);
-                // Rain/snow: the overcast sky kills visible shafts — fade the rays out (and
-                // back in when it clears). Eased through _godRayAmount so it never pops.
+                // Rain/snow: the overcast sky kills visible shafts outdoors.
                 bool overcast = outdoors && (Game1.isRaining || Game1.isSnowing || Game1.isLightning);
                 // Shafts are a LOW-LIGHT phenomenon: they exist where a bright source beats a
-                // dim surround. At high noon outdoors nothing on screen is dim, so the same
-                // pass read as a wash hanging off every bright object ("a glow, not god rays").
-                // Ride the presence down to 30% at midday and back to full by
-                // 08:00 / 17:00 — golden hour and night keep the full look. Indoors untouched:
-                // a lamp in a dark room is exactly what rays are for.
+                // dim surround. At high noon outdoors nothing on screen is dim, so ride the
+                // presence down to 30% at midday and back to full by 08:00 / 17:00. Indoors
+                // untouched: a lamp in a dark room is exactly what shafts are for.
                 float rayDay = 1f;
                 if (outdoors)
                 {
                     int rm = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
                     rayDay = 1f - 0.7f * (1f - MathHelper.Clamp(Math.Abs(rm - 750) / 270f, 0f, 1f));
                 }
-                float rayTarget = (hasLight && !overcast) ? rayDay : 0f;
+                float rayTarget = (config.GodRaysEnabled && config.FloodLightingEnabled && !overcast) ? rayDay : 0f;
                 Approach(ref _godRayAmount, rayTarget, 0.05f); // ~0.5s fade
-                if (_godRayAmount > 0.01f && _godRayLights.Count > 0) AddStage(_godRaysStageDelegate!, 4);
             }
             if (config.BloomEnabled && _bloom != null) AddStage(_bloomStageDelegate!, 5);
             // Fog is a weak, patchy effect indoors (and covers the black border), so outdoors only.
@@ -992,14 +1054,24 @@ namespace SDVRadiance
             Approach(ref _toneMapEase, config.ColorGradeEnabled && config.ColorGradeToneMap ? 1f : 0f, 0.08f);
             Approach(ref _vignetteEase, config.VignetteEnabled ? 1f : 0f, 0.08f);
             Approach(ref _caEase, config.ChromaticAberrationEnabled && !eventNow ? 1f : 0f, 0.15f);
+            // The haze's sources come from the same scan the water-breath particles use; the
+            // scan is called here too so the haze works with the particle switch off. It
+            // early-outs unless the camera crossed a tile.
+            ScanWaterBreathSources();
+            Approach(ref _heatHazeEase, config.HeatHazeEnabled && HeatOnScreen ? 1f : 0f, 0.05f);
+            bool hazeLive = _heatHazeEase > FadeGone && _heatMapTexture != null;
             bool gradeWanted = (config.ColorGradeEnabled || config.BlueLightFilter > 0.001f) && _colorGrade != null;
-            bool finishWanted = (config.VignetteEnabled || config.ChromaticAberrationEnabled) && _finishing != null;
+            bool finishWanted = (config.VignetteEnabled || config.ChromaticAberrationEnabled || hazeLive) && _finishing != null;
             // Tilt-shift presence first (its fade must be updated before the tail decision):
             // NOT during events - the game draws the event UI (SKIP button) as part of the
             // world frame, and the bottom blur band smears it unreadable. Cutscenes keep
             // the rest of the stack (grade/bloom/fog/clouds) for the cinematic look.
             bool tiltOn = config.TiltShiftEnabled && _tiltShift != null && !eventNow;
             _fadeTilt = tiltOn ? Ease01(_fadeTilt) : Ease0(_fadeTilt);
+            // Kept moving even while the blur is off, so it is already where it belongs on the
+            // frame the blur comes back. A location that turns its own roof on and off without a
+            // warp is the case this ramp exists for; a door snaps it above instead.
+            Approach(ref _tiltIndoorEase, outdoors ? 0f : 1f, 0.08f);
             bool tiltLive = _fadeTilt > FadeGone && _tiltShift != null;
             // Fused tail: ONE draw instead of grade + finishing whenever both are wanted,
             // CA is dormant, and tilt-shift is not in the chain. With CA live the fused
@@ -1008,7 +1080,10 @@ namespace SDVRadiance
             // stage in the middle, so fusing the ends would change what gets blurred. Both
             // fall back to the old chain; at the CA swap boundary its contribution is
             // below the FadeGone floor, well under a pixel of channel split.
-            bool useTail = _tail != null && gradeWanted && finishWanted && _caEase <= FadeGone && !tiltLive;
+            // The fused tail does not know the haze, so a screen with live heat on it takes
+            // the separate grade + finishing path. Heat on screen means a volcano floor or a
+            // hot spring, which is exactly where one extra pass is worth the shimmer.
+            bool useTail = _tail != null && gradeWanted && finishWanted && _caEase <= FadeGone && !tiltLive && !hazeLive;
             if (!useTail && gradeWanted)
                 AddStage(_colorGradeStageDelegate!, 7);
             // Kept in the list while it decays, so a cutscene STARTING pulls the blur out
@@ -1091,6 +1166,9 @@ namespace SDVRadiance
                 AdvanceWetness(config);
 
                 var stages = BuildStageList(config, w, h);
+                // The sprite normal buffer for this frame, before the chain copies the scene: it is
+                // read by the flood stage and must be bound to nothing by then.
+                RenderNormalPass(config, target);
 
                 // Into the game's own frame, before the chain copies it: particles drawn here are
                 // lit, rippled, bloomed and graded exactly like the map pixels around them. The
@@ -1654,16 +1732,22 @@ namespace SDVRadiance
             _waterSignedDistanceTexture?.Dispose(); _waterSignedDistanceTexture = null;
             _waterRealShoreDistanceTexture?.Dispose(); _waterRealShoreDistanceTexture = null;
             _waterPlungeChurnTexture?.Dispose(); _waterPlungeChurnTexture = null;
+            _surfaceClassTexture?.Dispose(); _surfaceClassTexture = null; _surfaceClassSource = null;
+            _neutralSurfaceTexture?.Dispose(); _neutralSurfaceTexture = null;
             _fallDistanceFarTexture?.Dispose(); _fallDistanceFarTexture = null;
             _sceneRenderTarget?.Dispose(); _fullResolutionPingA?.Dispose(); _fullResolutionPingB?.Dispose(); _halfResolutionScratchA?.Dispose(); _halfResolutionScratchB?.Dispose(); _cloudMaskKeep?.Dispose(); _cloudMaskKeep = null; _waterMask?.Dispose(); _occluderMask?.Dispose(); _floodOccluderMask?.Dispose(); _luminanceRenderTarget?.Dispose(); _noiseTexture?.Dispose(); _noiseTexture = null;
             _spriteMaskRenderTarget?.Dispose(); _spriteMaskSpriteBatch?.Dispose();
+            _floodOccluderBaseTexture?.Dispose(); _floodOccluderSpriteBatch?.Dispose();
+            for (int i = 0; i < _floodOccluderSoft.Length; i++) { _floodOccluderSoft[i]?.Dispose(); _floodOccluderSoft[i] = null; }
+            _floodOccluderBaseTexture = null; _floodOccluderSpriteBatch = null;
             _maskDebugTexture?.Dispose(); _maskDebugTexture = null;
-            _bloom?.Dispose(); _colorGrade?.Dispose(); _godRays?.Dispose(); _fogEffect?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
-            _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose(); _floodEffect?.Dispose(); _flood.Dispose();
+            _bloom?.Dispose(); _colorGrade?.Dispose(); _fogEffect?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
+            _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose(); _floodEffect?.Dispose(); _flood.Dispose(); _cascadesEffect?.Dispose(); _cascades.Dispose(); _normalsEffect?.Dispose(); _sheetNormals.Dispose(); _normalRenderTarget?.Dispose(); _normalRenderTarget = null; _flatNormalTexture?.Dispose(); _flatNormalTexture = null; SheetUpscaler.Dispose(); _normalSpriteBatch?.Dispose(); _normalSpriteBatch = null;
+            _heatMapTexture?.Dispose();
             _sceneRenderTarget = _fullResolutionPingA = _fullResolutionPingB = _halfResolutionScratchA = _halfResolutionScratchB = null;
             _waterMask = null; _occluderMask = null; _floodOccluderMask = null; _luminanceRenderTarget = null;
             _spriteMaskRenderTarget = null; _spriteMaskSpriteBatch = null;
-            _bloom = _colorGrade = _godRays = _fogEffect = _cloudShadow = _tiltShift = _water = _finishing = _lighting = _floodEffect = null;
+            _bloom = _colorGrade = _fogEffect = _cloudShadow = _tiltShift = _water = _finishing = _lighting = _floodEffect = _cascadesEffect = _normalsEffect = null;
             _fxParamCache.Clear(); // parameter cache keys pin the disposed Effects otherwise
             _particles?.Dispose(); _particles = null;
             _labelDiffTexture?.Dispose(); _labelDiffTexture = null;

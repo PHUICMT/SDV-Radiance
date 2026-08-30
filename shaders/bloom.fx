@@ -32,6 +32,7 @@ float Threshold;      // luminance cutoff for the bright-pass (0..1)
 float Intensity;      // how strongly bloom is added back (0..2)
 float2 TexelSize;     // (1/width, 1/height) of the blur source, for tap offsets
 float BloomWarm;      // 0 by day .. 1 at night: tint the bloom warm so lamps/windows glow amber
+float EmissiveBoost;  // 0..1: how far a saturated bright pixel may glow below Threshold
 
 struct PixelInput
 {
@@ -86,7 +87,16 @@ float4 BrightPassPS(PixelInput input) : SV_TARGET
     float3 c = (s0 * w0 + s1 * w1 + s2 * w2 + s3 * w3) / (w0 + w1 + w2 + w3);
 
     float lum = dot(c, LUMA);
-    float knee = smoothstep(Threshold, Threshold + 0.25, lum);
+    // Saturated AND bright reads as a light SOURCE: a lit pane, lava, a flame, a crystal.
+    // Bright but grey reads as a lit SURFACE - snow, a white wall - which is exactly the
+    // pixel the old god rays wrongly promoted to a light and paid for. Chroma is zero on
+    // every grey no matter how bright, so this gate only ever opens for colour.
+    float brightest = max(c.r, max(c.g, c.b));
+    float chroma = brightest - min(c.r, min(c.g, c.b));
+    float saturation = chroma / max(brightest, 1e-4);
+    float emissive = smoothstep(0.35, 0.75, saturation) * smoothstep(0.50, 0.95, lum);
+    float gate = Threshold - EmissiveBoost * 0.35 * emissive;
+    float knee = smoothstep(gate, gate + 0.25, lum);
     return float4(c * knee, 1.0);
 }
 

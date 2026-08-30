@@ -22,6 +22,83 @@ namespace SDVRadiance
     /// </summary>
     internal sealed partial class ShadowRenderer
     {
+        /// <summary>
+        /// Where every creature is right now, so one can be walked to instead of hunted for
+        /// (<c>radiance_creatures</c>).
+        ///
+        /// <para>A wildlife mod's animals wander, and testing what their shadow does meant warping
+        /// around a map hoping to land near one. This asks the game where they are: every character
+        /// whose class comes from outside the game's own code, plus horses, pets and farm animals,
+        /// with the tile to warp to and the two numbers that decide how their shadow is laid
+        /// down.</para>
+        ///
+        /// <para>With <paramref name="everywhere"/> it walks every loaded location rather than the
+        /// one underfoot, which is the only way to find a creature you are not already standing
+        /// next to.</para>
+        /// </summary>
+        internal static string CreatureCensus(bool everywhere, ShadowModel model)
+        {
+            var report = new StringBuilder();
+            var seen = new System.Collections.Generic.List<GameLocation>();
+            if (everywhere)
+            {
+                Utility.ForEachLocation(candidate => { seen.Add(candidate); return true; });
+            }
+            else if (Game1.currentLocation != null)
+            {
+                seen.Add(Game1.currentLocation);
+            }
+            report.AppendLine($"[creatures] scanning {seen.Count} location(s), time={Game1.timeOfDay} season={Game1.season}");
+            int total = 0;
+            foreach (GameLocation location in seen)
+            {
+                int here = 0;
+                var lines = new StringBuilder();
+                foreach (NPC npc in location.characters)
+                {
+                    if (npc?.Sprite == null)
+                        continue;
+                    bool fromAnotherMod = npc.GetType().Assembly != typeof(NPC).Assembly;
+                    if (!fromAnotherMod && npc is not StardewValley.Characters.Horse
+                        && npc is not StardewValley.Characters.Pet)
+                        continue;
+                    Point tile = npc.TilePoint;
+                    here++;
+                    lines.AppendLine($"  {npc.GetType().Name,-18} {npc.Name,-18} tile={tile.X},{tile.Y} "
+                        + $"sprite={npc.Sprite.SpriteWidth}x{npc.Sprite.SpriteHeight} "
+                        + $"laysDown={(StandsLikeAPerson(npc, model) ? "person" : "solid")} "
+                        + $"hideShadow={npc.HideShadow} shadow={(ShadowHiddenFor(npc) ? "SKIPPED" : "cast")} "
+                        + $"from={(fromAnotherMod ? npc.GetType().Assembly.GetName().Name : "the game")}");
+                }
+                foreach (FarmAnimal animal in location.animals.Values)
+                {
+                    if (animal?.Sprite == null)
+                        continue;
+                    Point tile = animal.TilePoint;
+                    here++;
+                    lines.AppendLine($"  {"FarmAnimal",-18} {animal.Name,-18} tile={tile.X},{tile.Y} "
+                        + $"sprite={animal.Sprite.SpriteWidth}x{animal.Sprite.SpriteHeight} "
+                        + "laysDown=solid shadow=cast from=the game");
+                }
+                if (here == 0)
+                    continue;
+                total += here;
+                report.AppendLine($"[{location.NameOrUniqueName}] {here}");
+                report.Append(lines);
+            }
+            if (total == 0)
+            {
+                report.AppendLine(everywhere
+                    ? "  (none anywhere: no horse, no pet, and nothing from a creature mod is spawned right now)"
+                    : "  (none here — try 'radiance_creatures all')");
+            }
+            else
+            {
+                report.AppendLine($"[creatures] {total} total. Warp beside one with: debug warp <location> <x> <y>");
+            }
+            return report.ToString();
+        }
+
         internal static string Report(ModConfig config, bool wholeMap)
         {
             GameLocation? location = Game1.currentLocation;
@@ -58,7 +135,7 @@ namespace SDVRadiance
             Vector2 cur = Game1.currentCursorTile;
             report.AppendLine($"[shadows] cursor tile={cur.X},{cur.Y} player tile={Game1.player?.TilePoint} viewport={viewport.X},{viewport.Y}");
 
-            AppendCharacters(report, location, w);
+            AppendCharacters(report, location, w, config.DirectionalShadowModel);
             AppendOtherFarmers(report, location, w);
             AppendEntities(report, location, w);
 
@@ -100,9 +177,33 @@ namespace SDVRadiance
         }
 
         /// <summary>Every character the pass would walk, and the verdict it would reach.</summary>
-        private static void AppendCharacters(StringBuilder report, GameLocation location, ScanWindow w)
+        private static void AppendCharacters(StringBuilder report, GameLocation location, ScanWindow w, ShadowModel model)
         {
             report.AppendLine("[shadows] characters (verdict = what the shadow pass does with it):");
+            report.AppendLine($"  own-blob classes seen: {ShadowSuppression.SelfShadowedCharacterTypes.Count}"
+                + (ShadowSuppression.SelfShadowedCharacterTypes.Count > 0
+                    ? " (" + string.Join(", ", System.Linq.Enumerable.Select(ShadowSuppression.SelfShadowedCharacterTypes, t => t.Name)) + ")" : "")
+                + $"; mod character draws patched: {ShadowSuppression.PatchedCharacterDraws.Count}"
+                + (ShadowSuppression.PatchedCharacterDraws.Count > 0 ? " (" + string.Join(", ", ShadowSuppression.PatchedCharacterDraws) + ")" : ""));
+            // A round patch under a creature is either the blob its own mod paints or our
+            // silhouette laid flat, and on sand at four times scale those are the same picture.
+            // What CAN be read is whether the draw came through our shim at all. Swallowed means
+            // we saw it and dropped it; let through means we saw it and our shadows were off. A
+            // blob on the screen with both of these at zero is a blob painted from a method the
+            // patch never reached, which is a hole rather than a taste question.
+            report.AppendLine($"  own-blob draws since the last report: {ShadowSuppression.BlobDrawsSwallowed} swallowed, "
+                + $"{ShadowSuppression.BlobDrawsLetThrough} let through "
+                + "(both zero AND a round patch under a creature = its mod paints it somewhere we never see)");
+            // And the game's OWN blob, per class, for the same window. A class that never appears
+            // here was never offered to us: its round patch is drawn by something that does not go
+            // through Character.DrawShadow, and reading the game's source for the class will not
+            // show that.
+            report.AppendLine("  vanilla DrawShadow taken away since the last report: "
+                + (ShadowSuppression.VanillaShadowSuppressed.Count == 0
+                    ? "nothing (nobody offered us one)"
+                    : string.Join(", ", System.Linq.Enumerable.Select(
+                        ShadowSuppression.VanillaShadowSuppressed, pair => $"{pair.Key} x{pair.Value}"))));
+            ShadowSuppression.ResetBlobTally();
             int shown = 0;
             foreach (NPC npc in CharactersIn(location))
             {
@@ -136,6 +237,13 @@ namespace SDVRadiance
                             + $"spriteTop={(int)sprTop} spriteBottom={(int)sprBottom} "
                             + $"originY={(int)((anchorPt.Y - sprTop) / 4f)}/{npc.Sprite?.SourceRect.Height ?? 0} "
                             + $"spriteH={npc.Sprite?.SpriteHeight ?? 0} srcH={npc.Sprite?.SourceRect.Height ?? 0} "
+                            // Which lay-down this caster gets, and the two numbers that decided it.
+                            // A creature whose frame is taller than it is wide is read as a person
+                            // and keeps the narrow foreshortening, which is the right answer for a
+                            // villager and the wrong-looking one for a long-necked bird, so the
+                            // question needs to be answerable from here rather than by eye.
+                            + $"spriteW={npc.Sprite?.SpriteWidth ?? 0} "
+                            + $"laysDown={(StandsLikeAPerson(npc, model) ? "person" : "solid")} "
                             + $"eventActor={npc.EventActor} simpleNonVillager={npc.SimpleNonVillagerNPC} "
                             + $"hideShadow={npc.HideShadow} layingDown={npc.layingDown} drawOffset={npc.drawOffset.X},{npc.drawOffset.Y} "
                             + $"water={OnWater(location, t)} "

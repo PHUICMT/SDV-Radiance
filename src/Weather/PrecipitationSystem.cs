@@ -46,6 +46,14 @@ namespace SDVRadiance
         /// <summary>Vertical speed of the front layer, in buffer pixels per second. Anchored on
         /// vanilla's measured ~343-457 px/s so the replacement reads as the same storm.</summary>
         private const float BaseFallPixelsPerSecond = 460f;
+        /// <summary>The wind the slant dial brings of its own at the top of its range, in pixels
+        /// per second. Against the fall speed above it is a lean of about fifty degrees, which is
+        /// driving rain and not a horizontal smear.</summary>
+        private const float SlantOwnWindPixelsPerSecond = 520f;
+        /// <summary>The top of the slant dial, as ModConfig clamps it.</summary>
+        private const float MaxRainSlant = 3f;
+        /// <summary>The hardest slant the pair of them can reach: about seventy degrees.</summary>
+        private const float MaxSlantedWindPixelsPerSecond = 1300f;
         /// <summary>Three planes of rain, back to front. The back layer is slow, short and faint;
         /// the front is fast, long and bright. That difference IS the depth.</summary>
         private static readonly float[] RainLayerSpeed = { 0.55f, 0.80f, 1.10f };
@@ -122,6 +130,8 @@ namespace SDVRadiance
         /// the slant drifts instead of snapping. Shared statics on purpose: both split-screen
         /// halves must lean the same way.</summary>
         private static float _windPixelsPerSecond = -120f;
+        /// <summary>The wind the rain leans with, signed, for anything else that moves in it (the foliage sway).</summary>
+        internal static float WindPixelsPerSecond => _windPixelsPerSecond;
 
         private static Texture2D? _streakTexture;
         private static Texture2D? _flakeTexture;
@@ -398,6 +408,36 @@ namespace SDVRadiance
         private static float Approach(float current, float target, float amount)
             => current + (target - current) * Math.Clamp(amount, 0f, 1f);
 
+        /// <summary>How fast sideways the rain travels, in pixels per second, once the player's
+        /// slant dial has had its say.
+        ///
+        /// <para>
+        /// The dial was a plain multiplier on the game's own wind, and on a quiet rainy day the
+        /// game reports almost none: three times almost nothing is still rain falling straight
+        /// down, so the top of the slider looked like it did nothing. Above 1 it now brings a wind
+        /// of its own instead, so the rain leans on a windless day too. At 1 and below it is the
+        /// old multiplier exactly, and a save that never touched the dial falls as it always did.
+        /// </para>
+        ///
+        /// <para>
+        /// The added wind blows the way the weather already does. The game's own drift is leftward
+        /// and stays leftward, so rather than take the sign of a value that wobbles across zero
+        /// twice a minute - which would snap every drop mid-fall - it follows that drift unless
+        /// the wind is genuinely blowing the other way.
+        /// </para>
+        /// </summary>
+        private static float SlantedWind(float slant)
+        {
+            float scaled = _windPixelsPerSecond * slant;
+            if (slant <= 1f)
+                return scaled;
+            float direction = _windPixelsPerSecond > 30f ? 1f : -1f;
+            float own = direction * SlantOwnWindPixelsPerSecond * (slant - 1f) / (MaxRainSlant - 1f);
+            // Rain that crosses the screen three times faster than it falls has stopped reading as
+            // rain, so the pair is capped at a hard driving slant rather than a horizontal streak.
+            return Math.Clamp(scaled + own, -MaxSlantedWindPixelsPerSecond, MaxSlantedWindPixelsPerSecond);
+        }
+
         // ---- seeding + camera lock --------------------------------------------------------------
 
         private static void EnsureSeeded(ScreenPrecipitation screen, int viewportWidth, int viewportHeight)
@@ -513,7 +553,7 @@ namespace SDVRadiance
                 // The slant the player chose is applied to the TRAVEL, and the streak is drawn
                 // at the angle of that travel, so a harder slant is rain that really does cross
                 // the screen faster rather than a sprite leaning while it falls straight.
-                drop.Position.X += _windPixelsPerSecond * rainSlant * RainLayerSpeed[drop.Layer] * dt;
+                drop.Position.X += SlantedWind(rainSlant) * RainLayerSpeed[drop.Layer] * dt;
                 drop.Position.Y += fall;
                 drop.FallRemaining -= fall;
                 if (drop.Position.X < -64f) drop.Position.X += viewportWidth + 128;
@@ -672,7 +712,7 @@ namespace SDVRadiance
             float windSize = dials?.PrecipitationWindSize ?? 1f;
             float windOpacity = dials?.PrecipitationWindOpacity ?? 1f;
             float fallSpeed = BaseFallPixelsPerSecond;
-            float streakAngle = MathF.Atan2(-_windPixelsPerSecond * (dials?.PrecipitationRainSlant ?? 1f), fallSpeed);
+            float streakAngle = MathF.Atan2(-SlantedWind(dials?.PrecipitationRainSlant ?? 1f), fallSpeed);
             if (_streakTexture != null)
             {
                 Color streakTint = Shaded(Color.Lerp(RainTint, GreenRainTint, screen.GreenEase), ambient);

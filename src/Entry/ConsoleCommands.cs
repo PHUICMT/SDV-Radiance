@@ -109,6 +109,13 @@ namespace SDVRadiance
             helper.ConsoleCommands.Add("radiance_tile",
                 "Dump water-related data for the tile under the player, or 'radiance_tile x y' for any tile (layer properties, HF class, isWaterTile, compose flags).",
                 (_, args) => DumpTile(s => monitor.Log(s, LogLevel.Info), getPipeline(), getConfig(), args));
+            helper.ConsoleCommands.Add("radiance_reliefdraws",
+                "Name the sprites the sprite relief is embossing over one tile: 'radiance_reliefdraws' for the "
+                + "tile under the player, or 'radiance_reliefdraws x y' for any tile. Prints each recorded draw "
+                + "that covers it - sheet name, source cell, alpha and size, and whether it is BEVELLED or "
+                + "left FLAT - so a thing that should not be wearing a bevel (water, a glow, an effect) can "
+                + "be named instead of guessed at.",
+                (_, args) => DumpReliefDraws(s => monitor.Log(s, LogLevel.Info), getPipeline(), args));
             helper.ConsoleCommands.Add("radiance_screenwatch",
                 "Trace the per-screen render pass for the next N calls (default 60). Prints which screen asked, "
                 + "whether effects were active for it, and the caches that are keyed to where the camera is. "
@@ -119,6 +126,17 @@ namespace SDVRadiance
                     int frames = args.Length >= 1 && int.TryParse(args[0], out int f) ? Math.Clamp(f, 1, 600) : 60;
                     ModEntry.ScreenWatchFrames = frames;
                     monitor.Log($"Watching the render pass for {frames} calls (split screen spends two per frame).", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_reflectwatch",
+                "Trace the entity mirror for the next N frames (default 300) and print only what changes: "
+                + "whether the bake ran, how many trees and bodies it stamped, how many creatures drew their own "
+                + "mirror and how many came out empty, and the mask window it asked. For a reflection that "
+                + "comes and goes: run it, then WALK along the water, and read which number moves.",
+                (_, args) =>
+                {
+                    int frames = args.Length >= 1 && int.TryParse(args[0], out int rf) ? Math.Clamp(rf, 1, 3600) : 300;
+                    RenderPipeline.ReflectWatchFrames = frames;
+                    monitor.Log($"Watching the entity mirror for {frames} frames. Walk along the water now.", LogLevel.Info);
                 });
             helper.ConsoleCommands.Add("radiance_lightwatch",
                 "Trace the light array for the next N frames (default 60) and print only what changes: "
@@ -206,7 +224,7 @@ namespace SDVRadiance
                 "List on-screen tiles whose water has effect but no march (ripple without reflection - the orange tiles in the radiance_debug water overlay), worst first.",
                 (_, _) => monitor.Log(getPipeline()?.DescribeEffectOnlyTiles() ?? "pipeline not ready", LogLevel.Info));
             helper.ConsoleCommands.Add("radiance_maskdump",
-                "Save the water mask textures to PNG in the temp folder (debug).",
+                "Save the water mask and the flood occluder mask to PNG in the temp folder (debug).",
                 (_, _) => monitor.Log(getPipeline()?.DumpMasks(System.IO.Path.GetTempPath()) ?? "pipeline not ready", LogLevel.Info));
             helper.ConsoleCommands.Add("radiance_maskview",
                 "Toggle the live water-mask overlay (cyan = full effect, orange = effect-only art water, green rim = reflection shoreline). Same as: radiance_debug water",
@@ -217,7 +235,7 @@ namespace SDVRadiance
                     monitor.Log($"Water mask overlay: {(RenderPipeline.MaskView ? "ON" : "OFF")} (rebuilds on next tile crossing / within 10s)", LogLevel.Info);
                 });
             helper.ConsoleCommands.Add("radiance_debug",
-                "Show one internal buffer over the world. Channels: off | water | labeldiff | sdf | subtype | sprite | reflect | mirror | emitter | caustic | window. "
+                "Show one internal buffer over the world. Channels: off | water | labeldiff | sdf | subtype | sprite | reflect | mirror | emitter | caustic | window | sky. "
                 + "emitter paints the lighting pass's answer to 'which pixels ARE a light': RED = treated as the light "
                 + "itself and spared the room's dimming, GREEN = close enough to a light but not bright enough in the art to count. "
                 + "labeldiff paints the radiance_verify verdict: RED = label says liquid but the mask has none, YELLOW = the mask ripples where the label says solid. "
@@ -227,7 +245,7 @@ namespace SDVRadiance
                 {
                     if (args.Length < 1 || !Enum.TryParse(args[0], ignoreCase: true, out DebugOverlayChannel channel))
                     {
-                        monitor.Log("usage: radiance_debug off|water|labeldiff|sdf|subtype|sprite|reflect|mirror|flood|emitter|caustic|window "
+                        monitor.Log("usage: radiance_debug off|water|labeldiff|sdf|subtype|sprite|reflect|mirror|flood|emitter|caustic|window|sky "
                             + $"(now: {RenderPipeline.DebugChannel})", LogLevel.Info);
                         return;
                     }
@@ -250,6 +268,28 @@ namespace SDVRadiance
                 (_, args) => monitor.Log(
                     ShadowRenderer.Report(getConfig(), args.Length >= 1 && args[0].Equals("all", StringComparison.OrdinalIgnoreCase)),
                     LogLevel.Info));
+            helper.ConsoleCommands.Add("radiance_creatures",
+                "Where every creature is right now: horses, pets, farm animals and anything a mod adds, with the "
+                + "tile to warp to, its frame size and how its shadow is laid down. "
+                + "'radiance_creatures all' scans every loaded location, which is the only way to find one you are "
+                + "not already standing next to. A wildlife mod's animals wander, so hunting for one by warping "
+                + "around a map is how a test session gets spent.",
+                (_, args) => monitor.Log(
+                    ShadowRenderer.CreatureCensus(args.Length >= 1 && args[0].Equals("all", StringComparison.OrdinalIgnoreCase),
+                        getConfig().DirectionalShadowModel),
+                    LogLevel.Info));
+            helper.ConsoleCommands.Add("radiance_invincible",
+                "Set invincibility ON or OFF and say which it ended up as. The game's own 'debug invincible' TOGGLES, "
+                + "so a script that calls it twice quietly hands you back to the monsters, and a test session in the "
+                + "mines is not the place to find that out. Usage: radiance_invincible [on|off], default on.",
+                (_, args) =>
+                {
+                    bool wanted = args.Length < 1 || !args[0].Equals("off", StringComparison.OrdinalIgnoreCase);
+                    Game1.player.temporarilyInvincible = wanted;
+                    Game1.player.temporaryInvincibilityTimer = wanted ? -1000000000 : 0;
+                    monitor.Log($"invincible = {Game1.player.temporarilyInvincible} (live only; nothing is saved)",
+                        LogLevel.Info);
+                });
             helper.ConsoleCommands.Add("radiance_dump",
                 "Capture every buffer this frame (composed frame, water masks, occluders, lightmap, reflection) to "
                 + "Documents\\Radiance-Dumps\\<name>\\ for offline comparison. Usage: radiance_dump <name>. "
@@ -328,6 +368,115 @@ namespace SDVRadiance
                         return;
                     }
                     monitor.Log(pipeline.ParticleDiag(), LogLevel.Info);
+                });
+
+            helper.ConsoleCommands.Add("radiance_rings",
+                "Take the player's rings off into the bag, or put them back: radiance_rings off|on. "
+                + "A worn glow ring is a light source that follows the camera, which is exactly what a "
+                + "shot of a window's reflection does not want: the pane blows out and the reflection is "
+                + "the first thing to go. There is no way to do this from the game's own console, and the "
+                + "gallery tool cannot click through the inventory screen. Nothing is saved, so the rings "
+                + "are back on the next time the save is loaded whatever happens here.",
+                (_, args) =>
+                {
+                    if (Game1.player == null)
+                    {
+                        monitor.Log("Load a save first.", LogLevel.Warn);
+                        return;
+                    }
+                    string wanted = args.Length > 0 ? args[0].ToLowerInvariant() : "";
+                    if (wanted is not ("off" or "on"))
+                    {
+                        monitor.Log("usage: radiance_rings off|on", LogLevel.Info);
+                        return;
+                    }
+                    Farmer who = Game1.player;
+                    int moved = 0;
+                    if (wanted == "off")
+                    {
+                        foreach (var slot in new[] { who.leftRing, who.rightRing })
+                        {
+                            StardewValley.Objects.Ring? ring = slot.Value;
+                            if (ring == null)
+                                continue;
+                            // onUnequip is what removes the light the ring hung on the player. Nulling
+                            // the slot without it leaves the glow behind, which is the whole problem.
+                            ring.onUnequip(who);
+                            slot.Value = null;
+                            if (!who.addItemToInventoryBool(ring))
+                                monitor.Log("The bag is full, so one ring was dropped from the world.", LogLevel.Warn);
+                            moved++;
+                        }
+                        monitor.Log(moved == 0 ? "No rings were being worn." : $"{moved} ring(s) off.", LogLevel.Info);
+                        return;
+                    }
+                    for (int i = 0; i < who.Items.Count && moved < 2; i++)
+                    {
+                        if (who.Items[i] is not StardewValley.Objects.Ring ring)
+                            continue;
+                        var slot = who.leftRing.Value == null ? who.leftRing
+                                 : who.rightRing.Value == null ? who.rightRing : null;
+                        if (slot == null)
+                            break;
+                        who.Items[i] = null;
+                        slot.Value = ring;
+                        ring.onEquip(who);
+                        moved++;
+                    }
+                    monitor.Log(moved == 0 ? "No rings in the bag to put on." : $"{moved} ring(s) on.", LogLevel.Info);
+                });
+
+            helper.ConsoleCommands.Add("radiance_aurora",
+                "Force tonight's aurora display on or off, or hand it back to the nightly roll: "
+                + "radiance_aurora on|off|auto. Only 62 percent of clear winter nights carry a display "
+                + "at all, and it builds and dies over a few hours inside the night, so testing it by "
+                + "waiting is a lottery. 'on' skips the roll and the ramp and holds it at full. Nothing "
+                + "else about the gate changes: it still needs the switch, winter, a clear night "
+                + "outdoors and reflections on. Not saved.",
+                (_, args) =>
+                {
+                    string wanted = args.Length > 0 ? args[0].ToLowerInvariant() : "";
+                    if (wanted is not ("on" or "off" or "auto"))
+                    {
+                        monitor.Log("usage: radiance_aurora on|off|auto (now: "
+                            + (RenderPipeline.AuroraForce > 0 ? "on" : RenderPipeline.AuroraForce < 0 ? "off" : "auto")
+                            + ")", LogLevel.Info);
+                        return;
+                    }
+                    RenderPipeline.AuroraForce = wanted == "on" ? 1 : wanted == "off" ? -1 : 0;
+                    monitor.Log($"aurora display: {wanted}. The rest of the gate is unchanged - "
+                        + "check the sky: line of radiance_report if nothing shows.", LogLevel.Info);
+                });
+
+            helper.ConsoleCommands.Add("radiance_star",
+                "Bring shooting stars forward to this frame: 'radiance_star' for three, or 'radiance_star n' "
+                + "for one to three, spread across the view so at least one crosses open water. A streak only "
+                + "exists where the sky does, which is water, so one placed by the player lands on the pier "
+                + "they are standing on as often as not. The gate is unchanged: it still needs the switch, a "
+                + "clear night outdoors and reflections on, and it reports which of those refused. Each streak "
+                + "lasts around a second, and they come in three weights, so run it a few times.",
+                (_, args) =>
+                {
+                    RenderPipeline? pipeline = getPipeline();
+                    if (pipeline == null) { monitor.Log("pipeline not ready", LogLevel.Info); return; }
+                    ModConfig config = getConfig();
+                    GameLocation? location = Game1.currentLocation;
+                    string weather = Game1.isLightning ? "storm" : Game1.isRaining ? "rain"
+                        : Game1.isSnowing ? "snow" : Game1.isDebrisWeather ? "windy" : "sun";
+                    if (!config.ShootingStarsEnabled)
+                    { monitor.Log("Shooting stars are switched OFF (F6, Weather tab).", LogLevel.Info); return; }
+                    if (!config.WaterReflection)
+                    { monitor.Log("Water reflection is OFF, and the sky only exists inside the reflection.", LogLevel.Info); return; }
+                    if (!(location?.IsOutdoors ?? false))
+                    { monitor.Log("Indoors: there is no sky here to put a star in.", LogLevel.Info); return; }
+                    if (weather is not "sun" and not "windy")
+                    { monitor.Log($"Weather is {weather}; a star needs a clear sky. Try radiance_weather sun.", LogLevel.Info); return; }
+                    if (Game1.timeOfDay < 1930)
+                    { monitor.Log($"It is {Game1.getTimeOfDayString(Game1.timeOfDay)}; the sky is not dark enough until about 19:30.", LogLevel.Info); return; }
+                    int wanted = args.Length >= 1 && int.TryParse(args[0], out int typedStars)
+                        ? Math.Clamp(typedStars, 1, 3) : 3;
+                    pipeline.MeteorRequests = wanted;
+                    monitor.Log($"{wanted} star(s) requested, spread across the view - watch the open water.", LogLevel.Info);
                 });
         }
 
@@ -410,6 +559,20 @@ namespace SDVRadiance
                     }
                     string contextId = Game1.player.currentLocation.GetLocationContextId();
                     StardewValley.Network.LocationWeather weather = Game1.netWorldState.Value.GetWeatherForLocation(contextId);
+                    // The weather id is a field of its own beside the flags, and it is what asking
+                    // a location what its weather is returns. Writing only the flags left the two
+                    // disagreeing: the rain stopped falling while every reader of the id still saw
+                    // rain, which is how a test harness set a sunny day and was told it was raining.
+                    // Written before the flags in case its setter has an opinion about them.
+                    weather.Weather = wanted switch
+                    {
+                        "rain" => Game1.weather_rain,
+                        "storm" => Game1.weather_lightning,
+                        "snow" => Game1.weather_snow,
+                        "wind" => Game1.weather_debris,
+                        "greenrain" => Game1.weather_green_rain,
+                        _ => Game1.weather_sunny,
+                    };
                     // Clear everything first: the game treats the flags as one-per-day exclusive
                     // (storm being the rain+lightning pair), and IsGreenRain's setter forces
                     // IsRaining back on, so green rain must be cleared before rain is written.
@@ -795,6 +958,85 @@ namespace SDVRadiance
                 write($"    ... and {hits.Count - 20} more (full list is in the SMAPI log)");
         }
 
+        /// <summary>What the sprite relief is embossing over one tile, from the last frame the
+        /// recorder captured (see <see cref="SpriteDrawRecorder"/>): the draws whose footprint
+        /// covers that tile, each named by its sheet.</summary>
+        private static void DumpReliefDraws(Action<string> write, RenderPipeline? pipeline, string[]? args = null)
+        {
+            if (!StardewModdingAPI.Context.IsWorldReady || Game1.player == null)
+            {
+                write("Load a save first.");
+                return;
+            }
+            Point tile = Game1.player.TilePoint;
+            if (args is { Length: >= 2 } && int.TryParse(args[0], out int ax) && int.TryParse(args[1], out int ay))
+                tile = new Point(ax, ay);
+            var records = SpriteDrawRecorder.Records;
+            write($"=== relief draws over tile ({tile.X},{tile.Y}) ===");
+            write($"recorded {records.Count} draws last frame ({SpriteDrawRecorder.PatchedOverloads} overloads patched); "
+                + "the list is screen-space, as the game's batch received it.");
+            if (pipeline != null)
+                write($"tree trunks mended last frame: {pipeline.TrunkJoinsMended} "
+                    + "(zero with trees on screen means the canopy/trunk pair was not recognised)");
+            // BOTH SIDES of the test that decides FLAT or BEVELLED, printed together. Whether a
+            // draw is the map's own art is decided by comparing what the map says it paints from
+            // against what the draw actually carries, and reading only one of those two lists is
+            // how this was misdiagnosed twice: once by assuming the map's name, once by assuming
+            // the drawn name. They are both here now, so the mismatch can be seen rather than
+            // reasoned about.
+            var map = Game1.currentLocation?.Map;
+            if (map != null)
+            {
+                var declared = new System.Collections.Generic.List<string>();
+                foreach (xTile.Tiles.TileSheet sheet in map.TileSheets)
+                    declared.Add(sheet.ImageSource ?? "<null>");
+                write("the map says it paints from: " + string.Join(", ", declared));
+            }
+            if (records.Count == 0)
+            {
+                write("Nothing recorded: the relief is off, or faded out. Turn on sprite relief and try again.");
+                return;
+            }
+            // The recorder holds SCREEN pixels; the tile is world, so put the tile on the screen.
+            var want = new Rectangle(tile.X * 64 - Game1.viewport.X, tile.Y * 64 - Game1.viewport.Y, 64, 64);
+            int listed = 0, skipped = 0;
+            foreach (SpriteDrawRecorder.Record record in records)
+            {
+                Rectangle footprint = record.UsesDestination
+                    ? record.Destination
+                    : new Rectangle((int)(record.Position.X - record.Origin.X * record.Scale.X),
+                        (int)(record.Position.Y - record.Origin.Y * record.Scale.Y),
+                        (int)Math.Ceiling(record.Source.Width * record.Scale.X),
+                        (int)Math.Ceiling(record.Source.Height * record.Scale.Y));
+                if (!footprint.Intersects(want))
+                    continue;
+                if (listed >= 24)
+                {
+                    skipped++;
+                    continue;
+                }
+                listed++;
+                string sheet = record.Texture.IsDisposed ? "<disposed>"
+                    : string.IsNullOrEmpty(record.Texture.Name) ? "<unnamed>" : record.Texture.Name;
+                // The whole point of this tool is "is THIS thing wearing a bevel", and listing the
+                // draw without saying so answers a different question: a map tile is recorded and
+                // replayed like any other, just with a flat normal, so its presence in the list
+                // proves nothing either way. Reading the list as if it did cost a wrong "fixed".
+                string kind = record.Texture.IsDisposed ? " [disposed]"
+                    : pipeline == null ? " [pipeline not ready, cannot say]"
+                    : pipeline.ReliefLeavesSheetFlat(record.Texture) ? " [FLAT: no bevel]"
+                    : " [BEVELLED]";
+                write($"  {sheet}{kind}  cell {record.Source.X},{record.Source.Y} {record.Source.Width}x{record.Source.Height}"
+                    + $"  on screen {footprint.X},{footprint.Y} {footprint.Width}x{footprint.Height}"
+                    + $"  alpha {record.Alpha:F2} depth {record.Depth:F4}"
+                    + (record.Effects == SpriteEffects.None ? "" : $" {record.Effects}"));
+            }
+            if (skipped > 0)
+                write($"  ... and {skipped} more over this tile.");
+            if (listed == 0)
+                write("  nothing recorded covers that tile.");
+        }
+
         private static void DumpTile(Action<string> write, RenderPipeline? pipeline, ModConfig config, string[]? args = null, bool includePalette = true)
         {
             if (!StardewModdingAPI.Context.IsWorldReady || Game1.player == null)
@@ -819,6 +1061,10 @@ namespace SDVRadiance
                 return;
             WriteBackPalette(write, location, t);
         }
+
+        /// <summary>Game minutes as the clock shows them, hours past midnight included, so an
+        /// aurora that runs to 25:10 reads as 25:10 rather than as one in the morning.</summary>
+        private static string Clock(float minutes) => $"{(int)(minutes / 60f):00}:{(int)(minutes % 60f):00}";
 
         /// <summary>Everything needed to reproduce the scene, first, because this output gets
         /// pasted into a bug report by someone who will not be asked a second question.</summary>
@@ -845,6 +1091,20 @@ namespace SDVRadiance
                     + $"presence={pipeline.FadeWaterForReport:0.00} daylight={pipeline._causticDaylight:0.00} "
                     + $"weather={pipeline.CausticWeatherMultiplier:0.00} indoors={!location.IsOutdoors} "
                     + $"texture={(pipeline.CausticTextureMissing ? "MISSING" : "loaded")})");
+            // The reflected sky, spelled out the same way and for exactly the same reason. The
+            // aurora and the shooting star share one gate (switch, outdoors, clear weather, real
+            // night, winter for the aurora) and they only exist inside the reflection, so five
+            // separate things can each silently be the answer to "I turned it on and saw nothing".
+            if (pipeline != null)
+                write($"sky: aurora={pipeline.SkyAuroraUploaded:0.000} (toggle={config.AuroraEnabled} "
+                    + $"dial={config.AuroraStrength:0.00} winter={Game1.IsWinter} "
+                    + $"show={RenderPipeline.SkyAuroraShow:0.00} tonight={RenderPipeline.SkyAuroraTonight} "
+                    + $"{Clock(RenderPipeline.SkyAuroraShowStart)}-{Clock(RenderPipeline.SkyAuroraShowEnd)} "
+                    + $"force={(RenderPipeline.AuroraForce > 0 ? "on" : RenderPipeline.AuroraForce < 0 ? "off" : "auto")}) star: "
+                    + $"envelope={pipeline.SkyMeteorEnvelope:0.000} burning={pipeline.SkyMeteorBurning}/3 (toggle={config.ShootingStarsEnabled} "
+                    + $"nextIn={(pipeline.SkyMeteorSecondsToNext < 0 ? "n/a" : pipeline.SkyMeteorSecondsToNext.ToString("0") + "s")}) "
+                    + $"gate: clearNight={pipeline.SkyClearNight} outdoors={location.IsOutdoors} "
+                    + $"weather={weather} reflection={config.WaterReflection}");
             // The window pass, spelled out the same way and for the same reason. A street where
             // nothing shows in the glass is either a street whose windows nobody has labelled
             // (panes=0) or a street whose windows are drawn over by the map's own front layer

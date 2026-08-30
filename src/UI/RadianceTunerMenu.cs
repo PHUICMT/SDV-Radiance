@@ -58,7 +58,7 @@ namespace SDVRadiance
         private readonly List<(string text, int y)> _sectionTitles = new();
         /// <summary>Read-only lines. Supplied per draw rather than baked at layout time, so a
         /// running measurement can count up without rebuilding the menu underneath it.</summary>
-        private readonly List<(Func<string> text, int y)> _infoLines = new();
+        private readonly List<(Func<string> text, int y, int height)> _infoLines = new();
         /// <summary>
         /// A plain-language note per control row, shown while the pointer rests on it.
         ///
@@ -115,7 +115,7 @@ namespace SDVRadiance
             string[] keys =
             {
                 "tuner.tab.looks", "config.section.perf", "tuner.section.colorgrade",
-                "tuner.section.bloom", "tuner.tab.lens", "tuner.section.lighting",
+                "tuner.section.bloom", "tuner.tab.lens", "tuner.tab.smoothing", "tuner.section.lighting",
                 "tuner.section.windows", "tuner.section.shadows", "tuner.section.godrays", "tuner.section.water",
                 "tuner.section.cloudshadow", "tuner.tab.fog", "config.section.weather",
                 "config.section.particles", "config.section.camera", "config.section.debug",
@@ -157,6 +157,7 @@ namespace SDVRadiance
                 ("tuner.section.colorgrade", "tuner.desc.colorgrade", BuildColorGrade),
                 ("tuner.section.bloom",   "tuner.desc.bloom",      BuildBloom),
                 ("tuner.tab.lens",        "tuner.desc.lens",       BuildLens),
+                ("tuner.tab.smoothing",   "tuner.desc.smoothing",  BuildSmoothing),
                 ("tuner.section.lighting", "tuner.desc.lighting",  BuildLighting),
                 ("tuner.section.windows", "tuner.desc.windows",    BuildWindows),
                 ("tuner.section.shadows", "tuner.desc.shadows",    BuildShadows),
@@ -176,7 +177,13 @@ namespace SDVRadiance
         private void Reopen() => Game1.activeClickableMenu = new RadianceTunerMenu(_config, _translate, _onChange, _onSave);
 
         // ---- content build helpers (append to lists, advance _contentCursorY) ----
-        private void Section(string key) { _sectionTitles.Add((_translate(key), _contentCursorY)); _contentCursorY += S(30); }
+        private void Section(string key)
+        {
+            // A heading over rows that are all hidden is a heading over nothing.
+            if (_rowsEnabledWhen != null && !_rowsEnabledWhen())
+                return;
+            _sectionTitles.Add((_translate(key), _contentCursorY)); _contentCursorY += S(30);
+        }
         /// <summary>The condition every row built from here on has to meet to be live. A tab sets it
         /// once around the block its master switch owns, instead of every row repeating it, and
         /// clears it after. Rows that pass their own condition ignore this.</summary>
@@ -186,18 +193,42 @@ namespace SDVRadiance
         private void DependsOn(Func<bool> condition) => _rowsEnabledWhen = condition;
         private void EndDependsOn() => _rowsEnabledWhen = null;
 
-        private void Info(Func<string> text) { _infoLines.Add((text, _contentCursorY)); _contentCursorY += S(26); }
+        private void Info(Func<string> text) { _infoLines.Add((text, _contentCursorY, S(22))); _contentCursorY += S(26); }
+
+        /// <summary>A sentence or three, wrapped to the column at reading size. Info lines shrink
+        /// to fit one row, which is right for a bench figure and wrong for a tab's description:
+        /// the weather tab's Thai description came out a hairline nobody could read. The wrap is
+        /// done once here, at the scale the line is drawn at, so the row is as tall as it needs.</summary>
+        private void Paragraph(string text)
+        {
+            float textScale = 0.72f * _ui;
+            string wrapped = Game1.parseText(text, Game1.smallFont, (int)(_contentColumnWidth / textScale));
+            int height = (int)Math.Ceiling(TunerText.Measure(wrapped).Y * textScale);
+            _infoLines.Add((() => wrapped, _contentCursorY, height));
+            _contentCursorY += height + S(4);
+        }
+        /// <summary>Rows whose condition is false are not built at all - the section collapses
+        /// instead of greying out. Asked for in exactly these words: a slider that does nothing
+        /// should not be on screen. Every toggle click rebuilds the tab (see receiveLeftClick),
+        /// so the rows a switch owns appear and disappear with it; the Enabled dim survives only
+        /// as the fallback for a condition that changes without a rebuild.</summary>
         private void Tog(string key, Func<bool> g, Action<bool> s, string? help = null, Func<bool>? enabledWhen = null)
         {
+            Func<bool>? live = enabledWhen ?? _rowsEnabledWhen;
+            if (live != null && !live())
+                return;
             var row = new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, S(38));
-            _toggles.Add(new TunerToggle(_translate(key), row, g, s) { TextScale = _ui, Enabled = enabledWhen ?? _rowsEnabledWhen });
+            _toggles.Add(new TunerToggle(_translate(key), row, g, s) { TextScale = _ui, Enabled = live });
             Help(row, help);
             _contentCursorY += S(44);
         }
         private void Sld(string key, float min, float max, Func<float> g, Action<float> s, string? help = null, Func<bool>? enabledWhen = null)
         {
+            Func<bool>? live = enabledWhen ?? _rowsEnabledWhen;
+            if (live != null && !live())
+                return;
             _sliders.Add(new TunerSlider(_translate(key), _contentCursorX, _contentCursorY, _contentColumnWidth, min, max, g, s, S(26), S(20))
-                { TextScale = _ui, Enabled = enabledWhen ?? _rowsEnabledWhen });
+                { TextScale = _ui, Enabled = live });
             // The label sits above the track, so the hover area is the whole row, not the bar.
             Help(new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, S(50)), help);
             _contentCursorY += S(50);
@@ -292,8 +323,7 @@ namespace SDVRadiance
             _contentCursorY = contentTop + BodyPad;
             // One line saying what this tab is for, before anything else on it. A column of
             // sliders assumes the reader already knows which effect they belong to.
-            string descKey = _tabDefinitions[_activeTab].desc;
-            Info(() => _translate(descKey));
+            Paragraph(_translate(_tabDefinitions[_activeTab].desc));
             _contentCursorY += S(6);
             _tabDefinitions[_activeTab].build();
             int contentHeight = _contentCursorY - (contentTop + BodyPad);
@@ -427,7 +457,12 @@ namespace SDVRadiance
         private void BuildColorGrade()
         {
             Tog("tuner.colorgrade", () => _config.ColorGradeEnabled, v => _config.ColorGradeEnabled = v, "help.colorgrade");
-            BuildLutPicker();
+            // The whole grade dies with its switch (the stage gates on it), so every row here
+            // hides with it - EXCEPT the blue-light filter at the bottom, which the finishing
+            // pass applies whether the grade runs or not, so it must stay on screen.
+            if (_config.ColorGradeEnabled)
+                BuildLutPicker();
+            DependsOn(() => _config.ColorGradeEnabled);
             Tog("tuner.automood", () => _config.ColorGradeAuto, v => _config.ColorGradeAuto = v, "help.automood");
             Sld("tuner.strength", 0f, 1f, () => _config.ColorGradeStrength, v => _config.ColorGradeStrength = v);
             Sld("tuner.contrast", 0.5f, 1.5f, () => _config.ColorGradeContrast, v => _config.ColorGradeContrast = v, "help.contrast");
@@ -435,6 +470,7 @@ namespace SDVRadiance
             Sld("tuner.temperature", -1f, 1f, () => _config.ColorGradeTemperature, v => _config.ColorGradeTemperature = v, "help.temperature");
             Sld("tuner.brightness", 0.5f, 1.5f, () => _config.ColorGradeBrightness, v => _config.ColorGradeBrightness = v);
             Tog("tuner.tonemap", () => _config.ColorGradeToneMap, v => _config.ColorGradeToneMap = v, "help.tonemap");
+            EndDependsOn();
             Sld("tuner.bluelight", 0f, 1f, () => _config.BlueLightFilter, v => _config.BlueLightFilter = v, "help.bluelight");
         }
 
@@ -445,6 +481,7 @@ namespace SDVRadiance
             DependsOn(() => _config.BloomEnabled);
             Sld("tuner.intensity", 0f, 2f, () => _config.BloomIntensity, v => _config.BloomIntensity = v);
             Sld("tuner.bloomthreshold", 0f, 1f, () => _config.BloomThreshold, v => _config.BloomThreshold = v, "help.bloomthreshold");
+            Sld("tuner.bloomemissiveboost", 0f, 1f, () => _config.BloomEmissiveBoost, v => _config.BloomEmissiveBoost = v, "help.bloomemissiveboost");
             EndDependsOn();
         }
 
@@ -453,8 +490,33 @@ namespace SDVRadiance
             Tog("tuner.shadows", () => _config.DirectionalShadowsEnabled, v => _config.DirectionalShadowsEnabled = v, "help.shadows");
             // Nothing below does anything while the shadows themselves are off.
             DependsOn(() => _config.DirectionalShadowsEnabled);
+            // Which shapes, before any dial, the same way the water page opens with which water.
+            // Two buttons named by the version each look shipped in, with the one in use lit.
+            Section("tuner.shadowmodel");
+            if (_config.DirectionalShadowsEnabled)
+            {
+                (ShadowModel model, string key)[] shadowModels =
+                {
+                    (ShadowModel.Modern, "modern"),
+                    (ShadowModel.Classic, "classic"),
+                };
+                int buttonWidth = (_contentColumnWidth - 6 * (shadowModels.Length - 1)) / shadowModels.Length;
+                for (int i = 0; i < shadowModels.Length; i++)
+                {
+                    var (model, key) = shadowModels[i];
+                    var rect = new Rectangle(_contentCursorX + i * (buttonWidth + 6), _contentCursorY, buttonWidth, S(40));
+                    var button = Btn(_translate($"tuner.shadowmodel.{key}"), rect, () =>
+                    {
+                        _config.DirectionalShadowModel = model; _onChange(); _onSave(); Reflow();
+                    });
+                    button.IsChosen = () => _config.DirectionalShadowModel == model;
+                    Help(rect, $"help.shadowmodel.{key}");
+                }
+                _contentCursorY += S(50);
+            }
             Sld("tuner.shadowstrength", 0f, 1f, () => _config.DirectionalShadowStrength, v => _config.DirectionalShadowStrength = v);
             Sld("tuner.shadowlength", 0.2f, 2f, () => _config.DirectionalShadowLength, v => _config.DirectionalShadowLength = v, "help.shadowlength");
+            Sld("tuner.goldenhour", 0f, 1f, () => _config.GoldenHourStrength, v => _config.GoldenHourStrength = v, "help.goldenhour");
             Sld("tuner.shadowblur", 0f, 5f, () => _config.DirectionalShadowBlur, v => _config.DirectionalShadowBlur = v, "help.shadowblur");
             Sld("tuner.shadowcasts", ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax,
                 () => _config.ShadowCastsPerCharacter,
@@ -509,7 +571,10 @@ namespace SDVRadiance
         private void BuildLighting()
         {
             Tog("tuner.lighting", () => _config.LightingEnabled, v => _config.LightingEnabled = v, "help.lighting");
-            // Every light dial below belongs to the lighting pass.
+            // Every light dial below belongs to the lighting pass. Grouped by family - the
+            // darkness dials, then the shadows lamps throw, then the bounced light - because
+            // the old order had the lamp-shadow softness dials sitting a whole GI block away
+            // from the lamp-shadow switch that owns them.
             DependsOn(() => _config.LightingEnabled);
             Sld("tuner.lightindoor", 0f, 0.95f, () => _config.LightingIndoorDarkness, v => _config.LightingIndoorDarkness = v, "help.lightindoor");
             Sld("tuner.lightnight", 0f, 0.95f, () => _config.LightingNightDarkness, v => _config.LightingNightDarkness = v, "help.lightnight");
@@ -517,11 +582,45 @@ namespace SDVRadiance
             Sld("tuner.lightwarmth", 0f, 1f, () => _config.LightingWarmth, v => _config.LightingWarmth = v, "help.lightwarmth");
             Sld("tuner.lightboost", 0f, 2f, () => _config.LightingBoost, v => _config.LightingBoost = v, "help.lightboost");
             Sld("tuner.lightradius", 0.2f, 3f, () => _config.LightingRadiusScale, v => _config.LightingRadiusScale = v, "help.lightradius");
+            Section("tuner.section.lampshadows");
             Tog("tuner.lightshadows", () => _config.LightingShadows, v => _config.LightingShadows = v, "help.lightshadows");
+            DependsOn(() => _config.LightingEnabled && _config.LightingShadows);
             Sld("tuner.lightshadowstrength", 0f, 1f, () => _config.LightingShadowStrength, v => _config.LightingShadowStrength = v);
+            Tog("tuner.lightsilhouettes", () => _config.LightShadowSilhouettes, v => _config.LightShadowSilhouettes = v, "help.lightsilhouettes");
+            Tog("tuner.lightprops", () => _config.LightShadowProps, v => _config.LightShadowProps = v, "help.lightprops");
+            Sld("tuner.lightshadowcarve", 0f, 1f, () => _config.LightShadowCarve, v => _config.LightShadowCarve = v, "help.lightshadowcarve");
+            Sld("tuner.lightshadowsoftness", 0f, 2f, () => _config.LightShadowSoftness, v => _config.LightShadowSoftness = v, "help.lightshadowsoftness");
+            DependsOn(() => _config.LightingEnabled);
+            Section("tuner.section.gi");
             Tog("tuner.floodgi", () => _config.FloodLightingEnabled, v => _config.FloodLightingEnabled = v, "help.floodgi");
+            DependsOn(() => _config.LightingEnabled && _config.FloodLightingEnabled);
+            if (_config.LightingEnabled && _config.FloodLightingEnabled)
+            {
+                // Which model computes the GI map: two buttons, the one in use lit (see WaterReflectModel).
+                (GiModel model, string key)[] giModels = { (GiModel.Flood, "flood"), (GiModel.Cascades, "cascades") };
+                int giButtonWidth = (_contentColumnWidth - 6 * (giModels.Length - 1)) / giModels.Length;
+                for (int giIndex = 0; giIndex < giModels.Length; giIndex++)
+                {
+                    var (model, key) = giModels[giIndex];
+                    var rect = new Rectangle(_contentCursorX + giIndex * (giButtonWidth + 6), _contentCursorY, giButtonWidth, S(40));
+                    var btn = Btn(_translate($"tuner.gimodel.{key}"), rect, () => { _config.FloodGiModel = model; _onChange(); _onSave(); });
+                    btn.IsChosen = () => _config.FloodGiModel == model;
+                    Help(rect, $"help.gimodel.{key}");
+                }
+                _contentCursorY += S(50);
+            }
             Sld("tuner.floodstrength", 0f, 1.5f, () => _config.FloodLightingStrength, v => _config.FloodLightingStrength = v, "help.floodstrength");
             Sld("tuner.floodshadow", 0f, 1f, () => _config.FloodShadowStrength, v => _config.FloodShadowStrength = v, "help.floodshadow");
+            Sld("tuner.colourbleed", 0f, 1f, () => _config.FloodColourBleed, v => _config.FloodColourBleed = v, "help.colourbleed");
+            Tog("tuner.relief", () => _config.SpriteReliefEnabled, v => _config.SpriteReliefEnabled = v, "help.relief");
+            Sld("tuner.reliefstrength", 0f, 1f, () => _config.SpriteReliefStrength, v => _config.SpriteReliefStrength = v, "help.reliefstrength",
+                () => _config.LightingEnabled && _config.FloodLightingEnabled && _config.SpriteReliefEnabled);
+            Sld("tuner.reliefsun", 0f, 1f, () => _config.SpriteReliefSun, v => _config.SpriteReliefSun = v, "help.reliefsun",
+                () => _config.LightingEnabled && _config.FloodLightingEnabled && _config.SpriteReliefEnabled);
+            Sld("tuner.reliefrim", 0f, 1f, () => _config.SpriteReliefRim, v => _config.SpriteReliefRim = v, "help.reliefrim",
+                () => _config.LightingEnabled && _config.FloodLightingEnabled && _config.SpriteReliefEnabled);
+            Sld("tuner.leafshimmer", 0f, 1f, () => _config.SpriteReliefLeafShimmer, v => _config.SpriteReliefLeafShimmer = v, "help.leafshimmer",
+                () => _config.LightingEnabled && _config.FloodLightingEnabled && _config.SpriteReliefEnabled);
             EndDependsOn();
         }
 
@@ -531,9 +630,16 @@ namespace SDVRadiance
         {
             Section("tuner.section.windowlight");
             Tog("tuner.windoweffects", () => _config.WindowEffectsEnabled, v => _config.WindowEffectsEnabled = v, "help.windoweffects");
+            // The beam and the daylight it lays on the floor belong to the window-light master;
+            // the glass rows below belong to the reflection switch. Two families, two gates.
+            DependsOn(() => _config.WindowEffectsEnabled);
             Tog("tuner.windowbeam", () => _config.WindowBeamEnabled, v => _config.WindowBeamEnabled = v, "help.windowbeam");
+            Sld("tuner.windowdaylightstrength", 0f, 2f, () => _config.WindowDaylightStrength,
+                v => _config.WindowDaylightStrength = v, "help.windowdaylightstrength");
+            EndDependsOn();
             Section("tuner.section.windowreflection");
             Tog("tuner.windowreflection", () => _config.WindowReflectionEnabled, v => _config.WindowReflectionEnabled = v, "help.windowreflection");
+            DependsOn(() => _config.WindowReflectionEnabled);
             Sld("tuner.windowreflectionstrength", 0f, 2f, () => _config.WindowReflectionStrength,
                 v => _config.WindowReflectionStrength = v, "help.windowreflectionstrength");
             Sld("tuner.windowreflectionnight", 0f, 2f, () => _config.WindowReflectionNightStrength,
@@ -546,34 +652,33 @@ namespace SDVRadiance
                 v => _config.WindowGlareStrength = v, "help.windowglare");
             Sld("tuner.windowlightglow", 0f, 2f, () => _config.WindowLightGlowStrength,
                 v => _config.WindowLightGlowStrength = v, "help.windowlightglow");
+            EndDependsOn();
             // The beam switches itself off when a mod that draws its own is installed, and until
             // now it did that in the startup log only. On screen it read as a feature that simply
             // does not work, with a switch that appears to do nothing when you turn it back on and
             // reopen the menu. Say who took it, where the switch is.
             if (!string.IsNullOrEmpty(_config.WindowCompatAppliedFor) && !_config.WindowBeamEnabled)
-                Info(() => _translate("tuner.windowcompat"));
+                Paragraph(_translate("tuner.windowcompat"));
         }
 
         private void BuildGodRays()
         {
             Section("tuner.section.godrayslamps");
             Tog("tuner.godrays", () => _config.GodRaysEnabled, v => _config.GodRaysEnabled = v, "help.godrays");
-            // God rays' reach and strength need god rays.
+            // The strength dial needs the shafts on.
             DependsOn(() => _config.GodRaysEnabled);
-            Sld("tuner.godraysintensity", 0f, 1.5f, () => _config.GodRaysIntensity, v => _config.GodRaysIntensity = v);
-            Sld("tuner.godraysthreshold", 0f, 1f, () => _config.GodRaysThreshold, v => _config.GodRaysThreshold = v, "help.godraysthreshold");
-            Sld("tuner.godraysdensity", 0.1f, 1f, () => _config.GodRaysDensity, v => _config.GodRaysDensity = v, "help.godraysdensity");
+            Sld("tuner.godraysintensity", 0f, 2f, () => _config.GodRaysIntensity, v => _config.GodRaysIntensity = v);
+            EndDependsOn();
             _contentCursorY += 12;
             Section("tuner.section.godrayssun");
             Tog("tuner.godrayssun", () => _config.GodRaysSun, v => _config.GodRaysSun = v, "help.godrayssun");
+            // The sun switch stands alone by design (see SetSunShaftParams) - its dials hang
+            // off it, not off the lamp master above.
+            DependsOn(() => _config.GodRaysSun);
             Sld("tuner.godrayssunintensity", 0f, 1.5f, () => _config.GodRaysSunIntensity,
                 v => _config.GodRaysSunIntensity = v, "help.godrayssunintensity");
             Sld("tuner.godrayssunreach", 0.1f, 1f, () => _config.GodRaysSunReach,
                 v => _config.GodRaysSunReach = v, "help.godrayssunreach");
-            _contentCursorY += 12;
-            Section("tuner.section.godraysboth");
-            Sld("tuner.godraysdecay", 0.5f, 0.99f, () => _config.GodRaysDecay,
-                v => _config.GodRaysDecay = v, "help.godraysdecay");
             EndDependsOn();
         }
 
@@ -595,31 +700,67 @@ namespace SDVRadiance
         {
             Section("tuner.section.fog");
             Tog("tuner.fog", () => _config.FogEnabled, v => _config.FogEnabled = v, "help.fog");
-            // Fog's dials need fog.
+            // Day fog's dials need day fog - and ONLY those. The night mist is a separate
+            // effect with a separate toggle on the render side, and one DependsOn wrapped
+            // around the whole tab dimmed the night rows whenever the DAY fog was off, which
+            // read as "night mist is off" while it kept drawing every night.
             DependsOn(() => _config.FogEnabled);
             Sld("tuner.fogcoverage", 0f, 1f, () => _config.FogCoverage, v => _config.FogCoverage = v);
             Sld("tuner.fogdensity", 0f, 1f, () => _config.FogDensity, v => _config.FogDensity = v);
             Sld("tuner.fogspeed", 0f, 0.1f, () => _config.FogSpeed, v => _config.FogSpeed = v);
             Sld("tuner.fogscale", 1f, 8f, () => _config.FogScale, v => _config.FogScale = v, "help.fogscale");
+            EndDependsOn();
             _contentCursorY += 12;
             Section("tuner.section.fognight");
             Tog("tuner.fognightmist", () => _config.FogNightMist, v => _config.FogNightMist = v, "help.fognightmist");
+            DependsOn(() => _config.FogNightMist);
             Sld("tuner.fognightmistcoverage", 0f, 1f, () => _config.FogNightMistCoverage, v => _config.FogNightMistCoverage = v);
             Sld("tuner.fognightmistdensity", 0f, 1f, () => _config.FogNightMistDensity, v => _config.FogNightMistDensity = v);
             Sld("tuner.fognightmistspeed", 0f, 0.1f, () => _config.FogNightMistSpeed, v => _config.FogNightMistSpeed = v);
+            EndDependsOn();
             _contentCursorY += 12;
             Section("tuner.section.fogboth");
+            // Shared by both fogs, so it goes grey only when neither is on.
+            DependsOn(() => _config.FogEnabled || _config.FogNightMist);
             Sld("tuner.fogtopbias", 0f, 1f, () => _config.FogTopBias,
                 v => _config.FogTopBias = v, "help.fogtopbias");
+            EndDependsOn();
+            _contentCursorY += 12;
+            Section("tuner.section.heathaze");
+            Tog("tuner.heathaze", () => _config.HeatHazeEnabled, v => _config.HeatHazeEnabled = v, "help.heathaze");
+            DependsOn(() => _config.HeatHazeEnabled);
+            Sld("tuner.heathazestrength", 0f, 2f, () => _config.HeatHazeStrength,
+                v => _config.HeatHazeStrength = v, "help.heathazestrength");
             EndDependsOn();
         }
 
         private void BuildWeather()
         {
-            Tog("tuner.precipitation", () => _config.PrecipitationEnabled, v => _config.PrecipitationEnabled = v, "help.precipitation");
+            Section("tuner.section.foliagesway");
+            Tog("tuner.foliagesway", () => _config.FoliageSwayEnabled, v => _config.FoliageSwayEnabled = v, "help.foliagesway");
+            DependsOn(() => _config.FoliageSwayEnabled);
+            Sld("tuner.foliageswaystrength", 0f, 2f, () => _config.FoliageSwayStrength, v => _config.FoliageSwayStrength = v, "help.foliageswaystrength");
+            Sld("config.weather.foliageswayspeed.name", 0.25f, 2f, () => _config.FoliageSwaySpeed,
+                v => _config.FoliageSwaySpeed = v, "config.weather.foliageswayspeed.tooltip");
+            Sld("config.weather.foliageswaygustspan.name", 4f, 40f, () => _config.FoliageSwayGustSpan,
+                v => _config.FoliageSwayGustSpan = v, "config.weather.foliageswaygustspan.tooltip");
+            EndDependsOn();
             _contentCursorY += 12;
+            Section("tuner.section.sky");
+            Tog("tuner.precipitation", () => _config.PrecipitationEnabled, v => _config.PrecipitationEnabled = v, "help.precipitation");
+            Tog("tuner.aurora", () => _config.AuroraEnabled, v => _config.AuroraEnabled = v, "help.aurora");
+            Sld("tuner.aurorastrength", 0f, 2f, () => _config.AuroraStrength,
+                v => _config.AuroraStrength = v, "help.aurorastrength",
+                () => _config.AuroraEnabled);
+            Tog("tuner.shootingstars", () => _config.ShootingStarsEnabled, v => _config.ShootingStarsEnabled = v, "help.shootingstars");
+            // Each kind of weather has its own switch under the precipitation master, and its
+            // dials hang off BOTH (PrecipitationSystem asks the master and the kind together).
+            if (_config.PrecipitationEnabled)
+                _contentCursorY += 12;
+            DependsOn(() => _config.PrecipitationEnabled);
             Section("tuner.section.precipitationrain");
             Tog("tuner.precipitationrain", () => _config.PrecipitationRain, v => _config.PrecipitationRain = v, "help.precipitationrain");
+            DependsOn(() => _config.PrecipitationEnabled && _config.PrecipitationRain);
             Sld("tuner.precipitationdensity", 0.25f, 2f, () => _config.PrecipitationRainDensity,
                 v => _config.PrecipitationRainDensity = v, "help.precipitationdensity");
             Sld("tuner.precipitationsize", 0.5f, 2f, () => _config.PrecipitationRainSize,
@@ -630,18 +771,24 @@ namespace SDVRadiance
                 v => _config.PrecipitationStormDensity = v, "help.precipitationstormdensity");
             Sld("tuner.precipitationrainslant", 0f, 3f, () => _config.PrecipitationRainSlant,
                 v => _config.PrecipitationRainSlant = v, "help.precipitationrainslant");
-            _contentCursorY += 12;
+            DependsOn(() => _config.PrecipitationEnabled);
+            if (_config.PrecipitationEnabled)
+                _contentCursorY += 12;
             Section("tuner.section.precipitationsnow");
             Tog("tuner.precipitationsnow", () => _config.PrecipitationSnow, v => _config.PrecipitationSnow = v, "help.precipitationsnow");
+            DependsOn(() => _config.PrecipitationEnabled && _config.PrecipitationSnow);
             Sld("tuner.precipitationdensity", 0.25f, 2f, () => _config.PrecipitationSnowDensity,
                 v => _config.PrecipitationSnowDensity = v, "help.precipitationdensity");
             Sld("tuner.precipitationsize", 0.5f, 2f, () => _config.PrecipitationSnowSize,
                 v => _config.PrecipitationSnowSize = v, "help.precipitationsize");
             Sld("tuner.precipitationopacity", 0.25f, 2f, () => _config.PrecipitationSnowOpacity,
                 v => _config.PrecipitationSnowOpacity = v, "help.precipitationopacity");
-            _contentCursorY += 12;
+            DependsOn(() => _config.PrecipitationEnabled);
+            if (_config.PrecipitationEnabled)
+                _contentCursorY += 12;
             Section("tuner.section.precipitationwind");
             Tog("tuner.precipitationwind", () => _config.PrecipitationWind, v => _config.PrecipitationWind = v, "help.precipitationwind");
+            DependsOn(() => _config.PrecipitationEnabled && _config.PrecipitationWind);
             Sld("tuner.precipitationdensity", 0.25f, 2f, () => _config.PrecipitationWindDensity,
                 v => _config.PrecipitationWindDensity = v, "help.precipitationdensity");
             Sld("tuner.precipitationsize", 0.5f, 2f, () => _config.PrecipitationWindSize,
@@ -650,10 +797,12 @@ namespace SDVRadiance
                 v => _config.PrecipitationWindOpacity = v, "help.precipitationopacity");
             Sld("tuner.precipitationwindslant", 0.25f, 3f, () => _config.PrecipitationWindSlant,
                 v => _config.PrecipitationWindSlant = v, "help.precipitationwindslant");
+            EndDependsOn();
             _contentCursorY += 12;
             Section("tuner.section.lightning");
             Tog("tuner.lightning", () => _config.LightningEffectsEnabled, v => _config.LightningEffectsEnabled = v, "help.lightning");
-            Tog("tuner.lightningbolts", () => _config.LightningBoltsEnabled, v => _config.LightningBoltsEnabled = v, "help.lightningbolts");
+            Tog("tuner.lightningbolts", () => _config.LightningBoltsEnabled, v => _config.LightningBoltsEnabled = v, "help.lightningbolts",
+                () => _config.LightningEffectsEnabled);
             _contentCursorY += 12;
             // The wet GROUND is not offered here. It is written and it works, but where
             // standing water may honestly lie is a question about the map and on a modded map
@@ -662,10 +811,14 @@ namespace SDVRadiance
             // reaches WetWorldEnabled for anyone who wants to look at it.
             Section("tuner.section.screendrops");
             Tog("tuner.wetworldlensdrops", () => _config.WetWorldLensDrops, v => _config.WetWorldLensDrops = v, "help.wetworldlensdrops");
+            // The edge haze is drawn by the same pass as the drops (ScreenEdgeDrops), so it
+            // goes with the drops switch too, not only the drop size.
+            DependsOn(() => _config.WetWorldLensDrops);
             Sld("tuner.wetworldlensdropsize", 0.5f, 2f, () => _config.WetWorldLensDropSize,
                 v => _config.WetWorldLensDropSize = v, "help.wetworldlensdropsize");
             Sld("tuner.wetworldedgehaze", 0f, 2f, () => _config.WetWorldEdgeHaze,
                 v => _config.WetWorldEdgeHaze = v, "help.wetworldedgehaze");
+            EndDependsOn();
         }
 
         private void BuildParticles()
@@ -694,6 +847,15 @@ namespace SDVRadiance
             Emitter("ringsparkles", () => _config.ParticleRingSparkles, v => _config.ParticleRingSparkles = v,
                 () => _config.ParticleRingSparklesAmount, v => _config.ParticleRingSparklesAmount = v,
                 () => _config.ParticleRingSparklesSize, v => _config.ParticleRingSparklesSize = v);
+            Emitter("waterfallmist", () => _config.ParticleWaterfallMist, v => _config.ParticleWaterfallMist = v,
+                () => _config.ParticleWaterfallMistAmount, v => _config.ParticleWaterfallMistAmount = v,
+                () => _config.ParticleWaterfallMistSize, v => _config.ParticleWaterfallMistSize = v);
+            Emitter("hotspringsteam", () => _config.ParticleHotSpringSteam, v => _config.ParticleHotSpringSteam = v,
+                () => _config.ParticleHotSpringSteamAmount, v => _config.ParticleHotSpringSteamAmount = v,
+                () => _config.ParticleHotSpringSteamSize, v => _config.ParticleHotSpringSteamSize = v);
+            Emitter("lavasparks", () => _config.ParticleLavaSparks, v => _config.ParticleLavaSparks = v,
+                () => _config.ParticleLavaSparksAmount, v => _config.ParticleLavaSparksAmount = v,
+                () => _config.ParticleLavaSparksSize, v => _config.ParticleLavaSparksSize = v);
             EndDependsOn();
         }
 
@@ -704,11 +866,16 @@ namespace SDVRadiance
                              Func<float> getAmount, Action<float> setAmount,
                              Func<float> getSize, Action<float> setSize)
         {
-            _contentCursorY += 12;
+            Func<bool>? master = _rowsEnabledWhen;
+            if (master == null || master())
+                _contentCursorY += 12;
             Section($"tuner.section.particle{emitter}");
             Tog($"tuner.particle{emitter}", getOn, setOn, $"help.particle{emitter}");
-            Sld("tuner.particleamount", 0f, 2f, getAmount, setAmount, "help.particleamount");
-            Sld("tuner.particlesize", 0.5f, 2f, getSize, setSize, "help.particlesize");
+            // Amount and size ask the emitter's own switch as well as the master (every emitter
+            // multiplies both in), so they hide with either.
+            Func<bool> emitterOn = () => (master == null || master()) && getOn();
+            Sld("tuner.particleamount", 0f, 2f, getAmount, setAmount, "help.particleamount", emitterOn);
+            Sld("tuner.particlesize", 0.5f, 2f, getSize, setSize, "help.particlesize", emitterOn);
         }
 
         private void BuildWater()
@@ -720,33 +887,41 @@ namespace SDVRadiance
             Sld("tuner.watersparkle", 0f, 1f, () => _config.WaterSparkle, v => _config.WaterSparkle = v, "help.watersparkle");
             Sld("tuner.watersparkledensity", 0.2f, 2f, () => _config.WaterSparkleDensity, v => _config.WaterSparkleDensity = v);
             Tog("tuner.watercaustics", () => _config.WaterCausticsEnabled, v => _config.WaterCausticsEnabled = v, "help.watercaustics");
-            Sld("tuner.watercausticsstrength", 0f, 1f, () => _config.WaterCausticsStrength, v => _config.WaterCausticsStrength = v);
+            Sld("tuner.watercausticsstrength", 0f, 1f, () => _config.WaterCausticsStrength, v => _config.WaterCausticsStrength = v, null,
+                () => _config.WaterEnabled && _config.WaterCausticsEnabled);
             Sld("tuner.waterspeed", 0f, 3f, () => _config.WaterSpeed, v => _config.WaterSpeed = v);
             Tog("tuner.waterreflection", () => _config.WaterReflection, v => _config.WaterReflection = v, "help.waterreflection");
+            // Everything from here to the rain rings is the reflection: the model, its dials,
+            // blur, depth and reach all draw inside the mirror, so they go with its switch.
+            bool reflectionOn = _config.WaterEnabled && _config.WaterReflection;
+            DependsOn(() => _config.WaterEnabled && _config.WaterReflection);
             Sld("tuner.waterreflectstrength", 0f, 1f, () => _config.WaterReflectStrength, v => _config.WaterReflectStrength = v);
             // Which water, two buttons, and only then that water's own dials. A dial that does
             // nothing under the water in use is a dial a player moves, sees nothing, and files
             // as broken, so the classic water's three looks and its distortion and banding only
             // appear once the classic water is the one picked.
             Section("tuner.watermodel");
-            (WaterReflectionModel model, string key)[] waterModels =
+            if (reflectionOn)
             {
-                (WaterReflectionModel.Modern, "modern"),
-                (WaterReflectionModel.Classic, "classic"),
-            };
-            int mw = (_contentColumnWidth - 6 * (waterModels.Length - 1)) / waterModels.Length;
-            for (int i = 0; i < waterModels.Length; i++)
-            {
-                var (model, key) = waterModels[i];
-                var rect = new Rectangle(_contentCursorX + i * (mw + 6), _contentCursorY, mw, S(40));
-                var btn = Btn(_translate($"tuner.watermodel.{key}"), rect, () =>
+                (WaterReflectionModel model, string key)[] waterModels =
                 {
-                    _config.WaterReflectModel = model; _onChange(); _onSave(); Reflow();
-                });
-                btn.IsChosen = () => _config.WaterReflectModel == model;
-                Help(rect, $"help.watermodel.{key}");
+                    (WaterReflectionModel.Modern, "modern"),
+                    (WaterReflectionModel.Classic, "classic"),
+                };
+                int mw = (_contentColumnWidth - 6 * (waterModels.Length - 1)) / waterModels.Length;
+                for (int i = 0; i < waterModels.Length; i++)
+                {
+                    var (model, key) = waterModels[i];
+                    var rect = new Rectangle(_contentCursorX + i * (mw + 6), _contentCursorY, mw, S(40));
+                    var btn = Btn(_translate($"tuner.watermodel.{key}"), rect, () =>
+                    {
+                        _config.WaterReflectModel = model; _onChange(); _onSave(); Reflow();
+                    });
+                    btn.IsChosen = () => _config.WaterReflectModel == model;
+                    Help(rect, $"help.watermodel.{key}");
+                }
+                _contentCursorY += S(50);
             }
-            _contentCursorY += S(50);
             if (_config.WaterReflectModel == WaterReflectionModel.Modern)
             {
                 Sld("tuner.watermodernwobble", 0f, 2f, () => _config.WaterModernWobble,
@@ -774,39 +949,42 @@ namespace SDVRadiance
                 // have no meaning apart, and a picked look is something a player can see the
                 // point of without knowing what either number is.
                 Section("tuner.reflstyle");
-                (WaterReflectionStyle style, string key)[] reflStyles =
+                if (reflectionOn)
                 {
-                    (WaterReflectionStyle.StillWater, "still"),
-                    (WaterReflectionStyle.Natural, "natural"),
-                    (WaterReflectionStyle.Choppy, "choppy"),
-                };
-                int rw = (_contentColumnWidth - 6 * (reflStyles.Length - 1)) / reflStyles.Length;
-                for (int i = 0; i < reflStyles.Length; i++)
-                {
-                    var (style, key) = reflStyles[i];
-                    var rect = new Rectangle(_contentCursorX + i * (rw + 6), _contentCursorY, rw, S(40));
-                    var btn = Btn(_translate($"tuner.reflstyle.{key}"), rect, () =>
+                    (WaterReflectionStyle style, string key)[] reflStyles =
                     {
-                        _config.WaterReflectStyle = style; _onChange(); _onSave(); Reflow();
-                    });
-                    btn.IsChosen = () => _config.WaterReflectStyle == style;
-                    Help(rect, $"help.reflstyle.{key}");
+                        (WaterReflectionStyle.StillWater, "still"),
+                        (WaterReflectionStyle.Natural, "natural"),
+                        (WaterReflectionStyle.Choppy, "choppy"),
+                    };
+                    int rw = (_contentColumnWidth - 6 * (reflStyles.Length - 1)) / reflStyles.Length;
+                    for (int i = 0; i < reflStyles.Length; i++)
+                    {
+                        var (style, key) = reflStyles[i];
+                        var rect = new Rectangle(_contentCursorX + i * (rw + 6), _contentCursorY, rw, S(40));
+                        var btn = Btn(_translate($"tuner.reflstyle.{key}"), rect, () =>
+                        {
+                            _config.WaterReflectStyle = style; _onChange(); _onSave(); Reflow();
+                        });
+                        btn.IsChosen = () => _config.WaterReflectStyle == style;
+                        Help(rect, $"help.reflstyle.{key}");
+                    }
+                    _contentCursorY += S(50);
                 }
-                _contentCursorY += S(50);
                 Sld("tuner.waterreflectdistort", 0f, 1.5f, () => _config.WaterReflectDistort,
                     v => _config.WaterReflectDistort = v, "help.waterreflectdistort");
                 Sld("tuner.waterreflectbanding", 0f, 16f, () => _config.WaterReflectBanding,
                     v => _config.WaterReflectBanding = v, "help.waterreflectbanding");
             }
             Sld("tuner.waterreflectblur", 0f, 2f, () => _config.WaterReflectBlur,
-                v => _config.WaterReflectBlur = v, "help.waterreflectblur",
-                () => _config.WaterEnabled && _config.WaterReflection);
+                v => _config.WaterReflectBlur = v, "help.waterreflectblur");
             Sld("tuner.reflectdepth", 0.1f, 1.5f, () => _config.WaterReflectDepth,
-                v => _config.WaterReflectDepth = v, "help.reflectdepth",
-                () => _config.WaterEnabled && _config.WaterReflection);
+                v => _config.WaterReflectDepth = v, "help.reflectdepth");
             Sld("tuner.reflectreach", 0.2f, 1f, () => _config.WaterReflectReach,
                 v => _config.WaterReflectReach = v, "help.reflectreach");
-            _contentCursorY += 12;
+            DependsOn(() => _config.WaterEnabled);
+            if (_config.WaterEnabled)
+                _contentCursorY += 12;
             Section("tuner.section.waterrain");
             Sld("tuner.waterrainringdensity", 0f, 2f, () => _config.WaterRainRingDensity,
                 v => _config.WaterRainRingDensity = v, "help.waterrainringdensity");
@@ -823,7 +1001,7 @@ namespace SDVRadiance
 
             // Per-room water switch: only in gated building interiors (not outdoors / real level water).
             GameLocation? here = Game1.currentLocation;
-            if (here != null && !here.IsOutdoors && !RenderPipeline.HasLevelWater(here))
+            if (_config.WaterEnabled && here != null && !here.IsOutdoors && !RenderPipeline.HasLevelWater(here))
             {
                 string key = here.NameOrUniqueName;
                 _toggles.Add(new TunerToggle($"{_translate("tuner.waterhere")} · {here.Name}", new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, 38),
@@ -842,21 +1020,55 @@ namespace SDVRadiance
         {
             Section("tuner.section.tiltshift");
             Tog("tuner.tiltshift", () => _config.TiltShiftEnabled, v => _config.TiltShiftEnabled = v, "help.tiltshift");
-            _toggles.Add(new TunerToggle(_translate("tuner.tiltradial"), new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, 38),
-                () => _config.TiltShiftMode == TiltShiftFocus.Radial,
-                v => _config.TiltShiftMode = v ? TiltShiftFocus.Radial : TiltShiftFocus.Bands));
-            _contentCursorY += 44;
-            Sld("tuner.tiltradius", 0.05f, 0.9f, () => _config.TiltShiftRadius, v => _config.TiltShiftRadius = v);
+            DependsOn(() => _config.TiltShiftEnabled);
+            if (_config.TiltShiftEnabled)
+            {
+                _toggles.Add(new TunerToggle(_translate("tuner.tiltradial"), new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, 38),
+                    () => _config.TiltShiftMode == TiltShiftFocus.Radial,
+                    v => _config.TiltShiftMode = v ? TiltShiftFocus.Radial : TiltShiftFocus.Bands));
+                _contentCursorY += 44;
+            }
+            // The radius is the radial focus's own; the top and bottom ratios are the bands'.
+            // The shader reads one set or the other by mode, so only the set in use is shown.
+            Sld("tuner.tiltradius", 0.05f, 0.9f, () => _config.TiltShiftRadius, v => _config.TiltShiftRadius = v, null,
+                () => _config.TiltShiftEnabled && _config.TiltShiftMode == TiltShiftFocus.Radial);
+            Sld("tuner.tilttop", 0f, 1f, () => _config.TiltShiftTopRatio, v => _config.TiltShiftTopRatio = v, "help.tilttop",
+                () => _config.TiltShiftEnabled && _config.TiltShiftMode == TiltShiftFocus.Bands);
+            Sld("tuner.tiltbottom", 0f, 1f, () => _config.TiltShiftBottomRatio, v => _config.TiltShiftBottomRatio = v, "help.tiltbottom",
+                () => _config.TiltShiftEnabled && _config.TiltShiftMode == TiltShiftFocus.Bands);
             Sld("tuner.tiltfeather", 0f, 1f, () => _config.TiltShiftFeather, v => _config.TiltShiftFeather = v, "help.tiltfeather");
             Sld("tuner.tiltstrength", 0f, 1f, () => _config.TiltShiftStrength, v => _config.TiltShiftStrength = v);
-            Sld("tuner.tilttop", 0f, 1f, () => _config.TiltShiftTopRatio, v => _config.TiltShiftTopRatio = v, "help.tilttop");
-            Sld("tuner.tiltbottom", 0f, 1f, () => _config.TiltShiftBottomRatio, v => _config.TiltShiftBottomRatio = v, "help.tiltbottom");
+            Sld("tuner.tiltindoor", 0f, 1f, () => _config.TiltShiftIndoorAmount, v => _config.TiltShiftIndoorAmount = v, "help.tiltindoor");
+            EndDependsOn();
             _contentCursorY += 12;
             Section("tuner.section.finishing");
             Tog("tuner.vignette", () => _config.VignetteEnabled, v => _config.VignetteEnabled = v, "help.vignette");
-            Sld("tuner.vignettestrength", 0f, 1f, () => _config.VignetteStrength, v => _config.VignetteStrength = v);
+            Sld("tuner.vignettestrength", 0f, 1f, () => _config.VignetteStrength, v => _config.VignetteStrength = v, null,
+                () => _config.VignetteEnabled);
             Tog("tuner.ca", () => _config.ChromaticAberrationEnabled, v => _config.ChromaticAberrationEnabled = v, "help.ca");
-            Sld("tuner.castrength", 0f, 1f, () => _config.ChromaticAberrationStrength, v => _config.ChromaticAberrationStrength = v);
+            Sld("tuner.castrength", 0f, 1f, () => _config.ChromaticAberrationStrength, v => _config.ChromaticAberrationStrength = v, null,
+                () => _config.ChromaticAberrationEnabled);
+        }
+
+        /// <summary>The Scale2x doubling on its own tab: the switch, how far the smoothing goes,
+        /// and which of the four art families it touches. Moved out of the performance tab when
+        /// it stopped being one switch - it is a look, and it is judged by eye like one.</summary>
+        private void BuildSmoothing()
+        {
+            Tog("config.sheetupscale.name", () => _config.SheetUpscaleEnabled, v => _config.SheetUpscaleEnabled = v, "help.sheetupscale");
+            DependsOn(() => _config.SheetUpscaleEnabled);
+            Sld("config.sheetupscalesmoothness.name", 0f, 1f, () => _config.SheetUpscaleSmoothness,
+                v => _config.SheetUpscaleSmoothness = v, "config.sheetupscalesmoothness.tooltip");
+            Section("tuner.section.smoothingfamilies");
+            Tog("config.sheetupscaleworld.name", () => _config.SheetUpscaleWorld,
+                v => _config.SheetUpscaleWorld = v, "config.sheetupscaleworld.tooltip");
+            Tog("config.sheetupscalecharacters.name", () => _config.SheetUpscaleCharacters,
+                v => _config.SheetUpscaleCharacters = v, "config.sheetupscalecharacters.tooltip");
+            Tog("config.sheetupscaleportraits.name", () => _config.SheetUpscalePortraits,
+                v => _config.SheetUpscalePortraits = v, "config.sheetupscaleportraits.tooltip");
+            Tog("config.sheetupscaleinterface.name", () => _config.SheetUpscaleInterface,
+                v => _config.SheetUpscaleInterface = v, "config.sheetupscaleinterface.tooltip");
+            EndDependsOn();
         }
 
         private void BuildPerformance()
@@ -941,7 +1153,8 @@ namespace SDVRadiance
                 v => _config.CameraMode = v ? CameraMode.Smooth : CameraMode.Off)
             { TextScale = _ui });
             _contentCursorY += S(44);
-            Sld("config.smoothcam.speed.name", 0.05f, 1f, () => _config.CameraFollowSpeed, v => _config.CameraFollowSpeed = v);
+            Sld("config.smoothcam.speed.name", 0.05f, 1f, () => _config.CameraFollowSpeed, v => _config.CameraFollowSpeed = v, null,
+                () => _config.CameraMode == CameraMode.Smooth);
         }
 
         private void BuildDiagnostics()
@@ -1043,7 +1256,10 @@ namespace SDVRadiance
                     if (Visible(c.Load.Bounds) && c.Load.Bounds.Contains(x, y + _scroll)) { Game1.playSound("smallSelect"); c.Load.OnClick(); return; }
                 }
                 foreach (var t in _toggles)
-                    if (Visible(t.Row) && t.Hit(x, y + _scroll)) { t.Set(!t.Get()); Game1.playSound("drumkit6"); _onChange(); _onSave(); return; }
+                    // Reflow after every toggle: the rows a switch owns are only built while it
+                    // is on, so flipping it has to rebuild the tab. Safe inside the foreach
+                    // because the return leaves before the enumerator moves again.
+                    if (Visible(t.Row) && t.Hit(x, y + _scroll)) { t.Set(!t.Get()); Game1.playSound("drumkit6"); _onChange(); _onSave(); Reflow(); return; }
                 foreach (var s in _sliders)
                     if (Visible(s.Track) && s.IsEnabled && s.Track.Contains(x, y + _scroll)) { _dragging = s; s.SetFromX(x); _onChange(); return; }
             }
@@ -1165,9 +1381,9 @@ namespace SDVRadiance
                 var r = new Rectangle(_contentX + S(16), cy, _contentColumnWidth, S(24));
                 if (Visible(r)) TunerText.DrawFit(spriteBatch, text, new Vector2(_contentX + S(16), cy + dy), _contentColumnWidth, Game1.textColor * 0.85f, 0.85f * _ui);
             }
-            foreach (var (text, cy) in _infoLines)
+            foreach (var (text, cy, lineHeight) in _infoLines)
             {
-                var r = new Rectangle(_contentX + S(16), cy, _contentColumnWidth, S(22));
+                var r = new Rectangle(_contentX + S(16), cy, _contentColumnWidth, lineHeight);
                 if (Visible(r)) TunerText.DrawFit(spriteBatch, text(), new Vector2(_contentX + S(16), cy + dy), _contentColumnWidth, Game1.textColor * 0.7f, 0.72f * _ui);
             }
             foreach (var btn in _buttons) if (Visible(btn.Bounds)) btn.Draw(spriteBatch, dy, btn.IsChosen?.Invoke() == true);

@@ -1,6 +1,8 @@
+using System;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using StardewModdingAPI;
 using StardewValley;
 
 namespace SDVRadiance
@@ -33,6 +35,45 @@ namespace SDVRadiance
 
         /// <summary>When true, the vanilla drifting Cloud critter shadow is hidden.</summary>
         internal static bool SuppressVanillaClouds;
+
+        /// <summary>Character classes from other mods that draw a <see cref="Game1.shadowTexture"/>
+        /// blob of their own inside their own draw. Custom Companions does this for every companion:
+        /// it sets HideShadow so the game draws no blob, then draws one itself, scaled to its model.
+        /// Read by the shadow pass, which treats such a class as a caster (it wants a shadow, it just
+        /// paints its own), while the shim below swallows the blob it paints. Filled by the draw
+        /// itself rather than by class name, so a companion configured to have no shadow never
+        /// draws one and never lands here.</summary>
+        internal static readonly System.Collections.Generic.HashSet<System.Type> SelfShadowedCharacterTypes = new();
+
+        /// <summary>How many blob shadows painted by another mod's creature we swallowed, and how
+        /// many reached the screen anyway, counted for the frame radiance_shadows is asked about.
+        ///
+        /// <para>A round patch under a creature can be the blob its own mod paints or our own
+        /// silhouette laid flat, and at four times scale on sand the two are the same picture. The
+        /// only difference that can be READ is whether the draw came through this shim at all: a
+        /// mod that paints its blob from a method which does not take a SpriteBatch never passes
+        /// through here, and its blob is one we cannot see, let alone drop. A blob on the screen
+        /// with nothing in "let through" is the signature of that hole.</para></summary>
+        internal static int BlobDrawsSwallowed;
+
+        /// <inheritdoc cref="BlobDrawsSwallowed"/>
+        internal static int BlobDrawsLetThrough;
+
+        /// <summary>Start a fresh count, so the numbers belong to one frame rather than to the
+        /// whole session.</summary>
+        internal static void ResetBlobTally()
+        {
+            BlobDrawsSwallowed = 0;
+            BlobDrawsLetThrough = 0;
+            VanillaShadowSuppressed.Clear();
+        }
+
+        /// <summary>The class whose own draw is running right now, set by the prefix on every
+        /// patched draw, so the shim can say whose blob it just saw.</summary>
+        private static System.Type? _characterDrawing;
+
+        /// <summary>Every draw method the patch above took, for radiance_shadows.</summary>
+        internal static readonly System.Collections.Generic.List<string> PatchedCharacterDraws = new();
 
         /// <summary>
         /// Art the game asked to read past the edge of, by texture name and how many times.
@@ -113,7 +154,23 @@ namespace SDVRadiance
         /// Seated NPCs get our own grounding pool at the DRAWN position instead
         /// (<see cref="ShadowRenderer.IsSeated"/>); the player keeps their normal silhouette.
         /// </remarks>
-        internal static bool DrawShadow_Prefix() => !SuppressVanillaShadows;
+        internal static bool DrawShadow_Prefix(Character __instance)
+        {
+            if (!SuppressVanillaShadows)
+                return true;
+            // Which classes we actually took a blob away from this frame. A round patch that
+            // survives with the whole mod switched off is the game's own, and the only way to know
+            // whether we were ever offered it is to count the offers: a horse that never appears
+            // here is a horse whose blob is being drawn by something that does not go through
+            // Character.DrawShadow at all, and no amount of reading Horse.cs will show that.
+            string name = __instance?.GetType().Name ?? "null";
+            VanillaShadowSuppressed.TryGetValue(name, out int seen);
+            VanillaShadowSuppressed[name] = seen + 1;
+            return false;
+        }
+
+        /// <inheritdoc cref="BlobDrawsSwallowed"/>
+        internal static readonly System.Collections.Generic.Dictionary<string, int> VanillaShadowSuppressed = new();
 
         /// <summary>Skip the vanilla <c>Cloud</c> critter's drifting shadow draw.</summary>
         internal static bool Cloud_Draw_Prefix() => !SuppressVanillaClouds;
@@ -136,7 +193,11 @@ namespace SDVRadiance
             if (SuppressVanillaObjectShadows && (layerDepth == VanillaCanopyShadowDepth || ReferenceEquals(texture, Game1.shadowTexture)))
                 return;
             FrameCost.Count(FrameCost.Counter.ShimDraws);
-            spriteBatch.Draw(texture, pos, RepairSourceRect(texture, src), color, rotation, origin, scale, effects, layerDepth);
+            Rectangle? repaired = RepairSourceRect(texture, src);
+            // The wind, if this is a canopy or a bush and the switch is on (see FoliageSway).
+            if (FoliageSway.TryDraw(spriteBatch, texture, pos, repaired, color, rotation, origin, scale, effects, layerDepth))
+                return;
+            spriteBatch.Draw(texture, pos, repaired, color, rotation, origin, scale, effects, layerDepth);
         }
 
         /// <summary>Vector2-scale twin of <see cref="Draw_SkipVanillaShadow"/>.</summary>
@@ -193,6 +254,116 @@ namespace SDVRadiance
                 return;
             FrameCost.Count(FrameCost.Counter.ShimDraws);
             spriteBatch.Draw(texture, pos, RepairSourceRect(texture, src), color, rotation, origin, scale, effects, layerDepth);
+        }
+
+        /// <summary>Shim for the draw of a character class from another mod: remember that the class
+        /// paints its own blob, and drop it while our directional shadows are casting.</summary>
+        public static void Draw_SkipCharacterBlobShadow(SpriteBatch spriteBatch, Texture2D texture, Vector2 pos,
+            Rectangle? src, Color color, float rotation, Vector2 origin, float scale,
+            SpriteEffects effects, float layerDepth)
+        {
+            if (ReferenceEquals(texture, Game1.shadowTexture))
+            {
+                if (_characterDrawing != null)
+                    SelfShadowedCharacterTypes.Add(_characterDrawing);
+                if (SuppressVanillaShadows)
+                {
+                    BlobDrawsSwallowed++;
+                    return;
+                }
+                BlobDrawsLetThrough++;
+            }
+            FrameCost.Count(FrameCost.Counter.ShimDraws);
+            spriteBatch.Draw(texture, pos, RepairSourceRect(texture, src), color, rotation, origin, scale, effects, layerDepth);
+        }
+
+        /// <summary>Vector2-scale twin of <see cref="Draw_SkipCharacterBlobShadow"/>.</summary>
+        public static void Draw_SkipCharacterBlobShadowV(SpriteBatch spriteBatch, Texture2D texture, Vector2 pos,
+            Rectangle? src, Color color, float rotation, Vector2 origin, Vector2 scale,
+            SpriteEffects effects, float layerDepth)
+        {
+            if (ReferenceEquals(texture, Game1.shadowTexture))
+            {
+                if (_characterDrawing != null)
+                    SelfShadowedCharacterTypes.Add(_characterDrawing);
+                if (SuppressVanillaShadows)
+                {
+                    BlobDrawsSwallowed++;
+                    return;
+                }
+                BlobDrawsLetThrough++;
+            }
+            FrameCost.Count(FrameCost.Counter.ShimDraws);
+            spriteBatch.Draw(texture, pos, RepairSourceRect(texture, src), color, rotation, origin, scale, effects, layerDepth);
+        }
+
+        internal static void CharacterDraw_Prefix(NPC __instance) => _characterDrawing = __instance.GetType();
+
+        internal static void CharacterDraw_Postfix() => _characterDrawing = null;
+
+        /// <summary>Character draw methods declared by other mods: drop their Game1.shadowTexture blob draws.</summary>
+        internal static System.Collections.Generic.IEnumerable<CodeInstruction> CharacterBlobShadow_Transpiler(
+            System.Collections.Generic.IEnumerable<CodeInstruction> instructions)
+            => RedirectDraws(instructions, nameof(Draw_SkipCharacterBlobShadow));
+
+        /// <summary>
+        /// Route every method a mod's character class declares that takes a SpriteBatch through the
+        /// shim above. A mod creature that hides the vanilla blob to paint its own (Custom
+        /// Companions) kept that blob under our directional shadows, and got none of ours because
+        /// HideShadow read as "wants no shadow". Run at GameLaunched, when every mod's classes exist.
+        /// Only classes outside the game's own assembly, and every method of theirs that is handed a
+        /// SpriteBatch rather than only the ones called draw: Custom Companions' draw hands the batch
+        /// to a DoDraw of its own and paints the blob there, so patching by name saw nothing.
+        /// Vanilla NPCs already go through the DrawShadow prefix.
+        /// </summary>
+        internal static void PatchSelfDrawnCharacters(Harmony harmony, IMonitor monitor)
+        {
+            int patched = 0;
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (assembly == typeof(NPC).Assembly)
+                    continue;
+                System.Type[] types;
+                try { types = assembly.GetTypes(); }
+                catch (System.Reflection.ReflectionTypeLoadException ex) { types = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Where(ex.Types, t => t != null))!; }
+                catch (Exception) { continue; }
+                foreach (var type in types)
+                {
+                    if (type == null || !typeof(NPC).IsAssignableFrom(type))
+                        continue;
+                    System.Reflection.MethodInfo[] declared;
+                    try
+                    {
+                        declared = type.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic
+                            | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly);
+                    }
+                    catch (Exception) { continue; }
+                    foreach (var method in declared)
+                    {
+                        if (method.IsAbstract || method.IsGenericMethodDefinition || method.ContainsGenericParameters)
+                            continue;
+                        bool takesBatch = false;
+                        foreach (var parameter in method.GetParameters())
+                            if (parameter.ParameterType == typeof(SpriteBatch)) { takesBatch = true; break; }
+                        if (!takesBatch)
+                            continue;
+                        try
+                        {
+                            harmony.Patch(method,
+                                prefix: new HarmonyMethod(typeof(ShadowSuppression), nameof(CharacterDraw_Prefix)),
+                                postfix: new HarmonyMethod(typeof(ShadowSuppression), nameof(CharacterDraw_Postfix)),
+                                transpiler: new HarmonyMethod(typeof(ShadowSuppression), nameof(CharacterBlobShadow_Transpiler)));
+                            patched++;
+                            PatchedCharacterDraws.Add($"{type.Name}.{method.Name}");
+                        }
+                        catch (Exception ex)
+                        {
+                            monitor.Log($"Own-shadow patch skipped for {type.FullName}.{method.Name}: {ex.Message}", LogLevel.Trace);
+                        }
+                    }
+                }
+            }
+            monitor.Log($"Watching {patched} character draw(s) from other mods for a blob shadow of their own.", LogLevel.Trace);
         }
 
         /// <summary>Redirect a method's 9-arg SpriteBatch.Draw calls through <paramref name="shimName"/>.</summary>

@@ -5,6 +5,8 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
 using StardewValley;
+using StardewValley.Objects;
+using SObject = StardewValley.Object;
 
 namespace SDVRadiance
 {
@@ -89,7 +91,12 @@ namespace SDVRadiance
                 float u = local.X / vw;
                 float v = local.Y / vh;
 
-                float radiusUv = src.Radius * LampPoolReachPx / vh * radiusScale;
+                // Capped: the reach grows with the game's radius, which is right for lamps (1 to
+                // 2.5) and absurd past them. A glow ring is radius 10, and 5.5 screen heights of
+                // pool with the gentle falloff below lit two thirds of the whole frame from the
+                // player's hand, so its per-light shadows drew wedges in ground the game shows
+                // as night. The game's own glow for it reaches about two thirds of a screen.
+                float radiusUv = Math.Min(src.Radius * LampPoolReachPx / vh * radiusScale, LampPoolReachCapUv);
                 if (u < -radiusUv * 2f || u > 1f + radiusUv * 2f || v < -radiusUv * 2f || v > 1f + radiusUv * 2f)
                     continue; // fully off-screen
 
@@ -328,6 +335,9 @@ namespace SDVRadiance
         /// gives its first eight a shadow ray and pools the rest, so from eight onward the
         /// order on the list changes what the player sees.</summary>
         private const int ShaderLightSlots = 8;
+        /// <summary>Longest pool any one light may lay, in screen heights. See the radius line
+        /// in BuildLightList: past this the game's radius stops meaning "how far it lights".</summary>
+        private const float LampPoolReachCapUv = 1.2f;
 
         /// <param name="flick">Per-frame flame wobble, kept OUT of the ranking and multiplied in
         /// only once the array is settled. Steady lights pass 1.</param>
@@ -1216,7 +1226,123 @@ namespace SDVRadiance
         /// padding, same reason.</summary>
         private const int FloodOccPad = 8;
 
-        private bool BuildFloodOccluders(int w, int h)
+        /// <summary>Texels per tile in the flood occluder mask. One texel per tile made every fence,
+        /// bush and boulder a solid square, and a lamp behind a fence lit the far side evenly where
+        /// it should throw a comb of light between the pickets. Four per tile is enough for a picket
+        /// (a fence post is four game pixels, one texel) and keeps the mask at roughly 200 x 130.</summary>
+        // EIGHT, from four. At four a plant's footprint was a 4x4 block and the bilinear read of a
+        // block's diagonal edge is scalloped, one scallop per texel, sixteen world pixels wide -
+        // and a shadow wedge traces that edge, so its own edge came out as a saw that no amount
+        // of tap spread or step count could smooth (both were tried, at softness 0 and 2). Twice
+        // the texels halves the scallop; the LOD floor in floodlight.fx softens what is left.
+        // Must match the texels-per-tile constant in floodlight.fx's shadow march.
+        private const int FloodOccSubdivision = 8;
+        /// <summary>How much of the light each kind of silhouette stops. Fences are thin wood, but a
+        /// picket blocks all of what lands on it; a bush is leaves and lets a little through, but only
+        /// a little: at 0.6 a hedge sprayed light out its far side, which was the first thing seen; a
+        /// boulder is a boulder. The tile stamps the switch falls back to keep the old 150 and 200.</summary>
+        private const float FenceOccluderShare = 1.0f;
+        private const float BushOccluderShare = 0.9f;
+        private const float ClumpOccluderShare = 0.8f;
+        /// <summary>Kegs, chests, machines, signs and floor furniture: a solid body a lamp cannot
+        /// see through, a shade under a fence because their sprites carry soft edges the fence's
+        /// pickets do not.</summary>
+        private const float PropOccluderShare = 0.9f;
+        /// <summary>The tile-resolution grid (walls, tree trunks) that the silhouettes are drawn over.</summary>
+        private Texture2D? _floodOccluderBaseTexture;
+        private SpriteBatch? _floodOccluderSpriteBatch;
+        /// <summary>Additive with a per-tier factor: a wall under a bush stays a wall (the sum
+        /// saturates at 1), and a bush over open ground is exactly its share.</summary>
+        private static BlendState OccluderShareBlend(float share) => new()
+        {
+            ColorSourceBlend = Blend.BlendFactor, AlphaSourceBlend = Blend.BlendFactor,
+            ColorDestinationBlend = Blend.One, AlphaDestinationBlend = Blend.One,
+            BlendFactor = new Color(share, share, share, share),
+        };
+        /// <summary>Blend states are immutable once used, so one is kept per quantised share; the
+        /// share moves only while the silhouette switch is fading, so this holds a few dozen at most.</summary>
+        private readonly Dictionary<int, BlendState> _occluderBlendByShare = new();
+        private BlendState OccluderBlendFor(float share)
+        {
+            int key = Math.Clamp((int)MathF.Round(share * 255f), 0, 255);
+            if (!_occluderBlendByShare.TryGetValue(key, out BlendState? blend))
+                _occluderBlendByShare[key] = blend = OccluderShareBlend(key / 255f);
+            return blend;
+        }
+        /// <summary>0 = the 1.6.2 look (fences, bushes and boulders as whole tiles, rounder pools),
+        /// 1 = their own silhouettes. Eased, and the mask is rebuilt as it moves, so the switch
+        /// cross-fades the two instead of snapping every shadow in the room.</summary>
+        private float _occluderShapesEase = 1f;
+        /// <summary>The placed-things switch, eased the same way: 0 = kegs, chests and furniture
+        /// let lamp light straight through, 1 = they stand in it as the sprites they are.</summary>
+        private float _occluderPropsEase = 1f;
+
+        /// <summary>Item art by qualified id, the way <see cref="ShadowRenderer"/> keeps its own:
+        /// the registry walk is not free and a farm asks about the same keg a hundred times.
+        /// Cleared with the season, since a few items swap art with it.</summary>
+        private readonly Dictionary<string, (Texture2D? texture, Rectangle source)> _placedArtCache = new();
+        private string _placedArtSeason = "";
+
+        private bool TryPlacedArt(string qualifiedId, out Texture2D? texture, out Rectangle source)
+        {
+            string season = Game1.currentSeason ?? "";
+            if (season != _placedArtSeason)
+            {
+                _placedArtCache.Clear();
+                _placedArtSeason = season;
+            }
+            if (!_placedArtCache.TryGetValue(qualifiedId, out var entry))
+            {
+                try
+                {
+                    var data = ItemRegistry.GetDataOrErrorItem(qualifiedId);
+                    entry = (data.GetTexture(), data.GetSourceRect());
+                }
+                catch
+                {
+                    entry = (null, Rectangle.Empty);
+                }
+                _placedArtCache[qualifiedId] = entry;
+            }
+            texture = entry.texture;
+            source = entry.source;
+            return texture != null;
+        }
+
+        /// <summary>Where every non-window light stands, in world pixels, for the one question the
+        /// prop pass asks: is this thing a lamp? Answered from the game's own light list rather
+        /// than from a field on the object, so a mod's torch is a torch too.</summary>
+        private readonly List<Vector2> _occluderLightPositions = new();
+
+        private void GatherOccluderLightPositions()
+        {
+            _occluderLightPositions.Clear();
+            var lights = Game1.currentLightSources;
+            if (lights == null)
+                return;
+            foreach (var kv in lights)
+            {
+                if (kv.Value.lightContext.Value == LightSource.LightContext.WindowLight)
+                    continue;
+                _occluderLightPositions.Add(kv.Value.position.Value);
+            }
+        }
+
+        private bool LightStandsIn(Rectangle worldBox)
+        {
+            foreach (var position in _occluderLightPositions)
+                if (worldBox.Contains((int)position.X, (int)position.Y))
+                    return true;
+            return false;
+        }
+
+        /// <summary>The mask box-filtered to a half, a quarter and an eighth: the shadow march's
+        /// penumbra (OccAtBlur in floodlight.fx). Its own textures rather than a mip chain, because
+        /// the level a pixel shader asks tex2Dlod for reaches the GPU as a bias through MonoGame's
+        /// GLSL path and the softness dial did nothing.</summary>
+        private readonly RenderTarget2D?[] _floodOccluderSoft = new RenderTarget2D?[3];
+
+        private bool BuildFloodOccluders(int w, int h, ModConfig config)
         {
             GameLocation? location = Game1.currentLocation;
             if (location == null)
@@ -1241,6 +1367,10 @@ namespace SDVRadiance
             // SurfaceMap identity), or a growth stage ticking over — which happens at day start
             // behind the save fade, and is what the lazy once-a-second fallback is for.
             var surf = SurfaceMap.For(location);
+            Approach(ref _occluderShapesEase, config.LightShadowSilhouettes ? 1f : 0f, 0.05f);
+            int shapesStep = (int)MathF.Round(_occluderShapesEase * 32f);
+            Approach(ref _occluderPropsEase, config.LightShadowProps ? 1f : 0f, 0.05f);
+            int propsStep = (int)MathF.Round(_occluderPropsEase * 32f);
             int occluderInputsHash;
             unchecked
             {
@@ -1248,9 +1378,21 @@ namespace SDVRadiance
                 occluderInputsHash = occluderInputsHash * 31 + location.terrainFeatures.Count();
                 occluderInputsHash = occluderInputsHash * 31 + location.largeTerrainFeatures.Count;
                 occluderInputsHash = occluderInputsHash * 31 + location.resourceClumps.Count;
+                occluderInputsHash = occluderInputsHash * 31 + CountFences(location);
+                occluderInputsHash = occluderInputsHash * 31 + shapesStep;
+                // Placing or picking up anything, and a torch lit or put out, both move the mask.
+                occluderInputsHash = occluderInputsHash * 31 + location.objects.Count();
+                occluderInputsHash = occluderInputsHash * 31 + location.furniture.Count;
+                occluderInputsHash = occluderInputsHash * 31 + (Game1.currentLightSources?.Count ?? 0);
+                occluderInputsHash = occluderInputsHash * 31 + propsStep;
             }
             if (_floodOccluderMask != null && startTileX == _floodOccluderTileX && startTileY == _floodOccluderTileY
-                && _floodOccluderMask.Width == tilesW
+                // Texels, not tiles. The mask became a render target at FloodOccSubdivision texels
+                // per tile when silhouettes arrived, and this test kept comparing its width against
+                // the TILE count, which it can never equal - so the cache never hit and the whole
+                // mask, sprite draws and all, was rebuilt on every frame instead of on a change.
+                // Measured at 0.33 ms per frame on the beach and 0.57 on a fenced farm.
+                && _floodOccluderMask.Width == tilesW * FloodOccSubdivision
                 && ReferenceEquals(surf, _floodOccluderSurfaceMap) && occluderInputsHash == _floodOccluderInputsHash
                 && Game1.ticks - _floodOccluderCacheTick < 60)
             {
@@ -1275,7 +1417,23 @@ namespace SDVRadiance
                     {
                         // Walls/roofs block lamp light; decks (piers/bridges, height 1 but open)
                         // and water don't.
-                        solid = surf.BlocksLight(tx, ty);
+                        //
+                        // Neither does anything the farmer can WALK on, whatever the surface map
+                        // calls it. The farmhouse porch is roof by class - it sits under the
+                        // overhang - so the mask stamped the boards solid, and a light carried
+                        // onto them was a light standing inside a wall. Stepping up onto the
+                        // porch switched every shadow that light cast off, and stepping back down
+                        // switched them on: measured over the ground both frames share, the
+                        // picture moved 6.63 where the game's own moved 0.05.
+                        //
+                        // And a farm BUILDING blocks by its own collision map, asked directly. A coop
+                        // or a barn is not in the map at all - it is placed on grass the map calls
+                        // passable - so the walkable rule above alone struck every farm building out
+                        // of the mask the day it landed, and a ring at the coop door lit the ground
+                        // straight through the coop. The building's own map keeps the farmhouse
+                        // porch open (it is passable there too), so this does not undo that fix.
+                        solid = (surf.BlocksLight(tx, ty) && !CanWalkOn(location, tx, ty))
+                             || BuildingBlocks(location, tx, ty);
                     }
                     else
                     {
@@ -1283,7 +1441,35 @@ namespace SDVRadiance
                             && layer.Tiles[tx, ty] != null;
                     }
                     byte v = solid ? (byte)255 : (byte)0;
-                    _floodOccluderMaskPixels[j * tilesW + i] = new Color(v, v, v, (byte)255);
+                    _floodOccluderMaskPixels[j * tilesW + i] = new Color(v, v, v, v);
+                }
+            }
+
+            // A walkable slit INSIDE a structure - a farmhouse doorway column, the open band a
+            // building's collision map leaves across its middle - is enclosed by wall on both
+            // sides, so its probes go near-black and paint a smudge onto the facade art drawn
+            // over those tiles. Flag such cells in G, which every shader reads nothing from
+            // except the cascade resolve's facade lift: rays still march through the slit
+            // unchanged, so a light carried onto a porch keeps working. Runs before the tree
+            // and clump stamps so only real walls count as enclosure.
+            for (int j = 0; j < tilesH; j++)
+            {
+                for (int i = 0; i < tilesW; i++)
+                {
+                    int idx = j * tilesW + i;
+                    if (_floodOccluderMaskPixels[idx].R == 255)
+                        continue;
+                    bool SolidAt(int x, int y) => x >= 0 && x < tilesW && y >= 0 && y < tilesH
+                        && _floodOccluderMaskPixels[y * tilesW + x].R == 255;
+                    bool above = SolidAt(i, j - 1) || SolidAt(i, j - 2);
+                    bool below = SolidAt(i, j + 1) || SolidAt(i, j + 2);
+                    bool left = SolidAt(i - 1, j) || SolidAt(i - 2, j);
+                    bool right = SolidAt(i + 1, j) || SolidAt(i + 2, j);
+                    if ((above && below) || (left && right))
+                    {
+                        Color cell = _floodOccluderMaskPixels[idx];
+                        _floodOccluderMaskPixels[idx] = new Color(cell.R, (byte)255, cell.B, cell.A);
+                    }
                 }
             }
 
@@ -1294,7 +1480,7 @@ namespace SDVRadiance
                     return;
                 int idx = j * tilesW + i;
                 if (_floodOccluderMaskPixels[idx].R < strength)
-                    _floodOccluderMaskPixels[idx] = new Color(strength, strength, strength, (byte)255);
+                    _floodOccluderMaskPixels[idx] = new Color(strength, strength, strength, strength);
             }
 
             foreach (var kv in location.terrainFeatures.Pairs)
@@ -1307,35 +1493,694 @@ namespace SDVRadiance
                     case StardewValley.TerrainFeatures.FruitTree ft when ft.growthStage.Value >= 4:
                         Stamp((int)kv.Key.X, (int)kv.Key.Y, 215);
                         break;
+                    // Bushes and clumps are drawn as their own silhouettes below; the tile stamp
+                    // is what they fade back to when the silhouette switch is off.
                     case StardewValley.TerrainFeatures.Bush:
-                        Stamp((int)kv.Key.X, (int)kv.Key.Y, 150);
+                        Stamp((int)kv.Key.X, (int)kv.Key.Y, (byte)(150f * (1f - _occluderShapesEase)));
                         break;
                 }
             }
             foreach (var ltf in location.largeTerrainFeatures)
             {
                 if (ltf is StardewValley.TerrainFeatures.Bush b)
-                    Stamp((int)b.Tile.X, (int)b.Tile.Y, 150);
+                    Stamp((int)b.Tile.X, (int)b.Tile.Y, (byte)(150f * (1f - _occluderShapesEase)));
             }
             foreach (var clump in location.resourceClumps)
             {
                 if (clump == null) continue;
                 for (int cy = 0; cy < clump.height.Value; cy++)
                     for (int cx = 0; cx < clump.width.Value; cx++)
-                        Stamp((int)clump.Tile.X + cx, (int)clump.Tile.Y + cy, 200);
+                        Stamp((int)clump.Tile.X + cx, (int)clump.Tile.Y + cy, (byte)(200f * (1f - _occluderShapesEase)));
             }
             // Characters/animals/the player are NOT stamped: their shadows are owned by the
             // sprite silhouette pass — stamping them here too gave everyone standing near a
             // lamp a second blurry dark blotch on top of their cast shadow.
 
-            if (_floodOccluderMask == null || _floodOccluderMask.Width != tilesW || _floodOccluderMask.Height != tilesH)
+            // The grid above at tile resolution, then everything with a real silhouette drawn over
+            // it at FloodOccSubdivision texels per tile, by the game's own art and placement.
+            if (_floodOccluderBaseTexture == null || _floodOccluderBaseTexture.Width != tilesW || _floodOccluderBaseTexture.Height != tilesH)
+            {
+                _floodOccluderBaseTexture?.Dispose();
+                _floodOccluderBaseTexture = VramTally.Track(new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color), "flood occluder mask");
+            }
+            _floodOccluderBaseTexture.SetData(_floodOccluderMaskPixels, 0, count);
+            int maskW = tilesW * FloodOccSubdivision, maskH = tilesH * FloodOccSubdivision;
+            if (_floodOccluderMask is not RenderTarget2D maskTarget || maskTarget.Width != maskW || maskTarget.Height != maskH)
             {
                 _floodOccluderMask?.Dispose();
-                _floodOccluderMask = VramTally.Track(new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color), "flood occluder mask");
+                maskTarget = VramTally.Track(new RenderTarget2D(_device, maskW, maskH, false, SurfaceFormat.Color, DepthFormat.None), "flood occluder mask");
+                _floodOccluderMask = maskTarget;
             }
-            _floodOccluderMask.SetData(_floodOccluderMaskPixels, 0, count);
+            DrawOccluderSilhouettes(maskTarget, location, startTileX, startTileY, tilesW, tilesH);
+            BuildSoftOccluderLevels(maskTarget);
             _floodOccluderMaskSize = new Vector2(tilesW, tilesH);
             return true;
+        }
+
+        /// <summary>Run the radiance cascades over the flood occluder window just built (see
+        /// <see cref="RadianceCascades"/>): the mask and its softened copies are what the rays march.</summary>
+        private bool BuildCascades(ModConfig config)
+        {
+            if (_floodOccluderMask is not RenderTarget2D mask || _floodOccluderBaseTexture == null || _cascadesEffect == null)
+                return false;
+            return _cascades.Build(_device, _monitor, _cascadesEffect, _flood, config, mask, _floodOccluderSoft,
+                _floodOccluderBaseTexture, _floodOccluderTileX, _floodOccluderTileY,
+                (int)_floodOccluderMaskSize.X, (int)_floodOccluderMaskSize.Y, _floodOccluderCacheTick);
+        }
+
+        /// <summary>Whether the world draw should be recorded this frame: the relief is on, or it is
+        /// still fading out and needs a buffer to fade with.</summary>
+        internal bool WantsSpriteRecording(ModConfig config)
+            => config.Enabled && ((config.SpriteReliefEnabled && config.FloodLightingEnabled) || _reliefEase > FadeGone);
+
+        /// <summary>The textures the current map paints its tiles from, as instances rather than by
+        /// name: the display device loads a tilesheet through the same content manager, so the
+        /// instance is the same one the draws carry, and two sheets that share a file name in
+        /// different folders cannot be confused for each other. Rebuilt when the map changes and
+        /// once a second besides, because a content patch reloads assets under a map that never
+        /// changed and the old instances would go on being matched.</summary>
+        private readonly HashSet<Texture2D> _mapTileSheetTextures = new();
+        /// <summary>The same sheets by NAME, as a second way in. Asking the content manager for
+        /// "Maps/fall_town" on a game running in Thai hands back the base asset, while the display
+        /// device drew from "Maps/fall_town.th" - a different instance of a translated sheet, which
+        /// the set above cannot match. So a whole season's tiles wore the bevel the fix removed,
+        /// and only the seasons whose sheet the translation pack had not replaced looked right,
+        /// which is why this came back as "summer was fine".</summary>
+        private readonly HashSet<string> _mapTileSheetNames = new(StringComparer.OrdinalIgnoreCase);
+        private xTile.Map? _mapTileSheetSource;
+        private int _mapTileSheetTick = -1000;
+        private Texture2D? _lastSheetAsked;
+        private bool _lastSheetWasMapTile;
+
+        /// <summary>A drawn sheet's name with any locale suffix taken off: the game appends the
+        /// language to a translated asset ("Maps/fall_town.th"), and the map still calls it by the
+        /// base name. Anything after the LAST dot that is short and has no slash in it is a locale
+        /// tag, not part of a path.</summary>
+        private static string WithoutLocaleSuffix(string name)
+        {
+            int dot = name.LastIndexOf('.');
+            if (dot <= 0 || dot < name.Length - 6)
+                return name;
+            return name.IndexOf('/', dot) >= 0 || name.IndexOf('\\', dot) >= 0 ? name : name.Substring(0, dot);
+        }
+
+        /// <summary>
+        /// Whether this sheet is one the current map paints its tiles from. Such a draw gets no
+        /// relief: a normal map is baked for a WHOLE sheet, so at a tile cell's border the bevel's
+        /// Sobel reads the NEXT CELL of the sheet, which is unrelated art. Measured indoors, that
+        /// invented a lean of 91 of 128 across a wall's tile seam while the tile's own inside was
+        /// flat - an embossed line along every drawn tile edge, and a dark band under an animated
+        /// water tile that read as a shadow it should never have cast. The game draws only a
+        /// handful of tiles through the sorted batch (a fountain's water, a sorted Buildings tile),
+        /// so the tiles that DID get a bevel were the arbitrary few, which is the other half of why
+        /// it looked wrong. FLAT and not skipped: leaving the draw out stopped the tile covering
+        /// what stands behind it in the normal buffer, and a farmer walking behind a building had
+        /// their own bevelled outline show through the wall.
+        /// </summary>
+        /// <summary>Whether the relief pass will leave this sheet FLAT rather than bevel it, which
+        /// is the question radiance_reliefdraws exists to answer. A render target is flat because
+        /// it has no sheet to read a normal from; a map tilesheet is flat because a bevel baked for
+        /// a whole sheet reads the next cell along at a tile's border.</summary>
+        internal bool ReliefLeavesSheetFlat(Texture2D sheet)
+            => sheet is RenderTarget2D || DrawnFromMapTileSheet(sheet);
+
+        private bool DrawnFromMapTileSheet(Texture2D sheet)
+        {
+            if (ReferenceEquals(sheet, _lastSheetAsked))
+                return _lastSheetWasMapTile;
+            xTile.Map? map = Game1.currentLocation?.Map;
+            if (map == null)
+                return false;
+            if (!ReferenceEquals(map, _mapTileSheetSource) || Game1.ticks - _mapTileSheetTick > 60)
+            {
+                _mapTileSheetSource = map;
+                _mapTileSheetTick = Game1.ticks;
+                _mapTileSheetTextures.Clear();
+                _mapTileSheetNames.Clear();
+                foreach (xTile.Tiles.TileSheet tileSheet in map.TileSheets)
+                {
+                    if (string.IsNullOrEmpty(tileSheet.ImageSource))
+                        continue;
+                    _mapTileSheetNames.Add(LabelStore.NormalizeSheet(tileSheet.ImageSource));
+                    try
+                    {
+                        Texture2D loaded = Game1.content.Load<Texture2D>(tileSheet.ImageSource);
+                        if (!loaded.IsDisposed)
+                            _mapTileSheetTextures.Add(loaded);
+                    }
+                    catch
+                    {
+                        // A tilesheet the content manager will not hand over is one this pass
+                        // cannot recognise; its tiles keep the behaviour they had.
+                    }
+                }
+                _lastSheetAsked = null;
+            }
+            bool isMapTile = _mapTileSheetTextures.Contains(sheet);
+            if (!isMapTile && !string.IsNullOrEmpty(sheet.Name))
+                isMapTile = _mapTileSheetNames.Contains(LabelStore.NormalizeSheet(WithoutLocaleSuffix(sheet.Name)));
+            _lastSheetAsked = sheet;
+            _lastSheetWasMapTile = isMapTile;
+            return isMapTile;
+        }
+
+        /// <summary>
+        /// Put the tree's trunk back together in the normal buffer.
+        ///
+        /// <para>A tree is TWO sprites the artist lined up by hand: the canopy, whose trunk art
+        /// stops part way down the block (row 81 of the oak's 96), and a separate trunk piece that
+        /// takes over below it and is drawn UNDER the canopy where the two overlap. The relief
+        /// works out its shading per sprite from that sprite's own outline, so the row where the
+        /// canopy's art stops is shaded like the edge of a real object - and that shading lands
+        /// across the trunk as a dark line. Reported as the tree splitting in two, and it goes away
+        /// the moment sprite relief is switched off, which is what named it.</para>
+        ///
+        /// <para>The trunk piece is redrawn here, last, with the sheet's FLAT normal map: its own
+        /// alpha decides where it lands, so nothing beside the trunk is touched, and where it
+        /// covers the canopy's shaded edge that edge stops existing. The trunk loses its own bevel,
+        /// which is the price: a trunk with no relief reads as a trunk, and a trunk cut in half
+        /// does not. The pair is found in the RECORDED draws rather than rebuilt from the tree's
+        /// tile, so a modded tree drawn the same way is mended the same way.</para>
+        /// </summary>
+        private void FlattenTreeTrunkJoins()
+        {
+            var records = SpriteDrawRecorder.Records;
+            TrunkJoinsMended = 0;
+            if (records.Count == 0 || _normalsEffect == null)
+                return;
+            _normalSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.NonPremultiplied, SamplerState.PointClamp,
+                DepthStencilState.None, RasterizerState.CullNone);
+            try
+            {
+                for (int i = 0; i < records.Count; i++)
+                {
+                    SpriteDrawRecorder.Record trunk = records[i];
+                    if (trunk.UsesDestination || trunk.Texture.IsDisposed
+                        || trunk.Source.Width != TreeTrunkPieceWidth || trunk.Source.Height != TreeTrunkPieceHeight)
+                        continue;
+                    if (!TryFindCanopyFor(records, i, trunk))
+                        continue;
+                    Texture2D? flat = _sheetNormals.For(_device, _normalsEffect, trunk.Texture, NormalBakeFlat);
+                    if (flat == null)
+                        continue;
+                    // The trunk's OWN placement, whatever it ended up being. The wind rewrites this
+                    // draw to turn it about the tree's base, which moves the origin off zero and the
+                    // position onto the canopy's anchor, so anything rebuilt here from the tree's
+                    // geometry would land somewhere the trunk is not. Substituting only the texture
+                    // cannot miss.
+                    _normalSpriteBatch.Draw(flat, trunk.Position, trunk.Source, Color.White * trunk.Alpha,
+                        trunk.Rotation, trunk.Origin, trunk.Scale, trunk.Effects, 0f);
+                    TrunkJoinsMended++;
+                }
+            }
+            catch
+            {
+                // A mended trunk is a nicety; a thrown pass would cost the whole relief.
+            }
+            finally
+            {
+                _normalSpriteBatch.End();
+            }
+        }
+
+        /// <summary>How many tree trunks were mended in the normal buffer last frame. Printed by
+        /// radiance_reliefdraws: a fix whose match never fires looks exactly like a fix that did
+        /// nothing, and the first version of this one matched on an origin the wind pass had
+        /// already rewritten, so it never fired at all and there was no way to see that.</summary>
+        internal int TrunkJoinsMended { get; private set; }
+
+        /// <summary>The trunk piece the game draws below a tree's canopy (Tree.stumpSourceRect).</summary>
+        private const int TreeTrunkPieceWidth = 16;
+        private const int TreeTrunkPieceHeight = 32;
+
+        /// <summary>Where a recorded draw's art actually starts on screen. Position alone is not
+        /// that: the origin is subtracted from it first, and this mod's own wind pass rewrites a
+        /// trunk's position AND origin together to turn it about the tree's base. The corner they
+        /// describe between them does not move, so it is what the pair below is matched on.</summary>
+        private static Vector2 DrawnTopLeft(in SpriteDrawRecorder.Record record)
+            => record.Position - record.Origin * record.Scale;
+
+        /// <summary>Whether this trunk piece belongs to a canopy drawn just before it: the same
+        /// sheet, a 48x96 block, and the placement Tree.draw gives them both - the trunk's art
+        /// starts 32 across and 128 up from the canopy's anchor, give or take the few pixels a
+        /// shaken tree wobbles by. Searched backwards, because the canopy is drawn first.</summary>
+        private static bool TryFindCanopyFor(System.Collections.Generic.IReadOnlyList<SpriteDrawRecorder.Record> records,
+            int trunkIndex, in SpriteDrawRecorder.Record trunk)
+        {
+            Vector2 trunkCorner = DrawnTopLeft(trunk);
+            for (int j = trunkIndex - 1; j >= 0 && j >= trunkIndex - 8; j--)
+            {
+                SpriteDrawRecorder.Record candidate = records[j];
+                if (candidate.UsesDestination
+                    || !ReferenceEquals(candidate.Texture, trunk.Texture)
+                    || candidate.Source.Width != StardewValley.TerrainFeatures.Tree.treeTopSourceRect.Width
+                    || candidate.Source.Height != StardewValley.TerrainFeatures.Tree.treeTopSourceRect.Height)
+                    continue;
+                // The canopy hangs from its anchor: origin (24,96) at (tile*64+32, tile*64+64).
+                Vector2 anchor = candidate.Position;
+                if (Math.Abs(trunkCorner.Y - (anchor.Y - 128f)) < 2f
+                    && Math.Abs(trunkCorner.X - (anchor.X - 32f)) <= 5f)
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Replay this frame's recorded world draw with each sheet's normal map in place of its art
+        /// (see <see cref="SpriteDrawRecorder"/>, <see cref="SheetNormalCache"/>), into a buffer the
+        /// flood shader reads for the relief terms. Straight-alpha blend, because the encoded normal
+        /// must not be scaled by coverage. Leaves <paramref name="target"/> bound again.
+        /// </summary>
+        private void RenderNormalPass(ModConfig config, RenderTarget2D target)
+        {
+            bool wanted = config.SpriteReliefEnabled && config.FloodLightingEnabled && _normalsEffect != null;
+            Approach(ref _reliefEase, wanted ? 1f : 0f, 0.1f);
+            if (_reliefEase <= FadeGone)
+            {
+                _normalPassReady = false;
+                // Switched off and faded: the maps go back to the card. They return on demand.
+                if (!wanted && _sheetNormals.Count > 0)
+                    _sheetNormals.Clear();
+                return;
+            }
+            // Entries whose sheet a content patch reloaded can never be asked for again by their
+            // old key: without this sweep they held their bytes forever, the budget filled with
+            // ghosts, every new sheet was refused, and the relief flickered as sprites fell in
+            // and out of the flat stand-in.
+            _sheetNormals.SweepDisposed();
+            if (SpriteDrawRecorder.Records.Count == 0)
+            {
+                // No world draw was recorded this frame (a menu, a transition). Keeping the last
+                // frame's buffer beats blinking the relief off for one frame - but only while the
+                // camera has not moved, because this buffer is SCREEN space. Held across a camera
+                // move it lights the world with a stamp of where things used to be, and because
+                // the frames that record nothing come and go, that stamp flickers on and off. It
+                // showed at the town fountain, whose animated tiles are among the handful the game
+                // draws through the sorted batch at all, and it went away when the relief was
+                // switched off and on again, which is the signature of held state rather than a
+                // wrong decision. Where it cannot be trusted, hand back a flat buffer: no relief
+                // for a frame is a far smaller error than relief in the wrong place.
+                if (_normalPassReady && _normalRenderTarget != null
+                    && (_normalPassViewport.X != Game1.viewport.X || _normalPassViewport.Y != Game1.viewport.Y))
+                {
+                    RenderTargetBinding[] was = _device.GetRenderTargets();
+                    _device.SetRenderTarget(_normalRenderTarget);
+                    _device.Clear(new Color(128, 128, 255, 0));
+                    _device.SetRenderTargets(was);
+                    _normalPassViewport = new Point(Game1.viewport.X, Game1.viewport.Y);
+                }
+                return;
+            }
+            int w = target.Width, h = target.Height;
+            if (_normalRenderTarget == null || _normalRenderTarget.Width != w || _normalRenderTarget.Height != h)
+            {
+                _normalPassReady = false;
+                _normalRenderTarget?.Dispose();
+                // PreserveContents: read on frames whose replay was skipped (see above), which is
+                // a cross-frame read - rule 7.
+                _normalRenderTarget = VramTally.Track(new RenderTarget2D(_device, w, h, false, SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "sprite normals");
+            }
+            _normalSpriteBatch ??= new SpriteBatch(_device);
+            // Its own slot: this pass borrowed GridLightOccluders through the whole first relief
+            // round, so every bench table until 2026-08-27 shows the replay's cost wearing the
+            // occluder grid's name.
+            long t0 = FrameCost.Begin(FrameCost.Part.ReliefNormals);
+            try
+            {
+                _device.SetRenderTarget(_normalRenderTarget);
+                _device.Clear(new Color(128, 128, 255, 0));
+                // FrontToBack with the recorded depths, the order the game drew them in.
+                _normalSpriteBatch.Begin(SpriteSortMode.FrontToBack, BlendState.NonPremultiplied, SamplerState.PointClamp,
+                    DepthStencilState.None, RasterizerState.CullNone);
+                if (_flatNormalTexture == null || _flatNormalTexture.IsDisposed)
+                {
+                    _flatNormalTexture = new Texture2D(_device, 1, 1, false, SurfaceFormat.Color);
+                    _flatNormalTexture.SetData(new[] { new Color(128, 128, 255, 255) });
+                }
+                Texture2D flat = _flatNormalTexture;
+                Effect normals = _normalsEffect!;
+                _normalPassDrawn = SpriteDrawRecorder.Replay(_normalSpriteBatch,
+                    // A sheet that is itself a render target is a COMPOSED picture (Fashion
+                    // Sense builds the farmer that way) and a fresh instance can arrive any
+                    // frame: deriving a map from each one churned the cache without end. The
+                    // flat stand-in carries those sprites instead.
+                    (sheet, effects) =>
+                    {
+                        if (sheet is RenderTarget2D)
+                            return null;
+                        // A map's own tilesheet is baked FLAT (see _bakeSheetFlat): it must cover
+                        // what stands behind it without wearing a bevel of its own. Mirroring a
+                        // flat map changes nothing, so they share one entry.
+                        _bakeSheetFlat = DrawnFromMapTileSheet(sheet);
+                        bool flipped = !_bakeSheetFlat && (effects & SpriteEffects.FlipHorizontally) != 0;
+                        // Three derivations, three keys. Flat used to share the unflipped key, so
+                        // whichever was baked first stood in for the other from then on.
+                        int variant = _bakeSheetFlat ? NormalBakeFlat : flipped ? NormalBakeMirrored : NormalBakeBevelled;
+                        Texture2D? map = _sheetNormals.For(_device, normals, sheet, variant);
+                        _bakeSheetFlat = false;
+                        return map;
+                    }, flat);
+                _normalSpriteBatch.End();
+                // The map's front layers, in their own batch so they land ON TOP whatever depth
+                // they were recorded with - which is the order the game drew them, and what makes
+                // a farmer standing behind a building stop showing through its wall.
+                _normalSpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.NonPremultiplied, SamplerState.PointClamp,
+                    DepthStencilState.None, RasterizerState.CullNone);
+                _normalPassDrawn += SpriteDrawRecorder.ReplayFront(_normalSpriteBatch,
+                    (sheet, effects) =>
+                    {
+                        if (sheet is RenderTarget2D)
+                            return null;
+                        _bakeSheetFlat = DrawnFromMapTileSheet(sheet);
+                        bool flipped = !_bakeSheetFlat && (effects & SpriteEffects.FlipHorizontally) != 0;
+                        // Three derivations, three keys. Flat used to share the unflipped key, so
+                        // whichever was baked first stood in for the other from then on.
+                        int variant = _bakeSheetFlat ? NormalBakeFlat : flipped ? NormalBakeMirrored : NormalBakeBevelled;
+                        Texture2D? map = _sheetNormals.For(_device, normals, sheet, variant);
+                        _bakeSheetFlat = false;
+                        return map;
+                    }, flat);
+                _normalSpriteBatch.End();
+                FlattenTreeTrunkJoins();
+                _normalPassReady = true;
+                // Where this screen-space buffer was drawn from, so a later frame that cannot
+                // redraw it can tell whether it is still looking at the same view.
+                _normalPassViewport = new Point(Game1.viewport.X, Game1.viewport.Y);
+            }
+            catch (Exception ex)
+            {
+                // A half-drawn buffer is worse than none: only a completed replay is shown.
+                _normalPassReady = false;
+                try { _normalSpriteBatch.End(); } catch { }
+                if (config.DebugLogging)
+                    _monitor.Log($"sprite normal pass failed: {ex.Message}", LogLevel.Debug);
+            }
+            finally
+            {
+                _device.SetRenderTarget(target);
+                FrameCost.End(FrameCost.Part.ReliefNormals, t0);
+            }
+        }
+
+        /// <summary>Whether a placed building stands on this tile with a solid part of itself (its
+        /// collision map's solid cells), so a coop blocks and a porch or a door does not.</summary>
+        private static bool BuildingBlocks(GameLocation location, int x, int y)
+        {
+            var buildings = location.buildings;
+            if (buildings == null || buildings.Count == 0)
+                return false;
+            var tile = new Vector2(x, y);
+            foreach (var building in buildings)
+            {
+                if (building == null)
+                    continue;
+                // A fish pond is water inside a knee-high kerb; nothing about it stops a lamp.
+                if (building is StardewValley.Buildings.FishPond)
+                    continue;
+                // Cheap reject on the footprint before the collision map is consulted.
+                if (x < building.tileX.Value || x >= building.tileX.Value + building.tilesWide.Value
+                    || y < building.tileY.Value || y >= building.tileY.Value + building.tilesHigh.Value)
+                    continue;
+                // intersects() is the game's own walkability answer for a building: it consults
+                // the collision map, so a porch cell or a doorway marked open does not collide.
+                if (building.occupiesTile(tile) && building.intersects(new Rectangle(x * 64 + 16, y * 64 + 16, 32, 32)))
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>Whether the farmer can walk onto this tile, by the game's own answer. A tile
+        /// they can stand on cannot be the inside of a wall, so it must not block a lamp.</summary>
+        private static bool CanWalkOn(GameLocation location, int x, int y)
+        {
+            try
+            {
+                return location.isTilePassable(new xTile.Dimensions.Location(x, y), Game1.viewport);
+            }
+            catch
+            {
+                // Asked about a tile off its own edge a location can throw; that is not walkable.
+                return false;
+            }
+        }
+
+        /// <summary>A clump's sheet by name, the object sheet when it has none (every vanilla stump,
+        /// boulder and log), cached because the content manager's lookup is not free per clump.</summary>
+        private readonly Dictionary<string, Texture2D?> _clumpTextureCache = new();
+
+        private Texture2D? ClumpTexture(string? name)
+        {
+            if (string.IsNullOrEmpty(name))
+                return Game1.objectSpriteSheet;
+            // A content patch reloading the sheet disposes the instance this cache still holds;
+            // handing that out draws garbage or throws. Reload it under the same name instead.
+            if (!_clumpTextureCache.TryGetValue(name, out Texture2D? texture) || (texture?.IsDisposed ?? false))
+            {
+                try { texture = Game1.content.Load<Texture2D>(name); }
+                catch { texture = null; }
+                _clumpTextureCache[name] = texture;
+            }
+            return texture;
+        }
+
+        private void BuildSoftOccluderLevels(RenderTarget2D mask)
+        {
+            RenderTargetBinding[] previous = _device.GetRenderTargets();
+            _floodOccluderSpriteBatch ??= new SpriteBatch(_device);
+            try
+            {
+                Texture2D source = mask;
+                for (int level = 0; level < _floodOccluderSoft.Length; level++)
+                {
+                    int width = Math.Max(1, mask.Width >> (level + 1));
+                    int height = Math.Max(1, mask.Height >> (level + 1));
+                    RenderTarget2D? target = _floodOccluderSoft[level];
+                    if (target == null || target.Width != width || target.Height != height)
+                    {
+                        target?.Dispose();
+                        target = VramTally.Track(new RenderTarget2D(_device, width, height, false, SurfaceFormat.Color, DepthFormat.None), "flood occluder mask");
+                        _floodOccluderSoft[level] = target;
+                    }
+                    _device.SetRenderTarget(target);
+                    _device.Clear(Color.Transparent);
+                    // Half the size with a linear read is a 2x2 box filter; each level doubles the blur.
+                    _floodOccluderSpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp);
+                    _floodOccluderSpriteBatch.Draw(source, new Rectangle(0, 0, width, height), Color.White);
+                    _floodOccluderSpriteBatch.End();
+                    source = target;
+                }
+            }
+            finally
+            {
+                _device.SetRenderTargets(previous);
+            }
+        }
+
+        private static int CountFences(GameLocation location)
+        {
+            int fences = 0;
+            foreach (var pair in location.objects.Pairs)
+                if (pair.Value is Fence)
+                    fences++;
+            return fences;
+        }
+
+        /// <summary>
+        /// Fences, bushes and boulders into the occluder mask as the shapes they are, over the
+        /// tile grid. The game's own draw code places each one (a fence picks its piece from its
+        /// neighbours, a bush its season and size), so the sprite batch carries a transform that
+        /// turns the screen pixels those calls produce into mask texels, and the mask holds the
+        /// picket gaps a lamp's comb of light comes through. Only alpha is read from it.
+        /// </summary>
+        private void DrawOccluderSilhouettes(RenderTarget2D target, GameLocation location, int startTileX, int startTileY, int tilesW, int tilesH)
+        {
+            RenderTargetBinding[] previous = _device.GetRenderTargets();
+            _floodOccluderSpriteBatch ??= new SpriteBatch(_device);
+            SpriteBatch spriteBatch = _floodOccluderSpriteBatch;
+            try
+            {
+                _device.SetRenderTarget(target);
+                _device.Clear(Color.Transparent);
+                // LINEAR, not point: the tile grid used to be the whole mask and the shader's
+                // linear sampler melted each block over a tile. Scaled up point-sampled it kept
+                // hard 4x4 blocks that the sun shafts read as a grid of squares on the ground.
+                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp);
+                spriteBatch.Draw(_floodOccluderBaseTexture!, new Rectangle(0, 0, target.Width, target.Height), Color.White);
+                spriteBatch.End();
+                if (_occluderShapesEase <= 0.004f)
+                    return;
+
+                // The game draws at GlobalToLocal(viewport): put the viewport back, move to the
+                // mask's first tile, and shrink 64 world pixels to FloodOccSubdivision texels.
+                float toTexel = FloodOccSubdivision / 64f;
+                Matrix toMask = Matrix.CreateTranslation(Game1.viewport.X - startTileX * 64f, Game1.viewport.Y - startTileY * 64f, 0f)
+                              * Matrix.CreateScale(toTexel, toTexel, 1f);
+                int lastTileX = startTileX + tilesW, lastTileY = startTileY + tilesH;
+
+                // A picket is four game pixels, one texel here, and the LINEAR sampler halves a
+                // one-texel line before the shadow march ever sees it: a fence cast half a shadow.
+                // Drawn three times half a texel apart it is two texels wide and casts a whole one.
+                for (int pass = -1; pass <= 1; pass++)
+                {
+                    Matrix nudged = Matrix.CreateTranslation(pass * 0.5f / toTexel, 0f, 0f) * toMask;
+                    spriteBatch.Begin(SpriteSortMode.Deferred, OccluderBlendFor(FenceOccluderShare * _occluderShapesEase), SamplerState.PointClamp, null, null, null, nudged);
+                    foreach (var pair in location.objects.Pairs)
+                    {
+                        if (pair.Value is not Fence fence)
+                            continue;
+                        int tileX = (int)pair.Key.X, tileY = (int)pair.Key.Y;
+                        if (tileX < startTileX || tileX >= lastTileX || tileY < startTileY || tileY >= lastTileY)
+                            continue;
+                        try { fence.draw(spriteBatch, tileX, tileY, 1f); }
+                        catch { /* a mod's fence draw threw; it casts no occlusion this build */ }
+                    }
+                    spriteBatch.End();
+                }
+
+                spriteBatch.Begin(SpriteSortMode.Deferred, OccluderBlendFor(BushOccluderShare * _occluderShapesEase), SamplerState.PointClamp, null, null, null, toMask);
+                foreach (var pair in location.terrainFeatures.Pairs)
+                {
+                    if (pair.Value is StardewValley.TerrainFeatures.Bush bush && !bush.sourceRect.Value.IsEmpty)
+                        StampBush(spriteBatch, bush, pair.Key);
+                }
+                foreach (var large in location.largeTerrainFeatures)
+                {
+                    if (large is StardewValley.TerrainFeatures.Bush bush && !bush.sourceRect.Value.IsEmpty)
+                        StampBush(spriteBatch, bush, bush.Tile);
+                }
+                spriteBatch.End();
+
+                // Tree TRUNKS as solid posts on top of their tile stamp. The stamp is one texel
+                // that the linear scale-up melts over two tiles, peaking at 0.84 in the middle, so
+                // a lamp beside a tree cast a shadow nobody could find. A trunk is a post about
+                // two thirds of a tile wide standing on its tile; that is what blocks a lamp.
+                spriteBatch.Begin(SpriteSortMode.Deferred, OccluderBlendFor(_occluderShapesEase), SamplerState.PointClamp, null, null, null, toMask);
+                foreach (var pair in location.terrainFeatures.Pairs)
+                {
+                    // A grown tree is a post two thirds of a tile wide; a sapling at the bush and
+                    // small-tree stages (3 and 4) is a thinner, shorter one. Seeds and sprouts
+                    // (0 to 2) are a hand high and cast nothing worth a texel.
+                    int stage = pair.Value switch
+                    {
+                        StardewValley.TerrainFeatures.Tree tree => tree.growthStage.Value,
+                        StardewValley.TerrainFeatures.FruitTree fruitTree => fruitTree.growthStage.Value + 1,
+                        _ => -1,
+                    };
+                    if (stage < 3)
+                        continue;
+                    Rectangle trunk = stage >= 5
+                        ? new Rectangle((int)(pair.Key.X * 64f) + 12, (int)(pair.Key.Y * 64f) - 16, 40, 80)
+                        : new Rectangle((int)(pair.Key.X * 64f) + 20, (int)(pair.Key.Y * 64f) + 8, 24, 56);
+                    trunk.Offset(-Game1.viewport.X, -Game1.viewport.Y);
+                    spriteBatch.Draw(Game1.staminaRect, trunk, Color.White);
+                }
+                spriteBatch.End();
+
+                spriteBatch.Begin(SpriteSortMode.Deferred, OccluderBlendFor(ClumpOccluderShare * _occluderShapesEase), SamplerState.PointClamp, null, null, null, toMask);
+                foreach (var clump in location.resourceClumps)
+                {
+                    if (clump == null)
+                        continue;
+                    // A vanilla clump carries no texture name: it lives on the object sheet, and
+                    // asking the content manager for a null name threw, was caught, and the stump
+                    // silently cast nothing, along with every boulder and log on the farm.
+                    Texture2D? texture = ClumpTexture(clump.textureName.Value);
+                    if (texture == null)
+                        continue;
+                    Rectangle source = Game1.getSourceRectForStandardTileSheet(texture, clump.parentSheetIndex.Value, 16, 16);
+                    source.Width = clump.width.Value * 16;
+                    source.Height = clump.height.Value * 16;
+                    // A clump draws its top-left at its tile, scale 4 (ResourceClump.draw).
+                    spriteBatch.Draw(texture, Game1.GlobalToLocal(Game1.viewport, clump.Tile * 64f), source, Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
+                }
+                spriteBatch.End();
+
+                // PLACED THINGS: kegs, chests, machines, scarecrows, signs and floor furniture, each
+                // as the sprite the game draws for it, so a keg stands in the light as a keg and a
+                // bench as a bench. Until this pass a lamp saw straight through all of them while
+                // the sun did not, so the same barrel threw a shadow at noon and none at night.
+                // Under its own switch. Two rules carry over from the sun's object shadows (forage
+                // lies flat, a passable object is not a body) and one is this pass's own: a thing
+                // that IS a light casts no occlusion, or a torch would stand inside its own shadow
+                // and put its own pool out. Only the tiles inside the mask are asked about, by
+                // tile, the way the sun's pass does it; a built-up farm holds thousands of objects
+                // and walking them all was the wrong side of this cost.
+                float propShare = PropOccluderShare * _occluderShapesEase * _occluderPropsEase;
+                if (propShare > 0.004f)
+                {
+                    GatherOccluderLightPositions();
+                    spriteBatch.Begin(SpriteSortMode.Deferred, OccluderBlendFor(propShare), SamplerState.PointClamp, null, null, null, toMask);
+                    var placedObjects = location.objects;
+                    for (int tileY = startTileY; tileY < lastTileY; tileY++)
+                    {
+                        for (int tileX = startTileX; tileX < lastTileX; tileX++)
+                        {
+                            var tile = new Vector2(tileX, tileY);
+                            if (!placedObjects.TryGetValue(tile, out SObject placed) || placed == null || placed.isTemporarilyInvisible)
+                                continue;
+                            if (placed is Fence || placed is CrabPot || placed.IsSpawnedObject)
+                                continue;
+                            // Ground litter is not a body: a weed, a twig or a stone is a hand high,
+                            // and stamping each one solid filled a farm's mask with tile squares. It
+                            // gets its sprite alone below, so a tuft still throws a tuft's shadow.
+                            bool litter = placed.IsWeeds() || placed.IsTwig() || placed.IsBreakableStone();
+                            if (!placed.bigCraftable.Value && placed.isPassable())
+                                continue;
+                            if (LightStandsIn(new Rectangle(tileX * 64, tileY * 64, 64, 64)))
+                                continue;
+                            if (!TryPlacedArt(placed.QualifiedItemId, out Texture2D? art, out Rectangle source) || art == null || source.IsEmpty)
+                                continue;
+                            // The FOOTPRINT blocks, solid: what stands between a lamp and the floor
+                            // is the body on the ground, not the holes in its picture. Drawn from
+                            // the sprite alone, a table's legs let the light through in fingers
+                            // that fanned out across the room behind it. Then the sprite over it,
+                            // so the thing's own face counts as occluder and keeps its light (see
+                            // pixelOpen in floodlight.fx) instead of standing in its own shadow.
+                            if (!litter)
+                            {
+                                var footprint = new Rectangle(tileX * 64, tileY * 64, 64, 64);
+                                footprint.Offset(-Game1.viewport.X, -Game1.viewport.Y);
+                                spriteBatch.Draw(Game1.staminaRect, footprint, Color.White);
+                            }
+                            // Object.draw: a big craftable's 16x32 cell is drawn from the tile above
+                            // its own, a small object's 16x16 cell fills its tile, both at scale 4.
+                            var at = new Vector2(tileX * 64f, placed.bigCraftable.Value ? tileY * 64f - 64f : tileY * 64f);
+                            spriteBatch.Draw(art, Game1.GlobalToLocal(Game1.viewport, at), source, Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
+                        }
+                    }
+                    foreach (Furniture furniture in location.furniture)
+                    {
+                        if (furniture == null || furniture.isTemporarilyInvisible)
+                            continue;
+                        int kind = furniture.furniture_type.Value;
+                        // Rugs lie flat; windows, wall pieces and paintings hang on the wall.
+                        if (kind == 12 || kind == 6 || kind == 13 || kind == 17)
+                            continue;
+                        Vector2 tile = furniture.TileLocation;
+                        if (tile.X < startTileX || tile.X >= lastTileX || tile.Y < startTileY || tile.Y >= lastTileY)
+                            continue;
+                        Rectangle box = furniture.boundingBox.Value;
+                        if (LightStandsIn(box))
+                            continue;
+                        Rectangle source = furniture.sourceRect.Value;
+                        if (source.IsEmpty || !TryPlacedArt(furniture.QualifiedItemId, out Texture2D? art, out _) || art == null)
+                            continue;
+                        // Footprint first, solid, for the same reason as above; the bounding box IS
+                        // the footprint for floor furniture.
+                        Rectangle footprint = box;
+                        footprint.Offset(-Game1.viewport.X, -Game1.viewport.Y);
+                        spriteBatch.Draw(Game1.staminaRect, footprint, Color.White);
+                        // Furniture.draw: the sprite's bottom edge rests on the bounding box's.
+                        var at = new Vector2(box.X, box.Bottom - source.Height * 4f);
+                        spriteBatch.Draw(art, Game1.GlobalToLocal(Game1.viewport, at), source, Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
+                    }
+                    spriteBatch.End();
+                }
+            }
+            finally
+            {
+                _device.SetRenderTargets(previous);
+            }
         }
     }
 }

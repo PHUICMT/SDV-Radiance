@@ -100,6 +100,41 @@ namespace SDVRadiance
                 Game1.gameTimeInterval = 0;
         }
 
+        /// <summary>Hold every farmer's eyes open while frozen. Farmer.Update blinks them on a random
+        /// timer of the game's own, and two dumps of one frozen frame differed by the 42 pixels of a
+        /// blink. Written at draw time, so the game's own timer keeps running and nothing is lost when
+        /// the clock thaws.</summary>
+        internal static void HoldFarmerEyesOpenForDraw()
+        {
+            if (!Frozen)
+                return;
+            foreach (Farmer who in Game1.getAllFarmers())
+            {
+                who.currentEyes = 0;
+                who.blinkTimer = 0;
+            }
+        }
+
+        /// <summary>
+        /// Hold the game's DRAW-TIME clock still while frozen. Called at the start of every drawn
+        /// frame; does nothing unless frozen.
+        ///
+        /// <para>The game animates some things from <see cref="Game1.currentGameTime"/> rather than
+        /// from a tick counter: a placed campfire picks its flame frame from TotalGameTime, and so
+        /// do a few other lit objects. That clock is not ours, so a frozen capture of a beach with a
+        /// campfire on it differed from the next by the flame (309 pixels, the harness gate's last
+        /// hole on 2026-08-26). Replacing the value for the rest of this tick's draw pins it at the
+        /// same canonical second every freeze pins to; the game's own update writes a fresh one
+        /// before the next tick runs, so nothing that measures elapsed time in update sees this.</para>
+        /// </summary>
+        internal static void HoldGameTimeForDraw()
+        {
+            if (!Frozen || Game1.currentGameTime == null)
+                return;
+            var pinned = System.TimeSpan.FromTicks(PinnedTicks * (System.TimeSpan.TicksPerSecond / 60));
+            Game1.currentGameTime = new Microsoft.Xna.Framework.GameTime(pinned, Game1.currentGameTime.ElapsedGameTime);
+        }
+
         /// <summary>Pin the clock at <see cref="CanonicalTick"/>. Returns the pinned tick.</summary>
         internal static int Freeze()
         {

@@ -23,6 +23,7 @@ float Temperature;  // -1..1 (+ = warmer, - = cooler)
 float Brightness;   // ~0.5..1.5 multiplier (1 = neutral)
 float ToneMap;      // >0.5 = apply ACES filmic tone mapping
 float BlueLight;    // 0..1 eye-comfort warm shift, applied AFTER the grade blend (grade-independent)
+float2 ScreenPixels; // viewport size in pixels, for the dither's pixel grid
 
 static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
 
@@ -88,6 +89,22 @@ float3 ACESFilm(float3 x)
 // Approximate sRGB <-> linear (gamma 2.2). Cheap and good enough for grading.
 float3 ToLinear(float3 c) { return pow(saturate(c), 2.2); }
 float3 ToSRGB(float3 c)   { return pow(saturate(c), 1.0 / 2.2); }
+
+
+// Sub-LSB triangular dither for this pass's 8-bit write: a slow gradient (a fog
+// bank, the tone curve, the vignette ramp) cannot survive eight bits without
+// stepping, and those steps are the colour banding players report. Interleaved
+// gradient noise (Jimenez 2014): three instructions, no fetch; the triangular
+// remap hides band EDGES where uniform noise leaves them visible. Static across
+// frames on purpose - a pattern that changed per frame would be a shimmer of its
+// own. Same decision, same idiom as water.fx; correctness, not a look.
+float DitherLsb(float2 uv)
+{
+    float pixelNoise = frac(52.9829189 * frac(0.06711056 * uv.x * ScreenPixels.x
+                                            + 0.00583715 * uv.y * ScreenPixels.y));
+    return pixelNoise < 0.5 ? sqrt(2.0 * pixelNoise) - 1.0
+                            : 1.0 - sqrt(2.0 - 2.0 * pixelNoise);
+}
 
 float4 GradePS(PixelInput input) : SV_TARGET
 {
@@ -157,6 +174,7 @@ float4 GradePS(PixelInput input) : SV_TARGET
     // Blue-light / eye-comfort filter: cut blue and lift red a touch. Applied AFTER the
     // grade blend so it is independent of the artistic controls (works with grading off).
     outc *= float3(1.0 + BlueLight * 0.06, 1.0 - BlueLight * 0.06, 1.0 - BlueLight * 0.28);
+    outc += DitherLsb(input.UV) * (1.0 / 255.0);
     return float4(saturate(outc), src.a);
 }
 

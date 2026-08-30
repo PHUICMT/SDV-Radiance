@@ -146,6 +146,16 @@ namespace SDVRadiance
             Add("mask_occluder", _occluderMask);
             Add("mask_sprite", _spriteMaskRenderTarget);
             Add("flood_lightmap", _flood.Texture);
+            Add("cascade_lightmap", _cascades.Texture);
+            // The cascades' inputs, because a collapsed cascade map has exactly three suspects
+            // (the mask it marches, the softened copies, the emitters) and a capture that holds
+            // the output without the inputs cannot say which one lied.
+            Add("flood_occluder_mask", _floodOccluderMask);
+            Add("flood_occluder_soft0", _floodOccluderSoft[0]);
+            Add("flood_occluder_soft1", _floodOccluderSoft[1]);
+            Add("flood_occluder_soft2", _floodOccluderSoft[2]);
+            Add("cascade_emitters", _cascades.EmitterTexture);
+            Add("normals", _normalRenderTarget);
             Add("reflect_entity", _reflectionRenderTarget);
             Add("mirror_source", _mirrorSourceRenderTarget);
 

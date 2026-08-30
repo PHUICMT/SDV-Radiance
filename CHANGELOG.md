@@ -2,7 +2,542 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
-## 1.6.2 (in progress)
+## 1.7.0
+
+### Added
+
+- **Wind in the trees.** Tree tops and bushes lean with the wind, the same wind the rain already
+  leans with, so a storm tips them further and a calm day
+  barely moves them. Each tree tips as one piece about the point where its canopy meets its trunk,
+  a fraction of a degree, the same motion the game gives a tree you shake; a gust front sweeps
+  downwind across the map, so a row of trees leans one after another rather than all together, and
+  each tree keeps a rhythm of its own on top of that. Three dials on the weather page: how far, how
+  fast, and how long a gust is. Shadows keep their shape, and the reflection in the water leans
+  with the tree it belongs to, including the shake of a tree being chopped.
+
+- **Sprites at twice the texels (off by default).** Every sprite sheet in use is doubled on the
+  graphics card by the Scale2x rule, which turns a pixel staircase into a diagonal without
+  inventing colours, and each draw is redirected to the doubled sheet at half the scale, so two
+  texels stand where the game put one. The sheets themselves are never touched, so nothing that
+  reads them (labels, waterlines, bakes) changes. What a texture upscaler mod does to every sheet
+  at load, done only for the sheets on screen; the largest content-pack sheets are left alone.
+  Its own "Smooth art" page: the switch, a smoothing dial (0 is the game's own pixels, 1 the full
+  Scale2x rounding, baked into the sheets so the dial costs nothing while you play), and four
+  family switches so the world, the characters and animals, the portraits, and the menus and
+  dialogue lettering each smooth or stay crisp on their own.
+
+- **Sprite relief (off by default).** Lamps and the sun now light the side of a tree, a building,
+  a character or a placed thing that faces them a little more, and the side that faces away a
+  little less. The relief is read from each sprite sheet's own outline and painted shading, made
+  once per sheet on the graphics card, and applied as a lean around the flat answer, so the art's
+  own lighting is never shaded twice and bare ground does not change. Needs the flood GI lighting;
+  one switch and two dials on the lighting page. It costs a second draw of the world's sprites and
+  up to 192 MB of sheet maps, which is why it is a taste to switch on.
+
+- **Radiance cascades, the GI model 1.7.0 defaults to.** The flood lightmap can now be computed
+  on the GPU as light travelling instead of by the CPU sweep: every probe casts rays that stop at
+  whatever they meet, in four cascades that share the far field between neighbours, so shade under
+  a canopy and a lamp's spill round a corner follow the shapes in the way, at two probes per tile
+  instead of one cell. Same lights, same occluders, same composite. The lighting page has a
+  two-button choice, "Classic flood" and "Radiance cascades", and switching cross-fades. Needs a
+  16-bit-colour render target; a device without one keeps the flood.
+  It leads not because it is cheaper on average - at rest the two measure the same - but because
+  the flood's rebuild lands inside one frame: walking a lit town, the flood's worst single frame
+  came to 2.33 ms against the cascades' 0.26 ms, and a stutter is what a player feels. The flood
+  is still one button away for anyone who prefers its picture.
+
+- **Bounced light takes the colour of what it bounced off (off by default).** A red barn now throws
+  a little red on the ground beside it, and a green field lifts what stands in it toward green. The
+  bounce field has always been stripped of most of its hue on purpose, because every seed in it is
+  the same warm colour and one hue multiplied over a whole screen is a dye rather than lighting.
+  The hue bounced light actually carries is the hue of the surfaces around it, which is a different
+  colour at every pixel and so cannot wash the frame that way. Read from the couple of tiles around
+  each pixel and applied as hue only, so nothing gets brighter or darker than it was; one dial on
+  the lighting page, 0 being exactly the picture that shipped.
+
+- **Rim light from lamps.** The edge of a sprite that faces a lamp now catches a bright fringe in
+  that lamp's own colour, so a person or a tree standing near a light reads as being lit from that
+  side rather than merely standing next to it. Two lamps of different colours light their own edges
+  of the same tree. It is added over the picture rather than mixed into it, which is the point: the
+  sprite relief can only make a side lighter or darker than the art already is, and an outline the
+  artist drew near black stays near black however it leans. Reads from the same sheet normal maps
+  the relief builds, so it needs the relief on; one dial on the lighting page.
+
+- **Leaves catch the light.** Patches of canopy brighten and dim the way leaf faces flip in wind,
+  travelling through the crown - which is what wind in leaves actually looks like at sprite scale:
+  glitter, not geometry. Brightness only, so the art itself never moves and cannot tear, the lesson
+  both the tree sway and the water's waves taught this release. It reads the green of the leaves, so
+  a fall canopy shows it less, and it rides the sprite relief's own buffers, so it needs the relief
+  on; one dial on the lighting page beside the relief's others.
+
+- **Shooting stars.** Now and then on a clear night, any season, a streak crosses the sky the water
+  reflects and is gone in under a second. Like the aurora it lives only in the water, where the sky
+  appears; one switch on the weather page. One arrives within the first twenty seconds of a clear
+  night by the water and roughly every half minute to a minute after that; the first build waited
+  up to two minutes between streaks, each under a second long, in a spot picked at random that as
+  often as not was dry ground where the sky does not appear, which is a feature almost nobody would
+  ever have seen. Up to three cross at once, in three weights: most are faint and quick, a few
+  ordinary, and about one in twelve a heavy one that burns wider, longer and warmer. They
+  sometimes arrive in a cluster of two or three within a second, because a streak every half
+  minute on the dot reads as a scripted event rather than a sky. `radiance_star` brings three
+  forward on demand, spread across the view.
+
+- **Aurora on clear winter nights.** Slow curtains of green and violet drift across the sky the
+  water reflects. Only the water shows them, because the water is the only place this camera ever
+  sees the sky, which is also what makes it read as a reflection rather than a filter. Clear
+  winter nights only, eased in and out with dusk and the weather; a switch and a strength dial on
+  the weather page. The dial exists because the first build had none and the shipped constant was
+  arithmetic that had never been checked against a screen: open water contributes about a quarter
+  of the sky to what you see, and the curtain's own falloff stood at full height almost nowhere, so
+  a typical curtain arrived at roughly five values out of 255 on night water. Worse, both the
+  aurora and the shooting star were mixed into the reflection, and the reflection is gated on how
+  bright the water already is, which is right for mirroring a lit bank and exactly wrong for the
+  sky's own light: dark water is where an aurora shows. They are now added over the finished
+  water instead of mixed into it, the curtains are broader, and there is a dial.
+  What makes a curtain read as an aurora turned out to be shape rather than strength: it is
+  narrow across and long along, it snakes, and it is combed into fine rays down its length. The
+  first version summed two slow sines, which has none of those and drew a smooth hump that read
+  as green haze on the water. The curtains are ribbons now, layered two deep, combed into rays,
+  and coloured across their width the way a real one is: green through the core, teal at the
+  shoulders, violet out at the fringe.
+  A display is an EVENT rather than a fixture: a roll taken once per night decides whether tonight
+  carries one at all, when it starts and how long it runs, so some clear winter nights have none
+  and the ones that do build and die over a few hours. It surges the way a real one does, a
+  brightening running along a curtain and dying, and it lights more than the water: the sand and
+  the rocks beside the sea take the colour of the sky, and a window pane in a street reflects it,
+  both as hue only so nothing gets a step brighter than it was.
+
+- **Golden hour.** In the first and last hours of the sun, every shadow stretches further still,
+  the way a low sun really throws them: characters, trees, placed things and the patch of daylight
+  a window lays on the floor all agree, because they all ask the same sun. The middle of the day
+  never changes. One dial on the shadows page, off by default - a taste to turn up; 0 is exactly
+  the old geometry.
+
+- **Colored light glows on its own.** Bloom used to ask one question, "is this pixel bright?",
+  which treats a lit window pane and a white wall the same. It now also asks "does it shine with a
+  color?": saturated bright pixels, the lit panes, lava, flames and crystals, may glow below the
+  normal threshold, while gray pixels never qualify however bright, so snow and white walls stay
+  exactly as quiet as before. One dial on the bloom page, "Colored-light glow"; 0 restores the old
+  behavior.
+
+- **Lamp shafts, rebuilt, still off by default.** The beams a lamp, torch or fire throws are now
+  cut the way the sun's have been since 1.6.1: from what actually stands beside the light. The
+  flood pass already marches each light's ray against the occluder mask to shadow its pool; two
+  probes beside that path now ask whether a wall, a doorway frame or a tree blocks the light
+  next door, and where one does, the open side gets a beam. Open floor beside open floor is
+  evenly lit and shows nothing, which is the physics. The old lamp rays were a bright-pass, a
+  streak drawn out of any pixel bright enough near a lamp, which made every pale sprite a light
+  source and is why they shipped switched off for a year. Nothing but the scene's own occluders
+  can make a beam now, so the Known issue that kept them off is closed and the `godrays.fx`
+  shader is gone. The strength dial is the one setting left on the lamp side; the threshold,
+  density and ray-length dials described the streak and have nothing to shape any more. They
+  stay off by default: on a walk with a glow ring the beams kept finding "gaps" in ordinary
+  streets, and the shadows carry the scene without them, so they are a taste to switch on. The
+  strength dial is reset to 1 once by the config migration, because the old value meant an
+  additive gain and would draw shafts nobody can see.
+- **Waterfall mist, hot-spring steam and lava sparks.** Three particle emitters that read the
+  same painted labels the water does. A fall is a vertical run of strongly flowing tiles, and
+  the mist rises from where each run lands, so a two-tier fall puffs at both plunges. Steam
+  drifts up off hot-spring tiles, and the volcano's lava throws sparks that rise and fall back.
+  Each has its own switch, amount and size on the particles page.
+- **Fences, bushes and boulders shadow lamp light as their own shapes.** The occluder mask the
+  light shadows and both kinds of shaft read from held one texel per tile, so a fence was a
+  solid square and a torch behind it lit the far side evenly. It now holds four texels per tile
+  and the game's own art draws the shapes into it: a fence picks its piece from its neighbours,
+  a bush its season and size, a boulder its sheet. A torch behind a fence throws a comb of light
+  between the pickets and a bush leaves a leafy edge. Walls and tree trunks are unchanged. Some
+  players prefer the rounder pools, so it is a switch on the lighting page, **Shadows shaped by
+  fences and bushes**, on by default; the two looks cross-fade when it is flipped.
+- **Placed things block lamp light.** Kegs, chests, machines, scarecrows, signs and floor
+  furniture stand in a lamp's light as the shapes they are, so the barrel beside a torch throws
+  a shadow at night the way it does at noon; until now a lamp saw straight through all of them
+  while the sun did not. Each blocks by its footprint on the ground, with its sprite over it so
+  its own face keeps the light; a weed, a twig or a stone blocks by its sprite alone. A thing
+  that is itself a light never shadows itself. **Shadows from placed things** on the lighting
+  page, on by default; it costs nothing measurable, since the mask is rebuilt only when something
+  is placed, picked up or lit, and only the tiles in view are asked.
+- **The shadow march steps one mask texel at a time** (eight to a tile, up to 48 steps), instead
+  of a fixed sixteen. With a fixed count the gap between steps grew with the ray until it was
+  wider than a plant or a post, and some rays hit it while their neighbours passed between two
+  steps: painted raw, a fan of plates with seams between them; on screen, a saw-toothed edge that
+  crawled as the light moved. **Shadow edge softness** is now a real blur read from soft copies of
+  the mask (a half, a quarter, an eighth), decided once per ray where it first meets something, so
+  0 is a crisp edge, 1 about a quarter of a tile of penumbra a tile and a half out, and 2 up to a
+  whole tile with the far pickets of a fence thinning as a penumbra thins them.
+- **Lamp shadows cut into the game's own glow.** The game paints every lamp as a round glow
+  before the mod runs, so the per-light shadow could only shade what the mod added and a pool
+  stayed round behind a tree trunk. Where a light's ray is blocked, part of the game's glow now
+  goes with it, by a new dial on the lighting page, **Shadow cuts into the glow** (0 keeps the
+  round pools, 1 cuts through; ships at 0.76, the value that was tuned in). **Shadow edge
+  softness** ships at 1.45 for the same reason.
+- **Lamp shadows soften with distance.** A shadow's edge is now a ramp whose width grows with
+  how far the light has travelled past the thing that cut it, the way a real lamp's width shows
+  in its shadows: hard right beside a fence post, soft a few tiles on. **Shadow edge softness**
+  on the lighting page sets how much (0 hard, 2 twice the default).
+- **Heat haze.** Hot air over lava bends the picture seen through it, the way air over a summer
+  road does, from a per-tile heat grid built from the lava labels and the volcano itself. It
+  fades out round the player so the sprite the eye follows never swims, and it leaves hot
+  springs alone: their air is wet and the steam already says hot. Its own switch and strength
+  live at the end of the fog page.
+
+- **How much tilt-shift is kept indoors.** The blur reads height on screen as distance, which is
+  true outdoors, where the top of the frame is most of a map away. A room is a few tiles deep from
+  the far wall to the floor at your feet, so the same band ratios reach furniture that is barely
+  further back than you are. The new dial, on the lens page of both menus, shortens that reach
+  without touching what happens outside: 1 is the picture that has always shipped and stays the
+  default, 0 keeps a room evenly sharp.
+
+- **Daylight strength for windows.** The daylight a window draws into a room, the lit pane, the
+  beam and the patch of sun on the floor, has one dial now, on the windows page in the settings
+  menu and the tuner. 1 is the look that shipped. Asked for by a player whose farmhouse window
+  looked right while the two big windows of a villager's kitchen blew out to white, and whose only
+  remedy was the master switch, which also took the farmhouse's morning light with it. The light a
+  window adds to the room's own lighting is separate and does not move with the dial.
+
+### Changed
+
+- **Shadow shapes are a choice, named by version.** Two things about a shadow's shape changed in
+  1.7 and neither had a dial: a placed thing's shadow now stands on the row its art really ends on
+  instead of hanging from its cell, and a horse, a pet or a wildlife mod's creature lies down
+  across the ground instead of standing up on edge the way a person does. Each moved every shadow
+  of its kind at once, so the shadows page now opens the way the water page does, with two buttons:
+  Shadows 1.7 or Shadows 1.6. Shape only. Everything 1.7 fixed is fixed under both, so creatures
+  from other mods still cast, riding still leaves you a shadow, and a horse still faces the way it
+  is drawn: none of those was a look anybody chose.
+
+- **A look is named by the version it shipped in.** The water choice read "1.6.2 water" against
+  "Classic": one side carried a patch digit nobody needs in order to pick a look, and the other
+  carried no version at all, so a player deciding between them had to already know which release
+  "Classic" meant. Both sides are now the two-part version the look shipped in, Water 1.6 against
+  Water 1.5, and the GI choice is simply Flood against Radiance cascades, which are techniques
+  rather than versions and no longer pretend otherwise. Names only; nothing about the water or the
+  lightmap changed.
+
+- **The tuner hides what cannot work.** A dial under a switch that is off used to sit there greyed
+  out; now it is not on the page at all, and it comes back the moment the switch goes on. Every
+  dial's owner was checked against the code that reads it, not against what sounded right: the
+  blue-light filter stays visible with the colour grade off because the finishing pass applies it
+  either way; the tilt-shift radius shows only for the radial focus and the top and bottom ratios
+  only for the bands; a particle's amount and size go with that particle's own switch; the sun
+  shafts hang off the sun switch alone. The lighting page is regrouped into the darkness dials,
+  the shadows lamps throw, and the bounced light, so the lamp-shadow softness dials sit next to
+  the lamp-shadow switch instead of a whole GI block away from it.
+
+### Fixed
+
+- **Riding took every shadow off the screen.** Getting on a horse hands it to the rider: the game
+  takes the horse out of the location's character list and the rider draws it instead. The shadow
+  pass reads that list, so it could not see the horse, and it skips the rider because the horse's
+  shadow covers them. Between the two, a mounted player and their horse crossed a sunlit field
+  with nothing under either of them. The mount is now part of the caster list wherever it is
+  drawn from.
+
+- **A horse's shadow faced the wrong way.** A horse has one set of frames and the game mirrors
+  them to face the other way, so a silhouette cut from the frame and drawn unmirrored was a horse
+  facing backwards: head where the tail should be. Anything the game mirrors now has its shadow
+  mirrored with it. Farm animals are unaffected, because they have real frames for each direction.
+
+- **A horse's shadow stood up on edge beside it.** Shadows are laid down on the ground by two
+  different amounts: a person is thin and tall, so their shadow is mostly length, while a
+  four-legged animal is wide and low and its shadow is mostly width. Horses and pets are NPCs in
+  the game's own code, so they were taking the person's amount and their shadow leaned up beside
+  them instead of lying across the ground. Which one a character gets is now read from the frame
+  the game gave it, so a mod's crab and a mod's villager each get the right one without either
+  being named anywhere.
+
+- **Creatures from wildlife and companion mods had no shadow.** A mod that adds its own creatures
+  usually tells the game not to draw its round shadow blob, because it means to draw one of its
+  own, scaled to the creature. Custom Companions does this for every companion and then draws a
+  blob only for the ones its content pack asked for, which most packs leave off. We were reading
+  that flag the way the game's own code means it, "this thing has no shadow", so a pack's crabs,
+  ducks and deer stood on the ground with nothing under them while every other creature beside
+  them cast one. Outside the game's own code the flag now means what the mod meant by it, and
+  those creatures cast like anything else. A creature laying down still casts nothing.
+
+- **A tree looked like two pieces stacked, with sprite relief on.** A tree is drawn as two
+  sprites the artist lined up by hand: a canopy whose trunk art stops part way down, and a
+  separate trunk piece that takes over below it. The relief works out its shading for each sprite
+  on its own, so the row where the canopy's art stops was shaded like the edge of a real object,
+  and that shading landed across the trunk as a dark line. The trunk keeps the canopy's shading
+  through the join now. It gives up a little of its own depth for it, which is the right trade:
+  a trunk without relief still reads as a trunk, and one cut in half does not.
+
+- **A dark seam around tiles, in every language but English.** Sprite relief never bevels the
+  map's own tiles, because the shading is worked out for a whole sheet at once and at a tile's
+  border it reads the next tile along, which is unrelated art. The test for "is this the map's
+  own art" missed a sheet the game had swapped for a translated one, so on a game running in
+  Thai, Chinese, Japanese or Russian the seam came back on any tile the game happens to draw
+  among the sprites: the town fountain's jets were where it showed most. It also depended on the
+  season, because a translation pack replaces the sheets it has and leaves the rest, so summer
+  could look right while fall did not. Relief ships off by default, so this only ever showed for
+  someone who turned it on.
+
+- **The desert oasis rippled straight over the palms.** The pond there is water the game never
+  animates, so this mod's labels are what bring it to life - but the near-water test that decides
+  which sprites need carving out of the ripple only knew the game's own water, answered "no water
+  anywhere in the desert", and skipped every palm. The test now reads the same composed answer the
+  effect itself uses, so anything standing in labelled water is carved like anything standing in a
+  lake. The lower trunk is also carved now: a tree is drawn in two pieces and only the top one was
+  being excluded, which left the base of a palm underwater even once its crown was safe.
+
+- **A moving cut across the trunk of a swaying tree.** The wind tipped the top piece of a tree and
+  not the base piece the game draws with it, and on tree art that keeps most of its trunk in the
+  top piece the boundary crossed the trunk in mid-air and slid side to side as the tree leaned.
+  Both pieces now tip together about the same point at the roots, so the tree is rigid and the
+  seam cannot open. A chopped stump still stands still.
+
+- **Colour banding in fog, the colour grade and the vignette.** A slow gradient cannot survive an
+  8-bit frame without stepping, and those steps read as bands across a fog wisp, a graded sky or
+  the corner falloff. The water pass has dithered its own writes since 1.6.2; the fog, grade,
+  fused tail and finishing passes now do the same - a sub-level triangular dither, static across
+  frames, far too small to see as texture. No settings; it is correctness, not a look.
+
+- **A strip of dead water hugged the bank of a forest stream.** Where the map draws bank art over
+  its own water, the labels for that art say "none of this is liquid", and the rule that a
+  labelled tile is described by its labels took that as the answer for the whole tile: five tiles
+  of a two-tile stream shipped with no effect at all, a flat vanilla strip beside water wearing
+  everything. The art in question is a quarter to a half transparent and the water under it is the
+  game's own, which is why it only shows up where a recolour has repainted the sheet the water art
+  came from, since that is where the label describing the water itself goes unread. An overlay
+  saying "not liquid" no longer speaks for the ground beneath it: the overlay is still carved by
+  its own opacity, per pixel, and a label painted on the ground itself is obeyed as before.
+- **A narrow stream wore the river beside it as a pale sheet.** Where a stream runs two tiles from
+  a river, the mirror's source, reaching up from a pixel three tiles down, landed on the river's
+  surface and brought it back across dry land: a washed-out band over the stream's near half that
+  read as a bite taken out of the water. The mask already measured whether a source was water, but
+  as a vertical average, and a two-tile bank sits inside that average. The mirror now asks the map
+  itself, one answer per tile: a water source resolves to sky within a tile, flat ground within
+  one to two and a half, a deck within one and a half to three and a half for its posts and rails,
+  and a wall, a roof or a cliff keeps the reach it had. A river's far bank, a bridge and whoever
+  stands on one are untouched, and everything here rides the reflection reach dial as before.
+  **`radiance_debug mirrorsource`** paints what the mirror is reading over the water itself: red
+  where its source is flat ground, green where its source is water, blue for how much of it has
+  already given way to the sky.
+- **A creature from another mod cast no shadow and kept its round blob.** Custom Companions
+  tells the game not to draw a shadow for its companions and paints a round one itself, and to
+  the shadow pass "draw no shadow" meant the creature wanted none, so a companion stood in the
+  sun with a blob under it while everything beside it cast a real one. A creature that paints
+  its own blob wants a shadow: it now casts like any villager, and the blob it paints is dropped
+  while ours are casting. Told by the draw itself, not by the mod's name, so a companion set up to
+  have no shadow keeps none, and any other mod that shadows its creatures this way is covered.
+- **A fish pond either mirrored the lake behind it or had no water at all.** A built pond is
+  three rows of water inside a raised stone wall, and the mirror read it like any pond: whatever
+  stands above the far edge appears below it, as deep as it is tall. Two tiles past the wall on
+  many farms is the lake, so the bottom row of a pond carried a slice of the lake, cut off where
+  the pond ended, over water the fish had coloured red or green. Water behind a pond's wall now
+  resolves to sky the moment the mirror meets it, the way the wide rivers already do a few tiles
+  out; the trees, the fences and whoever stands behind the pond still appear in it, and so does
+  the pond's own far wall, which stood where the mirror used to show the ground under the rim.
+  And on a farm whose dirt carries a label, the label's "this is ground" carved the whole pond
+  away, so whether a pond rippled at all depended on whether somebody had labelled the ground
+  under it. The pond's water is the building's, drawn over the map, so its tiles no longer read
+  the map; the surface pass sees a pond as water inside a low wall rather than a five-by-five
+  block of wall, so a lamp beside it lights the water and the sun's dapple no longer treats it
+  as canopy; a pond stops counting as a still puddle, since the rule that calms a nine-tile pool
+  had its ripple, glints and reflections at half strength; and the netting frame a pond hangs
+  behind itself keeps the ripple off the net. One more, from 1.6.2: when the water learned to keep
+  off the art a location draws for itself, it kept off the pond's own water too, since a pond is
+  drawn by its location and everything it paints, bed, water, net and fish, was read as art over
+  water. A pond on 1.6.2 had no effect at all. What a pond paints as water is water now; its
+  rim, net, sign and bucket are still kept dry. And the water reaches the stones: the game paints
+  a pond's water half a tile in under its rim on every side, and the mask stopped at the tile
+  line, which left a strip of untouched water along the wall.
+- **A lamp standing inside something put its own light out.** The occluder mask stamps a
+  building's whole footprint solid, and the farmhouse porch is part of that footprint, so a glow
+  ring worn while standing on the boards sent every one of its rays out through an occluder: the
+  shadow took the game's own glow with it and the pool went out as the player stepped up. A light
+  whose own tile is blocked no longer shadows itself, and it throws no lamp shafts either. The
+  same footprint was also shadowing the house it belongs to, since the game draws a building's
+  face and roof over the tiles north of the ones it stands on: the boards went dark stepping off
+  the porch and lit again stepping back on. A wall now keeps the light that reaches its face,
+  while the ground in front of it still takes the shadow. And nothing the farmer can walk on
+  blocks a lamp any more, whatever the surface map calls it: the porch is roof by class, since it
+  sits under the overhang, so stepping onto the boards used to switch off every shadow the
+  carried light cast and stepping down switched them back on. Measured over the ground both
+  frames share, the picture moved 6.63 crossing that line where the game's own moved 0.05; it
+  now moves 0.14.
+- **The rain's slant dial did almost nothing at its top end.** It multiplied the wind the game
+  reports, and on a quiet rainy day the game reports almost none, so three times almost nothing
+  was still rain falling straight down. Above 1 it now brings a wind of its own, and the rain
+  leans on a still day too. At 1 and below it is unchanged, so a save that never touched it falls
+  exactly as it did.
+- **A farm building let lamp light straight through it.** The rule that a walkable tile cannot
+  be the inside of a wall asked the map, and a coop or a barn is not in the map: it stands on
+  grass the map calls passable. Every farm building fell out of the mask the day that rule
+  landed. A building now answers for itself by its own collision map, which keeps the farmhouse
+  porch and every doorway open.
+- **A glow ring threw black wedges at half past six in the morning.** The shadow's carve took
+  its full share of the scene at every hour, though outdoors by day the game paints no glow for
+  a ring at all. Both shadow terms now follow the tint the game paints the outdoors with: none at
+  noon, a third under rain, full at night. Indoors the game draws its lamps at every hour and so
+  do their shadows.
+- **Stumps, boulders and logs cast no lamp shadow.** A vanilla clump names no texture of its own,
+  and asking the content manager for a null name threw and was silently caught. They cast now,
+  from the object sheet, and saplings at the bush and small-tree stages cast a thinner post.
+- **A lit gap sat between a thing and its shadow.** The fade beside the pixel that once kept a
+  wall's lit face from going dark covered a third of a tile of every ray, and pixelOpen keeps the
+  wall's face now, so it is a sliver.
+- **Sun dapple came out as tile squares.** The sun shafts read the same mask the lamp shadows do,
+  and that mask now carries a solid footprint for every keg, post and weed, which the shaft march
+  took for canopy. The sun reads the tile grid alone: dapple is what a canopy does to sunlight.
+- **The occluder mask was rebuilt on every frame.** When it became a render target at four texels
+  per tile, the test that decides whether the cached one still fits kept comparing its width to
+  the number of TILES, which it can never equal, so every fence, bush and tree trunk was redrawn
+  sixty times a second to answer a question whose answer had not changed. Measured at 0.33 ms per
+  frame on the beach and 0.57 on a fenced farm, all of it given back.
+- **Sparks and shadows from the mines' wall torches sat half a tile to the left.** The game
+  lights a mine sconce from the top-left corner of its tile but draws the flame's glow at the
+  tile's centre; the mod now follows the game's own glow list, so embers rise from the flame and
+  the torch's shadows and pool are cast from it. Hearths and fireplaces were already right and
+  do not move.
+- **A glow ring taken off and put back on never cast shadows again.** The eight lights that get
+  a shadow ray were the first eight in the light array, and array slots stay with a light for
+  its whole stay, so "first eight" meant "arrived earliest". A re-equipped ring came back as a
+  new light in a late slot behind twenty street lamps, some of them off screen, and its shadow
+  weight stayed at zero until the map changed. The tier is chosen by rank now, eased as before.
+- **Lamp shadows reached into ground the game shows as night.** A light's pool grew with the
+  game's radius without limit, so a glow ring's pool spanned five screens and every occluder on
+  screen cut a wedge into the dark; and a shadow kept its full contrast wherever the pool still
+  reached at all. The pool reach is capped at 1.2 screen heights, the shadow's contrast now fades
+  with the pool, and the cut into the game's own glow follows the pool's core, so a shadow lives
+  inside its light and thins to nothing at the edge of it. With the shadow thinning like that,
+  the old per-light shadow strength of 0.7 reads as barely there, so it ships at 1 and an
+  untouched 0.7 is moved to 1 once by the config migration.
+- **Night mist rows greyed out when day fog was off.** The two fogs are separate switches, and
+  the tuner's night mist rows now follow their own.
+- **Character shadows flickered while walking through a room with more than 24 lights.** The
+  shadow pass kept the 24 lights nearest the screen centre, a number copied from the lighting
+  pass before that pass grew to 48; the saloon at night carries up to 39, so a dozen of them
+  traded places with every step and every NPC one of them lit gained and lost that cast. The
+  shadow pass now reads the lighting pass's own budget.
+- **The sea reflects the beach right up to the tide line again.** 1.6.2 labelled the surf
+  crests on the beach and island sheets as falling water so they would neither sway nor mirror,
+  and the water beside them went on mirroring the sand, which left a band of plain water colour
+  between the beach and its reflection. The crests are painted as water again, so the reflection
+  runs up to the foam the way it did in 1.5.3.
+- **A rectangle of flat water hung over a player sitting on a bench by the water.** The patch of
+  water the ripple and the mirror leave alone so the player's own body never ripples was placed
+  from the collision box plus the game's draw-time bob, and a seated player carries a bob of 48
+  pixels that the game itself mostly cancels with the sitting frame. The patch stood that far
+  above the seated body: a tile of dead water over the head on the beach pier bench, reported
+  with a picture. The patch and the player's own reflection now hang from where the game drew
+  the body this frame, and a seated player, who is on a bench and not in the water, gets no
+  patch at all.
+- **A fruit tree sapling cast no shadow.** A fruit tree still growing, from the day it is planted
+  to the day before it bears, was skipped by the shadow pass and the game paints no shadow of
+  its own under it either, so a young orchard stood on a lit lawn with nothing under it while
+  the wild sapling beside it cast one. It now casts from its own art like a wild sapling does,
+  with the short lean a bush takes.
+- **Everything a location drew was being carved out of the water a frame late.** 1.6.2 began
+  recording what a location paints for itself, so the boat at Ginger Island could stay out of
+  the ripple. The recorder wrapped the game's own location draw as well, which is where every
+  villager, animal, critter, tree, placed object, piece of debris and puff of smoke is drawn, and
+  all of it was stamped into the water mask at the previous frame's position and at the mask's
+  own resolution. Chimney smoke drifting over a lake came out as blocks, and a bird, a falling
+  leaf or a fish's splash crossing a river cut a hole through the water and the reflection under
+  it as it went. The recorder now pauses for the game's own draw and keeps only what the
+  location itself paints, which is what it was for.
+- **A creature that drew its own mirror while standing off the screen could lose that frame of
+  its reflection for the rest of the session.** The game draws no character more than two tiles
+  off the screen, and the mirror asks creatures to draw themselves from a window that reaches
+  further than that, so one standing above the view came out empty. That emptiness was remembered
+  against its sheet and animation frame, and every creature of its kind then had no reflection on
+  that frame of its walk, which read as blinking. An empty bake is no longer remembered, and the
+  body falls back to the built stamp for that frame instead of vanishing.
+- **`radiance_weather` set the weather only halfway.** It wrote the rain and snow flags but not
+  the weather id beside them, so the rain stopped falling while anything that asks a location
+  what its weather is kept answering the old one. Both are written now.
+
+### Removed
+
+- The lamp-ray bright-pass (`godrays.fx`) and its three dials: light threshold, ray density
+  and ray length. See Added.
+
+### For translators
+
+- Wind in the trees (weather): 14 new keys - `config.weather.foliagesway.name`/`.tooltip`, `config.weather.foliageswaystrength.name`/`.tooltip`, `tuner.foliagesway`, `tuner.foliageswaystrength`, `help.foliagesway`, `help.foliageswaystrength`, the two weather-page headings `tuner.section.foliagesway` and `tuner.section.sky`, and `config.weather.foliagesway<part>.name`/`.tooltip` for `speed` and `gustspan`.
+- Lighting page headings (tuner): 2 new keys - `tuner.section.lampshadows`, `tuner.section.gi`.
+- Sprites at twice the texels (its own "Smooth art" page): 16 new keys - `config.sheetupscale.name`/`.tooltip`, `help.sheetupscale`, `tuner.tab.smoothing`, `tuner.desc.smoothing`, `tuner.section.smoothingfamilies`, and `config.sheetupscale<part>.name`/`.tooltip` for the four `smoothness`, `world`, `characters`, `portraits`, `interface` settings (10 keys).
+
+- Leaf shimmer (lighting): 4 new keys - `config.lighting.leafshimmer.name`/`.tooltip`, `tuner.leafshimmer`, `help.leafshimmer`.
+- Colour bleed (lighting): 4 new keys - `config.lighting.colourbleed.name`/`.tooltip`, `tuner.colourbleed`, `help.colourbleed`.
+- Rim light (lighting): 4 new keys - `config.lighting.reliefrim.name`/`.tooltip`, `tuner.reliefrim`, `help.reliefrim`.
+- Sprite relief (lighting): 12 new keys - `config.lighting.relief.name`/`.tooltip`, `config.lighting.reliefstrength.name`/`.tooltip`, `config.lighting.reliefsun.name`/`.tooltip`, `tuner.relief`, `tuner.reliefstrength`, `tuner.reliefsun`, `help.relief`, `help.reliefstrength`, `help.reliefsun`.
+
+- GI model (lighting): 8 new keys - `config.lighting.gimodel.name`/`.tooltip`/`.flood`/`.cascades`, `tuner.gimodel.flood`/`.cascades`, `help.gimodel.flood`/`.cascades`.
+
+- Shooting stars (weather): 4 new keys - `config.weather.shootingstars.name`/`.tooltip`, `tuner.shootingstars`, `help.shootingstars`.
+- Aurora strength (weather): 4 new keys - `config.weather.aurorastrength.name`/`.tooltip`, `tuner.aurorastrength`, `help.aurorastrength`.
+
+- Aurora (weather): 4 new keys - `config.weather.aurora.name`/`.tooltip`, `tuner.aurora`, `help.aurora`.
+
+- Golden hour (shadows): 4 new keys - `config.shadows.goldenhour.name`/`.tooltip`, `tuner.goldenhour`, `help.goldenhour`.
+
+- Shadow shapes (shadows): 9 new keys - `config.shadows.model.name`/`.tooltip`/`.modern`/`.classic`, `tuner.shadowmodel`/`.modern`/`.classic`, `help.shadowmodel.modern`/`.classic`. The two `.modern`/`.classic` labels are the version names "Shadows 1.7" and "Shadows 1.6"; keep the version numbers as digits and translate only the word beside them.
+
+- **Changed meaning, 6 existing keys.** The two model choices are now named by version, so these
+  read differently even though the setting behind each is untouched:
+  `tuner.watermodel.modern` and `config.water.model.modern` are "Water 1.6" (was "1.6.2 water");
+  `tuner.watermodel.classic` and `config.water.model.classic` are "Water 1.5" (was "Classic");
+  `tuner.gimodel.flood` and `config.lighting.gimodel.flood` are "Flood" (was "Classic flood").
+  `config.water.model.tooltip` and `config.lighting.gimodel.tooltip` name those buttons and were
+  reworded to match.
+
+- Tilt-shift indoors (lens): 4 new keys - `config.tiltshift.indoor.name`/`.tooltip`, `tuner.tiltindoor`, `help.tiltindoor`.
+
+- Colored-light glow (bloom): 4 new keys - `config.bloom.emissiveboost.name`/`.tooltip`, `tuner.bloomemissiveboost`, `help.bloomemissiveboost`.
+
+**Particles: 15 new keys.** For each of `waterfallmist`, `hotspringsteam` and `lavasparks`,
+the five keys `config.particles.<name>.name`, `config.particles.<name>.tooltip`,
+`tuner.section.particle<name>`, `tuner.particle<name>` and `help.particle<name>`. "Mist" is the
+fine spray a waterfall throws where it lands; "steam" is the visible vapour over hot water;
+"sparks" are the embers a lava surface throws up.
+
+**Rain slant: 2 reworded keys.** `config.precipitation.rainslant.tooltip` and
+`help.precipitationrainslant`. The dial is no longer only a multiplier on the game's wind: above
+1 it brings a wind of its own, so the text says "how hard the rain leans" rather than "how much of
+the wind the rain feels". The name keys are unchanged.
+
+**Placed things: 4 new keys.** `config.lighting.props.name`, `config.lighting.props.tooltip`,
+`tuner.lightprops` and `help.lightprops`. "Placed things" means what the player has put down:
+kegs, chests, machines, signs, floor furniture. Not map scenery, which was already covered.
+
+**Shadow softness: 4 new keys.** `config.lighting.shadowsoftness.name`, `config.lighting.shadowsoftness.tooltip`,
+`tuner.lightshadowsoftness` and `help.lightshadowsoftness`. "Edge softness" is how blurred the
+shadow's border is, not how dark the shadow is.
+
+**Shadow depth: 4 new keys.** `config.lighting.shadowcarve.name`, `config.lighting.shadowcarve.tooltip`,
+`tuner.lightshadowcarve` and `help.lightshadowcarve`. The game draws each lamp as a round glow before
+the mod runs; this dial is how much of that glow a shadow removes, so "cuts into the glow" is literal.
+
+**Shadow shapes: 4 new keys.** `config.lighting.silhouettes.name`, `config.lighting.silhouettes.tooltip`,
+`tuner.lightsilhouettes` and `help.lightsilhouettes`. A "comb of light" is the row of bright
+stripes a lamp throws through the gaps of a fence, like sunlight through a picket fence.
+
+**Heat haze: 9 new keys.** `config.heathaze.name`, `config.heathaze.tooltip`,
+`config.heathaze.strength.name`, `config.heathaze.strength.tooltip`, `tuner.section.heathaze`,
+`tuner.heathaze`, `help.heathaze`, `tuner.heathazestrength` and `help.heathazestrength`. "Heat
+haze" is the shimmer of hot air; the player-facing strength label is "How far it bends".
+
+**Window daylight: 4 new keys.** `config.lighting.windowdaylightstrength.name`,
+`config.lighting.windowdaylightstrength.tooltip`, `tuner.windowdaylightstrength` and
+`help.windowdaylightstrength`. "Daylight strength" is how bright the light through an indoor
+window is drawn (the lit pane, the beam, the sun on the floor); it is not the room's own light.
+
+**Lamp shafts: 12 keys removed, 2 reworded.** Removed, because the dials they named are gone:
+`config.godrays.threshold.name`, `config.godrays.density.name`, `config.godrays.sectionboth`,
+`config.godrays.decay.name`, `config.godrays.decay.tooltip`, `tuner.godraysthreshold`,
+`tuner.godraysdensity`, `tuner.section.godraysboth`, `tuner.godraysdecay`,
+`help.godraysthreshold`, `help.godraysdensity` and `help.godraysdecay`. Reworded, and worth
+re-translating rather than keeping: `config.godrays.enabled.tooltip` and `help.godrays` now
+describe beams cut from the occluders beside a lamp (doorways, window frames, a tree by a
+street lamp) and say the effect needs the flood lighting on; it is still off by default.
+The Chinese file keeps the old wording for these two until it is updated.
+
+**Heat haze tooltip reworded once already:** `config.heathaze.tooltip` says the haze spares
+the player and that hot springs steam rather than shimmer. Translate the current English.
+
+## 1.6.2
 
 ### Added
 

@@ -45,6 +45,7 @@ namespace SDVRadiance
             Particles,           // the particle pool: one step of the simulation plus both draws
             Precipitation,       // replacement rain/snow: per-screen step plus the weather-slot draw
             WetWorld,            // wetness state + the wet-ground pass
+            ReliefNormals,       // sprite relief: replaying the recorded frame with normal maps
         }
 
         /// <summary>
@@ -78,7 +79,7 @@ namespace SDVRadiance
             BakeTooBig,
         }
 
-        private const int PartCount = 13;
+        private const int PartCount = 14;
         private const int CounterCount = 7;
         private const int WindowFrames = 300;      // five seconds at 60 fps
 
@@ -97,6 +98,7 @@ namespace SDVRadiance
             "particles",
             "precipitation (rain/snow)",
             "wet world",
+            "sprite relief normals",
         };
 
         private static readonly double[] _sum = new double[PartCount];
@@ -213,6 +215,7 @@ namespace SDVRadiance
             "particles",
             "precipitation",
             "wet world",
+            "relief normals",
         };
 
         internal static int PartTotal => PartCount;

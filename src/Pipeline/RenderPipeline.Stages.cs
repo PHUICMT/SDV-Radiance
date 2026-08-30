@@ -120,94 +120,6 @@ namespace SDVRadiance
             return MathHelper.Clamp(Math.Max(vpW / mapW, vpH / mapH), 1f, 4f);
         }
 
-        private void RenderGodRays(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, ModConfig config)
-        {
-            var effect = _godRays!;
-            var rtA = _halfResolutionScratchA!;
-            var rtB = _halfResolutionScratchB!;
-
-            // Rays emanate from real in-world light sources (screen UV, so they stay
-            // anchored to the scene as the camera pans) — one Bright+Rays pair PER light,
-            // beams summed into rtB, composited once. Each lamp owns its beams; nothing
-            // travels and nothing dims when another lamp takes over.
-            if (_godRayLights.Count == 0)
-                return;
-
-            float aspect = Game1.viewport.Width / (float)Math.Max(1, Game1.viewport.Height);
-
-            // Bright pass is GATED to a disk around the real light, so only pixels near THIS
-            // light streak into rays — distant bright scenery (flowers, white hair) no longer does.
-            // SNOW beats the bar wholesale: a winter field sits above 0.7 luminance edge to edge,
-            // so every patch near the sun streaked and the sum read as a soft glow instead of
-            // shafts (rays coming off things that are not lights). On snowy outdoor ground the bar rises to
-            // just under snow's own brightness — real lamp cores and sun glitter still pass.
-            // Eased, not switched: snow starting mid-day would otherwise change the bright bar
-            // in one frame and every shaft on screen would step. House rule - if it changes, it fades.
-            bool snowy = (Game1.currentSeason == "winter" || Game1.isSnowing) && (Game1.currentLocation?.IsOutdoors ?? false);
-            Approach(ref _snowThresholdAmount, snowy ? 1f : 0f, 0.04f);
-            if (Math.Abs((snowy ? 1f : 0f) - _snowThresholdAmount) < 0.003f) _snowThresholdAmount = snowy ? 1f : 0f;
-            float grThr = MathHelper.Lerp(config.GodRaysThreshold,
-                Math.Max(config.GodRaysThreshold, 0.93f), _snowThresholdAmount);
-            GetParam(effect, "Threshold")?.SetValue(grThr);
-            GetParam(effect, "Aspect")?.SetValue(aspect);
-            // Player pixels are not light emitters — same silhouette exclusion as the water.
-            var grWho = Game1.player;
-            var grMask = ShadowRenderer.PlayerMask;
-            var grRect = new Vector4(2f, 2f, -1f, -1f);
-            if (grWho != null && grMask != null)
-            {
-                Rectangle box = grWho.GetBoundingBox();
-                // Sprite bottom edge, not the feet-contact line — see the water stage.
-                Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, box.Bottom + grWho.yOffset));
-                Vector2 tl = feet - new Vector2(ShadowRenderer.PlayerRtW / 2f, ShadowRenderer.PlayerRtH - 8f);
-                // Screen px -> UV against the FRAME the game drew, not this pass's target
-                // (see _frameWidth): with render scale on they are different sizes.
-                grRect = new Vector4(tl.X / _frameWidth, tl.Y / _frameHeight,
-                    (tl.X + ShadowRenderer.PlayerRtW) / _frameWidth, (tl.Y + ShadowRenderer.PlayerRtH) / _frameHeight);
-            }
-            GetParam(effect, "PlayerRect")?.SetValue(grRect);
-            GetParam(effect, "PlayerMaskTexture")?.SetValue(grMask);
-            // NPCs / animals / critters are not light emitters either (same mask the water uses).
-            GetParam(effect, "SpriteMaskOn")?.SetValue(SpriteMaskReady && _spriteMaskRenderTarget != null ? 1f : 0f);
-            GetParam(effect, "SpriteMaskTexture")?.SetValue(_spriteMaskRenderTarget);
-            // With flood GI active, only lit pixels may emit rays (kills rays from bright
-            // sprites in unlit corners; lamp glow zones still stream at night).
-            bool floodGate = config.FloodLightingEnabled && _flood.Texture != null;
-            // Ride the flood stage's own presence fade instead of snapping the ray gate.
-            GetParam(effect, "FloodGate")?.SetValue(floodGate ? _fadeFlood : 0f);
-            if (floodGate)
-            {
-                GetParam(effect, "FloodMapTexture")?.SetValue(_flood.Texture);
-                GetParam(effect, "FloodTilesPerScreen")?.SetValue(new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f));
-                GetParam(effect, "FloodWorldTileOffset")?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
-                GetParam(effect, "FloodMapOrigin")?.SetValue(_flood.Origin);
-                GetParam(effect, "FloodMapSize")?.SetValue(_flood.MapSize);
-            }
-            GetParam(effect, "Density")?.SetValue(config.GodRaysDensity);
-            GetParam(effect, "Decay")?.SetValue(config.GodRaysDecay);
-            GetParam(effect, "Weight")?.SetValue(0.5f);
-            for (int li = 0; li < _godRayLights.Count; li++)
-            {
-                var (luv, lruv, lamt, lreach) = _godRayLights[li];
-                GetParam(effect, "LightPos")?.SetValue(luv);
-                GetParam(effect, "LightRadius")?.SetValue(lruv);
-                GetParam(effect, "LightAmt")?.SetValue(lamt);   // this lamp's own eased presence
-                GetParam(effect, "RayReach")?.SetValue(lreach); // 0 for a lamp, a fixed march for the sun
-                effect.CurrentTechnique = effect.Techniques["Bright"];
-                Pass(spriteBatch, source, rtA, effect);
-                effect.CurrentTechnique = effect.Techniques["Rays"];
-                if (li == 0)
-                    Pass(spriteBatch, rtA, rtB, effect);        // first light claims the buffer
-                else
-                    PassAdd(spriteBatch, rtA, rtB, effect);     // the rest SUM into it
-            }
-
-            GetParam(effect, "Intensity")?.SetValue(config.GodRaysIntensity * _godRayAmount);
-            GetParam(effect, "RaysTexture")?.SetValue(rtB);
-            effect.CurrentTechnique = effect.Techniques["Composite"];
-            DrawFull(spriteBatch, source, dest, effect);
-        }
-
         private void RenderBloom(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, ModConfig config)
         {
             var bloom = _bloom!;
@@ -233,6 +145,7 @@ namespace SDVRadiance
             Pass(spriteBatch, rtB, rtA, bloom);
 
             GetParam(bloom, "Intensity")?.SetValue(config.BloomIntensity * (1f + 0.2f * bloomNight));
+            GetParam(bloom, "EmissiveBoost")?.SetValue(MathHelper.Clamp(config.BloomEmissiveBoost, 0f, 1f));
             GetParam(bloom, "BloomWarm")?.SetValue(bloomNight);
             GetParam(bloom, "BloomTexture")?.SetValue(rtA);
             bloom.CurrentTechnique = bloom.Techniques["Composite"];
@@ -314,6 +227,7 @@ namespace SDVRadiance
             GetParam(effect, "NoiseTexture")?.SetValue(NoiseTex());
             GetParam(effect, "FogColor")?.SetValue(FogColor());
             GetParam(effect, "WorldOffset")?.SetValue(WorldOffset(dest.Width, dest.Height));
+            GetParam(effect, "ScreenPixels")?.SetValue(new Vector2(Game1.viewport.Width, Game1.viewport.Height));
             effect.CurrentTechnique = effect.Techniques["Fog"];
             DrawFull(spriteBatch, source, dest, effect);
         }
@@ -339,7 +253,11 @@ namespace SDVRadiance
             // bottom blur pulls BottomEdge up.
             GetParam(effect, "TopEdge")?.SetValue(MathHelper.Clamp(config.TiltShiftTopRatio, 0f, 1f) * 0.5f);
             GetParam(effect, "BottomEdge")?.SetValue(1f - MathHelper.Clamp(config.TiltShiftBottomRatio, 0f, 1f) * 0.5f);
-            GetParam(effect, "Strength")?.SetValue(config.TiltShiftStrength * _fadeTilt);
+            // Indoors the whole room spans a couple of tiles of depth, so the same blur that
+            // reads as distance in a field reads as a smear on the furniture against the far
+            // wall. The scale keeps the shape of the effect and shortens its reach.
+            float indoorScale = MathHelper.Lerp(1f, MathHelper.Clamp(config.TiltShiftIndoorAmount, 0f, 1f), _tiltIndoorEase);
+            GetParam(effect, "Strength")?.SetValue(config.TiltShiftStrength * _fadeTilt * indoorScale);
             Approach(ref _tiltModeEase, config.TiltShiftMode == TiltShiftFocus.Radial ? 1f : 0f, 0.08f);
             GetParam(effect, "Mode")?.SetValue(_tiltModeEase);
             GetParam(effect, "Center")?.SetValue(PlayerScreenUV());
@@ -415,6 +333,7 @@ namespace SDVRadiance
             // _toneMapEase advances once per frame in Apply (shared with the fused tail).
             GetParam(effect, "ToneMap")?.SetValue(_toneMapEase);
             GetParam(effect, "BlueLight")?.SetValue(MathHelper.Clamp(config.BlueLightFilter, 0f, 1f));
+            GetParam(effect, "ScreenPixels")?.SetValue(new Vector2(Game1.viewport.Width, Game1.viewport.Height));
             GetParam(effect, "LutAmount")?.SetValue(BindLut(effect, config));
             effect.CurrentTechnique = effect.Techniques["ColorGrade"];
             DrawFull(spriteBatch, source, dest, effect);
@@ -436,6 +355,10 @@ namespace SDVRadiance
                 temp += autoTemp;
                 sat *= autoSatMul;
             }
+            // The fused pass does the finishing stage's work, so it carries the sky tint too;
+            // without it the world stops taking the aurora's colour whenever the pipeline
+            // decides it can fuse.
+            GetParam(effect, "SkyLightTint")?.SetValue(SkyLightTintNow(config));
             GetParam(effect, "GradeOn")?.SetValue(1f);
             GetParam(effect, "Strength")?.SetValue(gradeOn ? MathHelper.Clamp(config.ColorGradeStrength, 0f, 1f) : 1f);
             GetParam(effect, "Contrast")?.SetValue(gradeOn ? config.ColorGradeContrast : 1f);
@@ -446,6 +369,7 @@ namespace SDVRadiance
             GetParam(effect, "BlueLight")?.SetValue(MathHelper.Clamp(config.BlueLightFilter, 0f, 1f));
             GetParam(effect, "VignetteStrength")?.SetValue(config.VignetteStrength * _vignetteEase);
             GetParam(effect, "NightAmt")?.SetValue(NightFactorNow() * _vignetteEase);
+            GetParam(effect, "ScreenPixels")?.SetValue(new Vector2(Game1.viewport.Width, Game1.viewport.Height));
             GetParam(effect, "LutAmount")?.SetValue(BindLut(effect, config));
             effect.CurrentTechnique = effect.Techniques["Tail"];
             DrawFull(spriteBatch, source, dest, effect);
@@ -455,7 +379,65 @@ namespace SDVRadiance
         // frame). Structural readiness gates (SpriteMaskOn/ReflectRTOn/SceneOn) stay
         // binary on purpose - there is no texture to fade until the bake exists - and
         // indoor/outdoor multipliers snap behind the game's own warp fade.
-        private float _shimmerEase, _dispGateEase = 1f, _rainRingsEase, _vignetteEase, _caEase, _toneMapEase, _tiltModeEase;
+        private float _shimmerEase, _dispGateEase = 1f, _rainRingsEase, _vignetteEase, _caEase, _toneMapEase, _tiltModeEase, _heatHazeEase;
+        /// <summary>1 while the camera is in a room, 0 outdoors. Unlike <see cref="_tiltModeEase"/>,
+        /// which follows a setting every screen shares, this one follows the location, so in split
+        /// screen one player can be inside while the other is not: it is saved per screen.</summary>
+        private float _tiltIndoorEase;
+        private float _auroraAmount;
+        /// <summary>The aurora's strength for the glass, which is drawn into the world batch
+        /// long before any of our passes and so cannot ask for it itself. Refreshed every
+        /// frame by the finishing pass, which always runs.</summary>
+        internal static float SkyAuroraGlass;
+        /// <summary><c>radiance_aurora</c>: 0 leaves the nightly roll in charge, 1 forces
+        /// tonight's display on, -1 forces it off. Testing a feature that only happens on
+        /// 62% of clear winter nights is otherwise a lottery, and a tester who draws three
+        /// blanks in a row reports it as broken - which is exactly what happened.</summary>
+        internal static int AuroraForce;
+        internal static float SkyAuroraShow;
+        internal static bool SkyAuroraTonight;
+        internal static float SkyAuroraShowStart, SkyAuroraShowEnd;
+        private static int _auroraShowDay = -1;
+        private static bool _auroraShowTonight;
+        private static float _auroraShowStart, _auroraShowLength;
+        // The shooting star: one streak at a time, timed on Determinism.Seconds so a frozen
+        // capture holds it still (or never starts one). Position and direction are in world
+        // tiles, matching the water shader's world-anchored sky.
+        private double _meteorNextAt = -1;
+        /// <summary>How many more streaks are owed in the burst being served. Real meteors do not
+        /// arrive on a metronome; one every half minute reads as a scripted event, so a spawn
+        /// sometimes brings one or two more within the second.</summary>
+        private int _meteorBurstLeft;
+        private const int MeteorSlots = 3;
+        /// <summary>One streak in flight. Three of them, because a sky that can only hold one at
+        /// a time never looks like a sky, and because a faint quick one crossing while a slow
+        /// bright one is still burning is most of what makes the two read as different things.
+        /// </summary>
+        private struct ShootingStar
+        {
+            public bool Active;
+            public double StartedAt;
+            public float Seconds;
+            public Vector2 StartTile, Direction;
+            public float TailTiles, TravelTiles, Width, Brightness;
+        }
+        private readonly ShootingStar[] _meteors = new ShootingStar[MeteorSlots];
+        private readonly Vector4[] _meteorPaths = new Vector4[MeteorSlots];
+        private readonly Vector4[] _meteorShapes = new Vector4[MeteorSlots];
+        private readonly Random _meteorRandom = new(0x5EED);
+        /// <summary>Set by <c>radiance_star</c>: how many streaks to bring forward to this frame,
+        /// if the night is clear enough for one at all. Requests are dropped when the gate is
+        /// closed, so a request made through a closed gate is answered by the report rather than
+        /// by a streak that appears an hour later.</summary>
+        internal int MeteorRequests;
+        // What the sky gate actually uploaded this frame, for radiance_report. "I turned it on
+        // and saw nothing" is answered by these numbers naming the factor that killed it,
+        // which is what the caustic line already does one block further up.
+        internal float SkyAuroraUploaded;
+        internal float SkyMeteorEnvelope;
+        internal int SkyMeteorBurning;
+        internal double SkyMeteorSecondsToNext = -1;
+        internal bool SkyClearNight;
 
         private bool _isFloodOcclusionReady;
         private const int FloodShadowedLights = 8;
@@ -513,6 +495,7 @@ namespace SDVRadiance
         /// <summary>Sun shaft term as last handed to the shader, for the report: "no shafts" has
         /// four gates (both switches, outdoors, sun up) and a strength of zero does not say which.</summary>
         internal float _dbgShaftStrength;
+        internal float _dbgLampShaftStrength;
         internal Vector2 _dbgShaftDir;
         private float _shaftStrengthEase;
         private Vector2 _shaftDirEase = new(0f, 1f);
@@ -583,12 +566,46 @@ namespace SDVRadiance
             SetCloudCoupling(effect);
             float directScale = SetLightArrays(effect, config, dest, floodCarry);
             SetRoomAndWindowParams(effect, config, directScale);
+            SetReliefParams(effect, config);
 
             effect.CurrentTechnique = effect.Techniques["FloodLight"];
             DrawFull(spriteBatch, source, dest, effect);
             // After the multiply, in the target it just wrote: a spark is what makes light, so
             // being darkened by the lightmap is exactly backwards for it.
             DrawEmissiveParticlesOnLighting(spriteBatch, dest, EmissiveParticleHost.Flood);
+        }
+
+        /// <summary>The sprite relief terms (see RenderNormalPass): the normal buffer, the lamps' lean and the
+        /// sun's, all zero unless a buffer was drawn this frame, so the shader's terms vanish exactly.</summary>
+        private void SetReliefParams(Effect effect, ModConfig config)
+        {
+            bool on = _normalPassReady && _normalRenderTarget != null && _reliefEase > FadeGone;
+            float lamps = on ? MathHelper.Clamp(config.SpriteReliefStrength, 0f, 1f) * _reliefEase * _fadeFlood : 0f;
+            GetParam(effect, "NormalTexture")?.SetValue(on ? _normalRenderTarget : null);
+            GetParam(effect, "ReliefStrength")?.SetValue(lamps);
+            // A lamp hangs about a third of a screen above the ground it lights: lower and every
+            // sprite beside a lamp is lit only on its very edge, higher and the lean vanishes.
+            GetParam(effect, "ReliefLampHeight")?.SetValue(0.35f);
+            float sun = 0f;
+            Vector3 sunDirection = new(0f, 0f, 1f);
+            bool outdoors = Game1.currentLocation?.IsOutdoors ?? false;
+            if (on && outdoors && ShadowRenderer.SunInSky(out float lean, out float _))
+            {
+                ShadowRenderer.WindowDaylight(out Vector3 _, out float sunStrength);
+                // The shadows fall the way the light travels, (lean, +1) down the screen, so the sun
+                // stands on the opposite side, above the picture.
+                sunDirection = Vector3.Normalize(new Vector3(-lean, -1f, 1.6f));
+                sun = MathHelper.Clamp(config.SpriteReliefSun, 0f, 1f) * sunStrength * _reliefEase * _fadeFlood;
+            }
+            GetParam(effect, "ReliefSunStrength")?.SetValue(sun);
+            GetParam(effect, "ReliefSunDir")?.SetValue(sunDirection);
+            // The rim and the shimmer ride the same buffer and the same fades as the lean, so
+            // they appear and leave with it rather than hanging on after the relief has gone.
+            GetParam(effect, "RimStrength")?.SetValue(
+                on ? MathHelper.Clamp(config.SpriteReliefRim, 0f, 1f) * _reliefEase * _fadeFlood : 0f);
+            GetParam(effect, "LeafShimmer")?.SetValue(
+                on ? MathHelper.Clamp(config.SpriteReliefLeafShimmer, 0f, 1f) * _reliefEase * _fadeFlood : 0f);
+            GetParam(effect, "ShimmerClock")?.SetValue((float)(Determinism.Seconds % 6283.185));
         }
 
         /// <summary>The lightmap itself: which texture, where it sits in the world, and how much of it carries.
@@ -600,6 +617,20 @@ namespace SDVRadiance
             GetParam(effect, "WorldTileOffset")?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
             GetParam(effect, "MapOrigin")?.SetValue(_flood.Origin);
             GetParam(effect, "MapSize")?.SetValue(_flood.MapSize);
+            // The cascades' map and the cross-fade toward it (see BuildStageList). Once the blend
+            // has settled at 1 the flood map stops being rebuilt, so the cascades' texture is handed
+            // to BOTH samplers: the lerp is exact at either end and never shows a stale grid.
+            bool cascadesShowing = _cascadesReady && _cascades.Texture != null;
+            if (cascadesShowing && _cascadeBlend >= 0.999f)
+            {
+                GetParam(effect, "LightMapTexture")?.SetValue(_cascades.Texture);
+                GetParam(effect, "MapOrigin")?.SetValue(_cascades.Origin);
+                GetParam(effect, "MapSize")?.SetValue(_cascades.MapSize);
+            }
+            GetParam(effect, "LightMap2Texture")?.SetValue(cascadesShowing ? _cascades.Texture : _flood.Texture);
+            GetParam(effect, "Map2Origin")?.SetValue(cascadesShowing ? _cascades.Origin : _flood.Origin);
+            GetParam(effect, "Map2Size")?.SetValue(cascadesShowing ? _cascades.MapSize : _flood.MapSize);
+            GetParam(effect, "LightMapBlend")?.SetValue(cascadesShowing ? _cascadeBlend : 0f);
             float floodCarry = MathHelper.Clamp(config.FloodLightingStrength, 0f, 1f) * _fadeFlood;
             GetParam(effect, "Strength")?.SetValue(floodCarry);
             GetParam(effect, "AmbientFloor")?.SetValue(0.10f);
@@ -688,6 +719,14 @@ namespace SDVRadiance
             GetParam(effect, "SunShaftHaze")?.SetValue(MathHelper.Clamp(_fogDayAmount, 0f, 1f));
             // The same baked fbm the clouds and fog sample, here for the shaft dust motes.
             GetParam(effect, "NoiseTexture")?.SetValue(NoiseTex());
+            // Lamp shafts ride the same pass (see the shader's LampShaftStrength). Their presence
+            // is decided with the stage list, eased there by weather and daylight; the dial and
+            // the flood's own fade multiply in here so nothing about them can pop.
+            float lampShafts = config.GodRaysEnabled
+                ? MathHelper.Clamp(config.GodRaysIntensity, 0f, 2f) * _godRayAmount * _fadeFlood
+                : 0f;
+            _dbgLampShaftStrength = lampShafts;
+            GetParam(effect, "LampShaftStrength")?.SetValue(lampShafts);
         }
 
         /// <summary>Couple the shafts to last frame's cloud mask, refusing it when it is stale or from elsewhere.</summary>
@@ -744,10 +783,30 @@ namespace SDVRadiance
             // RenderPipeline.FloodShadowFade for why a hard boundary here read as a flicker while
             // walking. The tier is chosen by id, so the same lamp keeps its shadow across frames
             // even when the ranking shuffles around it.
+            // Two orders of the same lights: the array's slot order, which the upload below has
+            // to follow because the positions and colours sit at those indices, and RANK order,
+            // which is what decides who deserves a shadow ray. The tier used to take the first
+            // eight of the slot order, and slots are kept stable for a light's whole stay, so
+            // "first eight" meant "the eight that arrived earliest": a glow ring taken off and put
+            // on again came back as a new light in a late slot behind twenty street lamps, some
+            // of them off screen, and never cast a shadow again until the map changed.
             _floodLiveIds.Clear();
+            _floodRankedSlots.Clear();
             for (int i = 0; i < _lightCount && i < _lightWrite.Count; i++)
+            {
                 _floodLiveIds.Add(_lightWrite[i].Id);
-            List<int> shadowed = AdvanceFloodShadowTier(_floodLiveIds);
+                _floodRankedSlots.Add(i);
+            }
+            _floodByRankThenId ??= (a, b) =>
+            {
+                int byRank = _lightWrite[b].Rank.CompareTo(_lightWrite[a].Rank);
+                return byRank != 0 ? byRank : _lightWrite[a].Id.CompareTo(_lightWrite[b].Id);
+            };
+            _floodRankedSlots.Sort(_floodByRankThenId);
+            _floodRankedIds.Clear();
+            foreach (int slot in _floodRankedSlots)
+                _floodRankedIds.Add(_lightWrite[slot].Id);
+            List<int> shadowed = AdvanceFloodShadowTier(_floodLiveIds, _floodRankedIds);
 
             int n = 0;
             for (int i = 0; i < _lightCount && i < _floodLiveIds.Count && n < FloodShadowedLights; i++)
@@ -793,9 +852,38 @@ namespace SDVRadiance
             // fixed on sight rather than left as a landmine for whoever hits it next: two systems
             // silently overwriting one shared cache is wrong regardless of what it does today.
             GetParam(effect, "OccluderTexture")?.SetValue(_floodOccluderMask);
+            // The tile grid alone, for the sun shafts (see OccluderBaseSampler in the shader).
+            GetParam(effect, "OccluderBaseTexture")?.SetValue(_floodOccluderBaseTexture);
+            GetParam(effect, "OccluderSoft1Texture")?.SetValue(_floodOccluderSoft[0]);
+            GetParam(effect, "OccluderSoft2Texture")?.SetValue(_floodOccluderSoft[1]);
+            GetParam(effect, "OccluderSoft3Texture")?.SetValue(_floodOccluderSoft[2]);
             GetParam(effect, "OccOrigin")?.SetValue(new Vector2(_floodOccluderTileX, _floodOccluderTileY));
             GetParam(effect, "OccMapSize")?.SetValue(_floodOccluderMaskSize);
-            GetParam(effect, "ShadowStrength")?.SetValue(MathHelper.Clamp(config.FloodShadowStrength, 0f, 1f));
+            // A lamp's shadow is only as visible as the lamp's glow. Outdoors by day the game
+            // paints no glow for a ring or a torch, yet the carve went on taking its full share
+            // out of the scene, so a plant beside the player threw a black wedge at 6:20 in the
+            // morning. Both terms follow the game's own dusk ramp outdoors; indoors the game
+            // draws its lamps at every hour and so do their shadows.
+            //
+            // "How visible is a lamp" is read off the tint the game paints the outdoors with, not
+            // off the clock: white at noon, dim under rain, dark at night. A rainy morning is the
+            // case the clock got wrong, since the sky is grey and the game already draws its lamps
+            // against it, so their shadows should show a little too. Night is what the dial was
+            // tuned at, so full darkness maps to 1 and a rainy day lands around a third.
+            float lampVisible = 1f;
+            if (Game1.currentLocation?.IsOutdoors == true)
+            {
+                Color paintedDaylight = Game1.outdoorLight;
+                float luminance = (0.2126f * paintedDaylight.R + 0.7152f * paintedDaylight.G + 0.0722f * paintedDaylight.B) / 255f;
+                float darkness = MathHelper.Clamp((1f - luminance) / 0.85f, 0f, 1f);
+                lampVisible = Math.Max(darkness, FloodLightmap.NightAmount());
+            }
+            GetParam(effect, "ShadowStrength")?.SetValue(MathHelper.Clamp(config.FloodShadowStrength, 0f, 1f) * lampVisible);
+            GetParam(effect, "ShadowCarve")?.SetValue(MathHelper.Clamp(config.LightShadowCarve, 0f, 1f) * lampVisible);
+            GetParam(effect, "ShadowSoftness")?.SetValue(MathHelper.Clamp(config.LightShadowSoftness, 0f, 2f));
+            // Rides the flood's own fade, so switching the GI off takes the tint with it rather
+            // than leaving a coloured field over a scene with no lightmap left under it.
+            GetParam(effect, "ColourBleed")?.SetValue(MathHelper.Clamp(config.FloodColourBleed, 0f, 1f) * _fadeFlood);
             return directScale;
         }
 
@@ -816,7 +904,15 @@ namespace SDVRadiance
             bool windowsHere = interiorWindowed && config.WindowEffectsEnabled;
             bool windowedRoom = windowsHere && config.WindowBeamEnabled;
             ShadowRenderer.WindowDaylight(out Vector3 dayColour, out float dayStrength);
-            Vector3 windowColourTarget = windowedRoom ? dayColour * (dayStrength * 0.8f) : Vector3.Zero;
+            // The player's own dial on the visible daylight: the glow on the pane, the beam and the
+            // floor patch move together, the room's lighting does not (that is lighting, not an
+            // effect). The dial does NOT touch PaneDaylight, which is only the pane's exemption
+            // from the room's exposure: scaling that too meant that at 0 the room's dimming and
+            // its sky cast fell on the glass, and a bright white window came out flat grey, the
+            // exact "dirty rather than a window" failure the shader was written to avoid. At 0
+            // the pane is the game's own art at neutral exposure, and nothing is added to it.
+            float daylightScale = MathHelper.Clamp(config.WindowDaylightStrength, 0f, 2f);
+            Vector3 windowColourTarget = windowedRoom ? dayColour * (dayStrength * 0.8f * daylightScale) : Vector3.Zero;
             float paneDaylightTarget = windowedRoom ? MathHelper.Clamp(dayStrength * 1.6f, 0f, 1f) : 0f;
             if (!ReferenceEquals(location, _exposureLocation))
             {
@@ -916,6 +1012,7 @@ namespace SDVRadiance
             // expressed in tiles, so the glass and the beam agree on where the window is.
             GetParam(effect, "WindowPane")?.SetValue(new Vector4(0.55f, 0.8f, 12f / 64f, 0.35f));
             GetParam(effect, "DebugEmitter")?.SetValue(DebugChannel == DebugOverlayChannel.Emitter ? 1f : 0f);
+            GetParam(effect, "DebugLampShadow")?.SetValue(DebugChannel == DebugOverlayChannel.LampShadow ? 1f : 0f);
 
             _dbgWindowsHere = windowsHere;
             _dbgWindowBeamOn = config.WindowBeamEnabled;
@@ -1060,6 +1157,8 @@ namespace SDVRadiance
             // future floor below 1 brings it back, but for now even is the look.
             GetParam(effect, "CausticDeepFloor")?.SetValue(1f);
             GetParam(effect, "DebugCaustic")?.SetValue(DebugChannel == DebugOverlayChannel.Caustic ? 1f : 0f);
+            GetParam(effect, "DebugMirrorSource")?.SetValue(DebugChannel == DebugOverlayChannel.MirrorSource ? 1f : 0f);
+            GetParam(effect, "DebugSky")?.SetValue(DebugChannel == DebugOverlayChannel.Sky ? 1f : 0f);
             _causticAmountUploaded = causticAmount;
         }
 
@@ -1143,6 +1242,11 @@ namespace SDVRadiance
             // Never unbound: an empty slot samples black, which is "on the lip and right under a
             // fall" everywhere and would take the whole mirror away. One far texel stands in.
             GetParam(effect, "PlungeChurnTexture")?.SetValue(_waterPlungeChurnTexture ?? FallDistanceFarTexture());
+            // The mirror asks how tall the map is where its source lands: flat ground shows in the
+            // water as a lip, not as a sheet.
+            Texture2D surfaceClasses = SurfaceClassTextureFor(Game1.currentLocation);
+            GetParam(effect, "SurfaceClassTexture")?.SetValue(surfaceClasses);
+            GetParam(effect, "MapTiles")?.SetValue(new Vector2(surfaceClasses.Width, surfaceClasses.Height));
             GetParam(effect, "SparkleDensity")?.SetValue(config.WaterSparkleDensity);
         }
 
@@ -1154,18 +1258,17 @@ namespace SDVRadiance
             // on a pier never ripples while the water right beside them stays animated.
             var pmask = ShadowRenderer.PlayerMask;
             var playerRect = new Vector4(2f, 2f, -1f, -1f);   // empty box (never matches)
-            if (who != null && pmask != null)
+            // A seated farmer is on a bench, not in the water, and the silhouette that would be
+            // laid over them is the standing bake, taller than the body it covers: what it covered
+            // over the beach pier bench was a rectangle of dead water above the player's head.
+            if (who != null && pmask != null && !who.IsSitting())
             {
-                Rectangle box = who.GetBoundingBox();
-                // yOffset is the DRAW-time bob (swimming, jumps) that the collision box never
-                // sees — without it the exclusion silhouette floats above the swimmer and the
-                // water effect leaves a dead margin over their head.
-                // box.Bottom, NOT the shadow's feet-contact line (bottom - 10): this rect has to
-                // overlay the DRAWN sprite, and the bake pins the sprite's bottom edge to the
-                // anchor. Anchoring 10 px high shifted the whole exclusion up, so a strip of
-                // water above the head stopped rippling while the sprite's own feet still did.
-                // Same convention the NPC stamps use (StampSprite).
-                Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, box.Bottom + who.yOffset));
+                // The box has to overlay the DRAWN sprite, whose bottom edge the bake pins to the
+                // anchor, so the anchor is where the game drew the body this frame and not the
+                // collision box: the two differ by the swim bob, a jump, and the frame's own offset
+                // (see FarmerDrawnAnchor). Anchoring at the shadow's feet line (bottom - 10) or a
+                // whole yOffset above the box both left a strip of dead water over the head.
+                Vector2 feet = Game1.GlobalToLocal(Game1.viewport, ShadowRenderer.FarmerDrawnAnchor(who));
                 Vector2 tl = feet - new Vector2(ShadowRenderer.PlayerRtW / 2f, ShadowRenderer.PlayerRtH - 8f);
                 // Screen px -> UV against the FRAME the game drew, not this pass's target
                 // (see _frameWidth): with render scale on they are different sizes.
@@ -1232,6 +1335,235 @@ namespace SDVRadiance
             Vector3 sky = SynthesisedSkyColour(sunWarm, nightGlow);
             sky *= Vector3.Lerp(Vector3.One, ComputeLightingAmbient(config), _fadeLighting);
             GetParam(effect, "SkyColor")?.SetValue(sky);
+            // B6: aurora - on a clear winter night the sky is not one flat colour, and the
+            // water is the only mirror this camera ever sees the sky in. The whole gate (the
+            // switch, winter, outdoors, clear weather, real night) rides ONE eased amount, so
+            // dusk arriving or the weather flipping mid-evening never pops the curtains.
+            float auroraTarget = config.AuroraEnabled && Game1.IsWinter
+                && (Game1.currentLocation?.IsOutdoors ?? false)
+                && !Game1.isRaining && !Game1.isSnowing && !Game1.isLightning
+                ? nightGlow * AuroraShowStrength() : 0f;
+            _auroraAmount = Determinism.Settle(
+                MathHelper.Lerp(_auroraAmount, auroraTarget, 0.02f), auroraTarget);
+            // The dial rides the eased gate rather than the shader, so the whole no-popping
+            // argument above still holds and the shader keeps one number to early-out on.
+            float auroraUploaded = _auroraAmount * config.AuroraStrength;
+            GetParam(effect, "AuroraAmt")?.SetValue(auroraUploaded);
+            SkyAuroraUploaded = auroraUploaded;
+            UpdateShootingStar(effect, config, nightGlow);
+        }
+
+        /// <summary>B6: a shooting star now and then, in the sky the water reflects. Any clear
+        /// night, any season; roughly one a minute while the conditions hold, each lasting under a
+        /// second. The clock is Determinism.Seconds, so a frozen capture neither starts one nor
+        /// advances one, and two dumps of one frozen frame agree.</summary>
+        private void UpdateShootingStar(Effect effect, ModConfig config, float nightGlow)
+        {
+            bool clearNight = config.ShootingStarsEnabled && nightGlow > 0.5f
+                && (Game1.currentLocation?.IsOutdoors ?? false)
+                && !Game1.isRaining && !Game1.isSnowing && !Game1.isLightning;
+            double now = Determinism.Seconds;
+
+            for (int slot = 0; slot < MeteorSlots; slot++)
+                if (_meteors[slot].Active && now - _meteors[slot].StartedAt >= _meteors[slot].Seconds)
+                    _meteors[slot].Active = false;
+
+            if (!clearNight)
+                MeteorRequests = 0;
+            if (clearNight && !Determinism.Frozen)
+            {
+                while (MeteorRequests > 0)
+                {
+                    int slot = FreeMeteorSlot();
+                    if (slot < 0)
+                        break;
+                    SpawnShootingStar(slot, now, acrossTheView: true);
+                    MeteorRequests--;
+                }
+                if (_meteorNextAt < 0)
+                    _meteorNextAt = now + 8 + _meteorRandom.NextDouble() * 14;
+                if (now >= _meteorNextAt)
+                {
+                    int slot = FreeMeteorSlot();
+                    if (slot >= 0)
+                        SpawnShootingStar(slot, now, acrossTheView: false);
+                    if (_meteorBurstLeft > 0)
+                    {
+                        _meteorBurstLeft--;
+                        _meteorNextAt = now + 0.15 + _meteorRandom.NextDouble() * 0.7;
+                    }
+                    else
+                    {
+                        _meteorBurstLeft = _meteorRandom.NextDouble() < 0.22 ? 1 + _meteorRandom.Next(2) : 0;
+                        _meteorNextAt = now + (_meteorBurstLeft > 0
+                            ? 0.2 + _meteorRandom.NextDouble() * 0.8
+                            : 22 + _meteorRandom.NextDouble() * 38);
+                    }
+                }
+            }
+
+            float loudest = 0f;
+            int burning = 0;
+            for (int slot = 0; slot < MeteorSlots; slot++)
+            {
+                ShootingStar star = _meteors[slot];
+                float envelope = 0f;
+                Vector2 head = star.StartTile;
+                if (star.Active)
+                {
+                    float progress = (float)Math.Clamp((now - star.StartedAt) / Math.Max(0.05f, star.Seconds), 0.0, 1.0);
+                    envelope = (float)Math.Sin(Math.PI * progress);
+                    head += star.Direction * (star.TravelTiles * progress);
+                    burning++;
+                }
+                _meteorPaths[slot] = new Vector4(head.X, head.Y, star.Direction.X, star.Direction.Y);
+                _meteorShapes[slot] = new Vector4(star.TailTiles, envelope, star.Width, star.Brightness);
+                loudest = Math.Max(loudest, envelope);
+            }
+            GetParam(effect, "Meteors")?.SetValue(_meteorPaths);
+            GetParam(effect, "MeteorShapes")?.SetValue(_meteorShapes);
+            GetParam(effect, "MeteorAny")?.SetValue(loudest);
+            SkyClearNight = clearNight;
+            SkyMeteorEnvelope = loudest;
+            SkyMeteorBurning = burning;
+            SkyMeteorSecondsToNext = clearNight && _meteorNextAt >= 0
+                ? Math.Max(0.0, _meteorNextAt - now) : -1;
+        }
+
+        /// <summary>A slot with nothing burning in it, or -1 when the sky is already full.</summary>
+        private int FreeMeteorSlot()
+        {
+            for (int slot = 0; slot < MeteorSlots; slot++)
+                if (!_meteors[slot].Active)
+                    return slot;
+            return -1;
+        }
+
+        /// <summary>Light one streak. Its weight is rolled here rather than fixed, because a sky
+        /// where every meteor is the same size reads as one asset played over and over: most are
+        /// faint and quick, a few are ordinary, and about one in twelve is a heavy one that burns
+        /// wider, longer and warmer. The shader reads the warmth back off the weight.
+        /// <para><paramref name="acrossTheView"/> is the console's request. A streak only exists
+        /// where the sky does, which is water, and one placed by the player's feet lands on the
+        /// pier they are standing on as often as not; asked-for streaks are spread across the
+        /// view and given a longer run so at least one of them crosses open water.</para></summary>
+        private void SpawnShootingStar(int slot, double now, bool acrossTheView)
+        {
+            float tilesAcross = Game1.viewport.Width / 64f, tilesDown = Game1.viewport.Height / 64f;
+            float originX = Game1.viewport.X / 64f, originY = Game1.viewport.Y / 64f;
+            double weight = _meteorRandom.NextDouble();
+            float width, brightness, tailTiles, travelTiles, seconds;
+            if (weight < 0.55)
+            {
+                width = 0.6f; brightness = 0.55f;
+                tailTiles = 1.2f + 0.8f * (float)_meteorRandom.NextDouble();
+                travelTiles = 3.0f + 2.0f * (float)_meteorRandom.NextDouble();
+                seconds = 0.45f + 0.25f * (float)_meteorRandom.NextDouble();
+            }
+            else if (weight < 0.92)
+            {
+                width = 1.0f; brightness = 1.0f;
+                tailTiles = 2.0f + 1.5f * (float)_meteorRandom.NextDouble();
+                travelTiles = 4.5f + 3.0f * (float)_meteorRandom.NextDouble();
+                seconds = 0.8f + 0.3f * (float)_meteorRandom.NextDouble();
+            }
+            else
+            {
+                width = 1.9f; brightness = 1.8f;
+                tailTiles = 4.0f + 2.5f * (float)_meteorRandom.NextDouble();
+                travelTiles = 7.0f + 4.0f * (float)_meteorRandom.NextDouble();
+                seconds = 1.4f + 0.6f * (float)_meteorRandom.NextDouble();
+            }
+            float acrossFraction = acrossTheView
+                ? 0.05f + 0.90f * (float)_meteorRandom.NextDouble()
+                : 0.15f + 0.70f * (float)_meteorRandom.NextDouble();
+            float downFraction = acrossTheView
+                ? 0.02f + 0.25f * (float)_meteorRandom.NextDouble()
+                : 0.10f + 0.60f * (float)_meteorRandom.NextDouble();
+            if (acrossTheView)
+                travelTiles = Math.Max(travelTiles, tilesDown * 0.8f);
+            float angle = MathHelper.ToRadians(20f + 40f * (float)_meteorRandom.NextDouble());
+            float side = _meteorRandom.NextDouble() < 0.5 ? -1f : 1f;
+            _meteors[slot] = new ShootingStar
+            {
+                Active = true,
+                StartedAt = now,
+                Seconds = seconds,
+                StartTile = new Vector2(originX + acrossFraction * tilesAcross,
+                                        originY + downFraction * tilesDown),
+                Direction = new Vector2(side * (float)Math.Cos(angle), (float)Math.Sin(angle)),
+                TailTiles = tailTiles,
+                TravelTiles = travelTiles,
+                Width = width,
+                Brightness = brightness,
+            };
+        }
+
+        /// <summary>How much of tonight's aurora display is up right now, 0 to 1.
+        ///
+        /// <para>An aurora that is simply on from dusk to dawn on every clear winter night is
+        /// wallpaper. A real one is an EVENT: some nights have none at all, and the ones that do
+        /// get an hour or three of it that builds and dies. Rolled once per night from the day
+        /// number, so every screen in split screen agrees, a frozen capture cannot drift, and
+        /// walking in and out of a building does not re-roll the sky.</para></summary>
+        private static float AuroraShowStrength()
+        {
+            int today = (int)(Game1.stats?.DaysPlayed ?? 0u);
+            if (today != _auroraShowDay)
+            {
+                _auroraShowDay = today;
+                var nightly = new Random(unchecked(today * 397 + 0x4A5));
+                // Rather more than half of clear winter nights carry one. Clear winter nights
+                // are themselves uncommon, so a harsher roll than this would make the feature
+                // something most players never meet.
+                _auroraShowTonight = nightly.NextDouble() < 0.62;
+                _auroraShowStart = 1180f + (float)nightly.NextDouble() * 320f;    // 19:40 .. 25:00
+                _auroraShowLength = 100f + (float)nightly.NextDouble() * 200f;    // 1h40 .. 5h
+            }
+            SkyAuroraTonight = _auroraShowTonight || AuroraForce > 0;
+            SkyAuroraShowStart = _auroraShowStart;
+            SkyAuroraShowEnd = _auroraShowStart + _auroraShowLength;
+            if (AuroraForce > 0)
+                return SkyAuroraShow = 1f;
+            if (AuroraForce < 0 || !_auroraShowTonight)
+                return SkyAuroraShow = 0f;
+            const float RampMinutes = 35f;
+            float minutes = ClockMinutes();
+            return SkyAuroraShow = Math.Min(
+                MathHelper.Clamp((minutes - _auroraShowStart) / RampMinutes, 0f, 1f),
+                MathHelper.Clamp((_auroraShowStart + _auroraShowLength - minutes) / RampMinutes, 0f, 1f));
+        }
+
+        /// <summary>The aurora's strength as a pure function of the night, for the passes that
+        /// have to know about it but do not run where the water does: the whole-frame sky tint
+        /// and the glass. Reading the water pass's own eased number would leave both of them
+        /// stale in any scene with no water on screen, which is most of a town.</summary>
+        private static float AuroraSceneAmount(ModConfig config)
+        {
+            if (!config.AuroraEnabled || !Game1.IsWinter
+                || !(Game1.currentLocation?.IsOutdoors ?? false)
+                || Game1.isRaining || Game1.isSnowing || Game1.isLightning)
+                return 0f;
+            float nightGlow = MathHelper.Clamp((ClockMinutes() - 1140) / 90f, 0f, 1f);
+            return nightGlow * AuroraShowStrength() * MathHelper.Clamp(config.AuroraStrength, 0f, 2f);
+        }
+
+        /// <summary>The colour the sky is lighting the world with, as a luminance-preserving
+        /// multiply. White unless an aurora is up.</summary>
+        internal static Vector3 SkyLightTintNow(ModConfig config)
+        {
+            float amount = Math.Min(1f, AuroraSceneAmount(config));
+            SkyAuroraGlass = amount;
+            if (amount <= 0.001f)
+                return Vector3.One;
+            // A green-cyan push of a few percent, normalised so its luminance is exactly 1: the
+            // world goes the colour of the sky without going one step brighter or darker. The
+            // lesson the bounced-light colour was built on, and the reason the brightness family
+            // of bug reports cannot be reopened by this.
+            Vector3 tint = new(0.88f, 1.06f, 0.99f);
+            float luminance = Vector3.Dot(tint, new Vector3(0.299f, 0.587f, 0.114f));
+            tint /= Math.Max(0.001f, luminance);
+            return Vector3.Lerp(Vector3.One, tint, amount * 0.85f);
         }
 
         /// <summary>The colour of the sky itself at this hour and in this weather, before the
@@ -1311,6 +1643,24 @@ namespace SDVRadiance
             // itself: with Vignette OFF (e.g. only CA on) the shader must add nothing,
             // or "off" quietly darkens the night screen edges.
             GetParam(effect, "NightAmt")?.SetValue(NightFactorNow() * _vignetteEase);
+            GetParam(effect, "ScreenPixels")?.SetValue(new Vector2(Game1.viewport.Width, Game1.viewport.Height));
+            // Heat haze: hot air over lava bends the picture. Strength carries
+            // the presence ease, so switching it off (or walking away from the heat) melts the
+            // wobble out instead of snapping the pixels straight.
+            GetParam(effect, "SkyLightTint")?.SetValue(SkyLightTintNow(config));
+            GetParam(effect, "HeatHazeStrength")?.SetValue(config.HeatHazeStrength * _heatHazeEase);
+            if (_heatHazeEase > FadeGone && _heatMapTexture != null)
+            {
+                GetParam(effect, "HeatMapTexture")?.SetValue(_heatMapTexture);
+                GetParam(effect, "HeatMapOriginTiles")?.SetValue(_heatMapOriginTiles);
+                GetParam(effect, "HeatMapSizeTiles")?.SetValue(_heatMapSizeTiles);
+                GetParam(effect, "TilesPerScreen")?.SetValue(new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f));
+                GetParam(effect, "WorldTileOffset")?.SetValue(new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f));
+                GetParam(effect, "HeatClock")?.SetValue((Determinism.Ticks % 360000) / 60f);
+                // The middle of the standing sprite, a little under a tile above the feet.
+                Point feet = Game1.player.StandingPixel;
+                GetParam(effect, "PlayerWorldTile")?.SetValue(new Vector2(feet.X / 64f, (feet.Y - 56f) / 64f));
+            }
             effect.CurrentTechnique = effect.Techniques["Finishing"];
             DrawFull(spriteBatch, source, dest, effect);
         }
@@ -1360,222 +1710,6 @@ namespace SDVRadiance
             // Last, after the blend-back as well as after the multiply: this stage runs behind
             // the flood one during a crossfade, so it is the one that owns the sparks.
             DrawEmissiveParticlesOnLighting(spriteBatch, dest, EmissiveParticleHost.Classic);
-        }
-
-        /// <summary>Character head anchors (centreX, boxTop), refilled once per light query so the
-        /// bubble test below doesn't call GetBoundingBox() again for every (light × character) pair.</summary>
-        private static readonly System.Collections.Generic.List<(float cx, float top)> _bubbleAnchors = new();
-
-        private static void FillBubbleAnchors(GameLocation? location)
-        {
-            _bubbleAnchors.Clear();
-            if (location != null)
-                foreach (NPC c in ShadowRenderer.CharactersIn(location))
-                {
-                    if (c == null)
-                        continue;
-                    Rectangle box = c.GetBoundingBox();
-                    _bubbleAnchors.Add((box.Center.X, box.Top));
-                }
-            var p = Game1.player;
-            if (p != null)
-            {
-                Rectangle box = p.GetBoundingBox();
-                _bubbleAnchors.Add((box.Center.X, box.Top));
-            }
-        }
-
-        /// <summary>A light hovering right above a character's head is almost certainly a
-        /// speech-bubble / emote light some mods add (e.g. The Muttering Farmer), not an
-        /// environmental light — those shouldn't spawn god rays. Tests against the anchors filled
-        /// by <see cref="FillBubbleAnchors"/> (no per-call GetBoundingBox()).</summary>
-        private static bool IsCharacterBubble(Vector2 worldPos)
-        {
-            foreach (var (cx, top) in _bubbleAnchors)
-                // above the head (roughly one-to-three tiles up), horizontally centred on them
-                if (Math.Abs(worldPos.X - cx) < 40f && worldPos.Y > top - 160f && worldPos.Y < top + 24f)
-                    return true;
-            return false;
-        }
-
-        /// <summary>Ray sources this frame, each with its OWN presence. Every on-screen lamp
-        /// gets its own beams: the old single-source pick made the one beam glide across the
-        /// screen to the next lamp as you walked, because there was only ever one origin.
-        /// <para>
-        /// Presence is PER LIGHT and eased, which is what stops the popping. A global fade
-        /// cannot express "this lamp is arriving while that one leaves", so a lamp entering
-        /// the view switched its beams on in a single frame. Worse where lamps CLUSTER: with
-        /// a hard top-N cut, walking past a row of them reshuffled which ones made the cut
-        /// and the losers vanished instantly. Now a light that loses its slot just eases out,
-        /// and its beams cross-fade with the one that took over.
-        /// </para></summary>
-        internal const int MaxRayLights = 3;      // how many lights may be ACTIVE at once
-        private const int RayRenderSlots = 5;     // + room for the ones still fading out
-        private const float RayMergeUV = 0.07f;   // closer than this and beams overlap anyway
-        private float _snowThresholdAmount;                // eased snow bright-bar blend (0..1)
-
-        private sealed class RayLight
-        {
-            public Vector2 Uv;
-            public float RadiusUv;
-            public float R;          // game radius: the "which lamps matter" ranking
-            public float Reach;      // 0 = march toward it (a lamp); > 0 = a fixed march along the direction (the sun)
-            public float Amt;        // eased presence 0..1
-            public bool Seen;        // present on screen this frame
-        }
-
-        private readonly Dictionary<string, RayLight> _godRayTracking = new();
-        private GameLocation? _godRayTrackingLocation;
-        private readonly List<KeyValuePair<string, RayLight>> _godRayTrackingScratch = new();
-        private readonly List<(Vector2 uv, float radiusUV, float amt, float reach)> _godRayLights = new();
-
-        /// <summary>Refresh the tracked ray lights: geometry, per-light presence, render list.</summary>
-        /// <summary>How far to the side of the screen the sun sits when it is low. Off the edge,
-        /// so the shafts come in at a slant rather than radiating from a point you can look at.</summary>
-        private const float SunRayReachU = 0.75f;
-        /// <summary>How far above the top of the screen the sun sits, on the horizon and overhead.
-        /// Never on screen: there is no sun sprite to stand under, and a source inside the frame
-        /// makes a starburst instead of shafts.</summary>
-        private const float SunRayAboveMin = 0.20f, SunRayAboveSpan = 0.55f;
-        /// <summary>The sun's reach has to cover the whole frame from off its corner, unlike a lamp
-        /// whose disk is what keeps distant bright scenery from streaking.</summary>
-        private const float SunRayRadiusUv = 2.5f;
-        /// <summary>How long a sun shaft is, in screen heights. The sun is off the frame, so the
-        /// march is a fixed distance along its direction rather than a fraction of the way to it -
-        /// a fraction of THAT would leave the picture in a couple of steps and streak the clamped
-        /// border pixel instead of the scene.</summary>
-        private const float SunRayReach = 0.32f;
-        /// <summary>Reserved tracking key. The game's own light sources are keyed by strings it
-        /// generates, and none of them look like this.</summary>
-        private const string SunRayKey = "__radiance_sun";
-
-        private bool UpdateRayLights(ModConfig config)
-        {
-            if (!ReferenceEquals(Game1.currentLocation, _godRayTrackingLocation))
-            {
-                _godRayTrackingLocation = Game1.currentLocation;
-                _godRayTracking.Clear();   // another map's lamps must not fade out over this one
-            }
-            foreach (var e in _godRayTracking.Values)
-                e.Seen = false;
-
-            var lights = Game1.currentLightSources;
-            if (lights != null && lights.Count > 0)
-            {
-                int vw = Math.Max(1, Game1.viewport.Width);
-                int vh = Math.Max(1, Game1.viewport.Height);
-                FillBubbleAnchors(Game1.currentLocation);   // once per frame, not per (light × character)
-
-                foreach (var kv in lights)
-                {
-                    LightSource ls = kv.Value;
-                    if (IsCharacterBubble(ls.position.Value))
-                        continue; // speech-bubble / emote light — not an environmental ray source
-                    float r = ls.radius.Value;
-                    if (r <= 0f)
-                        continue;
-                    Vector2 local = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
-                    float u = local.X / vw, v = local.Y / vh;
-                    if (u < -0.25f || u > 1.25f || v < -0.25f || v > 1.25f)
-                        continue; // off-screen
-
-                    if (!_godRayTracking.TryGetValue(kv.Key, out RayLight? e))
-                        _godRayTracking[kv.Key] = e = new RayLight();
-                    e.Uv = new Vector2(u, v);
-                    // radius.Value is ~tiles; on-screen glow ≈ radius*64px. Give the rays a
-                    // little more reach than the glow, so only pixels near THIS light streak
-                    // (not distant bright scenery like flowers/white hair).
-                    e.RadiusUv = MathHelper.Clamp(r * 64f * 2.2f / vh, 0.12f, 0.6f);
-                    e.R = r;
-                    e.Seen = true;
-                }
-            }
-
-            // THE SUN. Rays coming out of lamps are the half of this effect that was built first,
-            // and on its own it does not do what the name says: outdoors in the afternoon nothing
-            // is lit, so there was nothing to make a shaft from and the whole effect read as
-            // broken. Reported in those words, by someone who had walked every map looking for one.
-            //
-            // The sun is a light like any other here, just an enormous one standing off the edge of
-            // the frame. Its place comes from the same number the shadows lean by, mirrored,
-            // because a shadow points away from what lit it: morning sun off the right of the
-            // screen, evening off the left, and higher above the top the closer it is to noon. It
-            // is never placed INSIDE the frame - there is no sun sprite to stand under, and a
-            // source in view makes a starburst rather than shafts.
-            //
-            // Its reach is the whole frame, where a lamp's is a disk: for a lamp that disk is what
-            // stops distant bright scenery streaking, and for the sun there is no such thing as
-            // "too far from the sun". What keeps snow and pale walls out is the brightness bar,
-            // which already lifts itself on snowy ground.
-            if (config.GodRaysSun && ShadowRenderer.SunInSky(out float sunLean, out float sunHeight))
-            {
-                if (!_godRayTracking.TryGetValue(SunRayKey, out RayLight? sun))
-                    _godRayTracking[SunRayKey] = sun = new RayLight();
-                sun.Uv = new Vector2(0.5f - (float)Math.Sin(sunLean) * SunRayReachU,
-                                     -(SunRayAboveMin + SunRayAboveSpan * sunHeight));
-                sun.RadiusUv = SunRayRadiusUv;
-                sun.R = 1000f;      // never loses its slot to a lamp
-                sun.Reach = SunRayReach;
-                sun.Seen = true;
-            }
-
-            // Rank the candidates. A light that is ALREADY lit gets a bonus so it keeps its
-            // slot until something is genuinely brighter — without that hysteresis, two lamps
-            // of equal radius traded the last slot every few frames and flickered.
-            _godRayTrackingScratch.Clear();
-            foreach (var kv in _godRayTracking)
-                if (kv.Value.Seen)
-                    _godRayTrackingScratch.Add(kv);
-            if (_godRayTrackingScratch.Count > 1)
-                _godRayTrackingScratch.Sort((a, b) =>
-                {
-                    float sa = a.Value.R + (a.Value.Amt > 0.05f ? 1000f : 0f);
-                    float sb2 = b.Value.R + (b.Value.Amt > 0.05f ? 1000f : 0f);
-                    return sb2.CompareTo(sa);
-                });
-
-            int active = 0;
-            for (int i = 0; i < _godRayTrackingScratch.Count; i++)
-            {
-                RayLight e = _godRayTrackingScratch[i].Value;
-                bool on = active < MaxRayLights;
-                if (on)
-                    // Lamps standing almost on top of each other produce the same beams twice;
-                    // let the stronger one carry them and ease the neighbour out. This is what
-                    // keeps a row of close lamps from churning slots as the camera moves.
-                    for (int j = 0; j < i; j++)
-                    {
-                        RayLight o = _godRayTrackingScratch[j].Value;
-                        if (o.Amt > 0.05f && Vector2.Distance(o.Uv, e.Uv) < RayMergeUV) { on = false; break; }
-                        // (the sun sorts first, so it is never the one merged away)
-                    }
-                if (on)
-                    active++;
-                Approach(ref e.Amt, on ? 1f : 0f, 0.07f);   // ~0.6 s in, same out
-            }
-            // Unseen lights keep fading from their LAST known spot: a lamp scrolling off the
-            // edge, or a torch being put out, dims where it stood instead of blinking off.
-            foreach (var e in _godRayTracking.Values)
-                if (!e.Seen)
-                    Approach(ref e.Amt, 0f, 0.07f);
-
-            _godRayTrackingScratch.Clear();
-            foreach (var kv in _godRayTracking)
-                if (kv.Value.Amt <= 0.004f && !kv.Value.Seen)
-                    _godRayTrackingScratch.Add(kv);
-            foreach (var kv in _godRayTrackingScratch)
-                _godRayTracking.Remove(kv.Key);
-
-            _godRayLights.Clear();
-            foreach (var e in _godRayTracking.Values)
-                if (e.Amt > 0.01f)
-                    _godRayLights.Add((e.Uv, e.RadiusUv, e.Amt, e.Reach));
-            if (_godRayLights.Count > RayRenderSlots)
-            {
-                _godRayLights.Sort((a, b) => b.amt.CompareTo(a.amt));
-                _godRayLights.RemoveRange(RayRenderSlots, _godRayLights.Count - RayRenderSlots);
-            }
-            return _godRayLights.Count > 0;
         }
 
         // World-anchor for drifting noise (fog/clouds): the offset must be in units of the

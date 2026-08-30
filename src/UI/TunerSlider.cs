@@ -46,8 +46,9 @@ namespace SDVRadiance
         {
             float v = _getValue();
             float ts = 0.9f * TextScale;
-            // Dimmed rather than hidden. Hiding re-flows everything under it on every toggle, and
-            // a list that jumps as you use it is worse than one with a greyed row in it.
+            // A dead row is normally not BUILT at all (the tuner skips it and rebuilds the tab
+            // on every toggle), so this dim is only the fallback for a condition that goes
+            // false without a rebuild in between.
             float fade = IsEnabled ? 1f : 0.35f;
             TunerText.DrawFit(spriteBatch, _label, new Vector2(Track.X, Track.Y - _labelHeight + dy), Track.Width - (int)(70 * TextScale), Game1.textColor * fade, ts);
             // The text and its width only change when the value does, which is a drag, not a frame.

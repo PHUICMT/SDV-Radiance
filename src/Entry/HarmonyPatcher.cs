@@ -44,6 +44,11 @@ namespace SDVRadiance
             harmony.Patch(
                 original: AccessTools.Method(typeof(GameLocation), nameof(GameLocation.updateWater)),
                 postfix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(UpdateWater_Postfix)));
+            HoldCrittersWhileFrozen(harmony, monitor);
+            HoldMapAnimationWhileFrozen(harmony, monitor);
+            HoldTemporarySpritesWhileFrozen(harmony, monitor);
+            SpriteDrawRecorder.Install(harmony, monitor);
+            SheetUpscaler.Install(harmony, monitor);
             // Replace the vanilla rain/snow draw on the days the player asked for ours. The
             // prefix skips vanilla only when the PrecipitationSystem gate says this exact frame
             // is ours; the postfix draws the replacement in the same slot (before the lightmap,
@@ -105,6 +110,49 @@ namespace SDVRadiance
                     }
                 }
             }
+
+            // The mine's floor number is painted into the WORLD layer, not the HUD, so it landed
+            // in every captured frame: a badge in the corner of a gallery shot, and a caption that
+            // CHANGES between two visits to the same floor, which is noise in a comparison the
+            // harness is supposed to read as pixels. The game already knows to leave it out when a
+            // picture is being taken - MineShaft.drawAboveAlwaysFrontLayer returns early on
+            // takingMapScreenshot - so a capture borrows that flag for the length of that one call
+            // and puts it back. Setting it for the whole frame is not the same thing: this mod
+            // reads it in eight places, and one of them decides the render scale, so a frame
+            // captured under it would come out a different size than the frame being compared.
+            try
+            {
+                harmony.Patch(
+                    original: AccessTools.Method(typeof(StardewValley.Locations.MineShaft),
+                                                 nameof(StardewValley.Locations.MineShaft.drawAboveAlwaysFrontLayer),
+                                                 new[] { typeof(SpriteBatch) }),
+                    prefix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(MineFloorNumber_Prefix)),
+                    postfix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(MineFloorNumber_Postfix)));
+            }
+            catch (Exception ex)
+            {
+                monitor.Log($"Mine floor number will stay in captured frames: {ex.Message}", LogLevel.Trace);
+            }
+        }
+
+        /// <summary>What takingMapScreenshot was before a capture borrowed it.</summary>
+        private static bool _mapScreenshotFlagWas;
+
+        /// <inheritdoc cref="Apply"/>
+        private static void MineFloorNumber_Prefix()
+        {
+            if (!RenderPipeline.DumpPending || Game1.game1 == null)
+                return;
+            _mapScreenshotFlagWas = Game1.game1.takingMapScreenshot;
+            Game1.game1.takingMapScreenshot = true;
+        }
+
+        /// <inheritdoc cref="Apply"/>
+        private static void MineFloorNumber_Postfix()
+        {
+            if (!RenderPipeline.DumpPending || Game1.game1 == null)
+                return;
+            Game1.game1.takingMapScreenshot = _mapScreenshotFlagWas;
         }
 
         /// <summary>
@@ -146,8 +194,157 @@ namespace SDVRadiance
         /// ripple is active. waterPosition (the smooth 1px vertical scroll) is left
         /// running so the water still gently rises and falls.
         /// </summary>
+        /// <summary>
+        /// Hold every critter still while the capture clock is frozen. A seagull crossing the
+        /// beach is the game's own animation and runs straight through the freeze, and since the
+        /// mod started recording the art a location draws for itself, that gull lands in the
+        /// sprite mask, in the self-drawn atlas and in its own reflection: two dumps of one
+        /// frozen frame differed in all three and the verification harness could certify nothing
+        /// at any water spot. Author-only, since nothing freezes the clock during play.
+        /// </summary>
+        private static void HoldCrittersWhileFrozen(Harmony harmony, IMonitor monitor)
+        {
+            Type critterBase = typeof(StardewValley.BellsAndWhistles.Critter);
+            var prefix = new HarmonyMethod(typeof(HarmonyPatcher), nameof(CritterUpdate_Prefix));
+            Type[] signature = { typeof(Microsoft.Xna.Framework.GameTime), typeof(GameLocation) };
+            int patched = 0;
+            foreach (Type type in critterBase.Assembly.GetTypes())
+            {
+                if (!critterBase.IsAssignableFrom(type))
+                    continue;
+                var update = type.GetMethod("update",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic
+                        | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly,
+                    null, signature, null);
+                if (update == null || update.IsAbstract)
+                    continue;
+                try
+                {
+                    harmony.Patch(update, prefix: prefix);
+                    patched++;
+                }
+                catch (Exception ex)
+                {
+                    monitor.Log($"Critter freeze patch skipped for {type.FullName}: {ex.Message}", LogLevel.Trace);
+                }
+            }
+            monitor.Log($"Holding {patched} critter update(s) still while the capture clock is frozen.", LogLevel.Trace);
+        }
+
+        /// <summary>Skip a critter's update while frozen, and tell the location to keep it:
+        /// a critter that returns true is removed, and a beach that loses its gulls between two
+        /// dumps has changed as surely as one whose gulls moved.</summary>
+        internal static bool CritterUpdate_Prefix(ref bool __result)
+        {
+            if (!Determinism.Frozen)
+                return true;
+            __result = false;
+            return false;
+        }
+
+        /// <summary>Hold every NPC still while the capture clock is frozen: villagers on their
+        /// routes, and the creatures other mods derive from NPC (Custom Companions walks its animals
+        /// from an update of its own). A frozen beach still had a crab and a gull walking between
+        /// its two dumps, and Town at any hour has villagers moving, which is why town-night could
+        /// never certify reflect_entity. Patched by signature on every loaded assembly, at
+        /// GameLaunched so the other mods' classes exist. Author-only, like the critter hold.</summary>
+        internal static void HoldCharactersWhileFrozen(Harmony harmony, IMonitor monitor)
+        {
+            var prefix = new HarmonyMethod(typeof(HarmonyPatcher), nameof(CharacterUpdate_Prefix));
+            Type[] signature = { typeof(Microsoft.Xna.Framework.GameTime), typeof(GameLocation) };
+            int patched = 0;
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type[] types;
+                try { types = assembly.GetTypes(); }
+                catch (System.Reflection.ReflectionTypeLoadException ex) { types = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Where(ex.Types, t => t != null))!; }
+                catch (Exception) { continue; }
+                foreach (Type type in types)
+                {
+                    if (type == null || !typeof(NPC).IsAssignableFrom(type))
+                        continue;
+                    System.Reflection.MethodInfo? update;
+                    try
+                    {
+                        update = type.GetMethod("update",
+                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic
+                                | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly,
+                            null, signature, null);
+                    }
+                    catch (Exception) { continue; }
+                    if (update == null || update.IsAbstract)
+                        continue;
+                    try
+                    {
+                        harmony.Patch(update, prefix: prefix);
+                        patched++;
+                    }
+                    catch (Exception ex)
+                    {
+                        monitor.Log($"Character freeze patch skipped for {type.FullName}: {ex.Message}", LogLevel.Trace);
+                    }
+                }
+            }
+            monitor.Log($"Holding {patched} character update(s) still while the capture clock is frozen.", LogLevel.Trace);
+        }
+
+        /// <summary>Skip a character's update while frozen. Nothing to keep here: an NPC is not
+        /// removed for standing still, unlike a critter.</summary>
+        internal static bool CharacterUpdate_Prefix() => !Determinism.Frozen;
+
+        /// <summary>Hold the map's own animated tiles while frozen. The surf along the beach and the
+        /// waterfalls are frame-cycled by xTile from the elapsed time the game hands it, which is the
+        /// game's clock and not ours: two dumps of one frozen beach differed along the whole tide
+        /// line. Author-only.</summary>
+        private static void HoldMapAnimationWhileFrozen(Harmony harmony, IMonitor monitor)
+        {
+            var update = AccessTools.Method(typeof(xTile.Map), nameof(xTile.Map.Update), new[] { typeof(long) });
+            if (update == null)
+            {
+                monitor.Log("xTile.Map.Update(long) not found; animated tiles will run through a frozen capture.", LogLevel.Trace);
+                return;
+            }
+            harmony.Patch(update, prefix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(MapUpdate_Prefix)));
+        }
+
+        internal static bool MapUpdate_Prefix() => !Determinism.Frozen;
+
+        /// <summary>Hold the location's temporary sprites while frozen: the flame on a campfire, the
+        /// smoke off a chimney, a splash, all frame-cycled in update from the game's clock. The
+        /// beach gate still differed by a few hundred pixels at a campfire the player had left there
+        /// after the draw-time clock was pinned, because the flame is one of these and advances in
+        /// update, not draw. Kept rather than removed: a sprite that returns true is deleted, and a
+        /// scene that lost its flame between two dumps has changed as much as one whose flame moved.
+        /// Author-only.</summary>
+        private static void HoldTemporarySpritesWhileFrozen(Harmony harmony, IMonitor monitor)
+        {
+            var update = AccessTools.Method(typeof(TemporaryAnimatedSprite), nameof(TemporaryAnimatedSprite.update),
+                new[] { typeof(Microsoft.Xna.Framework.GameTime) });
+            if (update == null)
+            {
+                monitor.Log("TemporaryAnimatedSprite.update(GameTime) not found; temporary sprites will run through a frozen capture.", LogLevel.Trace);
+                return;
+            }
+            harmony.Patch(update, prefix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(TemporarySpriteUpdate_Prefix)));
+        }
+
+        internal static bool TemporarySpriteUpdate_Prefix(ref bool __result)
+        {
+            if (!Determinism.Frozen)
+                return true;
+            __result = false;
+            return false;
+        }
+
         internal static void UpdateWater_Postfix(GameLocation __instance)
         {
+            // The scroll is the game's motion, not ours, so a frozen render clock does not stop
+            // it: two dumps of one frozen frame at the beach differed across the whole sea, and
+            // the verification harness read that as a scene too unsteady to conclude anything
+            // from. While the clock is pinned the scroll is pinned with it, at the phase the
+            // frozen tick would have asked for, so the sea holds as still as everything else.
+            if (Determinism.Frozen)
+                __instance.waterPosition = 0f;
             if (!FreezeGameWater)
                 return;
             __instance.waterAnimationIndex = 0;

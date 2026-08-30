@@ -36,6 +36,52 @@ namespace SDVRadiance
         internal bool ReflectRTHasPlayer;   // player stamped this frame → the shader retires
                                             // its wading-silhouette fallback
 
+        /// <summary>Frames left to trace the entity mirror for (radiance_reflectwatch). Author
+        /// diagnostic for a reflection that comes and goes: one line per frame naming only what
+        /// CHANGED in what the bake decided - whether it ran, how many trees and bodies it stamped,
+        /// how many creatures drew themselves and how many of those came out empty, and the mask
+        /// window it asked. A steady scene prints one line and then a count of quiet frames.</summary>
+        internal static int ReflectWatchFrames;
+        private int _watchTreeStamps, _watchFlippedStamps;
+        private string? _watchReflectLastKey;
+        private int _watchReflectSteady;
+
+        private void ReportReflectWatch(string phase)
+        {
+            if (ReflectWatchFrames <= 0)
+                return;
+            ReflectWatchFrames--;
+            int empty = 0;
+            foreach (var bake in _selfDrawnMirrorBakes)
+                if (float.IsNaN(bake.Lift))
+                    empty++;
+            string key = $"{phase} water={_hasWaterInMask} ready={ReflectRTReady} spriteMask={SpriteMaskReady} "
+                + $"maskJob={(_pendingWaterMaskJob != null)} maskOrigin=({_lastWaterTileX},{_lastWaterTileY}) "
+                + $"trees={_watchTreeStamps} stamps={_watchFlippedStamps} "
+                + $"selfDrawn={_selfDrawnMirrorBakes.Count}/{_selfDrawnMirrorWanted.Count} empty={empty} "
+                + $"overflow={_selfDrawnMirrorOverflow} hookStamps={LocationDrawHook.Stamps.Count}";
+            if (key == _watchReflectLastKey)
+            {
+                _watchReflectSteady++;
+            }
+            else
+            {
+                if (_watchReflectSteady > 0)
+                    _monitor.Log($"[reflectwatch]   steady for {_watchReflectSteady} frame(s)", StardewModdingAPI.LogLevel.Info);
+                _watchReflectSteady = 0;
+                _monitor.Log($"[reflectwatch] view=({Game1.viewport.X / 64},{Game1.viewport.Y / 64}) {key}", StardewModdingAPI.LogLevel.Info);
+                _watchReflectLastKey = key;
+            }
+            if (ReflectWatchFrames == 0)
+            {
+                if (_watchReflectSteady > 0)
+                    _monitor.Log($"[reflectwatch]   steady for {_watchReflectSteady} frame(s)", StardewModdingAPI.LogLevel.Info);
+                _monitor.Log("[reflectwatch] done", StardewModdingAPI.LogLevel.Info);
+                _watchReflectLastKey = null;
+                _watchReflectSteady = 0;
+            }
+        }
+
         /// <summary>Bake the flipped-entity reflection layer for this frame. Called from
         /// Display.RenderingWorld right after the sprite mask bake (the only safe spot
         /// for render-target swaps).</summary>
@@ -108,7 +154,7 @@ namespace SDVRadiance
         /// each frame a creature is near water. Fields rather than locals so the frames where the
         /// bake actually runs - the busy ones - stop allocating two lists each.</summary>
         private readonly List<Character> _selfDrawnMirrorWanted = new();
-        private readonly List<(int Slot, Type Kind, Texture2D Sheet, Rectangle Frame)> _selfDrawnMirrorMeasured = new();
+        private readonly List<(int Slot, Character Who, Type Kind, Texture2D Sheet, Rectangle Frame)> _selfDrawnMirrorMeasured = new();
         /// <summary>Per type, whether its draw is its own. A type answers this the same way every
         /// time, and the answer costs a reflection lookup, so it is asked once.</summary>
         private static readonly Dictionary<Type, bool> PositionsItselfByType = new();
@@ -233,9 +279,11 @@ namespace SDVRadiance
 
         private void StampFarmerBake(SpriteBatch spriteBatch, Texture2D bake, Farmer who)
         {
-            Rectangle box = who.GetBoundingBox();
-            float feetY = box.Bottom - 10f + who.yOffset;
-            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, feetY));
+            // Hung from where the game drew the body, not from the collision box: seated, the
+            // whole yOffset put the mirror 48 px above the player (see FarmerDrawnAnchor).
+            Vector2 anchor = ShadowRenderer.FarmerDrawnAnchor(who);
+            float feetY = anchor.Y - 10f;
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(anchor.X, feetY));
             float depth = StampDepth(feetY);
             const int bandHeight = 16;
             int bands = ShadowRenderer.PlayerRtH / bandHeight;
@@ -394,7 +442,7 @@ namespace SDVRadiance
                     finally { Game1.spriteBatch = gameBatch; }
                     _selfDrawnMirrorBakes.Add((slot, contactWorldX, contactWorldY, float.NaN));
                     _selfDrawnMirrorTaken.Add(c);
-                    _selfDrawnMirrorMeasured.Add((slot, c.GetType(), c.Sprite.Texture, c.Sprite.SourceRect));
+                    _selfDrawnMirrorMeasured.Add((slot, c, c.GetType(), c.Sprite.Texture, c.Sprite.SourceRect));
                 }
             }
             finally
@@ -432,7 +480,7 @@ namespace SDVRadiance
         /// <summary>Fill in, for each slot baked this frame, how far above the slot's contact row
         /// the body it drew ends. Reads the target back only for a creature-and-sheet pair that has
         /// not been seen before; everything else is answered from the cache.</summary>
-        private void ResolveSelfDrawnContactLifts(List<(int Slot, Type Kind, Texture2D Sheet, Rectangle Frame)> measured)
+        private void ResolveSelfDrawnContactLifts(List<(int Slot, Character Who, Type Kind, Texture2D Sheet, Rectangle Frame)> measured)
         {
             var atlas = _selfDrawnMirrorAtlas;
             if (atlas == null)
@@ -440,13 +488,25 @@ namespace SDVRadiance
             int contactRow = SelfDrawnSlotHeight - SelfDrawnRowsBelowContact;
             for (int i = 0; i < measured.Count; i++)
             {
-                var (slot, kind, sheet, frame) = measured[i];
+                var (slot, who, kind, sheet, frame) = measured[i];
                 var key = (kind, sheet, frame);
                 if (!_selfDrawnContactLift.TryGetValue(key, out float lift))
                 {
                     lift = MeasureSlotContactLift(atlas, slot, contactRow);
-                    _selfDrawnContactLift[key] = lift;
+                    // An EMPTY slot is not remembered. The game's own NPC draw paints nothing for a
+                    // body more than two tiles off the screen, and the mask window this bake gathers
+                    // from reaches well past that, so a creature standing above the view came out
+                    // empty; remembered against its sheet and frame, that emptiness then hid every
+                    // creature of its kind on that frame of the walk for the rest of the session,
+                    // which reads as a reflection blinking with the animation. Measured again next
+                    // frame instead, and the frame it does draw is the one that is kept.
+                    if (!float.IsNaN(lift))
+                        _selfDrawnContactLift[key] = lift;
                 }
+                // Nothing drawn means nothing to turn over, so the built stamp has this body back
+                // for the frame: a reflection that is predicted is better than one that is missing.
+                if (float.IsNaN(lift))
+                    _selfDrawnMirrorTaken.Remove(who);
                 for (int b = 0; b < _selfDrawnMirrorBakes.Count; b++)
                 {
                     var bake = _selfDrawnMirrorBakes[b];
@@ -554,9 +614,14 @@ namespace SDVRadiance
         {
             ReflectRTReady = false;
             ReflectRTHasPlayer = false;
+            _watchTreeStamps = 0;
+            _watchFlippedStamps = 0;
             GameLocation? location = Game1.currentLocation;
             if (location == null || (!_hasWaterInMask && !_wetPuddleMirrorWanted) || Game1.game1.takingMapScreenshot)
+            {
+                ReportReflectWatch("skipped");
                 return;
+            }
 
             RenderTargetBinding[] prev = _device.GetRenderTargets();
             int w = prev.Length > 0 && prev[0].RenderTarget is RenderTarget2D rt ? rt.Width : Game1.viewport.Width;
@@ -616,6 +681,7 @@ namespace SDVRadiance
 
                 spriteBatch.End();
                 ReflectRTReady = true;
+                ReportReflectWatch("baked");
             }
             finally
             {
@@ -1076,20 +1142,35 @@ namespace SDVRadiance
                 {
                     // Grown tree: canopy 48×96 with the trunk base at tile*64+(32,64).
                     // Flipped: origin moves to the TOP of the source (24, 0).
-                    case StardewValley.TerrainFeatures.Tree tree when tree.growthStage.Value >= 5 && !tree.stump.Value && tree.texture?.Value != null:
+                    // The tree MOVES: the wind leans it, and the game turns it further while it is
+                    // being chopped. Both are a rotation about the point the origin already sits
+                    // on, so the mirror only has to carry the same angle - NEGATED, because a
+                    // reflection in a horizontal surface turns the opposite way. Without this the
+                    // water held a still tree beside a moving one, which is the one thing a mirror
+                    // may never do.
+                    // The gate is the game's own: a tree that has just been chopped is a stump AND
+                    // falling at the same time, and Tree.draw keeps drawing the whole tree for the
+                    // length of that fall. Refusing every stump took the reflection away the
+                    // instant the axe landed, so the tree toppled over an empty patch of water.
+                    case StardewValley.TerrainFeatures.Tree tree when tree.growthStage.Value >= 5 && (!tree.stump.Value || tree.falling.Value) && tree.texture?.Value != null:
+                        _watchTreeStamps++;
+                        float treeTurn = tree.shakeRotation + FoliageSway.TiltForTileBase(tile.X, tile.Y);
                         spriteBatch.Draw(tree.texture.Value,
                             Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
-                            ShadowRenderer.TreeCanopySourceRect(tree), Color.White, 0f, new Vector2(24f, 0f), 4f,
+                            ShadowRenderer.TreeCanopySourceRect(tree), Color.White, -treeTurn, new Vector2(24f, 0f), 4f,
                             SpriteEffects.FlipVertically | (tree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None),
                             StampDepth(tile.Y * 64f + 64f));
                         break;
                     // Mature fruit tree: 48×64 seasonal foliage, base at tile*64+(32,64).
-                    case StardewValley.TerrainFeatures.FruitTree ft when ft.growthStage.Value >= 4 && !ft.stump.Value && ft.texture != null:
+                    // Same gate and same turn as the wild tree above: FruitTree.draw carries its
+                    // canopy through the fall too, and shakes it while it goes.
+                    case StardewValley.TerrainFeatures.FruitTree ft when ft.growthStage.Value >= 4 && (!ft.stump.Value || ft.falling.Value) && ft.texture != null:
+                        _watchTreeStamps++;
                         int season = Game1.GetSeasonIndexForLocation(ft.Location);
                         var fsrc = new Rectangle((12 + season * 3) * 16, ft.GetSpriteRowNumber() * 5 * 16, 48, 64);
                         spriteBatch.Draw(ft.texture,
                             Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
-                            fsrc, Color.White, 0f, new Vector2(24f, fsrc.Height - 80f), 4f,
+                            fsrc, Color.White, -ft.shakeRotation, new Vector2(24f, fsrc.Height - 80f), 4f,
                             SpriteEffects.FlipVertically | (ft.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None),
                             StampDepth(tile.Y * 64f + 64f));
                         break;
@@ -1138,11 +1219,16 @@ namespace SDVRadiance
             {
                 if (bld?.texture?.Value == null || bld.isMoving || bld.daysOfConstructionLeft.Value > 0)
                     continue;
-                Rectangle bsrcRect = bld.getSourceRect();
+                bool fishPond = bld is StardewValley.Buildings.FishPond;
+                // FishPond.draw ignores the data's source rect and draws its 80x80 rim, so the
+                // mirror reads that same 80x80 rather than whatever the sheet's bounds are.
+                Rectangle bsrcRect = fishPond ? FishPondRimSourceRect : bld.getSourceRect();
                 if (bsrcRect.IsEmpty)
                     continue;
                 Vector2 bOffset = (bld.GetData()?.DrawOffset ?? Vector2.Zero) * 4f;
                 float bBaseY = (bld.tileY.Value + bld.tilesHigh.Value) * 64f + bOffset.Y;
+                if (fishPond)
+                    MirrorFishPondWall(spriteBatch, bld);
                 float bCentreX = bld.tileX.Value * 64f + bOffset.X + bsrcRect.Width * 2f;
                 // Reaches further than anything else here: a barn is six source tiles tall and
                 // the mirror stretches that again, so the water it can land on is a long way down.
@@ -1150,6 +1236,26 @@ namespace SDVRadiance
                     continue;
                 StampFlippedAt(spriteBatch, bld.texture.Value, bsrcRect, bCentreX, bBaseY, 0);
             }
+        }
+
+        /// <summary>FishPond.draw draws its rim from this rect whatever the sheet's bounds are, so
+        /// every stamp of a pond reads the same 80x80.</summary>
+        private static readonly Rectangle FishPondRimSourceRect = new Rectangle(0, 0, 80, 80);
+
+        /// <summary>The pond's own far wall, in the pond's own water. The scenery source has no
+        /// buildings in it, so the first row of a pond's mirror showed the ground under the rim; a
+        /// wall's inner face is what stands there. The top source row of the rim, flipped at the top
+        /// edge of the interior, on the entity layer, over whatever the landscape mirror puts
+        /// beneath it.</summary>
+        private void MirrorFishPondWall(SpriteBatch spriteBatch, StardewValley.Buildings.Building pond)
+        {
+            if (!WaterWithinTiles(pond.tileX.Value + 2, pond.tileY.Value + 2, 1))
+                return;
+            var wallRow = new Rectangle(0, 0, 80, 16);
+            // The painted water begins half a tile below the pond's top edge (FishPond.draw), and the
+            // mask's waterline sits there, so the wall's reflection hangs from the same line.
+            float waterTopY = pond.tileY.Value * 64f + 32f;
+            StampFlippedAt(spriteBatch, pond.texture.Value, wallRow, pond.tileX.Value * 64f + 160f, waterTopY, 0);
         }
 
         // The bank-edge / bridge anchor experiments (waterline glide, hang-from-edge,
@@ -1202,6 +1308,7 @@ namespace SDVRadiance
                 src.Height = Math.Max(1, src.Height - belowFeetRows);
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(centerX, feetY));
             float depth = StampDepth(feetY);
+            _watchFlippedStamps++;
             var origin = new Vector2(src.Width / 2f, 0f);
             var scale = new Vector2(4f, 4f * MirrorSquash);
             // A mirror in the surface turns the picture over, it does not turn it around, so a
@@ -1741,6 +1848,15 @@ namespace SDVRadiance
             report.AppendLine($"[reflect] location={Game1.currentLocation?.Name} waterAny={_hasWaterInMask} maskOrigin=({_lastWaterTileX},{_lastWaterTileY}) maskPx={_waterMask.Width}x{_waterMask.Height}");
             report.AppendLine($"[reflect] entityRT ready={ReflectRTReady} hasPlayer={ReflectRTHasPlayer} squash={MirrorSquash} | sceneRT ready={SceneRTReady} forcedOff={SceneSourceOff} | spriteMask ready={SpriteMaskReady}");
             report.AppendLine($"[reflect] wlAnchor={(_waterlineAnchorData != null ? $"built for {_waterlineAnchorData.Location?.Name} ({_waterlineAnchorData.PixelWidth}x{_waterlineAnchorData.PixelHeight})" : "none yet")}");
+            // Where the player's own stamp and exclusion box are hung from, and every offset the game
+            // could be drawing the body away from that: a seated farmer showed a rectangle of dead
+            // water a tile and a half over their head, and these numbers say which offset it was.
+            Rectangle playerBox = who.GetBoundingBox();
+            Vector2 playerDrawn = who.getLocalPosition(Game1.viewport);
+            report.AppendLine($"[reflect] player pos=({who.Position.X:0},{who.Position.Y:0}) box=({playerBox.X},{playerBox.Y},{playerBox.Width},{playerBox.Height}) "
+                + $"drawOffset=({who.drawOffset.X:0},{who.drawOffset.Y:0}) yOffset={who.yOffset:0} yJump={who.yJumpOffset} "
+                + $"sitting={who.IsSitting()} chairSit=({who.mapChairSitPosition.Value.X:0.##},{who.mapChairSitPosition.Value.Y:0.##}) "
+                + $"drawnLocal=({playerDrawn.X:0},{playerDrawn.Y:0}) boxBottomLocal={Game1.GlobalToLocal(Game1.viewport, new Vector2(playerBox.Center.X, playerBox.Bottom)).Y:0}");
 
             Rectangle box = who.GetBoundingBox();
             for (int t = 0; t <= 4; t++)

@@ -69,6 +69,13 @@ ALL_OFF = {
     "WindowEffectsEnabled": False, "WindowBeamEnabled": False, "BlueLightFilter": 0.0,
 }
 
+# Every switch 1.7.0 added, off, plus flood as the GI model. The 1.7.0 rows build on this so
+# each measures one feature against the same floor regardless of what the player runs with.
+FLOOR_170 = {
+    "SpriteReliefEnabled": False, "FoliageSwayEnabled": False, "SheetUpscaleEnabled": False,
+    "FloodGiModel": "Flood", "AuroraEnabled": False, "ShootingStarsEnabled": False,
+}
+
 CONFIGS = {
     # As the player has it. The number every other row is measured against.
     "full": {},
@@ -128,6 +135,24 @@ CONFIGS = {
     # Render scale on its own, so the presets' biggest lever can be told apart from their
     # feature cuts. Fill is quadratic in this number and nothing else here is.
     "half-scale": {"RenderScale": 0.5, "RenderScaleAuto": False},
+
+    # ---- 1.7.0. Each row is the FLOOR below plus exactly one feature, not a delta on the
+    # player's config: the first run of these was built on {} and measured nothing, because the
+    # author's own config already had relief, cascades and sway switched on, so three of the
+    # rows were the same file twice. The floor states every 1.7.0 switch, so a row means the
+    # same thing whatever config.json holds. Day scene list on purpose - relief and sway live
+    # on crops and trees, which the weather list never visits.
+    "base-170": dict(FLOOR_170),
+    "relief-on": dict(FLOOR_170, SpriteReliefEnabled=True),
+    "sway-on": dict(FLOOR_170, FoliageSwayEnabled=True),
+    "upscale-on": dict(FLOOR_170, SheetUpscaleEnabled=True),
+    # A swap, not a switch: this row prices cascades AGAINST flood.
+    "cascades": dict(FLOOR_170, FloodGiModel="Cascades"),
+    # The night-sky pair; only town-night can see it.
+    "sky-on": dict(FLOOR_170, AuroraEnabled=True, ShootingStarsEnabled=True),
+    "all-170": {"SpriteReliefEnabled": True, "FoliageSwayEnabled": True,
+                "SheetUpscaleEnabled": True, "FloodGiModel": "Cascades",
+                "AuroraEnabled": True, "ShootingStarsEnabled": True},
 }
 
 # The 1.6.0 rows are about weather, so they get the weather scene list.
@@ -214,6 +239,48 @@ def load_save():
     raise RuntimeError("save never finished loading")
 
 
+def clear_the_way(rounds=6):
+    """Get past whatever is on screen, and prove it with a warp.
+
+    A save does not hand you a farmer standing in a field: it can open on a cutscene, a letter,
+    the morning message, or an NPC greeting, and any of those swallows the warp that follows.
+    The bench then measures the room it never left and files the numbers under the scene it was
+    asked for. Marnie saying hello is what caught this.
+
+    `clear` takes menus and boxes; `debug EndEvent` skips a running event and warns harmlessly
+    when there is none. Both are repeated, because an event can hand straight over to a letter.
+    The proof is the WARP, not the absence of a complaint: ask to be moved and read back where
+    the game says it is.
+    """
+    for attempt in range(rounds):
+        try:
+            rpc("clear", timeout=30)
+            rpc("console", {"command": "debug EndEvent"}, timeout=60)
+            time.sleep(1.5)
+            rpc("goto", {"location": "Farm", "x": 64, "y": 17}, timeout=150)
+            time.sleep(1.5)
+            where = rpc("state", timeout=30).get("result", {}).get("location")
+        except Exception as exc:
+            print(f"  clearing the way: {exc}", flush=True)
+            continue
+        if where == "Farm":
+            if attempt:
+                print(f"  cleared the way after {attempt + 1} rounds", flush=True)
+            return True
+        print(f"  something is still holding the screen (still in {where}), trying again", flush=True)
+    print("  COULD NOT CLEAR THE SCREEN - measurements after this cannot be trusted", flush=True)
+    return False
+
+
+def shake_off_dialogue():
+    """Cheap version for between scenes: a greeting can start at any warp."""
+    try:
+        rpc("clear", timeout=30)
+        rpc("console", {"command": "debug EndEvent"}, timeout=60)
+    except Exception:
+        pass
+
+
 # FrameCost.Describe writes "  <name padded to 26>  avg  0.412 ms   worst  1.900 ms".
 COST_LINE = re.compile(r"^\s+(\S.*?)\s+avg\s+([\d.]+) ms\s+worst\s+([\d.]+) ms\s*$", re.M)
 
@@ -270,6 +337,7 @@ def measure(cfg_name, base):
         print(f"  bridge never came up for {cfg_name}")
         return {}
     load_save()
+    clear_the_way()
     try:
         # Uncapped, or the whole-frame row is 16.67 ms in every config and the benchmark cannot
         # see the GPU cost it exists to find.
@@ -281,6 +349,9 @@ def measure(cfg_name, base):
     scenes = WEATHER_SCENES if cfg_name in WEATHER_CONFIGS else SCENES
     for scene, loc, x, y, tod, weather in scenes:
         try:
+            # An NPC can start talking the moment you land, and a dialogue box up
+            # during a measurement is a different frame from the one being asked about.
+            shake_off_dialogue()
             rpc("goto", {"location": loc, "x": x, "y": y}, timeout=120)
             # Re-assert uncapped every scene. Asking once at the start is not enough: a run came
             # back with all five scenes at exactly 5.55 ms, which is a refresh cap and not a
@@ -293,6 +364,7 @@ def measure(cfg_name, base):
             # is set every scene: the previous scene's storm does not follow you to the beach,
             # and a scene that wants a clear sky has to say so rather than inherit one.
             rpc("console", {"command": "radiance_weather " + (weather or "sun")}, timeout=60)
+            shake_off_dialogue()
             time.sleep(SETTLE_SECONDS)
             # The bridge hands the command to SMAPI's queue and returns before it has run, so
             # "the call succeeded" says nothing about the file. Wait for the WRITE instead, or
@@ -339,9 +411,24 @@ def main():
     args = ap.parse_args()
     wanted = args.config or list(CONFIGS)
 
-    base = json.load(open(CONFIG, encoding="utf-8"))
     backup = CONFIG + ".perfbench-backup"
-    shutil.copy2(CONFIG, backup)
+    # A backup already here means the LAST run died before its finally block, so config.json
+    # is that run's bench config and not the player's. Taking it as the base spreads a
+    # switched-off mod through every row, and copying over the backup destroys the only
+    # surviving copy of the real settings. That happened on 2026-08-30 and cost the author
+    # twenty-one tuned switches: the run reported "the mod never ran a frame" for every scene
+    # of every config, which is at least loud, but the settings were already gone by then.
+    if os.path.exists(backup):
+        print("a previous run did not finish: restoring config.json from its backup first")
+        shutil.copy2(backup, CONFIG)
+    else:
+        shutil.copy2(CONFIG, backup)
+
+    base = json.load(open(CONFIG, encoding="utf-8"))
+    if base.get("Enabled") is False:
+        raise SystemExit(
+            "config.json says Enabled=false, so nothing can be measured from it. "
+            "Turn the mod back on, or delete the key to take the shipped default, and re-run.")
     all_results, all_frames = {}, {}
     try:
         for name in wanted:

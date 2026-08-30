@@ -198,6 +198,21 @@ namespace SDVRadiance
         /// separate the several ways "I see nothing" can be true: the system off, the presence
         /// still fading in, an empty pool, a full pool nobody can see, or particles drawn into a
         /// target that never reached the screen.</summary>
+        /// <summary>The feet as world tiles, so "mist in the wrong place" is a coordinate to
+        /// stand on instead of a guess.</summary>
+        private string MistFeetTiles()
+        {
+            if (_mistFeet.Count == 0)
+                return "";
+            var parts = new System.Text.StringBuilder("[");
+            for (int i = 0; i < _mistFeet.Count; i++)
+            {
+                if (i > 0) parts.Append(' ');
+                parts.Append((int)(_mistFeet[i].X / 64f)).Append(',').Append((int)(_mistFeet[i].Y / 64f));
+            }
+            return parts.Append(']').ToString();
+        }
+
         internal string ParticleDiag()
         {
             if (_particles == null)
@@ -212,6 +227,7 @@ namespace SDVRadiance
                  + $"drawn ambient={_particleAmbientDrawn} emissive={_particleEmissiveDrawn} "
                  + $"refused={_particles.SpawnsRefused} atlas={(_particles.AtlasReady ? "built" : "MISSING")} "
                  + $"dustWindows={_dustWindowsLit} emberFires={_emberFiresLit} (biggest {ParticleEmberBiggestFire}) "
+                 + $"mistFeet={_mistFeet.Count}{MistFeetTiles()} steamTiles={_steamTiles.Count} lavaTiles={_lavaTiles.Count} "
                  + $"fireflies={(_firefliesFlying ? "flying" : "not tonight")} "
                  + $"blossom={(_blossomFalling ? "falling" : "not today")} "
                  + $"ringSparkles={(_ringSparkling ? "on" : "no ring")} carried[{ParticleCarriedFlame}] "

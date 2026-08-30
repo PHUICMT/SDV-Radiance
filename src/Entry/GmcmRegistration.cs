@@ -55,6 +55,7 @@ namespace SDVRadiance
             RegisterWindowsPage(api, manifest, i18n, config);
             RegisterShadowsPage(api, manifest, i18n, config);
             RegisterCameraPage(api, manifest, i18n, config);
+            RegisterSmoothingPage(api, manifest, i18n, config);
             RegisterPerformancePage(api, manifest, i18n, config);
             RegisterMiscPage(api, manifest, i18n, config, helper, monitor, getPipeline);
         }
@@ -99,6 +100,7 @@ namespace SDVRadiance
             api.AddPageLink(manifest, "colorgrade", () => i18n("config.section.colorgrade"));
             api.AddPageLink(manifest, "bloom", () => i18n("config.section.bloom"));
             api.AddPageLink(manifest, "lens", () => i18n("config.section.lens"));
+            api.AddPageLink(manifest, "smoothing", () => i18n("tuner.tab.smoothing"));
             api.AddPageLink(manifest, "lighting", () => i18n("config.section.lighting"));
             api.AddPageLink(manifest, "windows", () => i18n("config.section.windows"));
             api.AddPageLink(manifest, "shadows", () => i18n("config.section.shadows"));
@@ -124,6 +126,9 @@ namespace SDVRadiance
                 () => i18n("config.bloom.threshold.name"), null, 0f, 1f, 0.05f);
             api.AddNumberOption(manifest, () => config().BloomIntensity, v => config().BloomIntensity = v,
                 () => i18n("config.bloom.intensity.name"), null, 0f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().BloomEmissiveBoost, v => config().BloomEmissiveBoost = v,
+                () => i18n("config.bloom.emissiveboost.name"),
+                () => i18n("config.bloom.emissiveboost.tooltip"), 0f, 1f, 0.05f);
 
             // --- Color grading (implemented) ---
         }
@@ -190,11 +195,7 @@ namespace SDVRadiance
             api.AddBoolOption(manifest, () => config().GodRaysEnabled, v => config().GodRaysEnabled = v,
                 () => i18n("config.godrays.enabled.name"), () => i18n("config.godrays.enabled.tooltip"));
             api.AddNumberOption(manifest, () => config().GodRaysIntensity, v => config().GodRaysIntensity = v,
-                () => i18n("config.godrays.intensity.name"), null, 0f, 1.5f, 0.05f);
-            api.AddNumberOption(manifest, () => config().GodRaysThreshold, v => config().GodRaysThreshold = v,
-                () => i18n("config.godrays.threshold.name"), null, 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().GodRaysDensity, v => config().GodRaysDensity = v,
-                () => i18n("config.godrays.density.name"), null, 0.1f, 1f, 0.05f);
+                () => i18n("config.godrays.intensity.name"), null, 0f, 2f, 0.05f);
             api.AddSectionTitle(manifest, () => i18n("config.godrays.sectionsun"));
             api.AddBoolOption(manifest, () => config().GodRaysSun, v => config().GodRaysSun = v,
                 () => i18n("config.godrays.sun.name"), () => i18n("config.godrays.sun.tooltip"));
@@ -202,12 +203,6 @@ namespace SDVRadiance
                 () => i18n("config.godrays.sunintensity.name"), () => i18n("config.godrays.sunintensity.tooltip"), 0f, 1.5f, 0.05f);
             api.AddNumberOption(manifest, () => config().GodRaysSunReach, v => config().GodRaysSunReach = v,
                 () => i18n("config.godrays.sunreach.name"), () => i18n("config.godrays.sunreach.tooltip"), 0.1f, 1f, 0.05f);
-            // Falloff is set once for the whole light loop, so it shapes the lamp streaks and the
-            // sun's dapple alike. Its own heading rather than a place in either section above,
-            // because a shared dial filed under one of them claims to belong to that one.
-            api.AddSectionTitle(manifest, () => i18n("config.godrays.sectionboth"));
-            api.AddNumberOption(manifest, () => config().GodRaysDecay, v => config().GodRaysDecay = v,
-                () => i18n("config.godrays.decay.name"), () => i18n("config.godrays.decay.tooltip"), 0.5f, 0.99f, 0.01f);
 
             // --- Volumetric fog (implemented) ---
         }
@@ -239,6 +234,11 @@ namespace SDVRadiance
                 () => i18n("config.fog.topbias.name"), () => i18n("config.fog.topbias.tooltip"), 0f, 1f, 0.05f);
             api.AddNumberOption(manifest, () => config().FogNightMistSpeed, v => config().FogNightMistSpeed = v,
                 () => i18n("config.fog.nightmistspeed.name"), null, 0f, 0.1f, 0.002f);
+            api.AddSectionTitle(manifest, () => i18n("config.heathaze.name"));
+            api.AddBoolOption(manifest, () => config().HeatHazeEnabled, v => config().HeatHazeEnabled = v,
+                () => i18n("config.heathaze.name"), () => i18n("config.heathaze.tooltip"));
+            api.AddNumberOption(manifest, () => config().HeatHazeStrength, v => config().HeatHazeStrength = v,
+                () => i18n("config.heathaze.strength.name"), () => i18n("config.heathaze.strength.tooltip"), 0f, 2f, 0.05f);
 
             // --- Cloud shadows (implemented) ---
         }
@@ -247,6 +247,20 @@ namespace SDVRadiance
         private static void RegisterWeatherPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
         {
             api.AddPage(manifest, "weather", () => i18n("config.section.weather"));
+            api.AddBoolOption(manifest, () => config().AuroraEnabled, v => config().AuroraEnabled = v,
+                () => i18n("config.weather.aurora.name"), () => i18n("config.weather.aurora.tooltip"));
+            api.AddNumberOption(manifest, () => config().AuroraStrength, v => config().AuroraStrength = v,
+                () => i18n("config.weather.aurorastrength.name"), () => i18n("config.weather.aurorastrength.tooltip"), 0f, 2f, 0.1f);
+            api.AddBoolOption(manifest, () => config().ShootingStarsEnabled, v => config().ShootingStarsEnabled = v,
+                () => i18n("config.weather.shootingstars.name"), () => i18n("config.weather.shootingstars.tooltip"));
+            api.AddBoolOption(manifest, () => config().FoliageSwayEnabled, v => config().FoliageSwayEnabled = v,
+                () => i18n("config.weather.foliagesway.name"), () => i18n("config.weather.foliagesway.tooltip"));
+            api.AddNumberOption(manifest, () => config().FoliageSwayStrength, v => config().FoliageSwayStrength = v,
+                () => i18n("config.weather.foliageswaystrength.name"), () => i18n("config.weather.foliageswaystrength.tooltip"), 0f, 2f, 0.1f);
+            api.AddNumberOption(manifest, () => config().FoliageSwaySpeed, v => config().FoliageSwaySpeed = v,
+                () => i18n("config.weather.foliageswayspeed.name"), () => i18n("config.weather.foliageswayspeed.tooltip"), 0.25f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().FoliageSwayGustSpan, v => config().FoliageSwayGustSpan = v,
+                () => i18n("config.weather.foliageswaygustspan.name"), () => i18n("config.weather.foliageswaygustspan.tooltip"), 4f, 40f, 1f);
             api.AddBoolOption(manifest, () => config().PrecipitationEnabled, v => config().PrecipitationEnabled = v,
                 () => i18n("config.precipitation.enabled.name"), () => i18n("config.precipitation.enabled.tooltip"));
             api.AddSectionTitle(manifest, () => i18n("config.precipitation.rain.name"));
@@ -332,6 +346,18 @@ namespace SDVRadiance
                 () => config().ParticleRingSparkles, v => config().ParticleRingSparkles = v,
                 () => config().ParticleRingSparklesAmount, v => config().ParticleRingSparklesAmount = v,
                 () => config().ParticleRingSparklesSize, v => config().ParticleRingSparklesSize = v);
+            AddParticleEmitter(api, manifest, i18n, "waterfallmist",
+                () => config().ParticleWaterfallMist, v => config().ParticleWaterfallMist = v,
+                () => config().ParticleWaterfallMistAmount, v => config().ParticleWaterfallMistAmount = v,
+                () => config().ParticleWaterfallMistSize, v => config().ParticleWaterfallMistSize = v);
+            AddParticleEmitter(api, manifest, i18n, "hotspringsteam",
+                () => config().ParticleHotSpringSteam, v => config().ParticleHotSpringSteam = v,
+                () => config().ParticleHotSpringSteamAmount, v => config().ParticleHotSpringSteamAmount = v,
+                () => config().ParticleHotSpringSteamSize, v => config().ParticleHotSpringSteamSize = v);
+            AddParticleEmitter(api, manifest, i18n, "lavasparks",
+                () => config().ParticleLavaSparks, v => config().ParticleLavaSparks = v,
+                () => config().ParticleLavaSparksAmount, v => config().ParticleLavaSparksAmount = v,
+                () => config().ParticleLavaSparksSize, v => config().ParticleLavaSparksSize = v);
 
             // --- Cloud shadows (implemented) ---
         }
@@ -401,6 +427,8 @@ namespace SDVRadiance
                 () => i18n("config.tiltshift.top.name"), null, 0f, 1f, 0.05f);
             api.AddNumberOption(manifest, () => config().TiltShiftBottomRatio, v => config().TiltShiftBottomRatio = v,
                 () => i18n("config.tiltshift.bottom.name"), null, 0f, 1f, 0.05f);
+            api.AddNumberOption(manifest, () => config().TiltShiftIndoorAmount, v => config().TiltShiftIndoorAmount = v,
+                () => i18n("config.tiltshift.indoor.name"), () => i18n("config.tiltshift.indoor.tooltip"), 0f, 1f, 0.05f);
             api.AddSectionTitle(manifest, () => i18n("config.section.finishing"));
             api.AddBoolOption(manifest, () => config().VignetteEnabled, v => config().VignetteEnabled = v,
                 () => i18n("config.vignette.enabled.name"), () => i18n("config.vignette.enabled.tooltip"));
@@ -522,10 +550,32 @@ namespace SDVRadiance
             api.AddPage(manifest, "lighting", () => i18n("config.section.lighting"));
             api.AddBoolOption(manifest, () => config().FloodLightingEnabled, v => config().FloodLightingEnabled = v,
                 () => i18n("config.lighting.flood.name"), () => i18n("config.lighting.flood.tooltip"));
+            api.AddTextOption(manifest,
+                () => config().FloodGiModel.ToString(),
+                v => config().FloodGiModel = Enum.TryParse<GiModel>(v, out var model) ? model : GiModel.Flood,
+                () => i18n("config.lighting.gimodel.name"), () => i18n("config.lighting.gimodel.tooltip"),
+                new[] { nameof(GiModel.Flood), nameof(GiModel.Cascades) },
+                v => i18n($"config.lighting.gimodel.{v.ToLowerInvariant()}"));
+            api.AddBoolOption(manifest, () => config().SpriteReliefEnabled, v => config().SpriteReliefEnabled = v,
+                () => i18n("config.lighting.relief.name"), () => i18n("config.lighting.relief.tooltip"));
+            api.AddNumberOption(manifest, () => config().SpriteReliefStrength, v => config().SpriteReliefStrength = v,
+                () => i18n("config.lighting.reliefstrength.name"), () => i18n("config.lighting.reliefstrength.tooltip"), 0f, 1f, 0.05f);
+            api.AddNumberOption(manifest, () => config().SpriteReliefSun, v => config().SpriteReliefSun = v,
+                () => i18n("config.lighting.reliefsun.name"), () => i18n("config.lighting.reliefsun.tooltip"), 0f, 1f, 0.05f);
+            api.AddNumberOption(manifest, () => config().SpriteReliefRim, v => config().SpriteReliefRim = v,
+                () => i18n("config.lighting.reliefrim.name"), () => i18n("config.lighting.reliefrim.tooltip"), 0f, 1f, 0.05f);
+            api.AddNumberOption(manifest, () => config().SpriteReliefLeafShimmer, v => config().SpriteReliefLeafShimmer = v,
+                () => i18n("config.lighting.leafshimmer.name"), () => i18n("config.lighting.leafshimmer.tooltip"), 0f, 1f, 0.05f);
             api.AddNumberOption(manifest, () => config().FloodLightingStrength, v => config().FloodLightingStrength = v,
                 () => i18n("config.lighting.floodstrength.name"), () => i18n("config.lighting.floodstrength.tooltip"), 0f, 1f, 0.05f);
+            api.AddNumberOption(manifest, () => config().FloodColourBleed, v => config().FloodColourBleed = v,
+                () => i18n("config.lighting.colourbleed.name"), () => i18n("config.lighting.colourbleed.tooltip"), 0f, 1f, 0.05f);
             api.AddNumberOption(manifest, () => config().FloodShadowStrength, v => config().FloodShadowStrength = v,
                 () => i18n("config.lighting.floodshadow.name"), () => i18n("config.lighting.floodshadow.tooltip"), 0f, 1f, 0.05f);
+            api.AddNumberOption(manifest, () => config().LightShadowCarve, v => config().LightShadowCarve = v,
+                () => i18n("config.lighting.shadowcarve.name"), () => i18n("config.lighting.shadowcarve.tooltip"), 0f, 1f, 0.05f);
+            api.AddNumberOption(manifest, () => config().LightShadowSoftness, v => config().LightShadowSoftness = v,
+                () => i18n("config.lighting.shadowsoftness.name"), () => i18n("config.lighting.shadowsoftness.tooltip"), 0f, 2f, 0.05f);
             api.AddBoolOption(manifest, () => config().LightingEnabled, v => config().LightingEnabled = v,
                 () => i18n("config.lighting.enabled.name"), () => i18n("config.lighting.enabled.tooltip"));
             api.AddNumberOption(manifest, () => config().LightingIndoorDarkness, v => config().LightingIndoorDarkness = v,
@@ -544,6 +594,10 @@ namespace SDVRadiance
                 () => i18n("config.lighting.shadows.name"), () => i18n("config.lighting.shadows.tooltip"));
             api.AddNumberOption(manifest, () => config().LightingShadowStrength, v => config().LightingShadowStrength = v,
                 () => i18n("config.lighting.shadowstrength.name"), null, 0f, 1f, 0.05f);
+            api.AddBoolOption(manifest, () => config().LightShadowSilhouettes, v => config().LightShadowSilhouettes = v,
+                () => i18n("config.lighting.silhouettes.name"), () => i18n("config.lighting.silhouettes.tooltip"));
+            api.AddBoolOption(manifest, () => config().LightShadowProps, v => config().LightShadowProps = v,
+                () => i18n("config.lighting.props.name"), () => i18n("config.lighting.props.tooltip"));
 
             // --- Directional sprite shadows ---
         }
@@ -563,6 +617,9 @@ namespace SDVRadiance
                 () => i18n("config.lighting.windoweffects.name"), () => i18n("config.lighting.windoweffects.tooltip"));
             api.AddBoolOption(manifest, () => config().WindowBeamEnabled, v => config().WindowBeamEnabled = v,
                 () => i18n("config.lighting.windowbeam.name"), () => i18n("config.lighting.windowbeam.tooltip"));
+            api.AddNumberOption(manifest, () => config().WindowDaylightStrength, v => config().WindowDaylightStrength = v,
+                () => i18n("config.lighting.windowdaylightstrength.name"),
+                () => i18n("config.lighting.windowdaylightstrength.tooltip"), 0f, 2f, 0.05f);
             api.AddSectionTitle(manifest, () => i18n("config.windows.sectionreflection"));
             api.AddBoolOption(manifest, () => config().WindowReflectionEnabled, v => config().WindowReflectionEnabled = v,
                 () => i18n("config.lighting.windowreflection.name"), () => i18n("config.lighting.windowreflection.tooltip"));
@@ -604,10 +661,20 @@ namespace SDVRadiance
             api.AddPage(manifest, "shadows", () => i18n("config.section.shadows"));
             api.AddBoolOption(manifest, () => config().DirectionalShadowsEnabled, v => config().DirectionalShadowsEnabled = v,
                 () => i18n("config.shadows.enabled.name"), () => i18n("config.shadows.enabled.tooltip"));
+            // Which shapes, named by the version each shipped in, exactly as the water is.
+            api.AddTextOption(manifest,
+                () => config().DirectionalShadowModel.ToString(),
+                v => config().DirectionalShadowModel = Enum.TryParse<ShadowModel>(v, out var model) ? model : ShadowModel.Modern,
+                () => i18n("config.shadows.model.name"), () => i18n("config.shadows.model.tooltip"),
+                new[] { nameof(ShadowModel.Modern), nameof(ShadowModel.Classic) },
+                v => i18n($"config.shadows.model.{v.ToLowerInvariant()}"));
             api.AddNumberOption(manifest, () => config().DirectionalShadowStrength, v => config().DirectionalShadowStrength = v,
                 () => i18n("config.shadows.strength.name"), null, 0f, 1f, 0.05f);
             api.AddNumberOption(manifest, () => config().DirectionalShadowLength, v => config().DirectionalShadowLength = v,
                 () => i18n("config.shadows.length.name"), null, 0.2f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().GoldenHourStrength, v => config().GoldenHourStrength = v,
+                () => i18n("config.shadows.goldenhour.name"),
+                () => i18n("config.shadows.goldenhour.tooltip"), 0f, 1f, 0.05f);
             api.AddNumberOption(manifest, () => config().DirectionalShadowBlur, v => config().DirectionalShadowBlur = v,
                 () => i18n("config.shadows.blur.name"), null, 0f, 5f, 0.5f);
             api.AddBoolOption(manifest, () => config().DirectionalShadowObjects, v => config().DirectionalShadowObjects = v,
@@ -686,6 +753,26 @@ namespace SDVRadiance
                 () => i18n("config.rendersharpness.name"), () => i18n("config.rendersharpness.tooltip"), 0f, 2f, 0.1f);
 
             // --- Misc page: hotkeys + diagnostics + roadmap ---
+        }
+
+        /// <summary>The Scale2x doubling: how far it goes and which art families it touches.
+        /// Its own page, mirroring the tuner's own tab, because it stopped being one switch.</summary>
+        private static void RegisterSmoothingPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        {
+            api.AddPage(manifest, "smoothing", () => i18n("tuner.tab.smoothing"));
+            api.AddBoolOption(manifest, () => config().SheetUpscaleEnabled, v => config().SheetUpscaleEnabled = v,
+                () => i18n("config.sheetupscale.name"), () => i18n("config.sheetupscale.tooltip"));
+            api.AddNumberOption(manifest, () => config().SheetUpscaleSmoothness, v => config().SheetUpscaleSmoothness = v,
+                () => i18n("config.sheetupscalesmoothness.name"), () => i18n("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
+            api.AddSectionTitle(manifest, () => i18n("tuner.section.smoothingfamilies"));
+            api.AddBoolOption(manifest, () => config().SheetUpscaleWorld, v => config().SheetUpscaleWorld = v,
+                () => i18n("config.sheetupscaleworld.name"), () => i18n("config.sheetupscaleworld.tooltip"));
+            api.AddBoolOption(manifest, () => config().SheetUpscaleCharacters, v => config().SheetUpscaleCharacters = v,
+                () => i18n("config.sheetupscalecharacters.name"), () => i18n("config.sheetupscalecharacters.tooltip"));
+            api.AddBoolOption(manifest, () => config().SheetUpscalePortraits, v => config().SheetUpscalePortraits = v,
+                () => i18n("config.sheetupscaleportraits.name"), () => i18n("config.sheetupscaleportraits.tooltip"));
+            api.AddBoolOption(manifest, () => config().SheetUpscaleInterface, v => config().SheetUpscaleInterface = v,
+                () => i18n("config.sheetupscaleinterface.name"), () => i18n("config.sheetupscaleinterface.tooltip"));
         }
 
         /// <summary>Hotkeys, the debug switches, and the roadmap section.</summary>

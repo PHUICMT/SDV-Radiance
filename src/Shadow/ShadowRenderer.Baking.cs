@@ -738,6 +738,10 @@ namespace SDVRadiance
         /// <summary>Sun (or moon, after dark) angle → shadow lean (radians), length stretch,
         /// and base opacity. The moon crosses the sky over the night like the sun does over
         /// the day; its shadows are much fainter and scale with the lunar phase.</summary>
+        /// <summary>The golden-hour dial, captured once per frame by ModEntry because
+        /// <see cref="ComputeSun"/> is static and has no config within reach.</summary>
+        internal static float GoldenHourStrengthNow;
+
         private static void ComputeSun(out float rot, out float stretch, out float alpha)
         {
             // Continuous minutes: the raw HHMM value made the angle lurch once per tick
@@ -766,6 +770,12 @@ namespace SDVRadiance
             // upright (not the rejected upside-down flip).
             rot = 1.15f * sunSkyOffset;                                     // <0 morning lean-left, >0 evening lean-right
             stretch = MathHelper.Lerp(0.3f, 1.2f, Math.Abs(sunSkyOffset));  // stretched LONG when the sun is low
+            // Golden hour: the true edges of the day stretch further still. Quartic in the
+            // offset, so noon and mid-afternoon feel nothing and only a genuinely low sun
+            // goes long; every consumer of this method (characters, objects, the window
+            // daylight patch) inherits it, which is what keeps the parity rule intact.
+            float lowSunEdge = sunSkyOffset * sunSkyOffset * sunSkyOffset * sunSkyOffset;
+            stretch *= 1f + GoldenHourStrengthNow * 1.3f * lowSunEdge;
             alpha = 0.9f * TimeFade();                           // opacity at the feet (× strength; fades toward the tip)
             // A lightning strike momentarily overrides both branches: every bake and draw path
             // funnels through this method, so keying it here keys every shadow at once.

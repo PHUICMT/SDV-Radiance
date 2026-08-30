@@ -79,6 +79,9 @@ namespace SDVRadiance
             // ---- presence fades ----
             public GameLocation? FadeLocation;
             public float FadeWater, FadeCloud, FadeLighting, FadeFlood, FadeTilt;
+            /// <summary>Per screen because it follows the location, and two players can be on
+            /// opposite sides of a door.</summary>
+            public float TiltIndoorEase;
 
             // ---- auto-exposure meter, and the eases that follow the room ----
             // Two screens in two rooms dragged one exposure between two targets, which scales the
@@ -96,6 +99,9 @@ namespace SDVRadiance
 
             // ---- bounce-light grid ----
             public FloodLightmap Flood = new();
+            public RadianceCascades Cascades = new();
+            public float CascadeBlend;
+            public bool CascadesReady;
 
             public void Release()
             {
@@ -198,6 +204,7 @@ namespace SDVRadiance
             s.FadeLighting = _fadeLighting;
             s.FadeFlood = _fadeFlood;
             s.FadeTilt = _fadeTilt;
+            s.TiltIndoorEase = _tiltIndoorEase;
 
             s.LuminanceTarget = _luminanceRenderTarget;
             s.LuminancePixels = _luminancePixels;
@@ -214,6 +221,9 @@ namespace SDVRadiance
             s.FadeWet = _fadeWet;
 
             s.Flood = _flood;
+            s.Cascades = _cascades;
+            s.CascadeBlend = _cascadeBlend;
+            s.CascadesReady = _cascadesReady;
         }
 
         private void LoadScreenState(ScreenState s)
@@ -271,6 +281,7 @@ namespace SDVRadiance
             _fadeLighting = s.FadeLighting;
             _fadeFlood = s.FadeFlood;
             _fadeTilt = s.FadeTilt;
+            _tiltIndoorEase = s.TiltIndoorEase;
 
             _luminanceRenderTarget = s.LuminanceTarget;
             _luminancePixels = s.LuminancePixels;
@@ -287,6 +298,9 @@ namespace SDVRadiance
             _fadeWet = s.FadeWet;
 
             _flood = s.Flood;
+            _cascades = s.Cascades;
+            _cascadeBlend = s.CascadeBlend;
+            _cascadesReady = s.CascadesReady;
 
             // The player colour bake runs before this screen's chain gets a look at the frame and
             // gates on this flag. It used to hold whichever screen answered last, so a player on a

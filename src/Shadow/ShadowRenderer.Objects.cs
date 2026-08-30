@@ -461,7 +461,15 @@ namespace SDVRadiance
             }
             _groundForeshortening = config.ShadowGroundForeshortening;
             _characterGroundForeshortening = config.ShadowCharacterGroundForeshortening;
+            _shadowModel = config.DirectionalShadowModel;
         }
+
+        /// <summary>Which shape this frame's shadows are. Read once per pass beside the rest of the
+        /// per-frame tuning, so the draw never reaches for the config.</summary>
+        private ShadowModel _shadowModel = ShadowModel.Modern;
+
+        /// <summary>True while the 1.6 shapes are chosen.</summary>
+        private bool ClassicShadowShapes => _shadowModel == ShadowModel.Classic;
 
         /// <summary>This caster's own reach: its kind's ceiling, scaled by the overall length slider.
         ///
@@ -753,7 +761,10 @@ namespace SDVRadiance
                     // Trees are tall → damp the lean so the canopy shadow stays rooted at the
                     // trunk (its vanilla contact blob is kept to fill the base). Bushes are
                     // short → full lean, matching the character direction, blob suppressed.
-                    case Tree tree when tree.growthStage.Value >= 5 && !tree.stump.Value && tree.texture?.Value != null:
+                    // The game's own gate: a tree being chopped is a stump AND falling, and it is
+                    // drawn whole for the length of that fall, so a canopy shadow that stops at
+                    // the axe stroke leaves the toppling tree casting a sapling's stub.
+                    case Tree tree when tree.growthStage.Value >= 5 && (!tree.stump.Value || tree.falling.Value) && tree.texture?.Value != null:
                         DrawTreeShadow(spriteBatch, tree, tile, LeanOf(rot, ShadowKind.Trees), LengthOf(stretch, ShadowKind.Trees), alpha,
                             SoftnessOf(blur, ShadowKind.Trees));
                         break;
@@ -764,9 +775,15 @@ namespace SDVRadiance
                         DrawSmallTreeShadow(spriteBatch, small, tile, LeanOf(rot, ShadowKind.SmallTrees), LengthOf(stretch, ShadowKind.SmallTrees), alpha,
                             SoftnessOf(blur, ShadowKind.SmallTrees));
                         break;
-                    case FruitTree ft when ft.growthStage.Value >= 4 && !ft.stump.Value && ft.texture != null:
+                    case FruitTree ft when ft.growthStage.Value >= 4 && (!ft.stump.Value || ft.falling.Value) && ft.texture != null:
                         DrawFruitTreeShadow(spriteBatch, ft, tile, LeanOf(rot, ShadowKind.Trees), LengthOf(stretch, ShadowKind.Trees), alpha,
                             SoftnessOf(blur, ShadowKind.Trees));
+                        break;
+                    // A fruit tree still growing (stages 0 to 3) is short, so it takes the full
+                    // lean a bush and a wild sapling take.
+                    case FruitTree sapling when sapling.growthStage.Value < 4 && sapling.texture != null:
+                        DrawFruitTreeSaplingShadow(spriteBatch, sapling, tile, LeanOf(rot, ShadowKind.SmallTrees), LengthOf(stretch, ShadowKind.SmallTrees), alpha,
+                            SoftnessOf(blur, ShadowKind.SmallTrees));
                         break;
                     case Bush bush:
                         DrawBushShadow(spriteBatch, bush, LeanOf(rot, ShadowKind.Bushes), LengthOf(stretch, ShadowKind.Bushes), alpha,
@@ -1053,11 +1070,35 @@ namespace SDVRadiance
         {
             if (!TryItemArt(o.QualifiedItemId, out Texture2D texture, out Rectangle src))
                 return;
-            // Big craftables sit ON their tile; the barrel/machine visually rests a bit above the
-            // tile's bottom edge, so anchor the shadow's dark base slightly up from (tile.Y+1)*64.
-            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - 20f));
+            // Where the game puts the foot. Object.draw builds a destination rectangle from
+            // (x*64, y*64 - 64) that is 128 tall, so the art's bottom edge lands exactly on
+            // (tile.Y + 1) * 64. The base used to be lifted 20px above that, on the theory that a
+            // barrel rests a little high inside its cell, and on a tall thin thing - a lightning
+            // rod, a post, a signboard - the lift is plainly a strip of lit ground between the
+            // object's foot and the start of its own shadow. The silhouette is sheared and
+            // squashed about its own base, so the base lands wherever this anchor is put: the
+            // strip was the lift, exactly.
+            //
+            // Anything that really does sit high in its cell has transparent rows at the bottom of
+            // its art, and the silhouette is cut from that art, so its own alpha decides where the
+            // dark begins. That is what the lift was reaching for, applied to every item at once.
+            //
+            // Measured rather than argued: 20, 10 and 0 shot from one spot at one clock with the
+            // cloud shadow turned OFF and the mod rebuilt between each. The first comparison of
+            // this said 0 looked worse and it was wrong - the cloud had drifted across the rods
+            // between the two frames, which darkens the ground and weakens every shadow on it.
+            //
+            // The 1.6 shapes keep the lift and the cell, because that pair is what every release
+            // up to 1.6 drew and some players will have made their peace with it.
+            float lift = ClassicShadowShapes ? 20f : 0f;
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1f) * 64f - lift));
             float depth = MathHelper.Clamp(Math.Max(0f, ((tile.Y + 1f) * 64f - 24f) / 10000f) + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
-            EmitObject(spriteBatch, texture, src, feet, new Vector2(src.Width / 2f, src.Height),
+            // Pivot on the row the ART ends on, not on the cell's bottom edge. Both stand the
+            // object on the ground; only this one puts the shadow's contact point where the
+            // object's own base is, and the difference shows on anything that leaves empty rows
+            // under itself inside its cell.
+            float pivotRow = ClassicShadowShapes ? src.Height : ArtFootRow(texture, src);
+            EmitObject(spriteBatch, texture, src, feet, new Vector2(src.Width / 2f, pivotRow),
                 alpha, rot, stretch, depth, blur);
         }
 
@@ -1122,6 +1163,52 @@ namespace SDVRadiance
         // (a few items swap art by season).
         private readonly System.Collections.Generic.Dictionary<string, (Texture2D? texture, Rectangle src)> _itemArtCache = new();
         private string _itemArtSeason = "";
+
+        /// <summary>The row a sprite cell's art actually ENDS on, counted from the cell's top, so a
+        /// shadow can be pivoted on the object's own base rather than on the cell's bottom edge.
+        ///
+        /// <para>A cell is a fixed box and the art inside it need not fill it: a lightning rod, a
+        /// sign, a scarecrow all leave empty rows under their base. Pivoting on the cell puts the
+        /// shadow's contact point in that empty space, which on the ground reads as the shadow
+        /// sitting below the thing that casts it. This asks the art where it stops instead, which
+        /// is the same answer the trunk seam needed earlier the same day: read the alpha, do not
+        /// assume the box.</para>
+        ///
+        /// <para>One readback per distinct piece of art, cached for the session; a 16x32 cell is
+        /// two thousand pixels. Falls back to the cell height, the old behaviour, if the texture
+        /// cannot be read.</para>
+        /// </summary>
+        private float ArtFootRow(Texture2D texture, Rectangle src)
+        {
+            var key = (texture, src);
+            if (_artFootRow.TryGetValue(key, out float known))
+                return known;
+            float foot = src.Height;
+            try
+            {
+                if (src.Width > 0 && src.Height > 0 && !texture.IsDisposed
+                    && src.Right <= texture.Width && src.Bottom <= texture.Height)
+                {
+                    var pixels = new Color[src.Width * src.Height];
+                    texture.GetData(0, src, pixels, 0, pixels.Length);
+                    for (int row = src.Height - 1; row >= 0; row--)
+                    {
+                        bool opaque = false;
+                        for (int column = 0; column < src.Width; column++)
+                            if (pixels[row * src.Width + column].A > 8) { opaque = true; break; }
+                        if (opaque) { foot = row + 1; break; }
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                foot = src.Height;
+            }
+            _artFootRow[key] = foot;
+            return foot;
+        }
+
+        private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), float> _artFootRow = new();
 
         private bool TryItemArt(string qualifiedId, out Texture2D texture, out Rectangle src)
         {
@@ -1229,6 +1316,27 @@ namespace SDVRadiance
             SpriteEffects effect = tree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
             EmitObject(spriteBatch, tree.texture.Value, src, feet, new Vector2(src.Width / 2f, src.Height),
                 alpha, rot, stretch, depth, blur, ObjectHeadFade, effect);
+        }
+
+        /// <summary>
+        /// A fruit tree the game still draws as a sapling, stages 0 to 3. It cast nothing here, and
+        /// the game paints no blob under it either, so a young orchard stood on a lit lawn with no
+        /// shadow at all beside a wild sapling that had one. FruitTree.draw's own rects, 48x80 per
+        /// stage, hung from the point FruitTree.draw hangs them from: bottom-centre at
+        /// (tile*64 + 32, tile*64 + 48), shifted by the same sine of the tile column the game
+        /// shifts the sapling by, so the shadow stands where the sapling does.
+        /// </summary>
+        private void DrawFruitTreeSaplingShadow(SpriteBatch spriteBatch, FruitTree sapling, Vector2 tile, float rot, float stretch, float alpha, float blur)
+        {
+            int row = sapling.GetSpriteRowNumber();
+            int column = sapling.growthStage.Value switch { 0 => 0, 1 => 48, 2 => 96, _ => 144 };
+            var src = new Rectangle(column, row * 5 * 16, 48, 80);
+            float sway = (float)Math.Max(-8.0, Math.Min(64.0, Math.Sin((double)(tile.X * 200f) / (Math.PI * 2.0)) * -16.0)) / 2f;
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f + sway, tile.Y * 64f + 48f + sway));
+            float depth = MathHelper.Clamp(sapling.getBoundingBox().Bottom / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
+            SpriteEffects effects = sapling.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
+            EmitObject(spriteBatch, sapling.texture, src, feet, new Vector2(24f, 80f),
+                alpha, rot, stretch, depth, blur, ObjectHeadFade, effects);
         }
 
         private void DrawFruitTreeShadow(SpriteBatch spriteBatch, FruitTree ft, Vector2 tile, float rot, float stretch, float alpha, float blur)

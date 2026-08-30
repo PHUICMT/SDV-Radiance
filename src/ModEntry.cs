@@ -109,6 +109,7 @@ namespace SDVRadiance
             helper.Events.Display.RenderingWorld += OnRenderingWorld;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
             helper.Events.Display.RenderingStep += OnRenderingStep;
+            helper.Events.Display.RenderedStep += OnRenderedStep;
             // Over the UI, not under it: the readout has to stay visible while a menu is open,
             // because "it stutters when I open my inventory" is one of the things it is for.
             helper.Events.Display.RenderedHud += (_, e) => PerfHud.Draw(e.SpriteBatch);
@@ -204,6 +205,20 @@ namespace SDVRadiance
                 }
                 helper.WriteConfig(_config);
             }
+            // 1.7.0: the lamp shafts were rebuilt from the occluder mask. Their strength dial meant
+            // an additive gain before and a share of the tuned look now, so a kept 0.15 would draw
+            // shafts nobody can see if they are switched on: reset it once. The switch itself is
+            // left as the player had it. The per-light shadow was rebuilt too (it thins with the
+            // pool now, and cuts into the game's own glow), and its old default of 0.7 reads as
+            // barely there in the new formula: a kept 0.7 gets the new default once.
+            if (_config.ConfigVersion < 2)
+            {
+                _config.ConfigVersion = 2;
+                _config.GodRaysIntensity = 1.0f;
+                if (Math.Abs(_config.FloodShadowStrength - 0.7f) < 0.001f)
+                    _config.FloodShadowStrength = 1.0f;
+                helper.WriteConfig(_config);
+            }
         }
 
         private RenderPipeline Pipeline
@@ -273,8 +288,35 @@ namespace SDVRadiance
         /// </summary>
         private void OnRenderingWorld(object? sender, RenderingWorldEventArgs e)
         {
+            // The two draw-time looks read their switches here, once a frame, before the world
+            // draws: the foliage sway (in the Tree/Bush shim) and the sheet upscaler (a prefix on
+            // SpriteBatch.Draw). Both fall silent with the mod, so they are set before the gate.
+            FoliageSway.Enabled = _config.Enabled && _config.FoliageSwayEnabled;
+            FoliageSway.Strength = Math.Clamp(_config.FoliageSwayStrength, 0f, 2f);
+            FoliageSway.Speed = Math.Clamp(_config.FoliageSwaySpeed, 0.25f, 2f);
+            FoliageSway.GustSpanTiles = Math.Clamp(_config.FoliageSwayGustSpan, 4f, 40f);
+            FoliageSway.WindPixelsPerSecond = PrecipitationSystem.WindPixelsPerSecond;
+            FoliageSway.StripDrawsThisFrame = 0;
+            SheetUpscaler.Enabled = _config.Enabled && _config.SheetUpscaleEnabled;
+            SheetUpscaler.WorldEnabled = _config.SheetUpscaleWorld;
+            SheetUpscaler.CharactersEnabled = _config.SheetUpscaleCharacters;
+            SheetUpscaler.PortraitsEnabled = _config.SheetUpscalePortraits;
+            SheetUpscaler.InterfaceEnabled = _config.SheetUpscaleInterface;
+            SheetUpscaler.Smoothness = _config.SheetUpscaleSmoothness;
+            SheetUpscaler.BeginFrame();
             if (!_config.Enabled)
                 return;
+            // Author freeze: the game's own draw-time clock is pinned along with ours, or a
+            // campfire's flame keeps two captures of one frozen frame from ever matching.
+            Determinism.HoldGameTimeForDraw();
+            // Whether this frame's world draw is worth recording for the sprite relief: the
+            // pipeline knows, because it also knows whether the relief is still fading out.
+            SpriteDrawRecorder.Wanted = Pipeline.WantsSpriteRecording(_config);
+            Determinism.HoldFarmerEyesOpenForDraw();
+
+            // Golden hour: ComputeSun is static, so the day's-edge stretch dial is captured
+            // here once per frame, before any bake or draw asks where the sun is.
+            ShadowRenderer.GoldenHourStrengthNow = Math.Clamp(_config.GoldenHourStrength, 0f, 1f);
 
             // Hand both renderers over to this screen before anything reads a cache. On a split
             // screen this handler runs once per screen per frame, and everything remembered
@@ -426,6 +468,9 @@ namespace SDVRadiance
         {
             if (e.Step != StardewValley.Mods.RenderSteps.World_Sorted)
                 return;
+            // The sorted world batch is what the sprite relief replays (see SpriteDrawRecorder);
+            // the recorder decides for itself whether anyone wants this frame.
+            SpriteDrawRecorder.BeginWorldSorted();
             if (!_config.Enabled)
                 return;
             // The people in the glass go into the same sorted batch, at the sill's depth, so a
@@ -450,6 +495,19 @@ namespace SDVRadiance
                     _prepareMilliseconds = _drawMilliseconds = _maxDrawMilliseconds = 0; _performanceFrameCount = 0;
                 }
             }
+        }
+
+        private void OnRenderedStep(object? sender, RenderedStepEventArgs e)
+        {
+            // Two boundaries, not one. The sorted step ends where the sprites do, and the map's
+            // front layers are drawn after it and OVER it: they belong in the recording (they are
+            // what covers a farmer standing behind a building), but as their own pass. The list
+            // closes at the always-front step, before the weather draws, or rain and snow would
+            // stamp the whole screen flat.
+            if (e.Step == StardewValley.Mods.RenderSteps.World_Sorted)
+                SpriteDrawRecorder.EndWorldSorted();
+            else if (e.Step == StardewValley.Mods.RenderSteps.World_AlwaysFront)
+                SpriteDrawRecorder.EndWorldFront();
         }
 
         private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
@@ -568,6 +626,16 @@ namespace SDVRadiance
             // fields no layer, label or entity list can see. Bracket those draws so the water
             // knows where their art landed.
             LocationDrawHook.Apply(_harmony!, this.Monitor);
+
+            // A character class from another mod that paints its own blob shadow (Custom
+            // Companions) hides the vanilla one, which read to the shadow pass as "no shadow": its
+            // creatures cast nothing and kept their blob. Its draws go through a shim that says so.
+            ShadowSuppression.PatchSelfDrawnCharacters(_harmony!, this.Monitor);
+
+            // The verification harness freezes the render clock and dumps twice; villagers and the
+            // creatures other mods derive from NPC keep walking through that, so their update is
+            // held too. Every loaded assembly, hence GameLaunched.
+            HarmonyPatcher.HoldCharactersWhileFrozen(_harmony!, this.Monitor);
 
             // If another mod also rewrites the weather draw, two replacements fight over one
             // slot and the player cannot tell whose rain is broken. Yield for the session and

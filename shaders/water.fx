@@ -72,6 +72,25 @@ sampler2D PlungeChurnSampler = sampler_state
     AddressU = Clamp; AddressV = Clamp;
 };
 
+// How tall the map itself is, one texel per tile of the whole location (SurfaceClassTextureFor):
+// 0 flat ground, 64 a deck, 128 water, 255 a wall or a roof. The mirror reads it at its SOURCE.
+// A sandy path beside a stream is a thing of no height, and mirroring it three tiles deep laid a
+// flat tan sheet over the stream that read as the water missing.
+//
+// POINT, and read at the tile's centre. A class is a name, not a quantity: filtered, a ground tile
+// beside a water tile came back as the number halfway between them, and since the mirror's source
+// always sits just above a waterline that is exactly where every read landed. Painted, the term
+// said flat=0.21 where the answer is "flat, entirely" and the rule barely fired - the first version
+// of this fix changed nothing on screen for that one reason.
+texture SurfaceClassTexture;
+sampler2D SurfaceClassSampler = sampler_state
+{
+    Texture = <SurfaceClassTexture>;
+    MinFilter = Point; MagFilter = Point; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+float2 MapTiles;          // the location's size in tiles, the extent of SurfaceClassTexture
+
 // The caustic net, baked offline (tools/make-caustics.py): a tileable Voronoi ridge. Wrap
 // addressing because it is sampled in world space - the net is painted on the bed and the
 // camera merely looks at it.
@@ -86,6 +105,7 @@ float CausticAmt;        // 0 = the term vanishes; strength, weather, night and 
                          // ease all folded in on the CPU
 float CausticDeepFloor;  // what little survives in open water, far from any shore
 float DebugCaustic;      // 1 = paint the caustic term as pure red instead of adding it (radiance_debug caustic)
+float DebugMirrorSource; // 1 = paint what the mirror reads instead of the water (radiance_debug mirrorsource)
 
 float Presence;         // 0..1 whole-pass presence fade. The CPU already scales Strength,
                         // Sparkle, TintAmt and ReflectStrength by it, but several terms below
@@ -121,6 +141,15 @@ float PlayerInWater;    // 0..1 eased: the player's feet are on water pixels (wa
                         // this in/out over ~a third of a second so the self-reflection never pops.
 float TintAmt;          // depth-tint amount (0 when the shimmer toggle is off; reflection may still run)
 float3 SkyColor;        // synthesised sky tint: day/golden-hour/night/overcast, ambient-scaled (C#)
+float AuroraAmt;        // 0..1 eased: aurora curtains in the reflected sky (clear winter nights)
+float DebugSky;         // 1 = paint the sky glow's own inputs instead of the scene (radiance_debug sky)
+// Up to three streaks at once, because one at a time reads as a scripted event rather than a
+// sky. Each slot is independent: its own clock, path, length and weight, so a faint quick one
+// can cross while a slow bright one is still burning.
+#define METEOR_SLOTS 3
+float4 Meteors[METEOR_SLOTS];       // xy = head in world tiles, zw = unit direction of travel
+float4 MeteorShapes[METEOR_SLOTS];  // x = tail tiles, y = envelope 0..1, z = width, w = brightness
+float MeteorAny;        // the loudest envelope of the three, so the whole block can be skipped
 float4 PlayerRect;      // player silhouette bounds in screen UV (x0,y0,x1,y1)
 float SpriteMaskOn;     // 1 when the per-frame sprite mask below is live
 // Per-frame mask of every sprite ON the water (NPCs, farm animals, critters) baked in
@@ -298,6 +327,136 @@ float ValueNoise(float2 p)
 // The fine octave carries little and only with choppiness, because a y offset that turns
 // over every four rows tears a sharp edge into thin regular lines. Phase-continuous in world
 // space and in time: a re-seed is a flicker.
+
+// B6: aurora in the reflected sky. On a clear winter night the synthesised sky the
+// water resolves to is not one flat colour: slow curtains of green and violet drift
+// across it. The curtains are anchored to the WORLD and drift with Time, so the
+// surface stays put while the camera walks and two frozen dumps agree; AuroraAmt
+// carries the whole gate (the switch, winter, outdoors, clear weather, real night)
+// pre-eased on the CPU, so nothing here can pop.
+// The sky's own LIGHT, kept apart from its colour. Both of these are things the sky emits,
+// not things it reflects, and the difference decides where they belong in the composite: the
+// mirror is gated on how bright this water already is (see the luminance gate further down),
+// which is right for mirroring a lit bank and exactly wrong for an aurora, since dark water is
+// where an aurora shows. Routed through that gate the curtains arrived at about ten values out
+// of 255 on the night sea they were written for, which is why nobody ever saw one. They are
+// added over the finished water instead.
+float3 SkyGlow(float2 uv)
+{
+    float3 glow = 0.0;
+    [branch] if (AuroraAmt < 0.004 && MeteorAny < 0.004)
+        return glow;
+    float2 worldTile = uv * TilesPerScreen + WorldTileOffset;
+    [branch] if (AuroraAmt >= 0.004)
+    {
+        // An aurora is a RIBBON: narrow across, long along, snaking, crisp at its lower edge and
+        // dissolving upward, combed into strands, and coloured green at the foot through teal to
+        // violet where it dies. All of that is in place. What was left, and what read as wrong
+        // even once the shape was right, is that every part of it was a pure sine and therefore
+        // PERFECT: the lower edge swept the frame as a textbook wave, the strands stood at equal
+        // spacing and equal width, and the ribbon was as bright at one end as the other. Nothing
+        // in a sky is regular, and regularity is what makes a good shape read as a pattern.
+        //
+        // So every one of those three now carries value noise on top of its sines. The noise is
+        // world-anchored and moves with Time, exactly like the ripple field below, so a curtain
+        // still travels rather than boiling in place, and two frozen dumps of one frame agree.
+        float driftAlong = Time * 0.055;
+        // The snake, with two octaves of noise on it, so the edge wanders instead of sweeping.
+        float snake = 1.9 * sin(worldTile.x * 0.13 + driftAlong)
+                    + 0.9 * sin(worldTile.x * 0.31 - Time * 0.038)
+                    + 2.6 * (ValueNoise(float2(worldTile.x * 0.055 - Time * 0.012, Time * 0.021)) - 0.5)
+                    + 1.1 * (ValueNoise(float2(worldTile.x * 0.150 + Time * 0.018, 7.3)) - 0.5);
+        float across = worldTile.y * 0.86 + snake;
+        // Position WITHIN one curtain, 0 to 1, so the profile across it can be asymmetric. A
+        // sine cannot be: it rises and falls at the same rate, and a curtain that fades in as
+        // gently as it fades out is a stripe. The crisp edge lands in six hundredths of the
+        // span and the tail takes ten times that, which is the silhouette of the real thing.
+        // How crisp that edge is wanders along the ribbon too - a real one is knife-sharp in
+        // places and soft a few tiles further on.
+        float within = frac(across * 0.15915494);            // across / 2pi
+        float edgeBite = 0.020 + 0.075 * ValueNoise(float2(worldTile.x * 0.09 - Time * 0.014, 2.1));
+        float profile = smoothstep(0.30, 0.30 + edgeBite, within)
+                      * (1.0 - smoothstep(0.40, 0.95, within));
+        // A second set hanging behind the first, wider and fainter: a real display is layered,
+        // and one lone ribbon reads as a painted stripe.
+        float behind = frac(across * 0.0684 + 0.31 - Time * 0.0033);
+        profile = max(profile, 0.45 * smoothstep(0.34, 0.42, behind) * (1.0 - smoothstep(0.46, 0.98, behind)));
+        // The strands. Fine and MANY, and the floor never reaches zero: rays brighten and dim a
+        // curtain along its length, they do not chop it into pieces. The phase is warped by
+        // noise before the sines see it, which is what stops them standing at equal spacing:
+        // strands now bunch in some stretches and thin out in others.
+        float strandWarp = worldTile.x * 3.1 + snake * 0.8 + Time * 0.24
+                         + 3.4 * ValueNoise(float2(worldTile.x * 0.24, Time * 0.03 + 4.7));
+        float strands = 0.62 + 0.38 * sin(strandWarp);
+        strands *= 0.78 + 0.22 * sin(worldTile.x * 7.3 - Time * 0.33);
+        // ...and their weight varies along the ribbon as well, so a stretch of curtain can blaze
+        // while the next one over is a whisper. A ribbon of even brightness end to end is the
+        // last thing left that says "drawn by a formula".
+        strands *= 0.55 + 0.75 * ValueNoise(float2(worldTile.x * 0.11 + Time * 0.017, 11.9));
+        // How much curtain there is HERE at all. Without it the ribbons run the full width of
+        // every frame at the same strength, and a pattern that repeats identically across the
+        // screen is read as a texture rather than as sky. This lets a display be bright over
+        // one stretch of water and absent over the next, and drift between the two.
+        float presence = smoothstep(0.12, 0.72,
+            0.5 + 0.5 * sin(worldTile.x * 0.071 + worldTile.y * 0.029 + Time * 0.031));
+        presence *= smoothstep(0.10, 0.62, ValueNoise(float2(worldTile.x * 0.038 + Time * 0.009,
+                                                             worldTile.y * 0.021 - Time * 0.006)));
+        // Breakup: the part of a display that makes people stop talking. A real aurora does
+        // not only drift, it SURGES - a brightening runs along the curtain in a couple of
+        // seconds and dies, then another somewhere else. One travelling noise wave does it,
+        // moving fast along x against everything else here, which all crawls.
+        float surge = ValueNoise(float2(worldTile.x * 0.058 - Time * 0.36, Time * 0.041 + 5.1));
+        float breakup = lerp(0.55, 1.75, smoothstep(0.30, 0.92, surge));
+        // ...and a slow whole-sky pulse under it, so even a quiet stretch is never quite still.
+        breakup *= 0.86 + 0.28 * ValueNoise(float2(Time * 0.085, 13.7));
+        float band = saturate(profile * strands * breakup) * presence;
+        // Colour across the width, in the order a curtain really shows it. Green holds most of
+        // the body rather than a sliver at the foot: the reference photographs are green first
+        // and everything else second, and keying the teal to start at 0.55 instead of 0.40 is
+        // the difference between an aurora and a blue-green glow.
+        float3 curtainColour = lerp(float3(0.22, 1.00, 0.52), float3(0.18, 0.62, 0.90),
+                                    smoothstep(0.55, 0.92, within));
+        curtainColour = lerp(curtainColour, float3(0.55, 0.26, 0.88), smoothstep(0.78, 0.99, within));
+        // Added straight over the finished water, so this figure is what lands on the screen.
+        // The dial runs to 2 for anyone who wants the sky of a postcard, and to 0 for anyone
+        // who wants the water back the way it was.
+        glow += curtainColour * (band * 0.95 * AuroraAmt);
+    }
+    // The shooting stars: short streaks, bright at the head and fading down the tail, drawn only
+    // where the sky itself appears. The CPU owns each event (when, where, which way, how big);
+    // this only measures the pixel's distance to the segment each streak occupies right now.
+    // A heavy one burns wider and warmer, the way a real bright meteor does, and the warmth is
+    // read from its own weight rather than carried as a fifth number.
+    [branch] if (MeteorAny >= 0.004)
+    {
+        for (int slot = 0; slot < METEOR_SLOTS; slot++)
+        {
+            float4 shape = MeteorShapes[slot];
+            if (shape.y < 0.004)
+                continue;
+            float4 path = Meteors[slot];
+            float2 tailStart = path.xy - path.zw * shape.x;
+            float2 fromTail = worldTile - tailStart;
+            float alongTail = saturate(dot(fromTail, path.zw) / max(shape.x, 0.01));
+            float2 closest = tailStart + path.zw * (alongTail * shape.x);
+            float distance = length(worldTile - closest);
+            float halfWidth = 0.11 * shape.z;
+            float streak = smoothstep(halfWidth, halfWidth * 0.18, distance)
+                         * (0.20 + 0.80 * alongTail * alongTail);
+            float warmth = saturate((shape.w - 1.0) * 1.2);
+            float3 streakColour = lerp(float3(0.95, 0.97, 1.00), float3(1.00, 0.86, 0.64), warmth);
+            glow += streakColour * (streak * 0.5 * shape.w * shape.y);
+        }
+    }
+    return glow;
+}
+
+/// The sky's colour, which the mirror mixes with the water the ordinary way.
+float3 SkyNow(float2 uv)
+{
+    return SkyColor;
+}
+
 float2 ReflectionWobbleField(float2 worldTile, float t, float choppiness)
 {
     float2 slow = float2(worldTile.x * 0.5, worldTile.y * 4.0)  + float2(0.03, 1.0) * t;
@@ -379,6 +538,19 @@ float4 WaterPS(PixelInput input) : SV_TARGET
 {
     float2 uv = input.UV;
 
+    // radiance_debug sky. The aurora has now been argued about three times from screenshots and
+    // every answer was wrong, so it gets a picture of its own inputs instead, before any water
+    // gating can hide them. RED = the amount the CPU uploaded actually arrived in the shader.
+    // GREEN = the curtain field's own height here. BLUE = the shooting star's envelope. A black
+    // screen means the uniform never landed; flat red means the field is the problem; red and
+    // green in bands means the shader is fine and the composite below is eating it.
+    [branch] if (DebugSky > 0.5)
+    {
+        // Read from the real SkyGlow rather than a copy of its formula: the copy had already
+        // gone stale once, still carrying the frequencies the field was written with.
+        return float4(AuroraAmt, SkyGlow(uv).g, MeteorAny, 1.0);
+    }
+
     // Continuous world-tile coordinate (locks the shimmer to the water surface
     // as the camera pans, instead of swimming across the screen).
     float2 worldTile = uv * TilesPerScreen + WorldTileOffset;
@@ -401,6 +573,12 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // what "the falling water sways with the waves" is. Water at 255 sits above the 0.85 bar and
     // is unaffected; lava (128) is already excluded by its own tag.
     float isFlow = step(0.75, maskA) * (1.0 - step(0.85, maskA));
+    // VESSEL (alpha 240) is plain water inside a built wall, a fish pond: every plain-water gate
+    // below still passes it (they sit at or below 0.9). The one thing it changes is the mirror,
+    // which resolves a WATER source to sky at once instead of over 4..8 tiles: two tiles past a
+    // pond's wall is often the lake, and a lake mirrored into a pond three rows deep was a band
+    // of the wrong water across the pond's bottom row.
+    float isVessel = step(0.92, maskA) * (1.0 - step(0.97, maskA));
     float rippleGate = (1.0 - isIce) * (1.0 - isFlow);    // ice / falling: no surface wave
 
     // Signed shore distance in TEXELS (+ = inside water). Sampled for every pixel because
@@ -778,6 +956,15 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // tile before the edge rather than trusting the edge.
         float2 srcWorldTile = reflUvRaw * TilesPerScreen + WorldTileOffset;
         srcWater *= saturate(srcWorldTile.y - MaskOrigin.y);
+        // What the source stands on: 0 ground, ~0.25 deck, ~0.5 water, 1 wall or roof.
+        float srcHeightClass = tex2D(SurfaceClassSampler, (floor(srcWorldTile) + 0.5) / MapTiles).a;
+        float srcFlat = saturate(1.0 - srcHeightClass * 4.0);
+        float srcDeck = saturate(1.0 - abs(srcHeightClass - 0.25) * 4.0);
+        // The map itself says the source is WATER. The five-tap srcWater above says the same thing
+        // in the mask, but it is smoothed vertically and a bank two tiles wide sits inside that
+        // smoothing, so where a stream runs beside a river it read as half water and let the river
+        // through. This one is a per-tile answer and does not blur across a bank.
+        float srcIsWater = saturate(1.0 - abs(srcHeightClass - 0.5) * 6.0);
 
         // Distance fade: defined near the shoreline, gone by ~0.75 screen below it. (An
         // always-on base mirrored far-upstream cliffs down entire rivers as dark streaks;
@@ -856,7 +1043,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // same caution: mirroring water onto water is what produced the dark streaks down a river,
         // so it still resolves to sky, just not before the bank above has had its say.
         float depthTiles = depth * TilesPerScreen.y;
-        float3 skySurf = lerp(col.rgb, SkyColor, 0.25);
+        float3 skySurf = lerp(col.rgb, SkyNow(uv), 0.25);
         // ...and the same resolution when the mirrored SOURCE is upstream water. This used to be
         // a 70% DAMP gated at 1.2 tiles, and that gate was a visible horizontal cut right under
         // every bridge (a bridge is ~1 tile tall, so just past its own art the source is river
@@ -870,6 +1057,25 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         float depthScale = max(0.1, ReflDepthScale);
         float toSky = max(smoothstep(9.0 * depthScale, 16.0 * depthScale, depthTiles),
                           srcWater * smoothstep(4.0 * depthScale, 8.0 * depthScale, depthTiles));
+        // Inside a vessel a water source is sky from the first texel: nothing behind a pond's wall
+        // that is itself water can appear in the pond.
+        toSky = max(toSky, isVessel * smoothstep(0.15, 0.55, srcWater));
+        // Flat ground has no height to mirror. A bank shows in the water as a lip a tile or so
+        // deep and then the sky, where the mirror was laying a sheet of it three tiles down a
+        // narrow stream: a sandy path reflected as a tan slab that read as a bite out of the
+        // water. A deck is a low thing too, a little taller for its posts and rails; a wall, a
+        // roof or a cliff keeps the full bound above. Trees, people and buildings never pass
+        // through here at all: they arrive on the entity layer.
+        toSky = max(toSky, srcFlat * smoothstep(1.0 * depthScale, 2.5 * depthScale, depthTiles));
+        toSky = max(toSky, srcDeck * smoothstep(1.5 * depthScale, 3.5 * depthScale, depthTiles));
+        // Water reflected in water carries nothing the eye can use, and across a bank it is a lie:
+        // a stream two tiles from a river was wearing the river's surface as a pale sheet, which
+        // read as a bite out of the stream. It resolves to sky within a tile. A bank, a bridge and
+        // a cliff are none of these classes, so what a wide river shows of its far side is
+        // untouched; this is the same rule the old five-tap already meant, asked of the map.
+        toSky = max(toSky, srcIsWater * smoothstep(1.0 * depthScale, 2.0 * depthScale, depthTiles));
+        if (DebugMirrorSource > 0.5)
+            return float4(srcFlat, srcIsWater, toSky, 1.0);
         // P3b — sprites already reflect via the flipped-entity RT (composited below); the
         // same sprite left in the screen-flip SOURCE would mirror twice at a different
         // offset. With the sprite-free scenery source (P3c) live there is nothing to
@@ -894,7 +1100,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // The no-mirror fallback is the same surface with a WHISPER of sky, not a brightened copy
         // of the water (two formulas ~40% apart in brightness met at a visible seam). Kept subtle:
         // at 0.35 the glaze washed the mirror itself out — its job is only to remove the seam.
-        float3 sheenCol = lerp(col.rgb, SkyColor, 0.12);
+        float3 sheenCol = lerp(col.rgb, SkyNow(uv), 0.12);
         // The old nearSelf damping (x0.6 within ~2 texels of the waterline) is retired: with a
         // brighter sheen it rendered as a pale empty strip hugging every bank, and the physically
         // right content there is the bank's own dark rim reflection at full strength.
@@ -931,6 +1137,26 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         float amt = saturate(ReflectStrength) * water * fade * onScreen
                   * saturate(max(srcLum, lumAvg) * 3.2) * lerp(0.5, 1.0, mirrorness) * reflectance;
         col.rgb = lerp(col.rgb, reflCol, amt);
+        // The aurora and the shooting star go on AFTER that mix, and deliberately not through
+        // it. Everything above is a mirror, and a mirror is rightly gated on how bright the
+        // water already is; these two are the sky's own light arriving, and the darker the
+        // water the more of them you see. They still need water, the stage's fade, the pixel to
+        // be on screen and the reflection to be switched on at all, because the sky only exists
+        // in this picture where the water shows it. Water that is busy mirroring a bank keeps a
+        // third of the glow rather than none: the light lands on the whole surface, it is only
+        // the reflected image that the bank has taken over.
+        //
+        // It must NOT take `fade`, `onScreen` or `toSky`, and taking them is what kept the
+        // curtains off the screen after they had already been moved out of the mirror's
+        // luminance gate. All three describe how well the mirror could REACH its source:
+        // `fade` is saturate(1 - depth * 0.5) against a depth measured in screens, so the open
+        // sea, where the source is many tiles up and the surface resolves entirely to sky, has
+        // fade = 0. That is exactly the water an aurora shows on. The sky's light does not have
+        // to reach anywhere to land on water; it only has to be water, on this pass, with the
+        // reflection switched on at all.
+        // ReflectStrength already carries the whole-pass Presence fade (the CPU scales it),
+        // so the stage still fades both ways without a second multiply.
+        col.rgb += SkyGlow(uv) * (water * saturate(ReflectStrength));
         // The churned water is itself paler than the pool around it, milky with air, and
         // palest at the foot of the fall.
         col.rgb = lerp(col.rgb, lerp(col.rgb, SkyColor * 0.5 + 0.5, 0.28), churn * water);

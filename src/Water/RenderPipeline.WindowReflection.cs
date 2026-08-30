@@ -244,6 +244,11 @@ namespace SDVRadiance
         {
             var (sunWarm, nightGlow) = TimeOfDayAmounts();
             Vector3 sky = SynthesisedSkyColour(sunWarm, nightGlow);
+            // A window is a mirror pointed at the same sky the water is, so on an aurora night
+            // the glass in a street should carry it too. Added BEFORE the luminance
+            // normalisation below, so it moves the hue of the reflection and not its
+            // brightness: the pane goes green, it does not light up.
+            sky += new Vector3(0.05f, 0.30f, 0.16f) * Math.Min(1f, SkyAuroraGlass);
             float luminance = Math.Max(0.02f, Vector3.Dot(sky, GlassTintLuminanceWeights));
             Vector3 skyAtGlassBrightness = sky * (GlassTintLuminance / luminance);
             return Vector3.Clamp(

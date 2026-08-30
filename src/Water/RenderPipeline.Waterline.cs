@@ -278,7 +278,7 @@ namespace SDVRadiance
             _maskScratch.TileIceBits = null; _maskScratch.TileLavaBits = null; _maskScratch.TileFlowBits = null;
             _maskScratch.MarchOutsideFlags = null; _maskScratch.MarchFloodStack = null; _maskScratch.SpeckVisitedFlags = null; _maskScratch.SpeckComponentMembers = null;
             _maskScratch.TileNearLandFlags = null; _maskScratch.TileHasFrontArtFlags = null;
-            _maskScratch.TileIceFlags = null; _maskScratch.TileFlowFlags = null; _maskScratch.TileLavaFlags = null;
+            _maskScratch.TileIceFlags = null; _maskScratch.TileFlowFlags = null; _maskScratch.TileLavaFlags = null; _maskScratch.TilePondFlags = null;
             _maskScratch.TileHasEffectWaterFlags = null; _maskScratch.TileCalmnessValues = null;
             _maskScratch.WaterSignedDistancePixels = null; _maskScratch.DistanceToLand = null; _maskScratch.DistanceToWater = null;
         }

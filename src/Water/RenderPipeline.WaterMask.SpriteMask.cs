@@ -523,19 +523,38 @@ namespace SDVRadiance
                     // Grown tree: canopy (0,0,48,96) at tile*64+(32,64), origin (24,96) — Tree.draw's math.
                     // Stamped at the canopy's CURRENT opacity, which is the whole point of the
                     // alpha reaching the shader at all - see the note on TreeMaskAlpha.
-                    case StardewValley.TerrainFeatures.Tree tree when tree.growthStage.Value >= 5 && !tree.stump.Value && tree.texture?.Value != null:
+                    // The game's own gate: a tree being chopped is a stump AND falling, and it is
+                    // drawn whole for the length of the fall, so refusing every stump left the
+                    // ripple running over a toppling tree.
+                    case StardewValley.TerrainFeatures.Tree tree when tree.growthStage.Value >= 5 && (!tree.stump.Value || tree.falling.Value) && tree.texture?.Value != null:
+                        // The same turn the tree is drawn with, or the carve stays where the tree
+                        // was standing: the wind leans it a couple of pixels and a chopping stroke
+                        // swings it right over, and the ripple would run across whatever leaned out
+                        // of the hole.
+                        float treeTurn = tree.shakeRotation + FoliageSway.TiltForTileBase(tile.X, tile.Y);
                         spriteBatch.Draw(tree.texture.Value,
                             Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
-                            ShadowRenderer.TreeCanopySourceRect(tree), Color.White * TreeMaskAlpha(tree), 0f, new Vector2(24f, 96f), 4f,
+                            ShadowRenderer.TreeCanopySourceRect(tree), Color.White * TreeMaskAlpha(tree), treeTurn, new Vector2(24f, 96f), 4f,
+                            tree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
+                        // The TRUNK is a second draw in Tree.draw (16x32 at tile*64+(0,-64), origin
+                        // zero, +96 for moss) and was never stamped: the canopy rect above covers
+                        // the tree's top six tiles but the trunk piece is drawn separately, so a
+                        // palm planted at the oasis pond kept its lower trunk inside the ripple
+                        // while its crown was carved. Same opacity as the canopy for the same reason.
+                        spriteBatch.Draw(tree.texture.Value,
+                            Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f, tile.Y * 64f - 64f)),
+                            new Rectangle(tree.hasMoss.Value ? 128 : 32, 96, 16, 32),
+                            Color.White * TreeMaskAlpha(tree), 0f, Vector2.Zero, 4f,
                             tree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
                         break;
                     // Mature fruit tree: 48x64 seasonal foliage at tile*64+(32,64), origin (24,80).
-                    case StardewValley.TerrainFeatures.FruitTree ft when ft.growthStage.Value >= 4 && !ft.stump.Value && ft.texture != null:
+                    // Same gate and same shake as the wild tree above.
+                    case StardewValley.TerrainFeatures.FruitTree ft when ft.growthStage.Value >= 4 && (!ft.stump.Value || ft.falling.Value) && ft.texture != null:
                         int season = Game1.GetSeasonIndexForLocation(ft.Location);
                         var fsrc = new Rectangle((12 + season * 3) * 16, ft.GetSpriteRowNumber() * 5 * 16, 48, 64);
                         spriteBatch.Draw(ft.texture,
                             Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
-                            fsrc, Color.White, 0f, new Vector2(24f, 80f), 4f,
+                            fsrc, Color.White, ft.shakeRotation, new Vector2(24f, 80f), 4f,
                             ft.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
                         break;
                     // Bush: bottom-centre = (tile.X*64 + (eff+1)*32, (tile.Y+1)*64) — the shadow baker's anchor.
@@ -606,7 +625,8 @@ namespace SDVRadiance
             {
                 if (bld?.texture?.Value == null || bld.isMoving || bld.daysOfConstructionLeft.Value > 0)
                     continue;
-                Rectangle bsrcRect = bld.getSourceRect();
+                // FishPond.draw draws its 80x80 rim whatever the data's source rect says; read the same.
+                Rectangle bsrcRect = bld is StardewValley.Buildings.FishPond ? FishPondRimSourceRect : bld.getSourceRect();
                 if (bsrcRect.IsEmpty)
                     continue;
                 Vector2 bOffset = (bld.GetData()?.DrawOffset ?? Vector2.Zero) * 4f;
@@ -619,6 +639,16 @@ namespace SDVRadiance
                 spriteBatch.Draw(bld.texture.Value,
                     Game1.GlobalToLocal(Game1.viewport, new Vector2(bLeftX, bBaseY - bsrcRect.Height * 4f)),
                     bsrcRect, Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
+                // FishPond.draw hangs a netting frame (80x48 of the sheet, one of three) from two
+                // tiles above the pond down to the foot of its top rim row, over whatever stands
+                // behind the pond: on a farm where that is the lake, the ripple ran through the net.
+                if (bld is StardewValley.Buildings.FishPond pond && pond.nettingStyle.Value < 3)
+                {
+                    var netting = new Rectangle(80, pond.nettingStyle.Value * 48, 80, 48);
+                    spriteBatch.Draw(bld.texture.Value,
+                        Game1.GlobalToLocal(Game1.viewport, new Vector2(bld.tileX.Value * 64f, bld.tileY.Value * 64f - 128f)),
+                        netting, Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
+                }
             }
 
         }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewValley;
@@ -60,7 +61,14 @@ namespace SDVRadiance
         /// left that wanted a faster clock than a fire once did.
         /// </para>
         /// </summary>
-        private static int HashLightInputs(GameLocation location)
+        internal static int HashLightInputs(GameLocation location) => HashLightInputs(location, 16f);
+
+        /// <param name="positionPixelsPerHashStep">How far a light must move before the hash changes
+        /// and the map rebuilds. The flood keeps 16 px: its bounce is blurred and a finer clock buys
+        /// nothing. The cascades pass 4 px: their map carries a carried light's mound crisply, and at
+        /// 16 px the mound stepped a quarter tile at a time behind a walking glow ring - with the
+        /// sub-tile seeds it now glides, but only as often as this lets it rebuild.</param>
+        internal static int HashLightInputs(GameLocation location, float positionPixelsPerHashStep)
         {
             unchecked
             {
@@ -73,8 +81,8 @@ namespace SDVRadiance
                         var ls = kv;
                         if (!ShadowRenderer.WindowGlowing(location, ls))
                             continue;
-                        h = h * 31 + (int)(ls.position.Value.X / 16f);
-                        h = h * 31 + (int)(ls.position.Value.Y / 16f);
+                        h = h * 31 + (int)(ls.position.Value.X / positionPixelsPerHashStep);
+                        h = h * 31 + (int)(ls.position.Value.Y / positionPixelsPerHashStep);
                         h = h * 31 + (int)(ls.radius.Value * 16f);
                         h = h * 31 + ls.textureIndex.Value;
                     }
@@ -120,7 +128,7 @@ namespace SDVRadiance
         /// Carried as one value because four separate answers escaping one block is four
         /// out-parameters, and nobody can read those at the call site.
         /// </summary>
-        private readonly struct SceneSeed
+        internal readonly struct SceneSeed
         {
             public readonly bool Outdoors;
             /// <summary>Places the game renders dark BY DESIGN (mines, volcano): strictly add-only,
@@ -145,7 +153,7 @@ namespace SDVRadiance
 
         /// <summary>The tile rectangle this build covers: its top-left world tile and its size in
         /// cells. One parameter in place of the four that were threaded through every phase.</summary>
-        private readonly struct TileWindow
+        internal readonly struct TileWindow
         {
             public readonly int X0, Y0, W, H;
             public TileWindow(int x0, int y0, int w, int h) { X0 = x0; Y0 = y0; W = w; H = h; }
@@ -210,7 +218,7 @@ namespace SDVRadiance
             SceneSeed scene = DescribeScene(location, config);
             var win = new TileWindow(tx0, ty0, tw, th);
             SeedSkyExposure(location, scene, win);
-            SeedLightSources(location, scene, win);
+            SeedLightSources(location, scene, win, subTileSeeds: false);
             SeedWindowGlows(location, scene, win);
             FloodSweeps(win);
             BounceBlur(win);
@@ -228,7 +236,7 @@ namespace SDVRadiance
         }
 
         /// <summary>Read the location once: what the seed passes below all need to agree on.</summary>
-        private static SceneSeed DescribeScene(GameLocation location, ModConfig config)
+        internal static SceneSeed DescribeScene(GameLocation location, ModConfig config)
         {
             // ---- Seed pass: sky exposure + per-cell decay from the occluder grid ----
             // The flood is RELATIVE lighting: the game's own day/night & scripted darkness
@@ -260,6 +268,178 @@ namespace SDVRadiance
                 : 1f;
             Vector3 sky = SkyColor(outdoors, config);
             return new SceneSeed(outdoors, scriptedDark, vanillaDark, nightSeed, sky);
+        }
+
+        /// <summary>
+        /// The light seeds alone - lamps, fires, windows and the columns they spill - on an EMPTY
+        /// grid, packed into <paramref name="pixels"/> x <paramref name="storageScale"/> for the
+        /// cascades' emitter texture (see RadianceCascades). The sky is deliberately not seeded:
+        /// to the cascades it is what a ray sees when nothing stops it, not a thing on the grid.
+        /// Returns how many cells carry a seed, for the debug caption.
+        /// </summary>
+        internal int SeedEmitters(GameLocation location, in SceneSeed scene, in TileWindow win, Color[] pixels, float storageScale)
+        {
+            int count = win.Count;
+            if (_lightCells.Length < count)
+            {
+                _lightCells = new Vector3[count];
+                _blurredLightCells = new Vector3[count];
+                _blurRowScratch = new Vector3[count];
+                _lightDecay = new float[count];
+                _lightmapPixels = new Color[count];
+            }
+
+            // ---- Split the seeds into what stood still and what moved. ----
+            // Every write in this path is a Vector3.Max, and max commutes exactly, so seeding the
+            // still lights once, keeping the grid, and laying the moving lights over the copy is
+            // the same result TO THE BIT as re-walking everything - not an approximation. The
+            // cache is only reused while every input the still half reads is bit-identical (the
+            // signature hashes raw float bits, stricter than the rebuild gate's quantised hash),
+            // so a hit cannot differ from a fresh pass. What earns the machinery: a carried glow
+            // ring rebuilds this grid every 4 px of a walk, and each rebuild re-walked every lamp
+            // and window in town to re-derive a grid that had not changed.
+            _movingLightIds.Clear();
+            _lightTuplesCurrent.Clear();
+            if (!ReferenceEquals(location, _staticSeedLocation))
+            {
+                _staticSeedLocation = location;
+                _lightTuplesPrevious.Clear();
+                _staticSeedValid = false;
+            }
+            int signature = HashStaticSeedInputs(location, scene, win);
+            var lightsNow = Game1.currentLightSources;
+            if (lightsNow != null)
+            {
+                foreach (var pair in lightsNow)
+                {
+                    LightSource lightSource = pair.Value;
+                    string id = pair.Key;
+                    int tuple = LightSeedTuple(location, lightSource);
+                    _lightTuplesCurrent[id] = tuple;
+                    bool moved = !_lightTuplesPrevious.TryGetValue(id, out int wasTuple) || wasTuple != tuple;
+                    // A window light never counts as moving: the window-glow pass reads every
+                    // window's position for its covered-check, so a change there has to rebuild
+                    // the still half anyway - and windows do not walk.
+                    if (moved && lightSource.lightContext.Value != LightSource.LightContext.WindowLight)
+                        _movingLightIds.Add(id);
+                    else
+                        unchecked { signature += tuple; }   // set-sum: dictionary order must not matter
+                }
+            }
+            (_lightTuplesPrevious, _lightTuplesCurrent) = (_lightTuplesCurrent, _lightTuplesPrevious);
+
+            if (_staticSeedCells.Length < count)
+            {
+                _staticSeedCells = new Vector3[count];
+                _staticSeedValid = false;
+            }
+            if (!_staticSeedValid || signature != _staticSeedSignature)
+            {
+                // Full price, as every build used to pay: the still lights and the windows.
+                // (LastWindowSeed only refreshes here, which is honest: it describes the pass
+                // that produced the cached grid.)
+                Array.Clear(_lightCells, 0, count);
+                SeedLightSources(location, scene, win, subTileSeeds: true, skipIds: _movingLightIds);
+                SeedWindowGlows(location, scene, win);
+                Array.Copy(_lightCells, _staticSeedCells, count);
+                _staticSeedSignature = signature;
+                _staticSeedValid = true;
+            }
+            else
+            {
+                Array.Copy(_staticSeedCells, _lightCells, count);
+            }
+            if (_movingLightIds.Count > 0)
+                SeedLightSources(location, scene, win, subTileSeeds: true, onlyIds: _movingLightIds);
+            // The daylight sink AGAIN, for the cascades only. The seeds already carry it once,
+            // calibrated for the flood's blurred half-weight bounce - but the cascades deliver a
+            // lamp's light straight to whatever stands near it, and one sink left a carried glow
+            // ring repainting fences at one in the afternoon: measured +300 over a 740 sky on the
+            // tile beside the player, and a fence's shade fading by 48 from four tiles away, which
+            // read as "the shade on things comes and goes as I walk". Squared, midday is 0.12 of
+            // full; at night the sink is exactly 1 and a carried lamp still washes the walls it
+            // passes, which is the point of the model.
+            float daylightSink = scene.Outdoors
+                ? 1f - 0.65f * (1f - MathHelper.Clamp(Math.Abs(GameClock.MinutesNow() - 750f) / 270f, 0f, 1f))
+                : 1f;
+            float packScale = storageScale * daylightSink;
+            int seeded = 0;
+            for (int idx = 0; idx < count; idx++)
+            {
+                Vector3 c = _lightCells[idx];
+                if (c.X > 0.001f || c.Y > 0.001f || c.Z > 0.001f)
+                    seeded++;
+                pixels[idx] = new Color(
+                    (byte)MathHelper.Clamp(c.X * 255f * packScale, 0f, 255f),
+                    (byte)MathHelper.Clamp(c.Y * 255f * packScale, 0f, 255f),
+                    (byte)MathHelper.Clamp(c.Z * 255f * packScale, 0f, 255f), (byte)255);
+            }
+            return seeded;
+        }
+
+        // ---- The still-seed cache (see SeedEmitters) ----
+        private Vector3[] _staticSeedCells = Array.Empty<Vector3>();
+        private int _staticSeedSignature;
+        private bool _staticSeedValid;
+        private GameLocation? _staticSeedLocation;
+        private Dictionary<string, int> _lightTuplesPrevious = new();
+        private Dictionary<string, int> _lightTuplesCurrent = new();
+        private readonly HashSet<string> _movingLightIds = new();
+
+        /// <summary>Raw-bit hash of everything one light contributes to the seed grid, including
+        /// whether the glow gate lets it seed at all: a window going dark changes WHICH lights
+        /// seed, not any of the numbers on the light.</summary>
+        private static int LightSeedTuple(GameLocation location, LightSource lightSource)
+        {
+            unchecked
+            {
+                int h = 17;
+                h = h * 31 + lightSource.position.Value.X.GetHashCode();
+                h = h * 31 + lightSource.position.Value.Y.GetHashCode();
+                h = h * 31 + lightSource.radius.Value.GetHashCode();
+                h = h * 31 + lightSource.textureIndex.Value;
+                h = h * 31 + (int)lightSource.color.Value.PackedValue;
+                h = h * 31 + (int)lightSource.lightContext.Value;
+                h = h * 31 + (ShadowRenderer.WindowGlowing(location, lightSource) ? 1 : 0);
+                return h;
+            }
+        }
+
+        /// <summary>Raw-bit hash of every input the still half of the seed pass reads besides the
+        /// lights themselves: the window rectangle, the scene, the clock (midday sink, window
+        /// daylight), the weather, and the glow-sprite list some rooms publish their windows as.
+        /// Bit-strict on purpose - a cache reused under a changed input would no longer be
+        /// identical to a fresh pass, and identical is the whole contract.</summary>
+        private static int HashStaticSeedInputs(GameLocation location, in SceneSeed scene, in TileWindow win)
+        {
+            unchecked
+            {
+                int h = 17;
+                h = h * 31 + win.X0; h = h * 31 + win.Y0;
+                h = h * 31 + win.W; h = h * 31 + win.H;
+                h = h * 31 + ((scene.Outdoors ? 1 : 0) | (scene.ScriptedDark ? 2 : 0) | (scene.VanillaDark ? 4 : 0));
+                h = h * 31 + scene.NightSeed.GetHashCode();
+                h = h * 31 + scene.Sky.X.GetHashCode();
+                h = h * 31 + scene.Sky.Y.GetHashCode();
+                h = h * 31 + scene.Sky.Z.GetHashCode();
+                h = h * 31 + WindowPatchScale.GetHashCode();
+                h = h * 31 + WindowRoomScale.GetHashCode();
+                h = h * 31 + Game1.ambientLight.PackedValue.GetHashCode();
+                h = h * 31 + GameClock.MinutesNow().GetHashCode();
+                h = h * 31 + ((Game1.isRaining ? 1 : 0) | (Game1.isSnowing ? 2 : 0) | (Game1.isLightning ? 4 : 0));
+                h = h * 31 + (Game1.currentSeason?.GetHashCode() ?? 0);
+                h = h * 31 + Game1.dayOfMonth;
+                if (location.lightGlows is { } glows)
+                {
+                    h = h * 31 + glows.Count;
+                    foreach (Vector2 glowPoint in glows)
+                    {
+                        h = h * 31 + glowPoint.X.GetHashCode();
+                        h = h * 31 + glowPoint.Y.GetHashCode();
+                    }
+                }
+                return h;
+            }
         }
 
         /// <summary>Sky exposure and per-cell decay, read off the occluder grid.</summary>
@@ -326,15 +506,29 @@ namespace SDVRadiance
             return inten > 0.002f;
         }
 
-        private void SeedLightSources(GameLocation location, in SceneSeed scene, in TileWindow win)
+        /// <param name="subTileSeeds">Seed each light into the four cells around its TRUE position,
+        /// weighted bilinearly, instead of snapping to one tile. The cascades want this: their map
+        /// rebuilds as a carried light moves (the hash reads position at 16 px), and with the seed
+        /// snapped to whole tiles the light's mound TELEPORTED a tile at a time - the ground around
+        /// a walking player with a glow ring flickered at every tile crossing. The flood keeps the
+        /// snap: its bounce is blurred to softness anyway, and its output is a verified baseline.</param>
+        /// <param name="onlyIds">Seed only these lights (the moving half of the emitter split).</param>
+        /// <param name="skipIds">Seed everything but these (the still half). Both null: everything,
+        /// which is what the flood's own build wants.</param>
+        private void SeedLightSources(GameLocation location, in SceneSeed scene, in TileWindow win, bool subTileSeeds,
+            HashSet<string>? onlyIds = null, HashSet<string>? skipIds = null)
         {
             // ---- Seed the game's real light sources (lamps, torches, fires, windows) ----
             var lights = Game1.currentLightSources;
             if (lights != null)
             {
-                foreach (var kv in lights.Values)
+                foreach (var pair in lights)
                 {
-                    var ls = kv;
+                    var ls = pair.Value;
+                    if (onlyIds != null && !onlyIds.Contains(pair.Key))
+                        continue;
+                    if (skipIds != null && skipIds.Contains(pair.Key))
+                        continue;
                     if (!ShadowRenderer.WindowGlowing(location, ls))   // stale/dark window: not emitting
                         continue;
                     // The TRUE cell, which may lie outside the grid; the columns below are laid
@@ -362,7 +556,7 @@ namespace SDVRadiance
                     // breathes where it is visible, in the direct pool (RenderPipeline.Lighting)
                     // and in the shadows it casts, both of which are per-frame and free.
                     float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * (scene.Outdoors ? 1.25f : 0.5f);
-                    if (!ClampSeed(ref ci, ref cj, ref inten, win))
+                    if (!subTileSeeds && !ClampSeed(ref ci, ref cj, ref inten, win))
                         continue;
                     // The same midday sink the DIRECT pools got ("a street lamp at noon reads as
                     // glass"): these seeds never had it, which went unnoticed while the flat bounce
@@ -408,8 +602,36 @@ namespace SDVRadiance
                     // One seed cell; the bilinear upsample + the 5×5 bounce spread it into a soft
                     // pool. (A wide radial seed disc was tried to force a bigger pool but never read
                     // as wider on the coarse grid — reverted to keep it simple.)
-                    int idx = cj * win.W + ci;
-                    _lightCells[idx] = Vector3.Max(_lightCells[idx], seedColor * inten);
+                    if (subTileSeeds)
+                    {
+                        // The light's TRUE position in cell coordinates (cell centres at +0.5),
+                        // split over the four cells around it. A light standing at a tile's centre
+                        // (a placed torch) lands whole in its own cell, exactly as the snap put it;
+                        // a CARRIED light glides between cells as its owner walks.
+                        float cellX = glowPosition.X / 64f - 0.5f - win.X0;
+                        float cellY = glowPosition.Y / 64f - 0.5f - win.Y0;
+                        int leftCell = (int)Math.Floor(cellX);
+                        int topCell = (int)Math.Floor(cellY);
+                        float rightShare = cellX - leftCell;
+                        float bottomShare = cellY - topCell;
+                        for (int corner = 0; corner < 4; corner++)
+                        {
+                            int cornerI = leftCell + (corner & 1);
+                            int cornerJ = topCell + (corner >> 1);
+                            float share = ((corner & 1) == 0 ? 1f - rightShare : rightShare)
+                                        * ((corner >> 1) == 0 ? 1f - bottomShare : bottomShare);
+                            float cornerInten = inten * share;
+                            if (!ClampSeed(ref cornerI, ref cornerJ, ref cornerInten, win))
+                                continue;
+                            int cornerIdx = cornerJ * win.W + cornerI;
+                            _lightCells[cornerIdx] = Vector3.Max(_lightCells[cornerIdx], seedColor * cornerInten);
+                        }
+                    }
+                    else
+                    {
+                        int idx = cj * win.W + ci;
+                        _lightCells[idx] = Vector3.Max(_lightCells[idx], seedColor * inten);
+                    }
 
                     // SUN SHAFT: daylight through a window falls onto the floor below it — seed a
                     // fading column of cool light under the window so (after bilinear + the blur

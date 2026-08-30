@@ -495,6 +495,15 @@ namespace SDVRadiance
                 foreach (NPC npc in ev.actors)
                     if (!ev.ShouldHideCharacter(npc))
                         yield return npc;
+            // A RIDDEN horse is not in location.characters at all: Horse's mount code removes it
+            // from the list and the rider draws it instead (Farmer.draw calls mount.draw). So this
+            // list, which is every caster the pass walks, could not see it, and the rider is
+            // skipped on the grounds that the horse's shadow covers them. Riding therefore took
+            // every shadow off the screen, horse and rider both. Added here rather than at each
+            // call site so the sun pass, the per-light pass, the bake and the report all agree.
+            foreach (Farmer who in location.farmers)
+                if (who?.mount != null)
+                    yield return who.mount;
         }
 
         /// <summary>
@@ -530,6 +539,12 @@ namespace SDVRadiance
             // shadow disappearing the moment you mount.
             if (!npc.HideShadow || npc is Pet || npc is Horse)
                 return false;
+            // A creature from another mod that hides the vanilla blob only to paint a blob of its
+            // own (Custom Companions, for every companion) wants a shadow: it gets ours, and the
+            // shim its draw runs through swallows the one it paints. Known by the draw itself, not
+            // by the class name, so a companion configured with no shadow keeps none.
+            if (ShadowSuppression.SelfShadowedCharacterTypes.Contains(npc.GetType()))
+                return false;
             // NPC.cs, end-of-route behaviour: a standing silhouette over a sleeping sprite is worse
             // than no shadow, so this is the one HideShadow that really means none.
             if (npc.layingDown)
@@ -539,6 +554,21 @@ namespace SDVRadiance
                 return false;
             // Event.AddTemporaryActor: flag set from sprite width alone (>= 32).
             if (npc.EventActor && (npc.Sprite?.SpriteWidth ?? 0) >= 32)
+                return false;
+            // Every reason above is a piece of the GAME's own code, and the flag means what that
+            // code meant by it. A class that ships in another mod's assembly cannot be read the
+            // same way: there the flag is set to stop the game painting its round blob, because
+            // the mod means to paint its own. Custom Companions sets it on every companion and
+            // then paints a blob only for the ones its content pack marked EnableShadow, which
+            // defaults to false — so the crabs and ducks of a wildlife pack hid the game's shadow,
+            // painted none of their own, and were the only creatures in the location with nothing
+            // under them. Reported twice by different players.
+            //
+            // SelfShadowedCharacterTypes above cannot answer this on its own: it is filled by
+            // WATCHING a class paint a blob, so a class that never paints one never lands in it,
+            // and which companion happens to walk on screen first decides the answer for a whole
+            // session.
+            if (npc.GetType().Assembly != typeof(NPC).Assembly)
                 return false;
             return true;
         }
@@ -716,6 +746,10 @@ namespace SDVRadiance
             _overcastBlend += (OvercastNow() - _overcastBlend) * SunBlendRate;
             if (Math.Abs(OvercastNow() - _overcastBlend) < 0.004f)
                 _overcastBlend = OvercastNow();
+            // A frozen capture pins both cross-fades at their target, as it pins every other fade:
+            // two dumps of one frozen scene taken while a blend was still in transit differed by a
+            // level or two along every shadow edge, which is drift of ours, not the game's.
+            _overcastBlend = Determinism.Settle(_overcastBlend, OvercastNow());
             float sunTarget = SunCasts() ? 1f : 0f;
             // The benchmark calls this several extra times per frame to measure it. Advancing the
             // dusk cross-fade once per CALL rather than once per frame would run it at seven times
@@ -725,9 +759,13 @@ namespace SDVRadiance
                 _sunBlend += (sunTarget - _sunBlend) * SunBlendRate;
                 if (Math.Abs(sunTarget - _sunBlend) < 0.004f)
                     _sunBlend = sunTarget;
+                _sunBlend = Determinism.Settle(_sunBlend, sunTarget);
             }
 
             _renderDepth++;
+            // Our shadows are lighting, not bodies: keep them out of the sprite-relief replay
+            // (see SpriteDrawRecorder.SuppressRecording for what happened when they got in).
+            SpriteDrawRecorder.SuppressRecording = true;
             try
             {
                 if (_sunBlend > 0.004f)
@@ -742,6 +780,7 @@ namespace SDVRadiance
             finally
             {
                 _renderDepth--;
+                SpriteDrawRecorder.SuppressRecording = false;
             }
         }
     }

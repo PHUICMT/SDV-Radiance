@@ -126,7 +126,28 @@ icon("lens", ((120, 132, 150), (70, 80, 96), (255, 255, 255)), [
     "................",
 ])
 
-# 6. Lighting - a hanging lantern with a pool of light.
+# 6. Smoothing - a pixel staircase with the smoothed diagonal skimming its corners,
+# which is literally what the Scale2x tab does to the art.
+icon("smoothing", ((152, 200, 132), (104, 152, 92), (86, 150, 200)), [
+    "................",
+    "..ooooooo.......",
+    "..o111113o......",
+    "..o11111o3......",
+    "..o11111o.3.....",
+    "..o11111oooo....",
+    "..o11111111o3...",
+    "..o11111111o.3..",
+    "..o11111111oooo.",
+    "..o11111111111o.",
+    "..o11111111111o.",
+    "..o11222222211o.",
+    "..ooooooooooooo.",
+    "................",
+    "................",
+    "................",
+])
+
+# 7. Lighting - a hanging lantern with a pool of light.
 icon("lighting", ((255, 226, 150), (226, 170, 70), (120, 84, 50)), [
     ".......oo.......",
     ".......33.......",

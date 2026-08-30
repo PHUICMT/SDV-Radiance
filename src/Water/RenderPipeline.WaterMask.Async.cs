@@ -43,6 +43,11 @@ namespace SDVRadiance
             public bool AnyWater;              // gather: any true water tile
             public bool AnyLabeled;            // gather: any label-nominated water art
             public bool WaterAny;              // compose: final any-water verdict
+            /// <summary>Compose: per window tile, game water OR any composed effect pixel. This is
+            /// what the near-water gates (sprite mask, entity mirror) are published, because the
+            /// gather flags alone miss water that only a label brought in - the desert oasis is
+            /// one - and every stamp near it was culled while the ripple ran over the palms.</summary>
+            public bool[]? TileHasEffectWaterFlags;
             public double ComposeDurationMilliseconds;           // worker-side timing (diag)
             public System.Threading.Tasks.Task? Task;
             public volatile bool Done;
@@ -56,6 +61,9 @@ namespace SDVRadiance
             // Location-wide water body sizes for the calm factor (main thread builds, worker reads):
             public int[]? BodyTileCounts;
             public int BodyGridWidth, BodyGridHeight;
+            // Built fish ponds in this location, interior tiles only (main thread gathers, worker
+            // reads). A pond's tiles read no map art and carry the VESSEL alpha tag.
+            public List<Rectangle>? PondRects;
         }
 
         private WaterMaskJob? _pendingWaterMaskJob;
@@ -645,6 +653,16 @@ namespace SDVRadiance
                 foreach (int idx in member)
                     grid[idx] = size;
             }
+            // The calm rule reads a nine-tile body as a still puddle and turns its ripple, its
+            // glints and every reflection in it down to about half. A fish pond is nine tiles of
+            // water the game animates exactly as it animates the lake, with fish in it, and at half
+            // strength it read as untouched vanilla water beside a lake wearing the full effect.
+            // It is scored as a body big enough to be calm about nothing.
+            if (pondRects != null)
+                foreach (var r in pondRects)
+                    for (int y = Math.Max(0, r.Top); y < Math.Min(gh, r.Bottom); y++)
+                        for (int x = Math.Max(0, r.Left); x < Math.Min(gw, r.Right); x++)
+                            grid[y * gw + x] = Math.Max(grid[y * gw + x], 36);
 
             _bodyTileCounts = grid; _bodyGridWidth = gw; _bodyGridHeight = gh;
             _bodySizeSourceSurfaceMap = surf; _bodySizeEpoch = MaskEpoch;
@@ -711,22 +729,28 @@ namespace SDVRadiance
             var labels = LabelStore.Instance;
             if (labels is { Any: false }) labels = null;
             // The Desert never has waterTiles (the game excludes it by class in loadMap): its
-            // pond is decorative art the game draws no overlay on, so nothing there is water,
-            // whatever the tile properties say.
+            // pond is decorative art the game draws no overlay on, so no GAME water lives here,
+            // whatever the tile properties say. The pond still enters the mask through its
+            // LABELS, like any labelled water - this veto only keeps it off the game-water road.
             bool desert = location is StardewValley.Locations.Desert;
             // Fish ponds draw their own water in the sorted-sprite pass — never in waterTiles,
             // never a Back "Water" property. Their water is the interior of the footprint
             // (the 1-tile rim is masonry, per FishPond.isTileFishable).
             List<Rectangle>? pondRects = null;
+            List<StardewValley.Buildings.FishPond>? ponds = null;
             foreach (var b in location.buildings)
             {
                 if (b is StardewValley.Buildings.FishPond fp && fp.daysOfConstructionLeft.Value <= 0)
+                {
                     (pondRects ??= new()).Add(new Rectangle(
                         fp.tileX.Value + 1, fp.tileY.Value + 1,
                         Math.Max(0, fp.tilesWide.Value - 2), Math.Max(0, fp.tilesHigh.Value - 2)));
+                    (ponds ??= new()).Add(fp);
+                }
             }
             // Body sizes for the calm factor, measured over the whole map rather than the window.
             job.BodyTileCounts = RefreshLocationBodySizes(surf, pondRects);
+            job.PondRects = pondRects;
             job.BodyGridWidth = _bodyGridWidth;
             job.BodyGridHeight = _bodyGridHeight;
 
@@ -801,6 +825,18 @@ namespace SDVRadiance
                 || (location is StardewValley.Locations.MineShaft ms && ms.getMineArea() == 80);
 
             var ctx = new TileGatherContext(labels, surf, backs, blds, always, fronts, front, locIsLava);
+            // A fish pond's water is drawn by the building, over whatever the map has there. The
+            // ground under it is ordinary farm dirt or grass, and on most maps that art carries a
+            // label that calls all 256 of its pixels ground. The label rule ("what the author
+            // painted non-liquid is carved, even on a tile the game calls water", written for a
+            // bank ledge painted over a river) then carved the whole pond away: effect 0/256, the
+            // pond drawn as the game draws it and nothing of ours on it. Whether a pond had any
+            // water at all depended on whether somebody had labelled the dirt under it. Inside a
+            // pond there is no map to read, so its tiles are gathered through a context that
+            // carries no labels and no layers: the tile fills whole, as the game's own overlay does.
+            // The tile is also remembered as a pond tile for Pass E, which tags its alpha VESSEL.
+            var pondCtx = new TileGatherContext(null, surf, null, null, null, null, null, locIsLava);
+            if (_maskScratch.TilePondFlags == null || _maskScratch.TilePondFlags.Length < count) _maskScratch.TilePondFlags = new bool[count];
 
             for (int j = 0; j < tilesH; j++)
             {
@@ -809,7 +845,17 @@ namespace SDVRadiance
                     int idx = j * tilesW + i;
                     bool isWater = _waterTileFlags[idx];
                     int tx = startTileX + i, ty = startTileY + j;
-                    GatherTile(job, ctx, idx, tx, ty, isWater);
+                    bool inPond = InsideFishPond(pondRects, tx, ty);
+                    // The rim tiles: FishPond.draw paints its water half a tile in under the stones
+                    // on every side, so the water the player sees is wider than the interior. Those
+                    // tiles are pond tiles too, with only the texels the game paints water on; the
+                    // stones over them are carved by the building stamp in the sprite mask.
+                    var rimOf = inPond ? null : FishPondRimOwning(ponds, tx, ty);
+                    bool pondTile = inPond || rimOf != null;
+                    _maskScratch.TilePondFlags[idx] = pondTile;
+                    GatherTile(job, pondTile ? pondCtx : ctx, idx, tx, ty, isWater);
+                    if (rimOf != null)
+                        _maskScratch.TileEffectBits![idx] = FishPondWaterBits(rimOf, tx, ty);
                 }
             }
             GatherEntityCarveRects(location);
@@ -819,6 +865,50 @@ namespace SDVRadiance
         /// <summary>Everything the gather works out about ONE tile: which of its pixels are
         /// liquid, what art stands on it, and which of that art carves the water back out.
         /// Results land in <see cref="_maskScratch"/> at <paramref name="idx"/>.</summary>
+        /// <summary>The pond whose rim ring this tile is, or null. The interior is answered by
+        /// <see cref="InsideFishPond"/> first, so a hit here is always a rim tile.</summary>
+        private static StardewValley.Buildings.FishPond? FishPondRimOwning(List<StardewValley.Buildings.FishPond>? ponds, int tx, int ty)
+        {
+            if (ponds == null)
+                return null;
+            foreach (var pond in ponds)
+                if (tx >= pond.tileX.Value && tx < pond.tileX.Value + pond.tilesWide.Value
+                    && ty >= pond.tileY.Value && ty < pond.tileY.Value + pond.tilesHigh.Value)
+                    return pond;
+            return null;
+        }
+
+        /// <summary>The water FishPond.draw paints, in world pixels: from half a tile inside the left
+        /// edge to half a tile inside the right, from half a tile below the top edge to five pixels
+        /// short of the bottom. Read off the game's draw, not guessed from the footprint.</summary>
+        private static Rectangle FishPondWaterPixels(StardewValley.Buildings.FishPond pond)
+            => new Rectangle(pond.tileX.Value * 64 + 32, pond.tileY.Value * 64 + 32,
+                             (pond.tilesWide.Value - 1) * 64, pond.tilesHigh.Value * 64 - 32 - 5);
+
+        /// <summary>Which of a rim tile's 256 texels the pond's water is painted on.</summary>
+        private static bool[] FishPondWaterBits(StardewValley.Buildings.FishPond pond, int tx, int ty)
+        {
+            Rectangle water = FishPondWaterPixels(pond);
+            const int T = MaskTexelsPerTile;
+            const int pixelsPerTexel = 64 / T;
+            var bits = new bool[T * T];
+            for (int py = 0; py < T; py++)
+                for (int px = 0; px < T; px++)
+                    bits[py * T + px] = water.Contains(tx * 64 + px * pixelsPerTexel + pixelsPerTexel / 2,
+                                                       ty * 64 + py * pixelsPerTexel + pixelsPerTexel / 2);
+            return bits;
+        }
+
+        private static bool InsideFishPond(List<Rectangle>? pondRects, int tx, int ty)
+        {
+            if (pondRects == null)
+                return false;
+            foreach (var pond in pondRects)
+                if (pond.Contains(tx, ty))
+                    return true;
+            return false;
+        }
+
         private void GatherTile(WaterMaskJob job, TileGatherContext ctx, int idx, int tx, int ty, bool isWater)
         {
             bool[]? bits = null;
@@ -1186,24 +1276,42 @@ namespace SDVRadiance
                 if (isWater && ctx.Labels != null)
                 {
                     bool[]? union = null;
-                    void Union(xTile.Layers.Layer? layer)
+                    bool anyLiquid = false, groundItself = false;
+                    void Union(xTile.Layers.Layer? layer, bool isBack)
                     {
                         byte[]? l = ctx.Labels.Get(layer, tx, ty);
                         if (l == null)
                             return;
+                        if (isBack)
+                            groundItself = true;
                         union ??= new bool[256];
                         for (int p = 0; p < 256; p++)
                         {
                             byte c = l[p];
                             if (c == 1 || c == 9 || c == 10 || c == 11 || c == 14 || c == 255)
+                            {
                                 union[p] = true;
+                                anyLiquid = true;
+                            }
                         }
                     }
-                    if (ctx.Backs != null) foreach (var l in ctx.Backs) Union(l);
-                    if (ctx.Blds != null) foreach (var l in ctx.Blds) Union(l);
-                    if (ctx.Fronts != null) foreach (var l in ctx.Fronts) Union(l);
-                    if (ctx.Always != null) foreach (var l in ctx.Always) Union(l);
-                    if (union != null)
+                    if (ctx.Backs != null) foreach (var l in ctx.Backs) Union(l, true);
+                    if (ctx.Blds != null) foreach (var l in ctx.Blds) Union(l, false);
+                    if (ctx.Fronts != null) foreach (var l in ctx.Fronts) Union(l, false);
+                    if (ctx.Always != null) foreach (var l in ctx.Always) Union(l, false);
+                    // A tile whose ONLY label is an overlay saying "none of this is liquid" is,
+                    // as far as the water beneath is concerned, a tile nobody painted. The bank
+                    // art along a forest stream is labelled ground on Buildings and is a quarter
+                    // to a half transparent; the ground under it is the game's own water, and its
+                    // Back label goes unread wherever a recolour has repainted that sheet. Taken
+                    // as the union, the answer was "no liquid anywhere here" and five tiles of a
+                    // two-tile stream shipped at effect 0/256: a dead strip of vanilla water
+                    // hugging the bank while the water a tile away wore the whole effect. The
+                    // overlay is still carved, by its own opacity, a few lines below - which is
+                    // the per-pixel answer this rule was reaching for. A BACK label that paints
+                    // the ground itself and calls it dry is still obeyed: that one is about the
+                    // tile, not about something standing on it.
+                    if (union != null && (anyLiquid || groundItself))
                         keep = union;
                 }
         }
@@ -1488,6 +1596,17 @@ namespace SDVRadiance
             // write the WINDOW's mask, and letting a map-sized job write it moves the waterline.
             if (!BuildWaterlineHeightMap(job, tilesW, tilesH))
                 return;
+
+            // Snapshot the per-tile water verdict for the near-water gates (sprite mask, entity
+            // mirror). Those gates used to read the GAME-water gather flags, and water that only
+            // a label brought in never set them - the desert oasis is one - so every stamp near
+            // it was culled and the ripple ran over the palm trunks. Pass D has just computed
+            // game-water OR any composed effect pixel per tile, which is the question the gates
+            // actually ask; the job gets its own copy because the scratch array is rewritten by
+            // the next rebuild.
+            int tileCount = tilesW * tilesH;
+            job.TileHasEffectWaterFlags = new bool[tileCount];
+            Array.Copy(_maskScratch.TileHasEffectWaterFlags!, job.TileHasEffectWaterFlags, tileCount);
 
             SmoothShorelineAndEmit(tilesW, tilesH);
             BuildPlungeChurnField(tilesW, tilesH);
@@ -2393,8 +2512,11 @@ namespace SDVRadiance
                     }
                     int tileIdx = (y / MaskTexelsPerTile) * tilesW + (x / MaskTexelsPerTile);
                     byte effV = eff ? (byte)255 : (byte)0;
-                    // Body-size calm: a small pool ripples/glints gentler than an open lake.
-                    if (eff) effV = (byte)(effV * _maskScratch.TileCalmnessValues![tileIdx] / 255);
+                    // Body-size calm: a small pool ripples/glints gentler than an open lake. A fish
+                    // pond is never calm: the game animates it like the lake, and at half strength it
+                    // read as untouched vanilla water beside a lake wearing the full effect.
+                    bool pondTexel = _maskScratch.TilePondFlags != null && _maskScratch.TilePondFlags[tileIdx];
+                    if (eff && !pondTexel) effV = (byte)(effV * _maskScratch.TileCalmnessValues![tileIdx] / 255);
                     // ALPHA tags the water TYPE for the shader: 0 = ICE (mirror, no ripple),
                     // 128 = LAVA (slow molten flow + self-glow, no mirror), 255 = normal water.
                     // PER PIXEL where a label said so, falling back to the tile verdict for art
@@ -2417,6 +2539,12 @@ namespace SDVRadiance
                     byte alpha = iceB != null || lavaB != null
                         ? (iceB != null && iceB[lp] ? (byte)0 : lavaB != null && lavaB[lp] ? (byte)128 : flowA)
                         : _maskScratch.TileIceFlags![tileIdx] ? (byte)0 : _maskScratch.TileLavaFlags![tileIdx] ? (byte)128 : flowA;
+                    // 240 = VESSEL: plain water inside a built wall (a fish pond). It passes every
+                    // plain-water gate the shader has (all sit at or below 0.9), and the mirror reads
+                    // it as "a water source behind this wall is sky": two tiles past a pond's wall on
+                    // many farms is the lake, and a lake mirrored into a pond was the band players saw.
+                    if (alpha == 255 && _maskScratch.TilePondFlags != null && _maskScratch.TilePondFlags[tileIdx])
+                        alpha = 240;
                     _waterMaskPixels![p] = new Color(effV, march ? 255 : 0, bch, alpha);
                 }
             }
@@ -2502,12 +2630,17 @@ namespace SDVRadiance
             int count = tilesW * tilesH;
             int pw = tilesW * 16, ph = tilesH * 16;
             // Take this screen's own copy of the water flags before the next rebuild starts
-            // overwriting the shared gather buffer with somebody else's window.
-            if (_waterTileFlags != null && _waterTileFlags.Length >= count)
+            // overwriting the shared gather buffer with somebody else's window. The composed
+            // verdict is preferred: it also carries water that only a label brought in (the
+            // desert oasis), which the gather flags alone never see - and the near-water gates
+            // reading this array culled every sprite stamp there, so the ripple ran over the
+            // palms. The gather flags stay as the fallback for a job that stopped before Pass D.
+            bool[]? nearWaterFlags = job.TileHasEffectWaterFlags ?? _waterTileFlags;
+            if (nearWaterFlags != null && nearWaterFlags.Length >= count)
             {
                 if (_waterTilesInMask == null || _waterTilesInMask.Length < count)
                     _waterTilesInMask = new bool[count];
-                Array.Copy(_waterTileFlags, _waterTilesInMask, count);
+                Array.Copy(nearWaterFlags, _waterTilesInMask, count);
                 _waterTilesVersion++;
             }
             if (_waterMask == null || _waterMask.Width != pw || _waterMask.Height != ph)

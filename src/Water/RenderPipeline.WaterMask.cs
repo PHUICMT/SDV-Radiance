@@ -353,6 +353,55 @@ namespace SDVRadiance
         /// <para>The table is rebuilt when the mask window is, not per frame, and the answer it
         /// gives is the same answer cell for cell - this changes what the test costs and nothing
         /// about what it decides.</para></summary>
+        /// <summary>One texel per tile of the whole location: how tall the map itself is there, for
+        /// the mirror to ask about the thing it is about to reflect. 0 flat ground (and void), 64 a
+        /// deck, 128 water (the mirror has a rule of its own for that), 255 a wall, a roof or glass.
+        /// Rebuilt only when the location's surface map is a different object, so it costs a walk of
+        /// the tile grid once per location and a dictionary lookup per frame.</summary>
+        private Texture2D? _surfaceClassTexture;
+        private SurfaceMap? _surfaceClassSource;
+        /// <summary>Bound when there is no surface map: the water value, which the mirror treats as
+        /// nothing special. An unbound slot samples 0, which is ground, and would end every mirror
+        /// a tile down.</summary>
+        private Texture2D? _neutralSurfaceTexture;
+
+        private Texture2D SurfaceClassTextureFor(GameLocation? location)
+        {
+            var surf = SurfaceMap.For(location);
+            if (surf == null || surf.Width <= 0 || surf.Height <= 0)
+            {
+                if (_neutralSurfaceTexture == null || _neutralSurfaceTexture.IsDisposed)
+                {
+                    _neutralSurfaceTexture = new Texture2D(_device, 1, 1, false, SurfaceFormat.Alpha8);
+                    _neutralSurfaceTexture.SetData(new byte[] { 128 });
+                }
+                return _neutralSurfaceTexture;
+            }
+            if (ReferenceEquals(surf, _surfaceClassSource) && _surfaceClassTexture != null && !_surfaceClassTexture.IsDisposed)
+                return _surfaceClassTexture;
+            int width = surf.Width, height = surf.Height;
+            if (_surfaceClassTexture == null || _surfaceClassTexture.IsDisposed
+                || _surfaceClassTexture.Width != width || _surfaceClassTexture.Height != height)
+            {
+                _surfaceClassTexture?.Dispose();
+                _surfaceClassTexture = new Texture2D(_device, width, height, false, SurfaceFormat.Alpha8);
+            }
+            var texels = new byte[width * height];
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                    texels[y * width + x] = surf.GetSurface(x, y) switch
+                    {
+                        SurfaceClass.Ground => (byte)0,
+                        SurfaceClass.Void => (byte)0,
+                        SurfaceClass.Deck => (byte)64,
+                        SurfaceClass.Water => (byte)128,
+                        _ => (byte)255,
+                    };
+            _surfaceClassTexture.SetData(texels);
+            _surfaceClassSource = surf;
+            return _surfaceClassTexture;
+        }
+
         private bool WaterWithinTiles(int tileX, int tileY, int radiusTiles)
         {
             // Wet puddles mirror entities anywhere on the map, so while they are live the
@@ -498,12 +547,45 @@ namespace SDVRadiance
         /// <summary>Debug: save the water masks to PNG (R=effect, G=march, B=edge distance).</summary>
         public string DumpMasks(string dir)
         {
+            var report = new System.Text.StringBuilder();
+            // The flood occluder mask too: whether a fence landed in it as pickets or as a block is
+            // a question a screenshot of the lit scene answers badly and this file answers at once.
+            if (_floodOccluderMask != null)
+            {
+                string occluderPath = System.IO.Path.Combine(dir, "radiance-occluders.png");
+                using (var fs = System.IO.File.Create(occluderPath))
+                    _floodOccluderMask.SaveAsPng(fs, _floodOccluderMask.Width, _floodOccluderMask.Height);
+                report.Append($"saved {occluderPath} ({_floodOccluderMask.Width}x{_floodOccluderMask.Height}, "
+                            + $"first tile {_floodOccluderTileX},{_floodOccluderTileY}, {FloodOccSubdivision} texels per tile, alpha = occlusion); ");
+                // The shadow march reads this mask at coarser mip levels for its penumbra, and
+                // whether those levels hold anything is a question only the levels can answer: a
+                // target whose chain was never filled samples as its base level, and the softness
+                // dial does nothing at all. Level 1 is written beside the base with its mean alpha.
+                if (_floodOccluderMask is RenderTarget2D mipped && mipped.LevelCount > 1)
+                {
+                    int width1 = Math.Max(1, mipped.Width / 2), height1 = Math.Max(1, mipped.Height / 2);
+                    var level1 = new Color[width1 * height1];
+                    mipped.GetData(1, null, level1, 0, level1.Length);
+                    double alphaSum = 0;
+                    foreach (Color texel in level1) alphaSum += texel.A;
+                    string mipPath = System.IO.Path.Combine(dir, "radiance-occluders-mip1.png");
+                    using (var mipTexture = new Texture2D(_device, width1, height1))
+                    {
+                        mipTexture.SetData(level1);
+                        using var mipStream = System.IO.File.Create(mipPath);
+                        mipTexture.SaveAsPng(mipStream, width1, height1);
+                    }
+                    report.Append($"mip levels {mipped.LevelCount}, level 1 mean alpha {alphaSum / level1.Length:0.0} saved {mipPath}; ");
+                }
+                else
+                    report.Append("mask has no mip chain (the penumbra reads its own soft copies); ");
+            }
             if (_waterMask == null)
-                return "no water mask built (stand near water first)";
+                return report + "no water mask built (stand near water first)";
             string p1 = System.IO.Path.Combine(dir, "radiance-watermask.png");
             using (var fs = System.IO.File.Create(p1))
                 _waterMask.SaveAsPng(fs, _waterMask.Width, _waterMask.Height);
-            return $"saved {p1} (origin tile {_lastWaterTileX},{_lastWaterTileY}, player tile {Game1.player?.TilePoint})";
+            return report + $"saved {p1} (origin tile {_lastWaterTileX},{_lastWaterTileY}, player tile {Game1.player?.TilePoint})";
         }
     }
 }

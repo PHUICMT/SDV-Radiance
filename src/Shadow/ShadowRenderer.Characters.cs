@@ -127,6 +127,9 @@ namespace SDVRadiance
             _castsPerCaster = Math.Clamp(config.ShadowCastsPerCharacter, ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax);
             _groundForeshortening = config.ShadowGroundForeshortening;
             _characterGroundForeshortening = config.ShadowCharacterGroundForeshortening;
+            // The lamp pass captures its own tuning rather than going through CaptureKindTuning, so
+            // the shape choice has to be taken here as well or a lamp shadow keeps the sun's answer.
+            _shadowModel = config.DirectionalShadowModel;
             float lenCfg = Math.Max(0.1f, config.DirectionalShadowLength);
             float ambAlpha = strength * 0.4f;   // soft grounding pool; directional cast adds on top
             // OUTDOORS AT NIGHT a lamp is the only light on a dark ground, so its cast shadow
@@ -269,7 +272,7 @@ namespace SDVRadiance
         {
             // A RUNAWAY GUARD, not a look choice. Every light on screen casts from every caster
             // now; this only stops a location carrying an absurd number of lights from turning one
-            // frame into thousands of soft draws. It is the same 24 the lighting shader budgets,
+            // frame into thousands of soft draws. It is the same 48 the lighting pass budgets,
             // so the two agree on what "the lights in this scene" means. When it does bite it
             // keeps the lights nearest the screen centre, which is stable frame to frame (the old
             // dictionary-order + break-at-N popped shadows in/out as the light set reordered).
@@ -426,9 +429,13 @@ namespace SDVRadiance
 
         private readonly System.Collections.Generic.List<(Vector2 pos, float reach, float flick)> _nearbyLightSources = new();
         private readonly System.Collections.Generic.List<(float rot, float st, float a, float distSq)> _lightShadowCasts = new();
-        /// <summary>Runaway guard on the candidate lights, matching the lighting shader's own
-        /// budget so the two agree on what "the lights in this scene" means.</summary>
-        private const int ScreenLightBudget = 24;
+        /// <summary>Runaway guard on the candidate lights, matching the lighting pass's own
+        /// budget (<see cref="RenderPipeline.MaxLights"/>) so the two agree on what "the lights in
+        /// this scene" means. It was 24 after the lighting had already grown to 48, and the gap
+        /// was a flicker: the saloon at night carries 34 to 39 lights, so ten of them sat past the
+        /// bar and traded places every step the player took, and every NPC one of them lit gained
+        /// and lost that cast as it went. Reported as "everyone's shadow flickers when I walk".</summary>
+        private const int ScreenLightBudget = RenderPipeline.MaxLights;
         /// <summary>How many shadows one body may cast this frame, nearest light first — read from
         /// <see cref="ModConfig.ShadowCastsPerCharacter"/> once per frame rather than per caster.
         /// Ranking by distance keeps the swap invisible when a nearer light overtakes the last one
@@ -633,6 +640,25 @@ namespace SDVRadiance
                 return new Vector2(box.Center.X - lightPosition.X,
                                    box.Y - FlameHeightAboveFootprint - lightPosition.Y);
             }
+            // A torch the MAP hangs (the mines' wall sconces) lights from its tile's top-left
+            // corner while the game draws the flame's glow at the tile's centre. The glow list
+            // is the game saying where the fire is, so sparks and shadows go there too; before
+            // this the mine's sparks rose half a tile to the left of every sconce.
+            // Only a light standing exactly on a tile corner is one of those: a lamp the game
+            // hangs at a tile's centre is already where its flame is, and a window's glow in
+            // the same tile as a wall lamp must not drag the lamp under the window.
+            bool onTileCorner = lightPosition.X % 64f == 0f && lightPosition.Y % 64f == 0f;
+            if (onTileCorner && location.lightGlows != null)
+            {
+                int lightTileX = (int)MathF.Floor(lightPosition.X / 64f);
+                int lightTileY = (int)MathF.Floor(lightPosition.Y / 64f);
+                foreach (Vector2 glow in location.lightGlows)
+                {
+                    if ((int)MathF.Floor(glow.X / 64f) == lightTileX
+                        && (int)MathF.Floor(glow.Y / 64f) == lightTileY)
+                        return glow - lightPosition;
+                }
+            }
             return Vector2.Zero;
         }
 
@@ -701,6 +727,30 @@ namespace SDVRadiance
         /// feet + drawOffset rather than at the collision box.
         /// </para>
         /// </remarks>
+        /// <summary>
+        /// Where the game actually drew the local farmer this frame, in world pixels: the centre
+        /// of the body along X and its bottom edge along Y. Farmer.draw does not draw at Position:
+        /// it hands FarmerRenderer an origin of (xOffset, (yOffset + 128 - box.Height/2)/4 + 4)
+        /// source pixels and the renderer draws at position + origin with that same origin, so the
+        /// body lands three origins UP from where the box says, plus the frame's own positionOffset
+        /// and xOffset, drawOffset, and the jump offset twice (getLocalPosition adds it, draw adds
+        /// it again). Standing, every term but the box is zero and this is box.Bottom. Seated, the
+        /// game sets yOffset to -48 and picks a frame with an offset of its own, and the two nearly
+        /// cancel: the body sits where the box is. Adding yOffset whole, as the exclusion box and
+        /// the mirror stamp did, hung both 48 px above a seated player, a rectangle of dead water
+        /// over their head on the beach pier bench.
+        /// </summary>
+        internal static Vector2 FarmerDrawnAnchor(Farmer who)
+        {
+            Rectangle box = who.GetBoundingBox();
+            FarmerSprite.AnimationFrame? frame = who.FarmerSprite?.CurrentAnimationFrame;
+            float frameShiftX = frame.HasValue ? frame.Value.xOffset * 4f : 0f;
+            float frameShiftY = frame.HasValue ? frame.Value.positionOffset * 4f : 0f;
+            float centreX = box.Center.X + who.drawOffset.X + frameShiftX - 3f * who.xOffset;
+            float bottomY = box.Bottom + who.drawOffset.Y + 2f * who.yJumpOffset + frameShiftY - 0.75f * who.yOffset;
+            return new Vector2(centreX, bottomY);
+        }
+
         internal static bool IsSeated(Character? c)
         {
             if (c == null || c.drawOffset.LengthSquared() <= 256f)
@@ -743,6 +793,58 @@ namespace SDVRadiance
         private float CharacterAcrossScale(float rot, float stretch)
             => ShadowProjection.ForSolid(rot, stretch, _characterGroundForeshortening).AcrossScaleForRotation();
 
+        /// <summary>
+        /// Whether this character stands up like a person or lies across the ground like an animal.
+        ///
+        /// <para>People are thin and tall and their shadow is mostly length; a four-legged thing is
+        /// wide and low and its shadow is mostly width, which is why farm animals have their own
+        /// foreshortening. A horse and a pet are NPCs, so they were taking a person's foreshortening
+        /// and their shadows stood up on edge beside them instead of lying down. So did every
+        /// creature a wildlife mod adds, now that those cast at all.</para>
+        ///
+        /// <para>Asked of the frame the game gave the character rather than of a list of class
+        /// names, so a mod's crab and a mod's villager each get the right answer without being
+        /// named here: a villager's frame is 16 wide by 32 tall, a horse's and a pet's are 32 by 32,
+        /// a critter's is square or wider. A stretched sprite (16 by 64, the Squid Fest fishermen)
+        /// stays a person, which it is.</para>
+        /// </summary>
+        private static bool StandsLikeAPerson(NPC npc, ShadowModel model)
+        {
+            // 1.6 had no such question: every character took the person's foreshortening, horses
+            // and pets included. Answering it that way again is the whole of what the 1.6 shapes
+            // mean for a creature. Passed in rather than read from a field so the diagnostics,
+            // which are static and answer for a config they are handed, cannot drift from the draw.
+            if (model == ShadowModel.Classic)
+                return true;
+            AnimatedSprite? sprite = npc.Sprite;
+            if (sprite == null)
+                return true;
+            return sprite.SpriteHeight > sprite.SpriteWidth;
+        }
+
+        /// <summary>
+        /// Which way round the game is drawing this character, so the shadow faces the same way.
+        ///
+        /// <para>A horse has one set of frames and the game MIRRORS them to face the other way
+        /// (<c>NPC.draw</c> passes FlipHorizontally when <c>flip</c> is set or the current
+        /// animation frame asks for it). The source rectangle is identical either way, so a
+        /// silhouette cut from it and drawn unmirrored is a horse facing the wrong direction:
+        /// head where the tail is. It reads as the shadow being back to front, which is exactly
+        /// what it is.</para>
+        ///
+        /// <para>Farm animals are not affected and are not asked: they have real frames for each
+        /// direction and the game never mirrors them.</para>
+        /// </summary>
+        private static SpriteEffects SpriteFacing(NPC npc)
+        {
+            AnimatedSprite? sprite = npc.Sprite;
+            bool mirrored = npc.flip
+                || (sprite?.CurrentAnimation != null
+                    && sprite.currentAnimationIndex < sprite.CurrentAnimation.Count
+                    && sprite.CurrentAnimation[sprite.currentAnimationIndex].flip);
+            return mirrored ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
+        }
+
         private void DrawNpcShadow(SpriteBatch spriteBatch, NPC npc, float rot, float stretch, float alpha, float blur)
         {
             // The collision box is the anchor, with no drawOffset term. A stretched sprite and the
@@ -758,11 +860,17 @@ namespace SDVRadiance
             // Prefer the baked silhouette (one cohesive image, smoothly faded — same as the
             // player). Bands are the fallback only when the sprite is too big for a slot, which is
             // every stretched one: 64 rows drawn at 4x overflow the bake slot.
+            float across = StandsLikeAPerson(npc, _shadowModel) ? CharacterAcrossScale(rot, stretch)
+                                                 : SolidAcrossScale(rot, stretch);
+            SpriteEffects facing = SpriteFacing(npc);
             if (_casterBakeCache.TryGetValue((npc.Sprite.Texture, src), out SpriteBake? baked))
             {
                 baked.LastUsedTick = Game1.ticks;
+                // The bake is pinned bottom-CENTRE in its slot and FeetInRt is that centre, so a
+                // horizontal flip turns the silhouette about the same axis the game turns the
+                // sprite about, and the feet stay where they are.
                 DrawSoft(spriteBatch, Taps9, baked.Rt, null, feet, Color.White, alpha, rot, baked.FeetInRt,
-                    new Vector2(CharacterAcrossScale(rot, stretch), stretch), depth, SpriteEffects.None, blur);
+                    new Vector2(across, stretch), depth, facing, blur);
                 return;
             }
             // Where the feet sit INSIDE the sprite, which is the sprite's bottom edge only when the
@@ -786,7 +894,7 @@ namespace SDVRadiance
             if (originY >= 1f && originY < src.Height - 0.5f)
                 src = new Rectangle(src.X, src.Y, src.Width, (int)Math.Round(originY));
             DrawBandedGradient(spriteBatch, npc.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, Math.Min(originY, src.Height)),
-                alpha, rot, new Vector2(4f * CharacterAcrossScale(rot, stretch), 4f * stretch), depth, blur);
+                alpha, rot, new Vector2(4f * across, 4f * stretch), depth, blur, HeadFade, facing);
         }
     }
 }

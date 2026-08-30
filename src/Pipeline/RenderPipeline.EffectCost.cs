@@ -47,7 +47,7 @@ namespace SDVRadiance
         {
             ("BloomEnabled",               "bloom"),
             ("ColorGradeEnabled",          "colour grade"),
-            ("GodRaysEnabled",             "god rays"),
+            ("GodRaysEnabled",             "lamp shafts"),
             ("FogEnabled",                 "fog"),
             ("CloudShadowEnabled",         "cloud shadows"),
             ("TiltShiftEnabled",           "tilt shift"),
@@ -74,6 +74,19 @@ namespace SDVRadiance
             ("WetWorldLensDrops",          "drops on the glass"),
             ("WaterRainRingStrength",      "rings on the water"),
             ("LightningEffectsEnabled",    "lightning response"),
+            // 1.7.0. Most of these ship OFF, so they are priced by being turned ON: the number
+            // is what ticking that box would cost this player on the scene they are standing in.
+            // The GI model is the exception twice over - it is a swap rather than a switch, and
+            // it is an enum, which EcFlip learned to flip for exactly this row: the price is
+            // cascades AGAINST flood, whichever of the two the player is running.
+            ("SpriteReliefEnabled",        "sprite relief"),
+            ("FoliageSwayEnabled",         "foliage sway"),
+            ("SheetUpscaleEnabled",        "sheet upscale"),
+            ("FloodGiModel",               "cascades GI"),
+            ("AuroraEnabled",              "aurora"),
+            ("ShootingStarsEnabled",       "shooting stars"),
+            ("GoldenHourStrength",         "golden hour"),
+            ("BloomEmissiveBoost",         "emissive glow"),
         };
 
         internal static bool EffectCostRunning;
@@ -165,6 +178,15 @@ namespace SDVRadiance
             {
                 if (f <= 0f) return false;   // nothing to flip against
                 prop.SetValue(config, 0f);
+                return true;
+            }
+            if (saved is GiModel model)
+            {
+                // A swap, not a switch: the slope is one model priced against the other. With
+                // flood lighting off neither runs and the row reads zero, which is true.
+                var swapped = model == GiModel.Cascades ? GiModel.Flood : GiModel.Cascades;
+                prop.SetValue(config, swapped);
+                turnedOn = swapped == GiModel.Cascades;
                 return true;
             }
             return false;

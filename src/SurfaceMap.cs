@@ -447,6 +447,28 @@ namespace SDVRadiance
                     continue;
                 int bx = building.tileX.Value, by = building.tileY.Value;
                 int bw = building.tilesWide.Value, bh = building.tilesHigh.Value;
+                // A fish pond is the one building whose footprint is mostly water: a knee-high
+                // masonry rim around three by three of it (FishPond.isTileFishable). As a wall it
+                // blocked lamp light as a five-by-five block, threw a sun shaft's canopy where
+                // there is open sky, and told the water pass the pond was not water. The rim is
+                // ground: a kerb that low blocks no lamp and casts through the building pass, and
+                // the water pass paints the rim tiles by pixel from the game's own water rectangle.
+                // Its sprite never rises above its footprint, so there are no roof rows either.
+                if (building is StardewValley.Buildings.FishPond && building.daysOfConstructionLeft.Value <= 0)
+                {
+                    for (int y = by; y < by + bh; y++)
+                        for (int x = bx; x < bx + bw; x++)
+                        {
+                            if (!sm.InBounds(x, y))
+                                continue;
+                            bool rim = x == bx || x == bx + bw - 1 || y == by || y == by + bh - 1;
+                            if (rim)
+                                Set(sm, y * w + x, SurfaceClass.Ground, (sbyte)0);
+                            else
+                                Set(sm, y * w + x, SurfaceClass.Water, (sbyte)-1);
+                        }
+                    continue;
+                }
                 int spriteRows = bh;
                 try
                 {

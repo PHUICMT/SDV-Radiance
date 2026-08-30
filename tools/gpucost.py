@@ -33,6 +33,11 @@ SCENES = [
     ("town-snow",  "Town",  45, 55, 1200, "snow"),   # flakes rather than streaks
     ("beach-day",  "Beach", 30, 30, 1200, "sun"),    # the dry pair for beach-rain
     ("town-night", "Town",  45, 55, 2200, "sun"),    # the 1.5.0 baseline spot
+    ("farm-day",   "Farm",  64, 15, 1200, "sun"),    # crops and trees: where relief and sway live
+    # The sky glow only exists on a clear WINTER night outdoors by water, so it can only be
+    # priced there. Nothing else in the table needs a season, which is why the season is a
+    # per-scene setup command rather than a seventh column on every row.
+    ("beach-aurora", "Beach", 30, 30, 2200, "sun", ["debug season winter"]),
 ]
 
 # "[19:02:24 INFO  SDV-Radiance]   water caustics   0.031 ms", possibly with a trailing note.
@@ -111,9 +116,11 @@ def read_since(offset):
         return f.read().decode("utf-8", errors="replace")
 
 
-def run_scene(scene, loc, x, y, tod, weather, amplify):
+def run_scene(scene, loc, x, y, tod, weather, amplify, setup=()):
     rpc("goto", {"location": loc, "x": x, "y": y}, timeout=120)
     rpc("set", {"time": tod, "uncapped": True}, timeout=60)
+    for command in setup:
+        rpc("console", {"command": command}, timeout=60)
     rpc("goto", {"location": loc, "x": x, "y": y}, timeout=120)
     rpc("console", {"command": "radiance_weather " + weather}, timeout=60)
     time.sleep(4)
@@ -164,10 +171,12 @@ def main():
 
     os.makedirs(OUT, exist_ok=True)
     table = {}
-    for scene, loc, x, y, tod, weather in wanted:
+    for entry in wanted:
+        scene, loc, x, y, tod, weather = entry[:6]
+        setup = entry[6] if len(entry) > 6 else ()
         print(f"\n=== {scene} ({loc} {x},{y} {tod} {weather}) ===", flush=True)
         try:
-            text = run_scene(scene, loc, x, y, tod, weather, args.amplify)
+            text = run_scene(scene, loc, x, y, tod, weather, args.amplify, setup)
         except Exception as e:
             print(f"  FAILED {e}", flush=True)
             continue

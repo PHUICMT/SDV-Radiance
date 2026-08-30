@@ -38,6 +38,7 @@ float TopBias;       // extra fog toward the top of the screen (0..1)
 float Patchiness;    // 0 = classic even blanket · 1 = sparse drifting wisps with clear gaps
 float Coverage;      // 0..1 how MUCH of the frame the wisps occupy (amount, not opacity)
 float2 WorldOffset;  // world-anchor
+float2 ScreenPixels; // viewport size in pixels, for the dither's pixel grid
 
 struct PixelInput
 {
@@ -55,6 +56,22 @@ float fbm(float2 p)
     float n1 = tex2D(NoiseSampler, p * 0.11 + float2(Time * Speed, Time * Speed * 0.2)).r;
     float n2 = tex2D(NoiseSampler, mul(M, p) * 0.23 + float2(-Time * Speed * 0.6, Time * Speed * 0.13) + 0.37).r;
     return n1 * 0.65 + n2 * 0.35;
+}
+
+
+// Sub-LSB triangular dither for this pass's 8-bit write: a slow gradient (a fog
+// bank, the tone curve, the vignette ramp) cannot survive eight bits without
+// stepping, and those steps are the colour banding players report. Interleaved
+// gradient noise (Jimenez 2014): three instructions, no fetch; the triangular
+// remap hides band EDGES where uniform noise leaves them visible. Static across
+// frames on purpose - a pattern that changed per frame would be a shimmer of its
+// own. Same decision, same idiom as water.fx; correctness, not a look.
+float DitherLsb(float2 uv)
+{
+    float pixelNoise = frac(52.9829189 * frac(0.06711056 * uv.x * ScreenPixels.x
+                                            + 0.00583715 * uv.y * ScreenPixels.y));
+    return pixelNoise < 0.5 ? sqrt(2.0 * pixelNoise) - 1.0
+                            : 1.0 - sqrt(2.0 - 2.0 * pixelNoise);
 }
 
 float4 FogPS(PixelInput input) : SV_TARGET
@@ -76,7 +93,10 @@ float4 FogPS(PixelInput input) : SV_TARGET
     float f = saturate(n * Density * grad);
 
     float4 c = tex2D(SourceSampler, input.UV);
-    return float4(lerp(c.rgb, FogColor, f), c.a);
+    float3 fogged = lerp(c.rgb, FogColor, f);
+    // Gated by the fog's own contribution, so a clear pixel stays the exact source pixel.
+    fogged += DitherLsb(input.UV) * (1.0 / 255.0) * saturate(f * 12.0);
+    return float4(fogged, c.a);
 }
 
 technique Fog { pass P0 { PixelShader = compile PS_SHADERMODEL FogPS(); } }

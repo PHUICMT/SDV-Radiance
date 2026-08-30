@@ -44,6 +44,10 @@ namespace SDVRadiance
         /// <summary>Light ids in rank order for this frame, reused so the per-frame
         /// tier decision does not allocate.</summary>
         private readonly List<int> _floodLiveIds = new();
+        /// <summary>The same lights by rank, best first: who the shadowed tier should want.</summary>
+        private readonly List<int> _floodRankedIds = new();
+        private readonly List<int> _floodRankedSlots = new();
+        private Comparison<int>? _floodByRankThenId;
 
         /// <summary>Matches the light array's own entry rate, so a lamp's shadow arrives with the
         /// rest of it rather than trailing behind or racing ahead.</summary>
@@ -52,15 +56,18 @@ namespace SDVRadiance
         /// <summary>
         /// Decide this frame's shadowed tier and advance every weight.
         /// </summary>
-        /// <param name="liveIds">Light ids in rank order, as the array was written.</param>
+        /// <param name="liveIds">Light ids in the array's slot order, as it was written.</param>
+        /// <param name="rankedIds">The same ids by rank, best first.</param>
         /// <returns>Ids that hold a shadowed slot, in the order they should be uploaded.</returns>
-        private List<int> AdvanceFloodShadowTier(List<int> liveIds)
+        private List<int> AdvanceFloodShadowTier(List<int> liveIds, List<int> rankedIds)
         {
-            // Wanted: the top of the ranking, which is what the tier would have been with no
-            // easing at all.
+            // Wanted: the top of the RANKING, which is what the tier would have been with no
+            // easing at all. Not the top of the slot order: slots are stable for a light's stay,
+            // so that was "whoever arrived first", and a glow ring re-equipped mid-session never
+            // got a shadow ray again (see SetLightArrays).
             _floodShadowWanted.Clear();
-            for (int i = 0; i < liveIds.Count && i < FloodShadowedLights; i++)
-                _floodShadowWanted.Add(liveIds[i]);
+            for (int i = 0; i < rankedIds.Count && i < FloodShadowedLights; i++)
+                _floodShadowWanted.Add(rankedIds[i]);
 
             // A light that left the array entirely takes its weight with it: it is not on screen,
             // so there is nothing left to fade.
