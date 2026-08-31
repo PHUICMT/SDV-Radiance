@@ -26,10 +26,16 @@ namespace SDVRadiance
         /// by the sun (smooth, no bands). Falls back to <see cref="DrawBandedGradient"/> only when
         /// the sprite is too big for a slot or wasn't baked.
         /// </summary>
+        /// <param name="groundAnchorWorldY">The caster's own contact row in world pixels. Given
+        /// one, the shadow is cut along its length and each piece sorted at the depth of the floor
+        /// row it lies on (see <see cref="ShadowPieceDepth"/>) rather than all of it at
+        /// <paramref name="depth"/>. Only buildings ask for this: everything else on this path
+        /// carries a per-column tie-break inside its depth that a world Y cannot hold.</param>
         private void EmitObject(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, Vector2 feet,
             Vector2 baseOrigin, float alpha, float rot, float stretch, float depth, float blur,
             float headFade = HeadFade, SpriteEffects effects = SpriteEffects.None,
-            ShadowGeometry geometry = ShadowGeometry.Solid)
+            ShadowGeometry geometry = ShadowGeometry.Solid, float? groundAnchorWorldY = null,
+            Color? shadowColor = null)
         {
             var key = (texture, src, effects);
             // The lean is baked into the pixels as the projection that lays this caster down: a
@@ -74,9 +80,17 @@ namespace SDVRadiance
                 // bake's scale. Everything that fits a slot bakes at 4 and this is 1, exactly as
                 // before; only the sprites that used to draw as bands come back magnified.
                 float unbake = 4f / bakedEntry.BakedScale;
-                DrawSoft(spriteBatch, Taps9, bakedEntry.Rt, content, feet,
-                    Color.White, alpha, 0f, bakedEntry.FeetInRt - new Vector2(content.X, content.Y),
-                    new Vector2(unbake, unbake), depth, SpriteEffects.None, 0f);
+                Vector2 bakedOrigin = bakedEntry.FeetInRt - new Vector2(content.X, content.Y);
+                // The bake already holds a black, soft-edged silhouette, so it is tinted WHITE to
+                // come out as itself. A mask caller wants the same pixels read as coverage, which
+                // is the same white: the two agree, and only the banded fallback has to be told.
+                if (groundAnchorWorldY is float bakedAnchor)
+                    DrawSoftGrounded(spriteBatch, Taps9, bakedEntry.Rt, content, feet, Color.White, alpha, 0f,
+                        bakedOrigin, new Vector2(unbake, unbake), bakedAnchor, SpriteEffects.None, 0f);
+                else
+                    DrawSoft(spriteBatch, Taps9, bakedEntry.Rt, content, feet,
+                        Color.White, alpha, 0f, bakedOrigin,
+                        new Vector2(unbake, unbake), depth, SpriteEffects.None, 0f);
             }
             else
             {
@@ -111,8 +125,12 @@ namespace SDVRadiance
                 // were indistinguishable in the report while one of them was almost all of it.
                 FrameCost.Count(tooBig ? FrameCost.Counter.BakeTooBig : FrameCost.Counter.BakeMisses);
                 FrameCost.Count(FrameCost.Counter.ShadowSprites);
+                // groundSorted: false — this is a sort depth, not a world row. See the parameter's
+                // note: an object's depth carries a per-column tie-break that a world Y cannot
+                // hold, so the object path keeps one depth for the whole shadow for now.
                 DrawBandedGradient(spriteBatch, texture, src, feet, baseOrigin, alpha, rot,
-                    new Vector2(4f, 4f * stretch), depth, blur, headFade, effects);
+                    new Vector2(4f, 4f * stretch), groundAnchorWorldY ?? depth, blur, headFade, effects,
+                    groundSorted: groundAnchorWorldY.HasValue, shadowColor: shadowColor);
             }
         }
 
@@ -405,7 +423,7 @@ namespace SDVRadiance
         /// <summary>The kinds of caster that carry their own shadow length and softness. The split
         /// is the one the draw pass already made when the numbers were constants; naming it is what
         /// lets a player reach them.</summary>
-        internal enum ShadowKind { Trees, SmallTrees, Bushes, Crops, Grass, Objects }
+        internal enum ShadowKind { Trees, SmallTrees, Bushes, Crops, Grass, Objects, Buildings }
 
         /// <summary>Per-kind length ceilings and softness multipliers, read from config once per
         /// pass rather than per caster. Sized from the enum so adding a kind cannot leave a hole.</summary>
@@ -423,6 +441,7 @@ namespace SDVRadiance
             ShadowKind.Bushes => config.ShadowLengthBushes,
             ShadowKind.Crops => config.ShadowLengthCrops,
             ShadowKind.Grass => config.ShadowLengthGrass,
+            ShadowKind.Buildings => config.ShadowLengthBuildings,
             _ => config.ShadowLengthObjects,
         };
 
@@ -434,6 +453,7 @@ namespace SDVRadiance
             ShadowKind.Bushes => config.ShadowLeanBushes,
             ShadowKind.Crops => config.ShadowLeanCrops,
             ShadowKind.Grass => config.ShadowLeanGrass,
+            ShadowKind.Buildings => config.ShadowLeanBuildings,
             _ => config.ShadowLeanObjects,
         };
 
@@ -445,6 +465,7 @@ namespace SDVRadiance
             ShadowKind.Bushes => config.ShadowSoftnessBushes,
             ShadowKind.Crops => config.ShadowSoftnessCrops,
             ShadowKind.Grass => config.ShadowSoftnessGrass,
+            ShadowKind.Buildings => config.ShadowSoftnessBuildings,
             _ => config.ShadowSoftnessObjects,
         };
 
@@ -981,19 +1002,62 @@ namespace SDVRadiance
             => o is Fence || o is Sign ? ShadowGeometry.Card : ShadowGeometry.Solid;
 
         /// <summary>
-        /// Buildings are too tall for an upright silhouette (it juts up over the building itself),
-        /// so they get a soft contact POOL at the footprint base instead — grounds the building
-        /// without overlapping it or ghosting. Shape-accurate isn't achievable for tall map/entity
-        /// structures with these 2D techniques; a grounding pool is the clean compromise.
+        /// A building gets the contact pool at its footprint base AND, since 1.7.2, the shape of
+        /// its own roof laid on the ground.
+        ///
+        /// <para>
+        /// The shape is a CARD, not a solid. A solid lays its width down across the sun's
+        /// direction, which is right for a tree or a person, both of which have a thickness to
+        /// lie down; a building is standing walls, and rotating its width onto the ground swings
+        /// the near corners BELOW the footprint line, putting a piece of the shadow in front of
+        /// the building it belongs to. A card keeps the base edge on the ground line and shears
+        /// only what is above it, so nothing can come out in front.
+        /// </para>
         /// </summary>
-        private void DrawBuildingShadow(SpriteBatch spriteBatch, Building bld, float alpha, float blur)
+        private void DrawBuildingShadow(SpriteBatch spriteBatch, Building bld, float rot, float stretch,
+                                        float alpha, float blur, bool castShape)
         {
-            float w = bld.tilesWide.Value * 64f;
-            float baseX = (bld.tileX.Value + bld.tilesWide.Value / 2f) * 64f;
+            float footprintWidth = bld.tilesWide.Value * 64f;
             float baseY = (bld.tileY.Value + bld.tilesHigh.Value) * 64f;   // footprint bottom = ground line
-            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(baseX, baseY - 10f));
+            float footprintCentreX = (bld.tileX.Value + bld.tilesWide.Value / 2f) * 64f;
+            Vector2 footprintFeet = Game1.GlobalToLocal(Game1.viewport, new Vector2(footprintCentreX, baseY - 10f));
             float depth = MathHelper.Clamp(baseY / 10000f - ShadowDepthBias, 0f, 1f);
-            DrawContactBlob(spriteBatch, feet, w * 0.5f * 0.85f, 24f, alpha, depth, blur);
+            // The pool stays under every building whether or not it casts a shape. It is what
+            // grounds the footprint, and it is the whole answer on an overcast day and at every
+            // hour the sun is not casting.
+            DrawContactBlob(spriteBatch, footprintFeet, footprintWidth * 0.5f * 0.85f, 24f, alpha, depth, blur);
+
+            Texture2D? texture = null;
+            try { texture = bld.texture?.Value; } catch { /* a content pack can throw while loading its art */ }
+            if (!castShape || texture == null || bld.isUnderConstruction())
+                return;
+            Rectangle src = bld.getSourceRect();
+            if (src.Width <= 0 || src.Height <= 0)
+                return;
+            // The building's art is drawn with its bottom on the footprint's ground line and its
+            // left edge on the footprint's left, at 4x. A barn's roof overhangs its own footprint,
+            // so the silhouette has to hang from the ART's centre and not from the footprint's, or
+            // a wide roof's shadow comes out shifted by half the overhang.
+            float artCentreX = bld.tileX.Value * 64f + src.Width * 2f;
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(artCentreX, baseY));
+            // Ground-sorted from the building's TOP row, not its base, and the difference between
+            // those two is the whole reason a building's shape could not be cast before.
+            //
+            // The game gives a building a sort depth BELOW its own footprint base. Hang the shadow
+            // at the base and all of it lands in front of the building, laying the roof back
+            // across itself, which is what got the shape refused the first time. Ground-sorting
+            // from the base fixes only half: the far pieces drop behind the building, and the
+            // pieces near the base keep a depth the building still cannot cover, so a band stays
+            // across the porch. Measured on the farmhouse, that band survived the first sort.
+            //
+            // Anchored at the top row instead, every piece is below anything the building can be
+            // drawn at, so none of it can land on the building. The pieces this under-states are
+            // the ones lying between the base and the top, which is exactly the ground the
+            // building itself is standing on and hiding.
+            EmitObject(spriteBatch, texture, src, feet, new Vector2(src.Width / 2f, src.Height),
+                alpha, LeanOf(rot, ShadowKind.Buildings), LengthOf(stretch, ShadowKind.Buildings), depth,
+                SoftnessOf(blur, ShadowKind.Buildings), ObjectHeadFade, SpriteEffects.None, ShadowGeometry.Card,
+                groundAnchorWorldY: bld.tileY.Value * 64f);
         }
 
         /// <summary>
@@ -1402,12 +1466,14 @@ namespace SDVRadiance
                 return;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
-            float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
-
             // The baked silhouette is one cohesive image — flatten it vertically and lean it
-            // about the feet as a single unit (no per-layer fragmenting), softened at the edges.
-            DrawSoft(spriteBatch, Taps9, _playerRenderTarget, null, feet, Color.White, alpha, rot, _playerFeetInRenderTarget,
-                new Vector2(CharacterAcrossScale(rot, stretch), stretch), depth, SpriteEffects.None, blur);
+            // about the feet as a single unit (no per-layer fragmenting), softened at the edges,
+            // and sorted in strips against the floor it lies on, exactly as an NPC's is. Parity is
+            // the rule here: one shadow going behind a fence while the other crossed it would be
+            // the player and the villagers standing in different worlds.
+            DrawSoftGrounded(spriteBatch, Taps9, _playerRenderTarget, null, feet, Color.White, alpha, rot,
+                _playerFeetInRenderTarget, new Vector2(CharacterAcrossScale(rot, stretch), stretch),
+                who.StandingPixel.Y, SpriteEffects.None, blur);
         }
     }
 }

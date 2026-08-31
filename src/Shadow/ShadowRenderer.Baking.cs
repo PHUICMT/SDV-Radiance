@@ -669,14 +669,104 @@ namespace SDVRadiance
         private const int NpcBands = 7;
 
         /// <summary>
+        /// Sort depth for a piece of shadow lying <paramref name="upScreenPixels"/> up the screen
+        /// from the caster's feet. The value is SIGNED: a lamp above the caster throws the shadow
+        /// down the screen instead, and that piece belongs in front of the caster, not behind.
+        /// </summary>
+        /// <remarks>
+        /// A body and its shadow do not belong at the same depth. A body stands on one tile and is
+        /// drawn at that tile's depth; a shadow LIES ON THE FLOOR and runs away across it, so each
+        /// part of it belongs at the depth of the floor row it is lying on. Given a single depth
+        /// for its whole length, a shadow is sorted as though all of it stood where the caster
+        /// stands, and it paints over the table, chair or stool standing between the caster's feet
+        /// and the shadow's tip.
+        /// <para>
+        /// Sorting by the row a thing stands on is the game's own rule, and it works here for the
+        /// same reason it works there: a sprite covers screen rows ABOVE its base, so whatever
+        /// stands lower down the screen than a patch of floor is what may cover that patch.
+        /// </para>
+        /// <para>
+        /// This cannot help against a counter the MAP paints, which goes down on the Buildings
+        /// layer before the sorted batch is even opened: nothing drawn in that batch can get
+        /// behind it, at any depth.
+        /// </para>
+        /// </remarks>
+        private static float ShadowPieceDepth(float anchorWorldY, float upScreenPixels)
+            => MathHelper.Clamp((anchorWorldY - upScreenPixels) / 10000f - ShadowDepthBias, 0f, 1f);
+
+        /// <summary>Screen pixels of shadow per ground strip. A strip is flat in depth, so this is
+        /// how far the shadow's sort position is allowed to lag the floor beneath it; half a tile
+        /// resolves every piece of furniture, which is the smallest thing a shadow can be behind.</summary>
+        private const float GroundStripPixels = 32f;
+        /// <summary>Ceiling on the strips. Each one is a draw call times the blur taps, so the
+        /// count is bought only where the shadow is long enough to need it: a shadow that does not
+        /// reach past the caster's own tile is one strip, exactly as it was before.</summary>
+        private const int MaxGroundStrips = 6;
+
+        /// <summary>
+        /// Draw a baked silhouette in horizontal strips, each sorted at the depth of the floor row
+        /// it lies on (see <see cref="ShadowPieceDepth"/>). A short shadow comes out as one strip,
+        /// which is <see cref="DrawSoft"/> unchanged.
+        /// </summary>
+        private static void DrawSoftGrounded(SpriteBatch spriteBatch, Vector2[] taps, Texture2D texture, Rectangle? src,
+            Vector2 pos, Color baseColor, float alpha, float rot, Vector2 origin, Vector2 scale, float anchorWorldY,
+            SpriteEffects effects, float blur)
+        {
+            // Only the part of the silhouette's length that runs along the screen's Y moves it to
+            // another floor row. The sideways lean moves it along the row it is already on, which
+            // no sort depth has an opinion about. Signed, because a lamp overhead throws the
+            // shadow DOWN the screen and those pieces belong in front of the caster.
+            float upScreenPerTexel = (float)Math.Cos(rot) * scale.Y;
+            float alongScreenY = Math.Abs(origin.Y * upScreenPerTexel);
+            int strips = (int)MathHelper.Clamp(alongScreenY / GroundStripPixels, 1f, MaxGroundStrips);
+            Rectangle area = src ?? new Rectangle(0, 0, texture.Width, texture.Height);
+            if (strips <= 1 || area.Height < strips * 2)
+            {
+                DrawSoft(spriteBatch, taps, texture, src, pos, baseColor, alpha, rot, origin, scale,
+                    ShadowPieceDepth(anchorWorldY, 0f), effects, blur);
+                return;
+            }
+            for (int i = 0; i < strips; i++)
+            {
+                int y0 = area.Height * i / strips;
+                int y1 = area.Height * (i + 1) / strips;
+                var strip = new Rectangle(area.X, area.Y + y0, area.Width, y1 - y0);
+                // The origin has to keep naming the same feet row, so it rises with the strip -
+                // the same correction the banded gradient makes for its bands.
+                var stripOrigin = new Vector2(origin.X, origin.Y - y0);
+                float upScreen = (origin.Y - (y0 + y1) * 0.5f) * upScreenPerTexel;
+                DrawSoft(spriteBatch, taps, texture, strip, pos, baseColor, alpha, rot, stripOrigin, scale,
+                    ShadowPieceDepth(anchorWorldY, upScreen), effects, blur);
+            }
+        }
+
+        /// <summary>
         /// Draw a single-texture sprite as a shadow with a feet→head opacity gradient, by
         /// slicing it into horizontal bands (each drawn about the shared feet anchor so they
         /// stay aligned under rotation + stretch) and fading each band's alpha toward the tip.
         /// </summary>
+        /// <param name="anchorWorldY">The caster's own contact row in world pixels, which every
+        /// band is sorted relative to when <paramref name="groundSorted"/> is set. When it is not,
+        /// this is a plain sort depth and every band is given it unchanged.</param>
+        /// <param name="groundSorted">Whether each band sits at the depth of the floor row it lies
+        /// on rather than at the caster's. Characters do. The object path does not yet: an
+        /// object's depth carries a per-column tie-break that keeps two things on one row apart,
+        /// and that has no meaning as a world Y, so moving it is its own piece of work.</param>
+        /// <param name="shadowColor">What the bands are stamped in. Black on the world, because a
+        /// shadow is an absence of light; WHITE when the caller is filling a coverage mask that a
+        /// later pass reads as "how much of this pixel is in shadow", where black would read as
+        /// nothing at all.</param>
         private void DrawBandedGradient(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, Vector2 feet,
-            Vector2 baseOrigin, float alpha, float rot, Vector2 scale, float depth, float blur,
-            float headFade = HeadFade, SpriteEffects effects = SpriteEffects.None)
+            Vector2 baseOrigin, float alpha, float rot, Vector2 scale, float anchorWorldY, float blur,
+            float headFade = HeadFade, SpriteEffects effects = SpriteEffects.None, bool groundSorted = true,
+            Color? shadowColor = null)
         {
+            Color bandColor = shadowColor ?? Color.Black;
+            // The bands are already cut across the shadow's length, so each one can be sorted at
+            // the depth of the floor row it lies on for nothing (see ShadowPieceDepth). Only the
+            // part of the lean that runs along the screen's Y changes a band's row, and its sign
+            // matters: a lamp overhead lays the shadow down the screen rather than up it.
+            float upScreenPerTexel = (float)Math.Cos(rot) * scale.Y;
             // The ramp runs from the FEET row up, not from the sprite's bottom edge. On a sprite
             // the game has stretched, the character occupies the upper half and the rest is water
             // or tackle: measuring from the bottom edge handed the person the pale end of the ramp
@@ -699,8 +789,10 @@ namespace SDVRadiance
                 // water half) clamp to 1 rather than running past it.
                 float tBottom = MathHelper.Clamp(src.Height * (i + 0.5f) / bands / feetRow, 0f, 1f);
                 float ga = headFade + (1f - headFade) * (float)Math.Pow(tBottom, 1.8);
-                DrawSoft(spriteBatch, Taps5, texture, band, feet, Color.Black, alpha * ga, rot, origin, scale, depth,
-                    effects, blur);
+                float upScreen = (baseOrigin.Y - (y0 + y1) * 0.5f) * upScreenPerTexel;
+                float bandDepth = groundSorted ? ShadowPieceDepth(anchorWorldY, upScreen) : anchorWorldY;
+                DrawSoft(spriteBatch, Taps5, texture, band, feet, bandColor, alpha * ga, rot, origin, scale,
+                    bandDepth, effects, blur);
             }
         }
 

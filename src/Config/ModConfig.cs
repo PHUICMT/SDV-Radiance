@@ -925,6 +925,13 @@ namespace SDVRadiance
         public float DirectionalShadowBlur { get; set; } = 5.0f;
         /// <summary>Also cast directional shadows from trees and bushes (not just characters).</summary>
         public bool DirectionalShadowObjects { get; set; } = true;
+        /// <summary>Give a building the shape of its own shadow instead of a pool under it.
+        ///
+        /// <para>A building is the tallest thing on a farm and its shadow is the largest single
+        /// shape the sun draws there, so this is the one caster whose shadow is a feature of the
+        /// scene rather than a detail of a sprite. It rides on the object switch above: with
+        /// objects off, nothing casts.</para></summary>
+        public bool DirectionalShadowBuildings { get; set; } = true;
         /// <summary>
         /// How much the ground is foreshortened on screen: a circle drawn on the ground is an
         /// oval this many times as tall as it is wide. 1 is a ground seen from straight above,
@@ -991,6 +998,23 @@ namespace SDVRadiance
         /// <summary>Forage, fences, signs, torches, kegs, machines - anything standing on its tile
         /// at its own height, which is why this one is not capped below a person's.</summary>
         public float ShadowLengthObjects { get; set; } = 1.0f;
+        /// <summary>Barns, coops, sheds, the greenhouse and the farmhouse.
+        ///
+        /// <para>A building's shadow is not drawn among the sprites: it goes into a coverage mask
+        /// and the effect chain multiplies the picture down through it, so NOTHING hides any of
+        /// it. That is the whole difference from every other kind here, and it is why this number
+        /// is low. A caster in the sort loses whatever part of its shadow falls behind something;
+        /// a building loses nothing, so the same number reads several times longer.</para>
+        ///
+        /// <para>1.05 is where the author's own eye put it after walking the farm, replacing the
+        /// 0.45 this shipped as while it was still a guess. The guess was low by more than half,
+        /// and the reasoning above is why: a shadow nothing can hide reads longer than the same
+        /// number does on a caster in the sort, so the number was pulled down twice for the same
+        /// effect. 1.05 sits just above forage and machines at 1.00, which is the neighbour it was
+        /// judged against, and a building is the taller thing. Still a look rather than a measured
+        /// answer, which is why the dial is in the config, in GMCM and on the shadows page of
+        /// F6.</para></summary>
+        public float ShadowLengthBuildings { get; set; } = 1.05f;
 
         // Softness per kind, as a multiplier on DirectionalShadowBlur. A blur radius is in pixels,
         // so the same radius reads as a soft edge on a short shadow and a hard one on a long
@@ -1008,6 +1032,10 @@ namespace SDVRadiance
         public float ShadowSoftnessGrass { get; set; } = 1.0f;
         /// <summary>Softness of shadows from forage, fences and machines, times the overall blur.</summary>
         public float ShadowSoftnessObjects { get; set; } = 1.0f;
+        /// <summary>Softness of a building's shadow, times the overall blur. Softer than the rest:
+        /// the further a shadow's edge is from what casts it the less sharp it is, and a roof line
+        /// is the furthest edge on the farm from the ground it lands on.</summary>
+        public float ShadowSoftnessBuildings { get; set; } = 1.4f;
 
         // How far each kind LEANS, as a fraction of the sun's angle. 1 is the sun itself and is
         // the default for everything, because a shadow that leans less has moved the sun for its
@@ -1033,6 +1061,8 @@ namespace SDVRadiance
         public float ShadowLeanGrass { get; set; } = 1.0f;
         /// <summary>How far shadows from forage, fences and machines lean, as a fraction of the sun's own angle.</summary>
         public float ShadowLeanObjects { get; set; } = 1.0f;
+        /// <summary>How far a building's shadow leans, as a fraction of the sun's own angle.</summary>
+        public float ShadowLeanBuildings { get; set; } = 1.0f;
 
         /// <summary>A shadow shorter than this is not a shadow, so nothing is allowed to reach zero
         /// by way of a length slider; turn the whole feature off instead.</summary>
@@ -1215,18 +1245,21 @@ namespace SDVRadiance
             ShadowLengthCrops = ClampToRange(ShadowLengthCrops, ShadowKindLengthMin, ShadowKindLengthMax);
             ShadowLengthGrass = ClampToRange(ShadowLengthGrass, ShadowKindLengthMin, ShadowKindLengthMax);
             ShadowLengthObjects = ClampToRange(ShadowLengthObjects, ShadowKindLengthMin, ShadowKindLengthMax);
+            ShadowLengthBuildings = ClampToRange(ShadowLengthBuildings, ShadowKindLengthMin, ShadowKindLengthMax);
             ShadowSoftnessTrees = ClampToRange(ShadowSoftnessTrees, ShadowKindSoftnessMin, ShadowKindSoftnessMax);
             ShadowSoftnessSmallTrees = ClampToRange(ShadowSoftnessSmallTrees, ShadowKindSoftnessMin, ShadowKindSoftnessMax);
             ShadowSoftnessBushes = ClampToRange(ShadowSoftnessBushes, ShadowKindSoftnessMin, ShadowKindSoftnessMax);
             ShadowSoftnessCrops = ClampToRange(ShadowSoftnessCrops, ShadowKindSoftnessMin, ShadowKindSoftnessMax);
             ShadowSoftnessGrass = ClampToRange(ShadowSoftnessGrass, ShadowKindSoftnessMin, ShadowKindSoftnessMax);
             ShadowSoftnessObjects = ClampToRange(ShadowSoftnessObjects, ShadowKindSoftnessMin, ShadowKindSoftnessMax);
+            ShadowSoftnessBuildings = ClampToRange(ShadowSoftnessBuildings, ShadowKindSoftnessMin, ShadowKindSoftnessMax);
             ShadowLeanTrees = ClampToRange(ShadowLeanTrees, ShadowKindLeanMin, ShadowKindLeanMax);
             ShadowLeanSmallTrees = ClampToRange(ShadowLeanSmallTrees, ShadowKindLeanMin, ShadowKindLeanMax);
             ShadowLeanBushes = ClampToRange(ShadowLeanBushes, ShadowKindLeanMin, ShadowKindLeanMax);
             ShadowLeanCrops = ClampToRange(ShadowLeanCrops, ShadowKindLeanMin, ShadowKindLeanMax);
             ShadowLeanGrass = ClampToRange(ShadowLeanGrass, ShadowKindLeanMin, ShadowKindLeanMax);
             ShadowLeanObjects = ClampToRange(ShadowLeanObjects, ShadowKindLeanMin, ShadowKindLeanMax);
+            ShadowLeanBuildings = ClampToRange(ShadowLeanBuildings, ShadowKindLeanMin, ShadowKindLeanMax);
             ShadowCastsPerCharacter = Math.Clamp(ShadowCastsPerCharacter, ShadowCastsMin, ShadowCastsMax);
             CameraFollowSpeed = ClampToRange(CameraFollowSpeed, 0.05f, 1f);
         }

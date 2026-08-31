@@ -2,6 +2,129 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.7.2
+
+### Added
+
+- **Buildings lie down.** A barn, a coop, a shed, the greenhouse and the farmhouse each had a soft
+  patch under it and nothing else, while every tree and fence on the same farm threw the shape of
+  itself. They now cast their own shape, from their own art, so the roof line is on the ground
+  where the sun puts it. The patch underneath stays: it is what grounds a footprint on an overcast
+  day and at every hour the sun is not casting.
+
+  The shape is a card: it stays joined to the footprint line and shears sideways with the sun, so
+  it leans one way through the morning, stands almost straight up at noon and leans the other way
+  by evening, and no part of it can ever come out in front of the building it belongs to. A solid
+  projection, which is what a tree and a person get, swings the near corners below that line and
+  puts a piece of the shadow in front of the wall.
+
+  **It is a change in the light, not a sprite.** Every other shadow in this mod is drawn among the
+  sprites and sorted against them, which works because they are small. A building's shadow covers
+  dozens of tiles, and sorting one that size has no right answer: put it over the grass and it
+  goes over the building too, put it under the building and every tuft of grass punches a hole in
+  it. So it is stamped into a coverage mask and the effect chain multiplies the picture down
+  through it, the way a cloud shadow already works. Grass standing in a building's shadow is
+  darkened, which is what a shadow does to grass. The building itself is taken back out of the
+  mask before it is applied: the building is the thing in the sun.
+
+  It was tried once before and refused, because the cast came back laid across the building it
+  belonged to. Two separate things were doing that, and neither was the projection. The game sorts
+  a building well above its own footprint base, so a shadow hung at that base was in front of the
+  building: it is hung from the top row now, below anything the building can be drawn at. And the
+  solid projection was reaching in front on its own.
+
+  **Farm buildings only.** The saloon, Pierre's and every other building in town look like
+  buildings and are not: they are painted into the map the way the road and the grass are, and the
+  game hands us nothing to cast from. Asked directly, the farm owns six buildings and the town
+  owns none. Casting from painted map art is a different job and is not in this release.
+
+  **Glass shades like glass.** A shadow's darkness is read per pixel from the caster's own art, so
+  anything painted part-way clear throws a lighter shadow without being told to. The greenhouse's
+  sheet is 39% part-way clear, which is its glass, so a repaired greenhouse lays a pale shadow
+  through its panes and a solid one through its frame. The same holds for any building an art pack
+  paints that way. Nothing guesses at glass from how bright a pixel looks: that is the same
+  mistake as reading a bright pixel as a light source.
+
+  On by default, under the same switch trees and fences use, with its own length, softness and
+  lean in the config, in GMCM and on the shadows page of F6.
+
+### Fixed
+
+- **A shadow no longer lies across the thing standing in front of it.** A character's shadow was
+  given one sort depth, taken from the caster's own feet. That is where a BODY belongs, and it is
+  not where a shadow belongs: a shadow lies on the floor and runs away across it, so its far end
+  is on ground further back than the caster is standing on. Sorted as though all of it stood where
+  the caster stands, it painted over whatever was between the caster's feet and the shadow's tip,
+  which outdoors is most visibly the farmhouse wall a morning shadow leans onto. Every character's
+  shadow is now cut into pieces along its length and each piece takes the depth of the floor row
+  it is lying on, which is the rule the game sorts everything else in the world by. A shadow that
+  does not reach past the caster's own tile is drawn exactly as it was.
+
+  This is the class of fault behind the report that a farmer's shadow passes through tables and
+  the saloon counter, and it is the half that anything with a footprint is responsible for. The
+  saloon's counter is painted into the map instead, on a layer the game lays down before the
+  sorted batch is opened, so no sort depth can put a shadow behind that one.
+
+- **The top of your own head rippled with the water you stood beside.** The water is told which
+  pixels are yours so that your own sprite never distorts, and it was being told with the shadow
+  system's silhouette. A shadow is faded toward its far tip on purpose, from full at the feet to a
+  twentieth at the head, and the test the water applies to it lands about ten pixels below the top
+  of the head, so the crown fell outside the exclusion. Every other player in a co-op game was
+  already excluded through a copy of the same bake that carries no such fade, and now so are you.
+  Only with reflections on, which is where that copy is made.
+
+### Changed
+
+- **The shadow settings are grouped by the thing, not by the dial.** Length, softness and lean each
+  had their own block of seven, so choosing how a barn casts meant three sliders eight rows apart
+  in three different places, and the page was twenty-one sliders long. In F6 there is now a row of
+  kinds to pick from and the three dials for the one you picked sit under it, so the page ends
+  after three sliders and the choice survives closing the menu, which is what you want when the
+  way to judge a shadow is to go and look at it. In the settings menu, which cannot hide rows
+  behind a picker, the same twenty-one are regrouped under a heading per kind instead.
+
+  No value moved. A config file from 1.7.1 is read exactly as it was.
+
+### For translators
+
+**Nine new keys, twenty-eight removed, three reworded**, counted by diffing `i18n/default.json`
+against the `v1.7.1` tag rather than by any running tally. The file goes from 813 keys to 794.
+
+New:
+
+```
+config.shadows.buildings.name
+config.shadows.buildings.tooltip
+config.shadows.length.buildings.name
+tuner.shadowbuildings
+tuner.shadowlength.buildings
+help.shadowbuildings
+tuner.shadowkind.length
+tuner.shadowkind.softness
+tuner.shadowkind.lean
+```
+
+The six building strings each sit directly after their `objects` twin in `default.json`, so the
+wording already agreed for "Forage, fences & machines" is the line above the one to write. The
+tuner ones are short because they have to fit a button: "Barns & the house" rather than the full
+list. The three `shadowkind` strings are the dial names now that the kind is the heading, and they
+are one word each: Length, Softness, Lean.
+
+Removed, and this is why there are so many: the kind's name used to be repeated as the label of
+every dial, so "Bushes" existed three times over. The kind is written once now, as the heading, and
+the two duplicate families went with the two block titles that introduced them.
+
+```
+tuner.shadowsoftperkind          tuner.shadowleanperkind
+tuner.shadowsoftness.<7 kinds>   tuner.shadowlean.<7 kinds>
+config.shadows.softness.title    config.shadows.lean.title
+config.shadows.softness.<7 kinds>.name
+config.shadows.lean.<7 kinds>.name
+```
+
+Reworded, because the heading no longer introduces a block of lengths:
+`tuner.shadowperkind`, `config.shadows.perkind.title` and `config.shadows.perkind.tooltip`.
+
 ## 1.7.1
 
 ### Fixed

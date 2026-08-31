@@ -154,6 +154,11 @@ namespace SDVRadiance
             // it out: a comparer already reports a missing side, and cannot mistake that for a diff.
             if (_cascadeBlend < 0.999f)
                 Add("flood_lightmap", _flood.Texture);
+            // The building shadows, as coverage, before the chain multiplies them into the
+            // picture. "I cannot see the shadow" has two causes that look identical from the
+            // finished frame - an empty mask, or a mask nothing applied - and this separates them.
+            if (ShadowRenderer.BuildingSunShadowReady)
+                Add("building_shadow_mask", ShadowRenderer.BuildingSunShadowMask);
             Add("cascade_lightmap", _cascades.Texture);
             // The cascades' inputs, because a collapsed cascade map has exactly three suspects
             // (the mask it marches, the softened copies, the emitters) and a capture that holds

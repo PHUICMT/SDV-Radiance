@@ -37,6 +37,20 @@ Status legend: **OK** works together Â· **PARTIAL** works with settings tweaks Â
 | Fashion Sense + packs | OK | Player silhouette is RT-baked from the final composed sprite, so custom outfits/hair reflect and cast shadows correctly. |
 | Anime portrait/body CP packs | OK | Portrait-only changes; no rendering interaction. |
 
+## Creature and character mods
+
+Added 2026-08-31 from the 1.6.1 to 1.7.0 report round. Everything here was our fault rather than
+the other mod's, except where the row says otherwise.
+
+| Mod | Status | Notes |
+|-----|--------|-------|
+| Custom Companions (framework) and its packs | OK **since 1.7.0** | A creature a companion or wildlife mod adds got no shadow at all, and the round blob its own framework hides stayed hidden, so the creature had nothing under it. Reported by two people before it was looked at properly. Fixed `88aaa2f`, shipped 1.7.0. Custom Companions 5.1.0 is installed in the author's profile and reproduces it, but **the fix has still never been checked there by eye**. |
+| SH's Wild Animals | OK **since 1.7.0** | Two separate faults, both ours. The ducks wobbled with the ripples until 1.6.1, when creatures began drawing themselves into the water mask (Kaishale, Whystardewvalley, ghi3038). The shadows were missing entirely until 1.7.0; it is a Custom Companions pack, so it is the row above (Batcers, 28/8). |
+| Em's Horses | OK **since 1.7.0** | A horse has one set of frames and the game mirrors them, so a silhouette cut from the source rectangle and drawn unmirrored was a horse facing backwards, head where the tail is. It also stood up on edge beside the horse instead of lying down. Both fixed in 1.7.0, along with pets and anything else built low and wide. Batcers' screenshots of "sprites look weird" draw the horse identically in the shot he called broken and the one he called fine, so that half is still an open question to him. |
+| Scale Up Unofficial (HD sprites) | PARTIAL | Reported 2026-08-17 (Glarthon): shadows sit offset from the sprite. Known class rather than a bug: a mod that draws sprites at a different scale moves the feet anchor every shadow hangs from, and the anchor is read from the game's own placement. No patch planned. |
+| Controller Zoom | UNTESTED, suspected | The long-standing "black screen / zoomed in hard" report (razegaming00000, 1.2.1) is blamed on Clear Monocle and SpriteMaster on the Nexus page, but N1Zenma reproduced it on 2026-08-14 only with Controller Zoom installed. Needs one confirmation that Controller Zoom alone does it, then the known-issue text on the description page is wrong and should be rewritten. |
+| Alternative Textures | OK | A crash reported after **uninstalling** Radiance traced to Alternative Textures and Harmony, not to anything of ours. |
+
 ## How to test a conflict
 
 1. Enable the suspect mod (remove the leading `.` from its folder in `Mods/`).

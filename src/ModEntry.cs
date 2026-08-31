@@ -343,6 +343,11 @@ namespace SDVRadiance
                 // Co-op partners get their own silhouette, baked in the same window where a
                 // render-target swap is legal. Costs nothing in single player: the list is empty.
                 _shadows.PrepareOtherFarmers(Game1_GraphicsDevice, Game1.currentLocation, _config);
+                // A building's shadow is too big to be a sprite among sprites, so it is stamped
+                // into a coverage mask here and applied by the effect chain as a change in the
+                // light (RenderBuildingShadow). Same window as the bakes above, same reason: it
+                // swaps render targets, which is only legal before the world batches open.
+                _shadows.BuildBuildingSunShadowMask(Game1_GraphicsDevice, _config);
                 double ms = FrameCost.End(FrameCost.Part.ShadowPrepare, t0);
                 if (_config.DebugLogging) _prepareMilliseconds += ms;
             }

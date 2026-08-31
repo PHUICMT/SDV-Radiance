@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewValley;
+using StardewValley.Buildings;
 using StardewValley.Objects;
 using StardewValley.TerrainFeatures;
 using SObject = StardewValley.Object;
@@ -138,6 +139,7 @@ namespace SDVRadiance
             AppendCharacters(report, location, w, config.DirectionalShadowModel);
             AppendOtherFarmers(report, location, w);
             AppendEntities(report, location, w);
+            AppendBuildings(report, location, w);
 
             return report.ToString().TrimEnd();
         }
@@ -381,6 +383,103 @@ namespace SDVRadiance
                 }
             if (objs == 0)
                 report.AppendLine("  (none — an orphan shadow here comes from something not in these lists)");
+        }
+
+        /// <summary>
+        /// The buildings the location owns, and what the shadow pass does with each.
+        ///
+        /// <para>
+        /// Listed separately because a building is not in <c>location.objects</c> and answers a
+        /// question none of the other lists can: whether a thing on screen is a <see cref="Building"/>
+        /// the game hands us, or art the MAP paints. Only the first can be given a silhouette. The
+        /// farm's own farmhouse and greenhouse became real buildings in 1.6 and used to be map art,
+        /// so the answer is not the one older notes assume, and guessing it wrong is a day's work
+        /// aimed at the wrong mechanism.
+        /// </para>
+        /// </summary>
+        /// <summary>
+        /// How solid a piece of art is: what share of it is fully opaque, and what share is drawn
+        /// part-way clear.
+        /// </summary>
+        /// <remarks>
+        /// A building's shadow takes its darkness from its own art's alpha, so this answers a
+        /// question the finished picture cannot: whether a greenhouse throws a lighter shadow
+        /// through its glass than through its frame. It does only if the glass is PAINTED
+        /// part-way clear. Painted as opaque pixels, which is how nearly all building art is
+        /// drawn, glass shades exactly like a wall and there is nothing in the art to read.
+        /// <para>Read on demand and not cached: this runs when somebody types the command.</para>
+        /// </remarks>
+        private static void MeasureArtSolidity(Texture2D texture, Rectangle src, out float opaque, out float partlyClear)
+        {
+            opaque = partlyClear = -1f;
+            try
+            {
+                var pixels = new Color[src.Width * src.Height];
+                texture.GetData(0, src, pixels, 0, pixels.Length);
+                int solid = 0, part = 0;
+                foreach (Color pixel in pixels)
+                {
+                    if (pixel.A >= 250) solid++;
+                    else if (pixel.A > 8) part++;
+                }
+                opaque = (float)solid / pixels.Length;
+                partlyClear = (float)part / pixels.Length;
+            }
+            catch
+            {
+                // A readback can be refused (some devices, some wrapped textures). Saying nothing
+                // is better than reporting a zero that reads as "the art is empty".
+            }
+        }
+
+        private static void AppendBuildings(StringBuilder report, GameLocation location, ScanWindow w)
+        {
+            report.AppendLine($"[shadows] buildings this location owns: {location.buildings.Count}"
+                        + " (a building gets a grounding pool only; no silhouette is cast from one)");
+            foreach (Building bld in location.buildings)
+            {
+                if (bld == null)
+                    continue;
+                int bx = bld.tileX.Value, by = bld.tileY.Value;
+                int bw = bld.tilesWide.Value, bh = bld.tilesHigh.Value;
+                Texture2D? texture = null;
+                try { texture = bld.texture?.Value; } catch { /* a pack can throw while loading its art */ }
+                bool onScreen = w.OnScreen(bx, by) || w.OnScreen(bx + bw, by + bh);
+                // The source rect and what it comes to on screen at 4x, against the footprint the
+                // building stands on. A silhouette anchored from a guess at these two is a
+                // silhouette in the wrong place and the wrong size, and the numbers say so
+                // immediately where the picture only says "that looks wrong".
+                Rectangle srcRect = Rectangle.Empty;
+                try { srcRect = bld.getSourceRect(); } catch { /* a pack can throw building its rect */ }
+                // How much of the art is solid. A building's shadow takes its darkness from this
+                // art's alpha, so the number answers a question the picture cannot: whether a
+                // greenhouse casts a lighter shadow through its glass than through its frame. It
+                // does only if the glass is PAINTED transparent; painted as opaque pixels, which
+                // is how most building art is drawn, glass shades exactly like a wall.
+                float opaqueFraction = -1f, partialFraction = -1f;
+                if (texture != null && srcRect.Width > 0 && srcRect.Height > 0)
+                    MeasureArtSolidity(texture, srcRect, out opaqueFraction, out partialFraction);
+                // The WHOLE sheet as well, because the source rect is only the frame this building
+                // is wearing today. A greenhouse that has not been repaired is showing its ruin,
+                // and measuring that says nothing at all about its glass. The sheet holds every
+                // frame, so it answers the question whichever one is current.
+                float sheetOpaque = -1f, sheetPartial = -1f;
+                if (texture != null)
+                    MeasureArtSolidity(texture, new Rectangle(0, 0, texture.Width, texture.Height),
+                        out sheetOpaque, out sheetPartial);
+                report.AppendLine($"  {bld.buildingType.Value,-22} tile={bx},{by} footprint={bw}x{bh} tiles"
+                            + $" = {bw * 64}x{bh * 64}px | src={srcRect.Width}x{srcRect.Height}"
+                            + $" -> {srcRect.Width * 4}x{srcRect.Height * 4}px at 4x"
+                            + $" | sheet={(texture == null ? "none" : $"{texture.Width}x{texture.Height}")}"
+                            + $" solid={(opaqueFraction < 0f ? "?" : $"{opaqueFraction * 100f:0}%")}"
+                            + $" partlyClear={(partialFraction < 0f ? "?" : $"{partialFraction * 100f:0}%")}"
+                            + $" | wholeSheet solid={(sheetOpaque < 0f ? "?" : $"{sheetOpaque * 100f:0}%")}"
+                            + $" partlyClear={(sheetPartial < 0f ? "?" : $"{sheetPartial * 100f:0.0}%")}"
+                            + $" underConstruction={bld.isUnderConstruction()}"
+                            + $" {(onScreen ? "" : "* ")}-> grounding pool at footprint base");
+            }
+            if (location.buildings.Count == 0)
+                report.AppendLine("  (none — anything that looks like a building here is painted into the map)");
         }
 
         /// <summary>

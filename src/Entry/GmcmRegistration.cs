@@ -647,13 +647,28 @@ namespace SDVRadiance
         /// <c>config.shadows.{family}.{kind}.name</c>. The three per-kind families (length,
         /// softness, lean) are eighteen sliders of exactly this shape; the table keeps a kind
         /// from being added to one family and forgotten in another.</summary>
-        private static void AddPerKindSliders(IGenericModConfigMenuApi api, IManifest manifest,
-            Func<string, string> i18n, string family, float min, float max, float interval,
-            params (string Kind, Func<float> Get, Action<float> Set)[] sliders)
+        /// <summary>One caster kind's three dials under its own heading. GMCM cannot hide rows
+        /// behind a picker the way the tuner tab does, so the flat list is regrouped instead: the
+        /// kind is the heading and its length, softness and lean follow it, rather than three
+        /// blocks of seven with a building's three dials eight rows apart.</summary>
+        private static void AddKindDials(IGenericModConfigMenuApi api, IManifest manifest,
+            Func<string, string> i18n, string kind,
+            Func<float> getLength, Action<float> setLength,
+            Func<float> getSoftness, Action<float> setSoftness,
+            Func<float> getLean, Action<float> setLean)
         {
-            foreach ((string kind, Func<float> get, Action<float> set) in sliders)
-                api.AddNumberOption(manifest, get, set,
-                    () => i18n($"config.shadows.{family}.{kind}.name"), null, min, max, interval);
+            // The heading reuses the name the length block already carried, so no kind was
+            // renamed and no translator has to look at this again.
+            api.AddSectionTitle(manifest, () => i18n($"config.shadows.length.{kind}.name"));
+            api.AddNumberOption(manifest, getLength, setLength,
+                () => i18n("tuner.shadowkind.length"), null,
+                ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax, 0.05f);
+            api.AddNumberOption(manifest, getSoftness, setSoftness,
+                () => i18n("tuner.shadowkind.softness"), () => i18n("config.shadows.softness.tooltip"),
+                ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax, 0.1f);
+            api.AddNumberOption(manifest, getLean, setLean,
+                () => i18n("tuner.shadowkind.lean"), () => i18n("config.shadows.lean.tooltip"),
+                ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax, 0.05f);
         }
 
         private static void RegisterShadowsPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
@@ -679,6 +694,8 @@ namespace SDVRadiance
                 () => i18n("config.shadows.blur.name"), null, 0f, 5f, 0.5f);
             api.AddBoolOption(manifest, () => config().DirectionalShadowObjects, v => config().DirectionalShadowObjects = v,
                 () => i18n("config.shadows.objects.name"), () => i18n("config.shadows.objects.tooltip"));
+            api.AddBoolOption(manifest, () => config().DirectionalShadowBuildings, v => config().DirectionalShadowBuildings = v,
+                () => i18n("config.shadows.buildings.name"), () => i18n("config.shadows.buildings.tooltip"));
             api.AddNumberOption(manifest, () => config().ShadowGroundForeshortening, v => config().ShadowGroundForeshortening = v,
                 () => i18n("config.shadows.groundforeshortening.name"), () => i18n("config.shadows.groundforeshortening.tooltip"),
                 ModConfig.ShadowGroundForeshorteningMin, ModConfig.ShadowGroundForeshorteningMax, 0.05f);
@@ -689,38 +706,39 @@ namespace SDVRadiance
                 () => i18n("config.shadows.casts.name"), () => i18n("config.shadows.casts.tooltip"),
                 ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax, 1);
 
-            // Per-kind length and softness. The overall two above still multiply these, so a player
-            // who only wants everything shorter never has to come down here.
+            // Per kind, grouped by the kind rather than by the dial. The overall length and
+            // softness above still multiply these, so a player who only wants everything shorter
+            // never has to come down here at all.
             api.AddSectionTitle(manifest, () => i18n("config.shadows.perkind.title"),
                 () => i18n("config.shadows.perkind.tooltip"));
-            AddPerKindSliders(api, manifest, i18n, "length",
-                ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax, 0.05f,
-                ("trees", () => config().ShadowLengthTrees, v => config().ShadowLengthTrees = v),
-                ("smalltrees", () => config().ShadowLengthSmallTrees, v => config().ShadowLengthSmallTrees = v),
-                ("bushes", () => config().ShadowLengthBushes, v => config().ShadowLengthBushes = v),
-                ("crops", () => config().ShadowLengthCrops, v => config().ShadowLengthCrops = v),
-                ("grass", () => config().ShadowLengthGrass, v => config().ShadowLengthGrass = v),
-                ("objects", () => config().ShadowLengthObjects, v => config().ShadowLengthObjects = v));
-            api.AddSectionTitle(manifest, () => i18n("config.shadows.softness.title"),
-                () => i18n("config.shadows.softness.tooltip"));
-            AddPerKindSliders(api, manifest, i18n, "softness",
-                ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax, 0.1f,
-                ("trees", () => config().ShadowSoftnessTrees, v => config().ShadowSoftnessTrees = v),
-                ("smalltrees", () => config().ShadowSoftnessSmallTrees, v => config().ShadowSoftnessSmallTrees = v),
-                ("bushes", () => config().ShadowSoftnessBushes, v => config().ShadowSoftnessBushes = v),
-                ("crops", () => config().ShadowSoftnessCrops, v => config().ShadowSoftnessCrops = v),
-                ("grass", () => config().ShadowSoftnessGrass, v => config().ShadowSoftnessGrass = v),
-                ("objects", () => config().ShadowSoftnessObjects, v => config().ShadowSoftnessObjects = v));
-            api.AddSectionTitle(manifest, () => i18n("config.shadows.lean.title"),
-                () => i18n("config.shadows.lean.tooltip"));
-            AddPerKindSliders(api, manifest, i18n, "lean",
-                ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax, 0.05f,
-                ("trees", () => config().ShadowLeanTrees, v => config().ShadowLeanTrees = v),
-                ("smalltrees", () => config().ShadowLeanSmallTrees, v => config().ShadowLeanSmallTrees = v),
-                ("bushes", () => config().ShadowLeanBushes, v => config().ShadowLeanBushes = v),
-                ("crops", () => config().ShadowLeanCrops, v => config().ShadowLeanCrops = v),
-                ("grass", () => config().ShadowLeanGrass, v => config().ShadowLeanGrass = v),
-                ("objects", () => config().ShadowLeanObjects, v => config().ShadowLeanObjects = v));
+            AddKindDials(api, manifest, i18n, "trees",
+                () => config().ShadowLengthTrees, v => config().ShadowLengthTrees = v,
+                () => config().ShadowSoftnessTrees, v => config().ShadowSoftnessTrees = v,
+                () => config().ShadowLeanTrees, v => config().ShadowLeanTrees = v);
+            AddKindDials(api, manifest, i18n, "smalltrees",
+                () => config().ShadowLengthSmallTrees, v => config().ShadowLengthSmallTrees = v,
+                () => config().ShadowSoftnessSmallTrees, v => config().ShadowSoftnessSmallTrees = v,
+                () => config().ShadowLeanSmallTrees, v => config().ShadowLeanSmallTrees = v);
+            AddKindDials(api, manifest, i18n, "bushes",
+                () => config().ShadowLengthBushes, v => config().ShadowLengthBushes = v,
+                () => config().ShadowSoftnessBushes, v => config().ShadowSoftnessBushes = v,
+                () => config().ShadowLeanBushes, v => config().ShadowLeanBushes = v);
+            AddKindDials(api, manifest, i18n, "crops",
+                () => config().ShadowLengthCrops, v => config().ShadowLengthCrops = v,
+                () => config().ShadowSoftnessCrops, v => config().ShadowSoftnessCrops = v,
+                () => config().ShadowLeanCrops, v => config().ShadowLeanCrops = v);
+            AddKindDials(api, manifest, i18n, "grass",
+                () => config().ShadowLengthGrass, v => config().ShadowLengthGrass = v,
+                () => config().ShadowSoftnessGrass, v => config().ShadowSoftnessGrass = v,
+                () => config().ShadowLeanGrass, v => config().ShadowLeanGrass = v);
+            AddKindDials(api, manifest, i18n, "objects",
+                () => config().ShadowLengthObjects, v => config().ShadowLengthObjects = v,
+                () => config().ShadowSoftnessObjects, v => config().ShadowSoftnessObjects = v,
+                () => config().ShadowLeanObjects, v => config().ShadowLeanObjects = v);
+            AddKindDials(api, manifest, i18n, "buildings",
+                () => config().ShadowLengthBuildings, v => config().ShadowLengthBuildings = v,
+                () => config().ShadowSoftnessBuildings, v => config().ShadowSoftnessBuildings = v,
+                () => config().ShadowLeanBuildings, v => config().ShadowLeanBuildings = v);
 
             // --- Camera (implemented) ---
         }

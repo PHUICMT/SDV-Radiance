@@ -372,8 +372,9 @@ namespace SDVRadiance
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                     new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
                 float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
-                DrawSoft(spriteBatch, Taps9, bake.Mask, null, feet, Color.White, alpha, rot,
-                    bake.FeetInRenderTarget, new Vector2(CharacterAcrossScale(rot, stretch), stretch), depth, SpriteEffects.None, blur);
+                DrawSoftGrounded(spriteBatch, Taps9, bake.Mask, null, feet, Color.White, alpha, rot,
+                    bake.FeetInRenderTarget, new Vector2(CharacterAcrossScale(rot, stretch), stretch),
+                    who.StandingPixel.Y, SpriteEffects.None, blur);
             }
         }
 
@@ -401,8 +402,8 @@ namespace SDVRadiance
                 if (!bake.Ready || bake.Mask == null)
                     continue;
                 foreach (var (rot, st, a, _) in _lightShadowCasts)
-                    DrawSoft(spriteBatch, Taps9, bake.Mask, null, feet, Color.White, a, rot,
-                        bake.FeetInRenderTarget, new Vector2(1f, st), depth, SpriteEffects.None, blur);
+                    DrawSoftGrounded(spriteBatch, Taps9, bake.Mask, null, feet, Color.White, a, rot,
+                        bake.FeetInRenderTarget, new Vector2(1f, st), who.StandingPixel.Y, SpriteEffects.None, blur);
             }
         }
     }

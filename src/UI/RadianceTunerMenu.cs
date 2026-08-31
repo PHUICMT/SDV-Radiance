@@ -485,6 +485,51 @@ namespace SDVRadiance
             EndDependsOn();
         }
 
+        /// <summary>The seven kinds of caster, each carrying the three dials that belong to it.
+        /// Grouped by the thing rather than by the dial: tuning one building used to mean three
+        /// sliders eight rows apart in three separate blocks of seven. The name key is the one the
+        /// length block already used, so no kind had to be renamed or retranslated.</summary>
+        private static readonly (string NameKey,
+            Func<ModConfig, float> GetLength, Action<ModConfig, float> SetLength,
+            Func<ModConfig, float> GetSoftness, Action<ModConfig, float> SetSoftness,
+            Func<ModConfig, float> GetLean, Action<ModConfig, float> SetLean)[] ShadowKinds =
+        {
+            ("tuner.shadowlength.trees",
+                c => c.ShadowLengthTrees,        (c, v) => c.ShadowLengthTrees = v,
+                c => c.ShadowSoftnessTrees,      (c, v) => c.ShadowSoftnessTrees = v,
+                c => c.ShadowLeanTrees,          (c, v) => c.ShadowLeanTrees = v),
+            ("tuner.shadowlength.smalltrees",
+                c => c.ShadowLengthSmallTrees,   (c, v) => c.ShadowLengthSmallTrees = v,
+                c => c.ShadowSoftnessSmallTrees, (c, v) => c.ShadowSoftnessSmallTrees = v,
+                c => c.ShadowLeanSmallTrees,     (c, v) => c.ShadowLeanSmallTrees = v),
+            ("tuner.shadowlength.bushes",
+                c => c.ShadowLengthBushes,       (c, v) => c.ShadowLengthBushes = v,
+                c => c.ShadowSoftnessBushes,     (c, v) => c.ShadowSoftnessBushes = v,
+                c => c.ShadowLeanBushes,         (c, v) => c.ShadowLeanBushes = v),
+            ("tuner.shadowlength.crops",
+                c => c.ShadowLengthCrops,        (c, v) => c.ShadowLengthCrops = v,
+                c => c.ShadowSoftnessCrops,      (c, v) => c.ShadowSoftnessCrops = v,
+                c => c.ShadowLeanCrops,          (c, v) => c.ShadowLeanCrops = v),
+            ("tuner.shadowlength.grass",
+                c => c.ShadowLengthGrass,        (c, v) => c.ShadowLengthGrass = v,
+                c => c.ShadowSoftnessGrass,      (c, v) => c.ShadowSoftnessGrass = v,
+                c => c.ShadowLeanGrass,          (c, v) => c.ShadowLeanGrass = v),
+            ("tuner.shadowlength.objects",
+                c => c.ShadowLengthObjects,      (c, v) => c.ShadowLengthObjects = v,
+                c => c.ShadowSoftnessObjects,    (c, v) => c.ShadowSoftnessObjects = v,
+                c => c.ShadowLeanObjects,        (c, v) => c.ShadowLeanObjects = v),
+            ("tuner.shadowlength.buildings",
+                c => c.ShadowLengthBuildings,    (c, v) => c.ShadowLengthBuildings = v,
+                c => c.ShadowSoftnessBuildings,  (c, v) => c.ShadowSoftnessBuildings = v,
+                c => c.ShadowLeanBuildings,      (c, v) => c.ShadowLeanBuildings = v),
+        };
+
+        /// <summary>Which kind the shadow tab is showing dials for. Static so it survives closing
+        /// the menu, because the whole point is to change one kind, go and look at it in the game,
+        /// and come back to the same kind rather than hunting for it again. Not saved to config:
+        /// it is a place in a menu, not a setting.</summary>
+        private static int _shadowKindIndex;
+
         private void BuildShadows()
         {
             Tog("tuner.shadows", () => _config.DirectionalShadowsEnabled, v => _config.DirectionalShadowsEnabled = v, "help.shadows");
@@ -522,49 +567,47 @@ namespace SDVRadiance
                 () => _config.ShadowCastsPerCharacter,
                 v => _config.ShadowCastsPerCharacter = (int)MathF.Round(v), "help.shadowcasts");
             Tog("tuner.shadowobjects", () => _config.DirectionalShadowObjects, v => _config.DirectionalShadowObjects = v, "help.shadowobjects");
+            Tog("tuner.shadowbuildings", () => _config.DirectionalShadowBuildings, v => _config.DirectionalShadowBuildings = v, "help.shadowbuildings");
             Sld("tuner.shadowgroundforeshortening", ModConfig.ShadowGroundForeshorteningMin, ModConfig.ShadowGroundForeshorteningMax,
                 () => _config.ShadowGroundForeshortening, v => _config.ShadowGroundForeshortening = v, "help.shadowgroundforeshortening");
             Sld("tuner.shadowcharactergroundforeshortening", ModConfig.ShadowGroundForeshorteningMin, ModConfig.ShadowGroundForeshorteningMax,
                 () => _config.ShadowCharacterGroundForeshortening, v => _config.ShadowCharacterGroundForeshortening = v, "help.shadowcharactergroundforeshortening");
+            // One kind at a time. Pick the thing, and its three dials sit together under the
+            // picker, instead of the page carrying all twenty-one at once with a building's three
+            // eight rows apart in three different blocks.
             Section("tuner.shadowperkind");
-            Sld("tuner.shadowlength.trees", ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax,
-                () => _config.ShadowLengthTrees, v => _config.ShadowLengthTrees = v);
-            Sld("tuner.shadowlength.smalltrees", ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax,
-                () => _config.ShadowLengthSmallTrees, v => _config.ShadowLengthSmallTrees = v);
-            Sld("tuner.shadowlength.bushes", ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax,
-                () => _config.ShadowLengthBushes, v => _config.ShadowLengthBushes = v);
-            Sld("tuner.shadowlength.crops", ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax,
-                () => _config.ShadowLengthCrops, v => _config.ShadowLengthCrops = v);
-            Sld("tuner.shadowlength.grass", ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax,
-                () => _config.ShadowLengthGrass, v => _config.ShadowLengthGrass = v);
-            Sld("tuner.shadowlength.objects", ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax,
-                () => _config.ShadowLengthObjects, v => _config.ShadowLengthObjects = v);
-            Section("tuner.shadowsoftperkind");
-            Sld("tuner.shadowsoftness.trees", ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax,
-                () => _config.ShadowSoftnessTrees, v => _config.ShadowSoftnessTrees = v);
-            Sld("tuner.shadowsoftness.smalltrees", ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax,
-                () => _config.ShadowSoftnessSmallTrees, v => _config.ShadowSoftnessSmallTrees = v);
-            Sld("tuner.shadowsoftness.bushes", ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax,
-                () => _config.ShadowSoftnessBushes, v => _config.ShadowSoftnessBushes = v);
-            Sld("tuner.shadowsoftness.crops", ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax,
-                () => _config.ShadowSoftnessCrops, v => _config.ShadowSoftnessCrops = v);
-            Sld("tuner.shadowsoftness.grass", ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax,
-                () => _config.ShadowSoftnessGrass, v => _config.ShadowSoftnessGrass = v);
-            Sld("tuner.shadowsoftness.objects", ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax,
-                () => _config.ShadowSoftnessObjects, v => _config.ShadowSoftnessObjects = v);
-            Section("tuner.shadowleanperkind");
-            Sld("tuner.shadowlean.trees", ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax,
-                () => _config.ShadowLeanTrees, v => _config.ShadowLeanTrees = v, "help.shadowlean");
-            Sld("tuner.shadowlean.smalltrees", ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax,
-                () => _config.ShadowLeanSmallTrees, v => _config.ShadowLeanSmallTrees = v, "help.shadowlean");
-            Sld("tuner.shadowlean.bushes", ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax,
-                () => _config.ShadowLeanBushes, v => _config.ShadowLeanBushes = v, "help.shadowlean");
-            Sld("tuner.shadowlean.crops", ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax,
-                () => _config.ShadowLeanCrops, v => _config.ShadowLeanCrops = v, "help.shadowlean");
-            Sld("tuner.shadowlean.grass", ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax,
-                () => _config.ShadowLeanGrass, v => _config.ShadowLeanGrass = v, "help.shadowlean");
-            Sld("tuner.shadowlean.objects", ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax,
-                () => _config.ShadowLeanObjects, v => _config.ShadowLeanObjects = v, "help.shadowlean");
+            if (_config.DirectionalShadowsEnabled)
+            {
+                const int kindColumns = 2;
+                int kindButtonWidth = (_contentColumnWidth - 6 * (kindColumns - 1)) / kindColumns;
+                for (int i = 0; i < ShadowKinds.Length; i++)
+                {
+                    int column = i % kindColumns, row = i / kindColumns;
+                    // A kind left alone on the last row takes the whole width rather than sitting
+                    // beside a gap.
+                    bool isLastAndAlone = i == ShadowKinds.Length - 1 && column == 0;
+                    var rect = new Rectangle(_contentCursorX + column * (kindButtonWidth + 6),
+                        _contentCursorY + row * S(46),
+                        isLastAndAlone ? _contentColumnWidth : kindButtonWidth, S(40));
+                    int chosenIndex = i;
+                    var kindButton = Btn(_translate(ShadowKinds[i].NameKey), rect, () =>
+                    {
+                        // Nothing is saved by picking a kind: this moves the page, not a value.
+                        _shadowKindIndex = chosenIndex; Reflow();
+                    });
+                    kindButton.IsChosen = () => _shadowKindIndex == chosenIndex;
+                }
+                _contentCursorY += (ShadowKinds.Length + kindColumns - 1) / kindColumns * S(46) + S(6);
+            }
+            // Clamped rather than trusted: the field is static and outlives any one menu, so a
+            // shorter list in a later version would otherwise index off the end.
+            var shadowKind = ShadowKinds[Math.Clamp(_shadowKindIndex, 0, ShadowKinds.Length - 1)];
+            Sld("tuner.shadowkind.length", ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax,
+                () => shadowKind.GetLength(_config), v => shadowKind.SetLength(_config, v));
+            Sld("tuner.shadowkind.softness", ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax,
+                () => shadowKind.GetSoftness(_config), v => shadowKind.SetSoftness(_config, v));
+            Sld("tuner.shadowkind.lean", ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax,
+                () => shadowKind.GetLean(_config), v => shadowKind.SetLean(_config, v), "help.shadowlean");
             EndDependsOn();
         }
 

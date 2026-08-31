@@ -34,6 +34,11 @@ sprites, outfit mods, and recolors work automatically, with no per-mod patches.
 - Daylight through the windows: each pane lays a patch of sun across the floor that leans with the same sun the shadows use, coloured by hour, season and weather
 - The scene answers lightning: for a blink after a strike every shadow leans away from the bolt, the mod's own darkening lifts with the game's flash, and a warm afterglow follows it out
 - Up to 48 lights per scene; the nearest and brightest cast their own shadows, the rest pool light. The budget is deliberately larger than a room needs so walking never makes one light hand its slot to another
+- Radiance cascades: the bounce lighting is computed as rays over a probe grid rather than a spreading flood, so light reaches around a corner instead of leaking through the wall. The default model since 1.7.0, with the older flood still selectable
+- Bounced light takes the colour of what it bounced off, so a red barn throws warm light onto the ground beside it. Off by default, it is a look rather than a correction
+- Lamps throw shadows with a shape: fences, bushes, boulders and placed things block lamp light as their own silhouette, the shadow's edge softens with distance from the lamp, and the shadow cuts into the round glow the game itself paints
+- The edge of a sprite facing a lamp catches a bright fringe in the lamp's own colour
+- Golden hour: in the first and last hours of the sun every shadow stretches further still
 
 **Water**
 - Pixel-accurate reflections mirrored along the real painted shoreline (banks, trees, bridges, piers)
@@ -50,7 +55,14 @@ sprites, outfit mods, and recolors work automatically, with no per-mod patches.
 - Visible lightning bolts on any map, using the game's own bolt art, and not on every rumble
 - Drops on the edge of the screen that merge, grow heavy and run, becoming frost in snow, with the edge of the picture misting over around them
 - Particles drawn into the world rather than over it, so they take the light, the weather and the grade: dust in a window beam, sparks off a real fire, fireflies on the game's own firefly nights, blossom and leaves on the days the game leaves the air empty, and sparks turning around a glow ring
-- A wet world after the rain, on its own clock, with lamplight smearing down the wet ground. Ships switched off and out of the menus, see Roadmap
+- A wet world after the rain, on its own clock, with lamplight smearing down the wet ground. Ships switched off, dials in both menus
+- Heat haze: hot air over lava bends the picture seen through it, the way air over a summer road does
+
+**Sprites & foliage**
+- Wind in the trees: tree tops and bushes lean with the same wind the rain leans with, and a gust front crosses the map so a row of trees leans one after another rather than all at once. The tilt is a fraction of a degree, because pixel art has no in-between pixels to bend into
+- Leaves catch the light: patches of canopy brighten and dim the way leaf faces flip in wind
+- Sprite relief: a lamp or the sun lights the side of a tree, a building or a fence that faces it, from a normal map synthesised out of the sprite itself. Off by default
+- Sprites at twice the texels: every sheet in use is doubled on the graphics card by the Scale2x rule, per art family, so dialogue text can stay sharp while the trees soften. Off by default, and the sheets themselves are never touched
 
 **Windows & glass**
 - Reflections in windows: you at the window's own height, with the tool in your hand, keeping your stride. Glass reflects when what is behind it is darker than what is in front, so the image is plain in daylight and thins after dusk as the room lights up behind the pane
@@ -58,7 +70,9 @@ sprites, outfit mods, and recolors work automatically, with no per-mod patches.
 
 **Atmosphere & color**
 - Sun shafts: daylight cut by a canopy into slanting patches on the ground, with their own strength and reach. On by default
-- Lamp shafts from in-world light sources, on a separate switch. Ships off, see Roadmap
+- Lamp shafts from in-world light sources, rebuilt in 1.7.0 from the same shapes the lamp shadows use, on a separate switch. Ships off
+- Aurora on clear winter nights: slow curtains of green and violet that the water carries too. On, and rare
+- Shooting stars on a clear night in any season, drawn into the sea as well as the sky
 - Cloud shadows drifting across the ground, with count, coverage, size, and speed controls
 - Day fog and night mist: two separate wispy drifting effects, each with its own amount, intensity, and drift speed
 - Bloom, tilt-shift depth blur, vignette, chromatic aberration
@@ -204,13 +218,16 @@ If the game folder isn't auto-detected, set `<GamePath>` in `SDV-Radiance.csproj
 
 Planned directions (not yet shipped):
 
-- Puddles decided from the map rather than guessed at, which is what keeps the wet ground out of the menus
-- The sun-shaft rebuild carried over to the lamp shafts, which are still the old bright-pass kind and are still the reason that half ships off
-- Per-light shadows extended to objects and map props. Characters and animals already cast one per light source indoors and after dark; furniture and scenery get a soft contact pool there instead, and only throw a full directional shadow outdoors in daylight
+- Puddles decided from the map rather than guessed at, which is the reason the wet ground still ships off
+- A shadow clipped against what stands in front of it. Indoors a shadow crosses a table or the saloon counter, because it is drawn at one sort depth taken from the caster's feet
+- Reflections that shift with the camera the way a real mirror image does. Confirmed physically right and not yet built; it is the other half of the reports that a reflection at the beach sits away from the player
 - Water carrying under every bridge and pier, not only the ones whose map data makes it possible today
-- Real-time 2D global illumination (radiance-cascades style)
-- Normal-mapped sprite lighting
-- High-quality texture upscaling / sprite sharpening built in, so a separate upscaler is not needed and there is nothing to conflict with
+- Lamp shafts on by default, once a night walk with them on stops finding gaps that are not there
+
+Shipped since this list was last written: radiance-cascades global illumination and
+normal-mapped sprite lighting (1.7.0, the first on by default and the second off), built-in
+sprite sharpening (1.7.0, off by default), the lamp-shaft rebuild (1.7.0, still off), and
+per-light shadows for objects and map props (1.7.0, as their own shapes).
 
 ## Support / donate
 
@@ -222,6 +239,7 @@ Free and always will be. If it's useful to you, support is appreciated but never
 
 MIT, see [LICENSE](LICENSE). Third-party attribution (frameworks, tooling, and any reused code) is in [CREDITS.md](CREDITS.md).
 
-Translations: Simplified Chinese bundled from 1.2.2 by **rime961**. Separate translation mods on
-the Nexus, with thanks: Korean by [jjongleee](https://www.nexusmods.com/stardewvalley/mods/49448),
-Chinese by [Rubbish404](https://www.nexusmods.com/stardewvalley/mods/49647).
+Translations: Simplified Chinese bundled since 1.2.2 by **Rime961**, complete at 813 of 813 keys
+in 1.7.0. Thai by the author, also complete. Separate translation mods on the Nexus, with thanks:
+Korean by [jjongleee](https://www.nexusmods.com/stardewvalley/mods/49448), Chinese by
+[Rubbish404](https://www.nexusmods.com/stardewvalley/mods/49647).

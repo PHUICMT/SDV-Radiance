@@ -202,7 +202,7 @@ namespace SDVRadiance
 
         // Presence fades (0..1): stages ease IN when they (re)appear instead of popping.
         private GameLocation? _fadeLocation;
-        private float _fadeWater, _fadeCloud, _fadeLighting, _fadeFlood, _fadeTilt;
+        private float _fadeWater, _fadeCloud, _fadeLighting, _fadeFlood, _fadeTilt, _fadeBuildingShadow;
 
         /// <summary>One ease-in step (~0.5 s to full at 60 fps).</summary>
         private static float Ease01(float v) => Determinism.Frozen ? 1f
@@ -570,7 +570,7 @@ namespace SDVRadiance
         // Reused per-frame stage list + cached stage delegates (see Apply).
         private readonly List<Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>> _stages = new();
         private Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>?
-            _lightingStageDelegate, _waterStageDelegate, _cloudShadowStageDelegate, _bloomStageDelegate, _fogStageDelegate, _colorGradeStageDelegate, _tiltShiftStageDelegate, _finishingStageDelegate, _floodStageDelegate, _tailStageDelegate;
+            _lightingStageDelegate, _waterStageDelegate, _cloudShadowStageDelegate, _buildingShadowStageDelegate, _bloomStageDelegate, _fogStageDelegate, _colorGradeStageDelegate, _tiltShiftStageDelegate, _finishingStageDelegate, _floodStageDelegate, _tailStageDelegate;
 
         /// <summary>Scratch for the two per-frame "what is bound right now" queries in
         /// <see cref="Apply"/>. The parameterless GetRenderTargets() allocates a fresh array on
@@ -766,7 +766,7 @@ namespace SDVRadiance
             // whole Apply in that same frame, cutting the ~0.5 s fade-out short (the one hard
             // cut left in the no-popping audit). Stay awake until every decay ends, then the
             // early-out above makes the disabled mod truly free.
-            || _fadeWater > FadeGone || _fadeCloud > FadeGone || _fadeLighting > FadeGone
+            || _fadeWater > FadeGone || _fadeCloud > FadeGone || _fadeBuildingShadow > FadeGone || _fadeLighting > FadeGone
             || _fadeFlood > FadeGone || _fadeTilt > FadeGone
             || _fogDayAmount > 0.004f || _fogMistAmount > 0.004f || _godRayAmount > 0.01f;
 
@@ -884,7 +884,7 @@ namespace SDVRadiance
             if (!ReferenceEquals(Game1.currentLocation, _fadeLocation))
             {
                 _fadeLocation = Game1.currentLocation;
-                _fadeWater = _fadeCloud = _fadeLighting = _fadeFlood = _fadeTilt = 0f;
+                _fadeWater = _fadeCloud = _fadeLighting = _fadeFlood = _fadeTilt = _fadeBuildingShadow = 0f;
                 // Snapped rather than eased, because a door is the only way in or out of a room:
                 // easing it across the warp would ramp the outdoor amount of blur in over the
                 // same half second the tilt itself is fading in, then pull it back down again.
@@ -897,6 +897,7 @@ namespace SDVRadiance
             stages.Clear();
             _stageNameIndices.Clear();
             _lightingStageDelegate ??= RenderLighting; _waterStageDelegate ??= RenderWater; _cloudShadowStageDelegate ??= RenderCloudShadow;
+            _buildingShadowStageDelegate ??= RenderBuildingShadow;
             _bloomStageDelegate ??= RenderBloom; _fogStageDelegate ??= RenderFog;
             _colorGradeStageDelegate ??= ColorGrade; _tiltShiftStageDelegate ??= RenderTiltShift; _finishingStageDelegate ??= RenderFinishing;
             _floodStageDelegate ??= RenderFloodLight;
@@ -1018,6 +1019,15 @@ namespace SDVRadiance
             bool cloudOn = config.CloudShadowEnabled && _cloudShadow != null && outdoors && _cloudDayFactor > 0.02f;
             _fadeCloud = cloudOn ? Ease01(_fadeCloud) : Ease0(_fadeCloud);
             if (_fadeCloud > FadeGone && _cloudShadow != null) AddStage(_cloudShadowStageDelegate!, 3);
+            // A building's shadow rides here rather than in the sort, and it borrows the cloud
+            // shadow's shader to do it (see RenderBuildingShadow). Eased like every other stage:
+            // walking indoors, the sun going in, or the switch being turned off all have to ramp
+            // it out rather than drop it in one frame.
+            bool buildingShadowOn = config.DirectionalShadowsEnabled && config.DirectionalShadowObjects
+                                    && config.DirectionalShadowBuildings && outdoors
+                                    && ShadowRenderer.BuildingSunShadowReady;
+            _fadeBuildingShadow = buildingShadowOn ? Ease01(_fadeBuildingShadow) : Ease0(_fadeBuildingShadow);
+            if (_fadeBuildingShadow > FadeGone && _cloudShadow != null) AddStage(_buildingShadowStageDelegate!, 3);
             // Lamp shafts are drawn INSIDE the flood pass now, from the same occluder mask the sun
             // shafts march (floodlight.fx, LampShaftStrength); the bright-pass stage that used to
             // sit here is gone with its shader. What is decided here is only their presence, eased

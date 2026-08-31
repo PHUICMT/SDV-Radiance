@@ -171,7 +171,18 @@ float4 CompositePS(PixelInput input) : SV_TARGET
     return float4(c.rgb * shade, c.a);
 }
 
+// A coverage mask that was STAMPED by a SpriteBatch (the building shadows) carries its shape in
+// ALPHA and nowhere else: the silhouettes are baked black, and a tint can only darken, so their
+// colour channels come out zero however they are drawn. Everything below reads .r, so the shape is
+// moved into it once, here, and the blur and the composite then work on it unchanged.
+float4 AlphaToCoveragePS(PixelInput input) : SV_TARGET
+{
+    float coverage = tex2D(SourceSampler, input.UV).a;
+    return float4(coverage, coverage, coverage, 1.0);
+}
+
 technique Mask      { pass P0 { PixelShader = compile PS_SHADERMODEL MaskPS(); } }
+technique AlphaToCoverage { pass P0 { PixelShader = compile PS_SHADERMODEL AlphaToCoveragePS(); } }
 technique BlurH     { pass P0 { PixelShader = compile PS_SHADERMODEL BlurHPS(); } }
 technique BlurV     { pass P0 { PixelShader = compile PS_SHADERMODEL BlurVPS(); } }
 technique Composite { pass P0 { PixelShader = compile PS_SHADERMODEL CompositePS(); } }

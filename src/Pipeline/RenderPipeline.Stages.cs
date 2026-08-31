@@ -107,6 +107,60 @@ namespace SDVRadiance
             _cloudMaskStrength = cloudOpacity;
         }
 
+        /// <summary>
+        /// Multiply the picture down where a building's shadow falls.
+        /// </summary>
+        /// <remarks>
+        /// A building's shadow covers dozens of tiles, which is more than a sprite in the sort can
+        /// do anything sensible with: put it over the grass and it goes over the building too, put
+        /// it under the building and every tuft of grass punches a hole in it. So it arrives as a
+        /// coverage mask (<see cref="ShadowRenderer.BuildingSunShadowMask"/>) and is applied here
+        /// as a change in the light, which is what it is. Grass standing in the shadow is darkened
+        /// rather than sorted in front of it.
+        /// <para>
+        /// The cloud shadow's own shader does this job already and does it well: blur the mask into
+        /// a penumbra, then multiply. Reused rather than copied, so there is one place where "a
+        /// shadow lying over the whole picture" is written down, and no second shader to compile.
+        /// </para>
+        /// </remarks>
+        private void RenderBuildingShadow(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, ModConfig config)
+        {
+            Effect? effect = _cloudShadow;
+            Texture2D? mask = ShadowRenderer.BuildingSunShadowMask;
+            if (effect == null || mask == null || !ShadowRenderer.BuildingSunShadowReady)
+            {
+                // The stage stays listed while its presence eases out, so a frame with no mask has
+                // to hand the picture on untouched rather than skip and leave the chain a hole.
+                DrawFull(spriteBatch, source, dest, null!);
+                return;
+            }
+            var rtA = _halfResolutionScratchA!;
+
+            // The stamped mask holds its shape in ALPHA - the silhouettes are baked black, and a
+            // SpriteBatch tint can only darken, so their colour channels are zero. Everything after
+            // this reads red, so move the shape into it first.
+            //
+            // And that is all that happens to it. The penumbra is already in the mask, put there
+            // when it was stamped, because the buildings are cut out of it afterwards: blurring
+            // here would spread that cut outwards and leave a bright gap hugging every wall.
+            effect.CurrentTechnique = effect.Techniques["AlphaToCoverage"];
+            Pass(spriteBatch, mask, rtA, effect);
+
+            GetParam(effect, "Opacity")?.SetValue(BuildingShadowOpacity(config));
+            // The sun is the light here, so a building's shadow shades everything under it,
+            // white art included. That is the same call the cloud shadow makes by day, and for
+            // the same reason: anything allowed to resist punches a hole in the shadow.
+            GetParam(effect, "LightProtect")?.SetValue(0f);
+            GetParam(effect, "ShadowTexture")?.SetValue(rtA);
+            effect.CurrentTechnique = effect.Techniques["Composite"];
+            DrawFull(spriteBatch, source, dest, effect);
+        }
+
+        /// <summary>How dark a building's shadow gets, riding the same strength dial every other
+        /// shadow rides and its own presence fade.</summary>
+        private float BuildingShadowOpacity(ModConfig config)
+            => MathHelper.Clamp(config.DirectionalShadowStrength, 0f, 1f) * 0.7f * _fadeBuildingShadow;
+
         /// <summary>How many times the current map fits inside the viewport (>=1), clamped.
         /// 1 = map at least as big as the screen; higher = smaller map, more cloud banks.</summary>
         private static float SmallMapCloudBoost()
@@ -1256,7 +1310,23 @@ namespace SDVRadiance
             // Player SILHOUETTE mask (the shadow system's per-frame bake) in buffer UV —
             // ring-tile water effects skip exactly the player's own pixels, so a blue outfit
             // on a pier never ripples while the water right beside them stays animated.
-            var pmask = ShadowRenderer.PlayerMask;
+            // The COLOUR twin first, and the silhouette only as the fallback. Both are the same
+            // pose at the same anchor in the same render target and the shader reads nothing but
+            // alpha, so they are interchangeable here - except that the silhouette belongs to the
+            // shadow system, which fades it toward the far tip on purpose: full at the feet down
+            // to a twentieth at the head. The shader then thresholds at 0.15, and the fade crosses
+            // 0.15 about ten pixels BELOW the top of the head, so the crown of a farmer's head was
+            // never excluded and rippled with the water it stood beside. The colour bake carries
+            // the sprite's own alpha and no fade, which is exactly why every other farmer in
+            // co-op was already given it and not this one.
+            //
+            // It stays a fallback rather than a requirement: the colour twin is only baked when
+            // the reflection or a puddle wants it, so with reflections switched off there is
+            // nothing to read and the old behaviour is still the right answer. Widening that gate
+            // would buy those players the ten pixels for a second FarmerRenderer draw, which is
+            // not a trade to make without measuring it on somebody who turned reflections off to
+            // go faster.
+            var pmask = ShadowRenderer.PlayerColor ?? ShadowRenderer.PlayerMask;
             var playerRect = new Vector4(2f, 2f, -1f, -1f);   // empty box (never matches)
             // A seated farmer is on a bench, not in the water, and the silhouette that would be
             // laid over them is the standing bake, taller than the body it covers: what it covered

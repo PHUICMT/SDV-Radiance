@@ -72,9 +72,9 @@ namespace SDVRadiance
             {
                 DrawObjectShadows(spriteBatch, location, rot, stretch, alpha, blur);
 
-                // Farm building ENTITIES (coop/barn/house) cast a shape-accurate silhouette from
-                // their own texture, anchored at the footprint base — heavily damped/flattened so a
-                // tall building's shadow lies beside it instead of swinging up over itself.
+                // Farm building ENTITIES (coop/barn/house) get their grounding pool here. Their
+                // SHAPE is cast somewhere else entirely, through the effect chain, for reasons
+                // spelled out on the call below.
                 var viewport = Game1.viewport;
                 int btx0 = viewport.X / 64 - 12, btx1 = (viewport.X + viewport.Width) / 64 + 4;
                 int bty0 = viewport.Y / 64 - 12, bty1 = (viewport.Y + viewport.Height) / 64 + 4;
@@ -83,10 +83,13 @@ namespace SDVRadiance
                     if (bld == null || bld.tileX.Value > btx1 || bld.tileX.Value + bld.tilesWide.Value < btx0
                         || bld.tileY.Value > bty1 || bld.tileY.Value + bld.tilesHigh.Value < bty0)
                         continue;
-                    // Buildings get a neutral grounding pool: a shape-accurate cast can't lean
-                    // up like everything else without swinging the roof over itself, and the
-                    // sheared-down bake was rejected visually — see the session notes.
-                    DrawBuildingShadow(spriteBatch, bld, alpha * 0.7f, blur);
+                    // The POOL only. A building's shape is cast through the effect chain instead
+                    // (ShadowRenderer.BuildingMask + RenderBuildingShadow), because a shadow that
+                    // size cannot be sorted: over the grass means over the building too, under the
+                    // building means every tuft of grass punches a hole in it. Drawing it here as
+                    // well would be the same shadow twice, once sorted and once not.
+                    DrawBuildingShadow(spriteBatch, bld, rot, stretch, alpha * 0.7f, blur,
+                        castShape: false);
                 }
             }
         }
@@ -95,17 +98,17 @@ namespace SDVRadiance
         {
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(a.Position.X + a.Sprite.SpriteWidth * 4 / 2f, a.GetBoundingBox().Bottom - FeetLift));
-            float depth = MathHelper.Clamp(a.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
+            float anchorWorldY = a.StandingPixel.Y;
             if (_casterBakeCache.TryGetValue((a.Sprite.Texture, a.Sprite.SourceRect), out SpriteBake? baked))
             {
                 baked.LastUsedTick = Game1.ticks;
-                DrawSoft(spriteBatch, Taps9, baked.Rt, null, feet, Color.White, alpha, rot, baked.FeetInRt,
-                    new Vector2(SolidAcrossScale(rot, stretch), stretch), depth, SpriteEffects.None, blur);
+                DrawSoftGrounded(spriteBatch, Taps9, baked.Rt, null, feet, Color.White, alpha, rot, baked.FeetInRt,
+                    new Vector2(SolidAcrossScale(rot, stretch), stretch), anchorWorldY, SpriteEffects.None, blur);
                 return;
             }
             Rectangle src = a.Sprite.SourceRect;
             DrawBandedGradient(spriteBatch, a.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, src.Height),
-                alpha, rot, new Vector2(4f * SolidAcrossScale(rot, stretch), 4f * stretch), depth, blur);
+                alpha, rot, new Vector2(4f * SolidAcrossScale(rot, stretch), 4f * stretch), anchorWorldY, blur);
         }
 
         /// <summary>
@@ -364,8 +367,8 @@ namespace SDVRadiance
                     GatherCasts(feet, castStrength, lenCfg);
                     DrawContactBlob(spriteBatch, feet, 22f, 11f, ambAlpha * (_lightShadowCasts.Count > 0 ? 0.45f : 1f), depth, blur);
                     foreach (var (rot, st, a, _) in _lightShadowCasts)
-                        DrawSoft(spriteBatch, Taps9, _playerRenderTarget, null, feet, Color.White, a, rot, _playerFeetInRenderTarget,
-                            new Vector2(1f, st), depth, SpriteEffects.None, blur);
+                        DrawSoftGrounded(spriteBatch, Taps9, _playerRenderTarget, null, feet, Color.White, a, rot,
+                            _playerFeetInRenderTarget, new Vector2(1f, st), who.StandingPixel.Y, SpriteEffects.None, blur);
                 }
             }
         }
@@ -856,7 +859,7 @@ namespace SDVRadiance
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f,
                     npc.GetBoundingBox().Bottom - FeetLift));
-            float depth = MathHelper.Clamp(npc.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
+            float anchorWorldY = npc.StandingPixel.Y;
             // Prefer the baked silhouette (one cohesive image, smoothly faded — same as the
             // player). Bands are the fallback only when the sprite is too big for a slot, which is
             // every stretched one: 64 rows drawn at 4x overflow the bake slot.
@@ -869,8 +872,8 @@ namespace SDVRadiance
                 // The bake is pinned bottom-CENTRE in its slot and FeetInRt is that centre, so a
                 // horizontal flip turns the silhouette about the same axis the game turns the
                 // sprite about, and the feet stay where they are.
-                DrawSoft(spriteBatch, Taps9, baked.Rt, null, feet, Color.White, alpha, rot, baked.FeetInRt,
-                    new Vector2(across, stretch), depth, facing, blur);
+                DrawSoftGrounded(spriteBatch, Taps9, baked.Rt, null, feet, Color.White, alpha, rot, baked.FeetInRt,
+                    new Vector2(across, stretch), anchorWorldY, facing, blur);
                 return;
             }
             // Where the feet sit INSIDE the sprite, which is the sprite's bottom edge only when the
@@ -894,7 +897,7 @@ namespace SDVRadiance
             if (originY >= 1f && originY < src.Height - 0.5f)
                 src = new Rectangle(src.X, src.Y, src.Width, (int)Math.Round(originY));
             DrawBandedGradient(spriteBatch, npc.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, Math.Min(originY, src.Height)),
-                alpha, rot, new Vector2(4f * across, 4f * stretch), depth, blur, HeadFade, facing);
+                alpha, rot, new Vector2(4f * across, 4f * stretch), anchorWorldY, blur, HeadFade, facing);
         }
     }
 }
