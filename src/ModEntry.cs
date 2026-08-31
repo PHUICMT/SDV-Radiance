@@ -177,6 +177,7 @@ namespace SDVRadiance
             HarmonyPatcher.InstallAll(_harmony, this.Monitor);
 
             this.Monitor.Log("SDV-Radiance loaded (world post-processing via RenderedWorld).", LogLevel.Info);
+            PlatformReport.WriteOnce(this.Monitor, Game1.graphics?.GraphicsDevice);
 
             // Local dev harness: src/DevMenu.local.cs is git-excluded, so it only exists on the
             // author's machine; it additionally requires a dev.local.flag file in the mod folder.

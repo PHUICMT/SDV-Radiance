@@ -2,6 +2,61 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.7.1
+
+### Fixed
+
+- **A column of dead water stood over a modded animal that was emoting.** The balloon over a
+  character's head was masked out of the water with a box measured from the collision box, three
+  tiles up and two tall, which is about right over a villager and nowhere near a duck. The
+  character already draws its own balloon when it stamps itself into that mask, from its own
+  sprite height and whatever offset its pack asked for, so the guessed box is now only the
+  fallback for a character that could not draw itself.
+
+- **The same box, for a farmer sitting down.** A seat, a bus ride or an event pose moves where the
+  game draws somebody without moving the collision box it is drawn from. The villagers already had
+  that correction and the two farmer paths beside them did not, so your own balloon could ripple
+  while you sat on a bench by the water.
+
+- **The diagnostic report and the debug overlay tell you more.** Which lighting model ran and what
+  it found is in the report file now, not only in an on-screen caption, and the four debug overlay
+  channels that existed without being listed anywhere (`flood`, `normals`, `lampshadow`,
+  `mirrorsource`) are offered by name in the console help. The mod also writes what it can see of
+  your machine into the SMAPI log at startup: platform, graphics adapter, profile, whether the
+  float render targets the newer lighting needs exist here, and whether four known pixels survive
+  being written to a texture and read back. If you play somewhere unusual, that last line is worth
+  more to a bug report than any screenshot.
+
+### Changed
+
+- **Doubled sheets no longer pay for the shadows.** A shadow silhouette is stamped in flat black
+  and then blurred, so the smoothed diagonal the doubling buys is thrown away a moment later. The
+  shadow pass draws through the game's own batch, which is the only thing the upscaler was
+  checking, so every shadow was reading four times the texels it needed. Measured against 1.7.0 in
+  the same frozen scene with doubling on, the shadow draw fell from 0.055 ms to 0.037 ms at Town
+  after dark and from 0.089 ms to 0.075 ms at Town in daylight. Shadows look the same whether doubling is on or off, which is
+  the point. This also makes the Performance tab honest: its benchmark ran on a batch of its own
+  and so never saw the redirect, and reported a shadow cost lower than the one a real frame paid.
+
+- **The water's exclusion mask stopped paying for it too.** That mask is a coverage shape, read for
+  where it is opaque and nothing else, so a smoothed diagonal buys it nothing. Most of it was
+  already clear; the parts where a critter, an NPC, a farm animal or an above-head scroll draws
+  ITSELF were not, because those have to render through the game's own batch and that is what the
+  doubling decides by.
+
+- **The diagnostic report says which lighting model ran.** The GI line the debug overlay draws
+  is in the report file too now: the model, the probe grid, and how many light seeds it found.
+  A player on a platform with no console could not reach any of that before.
+
+### For translators
+
+**Nothing to do for this release.** No keys were added, removed or reworded: `i18n/default.json`
+still holds the same 813 keys it did at 1.7.0, and Chinese and Thai are both complete against it.
+Everything 1.7.1 changes is either a fix with no words attached or a diagnostic that only ever
+writes to the SMAPI log, which is English by design so that a log can be read by whoever is asked
+to look at it.
+
+
 ## 1.7.0
 
 ### Added

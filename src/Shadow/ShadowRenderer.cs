@@ -766,6 +766,15 @@ namespace SDVRadiance
             // Our shadows are lighting, not bodies: keep them out of the sprite-relief replay
             // (see SpriteDrawRecorder.SuppressRecording for what happened when they got in).
             SpriteDrawRecorder.SuppressRecording = true;
+            // And keep them off the doubled sheets for the same reason. A silhouette is stamped
+            // black and then blurred, so the smoothed diagonal the upscaler pays for is thrown
+            // away a moment later. This batch IS Game1.spriteBatch, which is the only thing the
+            // upscaler checks, so without this every shadow read four times the texels it needs.
+            // Saved and restored rather than set and cleared: more than one pass suspends this,
+            // and a nested one clearing the flag on its way out would hand the rest of the outer
+            // pass back to the upscaler without anybody asking for it.
+            bool upscalerWasSuspended = SheetUpscaler.SuspendedForOwnDraw;
+            SheetUpscaler.SuspendedForOwnDraw = true;
             try
             {
                 if (_sunBlend > 0.004f)
@@ -781,6 +790,7 @@ namespace SDVRadiance
             {
                 _renderDepth--;
                 SpriteDrawRecorder.SuppressRecording = false;
+                SheetUpscaler.SuspendedForOwnDraw = upscalerWasSuspended;
             }
         }
     }

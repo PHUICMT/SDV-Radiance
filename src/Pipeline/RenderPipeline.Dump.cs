@@ -145,7 +145,15 @@ namespace SDVRadiance
             Add("mirror_selfdrawn_atlas", _selfDrawnMirrorAtlas);
             Add("mask_occluder", _occluderMask);
             Add("mask_sprite", _spriteMaskRenderTarget);
-            Add("flood_lightmap", _flood.Texture);
+            // Only while it is still being BUILT. Once the cascades' cross-fade settles, the
+            // pipeline stops calling _flood.Build (see the floodMapWanted gate), so this texture
+            // holds whatever was in it when the fade finished, which is a different frame on every
+            // launch. Dumped anyway it looked like a live buffer with 71% of its bytes moving
+            // between two runs of the SAME build, which is a regression report waiting to happen.
+            // A buffer nothing maintains is not evidence, and the honest way to say so is to leave
+            // it out: a comparer already reports a missing side, and cannot mistake that for a diff.
+            if (_cascadeBlend < 0.999f)
+                Add("flood_lightmap", _flood.Texture);
             Add("cascade_lightmap", _cascades.Texture);
             // The cascades' inputs, because a collapsed cascade map has exactly three suspects
             // (the mask it marches, the softened copies, the emitters) and a capture that holds

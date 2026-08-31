@@ -194,6 +194,7 @@ namespace SDVRadiance
                 return;
 
             RenderTargetBinding[] prev = _device.GetRenderTargets();
+            bool upscalerWasSuspended = SheetUpscaler.SuspendedForOwnDraw;
             int w = prev.Length > 0 && prev[0].RenderTarget is RenderTarget2D rt ? rt.Width : Game1.viewport.Width;
             int h = prev.Length > 0 && prev[0].RenderTarget is RenderTarget2D rt2 ? rt2.Height : Game1.viewport.Height;
             if (w <= 0 || h <= 0)
@@ -207,6 +208,12 @@ namespace SDVRadiance
 
             try
             {
+                // Nothing stamped here is looked at. It is a coverage shape, read for where it is
+                // opaque and nothing else, so the smoothed diagonal a doubled sheet buys is worth
+                // nothing to it. Most stamps go through our own batch and were never redirected,
+                // but the four that let a sprite draw ITSELF have to point the global at ours for
+                // the duration, and the upscaler decides by exactly that global.
+                SheetUpscaler.SuspendedForOwnDraw = true;   // saved above, restored below
                 _device.SetRenderTarget(_spriteMaskRenderTarget);
                 _device.Clear(Color.Transparent);
                 var spriteBatch = _spriteMaskSpriteBatch;
@@ -228,6 +235,7 @@ namespace SDVRadiance
             }
             finally
             {
+                SheetUpscaler.SuspendedForOwnDraw = upscalerWasSuspended;
                 _device.SetRenderTargets(prev);
             }
         }
@@ -283,7 +291,8 @@ namespace SDVRadiance
                 // Ask it to draw itself first, and only fall back to rebuilding its placement if
                 // that throws. A villager comes out the same either way; anything that positions
                 // itself differently only comes out right this way.
-                if (!StampCharacterSelf(spriteBatch, c))
+                bool drewItself = StampCharacterSelf(spriteBatch, c);
+                if (!drewItself)
                     StampSprite(spriteBatch, c.Sprite.Texture, c.Sprite.SourceRect, bb);
                 // A SPEECH BUBBLE is part of the world layer too (drawn above AlwaysFront),
                 // so a fisherman chatting over the river had his bubble rippled and tinted
@@ -298,8 +307,17 @@ namespace SDVRadiance
                     Vector2 tl = Game1.GlobalToLocal(Game1.viewport, new Vector2(world.X, world.Y));
                     spriteBatch.Draw(Game1.staminaRect, new Rectangle((int)tl.X, (int)tl.Y, world.Width, world.Height), Color.White);
                 }
-                // Emotes (the thought/exclamation balloon) live in the world layer too.
-                if (c.isEmoting)
+                // Emotes (the thought/exclamation balloon) live in the world layer too, and the
+                // character that just drew itself drew its emote as part of that: NPC.draw ends
+                // with DrawEmote, which places the balloon from the sprite's OWN height, the
+                // pack's EmoteOffset and a per-age and per-gender nudge. This box knew none of
+                // that. It sat three tiles over the collision box and 128 tall, which is roughly
+                // right over a villager and nowhere near a duck: reported with a picture of a
+                // column of dead water standing above two modded birds while their balloon
+                // floated in live water below it. So it is what it always should have been, the
+                // fallback for a character that could not draw itself, next to the fallback for
+                // its body.
+                if (!drewItself && c.isEmoting)
                     StampUiBox(spriteBatch, bb.Center.X, bb.Top - 160, 80, 128);
                 // The SPEECH bubble is a different mechanism from the emote icon above, and
                 // only the icon was ever covered. Reported as "water displacement somehow
@@ -324,7 +342,15 @@ namespace SDVRadiance
             {
                 if (pw.isEmoting)
                 {
+                    // Same correction the villagers get above, and for the same reason: the game
+                    // draws the balloon from getLocalPosition, which adds drawOffset, while the
+                    // collision box this is measured from never hears about it. A farmer sitting
+                    // on a bench or posed by an event is drawn somewhere the box does not admit
+                    // to, and the exclusion stayed where the box was.
                     Rectangle pbb = pw.GetBoundingBox();
+                    Vector2 playerDrawOffset = pw.drawOffset;
+                    if (playerDrawOffset != Vector2.Zero)
+                        pbb.Offset((int)playerDrawOffset.X, (int)playerDrawOffset.Y);
                     StampUiBox(spriteBatch, pbb.Center.X, pbb.Top - 160, 80, 128);
                 }
                 // The report said "muttering FARMER speech bubbles", and a farmer is not an
@@ -353,7 +379,12 @@ namespace SDVRadiance
                 spriteBatch.Draw(other.Colour, feet - new Vector2(ShadowRenderer.PlayerRtW / 2f, ShadowRenderer.PlayerRtH - 8f),
                     Color.White);
                 if (other.Who.isEmoting)
+                {
+                    Vector2 otherDrawOffset = other.Who.drawOffset;
+                    if (otherDrawOffset != Vector2.Zero)
+                        obb.Offset((int)otherDrawOffset.X, (int)otherDrawOffset.Y);
                     StampUiBox(spriteBatch, obb.Center.X, obb.Top - 160, 80, 128);
+                }
                 StampAboveHead(spriteBatch, other.Who);
             }
         }

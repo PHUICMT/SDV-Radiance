@@ -374,6 +374,10 @@ namespace SDVRadiance
                         + $"(0 = switched off, flood lighting off, overcast outdoors, or still fading)");
             // A fade at 0 means the stage is listed but contributing nothing this frame, which
             // looks identical to "switched off" from the outside and is not the same problem.
+            // The GI model in words, in the file a player attaches to a report. The caption in
+            // radiance_debug flood says the same thing, but that needs a keyboard and a console,
+            // which is exactly what the platforms we hear the least from do not have.
+            sb.AppendLine($"    GI: {(_cascades.Refused ? $"cascades refused by this device ({_cascades.RefusedReason})" : _cascades.LastReport)}");
             sb.AppendLine("presence (0 = contributing nothing this frame):");
             sb.AppendLine($"    water={_fadeWater:F2} flood={_fadeFlood:F2} lighting={_fadeLighting:F2} "
                         + $"cloud={_fadeCloud:F2} tilt={_fadeTilt:F2} godRays={_godRayAmount:F2}");

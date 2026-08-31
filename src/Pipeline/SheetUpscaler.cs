@@ -50,6 +50,14 @@ namespace SDVRadiance
         internal static int PatchedOverloads { get; private set; }
         /// <summary>Draws redirected this frame, for the debug caption.</summary>
         internal static int RedirectedThisFrame;
+        /// <summary>Set while this mod draws something of its own through the game's batch that
+        /// does not want a smoothed sheet. Shadow silhouettes are the case: they are stamped in
+        /// flat black and then blurred, so the rounded diagonal is thrown away a moment later,
+        /// and the only thing left of it is four times the texels read. Measured at town-night
+        /// with doubling on, the shadow draw was 0.021 ms before this pass existed and 0.322 ms
+        /// after. The batch identity check below cannot tell our draws from the game's, because
+        /// world sprites of ours are required to use Game1.spriteBatch, so the caller says so.</summary>
+        internal static bool SuspendedForOwnDraw;
 
         private static bool Active => Enabled && Device != null && Effect != null;
 
@@ -80,7 +88,7 @@ namespace SDVRadiance
         /// <summary>The doubled sheet for this draw, or null to leave the draw alone.</summary>
         private static Texture2D? Doubled(SpriteBatch batch, Texture2D texture)
         {
-            if (!Active || !ReferenceEquals(batch, Game1.spriteBatch) || texture == null || texture.IsDisposed)
+            if (!Active || SuspendedForOwnDraw || !ReferenceEquals(batch, Game1.spriteBatch) || texture == null || texture.IsDisposed)
                 return null;
             // Only ART. A render target is a picture of the frame - the game's own screen being
             // presented, this mod's effect chain copying its buffers - and doubling those made

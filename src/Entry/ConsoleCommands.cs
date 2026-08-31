@@ -235,7 +235,13 @@ namespace SDVRadiance
                     monitor.Log($"Water mask overlay: {(RenderPipeline.MaskView ? "ON" : "OFF")} (rebuilds on next tile crossing / within 10s)", LogLevel.Info);
                 });
             helper.ConsoleCommands.Add("radiance_debug",
-                "Show one internal buffer over the world. Channels: off | water | labeldiff | sdf | subtype | sprite | reflect | mirror | emitter | caustic | window | sky. "
+                "Show one internal buffer over the world. Channels: off | water | labeldiff | sdf | subtype | sprite | reflect "
+                + "| mirror | mirrorsource | flood | normals | lampshadow | emitter | caustic | window | sky. "
+                + "normals paints the sprite normal buffer the relief reads, and captions it with the recorded draw count, "
+                + "the sway strips and the doubled-sheet redirects of this frame: the one place those counters are shown. "
+                + "lampshadow paints the per-light shadow terms themselves, before they touch the picture, which is the only "
+                + "way to tell a sawtoothed shadow edge in the terms from one in what they multiply. "
+                + "flood paints the GI lightmap a cell at a time, so a light can be switched and its cells watched rather than guessed at. "
                 + "emitter paints the lighting pass's answer to 'which pixels ARE a light': RED = treated as the light "
                 + "itself and spared the room's dimming, GREEN = close enough to a light but not bright enough in the art to count. "
                 + "labeldiff paints the radiance_verify verdict: RED = label says liquid but the mask has none, YELLOW = the mask ripples where the label says solid. "
@@ -245,7 +251,7 @@ namespace SDVRadiance
                 {
                     if (args.Length < 1 || !Enum.TryParse(args[0], ignoreCase: true, out DebugOverlayChannel channel))
                     {
-                        monitor.Log("usage: radiance_debug off|water|labeldiff|sdf|subtype|sprite|reflect|mirror|flood|emitter|caustic|window|sky "
+                        monitor.Log("usage: radiance_debug off|water|labeldiff|sdf|subtype|sprite|reflect|mirror|mirrorsource|flood|normals|lampshadow|emitter|caustic|window|sky "
                             + $"(now: {RenderPipeline.DebugChannel})", LogLevel.Info);
                         return;
                     }

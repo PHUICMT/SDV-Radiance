@@ -222,7 +222,7 @@ namespace SDVRadiance
             }
             Origin = originTiles;
             MapSize = probeGrid * ProbeSpacingTiles;
-            LastReport = $"cascades: {probesX}x{probesY} probes, {seededCells} emitter cells, "
+            LastReport = $"cascades: {probesX}x{probesY} probes, {CascadeCount} cascades, {seededCells} emitter cells, "
                 + (scene.VanillaDark ? $"add-only seed {scene.NightSeed:F2}" : $"sky ({miss.X:F2},{miss.Y:F2},{miss.Z:F2})");
             return true;
         }
