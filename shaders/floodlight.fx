@@ -136,6 +136,11 @@ float4 SoftColArr[SOFT_LIGHTS];
 float SoftCount;
 float Aspect;            // w/h so light pools stay round
 float ShadowStrength;    // 0..1 how dark a fully occluded ray gets
+// The ceiling on samples ONE shadow ray may take. 12 is what every release up to 1.6.2 did,
+// full stop; 48 is one sample per mask texel, which is what stops a ray stepping over a fence
+// post. It is a uniform because it is the only cost in this shader paid per lamp on screen,
+// and a machine that cannot afford eight lamps at 48 can afford them at 12.
+float MarchStepCeiling = 48.0;
 float ShadowCarve;       // 0..1 how much of the GAME's own glow goes with it in shadow (see shadowCarve)
 // PENUMBRA. A shadow's edge is not one width: an occluder right beside the pixel cuts a hard
 // edge, one far from it a soft one, because a lamp is not a point and its width shows in the
@@ -470,7 +475,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             // five taps across the ray, which could only ever give the edge a handful of levels.
             float distTiles = dist * TilesPerScreen.y;
             float distTexels = distTiles * 8.0;
-            float stepCount = clamp(ceil(distTexels), 8.0, 48.0);
+            float stepCount = clamp(ceil(distTexels), 8.0, max(8.0, MarchStepCeiling));
             float stepTexels = distTexels / stepCount;
             // The blur is decided ONCE per ray, where the ray first meets something. Left to vary
             // step by step, the steps on the occluder's far side (nearer the pixel, so less blur)
@@ -505,9 +510,27 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             // solid, so a ring worn while standing on it sent every ray out through an occluder:
             // the carve took the game's own glow with it and the pool went out as the player
             // stepped up onto the boards. The bright core of that pool measured 251 on the path
-            // and 132 on the porch. How blocked the light's OWN cell is is the measure of it,
-            // which leaves a torch beside a fence its comb, since that cell is mostly open.
-            float selfOpen = 1.0 - smoothstep(0.35, 0.85, OccAt(lp));
+            // and 132 on the porch.
+            //
+            // ENCLOSED is the question, and a POINT sample cannot tell it from ADJACENT. A light
+            // the player carries sits at the middle of the tile they stand on, so walking into a
+            // stove or a keg puts a stamped-solid cell half a tile away: read at one point, the
+            // mask goes 0.00 to 0.90 within a quarter of a tile, and since this term multiplies
+            // the light's whole accumulated occlusion it took EVERY shadow that lamp cast with
+            // it, on every side, the instant you touched anything. Reported as the shadows
+            // disappearing on contact while wearing a glow ring, and measured from a pair of
+            // captures a single tile apart.
+            //
+            // A tile-wide read separates the two cases cleanly, because it is the difference
+            // between them: inside a footprint every direction is solid and it reads near 1;
+            // beside a stove one direction is and it reads about a half. Measured on the mask
+            // from that capture, walking the light down the column: 0.06, 0.34, 0.47, 0.61,
+            // 0.80, 1.00. So the ends sit where only the enclosed end of that walk crosses.
+            //
+            // And it never reaches zero. A term that decides rather than fades is what made a
+            // quarter tile of movement switch a room's shadows off; the floor keeps a pressed-in
+            // light most of its shadows and still spares the porch its pool.
+            float selfOpen = lerp(1.0, 0.15, smoothstep(0.55, 0.95, OccAtBlur(lp, 8.0)));
             // And a wall is not shadowed by its own footprint. The mask stamps a building solid
             // across its tiles, but the game draws that building's face and roof OVER the tiles
             // north of them, so a lamp in front of the farmhouse threw the house's shadow across

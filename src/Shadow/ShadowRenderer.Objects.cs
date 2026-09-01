@@ -485,6 +485,24 @@ namespace SDVRadiance
             _shadowModel = config.DirectionalShadowModel;
         }
 
+        /// <summary>Whether this kind casts at all this frame: its own length dial above zero.
+        ///
+        /// <para>A shadow with no length is no shadow, so the bottom of each kind's dial is where
+        /// that kind is switched off, and the check sits BEFORE the work rather than inside the
+        /// draw. That is the whole point of it. On a farm screen measured 2026-09-01, 158 of the
+        /// 200 casters the object pass drew were tufts of grass, and object shadows cost 0.252 ms
+        /// of processor time against a noise floor of 0.005. There was no way to spend less of
+        /// that without giving up every object shadow on the map: the per-kind dials are length,
+        /// softness and lean, and all three are appearance, so a player who turned them all the
+        /// way down - which is exactly what was reported - changed how the grass shadows looked
+        /// and not how many were drawn.</para>
+        ///
+        /// <para>Nothing pops. The dial's old floor was 0.05, where a shadow is already a few
+        /// pixels of smudge under the thing casting it, so the last step down to nothing is
+        /// smaller than any step before it.</para>
+        /// </summary>
+        private bool KindCasts(ShadowKind kind) => _kindLengthCaps[(int)kind] > 0f;
+
         /// <summary>Which shape this frame's shadows are. Read once per pass beside the rest of the
         /// per-frame tuning, so the draw never reaches for the config.</summary>
         private ShadowModel _shadowModel = ShadowModel.Modern;
@@ -785,28 +803,28 @@ namespace SDVRadiance
                     // The game's own gate: a tree being chopped is a stump AND falling, and it is
                     // drawn whole for the length of that fall, so a canopy shadow that stops at
                     // the axe stroke leaves the toppling tree casting a sapling's stub.
-                    case Tree tree when tree.growthStage.Value >= 5 && (!tree.stump.Value || tree.falling.Value) && tree.texture?.Value != null:
+                    case Tree tree when tree.growthStage.Value >= 5 && (!tree.stump.Value || tree.falling.Value) && tree.texture?.Value != null && KindCasts(ShadowKind.Trees):
                         DrawTreeShadow(spriteBatch, tree, tile, LeanOf(rot, ShadowKind.Trees), LengthOf(stretch, ShadowKind.Trees), alpha,
                             SoftnessOf(blur, ShadowKind.Trees));
                         break;
                     // Everything else the game still DRAWS as a tree: seeds, sprouts, saplings,
                     // bush-stage growth and stumps. They are short, so they take the full lean a
                     // bush does rather than the damped canopy lean above.
-                    case Tree small when small.texture?.Value != null:
+                    case Tree small when small.texture?.Value != null && KindCasts(ShadowKind.SmallTrees):
                         DrawSmallTreeShadow(spriteBatch, small, tile, LeanOf(rot, ShadowKind.SmallTrees), LengthOf(stretch, ShadowKind.SmallTrees), alpha,
                             SoftnessOf(blur, ShadowKind.SmallTrees));
                         break;
-                    case FruitTree ft when ft.growthStage.Value >= 4 && (!ft.stump.Value || ft.falling.Value) && ft.texture != null:
+                    case FruitTree ft when ft.growthStage.Value >= 4 && (!ft.stump.Value || ft.falling.Value) && ft.texture != null && KindCasts(ShadowKind.Trees):
                         DrawFruitTreeShadow(spriteBatch, ft, tile, LeanOf(rot, ShadowKind.Trees), LengthOf(stretch, ShadowKind.Trees), alpha,
                             SoftnessOf(blur, ShadowKind.Trees));
                         break;
                     // A fruit tree still growing (stages 0 to 3) is short, so it takes the full
                     // lean a bush and a wild sapling take.
-                    case FruitTree sapling when sapling.growthStage.Value < 4 && sapling.texture != null:
+                    case FruitTree sapling when sapling.growthStage.Value < 4 && sapling.texture != null && KindCasts(ShadowKind.SmallTrees):
                         DrawFruitTreeSaplingShadow(spriteBatch, sapling, tile, LeanOf(rot, ShadowKind.SmallTrees), LengthOf(stretch, ShadowKind.SmallTrees), alpha,
                             SoftnessOf(blur, ShadowKind.SmallTrees));
                         break;
-                    case Bush bush:
+                    case Bush bush when KindCasts(ShadowKind.Bushes):
                         DrawBushShadow(spriteBatch, bush, LeanOf(rot, ShadowKind.Bushes), LengthOf(stretch, ShadowKind.Bushes), alpha,
                             SoftnessOf(blur, ShadowKind.Bushes));
                         break;
@@ -818,14 +836,14 @@ namespace SDVRadiance
                     // picture of a dead crop row. Nothing else here needed changing: the crop
                     // keeps its texture, its source rect, its draw position and its flip through
                     // dying, so the same call handles it.
-                    case HoeDirt { crop: { } crop } hd when !crop.forageCrop.Value && !crop.IsErrorCrop():
+                    case HoeDirt { crop: { } crop } hd when !crop.forageCrop.Value && !crop.IsErrorCrop() && KindCasts(ShadowKind.Crops):
                         DrawCropShadow(spriteBatch, crop, tile, LeanOf(rot, ShadowKind.Crops), LengthOf(stretch, ShadowKind.Crops), alpha,
                             SoftnessOf(blur, ShadowKind.Crops));
                         break;
                     // Grass. It stands on the ground like everything else here and was the only
                     // thing on a meadow not casting, which reads as the grass being printed on the
                     // dirt while the fence beside it stands on it.
-                    case StardewValley.TerrainFeatures.Grass grass when grass.texture?.Value != null:
+                    case StardewValley.TerrainFeatures.Grass grass when grass.texture?.Value != null && KindCasts(ShadowKind.Grass):
                         DrawGrassShadow(spriteBatch, grass, tile, LeanOf(rot, ShadowKind.Grass), LengthOf(stretch, ShadowKind.Grass), alpha,
                             SoftnessOf(blur, ShadowKind.Grass));
                         break;
@@ -843,7 +861,7 @@ namespace SDVRadiance
                 Vector2 ltile = ltf?.Tile ?? Vector2.Zero;
                 if (ltf == null || ltile.X < tileX0 || ltile.X > tileX1 || ltile.Y < tileY0 || ltile.Y > tileY1)
                     continue;
-                if (ltf is Bush bush)
+                if (ltf is Bush bush && KindCasts(ShadowKind.Bushes))
                     DrawBushShadow(spriteBatch, bush, LeanOf(rot, ShadowKind.Bushes), LengthOf(stretch, ShadowKind.Bushes), alpha,
                         SoftnessOf(blur, ShadowKind.Bushes));
             }
@@ -869,6 +887,10 @@ namespace SDVRadiance
         private void CastPlacedObjectShadows(SpriteBatch spriteBatch, GameLocation location, float rot, float stretch, float alpha,
             float blur, int tileX0, int tileX1, int tileY0, int tileY1)
         {
+            // Every caster in here is the Objects kind, so its dial being at zero skips the walk
+            // rather than each draw inside it.
+            if (!KindCasts(ShadowKind.Objects))
+                return;
             // Same viewport-bounded lookup for placed objects (machines, fences, decor): objects is
             // tile-keyed too, so we never walk the whole placed-object set to find the on-screen few.
             var objDict = location.objects;

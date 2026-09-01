@@ -2643,32 +2643,23 @@ namespace SDVRadiance
                 Array.Copy(nearWaterFlags, _waterTilesInMask, count);
                 _waterTilesVersion++;
             }
-            if (_waterMask == null || _waterMask.Width != pw || _waterMask.Height != ph)
-            {
-                _waterMask?.Dispose();
-                _waterMask = VramTally.Track(new Texture2D(_device, pw, ph, false, SurfaceFormat.Color), "water mask");
-            }
-            _waterMask.SetData(_waterMaskPixels, 0, pw * ph);
-            if (_waterSignedDistanceTexture == null || _waterSignedDistanceTexture.Width != pw || _waterSignedDistanceTexture.Height != ph)
-            {
-                _waterSignedDistanceTexture?.Dispose();
-                _waterSignedDistanceTexture = new Texture2D(_device, pw, ph, false, SurfaceFormat.Alpha8);
-            }
-            _waterSignedDistanceTexture.SetData(_maskScratch.WaterSignedDistancePixels, 0, pw * ph);
-            if (_waterRealShoreDistanceTexture == null || _waterRealShoreDistanceTexture.Width != pw || _waterRealShoreDistanceTexture.Height != ph)
-            {
-                _waterRealShoreDistanceTexture?.Dispose();
-                _waterRealShoreDistanceTexture = new Texture2D(_device, pw, ph, false, SurfaceFormat.Alpha8);
-            }
+            // Every upload goes into the pair's spare, never into the texture the card may still
+            // be reading: SetData on an in-use texture makes the driver wait out every queued draw
+            // that samples it, which is where this window's 300x worst frames were going. Same
+            // pixels either way; only the wait goes. See TextureDoubleBuffer.
+            //
+            // The two ! carry the invariant the direct SetData calls here always relied on: a job
+            // does not reach Apply without the compose pass having filled both buffers.
+            _waterMask = TextureDoubleBuffer.UploadIntoSpare(_device, ref _waterMaskSpare, _waterMask,
+                pw, ph, SurfaceFormat.Color, "water mask", _waterMaskPixels!, pw * ph);
+            _waterSignedDistanceTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _waterSignedDistanceSpare,
+                _waterSignedDistanceTexture, pw, ph, SurfaceFormat.Alpha8, null, _maskScratch.WaterSignedDistancePixels!, pw * ph);
             if (_maskScratch.RealShoreDistancePixels != null)
-                _waterRealShoreDistanceTexture.SetData(_maskScratch.RealShoreDistancePixels, 0, pw * ph);
-            if (_waterPlungeChurnTexture == null || _waterPlungeChurnTexture.Width != pw || _waterPlungeChurnTexture.Height != ph)
-            {
-                _waterPlungeChurnTexture?.Dispose();
-                _waterPlungeChurnTexture = new Texture2D(_device, pw, ph, false, SurfaceFormat.Color);
-            }
+                _waterRealShoreDistanceTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _waterRealShoreDistanceSpare,
+                    _waterRealShoreDistanceTexture, pw, ph, SurfaceFormat.Alpha8, null, _maskScratch.RealShoreDistancePixels, pw * ph);
             if (_maskScratch.PlungeChurnPixels != null)
-                _waterPlungeChurnTexture.SetData(_maskScratch.PlungeChurnPixels, 0, pw * ph * FallDistanceBytesPerTexel);
+                _waterPlungeChurnTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _waterPlungeChurnSpare,
+                    _waterPlungeChurnTexture, pw, ph, SurfaceFormat.Color, null, _maskScratch.PlungeChurnPixels, pw * ph * FallDistanceBytesPerTexel);
             _waterMaskPixelSize = new Vector2(tilesW, tilesH);
 
             if (MaskView)
@@ -2707,34 +2698,21 @@ namespace SDVRadiance
             // licence to darken the entire screen. Nothing is near water here; say so.
             for (int p = 0; p < pcount; p++) _maskScratch.WaterSignedDistancePixels[p] = 0;
 
-            if (_waterMask == null || _waterMask.Width != pw || _waterMask.Height != ph)
-            {
-                _waterMask?.Dispose();
-                _waterMask = new Texture2D(_device, pw, ph, false, SurfaceFormat.Color);
-            }
-            _waterMask.SetData(_waterMaskPixels, 0, pcount);
-            if (_waterSignedDistanceTexture == null || _waterSignedDistanceTexture.Width != pw || _waterSignedDistanceTexture.Height != ph)
-            {
-                _waterSignedDistanceTexture?.Dispose();
-                _waterSignedDistanceTexture = new Texture2D(_device, pw, ph, false, SurfaceFormat.Alpha8);
-            }
-            _waterSignedDistanceTexture.SetData(_maskScratch.WaterSignedDistancePixels, 0, pcount);
-            if (_waterRealShoreDistanceTexture == null || _waterRealShoreDistanceTexture.Width != pw || _waterRealShoreDistanceTexture.Height != ph)
-            {
-                _waterRealShoreDistanceTexture?.Dispose();
-                _waterRealShoreDistanceTexture = new Texture2D(_device, pw, ph, false, SurfaceFormat.Alpha8);
-            }
-            _waterRealShoreDistanceTexture.SetData(_maskScratch.WaterSignedDistancePixels, 0, pcount);
+            // Into the spare of each pair, exactly as ApplyWaterMask uploads: a window with no
+            // water in it is still a whole-mask upload, and the card holds the old texture just
+            // as long here as it does there.
+            _waterMask = TextureDoubleBuffer.UploadIntoSpare(_device, ref _waterMaskSpare, _waterMask,
+                pw, ph, SurfaceFormat.Color, "water mask", _waterMaskPixels, pcount);
+            _waterSignedDistanceTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _waterSignedDistanceSpare,
+                _waterSignedDistanceTexture, pw, ph, SurfaceFormat.Alpha8, null, _maskScratch.WaterSignedDistancePixels, pcount);
+            _waterRealShoreDistanceTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _waterRealShoreDistanceSpare,
+                _waterRealShoreDistanceTexture, pw, ph, SurfaceFormat.Alpha8, null, _maskScratch.WaterSignedDistancePixels, pcount);
             // No water, so nothing is near a fall: the fall-distance field reads "far" everywhere.
             if (_maskScratch.PlungeChurnPixels == null || _maskScratch.PlungeChurnPixels.Length < pcount * FallDistanceBytesPerTexel)
                 _maskScratch.PlungeChurnPixels = new byte[pcount * FallDistanceBytesPerTexel];
             FillFallDistanceFar(_maskScratch.PlungeChurnPixels, 0, pcount);
-            if (_waterPlungeChurnTexture == null || _waterPlungeChurnTexture.Width != pw || _waterPlungeChurnTexture.Height != ph)
-            {
-                _waterPlungeChurnTexture?.Dispose();
-                _waterPlungeChurnTexture = new Texture2D(_device, pw, ph, false, SurfaceFormat.Color);
-            }
-            _waterPlungeChurnTexture.SetData(_maskScratch.PlungeChurnPixels, 0, pcount * FallDistanceBytesPerTexel);
+            _waterPlungeChurnTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _waterPlungeChurnSpare,
+                _waterPlungeChurnTexture, pw, ph, SurfaceFormat.Color, null, _maskScratch.PlungeChurnPixels, pcount * FallDistanceBytesPerTexel);
             _waterMaskPixelSize = new Vector2(tilesW, tilesH);
         }
 

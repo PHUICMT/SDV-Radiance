@@ -519,6 +519,7 @@ namespace SDVRadiance
         private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
         {
             Determinism.HoldGameClock();
+            Determinism.FollowTheGamesTimeStep();
 
             // Resource maintenance lives HERE, on the game's own tick, and not on any render
             // path, because every render path in this mod is gated on the mod being switched on.

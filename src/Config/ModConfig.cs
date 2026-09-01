@@ -631,6 +631,38 @@ namespace SDVRadiance
         /// <summary>How soft a lamp shadow's edge gets with distance from what cast it. 1 is the
         /// tuned look, 0 the hard edge of the mask itself, 2 twice as soft.</summary>
         public float LightShadowSoftness { get; set; } = 1.45f;
+        /// <summary>How finely a lamp's shadow is traced, as the ceiling on how many samples one
+        /// ray may take. This is the one dial in this mod whose price is paid PER LAMP ON SCREEN,
+        /// so it is the one that matters in a place with many of them.
+        ///
+        /// <para>Up to 1.6.2 a ray took twelve samples, full stop. 1.7.0 changed it to one sample
+        /// per mask texel so that a ray could not step over a fence post and miss it, which is up
+        /// to forty-eight - four times the reads, on every lamp, on every pixel that lamp reaches.
+        /// The picture is better for it and the cost went somewhere: this machine could not
+        /// measure it, and two players on weaker ones reported the release as slower with no new
+        /// switch to turn off, because the change rode along inside a commit named for the
+        /// feature beside it.</para>
+        ///
+        /// <para>0 is the twelve samples of 1.6.2 and its cost with it. 1 is the forty-eight of
+        /// 1.7. The default stays at 1 because that is what shipped and what the look was tuned
+        /// against; this exists so nobody has to choose between the mod and their frame rate, and
+        /// so the next report can name a number instead of a feeling.</para></summary>
+        public float LightShadowDetail { get; set; } = 1f;
+        /// <summary>Share the lamp shadow detail between the lamps lighting the same place, rather
+        /// than giving every one of them the full trace.
+        ///
+        /// <para>What a shadow ray costs is how many steps it takes. Stopping a ray early once it
+        /// is fully blocked was tried and saved nothing measurable, so fewer steps is the only
+        /// lever there is. The number of lamps marching at a pixel is what runs away: a saloon at
+        /// night costs more than a lit street with fewer full-screen passes, because in a small
+        /// room every shadowed lamp reaches every pixel and each one marches the whole way.</para>
+        ///
+        /// <para>Two lamps keep the whole dial; past that they share it, down to the twelve
+        /// samples every release up to 1.6.2 took. That floor is the point: a room full of lamps
+        /// can never trace coarser than a release nobody complained about, and detail is given up
+        /// exactly where it is hardest to see, because a shadow edge under eight lamps is read
+        /// against seven other lamps' light.</para></summary>
+        public bool LightShadowDetailShared { get; set; } = true;
         /// <summary>Gates the VISIBLE window work (the beam, the lit glass, the patch of sun on the
         /// floor) and the warm glow on house windows outdoors at night. It does NOT gate the
         /// daylight a window adds to the room's own lighting - that half answers to
@@ -876,6 +908,36 @@ namespace SDVRadiance
         public float LightingIndoorDarkness { get; set; } = 0.65f;
         /// <summary>Extra darkening at night where we own the lighting. 0 = none.</summary>
         public float LightingNightDarkness { get; set; } = 0.25f;
+        /// <summary>How far an interior's COLOUR follows the hour, against the full walk this mod
+        /// paints: cool from open sky before the sun is properly up, neutral in the middle of the
+        /// day, warm in the hour before dark, blue again at night.
+        ///
+        /// <para>The brightness curve is not this dial and never moves with it - that is the two
+        /// darkness sliders above. This is only how much the room is TINTED, and it exists because
+        /// it had no dial at all until somebody woke up in a room they read as cold and blue and
+        /// found nothing on any page that would take the blue out. What they reached for instead
+        /// was the GI strength, which does move it, and which also lights the whole outdoors, so
+        /// the room came right and the fields blew out.</para>
+        ///
+        /// <para>1 is the walk every release so far has painted and stays the default. 0 leaves an
+        /// interior the colour the game drew it, still dimmed by the hour.</para></summary>
+        public float LightingIndoorColourWalk { get; set; } = 1f;
+        /// <summary>How much of the morning's cool cast a room keeps when the sky is CLEAR, as a
+        /// fraction of the cast an overcast morning gets.
+        ///
+        /// <para>The cool cast argues that a room early on is lit by the sky rather than by the
+        /// sun, and that the sky is blue. That holds on an overcast morning and not on a clear one:
+        /// the sun is up by 6:00 in this game, it is low, and low sun is the warmest light of the
+        /// day. Every release up to now painted the same cool morning whatever the weather was
+        /// doing, and the player who reported it said so without meaning to, describing a room that
+        /// read cold and blue on waking "except on rainy days" - the one morning of the two where
+        /// the old cast was right.</para>
+        ///
+        /// <para>1 is that old behaviour, a clear morning as cool as a rainy one, and it is here so
+        /// anyone who preferred it can have it back. 0 leaves a clear morning with no cool cast at
+        /// all. Rain and storms are unaffected at every value: they always get the full cast, which
+        /// is the one this dial does not touch.</para></summary>
+        public float LightingMorningClearSkyCool { get; set; } = 0.35f;
         /// <summary>How much of the night darkening carries into the early morning (before 7:00).
         /// 0 wakes in a bright room; higher = darker mornings. The historical look used 0.25.</summary>
         public float LightingMorningDarkness { get; set; } = 0.25f;
@@ -902,11 +964,30 @@ namespace SDVRadiance
         public float LightingShadowStrength { get; set; } = 0.62f;
         /// <summary>Fences, bushes and boulders block lamp light as their own silhouettes (a comb of
         /// light through the pickets) rather than as whole tiles. Off is the 1.6.2 look: rounder
-        /// pools, blockier shadows. A taste, so it is a switch.</summary>
-        public bool LightShadowSilhouettes { get; set; } = true;
+        /// pools, blockier shadows. A taste, so it is a switch.
+        ///
+        /// <para>OFF by default from 1.7.3, along with <see cref="LightShadowProps"/>. Both shipped
+        /// on in 1.7.0 on the strength of costing nothing measurable, which was true of the seven
+        /// scenes they were measured in and is not a claim about anyone else's machine. The shape
+        /// of the work is a march per light against every occluder near it, so its price is the
+        /// number of lamps on screen times the number of things standing beside them - and every
+        /// scene in that set was a town, a beach or a quiet farm. The first report from outside
+        /// was a farm at 6:20 with several hundred crops, a lot of sprinklers and a dozen lit
+        /// torches, holding 60 fps on 1.6.2 and about 40 now, with both of these on and everything
+        /// else the same.</para>
+        ///
+        /// <para>That report is not proof these two are the cause, and it is not being treated as
+        /// proof: it is the reason a default that has never been measured on a weak machine should
+        /// not be the one every new install gets. Whoever wants the look turns it on and sees it
+        /// immediately. Nobody has to work out why their farm got slower.</para></summary>
+        public bool LightShadowSilhouettes { get; set; }
         /// <summary>Kegs, chests, machines, signs and floor furniture block lamp light as the sprites
-        /// they are. Off, a lamp sees straight through them while the sun does not.</summary>
-        public bool LightShadowProps { get; set; } = true;
+        /// they are. Off, a lamp sees straight through them while the sun does not.
+        ///
+        /// <para>OFF by default from 1.7.3. Same reasoning as <see cref="LightShadowSilhouettes"/>
+        /// above, and this is the heavier of the two on a working farm: a fence is a fence, but a
+        /// sprinkler, a keg and a scarecrow are everywhere somebody has been playing a while.</para></summary>
+        public bool LightShadowProps { get; set; }
 
         // --- Directional sprite shadows (sun-cast, sheared silhouettes) ---
         /// <summary>Which shape a cast shadow is. See <see cref="ShadowModel"/>: 1.7 stands a placed
@@ -1066,7 +1147,11 @@ namespace SDVRadiance
 
         /// <summary>A shadow shorter than this is not a shadow, so nothing is allowed to reach zero
         /// by way of a length slider; turn the whole feature off instead.</summary>
-        public const float ShadowKindLengthMin = 0.05f;
+        /// <summary>Zero, and zero means this kind does not cast at all: a shadow with no
+        /// length is no shadow, and switching one kind off had no other home. The floor was
+        /// 0.05, where a shadow is already a smudge a few pixels wide under the thing casting
+        /// it, so the last step down is the smallest one on the dial.</summary>
+        public const float ShadowKindLengthMin = 0f;
         /// <summary>Twice a person's own height, which is as far as a low sun takes anything.</summary>
         public const float ShadowKindLengthMax = 2f;
         /// <summary>Zero softness is a crisp edge, which is a look some people want.</summary>
@@ -1226,8 +1311,11 @@ namespace SDVRadiance
             FoliageSwayGustSpan = ClampToRange(FoliageSwayGustSpan, 4f, 40f);
             LightShadowCarve = ClampToRange(LightShadowCarve, 0f, 1f);
             LightShadowSoftness = ClampToRange(LightShadowSoftness, 0f, 2f);
+            LightShadowDetail = ClampToRange(LightShadowDetail, 0f, 1f);
             LightingIndoorDarkness = ClampToRange(LightingIndoorDarkness, 0f, 0.95f);
             LightingNightDarkness = ClampToRange(LightingNightDarkness, 0f, 0.95f);
+            LightingIndoorColourWalk = ClampToRange(LightingIndoorColourWalk, 0f, 1f);
+            LightingMorningClearSkyCool = ClampToRange(LightingMorningClearSkyCool, 0f, 1f);
             LightingWarmth = ClampToRange(LightingWarmth, 0f, 1f);
             LightingBoost = ClampToRange(LightingBoost, 0f, 2f);
             LightingRadiusScale = ClampToRange(LightingRadiusScale, 0.2f, 3f);

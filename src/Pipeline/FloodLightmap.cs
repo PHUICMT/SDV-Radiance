@@ -24,6 +24,12 @@ namespace SDVRadiance
         private const float AirDecay = 0.86f;
         /// <summary>Per-cell survival through solid/occluding tiles (light dies in ~2-3 tiles).</summary>
         private const float SolidDecay = 0.65f;
+        /// <summary>How much of a full overcast a SNOWFALL is worth to the morning's colour.
+        /// A snowy sky is bright and the ground under it is a reflector, so it is neither the
+        /// blue-grey of rain nor the warm low sun of a clear day. Half, which is the same share
+        /// the shadow pass gives a snowfall for the same reason.</summary>
+        private const float SnowOvercastShare = 0.5f;
+
         /// <summary>Sky light an occluded cell still starts with, as a fraction of the open sky.
         /// It used to be zero, which is what a roof does to DIRECT sun but not to the sky as a
         /// whole: a wall in the open still faces a bright hemisphere. Zero also made occlusion a
@@ -100,6 +106,7 @@ namespace SDVRadiance
         private float[] _lightDecay = Array.Empty<float>();
         private Color[] _lightmapPixels = Array.Empty<Color>();
         private Texture2D? _lightmapTexture;
+        private Texture2D? _lightmapTextureSpare;   // its pair - see TextureDoubleBuffer
 
         internal Texture2D? Texture => _lightmapTexture;
         /// <summary>World tile coordinate of the map's (0,0) cell.</summary>
@@ -224,12 +231,11 @@ namespace SDVRadiance
             BounceBlur(win);
             ComposeLightmapPixels(scene, win);
 
-            if (_lightmapTexture == null || _lightmapTexture.Width != tw || _lightmapTexture.Height != th)
-            {
-                _lightmapTexture?.Dispose();
-                _lightmapTexture = VramTally.Track(new Texture2D(graphicsDevice, tw, th, false, SurfaceFormat.Color), "flood lightmap");
-            }
-            _lightmapTexture.SetData(_lightmapPixels, 0, count);
+            // Into the pair's spare, never into the texture the lighting pass may still be
+            // reading (TextureDoubleBuffer): this is the grid whose worst frames carried a 2 ms
+            // GPU column against a 0.025 ms average.
+            _lightmapTexture = TextureDoubleBuffer.UploadIntoSpare(graphicsDevice, ref _lightmapTextureSpare,
+                _lightmapTexture, tw, th, SurfaceFormat.Color, "flood lightmap", _lightmapPixels, count);
             Origin = new Vector2(tx0, ty0);
             MapSize = new Vector2(tw, th);
             return true;
@@ -1063,6 +1069,34 @@ namespace SDVRadiance
             Vector3 warmDusk = new(1.00f, 0.90f, 0.76f);
             Vector3 nightSky = new(0.36f, 0.52f, 1.00f);
             float morning = 1f - MathHelper.Clamp((nowMinutes - 360f) / 200f, 0f, 1f);   // 06:00 -> 09:20
+            // AND A CLEAR MORNING IS NOT LIT BY OPEN SKY. The argument for the cool cast above is
+            // that a room early on is lit by the sky rather than by the sun, and the sky is blue.
+            // That is true of an overcast morning and false of a clear one: the sun is up by 6:00
+            // in this game, it is low, and low sun is the warmest light of the day. The reporter
+            // who raised it said so without meaning to, describing a room that reads cold and blue
+            // on waking "except on rainy days" - the one morning of the two where the cast is
+            // right. So the cool walk is now the weather's, and a clear morning keeps only a share
+            // of it rather than the whole thing.
+            //
+            // Read from the WEATHER and not from the room, because a room is never raining.
+            // ShadowRenderer.OvercastNow answers for the current location, which is right for a
+            // shadow outdoors and always zero in here: the first version asked it and made every
+            // morning a clear one, rain included. Caught by the rainy picture moving exactly as far
+            // as the clear one, which it must not do. These are the same three flags the level line
+            // above already reads, so an interior gets one answer about the sky.
+            //
+            // Only the MORNING. The same reasoning does apply to the warm hour before dark, and it
+            // is deliberately not applied there: nobody has reported it, that ramp was already
+            // pulled back once in 1.5.5 for being too strong, and two changes to one curve in one
+            // release cannot be told apart afterwards by the people who see them.
+            //
+            // How much a clear morning keeps is the player's, because this moves a look that every
+            // release so far has painted the same way. At 1 they get that look back exactly; rain
+            // is on the far end of the same lerp and never moves with the dial at all.
+            float overcast = Game1.isRaining || Game1.isLightning ? 1f
+                : Game1.isSnowing ? SnowOvercastShare : 0f;
+            morning *= MathHelper.Lerp(
+                MathHelper.Clamp(config.LightingMorningClearSkyCool, 0f, 1f), 1f, overcast);
             float evening = MathHelper.Clamp((nowMinutes - (darkMinutes - 110f)) / 110f, 0f, 1f);
             Vector3 chroma = Vector3.Lerp(Vector3.One, coolSky, morning);
             chroma = Vector3.Lerp(chroma, warmDusk, evening);
@@ -1103,6 +1137,17 @@ namespace SDVRadiance
                         MathHelper.Clamp((MaxCastRatio - 1f) / denom, 0f, 1f));
             }
 
+            // AND THE PLAYER GETS TO SAY HOW FAR IT WALKS. Everything above is a mood decided
+            // here, with no dial anywhere on any page, and a player who woke up in a room that
+            // read to them as cold and blue had nothing to turn down. What they reached for was
+            // the GI strength, which does move this, and which also lights the whole outdoors:
+            // the room came right and the fields blew out. Applied last, so the ratio guard above
+            // keeps its meaning and this only scales what survived it. At 0 the room is the colour
+            // the game drew, still dimmed by the hour, because the dim is the darkness sliders'
+            // job and not this one's.
+            chroma = Vector3.Lerp(Vector3.One, chroma,
+                MathHelper.Clamp(config.LightingIndoorColourWalk, 0f, 1f));
+
             // Brightness and colour must not fight: a strong cast is dark all by itself, so
             // the chroma is rescaled to carry exactly the luminance the curve above asked
             // for. The darkness sliders stay the only thing that decides how dark a room is,
@@ -1121,6 +1166,8 @@ namespace SDVRadiance
         {
             _lightmapTexture?.Dispose();
             _lightmapTexture = null;
+            _lightmapTextureSpare?.Dispose();
+            _lightmapTextureSpare = null;
         }
     }
 }

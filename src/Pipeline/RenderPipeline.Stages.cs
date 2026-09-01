@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
@@ -794,7 +795,7 @@ namespace SDVRadiance
             // never step the shafts.
             float cloudCoupleTarget = 0f;
             Vector2 cloudShift = Vector2.Zero;
-            if (_cloudMaskKeep != null && Determinism.Ticks - _cloudMaskTick <= 2)
+            if (GpuContent.Usable(_cloudMaskKeep) && Determinism.Ticks - _cloudMaskTick <= 2)
             {
                 var tilesPer = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
                 Vector2 shiftTiles = new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f) - _cloudMaskTileOffset;
@@ -815,6 +816,13 @@ namespace SDVRadiance
 
         /// <summary>The two tiers of direct pool, and the occluder mask they are shadowed against. Returns the
         /// discount each pool paid, which the report mirrors.</summary>
+        /// <summary>What the shadow march was actually handed this frame, and how many lamps were
+        /// marching when it was decided. For the report: a setting whose effect nobody can read is
+        /// a setting nobody can judge, and three counters written this week were unreadable for
+        /// exactly that reason.</summary>
+        internal static float LastMarchStepCeiling;
+        internal static int LastMarchingLamps;
+
         private float SetLightArrays(Effect effect, ModConfig config, RenderTarget2D dest, float floodCarry)
         {
             // Direct pools: the ranked leaders get the shadow ray, everything behind them
@@ -934,6 +942,35 @@ namespace SDVRadiance
             }
             GetParam(effect, "ShadowStrength")?.SetValue(MathHelper.Clamp(config.FloodShadowStrength, 0f, 1f) * lampVisible);
             GetParam(effect, "ShadowCarve")?.SetValue(MathHelper.Clamp(config.LightShadowCarve, 0f, 1f) * lampVisible);
+            // 0 on the dial is the twelve samples every release up to 1.6.2 took, 1 is the
+            // forty-eight that 1.7 traces with. The mapping lives here so the shader is handed
+            // a count and never has to know what a dial is.
+            float dialCeiling = MathHelper.Lerp(12f, 48f, MathHelper.Clamp(config.LightShadowDetail, 0f, 1f));
+            // AND THE DIAL IS A BUDGET, NOT A PER-LAMP ALLOWANCE, WHEN THIS IS ON.
+            //
+            // What a shadow ray costs is the number of steps it takes, and nothing else: an
+            // attempt to stop a ray early once it was fully blocked saved nothing measurable in
+            // any of four scenes, because the weight that fades the ends of every ray means it
+            // almost never reaches full block at full weight. So the only thing that makes this
+            // cheaper is fewer steps.
+            //
+            // n is how many lamps will actually march at this pixel, which is already counted
+            // above for the shader's own light array. The bill is that count multiplied by the
+            // ceiling, and it is the count that runs away: the saloon at night measured 0.896 ms
+            // against the town's 0.567 with FEWER full-screen passes, because in a small lit room
+            // every one of the eight shadowed lamps reaches every pixel and each one marches.
+            //
+            // Two lamps keep the whole dial. Past that they share it, down to the twelve samples
+            // of 1.6.2, which is the floor by construction: this can never look coarser than a
+            // release everybody was happy with. And it gives up detail exactly where detail is
+            // hardest to see, since a shadow's edge is read against the other seven lamps' light.
+            float marchingLamps = Math.Max(1f, _isFloodOcclusionReady ? n : 0);
+            float shared = config.LightShadowDetailShared
+                ? MathHelper.Clamp(dialCeiling * 2f / marchingLamps, 12f, dialCeiling)
+                : dialCeiling;
+            GetParam(effect, "MarchStepCeiling")?.SetValue(shared);
+            LastMarchStepCeiling = shared;
+            LastMarchingLamps = (int)marchingLamps;
             GetParam(effect, "ShadowSoftness")?.SetValue(MathHelper.Clamp(config.LightShadowSoftness, 0f, 2f));
             // Rides the flood's own fade, so switching the GI off takes the tint with it rather
             // than leaving a coloured field over a scene with no lightmap left under it.
@@ -1116,7 +1153,12 @@ namespace SDVRadiance
             // The sky half of the precipitation lands here, on the rippled result, so streaks
             // hang straight over the river instead of waving with it. This side of the capture
             // never meets the vanilla lightmap, so the particles' own ambient dims it instead.
+            // It pays its own bill: the time is booked under precipitation (inside the call) and
+            // taken back out of this stage's CPU column, which double-counted it and read as the
+            // water pass costing ten times more in rain.
+            long precipitationStart = Stopwatch.GetTimestamp();
             PrecipitationSystem.DrawSkyForChain(spriteBatch, dest, _frameWidth, AmbientLightOnParticles());
+            ExcludeTicksFromOpenStage(Stopwatch.GetTimestamp() - precipitationStart);
         }
 
         /// <summary>How agitated the surface is this frame: weather, season, the shimmer toggle's ease, the
@@ -1878,7 +1920,10 @@ namespace SDVRadiance
             _luminanceRenderTarget ??= VramTally.Track(new RenderTarget2D(_device, 32, 32, false, SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "luminance probe");
             _luminancePixels ??= new Color[32 * 32];
 
-            if (_isLuminancePrimed)
+            // Primed says a reading was WRITTEN. Usable says it is still THERE: a device reset
+            // throws a render target's contents away, and metering a wiped probe reads black,
+            // which is the largest brightening this meter can ask for. Re-prime instead.
+            if (_isLuminancePrimed && GpuContent.Usable(_luminanceRenderTarget))
             {
                 _luminanceRenderTarget.GetData(_luminancePixels);
                 float sum = 0f;

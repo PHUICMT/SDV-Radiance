@@ -576,6 +576,10 @@ namespace SDVRadiance
                 () => i18n("config.lighting.shadowcarve.name"), () => i18n("config.lighting.shadowcarve.tooltip"), 0f, 1f, 0.05f);
             api.AddNumberOption(manifest, () => config().LightShadowSoftness, v => config().LightShadowSoftness = v,
                 () => i18n("config.lighting.shadowsoftness.name"), () => i18n("config.lighting.shadowsoftness.tooltip"), 0f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().LightShadowDetail, v => config().LightShadowDetail = v,
+                () => i18n("config.lighting.shadowdetail.name"), () => i18n("config.lighting.shadowdetail.tooltip"), 0f, 1f, 0.05f);
+            api.AddBoolOption(manifest, () => config().LightShadowDetailShared, v => config().LightShadowDetailShared = v,
+                () => i18n("config.lighting.shadowshared.name"), () => i18n("config.lighting.shadowshared.tooltip"));
             api.AddBoolOption(manifest, () => config().LightingEnabled, v => config().LightingEnabled = v,
                 () => i18n("config.lighting.enabled.name"), () => i18n("config.lighting.enabled.tooltip"));
             api.AddNumberOption(manifest, () => config().LightingIndoorDarkness, v => config().LightingIndoorDarkness = v,
@@ -584,6 +588,10 @@ namespace SDVRadiance
                 () => i18n("config.lighting.night.name"), () => i18n("config.lighting.night.tooltip"), 0f, 0.95f, 0.05f);
             api.AddNumberOption(manifest, () => config().LightingMorningDarkness, v => config().LightingMorningDarkness = v,
                 () => i18n("config.lighting.morning.name"), () => i18n("config.lighting.morning.tooltip"), 0f, 0.95f, 0.05f);
+            api.AddNumberOption(manifest, () => config().LightingIndoorColourWalk, v => config().LightingIndoorColourWalk = v,
+                () => i18n("config.lighting.indoorcolour.name"), () => i18n("config.lighting.indoorcolour.tooltip"), 0f, 1f, 0.05f);
+            api.AddNumberOption(manifest, () => config().LightingMorningClearSkyCool, v => config().LightingMorningClearSkyCool = v,
+                () => i18n("config.lighting.morningcool.name"), () => i18n("config.lighting.morningcool.tooltip"), 0f, 1f, 0.05f);
             api.AddNumberOption(manifest, () => config().LightingWarmth, v => config().LightingWarmth = v,
                 () => i18n("config.lighting.warmth.name"), null, 0f, 1f, 0.05f);
             api.AddNumberOption(manifest, () => config().LightingBoost, v => config().LightingBoost = v,

@@ -88,6 +88,14 @@ namespace SDVRadiance
         private Texture2D? _waterMask;         // PIXEL-accurate water mask (16 texels/tile): true water tiles + the painted
                                                // water inside shore-tile art, minus opaque Buildings/Front art (pier posts,
                                                // bridges, lily pads). Effects end exactly at the real waterline.
+        // Each uploaded mask is a PAIR: the spare takes the next upload while the card finishes
+        // with the front (TextureDoubleBuffer). Spares are per screen, exactly as their fronts
+        // are: handing one screen's front to another screen as a spare would write into a
+        // texture the first screen's draw still reads, which is the wait this exists to remove.
+        private Texture2D? _waterMaskSpare;
+        private Texture2D? _waterSignedDistanceSpare;
+        private Texture2D? _waterRealShoreDistanceSpare;
+        private Texture2D? _waterPlungeChurnSpare;
         private Texture2D? _waterSignedDistanceTexture;          // Alpha8 signed shore distance (Pass F): 128 = waterline, ±4/texel
         private Texture2D? _waterRealShoreDistanceTexture;       // the same, measured with the art standing in the water put back
         private Texture2D? _waterPlungeChurnTexture;             // Color: R = distance below the nearest falling face (0 at the foot, 255 six tiles out),
@@ -204,9 +212,53 @@ namespace SDVRadiance
         private GameLocation? _fadeLocation;
         private float _fadeWater, _fadeCloud, _fadeLighting, _fadeFlood, _fadeTilt, _fadeBuildingShadow;
 
-        /// <summary>One ease-in step (~0.5 s to full at 60 fps).</summary>
+        /// <summary>
+        /// SECONDS SINCE THE LAST FRAME, WHICH IS WHAT EVERY FADE IN THIS MOD IS PACED BY.
+        ///
+        /// <para>Every ease below used to take a fixed fraction of the remaining distance PER
+        /// CALL, and every comment beside one converted that to seconds at sixty frames a second,
+        /// which is a machine and not a unit. The same mistake was found and fixed once already,
+        /// in the render-scale controller, where the frame cap being lifted made a three second
+        /// settling hold last half a second. The fades were never converted with it.</para>
+        ///
+        /// <para>Uncapped, this mod fades between three and seven times too fast, and a fade that
+        /// fast is a pop. Reported from outside with a video: cloud shadows, the lighting and the
+        /// sun shafts on the ground all flickering across a map transition, on a machine running
+        /// a mod that removes the sixty frame cap. Nobody at sixty frames a second ever saw it,
+        /// which is exactly why it survived this long.</para>
+        ///
+        /// <para>Clamped at both ends. The ceiling matters: a load screen or an alt-tab hands back
+        /// an enormous delta, and letting that through would snap every fade to its target in one
+        /// step, which is the popping this whole family exists to prevent. Three frames' worth is
+        /// as much as any one step may take.</para>
+        /// </summary>
+        private static double _easeSeconds = 1.0 / 60.0;
+        private static long _easeStamp;
+        private const double EaseSecondsFloor = 1.0 / 1000.0;
+        private const double EaseSecondsCeiling = 3.0 / 60.0;
+
+        /// <summary>Read the clock once for the frame. Called at the top of <see cref="Apply"/>,
+        /// so every ease in the frame that follows steps by the same amount. Asking per ease would
+        /// give the first one the whole frame and the other thirty nothing at all.</summary>
+        private static void StampEaseClock()
+        {
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (_easeStamp != 0)
+            {
+                double seconds = (now - _easeStamp) / (double)System.Diagnostics.Stopwatch.Frequency;
+                _easeSeconds = Math.Clamp(seconds, EaseSecondsFloor, EaseSecondsCeiling);
+            }
+            _easeStamp = now;
+        }
+
+        /// <summary>How much of the distance to the target SURVIVES one frame, for a rate that was
+        /// written as a per-frame fraction at sixty frames a second. At exactly sixty this returns
+        /// <c>1 - rate</c> and every ease behaves as it always has, to the bit.</summary>
+        private static float EaseKeep(float rate) => (float)Math.Pow(1.0 - rate, _easeSeconds * 60.0);
+
+        /// <summary>One ease-in step (~0.5 s to full, at any frame rate).</summary>
         private static float Ease01(float v) => Determinism.Frozen ? 1f
-            : v >= 0.999f ? 1f : Math.Min(1f, v + (1f - v) * 0.10f);
+            : v >= 0.999f ? 1f : Math.Min(1f, 1f - (1f - v) * EaseKeep(0.10f));
 
 
         /// <summary>One ease-OUT step, the mirror of <see cref="Ease01"/> (~0.5 s to gone).
@@ -216,13 +268,13 @@ namespace SDVRadiance
         /// instantly. A stage keeps rendering while its presence decays, and only leaves the
         /// list once it is actually invisible.</summary>
         private static float Ease0(float v) => Determinism.Frozen ? 0f
-            : v <= 0.004f ? 0f : v - v * 0.10f;
+            : v <= 0.004f ? 0f : v * EaseKeep(0.10f);
 
         /// <summary>One eased step of <paramref name="v"/> toward <paramref name="target"/>. The
         /// pattern was written out by hand at seven call sites; freeze mode has to land on the
         /// target at every one of them, so they share a step now.</summary>
         private static void Approach(ref float v, float target, float rate) =>
-            v = Determinism.Settle(v + (target - v) * rate, target);
+            v = Determinism.Settle(target + (v - target) * EaseKeep(rate), target);
 
         /// <summary>Presence threshold below which a stage is genuinely invisible and may be
         /// dropped from the frame's stage list.</summary>
@@ -238,6 +290,7 @@ namespace SDVRadiance
         private Vector2 _waterMaskTilesPerScreen, _waterMaskWorldTileOffset, _waterMaskPixelSize;
 
         private Texture2D? _occluderMask;      // per-tile occluder mask (walls/structures) for shadows
+        private Texture2D? _occluderMaskSpare; // its pair - see the water mask spares above
         private Color[]? _occluderMaskPixels;
         private Vector2 _occluderTilesPerScreen, _occluderWorldTileOffset, _occluderMaskSize;
         private bool _shadowsReady;            // true when an occluder mask was built this frame
@@ -290,6 +343,10 @@ namespace SDVRadiance
         // judged against. GPU fill cost doesn't show here (measure that as FPS A/B); what this
         // pins down is WHICH passes ran and what their draw-call setup costs.
         private static readonly string[] _stageNames = { "flood", "lighting", "water", "cloud", "rays", "bloom", "fog", "grade", "tilt", "finish", "tail", "wet" };
+        /// <summary>How many pass slots the GPU timer has to reserve. Read by GpuTimer rather
+        /// than copied into it: the copy was wrong by one for long enough that the last pass
+        /// never reported a GPU figure.</summary>
+        internal static int StageNameCount => _stageNames.Length;
         private readonly double[] _stageMilliseconds = new double[_stageNames.Length];
         private readonly double[] _stageMaxMilliseconds = new double[_stageNames.Length];
         private readonly int[] _stageRunFrames = new int[_stageNames.Length];
@@ -1114,6 +1171,11 @@ namespace SDVRadiance
 
         public void Apply(SpriteBatch spriteBatch, ModConfig config)
         {
+            // Before anything reads a fade. Stamped here rather than per ease so that all thirty
+            // of them step by the same amount, and stamped even on the early return below: a
+            // frame the chain sat out is still a frame that passed, and the fade that resumes
+            // afterwards should not be handed the whole gap at once.
+            StampEaseClock();
             if (!AnyEffectActive(config))
             {
                 _masterFade = 0f; // reset so the stack fades back in next time it's enabled
@@ -1529,6 +1591,20 @@ namespace SDVRadiance
                 catch (Exception ex) { _monitor.Log($"radiance_dump failed: {ex.Message}", LogLevel.Warn); }
                 finally { _pendingDump = null; }
             }
+            // The burst rides the same finished frame the dump does. Its own guard, for the same
+            // reason: a diagnostic must never cost the player their frame.
+            if (_burstFramesWanted > 0)
+            {
+                try { CaptureBurstFrame(spriteBatch, target); }
+                catch (Exception ex)
+                {
+                    _monitor.Log($"radiance_dumpburst failed: {ex.Message}", LogLevel.Warn);
+                    _burstFramesWanted = 0;
+                    foreach (var frame in _burstFrames) frame.Dispose();
+                    _burstFrames.Clear();
+                    _burstName = null;
+                }
+            }
         }
 
         /// <summary>
@@ -1746,12 +1822,17 @@ namespace SDVRadiance
             _waterSignedDistanceTexture?.Dispose(); _waterSignedDistanceTexture = null;
             _waterRealShoreDistanceTexture?.Dispose(); _waterRealShoreDistanceTexture = null;
             _waterPlungeChurnTexture?.Dispose(); _waterPlungeChurnTexture = null;
+            _waterMaskSpare?.Dispose(); _waterMaskSpare = null;
+            _waterSignedDistanceSpare?.Dispose(); _waterSignedDistanceSpare = null;
+            _waterRealShoreDistanceSpare?.Dispose(); _waterRealShoreDistanceSpare = null;
+            _waterPlungeChurnSpare?.Dispose(); _waterPlungeChurnSpare = null;
+            _occluderMaskSpare?.Dispose(); _occluderMaskSpare = null;
             _surfaceClassTexture?.Dispose(); _surfaceClassTexture = null; _surfaceClassSource = null;
             _neutralSurfaceTexture?.Dispose(); _neutralSurfaceTexture = null;
             _fallDistanceFarTexture?.Dispose(); _fallDistanceFarTexture = null;
             _sceneRenderTarget?.Dispose(); _fullResolutionPingA?.Dispose(); _fullResolutionPingB?.Dispose(); _halfResolutionScratchA?.Dispose(); _halfResolutionScratchB?.Dispose(); _cloudMaskKeep?.Dispose(); _cloudMaskKeep = null; _waterMask?.Dispose(); _occluderMask?.Dispose(); _floodOccluderMask?.Dispose(); _luminanceRenderTarget?.Dispose(); _noiseTexture?.Dispose(); _noiseTexture = null;
             _spriteMaskRenderTarget?.Dispose(); _spriteMaskSpriteBatch?.Dispose();
-            _floodOccluderBaseTexture?.Dispose(); _floodOccluderSpriteBatch?.Dispose();
+            _floodOccluderBaseTexture?.Dispose(); _floodOccluderBaseSpare?.Dispose(); _floodOccluderBaseSpare = null; _floodOccluderSpriteBatch?.Dispose();
             for (int i = 0; i < _floodOccluderSoft.Length; i++) { _floodOccluderSoft[i]?.Dispose(); _floodOccluderSoft[i] = null; }
             _floodOccluderBaseTexture = null; _floodOccluderSpriteBatch = null;
             _maskDebugTexture?.Dispose(); _maskDebugTexture = null;

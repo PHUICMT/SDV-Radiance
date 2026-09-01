@@ -236,8 +236,11 @@ namespace SDVRadiance
             var sig = (who.FarmerSprite.CurrentFrame, (int)who.FacingDirection, src);
             bool accessoryRefreshDue = PlayerAccessoriesAnimate && Game1.ticks % 8 == 0
                                        && !Determinism.Frozen;
+            // Fresh says the pose still matches. Usable says the pixels are still there: a
+            // device reset empties a render target without touching any flag this mod keeps.
             if (_playerMaskFresh && sig == _playerBakeSignature && !accessoryRefreshDue
-                && (!reflectionNeedsPlayer || _playerColorFresh))
+                && GpuContent.Usable(_playerRenderTarget)
+                && (!reflectionNeedsPlayer || (_playerColorFresh && GpuContent.Usable(_playerColorRenderTarget))))
             {
                 _playerReady = !swim && !IsSeated(who);
                 PlayerMask = _playerRenderTarget;

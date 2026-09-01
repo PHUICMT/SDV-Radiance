@@ -75,7 +75,13 @@ namespace SDVRadiance
         /// filled and the collection never has to wait.</summary>
         private const int Ring = 4;
         private const int Latency = 3;
-        private const int PartCount = 10;   // must match FrameCost.Part
+        /// <summary>Counted from the enum, never written down. It WAS written down, as 10, while
+        /// FrameCost.Part had grown to 14, and a comment saying "must match" is not a thing that
+        /// matches: MarkStageBegin lays the chain's passes out at PartCount + stage, so the first
+        /// four passes were writing into the last four parts' slots and whichever marked last won.
+        /// The flood pass, the most expensive thing in this mod, reported the particle pool's cost
+        /// instead of its own and read 0.000 ms in every scene for as long as this existed.</summary>
+        private static readonly int PartCount = Enum.GetValues(typeof(FrameCost.Part)).Length;
 
         /// <summary>Slots beyond the parts, one per pass of the effect chain.
         ///
@@ -87,8 +93,11 @@ namespace SDVRadiance
         /// seven the milliseconds are in. Per-pass marks nest inside the chain's own pair, which is
         /// exactly what timestamps allow and elapsed-time queries would not.
         /// </para></summary>
-        private const int StageCount = 11;   // must match RenderPipeline._stageNames
-        private const int SlotCount = PartCount + StageCount;
+        /// <summary>Taken from the name table itself, for the same reason as above: it was written
+        /// down as 11 while there were 12 names, so the last pass ("wet") was silently outside the
+        /// range check in MarkStageBegin and never reported a GPU figure at all.</summary>
+        private static readonly int StageCount = RenderPipeline.StageNameCount;
+        private static readonly int SlotCount = PartCount + StageCount;
 
         /// <summary>Query ids, laid out [slot][part * 2 + (0 = begin, 1 = end)].</summary>
         private static uint[][]? _ids;

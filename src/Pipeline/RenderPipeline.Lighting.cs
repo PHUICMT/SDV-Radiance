@@ -1177,11 +1177,6 @@ namespace SDVRadiance
                 return false;
 
             bool sizeChanged = _occluderMask == null || _occluderMask.Width != tilesW || _occluderMask.Height != tilesH;
-            if (sizeChanged)
-            {
-                _occluderMask?.Dispose();
-                _occluderMask = VramTally.Track(new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color), "light occluder mask");
-            }
             // UPLOAD ONLY WHAT CHANGED. The throttle above stops the grid being rebuilt more than
             // every third tick, but it did not stop the RESULT being pushed to the card, so a
             // player standing still re-uploaded an identical mask twenty times a second. That
@@ -1193,9 +1188,14 @@ namespace SDVRadiance
             // got the same treatment. Comparing the bytes costs a walk of a grid we have just
             // walked anyway, against a texture transfer and whatever the driver does to a
             // resource the GPU may still be reading.
-            if (_occluderMask != null && (sizeChanged || !SameOccluderContent(count)))
+            //
+            // And when it does upload, it uploads into the pair's spare rather than into the
+            // texture the card may still be sampling, which is the other half of that same wait
+            // (TextureDoubleBuffer).
+            if (sizeChanged || !SameOccluderContent(count))
             {
-                _occluderMask.SetData(_occluderMaskPixels, 0, count);
+                _occluderMask = TextureDoubleBuffer.UploadIntoSpare(_device, ref _occluderMaskSpare, _occluderMask,
+                    tilesW, tilesH, SurfaceFormat.Color, "light occluder mask", _occluderMaskPixels, count);
                 if (_occluderMaskUploaded == null || _occluderMaskUploaded.Length < count)
                     _occluderMaskUploaded = new Color[count];
                 Array.Copy(_occluderMaskPixels, _occluderMaskUploaded, count);
@@ -1248,8 +1248,66 @@ namespace SDVRadiance
         /// see through, a shade under a fence because their sprites carry soft edges the fence's
         /// pickets do not.</summary>
         private const float PropOccluderShare = 0.9f;
+
+        /// <summary>Where a sprite's BASE begins and ends across its own source rect, in source
+        /// pixels, so the solid block under a placed thing is as wide as the thing rather than as
+        /// wide as the tile it stands on.
+        ///
+        /// <para>Read from the bottom of the picture only. The base is what rests on the floor,
+        /// and it is what a lamp's ray meets: a lamp on a table reads the tabletop as the thing in
+        /// the way and a lamp on the floor reads the legs, so the widest row anywhere in the
+        /// sprite is the wrong answer for both.</para>
+        ///
+        /// <para>Cached per texture and rect, like the shadow pass's own foot-row lookup: this is
+        /// a readback, and a farm holds thousands of objects drawn from a handful of pictures.</para>
+        /// </summary>
+        private readonly Dictionary<(Texture2D, Rectangle), (int Left, int Right)> _artBaseSpan = new();
+
+        private (int Left, int Right) ArtBaseSpan(Texture2D texture, Rectangle source)
+        {
+            var key = (texture, source);
+            if (_artBaseSpan.TryGetValue(key, out var known))
+                return known;
+            // The whole cell, which is what the old code assumed for everything.
+            var span = (Left: 0, Right: source.Width);
+            try
+            {
+                if (source.Width > 0 && source.Height > 0 && !texture.IsDisposed
+                    && source.Right <= texture.Width && source.Bottom <= texture.Height)
+                {
+                    var pixels = new Color[source.Width * source.Height];
+                    texture.GetData(0, source, pixels, 0, pixels.Length);
+                    // The bottom quarter, and never fewer than four rows: enough of the base to
+                    // catch both legs of a table, little enough that a wide top does not decide it.
+                    int rows = Math.Max(4, source.Height / 4);
+                    int first = source.Width, last = -1;
+                    for (int row = source.Height - rows; row < source.Height; row++)
+                    {
+                        if (row < 0)
+                            continue;
+                        for (int column = 0; column < source.Width; column++)
+                            if (pixels[row * source.Width + column].A > 8)
+                            {
+                                if (column < first) first = column;
+                                if (column > last) last = column;
+                            }
+                    }
+                    // A base that read as empty is a picture this cannot speak for, so it keeps
+                    // the whole cell rather than shrinking to nothing and letting light through.
+                    if (last >= first)
+                        span = (first, last + 1);
+                }
+            }
+            catch (Exception)
+            {
+                span = (0, source.Width);
+            }
+            _artBaseSpan[key] = span;
+            return span;
+        }
         /// <summary>The tile-resolution grid (walls, tree trunks) that the silhouettes are drawn over.</summary>
         private Texture2D? _floodOccluderBaseTexture;
+        private Texture2D? _floodOccluderBaseSpare;   // its pair - see TextureDoubleBuffer
         private SpriteBatch? _floodOccluderSpriteBatch;
         /// <summary>Additive with a per-tier factor: a wall under a bush stays a wall (the sum
         /// saturates at 1), and a bush over open ground is exactly its share.</summary>
@@ -1518,12 +1576,10 @@ namespace SDVRadiance
 
             // The grid above at tile resolution, then everything with a real silhouette drawn over
             // it at FloodOccSubdivision texels per tile, by the game's own art and placement.
-            if (_floodOccluderBaseTexture == null || _floodOccluderBaseTexture.Width != tilesW || _floodOccluderBaseTexture.Height != tilesH)
-            {
-                _floodOccluderBaseTexture?.Dispose();
-                _floodOccluderBaseTexture = VramTally.Track(new Texture2D(_device, tilesW, tilesH, false, SurfaceFormat.Color), "flood occluder mask");
-            }
-            _floodOccluderBaseTexture.SetData(_floodOccluderMaskPixels, 0, count);
+            // Into the pair's spare, never into the texture the silhouette pass may still be
+            // reading from the previous window (TextureDoubleBuffer).
+            _floodOccluderBaseTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _floodOccluderBaseSpare,
+                _floodOccluderBaseTexture, tilesW, tilesH, SurfaceFormat.Color, "flood occluder mask", _floodOccluderMaskPixels, count);
             int maskW = tilesW * FloodOccSubdivision, maskH = tilesH * FloodOccSubdivision;
             if (_floodOccluderMask is not RenderTarget2D maskTarget || maskTarget.Width != maskW || maskTarget.Height != maskH)
             {
@@ -2136,9 +2192,20 @@ namespace SDVRadiance
                             // that fanned out across the room behind it. Then the sprite over it,
                             // so the thing's own face counts as occluder and keeps its light (see
                             // pixelOpen in floodlight.fx) instead of standing in its own shadow.
+                            //
+                            // AS WIDE AS THE THING, NOT AS WIDE AS ITS TILE. This filled the whole
+                            // 64 square whatever stood on it, so a keg two thirds of a tile across
+                            // blocked a lamp with a square, and the square is what a player saw:
+                            // "there is a visible box-shaped light around the machine, the light
+                            // doesn't blend or spread naturally". Taking the span of the sprite's
+                            // own base keeps every reason the solid block exists - the gaps between
+                            // a table's legs are still closed, because a span is filled, not traced
+                            // - and stops the block claiming ground the object never stood on.
                             if (!litter)
                             {
-                                var footprint = new Rectangle(tileX * 64, tileY * 64, 64, 64);
+                                var (baseLeft, baseRight) = ArtBaseSpan(art, source);
+                                var footprint = new Rectangle(tileX * 64 + baseLeft * 4, tileY * 64,
+                                                              Math.Max(4, (baseRight - baseLeft) * 4), 64);
                                 footprint.Offset(-Game1.viewport.X, -Game1.viewport.Y);
                                 spriteBatch.Draw(Game1.staminaRect, footprint, Color.White);
                             }

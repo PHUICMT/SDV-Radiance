@@ -67,6 +67,71 @@ namespace SDVRadiance
         /// scale keeps the ping buffers smaller than the window.</summary>
         private RenderTarget2D? _dumpCaptureRenderTarget;
 
+        // ---- consecutive-frame burst: the instrument for a blink ----
+        //
+        // A blink that lives BETWEEN adjacent frames cannot be caught from outside: external
+        // screenshots arrive a quarter of a second apart, and at that spacing intended animation
+        // (the river, a hearth's breathing) has moved as far as any bug would, so the two are
+        // indistinguishable in every metric. Adjacent frames at an uncapped rate are milliseconds
+        // apart - intended animation is nearly still between them, and whatever differs hard IS
+        // the blink. The burst holds each frame on the card (a copy costs a blit, not a stall)
+        // and writes the PNGs only after the last one, so the capture window itself runs clean.
+        private static int _burstFramesWanted;
+        private static string? _burstName;
+        /// <summary>Take every Nth frame. 1 is adjacent frames, the blink instrument; higher
+        /// strides stretch the same 24 frames across real time, so a POP with a period of
+        /// tenths of a second lands inside the window. At an uncapped rate a stride chosen as
+        /// fps/60 spaces samples the same wall-time apart as a capped run's adjacent frames,
+        /// and equal spacing means intended motion contributes equally to both - whatever
+        /// variance the uncapped run has left over is the artifact.</summary>
+        private static int _burstStride = 1;
+        private static int _burstSkip;
+        private readonly List<RenderTarget2D> _burstFrames = new();
+
+        /// <summary>Ask for a run of finished frames, written after the last one.</summary>
+        internal static void RequestBurst(string name, int frames, int stride = 1)
+        {
+            _burstName = name;
+            _burstFramesWanted = frames;
+            _burstStride = Math.Max(1, stride);
+            _burstSkip = 0;
+        }
+
+        /// <summary>Copy this frame into the burst ring; on the last one, write the whole run.</summary>
+        private void CaptureBurstFrame(SpriteBatch spriteBatch, RenderTarget2D target)
+        {
+            if (_burstSkip > 0)
+            {
+                _burstSkip--;
+                return;
+            }
+            _burstSkip = _burstStride - 1;
+            var kept = new RenderTarget2D(_device, target.Width, target.Height, false,
+                                          target.Format, DepthFormat.None);
+            // Binding the ring unbinds the game's target, which is what makes it legal to sample.
+            RenderTargetBinding[] previous = _device.GetRenderTargets();
+            _device.SetRenderTarget(kept);
+            spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
+            spriteBatch.Draw(target, Vector2.Zero, Color.White);
+            spriteBatch.End();
+            _device.SetRenderTargets(previous);
+            _burstFrames.Add(kept);
+            if (--_burstFramesWanted > 0)
+                return;
+
+            string dir = Path.Combine(DumpRoot, _burstName ?? "burst");
+            Directory.CreateDirectory(dir);
+            for (int i = 0; i < _burstFrames.Count; i++)
+            {
+                using FileStream file = File.Create(Path.Combine(dir, $"{i:000}.png"));
+                _burstFrames[i].SaveAsPng(file, _burstFrames[i].Width, _burstFrames[i].Height);
+                _burstFrames[i].Dispose();
+            }
+            _monitor.Log($"[SDV-Radiance] Burst written: {_burstFrames.Count} consecutive frames to {dir}", LogLevel.Info);
+            _burstFrames.Clear();
+            _burstName = null;
+        }
+
         /// <summary>
         /// Capture the frame with the mod switched off. <c>Apply</c> returns before it reaches the
         /// normal capture when nothing is active, so a vanilla half of a comparison pair would

@@ -108,6 +108,17 @@ namespace SDVRadiance
         private static readonly double[] _running = new double[PartCount];   // lifetime, for nesting adjustments
         private static int _frames, _windowFrameCount;
 
+        // ---- garbage collections, per window ----
+        // The worst column of every table in this report can be a collection pause wearing a
+        // stage's name: whichever bracket is open when the runtime stops the world inherits the
+        // wait. Nothing printed the collection counts, so a GC-shaped stutter and a genuinely
+        // expensive rebuild were indistinguishable in every hunt to date. Whole-process numbers -
+        // the game and every mod allocate into the same heap - which is exactly the number a
+        // stutter hunt needs beside the worst frames it is trying to explain.
+        private static readonly int[] _gcBase = new int[3];
+        private static readonly int[] _gcWindow = new int[3];
+        private static bool _gcBaseTaken;
+
         private static readonly string[] CounterNames =
         {
             "object sprite bakes",
@@ -339,8 +350,19 @@ namespace SDVRadiance
                     _unfocusedFrames++;
             }
             _lastFrameStamp = now;
+            if (!_gcBaseTaken)
+            {
+                for (int g = 0; g < 3; g++) _gcBase[g] = GC.CollectionCount(g);
+                _gcBaseTaken = true;
+            }
             if (++_frames < WindowFrames)
                 return;
+            for (int g = 0; g < 3; g++)
+            {
+                int nowCount = GC.CollectionCount(g);
+                _gcWindow[g] = nowCount - _gcBase[g];
+                _gcBase[g] = nowCount;
+            }
             Array.Copy(_sum, _windowSum, PartCount);
             Array.Copy(_max, _windowMax, PartCount);
             Array.Copy(_countSum, _countWindowSum, CounterCount);
@@ -462,6 +484,14 @@ namespace SDVRadiance
                 text.AppendLine($"  {"...of which measured above",-26}     {(frameAvg > 0 ? total / frameAvg * 100 : 0),5:0.0}%");
                 if (frameAvg < 17.2)
                     text.AppendLine("  The frame rate is at its cap here, so this scene has no problem to find.");
+                if (complete)
+                {
+                    // Whole process, not just this mod: everything allocates into one heap and a
+                    // collection pauses everyone. A worst frame beside a nonzero gen1 or gen2
+                    // count here may be the collector wearing a stage's name.
+                    text.AppendLine($"  {"GC collections this window",-26} gen0 {_gcWindow[0]}   gen1 {_gcWindow[1]}   gen2 {_gcWindow[2]}"
+                                  + "   (whole process, game and every mod)");
+                }
                 int unfocused = complete ? _unfocusedWindowFrames : _unfocusedFrames;
                 if (unfocused > 0)
                 {

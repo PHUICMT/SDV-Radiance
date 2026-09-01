@@ -622,6 +622,8 @@ namespace SDVRadiance
             Sld("tuner.lightindoor", 0f, 0.95f, () => _config.LightingIndoorDarkness, v => _config.LightingIndoorDarkness = v, "help.lightindoor");
             Sld("tuner.lightnight", 0f, 0.95f, () => _config.LightingNightDarkness, v => _config.LightingNightDarkness = v, "help.lightnight");
             Sld("tuner.lightmorning", 0f, 0.95f, () => _config.LightingMorningDarkness, v => _config.LightingMorningDarkness = v, "help.lightmorning");
+            Sld("tuner.lightindoorcolour", 0f, 1f, () => _config.LightingIndoorColourWalk, v => _config.LightingIndoorColourWalk = v, "help.lightindoorcolour");
+            Sld("tuner.lightmorningcool", 0f, 1f, () => _config.LightingMorningClearSkyCool, v => _config.LightingMorningClearSkyCool = v, "help.lightmorningcool");
             Sld("tuner.lightwarmth", 0f, 1f, () => _config.LightingWarmth, v => _config.LightingWarmth = v, "help.lightwarmth");
             Sld("tuner.lightboost", 0f, 2f, () => _config.LightingBoost, v => _config.LightingBoost = v, "help.lightboost");
             Sld("tuner.lightradius", 0.2f, 3f, () => _config.LightingRadiusScale, v => _config.LightingRadiusScale = v, "help.lightradius");
@@ -633,6 +635,8 @@ namespace SDVRadiance
             Tog("tuner.lightprops", () => _config.LightShadowProps, v => _config.LightShadowProps = v, "help.lightprops");
             Sld("tuner.lightshadowcarve", 0f, 1f, () => _config.LightShadowCarve, v => _config.LightShadowCarve = v, "help.lightshadowcarve");
             Sld("tuner.lightshadowsoftness", 0f, 2f, () => _config.LightShadowSoftness, v => _config.LightShadowSoftness = v, "help.lightshadowsoftness");
+            Sld("tuner.lightshadowdetail", 0f, 1f, () => _config.LightShadowDetail, v => _config.LightShadowDetail = v, "help.lightshadowdetail");
+            Tog("tuner.lightshadowshared", () => _config.LightShadowDetailShared, v => _config.LightShadowDetailShared = v, "help.lightshadowshared");
             DependsOn(() => _config.LightingEnabled);
             Section("tuner.section.gi");
             Tog("tuner.floodgi", () => _config.FloodLightingEnabled, v => _config.FloodLightingEnabled = v, "help.floodgi");

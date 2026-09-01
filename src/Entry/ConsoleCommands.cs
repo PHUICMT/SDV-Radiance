@@ -310,6 +310,27 @@ namespace SDVRadiance
                         + (Determinism.Frozen ? " (clock frozen)" : " — WARNING: clock is running, run radiance_freeze first"),
                         Determinism.Frozen ? LogLevel.Info : LogLevel.Warn);
                 });
+            helper.ConsoleCommands.Add("radiance_dumpburst",
+                "Capture N CONSECUTIVE finished frames to Documents\\Radiance-Dumps\\<name>\\ as PNGs. "
+                + "Built for flicker: at an uncapped frame rate adjacent frames are milliseconds apart, so "
+                + "intended animation barely moves between them and anything that differs hard IS the blink. "
+                + "Do NOT freeze first — the blink under investigation is live behaviour. "
+                + "Usage: radiance_dumpburst <name> [frames=12, max 24] [stride=1]. A stride of N keeps "
+                + "every Nth frame, stretching the window to catch a POP instead of a per-frame blink.",
+                (_, args) =>
+                {
+                    string name = args.Length >= 1 ? args[0] : "burst";
+                    foreach (char c in System.IO.Path.GetInvalidFileNameChars())
+                        name = name.Replace(c, '_');
+                    int frames = args.Length >= 2 && int.TryParse(args[1], out int parsed) ? parsed : 12;
+                    frames = Math.Clamp(frames, 2, 24);
+                    int stride = args.Length >= 3 && int.TryParse(args[2], out int parsedStride) ? parsedStride : 1;
+                    stride = Math.Clamp(stride, 1, 64);
+                    RenderPipeline.RequestBurst(name, frames, stride);
+                    monitor.Log($"radiance_dumpburst: capturing {frames} consecutive frames as '{name}'"
+                        + (Determinism.Frozen ? " — WARNING: clock frozen, a blink cannot happen; radiance_freeze off first" : ""),
+                        Determinism.Frozen ? LogLevel.Warn : LogLevel.Info);
+                });
             helper.ConsoleCommands.Add("radiance_freeze",
                 "Pin the render clock and every eased amount so the same spot renders the same bytes twice "
                 + "(what a before/after capture needs). No args toggles; 'on'/'off' set it. Game logic is untouched — "
@@ -813,6 +834,31 @@ namespace SDVRadiance
                 Write(pipeline?.DescribeAutoScale() ?? "pipeline not ready");
                 Write("");
                 Write(VramTally.Describe());
+                Write("");
+                // The clock block. Two numbers here decide whether anything ELSE in this report
+                // about animation speed or flicker can be read at all, and both used to be
+                // invisible: GpuContent counted lost render targets from the day it was written
+                // and nothing ever printed the count.
+                Write("=== what the lamp shadow march was handed this frame ===");
+                Write($"  lamps marching   {RenderPipeline.LastMarchingLamps}"
+                    + $"   steps allowed each   {RenderPipeline.LastMarchStepCeiling:0.#}");
+                Write("                   The cost of this mod's biggest GPU item is those two numbers");
+                Write("                   multiplied. Sharing is on when the second falls as the first");
+                Write("                   rises; 12 is the floor and is what every release up to 1.6.2 did.");
+                Write("");
+                Write("=== the frame clock, and the graphics device under it ===");
+                Write($"  frame cap        {(Determinism.CapIsOff ? "OFF right now" : "on right now")}"
+                    + $", changed {Determinism.CapChanges} time(s) this session");
+                Write("  what that means  a cap that has NEVER lifted means this mod is reading the game's own");
+                Write("                   frame counter, and an uncapper that is running would have lifted it.");
+                Write("                   Zero lifts plus unlocked frames on screen is the uncapper not doing");
+                Write("                   what it says, and nothing below is worth reading until that is settled.");
+                Write($"  render targets whose pixels were found gone: {GpuContent.LostCount}");
+                Write("                   READ THIS ONLY ON DIRECTX. The check behind it is RenderTarget2D's own");
+                Write("                   IsContentLost, and this game's MonoGame build returns a hardcoded false");
+                Write("                   from it on the OpenGL backend, which is what Stardew runs here. So a");
+                Write("                   zero on this line is the question going unanswered, not an answer: it");
+                Write("                   does NOT mean the graphics device was never reset under us.");
                 Write("");
                 Write("=== label check for everything on screen ===");
                 Write(pipeline?.VerifyLabels(Game1.currentLocation) ?? "pipeline not ready");

@@ -2,6 +2,262 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.7.3
+
+### Added
+
+- **Lamp shadow detail, on the dynamic lighting page.** How finely a lamp's shadow is traced, and
+  the only setting in this mod whose cost is paid **per lamp on screen**. That makes it the one
+  worth reaching for in a place full of them: a farm at dawn with a torch on every sprinkler, a lit
+  street, a mine.
+
+  Every release up to 1.6.2 walked a shadow ray in twelve samples, full stop. 1.7.0 changed it to
+  one sample per mask texel, up to forty-eight, so a ray could not step over a fence post and miss
+  it. That is four times the reads on every lamp, on every pixel it reaches, and it shipped inside
+  a commit named for the feature beside it, so it arrived with no switch of its own. Two players
+  reported 1.7 as slower with nothing new to turn off, and they were right: there was nothing.
+
+  Measured on this machine at Town, ten at night, with the street lamps lit: the effect chain costs
+  **0.860 ms** of GPU at full detail and **0.564 ms** at the lowest, so the finer trace is
+  **0.295 ms**, about a third of everything this mod asks of the card in that scene. Three
+  measurements each way, alternating, with a worst spread inside one setting of 0.023 ms. The
+  processor side does not move at all, which is why the mod's own cost report called this free and
+  why it shipped.
+
+  0 is the twelve samples of 1.6.2 and the cost that came with them. 1 is the forty-eight of 1.7,
+  and stays the default, because that is what the look was tuned against. Nobody should have to
+  choose between this mod and their frame rate, and the next report can now name a number.
+
+- **Lamps in the same room now share the shadow detail between them.** A new **Share lamp shadow
+  detail** on the dynamic lighting page, on by default.
+
+  What a lamp's shadow costs is how many steps its ray takes, and there is no way around that: an
+  attempt to stop a ray as soon as it was fully blocked saved nothing measurable in four scenes,
+  because the weight that fades each ray's ends means it almost never reaches full block at full
+  weight. Fewer steps is the only lever there is.
+
+  The number that runs away is how many lamps march at one pixel. A saloon at night costs more than
+  a lit street while drawing fewer full-screen passes, because in a small room every one of the
+  eight shadowed lamps reaches every pixel and each one walks the whole way. So the dial is now a
+  budget rather than a per-lamp allowance: one or two lamps keep all of it, and past that they
+  share, down to the twelve samples every release up to 1.6.2 took. That floor is the point. A room
+  full of lamps can never trace coarser than a release nobody complained about.
+
+  Measured by toggling it inside one frozen scene, three readings each way: the lighting pass costs
+  **0.855 ms** with every lamp tracing in full and **0.427 ms** sharing in the saloon, 0.553 against
+  0.292 in the town, 0.460 against 0.234 in the mines. Half, in every lit place. On a farm at dawn
+  with a single lamp casting, it is 0.228 either way, which is the point of a budget: full detail
+  stays where it is cheap.
+
+  Detail is given up where it is hardest to see, since a shadow's edge under eight lamps is read
+  against seven other lamps' light. Two of the four scenes were photographed before and after in the
+  same frozen frame; what differed in them was a villager walking out of shot and a drifting spark,
+  not a shadow.
+
+- **The bottom of each shadow kind's length dial now switches that kind off.** Under Per kind on
+  the directional shadows page, every kind of thing has its own length, softness and lean. All
+  three are appearance, and none of them changed how much was drawn, so a player who wanted to
+  spend less on shadows could only turn off every object shadow on the map at once.
+
+  That is not a guess about what someone would want. It is what was reported: large patches of
+  grass stuttering on a farm, with every grass shadow setting already turned to its lowest and
+  barely any change. Those settings were doing exactly what they say and nothing else.
+
+  A shadow with no length is no shadow, so 0 is now the bottom of each dial and 0 means that kind
+  is skipped before any work is done for it. Measured on a farm screen where 158 of the 200 shadows
+  drawn were tufts of grass: drawing them costs **0.136 ms** of processor time a frame, against
+  0.019 ms of measurement noise, and turning grass alone off is a little over half of what turning
+  every object shadow off saves. The old floor was 0.05, where a shadow is already a few pixels of
+  smudge under the thing casting it, so the last step down is the smallest step on the dial.
+
+  Trees, saplings, bushes, crops, grass and placed things each have their own. Keep the tree
+  shadows and drop the grass, or the other way round.
+
+- **A room's colour through the day is a dial now, on the dynamic lighting page.** An interior in
+  this mod is tinted by the hour: cool from open sky before the sun is properly up, neutral through
+  the middle of the day, warm in the hour before dark, blue again at night. That walk was decided
+  in the code and had no setting anywhere, on any page, in any release.
+
+  Somebody woke up in a room that read to them as cold and blue and went looking for the way to
+  take the blue out. There wasn't one. What they found instead was the GI strength, which does move
+  it, and which also lights the whole outdoors, so the room came right and the fields blew out.
+  That is one slider doing two jobs, and it is the wrong one for this.
+
+  **Room colour by hour** is the right one. It is the tint only: how dark a room gets stays with
+  the two darkness sliders above it and does not move with this. 1 is the walk every release so far
+  has painted and remains the default, so nobody's picture changes. 0 leaves a room the colour the
+  game drew it, still dimmed by the hour.
+
+- **A clear morning is no longer painted the colour of an overcast one, and how blue it reads is
+  a dial.** New **Cool cast on clear mornings** on the dynamic lighting page.
+
+  A room early in the day is given a cool cast here, and the argument for it is that the light
+  coming through a window at that hour is open sky rather than sun, and open sky is blue. That
+  holds when the sky is grey. It is false when the sky is clear: the sun is up by 6:00 in this
+  game, it is low, and low sun is the warmest light of the day. Every release so far painted the
+  same cool morning whatever the weather was doing.
+
+  The player who reported it said so without meaning to. Their room read cold and blue on waking,
+  **"except on rainy days"**, which is the one morning of the two where the old cast was right.
+
+  So the cool morning now belongs to the weather. Rain and storms keep it in full, a snowfall
+  counts as half an overcast because a snowy sky is bright and the ground under it is a reflector,
+  and a clear morning keeps the share this dial sets. The default is 0.35, measured in a farmhouse
+  at 6:20 by walking the dial and reading the blue against the red across the lit room: 0.277 with
+  no cast at all, 0.305 at the default, 0.384 at the old look. **1 is that old look exactly**, for
+  anyone who preferred it.
+
+  A rainy morning was photographed at both ends of the dial as the control, and moved 0.06% as far
+  as a clear one did, which is the fire and the dust in the room rather than the setting. Only the
+  morning is touched. The same reasoning applies to the warm hour before dark and is deliberately
+  not applied there, because that ramp was already pulled back once in 1.5.5 and two changes to one
+  curve in one release cannot be told apart afterwards by the people who see them.
+
+- **radiance_dumpburst, for a flicker nobody can screenshot.** Captures up to 24 CONSECUTIVE
+  finished frames (an optional stride keeps every Nth), held on the card and written as PNGs
+  after the last one, so the capture window itself runs clean. A blink that lives between
+  adjacent frames cannot be caught from outside the game: external screenshots arrive a quarter
+  of a second apart, and at that spacing intended animation has moved as far as any bug would.
+  Console only, no new settings, no translation keys.
+
+### Changed
+
+- **Two lamp-shadow options now ship switched off.** **Shadows from placed things** and **Shadows
+  shaped by fences and bushes**, both on the dynamic lighting page, arrived on by default in 1.7.0
+  because they cost nothing that could be measured. That was true of the seven scenes they were
+  measured in, and it was never a claim about anybody else's machine.
+
+  The work they do is a march, per light, against everything standing near it, so what it costs is
+  the number of lamps on screen multiplied by the number of things beside them. Every scene in that
+  measurement set was a town, a beach or a quiet farm. The first report from outside was a farm at
+  6:20 in the morning with several hundred crops, a lot of sprinklers and a dozen torches still
+  lit, holding 60 frames on 1.6.2 and about 40 now, with these two on and nothing else changed.
+
+  That report has not been confirmed as the cause and is not being written up as one. It is the
+  reason a default nobody has measured on a weak machine should not be the one every new install
+  gets. Both switches are still there, on the same page, and turning one on shows you the
+  difference straight away.
+
+  **If you already have them on, they stay on.** Changing a default does not touch a config file
+  that already exists, so this only affects a fresh install. Wind in the trees is untouched and
+  stays on: it measured at nothing in all seven scenes and it is not a suspect.
+
+### Fixed
+
+- **A lamp you carry no longer switches off every shadow it casts the moment you touch
+  something.** Walk into a stove, a keg or a table while wearing a glow ring and the shadows that
+  lamp was casting all over the room vanished at once, on every side, not just the side you
+  touched. Step back and they returned.
+
+  A light gets a term that stops it shadowing itself, because a lamp standing inside a building's
+  footprint sends every ray out through an occluder and the carve would eat its own pool. That
+  term asked whether the light's own POINT was blocked, and a point cannot tell enclosed from
+  merely adjacent: a light you carry sits at the middle of the tile you stand on, so touching
+  anything puts a solid cell half a tile away and the reading jumped from 0.00 to 0.90 within a
+  quarter of a tile. Because the term multiplies that lamp's whole occlusion, the jump took every
+  shadow with it.
+
+  It now reads a tile-wide neighbourhood instead, which is exactly the difference between the two
+  cases: inside a footprint every direction is solid and it reads near 1, beside a stove one
+  direction is and it reads about a half. It also never reaches zero any more, so a light pressed
+  against something keeps most of its shadows and a light truly enclosed still keeps its pool.
+
+  Found from a pair of captures one tile apart, and the new curve was checked against that
+  capture's own occluder mask before a line was compiled: at the spot where the shadows died the
+  term goes from 0.00 to 1.00, and a lamp genuinely sunk inside a solid block still falls to 0.15.
+
+- **A mask upload no longer makes the graphics card wait.** Every mask this mod computes on the
+  processor - the water mask and its three distance fields, the two occluder grids, the flood
+  lightmap - was uploaded into the same texture the card could still be reading, and the driver
+  answers that by holding the whole frame until every queued draw that reads it has finished.
+  Uploads now go into the spare of a texture pair and the two swap, which is the same fix the
+  cascades' emitter grid has carried for a while, applied everywhere.
+
+  Same pixels either way, byte for byte: three frozen scenes were dumped on both builds and every
+  mask buffer came back identical. What moved was the worst frame of the effect chain on a farm
+  walk, 2.0 to 2.3 ms down to 1.5 to 1.7, because the lightmap and occluder uploads happen in the
+  middle of the chain, between draws that read the previous content, which is exactly where a
+  forced wait lands. Averages did not move; no work was removed, a wait was.
+
+- **The report stopped billing the rain to the water pass, and started counting collections.**
+  The rain streaks' sky half is drawn inside the water stage on purpose, so streaks hang straight
+  over a river instead of waving with it, and its time was counted twice: once under
+  precipitation, where it belongs, and again in the water row of the per-pass table, which
+  therefore read ten times higher in rain than in the clear for a pass that had not changed at
+  all. The water row now reads the pass itself: 0.017 ms in the clear and 0.017 ms in the rain,
+  same beach.
+
+  The report also prints garbage collections per measurement window, marked as whole-process,
+  because a collection pause lands in whichever bracket happens to be open and nothing could tell
+  that apart from a genuinely expensive rebuild until now. First reading on a farm walk: gen0
+  five per window, gen2 zero, so the collector is not where the stutter lives.
+
+- **With the frame cap lifted, everything this mod animates ran too fast.** Ripples, drifting
+  clouds, heat shimmer and the water's own wave all count in sixtieths of a second, and they took
+  that count from the game's frame counter, which is the same thing only while the game runs its
+  normal fixed timestep. A mod that lifts the cap breaks the equality rather than the counter: at
+  144 frames a second the count arrives two and a half times too fast, and so does everything read
+  from it.
+
+  The count now comes from elapsed time whenever the cap is off, handed over at the point the two
+  clocks last agreed so that nothing jumps as it is lifted. With the cap on, which is every
+  ordinary session, it is the game's own counter exactly as before.
+
+  UltraSmooth's author had already found this and patched three members of this mod from outside to
+  fix it. That was a kindness, and it should not have been necessary: the patch is pinned to names
+  this mod is free to rename, and anyone running a different uncapper got no such favour. It is
+  ours to keep, so it is kept here now.
+
+- **A lamp beside a placed machine lit a square instead of the machine.** Anything set down on the
+  ground blocked lamp light with a solid block the full width of the tile it stood on, whatever
+  shape it actually had. A keg is about two thirds of a tile across and a scarecrow is thinner
+  still, so both threw the tile's square rather than their own, which is what one report described
+  as a visible box-shaped light around the machine that did not blend or spread.
+
+  The block is now as wide as the sprite's own base, read from the bottom rows of the picture,
+  because the base is what rests on the floor and what a lamp's ray actually meets. Every reason
+  the solid block exists is kept: the gap between a table's legs is still closed, since the span is
+  filled rather than traced. It just stops claiming ground the object never stood on.
+
+### For translators
+
+16 new keys and 2 whose meaning changed. English and Thai are both
+at 810; Chinese is at 794 and owes all of them.
+
+New:
+
+```json
+{
+  "tuner.lightindoorcolour": "Room colour by hour",
+  "tuner.lightmorningcool": "Clear morning coolness",
+  "tuner.lightshadowdetail": "Shadow detail",
+  "tuner.lightshadowshared": "Share detail between lamps",
+  "config.lighting.shadowdetail.name": "Lamp shadow detail",
+  "config.lighting.shadowdetail.tooltip": "How finely a lamp's shadow is traced. This is the only setting here whose cost is paid per lamp on screen, so it is the one that matters in a place with many of them: a farm at dawn with a torch on every sprinkler, a lit street, a mine. 0 traces it the way every release up to 1.6.2 did and costs what that did; 1 is the finer trace 1.7 shipped with, which keeps a ray from stepping over a fence post and missing it. Lower this before switching the flood lighting off.",
+  "config.lighting.shadowshared.name": "Share lamp shadow detail",
+  "config.lighting.shadowshared.tooltip": "When several lamps light the same place, share the shadow detail between them instead of giving each one the full trace. Two lamps keep all of it; past that they share, down to the trace every release up to 1.6.2 used, which is the floor. This is the setting that matters in a small room with many lamps, where the cost is the number of lamps multiplied by how finely each one is traced, and where a single shadow's edge is the hardest to pick out anyway.",
+  "config.lighting.indoorcolour.name": "Indoor colour by hour",
+  "config.lighting.indoorcolour.tooltip": "How far a room's colour follows the hour: cool from open sky before the sun is properly up, neutral in the middle of the day, warm in the hour before dark, blue again at night. This is the tint only. How dark a room gets is the two darkness sliders above and does not move with this. 1 is the walk every release so far has painted; 0 leaves a room the colour the game drew it, still dimmed by the hour. Reach for this rather than the GI strength if a room reads too cold, because the GI strength lights the outdoors as well.",
+  "config.lighting.morningcool.name": "Cool cast on clear mornings",
+  "config.lighting.morningcool.tooltip": "How blue a room reads early on a CLEAR morning, against how blue it reads on an overcast one. The cool cast is there because a room early in the day is lit by open sky rather than by the sun, which is true when the sky is grey and not when it is clear: the sun is up by 6:00, it is low, and low sun is the warmest light there is. 1 is the same cool morning every release so far has painted whatever the weather was doing, and is here for anyone who preferred it. 0 leaves a clear morning no cool cast at all. Rain and storms keep the full cast at every setting and do not move with this.",
+  "help.lightindoorcolour": "How far a room's colour follows the hour. Cool early, neutral at midday, warm before dark, blue at night. Brightness is the darkness sliders and does not move with this. 0 leaves a room the colour the game drew it.",
+  "help.lightmorningcool": "How blue a room reads early on a clear morning. Rain always keeps the full blue and is not touched by this. 1 is the old look, where every morning was cool whatever the sky was doing.",
+  "help.lightshadowdetail": "How finely a lamp's shadow is traced. The only cost here that is paid for every lamp on screen, so it is what to lower in a place full of them. 0 is how 1.6.2 drew it.",
+  "help.lightshadowshared": "Several lamps in one room share the shadow detail instead of each taking the full trace. Never coarser than 1.6.2 was. This is what makes a room full of lamps affordable."
+}
+```
+
+Changed meaning, so an existing translation is now wrong rather than merely old. Both say the
+same new thing: a length of 0 no longer means a very short shadow, it means that kind of thing
+is not drawn at all.
+
+```json
+{
+  "config.shadows.perkind.tooltip": "How each kind of thing casts: how far its shadow reaches as a fraction of its own height, how soft its edge is, and how far it leans. The Shadow length and Edge softness sliders above multiply all of them. A length of 0 switches that kind off entirely and stops it being drawn, which is the one setting here that costs less rather than looking different: on a farm screen, 158 of the 200 shadows drawn were tufts of grass.",
+  "help.shadowlength": "How far a shadow reaches. The sun's height still decides it, so shadows are long at dawn and short at noon whatever you set here. At 0 that kind stops casting, and stops being drawn."
+}
+```
+
 ## 1.7.2
 
 ### Added

@@ -31,6 +31,60 @@ namespace SDVRadiance
     /// the disposal sites.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// IS THIS CACHED RENDER TARGET STILL WORTH READING?
+    ///
+    /// <para>
+    /// Fifteen render targets in this mod are built once and read on later frames: the cloud
+    /// mask, the bounce grid, the occluder masks, the luminance probe, the character and player
+    /// bakes, the mirror's scene cache. Every one of them is created with PreserveContents,
+    /// which is what keeps a target's pixels alive across a target swap - and is NOT what keeps
+    /// them alive across a graphics device reset. On a reset the contents are gone, and the
+    /// target reads back as whatever the driver left there.
+    /// </para>
+    ///
+    /// <para>
+    /// That used to be somebody else's problem, because nothing in a normal session resets the
+    /// device. Then a report arrived from a player running a mod that lifts the frame cap: it
+    /// switches vertical sync off, the game switches it back on when a location loads, the other
+    /// mod switches it off again, and each of those calls ApplyChanges. Every scene transition
+    /// was resetting the device several times, and this mod went on drawing from fifteen targets
+    /// whose contents had just been thrown away - the lighting, the cloud shadows and the sun
+    /// dapple all flashing together, which is exactly what was filmed.
+    /// </para>
+    ///
+    /// <para>
+    /// XNA has always had the answer and this mod never asked the question. <c>IsContentLost</c>
+    /// says precisely this. Asking it at every reuse site costs nothing and is right no matter
+    /// who resets the device or why, so it is not a workaround for one mod.
+    /// </para>
+    /// </summary>
+    internal static class GpuContent
+    {
+        /// <summary>How many times a cached target has been found wiped. Reported by
+        /// radiance_report: a session with a non-zero count here is a session where something
+        /// keeps resetting the graphics device, which is worth knowing on its own.</summary>
+        internal static int LostCount;
+
+        /// <summary>True when <paramref name="texture"/> can be read this frame. A null, disposed
+        /// or reset target all mean the same thing to a caller: build it again.
+        ///
+        /// <para>Takes a Texture2D rather than a RenderTarget2D so that every cache site can ask
+        /// the same question without first knowing which of the two it is holding. Only a render
+        /// target can lose its contents to a device reset - a plain texture is uploaded from data
+        /// this mod still has - so for anything else this is the null and disposed check and
+        /// nothing more, which is the honest answer for it.</para></summary>
+        internal static bool Usable(Texture2D? texture)
+        {
+            if (texture == null || texture.IsDisposed)
+                return false;
+            if (texture is not RenderTarget2D target || !target.IsContentLost)
+                return true;
+            LostCount++;
+            return false;
+        }
+    }
+
     internal static class VramTally
     {
         private sealed class Entry

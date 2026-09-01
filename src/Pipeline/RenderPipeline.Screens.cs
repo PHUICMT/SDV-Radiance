@@ -38,6 +38,13 @@ namespace SDVRadiance
             public Texture2D? WaterSignedDistance;
             public Texture2D? WaterRealShoreDistance;
             public Texture2D? WaterPlungeChurn;
+            /// <summary>The pairs' spares travel with their fronts (TextureDoubleBuffer): handing
+            /// one screen's front to another screen as a spare would write into a texture the
+            /// first screen's draw still reads, which is the very wait the pair removes.</summary>
+            public Texture2D? WaterMaskSpare;
+            public Texture2D? WaterSignedDistanceSpare;
+            public Texture2D? WaterRealShoreDistanceSpare;
+            public Texture2D? WaterPlungeChurnSpare;
             /// <summary>Published copy of the composed water flags, for the "is there water near
             /// this sprite" test. A copy rather than the compose buffer itself: that one is written
             /// by a worker thread and belongs to whichever rebuild is running, not to a screen.</summary>
@@ -55,6 +62,7 @@ namespace SDVRadiance
 
             // ---- occluder grid ----
             public Texture2D? OccluderMask;
+            public Texture2D? OccluderMaskSpare;
             public Color[]? OccluderMaskPixels;
             public int OccluderTileX = int.MinValue, OccluderTileY = int.MinValue, OccluderCacheTick = int.MinValue;
             public int OccluderInputsHash;
@@ -109,7 +117,12 @@ namespace SDVRadiance
                 WaterSignedDistance?.Dispose();
                 WaterRealShoreDistance?.Dispose();
                 WaterPlungeChurn?.Dispose();
+                WaterMaskSpare?.Dispose();
+                WaterSignedDistanceSpare?.Dispose();
+                WaterRealShoreDistanceSpare?.Dispose();
+                WaterPlungeChurnSpare?.Dispose();
                 OccluderMask?.Dispose();
+                OccluderMaskSpare?.Dispose();
                 FloodOccluderMask?.Dispose();
                 MirrorSceneCache?.Dispose();
                 LuminanceTarget?.Dispose();
@@ -155,6 +168,10 @@ namespace SDVRadiance
             s.WaterSignedDistance = _waterSignedDistanceTexture;
             s.WaterRealShoreDistance = _waterRealShoreDistanceTexture;
             s.WaterPlungeChurn = _waterPlungeChurnTexture;
+            s.WaterMaskSpare = _waterMaskSpare;
+            s.WaterSignedDistanceSpare = _waterSignedDistanceSpare;
+            s.WaterRealShoreDistanceSpare = _waterRealShoreDistanceSpare;
+            s.WaterPlungeChurnSpare = _waterPlungeChurnSpare;
             s.WaterTilesInMask = _waterTilesInMask;
             s.WaterTilesVersion = _waterTilesVersion;
             s.LastWaterLocation = _lastWaterLocation;
@@ -171,6 +188,7 @@ namespace SDVRadiance
             s.WaterMaskPixelSize = _waterMaskPixelSize;
 
             s.OccluderMask = _occluderMask;
+            s.OccluderMaskSpare = _occluderMaskSpare;
             s.OccluderMaskPixels = _occluderMaskPixels;
             s.OccluderTileX = _occluderTileX;
             s.OccluderTileY = _occluderTileY;
@@ -232,6 +250,10 @@ namespace SDVRadiance
             _waterSignedDistanceTexture = s.WaterSignedDistance;
             _waterRealShoreDistanceTexture = s.WaterRealShoreDistance;
             _waterPlungeChurnTexture = s.WaterPlungeChurn;
+            _waterMaskSpare = s.WaterMaskSpare;
+            _waterSignedDistanceSpare = s.WaterSignedDistanceSpare;
+            _waterRealShoreDistanceSpare = s.WaterRealShoreDistanceSpare;
+            _waterPlungeChurnSpare = s.WaterPlungeChurnSpare;
             _waterTilesInMask = s.WaterTilesInMask;
             _waterTilesVersion = s.WaterTilesVersion;
             _lastWaterLocation = s.LastWaterLocation;
@@ -248,6 +270,7 @@ namespace SDVRadiance
             _waterMaskPixelSize = s.WaterMaskPixelSize;
 
             _occluderMask = s.OccluderMask;
+            _occluderMaskSpare = s.OccluderMaskSpare;
             _occluderMaskPixels = s.OccluderMaskPixels;
             _occluderTileX = s.OccluderTileX;
             _occluderTileY = s.OccluderTileY;

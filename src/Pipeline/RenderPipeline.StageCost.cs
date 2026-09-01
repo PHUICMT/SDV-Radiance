@@ -68,6 +68,25 @@ namespace SDVRadiance
             _stageCpuStart = Stopwatch.GetTimestamp();
         }
 
+        /// <summary>Take work that ran inside the open stage's bracket but is not the stage's own
+        /// out of its CPU column, by moving the bracket's start forward by exactly that long.</summary>
+        /// <remarks>
+        /// The precipitation's sky half is drawn inside the water stage on purpose - streaks land
+        /// on the rippled result so they hang straight over a river - and it books its own cost
+        /// under <see cref="FrameCost.Part.Precipitation"/> as it always has. Until this existed
+        /// the same milliseconds were counted a second time in the water ROW of this table, which
+        /// is how a performance audit read "the water pass costs ten times more in rain" and spent
+        /// a question on a pass that had not changed at all: 0.018 to 0.193 ms in the same scene,
+        /// all of it rain streak submission. The GPU column still contains the streaks' draw - the
+        /// card timer brackets a whole stage and cannot split one - but the streaks are a few
+        /// hundred alpha quads and the CPU column was where the misreading happened.
+        /// </remarks>
+        private void ExcludeTicksFromOpenStage(long stopwatchTicks)
+        {
+            if (_stageMarked >= 0)
+                _stageCpuStart += stopwatchTicks;
+        }
+
         /// <returns>What the pass took to submit, in milliseconds, for the debug-log accumulators
         /// that already existed. Zero if no pass was open.</returns>
         private double EndStageCost()

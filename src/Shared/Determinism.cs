@@ -50,8 +50,97 @@ namespace SDVRadiance
         /// <summary>Tick count every animated stage reads while frozen (always <see cref="CanonicalTick"/>).</summary>
         internal static int PinnedTicks;
 
-        /// <summary>The tick count the render stages animate from.</summary>
-        internal static int Ticks => Frozen ? PinnedTicks : Game1.ticks;
+        /// <summary>The tick count the render stages animate from.
+        ///
+        /// <para>SIXTY OF THESE IS A SECOND, and every caller spends it that way
+        /// (<c>(Ticks % 360000) / 60f</c>). That holds because the game runs a fixed timestep, so
+        /// its own frame counter and the wall clock are the same counter. An uncapper breaks the
+        /// equality rather than the counter: UltraSmooth and its kind set
+        /// <c>IsFixedTimeStep = false</c>, after which <see cref="Game1.ticks"/> counts FRAMES, and
+        /// at 144 fps every ripple, cloud, flame and heat shimmer in this mod runs two and a half
+        /// times too fast. The author of UltraSmooth found this and patches the property from
+        /// outside to a stopwatch, which is a kindness this mod should not need: the contract is
+        /// ours to keep, the patch is pinned to a name we are free to rename, and a player running
+        /// any OTHER uncapper gets no such favour.</para>
+        ///
+        /// <para>ONCE THE CAP HAS COME OFF, THIS CLOCK NEVER GOES BACK. The first version handed
+        /// over to elapsed time when the cap lifted and back to the frame counter when it returned,
+        /// which jumps: the game's counter raced ahead the whole time the cap was off. That was
+        /// written down as acceptable on the assumption a player toggles the mode rarely.
+        /// UltraSmooth toggles it FOR them, dropping to the capped step for every cutscene and
+        /// lifting it again on the way out, so the jump landed on every scene transition, which is
+        /// exactly where a flicker was being reported. Now the count is ours from the first moment
+        /// the cap lifts and stays ours, advancing at sixty a second of real time in either mode,
+        /// so neither direction moves anything.</para>
+        ///
+        /// <para>Until the cap has ever lifted this is <see cref="Game1.ticks"/> and nothing else.
+        /// That is every ordinary session and every harness run, and the baselines depend on it:
+        /// the game's counter and the wall clock have different origins, so deriving from time
+        /// from the start would shift the phase of every animated term by a constant.</para>
+        /// </summary>
+        internal static int Ticks => Frozen ? PinnedTicks
+            : _clockIsOurs ? (int)_ourTicks
+            : Game1.ticks;
+
+        /// <summary>True once an uncapper has lifted the frame cap at least once this session.
+        /// One way: see the note above about jumping back.</summary>
+        private static bool _clockIsOurs;
+        /// <summary>Our own count of sixtieths, seeded from the game's at the moment of handover.</summary>
+        private static double _ourTicks;
+        private static double _lastSecondsSeen;
+        /// <summary>Which of the game's ticks this last advanced on. The update event fires once
+        /// per SCREEN, and without this a split screen would run the world at twice the speed.</summary>
+        private static int _advancedOnTick = -1;
+
+        /// <summary>Advance our own clock, and notice an uncapper lifting the cap for the first
+        /// time. Called every update tick.</summary>
+        internal static void FollowTheGamesTimeStep()
+        {
+            if (_advancedOnTick == Game1.ticks)
+                return;
+            _advancedOnTick = Game1.ticks;
+            double secondsNow = Seconds;
+            bool cappedNow = Game1.game1?.IsFixedTimeStep ?? true;
+            // Counted on every EDGE, not once. The first version only counted the handover, so it
+            // could read 0 or 1 for the rest of the session and could not answer the question it
+            // was written for: how often does the uncapper change its mind. It turns out to be
+            // every cutscene, which is what made the old jumping handover a flicker.
+            if (cappedNow != _wasCapped)
+            {
+                _wasCapped = cappedNow;
+                CapChanges++;
+            }
+            if (!_clockIsOurs)
+            {
+                if (cappedNow)
+                {
+                    _lastSecondsSeen = secondsNow;
+                    return;
+                }
+                // Seeded where the two clocks still agree, so lifting the cap moves nothing.
+                _clockIsOurs = true;
+                _ourTicks = Game1.ticks;
+            }
+            double elapsed = secondsNow - _lastSecondsSeen;
+            _lastSecondsSeen = secondsNow;
+            // A load, a long pause or an alt-tab must not fast-forward the whole world when the
+            // game comes back; a second is far longer than any real frame and far shorter than
+            // any stall worth replaying.
+            if (elapsed > 0.0 && elapsed < 1.0)
+                _ourTicks += elapsed * 60.0;
+        }
+
+        /// <summary>How many times the frame cap has gone on or off this session. Reported by
+        /// radiance_report: a zero here while somebody insists their frames are unlocked means the
+        /// uncapper is not doing what either of us thinks it is, and nothing else in the report
+        /// about the clock can be read until that is settled. A number that climbs while somebody
+        /// plays is the uncapper toggling the mode for them, which UltraSmooth does around every
+        /// cutscene.</summary>
+        internal static int CapChanges;
+        private static bool _wasCapped = true;
+
+        /// <summary>Whether the frame cap is off right now, for the report.</summary>
+        internal static bool CapIsOff => !(Game1.game1?.IsFixedTimeStep ?? true);
 
         /// <summary>Elapsed seconds for stages that animate off the game timer rather than ticks.
         /// Derived from <see cref="PinnedTicks"/> while frozen so both clocks agree.</summary>
