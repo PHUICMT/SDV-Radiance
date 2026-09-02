@@ -623,6 +623,26 @@ namespace SDVRadiance
             SetRoomAndWindowParams(effect, config, directScale);
             SetReliefParams(effect, config);
 
+            // The lamps' shadow rays at half resolution, four lamps to a target, read back by the
+            // flood pass below (MarchFromTexture in the shader). Only when a ray could show:
+            // the CPU's mirror of the shader's own test says when none can.
+            bool marchHalf = !config.LightShadowSharpEdges && !LastMarchSkipped && LastMarchingLamps > 0
+                && _isFloodOcclusionReady && _halfResolutionScratchA != null && _halfResolutionScratchB != null;
+            if (marchHalf)
+            {
+                // One technique, the base of the four lamps handed over as a uniform: see
+                // MarchBase in floodlight.fx for the constant-packing bug two techniques had.
+                effect.CurrentTechnique = effect.Techniques["LampMarch"];
+                GetParam(effect, "MarchBase")?.SetValue(0f);
+                DrawFull(spriteBatch, source, _halfResolutionScratchA!, effect);
+                GetParam(effect, "MarchBase")?.SetValue(4f);
+                DrawFull(spriteBatch, source, _halfResolutionScratchB!, effect);
+                GetParam(effect, "MarchATexture")?.SetValue(_halfResolutionScratchA);
+                GetParam(effect, "MarchBTexture")?.SetValue(_halfResolutionScratchB);
+            }
+            GetParam(effect, "MarchFromTexture")?.SetValue(marchHalf ? 1f : 0f);
+            LastMarchHalfResolution = marchHalf;
+
             effect.CurrentTechnique = effect.Techniques["FloodLight"];
             DrawFull(spriteBatch, source, dest, effect);
             // After the multiply, in the target it just wrote: a spark is what makes light, so
@@ -822,6 +842,16 @@ namespace SDVRadiance
         /// exactly that reason.</summary>
         internal static float LastMarchStepCeiling;
         internal static int LastMarchingLamps;
+        /// <summary>Whether the shader skipped every lamp's shadow march this frame because no
+        /// term that reads its result was live: shadows at zero (daylight outdoors), shafts off,
+        /// no debug paint. The lamps still light; only the ray is not walked.</summary>
+        internal static bool LastMarchSkipped;
+        /// <summary>Whether the last flood pass read its rays from the half-resolution targets.
+        /// The setting behind it is <see cref="ModConfig.LightShadowSharpEdges"/>, inverted: sharp
+        /// edges means every ray is walked from every pixel. This is the report's mirror of what
+        /// the frame actually did, which is not the same question when the march is skipped
+        /// entirely or the occluder grid is not ready yet.</summary>
+        internal static bool LastMarchHalfResolution;
 
         private float SetLightArrays(Effect effect, ModConfig config, RenderTarget2D dest, float floodCarry)
         {
@@ -940,8 +970,15 @@ namespace SDVRadiance
                 float darkness = MathHelper.Clamp((1f - luminance) / 0.85f, 0f, 1f);
                 lampVisible = Math.Max(darkness, FloodLightmap.NightAmount());
             }
-            GetParam(effect, "ShadowStrength")?.SetValue(MathHelper.Clamp(config.FloodShadowStrength, 0f, 1f) * lampVisible);
+            float shadowStrengthNow = MathHelper.Clamp(config.FloodShadowStrength, 0f, 1f) * lampVisible;
+            GetParam(effect, "ShadowStrength")?.SetValue(shadowStrengthNow);
             GetParam(effect, "ShadowCarve")?.SetValue(MathHelper.Clamp(config.LightShadowCarve, 0f, 1f) * lampVisible);
+            // The shader's own test, mirrored here so the report can say the march was skipped
+            // (see marchWanted in floodlight.fx). The shaft strength is the value the last shaft
+            // update handed over, which is this frame's or the one before; a report flag, not a
+            // gate, so a frame of easing either way is fine.
+            LastMarchSkipped = shadowStrengthNow <= 0f && _dbgLampShaftStrength <= 0.004f
+                && DebugChannel != DebugOverlayChannel.LampShadow;
             // 0 on the dial is the twelve samples every release up to 1.6.2 took, 1 is the
             // forty-eight that 1.7 traces with. The mapping lives here so the shader is handed
             // a count and never has to know what a dial is.

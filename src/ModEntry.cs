@@ -243,7 +243,13 @@ namespace SDVRadiance
         private static GraphicsDevice Game1_GraphicsDevice =>
             Game1.graphics.GraphicsDevice;
 
-        /// <summary>Apply the effect chain to the world layer after the game has drawn it.</summary>
+        /// <summary>Apply the effect chain to the world layer after the game has drawn it.
+        /// High priority so this runs before every other mod's RenderedWorld handler: what those
+        /// draw is almost always an overlay meant to be read (a grid, a range highlight, a label),
+        /// and a handler that ran before this one had its drawing captured into the frame and
+        /// blurred, tinted and lit along with the world. Running first, the chain is finished by
+        /// the time they draw, and their overlay lands on top of it as crisp as the HUD.</summary>
+        [EventPriority(EventPriority.High)]
         private void OnRenderedWorld(object? sender, RenderedWorldEventArgs e)
         {
             // Self-heal: keep the postfix in sync with live config. A pending capture holds the
@@ -275,6 +281,7 @@ namespace SDVRadiance
             // early when the mod is switched off and a capture can still bring us here.
             Pipeline.BeginScreen(Context.ScreenId);
             Pipeline.Apply(e.SpriteBatch, _config);
+            HarmonyPatcher.DrawHoistedMineFloorNumber(e.SpriteBatch);
             // Logged AFTER the pass so the frame size is this screen's, not the previous screen's.
             if (watching)
                 this.Monitor.Log($"[screenwatch] screen={Context.ScreenId} location={Game1.currentLocation?.NameOrUniqueName} "
@@ -305,6 +312,9 @@ namespace SDVRadiance
             SheetUpscaler.InterfaceEnabled = _config.SheetUpscaleInterface;
             SheetUpscaler.Smoothness = _config.SheetUpscaleSmoothness;
             SheetUpscaler.BeginFrame();
+            // The mine's floor number leaves the world layer whenever the chain will run over it,
+            // and OnRenderedWorld draws it back after the chain.
+            HarmonyPatcher.HoistMineFloorNumber = EffectsActive;
             if (!_config.Enabled)
                 return;
             // Author freeze: the game's own draw-time clock is pinned along with ours, or a
@@ -648,6 +658,12 @@ namespace SDVRadiance
             // slot and the player cannot tell whose rain is broken. Yield for the session and
             // say so once; the config value itself is left alone.
             HarmonyPatcher.DetectForeignWeatherPatches(this.Monitor);
+
+            // Say in the log who owns our animation clock. An uncapper has a real reason to patch
+            // it and one of them does, but until this line existed a patched clock was invisible
+            // from inside and from any log a player could send: a flicker hunt on 2026-09-01 ran
+            // all night and ended there. Nothing is changed by this, it is only said out loud.
+            HarmonyPatcher.LogForeignClockPatches(this.Monitor);
 
             RenderPipeline.DynamicReflectionsPresent = this.Helper.ModRegistry.IsLoaded("PeacefulEnd.DynamicReflections");
             if (RenderPipeline.DynamicReflectionsPresent)

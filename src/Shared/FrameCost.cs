@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using StardewValley;
 
 namespace SDVRadiance
 {
@@ -77,10 +78,19 @@ namespace SDVRadiance
             // session. Forest read twenty "misses" a frame, dead flat, against a cache at 65 of 464
             // slots with no evictions: every reading said thrash and none of it was.
             BakeTooBig,
+            // Every SpriteBatch.Draw the shadow pass itself issues. "Shadow sprites drawn" counts
+            // casters; this counts CALLS, and the two differ by up to 9 taps times 6 strips times
+            // the casts per character, because a character's soft edge is drawn live while an
+            // object's is baked into its pixels. Nothing said how far apart the two numbers were,
+            // and the plan to close that gap (bake the blur for characters as well) is worth
+            // exactly the size of this number and nothing else.
+            ShadowDrawCalls,
         }
 
         private const int PartCount = 14;
-        private const int CounterCount = 7;
+        /// <summary>Sized by the enum, not written beside it: a hand-kept copy of a count drifted
+        /// once already (GpuTimer's PartCount) and reported four passes as free for weeks.</summary>
+        private static readonly int CounterCount = Enum.GetValues(typeof(Counter)).Length;
         private const int WindowFrames = 300;      // five seconds at 60 fps
 
         private static readonly string[] Names =
@@ -108,6 +118,36 @@ namespace SDVRadiance
         private static readonly double[] _running = new double[PartCount];   // lifetime, for nesting adjustments
         private static int _frames, _windowFrameCount;
 
+        // ---- the longest frames, one by one ----
+        // Every table above is an average and a worst COLUMN: the worst water gather and the worst
+        // shadow bake are printed, but nothing says whether they happened in the same frame, or
+        // what else that frame was doing, or whether the frame the player felt was one of ours at
+        // all. A steady 60 is lost one frame at a time, so the hunt for it needs the frames
+        // themselves: for each of the longest since the last report, how long it was, how much of
+        // it this mod can account for, which parts, what the caches did, whether the collector
+        // ran, and where the player was standing. A frame that is long and mostly NOT ours is as
+        // much of an answer as one that is.
+        private const int WorstFramesKept = 6;
+        private sealed class LongFrame
+        {
+            public double FrameMs;
+            public double OursMs;
+            public readonly double[] Parts = new double[PartCount];
+            public readonly int[] Counts = new int[8];
+            public int Gen0, Gen1, Gen2;
+            public string Location = "";
+            public int TimeOfDay;
+            public int FramesSinceArrival;
+        }
+        private static readonly LongFrame[] _longest = new LongFrame[WorstFramesKept];
+        private static int _longestCount;
+        private static readonly double[] _thisFrame = new double[PartCount];
+        private static readonly int[] _gcLastFrame = new int[3];
+        private static string _lastFrameLocation = "";
+        private static int _framesSinceArrival = int.MaxValue / 2;
+        /// <summary>Frames after a location change that still count as arrival work.</summary>
+        private const int ArrivalFrames = 180;
+
         // ---- garbage collections, per window ----
         // The worst column of every table in this report can be a collection pause wearing a
         // stage's name: whichever bracket is open when the runtime stops the world inherits the
@@ -128,7 +168,17 @@ namespace SDVRadiance
             "shadow sprites drawn",
             "vanilla-draw shim calls",
             "too big to bake (draws banded)",
+            "shadow draw calls (SpriteBatch)",
         };
+
+        static FrameCost()
+        {
+            // Loud on the first frame rather than quietly printing the wrong name beside the
+            // wrong number for the rest of the release.
+            if (CounterNames.Length != CounterCount)
+                throw new InvalidOperationException(
+                    $"FrameCost has {CounterCount} counters and {CounterNames.Length} counter names; add the missing name.");
+        }
 
         private static readonly long[] _countSum = new long[CounterCount];
         private static readonly long[] _countWindowSum = new long[CounterCount];
@@ -285,8 +335,95 @@ namespace SDVRadiance
             int i = (int)part;
             _sum[i] += ms;
             _running[i] += ms;
+            _thisFrame[i] += ms;
             if (ms > _max[i]) _max[i] = ms;
             return ms;
+        }
+
+        /// <summary>Offer the frame that just ended to the ledger of the longest. The chain
+        /// encloses the grid rebuilds, so they are taken off it here the way the table does.</summary>
+        private static void OfferLongFrame(double frameMs, int[] countsThisFrame)
+        {
+            double ours = 0;
+            double grids = 0;
+            for (int i = (int)Part.GridFlood; i <= (int)Part.GridWaterMask; i++) grids += _thisFrame[i];
+            _thisFrame[(int)Part.Chain] = Math.Max(0, _thisFrame[(int)Part.Chain] - grids);
+            for (int i = 0; i < PartCount; i++) ours += _thisFrame[i];
+            string location = Game1.currentLocation?.NameOrUniqueName ?? "";
+            if (location != _lastFrameLocation)
+                _framesSinceArrival = 0;
+            else if (_framesSinceArrival < int.MaxValue / 2)
+                _framesSinceArrival++;
+            _lastFrameLocation = location;
+            int gen0 = GC.CollectionCount(0), gen1 = GC.CollectionCount(1), gen2 = GC.CollectionCount(2);
+            int d0 = gen0 - _gcLastFrame[0], d1 = gen1 - _gcLastFrame[1], d2 = gen2 - _gcLastFrame[2];
+            _gcLastFrame[0] = gen0; _gcLastFrame[1] = gen1; _gcLastFrame[2] = gen2;
+
+            int slot;
+            if (_longestCount < WorstFramesKept)
+                slot = _longestCount++;
+            else
+            {
+                slot = 0;
+                for (int k = 1; k < WorstFramesKept; k++)
+                    if (_longest[k].FrameMs < _longest[slot].FrameMs) slot = k;
+                if (_longest[slot].FrameMs >= frameMs)
+                    return;
+            }
+            LongFrame f = _longest[slot] ??= new LongFrame();
+            f.FrameMs = frameMs;
+            f.OursMs = ours;
+            Array.Copy(_thisFrame, f.Parts, PartCount);
+            Array.Copy(countsThisFrame, f.Counts, Math.Min(countsThisFrame.Length, f.Counts.Length));
+            f.Gen0 = d0; f.Gen1 = d1; f.Gen2 = d2;
+            f.Location = location;
+            f.TimeOfDay = Game1.timeOfDay;
+            f.FramesSinceArrival = _framesSinceArrival;
+        }
+
+        /// <summary>The longest frames since the last report, longest first, each with what this
+        /// mod did in it. Printed by radiance_report, and reset by printing.</summary>
+        internal static string DescribeLongestFrames()
+        {
+            var text = new System.Text.StringBuilder();
+            if (_longestCount == 0)
+            {
+                text.AppendLine("the longest frames since the last report: none measured yet");
+                return text.ToString();
+            }
+            text.AppendLine($"the {_longestCount} longest frames since the last report, and what this mod did in each");
+            text.AppendLine("(a 60 fps frame is 16.667 ms; 'not ours' is the game, other mods, the driver and the collector;");
+            text.AppendLine(" 'arrival+N' is N frames after entering the location, where arrival work is expected):");
+            var order = new int[_longestCount];
+            for (int k = 0; k < _longestCount; k++) order[k] = k;
+            Array.Sort(order, (a, b) => _longest[b].FrameMs.CompareTo(_longest[a].FrameMs));
+            foreach (int k in order)
+            {
+                LongFrame f = _longest[k];
+                // the three biggest parts of ours, by name
+                var partOrder = new int[PartCount];
+                for (int i = 0; i < PartCount; i++) partOrder[i] = i;
+                Array.Sort(partOrder, (a, b) => f.Parts[b].CompareTo(f.Parts[a]));
+                var parts = new System.Text.StringBuilder();
+                for (int n = 0; n < 3; n++)
+                {
+                    int i = partOrder[n];
+                    if (f.Parts[i] < 0.05) break;
+                    parts.Append(n == 0 ? "" : ", ").Append(Names[i]).Append(' ').Append(f.Parts[i].ToString("0.00"));
+                }
+                string counts = "";
+                if (f.Counts[(int)Counter.ObjectBakes] + f.Counts[(int)Counter.CasterBakes] > 0)
+                    counts += $"  bakes {f.Counts[(int)Counter.ObjectBakes]}+{f.Counts[(int)Counter.CasterBakes]}";
+                if (f.Counts[(int)Counter.BakeMisses] > 0) counts += $"  misses {f.Counts[(int)Counter.BakeMisses]}";
+                if (f.Counts[(int)Counter.BakeEvictions] > 0) counts += $"  evictions {f.Counts[(int)Counter.BakeEvictions]}";
+                string gc = f.Gen0 + f.Gen1 + f.Gen2 > 0 ? $"  GC gen0 +{f.Gen0} gen1 +{f.Gen1} gen2 +{f.Gen2}" : "";
+                string where = $"{f.Location} {f.TimeOfDay / 100}:{f.TimeOfDay % 100:00}"
+                             + (f.FramesSinceArrival < ArrivalFrames ? $" (arrival+{f.FramesSinceArrival})" : "");
+                text.AppendLine($"  {f.FrameMs,7:0.00} ms  {where,-32}  ours {f.OursMs,6:0.00}  not ours {Math.Max(0, f.FrameMs - f.OursMs),6:0.00}"
+                              + (parts.Length > 0 ? $"   [{parts}]" : "") + counts + gc);
+            }
+            _longestCount = 0;
+            return text.ToString();
         }
 
         /// <summary>Advance the rolling window. Called once per frame, from the first of our
@@ -295,6 +432,10 @@ namespace SDVRadiance
         {
             // Fold the frame that just ended into the window BEFORE the roll, so the per-frame
             // worst is a real frame's count rather than a running total that only ever grows.
+            // The counts are kept aside first: the ledger of the longest frames wants them beside
+            // the frame's wall-clock time, which is only known further down.
+            var countsOfLastFrame = new int[CounterCount];
+            Array.Copy(_countThisFrame, countsOfLastFrame, CounterCount);
             for (int i = 0; i < CounterCount; i++)
             {
                 _countSum[i] += _countThisFrame[i];
@@ -332,6 +473,8 @@ namespace SDVRadiance
                 bool focused = IsWindowFocused();
                 if (frameMs < 250)
                 {
+                    if (focused)
+                        OfferLongFrame(frameMs, countsOfLastFrame);
                     _frameSum += frameMs;
                     if (frameMs > _frameMax) _frameMax = frameMs;
                     _frameEmaMs = _frameEmaMs <= 0 ? frameMs : _frameEmaMs * 0.9 + frameMs * 0.1;
@@ -350,6 +493,7 @@ namespace SDVRadiance
                     _unfocusedFrames++;
             }
             _lastFrameStamp = now;
+            Array.Clear(_thisFrame, 0, PartCount);
             if (!_gcBaseTaken)
             {
                 for (int g = 0; g < 3; g++) _gcBase[g] = GC.CollectionCount(g);
@@ -421,6 +565,8 @@ namespace SDVRadiance
             _frameSum = _frameMax = _frameWindowSum = _frameWindowMax = 0;
             _lastFrameStamp = 0;
             _frames = _windowFrameCount = 0;
+            Array.Clear(_thisFrame, 0, PartCount);
+            _longestCount = 0;
         }
 
         internal static string Describe()

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
@@ -77,6 +78,10 @@ namespace SDVRadiance
             }
 
             BakePlayerPose(graphicsDevice, who, swim, reflectionNeedsPlayer);
+            // With the pose baked, compose every cast of its shadow into the patch, cut by the
+            // map, while a render-target swap is still allowed (see ShadowRenderer.PlayerPatch).
+            if (shadowsOn)
+                RenderPlayerShadowPatch(graphicsDevice, config);
             }
             finally
             {
@@ -143,6 +148,11 @@ namespace SDVRadiance
             // tied to a map, so warping back and forth used to re-bake everything both ways for
             // nothing. It still triggers ONE full enumeration, so a new screen arrives baked
             // instead of spending a frame on banded stand-ins.
+            if (ForgetObjectBakesRequested)
+            {
+                ForgetObjectBakesRequested = false;
+                ForgetObjectBakes();
+            }
             bool locationChanged = Game1.currentLocation != _objectBakeLocation;
             _objectBakeLocation = Game1.currentLocation;
 
@@ -184,16 +194,30 @@ namespace SDVRadiance
                 try
                 {
                     if (locationChanged || _bakedObjectCache.Count == 0)
+                    {
                         // The blur is an ARGUMENT now, not a field the bake reads behind the draw
                         // pass's back, so the full enumeration has to hand over the real one. It
                         // passed a zero here for as long as the bake had its own copy, which would
                         // now mean every silhouette baked on arrival in a location came out crisp.
+                        //
+                        // The whole map, not the screen: this frame is under the warp fade, and a
+                        // bake burst here is a burst nobody sees, where the same sprites baked on
+                        // first sight while walking were the 10 ms frames a farm walk showed.
+                        // Bounded by the cache cap (EmitObject stops at it) and by the map.
+                        int before = _bakedObjectCache.Count;
+                        long startTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+                        _bakeWholeMap = WholeMapArrivalBake;
                         DrawObjectShadows(_renderTargetSpriteBatch!, objectLocation, sunRotation, sunStretch, 0f, config.DirectionalShadowBlur);
+                        _bakeWholeMap = false;
+                        DiagnosticMonitor?.Log($"[diag] object bakes on arrival: {_bakedObjectCache.Count - before} in "
+                            + $"{(System.Diagnostics.Stopwatch.GetTimestamp() - startTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency:0.0} ms, "
+                            + $"cache {_bakedObjectCache.Count} of {ObjectBakeCapTotal} ({objectLocation.NameOrUniqueName})", LogLevel.Trace);
+                    }
                     else
                         BakeQueuedObjectSprites(graphicsDevice);
                 }
                 catch (Exception ex) { if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log($"[shadow] obj bake threw: {ex}", LogLevel.Warn); } }
-                finally { graphicsDevice.SetRenderTargets(objPrev); _isBakingObjects = false; }
+                finally { graphicsDevice.SetRenderTargets(objPrev); _isBakingObjects = false; _bakeWholeMap = false; }
             }
             // Either path leaves the queue spent, including anything the refresh budget did not
             // reach. Nothing is lost by that: an entry the sun has moved off is still stale next
@@ -564,14 +588,43 @@ namespace SDVRadiance
         /// <para>The caps together allow 464 sprites where the old single pool allowed 128, and
         /// hold less memory doing it, because the ones that only need a small slot get one.</para>
         /// </summary>
+        /// <summary>Live bakes per slot class, refilled by one walk of the cache each frame.</summary>
+        private readonly int[] _objectLiveByClass = new int[ObjectSlotClasses.Length];
+        /// <summary>Set for the arrival enumeration only: DrawObjectShadows walks the whole map and
+        /// EmitObject stops baking at the cache cap. See RunSceneBakes.</summary>
+        private bool _bakeWholeMap;
+
+        /// <summary>Console A/B (radiance_mapbake): off makes the arrival enumeration walk the screen
+        /// only, as it did before 1.7.4, so the first sight of every other sprite bakes mid-walk.</summary>
+        internal static bool WholeMapArrivalBake = true;
+        /// <summary>Set by the console; honoured at the top of the next bake pass, on the render
+        /// thread, which is the only place the cache may be touched.</summary>
+        internal static bool ForgetObjectBakesRequested;
+
+        /// <summary>Drop every object bake and hand its slot back, so the next frame enumerates
+        /// the location again from nothing. For the A/B: two walks over the same map are only
+        /// comparable when neither starts with the other's bakes.</summary>
+        internal void ForgetObjectBakes()
+        {
+            foreach (var kv in _bakedObjectCache)
+                _objectFreeTargetsByClass[kv.Value.SlotClass].Add(kv.Value.Rt);
+            _bakedObjectCache.Clear();
+            _objectBakeQueue.Clear();
+            _objectBakeLocation = null;
+        }
+
         private void EvictColdObjectBakes()
         {
+            // One walk to count every class, not one walk per class: this runs every frame, and
+            // on a farm holding four hundred bakes three walks to learn that nothing is over its
+            // cap were most of what the method did.
+            Array.Clear(_objectLiveByClass, 0, _objectLiveByClass.Length);
+            foreach (var kv in _bakedObjectCache)
+                _objectLiveByClass[kv.Value.SlotClass]++;
             for (int cls = 0; cls < ObjectSlotClasses.Length; cls++)
             {
                 int cap = ObjectSlotClasses[cls].Cap;
-                int live = 0;
-                foreach (var kv in _bakedObjectCache)
-                    if (kv.Value.SlotClass == cls) live++;
+                int live = _objectLiveByClass[cls];
                 if (live <= cap)
                     continue;
 
@@ -657,6 +710,7 @@ namespace SDVRadiance
             // copies on the same pixel, costing N× the draw calls for nothing).
             if (blur <= 0f)
             {
+                FrameCost.Count(FrameCost.Counter.ShadowDrawCalls);
                 spriteBatch.Draw(texture, pos, src, baseColor * MathHelper.Clamp(alpha, 0f, 1f), rot, origin, scale, effects, depth);
                 return;
             }
@@ -664,6 +718,7 @@ namespace SDVRadiance
             // Per-tap alpha so 1-(1-a)^N ≈ target alpha at the fully-covered core.
             float a = 1f - (float)Math.Pow(1f - MathHelper.Clamp(alpha, 0f, 1f), 1f / taps.Length);
             Color c = baseColor * a;
+            FrameCost.Count(FrameCost.Counter.ShadowDrawCalls, taps.Length);
             foreach (Vector2 t in taps)
                 spriteBatch.Draw(texture, pos + t * blur, src, c, rot, origin, scale, effects, depth);
         }
@@ -697,6 +752,154 @@ namespace SDVRadiance
         private static float ShadowPieceDepth(float anchorWorldY, float upScreenPixels)
             => MathHelper.Clamp((anchorWorldY - upScreenPixels) / 10000f - ShadowDepthBias, 0f, 1f);
 
+        /// <summary>
+        /// The same rule for a caster that arrives with a finished sort depth instead of a world
+        /// row: the piece lying <paramref name="upScreenPixels"/> up the screen from its feet.
+        /// </summary>
+        /// <remarks>
+        /// Objects were left out of the grounded sort when it was written, on the grounds that an
+        /// object's depth carries a per-column tie-break (<c>tile.X * 1e-5f</c>, which keeps two
+        /// things standing on one row apart) that has no meaning as a world Y and so could not be
+        /// rebuilt from one. True, and beside the point: the tie-break never needed rebuilding.
+        /// Moving a piece of shadow one row further up the screen subtracts the same amount from
+        /// the sort depth whatever that depth was built out of, so subtracting from the depth the
+        /// caller already computed carries its tie-break, its bias and any other term it holds
+        /// through untouched. A caller that hands over a depth of zero, as the building coverage
+        /// mask does because depth means nothing to a mask, still gets zero.
+        /// <para>
+        /// One strip is 32 screen pixels, which is 3.2e-3 of depth: three hundred times the
+        /// tie-break, so the strips order among themselves and the tie-break still does its own
+        /// job inside a row.
+        /// </para>
+        /// </remarks>
+        private static float ShadowPieceDepthUnder(float casterSortDepth, float upScreenPixels)
+            => MathHelper.Clamp(casterSortDepth - upScreenPixels / 10000f, 0f, 1f);
+
+        /// <summary>The footprints, in world pixels, of every building the current location owns,
+        /// refreshed once per shadow pass. Read by <see cref="GroundedPieceDepth"/>.</summary>
+        private static readonly List<Rectangle> BuildingFootprints = new();
+
+        /// <summary>Collect the buildings' footprints for this pass. Cheap: a location owns a
+        /// handful, and the list is what lets every strip of every shadow answer "am I lying on a
+        /// building" without walking the buildings itself.</summary>
+        private static void RefreshBuildingFootprints(GameLocation? location)
+        {
+            BuildingFootprints.Clear();
+            if (location?.buildings == null)
+                return;
+            foreach (Building bld in location.buildings)
+            {
+                if (bld == null)
+                    continue;
+                BuildingFootprints.Add(new Rectangle(bld.tileX.Value * 64, bld.tileY.Value * 64,
+                    bld.tilesWide.Value * 64, bld.tilesHigh.Value * 64));
+            }
+        }
+
+        /// <summary>
+        /// Sort depth for a piece of a character's shadow: the floor row it lies on, unless that
+        /// row is inside a building's footprint, where it is the caster's own row instead.
+        /// </summary>
+        /// <remarks>
+        /// A shadow that runs up the screen onto a table is covered by the table, and the floor
+        /// row sort gives exactly that. A shadow that runs up onto a house is a different case:
+        /// the house is one sprite many tiles tall, sorted at one row near its base, and a piece
+        /// of shadow lying on its porch or climbing its wall is sorted BEHIND that row and
+        /// vanishes, while the player standing on the same porch, sorted at their feet, is drawn
+        /// over the house as they should be. Measured on the farmhouse porch: the house at
+        /// 0.0960, the player at 0.1003, the shadow's strips from 0.0984 down to 0.0925, so every
+        /// strip past the first was under the house. Light falling on a wall throws the shadow
+        /// onto the wall, so within a building's footprint the shadow takes the caster's row and
+        /// is drawn over the building's face, just under the caster. Furniture is not a building
+        /// and keeps the floor-row rule.
+        /// </remarks>
+        /// <summary>
+        /// How far along a character's shadow, in screen pixels from the feet, the shadow is cut
+        /// off by a solid tile the map paints, or <see cref="float.MaxValue"/> when nothing cuts it.
+        /// </summary>
+        /// <remarks>
+        /// The saloon counter is painted into the map on the Buildings layer, which the game lays
+        /// down before the sorted batch opens, so no sort depth can put anything behind it. Sorted
+        /// or not, a shadow leaning across it painted the counter top and then the floor and the
+        /// stools beyond, as if the counter were not there. A counter is a box: light landing on
+        /// it stops at it. So the shadow is walked from the feet outward in world tiles, and the
+        /// first solid map tile it meets (a Buildings tile with no Passable property, which is what
+        /// a counter, a wall or a shelf is) becomes the end of it, at that run of tiles' far edge.
+        /// The pieces lying ON the tiles are kept, because light on a counter top or a wall throws
+        /// the shadow onto that surface; only what lies beyond is dropped. Placed things are not
+        /// map tiles and are sorted like any sprite, so they are not consulted here.
+        /// </remarks>
+        private static float ShadowClipDistance(GameLocation? location, float feetWorldX, float anchorWorldY,
+            float rot, float scaleY, float lengthTexels)
+        {
+            if (location == null)
+                return float.MaxValue;
+            float sin = (float)Math.Sin(rot), cos = (float)Math.Cos(rot);
+            float lengthPixels = lengthTexels * scaleY;
+            const float step = 8f;
+            // Which way the shadow runs decides which edge of the solid tiles ends it. A map
+            // tile's visible face points at the viewer, down the screen. A shadow running UP the
+            // screen comes from a light on the viewer's side, which lights that face, so the
+            // shadow lands on it and the pieces lying on the tiles are kept: this is a shadow
+            // climbing the back wall. A shadow running DOWN the screen comes from a light behind
+            // the thing, whose visible face is then in its own shade, so the shadow has nowhere
+            // to land there and stops at the near edge: this is a shadow meeting the counter from
+            // behind the bar, where painting it on the counter's front read as passing through.
+            bool towardViewer = cos < 0f;
+            int feetTileX = (int)Math.Floor(feetWorldX / 64f), feetTileY = (int)Math.Floor(anchorWorldY / 64f);
+            bool SolidAt(float d)
+            {
+                int tileX = (int)Math.Floor((feetWorldX + sin * d) / 64f);
+                int tileY = (int)Math.Floor((anchorWorldY - cos * d) / 64f);
+                // The tile under a pair of feet is never the thing that cuts their shadow.
+                if (tileX == feetTileX && tileY == feetTileY)
+                    return false;
+                return location.hasTileAt(tileX, tileY, "Buildings")
+                    && location.doesTileHaveProperty(tileX, tileY, "Passable", "Buildings") == null;
+            }
+            float near = -1f, far = -1f, previous = 0f;
+            for (float d = step; d < lengthPixels; d += step)
+            {
+                if (SolidAt(d))
+                {
+                    if (near < 0f)
+                    {
+                        // The edge lies between the last clear sample and this one. Standing
+                        // against the counter the feet are a dozen pixels from it, so a sample's
+                        // width of slack was a visible spill of shadow onto its front: bisect to
+                        // within a pixel of the tile's edge instead.
+                        float clear = previous, solid = d;
+                        for (int i = 0; i < 4; i++)
+                        {
+                            float mid = (clear + solid) * 0.5f;
+                            if (SolidAt(mid)) solid = mid; else clear = mid;
+                        }
+                        near = solid;
+                    }
+                    far = d;
+                }
+                else if (far >= 0f)
+                    break;
+                previous = d;
+            }
+            if (far < 0f)
+                return float.MaxValue;
+            return towardViewer ? near : far + step * 0.5f;
+        }
+
+        private static float GroundedPieceDepth(float anchorWorldY, float upScreenPixels, float feetWorldX, float sidewaysPixels)
+        {
+            if (upScreenPixels > 0f && BuildingFootprints.Count > 0)
+            {
+                int worldX = (int)(feetWorldX + sidewaysPixels);
+                int worldY = (int)(anchorWorldY - upScreenPixels);
+                foreach (Rectangle footprint in BuildingFootprints)
+                    if (footprint.Contains(worldX, worldY))
+                        return ShadowPieceDepth(anchorWorldY, 0f);
+            }
+            return ShadowPieceDepth(anchorWorldY, upScreenPixels);
+        }
+
         /// <summary>Screen pixels of shadow per ground strip. A strip is flat in depth, so this is
         /// how far the shadow's sort position is allowed to lag the floor beneath it; half a tile
         /// resolves every piece of furniture, which is the smallest thing a shadow can be behind.</summary>
@@ -711,22 +914,50 @@ namespace SDVRadiance
         /// it lies on (see <see cref="ShadowPieceDepth"/>). A short shadow comes out as one strip,
         /// which is <see cref="DrawSoft"/> unchanged.
         /// </summary>
+        /// <param name="anchorWorldY">The caster's contact row in world pixels, or its finished
+        /// sort depth when <paramref name="anchorIsSortDepth"/> is set.</param>
+        /// <param name="anchorIsSortDepth">Whether the anchor is already a sort depth rather than
+        /// a world row. Objects arrive that way; see <see cref="ShadowPieceDepthUnder"/>.</param>
         private static void DrawSoftGrounded(SpriteBatch spriteBatch, Vector2[] taps, Texture2D texture, Rectangle? src,
             Vector2 pos, Color baseColor, float alpha, float rot, Vector2 origin, Vector2 scale, float anchorWorldY,
-            SpriteEffects effects, float blur)
+            SpriteEffects effects, float blur, bool anchorIsSortDepth = false)
         {
             // Only the part of the silhouette's length that runs along the screen's Y moves it to
             // another floor row. The sideways lean moves it along the row it is already on, which
             // no sort depth has an opinion about. Signed, because a lamp overhead throws the
             // shadow DOWN the screen and those pieces belong in front of the caster.
             float upScreenPerTexel = (float)Math.Cos(rot) * scale.Y;
+            float feetWorldX = pos.X + Game1.viewport.X;
+            Rectangle area = src ?? new Rectangle(0, 0, texture.Width, texture.Height);
+            // Where a solid map tile ends the shadow, the silhouette itself is cut there, from its
+            // tip end, BEFORE the strips are decided. Skipping strips alone left the short shadows
+            // untouched: a lamp's cast is often under one strip long, took the single-draw path
+            // below, and went on through the counter whole.
+            float clipDistance = anchorIsSortDepth ? float.MaxValue
+                : ShadowClipDistance(Game1.currentLocation, feetWorldX, anchorWorldY, rot, scale.Y, origin.Y);
+            if (clipDistance < float.MaxValue)
+            {
+                // The soft edge is drawn as taps offset by the blur radius in every direction, so
+                // the silhouette must end a blur's width short of the tile for its softness to end
+                // AT the tile rather than a few pixels onto it; and a texel more for the rounding.
+                float clipInsideBlur = Math.Max(0f, clipDistance - blur - scale.Y);
+                int cut = (int)Math.Ceiling(origin.Y - clipInsideBlur / Math.Max(scale.Y, 0.001f));
+                if (cut >= area.Height)
+                    return;
+                if (cut > 0)
+                {
+                    area = new Rectangle(area.X, area.Y + cut, area.Width, area.Height - cut);
+                    // The origin keeps naming the feet row of what is left.
+                    origin.Y -= cut;
+                }
+            }
             float alongScreenY = Math.Abs(origin.Y * upScreenPerTexel);
             int strips = (int)MathHelper.Clamp(alongScreenY / GroundStripPixels, 1f, MaxGroundStrips);
-            Rectangle area = src ?? new Rectangle(0, 0, texture.Width, texture.Height);
             if (strips <= 1 || area.Height < strips * 2)
             {
-                DrawSoft(spriteBatch, taps, texture, src, pos, baseColor, alpha, rot, origin, scale,
-                    ShadowPieceDepth(anchorWorldY, 0f), effects, blur);
+                DrawSoft(spriteBatch, taps, texture, area, pos, baseColor, alpha, rot, origin, scale,
+                    anchorIsSortDepth ? ShadowPieceDepthUnder(anchorWorldY, 0f)
+                                      : ShadowPieceDepth(anchorWorldY, 0f), effects, blur);
                 return;
             }
             for (int i = 0; i < strips; i++)
@@ -737,9 +968,17 @@ namespace SDVRadiance
                 // The origin has to keep naming the same feet row, so it rises with the strip -
                 // the same correction the banded gradient makes for its bands.
                 var stripOrigin = new Vector2(origin.X, origin.Y - y0);
-                float upScreen = (origin.Y - (y0 + y1) * 0.5f) * upScreenPerTexel;
+                float texelsAboveFeet = origin.Y - (y0 + y1) * 0.5f;
+                // Past a solid map tile the shadow is over (see ShadowClipDistance).
+                if (texelsAboveFeet * scale.Y > clipDistance)
+                    continue;
+                float upScreen = texelsAboveFeet * upScreenPerTexel;
+                // Where the strip's centre lands sideways, for the building test: the lean moves
+                // a piece along its row as well as up the screen.
+                float sideways = texelsAboveFeet * (float)Math.Sin(rot) * scale.Y;
                 DrawSoft(spriteBatch, taps, texture, strip, pos, baseColor, alpha, rot, stripOrigin, scale,
-                    ShadowPieceDepth(anchorWorldY, upScreen), effects, blur);
+                    anchorIsSortDepth ? ShadowPieceDepthUnder(anchorWorldY, upScreen)
+                                      : GroundedPieceDepth(anchorWorldY, upScreen, feetWorldX, sideways), effects, blur);
             }
         }
 
@@ -749,20 +988,21 @@ namespace SDVRadiance
         /// stay aligned under rotation + stretch) and fading each band's alpha toward the tip.
         /// </summary>
         /// <param name="anchorWorldY">The caster's own contact row in world pixels, which every
-        /// band is sorted relative to when <paramref name="groundSorted"/> is set. When it is not,
-        /// this is a plain sort depth and every band is given it unchanged.</param>
-        /// <param name="groundSorted">Whether each band sits at the depth of the floor row it lies
-        /// on rather than at the caster's. Characters do. The object path does not yet: an
-        /// object's depth carries a per-column tie-break that keeps two things on one row apart,
-        /// and that has no meaning as a world Y, so moving it is its own piece of work.</param>
+        /// band is sorted relative to. When <paramref name="anchorIsSortDepth"/> is set this is a
+        /// finished sort depth instead, and the bands are offset from it by the same amount.</param>
+        /// <param name="anchorIsSortDepth">Whether the anchor is a sort depth rather than a world
+        /// row. Objects arrive that way, because an object's depth carries a per-column tie-break
+        /// that no world Y can hold; see <see cref="ShadowPieceDepthUnder"/> for why that never
+        /// stood in the way of grounding them. Every band is sorted at the floor row it lies on
+        /// either way.</param>
         /// <param name="shadowColor">What the bands are stamped in. Black on the world, because a
         /// shadow is an absence of light; WHITE when the caller is filling a coverage mask that a
         /// later pass reads as "how much of this pixel is in shadow", where black would read as
         /// nothing at all.</param>
         private void DrawBandedGradient(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, Vector2 feet,
             Vector2 baseOrigin, float alpha, float rot, Vector2 scale, float anchorWorldY, float blur,
-            float headFade = HeadFade, SpriteEffects effects = SpriteEffects.None, bool groundSorted = true,
-            Color? shadowColor = null)
+            float headFade = HeadFade, SpriteEffects effects = SpriteEffects.None,
+            bool anchorIsSortDepth = false, Color? shadowColor = null)
         {
             Color bandColor = shadowColor ?? Color.Black;
             // The bands are already cut across the shadow's length, so each one can be sorted at
@@ -781,6 +1021,9 @@ namespace SDVRadiance
             // stump at height/6 showed coarse steps). Finer division → the per-band alpha gradient
             // reads as a smooth ramp, not layers. Capped so tall sprites don't explode the draw count.
             int bands = (int)MathHelper.Clamp(src.Height / 2f, 12f, 28f);
+            float feetWorldX = feet.X + Game1.viewport.X;
+            float clipDistance = anchorIsSortDepth ? float.MaxValue
+                : ShadowClipDistance(Game1.currentLocation, feetWorldX, anchorWorldY, rot, scale.Y, feetRow);
             for (int i = 0; i < bands; i++)
             {
                 int y0 = src.Height * i / bands;
@@ -792,8 +1035,14 @@ namespace SDVRadiance
                 // water half) clamp to 1 rather than running past it.
                 float tBottom = MathHelper.Clamp(src.Height * (i + 0.5f) / bands / feetRow, 0f, 1f);
                 float ga = headFade + (1f - headFade) * (float)Math.Pow(tBottom, 1.8);
-                float upScreen = (baseOrigin.Y - (y0 + y1) * 0.5f) * upScreenPerTexel;
-                float bandDepth = groundSorted ? ShadowPieceDepth(anchorWorldY, upScreen) : anchorWorldY;
+                float texelsAboveFeet = baseOrigin.Y - (y0 + y1) * 0.5f;
+                if (texelsAboveFeet * scale.Y > clipDistance)
+                    continue;
+                float upScreen = texelsAboveFeet * upScreenPerTexel;
+                float sideways = texelsAboveFeet * (float)Math.Sin(rot) * scale.Y;
+                float bandDepth = anchorIsSortDepth
+                    ? ShadowPieceDepthUnder(anchorWorldY, upScreen)
+                    : GroundedPieceDepth(anchorWorldY, upScreen, feetWorldX, sideways);
                 DrawSoft(spriteBatch, Taps5, texture, band, feet, bandColor, alpha * ga, rot, origin, scale,
                     bandDepth, effects, blur);
             }

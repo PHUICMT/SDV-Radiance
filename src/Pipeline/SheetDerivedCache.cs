@@ -35,6 +35,20 @@ namespace SDVRadiance
         private readonly long _largestInputBytes;
         private readonly int _scale;
         private readonly int _generatePerFrameCap;
+        /// <summary>The tick through which the per-frame cap is lifted. See <see cref="AllowBurstThisTick"/>.</summary>
+        private int _burstUntilTick = -1;
+
+        /// <summary>
+        /// Let this frame generate every sheet it asks for, cap or no cap.
+        /// </summary>
+        /// <remarks>
+        /// The cap exists so a screen that suddenly needs twenty sheets does not spend one long
+        /// frame on them; it spreads them over five frames instead, each a little late, which on
+        /// arrival at a new map means five frames of sheets switching from blocky to smooth in
+        /// front of the player. On a warp the game is showing its fade-to-black, and a long frame
+        /// under a black screen is a frame nobody sees, so that is where the whole set is made.
+        /// </remarks>
+        internal void AllowBurstThisTick() => _burstUntilTick = Game1.ticks + 1;
         /// <summary>Sets the shader's parameters for one sheet: (effect, sheet, variant).</summary>
         private readonly Action<Effect, Texture2D, int> _setParameters;
         private readonly string _technique;
@@ -101,7 +115,7 @@ namespace SDVRadiance
                 _frameTick = Game1.ticks;
                 _generatedThisFrame = 0;
             }
-            if (_generatedThisFrame >= _generatePerFrameCap)
+            if (_generatedThisFrame >= _generatePerFrameCap && Game1.ticks > _burstUntilTick)
                 return null;
             long inputBytes = (long)sheet.Width * sheet.Height * 4;
             if (inputBytes > _largestInputBytes)

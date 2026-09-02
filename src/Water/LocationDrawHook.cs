@@ -177,10 +177,38 @@ namespace SDVRadiance
                 return;
             }
 
-            // The recorder itself. Patched once, and it leaves immediately unless a bracketed draw
-            // is running, so the cost outside those few calls is one static bool.
-            // Both scale overloads: which one a location reaches for is its own business, and
-            // missing the one it happens to use would look exactly like the hook not working.
+            if (!InstallDrawRecorders(harmony, monitor))
+                return;
+            // The one thing a location draws that IS water. Bracketed so its draws are skipped.
+            MethodInfo? pondDraw = AccessTools.Method(typeof(StardewValley.Buildings.FishPond), "draw", new[] { typeof(SpriteBatch) });
+            if (pondDraw != null)
+            {
+                try
+                {
+                    harmony.Patch(pondDraw,
+                        prefix: new HarmonyMethod(typeof(LocationDrawHook), nameof(OwnWaterDraw_Prefix)),
+                        postfix: new HarmonyMethod(typeof(LocationDrawHook), nameof(OwnWaterDraw_Postfix)));
+                }
+                catch (Exception ex)
+                {
+                    monitor.Log($"Could not bracket FishPond.draw: {ex.Message}. A fish pond will carry no water effect.", LogLevel.Trace);
+                }
+            }
+            monitor.Log($"Watching {patched} location draw(s) for art the water must not touch.", LogLevel.Trace);
+        }
+
+        /// <summary>
+        /// The recorder itself, on SpriteBatch.Draw. Patched once, and it leaves immediately
+        /// unless a bracketed draw is running, so the cost outside those few calls is one static
+        /// bool. Both scale overloads: which one a location reaches for is its own business, and
+        /// missing the one it happens to use would look exactly like the hook not working.
+        /// </summary>
+        /// <remarks>Its own method so that radiance_hooks can take the SpriteBatch patches off and
+        /// put them back without touching the location brackets, which stay installed
+        /// throughout.</remarks>
+        /// <returns>Whether at least one overload was patched.</returns>
+        internal static bool InstallDrawRecorders(Harmony harmony, IMonitor monitor)
+        {
             int recorders = 0;
             foreach ((Type scaleType, string handler) in new[]
                      {
@@ -202,24 +230,9 @@ namespace SDVRadiance
             {
                 monitor.Log("SpriteBatch.Draw has neither scale overload any more, so a location's "
                           + "own art cannot be recorded.", LogLevel.Trace);
-                return;
+                return false;
             }
-            // The one thing a location draws that IS water. Bracketed so its draws are skipped.
-            MethodInfo? pondDraw = AccessTools.Method(typeof(StardewValley.Buildings.FishPond), "draw", new[] { typeof(SpriteBatch) });
-            if (pondDraw != null)
-            {
-                try
-                {
-                    harmony.Patch(pondDraw,
-                        prefix: new HarmonyMethod(typeof(LocationDrawHook), nameof(OwnWaterDraw_Prefix)),
-                        postfix: new HarmonyMethod(typeof(LocationDrawHook), nameof(OwnWaterDraw_Postfix)));
-                }
-                catch (Exception ex)
-                {
-                    monitor.Log($"Could not bracket FishPond.draw: {ex.Message}. A fish pond will carry no water effect.", LogLevel.Trace);
-                }
-            }
-            monitor.Log($"Watching {patched} location draw(s) for art the water must not touch.", LogLevel.Trace);
+            return true;
         }
 
         private static void OwnWaterDraw_Prefix()

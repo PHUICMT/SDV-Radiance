@@ -308,6 +308,7 @@ namespace SDVRadiance
 
             long gatherStartTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
             var newWaterMaskJob = GatherWaterMask(location, 0, 0, mw, mh);
+            _gatherAnchorFills++; _gatherAnchorTiles += mw * mh;
             newWaterMaskJob.AnchorOnly = true;
             newWaterMaskJob.ScreenId = _activeScreenId;
             double gatherDurationMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - gatherStartTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;

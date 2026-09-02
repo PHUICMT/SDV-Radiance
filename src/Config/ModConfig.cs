@@ -663,6 +663,22 @@ namespace SDVRadiance
         /// exactly where it is hardest to see, because a shadow edge under eight lamps is read
         /// against seven other lamps' light.</para></summary>
         public bool LightShadowDetailShared { get; set; } = true;
+        /// <summary>Trace every lamp's shadow ray from every pixel, for the crispest edge, instead
+        /// of tracing at half resolution and reading the answer back.
+        ///
+        /// <para>The ray is walked from the lamp to the pixel, asking what stands in the way, and
+        /// it is the one cost this lighting pays per lamp per pixel: eight lamps on screen means
+        /// eight rays at every pixel. Walking them at half resolution is a quarter as many, and
+        /// the pass measures 0.168 ms against 0.228 in town at night, 0.244 against 0.424 in the
+        /// saloon where all eight lamps reach every pixel.</para>
+        ///
+        /// <para>What it was thought to cost was the edge: a frozen saloon frame compared both
+        /// ways moved 61% of its pixels, mean 6 of 255, up to 128, and that was read as the
+        /// bilinear read-back softening the shadow. It was a bug (MarchBase in floodlight.fx):
+        /// lamps four to seven marched from another lamp's position. With it fixed, the same
+        /// comparison at three town spots at dawn moves 0.00% of pixels past 24 of 255. Off by
+        /// default; the switch stays for anyone who can see a difference this cannot find.</para></summary>
+        public bool LightShadowSharpEdges { get; set; }
         /// <summary>Gates the VISIBLE window work (the beam, the lit glass, the patch of sun on the
         /// floor) and the warm glow on house windows outdoors at night. It does NOT gate the
         /// daylight a window adds to the room's own lighting - that half answers to
@@ -1487,9 +1503,13 @@ namespace SDVRadiance
                     WaterReflection = true;
                     DirectionalShadowObjects = true;
                     ShadowCastsPerCharacter = 3;
+                    // The one thing the default lowers on everybody's behalf, so the preset whose
+                    // promise is that nothing lowers itself is where it goes back up.
+                    LightShadowSharpEdges = true;
                     break;
 
                 case PerfPreset.Balanced:
+                    LightShadowSharpEdges = false;
                     RenderScale = 0.75f;
                     RenderScaleAuto = false;
                     // Every reflection still there, just fading in eight-row steps instead of
@@ -1510,6 +1530,7 @@ namespace SDVRadiance
                     break;
 
                 case PerfPreset.Performance:
+                    LightShadowSharpEdges = false;
                     RenderScale = 0.5f;
                     // The one setting with a quadratic effect, and the one no performance report
                     // has ever mentioned finding. A preset picked BY somebody having trouble is
@@ -1539,6 +1560,7 @@ namespace SDVRadiance
                     break;
 
                 case PerfPreset.LowSpec:
+                    LightShadowSharpEdges = false;
                     RenderScale = 0.5f;
                     RenderScaleAuto = true;
                     TiltShiftEnabled = false;

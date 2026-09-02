@@ -63,6 +63,8 @@ namespace SDVRadiance
 
         internal static void Install(Harmony harmony, IMonitor monitor)
         {
+            // Re-entered by radiance_hooks on, after an off: count the overloads afresh.
+            PatchedOverloads = 0;
             (Type[] signature, string handler)[] overloads =
             {
                 (new[] { typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color), typeof(float), typeof(Vector2), typeof(Vector2), typeof(SpriteEffects), typeof(float) },

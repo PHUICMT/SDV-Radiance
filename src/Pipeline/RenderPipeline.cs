@@ -725,6 +725,8 @@ namespace SDVRadiance
                     effect.Parameters["FlipX"]?.SetValue(variant == NormalBakeMirrored ? 1f : 0f);
                 });
             _bloom = LoadEffect("bloom.mgfxo");
+            // The player's shadow patch cuts itself against the map with this (ShadowRenderer.PlayerPatch).
+            ShadowRenderer.ShadowMaskEffect = LoadEffect("shadowmask.mgfxo");
             _colorGrade = LoadEffect("colorgrade.mgfxo");
             _fogEffect = LoadEffect("fog.mgfxo");
             _cloudShadow = LoadEffect("cloudshadow.mgfxo");
@@ -942,6 +944,11 @@ namespace SDVRadiance
             {
                 _fadeLocation = Game1.currentLocation;
                 _fadeWater = _fadeCloud = _fadeLighting = _fadeFlood = _fadeTilt = _fadeBuildingShadow = 0f;
+                // And the one frame where a stall costs nothing: the game's own fade-to-black is
+                // over the picture. Work that would otherwise land mid-stride, the first time each
+                // thing scrolled into view, is done here instead.
+                PrewarmArtBaseSpans(Game1.currentLocation);
+                SheetUpscaler.Cache.AllowBurstThisTick();
                 // Snapped rather than eased, because a door is the only way in or out of a room:
                 // easing it across the warp would ramp the outdoor amount of blur in over the
                 // same half second the tilt itself is fading in, then pull it back down again.

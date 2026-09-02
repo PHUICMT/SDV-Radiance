@@ -366,6 +366,10 @@ namespace SDVRadiance
                     float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                     GatherCasts(feet, castStrength, lenCfg);
                     DrawContactBlob(spriteBatch, feet, 22f, 11f, ambAlpha * (_lightShadowCasts.Count > 0 ? 0.45f : 1f), depth, blur);
+                    // The patch, when it was composed this frame, already holds every cast cut by
+                    // the map; the pool above is drawn either way.
+                    if (DrawPlayerPatch(spriteBatch))
+                        return;
                     foreach (var (rot, st, a, _) in _lightShadowCasts)
                         DrawSoftGrounded(spriteBatch, Taps9, _playerRenderTarget, null, feet, Color.White, a, rot,
                             _playerFeetInRenderTarget, new Vector2(1f, st), who.StandingPixel.Y, SpriteEffects.None, blur);

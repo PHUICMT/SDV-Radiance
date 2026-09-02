@@ -372,6 +372,7 @@ namespace SDVRadiance
         private static void DrawOrientedTile(SpriteBatch spriteBatch, Texture2D texture, Rectangle src,
             Vector2 topLeft, float scale, byte orient, Color colour, float depth)
         {
+            FrameCost.Count(FrameCost.Counter.ShadowDrawCalls);
             if (orient == 0)
             {
                 spriteBatch.Draw(texture, topLeft, src, colour, 0f, Vector2.Zero, scale, SpriteEffects.None, depth);

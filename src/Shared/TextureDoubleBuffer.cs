@@ -60,5 +60,29 @@ namespace SDVRadiance
             spare = front != null && !front.IsDisposed ? front : null;
             return written;
         }
+
+        /// <summary>Make sure <paramref name="spare"/> exists at this size and format, for a caller
+        /// that writes it in pieces over several frames and swaps with <see cref="Swap"/> at the
+        /// end. The same pair discipline as <see cref="UploadIntoSpare"/>: the spare is never the
+        /// texture the card is reading.</summary>
+        internal static void EnsureSpare(GraphicsDevice device, ref Texture2D? spare, int width, int height,
+            SurfaceFormat format, string? tallyBucket)
+        {
+            if (spare != null && !spare.IsDisposed && spare.Width == width && spare.Height == height
+                && spare.Format == format)
+                return;
+            spare?.Dispose();
+            var made = new Texture2D(device, width, height, false, format);
+            spare = tallyBucket != null ? VramTally.Track(made, tallyBucket) : made;
+        }
+
+        /// <summary>The spare, now fully written, becomes the front; the old front becomes the
+        /// spare for the next write (or nothing, if it was disposed or never existed).</summary>
+        internal static void Swap(ref Texture2D? front, ref Texture2D? spare)
+        {
+            Texture2D? written = spare;
+            spare = front != null && !front.IsDisposed ? front : null;
+            front = written;
+        }
     }
 }

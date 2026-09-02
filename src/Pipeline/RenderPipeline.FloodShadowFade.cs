@@ -48,6 +48,7 @@ namespace SDVRadiance
         private readonly List<int> _floodRankedIds = new();
         private readonly List<int> _floodRankedSlots = new();
         private Comparison<int>? _floodByRankThenId;
+        private Comparison<int>? _floodShadowByWeightThenId;
 
         /// <summary>Matches the light array's own entry rate, so a lamp's shadow arrives with the
         /// rest of it rather than trailing behind or racing ahead.</summary>
@@ -98,12 +99,16 @@ namespace SDVRadiance
             foreach (int id in liveIds)
                 if (_floodShadowWeight.ContainsKey(id))
                     _floodShadowOrder.Add(id);
-            _floodShadowOrder.Sort((a, b) =>
+            // The comparison is kept, not written inline: a lambda that reads a field captures
+            // this, and List.Sort with a fresh delegate allocated one per frame for the whole
+            // session. Same idiom as _floodByRankThenId beside it.
+            _floodShadowByWeightThenId ??= (a, b) =>
             {
                 float wa = _floodShadowWeight[a], wb = _floodShadowWeight[b];
                 int byWeight = wb.CompareTo(wa);
                 return byWeight != 0 ? byWeight : a.CompareTo(b);
-            });
+            };
+            _floodShadowOrder.Sort(_floodShadowByWeightThenId);
             if (_floodShadowOrder.Count > FloodShadowedLights)
                 _floodShadowOrder.RemoveRange(FloodShadowedLights,
                     _floodShadowOrder.Count - FloodShadowedLights);

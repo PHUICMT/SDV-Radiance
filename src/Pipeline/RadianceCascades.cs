@@ -130,6 +130,7 @@ namespace SDVRadiance
             // occluder window, so a lamp, a window and the column it spills are worth exactly what
             // the flood would have seeded them at. The sky is NOT among them - it is what a ray
             // sees when nothing stops it, which is the whole difference between the two models.
+            long phaseStart = System.Diagnostics.Stopwatch.GetTimestamp();
             FloodLightmap.SceneSeed scene = FloodLightmap.DescribeScene(location, config);
             var window = new FloodLightmap.TileWindow(windowTileX, windowTileY, tilesW, tilesH);
             int count = tilesW * tilesH;
@@ -144,7 +145,9 @@ namespace SDVRadiance
                 emitterTexture = VramTally.Track(new Texture2D(device, tilesW, tilesH, false, SurfaceFormat.Color), "cascade emitters");
                 _emitterTextures[_emitterTextureIndex] = emitterTexture;
             }
+            phaseStart = PhaseCost.NoteSince("flood cascades: seeds (game questions)", phaseStart);
             emitterTexture.SetData(_emitterPixels, 0, count);
+            phaseStart = PhaseCost.NoteSince("flood cascades: emitter upload", phaseStart);
 
             Vector3 miss, hit, lift;
             if (scene.VanillaDark)
@@ -220,6 +223,7 @@ namespace SDVRadiance
                 else
                     device.SetRenderTarget(null);
             }
+            PhaseCost.NoteSince("flood cascades: passes (GPU submit)", phaseStart);
             Origin = originTiles;
             MapSize = probeGrid * ProbeSpacingTiles;
             LastReport = $"cascades: {probesX}x{probesY} probes, {CascadeCount} cascades, {seededCells} emitter cells, "

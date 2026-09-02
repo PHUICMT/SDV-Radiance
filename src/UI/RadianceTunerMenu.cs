@@ -637,6 +637,7 @@ namespace SDVRadiance
             Sld("tuner.lightshadowsoftness", 0f, 2f, () => _config.LightShadowSoftness, v => _config.LightShadowSoftness = v, "help.lightshadowsoftness");
             Sld("tuner.lightshadowdetail", 0f, 1f, () => _config.LightShadowDetail, v => _config.LightShadowDetail = v, "help.lightshadowdetail");
             Tog("tuner.lightshadowshared", () => _config.LightShadowDetailShared, v => _config.LightShadowDetailShared = v, "help.lightshadowshared");
+            Tog("tuner.lightshadowsharp", () => _config.LightShadowSharpEdges, v => _config.LightShadowSharpEdges = v, "help.lightshadowsharp");
             DependsOn(() => _config.LightingEnabled);
             Section("tuner.section.gi");
             Tog("tuner.floodgi", () => _config.FloodLightingEnabled, v => _config.FloodLightingEnabled = v, "help.floodgi");

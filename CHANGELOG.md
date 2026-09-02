@@ -2,6 +2,196 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.7.4
+
+### Fixed
+
+- **The mine's floor number is readable again.** The game paints that number into the world layer,
+  not the HUD, so it went through every effect the world does: the tilt-shift band blurred it and
+  the colour grade tinted it, and on a dark floor the number was hard to make out. It now leaves
+  the world layer for the length of the game's own draw, the way it already did for a map
+  screenshot, and is drawn again after the effects have run, at the same place, in the same colour
+  and with the same skull beside it on a floor that has to be cleared. With every effect switched
+  off the game draws it exactly where it always did.
+
+- **Other mods' overlays are no longer blurred or tinted.** A mod that draws a grid, a range
+  highlight or a label over the world does it in the same event this mod uses to run its effects,
+  and whichever ran first won: when the other mod drew first, its overlay was captured into the
+  frame and went through the tilt-shift, the grade and the lighting like a tree would. The effects
+  now run first in that event, so anything another mod draws there lands on top of the finished
+  frame, as crisp as the HUD.
+
+- **A tree's or a barrel's shadow no longer lies across what is standing in front of it.** 1.7.2 cut
+  every character's shadow into pieces and sorted each at the floor row it lies on, which is the
+  rule the game sorts everything else by, and left objects out. The reason given was that an
+  object's sort depth carries a per-column tie-break, which keeps two things standing on one row
+  apart, and that a world row could not be rebuilt from. That was true and it was beside the point:
+  moving a piece of shadow one row up the screen takes the same amount off the sort depth whatever
+  that depth was built from, so it can be taken off the depth the caster already has and every term
+  inside it comes through untouched. Walk between a tree at dawn and the tip of its shadow and the
+  shadow is now behind you, as it always was for another farmer. A shadow that does not reach past
+  its own tile is drawn exactly as it was, and characters are untouched by this.
+
+  The saloon counter is still the exception, and still for the reason it always was: the map paints
+  it on a layer laid down before the sorted batch opens, so no sort depth can put a shadow behind
+  it.
+
+- **A shadow climbs the wall of a building behind you instead of vanishing.** Sorting each piece of
+  a shadow by the floor row it lies on put a shadow leaning up onto a table behind the table, which
+  is right, and put a shadow leaning up onto the farmhouse behind the farmhouse, which is not: a
+  house is one sprite many tiles tall, sorted at one row near its base, so every piece of shadow
+  past the first strip fell under it and standing on the porch left you with no shadow at all.
+  Measured there: the house at 0.0960, the player at 0.1003, the shadow's strips from 0.0984 down
+  to 0.0925. Light on a wall throws the shadow onto the wall, so a piece of shadow lying inside a
+  building's footprint now takes the caster's own row and is drawn over the building's face, just
+  under the caster. Furniture is not a building and keeps the floor-row rule, so the table case
+  from 1.7.2 is unchanged.
+
+- **A shadow stops at the saloon counter instead of passing through it.** The counter is painted
+  into the map on a layer the game lays down before anything sorted is drawn, so no sort depth could
+  ever put a shadow behind it: standing behind the bar at night, your shadow ran across the counter
+  top and on over the floor and the stools in front, as if the counter were not there. A counter is
+  a box, and light landing on it stops at it. A character's shadow is now walked outward from the
+  feet in map tiles, and the first solid map tile it meets ends it at that run of tiles' far edge.
+  For the player this is now done per pixel rather than by cutting rectangles: every cast of your
+  shadow is composed into a small patch before the world is drawn, a shader asks the map for each
+  pixel which tile it lies on and which tiles the light crossed to reach it, and the finished patch
+  goes into the world in floor-row strips like any other shadow. Four rounds of cutting rectangles
+  at a guessed distance each left a different sliver on the counter's front; the patch has no
+  distance to guess. It also draws your shadow in a handful of calls instead of up to a hundred and
+  sixty. Villagers keep the rectangle cut, which is walked out on the CPU.
+  Which edge ends it depends on which way the shadow runs: up the screen, toward a back wall whose
+  visible face is lit by the same light, the pieces lying on the tiles are kept and the shadow
+  climbs the wall; down the screen, toward a counter whose visible face is in its own shade, it
+  stops at the near edge and nothing is painted on the counter's front. Placed things are sorted
+  sprites and are not consulted, so nothing about fences, kegs or furniture changes.
+
+### Changed
+
+- **`radiance_report` names the longest frames.** Every table in the report is an average and a
+  worst column, which says a rebuild was expensive somewhere in the last five seconds and nothing
+  about the frame the player actually felt. The report now lists the six longest frames since the
+  last report, longest first, and for each one how long it was, how much of it this mod can account
+  for, its three biggest parts by name, what the shadow caches did in it, whether the garbage
+  collector ran, and where the player was standing. A frame that is long and mostly not ours is
+  printed as plainly as one that is. The water entity mirror is timed phase by phase in the same
+  report, and a console switch (`radiance_mirrorflush`) can submit it phase by phase for a
+  measurement, which is how a 96 ms frame blamed on the mirror was traced to an asset reload by
+  a content pack that the mirror's submit merely happened to be the first to wait on.
+
+- **A lamp's shadow costs a quarter of what it did.** The shape of a lamp's shadow is worked out
+  by walking a ray from the lamp to the pixel and asking what stands in the way, which is the one
+  thing this mod's lighting pays for per lamp per pixel: eight lamps on screen means eight rays at
+  every pixel. Those rays are now walked at half resolution and read back by the pass that needs
+  them, which is a quarter as many. The lighting pass measures 0.168 ms against 0.228 in town at
+  night and 0.244 against 0.424 in the saloon, where every one of the eight lamps reaches every
+  pixel. Compared on frozen frames at three town spots, the picture is the same to within what the
+  comparison can find, and **Sharp lamp shadow edges** in the tuner (F6, lamp shadows) and in the
+  config walks every ray from every pixel again for anyone who sees otherwise. The Quality
+  performance preset turns it on, the other three leave it off.
+- **Arriving at a map bakes every object shadow the map holds, under the warp fade.** The
+  arrival pass used to bake the shadows of what was on screen and leave the rest to be baked
+  the first time it scrolled into view, which on a farm walk was the burst of a dozen bakes on
+  one frame every few steps. The map is walked whole now, on the frame the game is still fading
+  in from black, up to the bake cache's cap. `radiance_mapbake off` restores the screen-only
+  pass for an A/B; the SMAPI log says how many bakes an arrival made and how long they took.
+- **A rebuilt water mask arrives one texture per frame.** The four textures a rebuild produces
+  (about 2.6 MB for a window at zoom 0.75) used to be uploaded in one frame, 0.8 ms of that frame
+  on the Town river, and after the change below that was the larger half of what a rebuild spent
+  on the main thread. The upload goes into the texture nothing is reading, so it never needed to
+  land in one frame: the two large ones now take a frame each and the two small ones share a
+  third, and all four swap in together when the last lands. The old mask stays up until then, as
+  it already did while the compose ran. `radiance_applyspread off` restores the one-frame upload
+  for an A/B.
+- **Walking along water asks the game about each tile once, not on every rebuild.** The water mask
+  is rebuilt every few tiles of walking, and each rebuild used to ask the game the same questions
+  about every tile in the window: which label is painted there, what art the map's layers hold,
+  which pixels that art covers. Measured on the Town river, 2.3 ms of the main thread per rebuild,
+  on a frame that also had to draw the game. None of those answers change while the map, its
+  surface map and its labels stay what they were, so they are now remembered per map tile and a
+  rebuild copies them; only tiles never seen before, tiles whose water verdict changed, tiles
+  whose map layers hold a different tile object than they did (a map edited in place, the beach
+  bridge repaired), and fish ponds are asked again. `radiance_gathercache off` restores the old
+  path for an A/B, and the report's water rebuild block says how many tiles were copied.
+- **Two stalls that used to land mid-stride now land on the warp frame instead.** Arriving at a
+  map, the game shows its fade-to-black; a long frame under it is a frame nobody sees. Two pieces
+  of first-sight work used to wait until a thing scrolled into view and then stall the frame it
+  appeared in, which is the "stutter while working the farm" shape. The lamp-shadow pass reads the
+  base width of every kind of placed thing off its picture, a readback that makes the processor
+  wait for the card; that is now read for every kind in the location on arrival, once per kind.
+  And the sheet doubler, which makes at most four smoothed sheets a frame so that a screen needing
+  twenty does not spend one long frame on them, is allowed the whole set on the warp frame, where
+  five frames of sheets switching from blocky to smooth in front of the player used to be.
+
+- **The lamp-shadow occluder grid stops asking the map the same questions once a second.** The
+  grid of what blocks a lamp is rebuilt on every tile crossing and at least once a second, and each
+  rebuild asked the game three questions for every tile in the window, fifteen hundred tiles: the
+  surface class, whether you can walk there, and whether a building's collision map covers it.
+  That was this grid's worst frame on a farm walk. The answers are map answers, and the map does
+  not move when a chest is placed or a tree grows, so they are now asked once for the whole map on
+  arrival and kept until the map, its surface map or its building list changes. What is placed or
+  grows is stamped over that base exactly as before.
+
+- **A lamp's shadow ray is not walked when nothing could show it.** Outdoors by day the game paints
+  no glow for a torch or a ring under a white sky, so the mod hands its lamp shadows down to zero
+  there, as it should. Every lamp in reach then went on marching its ray at every pixel anyway, up to
+  forty-eight steps of two texture reads each, to multiply the answer by zero. A farm at noon with a
+  torch on every sprinkler paid the whole march for a picture that did not contain it. The pass now
+  asks once, from the same numbers it was already given, whether a shadow, a lamp shaft or the
+  debug paint could carry the result, and walks nothing when none can. The picture is the same to
+  the byte; `radiance_report` says on its lamp line when the march was skipped.
+
+### For translators
+
+Four new keys in `i18n/default.json`, all for the one new setting (sharp lamp shadow edges):
+
+```
+tuner.lightshadowsharp
+help.lightshadowsharp
+config.lighting.shadowsharp.name
+config.lighting.shadowsharp.tooltip
+```
+
+No existing key changed meaning.
+
+### Added
+
+- **The report says who owns this mod's animation clock.** Every moving thing here counts off one
+  clock, and another mod is allowed to take it over. An uncapper has a reason to: once the frame
+  cap is off the game's own frame counter stops being a measure of time, and one of them patches
+  this mod's clock from the outside rather than let the ripple, the flames and the clouds run at
+  the frame rate. That is a kindness, and it was also invisible. Nothing this mod printed, and
+  nothing in a log a player could send, said the clock had been replaced, so a whole night went
+  into a flicker that came down to exactly that. `radiance_report` now names the mod holding it, or
+  says plainly that nobody is, and the same answer goes into the log at startup where a player with
+  no console still carries it. Nothing about the behaviour changes; it is only said out loud.
+
+- **The report counts the shadow pass's draw calls, not only its sprites.** The two were assumed
+  to be close and they are not: an object's soft edge is baked into its pixels and drawn once, but a
+  character's is drawn live, nine copies per strip, up to six strips, once per light that reaches
+  them. Nobody had a number for how many `SpriteBatch.Draw` calls that came to on a farm at dawn or
+  in a lit town at night, and the plan to bake the blur for characters as well is worth exactly that
+  number. A new row in `radiance_report`, `shadow draw calls (SpriteBatch)`, gives it.
+
+- **`radiance_hooks off` takes this mod's patches off `SpriteBatch.Draw` for a measurement.**
+  Three features prefix that method, which the game calls thousands of times a frame, and Harmony
+  folds them into one replacement that every call pays for whether the features are on or not. Two
+  of the three ship switched off. None of that cost appears in any row of this mod's report, because
+  it is spent inside the game's own draw. The switch removes the patches while the game runs, so
+  the difference can be read off WHOLE FRAME with them on and off, on one launch; `on` puts them
+  back. While off, sprite relief, sheet doubling and the water's carve of a location's own art are
+  off too, and the report says so.
+
+- **`radiance_clockcheck` proves that line is not lying.** A check that answers "all clear" when it
+  is broken is worse than no check. This installs a patch under another mod's name, asks the check
+  what it sees, removes the patch and asks again, so both answers are demonstrated rather than
+  assumed. It changes nothing and leaves nothing behind.
+
+### For translators
+
+Nothing to do: both additions are console and log output, which is not translated. No i18n keys
+were added, removed or reworded.
+
 ## 1.7.3
 
 ### Added

@@ -137,6 +137,7 @@ namespace SDVRadiance
             report.AppendLine($"[shadows] cursor tile={cur.X},{cur.Y} player tile={Game1.player?.TilePoint} viewport={viewport.X},{viewport.Y}");
 
             AppendCharacters(report, location, w, config.DirectionalShadowModel);
+            AppendLocalPlayer(report, location, w, config);
             AppendOtherFarmers(report, location, w);
             AppendEntities(report, location, w);
             AppendBuildings(report, location, w);
@@ -253,6 +254,86 @@ namespace SDVRadiance
             }
             if (shown == 0)
                 report.AppendLine("  (none — if you can see NPCs, they are not in the list the pass reads)");
+        }
+
+        /// <summary>
+        /// The one caster this report never described: the player reading it.
+        /// </summary>
+        /// <remarks>
+        /// Every section here grew out of a question somebody asked, and this one is no different.
+        /// Asked why the player's own shadow was missing while standing on a farmhouse porch, the
+        /// report answered with a list of NPCs, an other-farmers list that says the local player is
+        /// excluded by design, and nothing whatever about the shadow being asked about. Meanwhile
+        /// the vanilla blob is taken away from the farmer thousands of times a session, so when our
+        /// own draw is skipped the player has no shadow of any kind, and nothing said which path
+        /// skipped it or why.
+        /// <para>
+        /// The sun and the lights are separate paths with separate gates, so both verdicts are
+        /// printed whichever one is live now: a shadow that is fine at noon and gone at nine is
+        /// two different questions, and the report should not make anyone guess which.
+        /// </para>
+        /// <para>
+        /// CASTS is not the end of the question either, which is why the reach is printed with it.
+        /// A shadow can be drawn and still invisible, and the rows it lies on are what decides
+        /// whether anything is standing over it.
+        /// </para>
+        /// </remarks>
+        private static void AppendLocalPlayer(StringBuilder report, GameLocation location, ScanWindow w, ModConfig config)
+        {
+            report.AppendLine("[shadows] the local player (the caster this report used to leave out):");
+            Farmer? who = Game1.player;
+            ShadowRenderer? renderer = Current;
+            if (who == null || renderer == null)
+            {
+                report.AppendLine("  no player or no live renderer, so there is nothing to say about it");
+                return;
+            }
+            Point tile = who.TilePoint;
+            bool ready = renderer._playerReady;
+            bool hasTarget = renderer._playerRenderTarget != null;
+            bool seated = IsSeated(who);
+            bool here = who.currentLocation == location;
+            string verdict =
+                !here ? "SKIP not in this location"
+                : who.swimming.Value ? "SKIP swimming"
+                : who.isRidingHorse() ? "SKIP riding (the horse casts)"
+                : seated ? "contact pool only (seated)"
+                : !ready ? "SKIP the bake is not ready"
+                : !hasTarget ? "SKIP there is no bake target to draw from"
+                : "CASTS";
+            report.AppendLine($"{w.Mark(tile.X, tile.Y)} {who.Name,-16} tile={tile.X},{tile.Y} "
+                        + $"{w.Screen(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom)} "
+                        + $"standingY={who.StandingPixel.Y} bakeReady={ready} bakeTarget={hasTarget} "
+                        + $"seated={seated} swimming={who.swimming.Value} riding={who.isRidingHorse()} "
+                        + $"-> {verdict}");
+            report.AppendLine($"  the same verdict applies on both paths here, and the live one is "
+                        + $"{(SunCasts() ? "SUN" : "PER-LIGHT")}. On the sun path there is no ambient pool to fall "
+                        + "back on, so a SKIP there means no shadow of any kind: the vanilla blob has already "
+                        + "been taken away by then.");
+            if (verdict != "CASTS")
+                return;
+            report.AppendLine($"  patch: {PlayerPatchReport}"
+                        + (renderer._patchValid ? " -> drawn as strips of the patch, cut by the map per pixel"
+                                                : " -> drawn as leaned strips with the CPU-walked tile clip"));
+            // The reach, from the same numbers the draw uses, so a drift between this and the
+            // geometry line above is itself the finding.
+            ComputeSun(out float rot, out float stretch, out float _);
+            float sunStretch = stretch * Math.Max(0.1f, config.DirectionalShadowLength)
+                             * MathHelper.Lerp(1f, OvercastLength, OvercastNow());
+            float upScreenPerTexel = (float)Math.Cos(rot) * sunStretch;
+            float reachPixels = Math.Abs(renderer._playerFeetInRenderTarget.Y * upScreenPerTexel);
+            int strips = (int)MathHelper.Clamp(reachPixels / GroundStripPixels, 1f, MaxGroundStrips);
+            float feetDepth = ShadowPieceDepth(who.StandingPixel.Y, 0f);
+            float tipDepth = ShadowPieceDepth(who.StandingPixel.Y, reachPixels);
+            report.AppendLine($"  it reaches {reachPixels:0} screen px up the screen from the feet "
+                        + $"({reachPixels / 64f:0.0} tiles), cut into {strips} strip(s)");
+            report.AppendLine($"  sorted from {feetDepth:0.00000} at the feet down to {tipDepth:0.00000} at the tip, "
+                        + $"so the tip is sorted as though it stood on tile row {(who.StandingPixel.Y - reachPixels) / 64f:0.0} "
+                        + $"rather than row {who.StandingPixel.Y / 64f:0.0}");
+            report.AppendLine("  CASTS and nothing on screen means it is drawn and covered. Two things can cover it: "
+                        + "art the map paints on the Front layer, which the game lays down AFTER the sorted batch and "
+                        + "which no sort depth can get behind, and any sprite whose own row is further down the screen "
+                        + "than the row the shadow lies on.");
         }
 
         /// <summary>The other players: a separate list with a separate bake, which this report did

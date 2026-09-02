@@ -49,6 +49,9 @@ namespace SDVRadiance
             /// one - and every stamp near it was culled while the ripple ran over the palms.</summary>
             public bool[]? TileHasEffectWaterFlags;
             public double ComposeDurationMilliseconds;           // worker-side timing (diag)
+            /// <summary>Apply: how many of the upload steps have run, one texture (or the two small
+            /// ones) per frame (RenderPipeline.WaterMask.Apply.cs). The job stays pending until all have.</summary>
+            public int ApplyTexturesDone;
             public System.Threading.Tasks.Task? Task;
             public volatile bool Done;
             public volatile bool Failed;
@@ -838,6 +841,10 @@ namespace SDVRadiance
             var pondCtx = new TileGatherContext(null, surf, null, null, null, null, null, locIsLava);
             if (_maskScratch.TilePondFlags == null || _maskScratch.TilePondFlags.Length < count) _maskScratch.TilePondFlags = new bool[count];
 
+            // The map-wide memory of earlier gathers (RenderPipeline.WaterMask.GatherCache.cs). A
+            // tile is copied from it when it was gathered under the same water verdict; anything
+            // else, and every pond tile, is asked of the game as before and then remembered.
+            GatheredTileAnswers? remembered = GatherCacheEnabled ? EnsureGatheredTileAnswers(location, surf) : null;
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)
@@ -853,7 +860,31 @@ namespace SDVRadiance
                     var rimOf = inPond ? null : FishPondRimOwning(ponds, tx, ty);
                     bool pondTile = inPond || rimOf != null;
                     _maskScratch.TilePondFlags[idx] = pondTile;
+                    int cell = remembered != null && !pondTile && tx >= 0 && ty >= 0 && tx < remembered.Width && ty < remembered.Height
+                        ? ty * remembered.Width + tx : -1;
+                    if (cell >= 0)
+                    {
+                        ushort known = remembered!.Flags[cell];
+                        int identity = TileIdentity(ctx, tx, ty);
+                        if ((known & GatheredFilled) != 0 && ((known & GatheredIsWater) != 0) == isWater
+                            && remembered.Identity[cell] == identity)
+                        {
+                            CopyGatheredTile(job, remembered, cell, idx);
+                            _gatherCacheCopied++;
+                            continue;
+                        }
+                        // AnyLabeled is the one thing GatherTile reports on the job rather than per
+                        // tile; read this tile's own contribution off it so the memory can replay it.
+                        bool labeledBefore = job.AnyLabeled;
+                        job.AnyLabeled = false;
+                        GatherTile(job, ctx, idx, tx, ty, isWater);
+                        StoreGatheredTile(remembered, cell, idx, isWater, job.AnyLabeled, identity);
+                        job.AnyLabeled |= labeledBefore;
+                        _gatherCacheGathered++;
+                        continue;
+                    }
                     GatherTile(job, pondTile ? pondCtx : ctx, idx, tx, ty, isWater);
+                    _gatherCacheGathered++;
                     if (rimOf != null)
                         _maskScratch.TileEffectBits![idx] = FishPondWaterBits(rimOf, tx, ty);
                 }
@@ -2597,124 +2628,6 @@ namespace SDVRadiance
             }
         }
 
-
-        /// <summary>Apply stage - main thread: upload the composed buffers and publish the new
-        /// mask identity. Until this runs, the shader keeps the OLD texture + OLD origin
-        /// (a consistent pair — the mask content is world-anchored).</summary>
-        private void ApplyWaterMask(WaterMaskJob job)
-        {
-            _lastWaterLocation = job.Location;
-            _lastWaterTileX = job.StartTileX;
-            _lastWaterTileY = job.StartTileY;
-            _lastWaterBuildTick = Game1.ticks;
-            _lastWaterHookVersion = job.WaterDrawHookVersion;
-            _lastWaterLabelVersion = job.LabelVersion;
-            _lastWaterEpoch = job.Epoch;
-            _hasWaterInMask = job.WaterAny;
-            // Published for the player colour bake, which runs before this pipeline gets a look
-            // at the frame. One compose late is fine: its reader gates on the same flag.
-            ShadowRenderer.WaterOnScreen = job.WaterAny;
-            if (!job.WaterAny)
-            {
-                // The ORIGIN has just moved to this window, so the texture has to move with it.
-                // Skipping the upload here used to be safe only because the stage was skipped
-                // whenever this flag was false; now the stage belongs to the location, so a mask
-                // left holding the last window that DID have water gets sampled at the new
-                // window's world coordinates - the last window's water pattern reappearing in
-                // blocks on dry sand. A mask must always agree with its own origin.
-                ClearWaterMask(job);
-                return;
-            }
-
-            int tilesW = job.TileWidth, tilesH = job.TileHeight;
-            int count = tilesW * tilesH;
-            int pw = tilesW * 16, ph = tilesH * 16;
-            // Take this screen's own copy of the water flags before the next rebuild starts
-            // overwriting the shared gather buffer with somebody else's window. The composed
-            // verdict is preferred: it also carries water that only a label brought in (the
-            // desert oasis), which the gather flags alone never see - and the near-water gates
-            // reading this array culled every sprite stamp there, so the ripple ran over the
-            // palms. The gather flags stay as the fallback for a job that stopped before Pass D.
-            bool[]? nearWaterFlags = job.TileHasEffectWaterFlags ?? _waterTileFlags;
-            if (nearWaterFlags != null && nearWaterFlags.Length >= count)
-            {
-                if (_waterTilesInMask == null || _waterTilesInMask.Length < count)
-                    _waterTilesInMask = new bool[count];
-                Array.Copy(nearWaterFlags, _waterTilesInMask, count);
-                _waterTilesVersion++;
-            }
-            // Every upload goes into the pair's spare, never into the texture the card may still
-            // be reading: SetData on an in-use texture makes the driver wait out every queued draw
-            // that samples it, which is where this window's 300x worst frames were going. Same
-            // pixels either way; only the wait goes. See TextureDoubleBuffer.
-            //
-            // The two ! carry the invariant the direct SetData calls here always relied on: a job
-            // does not reach Apply without the compose pass having filled both buffers.
-            _waterMask = TextureDoubleBuffer.UploadIntoSpare(_device, ref _waterMaskSpare, _waterMask,
-                pw, ph, SurfaceFormat.Color, "water mask", _waterMaskPixels!, pw * ph);
-            _waterSignedDistanceTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _waterSignedDistanceSpare,
-                _waterSignedDistanceTexture, pw, ph, SurfaceFormat.Alpha8, null, _maskScratch.WaterSignedDistancePixels!, pw * ph);
-            if (_maskScratch.RealShoreDistancePixels != null)
-                _waterRealShoreDistanceTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _waterRealShoreDistanceSpare,
-                    _waterRealShoreDistanceTexture, pw, ph, SurfaceFormat.Alpha8, null, _maskScratch.RealShoreDistancePixels, pw * ph);
-            if (_maskScratch.PlungeChurnPixels != null)
-                _waterPlungeChurnTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _waterPlungeChurnSpare,
-                    _waterPlungeChurnTexture, pw, ph, SurfaceFormat.Color, null, _maskScratch.PlungeChurnPixels, pw * ph * FallDistanceBytesPerTexel);
-            _waterMaskPixelSize = new Vector2(tilesW, tilesH);
-
-            if (MaskView)
-                BuildMaskViewTex(pw, ph);
-            // Keep the label-verdict overlay in step with the mask it judges: a rebuild on a
-            // tile crossing would otherwise leave yesterday's verdict floating over new water.
-            if (DebugChannel == DebugOverlayChannel.LabelDiff)
-                VerifyLabels(Game1.currentLocation, worstToList: 0);
-        }
-
-        /// <summary>Publish an EMPTY mask for a window with no water, sized and anchored like any
-        /// other, so the shader reads "no water here" instead of the previous window's pattern.
-        /// All three textures are cleared together: R and G decide coverage, and the SDF's 128 is
-        /// its zero, so leaving a stale distance field behind would still shade a phantom shore.</summary>
-        private void ClearWaterMask(WaterMaskJob job)
-        {
-            int tilesW = job.TileWidth, tilesH = job.TileHeight;
-            int count = tilesW * tilesH;
-            int pw = tilesW * 16, ph = tilesH * 16;
-            int pcount = pw * ph;
-
-            if (_waterMaskPixels == null || _waterMaskPixels.Length < pcount) _waterMaskPixels = new Color[pcount];
-            if (_maskScratch.WaterSignedDistancePixels == null || _maskScratch.WaterSignedDistancePixels.Length < pcount) _maskScratch.WaterSignedDistancePixels = new byte[pcount];
-            // No water in this window, so nothing is near any: the "is there water by this sprite"
-            // test must agree with the textures it is cleared alongside.
-            if (_waterTilesInMask != null)
-            {
-                Array.Clear(_waterTilesInMask, 0, Math.Min(count, _waterTilesInMask.Length));
-                _waterTilesVersion++;
-            }
-            Array.Clear(_waterMaskPixels, 0, pcount);
-            // 0 = as far from water as this encoding can say. It used to be 128, which means
-            // "exactly on the waterline", so a window with NO WATER IN IT told the shader that
-            // every single pixel was standing at the water's edge - and the wet-rim term, whose
-            // whole job is to darken the last few texels of land before the water, then had
-            // licence to darken the entire screen. Nothing is near water here; say so.
-            for (int p = 0; p < pcount; p++) _maskScratch.WaterSignedDistancePixels[p] = 0;
-
-            // Into the spare of each pair, exactly as ApplyWaterMask uploads: a window with no
-            // water in it is still a whole-mask upload, and the card holds the old texture just
-            // as long here as it does there.
-            _waterMask = TextureDoubleBuffer.UploadIntoSpare(_device, ref _waterMaskSpare, _waterMask,
-                pw, ph, SurfaceFormat.Color, "water mask", _waterMaskPixels, pcount);
-            _waterSignedDistanceTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _waterSignedDistanceSpare,
-                _waterSignedDistanceTexture, pw, ph, SurfaceFormat.Alpha8, null, _maskScratch.WaterSignedDistancePixels, pcount);
-            _waterRealShoreDistanceTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _waterRealShoreDistanceSpare,
-                _waterRealShoreDistanceTexture, pw, ph, SurfaceFormat.Alpha8, null, _maskScratch.WaterSignedDistancePixels, pcount);
-            // No water, so nothing is near a fall: the fall-distance field reads "far" everywhere.
-            if (_maskScratch.PlungeChurnPixels == null || _maskScratch.PlungeChurnPixels.Length < pcount * FallDistanceBytesPerTexel)
-                _maskScratch.PlungeChurnPixels = new byte[pcount * FallDistanceBytesPerTexel];
-            FillFallDistanceFar(_maskScratch.PlungeChurnPixels, 0, pcount);
-            _waterPlungeChurnTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _waterPlungeChurnSpare,
-                _waterPlungeChurnTexture, pw, ph, SurfaceFormat.Color, null, _maskScratch.PlungeChurnPixels, pcount * FallDistanceBytesPerTexel);
-            _waterMaskPixelSize = new Vector2(tilesW, tilesH);
-        }
 
         // ---- live debug overlay: what the mask ACTUALLY covers, per pixel ----
 

@@ -227,23 +227,38 @@ namespace SDVRadiance
                     return true;
                 if (!job.Done)
                     return true;
-                _pendingWaterMaskJob = null;
+                if (job.ApplyTexturesDone == 0)
+                    NoteWaterRebuildCost(compose: job.ComposeDurationMilliseconds);
                 if (job.AnchorOnly)
                 {
                     // P3a: publish the location-wide waterline anchor and shrink the
                     // map-sized scratch back down. The window mask was fresh when this
                     // was kicked; fall through so a camera move still rebuilds it now.
+                    _pendingWaterMaskJob = null;
                     ConsumeAnchorJob(job);
                 }
                 else if (job.Failed)
                 {
+                    _pendingWaterMaskJob = null;
                     if (!_waterMaskJobFailureLogged) { _monitor.Log("Water mask compose failed once; rebuilding synchronously.", LogLevel.Warn); _waterMaskJobFailureLogged = true; }
                 }
                 else if (job.Location == location && job.StartTileX == startTileX && job.StartTileY == startTileY
                     && job.TileWidth == tilesW && job.TileHeight == tilesH)
                 {
-                    ApplyWaterMask(job);
+                    // One texture per frame; the job stays pending, and the old mask stays up,
+                    // until the last one swaps the pairs (RenderPipeline.WaterMask.Apply.cs).
+                    long applyStartTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+                    bool applied = ApplyWaterMaskStep(job);
+                    NoteWaterRebuildCost(apply: (System.Diagnostics.Stopwatch.GetTimestamp() - applyStartTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+                    if (applied)
+                        _pendingWaterMaskJob = null;
                     return true;
+                }
+                else
+                {
+                    // The camera crossed again while this one composed or uploaded: drop it and
+                    // gather the window that is wanted now. A half-written spare is never shown.
+                    _pendingWaterMaskJob = null;
                 }
             }
             return false;
@@ -282,15 +297,79 @@ namespace SDVRadiance
             return false;
         }
 
+        // The three halves of a water mask rebuild, timed apart. The report's `grid: water mask`
+        // row brackets the gather and the apply together and shows a 2.4 ms worst frame on a farm
+        // walk; which half that is decides whether the fix is a map-wide gather cache or a sliced
+        // upload, and until these existed the question could only be argued.
+        private double _waterGatherWorstScroll, _waterGatherWorstArrival, _waterGatherWorstRefresh, _waterApplyWorst, _waterComposeWorst;
+        private int _waterGatherCount, _waterGatherArrivalCount, _waterGatherRefreshCount, _waterApplyCount;
+        private double _waterGatherSum, _waterGatherArrivalSum, _waterGatherRefreshSum, _waterApplySum;
+
+        /// <summary>Which kind of rebuild a gather was, so the report can keep the three apart: a
+        /// scroll copies from the map memory, a refresh asks the window afresh, an arrival has
+        /// nothing remembered yet.</summary>
+        private enum GatherKind { Scroll, Refresh, Arrival }
+
+        private void NoteWaterRebuildCost(double gather = -1, GatherKind kind = GatherKind.Scroll, double apply = -1, double compose = -1)
+        {
+            if (gather >= 0)
+            {
+                switch (kind)
+                {
+                    case GatherKind.Scroll:
+                        _waterGatherWorstScroll = Math.Max(_waterGatherWorstScroll, gather);
+                        _waterGatherSum += gather; _waterGatherCount++;
+                        break;
+                    case GatherKind.Refresh:
+                        _waterGatherWorstRefresh = Math.Max(_waterGatherWorstRefresh, gather);
+                        _waterGatherRefreshSum += gather; _waterGatherRefreshCount++;
+                        break;
+                    default:
+                        _waterGatherWorstArrival = Math.Max(_waterGatherWorstArrival, gather);
+                        _waterGatherArrivalSum += gather; _waterGatherArrivalCount++;
+                        break;
+                }
+            }
+            if (apply >= 0) { _waterApplyWorst = Math.Max(_waterApplyWorst, apply); _waterApplySum += apply; _waterApplyCount++; }
+            if (compose >= 0) _waterComposeWorst = Math.Max(_waterComposeWorst, compose);
+        }
+
+        /// <summary>The rebuild halves since the last report, then reset.</summary>
+        internal string DescribeWaterRebuildCost()
+        {
+            string text = "water mask rebuild, main thread, since the last report:\n"
+                + $"  gather on a scroll (copied from the map memory)  {_waterGatherCount} time(s)  avg {(_waterGatherCount > 0 ? _waterGatherSum / _waterGatherCount : 0):0.000} ms  worst {_waterGatherWorstScroll:0.000} ms\n"
+                + $"  gather on the 10 s refresh (copied where the map's tiles are unchanged)  {_waterGatherRefreshCount} time(s)  avg {(_waterGatherRefreshCount > 0 ? _waterGatherRefreshSum / _waterGatherRefreshCount : 0):0.000} ms  worst {_waterGatherWorstRefresh:0.000} ms\n"
+                + $"  gather on arrival (nothing remembered yet)  {_waterGatherArrivalCount} time(s)  avg {(_waterGatherArrivalCount > 0 ? _waterGatherArrivalSum / _waterGatherArrivalCount : 0):0.000} ms  worst {_waterGatherWorstArrival:0.000} ms\n"
+                + $"  apply (one of the four textures per frame)  {_waterApplyCount} time(s)  avg {(_waterApplyCount > 0 ? _waterApplySum / _waterApplyCount : 0):0.000} ms"
+                + $"  worst {_waterApplyWorst:0.000} ms\n"
+                + $"  compose, on the worker thread, worst {_waterComposeWorst:0.000} ms (not on the frame)\n"
+                + DescribeGatherCache();
+            _waterGatherWorstScroll = _waterGatherWorstArrival = _waterGatherWorstRefresh = _waterApplyWorst = _waterComposeWorst = 0;
+            _waterGatherCount = _waterGatherArrivalCount = _waterGatherRefreshCount = _waterApplyCount = 0;
+            _waterGatherSum = _waterGatherArrivalSum = _waterGatherRefreshSum = _waterApplySum = 0;
+            return text;
+        }
+
         /// <summary>Gather the window on this thread, then compose it on a task. The old mask keeps
         /// rendering until the new one lands.</summary>
         private void StartWaterMaskRebuild(GameLocation location, int startTileX, int startTileY,
                                            int tilesW, int tilesH)
         {
+            // The ten second safety refresh (CurrentMaskStillFits) is here to notice a map that
+            // changed under us without saying so. The gather notices that per tile now, by the
+            // identity of the tile objects the map holds (GatherCache.cs), so the refresh is an
+            // ordinary rebuild; it is still counted apart so the report can tell the two kinds.
+            GatherKind kind = GatherKind.Scroll;
+            if (location != _lastWaterLocation)
+                kind = GatherKind.Arrival;
+            else if (Game1.ticks - _lastWaterBuildTick >= 600)
+                kind = GatherKind.Refresh;
             long gatherStartTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
             var newWaterMaskJob = GatherWaterMask(location, startTileX, startTileY, tilesW, tilesH);
             newWaterMaskJob.ScreenId = _activeScreenId;
             double gatherDurationMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - gatherStartTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            NoteWaterRebuildCost(gather: gatherDurationMilliseconds, kind);
             if (gatherDurationMilliseconds > 8)
                 _monitor.Log($"[diag] water gather={gatherDurationMilliseconds:0.0}ms ({(location == _lastWaterLocation ? "scroll" : "location change")})", LogLevel.Debug);
 

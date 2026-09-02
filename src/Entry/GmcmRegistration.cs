@@ -580,6 +580,8 @@ namespace SDVRadiance
                 () => i18n("config.lighting.shadowdetail.name"), () => i18n("config.lighting.shadowdetail.tooltip"), 0f, 1f, 0.05f);
             api.AddBoolOption(manifest, () => config().LightShadowDetailShared, v => config().LightShadowDetailShared = v,
                 () => i18n("config.lighting.shadowshared.name"), () => i18n("config.lighting.shadowshared.tooltip"));
+            api.AddBoolOption(manifest, () => config().LightShadowSharpEdges, v => config().LightShadowSharpEdges = v,
+                () => i18n("config.lighting.shadowsharp.name"), () => i18n("config.lighting.shadowsharp.tooltip"));
             api.AddBoolOption(manifest, () => config().LightingEnabled, v => config().LightingEnabled = v,
                 () => i18n("config.lighting.enabled.name"), () => i18n("config.lighting.enabled.tooltip"));
             api.AddNumberOption(manifest, () => config().LightingIndoorDarkness, v => config().LightingIndoorDarkness = v,

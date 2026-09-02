@@ -26,11 +26,12 @@ namespace SDVRadiance
         /// by the sun (smooth, no bands). Falls back to <see cref="DrawBandedGradient"/> only when
         /// the sprite is too big for a slot or wasn't baked.
         /// </summary>
-        /// <param name="groundAnchorWorldY">The caster's own contact row in world pixels. Given
-        /// one, the shadow is cut along its length and each piece sorted at the depth of the floor
-        /// row it lies on (see <see cref="ShadowPieceDepth"/>) rather than all of it at
-        /// <paramref name="depth"/>. Only buildings ask for this: everything else on this path
-        /// carries a per-column tie-break inside its depth that a world Y cannot hold.</param>
+        /// <param name="groundAnchorWorldY">The caster's own contact row in world pixels, for a
+        /// caller that has one. Only buildings do. Everything else on this path is grounded from
+        /// <paramref name="depth"/> instead (see <see cref="ShadowPieceDepthUnder"/>), which keeps
+        /// the per-column tie-break that depth carries and that a world Y could not hold. Either
+        /// way the shadow is cut along its length and each piece sorted at the depth of the floor
+        /// row it lies on, rather than all of it at the caster's own row.</param>
         private void EmitObject(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, Vector2 feet,
             Vector2 baseOrigin, float alpha, float rot, float stretch, float depth, float blur,
             float headFade = HeadFade, SpriteEffects effects = SpriteEffects.None,
@@ -49,6 +50,10 @@ namespace SDVRadiance
                 : ShadowProjection.ForSolid(rot, stretch, _groundForeshortening);
             if (_isBakingObjects)
             {
+                // A whole-map walk stops baking at the cap: past it every bake would only evict
+                // one the screen may be using, and the lazy path handles the rest as before.
+                if (_bakeWholeMap && _bakedObjectCache.Count >= ObjectBakeCapTotal)
+                    return;
                 if (_objectGraphicsDevice != null && !_bakedObjectCache.ContainsKey(key)
                     && BakeObjectSprite(_objectGraphicsDevice, texture, src, baseOrigin, effects, projection, blur, out RenderTarget2D rt, out Vector2 feetInRT))
                     _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = feetInRT, BakedProjection = projection, BakedBlur = blur, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = Game1.ticks };
@@ -84,13 +89,16 @@ namespace SDVRadiance
                 // The bake already holds a black, soft-edged silhouette, so it is tinted WHITE to
                 // come out as itself. A mask caller wants the same pixels read as coverage, which
                 // is the same white: the two agree, and only the banded fallback has to be told.
+                // Cut along its length and sorted per floor row either way. A caster that knows
+                // its own contact row hands that over; everything else on this path hands over the
+                // sort depth it already built, which carries the same answer plus its tie-break.
                 if (groundAnchorWorldY is float bakedAnchor)
                     DrawSoftGrounded(spriteBatch, Taps9, bakedEntry.Rt, content, feet, Color.White, alpha, 0f,
                         bakedOrigin, new Vector2(unbake, unbake), bakedAnchor, SpriteEffects.None, 0f);
                 else
-                    DrawSoft(spriteBatch, Taps9, bakedEntry.Rt, content, feet,
-                        Color.White, alpha, 0f, bakedOrigin,
-                        new Vector2(unbake, unbake), depth, SpriteEffects.None, 0f);
+                    DrawSoftGrounded(spriteBatch, Taps9, bakedEntry.Rt, content, feet, Color.White, alpha, 0f,
+                        bakedOrigin, new Vector2(unbake, unbake), depth, SpriteEffects.None, 0f,
+                        anchorIsSortDepth: true);
             }
             else
             {
@@ -125,12 +133,11 @@ namespace SDVRadiance
                 // were indistinguishable in the report while one of them was almost all of it.
                 FrameCost.Count(tooBig ? FrameCost.Counter.BakeTooBig : FrameCost.Counter.BakeMisses);
                 FrameCost.Count(FrameCost.Counter.ShadowSprites);
-                // groundSorted: false — this is a sort depth, not a world row. See the parameter's
-                // note: an object's depth carries a per-column tie-break that a world Y cannot
-                // hold, so the object path keeps one depth for the whole shadow for now.
+                // The bands are grounded here too, and by the same two routes: a world row when
+                // the caller knows one, otherwise the sort depth it computed, offset per band.
                 DrawBandedGradient(spriteBatch, texture, src, feet, baseOrigin, alpha, rot,
                     new Vector2(4f, 4f * stretch), groundAnchorWorldY ?? depth, blur, headFade, effects,
-                    groundSorted: groundAnchorWorldY.HasValue, shadowColor: shadowColor);
+                    anchorIsSortDepth: !groundAnchorWorldY.HasValue, shadowColor: shadowColor);
             }
         }
 
@@ -741,6 +748,15 @@ namespace SDVRadiance
             var viewport = Game1.viewport;
             int tileX0 = viewport.X / 64 - 3, tileX1 = (viewport.X + viewport.Width) / 64 + 3;
             int tileY0 = viewport.Y / 64 - 3, tileY1 = (viewport.Y + viewport.Height) / 64 + 8; // extra bottom margin for tall trees
+            if (_bakeWholeMap && location.map?.Layers.Count > 0)
+            {
+                // The arrival enumeration, in bake mode, walks the whole map rather than the
+                // screen: every sprite the map holds is baked under the warp fade, so walking
+                // never meets a burst of first-sight bakes. See RunSceneBakes.
+                tileX0 = 0; tileY0 = 0;
+                tileX1 = location.map.Layers[0].LayerWidth - 1;
+                tileY1 = location.map.Layers[0].LayerHeight - 1;
+            }
 
             CastTerrainFeatureShadows(spriteBatch, location, rot, stretch, alpha, blur, tileX0, tileX1, tileY0, tileY1);
             CastLargeTerrainShadows(spriteBatch, location, rot, stretch, alpha, blur, tileX0, tileX1, tileY0, tileY1);
@@ -1485,6 +1501,9 @@ namespace SDVRadiance
 
             Farmer who = Game1.player;
             if (OnOpenWater(location, who.TilePoint))   // open water only — surf/shore keeps the shadow
+                return;
+            // The patch, when it was composed this frame, already holds this cast cut by the map.
+            if (DrawPlayerPatch(spriteBatch))
                 return;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));

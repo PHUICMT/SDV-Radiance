@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
@@ -101,6 +102,15 @@ namespace SDVRadiance
                 + "the label check for the screen, and the installed mods that could be involved. No arguments, "
                 + "just stand where the problem is and run it.",
                 (_, _) => WriteReport(helper, monitor, getPipeline(), getConfig()));
+            // A check that answers "all clear" when it is actually broken is worse than no check,
+            // and the clock line above is exactly that shape of check. This makes a patch under a
+            // foreign name, asks the line what it sees, removes the patch and asks again, so both
+            // answers are proved in one command rather than assumed.
+            helper.ConsoleCommands.Add("radiance_clockcheck",
+                "Prove the render-clock line in radiance_report still works: install a throwaway patch under "
+                + "another mod's name, print what the check says, remove it, and print again. Changes nothing "
+                + "and leaves nothing behind.",
+                (_, _) => HarmonyPatcher.SelfTestClockPatchDetection(monitor));
         }
 
         /// <summary>Traces that print only what CHANGED per frame - the shape of tool that beat three wrong guesses.</summary>
@@ -510,6 +520,132 @@ namespace SDVRadiance
         /// <summary>What this machine actually pays, per stage and per effect.</summary>
         private static void RegisterCostMeasurements(IModHelper helper, IMonitor monitor, Func<ModConfig> getConfig, Func<RenderPipeline?> getPipeline)
         {
+            helper.ConsoleCommands.Add("radiance_shadowpatch",
+                "'radiance_shadowpatch off' draws the player's shadow the old way, as leaned strips straight into "
+                + "the world batch, with the map-tile clip walked out on the CPU; 'on' (the default) composes it "
+                + "into a patch cut by the map per pixel first. An A/B for the saloon counter and the farmhouse "
+                + "porch; the report's player block says which path drew.",
+                (_, args) =>
+                {
+                    if (args.Length < 1 || !(args[0].Equals("on", StringComparison.OrdinalIgnoreCase)
+                                             || args[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        monitor.Log($"player shadow patch is {(ShadowRenderer.PlayerPatchEnabled ? "on" : "OFF")}. "
+                            + "Usage: radiance_shadowpatch on|off", LogLevel.Info);
+                        return;
+                    }
+                    ShadowRenderer.PlayerPatchEnabled = args[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    monitor.Log($"player shadow patch {(ShadowRenderer.PlayerPatchEnabled ? "on" : "off")}.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_mirrorflush",
+                "Diagnostic. 'radiance_mirrorflush on' submits the water entity mirror after every phase instead of "
+                + "once, so the report's 'mirror' block can say which phase's draws a stall inside the submit belongs "
+                + "to. It changes how mirrored things overlap, so it is for a measurement, not for play. 'off' restores.",
+                (_, args) =>
+                {
+                    bool on = args.Length > 0 && args[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    RenderPipeline.MirrorFlushPerPhase = on;
+                    monitor.Log($"mirror submit per phase {(on ? "on" : "off")}.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_marchhalf",
+                "'radiance_marchhalf off' fires every lamp's shadow ray from every pixel of the lighting pass, "
+                + "the way it did before 1.7.4; 'on' (the default) fires them from a half-resolution pass, four "
+                + "lamps to a target, and the lighting pass reads the answer back. The same switch as the "
+                + "'Sharp lamp shadow edges' setting, which this writes, so the tuner and this agree; it is not "
+                + "saved to the config file. radiance_gputime's 'effect chain' row is the receipt.",
+                (_, args) =>
+                {
+                    if (args.Length < 1 || !(args[0].Equals("on", StringComparison.OrdinalIgnoreCase)
+                                             || args[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        monitor.Log($"half-resolution lamp march is {(getConfig().LightShadowSharpEdges ? "OFF" : "on")}"
+                            + $" (last frame {(RenderPipeline.LastMarchHalfResolution ? "read it" : "marched in the pass")}). "
+                            + "Usage: radiance_marchhalf on|off", LogLevel.Info);
+                        return;
+                    }
+                    bool half = args[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    getConfig().LightShadowSharpEdges = !half;
+                    monitor.Log($"half-resolution lamp march {(half ? "on" : "off")}"
+                        + $" (sharp lamp shadow edges {(half ? "off" : "ON")}).", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_mapbake",
+                "'radiance_mapbake off' bakes only the screen's object shadows on arrival in a location, the way "
+                + "it did before 1.7.4, so every other sprite bakes the first time it scrolls into view; 'on' (the "
+                + "default) bakes the whole map under the warp fade. 'clear' forgets every object bake, for a "
+                + "fair A/B of two walks. The SMAPI log's '[diag] object bakes on arrival' line and the report's "
+                + "'object sprite bakes' worst column are the receipt.",
+                (_, args) =>
+                {
+                    string mode = args.Length > 0 ? args[0].ToLowerInvariant() : "";
+                    if (mode == "clear")
+                    {
+                        ShadowRenderer.ForgetObjectBakesRequested = true;
+                        monitor.Log("object bakes will be forgotten on the next frame, which then enumerates the location again.", LogLevel.Info);
+                        return;
+                    }
+                    if (mode != "on" && mode != "off")
+                    {
+                        monitor.Log($"whole-map arrival bake is {(ShadowRenderer.WholeMapArrivalBake ? "on" : "OFF")}. "
+                            + "Usage: radiance_mapbake on|off|clear", LogLevel.Info);
+                        return;
+                    }
+                    ShadowRenderer.WholeMapArrivalBake = mode == "on";
+                    monitor.Log($"whole-map arrival bake {mode}.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_applyspread",
+                "'radiance_applyspread off' uploads a rebuilt water mask's four textures in one frame, the way it "
+                + "did before 1.7.4; 'on' (the default) uploads one texture per frame and swaps them in together "
+                + "when the last lands. An A/B for a water edge that arrives late; the report's 'apply' line "
+                + "reads per frame while on.",
+                (_, args) =>
+                {
+                    if (args.Length < 1 || !(args[0].Equals("on", StringComparison.OrdinalIgnoreCase)
+                                             || args[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        monitor.Log($"water apply spread is {(RenderPipeline.ApplySpreadEnabled ? "on" : "OFF")}. "
+                            + "Usage: radiance_applyspread on|off", LogLevel.Info);
+                        return;
+                    }
+                    RenderPipeline.ApplySpreadEnabled = args[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    monitor.Log($"water apply spread {(RenderPipeline.ApplySpreadEnabled ? "on" : "off")}.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_gathercache",
+                "'radiance_gathercache off' makes every water mask rebuild ask the game about every tile of the "
+                + "window again, the way it did before 1.7.4; 'on' (the default) copies tiles it has already asked "
+                + "about from a map-wide memory. An A/B for anything wrong at the water's edge that a fresh "
+                + "gather would fix; the report's 'water mask rebuild' block says how many tiles were copied.",
+                (_, args) =>
+                {
+                    if (args.Length < 1 || !(args[0].Equals("on", StringComparison.OrdinalIgnoreCase)
+                                             || args[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        monitor.Log($"water gather cache is {(RenderPipeline.GatherCacheEnabled ? "on" : "OFF")}. "
+                            + "Usage: radiance_gathercache on|off", LogLevel.Info);
+                        return;
+                    }
+                    RenderPipeline.GatherCacheEnabled = args[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    RenderPipeline.MaskEpoch++;
+                    RenderPipeline.MaskEpochReason = "radiance_gathercache was switched";
+                    monitor.Log($"water gather cache {(RenderPipeline.GatherCacheEnabled ? "on" : "off")}; the mask rebuilds now.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_hooks",
+                "'radiance_hooks off' takes this mod's patches off SpriteBatch.Draw for the rest of the session, "
+                + "'on' puts them back. The patches run on every draw the game makes, thousands a frame, and "
+                + "their cost is in no row of radiance_report because it is spent inside the game's own draw. "
+                + "Measure it by reading WHOLE FRAME with the hooks off and on, alternating, same launch, window "
+                + "focused. While off, sprite relief, sheet doubling and the carve of a location's own art out of "
+                + "the water are off too.",
+                (_, args) =>
+                {
+                    if (args.Length < 1 || !(args[0].Equals("on", StringComparison.OrdinalIgnoreCase)
+                                             || args[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        monitor.Log($"draw hooks are {(HarmonyPatcher.DrawHooksInstalled ? "on" : "OFF")}. "
+                            + "Usage: radiance_hooks on|off", LogLevel.Info);
+                        return;
+                    }
+                    HarmonyPatcher.SetDrawHooks(args[0].Equals("on", StringComparison.OrdinalIgnoreCase), monitor);
+                });
             helper.ConsoleCommands.Add("radiance_bench",
                 "Measure what this mod costs on THIS machine and suggest an effect resolution. Sweeps the "
                 + "settings for about ten seconds (the picture flickers while it does), then prints the cost of "
@@ -841,12 +977,28 @@ namespace SDVRadiance
                 // and nothing ever printed the count.
                 Write("=== what the lamp shadow march was handed this frame ===");
                 Write($"  lamps marching   {RenderPipeline.LastMarchingLamps}"
-                    + $"   steps allowed each   {RenderPipeline.LastMarchStepCeiling:0.#}");
+                    + $"   steps allowed each   {RenderPipeline.LastMarchStepCeiling:0.#}"
+                    + (RenderPipeline.LastMarchSkipped
+                        ? "   (march SKIPPED this frame: shadows at zero, shafts off, so nothing could show it)"
+                        : RenderPipeline.LastMarchHalfResolution
+                            ? "   (rays fired at half resolution, read back by the pass)"
+                            : "   (rays fired in the pass, full resolution)"));
                 Write("                   The cost of this mod's biggest GPU item is those two numbers");
                 Write("                   multiplied. Sharing is on when the second falls as the first");
                 Write("                   rises; 12 is the floor and is what every release up to 1.6.2 did.");
                 Write("");
                 Write("=== the frame clock, and the graphics device under it ===");
+                // Asked live, not remembered from startup: a mod is free to patch later than
+                // GameLaunched, and the whole point of this line is that nobody should have to
+                // know it is a question. A night of hunting a flicker on 2026-09-01 ended at a
+                // patch on this clock that no diagnostic in the mod could see.
+                Write(DescribeClockOwnership());
+                // Said out loud because a report taken with the hooks off has three features
+                // silently missing from it, and a WHOLE FRAME figure that is not comparable to
+                // one taken with them on.
+                Write($"  draw hooks       {(HarmonyPatcher.DrawHooksInstalled
+                    ? "on SpriteBatch.Draw, as shipped"
+                    : "REMOVED by radiance_hooks off: relief, sheet doubling and location-art carving are off in this report")}");
                 Write($"  frame cap        {(Determinism.CapIsOff ? "OFF right now" : "on right now")}"
                     + $", changed {Determinism.CapChanges} time(s) this session");
                 Write("  what that means  a cap that has NEVER lifted means this mod is reading the game's own");
@@ -865,6 +1017,15 @@ namespace SDVRadiance
                 Write("");
                 Write("=== how the water surface has been behaving, and what just happened to it ===");
                 Write(pipeline?.DescribeWaterHistory() ?? "pipeline not ready");
+                Write("");
+                Write(pipeline?.DescribeWaterRebuildCost() ?? "pipeline not ready");
+                Write("flood grids, main thread, per rebuild since the last report:");
+                Write(PhaseCost.Describe("flood ").TrimEnd());
+                Write("");
+                Write("water entity mirror, main thread, per bake since the last report:");
+                Write(PhaseCost.Describe("mirror").TrimEnd());
+                Write("");
+                Write(FrameCost.DescribeLongestFrames().TrimEnd());
                 Write("");
                 Write("=== water with ripple but no reflection, worst first ===");
                 Write(pipeline?.DescribeEffectOnlyTiles() ?? "pipeline not ready");
@@ -931,6 +1092,31 @@ namespace SDVRadiance
             if (normalised.StartsWith("Mods/", StringComparison.OrdinalIgnoreCase))
                 return "loaded by a mod, id not matched: " + normalised.Split('/')[1];
             return "vanilla asset path, but a content pack may have repainted it in place";
+        }
+
+        /// <summary>
+        /// The report's answer to "is this mod's animation clock still this mod's own".
+        /// </summary>
+        /// <remarks>
+        /// Every animated term in this mod counts off <see cref="Determinism.Ticks"/>, so a mod
+        /// that has patched it is deciding the speed of the ripple, the flames, the clouds and the
+        /// heat shimmer, and no other line in this report about flicker or about animation running
+        /// at the wrong speed can be read before this one. The negative is spelled out too: a
+        /// report that simply omitted the line when it found nothing would be a report where "no
+        /// line" meant both "nobody" and "this build cannot tell".
+        /// </remarks>
+        private static string DescribeClockOwnership()
+        {
+            List<string> found = HarmonyPatcher.ForeignClockPatches();
+            if (found.Count == 0)
+                return "  render clock     ours alone: no other mod has patched it";
+            var text = new System.Text.StringBuilder();
+            text.AppendLine("  render clock     PATCHED BY ANOTHER MOD, which is the first thing to read here");
+            foreach (string line in found)
+                text.AppendLine($"                   {line}");
+            text.Append("                   Everything animated in this mod counts off that clock, so whoever "
+                + "holds it sets the speed of the ripple, the flames, the clouds and the shimmer.");
+            return text.ToString();
         }
 
         /// <summary>

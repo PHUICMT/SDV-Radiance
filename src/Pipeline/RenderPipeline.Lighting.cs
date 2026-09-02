@@ -1263,6 +1263,51 @@ namespace SDVRadiance
         /// </summary>
         private readonly Dictionary<(Texture2D, Rectangle), (int Left, int Right)> _artBaseSpan = new();
 
+        /// <summary>
+        /// Read the base span of every distinct piece of placed art in the location now, on the
+        /// warp frame, so no readback is left to happen the first time a thing scrolls into view.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="ArtBaseSpan"/> is a <c>GetData</c>, which on this backend makes the CPU wait
+        /// for the card. It is cached per picture, so a farm pays it once per KIND of thing rather
+        /// than once per thing, but that once used to land mid-stride: walk into a new part of the
+        /// farm and every kind first seen there stalled the frame it appeared in, which is the
+        /// "stutter while working the farm" shape. A location is a few dozen kinds at most, and the
+        /// game is showing black while this runs.
+        /// </remarks>
+        private void PrewarmArtBaseSpans(GameLocation? location)
+        {
+            if (location?.objects == null)
+                return;
+            int read = 0;
+            try
+            {
+                foreach (var pair in location.objects.Pairs)
+                {
+                    SObject placed = pair.Value;
+                    if (placed == null || placed is Fence || placed is CrabPot || placed.IsSpawnedObject)
+                        continue;
+                    if (!placed.bigCraftable.Value && placed.isPassable())
+                        continue;
+                    if (placed.IsWeeds() || placed.IsTwig() || placed.IsBreakableStone())
+                        continue;
+                    if (!TryPlacedArt(placed.QualifiedItemId, out Texture2D? art, out Rectangle source) || art == null || source.IsEmpty)
+                        continue;
+                    if (_artBaseSpan.ContainsKey((art, source)))
+                        continue;
+                    ArtBaseSpan(art, source);
+                    read++;
+                }
+            }
+            catch (Exception ex)
+            {
+                // A warm-up must never be the thing that breaks a warp; the lazy path still works.
+                _monitor.Log($"art base prewarm stopped early: {ex.Message}", LogLevel.Trace);
+            }
+            if (read > 0)
+                _monitor.Log($"[diag] art base spans read on arrival: {read} kind(s) in {location.NameOrUniqueName}", LogLevel.Trace);
+        }
+
         private (int Left, int Right) ArtBaseSpan(Texture2D texture, Rectangle source)
         {
             var key = (texture, source);
@@ -1424,6 +1469,7 @@ namespace SDVRadiance
             // clump appearing/vanishing (the counts below), a building placed or removed (a new
             // SurfaceMap identity), or a growth stage ticking over — which happens at day start
             // behind the save fade, and is what the lazy once-a-second fallback is for.
+            long phaseStart = System.Diagnostics.Stopwatch.GetTimestamp();
             var surf = SurfaceMap.For(location);
             Approach(ref _occluderShapesEase, config.LightShadowSilhouettes ? 1f : 0f, 0.05f);
             int shapesStep = (int)MathF.Round(_occluderShapesEase * 32f);
@@ -1457,6 +1503,7 @@ namespace SDVRadiance
                 _floodOccluderMaskSize = new Vector2(tilesW, tilesH);
                 return true;
             }
+            phaseStart = PhaseCost.NoteSince("flood occluders: gate (counts + fences)", phaseStart);
             _floodOccluderTileX = startTileX;
             _floodOccluderTileY = startTileY;
             _floodOccluderCacheTick = Game1.ticks;
@@ -1465,13 +1512,22 @@ namespace SDVRadiance
 
             if (_floodOccluderMaskPixels == null || _floodOccluderMaskPixels.Length < count)
                 _floodOccluderMaskPixels = new Color[count];
+            // The map's own answer for every tile, asked once per map and kept (see
+            // EnsureFloodSolidBase). This loop used to ask the game three questions per tile,
+            // fifteen hundred tiles, once a second and on every tile crossing, and that was the
+            // 1.27 ms worst frame this grid showed on a farm walk.
+            EnsureFloodSolidBase(location, surf, layer);
             for (int j = 0; j < tilesH; j++)
             {
                 for (int i = 0; i < tilesW; i++)
                 {
                     int tx = startTileX + i, ty = startTileY + j;
                     bool solid;
-                    if (surf != null)
+                    if (_floodSolidBase != null && tx >= 0 && ty >= 0 && tx < _floodSolidBaseWidth && ty < _floodSolidBaseHeight)
+                    {
+                        solid = _floodSolidBase[ty * _floodSolidBaseWidth + tx] != 0;
+                    }
+                    else if (surf != null)
                     {
                         // Walls/roofs block lamp light; decks (piers/bridges, height 1 but open)
                         // and water don't.
@@ -1573,6 +1629,7 @@ namespace SDVRadiance
             // Characters/animals/the player are NOT stamped: their shadows are owned by the
             // sprite silhouette pass — stamping them here too gave everyone standing near a
             // lamp a second blurry dark blotch on top of their cast shadow.
+            phaseStart = PhaseCost.NoteSince("flood occluders: window copy + tile stamps", phaseStart);
 
             // The grid above at tile resolution, then everything with a real silhouette drawn over
             // it at FloodOccSubdivision texels per tile, by the game's own art and placement.
@@ -1580,6 +1637,7 @@ namespace SDVRadiance
             // reading from the previous window (TextureDoubleBuffer).
             _floodOccluderBaseTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _floodOccluderBaseSpare,
                 _floodOccluderBaseTexture, tilesW, tilesH, SurfaceFormat.Color, "flood occluder mask", _floodOccluderMaskPixels, count);
+            phaseStart = PhaseCost.NoteSince("flood occluders: base upload", phaseStart);
             int maskW = tilesW * FloodOccSubdivision, maskH = tilesH * FloodOccSubdivision;
             if (_floodOccluderMask is not RenderTarget2D maskTarget || maskTarget.Width != maskW || maskTarget.Height != maskH)
             {
@@ -1588,7 +1646,9 @@ namespace SDVRadiance
                 _floodOccluderMask = maskTarget;
             }
             DrawOccluderSilhouettes(maskTarget, location, startTileX, startTileY, tilesW, tilesH);
+            phaseStart = PhaseCost.NoteSince("flood occluders: silhouettes (sprite draws)", phaseStart);
             BuildSoftOccluderLevels(maskTarget);
+            PhaseCost.NoteSince("flood occluders: soft levels (GPU blur)", phaseStart);
             _floodOccluderMaskSize = new Vector2(tilesW, tilesH);
             return true;
         }
@@ -1940,6 +2000,64 @@ namespace SDVRadiance
 
         /// <summary>Whether a placed building stands on this tile with a solid part of itself (its
         /// collision map's solid cells), so a coop blocks and a porch or a door does not.</summary>
+        /// <summary>Per tile of the whole map, whether the map itself blocks a lamp there: the
+        /// surface class, whether the farmer can walk on it, and the buildings' collision maps.
+        /// Gathered once per (map, surface map, building count) and read by every window rebuild.</summary>
+        private byte[]? _floodSolidBase;
+        private int _floodSolidBaseWidth, _floodSolidBaseHeight;
+        private GameLocation? _floodSolidBaseLocation;
+        private SurfaceMap? _floodSolidBaseSurface;
+        private int _floodSolidBaseBuildingCount = -1;
+
+        /// <summary>
+        /// Refresh the map-wide solid base when its inputs changed; otherwise nothing.
+        /// </summary>
+        /// <remarks>
+        /// The three questions asked per tile here are map questions: the surface class comes
+        /// from the surface map, walkability from the map's own layers and properties, and a
+        /// building blocks by its collision map. None of them move when a chest is placed or a
+        /// tree grows - those are stamped over the base afterwards, as before - so the answers
+        /// hold for as long as the map, its surface map and its building list do. Asking them
+        /// once for the whole map on arrival, under the warp fade, costs a few milliseconds
+        /// once; asking them for every tile of the window once a second and on every tile
+        /// crossing was the grid's worst frame.
+        /// </remarks>
+        private void EnsureFloodSolidBase(GameLocation location, SurfaceMap? surf, xTile.Layers.Layer? layer)
+        {
+            int buildingCount = location.buildings?.Count ?? 0;
+            xTile.Layers.Layer? size = location.map?.Layers.Count > 0 ? location.map.Layers[0] : null;
+            if (size == null)
+            {
+                _floodSolidBase = null;
+                _floodSolidBaseLocation = null;
+                return;
+            }
+            int width = size.LayerWidth, height = size.LayerHeight;
+            if (_floodSolidBase != null && ReferenceEquals(location, _floodSolidBaseLocation)
+                && ReferenceEquals(surf, _floodSolidBaseSurface) && buildingCount == _floodSolidBaseBuildingCount
+                && width == _floodSolidBaseWidth && height == _floodSolidBaseHeight)
+                return;
+            if (_floodSolidBase == null || _floodSolidBase.Length != width * height)
+                _floodSolidBase = new byte[width * height];
+            _floodSolidBaseWidth = width;
+            _floodSolidBaseHeight = height;
+            _floodSolidBaseLocation = location;
+            _floodSolidBaseSurface = surf;
+            _floodSolidBaseBuildingCount = buildingCount;
+            for (int ty = 0; ty < height; ty++)
+            {
+                for (int tx = 0; tx < width; tx++)
+                {
+                    bool solid;
+                    if (surf != null)
+                        solid = (surf.BlocksLight(tx, ty) && !CanWalkOn(location, tx, ty)) || BuildingBlocks(location, tx, ty);
+                    else
+                        solid = layer != null && tx < layer.LayerWidth && ty < layer.LayerHeight && layer.Tiles[tx, ty] != null;
+                    _floodSolidBase[ty * width + tx] = solid ? (byte)1 : (byte)0;
+                }
+            }
+        }
+
         private static bool BuildingBlocks(GameLocation location, int x, int y)
         {
             var buildings = location.buildings;

@@ -85,6 +85,37 @@ namespace SDVRadiance
         /// <summary>Bake the flipped-entity reflection layer for this frame. Called from
         /// Display.RenderingWorld right after the sprite mask bake (the only safe spot
         /// for render-target swaps).</summary>
+        /// <summary>Diagnostic (radiance_mirrorflush): submit the mirror batch after every phase
+        /// instead of once at the end, so a stall inside the submit lands on the phase whose draws
+        /// caused it. Changes the overlap order between phases, so never on for play.</summary>
+        internal static bool MirrorFlushPerPhase;
+
+        /// <summary>Diagnostic, with the per-phase submit: every texture the plant mirror has ever
+        /// drawn this session, so a frame can say which textures it drew for the FIRST time. A
+        /// submit that stalls only on the frame a texture is new is the driver moving that
+        /// texture onto the card; one that stalls with nothing new is something else.</summary>
+        private readonly HashSet<Texture2D> _mirrorTexturesSeen = new();
+        private readonly List<string> _mirrorNewTexturesThisFrame = new();
+        private int _mirrorTreeDraws, _mirrorFruitTreeDraws, _mirrorBushDraws, _mirrorGrassDraws;
+
+        private void NoteMirrorTexture(Texture2D texture)
+        {
+            if (!MirrorFlushPerPhase || !_mirrorTexturesSeen.Add(texture))
+                return;
+            _mirrorNewTexturesThisFrame.Add($"{texture.Name ?? "(unnamed)"} {texture.Width}x{texture.Height}"
+                + (texture is RenderTarget2D ? " [render target]" : ""));
+        }
+
+        private static long FlushPhase(SpriteBatch spriteBatch, string name, long phaseStart)
+        {
+            if (!MirrorFlushPerPhase)
+                return phaseStart;
+            spriteBatch.End();
+            long afterSubmit = PhaseCost.NoteSince(name, phaseStart);
+            spriteBatch.Begin(SpriteSortMode.BackToFront, BlendState.AlphaBlend, SamplerState.PointClamp);
+            return afterSubmit;
+        }
+
         public void BakeWaterReflection(ModConfig config)
         {
             long t0 = FrameCost.Begin(FrameCost.Part.EntityReflection);
@@ -628,10 +659,16 @@ namespace SDVRadiance
             int h = prev.Length > 0 && prev[0].RenderTarget is RenderTarget2D rt2 ? rt2.Height : Game1.viewport.Height;
             if (w <= 0 || h <= 0)
                 return;
+            // Timed phase by phase (radiance_report, the 'mirror' block): the ledger of the
+            // longest frames caught this whole bake at 96 ms once per session, on the first
+            // frame a farm pond came into view, and a single bracket cannot say which of the
+            // first-use costs below that was.
+            long phaseStart = System.Diagnostics.Stopwatch.GetTimestamp();
             if (_reflectionRenderTarget == null || _reflectionRenderTarget.Width != w || _reflectionRenderTarget.Height != h)
             {
                 _reflectionRenderTarget?.Dispose();
                 _reflectionRenderTarget = VramTally.Track(new RenderTarget2D(_device, w, h, false, SurfaceFormat.Color, DepthFormat.None), "entity mirror");
+                phaseStart = PhaseCost.NoteSince("mirror: target allocated", phaseStart);
             }
             _spriteMaskSpriteBatch ??= new SpriteBatch(_device);
             // Before the mirror target is bound, because this one writes to a target of its own.
@@ -645,12 +682,15 @@ namespace SDVRadiance
             // The creature bake, which does rebind (it has to read its own atlas back), therefore
             // runs FIRST and is finished with the device before the tool is drawn at all.
             BakeSelfDrawnCharacterMirrors(location);
+            phaseStart = PhaseCost.NoteSince("mirror: creature bake (atlas + readback)", phaseStart);
             bool toolBaked = BakeHeldToolForMirror();
+            phaseStart = PhaseCost.NoteSince("mirror: tool bake", phaseStart);
 
             try
             {
                 _device.SetRenderTarget(_reflectionRenderTarget);
                 _device.Clear(Color.Transparent);
+                phaseStart = PhaseCost.NoteSince("mirror: bind + clear", phaseStart);
                 var spriteBatch = _spriteMaskSpriteBatch;
                 // BackToFront + per-stamp depth from the caster's TRUE feet row: whoever
                 // stands in front (bigger feet Y) draws last and wins the overlap — a
@@ -659,12 +699,24 @@ namespace SDVRadiance
                 spriteBatch.Begin(SpriteSortMode.BackToFront, BlendState.AlphaBlend, SamplerState.PointClamp);
 
                 MirrorFarmers(spriteBatch, toolBaked);
+                phaseStart = PhaseCost.NoteSince("mirror: farmers", phaseStart);
+                phaseStart = FlushPhase(spriteBatch, "mirror: farmers SUBMIT", phaseStart);
                 StampSelfDrawnCharacterMirrors(spriteBatch);
                 MirrorCharacters(spriteBatch, location);
+                phaseStart = PhaseCost.NoteSince("mirror: characters", phaseStart);
+                phaseStart = FlushPhase(spriteBatch, "mirror: characters SUBMIT", phaseStart);
                 MirrorAnimalsAndCritters(spriteBatch, location);
+                phaseStart = PhaseCost.NoteSince("mirror: animals + critters", phaseStart);
+                phaseStart = FlushPhase(spriteBatch, "mirror: animals + critters SUBMIT", phaseStart);
                 MirrorPlacedObjects(spriteBatch, location);
+                phaseStart = PhaseCost.NoteSince("mirror: placed objects", phaseStart);
+                phaseStart = FlushPhase(spriteBatch, "mirror: placed objects SUBMIT", phaseStart);
                 MirrorTemporarySprites(spriteBatch, location);
+                phaseStart = PhaseCost.NoteSince("mirror: temporary sprites", phaseStart);
+                phaseStart = FlushPhase(spriteBatch, "mirror: temporary sprites SUBMIT", phaseStart);
                 MirrorFishingBobbers(spriteBatch, location);
+                phaseStart = PhaseCost.NoteSince("mirror: bobbers", phaseStart);
+                phaseStart = FlushPhase(spriteBatch, "mirror: bobbers SUBMIT", phaseStart);
 
                 // How far from the water a piece of SCENERY may stand and still be mirrored. The
                 // mirror is stamped in four-row slices to get its head fade, so one tree canopy is
@@ -676,10 +728,27 @@ namespace SDVRadiance
                 int plantReach = Math.Max(1, (int)Math.Round(7 * reachScale));
                 int buildingReach = Math.Max(1, (int)Math.Round(9 * reachScale));
 
+                _mirrorNewTexturesThisFrame.Clear();
+                _mirrorTreeDraws = _mirrorFruitTreeDraws = _mirrorBushDraws = _mirrorGrassDraws = 0;
                 MirrorPlants(spriteBatch, location, plantReach);
+                phaseStart = PhaseCost.NoteSince("mirror: plants", phaseStart);
+                if (MirrorFlushPerPhase)
+                {
+                    spriteBatch.End();
+                    double submitMs = PhaseCost.MillisecondsSince(phaseStart);
+                    phaseStart = PhaseCost.NoteSince("mirror: plants SUBMIT", phaseStart);
+                    spriteBatch.Begin(SpriteSortMode.BackToFront, BlendState.AlphaBlend, SamplerState.PointClamp);
+                    if (submitMs > 8 || _mirrorNewTexturesThisFrame.Count > 0)
+                        _monitor.Log($"[diag] mirror plants submit {submitMs:0.00} ms in {location.NameOrUniqueName} at {Game1.timeOfDay}: "
+                            + $"draws trees {_mirrorTreeDraws} fruit {_mirrorFruitTreeDraws} bushes {_mirrorBushDraws} grass {_mirrorGrassDraws}; "
+                            + (_mirrorNewTexturesThisFrame.Count == 0 ? "no texture drawn for the first time"
+                               : "FIRST time for: " + string.Join(" | ", _mirrorNewTexturesThisFrame)), StardewModdingAPI.LogLevel.Info);
+                }
                 MirrorBuildings(spriteBatch, location, buildingReach);
+                phaseStart = PhaseCost.NoteSince("mirror: buildings", phaseStart);
 
                 spriteBatch.End();
+                PhaseCost.NoteSince("mirror: batch end (submit)", phaseStart);
                 ReflectRTReady = true;
                 ReportReflectWatch("baked");
             }
@@ -1155,6 +1224,7 @@ namespace SDVRadiance
                     case StardewValley.TerrainFeatures.Tree tree when tree.growthStage.Value >= 5 && (!tree.stump.Value || tree.falling.Value) && tree.texture?.Value != null:
                         _watchTreeStamps++;
                         float treeTurn = tree.shakeRotation + FoliageSway.TiltForTileBase(tile.X, tile.Y);
+                        NoteMirrorTexture(tree.texture.Value); _mirrorTreeDraws++;
                         spriteBatch.Draw(tree.texture.Value,
                             Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
                             ShadowRenderer.TreeCanopySourceRect(tree), Color.White, -treeTurn, new Vector2(24f, 0f), 4f,
@@ -1168,6 +1238,7 @@ namespace SDVRadiance
                         _watchTreeStamps++;
                         int season = Game1.GetSeasonIndexForLocation(ft.Location);
                         var fsrc = new Rectangle((12 + season * 3) * 16, ft.GetSpriteRowNumber() * 5 * 16, 48, 64);
+                        NoteMirrorTexture(ft.texture); _mirrorFruitTreeDraws++;
                         spriteBatch.Draw(ft.texture,
                             Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
                             fsrc, Color.White, -ft.shakeRotation, new Vector2(24f, fsrc.Height - 80f), 4f,
@@ -1337,6 +1408,7 @@ namespace SDVRadiance
         {
             var bsrc = bush.sourceRect.Value;
             int eff = bush.size.Value switch { 3 => 0, 4 => 1, _ => bush.size.Value };
+            NoteMirrorTexture(StardewValley.TerrainFeatures.Bush.texture.Value); _mirrorBushDraws++;
             spriteBatch.Draw(StardewValley.TerrainFeatures.Bush.texture.Value,
                 Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + (eff + 1) * 32f, (tile.Y + 1) * 64f)),
                 bsrc, Color.White, 0f, new Vector2(bsrc.Width / 2f, 0f), 4f,
@@ -1358,6 +1430,7 @@ namespace SDVRadiance
             if (!GrassArt.TryRead(grass, out int blades, out int[] which, out int[] ox, out int[] oy))
                 return;
             Texture2D texture = grass.texture.Value;
+            NoteMirrorTexture(texture); _mirrorGrassDraws++;
             for (int i = 0; i < blades; i++)
             {
                 Vector2 at = GrassArt.BladeAt(tile, i, ox, oy);

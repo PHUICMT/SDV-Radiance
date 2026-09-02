@@ -737,6 +737,7 @@ namespace SDVRadiance
             float blur = Math.Max(0f, config.DirectionalShadowBlur);
             if (strength <= 0.01f)
                 return;
+            RefreshBuildingFootprints(location);
 
             // Dusk is a CROSS-FADE, not a switch. The two paths model the same thing from different
             // sources, and swapping them on the frame SunCasts() flips took every shadow on screen

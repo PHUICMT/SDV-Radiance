@@ -45,7 +45,12 @@ float LightMapBlend;     // 0 = LightMapTexture only, 1 = LightMap2Texture only
 // four texels per tile, LINEAR-sampled so the
 // per-light shadow march below gets soft penumbra edges for free.
 texture OccluderTexture;
-sampler2D OccluderSampler = sampler_state
+// The four occluder samplers are pinned to s1-s4. SpriteBatch puts the texture it draws in
+// slot 0 AFTER the effect is applied, whatever the effect bound there, and the LampMarch passes
+// never read SourceSampler: left to the compiler, the first sampler they do read took s0 and
+// was overwritten by the scene, so every ray marched through the picture instead of the mask
+// and the whole frame darkened (measured: 61% of the saloon's pixels moved, mean 6/255).
+sampler2D OccluderSampler : register(s1) = sampler_state
 {
     Texture = <OccluderTexture>;
     MinFilter = Linear; MagFilter = Linear; MipFilter = None;
@@ -65,9 +70,9 @@ sampler2D OccluderSampler = sampler_state
 texture OccluderSoft1Texture;
 texture OccluderSoft2Texture;
 texture OccluderSoft3Texture;
-sampler2D OccluderSoft1Sampler = sampler_state { Texture = <OccluderSoft1Texture>; MinFilter = Linear; MagFilter = Linear; MipFilter = None; AddressU = Clamp; AddressV = Clamp; };
-sampler2D OccluderSoft2Sampler = sampler_state { Texture = <OccluderSoft2Texture>; MinFilter = Linear; MagFilter = Linear; MipFilter = None; AddressU = Clamp; AddressV = Clamp; };
-sampler2D OccluderSoft3Sampler = sampler_state { Texture = <OccluderSoft3Texture>; MinFilter = Linear; MagFilter = Linear; MipFilter = None; AddressU = Clamp; AddressV = Clamp; };
+sampler2D OccluderSoft1Sampler : register(s2) = sampler_state { Texture = <OccluderSoft1Texture>; MinFilter = Linear; MagFilter = Linear; MipFilter = None; AddressU = Clamp; AddressV = Clamp; };
+sampler2D OccluderSoft2Sampler : register(s3) = sampler_state { Texture = <OccluderSoft2Texture>; MinFilter = Linear; MagFilter = Linear; MipFilter = None; AddressU = Clamp; AddressV = Clamp; };
+sampler2D OccluderSoft3Sampler : register(s4) = sampler_state { Texture = <OccluderSoft3Texture>; MinFilter = Linear; MagFilter = Linear; MipFilter = None; AddressU = Clamp; AddressV = Clamp; };
 
 texture OccluderBaseTexture;
 sampler2D OccluderBaseSampler = sampler_state
@@ -152,6 +157,36 @@ float ShadowSoftness;
 // 1 = paint the shadow terms instead of the scene (radiance_debug lampshadow): R = deepest
 // occlusion any shadowed light met on its ray to this pixel, G = carve, B = mask under the pixel.
 float DebugLampShadow;
+// THE MARCH AT HALF RESOLUTION. The shadow ray is the one cost of this shader paid per lamp per
+// pixel, and a shadow's edge is already a ramp at least one mask texel wide (eight screen
+// pixels at zoom 1, wider with the penumbra), so the ray does not need to be fired from every
+// pixel: the LampMarch passes fire it from every other one, four lamps to a target, and this
+// pass reads the answer back bilinearly. 1 = read MarchA (lamps 0-3) and MarchB (4-7); 0 = fire
+// the ray here as every release before did. The CPU decides per frame (RenderFloodLight).
+float MarchFromTexture;
+// Which four lamps the LampMarch pass fires: 0 for lamps 0..3 (the first target), 4 for 4..7
+// (the second). A UNIFORM, not a literal per technique, and that is the whole point of it.
+// With a literal base of 4 the compiled shader touched only LightPosArr[4..7], and the GL
+// build packs each shader's constants from the lowest register it uses: the array's base moved,
+// the values written for it landed on the wrong lamps, and lamps 4 to 7 marched from another
+// lamp's position. Read through a uniform, the shader references the whole array and the pack
+// keeps its base; the pass costs the same. Found on the Town pavement at dawn, where a pool
+// vanished and returned as the walk re-ranked which lamp sat in slot 4.
+float MarchBase;
+texture MarchATexture;
+sampler2D MarchASampler = sampler_state
+{
+    Texture = <MarchATexture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+texture MarchBTexture;
+sampler2D MarchBSampler = sampler_state
+{
+    Texture = <MarchBTexture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
 
 // SPRITE RELIEF (SheetNormalCache / SpriteDrawRecorder on the CPU side): the world's sprites
 // drawn again with each sheet's normal map, so a lamp beside a tree lights the side of the
@@ -376,6 +411,92 @@ float OccAtBlur(float2 p, float radiusTexels)
     return lerp(lo, hi, frac(min(k, 2.999)));
 }
 
+// One lamp's shadow ray from the lamp to this pixel: the deepest occlusion it meets, before
+// the lamp's own openness and the pixel's are applied. Shared by FloodPS (the full-resolution
+// road) and the LampMarch passes (the half-resolution one), so the two can never disagree.
+float MarchOcc(float2 uv, float2 lp, float dist)
+{
+    float occ = 0.0;
+    // THE MARCH STEPS ONE MASK TEXEL AT A TIME. With a fixed count of steps the gap
+    // between them grows with the ray, and once it is wider than the thing in the way -
+    // a plant, a post, a keg - some rays hit it and their neighbours pass between two
+    // steps and miss. Painted raw (radiance_debug lampshadow) that is a fan of plates
+    // with dark seams between them at the radii where one step after another first
+    // reaches the occluder; in the picture it is a saw-toothed edge that crawls as the
+    // light moves. Eight texels to a tile (FloodOccSubdivision), up to 48 steps, and
+    // past 48 the read climbs the mip chain so each footprint still spans its step.
+    // The penumbra is a mip read too: the further a step is from the pixel, the wider a
+    // lamp's own width smears the edge, and a coarser level IS that smear. It replaces
+    // five taps across the ray, which could only ever give the edge a handful of levels.
+    float distTiles = dist * TilesPerScreen.y;
+    float distTexels = distTiles * 8.0;
+    float stepCount = clamp(ceil(distTexels), 8.0, max(8.0, MarchStepCeiling));
+    float stepTexels = distTexels / stepCount;
+    // The blur is decided ONCE per ray, where the ray first meets something. Left to vary
+    // step by step, the steps on the occluder's far side (nearer the pixel, so less blur)
+    // read it sharp and won the max() every time, and the softness dial did nothing.
+    float lockedRadius = -1.0;
+    [loop]
+    for (int s = 1; s <= (int)stepCount; s++)
+    {
+        float f = s / stepCount;
+        // Samples right beside the light and right beside the pixel are faded out, in
+        // TILES rather than as a fraction of the ray, and only a hand's breadth of each:
+        // selfOpen and pixelOpen (in FloodPS) do the rest, and a longer fade left a lit
+        // gap between every keg and its shadow.
+        float fromLightTiles = f * distTiles;
+        float fromPixelTiles = (1.0 - f) * distTiles;
+        float wgt = smoothstep(0.10, 0.40, fromLightTiles) * smoothstep(0.0, 0.08, fromPixelTiles);
+        float2 onRay = lerp(lp, uv, f);
+        // At the dial's 1 a step a tile and a half from the pixel reads at a three-texel
+        // blur, the width a lamp's own body smears an edge that far out; at 2 six texels;
+        // the ceiling is a whole tile. Wider blur also thins a fence's pickets with
+        // distance, which is what a penumbra does to a comb.
+        float penumbraTexels = (1.0 - f) * distTiles * 2.0 * ShadowSoftness;
+        float radiusHere = max(stepTexels, penumbraTexels);
+        float radius = lockedRadius >= 0.0 ? lockedRadius : radiusHere;
+        float blocked = OccAtBlur(onRay, radius);
+        if (lockedRadius < 0.0 && blocked > 0.2)
+            lockedRadius = radius;
+        occ = max(occ, blocked * wgt);
+    }
+    return occ;
+}
+
+// Four lamps' rays from this (half-resolution) pixel, one per channel: lamps MarchBase..+3.
+// The base is a uniform (see MarchBase for why a literal was a bug); the index is resolved
+// by the compiler as a select over the array, which a pixel
+// shader on this profile requires.
+float4 LampMarchFour(float2 uv)
+{
+    float4 result = float4(0.0, 0.0, 0.0, 0.0);
+    int base = (int)(MarchBase + 0.5);
+    [unroll]
+    for (int k = 0; k < 4; k++)
+    {
+        int li = base + k;
+        float on = step((float)li + 0.5, DirectCount);
+        float2 lp = LightPosArr[li].xy;
+        float4 lc = LightColArr[li];
+        float2 dvec = uv - lp;
+        dvec.x *= Aspect;
+        float dist = length(dvec);
+        float att = saturate(1.0 - dist / max(lc.w, 0.02));
+        att = att * (0.55 + 0.45 * att);
+        float occ = 0.0;
+        [branch]
+        if (on * att > 0.004)
+            occ = MarchOcc(uv, lp, dist);
+        if (k == 0) result.x = occ;
+        else if (k == 1) result.y = occ;
+        else if (k == 2) result.z = occ;
+        else result.w = occ;
+    }
+    return result;
+}
+
+float4 LampMarchPS(PixelInput input) : SV_TARGET { return LampMarchFour(input.UV); }
+
 float4 FloodPS(PixelInput input) : SV_TARGET
 {
     float2 uv = input.UV;
@@ -436,6 +557,20 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // mod had added and the pool stayed round. This takes part of that glow back.
     float shadowCarve = 0.0;
     float occDebug = 0.0;
+    // WHETHER ANY MARCH CAN BE SEEN. A ray's whole product, occ, reaches the picture through
+    // three terms and no others: the shadow (times ShadowStrength, and the carve rides on that
+    // same factor at the end of the pass), the lamp shafts (gated on LampShaftStrength) and the
+    // debug paint. Outdoors by day the CPU hands ShadowStrength down to zero, because the game
+    // paints no glow for a torch under a white sky and a shadow of nothing is nothing; the
+    // shafts are off by default; and yet every lamp in reach went on marching its ray at every
+    // pixel, up to forty-eight steps of two reads each, to multiply the answer by zero. A farm
+    // at noon with a torch on every sprinkler paid the whole march for a picture that did not
+    // contain it. This is decided from uniforms alone, so the branch it guards is the same for
+    // every pixel and costs nothing when it is taken.
+    // Any shadow strength above zero marches, however small: the CPU's mirror of this test
+    // (LastMarchSkipped) uses the same bound, and a threshold above zero would have let a
+    // faint dusk shadow round differently from the build before this line existed.
+    float marchWanted = (ShadowStrength > 0.0 ? 1.0 : 0.0) + step(0.004, LampShaftStrength) + step(0.5, DebugLampShadow);
     [unroll]
     for (int li = 0; li < 8; li++)
     {
@@ -462,49 +597,28 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             // instead of gaining one.
             float shadowW = LightPosArr[li].w;
             float occ = 0.0;
-            // THE MARCH STEPS ONE MASK TEXEL AT A TIME. With a fixed count of steps the gap
-            // between them grows with the ray, and once it is wider than the thing in the way -
-            // a plant, a post, a keg - some rays hit it and their neighbours pass between two
-            // steps and miss. Painted raw (radiance_debug lampshadow) that is a fan of plates
-            // with dark seams between them at the radii where one step after another first
-            // reaches the occluder; in the picture it is a saw-toothed edge that crawls as the
-            // light moves. Eight texels to a tile (FloodOccSubdivision), up to 48 steps, and
-            // past 48 the read climbs the mip chain so each footprint still spans its step.
-            // The penumbra is a mip read too: the further a step is from the pixel, the wider a
-            // lamp's own width smears the edge, and a coarser level IS that smear. It replaces
-            // five taps across the ray, which could only ever give the edge a handful of levels.
-            float distTiles = dist * TilesPerScreen.y;
-            float distTexels = distTiles * 8.0;
-            float stepCount = clamp(ceil(distTexels), 8.0, max(8.0, MarchStepCeiling));
-            float stepTexels = distTexels / stepCount;
-            // The blur is decided ONCE per ray, where the ray first meets something. Left to vary
-            // step by step, the steps on the occluder's far side (nearer the pixel, so less blur)
-            // read it sharp and won the max() every time, and the softness dial did nothing.
-            float lockedRadius = -1.0;
-            [loop]
-            for (int s = 1; s <= (int)stepCount; s++)
+            // The light's own openness, read once the march is worth reading at all; 1 leaves
+            // the shaft term below untouched on the frames the march is skipped.
+            float selfOpen = 1.0;
+            [branch]
+            if (marchWanted > 0.0)
             {
-                float f = s / stepCount;
-                // Samples right beside the light and right beside the pixel are faded out, in
-                // TILES rather than as a fraction of the ray, and only a hand's breadth of each:
-                // selfOpen and pixelOpen (below) do the rest, and a longer fade left a lit gap
-                // between every keg and its shadow.
-                float fromLightTiles = f * distTiles;
-                float fromPixelTiles = (1.0 - f) * distTiles;
-                float wgt = smoothstep(0.10, 0.40, fromLightTiles) * smoothstep(0.0, 0.08, fromPixelTiles);
-                float2 onRay = lerp(lp, uv, f);
-                // At the dial's 1 a step a tile and a half from the pixel reads at a three-texel
-                // blur, the width a lamp's own body smears an edge that far out; at 2 six texels;
-                // the ceiling is a whole tile. Wider blur also thins a fence's pickets with
-                // distance, which is what a penumbra does to a comb.
-                float penumbraTexels = (1.0 - f) * distTiles * 2.0 * ShadowSoftness;
-                float radiusHere = max(stepTexels, penumbraTexels);
-                float radius = lockedRadius >= 0.0 ? lockedRadius : radiusHere;
-                float blocked = OccAtBlur(onRay, radius);
-                if (lockedRadius < 0.0 && blocked > 0.2)
-                    lockedRadius = radius;
-                occ = max(occ, blocked * wgt);
+            [branch]
+            if (MarchFromTexture > 0.5)
+            {
+                // The ray was fired from the LampMarch pass at half resolution; read it back
+                // bilinearly. li is a literal here (the loop is unrolled), so the target and the
+                // channel are chosen at compile time. tex2Dlod: no gradients, so the per-light
+                // [branch] this sits in stays legal.
+                float4 packed = li < 4 ? tex2Dlod(MarchASampler, float4(uv, 0.0, 0.0))
+                                       : tex2Dlod(MarchBSampler, float4(uv, 0.0, 0.0));
+                int channel = li < 4 ? li : li - 4;
+                float4 pick = float4(channel == 0 ? 1.0 : 0.0, channel == 1 ? 1.0 : 0.0,
+                                     channel == 2 ? 1.0 : 0.0, channel == 3 ? 1.0 : 0.0);
+                occ = dot(packed, pick);
             }
+            else
+                occ = MarchOcc(uv, lp, dist);
             // A light standing INSIDE something does not get to shadow itself. The farmhouse
             // porch is part of the building's footprint and the mask stamps that footprint
             // solid, so a ring worn while standing on it sent every ray out through an occluder:
@@ -530,7 +644,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             // And it never reaches zero. A term that decides rather than fades is what made a
             // quarter tile of movement switch a room's shadows off; the floor keeps a pressed-in
             // light most of its shadows and still spares the porch its pool.
-            float selfOpen = lerp(1.0, 0.15, smoothstep(0.55, 0.95, OccAtBlur(lp, 8.0)));
+            selfOpen = lerp(1.0, 0.15, smoothstep(0.55, 0.95, OccAtBlur(lp, 8.0)));
             // And a wall is not shadowed by its own footprint. The mask stamps a building solid
             // across its tiles, but the game draws that building's face and roof OVER the tiles
             // north of them, so a lamp in front of the farmhouse threw the house's shadow across
@@ -539,6 +653,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             // reaches its face; the ground in front of it still takes the shadow.
             float pixelOpen = 1.0 - smoothstep(0.35, 0.85, OccAt(uv));
             occ *= selfOpen * pixelOpen;
+            }
             // A shadow lives inside its light's reach and thins with it: the contrast of the
             // shadow falls with the pool (att, again) so it is gone where the pool is gone, and
             // ground the game shows as night never gets a wedge cut into it.
@@ -1184,3 +1299,4 @@ float4 FloodPS(PixelInput input) : SV_TARGET
 }
 
 technique FloodLight { pass P0 { PixelShader = compile PS_SHADERMODEL FloodPS(); } }
+technique LampMarch { pass P0 { PixelShader = compile PS_SHADERMODEL LampMarchPS(); } }

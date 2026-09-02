@@ -222,20 +222,26 @@ namespace SDVRadiance
                 _lightmapPixels = new Color[count];
             }
 
+            // Timed in three phases for the report (PhaseCost): the seeds read the game, the
+            // sweeps are array work that could run on a worker, the upload is the card's.
+            long phaseStart = System.Diagnostics.Stopwatch.GetTimestamp();
             SceneSeed scene = DescribeScene(location, config);
             var win = new TileWindow(tx0, ty0, tw, th);
             SeedSkyExposure(location, scene, win);
             SeedLightSources(location, scene, win, subTileSeeds: false);
             SeedWindowGlows(location, scene, win);
+            phaseStart = PhaseCost.NoteSince("flood lightmap: seeds (game questions)", phaseStart);
             FloodSweeps(win);
             BounceBlur(win);
             ComposeLightmapPixels(scene, win);
+            phaseStart = PhaseCost.NoteSince("flood lightmap: sweeps + blur + compose", phaseStart);
 
             // Into the pair's spare, never into the texture the lighting pass may still be
             // reading (TextureDoubleBuffer): this is the grid whose worst frames carried a 2 ms
             // GPU column against a 0.025 ms average.
             _lightmapTexture = TextureDoubleBuffer.UploadIntoSpare(graphicsDevice, ref _lightmapTextureSpare,
                 _lightmapTexture, tw, th, SurfaceFormat.Color, "flood lightmap", _lightmapPixels, count);
+            PhaseCost.NoteSince("flood lightmap: upload", phaseStart);
             Origin = new Vector2(tx0, ty0);
             MapSize = new Vector2(tw, th);
             return true;
