@@ -181,7 +181,8 @@ namespace SDVRadiance
             // upscale, the builders that run before the list is assembled. The gap between the two
             // is where the fixed overhead of entering the chain lives, and it is worth seeing.
             sb.AppendLine("the chain's own line in the cost table also covers the capture blit, the");
-            sb.Append("builders, and the upscale - the difference from the sum above is that overhead.");
+            sb.AppendLine("builders, and the upscale - the difference from the sum above is that overhead.");
+            sb.Append(DescribeChainSteps());
             return sb.ToString();
         }
     }

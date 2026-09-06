@@ -351,10 +351,20 @@ namespace SDVRadiance
         {
             if (blurTexels <= 0f)
                 return;
-            int cls = ClassOfSlot(rt);
-            _objectBlurScratches[cls] ??= VramTally.Track(new RenderTarget2D(graphicsDevice, rt.Width, rt.Height,
-                false, SurfaceFormat.Color, DepthFormat.None), "object blur scratch");
-            RenderTarget2D scratch = _objectBlurScratches[cls]!;
+            RenderTarget2D scratch;
+            if (rt.Width == CasterRtW && rt.Height == CasterRtH)
+            {
+                _casterBlurScratch ??= VramTally.Track(new RenderTarget2D(graphicsDevice, rt.Width, rt.Height,
+                    false, SurfaceFormat.Color, DepthFormat.None), "character blur scratch");
+                scratch = _casterBlurScratch;
+            }
+            else
+            {
+                int cls = ClassOfSlot(rt);
+                _objectBlurScratches[cls] ??= VramTally.Track(new RenderTarget2D(graphicsDevice, rt.Width, rt.Height,
+                    false, SurfaceFormat.Color, DepthFormat.None), "object blur scratch");
+                scratch = _objectBlurScratches[cls]!;
+            }
             graphicsDevice.SetRenderTarget(scratch);
             graphicsDevice.Clear(Color.Transparent);
             _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);

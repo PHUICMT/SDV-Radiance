@@ -710,8 +710,50 @@ namespace SDVRadiance
         }
 
 
+        /// <summary>A gather between two of its tiles: everything the per-tile step needs, and how
+        /// far it has got.
+        ///
+        /// <para>The window gather runs Begin, every tile, Finish in one call and never sees this
+        /// as anything but a local. The whole-map ANCHOR gather is the reason it exists: on a
+        /// 156x65 farm that gather is 18 to 23 ms on the main thread, and it was taken in one
+        /// frame the moment the player stood still, on the theory that a resting player feels
+        /// nothing. In split screen the other player is walking through that frame, and a
+        /// 20 ms hitch is a step that does not register. Kept here, the anchor gather is walked
+        /// a slice at a time (<see cref="AnchorGatherBudgetMilliseconds"/> per resting frame) and
+        /// dispatched when it is done; the tiles it has already answered are in the map memory,
+        /// so a gather abandoned halfway costs less to start again.</para></summary>
+        private sealed class GatherInProgress
+        {
+            public WaterMaskJob Job = null!;
+            public TileGatherContext Context, PondContext;
+            public GatheredTileAnswers? Remembered;
+            public List<Rectangle>? PondRects;
+            public List<StardewValley.Buildings.FishPond>? Ponds;
+            public int NextTileIndex;
+            /// <summary>The scratch generation this gather owns; another gather starting bumps it
+            /// and this one must not write another tile.</summary>
+            public int Generation;
+            public int Slices;
+            public double TotalMilliseconds, WorstSliceMilliseconds;
+        }
+
+        /// <summary>Bumped by every gather that starts. The gather writes the shared scratch
+        /// buffers tile by tile, so a gather that is resumed later has to know nobody else wrote
+        /// them in between.</summary>
+        private int _gatherGeneration;
+
         private WaterMaskJob GatherWaterMask(GameLocation location, int startTileX, int startTileY, int tilesW, int tilesH)
         {
+            GatherInProgress gather = BeginGather(location, startTileX, startTileY, tilesW, tilesH);
+            GatherTilesUntil(gather, long.MaxValue);
+            return FinishGather(gather);
+        }
+
+        /// <summary>The first half of a gather: the job, the water flags for every tile, the layer
+        /// lists and the contexts the per-tile step reads. Nothing per tile yet.</summary>
+        private GatherInProgress BeginGather(GameLocation location, int startTileX, int startTileY, int tilesW, int tilesH)
+        {
+            _gatherGeneration++;
             int count = tilesW * tilesH;
             var job = new WaterMaskJob
             {
@@ -845,52 +887,82 @@ namespace SDVRadiance
             // tile is copied from it when it was gathered under the same water verdict; anything
             // else, and every pond tile, is asked of the game as before and then remembered.
             GatheredTileAnswers? remembered = GatherCacheEnabled ? EnsureGatheredTileAnswers(location, surf) : null;
-            for (int j = 0; j < tilesH; j++)
+            return new GatherInProgress
             {
-                for (int i = 0; i < tilesW; i++)
+                Job = job, Context = ctx, PondContext = pondCtx, Remembered = remembered,
+                PondRects = pondRects, Ponds = ponds, Generation = _gatherGeneration,
+            };
+        }
+
+        /// <summary>The per-tile half of a gather, from where it left off until every tile is done
+        /// or the clock reaches <paramref name="deadlineTimestamp"/>. True when the last tile is in.</summary>
+        private bool GatherTilesUntil(GatherInProgress gather, long deadlineTimestamp)
+        {
+            WaterMaskJob job = gather.Job;
+            TileGatherContext ctx = gather.Context, pondCtx = gather.PondContext;
+            GatheredTileAnswers? remembered = gather.Remembered;
+            List<Rectangle>? pondRects = gather.PondRects;
+            List<StardewValley.Buildings.FishPond>? ponds = gather.Ponds;
+            int tilesW = job.TileWidth, count = tilesW * job.TileHeight;
+            int startTileX = job.StartTileX, startTileY = job.StartTileY;
+            for (int idx = gather.NextTileIndex; idx < count; idx++)
+            {
+                // The clock is asked once every few tiles, not every tile: a tile is a few
+                // microseconds and the timestamp is not free.
+                if ((idx & 15) == 0 && idx != gather.NextTileIndex && System.Diagnostics.Stopwatch.GetTimestamp() >= deadlineTimestamp)
                 {
-                    int idx = j * tilesW + i;
-                    bool isWater = _waterTileFlags[idx];
-                    int tx = startTileX + i, ty = startTileY + j;
-                    bool inPond = InsideFishPond(pondRects, tx, ty);
-                    // The rim tiles: FishPond.draw paints its water half a tile in under the stones
-                    // on every side, so the water the player sees is wider than the interior. Those
-                    // tiles are pond tiles too, with only the texels the game paints water on; the
-                    // stones over them are carved by the building stamp in the sprite mask.
-                    var rimOf = inPond ? null : FishPondRimOwning(ponds, tx, ty);
-                    bool pondTile = inPond || rimOf != null;
-                    _maskScratch.TilePondFlags[idx] = pondTile;
-                    int cell = remembered != null && !pondTile && tx >= 0 && ty >= 0 && tx < remembered.Width && ty < remembered.Height
-                        ? ty * remembered.Width + tx : -1;
-                    if (cell >= 0)
+                    gather.NextTileIndex = idx;
+                    return false;
+                }
+                int i = idx % tilesW, j = idx / tilesW;
+                bool isWater = _waterTileFlags![idx];
+                int tx = startTileX + i, ty = startTileY + j;
+                bool inPond = InsideFishPond(pondRects, tx, ty);
+                // The rim tiles: FishPond.draw paints its water half a tile in under the stones
+                // on every side, so the water the player sees is wider than the interior. Those
+                // tiles are pond tiles too, with only the texels the game paints water on; the
+                // stones over them are carved by the building stamp in the sprite mask.
+                var rimOf = inPond ? null : FishPondRimOwning(ponds, tx, ty);
+                bool pondTile = inPond || rimOf != null;
+                _maskScratch.TilePondFlags![idx] = pondTile;
+                int cell = remembered != null && !pondTile && tx >= 0 && ty >= 0 && tx < remembered.Width && ty < remembered.Height
+                    ? ty * remembered.Width + tx : -1;
+                if (cell >= 0)
+                {
+                    ushort known = remembered!.Flags[cell];
+                    int identity = TileIdentity(ctx, tx, ty);
+                    if ((known & GatheredFilled) != 0 && ((known & GatheredIsWater) != 0) == isWater
+                        && remembered.Identity[cell] == identity)
                     {
-                        ushort known = remembered!.Flags[cell];
-                        int identity = TileIdentity(ctx, tx, ty);
-                        if ((known & GatheredFilled) != 0 && ((known & GatheredIsWater) != 0) == isWater
-                            && remembered.Identity[cell] == identity)
-                        {
-                            CopyGatheredTile(job, remembered, cell, idx);
-                            _gatherCacheCopied++;
-                            continue;
-                        }
-                        // AnyLabeled is the one thing GatherTile reports on the job rather than per
-                        // tile; read this tile's own contribution off it so the memory can replay it.
-                        bool labeledBefore = job.AnyLabeled;
-                        job.AnyLabeled = false;
-                        GatherTile(job, ctx, idx, tx, ty, isWater);
-                        StoreGatheredTile(remembered, cell, idx, isWater, job.AnyLabeled, identity);
-                        job.AnyLabeled |= labeledBefore;
-                        _gatherCacheGathered++;
+                        CopyGatheredTile(job, remembered, cell, idx);
+                        _gatherCacheCopied++;
                         continue;
                     }
-                    GatherTile(job, pondTile ? pondCtx : ctx, idx, tx, ty, isWater);
+                    // AnyLabeled is the one thing GatherTile reports on the job rather than per
+                    // tile; read this tile's own contribution off it so the memory can replay it.
+                    bool labeledBefore = job.AnyLabeled;
+                    job.AnyLabeled = false;
+                    GatherTile(job, ctx, idx, tx, ty, isWater);
+                    StoreGatheredTile(remembered, cell, idx, isWater, job.AnyLabeled, identity);
+                    job.AnyLabeled |= labeledBefore;
                     _gatherCacheGathered++;
-                    if (rimOf != null)
-                        _maskScratch.TileEffectBits![idx] = FishPondWaterBits(rimOf, tx, ty);
+                    continue;
                 }
+                GatherTile(job, pondTile ? pondCtx : ctx, idx, tx, ty, isWater);
+                _gatherCacheGathered++;
+                if (rimOf != null)
+                    _maskScratch.TileEffectBits![idx] = FishPondWaterBits(rimOf, tx, ty);
             }
-            GatherEntityCarveRects(location);
-            return job;
+            gather.NextTileIndex = count;
+            return true;
+        }
+
+        /// <summary>The last half: the entities standing in the window, then the job is ready
+        /// for its compose.</summary>
+        private WaterMaskJob FinishGather(GatherInProgress gather)
+        {
+            GatherEntityCarveRects(gather.Job.Location);
+            return gather.Job;
         }
 
         /// <summary>Everything the gather works out about ONE tile: which of its pixels are

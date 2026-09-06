@@ -152,6 +152,8 @@ namespace SDVRadiance
         /// the request rather than living here, so two kinds of caster can be softened differently
         /// in the same frame.</summary>
         private readonly RenderTarget2D?[] _objectBlurScratches = new RenderTarget2D?[3];
+        /// <summary>The same scratch for the character slots, which are one size of their own.</summary>
+        private RenderTarget2D? _casterBlurScratch;
         /// <summary>Every slot ever allocated, and the idle ones ready to lease again, PER SIZE
         /// CLASS. A free small slot cannot serve a tree, so one shared free list would hand back
         /// a target the caller cannot use.</summary>
@@ -373,8 +375,17 @@ namespace SDVRadiance
         /// warning. The real limits are per class (see ObjectSlotClasses); this is their sum.</summary>
         private static int ObjectBakeCapTotal
         {
-            get { int n = 0; foreach (var c in ObjectSlotClasses) n += c.Cap; return n; }
+            get { int n = 0; foreach (var c in ObjectSlotClasses) n += c.Cap * LiveScreens; return n; }
         }
+
+        /// <summary>How many screens are drawing. The bake caps are sized for what one viewport
+        /// can see; a split screen has two viewports, and with the caps left at one screen's
+        /// worth the two took turns evicting each other's sprites: 8.7 evictions and 8.9 bakes a
+        /// frame on a farm, four milliseconds of the shadow row, measured. Each class keeps one
+        /// screen's cap per live screen.</summary>
+        private static int LiveScreens => Math.Max(1, GameRunner.instance?.gameInstances?.Count ?? 1);
+
+        private static int ObjectClassCap(int slotClass) => ObjectSlotClasses[slotClass].Cap * LiveScreens;
         /// <summary>Distinct character/animal frames kept alive. Slots are 160×224 (~0.14 MB).</summary>
         private const int CasterBakeCap = 192;
         /// <summary>An eviction pass goes this far under the cap, so it is not re-triggered on the
@@ -388,6 +399,9 @@ namespace SDVRadiance
         private readonly System.Collections.Generic.List<(Texture2D texture, Rectangle src, SpriteEffects effect)> _objectEvictScratch = new();
         /// <summary>Pose the player RT was last baked with — identical pose skips the re-bake.</summary>
         private (int frame, int facing, Rectangle src) _playerBakeSignature = (-1, -1, default);
+        /// <summary>Whose silhouette the live player bake holds, so another screen can borrow it
+        /// rather than bake the same person again (ShadowRenderer.Farmers).</summary>
+        private long _playerBakeFarmerId;
 
         // Multiply only the destination ALPHA by the source alpha (RGB untouched): dst.a *= src.a.
         // Used to bake the feet→head opacity gradient onto the silhouette.

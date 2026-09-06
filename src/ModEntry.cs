@@ -117,6 +117,9 @@ namespace SDVRadiance
             // Surface grids are inferred per location and cached for the visit. A save load means
             // a whole new world, and placing/removing a farm building changes a map in place.
             helper.Events.GameLoop.SaveLoaded += (_, _) => SurfaceMap.Clear();
+            // The draw hook's sticky sets are per location now and outlive a warp (see
+            // WaterDrawHook); a new day is where they start over, as one set used to on every warp.
+            helper.Events.GameLoop.DayStarted += (_, _) => WaterDrawHook.ForgetAll();
             helper.Events.World.BuildingListChanged += (_, e) =>
             {
                 SurfaceMap.Invalidate(e.Location);
@@ -156,11 +159,13 @@ namespace SDVRadiance
                     {
                         RenderPipeline.MaskEpoch++;
                         RenderPipeline.MaskEpochReason = "a mod reloaded the map you are standing on (" + name.Name + ")";
+                        // The water the old map drew is no evidence about the new one.
+                        WaterDrawHook.Forget(Game1.currentLocation);
                         break;
                     }
                 }
                 if (anyMap)
-                    SurfaceMap.Clear();
+                    SurfaceMap.InvalidateAffectedBy(System.Linq.Enumerable.Select(e.Names, n => n.Name));
                 // Every reload, map or tilesheet: a label's verdict is an answer about ART, and
                 // this is the event that says the art may have been swapped. Cheap to throw away
                 // (a few dozen fingerprints per map) and wrong to keep.
@@ -220,6 +225,39 @@ namespace SDVRadiance
                     _config.FloodShadowStrength = 1.0f;
                 helper.WriteConfig(_config);
             }
+            // 1.7.5: presets stopped lowering the render scale. A player who picked Balanced or
+            // Performance before has the old value written in their config, and it is the value
+            // behind the blurry-world reports, so the exact number the preset used to write is
+            // put back to full size once. A number the player set by hand is not the preset's
+            // number and is left alone.
+            if (_config.ConfigVersion < 3)
+            {
+                _config.ConfigVersion = 3;
+                bool balancedScale = _config.ActivePerfPreset == PerfPreset.Balanced && Math.Abs(_config.RenderScale - 0.75f) < 0.001f;
+                bool halvedScale = (_config.ActivePerfPreset == PerfPreset.Performance || _config.ActivePerfPreset == PerfPreset.LowSpec)
+                    && Math.Abs(_config.RenderScale - 0.5f) < 0.001f;
+                if (balancedScale || halvedScale)
+                {
+                    _config.RenderScale = 1f;
+                    _config.RenderScaleAuto = false;
+                    this.Monitor.Log("Effect resolution set back to full size: the performance presets no longer lower it, because the "
+                                   + "round trip softened every sprite. The slider on the Performance page still sets it if you want the trade.", LogLevel.Info);
+                }
+                helper.WriteConfig(_config);
+            }
+            // 1.7.5: the one smoothing dial became one per art family. The value the player had is
+            // what every family starts from, so nothing looks different until a dial is moved.
+            if (_config.ConfigVersion < 4)
+            {
+                _config.ConfigVersion = 4;
+                float single = Math.Clamp(_config.SheetUpscaleSmoothness, 0f, 1f);
+                _config.SheetUpscaleSmoothnessWorld = single;
+                _config.SheetUpscaleSmoothnessCharacters = single;
+                _config.SheetUpscaleSmoothnessPortraits = single;
+                _config.SheetUpscaleSmoothnessItems = single;
+                _config.SheetUpscaleSmoothnessInterface = single;
+                helper.WriteConfig(_config);
+            }
         }
 
         private RenderPipeline Pipeline
@@ -252,6 +290,9 @@ namespace SDVRadiance
         [EventPriority(EventPriority.High)]
         private void OnRenderedWorld(object? sender, RenderedWorldEventArgs e)
         {
+            // Answered here because here is where the world has finished drawing and the recorder's
+            // list is closed. Before every early return below it, so it works with the effects off.
+            SpriteDrawRecorder.AnswerPendingQuestion(this.Monitor);
             // Self-heal: keep the postfix in sync with live config. A pending capture holds the
             // buffer open too, because the vanilla half of a before/after pair is taken with the
             // whole stack off, and with no buffer bound there is nothing to read back.
@@ -309,8 +350,14 @@ namespace SDVRadiance
             SheetUpscaler.WorldEnabled = _config.SheetUpscaleWorld;
             SheetUpscaler.CharactersEnabled = _config.SheetUpscaleCharacters;
             SheetUpscaler.PortraitsEnabled = _config.SheetUpscalePortraits;
+            SheetUpscaler.ItemsEnabled = _config.SheetUpscaleItems;
             SheetUpscaler.InterfaceEnabled = _config.SheetUpscaleInterface;
-            SheetUpscaler.Smoothness = _config.SheetUpscaleSmoothness;
+            SheetUpscaler.SmoothnessByFamily[(int)SheetUpscaler.ArtFamily.World] = _config.SheetUpscaleSmoothnessWorld;
+            SheetUpscaler.SmoothnessByFamily[(int)SheetUpscaler.ArtFamily.Characters] = _config.SheetUpscaleSmoothnessCharacters;
+            SheetUpscaler.SmoothnessByFamily[(int)SheetUpscaler.ArtFamily.Portraits] = _config.SheetUpscaleSmoothnessPortraits;
+            SheetUpscaler.SmoothnessByFamily[(int)SheetUpscaler.ArtFamily.Items] = _config.SheetUpscaleSmoothnessItems;
+            SheetUpscaler.SmoothnessByFamily[(int)SheetUpscaler.ArtFamily.Interface] = _config.SheetUpscaleSmoothnessInterface;
+            SheetUpscaler.Style = _config.SheetUpscaleStyle;
             SheetUpscaler.BeginFrame();
             // The mine's floor number leaves the world layer whenever the chain will run over it,
             // and OnRenderedWorld draws it back after the chain.
@@ -322,7 +369,7 @@ namespace SDVRadiance
             Determinism.HoldGameTimeForDraw();
             // Whether this frame's world draw is worth recording for the sprite relief: the
             // pipeline knows, because it also knows whether the relief is still fading out.
-            SpriteDrawRecorder.Wanted = Pipeline.WantsSpriteRecording(_config);
+            SpriteDrawRecorder.Wanted = Pipeline.WantsSpriteRecording(_config) || SpriteDrawRecorder.WaitingForAnswer;
             Determinism.HoldFarmerEyesOpenForDraw();
 
             // Golden hour: ComputeSun is static, so the day's-edge stretch dial is captured
@@ -349,15 +396,27 @@ namespace SDVRadiance
                 ShadowRenderer.DiagnosticMonitor = _config.DebugLogging ? this.Monitor : null;
                 ShadowRenderer.SharedMonitor = this.Monitor;
                 long t0 = FrameCost.Begin(FrameCost.Part.ShadowPrepare);
-                _shadows.PreparePlayer(Game1_GraphicsDevice, _config);
+                // The three parts are timed on their own into the report (ChainSteps): this row
+                // is the largest thing the mod does on a split screen and it did not say which.
+                // The device is fetched BEFORE the timer starts: the property reaches through
+                // MonoGame's device manager, and a split screen asks for it three times a frame
+                // per screen.
+                GraphicsDevice bakeDevice = Game1_GraphicsDevice;
+                long shadowStep = RenderPipeline.ChainStepBegin();
+                _shadows.PreparePlayer(bakeDevice, _config);
+                Pipeline.ChainStepEnd(RenderPipeline.ChainStep.PlayerBake, shadowStep);
+                shadowStep = RenderPipeline.ChainStepBegin();
                 // Co-op partners get their own silhouette, baked in the same window where a
                 // render-target swap is legal. Costs nothing in single player: the list is empty.
-                _shadows.PrepareOtherFarmers(Game1_GraphicsDevice, Game1.currentLocation, _config);
+                _shadows.PrepareOtherFarmers(bakeDevice, Game1.currentLocation, _config);
+                Pipeline.ChainStepEnd(RenderPipeline.ChainStep.OtherFarmerBakes, shadowStep);
+                shadowStep = RenderPipeline.ChainStepBegin();
                 // A building's shadow is too big to be a sprite among sprites, so it is stamped
                 // into a coverage mask here and applied by the effect chain as a change in the
                 // light (RenderBuildingShadow). Same window as the bakes above, same reason: it
                 // swaps render targets, which is only legal before the world batches open.
-                _shadows.BuildBuildingSunShadowMask(Game1_GraphicsDevice, _config);
+                _shadows.BuildBuildingSunShadowMask(bakeDevice, _config);
+                Pipeline.ChainStepEnd(RenderPipeline.ChainStep.BuildingMask, shadowStep);
                 double ms = FrameCost.End(FrameCost.Part.ShadowPrepare, t0);
                 if (_config.DebugLogging) _prepareMilliseconds += ms;
             }
@@ -482,6 +541,9 @@ namespace SDVRadiance
         /// </summary>
         private void OnRenderingStep(object? sender, RenderingStepEventArgs e)
         {
+            // Nothing this mod parked on a high texture unit last frame is still believed to be
+            // there while the game draws; a slot already empty costs nothing to set.
+            TextureUnitGuard.ReleaseHighUnits(Game1.graphics.GraphicsDevice);
             if (e.Step != StardewValley.Mods.RenderSteps.World_Sorted)
                 return;
             // The sorted world batch is what the sprite relief replays (see SpriteDrawRecorder);
@@ -589,6 +651,16 @@ namespace SDVRadiance
 
             if (_config.TunerKey.JustPressed())
                 ToggleTuner();
+
+            // Pointing at the thing and then typing in the console window is not possible: the
+            // pointer has to leave the game to reach the keyboard, and the answer would be about
+            // wherever it landed. A key asks about where the mouse is at the moment it is pressed.
+            if (_config.InspectDrawKey.JustPressed())
+            {
+                var at = new Microsoft.Xna.Framework.Point(Game1.getMouseX(), Game1.getMouseY());
+                SpriteDrawRecorder.AskWhatDrew(at);
+                Game1.addHUDMessage(HUDMessage.ForCornerTextbox($"Radiance: asking what drew {at.X},{at.Y} - see the SMAPI console"));
+            }
         }
 
         /// <summary>Open the tuner, or close it if it is already open. Behind a method because the

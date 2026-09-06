@@ -2,6 +2,323 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.7.5
+
+### Performance
+
+
+- **One farmer silhouette now serves every screen that wants it.** A farmer's shadow is baked from
+  a full character draw, which is the most expensive single thing this mod does, and on a split
+  screen the same person was baked twice a frame: once as their own screen's player, once as the
+  other screen's partner. A screen that wants a silhouette another screen has already baked at
+  that exact pose now borrows it. Measured on a two-screen farm with both walking: two thirds of
+  the silhouettes wanted each frame were borrowed rather than baked, the partner-bake row fell
+  from 0.82 ms to 0.36, the whole shadow bake row from 1.16 to 0.76, and the frame from 12.7 ms to
+  11.4 (79 to 88 fps). The periodic refresh that keeps animated accessories current is also
+  staggered per person now, so two players no longer fall due on the same frame.
+
+- **On a split screen, the shadow bakes stop treating the other screen's copy of the map as a
+  new arrival.** Each screen of a split-screen game holds its own copy of every location, so two
+  screens standing on the same farm compare as different objects, and every cache that asked
+  "is this the same location?" by object identity rebuilt itself at every screen switch. Measured
+  on a two-screen farm, walking: the object bakes' whole-map arrival walk ran on every frame of
+  both screens (2.2 ms), and so did the solid-tile texture behind the player's shadow (0.8 ms).
+  Those caches now ask whether it is the same place, by name and map size. Measured on that farm,
+  both screens walking: the shadow bake row went from 4.5 ms to 1.2 ms and the frame from 16.0 ms
+  to 12.7 ms (62 to 79 fps). What remains in the row is the other screen's farmer being baked as a
+  co-op partner, on the list.
+
+- **Split screen costs what two cameras cost, not twelve times it.** Measured here with two farmers
+  on one farm, eighteen tiles apart: this mod took 1.3 ms a frame with one screen and 16.5 with two,
+  and the frame ran at 38 fps against 60. Afterwards it is 6.1 ms and 70 fps.
+
+  Almost all of it was one mistake wearing several hats. A cache that holds the answer for "the
+  location I last looked at" is right for one screen and useless for two, because the screens take
+  turns and each one's answer replaces the other's. The window and emissive scans walk the whole map,
+  every layer, every tile; they ran twice a frame forever, 2,726 whole-map scans in a single test.
+  They are kept per location now. The waterfall and lava scan belongs to a camera, so it is kept per
+  screen, and the labels behind it are remembered per tile. The shadow bake caps were sized for one
+  viewport, so the two screens spent the frame evicting each other's sprites; each class now keeps a
+  screen's worth per screen.
+
+- **The cost report says which step of the effect chain, not just that it was the chain.** The chain's
+  row covered everything from the capture to the hand-back, and the pass table under it accounted for
+  a fiftieth of that on a split screen, which is where this hunt started. The report now breaks the
+  chain into its steps, the light list into its five parts, and the shadow row into the player bake,
+  the other farmers and the building mask.
+
+
+- **A character's shadow is drawn once per strip, not nine times.** Every villager's, animal's and
+  horse's shadow was softened at draw time: each strip of it was drawn nine times a frame, each
+  copy shifted by the blur radius, which with six villagers in the saloon was 536 draw calls a
+  frame for their shadows alone. The softness now goes into the baked silhouette once, the way
+  object shadows have been baked since 1.7.0, and each strip is one draw: 167 calls in the same
+  saloon, 534 instead of 635 in town at noon with the same six on the pavement. Compared on frozen
+  frames the picture is the same to within a tenth of a percent of pixels. A changed softness
+  slider re-bakes the warm silhouettes once. `radiance_casterblur off` is the A/B, and
+  `radiance_shadows` now says for each character whether it draws from a bake and at what blur.
+
+### Fixed
+
+
+- **A mailbox, a crop, a scarecrow or one villager no longer turns soft while the map around it
+  stays crisp.** Six reports since 1.7.0 described the same thing: one object blurred as if a
+  Gaussian layer sat over it, on some days and not others, with Smooth art and tilt-shift off,
+  cured by a restart. It was this mod. The flood lighting pass reads through a dozen texture
+  slots the game itself never uses, and the game's graphics layer (MonoGame) writes a sampler to
+  whatever texture the slot holds without binding the one it means, while a sprite sheet read
+  with GetData (by this mod at a warp, by SMAPI or a content pack loading art, by a costume mod
+  composing a character) is left parked on that slot. The next flood pass then wrote its linear
+  filter into that sheet, and every pixel-art batch in the game read it linearly for the rest of
+  the session. Measured on the farm mailbox, 4x4 screen blocks that are not one colour: 0% with
+  the mod folder removed, 82% with it, 0.4% with flood lighting off, and 0.0% to 9% with the
+  guard that now runs before every draw call and makes the slot hold the texture MonoGame thinks
+  it holds. `radiance_report` prints whether the guard is on; `radiance_unitguard off` is the A/B;
+  `radiance_resample` writes the pixel filter back to every sheet in a session that already went
+  soft. No new i18n keys.
+
+- **A content-pack farmhouse no longer wears a strip of its own shadow down one wall.** The
+  building's shadow has been placed where the game draws the building, offset and all, since the
+  last release; the cut that takes the building's own art back out of that shadow was still made
+  at the un-offset position, so a house whose data declares a draw offset kept a band of shadow
+  one offset wide along the side of its wall, faint and only with building shadows on. The vanilla
+  house declares no offset, which is why a vanilla farm never showed it. The cut now takes the
+  same offset as the stamp.
+
+- **`radiance_drawsat` now says how each texture was read.** Two frames after the question it lists
+  which sheets the world batch read with a linear filter, and whenever anything restarts the game's
+  own sprite batch in the middle of the world it names the caller and the sampler it asked for.
+
+- **Smooth art no longer draws a seam along the edges of floor and wall tiles.** The Scale2x
+  doubling rounded a whole tilesheet at once, so the border texel of every tile took its corner
+  from whatever tile happened to sit beside it in the sheet. Run through the same rule on the
+  vanilla outdoor sheet, that touched two or three texels on more than half of its tiles, and on
+  a floor made of one tile repeated it showed as a faint line at every tile edge. A map's own
+  tilesheets are now rounded one 16-pixel tile at a time; sprite sheets, whose cells are not all
+  one size, are unchanged.
+
+- **The bounce light no longer flickers in split screen.** The author could see it standing still,
+  and it survived several fixes before the frames were captured from inside the game and compared
+  screen by screen: a third of the picture stepping every twenty ticks, in haloes around every bush,
+  fence and tree. The flood occluder is a base texture, a silhouette mask drawn over it, and a small
+  pyramid of blurred copies; the mask already belonged to its screen and the other two did not, so a
+  screen that decided nothing had moved kept its own window's mask over a base built for the other
+  camera. Confirmed fixed the same way it was found: three bursts of twenty frames with not one step
+  above the noise floor, where every burst before carried one.
+
+- **The sprite relief lights each screen with its own sprites.** Its normal buffer is screen space
+  and there was one for the whole game, so on the frames where a screen records no world draw it
+  kept the other camera's sprites and lit the world with a stamp of things standing somewhere else.
+
+- **Lights no longer flicker and change places in split screen.** How far each light has faded, and
+  which lights hold the shader's slots, were one set shared by the whole game: every frame one screen
+  faded its lights up and the other faded those same lights down for not being on its half. Each
+  screen keeps its own now.
+
+- **The world stays as sharp as the game draws it at the zooms people play at.** Six players
+  reported the world soft while the HUD stayed crisp. Measured frame by frame from inside the game:
+  below 100% zoom the effects ran at the window's size, which shrank the frame, stretched it back
+  into the game's buffer, and left the game to shrink it once more, and the farm kept 66% of its edge
+  contrast at 75% zoom and 74% at 90%, against 100% at full zoom. Writing the frame back with a point
+  read made it worse, so the round trip is avoided instead: the effects now run at the buffer's size
+  unless the zoom is below 60%, where the buffer is near four times the window and the frame-rate
+  report that first asked for the smaller frame lives. The report now says beside the frame size
+  when the zoom lowered the scale.
+
+- **A building's shadow is anchored where the game draws the building.** A content pack's house can
+  declare a draw offset; the vanilla one does not, so the shadow stamp had never needed it and sat
+  that far to the side of a modded house, with the sun on either side. The mirror and the water mask
+  already anchored buildings with the offset.
+
+- **Walking into a room no longer switches the light on.** The sun shafts and both fogs eased up
+  from nothing over half a second on every warp, so stepping out of the farmhouse into a bright
+  morning read as the beams arriving rather than as light that was already there. Their target is
+  known the moment you arrive, so they are set to it behind the game's own fade to black. The fades
+  that wait on a buffer being built keep easing in, because their target is not knowable yet.
+
+- **Split screen: the shafts, fog, mist and building shadows follow their own screen.** All of them
+  ask whether the screen is outdoors, and all of them were one value for the whole game: with one
+  player in a room and the other in a field, every frame pulled each amount toward one answer and
+  then the other, and the outdoor half pulsed. Reported as the sunbeams flickering and moving about
+  as soon as a second player joined.
+
+- **Sun shafts in split screen are gated by their own screen's sky.** The cloud mask the shafts read
+  back a frame later was a single buffer, so each screen's beams were shaped by the other camera's
+  clouds, drawn eighteen tiles away.
+
+
+- **The on-screen performance readout no longer throws every frame.** Its rows were held in
+  arrays of a hand-typed sixteen, which was right when the mod had eleven parts to list; the wet
+  world and the sprite relief normals brought it to fourteen, and three headings plus fourteen
+  parts is one row past the end. So the panel threw on its last line, every frame it drew, and
+  each throw was written to the SMAPI log: one player counted 3,928 of them in a session and a
+  5.9 MB log. The rows are now sized from the part count itself, so adding a part cannot do this
+  again. Reported by trc666.
+
+- **Sheet doubling no longer tears the toolbar's items, stack counts and quality stars.** With the
+  doubling and its Menus and dialogue switch both on, anything the game draws at less than 4x was
+  read from the doubled sheet at less than two pixels per doubled texel, under the point sampling
+  the menus use: a texel came out one pixel wide or two, with no pattern. The toolbar draws its
+  items at 3.2x and 3.6x, a stack count and a quality star at 3x, so those wobbled and lost chunks
+  while the items in the inventory grid, drawn at 4x, were fine. Such draws are now left to the
+  game; measured in a night-time town with both switches on, the toolbar differs from the untouched
+  game in 0.1% of its pixels where it used to differ at every digit. Found while looking into a
+  report of inventory items looking pixelated; that report's picture shows a uniform blur this
+  could not have made, so whether it is the same thing is not known.
+
+- **Split screen no longer rebuilds the water surface on every frame when the two players are in
+  different places.** The record of where the game has drawn water was kept for one location at a
+  time and emptied whenever a draw came from another one. With one player on the farm and the
+  other indoors, that happened twice a frame, its version number climbed twice a frame, and every
+  water surface keyed on it was declared stale: both screens rebuilt their whole water window every
+  frame, and the map-wide shoreline was gathered again every time either player stood still. The
+  record is per location now and a screen extends its own. Reported by trc666, whose report showed
+  the 26 ms worst frame and the shoreline gather firing repeatedly.
+
+- **The whole-map shoreline gather no longer takes a frame for itself.** It ran in one piece the
+  moment the player stood still, 18 to 23 ms on a 156 by 65 farm, on the theory that a resting
+  player feels nothing. In split screen the other player is walking through that frame. It is
+  walked 2.5 ms a resting frame now and dispatched when the last tile is in; a step taken halfway
+  drops it, and what it had answered stays in the map memory, so the next attempt is shorter.
+  Measured on the town's 130 by 116 tiles: 35 ms that was one frame is now fifteen frames of at
+  most 2.6. radiance_report has a row for it.
+
+- **A reloaded map or tile sheet now invalidates only the places that draw from it.** Every reload
+  of anything under Maps/ used to drop every location's surface grid, and with the grids went the
+  occluder mask, the water gather's map memory and the shoreline anchor of the map the player was
+  standing on. Content packs with time-of-day conditions reload something under Maps/ every few
+  seconds on a large mod set, so on such a save those were rebuilt over and over for a town sheet
+  the farm never draws. A location is invalidated when the reloaded asset is its map or one of its
+  map's tile sheets, with the game's language suffix taken off the name.
+
+### Added
+
+
+- **Smooth art has an Items switch, for items lying in the world.** Tools, weapons, crops, forage,
+  big craftables and furniture placed in the world are their own family, known by their sheet, so
+  they can be rounded differently from the terrain. On by default like the world and the
+  characters. The same items shown in the toolbar and the inventory belong to Menus and dialogue,
+  which now reaches them: the toolbar draws its items at 3.2 screen pixels a texel, a size the
+  doubled sheet cannot be read evenly with point sampling, which is why they had stayed as the game
+  drew them whatever was switched on; in the interface those runs are read linearly now, while
+  4x draws, and everything in the world, stay point-read and crisp.
+
+- **`radiance_drawsat`: which sheet drew this pixel.** Point at the thing that looks wrong and type
+  it in the SMAPI console, or give it screen coordinates. It lists every sprite and map layer
+  covering that pixel, back to front, with the sheet each came from, the sheet's size, the piece of
+  it that was used, and **how many screen pixels one of its own pixels became**. The game's pixel
+  art is always 4; anything else is art at a different resolution or drawn at a different scale,
+  which is what "this one object looks blurry" almost always turns out to be. It also says when a
+  draw covers the pixel but is transparent there, so the answer is the sheet you can see rather
+  than the one on top. There is a key for it too, on the hotkeys page and unbound until you set
+  it, because pointing at something and then typing in the console window means the pointer has
+  to leave the game first.
+
+- **Daylight through the glass has a second dial for every house that is not yours.** The
+  request came with two screenshots: a farmhouse whose morning light read right beside a
+  villager's home that blew out to white, and one dial could only fix one of them. **Daylight
+  strength elsewhere**, on the windows page beside Daylight strength, sets shops, villagers'
+  homes and the saloon on their own; your farmhouse, cabin or island house keeps the first dial.
+  1 is the shipped look, so nothing changes until it is moved.
+
+- **The report answers the blur questions itself.** `radiance_report` now carries one line with
+  every setting that decides whether the world can look soft: the game's zoom and UI scale, the
+  render scale and whether it is automatic, the performance preset and the look, Smooth art,
+  Sprite relief, tilt-shift and chromatic aberration. Beside it: which GI model actually built the
+  lightmap (cascades, or the one-texel-per-tile flood map a card that refuses RGBA16F falls back
+  to), what the automatic render scale is doing and why, and which sprite sheets the relief pass
+  gave a bevel to on the last frame. A map's own tilesheet should never be on that list; one that
+  is would explain a grid at every tile edge, and until now nothing a player could send showed it.
+
+- **A soft look for the smoothing, beside the Scale2x one.** Smoothing look, on the Smooth art
+  page: Scale2x (1.7) is what the doubling has always been, twice the texels with the corners
+  rounded and every edge still a pixel edge. Soft 4x (1.7.5) redraws each sheet at four times the
+  texels by an xBR kernel of this mod's own, which finds the art's diagonals and curves and draws
+  them through out of the sheet's own colours, anti-aliased a quarter of a pixel wide: the rounded
+  look a texture-upscaler mod gives the art. It is baked per SPRITE, from that sprite's own
+  rectangle of its sheet, the way those mods do it, so a sprite never wears the edge of its
+  neighbour on the sheet (baked per sheet, every grass cell came out with a faint dark frame); only
+  the sprites actually drawn are held, under 192 MB, and on the farm with the menus switched on
+  that was 155 sprites and 5 MB. A light tent follows the kernel, three quarters of a texel out,
+  which is what a texture upscaler gets from drawing a bigger sheet down through a linear filter;
+  beside a capture of the same items under Clear Glasses the fruit read the same, chosen against
+  three other widths. The soft sheets are also sampled linearly whatever their batch asked for,
+  with the game's lettering and every other sheet left on their point sampler. Ships on Scale2x, so
+  nothing changes until it is chosen. `radiance_softedge` and `radiance_softblur` set the two widths
+  live, for anyone tuning by eye.
+
+### Changed
+
+
+- **Smooth art's smoothing amount is one dial per art family.** The world, the characters, the
+  portraits, the items and the menus each have their own, under their own switch on the Smooth art
+  page and in GMCM, so the world can be rounded all the way while the faces or the lettering keep
+  the game's own pixels, or the other way round. The value you had becomes every family's starting
+  value, so nothing looks different until a dial is moved. No new i18n keys: each dial reuses the
+  family's name and the old dial's label.
+
+- **Every per-screen part of the effect chain lives in the screen's own state now.** Split
+  screen used to copy 95 fields out of the pipeline and back in at every screen switch, and
+  seven flickers in one session were each a field the copy had missed. The pipeline now reads
+  and writes those fields through the active screen's state object directly, so a per-screen
+  field cannot be left behind: there is nothing to copy. Nothing changes on screen (verified
+  byte for byte at the harness's seven spots).
+
+- **No performance preset lowers the effect resolution any more.** Balanced used to compute the
+  effects at three quarters of the window and Performance and Low spec at half, with the automatic
+  step-down on. That round trip is what six people reported as a blurry world with a crisp HUD:
+  a sprite drawn at a scale the resample does not divide comes back softened, and a content pack's
+  2x sprite comes back softened everywhere. Measured here at 720p, three quarters saved 0.05 ms of
+  the chain's 0.38 and half saved 0.10, so the presets now save by switching work off and leave
+  the picture at full size. If a preset put your effect resolution below 1 before, it is set back
+  to full size once on first launch; the slider on the Performance page still sets it by hand.
+
+- **radiance_report says at the top when the window was out of focus.** The game sleeps 20 ms a
+  frame while its window is behind another one, so a report measured that way has a whole-frame
+  figure made mostly of sleep. The warning existed but sat beside that figure, most of a screen
+  down; when more than a fifth of the window was measured unfocused it is now repeated at the
+  very top, where someone about to paste the report will see it. Suggested by trc666, who had it
+  happen twice while running the command from the SMAPI console.
+
+- **The report's GPU column carries a caveat, and the wet-world row says what it brackets.** A
+  driver may resolve a timestamp at the edge of a command batch rather than at the mark, and then a
+  short pass inherits the cost of the pass before it: a wet-world row reading the water pass's
+  figure to the digit while the wet ground was switched off (trc666, AMD OpenGL; a smaller version
+  of it measured here). The footer now says so, and the row is labelled for both things it times,
+  the wet-ground pass and the drops on the screen edge.
+
+### Translations
+
+
+- Chinese is complete again at 814 of 814: the four sharp lamp shadow edges keys, from Rime961.
+
+### For translators
+
+
+Fourteen new keys in `i18n/default.json` since 1.7.4: the window daylight dial for other houses,
+the inspect key, the smoothing look, and the Items switch under Smooth art. English and Thai are
+done; the other languages fall back to English until sent. One existing key changed its meaning
+and needs a new translation: `config.sheetupscaleinterface.tooltip` now says the items shown in
+the toolbar and the inventory follow this switch. `help.reflectreach` was reworded during 1.7.4;
+check that its translation still fits.
+
+```
+config.inspectdrawkey.name
+config.inspectdrawkey.tooltip
+tuner.windowdaylightelsewhere
+help.windowdaylightelsewhere
+config.lighting.windowdaylightelsewhere.name
+config.lighting.windowdaylightelsewhere.tooltip
+config.sheetupscalestyle.name
+config.sheetupscalestyle.tooltip
+config.sheetupscalestyle.scale2x
+config.sheetupscalestyle.soft4x
+help.sheetupscalestyle.scale2x
+help.sheetupscalestyle.soft4x
+config.sheetupscaleitems.name
+config.sheetupscaleitems.tooltip
+```
+
 ## 1.7.4
 
 ### Fixed

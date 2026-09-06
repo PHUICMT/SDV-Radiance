@@ -568,6 +568,50 @@ namespace SDVRadiance
                     monitor.Log($"half-resolution lamp march {(half ? "on" : "off")}"
                         + $" (sharp lamp shadow edges {(half ? "off" : "ON")}).", LogLevel.Info);
                 });
+            helper.ConsoleCommands.Add("radiance_softedge",
+                "'radiance_softedge 0.25' sets how wide the Soft 4x look's anti-aliased edge is, in source pixels "
+                + "(0 = the hard-edged xBR of the emulator shaders, 0.25 = one texel of the four-times sheet); the "
+                + "soft sheets are re-made at the new width. For tuning by eye; not saved.",
+                (_, args) =>
+                {
+                    if (args.Length < 1 || !float.TryParse(args[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float width))
+                    {
+                        monitor.Log($"soft edge width is {SheetUpscaler.SoftEdgeSourcePixels:0.###} source pixels. Usage: radiance_softedge <0..1>", LogLevel.Info);
+                        return;
+                    }
+                    SheetUpscaler.SoftEdgeSourcePixels = Math.Clamp(width, 0f, 1f);
+                    monitor.Log($"soft edge width {SheetUpscaler.SoftEdgeSourcePixels:0.###}; the soft sheets re-make on the next draws.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_softblur",
+                "'radiance_softblur 1' sets the tent that follows the Soft 4x kernel, in texels of the four-times sheet "
+                + "(0 = the kernel alone, 1 = a quarter of a source pixel). Re-makes the soft sheets. For tuning by eye; not saved.",
+                (_, args) =>
+                {
+                    if (args.Length < 1 || !float.TryParse(args[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float texels))
+                    {
+                        monitor.Log($"soft blur is {SheetUpscaler.SoftBlurTexels:0.###} texels. Usage: radiance_softblur <0..3>", LogLevel.Info);
+                        return;
+                    }
+                    SheetUpscaler.SoftBlurTexels = Math.Clamp(texels, 0f, 3f);
+                    monitor.Log($"soft blur {SheetUpscaler.SoftBlurTexels:0.###} texels; the soft sheets re-make on the next draws.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_casterblur",
+                "'radiance_casterblur off' softens every character shadow tap by tap at draw time, nine draws a "
+                + "strip, the way it did before 1.7.5; 'on' (the default) bakes the softness into each character's "
+                + "silhouette once and draws each strip once. Every warm bake re-bakes on the switch. Not saved. "
+                + "radiance_report's 'shadow draw calls' row is the receipt.",
+                (_, args) =>
+                {
+                    if (args.Length < 1 || !(args[0].Equals("on", StringComparison.OrdinalIgnoreCase)
+                                             || args[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        monitor.Log($"character shadow blur is {(ShadowRenderer.CasterBlurBaked ? "baked" : "drawn LIVE")}. "
+                            + "Usage: radiance_casterblur on|off", LogLevel.Info);
+                        return;
+                    }
+                    ShadowRenderer.CasterBlurBaked = args[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    monitor.Log($"character shadow blur {(ShadowRenderer.CasterBlurBaked ? "baked" : "drawn live")}.", LogLevel.Info);
+                });
             helper.ConsoleCommands.Add("radiance_mapbake",
                 "'radiance_mapbake off' bakes only the screen's object shadows on arrival in a location, the way "
                 + "it did before 1.7.4, so every other sprite bakes the first time it scrolls into view; 'on' (the "
@@ -627,6 +671,59 @@ namespace SDVRadiance
                     RenderPipeline.MaskEpoch++;
                     RenderPipeline.MaskEpochReason = "radiance_gathercache was switched";
                     monitor.Log($"water gather cache {(RenderPipeline.GatherCacheEnabled ? "on" : "off")}; the mask rebuilds now.", LogLevel.Info);
+                });
+            // "This one object looks blurry" was unanswerable for six reporters in a row: the art
+            // could be the game's, a recolour's, a content pack's HD sprite or this mod's own
+            // doubling, and nothing on either side could tell them apart. The recorder already
+            // holds every draw the game made with the texture it came from, so the question is a
+            // lookup, and the answer names the sheet.
+            helper.ConsoleCommands.Add("radiance_unitguard",
+                "on|off: the guard that makes MonoGame bind a texture unit before writing a sampler to "
+                + "it. Off is for an A/B only: with it off, a sheet that any GetData parked on a high "
+                + "texture unit can be given this mod's linear sampler and read soft for the rest of the "
+                + "session (a mailbox, a crop, a walking villager going blurry while the map stays crisp).",
+                (_, args) =>
+                {
+                    if (args.Length >= 1 && (args[0].Equals("on", StringComparison.OrdinalIgnoreCase) || args[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
+                        TextureUnitGuard.Enabled = args[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    monitor.Log($"texture unit guard: {(TextureUnitGuard.Enabled ? "on" : "OFF")}"
+                              + (TextureUnitGuard.Installed ? $", {TextureUnitGuard.Rebinds} slot(s) rebound so far." : ", but its patch is NOT installed (see the startup log)."), LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_resample",
+                "Makes MonoGame write the Point filter to every texture the game draws again, for the "
+                + "next frames (default 3). MonoGame remembers per texture which sampler it last applied "
+                + "and skips the write when it believes nothing changed, so a texture whose GL filter "
+                + "drifted to linear behind its back stays blurry until that memory is broken. A soft "
+                + "sprite that comes back crisp after this was that drift.",
+                (_, args) =>
+                {
+                    int frames = args.Length >= 1 && int.TryParse(args[0], out int wanted) ? Math.Clamp(wanted, 1, 600) : 3;
+                    SheetUpscaler.ResampleFramesLeft = frames;
+                    monitor.Log($"every texture run of the game's batch is re-sampled as Point for the next {frames} frame(s).", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_drawsat",
+                "What drew this pixel? With no arguments it asks about the mouse pointer, or give it "
+                + "screen coordinates: 'radiance_drawsat 545 260'. Prints every sprite and map front "
+                + "layer covering that pixel, back to front, with the sheet each came from, its size, "
+                + "and how many screen pixels one of its own pixels became. The game's pixel art is "
+                + "always 4; anything else is art at another resolution or drawn at another scale, "
+                + "which is what 'that object looks blurry' usually is. The answer appears on the "
+                + "next drawn frame.",
+                (_, args) =>
+                {
+                    int x, y;
+                    if (args.Length >= 2 && int.TryParse(args[0], out x) && int.TryParse(args[1], out y))
+                    {
+                        // taken as given
+                    }
+                    else
+                    {
+                        x = Game1.getMouseX();
+                        y = Game1.getMouseY();
+                        monitor.Log($"no coordinates given, so asking about the mouse pointer at {x},{y}.", LogLevel.Info);
+                    }
+                    SpriteDrawRecorder.AskWhatDrew(new Microsoft.Xna.Framework.Point(x, y));
+                    monitor.Log("asked; the answer prints once the next frame has drawn.", LogLevel.Info);
                 });
             helper.ConsoleCommands.Add("radiance_hooks",
                 "'radiance_hooks off' takes this mod's patches off SpriteBatch.Draw for the rest of the session, "
@@ -976,6 +1073,8 @@ namespace SDVRadiance
                 // invisible: GpuContent counted lost render targets from the day it was written
                 // and nothing ever printed the count.
                 Write("=== what the lamp shadow march was handed this frame ===");
+                Write($"  lamp visibility  {RenderPipeline.LastLampVisible:0.000} (1 = night, 0 = white sky; from the game's daylight tint)"
+                    + $"   lamp shadow strength now {RenderPipeline.LastShadowStrengthNow:0.0000}");
                 Write($"  lamps marching   {RenderPipeline.LastMarchingLamps}"
                     + $"   steps allowed each   {RenderPipeline.LastMarchStepCeiling:0.#}"
                     + (RenderPipeline.LastMarchSkipped

@@ -59,7 +59,10 @@ namespace SDVRadiance
             _daylightPoolDamping = dayPool;    // emissive tiles ride the same daylight sink
 
             GameLocation? lightLocation = Game1.currentLocation;
+            long lightStep = ChainStepBegin();
             GatherGameLights(lightLocation);
+            ChainStepEnd(ChainStep.LightGather, lightStep);
+            lightStep = ChainStepBegin();
             // HOW HARD A FLAME BREATHES DEPENDS ON HOW MANY FLAMES ARE IN THE ROOM.
             //
             // The wobble was written for a hearth, where a room quietly pulsing with one fire is
@@ -139,12 +142,19 @@ namespace SDVRadiance
             // them like any lamp. Cached per location so the map scan runs once.
             if (Game1.currentLocation != null)
             {
+                ChainStepEnd(ChainStep.LightCandidates, lightStep);
+                lightStep = ChainStepBegin();
                 EnsureWindowCache(Game1.currentLocation);
                 AddWindowLights(vw, vh, boost, config);
+                ChainStepEnd(ChainStep.LightWindows, lightStep);
+                lightStep = ChainStepBegin();
                 EnsureEmissiveCache(Game1.currentLocation);
                 AddEmissiveLights(vw, vh, boost);
+                ChainStepEnd(ChainStep.LightEmissive, lightStep);
+                lightStep = ChainStepBegin();
             }
 
+            ChainStepEnd(ChainStep.LightSelect, lightStep);
             SelectLights();
 
             // Run the stage if we have lights, or if we're darkening a flat interior
@@ -783,17 +793,61 @@ namespace SDVRadiance
             public bool Fire;
         }
 
-        private readonly Dictionary<int, LightFade> _lightRamp = new();
-        private readonly HashSet<int> _lightChosen = new();
+        /// <summary>How lit each light is on THIS screen, and which lights hold the shader's
+        /// slots on it. Per screen (swapped in ScreenState), because the two cameras want
+        /// different lights: with one shared set, every frame screen 0 ramped its lights up and
+        /// screen 1 ramped the same lights down again for not being on its half, and the pools
+        /// pulsed and changed places between the two answers. Reported as the light flickering
+        /// and jumping about the moment a second player joined.</summary>
+        // moved to ScreenState (see RenderPipeline.Screens.cs)
+        // moved to ScreenState (see RenderPipeline.Screens.cs)
         private readonly HashSet<int> _lightWanted = new();
         private readonly List<(int Id, LightFade Fade, float Rank)> _lightWrite = new();
         private readonly List<int> _rampDrop = new();
-        private GameLocation? _lightRampLocation;
+        // moved to ScreenState (see RenderPipeline.Screens.cs)
 
         // ---- labeled-window glow (HF class 12) ----
         private GameLocation? _windowCacheLocation;
         private int _windowLabelVersion = -1;
         private readonly List<Vector2> _windowTiles = new();   // world-px centres of window tiles
+
+        /// <summary>The window and emissive scans, kept for the few locations in play rather than
+        /// for the last one asked about.
+        ///
+        /// <para>Both scans walk the whole map, every drawn layer, every tile, and they were held
+        /// in a single slot keyed by "the location I last scanned". That is right for one screen
+        /// and wrong for two: the screens take turns, so each one's scan replaced the other's and
+        /// both rescanned every frame. Measured on a farm with two screens, both outdoors: 2.15 ms
+        /// a frame for the windows and 2.13 for the emissive tiles, against 0.008 each with one
+        /// screen, and the SMAPI log carried 2,726 whole-map scans in a single run. What a scan
+        /// finds does not depend on the camera at all, so the answers are simply kept per
+        /// location, and a screen finds the other screen's work waiting for it.</para>
+        ///
+        /// <para>Four locations, dropped oldest first: two screens in two rooms is two, and the
+        /// spare pair covers walking between them without paying for a rescan on the way back.</para></summary>
+        private const int LocationScanCacheSlots = 4;
+        private readonly Dictionary<GameLocation, (int Version, List<Vector2> Tiles)> _windowTilesByLocation = new();
+        private readonly Dictionary<GameLocation, (int Version, List<(Vector2 Pos, Vector3 Col, float Amt)> Tiles)> _emissiveTilesByLocation = new();
+        private readonly List<GameLocation> _scanCacheDropScratch = new();
+
+        /// <summary>Keep the cache small: the oldest entries go when it outgrows its slots. The
+        /// dictionary preserves insertion order well enough for this, and a wrong guess costs one
+        /// rescan.</summary>
+        private void TrimScanCache<TValue>(Dictionary<GameLocation, TValue> cache)
+        {
+            if (cache.Count <= LocationScanCacheSlots)
+                return;
+            _scanCacheDropScratch.Clear();
+            int drop = cache.Count - LocationScanCacheSlots;
+            foreach (var key in cache.Keys)
+            {
+                if (_scanCacheDropScratch.Count >= drop)
+                    break;
+                _scanCacheDropScratch.Add(key);
+            }
+            foreach (var key in _scanCacheDropScratch)
+                cache.Remove(key);
+        }
         // Every drawn layer, TOP to BOTTOM (Front wins over Buildings over Back), from the shared
         // sort key. It used to be the three bare names, which missed Back2 / negative-suffix /
         // numbered layers outright, and ran in declaration order — the labeler and the mask now
@@ -807,9 +861,15 @@ namespace SDVRadiance
         {
             var labels = LabelStore.Instance;
             int ver = labels?.Version ?? 0;
-            if (ReferenceEquals(location, _windowCacheLocation) && ver == _windowLabelVersion)
+            if (LiveScreens.SamePlace(location, _windowCacheLocation) && ver == _windowLabelVersion)
                 return;
             _windowCacheLocation = location; _windowLabelVersion = ver; _windowTiles.Clear();
+            // Another screen may have scanned this very room already this frame.
+            if (_windowTilesByLocation.TryGetValue(location, out var remembered) && remembered.Version == ver)
+            {
+                _windowTiles.AddRange(remembered.Tiles);
+                return;
+            }
             var map = location.map;
             var layer = map != null && map.Layers.Count > 0 ? map.Layers[0] : null;
             // Windows are 100% label-driven: no labels loaded (version 0 = empty DB) means no window
@@ -836,6 +896,8 @@ namespace SDVRadiance
                     }
                 }
             windowScanStopwatch.Stop();
+            _windowTilesByLocation[location] = (ver, new List<Vector2>(_windowTiles));
+            TrimScanCache(_windowTilesByLocation);
             _monitor.Log($"[location] window scan done: {_windowTiles.Count} tiles in {windowScanStopwatch.Elapsed.TotalMilliseconds:0.0}ms", LogLevel.Trace);
         }
 
@@ -935,9 +997,15 @@ namespace SDVRadiance
         {
             var labels = LabelStore.Instance;
             int ver = labels?.Version ?? 0;
-            if (ReferenceEquals(location, _emissiveCacheLocation) && ver == _emissiveLabelVersion)
+            if (LiveScreens.SamePlace(location, _emissiveCacheLocation) && ver == _emissiveLabelVersion)
                 return;
             _emissiveCacheLocation = location; _emissiveLabelVersion = ver; _emissiveTiles.Clear();
+            if (location != null && _emissiveTilesByLocation.TryGetValue(location, out var rememberedEmissive)
+                && rememberedEmissive.Version == ver)
+            {
+                _emissiveTiles.AddRange(rememberedEmissive.Tiles);
+                return;
+            }
             var layer0 = location?.map?.Layers.Count > 0 ? location.map.Layers[0] : null;
             if (labels == null || layer0 == null || ver == 0 || location == null)
                 return;
@@ -969,6 +1037,8 @@ namespace SDVRadiance
                     }
                 }
             emissiveScanStopwatch.Stop();
+            _emissiveTilesByLocation[location] = (ver, new List<(Vector2, Vector3, float)>(_emissiveTiles));
+            TrimScanCache(_emissiveTilesByLocation);
             _monitor.Log($"[location] emissive scan done: {_emissiveTiles.Count} tiles in {emissiveScanStopwatch.Elapsed.TotalMilliseconds:0.0}ms", LogLevel.Trace);
         }
 
@@ -1351,8 +1421,8 @@ namespace SDVRadiance
             return span;
         }
         /// <summary>The tile-resolution grid (walls, tree trunks) that the silhouettes are drawn over.</summary>
-        private Texture2D? _floodOccluderBaseTexture;
-        private Texture2D? _floodOccluderBaseSpare;   // its pair - see TextureDoubleBuffer
+        // moved to ScreenState (see RenderPipeline.Screens.cs)
+        // moved to ScreenState (see RenderPipeline.Screens.cs)   // its pair - see TextureDoubleBuffer
         private SpriteBatch? _floodOccluderSpriteBatch;
         /// <summary>Additive with a per-tier factor: a wall under a bush stays a wall (the sum
         /// saturates at 1), and a bush over open ground is exactly its share.</summary>
@@ -1443,7 +1513,8 @@ namespace SDVRadiance
         /// penumbra (OccAtBlur in floodlight.fx). Its own textures rather than a mip chain, because
         /// the level a pixel shader asks tex2Dlod for reaches the GPU as a bias through MonoGame's
         /// GLSL path and the softness dial did nothing.</summary>
-        private readonly RenderTarget2D?[] _floodOccluderSoft = new RenderTarget2D?[3];
+        internal const int FloodOccluderSoftLevels = 3;
+        // moved to ScreenState (see RenderPipeline.Screens.cs)
 
         private bool BuildFloodOccluders(int w, int h, ModConfig config)
         {
@@ -1867,6 +1938,11 @@ namespace SDVRadiance
         /// flood shader reads for the relief terms. Straight-alpha blend, because the encoded normal
         /// must not be scaled by coverage. Leaves <paramref name="target"/> bound again.
         /// </summary>
+        /// <summary>The sheets the replay gave a bevel to, this frame and the last completed one,
+        /// for the report (see DescribeRelief).</summary>
+        private readonly HashSet<string> _bevelledSheetsThisFrame = new();
+        private List<string> _bevelledSheetsLastFrame = new();
+
         private void RenderNormalPass(ModConfig config, RenderTarget2D target)
         {
             bool wanted = config.SpriteReliefEnabled && config.FloodLightingEnabled && _normalsEffect != null;
@@ -1884,6 +1960,7 @@ namespace SDVRadiance
             // ghosts, every new sheet was refused, and the relief flickered as sprites fell in
             // and out of the flat stand-in.
             _sheetNormals.SweepDisposed();
+            _bevelledSheetsThisFrame.Clear();
             if (SpriteDrawRecorder.Records.Count == 0)
             {
                 // No world draw was recorded this frame (a menu, a transition). Keeping the last
@@ -1952,6 +2029,8 @@ namespace SDVRadiance
                         // Three derivations, three keys. Flat used to share the unflipped key, so
                         // whichever was baked first stood in for the other from then on.
                         int variant = _bakeSheetFlat ? NormalBakeFlat : flipped ? NormalBakeMirrored : NormalBakeBevelled;
+                        if (variant != NormalBakeFlat)
+                            _bevelledSheetsThisFrame.Add(sheet.Name ?? "(unnamed sheet)");
                         Texture2D? map = _sheetNormals.For(_device, normals, sheet, variant);
                         _bakeSheetFlat = false;
                         return map;
@@ -1972,12 +2051,15 @@ namespace SDVRadiance
                         // Three derivations, three keys. Flat used to share the unflipped key, so
                         // whichever was baked first stood in for the other from then on.
                         int variant = _bakeSheetFlat ? NormalBakeFlat : flipped ? NormalBakeMirrored : NormalBakeBevelled;
+                        if (variant != NormalBakeFlat)
+                            _bevelledSheetsThisFrame.Add(sheet.Name ?? "(unnamed sheet)");
                         Texture2D? map = _sheetNormals.For(_device, normals, sheet, variant);
                         _bakeSheetFlat = false;
                         return map;
                     }, flat);
                 _normalSpriteBatch.End();
                 FlattenTreeTrunkJoins();
+                _bevelledSheetsLastFrame = new List<string>(_bevelledSheetsThisFrame);
                 _normalPassReady = true;
                 // Where this screen-space buffer was drawn from, so a later frame that cannot
                 // redraw it can tell whether it is still looking at the same view.
@@ -2033,8 +2115,12 @@ namespace SDVRadiance
                 return;
             }
             int width = size.LayerWidth, height = size.LayerHeight;
-            if (_floodSolidBase != null && ReferenceEquals(location, _floodSolidBaseLocation)
-                && ReferenceEquals(surf, _floodSolidBaseSurface) && buildingCount == _floodSolidBaseBuildingCount
+            // The other screen's copy of this map has its own SurfaceMap object too; same place
+            // and same size is the same answer (LiveScreens.SamePlace).
+            bool sameSurface = ReferenceEquals(surf, _floodSolidBaseSurface)
+                || (surf != null && _floodSolidBaseSurface != null && surf.Width == _floodSolidBaseSurface.Width && surf.Height == _floodSolidBaseSurface.Height);
+            if (_floodSolidBase != null && LiveScreens.SamePlace(location, _floodSolidBaseLocation)
+                && sameSurface && buildingCount == _floodSolidBaseBuildingCount
                 && width == _floodSolidBaseWidth && height == _floodSolidBaseHeight)
                 return;
             if (_floodSolidBase == null || _floodSolidBase.Length != width * height)

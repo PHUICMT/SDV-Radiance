@@ -100,6 +100,10 @@ namespace SDVRadiance
             return report.ToString();
         }
 
+        /// <summary>The renderer the report reads its caches from: the report is static (a console
+        /// command has no instance) and the last one to prepare a frame is the one drawing.</summary>
+        private static ShadowRenderer? _diagInstance;
+
         internal static string Report(ModConfig config, bool wholeMap)
         {
             GameLocation? location = Game1.currentLocation;
@@ -250,10 +254,16 @@ namespace SDVRadiance
                             + $"eventActor={npc.EventActor} simpleNonVillager={npc.SimpleNonVillagerNPC} "
                             + $"hideShadow={npc.HideShadow} layingDown={npc.layingDown} drawOffset={npc.drawOffset.X},{npc.drawOffset.Y} "
                             + $"water={OnWater(location, t)} "
-                            + $"openWater={OnOpenWater(location, t)} -> {verdict}");
+                            + $"openWater={OnOpenWater(location, t)} "
+                            // Whether this frame draws from a baked silhouette (one draw a strip,
+                            // its softness in the pixels) or falls back to bands, and what blur
+                            // the bake carries: the receipt for the 1.7.5 bake-time blur.
+                            + $"bake={(npc.Sprite?.Texture != null && _diagInstance != null && _diagInstance._casterBakeCache.TryGetValue((npc.Sprite.Texture, npc.Sprite.SourceRect), out SpriteBake? npcBake) ? $"yes blur={npcBake.BakedBlur:0.0}" : "NO (bands)")} "
+                            + $"-> {verdict}");
             }
             if (shown == 0)
                 report.AppendLine("  (none — if you can see NPCs, they are not in the list the pass reads)");
+            report.AppendLine($"  character bake cache: {_diagInstance?._casterBakeCache.Count ?? -1} entries, blur baked = {CasterBlurBaked}");
         }
 
         /// <summary>

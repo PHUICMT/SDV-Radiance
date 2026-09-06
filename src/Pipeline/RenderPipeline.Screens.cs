@@ -76,6 +76,15 @@ namespace SDVRadiance
             public int FloodOccluderInputsHash;
             public SurfaceMap? FloodOccluderSurfaceMap;
             public Vector2 FloodOccluderMaskSize;
+            /// <summary>The occluder mask's two companions. The mask itself was already per
+            /// screen; these were not, and a screen whose gate said "nothing has moved, keep what
+            /// you built" then read the OTHER screen's window out of them. The bounce light was
+            /// computed from a picture of somewhere else on those frames, and since the two gates
+            /// open on different ticks it alternated: the flicker that survived every other fix.
+            /// A texture and its pair belong to whoever the mask belongs to.</summary>
+            public Texture2D? FloodOccluderBase;
+            public Texture2D? FloodOccluderBaseSpare;
+            public RenderTarget2D?[] FloodOccluderSoft = new RenderTarget2D?[FloodOccluderSoftLevels];
             public bool ShadowsReady;
 
             // ---- the mirror's scenery cache ----
@@ -105,6 +114,43 @@ namespace SDVRadiance
             public float ShimmerEase, RainRingsEase;
             public float FadeWet;
 
+            // ---- the sprite relief's normal buffer ----
+            // This buffer is SCREEN SPACE, and it was one buffer for the whole game. The two
+            // screens replayed their own sprites into it in turn, and on any frame where a screen
+            // recorded no world draw it kept whatever the other camera had just written: the world
+            // lit by a stamp of sprites standing somewhere else, flickering in and out as those
+            // frames came and went. The file's own comment predicted this for a camera move; two
+            // cameras are a camera move on every frame. Reported as the light flickering the
+            // moment either player walked.
+            public RenderTarget2D? NormalRenderTarget;
+            public bool NormalPassReady;
+            public Point NormalPassViewport;
+            public float ReliefEase;
+
+            // ---- the eased amounts that follow THIS screen's own scene ----
+            // Each of these has a target that asks whether the screen is outdoors, or what its
+            // own scene is doing. Shared between two screens, one player standing in a room and
+            // the other in a field pulled every one of them in opposite directions on alternate
+            // frames, and the outdoor half's shafts, fog and building shadows pulsed in time with
+            // it. Reported as the sunbeams flickering and moving about as soon as a second player
+            // joined, before that player had even come outside.
+            public float GodRayAmount, FogDayAmount, FogMistAmount, FadeBuildingShadow;
+            public float ToneMapEase, VignetteEase, ChromaticAberrationEase;
+
+            // ---- which lights this screen is showing, and how far each has faded ----
+            public Dictionary<int, LightFade> LightRamp = new();
+            public HashSet<int> LightChosen = new();
+            public GameLocation? LightRampLocation;
+
+            // ---- the cloud mask the sun shafts read back a frame later ----
+            // One shared keep between two screens meant screen 0's shafts read screen 1's sky,
+            // drawn from a camera eighteen tiles away, every other frame: the beams jumped
+            // between the two positions and read as flicker. Each screen keeps its own.
+            public RenderTarget2D? CloudMaskKeep;
+            public int CloudMaskTick = int.MinValue;
+            public Vector2 CloudMaskTileOffset;
+            public float CloudMaskStrength, ShaftCloudEase;
+
             // ---- bounce-light grid ----
             public FloodLightmap Flood = new();
             public RadianceCascades Cascades = new();
@@ -126,6 +172,11 @@ namespace SDVRadiance
                 FloodOccluderMask?.Dispose();
                 MirrorSceneCache?.Dispose();
                 LuminanceTarget?.Dispose();
+                CloudMaskKeep?.Dispose();
+                NormalRenderTarget?.Dispose();
+                FloodOccluderBase?.Dispose();
+                FloodOccluderBaseSpare?.Dispose();
+                for (int i = 0; i < FloodOccluderSoft.Length; i++) FloodOccluderSoft[i]?.Dispose();
                 Flood.Dispose();
             }
         }
@@ -142,13 +193,14 @@ namespace SDVRadiance
         /// </summary>
         internal void BeginScreen(int screenId)
         {
+            DrawingScreen = this;
             if (screenId == _activeScreenId)
                 return;
             if (_activeScreenId >= 0)
             {
                 if (!_screenStates.TryGetValue(_activeScreenId, out ScreenState? outgoing))
                     _screenStates[_activeScreenId] = outgoing = new ScreenState();
-                SaveScreenState(outgoing);
+                // The outgoing screen's state is already in its own object: nothing to copy.
             }
             _activeScreenId = screenId;
             if (!_screenStates.TryGetValue(screenId, out ScreenState? incoming))
@@ -158,178 +210,110 @@ namespace SDVRadiance
                 // anyway, and a wrong window drawn for one frame is a wrong window on screen.
                 _screenStates[screenId] = incoming = new ScreenState();
             }
-            LoadScreenState(incoming);
+            _screen = incoming;
             ForgetDepartedScreens();
         }
 
-        private void SaveScreenState(ScreenState s)
-        {
-            s.WaterMask = _waterMask;
-            s.WaterSignedDistance = _waterSignedDistanceTexture;
-            s.WaterRealShoreDistance = _waterRealShoreDistanceTexture;
-            s.WaterPlungeChurn = _waterPlungeChurnTexture;
-            s.WaterMaskSpare = _waterMaskSpare;
-            s.WaterSignedDistanceSpare = _waterSignedDistanceSpare;
-            s.WaterRealShoreDistanceSpare = _waterRealShoreDistanceSpare;
-            s.WaterPlungeChurnSpare = _waterPlungeChurnSpare;
-            s.WaterTilesInMask = _waterTilesInMask;
-            s.WaterTilesVersion = _waterTilesVersion;
-            s.LastWaterLocation = _lastWaterLocation;
-            s.LastWaterTileX = _lastWaterTileX;
-            s.LastWaterTileY = _lastWaterTileY;
-            s.LastWaterBuildTick = _lastWaterBuildTick;
-            s.LastWaterHookVersion = _lastWaterHookVersion;
-            s.LastWaterLabelVersion = _lastWaterLabelVersion;
-            s.LastWaterEpoch = _lastWaterEpoch;
-            s.HasWaterInMask = _hasWaterInMask;
-            s.WaterInMaskEase = _waterInMaskEase;
-            s.WaterMaskTilesPerScreen = _waterMaskTilesPerScreen;
-            s.WaterMaskWorldTileOffset = _waterMaskWorldTileOffset;
-            s.WaterMaskPixelSize = _waterMaskPixelSize;
-
-            s.OccluderMask = _occluderMask;
-            s.OccluderMaskSpare = _occluderMaskSpare;
-            s.OccluderMaskPixels = _occluderMaskPixels;
-            s.OccluderTileX = _occluderTileX;
-            s.OccluderTileY = _occluderTileY;
-            s.OccluderCacheTick = _occluderCacheTick;
-            s.OccluderInputsHash = _occluderInputsHash;
-            s.OccluderSurfaceMap = _occluderSurfaceMap;
-            s.OccluderMaskBuildMode = _occluderMaskBuildMode;
-            s.OccluderTilesPerScreen = _occluderTilesPerScreen;
-            s.OccluderWorldTileOffset = _occluderWorldTileOffset;
-            s.OccluderMaskSize = _occluderMaskSize;
-            s.FloodOccluderMask = _floodOccluderMask;
-            s.FloodOccluderMaskPixels = _floodOccluderMaskPixels;
-            s.FloodOccluderTileX = _floodOccluderTileX;
-            s.FloodOccluderTileY = _floodOccluderTileY;
-            s.FloodOccluderCacheTick = _floodOccluderCacheTick;
-            s.FloodOccluderInputsHash = _floodOccluderInputsHash;
-            s.FloodOccluderSurfaceMap = _floodOccluderSurfaceMap;
-            s.FloodOccluderMaskSize = _floodOccluderMaskSize;
-            s.ShadowsReady = _shadowsReady;
-
-            s.MirrorSceneCache = _mirrorSceneCache;
-            s.SceneCacheLocation = _sceneCacheLocation;
-            s.SceneCacheAnchorX = _sceneCacheAnchorX;
-            s.SceneCacheAnchorY = _sceneCacheAnchorY;
-            s.SceneCacheBuiltTick = _sceneCacheBuiltTick;
-            s.SceneAnimStamp = _sceneAnimationStamp;
-
-            s.FadeLocation = _fadeLocation;
-            s.FadeWater = _fadeWater;
-            s.FadeCloud = _fadeCloud;
-            s.FadeLighting = _fadeLighting;
-            s.FadeFlood = _fadeFlood;
-            s.FadeTilt = _fadeTilt;
-            s.TiltIndoorEase = _tiltIndoorEase;
-
-            s.LuminanceTarget = _luminanceRenderTarget;
-            s.LuminancePixels = _luminancePixels;
-            s.LuminancePrimed = _isLuminancePrimed;
-            s.ExposureMeterLocation = _exposureMeterLocation;
-            s.MeteredExposure = _meteredExposure;
-            s.ExposureEase = _exposureEase;
-            s.RoomSaturationEase = _roomSaturationEase;
-            s.PaneDaylightEase = _paneDaylightEase;
-            s.WindowDaylightEase = _windowDaylightEase;
-            s.WindowRoomLightEase = _windowRoomLightEase;
-            s.ShimmerEase = _shimmerEase;
-            s.RainRingsEase = _rainRingsEase;
-            s.FadeWet = _fadeWet;
-
-            s.Flood = _flood;
-            s.Cascades = _cascades;
-            s.CascadeBlend = _cascadeBlend;
-            s.CascadesReady = _cascadesReady;
-        }
-
-        private void LoadScreenState(ScreenState s)
-        {
-            _waterMask = s.WaterMask;
-            _waterSignedDistanceTexture = s.WaterSignedDistance;
-            _waterRealShoreDistanceTexture = s.WaterRealShoreDistance;
-            _waterPlungeChurnTexture = s.WaterPlungeChurn;
-            _waterMaskSpare = s.WaterMaskSpare;
-            _waterSignedDistanceSpare = s.WaterSignedDistanceSpare;
-            _waterRealShoreDistanceSpare = s.WaterRealShoreDistanceSpare;
-            _waterPlungeChurnSpare = s.WaterPlungeChurnSpare;
-            _waterTilesInMask = s.WaterTilesInMask;
-            _waterTilesVersion = s.WaterTilesVersion;
-            _lastWaterLocation = s.LastWaterLocation;
-            _lastWaterTileX = s.LastWaterTileX;
-            _lastWaterTileY = s.LastWaterTileY;
-            _lastWaterBuildTick = s.LastWaterBuildTick;
-            _lastWaterHookVersion = s.LastWaterHookVersion;
-            _lastWaterLabelVersion = s.LastWaterLabelVersion;
-            _lastWaterEpoch = s.LastWaterEpoch;
-            _hasWaterInMask = s.HasWaterInMask;
-            _waterInMaskEase = s.WaterInMaskEase;
-            _waterMaskTilesPerScreen = s.WaterMaskTilesPerScreen;
-            _waterMaskWorldTileOffset = s.WaterMaskWorldTileOffset;
-            _waterMaskPixelSize = s.WaterMaskPixelSize;
-
-            _occluderMask = s.OccluderMask;
-            _occluderMaskSpare = s.OccluderMaskSpare;
-            _occluderMaskPixels = s.OccluderMaskPixels;
-            _occluderTileX = s.OccluderTileX;
-            _occluderTileY = s.OccluderTileY;
-            _occluderCacheTick = s.OccluderCacheTick;
-            _occluderInputsHash = s.OccluderInputsHash;
-            _occluderSurfaceMap = s.OccluderSurfaceMap;
-            _occluderMaskBuildMode = s.OccluderMaskBuildMode;
-            _occluderTilesPerScreen = s.OccluderTilesPerScreen;
-            _occluderWorldTileOffset = s.OccluderWorldTileOffset;
-            _occluderMaskSize = s.OccluderMaskSize;
-            _floodOccluderMask = s.FloodOccluderMask;
-            _floodOccluderMaskPixels = s.FloodOccluderMaskPixels;
-            _floodOccluderTileX = s.FloodOccluderTileX;
-            _floodOccluderTileY = s.FloodOccluderTileY;
-            _floodOccluderCacheTick = s.FloodOccluderCacheTick;
-            _floodOccluderInputsHash = s.FloodOccluderInputsHash;
-            _floodOccluderSurfaceMap = s.FloodOccluderSurfaceMap;
-            _floodOccluderMaskSize = s.FloodOccluderMaskSize;
-            _shadowsReady = s.ShadowsReady;
-
-            _mirrorSceneCache = s.MirrorSceneCache;
-            _sceneCacheLocation = s.SceneCacheLocation;
-            _sceneCacheAnchorX = s.SceneCacheAnchorX;
-            _sceneCacheAnchorY = s.SceneCacheAnchorY;
-            _sceneCacheBuiltTick = s.SceneCacheBuiltTick;
-            _sceneAnimationStamp = s.SceneAnimStamp;
-
-            _fadeLocation = s.FadeLocation;
-            _fadeWater = s.FadeWater;
-            _fadeCloud = s.FadeCloud;
-            _fadeLighting = s.FadeLighting;
-            _fadeFlood = s.FadeFlood;
-            _fadeTilt = s.FadeTilt;
-            _tiltIndoorEase = s.TiltIndoorEase;
-
-            _luminanceRenderTarget = s.LuminanceTarget;
-            _luminancePixels = s.LuminancePixels;
-            _isLuminancePrimed = s.LuminancePrimed;
-            _exposureMeterLocation = s.ExposureMeterLocation;
-            _meteredExposure = s.MeteredExposure;
-            _exposureEase = s.ExposureEase;
-            _roomSaturationEase = s.RoomSaturationEase;
-            _paneDaylightEase = s.PaneDaylightEase;
-            _windowDaylightEase = s.WindowDaylightEase;
-            _windowRoomLightEase = s.WindowRoomLightEase;
-            _shimmerEase = s.ShimmerEase;
-            _rainRingsEase = s.RainRingsEase;
-            _fadeWet = s.FadeWet;
-
-            _flood = s.Flood;
-            _cascades = s.Cascades;
-            _cascadeBlend = s.CascadeBlend;
-            _cascadesReady = s.CascadesReady;
-
-            // The player colour bake runs before this screen's chain gets a look at the frame and
-            // gates on this flag. It used to hold whichever screen answered last, so a player on a
-            // shore next to a player in a cave got no reflection of themselves.
-            ShadowRenderer.WaterOnScreen = _hasWaterInMask;
-        }
+        // Every per-screen field of the pipeline lives in the active screen's state and is
+        // reached through these: a ref property reads and writes the field in place, so a
+        // `ref _x` or an `_x ??= ...` at the use sites is unchanged. There is no copying on a
+        // screen switch any more, only the swap of _screen below.
+        private ScreenState _screen = new();
+        private ref Texture2D? _waterMask => ref _screen.WaterMask;
+        private ref Texture2D? _waterSignedDistanceTexture => ref _screen.WaterSignedDistance;
+        private ref Texture2D? _waterRealShoreDistanceTexture => ref _screen.WaterRealShoreDistance;
+        private ref Texture2D? _waterPlungeChurnTexture => ref _screen.WaterPlungeChurn;
+        private ref Texture2D? _waterMaskSpare => ref _screen.WaterMaskSpare;
+        private ref Texture2D? _waterSignedDistanceSpare => ref _screen.WaterSignedDistanceSpare;
+        private ref Texture2D? _waterRealShoreDistanceSpare => ref _screen.WaterRealShoreDistanceSpare;
+        private ref Texture2D? _waterPlungeChurnSpare => ref _screen.WaterPlungeChurnSpare;
+        private ref bool[]? _waterTilesInMask => ref _screen.WaterTilesInMask;
+        private ref int _waterTilesVersion => ref _screen.WaterTilesVersion;
+        private ref GameLocation? _lastWaterLocation => ref _screen.LastWaterLocation;
+        private ref int _lastWaterTileX => ref _screen.LastWaterTileX;
+        private ref int _lastWaterTileY => ref _screen.LastWaterTileY;
+        private ref int _lastWaterBuildTick => ref _screen.LastWaterBuildTick;
+        private ref int _lastWaterHookVersion => ref _screen.LastWaterHookVersion;
+        private ref int _lastWaterLabelVersion => ref _screen.LastWaterLabelVersion;
+        private ref int _lastWaterEpoch => ref _screen.LastWaterEpoch;
+        private ref bool _hasWaterInMask => ref _screen.HasWaterInMask;
+        private ref float _waterInMaskEase => ref _screen.WaterInMaskEase;
+        private ref Vector2 _waterMaskTilesPerScreen => ref _screen.WaterMaskTilesPerScreen;
+        private ref Vector2 _waterMaskWorldTileOffset => ref _screen.WaterMaskWorldTileOffset;
+        private ref Vector2 _waterMaskPixelSize => ref _screen.WaterMaskPixelSize;
+        private ref Texture2D? _occluderMask => ref _screen.OccluderMask;
+        private ref Texture2D? _occluderMaskSpare => ref _screen.OccluderMaskSpare;
+        private ref Color[]? _occluderMaskPixels => ref _screen.OccluderMaskPixels;
+        private ref int _occluderTileX => ref _screen.OccluderTileX;
+        private ref int _occluderTileY => ref _screen.OccluderTileY;
+        private ref int _occluderCacheTick => ref _screen.OccluderCacheTick;
+        private ref int _occluderInputsHash => ref _screen.OccluderInputsHash;
+        private ref SurfaceMap? _occluderSurfaceMap => ref _screen.OccluderSurfaceMap;
+        private ref int _occluderMaskBuildMode => ref _screen.OccluderMaskBuildMode;
+        private ref Vector2 _occluderTilesPerScreen => ref _screen.OccluderTilesPerScreen;
+        private ref Vector2 _occluderWorldTileOffset => ref _screen.OccluderWorldTileOffset;
+        private ref Vector2 _occluderMaskSize => ref _screen.OccluderMaskSize;
+        private ref Texture2D? _floodOccluderMask => ref _screen.FloodOccluderMask;
+        private ref Color[]? _floodOccluderMaskPixels => ref _screen.FloodOccluderMaskPixels;
+        private ref int _floodOccluderTileX => ref _screen.FloodOccluderTileX;
+        private ref int _floodOccluderTileY => ref _screen.FloodOccluderTileY;
+        private ref int _floodOccluderCacheTick => ref _screen.FloodOccluderCacheTick;
+        private ref int _floodOccluderInputsHash => ref _screen.FloodOccluderInputsHash;
+        private ref SurfaceMap? _floodOccluderSurfaceMap => ref _screen.FloodOccluderSurfaceMap;
+        private ref Vector2 _floodOccluderMaskSize => ref _screen.FloodOccluderMaskSize;
+        private ref Texture2D? _floodOccluderBaseTexture => ref _screen.FloodOccluderBase;
+        private ref Texture2D? _floodOccluderBaseSpare => ref _screen.FloodOccluderBaseSpare;
+        private ref RenderTarget2D?[] _floodOccluderSoft => ref _screen.FloodOccluderSoft;
+        private ref bool _shadowsReady => ref _screen.ShadowsReady;
+        private ref RenderTarget2D? _mirrorSceneCache => ref _screen.MirrorSceneCache;
+        private ref GameLocation? _sceneCacheLocation => ref _screen.SceneCacheLocation;
+        private ref int _sceneCacheAnchorX => ref _screen.SceneCacheAnchorX;
+        private ref int _sceneCacheAnchorY => ref _screen.SceneCacheAnchorY;
+        private ref int _sceneCacheBuiltTick => ref _screen.SceneCacheBuiltTick;
+        private ref long _sceneAnimationStamp => ref _screen.SceneAnimStamp;
+        private ref GameLocation? _fadeLocation => ref _screen.FadeLocation;
+        private ref float _fadeWater => ref _screen.FadeWater;
+        private ref float _fadeCloud => ref _screen.FadeCloud;
+        private ref float _fadeLighting => ref _screen.FadeLighting;
+        private ref float _fadeFlood => ref _screen.FadeFlood;
+        private ref float _fadeTilt => ref _screen.FadeTilt;
+        private ref float _tiltIndoorEase => ref _screen.TiltIndoorEase;
+        private ref RenderTarget2D? _normalRenderTarget => ref _screen.NormalRenderTarget;
+        private ref bool _normalPassReady => ref _screen.NormalPassReady;
+        private ref Point _normalPassViewport => ref _screen.NormalPassViewport;
+        private ref float _reliefEase => ref _screen.ReliefEase;
+        private ref float _godRayAmount => ref _screen.GodRayAmount;
+        private ref float _fogDayAmount => ref _screen.FogDayAmount;
+        private ref float _fogMistAmount => ref _screen.FogMistAmount;
+        private ref float _fadeBuildingShadow => ref _screen.FadeBuildingShadow;
+        private ref float _toneMapEase => ref _screen.ToneMapEase;
+        private ref float _vignetteEase => ref _screen.VignetteEase;
+        private ref float _caEase => ref _screen.ChromaticAberrationEase;
+        private ref Dictionary<int, LightFade> _lightRamp => ref _screen.LightRamp;
+        private ref HashSet<int> _lightChosen => ref _screen.LightChosen;
+        private ref GameLocation? _lightRampLocation => ref _screen.LightRampLocation;
+        private ref RenderTarget2D? _cloudMaskKeep => ref _screen.CloudMaskKeep;
+        private ref int _cloudMaskTick => ref _screen.CloudMaskTick;
+        private ref Vector2 _cloudMaskTileOffset => ref _screen.CloudMaskTileOffset;
+        private ref float _cloudMaskStrength => ref _screen.CloudMaskStrength;
+        private ref float _shaftCloudEase => ref _screen.ShaftCloudEase;
+        private ref RenderTarget2D? _luminanceRenderTarget => ref _screen.LuminanceTarget;
+        private ref Color[]? _luminancePixels => ref _screen.LuminancePixels;
+        private ref bool _isLuminancePrimed => ref _screen.LuminancePrimed;
+        private ref GameLocation? _exposureMeterLocation => ref _screen.ExposureMeterLocation;
+        private ref float _meteredExposure => ref _screen.MeteredExposure;
+        private ref Vector3 _exposureEase => ref _screen.ExposureEase;
+        private ref float _roomSaturationEase => ref _screen.RoomSaturationEase;
+        private ref float _paneDaylightEase => ref _screen.PaneDaylightEase;
+        private ref float _windowDaylightEase => ref _screen.WindowDaylightEase;
+        private ref float _windowRoomLightEase => ref _screen.WindowRoomLightEase;
+        private ref float _shimmerEase => ref _screen.ShimmerEase;
+        private ref float _rainRingsEase => ref _screen.RainRingsEase;
+        private ref float _fadeWet => ref _screen.FadeWet;
+        private ref FloodLightmap _flood => ref _screen.Flood;
+        private ref RadianceCascades _cascades => ref _screen.Cascades;
+        private ref float _cascadeBlend => ref _screen.CascadeBlend;
+        private ref bool _cascadesReady => ref _screen.CascadesReady;
 
         /// <summary>Is this screen still being drawn? Screens are numbered from zero with no gaps,
         /// so anything at or past the count has left.</summary>

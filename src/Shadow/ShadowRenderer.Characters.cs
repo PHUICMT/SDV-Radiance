@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
@@ -103,7 +104,7 @@ namespace SDVRadiance
             {
                 baked.LastUsedTick = Game1.ticks;
                 DrawSoftGrounded(spriteBatch, Taps9, baked.Rt, null, feet, Color.White, alpha, rot, baked.FeetInRt,
-                    new Vector2(SolidAcrossScale(rot, stretch), stretch), anchorWorldY, SpriteEffects.None, blur);
+                    new Vector2(SolidAcrossScale(rot, stretch), stretch), anchorWorldY, SpriteEffects.None, baked.BakedBlur > 0f ? 0f : blur);
                 return;
             }
             Rectangle src = a.Sprite.SourceRect;
@@ -633,10 +634,45 @@ namespace SDVRadiance
         /// which is what keeps the saloon's hearth, a campfire and a street lamp where they are.
         /// </para>
         /// </summary>
+        /// <summary>The offsets worked out this frame, so a light is matched against the room's
+        /// furniture once however many times it is asked for.
+        ///
+        /// <para>The answer depends on the light's position and the room's furniture, and neither
+        /// moves between two screens of the same frame. The light list asks for every fire on
+        /// screen, and each ask walked every piece of furniture in the room: a farm with two
+        /// screens spent 4.2 ms a frame here, against 0.03 with one, because the two screens each
+        /// paid the whole walk and a farm's furniture list is long. Keyed by the light's position
+        /// and cleared when the frame or the room changes.</para></summary>
+        private static readonly Dictionary<(float x, float y), Vector2> _flameGlowOffsets = new();
+        private static GameLocation? _flameGlowLocation;
+        private static int _flameGlowTick = int.MinValue;
+        private static int _flameGlowFurnitureCount = -1;
+
         internal static Vector2 FlameGlowOffset(GameLocation? location, Vector2 lightPosition, int textureIndex)
         {
             if (location == null || (textureIndex != 4 && textureIndex != 5))
                 return Vector2.Zero;
+            // The furniture count joins the key so a piece placed or picked up this frame is not
+            // answered from a list that no longer describes the room.
+            int furnitureCount = location.furniture?.Count ?? 0;
+            if (!SDVRadiance.LiveScreens.SamePlace(location, _flameGlowLocation) || _flameGlowTick != Game1.ticks
+                || _flameGlowFurnitureCount != furnitureCount)
+            {
+                _flameGlowOffsets.Clear();
+                _flameGlowLocation = location;
+                _flameGlowTick = Game1.ticks;
+                _flameGlowFurnitureCount = furnitureCount;
+            }
+            var key = (lightPosition.X, lightPosition.Y);
+            if (_flameGlowOffsets.TryGetValue(key, out Vector2 known))
+                return known;
+            Vector2 answer = FindFlameGlowOffset(location, lightPosition);
+            _flameGlowOffsets[key] = answer;
+            return answer;
+        }
+
+        private static Vector2 FindFlameGlowOffset(GameLocation location, Vector2 lightPosition)
+        {
             foreach (Furniture piece in location.furniture)
             {
                 Rectangle box = piece.boundingBox.Value;
@@ -876,8 +912,10 @@ namespace SDVRadiance
                 // The bake is pinned bottom-CENTRE in its slot and FeetInRt is that centre, so a
                 // horizontal flip turns the silhouette about the same axis the game turns the
                 // sprite about, and the feet stay where they are.
+                // The softness is in the baked pixels (BakedBlur), so each strip is one draw; a
+                // bake made with no blur (the A/B switch off) is softened tap by tap as before.
                 DrawSoftGrounded(spriteBatch, Taps9, baked.Rt, null, feet, Color.White, alpha, rot, baked.FeetInRt,
-                    new Vector2(across, stretch), anchorWorldY, facing, blur);
+                    new Vector2(across, stretch), anchorWorldY, facing, baked.BakedBlur > 0f ? 0f : blur);
                 return;
             }
             // Where the feet sit INSIDE the sprite, which is the sprite's bottom edge only when the

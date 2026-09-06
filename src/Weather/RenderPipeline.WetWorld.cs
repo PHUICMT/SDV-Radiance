@@ -43,7 +43,7 @@ namespace SDVRadiance
         /// <summary>This screen's presence fade for the wet pass (saved in ScreenState). The
         /// wetness scalar is the slow world truth; this is the ~0.5 s screen-side ease that
         /// covers config toggles and warping indoors, so nothing pops.</summary>
-        private float _fadeWet;
+        // moved to ScreenState (see RenderPipeline.Screens.cs)
 
         /// <summary>The wetness of the context the player is standing in, 0..1.</summary>
         internal static float WetnessNow

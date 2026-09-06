@@ -85,6 +85,11 @@ namespace SDVRadiance
             // and the plan to close that gap (bake the blur for characters as well) is worth
             // exactly the size of this number and nothing else.
             ShadowDrawCalls,
+            // A farmer silhouette is the most expensive single bake in the mod (FarmerRenderer
+            // composes body, clothes, hair and whatever an appearance mod patched in), and on a
+            // split screen the same person is wanted by every screen at once.
+            FarmerBakes,
+            FarmerBakesShared,
         }
 
         private const int PartCount = 14;
@@ -107,7 +112,7 @@ namespace SDVRadiance
             "effect chain",
             "particles",
             "precipitation (rain/snow)",
-            "wet world",
+            "wet world (ground + screen drops)",
             "sprite relief normals",
         };
 
@@ -169,6 +174,8 @@ namespace SDVRadiance
             "vanilla-draw shim calls",
             "too big to bake (draws banded)",
             "shadow draw calls (SpriteBatch)",
+            "farmer silhouette bakes",
+            "farmer bakes shared between screens",
         };
 
         static FrameCost()
@@ -587,6 +594,23 @@ namespace SDVRadiance
             for (int i = 0; i < PartCount && !anyGpu; i++) anyGpu = gpuSamples[i] > 0;
 
             var text = new System.Text.StringBuilder();
+            // The focus warning is repeated at the TOP when it applies to a large share of the
+            // window. It was printed only beside the whole-frame figure, most of a screen further
+            // down, and a player who ran the command from the SMAPI console - which is to say with
+            // the game window behind it - had two of their three reports measured that way before
+            // the line was noticed. A number that is wrong is worth saying before the numbers, not
+            // after them. Below a fifth of the window it stays where it was: a handful of frames
+            // lost to an alt-tab does not move an average and a shouted warning about it would
+            // teach people to skip the shouting.
+            int unfocusedNow = complete ? _unfocusedWindowFrames : _unfocusedFrames;
+            if (unfocusedNow * 5 > frames)
+            {
+                text.AppendLine($"!! {unfocusedNow} of these {frames} frames were drawn with the game window OUT OF FOCUS,");
+                text.AppendLine("!! where the game sleeps 20 ms a frame. The WHOLE FRAME figure below is mostly that");
+                text.AppendLine("!! sleep and is not worth reading. The per-part numbers are unaffected. Click the");
+                text.AppendLine("!! game window, play for ten seconds and run this again before sharing it.");
+                text.AppendLine();
+            }
             text.AppendLine($"CPU submission time per frame, averaged over the last {frames} frames"
                           + (complete ? "" : " (a partial window)") + ":");
             double total = 0, gpuTotal = 0;
@@ -657,6 +681,11 @@ namespace SDVRadiance
                 text.AppendLine("and expensive to draw, which is exactly how object shadows once read as a rounding");
                 text.AppendLine("error while costing 1.80 ms. A GPU line of '-' means no result came back for that");
                 text.AppendLine("part in this window, usually because the part did not run.");
+                text.AppendLine("The GPU figures are driver timestamps, and a driver may resolve them at the edge of");
+                text.AppendLine("a command batch rather than at the mark: a short pass can then be handed the cost of");
+                text.AppendLine("the pass before it (seen on AMD OpenGL, a wet-world row reading the water pass's");
+                text.AppendLine("figure with the wet ground switched off). Read the CPU column and the totals first,");
+                text.AppendLine("and treat any single GPU row that matches its neighbour to the digit as suspect.");
             }
             else
             {

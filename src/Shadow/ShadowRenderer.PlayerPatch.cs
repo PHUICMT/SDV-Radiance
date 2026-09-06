@@ -133,7 +133,11 @@ namespace SDVRadiance
                 return;
             }
 
+            long solidStep = RenderPipeline.ChainStepBegin();
+
             EnsureSolidTiles(device, location);
+
+            RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.PatchSolidTiles, solidStep);
             if (_solidTiles == null)
             {
                 PlayerPatchReport = "no Buildings layer to cut against";
@@ -256,7 +260,9 @@ namespace SDVRadiance
                 _solidTiles = null;
                 return;
             }
-            if (ReferenceEquals(location, _solidTilesFor) && ReferenceEquals(map, _solidTilesMap)
+            // The same place seen from the other screen is a different object with the same
+            // Buildings layer: the texture built for one serves both (LiveScreens.SamePlace).
+            if (SDVRadiance.LiveScreens.SamePlace(location, _solidTilesFor) && SDVRadiance.LiveScreens.SameMapSize(map, _solidTilesMap)
                 && _solidTiles is { IsDisposed: false })
                 return;
             var buildings = map.GetLayer("Buildings");

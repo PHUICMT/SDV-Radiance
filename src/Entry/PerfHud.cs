@@ -48,10 +48,24 @@ namespace SDVRadiance
         private const int Pad = 8;
         private const int Gap = 14;               // between the label and the first number column
 
-        private static readonly string[] _label = new string[16];
-        private static readonly string[] _cpu = new string[16];
-        private static readonly string[] _gpu = new string[16];
-        private static readonly Color[] _colour = new Color[16];
+        /// <summary>Room for every row the panel can hold: the three headings, one line per part,
+        /// and the unfocused-frames warning.
+        ///
+        /// <para>SIZED FROM THE PART COUNT, never written beside it. These were a hand-typed 16,
+        /// which was right when the mod had eleven parts; the wet world and the sprite relief
+        /// normals took it to fourteen, and 3 + 14 is one past the end of a sixteen-long array. So
+        /// the panel threw IndexOutOfRangeException on its LAST row, on every frame it was asked
+        /// to draw - 3,928 times in one player's session, each one formatted into the SMAPI log
+        /// until the log was 5.9 MB. The readout meant to show what a frame costs was costing the
+        /// frame more than anything it measured. FrameCost already carries this lesson in a
+        /// comment of its own ("a hand-kept copy of a count drifted once already"); this is the
+        /// same mistake, one file over.</para></summary>
+        private static readonly int RowCapacity = FrameCost.PartTotal + 4;
+
+        private static readonly string[] _label = new string[RowCapacity];
+        private static readonly string[] _cpu = new string[RowCapacity];
+        private static readonly string[] _gpu = new string[RowCapacity];
+        private static readonly Color[] _colour = new Color[RowCapacity];
 
         internal static void Draw(SpriteBatch b)
         {

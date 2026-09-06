@@ -60,8 +60,13 @@ namespace SDVRadiance
         private int _generatedThisFrame, _frameTick = -1;
         private SpriteBatch? _spriteBatch;
 
+        /// <summary>A derivation that is more than one draw of one technique, or null for the
+        /// one-draw kind. Called with the target already bound and cleared; returns false to refuse.</summary>
+        private readonly Func<GraphicsDevice, SpriteBatch, Effect, Texture2D, RenderTarget2D, bool>? _bake;
+
         internal SheetDerivedCache(string bucket, long budgetBytes, long largestInputBytes, int scale,
-            int generatePerFrameCap, string technique, Action<Effect, Texture2D, int> setParameters)
+            int generatePerFrameCap, string technique, Action<Effect, Texture2D, int> setParameters,
+            Func<GraphicsDevice, SpriteBatch, Effect, Texture2D, RenderTarget2D, bool>? bake = null)
         {
             _bucket = bucket;
             _budgetBytes = budgetBytes;
@@ -70,7 +75,11 @@ namespace SDVRadiance
             _generatePerFrameCap = generatePerFrameCap;
             _technique = technique;
             _setParameters = setParameters;
+            _bake = bake;
         }
+
+        /// <summary>Texels of derivative per texel of sheet.</summary>
+        internal int Scale => _scale;
 
         internal int Count => _entries.Count;
         internal long HeldBytes => _heldBytes;
@@ -148,12 +157,20 @@ namespace SDVRadiance
             {
                 device.SetRenderTarget(target);
                 device.Clear(Color.Transparent);
-                _setParameters(effect, sheet, variant);
-                effect.CurrentTechnique = effect.Techniques[_technique];
-                _spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp,
-                    DepthStencilState.None, RasterizerState.CullNone, effect);
-                _spriteBatch.Draw(sheet, new Rectangle(0, 0, target.Width, target.Height), Color.White);
-                _spriteBatch.End();
+                if (_bake != null)
+                {
+                    if (!_bake(device, _spriteBatch, effect, sheet, target))
+                        throw new InvalidOperationException("the bake refused");
+                }
+                else
+                {
+                    _setParameters(effect, sheet, variant);
+                    effect.CurrentTechnique = effect.Techniques[_technique];
+                    _spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp,
+                        DepthStencilState.None, RasterizerState.CullNone, effect);
+                    _spriteBatch.Draw(sheet, new Rectangle(0, 0, target.Width, target.Height), Color.White);
+                    _spriteBatch.End();
+                }
             }
             catch
             {

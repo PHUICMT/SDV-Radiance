@@ -87,6 +87,18 @@ namespace SDVRadiance
 
     /// <summary>Which model computes the flood GI lightmap. Both read the same lights and the same
     /// occluders and hand floodlight.fx the same kind of texture; a switch cross-fades between them.</summary>
+    /// <summary>What the smoothed sheets look like. Both are baked once per sheet on the card.</summary>
+    public enum SheetSmoothingStyle
+    {
+        /// <summary>The 1.7 look: twice the texels by the Scale2x rule, corners rounded, every
+        /// edge still a pixel edge.</summary>
+        Scale2x,
+        /// <summary>Four times the texels (Scale2x twice over) with the edges spread by a quarter
+        /// of a pixel: the soft, rounded look a texture-upscaler mod gives the art. Sixteen times a
+        /// sheet's bytes, so only the small sheets get it; the large ones stay doubled.</summary>
+        Soft4x,
+    }
+
     public enum GiModel
     {
         /// <summary>The CPU sweep of every release so far: light floods tile by tile with a per-cell
@@ -584,17 +596,30 @@ namespace SDVRadiance
         /// <summary>Sprites drawn from sheets doubled on the graphics card by the Scale2x rule (see
         /// SheetUpscaler): two texels where the game put one. Off until it has been looked at.</summary>
         public bool SheetUpscaleEnabled { get; set; } = false;
-        /// <summary>How far the doubled sheets go toward the smoothed art: 0 keeps the game's own
-        /// pixels, 1 is the full Scale2x corner rounding. Baked into the sheets, so moving it
-        /// re-makes the cache once and costs nothing per frame after that (0..1).</summary>
+        /// <summary>Which look the smoothing has: the 1.7 doubling, or the soft four-times sheets.</summary>
+        public SheetSmoothingStyle SheetUpscaleStyle { get; set; } = SheetSmoothingStyle.Scale2x;
+        /// <summary>The single smoothing dial of 1.7.0 to 1.7.4. Read once by the ConfigVersion 4
+        /// migration, which copies it into the five dials below, and not used after that.</summary>
         public float SheetUpscaleSmoothness { get; set; } = 1f;
+        /// <summary>How far the doubled sheets go toward the smoothed art, one dial per art family:
+        /// 0 keeps the game's own pixels, 1 is the full Scale2x corner rounding. Split because a
+        /// player may want the world rounded and the faces left alone, or the other way. Baked into
+        /// the sheets, so moving one re-makes that family's sheets once and costs nothing per frame
+        /// after that (0..1).</summary>
+        public float SheetUpscaleSmoothnessWorld { get; set; } = 1f;
+        public float SheetUpscaleSmoothnessCharacters { get; set; } = 1f;
+        public float SheetUpscaleSmoothnessPortraits { get; set; } = 1f;
+        public float SheetUpscaleSmoothnessItems { get; set; } = 1f;
+        public float SheetUpscaleSmoothnessInterface { get; set; } = 1f;
         /// <summary>Which art the doubling touches, split because smoothing is a taste per family:
         /// the world's sprites read well doubled while a portrait or the dialogue lettering may
-        /// not. Portraits and characters are named by their sheet's content path; the rest divides
-        /// by when it is drawn - menus, dialogue and the HUD draw in the game's UI mode.</summary>
+        /// not. Portraits and characters are named by their sheet's content path; everything drawn
+        /// in the game's UI mode (menus, dialogue, the HUD and the items shown in them) is the
+        /// interface; items lying in the world are named by their sheet; the rest is the world.</summary>
         public bool SheetUpscaleWorld { get; set; } = true;
         public bool SheetUpscaleCharacters { get; set; } = true;
         public bool SheetUpscalePortraits { get; set; } = true;
+        public bool SheetUpscaleItems { get; set; } = true;
         public bool SheetUpscaleInterface { get; set; } = false;
         /// <summary>How strongly the flood lightmap modulates the scene (0..1).</summary>
         /// <remarks>
@@ -697,6 +722,11 @@ namespace SDVRadiance
         /// the farmhouse's morning with it. The light a window adds to the room's own lighting is
         /// separate and does not move with this.</summary>
         public float WindowDaylightStrength { get; set; } = 1f;
+        /// <summary>The same dial for every interior that is not the player's own house: shops,
+        /// villagers' homes, the saloon. Asked for on 2026-08-25 with screenshots of a farmhouse
+        /// that read right beside a villager's home that blew out to white: one dial could only
+        /// fix one of them. 1 is the shipped look, the same as the dial above.</summary>
+        public float WindowDaylightStrengthElsewhere { get; set; } = 1f;
         /// <summary>People walking past a window show faintly in its glass by day. Glass reflects
         /// when what is behind it is darker than what is in front, so this is the daytime twin of
         /// the night glow and fades out as the glow fades in; no setting can make a window do
@@ -1276,6 +1306,7 @@ namespace SDVRadiance
             WindowSceneReflectionStrength = ClampToRange(WindowSceneReflectionStrength, 0f, 2f);
             WindowLightGlowStrength = ClampToRange(WindowLightGlowStrength, 0f, 2f);
             WindowDaylightStrength = ClampToRange(WindowDaylightStrength, 0f, 2f);
+            WindowDaylightStrengthElsewhere = ClampToRange(WindowDaylightStrengthElsewhere, 0f, 2f);
             ParticleDensity = ClampToRange(ParticleDensity, 0.25f, 2f);
             ParticleDustAmount = ClampToRange(ParticleDustAmount, 0f, 2f);
             ParticleDustSize = ClampToRange(ParticleDustSize, 0.5f, 2f);
@@ -1322,6 +1353,11 @@ namespace SDVRadiance
             SpriteReliefRim = ClampToRange(SpriteReliefRim, 0f, 1f);
             SpriteReliefLeafShimmer = ClampToRange(SpriteReliefLeafShimmer, 0f, 1f);
             SheetUpscaleSmoothness = ClampToRange(SheetUpscaleSmoothness, 0f, 1f);
+            SheetUpscaleSmoothnessWorld = ClampToRange(SheetUpscaleSmoothnessWorld, 0f, 1f);
+            SheetUpscaleSmoothnessCharacters = ClampToRange(SheetUpscaleSmoothnessCharacters, 0f, 1f);
+            SheetUpscaleSmoothnessPortraits = ClampToRange(SheetUpscaleSmoothnessPortraits, 0f, 1f);
+            SheetUpscaleSmoothnessItems = ClampToRange(SheetUpscaleSmoothnessItems, 0f, 1f);
+            SheetUpscaleSmoothnessInterface = ClampToRange(SheetUpscaleSmoothnessInterface, 0f, 1f);
             FoliageSwayStrength = ClampToRange(FoliageSwayStrength, 0f, 2f);
             FoliageSwaySpeed = ClampToRange(FoliageSwaySpeed, 0.25f, 2f);
             FoliageSwayGustSpan = ClampToRange(FoliageSwayGustSpan, 4f, 40f);
@@ -1380,6 +1416,11 @@ namespace SDVRadiance
         /// <summary>Open the live tuner overlay. F6: F8/F9 belong to Fashion Sense's outfit
         /// tools in the wild, and colliding with the most popular cosmetic mod hurts.</summary>
         public KeybindList TunerKey { get; set; } = new(SButton.F6);
+        /// <summary>Ask what drew the pixel under the mouse (the console command radiance_drawsat,
+        /// without the console). Unbound by default: it exists for the day something on screen
+        /// looks wrong, and a key that does nothing the rest of the time should not be taken from
+        /// the player. The answer goes to the SMAPI console and the log.</summary>
+        public KeybindList InspectDrawKey { get; set; } = new();
 
         // --- Saved custom looks ---
         public List<NamedProfile> SavedProfiles { get; set; } = new();
@@ -1510,7 +1551,12 @@ namespace SDVRadiance
 
                 case PerfPreset.Balanced:
                     LightShadowSharpEdges = false;
-                    RenderScale = 0.75f;
+                    // No preset lowers the render scale any more. Measured 2026-09-06 at 720p:
+                    // 0.75 saved 0.05 ms of the chain's 0.38 and 0.5 saved 0.10, while the round
+                    // trip cost every sprite drawn at a scale the resample does not divide, which
+                    // is what six "the world went blurry" reports were. The slider is still there
+                    // for anyone who wants the trade; a preset makes it on nobody's behalf.
+                    RenderScale = 1f;
                     RenderScaleAuto = false;
                     // Every reflection still there, just fading in eight-row steps instead of
                     // four: measured at 31-37% off the reflection pass for nothing lost but the
@@ -1531,11 +1577,10 @@ namespace SDVRadiance
 
                 case PerfPreset.Performance:
                     LightShadowSharpEdges = false;
-                    RenderScale = 0.5f;
-                    // The one setting with a quadratic effect, and the one no performance report
-                    // has ever mentioned finding. A preset picked BY somebody having trouble is
-                    // the right place to reach for it on their behalf.
-                    RenderScaleAuto = true;
+                    // Full size here too (see Balanced): what this preset saves, it saves by
+                    // switching work off, not by drawing the world through a smaller buffer.
+                    RenderScale = 1f;
+                    RenderScaleAuto = false;
                     TiltShiftEnabled = false;
                     ChromaticAberrationEnabled = false;
                     // Flood GI is the pricier of the two lighting models; classic lighting
@@ -1561,8 +1606,8 @@ namespace SDVRadiance
 
                 case PerfPreset.LowSpec:
                     LightShadowSharpEdges = false;
-                    RenderScale = 0.5f;
-                    RenderScaleAuto = true;
+                    RenderScale = 1f;
+                    RenderScaleAuto = false;
                     TiltShiftEnabled = false;
                     ChromaticAberrationEnabled = false;
                     FloodLightingEnabled = false;

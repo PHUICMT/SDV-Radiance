@@ -459,7 +459,7 @@ namespace SDVRadiance
                     Game1.smallFont, new Vector2(12, 36), Color.Yellow);
             if (DebugChannel == DebugOverlayChannel.Normals)
                 Utility.drawTextWithShadow(spriteBatch,
-                    $"sway strips {FoliageSway.StripDrawsThisFrame}   upscaled draws {SheetUpscaler.RedirectedThisFrame} ({SheetUpscaler.PatchedOverloads} overloads)   {SheetUpscaler.Cache.Describe()}",
+                    $"sway strips {FoliageSway.StripDrawsThisFrame}   upscaled draws {SheetUpscaler.RedirectedThisFrame} ({SheetUpscaler.PatchedOverloads} overloads)   {SheetUpscaler.Cache.Describe()}   {SheetUpscaler.SoftSprites.Describe()}",
                     Game1.smallFont, new Vector2(12, 60), Color.Yellow);
             if (DebugChannel == DebugOverlayChannel.Flood && Game1.currentLocation != null)
             {

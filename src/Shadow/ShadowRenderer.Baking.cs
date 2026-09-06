@@ -33,7 +33,9 @@ namespace SDVRadiance
             // mirrored player stopped turning with you (reported on 1.3.3: "the reflection only
             // shows the front view and does not change"). The caster/object bakes below stay
             // shadow-only work, so a reflection-only frame pays for one small render target.
+            long gateStep = RenderPipeline.ChainStepBegin();
             bool shadowsOn = ShouldCast(config);
+            _diagInstance = this;
             // "The reflection needs the player" requires water actually on screen, not just the
             // setting: the only reader of PlayerColor early-outs without water, so a farmhouse
             // frame that baked it anyway was doing a second FarmerRenderer draw for nobody. Both
@@ -46,6 +48,7 @@ namespace SDVRadiance
                 && RenderPipeline.PuddleAmountNow > 0.05f && (Game1.currentLocation?.IsOutdoors ?? false);
             bool reflectionNeedsPlayer = ((config.Enabled && config.WaterReflection && WaterOnScreen) || wetPuddlesNeedPlayer)
                 && StardewModdingAPI.Context.IsWorldReady && Game1.currentLocation != null;
+            RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakeGates, gateStep);
             if (!shadowsOn && !reflectionNeedsPlayer)
             {
                 ForgetPlayerBake();
@@ -59,9 +62,15 @@ namespace SDVRadiance
             _renderDepth++;
             try
             {
+            long resourceStep = RenderPipeline.ChainStepBegin();
             EnsureBakeResources(graphicsDevice);
+            RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakeResources, resourceStep);
+            long bakeStep = RenderPipeline.ChainStepBegin();
             TrimBakeCaches();
+            RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakeTrim, bakeStep);
+            bakeStep = RenderPipeline.ChainStepBegin();
             RunSceneBakes(graphicsDevice, config, shadowsOn);
+            RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakeScene, bakeStep);
 
             // Sitting still casts (the bake captures the current SEATED animation frame, so the
             // silhouette matches the pose); horseback skips — the horse's own shadow covers the
@@ -69,6 +78,7 @@ namespace SDVRadiance
             // on _playerReady (a swimmer casts no shadow), while the water shader's exclusion
             // gate reads PlayerMask — without it the ripple displacement warped the swimmer's
             // own pixels (the bathhouse "wavy body").
+            long whoStep = RenderPipeline.ChainStepBegin();
             Farmer who = Game1.player;
             bool swim = who != null && who.swimming.Value;
             if (who == null || who.currentLocation != Game1.currentLocation || who.isRidingHorse())
@@ -77,11 +87,18 @@ namespace SDVRadiance
                 return;
             }
 
+            RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakeWho, whoStep);
+            long poseStep = RenderPipeline.ChainStepBegin();
             BakePlayerPose(graphicsDevice, who, swim, reflectionNeedsPlayer);
+            RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakePose, poseStep);
             // With the pose baked, compose every cast of its shadow into the patch, cut by the
             // map, while a render-target swap is still allowed (see ShadowRenderer.PlayerPatch).
             if (shadowsOn)
+            {
+                long patchStep = RenderPipeline.ChainStepBegin();
                 RenderPlayerShadowPatch(graphicsDevice, config);
+                RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.PlayerPatch, patchStep);
+            }
             }
             finally
             {
@@ -153,7 +170,8 @@ namespace SDVRadiance
                 ForgetObjectBakesRequested = false;
                 ForgetObjectBakes();
             }
-            bool locationChanged = Game1.currentLocation != _objectBakeLocation;
+            // By place, not by object: the other screen's copy of this map is not an arrival.
+            bool locationChanged = !SDVRadiance.LiveScreens.SamePlace(Game1.currentLocation, _objectBakeLocation);
             _objectBakeLocation = Game1.currentLocation;
 
             // Over cap AFTER eviction means the hot set alone does not fit: a foliage pack that
@@ -173,8 +191,10 @@ namespace SDVRadiance
             // Bake NPC + animal silhouettes (single-sprite casters) — cheap when warm: cache
             // hits only, no RT switch. Runs every frame so new animation frames bake instantly.
             // Shadow-only: the reflection stamps NPCs from their live sprite, not from a bake.
+            long casterStep = RenderPipeline.ChainStepBegin();
             if (shadowsOn && Game1.currentLocation is { } casterLocation)
-                BakeCasters(graphicsDevice, casterLocation);
+                BakeCasters(graphicsDevice, casterLocation, CasterBlurBaked ? Math.Max(0f, config.DirectionalShadowBlur) : 0f);
+            RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakeCasters, casterStep);
 
             // Bake OBJECT silhouettes (trees/bushes/clumps/furniture/craftables/…). The FULL
             // enumeration — every on-screen tile, every entity list, the tile-art classifier —
@@ -204,6 +224,7 @@ namespace SDVRadiance
                         // bake burst here is a burst nobody sees, where the same sprites baked on
                         // first sight while walking were the 10 ms frames a farm walk showed.
                         // Bounded by the cache cap (EmitObject stops at it) and by the map.
+                        long arrivalStep = RenderPipeline.ChainStepBegin();
                         int before = _bakedObjectCache.Count;
                         long startTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
                         _bakeWholeMap = WholeMapArrivalBake;
@@ -212,9 +233,14 @@ namespace SDVRadiance
                         DiagnosticMonitor?.Log($"[diag] object bakes on arrival: {_bakedObjectCache.Count - before} in "
                             + $"{(System.Diagnostics.Stopwatch.GetTimestamp() - startTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency:0.0} ms, "
                             + $"cache {_bakedObjectCache.Count} of {ObjectBakeCapTotal} ({objectLocation.NameOrUniqueName})", LogLevel.Trace);
+                        RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakeObjects, arrivalStep);
                     }
                     else
+                    {
+                        long queuedStep = RenderPipeline.ChainStepBegin();
                         BakeQueuedObjectSprites(graphicsDevice);
+                        RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakeObjectsQueued, queuedStep);
+                    }
                 }
                 catch (Exception ex) { if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log($"[shadow] obj bake threw: {ex}", LogLevel.Warn); } }
                 finally { graphicsDevice.SetRenderTargets(objPrev); _isBakingObjects = false; _bakeWholeMap = false; }
@@ -239,6 +265,7 @@ namespace SDVRadiance
                 SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "player silhouette");
 
             Rectangle src = who.FarmerSprite.SourceRect;
+            _playerBakeFarmerId = who.UniqueMultiplayerID;
 
             // Same pose as the last bake → the RT is still correct, skip the 3-batch redraw.
             // The every-8-frames refresh keeps accessory layers that animate independently of
@@ -258,8 +285,10 @@ namespace SDVRadiance
             // which is what a fixed character with fixed hair cycling two phases looks like. It
             // failed the harness gate, so nothing could be verified through it at all.
             var sig = (who.FarmerSprite.CurrentFrame, (int)who.FacingDirection, src);
-            bool accessoryRefreshDue = PlayerAccessoriesAnimate && Game1.ticks % 8 == 0
-                                       && !Determinism.Frozen;
+            // Staggered by who it is, so two screens' players do not fall due on the same frame
+            // (see the same line in ShadowRenderer.Farmers).
+            bool accessoryRefreshDue = PlayerAccessoriesAnimate && !Determinism.Frozen
+                                       && (Game1.ticks + (int)(who.UniqueMultiplayerID & 7L)) % 8 == 0;
             // Fresh says the pose still matches. Usable says the pixels are still there: a
             // device reset empties a render target without touching any flag this mod keeps.
             if (_playerMaskFresh && sig == _playerBakeSignature && !accessoryRefreshDue
@@ -345,7 +374,7 @@ namespace SDVRadiance
         /// Runs during RenderingWorld (render-target swaps are safe there). Warm frames are a
         /// dictionary hit — only frames never seen before actually bake.
         /// </summary>
-        private void BakeCasters(GraphicsDevice graphicsDevice, GameLocation location)
+        private void BakeCasters(GraphicsDevice graphicsDevice, GameLocation location, float blurPx)
         {
             if (location == null)
                 return;
@@ -370,11 +399,12 @@ namespace SDVRadiance
                     if (_casterBakeCache.TryGetValue(key, out SpriteBake? warm))
                     {
                         warm.LastUsedTick = Game1.ticks;
+                        RefreshCasterBlur(graphicsDevice, key.Item1, key.Item2, warm, blurPx, ref prev);
                         continue;
                     }
                     prev ??= graphicsDevice.GetRenderTargets();
-                    if (BakeSprite(graphicsDevice, key.Item1, key.Item2, out RenderTarget2D rt, out Vector2 feet))
-                        _casterBakeCache[key] = new SpriteBake { Rt = rt, FeetInRt = feet, LastUsedTick = Game1.ticks };
+                    if (BakeSprite(graphicsDevice, key.Item1, key.Item2, blurPx, out RenderTarget2D rt, out Vector2 feet))
+                        _casterBakeCache[key] = new SpriteBake { Rt = rt, FeetInRt = feet, BakedBlur = blurPx, LastUsedTick = Game1.ticks };
                 }
                 foreach (FarmAnimal a in AnimalsIn(location))
                 {
@@ -387,11 +417,12 @@ namespace SDVRadiance
                     if (_casterBakeCache.TryGetValue(key, out SpriteBake? warm))
                     {
                         warm.LastUsedTick = Game1.ticks;
+                        RefreshCasterBlur(graphicsDevice, key.Item1, key.Item2, warm, blurPx, ref prev);
                         continue;
                     }
                     prev ??= graphicsDevice.GetRenderTargets();
-                    if (BakeSprite(graphicsDevice, key.Item1, key.Item2, out RenderTarget2D rt, out Vector2 feet))
-                        _casterBakeCache[key] = new SpriteBake { Rt = rt, FeetInRt = feet, LastUsedTick = Game1.ticks };
+                    if (BakeSprite(graphicsDevice, key.Item1, key.Item2, blurPx, out RenderTarget2D rt, out Vector2 feet))
+                        _casterBakeCache[key] = new SpriteBake { Rt = rt, FeetInRt = feet, BakedBlur = blurPx, LastUsedTick = Game1.ticks };
                 }
             }
             catch (Exception ex)
@@ -405,22 +436,60 @@ namespace SDVRadiance
             }
         }
 
+        /// <summary>Live switch for the A/B: with it off, character bakes carry no blur and the
+        /// draw softens them tap by tap as it did before 1.7.5. radiance_casterblur.</summary>
+        internal static bool CasterBlurBaked = true;
+
+        /// <summary>A warm character bake whose softness no longer matches the setting is
+        /// re-rendered into the slot it already owns: the blur lives in the pixels now (see
+        /// <see cref="BakeSprite"/>), so a changed slider or the A/B switch would otherwise
+        /// leave every old bake at its old edge. The same 0.3 px tolerance the object bakes
+        /// use; the slider moves in tenths, so a nudge of it re-bakes once and a bake never
+        /// chases a value that is settling.</summary>
+        private void RefreshCasterBlur(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle src, SpriteBake warm,
+            float blurPx, ref RenderTargetBinding[]? prev)
+        {
+            if (Math.Abs(blurPx - warm.BakedBlur) <= 0.3f)
+                return;
+            prev ??= graphicsDevice.GetRenderTargets();
+            if (BakeSprite(graphicsDevice, texture, src, blurPx, out _, out Vector2 feet, into: warm.Rt))
+            {
+                warm.FeetInRt = feet;
+                warm.BakedBlur = blurPx;
+            }
+        }
+
         /// <summary>
         /// Bake a single sprite to a pooled slot: black silhouette at 4×, pinned bottom-centre,
-        /// then a feet→head alpha ramp multiplied on. Returns false (→ banding fallback) if the
-        /// sprite is larger than a slot. The caller owns the surrounding render-target swap.
+        /// then a feet→head alpha ramp multiplied on, then the shadow's softness stamped into the
+        /// pixels (see <see cref="BlurSlotInPlace"/>). Returns false (→ banding fallback) if the
+        /// sprite, with room for its soft edge, is larger than a slot. The caller owns the
+        /// surrounding render-target swap.
+        ///
+        /// <para>The blur is baked, not drawn. Until 1.7.5 every strip of every character shadow
+        /// was drawn nine times a frame, each copy shifted by the blur radius, which in town at
+        /// noon was 737 draw calls for 60 shadows. A slot texel is one screen pixel at the draw's
+        /// natural scale, the same as an object slot, so the radius goes in unchanged; the draw
+        /// then stretches the soft edge with the silhouette, along the shadow, which is where a
+        /// real penumbra widens.</para>
         /// </summary>
-        private bool BakeSprite(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle src, out RenderTarget2D rt, out Vector2 feetInRT)
+        /// <param name="into">A slot the entry already owns, to re-render in place; null leases
+        /// one from the pool.</param>
+        private bool BakeSprite(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle src, float blurPx,
+            out RenderTarget2D rt, out Vector2 feetInRT, RenderTarget2D? into = null)
         {
             rt = null!;
             feetInRT = default;
             if (texture == null || src.IsEmpty)
                 return false;
             float w = src.Width * 4f, h = src.Height * 4f;
-            if (w > CasterRtW || h > CasterRtH - 8f)
+            float blurTexels = Math.Max(0f, blurPx);
+            // The soft edge spreads the silhouette by the radius on every side; without the slack
+            // it clips at the slot wall and the shadow's head comes out with a flat top.
+            if (w + 2f * blurTexels > CasterRtW || h + blurTexels > CasterRtH - 8f)
                 return false;
 
-            rt = RentCasterRT(graphicsDevice);
+            rt = into ?? RentCasterRT(graphicsDevice);
             var pos = new Vector2((CasterRtW - w) / 2f, CasterRtH - h - 8f);
             feetInRT = new Vector2(CasterRtW / 2f, CasterRtH - 8f);
             try
@@ -435,6 +504,7 @@ namespace SDVRadiance
                 _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
                 _renderTargetSpriteBatch.Draw(_gradientTexture!, new Rectangle(0, (int)pos.Y, CasterRtW, (int)h), Color.White);
                 _renderTargetSpriteBatch.End();
+                BlurSlotInPlace(graphicsDevice, rt, blurTexels);
                 FrameCost.Count(FrameCost.Counter.CasterBakes);
                 return true;
             }
@@ -445,8 +515,10 @@ namespace SDVRadiance
                 // so without this the lease is lost: the pool still owns the memory but nothing
                 // can ever reuse it, and a sprite that fails to bake every frame leaks a slot
                 // every frame. Recycling used to happen wholesale when the cache cleared itself,
-                // and that is exactly what was removed to stop the cache thrashing.
-                _casterFreeTargets.Add(rt);
+                // and that is exactly what was removed to stop the cache thrashing. A slot that
+                // was already owned stays owned.
+                if (into == null)
+                    _casterFreeTargets.Add(rt);
                 rt = null!;
                 return false;
             }
@@ -538,6 +610,8 @@ namespace SDVRadiance
                 try { _objectBlurScratches[i]?.Dispose(); } catch { }
                 _objectBlurScratches[i] = null;
             }
+            try { _casterBlurScratch?.Dispose(); } catch { }
+            _casterBlurScratch = null;
             // A full re-enumeration has to happen if the shadows come back, or the draw pass
             // would find every sprite missing and paint a screen of banded stand-ins.
             _objectBakeLocation = null;
@@ -623,7 +697,7 @@ namespace SDVRadiance
                 _objectLiveByClass[kv.Value.SlotClass]++;
             for (int cls = 0; cls < ObjectSlotClasses.Length; cls++)
             {
-                int cap = ObjectSlotClasses[cls].Cap;
+                int cap = ObjectClassCap(cls);
                 int live = _objectLiveByClass[cls];
                 if (live <= cap)
                     continue;

@@ -38,6 +38,16 @@ namespace SDVRadiance
 
         private WaterlineAnchor? _waterlineAnchorData;
         private int _waterlineFreshFrameCount;              // consecutive frames the window mask was fresh
+
+        /// <summary>The whole-map anchor gather that is part way through, between resting frames.
+        /// See <see cref="GatherInProgress"/> for why it is not taken in one frame.</summary>
+        private GatherInProgress? _anchorGatherInProgress;
+        /// <summary>How much of a resting frame the anchor gather may take. The whole gather is
+        /// 18 to 23 ms on a 156x65 farm; at this budget it lands in eight or nine frames, none of
+        /// which the other player of a split screen can feel.</summary>
+        private const double AnchorGatherBudgetMilliseconds = 2.5;
+        private int _anchorGathersCompleted, _anchorGathersAbandoned, _anchorSliceCount;
+        private double _anchorSliceTotalMilliseconds, _anchorSliceWorstMilliseconds;
         private bool _waterlineAnchorFailedForLocation;         // one shot: don't retry a failed anchor for this location
         private GameLocation? _waterlineFailedLocation;
 
@@ -283,36 +293,77 @@ namespace SDVRadiance
             _maskScratch.WaterSignedDistancePixels = null; _maskScratch.DistanceToLand = null; _maskScratch.DistanceToWater = null;
         }
 
-        /// <summary>Kick the full-map anchor job if this location still needs one and the
-        /// moment is cheap: the window mask is fresh, no job is in flight, and the player
-        /// is resting (the full-map gather is a one-off ~tens-of-ms main-thread cost we
-        /// hide in a stand-still frame, never mid-walk). Returns true when a job was kicked.</summary>
+        /// <summary>Advance the full-map anchor gather if this location still needs one and the
+        /// moment is cheap: the window mask is fresh, no job is in flight, and the player is
+        /// resting. The gather takes a slice of the frame at a time (see
+        /// <see cref="GatherInProgress"/>); the compose is dispatched when the last tile is in.
+        /// Returns true on the frame the job was kicked.</summary>
         private bool MaybeKickAnchorJob(GameLocation location)
         {
             if (AnchorFresh(location))
+            {
+                AbandonAnchorGather();
                 return false;
+            }
             if (_waterlineAnchorFailedForLocation && _waterlineFailedLocation == location)
                 return false;
             _waterlineAnchorFailedForLocation = false;
+            // A job in flight is a worker reading the scratch the gather would write. The fresh
+            // path this is called from does not run with one pending, but the rule is worth its
+            // own line rather than a fact about a caller.
+            if (_pendingWaterMaskJob != null)
+                return false;
             if (Game1.game1.takingMapScreenshot || Game1.player?.isMoving() == true)
+            {
+                AbandonAnchorGather();
                 return false;
-            if (++_waterlineFreshFrameCount < 15)
+            }
+
+            GatherInProgress? gather = _anchorGatherInProgress;
+            // A gather part way through is only worth continuing into the same answer: same map,
+            // same identity, and nobody else has written the scratch since its last slice.
+            if (gather != null && (gather.Job.Location != location || gather.Generation != _gatherGeneration
+                || gather.Job.Epoch != MaskEpoch || gather.Job.LabelVersion != CurrentLabelVersion()
+                || gather.Job.WaterDrawHookVersion != WaterDrawHook.Version))
+            {
+                AbandonAnchorGather();
+                gather = null;
+            }
+            if (gather == null)
+            {
+                if (++_waterlineFreshFrameCount < 15)
+                    return false;
+                var back = location.map?.GetLayer("Back");
+                if (back == null)
+                    return false;
+                int mapTilesW = back.LayerWidth, mapTilesH = back.LayerHeight;
+                if (mapTilesW <= 0 || mapTilesH <= 0 || (long)mapTilesW * mapTilesH * 256 > WlMaxPixels)
+                    return false;
+                gather = BeginGather(location, 0, 0, mapTilesW, mapTilesH);
+                gather.Job.AnchorOnly = true;
+                gather.Job.ScreenId = _activeScreenId;
+                _gatherAnchorFills++; _gatherAnchorTiles += mapTilesW * mapTilesH;
+                _anchorGatherInProgress = gather;
+            }
+
+            long sliceStartTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+            long deadlineTimestamp = sliceStartTimestamp + (long)(AnchorGatherBudgetMilliseconds / 1000.0 * System.Diagnostics.Stopwatch.Frequency);
+            bool complete = GatherTilesUntil(gather, deadlineTimestamp);
+            double sliceMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - sliceStartTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            gather.Slices++;
+            gather.TotalMilliseconds += sliceMilliseconds;
+            gather.WorstSliceMilliseconds = Math.Max(gather.WorstSliceMilliseconds, sliceMilliseconds);
+            _anchorSliceCount++;
+            _anchorSliceTotalMilliseconds += sliceMilliseconds;
+            _anchorSliceWorstMilliseconds = Math.Max(_anchorSliceWorstMilliseconds, sliceMilliseconds);
+            if (!complete)
                 return false;
 
-            var back = location.map?.GetLayer("Back");
-            if (back == null)
-                return false;
-            int mw = back.LayerWidth, mh = back.LayerHeight;
-            if (mw <= 0 || mh <= 0 || (long)mw * mh * 256 > WlMaxPixels)
-                return false;
-
-            long gatherStartTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
-            var newWaterMaskJob = GatherWaterMask(location, 0, 0, mw, mh);
-            _gatherAnchorFills++; _gatherAnchorTiles += mw * mh;
-            newWaterMaskJob.AnchorOnly = true;
-            newWaterMaskJob.ScreenId = _activeScreenId;
-            double gatherDurationMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - gatherStartTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-            _monitor.Log($"[diag] waterline-anchor gather {mw}x{mh} = {gatherDurationMilliseconds:0.0}ms", LogLevel.Trace);
+            _anchorGatherInProgress = null;
+            _anchorGathersCompleted++;
+            var newWaterMaskJob = FinishGather(gather);
+            _monitor.Log($"[diag] waterline-anchor gather {newWaterMaskJob.TileWidth}x{newWaterMaskJob.TileHeight} = "
+                + $"{gather.TotalMilliseconds:0.0}ms over {gather.Slices} frame(s), worst frame {gather.WorstSliceMilliseconds:0.0}ms", LogLevel.Trace);
 
             newWaterMaskJob.Task = System.Threading.Tasks.Task.Run(() =>
             {
@@ -328,6 +379,16 @@ namespace SDVRadiance
             _pendingWaterMaskJob = newWaterMaskJob;
             _waterlineFreshFrameCount = 0;
             return true;
+        }
+
+        /// <summary>Drop a part-finished anchor gather. What it answered is in the map memory
+        /// already, so the next attempt copies those tiles instead of asking again.</summary>
+        private void AbandonAnchorGather()
+        {
+            if (_anchorGatherInProgress == null)
+                return;
+            _anchorGatherInProgress = null;
+            _anchorGathersAbandoned++;
         }
 
         /// <summary>Worker-side tail of an ANCHOR compose: turn the full-map march bits

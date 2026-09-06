@@ -28,6 +28,25 @@ namespace SDVRadiance
         /// <summary>Is this screen still being drawn?</summary>
         internal static bool StillExists(int screenId) => screenId >= 0 && screenId < Count;
 
+        /// <summary>Whether two location objects are the same place. On a split screen each game
+        /// instance holds its own copy of every location (the second screen is a client of the
+        /// first), so two screens standing on the same farm compare as different objects, and a
+        /// cache that asked ReferenceEquals rebuilt itself at every screen switch. Measured on a
+        /// two-screen farm on 2026-09-06: the object bake's whole-map arrival walk (2.2 ms) and the
+        /// shadow patch's solid-tile texture (0.8 ms) ran on every frame of both screens.</summary>
+        internal static bool SamePlace(GameLocation? a, GameLocation? b)
+            => ReferenceEquals(a, b) || (a != null && b != null && a.NameOrUniqueName == b.NameOrUniqueName);
+
+        /// <summary>The companion for a map object: the other screen's copy of a map is a
+        /// different object with the same layers, so a cache built from one serves the other as
+        /// long as the size is the size it was built for.</summary>
+        internal static bool SameMapSize(xTile.Map? a, xTile.Map? b)
+        {
+            if (ReferenceEquals(a, b)) return true;
+            if (a == null || b == null || a.Layers.Count == 0 || b.Layers.Count == 0) return false;
+            return a.Layers[0].LayerWidth == b.Layers[0].LayerWidth && a.Layers[0].LayerHeight == b.Layers[0].LayerHeight;
+        }
+
         /// <summary>
         /// Drop the entries belonging to screens that have left.
         ///

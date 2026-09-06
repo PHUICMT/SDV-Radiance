@@ -630,6 +630,9 @@ namespace SDVRadiance
             api.AddNumberOption(manifest, () => config().WindowDaylightStrength, v => config().WindowDaylightStrength = v,
                 () => i18n("config.lighting.windowdaylightstrength.name"),
                 () => i18n("config.lighting.windowdaylightstrength.tooltip"), 0f, 2f, 0.05f);
+            api.AddNumberOption(manifest, () => config().WindowDaylightStrengthElsewhere, v => config().WindowDaylightStrengthElsewhere = v,
+                () => i18n("config.lighting.windowdaylightelsewhere.name"),
+                () => i18n("config.lighting.windowdaylightelsewhere.tooltip"), 0f, 2f, 0.05f);
             api.AddSectionTitle(manifest, () => i18n("config.windows.sectionreflection"));
             api.AddBoolOption(manifest, () => config().WindowReflectionEnabled, v => config().WindowReflectionEnabled = v,
                 () => i18n("config.lighting.windowreflection.name"), () => i18n("config.lighting.windowreflection.tooltip"));
@@ -790,17 +793,33 @@ namespace SDVRadiance
             api.AddPage(manifest, "smoothing", () => i18n("tuner.tab.smoothing"));
             api.AddBoolOption(manifest, () => config().SheetUpscaleEnabled, v => config().SheetUpscaleEnabled = v,
                 () => i18n("config.sheetupscale.name"), () => i18n("config.sheetupscale.tooltip"));
-            api.AddNumberOption(manifest, () => config().SheetUpscaleSmoothness, v => config().SheetUpscaleSmoothness = v,
-                () => i18n("config.sheetupscalesmoothness.name"), () => i18n("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
+            api.AddTextOption(manifest,
+                () => config().SheetUpscaleStyle.ToString(),
+                v => config().SheetUpscaleStyle = Enum.TryParse<SheetSmoothingStyle>(v, out var style) ? style : SheetSmoothingStyle.Scale2x,
+                () => i18n("config.sheetupscalestyle.name"), () => i18n("config.sheetupscalestyle.tooltip"),
+                new[] { nameof(SheetSmoothingStyle.Scale2x), nameof(SheetSmoothingStyle.Soft4x) },
+                v => i18n($"config.sheetupscalestyle.{v.ToLowerInvariant()}"));
             api.AddSectionTitle(manifest, () => i18n("tuner.section.smoothingfamilies"));
             api.AddBoolOption(manifest, () => config().SheetUpscaleWorld, v => config().SheetUpscaleWorld = v,
                 () => i18n("config.sheetupscaleworld.name"), () => i18n("config.sheetupscaleworld.tooltip"));
+            api.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessWorld, v => config().SheetUpscaleSmoothnessWorld = v,
+                () => i18n("config.sheetupscaleworld.name") + ": " + i18n("config.sheetupscalesmoothness.name"), () => i18n("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
             api.AddBoolOption(manifest, () => config().SheetUpscaleCharacters, v => config().SheetUpscaleCharacters = v,
                 () => i18n("config.sheetupscalecharacters.name"), () => i18n("config.sheetupscalecharacters.tooltip"));
+            api.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessCharacters, v => config().SheetUpscaleSmoothnessCharacters = v,
+                () => i18n("config.sheetupscalecharacters.name") + ": " + i18n("config.sheetupscalesmoothness.name"), () => i18n("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
+            api.AddBoolOption(manifest, () => config().SheetUpscaleItems, v => config().SheetUpscaleItems = v,
+                () => i18n("config.sheetupscaleitems.name"), () => i18n("config.sheetupscaleitems.tooltip"));
+            api.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessItems, v => config().SheetUpscaleSmoothnessItems = v,
+                () => i18n("config.sheetupscaleitems.name") + ": " + i18n("config.sheetupscalesmoothness.name"), () => i18n("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
             api.AddBoolOption(manifest, () => config().SheetUpscalePortraits, v => config().SheetUpscalePortraits = v,
                 () => i18n("config.sheetupscaleportraits.name"), () => i18n("config.sheetupscaleportraits.tooltip"));
+            api.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessPortraits, v => config().SheetUpscaleSmoothnessPortraits = v,
+                () => i18n("config.sheetupscaleportraits.name") + ": " + i18n("config.sheetupscalesmoothness.name"), () => i18n("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
             api.AddBoolOption(manifest, () => config().SheetUpscaleInterface, v => config().SheetUpscaleInterface = v,
                 () => i18n("config.sheetupscaleinterface.name"), () => i18n("config.sheetupscaleinterface.tooltip"));
+            api.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessInterface, v => config().SheetUpscaleSmoothnessInterface = v,
+                () => i18n("config.sheetupscaleinterface.name") + ": " + i18n("config.sheetupscalesmoothness.name"), () => i18n("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
         }
 
         /// <summary>Hotkeys, the debug switches, and the roadmap section.</summary>
@@ -812,6 +831,8 @@ namespace SDVRadiance
                 () => i18n("config.togglekey.name"), () => i18n("config.togglekey.tooltip"));
             api.AddKeybindList(manifest, () => config().TunerKey, v => config().TunerKey = v,
                 () => i18n("config.tunerkey.name"), () => i18n("config.tunerkey.tooltip"));
+            api.AddKeybindList(manifest, () => config().InspectDrawKey, v => config().InspectDrawKey = v,
+                () => i18n("config.inspectdrawkey.name"), () => i18n("config.inspectdrawkey.tooltip"));
 
             // --- Diagnostics ---
             //

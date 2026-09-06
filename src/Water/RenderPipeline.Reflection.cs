@@ -1475,7 +1475,7 @@ namespace SDVRadiance
         // pending dump (captures must be same-frame exact), and every few ticks so animated
         // map tiles (waterfall art) keep moving in the mirror - at worst their reflection lags
         // by SceneCacheTtlTicks, invisible in a squashed wavy mirror.
-        private RenderTarget2D? _mirrorSceneCache;
+        // moved to ScreenState (see RenderPipeline.Screens.cs)
 
         /// <summary>Consecutive frames with no water on screen and nothing wanting a mirror.</summary>
         private int _waterIdleFrames;
@@ -1539,9 +1539,9 @@ namespace SDVRadiance
             SceneRTReady = false;
             _sceneCacheLocation = null;
         }
-        private GameLocation? _sceneCacheLocation;
-        private int _sceneCacheAnchorX, _sceneCacheAnchorY;   // world px of the cache's top-left
-        private int _sceneCacheBuiltTick = -1;
+        // moved to ScreenState (see RenderPipeline.Screens.cs)
+        // moved to ScreenState (see RenderPipeline.Screens.cs)   // world px of the cache's top-left
+        // moved to ScreenState (see RenderPipeline.Screens.cs)
         private const int SceneCachePadPx = 128;              // 2 tiles of camera drift per side
         private const int SceneCacheTtlTicks = 6;             // animated-tile refresh (~100 ms)
 
@@ -1579,7 +1579,7 @@ namespace SDVRadiance
         /// most maps have one, a few have two.</summary>
         private readonly List<long> _sceneAnimatedIntervals = new();
         /// <summary>The animation clock reading the cache was last drawn at.</summary>
-        private long _sceneAnimationStamp = -1;
+        // moved to ScreenState (see RenderPipeline.Screens.cs)
         private GameLocation? _sceneAnimatedFor;
         private int _sceneAnimatedEpoch = -1;
         /// <summary>Set when the map could not be read. Falls back to the old whole-map rebuild

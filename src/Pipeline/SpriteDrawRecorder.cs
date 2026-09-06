@@ -74,6 +74,199 @@ namespace SDVRadiance
         internal static int LastCount { get; private set; }
         internal static int PatchedOverloads { get; private set; }
         internal static IReadOnlyList<Record> Records => _records;
+
+        /// <summary>A pending "what drew this pixel?" question (radiance_drawsat). Six people have
+        /// reported one object looking softer than the world around it, and the only way to answer
+        /// which sheet it came from was to guess at the mod list. The list below already holds every
+        /// draw the game made, with its texture: the question is just a lookup.</summary>
+        private static Point? _askedPoint;
+        /// <summary>Whether a question is waiting, so the frame gets recorded even when nothing
+        /// else wants recording (the relief pass is off by default).</summary>
+        internal static bool WaitingForAnswer => _askedPoint.HasValue;
+
+        internal static void AskWhatDrew(Point screenPoint)
+        {
+            _askedPoint = screenPoint;
+            _flushWatchFrames = 2;
+            _flushedWith.Clear();
+            _answered.Clear();
+        }
+
+        /// <summary>True from the sorted step's start to the front layers' end: a Begin on the
+        /// game's batch inside this span is somebody ending the world batch and starting it again
+        /// under the world, and whatever sampler they start it with is what every sprite drawn
+        /// after them in the frame is read with.</summary>
+        internal static bool InWorldStep { get; private set; }
+        private static IMonitor? _monitor;
+        private static readonly HashSet<string> _restartsSeen = new();
+        /// <summary>Frames left in which the sampler each texture run is flushed with is noted,
+        /// after a radiance_drawsat question. The runs flush after the answer prints (the batch
+        /// is still open at RenderedWorld), so the table prints two frames after the question.</summary>
+        private static int _flushWatchFrames;
+        internal static bool FlushWatchOpen => _flushWatchFrames > 0;
+        private static readonly Dictionary<Texture2D, (SamplerState applied, SamplerState begun)> _flushedWith = new();
+        private static readonly List<Texture2D> _answered = new();
+
+        /// <summary>The game's own batch was begun again while the world was being drawn. Named once
+        /// per caller and sampler, because the one that matters is the one that is not Point: a
+        /// batch begun without a sampler reads LINEAR in MonoGame, and whoever ends the world batch
+        /// to draw their own thing and starts it again that way turns every sprite the game draws
+        /// after them into a filtered picture, while the map tiles drawn before stay crisp.</summary>
+        internal static void NoteWorldBatchRestart(SpriteSortMode sortMode, SamplerState? sampler)
+        {
+            if (_monitor == null)
+                return;
+            string filter = sampler == null ? "none given, so MonoGame reads LINEAR" : sampler.Filter.ToString();
+            string caller = CallerOfBegin();
+            if (!_restartsSeen.Add(caller + "|" + filter + "|" + sortMode))
+                return;
+            bool filtered = sampler == null || sampler.Filter != TextureFilter.Point;
+            _monitor.Log($"world batch restarted mid-frame by {caller}: {sortMode}, sampler {filter}."
+                       + (filtered ? " Every sprite the game draws after this point in the frame is filtered, not pixel art." : ""),
+                filtered ? LogLevel.Warn : LogLevel.Info);
+        }
+
+        /// <summary>Who called SpriteBatch.Begin: the first frames above the patch that belong to
+        /// neither Harmony nor MonoGame nor this file, by assembly and method.</summary>
+        private static string CallerOfBegin()
+        {
+            var trace = new System.Diagnostics.StackTrace(1, false);
+            var parts = new List<string>(4);
+            foreach (System.Diagnostics.StackFrame frame in trace.GetFrames())
+            {
+                System.Reflection.MethodBase? method = frame.GetMethod();
+                Type? type = method?.DeclaringType;
+                if (type == null)
+                    continue;
+                string assembly = type.Assembly.GetName().Name ?? "";
+                if (assembly.StartsWith("0Harmony", StringComparison.Ordinal) || assembly.StartsWith("MonoGame", StringComparison.Ordinal)
+                    || assembly.StartsWith("System", StringComparison.Ordinal) || type == typeof(SheetUpscaler) || type == typeof(SpriteDrawRecorder))
+                    continue;
+                parts.Add($"{assembly}:{type.Name}.{method!.Name}");
+                if (parts.Count == 4)
+                    break;
+            }
+            return parts.Count == 0 ? "(no caller frames)" : string.Join(" <- ", parts);
+        }
+
+        /// <summary>One run of one texture is about to flush in the game's batch: what the device
+        /// will read it with, and what the batch asked for at Begin.</summary>
+        internal static void NoteFlush(Texture2D texture, SamplerState applied, SamplerState begun)
+            => _flushedWith[texture] = (applied, begun);
+
+        private static void PrintFlushTable()
+        {
+            if (_monitor == null)
+                return;
+            _monitor.Log("=== how the game's world batch sampled its textures in the frames after the question ===", LogLevel.Info);
+            int filtered = 0;
+            foreach ((Texture2D texture, (SamplerState applied, SamplerState begun)) in _flushedWith)
+            {
+                bool point = applied.Filter == TextureFilter.Point;
+                bool listed = _answered.Contains(texture);
+                if (point && !listed)
+                    continue;
+                if (!point)
+                    filtered++;
+                string name = string.IsNullOrEmpty(texture.Name) ? $"(unnamed {texture.Width}x{texture.Height})" : texture.Name;
+                _monitor.Log($"  {name}: drawn with {applied.Filter}"
+                           + (begun.Filter == applied.Filter ? "" : $" (its batch was begun with {begun.Filter})")
+                           + (listed ? "  <-- covers the asked pixel" : ""),
+                    point ? LogLevel.Info : LogLevel.Warn);
+            }
+            _monitor.Log(filtered == 0
+                    ? "  every texture in the game's world batch was drawn with Point filtering; a soft sprite is soft in its sheet."
+                    : $"  {filtered} texture(s) were drawn FILTERED in a batch meant for pixel art; see any 'world batch restarted' line above for who.",
+                filtered == 0 ? LogLevel.Info : LogLevel.Warn);
+            _flushedWith.Clear();
+            _answered.Clear();
+        }
+
+        /// <summary>Answer the pending question from the frame just drawn. Called once the world
+        /// (sprites and front layers) is on screen and the list is closed.</summary>
+        internal static void AnswerPendingQuestion(IMonitor monitor)
+        {
+            if (_askedPoint is not Point point)
+                return;
+            _askedPoint = null;
+            if (!HarmonyPatcher.DrawHooksInstalled)
+            {
+                monitor.Log("radiance_drawsat: the draw hooks are off (radiance_hooks on puts them back), "
+                          + "so nothing was recorded to answer with.", LogLevel.Warn);
+                return;
+            }
+            monitor.Log($"=== what drew screen pixel ({point.X},{point.Y}) ===", LogLevel.Info);
+            monitor.Log($"{_records.Count} draws recorded this frame ({SortedCount} sprites, then the map's front layers). "
+                      + "Listed back to front, so the last line is the one on top.", LogLevel.Info);
+            int hits = 0;
+            for (int i = 0; i < _records.Count; i++)
+            {
+                Record record = _records[i];
+                Rectangle box = FootprintOf(record);
+                if (!box.Contains(point))
+                    continue;
+                hits++;
+                if (record.Texture != null)
+                    _answered.Add(record.Texture);
+                float perSourcePixel = record.Source.Width > 0 ? box.Width / (float)record.Source.Width : 0f;
+                string sheet = string.IsNullOrEmpty(record.Texture?.Name) ? "(unnamed texture)" : record.Texture!.Name;
+                string kind = record.Texture is RenderTarget2D ? " [composed on the card, not a file]" : "";
+                string layer = i < SortedCount ? "sprite" : "map front layer";
+                string alpha = AlphaAt(record, point);
+                monitor.Log($"  {layer}: {sheet}{kind}", LogLevel.Info);
+                monitor.Log($"      sheet {record.Texture?.Width}x{record.Texture?.Height}, source {record.Source.Width}x{record.Source.Height} at {record.Source.X},{record.Source.Y}"
+                          + $" -> {box.Width}x{box.Height} on screen at {box.X},{box.Y}", LogLevel.Info);
+                monitor.Log($"      {perSourcePixel:0.###} screen pixels per source pixel"
+                          + (Math.Abs(perSourcePixel - 4f) < 0.001f ? " (4 is the game's own pixel art)" : "  <-- NOT the game's 4")
+                          + $", opacity {record.Alpha:0.##}, depth {record.Depth:0.####}"
+                          + (Math.Abs(record.Rotation) > 0.0001f ? $", rotated {record.Rotation:0.###} rad (the box above ignores the turn)" : "")
+                          + alpha, LogLevel.Info);
+            }
+            if (hits == 0)
+                monitor.Log("  nothing the game drew into its sorted world batch covers that pixel. "
+                          + "The map's BACK layers are drawn before the batch and are not on this list, "
+                          + "so bare ground answers nothing here.", LogLevel.Info);
+        }
+
+        /// <summary>Where a recorded draw landed on screen. A destination draw carries its own box;
+        /// a position draw is placed by its origin and scale.</summary>
+        private static Rectangle FootprintOf(in Record record)
+        {
+            if (record.UsesDestination)
+                return record.Destination;
+            float width = record.Source.Width * Math.Abs(record.Scale.X);
+            float height = record.Source.Height * Math.Abs(record.Scale.Y);
+            float left = record.Position.X - record.Origin.X * record.Scale.X;
+            float top = record.Position.Y - record.Origin.Y * record.Scale.Y;
+            return new Rectangle((int)Math.Floor(left), (int)Math.Floor(top),
+                                 (int)Math.Ceiling(width), (int)Math.Ceiling(height));
+        }
+
+        /// <summary>The sheet's own pixel under the asked-for point, so a draw whose quad covers the
+        /// point but is transparent there says so rather than reading as the answer.</summary>
+        private static string AlphaAt(in Record record, Point point)
+        {
+            try
+            {
+                Rectangle box = FootprintOf(record);
+                if (record.Texture == null || record.Texture.IsDisposed || box.Width <= 0 || box.Height <= 0)
+                    return "";
+                int sx = record.Source.X + (int)((point.X - box.X) / (float)box.Width * record.Source.Width);
+                int sy = record.Source.Y + (int)((point.Y - box.Y) / (float)box.Height * record.Source.Height);
+                if ((record.Effects & SpriteEffects.FlipHorizontally) != 0)
+                    sx = record.Source.X + record.Source.Right - 1 - sx;
+                if (sx < 0 || sy < 0 || sx >= record.Texture.Width || sy >= record.Texture.Height)
+                    return "";
+                var one = new Color[1];
+                record.Texture.GetData(0, new Rectangle(sx, sy, 1, 1), one, 0, 1);
+                return one[0].A < 8 ? ", TRANSPARENT at that pixel" : $", the sheet's pixel there is {one[0].R},{one[0].G},{one[0].B}";
+            }
+            catch
+            {
+                // A texture the card will not read back says nothing, which is not an error.
+                return "";
+            }
+        }
         /// <summary>Where the sorted step's own draws end and the map's FRONT layers begin. The
         /// game draws the front layers after the sprites and over them, so they are recorded in
         /// the same list but replayed as a second pass on top (see <see cref="Replay"/>).</summary>
@@ -84,6 +277,7 @@ namespace SDVRadiance
             // Re-entered by radiance_hooks on, after an off: count the overloads afresh rather
             // than reporting six.
             PatchedOverloads = 0;
+            _monitor = monitor;
             (Type[] signature, string handler)[] overloads =
             {
                 (new[] { typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color), typeof(float), typeof(Vector2), typeof(Vector2), typeof(SpriteEffects), typeof(float) },
@@ -116,6 +310,9 @@ namespace SDVRadiance
             SortedCount = 0;
             _drawDepth = 0;
             _recording = Wanted;
+            InWorldStep = true;
+            if (_flushWatchFrames > 0 && --_flushWatchFrames == 0)
+                PrintFlushTable();
         }
 
         /// <summary>The sorted step has drawn: mark where it ended. Recording CONTINUES, because
@@ -132,6 +329,7 @@ namespace SDVRadiance
         internal static void EndWorldFront()
         {
             _recording = false;
+            InWorldStep = false;
             LastCount = _records.Count;
         }
 

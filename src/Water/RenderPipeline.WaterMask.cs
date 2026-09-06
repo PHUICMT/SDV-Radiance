@@ -344,7 +344,12 @@ namespace SDVRadiance
                 + $"  apply (one of the four textures per frame)  {_waterApplyCount} time(s)  avg {(_waterApplyCount > 0 ? _waterApplySum / _waterApplyCount : 0):0.000} ms"
                 + $"  worst {_waterApplyWorst:0.000} ms\n"
                 + $"  compose, on the worker thread, worst {_waterComposeWorst:0.000} ms (not on the frame)\n"
+                + $"  whole-map anchor gather, {AnchorGatherBudgetMilliseconds} ms a resting frame  {_anchorGathersCompleted} finished, "
+                + $"{_anchorGathersAbandoned} abandoned (the player moved or the window rebuilt)  {_anchorSliceCount} slice(s)"
+                + $"  avg {(_anchorSliceCount > 0 ? _anchorSliceTotalMilliseconds / _anchorSliceCount : 0):0.000} ms  worst {_anchorSliceWorstMilliseconds:0.000} ms\n"
                 + DescribeGatherCache();
+            _anchorGathersCompleted = _anchorGathersAbandoned = _anchorSliceCount = 0;
+            _anchorSliceTotalMilliseconds = _anchorSliceWorstMilliseconds = 0;
             _waterGatherWorstScroll = _waterGatherWorstArrival = _waterGatherWorstRefresh = _waterApplyWorst = _waterComposeWorst = 0;
             _waterGatherCount = _waterGatherArrivalCount = _waterGatherRefreshCount = _waterApplyCount = 0;
             _waterGatherSum = _waterGatherArrivalSum = _waterGatherRefreshSum = _waterApplySum = 0;

@@ -31,6 +31,15 @@ namespace SDVRadiance
             /// colour scrub and no head fade. The water reflection flips this below the feet, the
             /// same way the local player's is used.</summary>
             internal RenderTarget2D? Color;
+            /// <summary>The targets this entry allocated, and the only ones it may dispose.
+            /// <see cref="Mask"/> and <see cref="Color"/> are what the draw reads, and on a split
+            /// screen they may point at another screen's player bake instead (see
+            /// <see cref="Loaned"/>), which that screen owns and disposes.</summary>
+            internal RenderTarget2D? OwnedMask;
+            internal RenderTarget2D? OwnedColour;
+            /// <summary>Mask and Color belong to another screen this frame. Re-checked every frame
+            /// rather than trusted: the screen that owns them can leave, and its targets go with it.</summary>
+            internal bool Loaned;
             internal Vector2 FeetInRenderTarget;
             internal (int Frame, int Facing, Rectangle Src) Signature;
             internal bool HasSignature;
@@ -201,9 +210,23 @@ namespace SDVRadiance
                     // Frozen stops it for the same reason it stops the player's own refresh: the
                     // verification harness needs two captures of one scene to be byte-identical,
                     // and a re-bake lets accessory animation drift in between them.
-                    bool accessoryRefreshDue = PlayerAccessoriesAnimate && Game1.ticks % 8 == 0
-                                               && !Determinism.Frozen;
-                    if (bake.HasSignature && bake.Signature == sig && !accessoryRefreshDue && bake.Mask != null
+                    // Staggered by who it is: with two screens the same tick used to fall due for
+                    // both players and both remote copies at once, which is four of the most
+                    // expensive bakes in the mod landing on one frame (measured worst 3.95 ms).
+                    bool accessoryRefreshDue = PlayerAccessoriesAnimate && !Determinism.Frozen
+                                               && (Game1.ticks + (int)(who.UniqueMultiplayerID & 7L)) % 8 == 0;
+                    // The other screen's own player is this screen's remote farmer, and that screen
+                    // baked them earlier in this very frame: borrow it rather than bake the same
+                    // person a second time. Asked first and re-asked every frame, because the
+                    // targets belong to that screen and go when it does.
+                    if (TryBorrowPlayerBake(who.UniqueMultiplayerID, sig, reflectionNeedsFarmers, bake))
+                    {
+                        FrameCost.Count(FrameCost.Counter.FarmerBakesShared);
+                        bake.Ready = !IsSeated(who);
+                        PublishRemoteFarmer(who, bake);
+                        continue;
+                    }
+                    if (!bake.Loaned && bake.HasSignature && bake.Signature == sig && !accessoryRefreshDue && bake.Mask != null
                         && (!reflectionNeedsFarmers || bake.ColorFresh))
                     {
                         bake.Ready = !IsSeated(who);
@@ -214,16 +237,20 @@ namespace SDVRadiance
                     // PreserveContents, for the same reason every persistent bake target here
                     // needs it: a cached target on DiscardContents decays into garbage between
                     // frames instead of holding the pose it was baked with.
-                    bake.Mask ??= VramTally.Track(new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
+                    bake.OwnedMask ??= VramTally.Track(new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
                         SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "farmer bakes (co-op)");
                     previous ??= graphicsDevice.GetRenderTargets();
-                    BakeFarmerSilhouette(graphicsDevice, who, src, bake.Mask, out Vector2 feetInRt);
+                    FrameCost.Count(FrameCost.Counter.FarmerBakes);
+                    BakeFarmerSilhouette(graphicsDevice, who, src, bake.OwnedMask, out Vector2 feetInRt);
+                    bake.Mask = bake.OwnedMask;
+                    bake.Loaned = false;
                     if (reflectionNeedsFarmers)
                     {
-                        bake.Color ??= VramTally.Track(new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
+                        bake.OwnedColour ??= VramTally.Track(new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
                             SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "farmer bakes (co-op)");
-                        BakeFarmerColour(graphicsDevice, who, src, bake.Color);
+                        BakeFarmerColour(graphicsDevice, who, src, bake.OwnedColour);
                     }
+                    bake.Color = bake.OwnedColour;
                     bake.ColorFresh = reflectionNeedsFarmers;
                     bake.FeetInRenderTarget = feetInRt;
                     bake.Signature = sig;
@@ -323,6 +350,55 @@ namespace SDVRadiance
             OtherFarmerImages.Add(new RemoteFarmerImage(who, bake.Mask, bake.ColorFresh ? bake.Color : null));
         }
 
+        /// <summary>
+        /// Another screen's player bake, when it is this farmer at this exact pose. On a split
+        /// screen every screen but one is looking at somebody else's local player, and that screen
+        /// has already baked them: one silhouette serves both. True when <paramref name="bake"/>
+        /// now points at that screen's targets.
+        /// </summary>
+        private bool TryBorrowPlayerBake(long farmerId, (int Frame, int Facing, Rectangle Src) sig,
+                                         bool needColour, FarmerBake bake)
+        {
+            foreach (var kv in _screenBakes)
+            {
+                if (kv.Key == _activeScreenId)
+                    continue;
+                ScreenBake other = kv.Value;
+                if (other.FarmerId != farmerId || other.Mask == null || !other.MaskFresh)
+                    continue;
+                if (other.Signature != sig)
+                    continue;
+                if (needColour && (!other.ColorFresh || other.Color == null))
+                    continue;
+                bake.Mask = other.Mask;
+                bake.Color = needColour ? other.Color : null;
+                bake.ColorFresh = needColour;
+                bake.FeetInRenderTarget = other.FeetInRenderTarget;
+                bake.Signature = sig;
+                bake.HasSignature = true;
+                bake.Loaned = true;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>Hand every borrowed silhouette back. Called when a screen is about to release
+        /// its targets: a loan outliving its lender is a disposed texture in the draw pass.</summary>
+        private void DropFarmerBakeLoans()
+        {
+            foreach (var kv in _otherFarmerBakes)
+            {
+                FarmerBake bake = kv.Value;
+                if (!bake.Loaned)
+                    continue;
+                bake.Mask = bake.OwnedMask;
+                bake.Color = bake.OwnedColour;
+                bake.ColorFresh = false;
+                bake.HasSignature = false;
+                bake.Loaned = false;
+            }
+        }
+
         /// <summary>Release targets for farmers who have not been seen for a while.</summary>
         private void EvictStaleFarmerBakes()
         {
@@ -336,8 +412,8 @@ namespace SDVRadiance
             {
                 if (_otherFarmerBakes.TryGetValue(id, out FarmerBake? bake))
                 {
-                    bake.Mask?.Dispose();
-                    bake.Color?.Dispose();
+                    bake.OwnedMask?.Dispose();
+                    bake.OwnedColour?.Dispose();
                 }
                 _otherFarmerBakes.Remove(id);
             }

@@ -113,6 +113,83 @@ namespace SDVRadiance
         /// <summary>Drop everything (save load, or a label reload during development).</summary>
         public static void Clear() => _locationCache.Clear();
 
+        /// <summary>
+        /// Drop the grids of every location one of these reloaded assets can have changed: a
+        /// location whose map IS the asset, or whose map draws from it as a tile sheet.
+        ///
+        /// <para>This used to be <see cref="Clear"/> for any name under Maps/. Content Patcher
+        /// packs with conditions on the time of day re-patch their assets every few in-game
+        /// minutes, and a heavily modded save sees a Maps/* reload every few seconds: the town's
+        /// autumn tile sheet, a festival map, a shop interior. Each one threw away the farm's
+        /// grid while the player stood on the farm, and everything keyed on that grid's identity
+        /// went with it: the flood occluder mask rebuilt, the water gather's map-wide memory was
+        /// dropped and re-asked tile by tile, and the whole-map waterline anchor was gathered
+        /// again. A split-screen report counted that anchor gather, 18 to 23 ms, "firing
+        /// repeatedly on the farm", and this is one of the two reasons it did (the other is in
+        /// WaterDrawHook). A tile sheet the current map never draws from cannot change what its
+        /// tiles are.</para>
+        ///
+        /// <para>Names are compared with the game's locale suffix taken off ("Maps/fall_town.th"
+        /// is the same sheet as "Maps/fall_town") and either slash accepted, because the map
+        /// calls its sheets by the base name and the invalidation carries the translated one.</para>
+        /// </summary>
+        public static void InvalidateAffectedBy(IEnumerable<string> reloadedAssetNames)
+        {
+            var reloaded = new List<string>();
+            foreach (string name in reloadedAssetNames)
+            {
+                string normalised = NormaliseAssetName(name);
+                if (normalised.StartsWith("Maps/", StringComparison.OrdinalIgnoreCase))
+                    reloaded.Add(normalised);
+            }
+            if (reloaded.Count == 0)
+                return;
+            Utility.ForEachLocation(location =>
+            {
+                if (LocationDrawsFrom(location, reloaded))
+                    _locationCache.Remove(location);
+                return true;
+            });
+            // A location the game holds outside its list (a temporary festival map, a mod's
+            // instanced interior) is still the one on screen.
+            if (Game1.currentLocation is { } here && LocationDrawsFrom(here, reloaded))
+                _locationCache.Remove(here);
+        }
+
+        private static bool LocationDrawsFrom(GameLocation location, List<string> reloaded)
+        {
+            string? mapPath = location.mapPath?.Value;
+            if (mapPath != null)
+            {
+                string map = NormaliseAssetName(mapPath);
+                foreach (string name in reloaded)
+                    if (string.Equals(map, name, StringComparison.OrdinalIgnoreCase))
+                        return true;
+            }
+            var sheets = location.map?.TileSheets;
+            if (sheets == null)
+                return false;
+            foreach (var sheet in sheets)
+            {
+                string source = NormaliseAssetName(sheet.ImageSource ?? "");
+                foreach (string name in reloaded)
+                    if (string.Equals(source, name, StringComparison.OrdinalIgnoreCase))
+                        return true;
+            }
+            return false;
+        }
+
+        /// <summary>Forward slashes, no locale suffix: anything after the LAST dot that is short
+        /// and has no slash in it is a language tag, not part of a path.</summary>
+        private static string NormaliseAssetName(string name)
+        {
+            name = name.Replace('\\', '/');
+            int dot = name.LastIndexOf('.');
+            if (dot <= 0 || dot < name.Length - 6 || name.IndexOf('/', dot) >= 0)
+                return name;
+            return name.Substring(0, dot);
+        }
+
         // ---- inference -----------------------------------------------------------------------
 
         /// <summary>

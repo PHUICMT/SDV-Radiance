@@ -26,6 +26,10 @@ namespace SDVRadiance
             public RenderTarget2D? Mask;
             public RenderTarget2D? Color;
             public (int frame, int facing, Rectangle src) Signature = (-1, -1, default);
+            /// <summary>Whose silhouette this is. Another screen's remote-farmer pass reads it to
+            /// borrow this bake instead of making a second one of the same person (see
+            /// TryBorrowPlayerBake).</summary>
+            public long FarmerId;
             public Vector2 FeetInRenderTarget;
             public bool Ready, MaskFresh, ColorFresh;
 
@@ -53,6 +57,7 @@ namespace SDVRadiance
                 outgoing.Mask = _playerRenderTarget;
                 outgoing.Color = _playerColorRenderTarget;
                 outgoing.Signature = _playerBakeSignature;
+                outgoing.FarmerId = _playerBakeFarmerId;
                 outgoing.FeetInRenderTarget = _playerFeetInRenderTarget;
                 outgoing.Ready = _playerReady;
                 outgoing.MaskFresh = _playerMaskFresh;
@@ -64,6 +69,7 @@ namespace SDVRadiance
             _playerRenderTarget = incoming.Mask;
             _playerColorRenderTarget = incoming.Color;
             _playerBakeSignature = incoming.Signature;
+            _playerBakeFarmerId = incoming.FarmerId;
             _playerFeetInRenderTarget = incoming.FeetInRenderTarget;
             _playerReady = incoming.Ready;
             _playerMaskFresh = incoming.MaskFresh;
@@ -86,6 +92,9 @@ namespace SDVRadiance
                 if (kv.Key >= live && kv.Key != _activeScreenId)
                     _departedScreens.Add(kv.Key);
             }
+            // Before anything is disposed: a remote farmer entry may be pointing at one of these
+            // targets (TryBorrowPlayerBake).
+            DropFarmerBakeLoans();
             foreach (int id in _departedScreens)
             {
                 _screenBakes[id].Release();

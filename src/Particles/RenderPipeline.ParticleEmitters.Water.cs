@@ -77,9 +77,86 @@ namespace SDVRadiance
 
         internal bool HeatOnScreen => _heatOnScreen;
 
+        /// <summary>Where each screen's camera was when its scan last ran. The window a scan
+        /// covers is the camera's, so this one is per screen on purpose: with a single slot the
+        /// two screens' crossings undid each other and the scan ran twice a frame forever
+        /// (0.34 ms a frame against 0.003 with one screen, measured on a farm).</summary>
+        private readonly Dictionary<int, (GameLocation? Location, int TileX, int TileY, int LabelVersion)> _breathScanByScreen = new();
         private GameLocation? _breathScanLocation;
         private int _breathScanTileX = int.MinValue, _breathScanTileY = int.MinValue;
         private int _breathScanLabelVersion = -1;
+
+        /// <summary>What the scan learned about each tile of the current map, kept for the
+        /// location: how many pixels flow, run hot, are molten. A tile is asked of the labels
+        /// once per location and label version, and every window after that reads bytes.
+        ///
+        /// <para>The scan used to ask the labels afresh for every tile of the window each time
+        /// the camera crossed a tile: four layers, a dictionary walk and an orient per layer,
+        /// about 2.5 ms for a window. Walking paid it every tile, and a split screen paid it
+        /// twice a frame, because the two cameras took turns and each one's crossing undid the
+        /// other's early-out. The report's "stage list + builders" step read 5.2 ms with two
+        /// screens on one farm against 0.14 for one. The window still decides what is on
+        /// screen; only the label reads are remembered.</para></summary>
+        private GameLocation? _breathTileCacheLocation;
+        private int _breathTileCacheLabelVersion = -1;
+        private int _breathTileCacheWidth, _breathTileCacheHeight;
+        private byte[] _breathTileFlow = Array.Empty<byte>();
+        private byte[] _breathTileHot = Array.Empty<byte>();
+        private byte[] _breathTileLava = Array.Empty<byte>();
+        private bool[] _breathTileScanned = Array.Empty<bool>();
+
+        private void EnsureBreathTileCache(GameLocation location, int labelVersion)
+        {
+            if (ReferenceEquals(location, _breathTileCacheLocation) && labelVersion == _breathTileCacheLabelVersion)
+                return;
+            int width = 0, height = 0;
+            foreach (Layer layer in _breathScanLayers)
+            {
+                width = Math.Max(width, layer.LayerWidth);
+                height = Math.Max(height, layer.LayerHeight);
+            }
+            _breathTileCacheLocation = location;
+            _breathTileCacheLabelVersion = labelVersion;
+            _breathTileCacheWidth = width;
+            _breathTileCacheHeight = height;
+            int tiles = width * height;
+            if (_breathTileScanned.Length < tiles)
+            {
+                _breathTileFlow = new byte[tiles];
+                _breathTileHot = new byte[tiles];
+                _breathTileLava = new byte[tiles];
+                _breathTileScanned = new bool[tiles];
+            }
+            else
+            {
+                Array.Clear(_breathTileScanned, 0, tiles);
+            }
+        }
+
+        /// <summary>The three pixel counts for one tile, from the cache when it has them and from
+        /// the labels once when it does not. Tiles outside the map are asked directly, which
+        /// answers zero.</summary>
+        private void BreathClassesAt(LabelStore? labels, int x, int y, out int flowing, out int hot, out int lava)
+        {
+            flowing = hot = lava = 0;
+            bool inside = x >= 0 && y >= 0 && x < _breathTileCacheWidth && y < _breathTileCacheHeight;
+            int index = inside ? y * _breathTileCacheWidth + x : -1;
+            if (inside && _breathTileScanned[index])
+            {
+                flowing = _breathTileFlow[index];
+                hot = _breathTileHot[index];
+                lava = _breathTileLava[index];
+                return;
+            }
+            for (int layerIndex = 0; layerIndex < _breathScanLayers.Count; layerIndex++)
+                CountBreathClasses(labels?.Get(_breathScanLayers[layerIndex], x, y), ref flowing, ref hot, ref lava);
+            if (!inside)
+                return;
+            _breathTileFlow[index] = (byte)Math.Min(255, flowing);
+            _breathTileHot[index] = (byte)Math.Min(255, hot);
+            _breathTileLava[index] = (byte)Math.Min(255, lava);
+            _breathTileScanned[index] = true;
+        }
         private readonly List<Vector2> _mistFeet = new();
         private readonly List<Vector2> _steamTiles = new();
         private readonly List<Vector2> _lavaTiles = new();
@@ -102,10 +179,13 @@ namespace SDVRadiance
             GameLocation? location = Game1.currentLocation;
             int cameraTileX = Game1.viewport.X / 64, cameraTileY = Game1.viewport.Y / 64;
             int labelVersion = LabelStore.Instance?.Version ?? 0;
-            if (ReferenceEquals(location, _breathScanLocation)
-                && cameraTileX == _breathScanTileX && cameraTileY == _breathScanTileY
-                && labelVersion == _breathScanLabelVersion)
+            int screenId = _activeScreenId;
+            if (_breathScanByScreen.TryGetValue(screenId, out var last)
+                && ReferenceEquals(location, last.Location)
+                && cameraTileX == last.TileX && cameraTileY == last.TileY
+                && labelVersion == last.LabelVersion)
                 return;
+            _breathScanByScreen[screenId] = (location, cameraTileX, cameraTileY, labelVersion);
             _breathScanLocation = location;
             _breathScanTileX = cameraTileX;
             _breathScanTileY = cameraTileY;
@@ -126,6 +206,7 @@ namespace SDVRadiance
                 if (MapLayers.BelongsToFamily(layer.Id, "Back") || MapLayers.BelongsToFamily(layer.Id, "Buildings")
                     || MapLayers.BelongsToFamily(layer.Id, "Front") || MapLayers.BelongsToFamily(layer.Id, "AlwaysFront"))
                     _breathScanLayers.Add(layer);
+            EnsureBreathTileCache(location, labelVersion);
 
             int firstTileX = Math.Max(0, cameraTileX - 1);
             int firstTileY = Math.Max(0, cameraTileY - MistScanAboveScreen);
@@ -154,10 +235,7 @@ namespace SDVRadiance
             {
                 for (int y = firstTileY; y <= lastTileY; y++)
                 {
-                    int flowingPixels = 0, hotPixels = 0, lavaPixels = 0;
-                    for (int layerIndex = 0; layerIndex < _breathScanLayers.Count; layerIndex++)
-                        CountBreathClasses(labels?.Get(_breathScanLayers[layerIndex], x, y),
-                                           ref flowingPixels, ref hotPixels, ref lavaPixels);
+                    BreathClassesAt(labels, x, y, out int flowingPixels, out int hotPixels, out int lavaPixels);
                     _breathFlowColumnCounts[(x - firstTileX) * rows + (y - firstTileY)]
                         = (byte)Math.Min(255, flowingPixels);
                     if (hotPixels >= BreathClassPixelFloor && _steamTiles.Count < SteamTileLimit)

@@ -149,7 +149,13 @@ namespace SDVRadiance
         };
 
         /// <summary>Erase each building's own art from the mask, drawn where the game draws it:
-        /// bottom-left of the art on the bottom-left of the footprint, at 4x, upright.</summary>
+        /// bottom-left of the art on the bottom-left of the footprint, at 4x, upright, moved by the
+        /// DrawOffset the building's data declares, exactly as the stamp is. The stamp took the
+        /// offset in 86a699b and this did not, so a content-pack house with an offset was carved
+        /// out of its own shadow at the wrong place and kept a strip of that shadow, one offset
+        /// wide, down the side of its wall (reported 2026-09-06 as a faint dark band on the
+        /// farmhouse that went away with building shadows off). The vanilla house declares none,
+        /// which is why nobody saw it on a vanilla farm.</summary>
         private void CarveBuildings(SpriteBatch spriteBatch, GameLocation location)
         {
             xTile.Dimensions.Rectangle viewport = Game1.viewport;
@@ -164,8 +170,9 @@ namespace SDVRadiance
                 Rectangle src = bld.getSourceRect();
                 if (src.Width <= 0 || src.Height <= 0)
                     continue;
-                float baseY = (bld.tileY.Value + bld.tilesHigh.Value) * 64f;
-                Vector2 corner = Game1.GlobalToLocal(viewport, new Vector2(bld.tileX.Value * 64f, baseY));
+                Vector2 drawOffset = (bld.GetData()?.DrawOffset ?? Vector2.Zero) * 4f;
+                float baseY = (bld.tileY.Value + bld.tilesHigh.Value) * 64f + drawOffset.Y;
+                Vector2 corner = Game1.GlobalToLocal(viewport, new Vector2(bld.tileX.Value * 64f + drawOffset.X, baseY));
                 spriteBatch.Draw(texture, corner, src, Color.White, 0f, new Vector2(0f, src.Height),
                     4f, SpriteEffects.None, 0f);
             }
@@ -191,9 +198,15 @@ namespace SDVRadiance
                 if (src.Width <= 0 || src.Height <= 0)
                     continue;
                 // Same anchor as the world draw: the art hangs from its own centre, because a
-                // barn's roof overhangs the footprint it is standing on.
-                float baseY = (bld.tileY.Value + bld.tilesHigh.Value) * 64f;
-                float artCentreX = bld.tileX.Value * 64f + src.Width * 2f;
+                // barn's roof overhangs the footprint it is standing on. The game draws a
+                // building at its tile plus the DrawOffset its data declares (times four, the
+                // sprite scale), and a content pack's house can declare one the vanilla house
+                // does not: without it the shadow sat that far to the right of the wall that cast
+                // it, which is how it was reported, with the sun on either side. The mirror and
+                // the water mask already anchor buildings this way.
+                Vector2 drawOffset = (bld.GetData()?.DrawOffset ?? Vector2.Zero) * 4f;
+                float baseY = (bld.tileY.Value + bld.tilesHigh.Value) * 64f + drawOffset.Y;
+                float artCentreX = bld.tileX.Value * 64f + drawOffset.X + src.Width * 2f;
                 Vector2 feet = Game1.GlobalToLocal(viewport, new Vector2(artCentreX, baseY));
                 // Depth means nothing in a mask - every stamp is coverage - so the whole thing goes
                 // in flat, and WHITE, which is what the compositing pass reads as "shadowed".

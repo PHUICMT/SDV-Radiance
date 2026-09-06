@@ -61,7 +61,7 @@ namespace SDVRadiance
             // None of that changes while you are standing there, and all of it was being worked out
             // again for every tile on screen, in two passes, sixty times a second. Now it is worked
             // out once per tile and kept until the map itself changes.
-            if (!ReferenceEquals(location, _propCacheLocation) || !ReferenceEquals(location.map, _propCacheMap)
+            if (!SDVRadiance.LiveScreens.SamePlace(location, _propCacheLocation) || !SDVRadiance.LiveScreens.SameMapSize(location.map, _propCacheMap)
                 || Game1.Date.TotalDays != _propCacheDay)
             {
                 _propCache.Clear();

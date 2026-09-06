@@ -86,7 +86,16 @@ namespace SDVRadiance
             // The last blur lands in the KEPT target, not the scratch one: god rays and bloom
             // rewrite the scratch buffers later this same frame, and the sun shafts need this
             // mask still intact NEXT frame (see _cloudMaskKeep). Same pass, different address.
-            var keep = _cloudMaskKeep ?? rtA;
+            // The keep is per screen (ScreenState): a screen whose keep was made for another
+            // frame size, or that has none yet, gets its own here rather than borrowing.
+            if (_cloudMaskKeep != null && (_cloudMaskKeep.IsDisposed || _cloudMaskKeep.Width != rtA.Width || _cloudMaskKeep.Height != rtA.Height))
+            {
+                if (!_cloudMaskKeep.IsDisposed) _cloudMaskKeep.Dispose();
+                _cloudMaskKeep = null;
+                _cloudMaskTick = int.MinValue;
+            }
+            _cloudMaskKeep ??= CreateRenderTarget(rtA.Width, rtA.Height, rtA.Format);
+            var keep = _cloudMaskKeep;
             GetParam(effect, "TexelSize")?.SetValue(new Vector2(0f, 1f / rtB.Height));
             effect.CurrentTechnique = effect.Techniques["BlurV"];
             Pass(spriteBatch, rtB, keep, effect);
@@ -434,11 +443,11 @@ namespace SDVRadiance
         // frame). Structural readiness gates (SpriteMaskOn/ReflectRTOn/SceneOn) stay
         // binary on purpose - there is no texture to fade until the bake exists - and
         // indoor/outdoor multipliers snap behind the game's own warp fade.
-        private float _shimmerEase, _dispGateEase = 1f, _rainRingsEase, _vignetteEase, _caEase, _toneMapEase, _tiltModeEase, _heatHazeEase;
+        private float _dispGateEase = 1f, _tiltModeEase, _heatHazeEase;
         /// <summary>1 while the camera is in a room, 0 outdoors. Unlike <see cref="_tiltModeEase"/>,
         /// which follows a setting every screen shares, this one follows the location, so in split
         /// screen one player can be inside while the other is not: it is saved per screen.</summary>
-        private float _tiltIndoorEase;
+        // moved to ScreenState (see RenderPipeline.Screens.cs)
         private float _auroraAmount;
         /// <summary>The aurora's strength for the glass, which is drawn into the world batch
         /// long before any of our passes and so cannot ask for it itself. Refreshed every
@@ -518,19 +527,19 @@ namespace SDVRadiance
         // Windowed-interior exposure + window shafts. Eased so a 10-minute clock tick or a
         // weather flip never steps the room in one frame; SNAPPED on location change (house
         // rule: indoor/outdoor multipliers hide behind the game's own warp fade).
-        private Vector3 _exposureEase = Vector3.One;
-        private float _roomSaturationEase = 1f;
+        // moved to ScreenState (see RenderPipeline.Screens.cs)
+        // moved to ScreenState (see RenderPipeline.Screens.cs)
         private Vector3 _windowColourEase = Vector3.Zero;
         /// <summary>How much the glass is allowed to ignore the room's exposure. It is a hole with
         /// the sky behind it only while there IS sky light: after dark it is a dark rectangle, and
         /// exempting it then left a window still lit at midnight.</summary>
-        private float _paneDaylightEase;
+        // moved to ScreenState (see RenderPipeline.Screens.cs)
         /// <summary>Eased twin of the window-beam setting, so switching it off fades the
         /// floor patch out instead of deleting it in one frame.</summary>
-        private float _windowDaylightEase;
+        // moved to ScreenState (see RenderPipeline.Screens.cs)
         /// <summary>Eased twin of the window room-light setting: the daylight a window contributes
         /// to the room's own lighting, which is the half a window-art mod cannot replace.</summary>
-        private float _windowRoomLightEase;
+        // moved to ScreenState (see RenderPipeline.Screens.cs)
         private GameLocation? _exposureLocation;
         private readonly Vector2[] _windowShaftPositions = new Vector2[6];
 
@@ -842,6 +851,13 @@ namespace SDVRadiance
         /// exactly that reason.</summary>
         internal static float LastMarchStepCeiling;
         internal static int LastMarchingLamps;
+        /// <summary>How visible the lamps were held to be this frame (1 = night, 0 = white sky),
+        /// and the lamp shadow strength that came out of it, for the report.</summary>
+        internal static float LastLampVisible = 1f;
+        internal static float LastShadowStrengthNow;
+        /// <summary>One step of an 8-bit colour: a lamp shadow weaker than this cannot change a
+        /// pixel of the target, so the march that would find it is skipped.</summary>
+        private const float MarchSkipBelowStrength = 1f / 255f;
         /// <summary>Whether the shader skipped every lamp's shadow march this frame because no
         /// term that reads its result was live: shadows at zero (daylight outdoors), shafts off,
         /// no debug paint. The lamps still light; only the ray is not walked.</summary>
@@ -971,6 +987,16 @@ namespace SDVRadiance
                 lampVisible = Math.Max(darkness, FloodLightmap.NightAmount());
             }
             float shadowStrengthNow = MathHelper.Clamp(config.FloodShadowStrength, 0f, 1f) * lampVisible;
+            // Below one colour step nothing the march finds can reach the picture: a shadow's
+            // whole effect is at most ShadowStrength of a pool that is itself scaled by the same
+            // daylight. The game's daylight tint is rarely pure white even at noon, so a strength
+            // of a few thousandths kept every lamp on the farm marching all day for a darkening
+            // the target could not hold. Snapped here, on the CPU, so the shader's own "above
+            // zero" test and the report's mirror of it keep meaning what they say.
+            if (shadowStrengthNow < MarchSkipBelowStrength)
+                shadowStrengthNow = 0f;
+            LastLampVisible = lampVisible;
+            LastShadowStrengthNow = shadowStrengthNow;
             GetParam(effect, "ShadowStrength")?.SetValue(shadowStrengthNow);
             GetParam(effect, "ShadowCarve")?.SetValue(MathHelper.Clamp(config.LightShadowCarve, 0f, 1f) * lampVisible);
             // The shader's own test, mirrored here so the report can say the march was skipped
@@ -1039,7 +1065,11 @@ namespace SDVRadiance
             // its sky cast fell on the glass, and a bright white window came out flat grey, the
             // exact "dirty rather than a window" failure the shader was written to avoid. At 0
             // the pane is the game's own art at neutral exposure, and nothing is added to it.
-            float daylightScale = MathHelper.Clamp(config.WindowDaylightStrength, 0f, 2f);
+            // Your own house and everybody else's are two dials: a farmhouse that read right beside
+            // a villager's home that blew out could only be fixed on one side with one dial.
+            // A cabin is a FarmHouse to the game; the island house is its own class.
+            bool playersOwnHome = location is StardewValley.Locations.FarmHouse or StardewValley.Locations.IslandFarmHouse;
+            float daylightScale = MathHelper.Clamp(playersOwnHome ? config.WindowDaylightStrength : config.WindowDaylightStrengthElsewhere, 0f, 2f);
             Vector3 windowColourTarget = windowedRoom ? dayColour * (dayStrength * 0.8f * daylightScale) : Vector3.Zero;
             float paneDaylightTarget = windowedRoom ? MathHelper.Clamp(dayStrength * 1.6f, 0f, 1f) : 0f;
             if (!ReferenceEquals(location, _exposureLocation))
@@ -1962,7 +1992,9 @@ namespace SDVRadiance
             // which is the largest brightening this meter can ask for. Re-prime instead.
             if (_isLuminancePrimed && GpuContent.Usable(_luminanceRenderTarget))
             {
+                long readStarted = Stopwatch.GetTimestamp();
                 _luminanceRenderTarget.GetData(_luminancePixels);
+                NoteReadback((Stopwatch.GetTimestamp() - readStarted) * 1000.0 / Stopwatch.Frequency);
                 float sum = 0f;
                 for (int i = 0; i < _luminancePixels.Length; i++)
                 {

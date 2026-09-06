@@ -684,6 +684,8 @@ namespace SDVRadiance
             Tog("tuner.windowbeam", () => _config.WindowBeamEnabled, v => _config.WindowBeamEnabled = v, "help.windowbeam");
             Sld("tuner.windowdaylightstrength", 0f, 2f, () => _config.WindowDaylightStrength,
                 v => _config.WindowDaylightStrength = v, "help.windowdaylightstrength");
+            Sld("tuner.windowdaylightelsewhere", 0f, 2f, () => _config.WindowDaylightStrengthElsewhere,
+                v => _config.WindowDaylightStrengthElsewhere = v, "help.windowdaylightelsewhere");
             EndDependsOn();
             Section("tuner.section.windowreflection");
             Tog("tuner.windowreflection", () => _config.WindowReflectionEnabled, v => _config.WindowReflectionEnabled = v, "help.windowreflection");
@@ -1105,17 +1107,42 @@ namespace SDVRadiance
         {
             Tog("config.sheetupscale.name", () => _config.SheetUpscaleEnabled, v => _config.SheetUpscaleEnabled = v, "help.sheetupscale");
             DependsOn(() => _config.SheetUpscaleEnabled);
-            Sld("config.sheetupscalesmoothness.name", 0f, 1f, () => _config.SheetUpscaleSmoothness,
-                v => _config.SheetUpscaleSmoothness = v, "config.sheetupscalesmoothness.tooltip");
+            if (_config.SheetUpscaleEnabled)
+            {
+                // Which look: two buttons, the one in use lit (see the GI model buttons).
+                (SheetSmoothingStyle style, string key)[] styles = { (SheetSmoothingStyle.Scale2x, "scale2x"), (SheetSmoothingStyle.Soft4x, "soft4x") };
+                int styleButtonWidth = (_contentColumnWidth - 6 * (styles.Length - 1)) / styles.Length;
+                for (int styleIndex = 0; styleIndex < styles.Length; styleIndex++)
+                {
+                    var (style, key) = styles[styleIndex];
+                    var rect = new Rectangle(_contentCursorX + styleIndex * (styleButtonWidth + 6), _contentCursorY, styleButtonWidth, S(40));
+                    var btn = Btn(_translate($"config.sheetupscalestyle.{key}"), rect, () => { _config.SheetUpscaleStyle = style; _onChange(); _onSave(); });
+                    btn.IsChosen = () => _config.SheetUpscaleStyle == style;
+                    Help(rect, $"help.sheetupscalestyle.{key}");
+                }
+                _contentCursorY += S(50);
+            }
             Section("tuner.section.smoothingfamilies");
             Tog("config.sheetupscaleworld.name", () => _config.SheetUpscaleWorld,
                 v => _config.SheetUpscaleWorld = v, "config.sheetupscaleworld.tooltip");
+            Sld("config.sheetupscalesmoothness.name", 0f, 1f, () => _config.SheetUpscaleSmoothnessWorld,
+                v => _config.SheetUpscaleSmoothnessWorld = v, "config.sheetupscalesmoothness.tooltip", () => _config.SheetUpscaleWorld);
             Tog("config.sheetupscalecharacters.name", () => _config.SheetUpscaleCharacters,
                 v => _config.SheetUpscaleCharacters = v, "config.sheetupscalecharacters.tooltip");
+            Sld("config.sheetupscalesmoothness.name", 0f, 1f, () => _config.SheetUpscaleSmoothnessCharacters,
+                v => _config.SheetUpscaleSmoothnessCharacters = v, "config.sheetupscalesmoothness.tooltip", () => _config.SheetUpscaleCharacters);
+            Tog("config.sheetupscaleitems.name", () => _config.SheetUpscaleItems,
+                v => _config.SheetUpscaleItems = v, "config.sheetupscaleitems.tooltip");
+            Sld("config.sheetupscalesmoothness.name", 0f, 1f, () => _config.SheetUpscaleSmoothnessItems,
+                v => _config.SheetUpscaleSmoothnessItems = v, "config.sheetupscalesmoothness.tooltip", () => _config.SheetUpscaleItems);
             Tog("config.sheetupscaleportraits.name", () => _config.SheetUpscalePortraits,
                 v => _config.SheetUpscalePortraits = v, "config.sheetupscaleportraits.tooltip");
+            Sld("config.sheetupscalesmoothness.name", 0f, 1f, () => _config.SheetUpscaleSmoothnessPortraits,
+                v => _config.SheetUpscaleSmoothnessPortraits = v, "config.sheetupscalesmoothness.tooltip", () => _config.SheetUpscalePortraits);
             Tog("config.sheetupscaleinterface.name", () => _config.SheetUpscaleInterface,
                 v => _config.SheetUpscaleInterface = v, "config.sheetupscaleinterface.tooltip");
+            Sld("config.sheetupscalesmoothness.name", 0f, 1f, () => _config.SheetUpscaleSmoothnessInterface,
+                v => _config.SheetUpscaleSmoothnessInterface = v, "config.sheetupscalesmoothness.tooltip", () => _config.SheetUpscaleInterface);
             EndDependsOn();
         }
 
