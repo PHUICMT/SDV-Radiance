@@ -22,7 +22,7 @@ namespace SDVRadiance
         /// <summary>One long shadow per caster, leaning away from the sun (outdoors, daytime).</summary>
         private void DrawSunShadows(SpriteBatch spriteBatch, GameLocation location, ModConfig config, float strength, float blur)
         {
-            ComputeSun(out float rot, out float stretch, out float alpha);
+            ComputeSun(out float rotation, out float stretch, out float alpha);
             // Overcast is a dimmer on the sun, not a switch (see OvercastNow): faint, short and
             // soft, with everything keeping its own silhouette instead of the screen reverting to
             // the game's blobs the moment it rains.
@@ -38,7 +38,7 @@ namespace SDVRadiance
             if (DiagnosticMonitor != null && _diagnosticFrameCount < 3)
             {
                 _diagnosticFrameCount++;
-                DiagnosticMonitor.Log($"[shadow] sun: npcs={location.characters.Count}, time={Game1.timeOfDay}, rot={rot:0.00}, stretch={stretch:0.00}, alpha={alpha:0.00}, blur={blur:0.0}", LogLevel.Debug);
+                DiagnosticMonitor.Log($"[shadow] sun: npcs={location.characters.Count}, time={Game1.timeOfDay}, rot={rotation:0.00}, stretch={stretch:0.00}, alpha={alpha:0.00}, blur={blur:0.0}", LogLevel.Debug);
             }
 
             foreach (NPC npc in CharactersIn(location))
@@ -56,22 +56,22 @@ namespace SDVRadiance
                         npc.GetSpriteWidthForPositioning() * 4f * 0.17f, alpha * 0.8f, SeatedDepth(npc), blur);
                     continue;
                 }
-                DrawNpcShadow(spriteBatch, npc, rot, stretch, alpha, blur);
+                DrawNpcShadow(spriteBatch, npc, rotation, stretch, alpha, blur);
             }
 
             foreach (FarmAnimal a in AnimalsIn(location))
             {
                 if (a?.Sprite?.Texture == null || OnOpenWater(location, a.TilePoint))
                     continue;
-                DrawAnimalShadow(spriteBatch, a, rot, stretch, alpha, blur);
+                DrawAnimalShadow(spriteBatch, a, rotation, stretch, alpha, blur);
             }
 
-            DrawPlayerShadow(spriteBatch, location, rot, stretch, alpha, blur);
-            DrawOtherFarmerSunShadows(spriteBatch, location, rot, stretch, alpha, blur);
+            DrawPlayerShadow(spriteBatch, location, rotation, stretch, alpha, blur);
+            DrawOtherFarmerSunShadows(spriteBatch, location, rotation, stretch, alpha, blur);
 
             if (config.DirectionalShadowObjects)
             {
-                DrawObjectShadows(spriteBatch, location, rot, stretch, alpha, blur);
+                DrawObjectShadows(spriteBatch, location, rotation, stretch, alpha, blur);
 
                 // Farm building ENTITIES (coop/barn/house) get their grounding pool here. Their
                 // SHAPE is cast somewhere else entirely, through the effect chain, for reasons
@@ -89,13 +89,13 @@ namespace SDVRadiance
                     // size cannot be sorted: over the grass means over the building too, under the
                     // building means every tuft of grass punches a hole in it. Drawing it here as
                     // well would be the same shadow twice, once sorted and once not.
-                    DrawBuildingShadow(spriteBatch, bld, rot, stretch, alpha * 0.7f, blur,
+                    DrawBuildingShadow(spriteBatch, bld, rotation, stretch, alpha * 0.7f, blur,
                         castShape: false);
                 }
             }
         }
 
-        private void DrawAnimalShadow(SpriteBatch spriteBatch, FarmAnimal a, float rot, float stretch, float alpha, float blur)
+        private void DrawAnimalShadow(SpriteBatch spriteBatch, FarmAnimal a, float rotation, float stretch, float alpha, float blur)
         {
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(a.Position.X + a.Sprite.SpriteWidth * 4 / 2f, a.GetBoundingBox().Bottom - FeetLift));
@@ -103,13 +103,13 @@ namespace SDVRadiance
             if (_casterBakeCache.TryGetValue((a.Sprite.Texture, a.Sprite.SourceRect), out SpriteBake? baked))
             {
                 baked.LastUsedTick = Game1.ticks;
-                DrawSoftGrounded(spriteBatch, Taps9, baked.Rt, null, feet, Color.White, alpha, rot, baked.FeetInRt,
-                    new Vector2(SolidAcrossScale(rot, stretch), stretch), anchorWorldY, SpriteEffects.None, baked.BakedBlur > 0f ? 0f : blur);
+                DrawSoftGrounded(spriteBatch, Taps9, baked.Rt, null, feet, Color.White, alpha, rotation, baked.FeetInRt,
+                    new Vector2(SolidAcrossScale(rotation, stretch), stretch), anchorWorldY, SpriteEffects.None, baked.BakedBlur > 0f ? 0f : blur);
                 return;
             }
-            Rectangle src = a.Sprite.SourceRect;
-            DrawBandedGradient(spriteBatch, a.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, src.Height),
-                alpha, rot, new Vector2(4f * SolidAcrossScale(rot, stretch), 4f * stretch), anchorWorldY, blur);
+            Rectangle sourceRect = a.Sprite.SourceRect;
+            DrawBandedGradient(spriteBatch, a.Sprite.Texture, sourceRect, feet, new Vector2(sourceRect.Width / 2f, sourceRect.Height),
+                alpha, rotation, new Vector2(4f * SolidAcrossScale(rotation, stretch), 4f * stretch), anchorWorldY, blur);
         }
 
         /// <summary>
@@ -320,8 +320,8 @@ namespace SDVRadiance
                 float halfW = npc.GetSpriteWidthForPositioning() * 4f * 0.36f;
                 GatherCasts(feet, castStrength, lenCfg);
                 DrawContactBlob(spriteBatch, feet, halfW, halfW * 0.5f, ambAlpha * (_lightShadowCasts.Count > 0 ? 0.45f : 1f), depth, blur);
-                foreach (var (rot, st, a, _) in _lightShadowCasts)
-                    DrawNpcShadow(spriteBatch, npc, rot, st, a, blur);
+                foreach (var (rotation, st, a, _) in _lightShadowCasts)
+                    DrawNpcShadow(spriteBatch, npc, rotation, st, a, blur);
             }
         }
 
@@ -339,8 +339,8 @@ namespace SDVRadiance
                 float halfW = animal.Sprite.SpriteWidth * 4f * 0.36f;
                 GatherCasts(feet, castStrength, lenCfg);
                 DrawContactBlob(spriteBatch, feet, halfW, halfW * 0.5f, ambAlpha * (_lightShadowCasts.Count > 0 ? 0.45f : 1f), depth, blur);
-                foreach (var (rot, st, a, _) in _lightShadowCasts)
-                    DrawAnimalShadow(spriteBatch, animal, rot, st, a, blur);
+                foreach (var (rotation, st, a, _) in _lightShadowCasts)
+                    DrawAnimalShadow(spriteBatch, animal, rotation, st, a, blur);
             }
         }
 
@@ -371,8 +371,8 @@ namespace SDVRadiance
                     // the map; the pool above is drawn either way.
                     if (DrawPlayerPatch(spriteBatch))
                         return;
-                    foreach (var (rot, st, a, _) in _lightShadowCasts)
-                        DrawSoftGrounded(spriteBatch, Taps9, _playerRenderTarget, null, feet, Color.White, a, rot,
+                    foreach (var (rotation, st, a, _) in _lightShadowCasts)
+                        DrawSoftGrounded(spriteBatch, Taps9, _playerRenderTarget, null, feet, Color.White, a, rotation,
                             _playerFeetInRenderTarget, new Vector2(1f, st), who.StandingPixel.Y, SpriteEffects.None, blur);
                 }
             }
@@ -436,7 +436,7 @@ namespace SDVRadiance
         }
 
         private readonly System.Collections.Generic.List<(Vector2 pos, float reach, float flick)> _nearbyLightSources = new();
-        private readonly System.Collections.Generic.List<(float rot, float st, float a, float distSq)> _lightShadowCasts = new();
+        private readonly System.Collections.Generic.List<(float rotation, float st, float a, float distSq)> _lightShadowCasts = new();
         /// <summary>Runaway guard on the candidate lights, matching the lighting pass's own
         /// budget (<see cref="RenderPipeline.MaxLights"/>) so the two agree on what "the lights in
         /// this scene" means. It was 24 after the lighting had already grown to 48, and the gap
@@ -458,7 +458,7 @@ namespace SDVRadiance
         /// alpha carries the flame flicker, so ranking by it would let a fire sitting near the cut
         /// flip in and out of the list every frame, which is the blinking this path was tuned to
         /// avoid. Distance between two things that are standing still does not move.</summary>
-        private static readonly System.Comparison<(float rot, float st, float a, float distSq)> ByLightDistance
+        private static readonly System.Comparison<(float rotation, float st, float a, float distSq)> ByLightDistance
             = (castA, castB) => castA.distSq.CompareTo(castB.distSq);
         // Why the light list ended up the size it did: total offered, then each filter's toll.
         /// <summary>Where each light was last frame, by its id — the drift test's memory. Pruned
@@ -530,8 +530,8 @@ namespace SDVRadiance
         {
             _lightShadowCasts.Clear();
             foreach (var (lpos, reach, flick) in _nearbyLightSources)
-                if (LightCast(feet, lpos, reach, strength, lenCfg, flick, out float rot, out float st, out float a))
-                    _lightShadowCasts.Add((rot, st, a, Vector2.DistanceSquared(feet, lpos)));
+                if (LightCast(feet, lpos, reach, strength, lenCfg, flick, out float rotation, out float st, out float a))
+                    _lightShadowCasts.Add((rotation, st, a, Vector2.DistanceSquared(feet, lpos)));
             // Keep the lights nearest THIS caster. Every caster asks the question for itself, so a
             // person at the far end of a room keeps the window above them no matter where the
             // camera is, and nobody's shadow depends on how many lights happen to be lit near
@@ -561,7 +561,7 @@ namespace SDVRadiance
                     _lightShadowCasts.RemoveRange(i, _lightShadowCasts.Count - i);
                     break;
                 }
-                _lightShadowCasts[i] = (cast.rot, cast.st, cast.a * fade, cast.distSq);
+                _lightShadowCasts[i] = (cast.rotation, cast.st, cast.a * fade, cast.distSq);
             }
         }
 
@@ -711,9 +711,9 @@ namespace SDVRadiance
 
         /// <summary>Shadow direction/length/opacity for a caster lit by one point light. False if out of reach.</summary>
         private static bool LightCast(Vector2 feet, Vector2 lightPos, float reach, float strength, float lenCfg, float flick,
-            out float rot, out float stretch, out float alpha)
+            out float rotation, out float stretch, out float alpha)
         {
-            rot = 0f; stretch = 0f; alpha = 0f;
+            rotation = 0f; stretch = 0f; alpha = 0f;
             Vector2 away = feet - lightPos;
             float dist = away.Length();
             if (dist < 1f || dist > reach)
@@ -730,7 +730,7 @@ namespace SDVRadiance
             alpha = (0.3f + 0.7f * prox) * 0.6f * strength * flick * edge;
             if (alpha <= 0.02f)
                 return false;
-            rot = (float)Math.Atan2(away.X, -away.Y);        // point the silhouette away from the light
+            rotation = (float)Math.Atan2(away.X, -away.Y);        // point the silhouette away from the light
             // Physically: a lamp is ELEVATED, so standing right under it the light comes from
             // nearly overhead → SHORT shadow; the further away you stand the more grazing the
             // angle → LONGER shadow (like a low sun at dusk). (This was inverted before.)
@@ -827,14 +827,14 @@ namespace SDVRadiance
         /// sideways shadow lies down instead of standing on its edge. See
         /// <see cref="ShadowProjection.AcrossScaleForRotation"/> for what the draw can and cannot
         /// reproduce of that.</summary>
-        private float SolidAcrossScale(float rot, float stretch)
-            => ShadowProjection.ForSolid(rot, stretch, _groundForeshortening).AcrossScaleForRotation();
+        private float SolidAcrossScale(float rotation, float stretch)
+            => ShadowProjection.ForSolid(rotation, stretch, _groundForeshortening).AcrossScaleForRotation();
 
         /// <summary>The same lay-down for a person, the player, another player or an NPC, at the
         /// people's own foreshortening; see <see cref="ModConfig.ShadowCharacterGroundForeshortening"/>
         /// for why they have one.</summary>
-        private float CharacterAcrossScale(float rot, float stretch)
-            => ShadowProjection.ForSolid(rot, stretch, _characterGroundForeshortening).AcrossScaleForRotation();
+        private float CharacterAcrossScale(float rotation, float stretch)
+            => ShadowProjection.ForSolid(rotation, stretch, _characterGroundForeshortening).AcrossScaleForRotation();
 
         /// <summary>
         /// Whether this character stands up like a person or lies across the ground like an animal.
@@ -888,14 +888,14 @@ namespace SDVRadiance
             return mirrored ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
         }
 
-        private void DrawNpcShadow(SpriteBatch spriteBatch, NPC npc, float rot, float stretch, float alpha, float blur)
+        private void DrawNpcShadow(SpriteBatch spriteBatch, NPC npc, float rotation, float stretch, float alpha, float blur)
         {
             // The collision box is the anchor, with no drawOffset term. A stretched sprite and the
             // offset that goes with it CANCEL: extendSourceRect(0, 32) with tempSpriteHeight = 64
             // and drawOffset = (0, 96) puts the bottom of the PERSON back on
             // GetBoundingBox().Bottom, which is where an ordinary character stands too. Adding the
             // offset here pushed those characters' shadows a tile and a half down the beach.
-            Rectangle src = npc.Sprite.SourceRect;
+            Rectangle sourceRect = npc.Sprite.SourceRect;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f,
                     npc.GetBoundingBox().Bottom - FeetLift));
@@ -903,10 +903,10 @@ namespace SDVRadiance
             // Prefer the baked silhouette (one cohesive image, smoothly faded — same as the
             // player). Bands are the fallback only when the sprite is too big for a slot, which is
             // every stretched one: 64 rows drawn at 4x overflow the bake slot.
-            float across = StandsLikeAPerson(npc, _shadowModel) ? CharacterAcrossScale(rot, stretch)
-                                                 : SolidAcrossScale(rot, stretch);
+            float across = StandsLikeAPerson(npc, _shadowModel) ? CharacterAcrossScale(rotation, stretch)
+                                                 : SolidAcrossScale(rotation, stretch);
             SpriteEffects facing = SpriteFacing(npc);
-            if (_casterBakeCache.TryGetValue((npc.Sprite.Texture, src), out SpriteBake? baked))
+            if (_casterBakeCache.TryGetValue((npc.Sprite.Texture, sourceRect), out SpriteBake? baked))
             {
                 baked.LastUsedTick = Game1.ticks;
                 // The bake is pinned bottom-CENTRE in its slot and FeetInRt is that centre, so a
@@ -914,7 +914,7 @@ namespace SDVRadiance
                 // sprite about, and the feet stay where they are.
                 // The softness is in the baked pixels (BakedBlur), so each strip is one draw; a
                 // bake made with no blur (the A/B switch off) is softened tap by tap as before.
-                DrawSoftGrounded(spriteBatch, Taps9, baked.Rt, null, feet, Color.White, alpha, rot, baked.FeetInRt,
+                DrawSoftGrounded(spriteBatch, Taps9, baked.Rt, null, feet, Color.White, alpha, rotation, baked.FeetInRt,
                     new Vector2(across, stretch), anchorWorldY, facing, baked.BakedBlur > 0f ? 0f : blur);
                 return;
             }
@@ -931,15 +931,15 @@ namespace SDVRadiance
             Vector2 gameAnchor = npc.getLocalPosition(Game1.viewport)
                 + new Vector2(npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Height / 2f);
             float spriteTop = gameAnchor.Y - npc.Sprite.SpriteHeight * 3f;
-            float originY = MathHelper.Clamp((feet.Y - spriteTop) / 4f, 0f, src.Height);
+            float originY = MathHelper.Clamp((feet.Y - spriteTop) / 4f, 0f, sourceRect.Height);
             // Whatever the stretch added BELOW the feet is not part of the character: on the Squid
             // Fest fishermen it is the line and float sitting in the water. Casting it put tackle
             // shadows on the sand beside them. Cropping there leaves the person, and leaves every
             // ordinary sprite untouched because their feet are already the bottom edge.
-            if (originY >= 1f && originY < src.Height - 0.5f)
-                src = new Rectangle(src.X, src.Y, src.Width, (int)Math.Round(originY));
-            DrawBandedGradient(spriteBatch, npc.Sprite.Texture, src, feet, new Vector2(src.Width / 2f, Math.Min(originY, src.Height)),
-                alpha, rot, new Vector2(4f * across, 4f * stretch), anchorWorldY, blur, HeadFade, facing);
+            if (originY >= 1f && originY < sourceRect.Height - 0.5f)
+                sourceRect = new Rectangle(sourceRect.X, sourceRect.Y, sourceRect.Width, (int)Math.Round(originY));
+            DrawBandedGradient(spriteBatch, npc.Sprite.Texture, sourceRect, feet, new Vector2(sourceRect.Width / 2f, Math.Min(originY, sourceRect.Height)),
+                alpha, rotation, new Vector2(4f * across, 4f * stretch), anchorWorldY, blur, HeadFade, facing);
         }
     }
 }

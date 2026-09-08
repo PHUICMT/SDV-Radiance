@@ -97,7 +97,7 @@ namespace SDVRadiance
         // NPC/animal sharing a frame shares one bake and warm frames cost a dictionary hit
         // instead of a render-target switch. Upright silhouettes carry no sun angle, so entries
         // stay valid indefinitely; the cache is only capped (see PreparePlayer).
-        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle src), SpriteBake> _casterBakeCache = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle sourceRect), SpriteBake> _casterBakeCache = new();
 
         // Objects (trees/bushes/clumps/furniture/craftables/crops/…) bake to pooled RTs with a
         // continuous gradient too — same smooth path as characters, no stepped bands. Slots are large
@@ -161,14 +161,14 @@ namespace SDVRadiance
             { new(), new(), new() };
         private readonly System.Collections.Generic.List<RenderTarget2D>[] _objectFreeTargetsByClass =
             { new(), new(), new() };
-        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle src, SpriteEffects effect), SpriteBake> _bakedObjectCache = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle sourceRect, SpriteEffects effect), SpriteBake> _bakedObjectCache = new();
         /// <summary>Sprites the DRAW pass wanted and found unbaked, to bake next frame. This is
         /// what lets the bake pass skip its full enumeration on a warm frame: instead of walking
         /// every on-screen tile a second time to discover nothing is missing, it bakes exactly
         /// what the draw pass reported missing, which on a still screen is nothing at all.
         /// Value carries the bake inputs recorded at draw time (the shear is per-CALLER, damped
         /// by sprite type, so it cannot be recomputed globally).</summary>
-        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle src, SpriteEffects effect), ObjectBakeRequest> _objectBakeQueue = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle sourceRect, SpriteEffects effect), ObjectBakeRequest> _objectBakeQueue = new();
 
         /// <summary>
         /// What a caster IS, as far as its shadow is concerned: a flat card standing on its bottom
@@ -218,22 +218,22 @@ namespace SDVRadiance
 
             /// <summary>The screen offset of one source pixel of height: up the screen at noon,
             /// swung by the lean, as long as the stretch.</summary>
-            private static Vector2 Along(float rot, float stretch)
-                => new((float)Math.Sin(rot) * stretch, -(float)Math.Cos(rot) * stretch);
+            private static Vector2 Along(float rotation, float stretch)
+                => new((float)Math.Sin(rotation) * stretch, -(float)Math.Cos(rotation) * stretch);
 
-            public static ShadowProjection ForCard(float rot, float stretch)
+            public static ShadowProjection ForCard(float rotation, float stretch)
             {
-                Vector2 along = Along(rot, stretch);
+                Vector2 along = Along(rotation, stretch);
                 return new ShadowProjection(1f, 0f, along.X, along.Y);
             }
 
-            public static ShadowProjection ForSolid(float rot, float stretch, float groundForeshortening)
+            public static ShadowProjection ForSolid(float rotation, float stretch, float groundForeshortening)
             {
                 float k = Math.Max(0.05f, groundForeshortening);
-                Vector2 along = Along(rot, stretch);
+                Vector2 along = Along(rotation, stretch);
                 // The ground's perpendicular to the sun's direction, measured ON the ground (screen
                 // y un-squashed by k to get there), then put back on screen (squashed again).
-                float groundX = (float)Math.Cos(rot) / k, groundY = (float)Math.Sin(rot);
+                float groundX = (float)Math.Cos(rotation) / k, groundY = (float)Math.Sin(rotation);
                 float length = (float)Math.Sqrt(groundX * groundX + groundY * groundY);
                 return new ShadowProjection(groundX / length, groundY * k / length, along.X, along.Y);
             }
@@ -395,10 +395,10 @@ namespace SDVRadiance
         /// banded stand-in and an immediate re-bake, which is the thrash being replaced. Only a
         /// cache that has run away to twice its cap stops respecting this.</summary>
         private const int HotBakeTicks = 8;
-        private readonly System.Collections.Generic.List<(Texture2D texture, Rectangle src)> _casterEvictScratch = new();
-        private readonly System.Collections.Generic.List<(Texture2D texture, Rectangle src, SpriteEffects effect)> _objectEvictScratch = new();
+        private readonly System.Collections.Generic.List<(Texture2D texture, Rectangle sourceRect)> _casterEvictScratch = new();
+        private readonly System.Collections.Generic.List<(Texture2D texture, Rectangle sourceRect, SpriteEffects effect)> _objectEvictScratch = new();
         /// <summary>Pose the player RT was last baked with — identical pose skips the re-bake.</summary>
-        private (int frame, int facing, Rectangle src) _playerBakeSignature = (-1, -1, default);
+        private (int frame, int facing, Rectangle sourceRect) _playerBakeSignature = (-1, -1, default);
         /// <summary>Whose silhouette the live player bake holds, so another screen can borrow it
         /// rather than bake the same person again (ShadowRenderer.Farmers).</summary>
         private long _playerBakeFarmerId;
@@ -702,12 +702,23 @@ namespace SDVRadiance
         /// itself.
         /// </para>
         /// </summary>
-        internal static bool SunInSky(out float lean, out float height)
+        /// <param name="glassRoofCounts">Whether a glass-roofed interior (see <see cref="UnderAGlassRoof"/>)
+        /// counts as under the sun. Only the dappled sunlight asks for that; the cast shadows keep
+        /// their indoor path there.</param>
+        /// <summary>An interior the sun shines straight into. The game files the greenhouse as an
+        /// interior (no sky, no weather drawn), but its roof is glass: the sun that dapples the farm
+        /// stands over it too, and so does the overcast that takes the dapple away. A content pack's
+        /// own greenhouse says so through the same flag, or by carrying the name.</summary>
+        internal static bool UnderAGlassRoof(GameLocation? location)
+            => location != null && !location.IsOutdoors
+               && (location.IsGreenhouse || string.Equals(location.Name, "Greenhouse", StringComparison.Ordinal));
+
+        internal static bool SunInSky(out float lean, out float height, bool glassRoofCounts = false)
         {
             lean = 0f;
             height = 0f;
             GameLocation? location = Game1.currentLocation;
-            if (location == null || !location.IsOutdoors
+            if (location == null || !(location.IsOutdoors || (glassRoofCounts && UnderAGlassRoof(location)))
                 || location.IsRainingHere() || location.IsSnowingHere() || location.IsLightningHere())
                 return false;
             float mins = GameClock.MinutesNow();

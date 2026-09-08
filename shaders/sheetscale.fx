@@ -66,9 +66,9 @@ struct PixelInput
     float2 UV       : TEXCOORD0;
 };
 
-float4 At(float2 sourceTexel, float dx, float dy)
+float4 NeighbourAt(float2 sourceTexel, float offsetX, float offsetY)
 {
-    float2 texel = sourceTexel + float2(dx, dy);
+    float2 texel = sourceTexel + float2(offsetX, offsetY);
     if (CellSize > 0.5)
     {
         float2 cellOrigin = floor(sourceTexel / CellSize) * CellSize;
@@ -77,9 +77,9 @@ float4 At(float2 sourceTexel, float dx, float dy)
     return tex2D(SheetSampler, (texel + 0.5) * TexelSize);
 }
 
-bool Same(float4 a, float4 b)
+bool Same(float4 first, float4 second)
 {
-    return all(abs(a - b) < 0.004);
+    return all(abs(first - second) < 0.004);
 }
 
 float4 SheetScalePS(PixelInput input) : SV_TARGET
@@ -89,22 +89,22 @@ float4 SheetScalePS(PixelInput input) : SV_TARGET
     float2 sourceTexel = floor(targetTexel * 0.5);
     float2 corner = targetTexel - sourceTexel * 2.0;     // (0,0) top-left ... (1,1) bottom-right
 
-    float4 P = At(sourceTexel, 0.0, 0.0);
-    float4 A = At(sourceTexel, 0.0, -1.0);   // up
-    float4 B = At(sourceTexel, 1.0, 0.0);    // right
-    float4 C = At(sourceTexel, -1.0, 0.0);   // left
-    float4 D = At(sourceTexel, 0.0, 1.0);    // down
+    float4 centrePixel = NeighbourAt(sourceTexel, 0.0, 0.0);
+    float4 up = NeighbourAt(sourceTexel, 0.0, -1.0);   // up
+    float4 right = NeighbourAt(sourceTexel, 1.0, 0.0);    // right
+    float4 left = NeighbourAt(sourceTexel, -1.0, 0.0);   // left
+    float4 down = NeighbourAt(sourceTexel, 0.0, 1.0);    // down
 
-    float4 result = P;
+    float4 result = centrePixel;
     if (corner.x < 0.5 && corner.y < 0.5)          // top-left: between C and A
-        result = (Same(C, A) && !Same(C, D) && !Same(A, B)) ? A : P;
+        result = (Same(left, up) && !Same(left, down) && !Same(up, right)) ? up : centrePixel;
     else if (corner.x >= 0.5 && corner.y < 0.5)    // top-right: between A and B
-        result = (Same(A, B) && !Same(A, C) && !Same(B, D)) ? B : P;
+        result = (Same(up, right) && !Same(up, left) && !Same(right, down)) ? right : centrePixel;
     else if (corner.x < 0.5 && corner.y >= 0.5)    // bottom-left: between D and C
-        result = (Same(D, C) && !Same(D, B) && !Same(C, A)) ? C : P;
+        result = (Same(down, left) && !Same(down, right) && !Same(left, up)) ? left : centrePixel;
     else                                           // bottom-right: between B and D
-        result = (Same(B, D) && !Same(B, A) && !Same(D, C)) ? D : P;
-    return lerp(P, result, Smoothness);
+        result = (Same(right, down) && !Same(right, up) && !Same(down, left)) ? down : centrePixel;
+    return lerp(centrePixel, result, Smoothness);
 }
 
 technique SheetScale { pass P0 { PixelShader = compile PS_SHADERMODEL SheetScalePS(); } }
@@ -125,35 +125,35 @@ technique SheetScale { pass P0 { PixelShader = compile PS_SHADERMODEL SheetScale
 // texel is black with no alpha and an opaque black one sits half a unit away from it, which
 // keeps an outline's edge from being read as the same thing as the emptiness beside it.
 
-float Value(float4 c)
+float Value(float4 colour)
 {
-    return dot(c.rgb, float3(0.2126, 0.7152, 0.0722)) + 0.5 * c.a;
+    return dot(colour.rgb, float3(0.2126, 0.7152, 0.0722)) + 0.5 * colour.a;
 }
 
-float4 Dist(float4 a, float4 b) { return abs(a - b); }
+float4 ColourDistance(float4 first, float4 second) { return abs(first - second); }
 
 // A neighbour read that never leaves the sprite: past its edge the edge texel repeats, the
 // way a clamped sampler treats the edge of a texture.
-float4 AtWithin(float2 centre, float dx, float dy)
+float4 NeighbourWithinSprite(float2 centre, float offsetX, float offsetY)
 {
-    float2 p = centre + float2(dx, dy) * TexelSize;
+    float2 sampleUv = centre + float2(offsetX, offsetY) * TexelSize;
     float2 lowest = (SourceRect.xy + 0.5) * TexelSize;
     float2 highest = (SourceRect.xy + SourceRect.zw - 0.5) * TexelSize;
-    return tex2D(SheetSampler, clamp(p, lowest, highest));
+    return tex2D(SheetSampler, clamp(sampleUv, lowest, highest));
 }
 
 // df(a,b) + df(a,c) + df(d,e) + df(d,f) + 4 df(g,h): how much the corner "e" and its diagonal
 // partner "d" differ from the pixels an edge between them would cut.
 float4 WeightedDistance(float4 a, float4 b, float4 c, float4 d, float4 e, float4 f, float4 g, float4 h)
 {
-    return Dist(a, b) + Dist(a, c) + Dist(d, e) + Dist(d, f) + 4.0 * Dist(g, h);
+    return ColourDistance(a, b) + ColourDistance(a, c) + ColourDistance(d, e) + ColourDistance(d, f) + 4.0 * ColourDistance(g, h);
 }
 
 float4 SheetXbrPS(PixelInput input) : SV_TARGET
 {
     // The target is the sprite alone, so its UV runs over SourceRect.
     float2 sourceCoord = SourceRect.xy + input.UV * SourceRect.zw;
-    float2 fp = frac(sourceCoord);
+    float2 positionInPixel = frac(sourceCoord);
     float2 centre = (floor(sourceCoord) + 0.5) * TexelSize;
 
     //        A1 B1 C1
@@ -161,11 +161,11 @@ float4 SheetXbrPS(PixelInput input) : SV_TARGET
     //     D0 D  E  F  F4
     //     G0 G  H  I  I4
     //        G5 H5 I5
-    float4 A1 = AtWithin(centre, -1.0, -2.0), B1 = AtWithin(centre, 0.0, -2.0), C1 = AtWithin(centre, 1.0, -2.0);
-    float4 A0 = AtWithin(centre, -2.0, -1.0), A = AtWithin(centre, -1.0, -1.0), B = AtWithin(centre, 0.0, -1.0), C = AtWithin(centre, 1.0, -1.0), C4 = AtWithin(centre, 2.0, -1.0);
-    float4 D0 = AtWithin(centre, -2.0, 0.0),  D = AtWithin(centre, -1.0, 0.0),  E = AtWithin(centre, 0.0, 0.0),  F = AtWithin(centre, 1.0, 0.0),  F4 = AtWithin(centre, 2.0, 0.0);
-    float4 G0 = AtWithin(centre, -2.0, 1.0),  G = AtWithin(centre, -1.0, 1.0),  H = AtWithin(centre, 0.0, 1.0),  I = AtWithin(centre, 1.0, 1.0),  I4 = AtWithin(centre, 2.0, 1.0);
-    float4 G5 = AtWithin(centre, -1.0, 2.0),  H5 = AtWithin(centre, 0.0, 2.0),  I5 = AtWithin(centre, 1.0, 2.0);
+    float4 A1 = NeighbourWithinSprite(centre, -1.0, -2.0), B1 = NeighbourWithinSprite(centre, 0.0, -2.0), C1 = NeighbourWithinSprite(centre, 1.0, -2.0);
+    float4 A0 = NeighbourWithinSprite(centre, -2.0, -1.0), A = NeighbourWithinSprite(centre, -1.0, -1.0), B = NeighbourWithinSprite(centre, 0.0, -1.0), C = NeighbourWithinSprite(centre, 1.0, -1.0), C4 = NeighbourWithinSprite(centre, 2.0, -1.0);
+    float4 D0 = NeighbourWithinSprite(centre, -2.0, 0.0),  D = NeighbourWithinSprite(centre, -1.0, 0.0),  E = NeighbourWithinSprite(centre, 0.0, 0.0),  F = NeighbourWithinSprite(centre, 1.0, 0.0),  F4 = NeighbourWithinSprite(centre, 2.0, 0.0);
+    float4 G0 = NeighbourWithinSprite(centre, -2.0, 1.0),  G = NeighbourWithinSprite(centre, -1.0, 1.0),  H = NeighbourWithinSprite(centre, 0.0, 1.0),  I = NeighbourWithinSprite(centre, 1.0, 1.0),  I4 = NeighbourWithinSprite(centre, 2.0, 1.0);
+    float4 G5 = NeighbourWithinSprite(centre, -1.0, 2.0),  H5 = NeighbourWithinSprite(centre, 0.0, 2.0),  I5 = NeighbourWithinSprite(centre, 1.0, 2.0);
 
     // The neighbourhood as seen from each corner, one component per corner.
     float4 b  = float4(Value(B), Value(D), Value(H), Value(F));
@@ -183,24 +183,24 @@ float4 SheetXbrPS(PixelInput input) : SV_TARGET
 
     // Where inside the pixel this texel is, seen from each corner: the 45 degree line and the
     // shallow (30) and steep (60) ones. The constants are the lines' equations per corner.
-    const float4 Ao = float4(1.0, -1.0, -1.0,  1.0);
-    const float4 Bo = float4(1.0,  1.0, -1.0, -1.0);
-    const float4 Co = float4(1.5,  0.5, -0.5,  0.5);
-    const float4 Ax = float4(1.0, -1.0, -1.0,  1.0);
-    const float4 Bx = float4(0.5,  2.0, -0.5, -2.0);
-    const float4 Cx = float4(1.0,  1.0, -0.5,  0.0);
-    const float4 Ay = float4(1.0, -1.0, -1.0,  1.0);
-    const float4 By = float4(2.0,  0.5, -2.0, -0.5);
-    const float4 Cy = float4(2.0,  0.0, -1.0,  0.5);
+    const float4 Line45A = float4(1.0, -1.0, -1.0,  1.0);
+    const float4 Line45B = float4(1.0,  1.0, -1.0, -1.0);
+    const float4 Line45C = float4(1.5,  0.5, -0.5,  0.5);
+    const float4 Line30A = float4(1.0, -1.0, -1.0,  1.0);
+    const float4 Line30B = float4(0.5,  2.0, -0.5, -2.0);
+    const float4 Line30C = float4(1.0,  1.0, -0.5,  0.0);
+    const float4 Line60A = float4(1.0, -1.0, -1.0,  1.0);
+    const float4 Line60B = float4(2.0,  0.5, -2.0, -0.5);
+    const float4 Line60C = float4(2.0,  0.0, -1.0,  0.5);
     float4 delta = max(EdgeSoftness, 0.0001).xxxx;
-    float4 coverage45 = smoothstep(Co - delta, Co + delta, Ao * fp.y + Bo * fp.x);
-    float4 coverage30 = smoothstep(Cx - delta, Cx + delta, Ax * fp.y + Bx * fp.x);
-    float4 coverage60 = smoothstep(Cy - delta, Cy + delta, Ay * fp.y + By * fp.x);
+    float4 coverage45 = smoothstep(Line45C - delta, Line45C + delta, Line45A * positionInPixel.y + Line45B * positionInPixel.x);
+    float4 coverage30 = smoothstep(Line30C - delta, Line30C + delta, Line30A * positionInPixel.y + Line30B * positionInPixel.x);
+    float4 coverage60 = smoothstep(Line60C - delta, Line60C + delta, Line60A * positionInPixel.y + Line60B * positionInPixel.x);
 
-    float4 t = EqualThreshold.xxxx;
-    float4 differentEF = step(t, Dist(e, f)), differentEH = step(t, Dist(e, h));
-    float4 differentEG = step(t, Dist(e, g)), differentDG = step(t, Dist(d, g));
-    float4 differentEC = step(t, Dist(e, c)), differentBC = step(t, Dist(b, c));
+    float4 threshold = EqualThreshold.xxxx;
+    float4 differentEF = step(threshold, ColourDistance(e, f)), differentEH = step(threshold, ColourDistance(e, h));
+    float4 differentEG = step(threshold, ColourDistance(e, g)), differentDG = step(threshold, ColourDistance(d, g));
+    float4 differentEC = step(threshold, ColourDistance(e, c)), differentBC = step(threshold, ColourDistance(b, c));
     float4 restrictionLevel1 = differentEF * differentEH;
     float4 restrictionLeft = differentEG * differentDG;
     float4 restrictionUp = differentEC * differentBC;
@@ -208,13 +208,13 @@ float4 SheetXbrPS(PixelInput input) : SV_TARGET
     // An edge runs past this corner when the pixel and its diagonal partner differ from what
     // the edge would cut MORE than the two corners on the edge differ from their surroundings.
     float4 edge = step(WeightedDistance(e, c, g, i, h5, f4, h, f), WeightedDistance(h, d, i5, f, i4, b, e, i) - 0.0001) * restrictionLevel1;
-    float4 edgeLeft = step(2.0 * Dist(f, g), Dist(h, c)) * restrictionLeft * edge;
-    float4 edgeUp = step(2.0 * Dist(h, c), Dist(f, g)) * restrictionUp * edge;
+    float4 edgeLeft = step(2.0 * ColourDistance(f, g), ColourDistance(h, c)) * restrictionLeft * edge;
+    float4 edgeUp = step(2.0 * ColourDistance(h, c), ColourDistance(f, g)) * restrictionUp * edge;
     float4 coverage = edge * max(coverage45, max(edgeLeft * coverage30, edgeUp * coverage60));
 
     // The colour on the far side of the edge is whichever of the two edge corners is nearer
     // in value to this pixel, per corner: (F or H), (B or F), (D or B), (H or D).
-    float4 nearerIsF = step(Dist(e, f), Dist(e, h));
+    float4 nearerIsF = step(ColourDistance(e, f), ColourDistance(e, h));
     float4 colour0 = lerp(H, F, nearerIsF.x);
     float4 colour1 = lerp(F, B, nearerIsF.y);
     float4 colour2 = lerp(B, D, nearerIsF.z);
@@ -235,12 +235,12 @@ technique SheetXbr { pass P0 { PixelShader = compile PS_SHADERMODEL SheetXbrPS()
 float4 SheetSoftenPS(PixelInput input) : SV_TARGET
 {
     float2 uv = input.UV;
-    float2 r = TexelSize * SoftRadius;
+    float2 radiusUv = TexelSize * SoftRadius;
     float4 sum = tex2D(SheetSampler, uv) * 0.25;
-    sum += (tex2D(SheetSampler, uv + float2(r.x, 0.0)) + tex2D(SheetSampler, uv - float2(r.x, 0.0))
-          + tex2D(SheetSampler, uv + float2(0.0, r.y)) + tex2D(SheetSampler, uv - float2(0.0, r.y))) * 0.125;
-    sum += (tex2D(SheetSampler, uv + r) + tex2D(SheetSampler, uv - r)
-          + tex2D(SheetSampler, uv + float2(r.x, -r.y)) + tex2D(SheetSampler, uv + float2(-r.x, r.y))) * 0.0625;
+    sum += (tex2D(SheetSampler, uv + float2(radiusUv.x, 0.0)) + tex2D(SheetSampler, uv - float2(radiusUv.x, 0.0))
+          + tex2D(SheetSampler, uv + float2(0.0, radiusUv.y)) + tex2D(SheetSampler, uv - float2(0.0, radiusUv.y))) * 0.125;
+    sum += (tex2D(SheetSampler, uv + radiusUv) + tex2D(SheetSampler, uv - radiusUv)
+          + tex2D(SheetSampler, uv + float2(radiusUv.x, -radiusUv.y)) + tex2D(SheetSampler, uv + float2(-radiusUv.x, radiusUv.y))) * 0.0625;
     return sum;
 }
 

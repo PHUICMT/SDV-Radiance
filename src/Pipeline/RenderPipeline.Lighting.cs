@@ -35,15 +35,15 @@ namespace SDVRadiance
         /// (skipping the lighting stage) only when there's nothing to do — i.e. no
         /// lights AND no ambient darkening to apply this frame.
         /// </summary>
-        private bool BuildLightList(int w, int h, ModConfig config)
+        private bool BuildLightList(int targetWidth, int targetHeight, ModConfig config)
         {
             _lightCount = 0;
             _lightCandidates.Clear();
             for (int i = 0; i < MaxLights; i++) { _lightPositions[i] = Vector2.Zero; _lightShaderData[i] = Vector4.Zero; _lightIsFire[i] = 0f; }
 
-            int vw = Math.Max(1, Game1.viewport.Width);
-            int vh = Math.Max(1, Game1.viewport.Height);
-            _lightAspect = vw / (float)vh;
+            int viewportWidth = Math.Max(1, Game1.viewport.Width);
+            int viewportHeight = Math.Max(1, Game1.viewport.Height);
+            _lightAspect = viewportWidth / (float)viewportHeight;
 
             // Warm tint for the light pools (candle-orange at Warmth=1).
             float warmth = MathHelper.Clamp(config.LightingWarmth, 0f, 1f);
@@ -55,8 +55,8 @@ namespace SDVRadiance
             // at noon reads as glass, not as a glowing pool (reported: light sources should
             // not be this bright in daylight).
             // 35% at midday, full again by 08:00/17:00 — indoors untouched.
-            float dayPool = OutdoorLampDaylightDamping();
-            _daylightPoolDamping = dayPool;    // emissive tiles ride the same daylight sink
+            float daylightPoolDamping = OutdoorLampDaylightDamping();
+            _daylightPoolDamping = daylightPoolDamping;    // emissive tiles ride the same daylight sink
 
             GameLocation? lightLocation = Game1.currentLocation;
             long lightStep = ChainStepBegin();
@@ -78,44 +78,44 @@ namespace SDVRadiance
             // its flicker. Twenty-four keep a fifth of it each, and the room stops shimmering
             // while each fire still moves.
             int flameCount = 0;
-            foreach (var g in _gatheredLights)
-                if (g.TextureIndex == 4 || g.TextureIndex == 5)
+            foreach (var gathered in _gatheredLights)
+                if (gathered.TextureIndex == 4 || gathered.TextureIndex == 5)
                     flameCount++;
             float flickerShare = 1f / (float)Math.Sqrt(Math.Max(1, flameCount));
-            foreach (var src in _gatheredLights)
+            foreach (var gathered in _gatheredLights)
             {
                 if (_lightCandidates.Count >= MaxLightCandidates)
                     break;
 
                 // A fireplace's flames are not where the game hangs its light: see FlameGlowOffset.
-                Vector2 glowPosition = src.Position
-                    + ShadowRenderer.FlameGlowOffset(lightLocation, src.Position, src.TextureIndex);
+                Vector2 glowPosition = gathered.Position
+                    + ShadowRenderer.FlameGlowOffset(lightLocation, gathered.Position, gathered.TextureIndex);
                 Vector2 local = Game1.GlobalToLocal(Game1.viewport, glowPosition);
-                float u = local.X / vw;
-                float v = local.Y / vh;
+                float screenU = local.X / viewportWidth;
+                float screenV = local.Y / viewportHeight;
 
                 // Capped: the reach grows with the game's radius, which is right for lamps (1 to
                 // 2.5) and absurd past them. A glow ring is radius 10, and 5.5 screen heights of
                 // pool with the gentle falloff below lit two thirds of the whole frame from the
                 // player's hand, so its per-light shadows drew wedges in ground the game shows
                 // as night. The game's own glow for it reaches about two thirds of a screen.
-                float radiusUv = Math.Min(src.Radius * LampPoolReachPx / vh * radiusScale, LampPoolReachCapUv);
-                if (u < -radiusUv * 2f || u > 1f + radiusUv * 2f || v < -radiusUv * 2f || v > 1f + radiusUv * 2f)
+                float radiusUv = Math.Min(gathered.Radius * LampPoolReachPx / viewportHeight * radiusScale, LampPoolReachCapUv);
+                if (screenU < -radiusUv * 2f || screenU > 1f + radiusUv * 2f || screenV < -radiusUv * 2f || screenV > 1f + radiusUv * 2f)
                     continue; // fully off-screen
 
                 // Vanilla stores light colour as the INVERSE (Black = full bright
                 // white light), so invert to get the visible glow colour.
-                Color c = src.Colour;
-                Vector3 glow = new(1f - c.R / 255f, 1f - c.G / 255f, 1f - c.B / 255f);
+                Color storedColour = gathered.Colour;
+                Vector3 glow = new(1f - storedColour.R / 255f, 1f - storedColour.G / 255f, 1f - storedColour.B / 255f);
                 if (glow.LengthSquared() < 0.01f)
                     glow = Vector3.One; // pure-white source stored as black-ish
                 // Two-tone: indoor windows are daylight (cool) — everything else warm; fire
                 // lights breathe with a slow flame flicker.
-                bool coolDaylight = lightLocation != null && !lightLocation.IsOutdoors && src.IsWindow;
+                bool coolDaylight = lightLocation != null && !lightLocation.IsOutdoors && gathered.IsWindow;
                 Vector3 tone = coolDaylight
                     ? Vector3.Lerp(Vector3.One, new Vector3(0.82f, 0.92f, 1.12f), warmth)
                     : warm;
-                glow *= tone * boost * dayPool;
+                glow *= tone * boost * daylightPoolDamping;
                 // The flicker is carried SEPARATELY and applied after the array is chosen.
                 // Folding it in here made a flickering quantity decide the ranking, and with
                 // a room offering three times as many lights as there are slots the scores
@@ -129,11 +129,11 @@ namespace SDVRadiance
                 // half of the room in front of it. The game hands both the same radius, so give
                 // flames a fifth more reach here rather than asking players to move a global
                 // slider that would swell every porch lamp with it.
-                bool isFire = src.TextureIndex == 4 || src.TextureIndex == 5;
+                bool isFire = gathered.TextureIndex == 4 || gathered.TextureIndex == 5;
                 if (isFire)
                     radiusUv *= 1.35f;
-                AddLightCandidate(new Vector2(u, v), new Vector4(glow, Math.Max(0.02f, radiusUv)),
-                    MathHelper.Lerp(1f, ShadowRenderer.FireFlicker(src.Position, src.TextureIndex), flickerShare), src.Id,
+                AddLightCandidate(new Vector2(screenU, screenV), new Vector4(glow, Math.Max(0.02f, radiusUv)),
+                    MathHelper.Lerp(1f, ShadowRenderer.FireFlicker(gathered.Position, gathered.TextureIndex), flickerShare), gathered.Id,
                     fire: isFire);
             }
 
@@ -145,11 +145,11 @@ namespace SDVRadiance
                 ChainStepEnd(ChainStep.LightCandidates, lightStep);
                 lightStep = ChainStepBegin();
                 EnsureWindowCache(Game1.currentLocation);
-                AddWindowLights(vw, vh, boost, config);
+                AddWindowLights(viewportWidth, viewportHeight, boost, config);
                 ChainStepEnd(ChainStep.LightWindows, lightStep);
                 lightStep = ChainStepBegin();
                 EnsureEmissiveCache(Game1.currentLocation);
-                AddEmissiveLights(vw, vh, boost);
+                AddEmissiveLights(viewportWidth, viewportHeight, boost);
                 ChainStepEnd(ChainStep.LightEmissive, lightStep);
                 lightStep = ChainStepBegin();
             }
@@ -164,9 +164,9 @@ namespace SDVRadiance
             // Diagnose the "fireplace/lamp casts a shadow but emits no visible light pool" report:
             // our pools only lift a DARKENED base, so if a room has lights yet isn't being
             // darkened (non-white ambient), the pools are invisible. Log that case once.
-            if (config.DebugLogging && !_loggedLightDiag && _lightCount > 0)
+            if (config.DebugLogging && !_loggedLightDiagnostic && _lightCount > 0)
             {
-                _loggedLightDiag = true;
+                _loggedLightDiagnostic = true;
                 _monitor.Log($"[light] location={Game1.currentLocation?.Name} outdoors={Game1.currentLocation?.IsOutdoors} " +
                              $"ambient={Game1.ambientLight} darkening={darkening} lights={_lightCount} " +
                              (darkening ? "(pools should show)" : "-> NOT darkening, so light pools won't be visible"), LogLevel.Debug);
@@ -251,26 +251,26 @@ namespace SDVRadiance
                 return;
 
             const float cellPx = ClusterCellTiles * 64f;
-            foreach (var kv in lights)
+            foreach (var lightEntry in lights)
             {
-                LightSource ls = kv.Value;
-                if (location != null && !ShadowRenderer.WindowGlowing(location, ls))
+                LightSource lightSource = lightEntry.Value;
+                if (location != null && !ShadowRenderer.WindowGlowing(location, lightSource))
                     continue;   // stale/dark window light — not emitting
-                Vector2 pos = ls.position.Value;
-                Color colour = ls.color.Value;
-                float radius = ls.radius.Value;
-                bool isWindow = ls.lightContext.Value == LightSource.LightContext.WindowLight;
+                Vector2 pos = lightSource.position.Value;
+                Color colour = lightSource.color.Value;
+                float radius = lightSource.radius.Value;
+                bool isWindow = lightSource.lightContext.Value == LightSource.LightContext.WindowLight;
 
-                if (ls.lightContext.Value != LightSource.LightContext.MapLight)
+                if (lightSource.lightContext.Value != LightSource.LightContext.MapLight)
                 {
                     _gatheredLights.Add(new GatheredLight
                     {
                         Position = pos,
                         Colour = colour,
                         Radius = radius,
-                        TextureIndex = ls.textureIndex.Value,
+                        TextureIndex = lightSource.textureIndex.Value,
                         IsWindow = isWindow,
-                        Id = StableLightId(kv.Key.ToString() ?? string.Empty),
+                        Id = StableLightId(lightEntry.Key.ToString() ?? string.Empty),
                     });
                     continue;
                 }
@@ -301,7 +301,7 @@ namespace SDVRadiance
                     Position = pos,
                     Colour = colour,
                     Radius = radius,
-                    TextureIndex = ls.textureIndex.Value,
+                    TextureIndex = lightSource.textureIndex.Value,
                     IsWindow = isWindow,
                     // Named after the neighbourhood, not the member that happened to arrive first,
                     // so the merged light is the same light next frame however the game enumerates.
@@ -383,8 +383,8 @@ namespace SDVRadiance
             Vector2 world = new(
                 uv.X * Math.Max(1, Game1.viewport.Width) + Game1.viewport.X,
                 uv.Y * Math.Max(1, Game1.viewport.Height) + Game1.viewport.Y);
-            int wx = (int)Math.Round(world.X / 8f);
-            int wy = (int)Math.Round(world.Y / 8f);
+            int worldNameX = (int)Math.Round(world.X / 8f);
+            int worldNameY = (int)Math.Round(world.Y / 8f);
 
             // EDGE TAPER. A light is cut off at a fixed distance past the screen edge, and
             // whatever it was still contributing went with it in a single frame: walking a town
@@ -400,9 +400,9 @@ namespace SDVRadiance
             // input is where the light is relative to the view.
             float reach = Math.Max(0.02f, data.W);
             float aspect = Math.Max(1, Game1.viewport.Width) / (float)Math.Max(1, Game1.viewport.Height);
-            float dx = Math.Max(0f, Math.Max(-uv.X, uv.X - 1f)) * aspect;   // reach is in height units
-            float dy = Math.Max(0f, Math.Max(-uv.Y, uv.Y - 1f));
-            float outside = (float)Math.Sqrt(dx * dx + dy * dy);
+            float outsideX = Math.Max(0f, Math.Max(-uv.X, uv.X - 1f)) * aspect;   // reach is in height units
+            float outsideY = Math.Max(0f, Math.Max(-uv.Y, uv.Y - 1f));
+            float outside = (float)Math.Sqrt(outsideX * outsideX + outsideY * outsideY);
             // FULL STRENGTH while the light can still reach the screen; the taper is only the
             // band beyond that, where it contributes nothing anyway.
             //
@@ -422,7 +422,7 @@ namespace SDVRadiance
                 return;
             data = new Vector4(data.X * taper, data.Y * taper, data.Z * taper, data.W);
 
-            _lightCandidates.Add((uv, data, stableId != 0 ? stableId : (wx * 73856093 ^ wy * 19349663), world, flick, fire));
+            _lightCandidates.Add((uv, data, stableId != 0 ? stableId : (worldNameX * 73856093 ^ worldNameY * 19349663), world, flick, fire));
         }
 
         /// <summary>
@@ -437,11 +437,11 @@ namespace SDVRadiance
         {
             unchecked
             {
-                int h = (int)2166136261;
-                foreach (char ch in key)
-                    h = (h ^ ch) * 16777619;
-                h ^= 0x5bf03635;
-                return h == 0 ? 1 : h;
+                int hash = (int)2166136261;
+                foreach (char character in key)
+                    hash = (hash ^ character) * 16777619;
+                hash ^= 0x5bf03635;
+                return hash == 0 ? 1 : hash;
             }
         }
 
@@ -462,10 +462,10 @@ namespace SDVRadiance
         /// cause is that a light leaving the list disappears in ONE FRAME, not where the line is
         /// drawn. Do not re-file this comment as the fix.
         /// </summary>
-        private static bool OffScreenBeyondReach(float u, float v, float reach)
+        private static bool OffScreenBeyondReach(float screenU, float screenV, float reach)
         {
             float margin = reach * 2f;
-            return u < -margin || u > 1f + margin || v < -margin || v > 1f + margin;
+            return screenU < -margin || screenU > 1f + margin || screenV < -margin || screenV > 1f + margin;
         }
 
         /// <summary>
@@ -494,11 +494,11 @@ namespace SDVRadiance
         /// </summary>
         private float Relevance(Vector2 uv, Vector4 data)
         {
-            float lum = 0.2126f * data.X + 0.7152f * data.Y + 0.0722f * data.Z;
+            float luminance = 0.2126f * data.X + 0.7152f * data.Y + 0.0722f * data.Z;
             float reach = Math.Max(0.02f, data.W);
-            float dx = Math.Max(0f, Math.Max(-uv.X, uv.X - 1f));
-            float dy = Math.Max(0f, Math.Max(-uv.Y, uv.Y - 1f));
-            float outside = (float)Math.Sqrt(dx * dx + dy * dy);      // 0 while the centre is on screen
+            float outsideX = Math.Max(0f, Math.Max(-uv.X, uv.X - 1f));
+            float outsideY = Math.Max(0f, Math.Max(-uv.Y, uv.Y - 1f));
+            float outside = (float)Math.Sqrt(outsideX * outsideX + outsideY * outsideY);      // 0 while the centre is on screen
             // Aspect-corrected, so "near the middle" means the same distance sideways as it does
             // up and down. The player sits at the middle of the screen, so this is also "near me".
             float centreX = (uv.X - 0.5f) * _lightAspect;
@@ -506,7 +506,7 @@ namespace SDVRadiance
             float fromCentre = (float)Math.Sqrt(centreX * centreX + centreY * centreY);
             float near = MathHelper.Lerp(1f, EdgeLightWeight,
                 MathHelper.Clamp(fromCentre / CentreFalloffScreens, 0f, 1f));
-            return lum * reach * MathHelper.Clamp(1f - outside / reach, 0f, 1f) * near;
+            return luminance * reach * MathHelper.Clamp(1f - outside / reach, 0f, 1f) * near;
         }
 
         /// <summary>Screen width over height for the frame the lights were measured in.</summary>
@@ -563,10 +563,10 @@ namespace SDVRadiance
 
             if (_lightCandidates.Count > ShaderLightSlots)
             {
-                _lightCandidates.Sort((a, b) =>
+                _lightCandidates.Sort((first, second) =>
                 {
-                    int byScore = Score(b).CompareTo(Score(a));
-                    return byScore != 0 ? byScore : a.Id.CompareTo(b.Id);
+                    int byScore = Score(second).CompareTo(Score(first));
+                    return byScore != 0 ? byScore : first.Id.CompareTo(second.Id);
                 });
             }
             // WHO THE ARRAY WANTS THIS FRAME. Entering was always a fade; leaving was not, so a
@@ -593,8 +593,8 @@ namespace SDVRadiance
             int wantedCount = Math.Min(_lightCandidates.Count, MaxLights);
             for (int i = 0; i < wantedCount; i++)
             {
-                var cand = _lightCandidates[i];
-                _lightWanted.Add(cand.Id);
+                var candidate = _lightCandidates[i];
+                _lightWanted.Add(candidate.Id);
                 // Keep its place and colour current even on a frame where it gets no slot: the
                 // fade it will eventually run has to start from where the light actually is.
                 //
@@ -607,10 +607,10 @@ namespace SDVRadiance
                 // light that came into view arrived able to evict a fully lit one immediately:
                 //   +790186620(new 0.694)  -790383231(was 0.694)
                 // The approaching-lamp problem is the TAPER's to solve, and it is solved there.
-                float ramp = _lightRamp.TryGetValue(cand.Id, out LightFade prev)
-                    ? prev.Ramp
+                float ramp = _lightRamp.TryGetValue(candidate.Id, out LightFade previousFade)
+                    ? previousFade.Ramp
                     : (sameRoom ? 0f : 1f);
-                _lightRamp[cand.Id] = new LightFade { Ramp = ramp, Uv = cand.Uv, Data = cand.Data, Flick = cand.Flick, Fire = cand.Fire };
+                _lightRamp[candidate.Id] = new LightFade { Ramp = ramp, Uv = candidate.Uv, Data = candidate.Data, Flick = candidate.Flick, Fire = candidate.Fire };
             }
 
             // Rank everything that could hold a slot by how bright it is ON SCREEN RIGHT NOW, so a
@@ -623,9 +623,9 @@ namespace SDVRadiance
             // gone dim, rather than never. The floor is low enough that the one leaving is down to
             // a couple of percent by then, which is not a thing anyone can see going out.
             _lightWrite.Clear();
-            foreach (var kv in _lightRamp)
+            foreach (var rampEntry in _lightRamp)
             {
-                float lit = _lightWanted.Contains(kv.Key) ? Math.Max(kv.Value.Ramp, WaitingLightFloor) : kv.Value.Ramp;
+                float lit = _lightWanted.Contains(rampEntry.Key) ? Math.Max(rampEntry.Value.Ramp, WaitingLightFloor) : rampEntry.Value.Ramp;
                 // The same margin the WANTED sort gives an incumbent, applied to the sort that
                 // hands out the actual slots. There are two rankings here and only one of them
                 // was protecting the light already in a slot, so a newcomer could be refused a
@@ -638,17 +638,17 @@ namespace SDVRadiance
                 // simply next to each other in a ranking with no hysteresis in it, and a step in
                 // either direction flips which one wins. That swap is the flicker people see when
                 // they walk through a room with more lamps in it than the shader has slots.
-                float rank = lit * Relevance(kv.Value.Uv, kv.Value.Data);
-                if (_lightChosen.Contains(kv.Key))
+                float rank = lit * Relevance(rampEntry.Value.Uv, rampEntry.Value.Data);
+                if (_lightChosen.Contains(rampEntry.Key))
                     rank *= IncumbentMargin;
-                _lightWrite.Add((kv.Key, kv.Value, rank));
+                _lightWrite.Add((rampEntry.Key, rampEntry.Value, rank));
             }
             if (_lightWrite.Count > MaxLights)
             {
-                _lightWrite.Sort((a, b) =>
+                _lightWrite.Sort((first, second) =>
                 {
-                    int byRank = b.Rank.CompareTo(a.Rank);
-                    return byRank != 0 ? byRank : a.Id.CompareTo(b.Id);
+                    int byRank = second.Rank.CompareTo(first.Rank);
+                    return byRank != 0 ? byRank : first.Id.CompareTo(second.Id);
                 });
             }
 
@@ -697,8 +697,8 @@ namespace SDVRadiance
                 float ramp = fade.Ramp * fade.Flick;
                 _lightPositions[i] = fade.Uv;
                 _lightIsFire[i] = fade.Fire ? 1f : 0f;
-                Vector4 d = fade.Data;
-                _lightShaderData[i] = new Vector4(d.X * ramp, d.Y * ramp, d.Z * ramp, d.W);
+                Vector4 glowData = fade.Data;
+                _lightShaderData[i] = new Vector4(glowData.X * ramp, glowData.Y * ramp, glowData.Z * ramp, glowData.W);
             }
             foreach (int id in _rampDrop)
                 _lightRamp.Remove(id);
@@ -707,10 +707,10 @@ namespace SDVRadiance
             ReportLightWatch(selectedLightCount);
 
             // Flick is deliberately not read here: the ranking must be steady.
-            float Score((Vector2 Uv, Vector4 Data, int Id, Vector2 World, float Flick, bool Fire) c)
+            float Score((Vector2 Uv, Vector4 Data, int Id, Vector2 World, float Flick, bool Fire) candidate)
             {
-                float r = Relevance(c.Uv, c.Data);
-                return _lightChosen.Contains(c.Id) ? r * IncumbentMargin : r;
+                float relevance = Relevance(candidate.Uv, candidate.Data);
+                return _lightChosen.Contains(candidate.Id) ? relevance * IncumbentMargin : relevance;
             }
         }
 
@@ -860,12 +860,12 @@ namespace SDVRadiance
         private void EnsureWindowCache(GameLocation location)
         {
             var labels = LabelStore.Instance;
-            int ver = labels?.Version ?? 0;
-            if (LiveScreens.SamePlace(location, _windowCacheLocation) && ver == _windowLabelVersion)
+            int labelVersion = labels?.Version ?? 0;
+            if (LiveScreens.SamePlace(location, _windowCacheLocation) && labelVersion == _windowLabelVersion)
                 return;
-            _windowCacheLocation = location; _windowLabelVersion = ver; _windowTiles.Clear();
+            _windowCacheLocation = location; _windowLabelVersion = labelVersion; _windowTiles.Clear();
             // Another screen may have scanned this very room already this frame.
-            if (_windowTilesByLocation.TryGetValue(location, out var remembered) && remembered.Version == ver)
+            if (_windowTilesByLocation.TryGetValue(location, out var remembered) && remembered.Version == labelVersion)
             {
                 _windowTiles.AddRange(remembered.Tiles);
                 return;
@@ -875,28 +875,28 @@ namespace SDVRadiance
             // Windows are 100% label-driven: no labels loaded (version 0 = empty DB) means no window
             // can exist, so skip the whole-map scan entirely. Without this we paid a w×h×3-layer scan
             // on every location change even though it could never find anything.
-            if (labels == null || layer == null || map == null || ver == 0)
+            if (labels == null || layer == null || map == null || labelVersion == 0)
                 return;
-            int w = layer.LayerWidth, h = layer.LayerHeight;
-            _monitor.Log($"[location] window scan start: {location.NameOrUniqueName} {w}x{h}", LogLevel.Trace);
+            int mapTilesWide = layer.LayerWidth, mapTilesHigh = layer.LayerHeight;
+            _monitor.Log($"[location] window scan start: {location.NameOrUniqueName} {mapTilesWide}x{mapTilesHigh}", LogLevel.Trace);
             var windowScanStopwatch = System.Diagnostics.Stopwatch.StartNew();
             // Resolve every drawn layer once instead of per tile: this is a w×h walk over however
             // many drawn layers the map carries, top to bottom.
-            var winLayers = WindowLayersTopToBottom(map).ToArray();
-            for (int ty = 0; ty < h; ty++)
-                for (int tx = 0; tx < w; tx++)
+            var windowLayers = WindowLayersTopToBottom(map).ToArray();
+            for (int tileY = 0; tileY < mapTilesHigh; tileY++)
+                for (int tileX = 0; tileX < mapTilesWide; tileX++)
                 {
-                    foreach (var wl in winLayers)
+                    foreach (var windowLayer in windowLayers)
                     {
-                        byte[]? cls = labels.Get(wl, tx, ty);
-                        if (cls == null) continue;
+                        byte[]? pixelClasses = labels.Get(windowLayer, tileX, tileY);
+                        if (pixelClasses == null) continue;
                         int windowPixelCount = 0;
-                        for (int p = 0; p < 256; p++) if (cls[p] == 12) windowPixelCount++;
-                        if (windowPixelCount >= 8) { _windowTiles.Add(new Vector2(tx * 64 + 32, ty * 64 + 32)); break; }
+                        for (int pixelIndex = 0; pixelIndex < 256; pixelIndex++) if (pixelClasses[pixelIndex] == 12) windowPixelCount++;
+                        if (windowPixelCount >= 8) { _windowTiles.Add(new Vector2(tileX * 64 + 32, tileY * 64 + 32)); break; }
                     }
                 }
             windowScanStopwatch.Stop();
-            _windowTilesByLocation[location] = (ver, new List<Vector2>(_windowTiles));
+            _windowTilesByLocation[location] = (labelVersion, new List<Vector2>(_windowTiles));
             TrimScanCache(_windowTilesByLocation);
             _monitor.Log($"[location] window scan done: {_windowTiles.Count} tiles in {windowScanStopwatch.Elapsed.TotalMilliseconds:0.0}ms", LogLevel.Trace);
         }
@@ -909,7 +909,7 @@ namespace SDVRadiance
         /// down instead of snapping every lit house dark in one frame.</summary>
         private float _windowEffectsEase = 1f;
 
-        private void AddWindowLights(int vw, int vh, float boost, ModConfig config)
+        private void AddWindowLights(int viewportWidth, int viewportHeight, float boost, ModConfig config)
         {
             if (_windowTiles.Count == 0)
                 return;
@@ -928,14 +928,14 @@ namespace SDVRadiance
             float day = 1f - night;
             if (night < 0.02f)
                 return;   // exterior windows only glow after dusk
-            float nowMin = GameClock.MinutesNow();
-            float b = Math.Max(0.4f, boost);
-            float radiusOut = WindowPoolExteriorPx / Math.Max(1, vh);
-            float radiusIn = WindowPoolInteriorPx / Math.Max(1, vh);
+            float nowMinutes = GameClock.MinutesNow();
+            float boostFloor = Math.Max(0.4f, boost);
+            float radiusOut = WindowPoolExteriorPx / Math.Max(1, viewportHeight);
+            float radiusIn = WindowPoolInteriorPx / Math.Max(1, viewportHeight);
             Vector3 warm = new(1.0f, 0.72f, 0.42f);          // exterior lamp behind the glass
             Vector3 cool = new(0.80f, 0.88f, 1.05f);         // daylight coming in
             bool rain = Game1.isRaining || Game1.isSnowing;
-            foreach (var wp in _windowTiles)
+            foreach (var windowPosition in _windowTiles)
             {
                 float amt; Vector3 col;
                 if (outdoors)
@@ -943,10 +943,10 @@ namespace SDVRadiance
                     // bedtime is hashed per ~6-tile BLOCK, so all the windows of one house go
                     // dark together but different houses sleep at different times — the street
                     // dims house-by-house, not all at once. Range 21:30–25:00, then a ~1h fade.
-                    int cx = ((int)wp.X - 32) / 64 / 6, cy = ((int)wp.Y - 32) / 64 / 6;
-                    int hcode = (cx * 73856093) ^ (cy * 19349663);
-                    int bedMin = 1290 + (Math.Abs(hcode) % 8) * 30;     // 21:30 … 25:00, 8 steps
-                    float bedFade = nowMin <= bedMin ? 1f : MathHelper.Clamp(1f - (nowMin - bedMin) / 60f, 0f, 1f);
+                    int blockX = ((int)windowPosition.X - 32) / 64 / 6, blockY = ((int)windowPosition.Y - 32) / 64 / 6;
+                    int houseBlockHash = (blockX * 73856093) ^ (blockY * 19349663);
+                    int bedtimeMinutes = 1290 + (Math.Abs(houseBlockHash) % 8) * 30;     // 21:30 … 25:00, 8 steps
+                    float bedFade = nowMinutes <= bedtimeMinutes ? 1f : MathHelper.Clamp(1f - (nowMinutes - bedtimeMinutes) / 60f, 0f, 1f);
                     amt = night * bedFade;
                     col = warm;
                 }
@@ -962,12 +962,12 @@ namespace SDVRadiance
                     continue;
                 if (_lightCandidates.Count >= MaxLightCandidates)
                     continue;
-                Vector2 local = Game1.GlobalToLocal(Game1.viewport, wp);
-                float u = local.X / vw, v = local.Y / vh;
+                Vector2 local = Game1.GlobalToLocal(Game1.viewport, windowPosition);
+                float screenU = local.X / viewportWidth, screenV = local.Y / viewportHeight;
                 float reach = Math.Max(0.02f, outdoors ? radiusOut : radiusIn);
-                if (OffScreenBeyondReach(u, v, reach))
+                if (OffScreenBeyondReach(screenU, screenV, reach))
                     continue;
-                AddLightCandidate(new Vector2(u, v), new Vector4(col * amt * b, reach));
+                AddLightCandidate(new Vector2(screenU, screenV), new Vector4(col * amt * boostFloor, reach));
             }
         }
 
@@ -987,7 +987,7 @@ namespace SDVRadiance
         private int _emissiveLabelVersion = -1;
         private float _daylightPoolDamping = 1f;   // outdoor midday sink shared by lamp pools and emissive
         private readonly List<(Vector2 Pos, Vector3 Col, float Amt)> _emissiveTiles = new();
-        private const int EmitMinPixels = 6;    // below this it is a stray dab, not a light
+        private const int EmissiveMinimumPixels = 6;    // below this it is a stray dab, not a light
         // Same lesson as the window scan: every drawn layer, top to bottom, never the three bare
         // names. A map carrying emissive art on Back2 or a negative-suffix layer must light it.
         private static List<xTile.Layers.Layer> EmissiveLayersTopToBottom(xTile.Map? map)
@@ -996,48 +996,48 @@ namespace SDVRadiance
         private void EnsureEmissiveCache(GameLocation location)
         {
             var labels = LabelStore.Instance;
-            int ver = labels?.Version ?? 0;
-            if (LiveScreens.SamePlace(location, _emissiveCacheLocation) && ver == _emissiveLabelVersion)
+            int labelVersion = labels?.Version ?? 0;
+            if (LiveScreens.SamePlace(location, _emissiveCacheLocation) && labelVersion == _emissiveLabelVersion)
                 return;
-            _emissiveCacheLocation = location; _emissiveLabelVersion = ver; _emissiveTiles.Clear();
+            _emissiveCacheLocation = location; _emissiveLabelVersion = labelVersion; _emissiveTiles.Clear();
             if (location != null && _emissiveTilesByLocation.TryGetValue(location, out var rememberedEmissive)
-                && rememberedEmissive.Version == ver)
+                && rememberedEmissive.Version == labelVersion)
             {
                 _emissiveTiles.AddRange(rememberedEmissive.Tiles);
                 return;
             }
-            var layer0 = location?.map?.Layers.Count > 0 ? location.map.Layers[0] : null;
-            if (labels == null || layer0 == null || ver == 0 || location == null)
+            var sizeLayer = location?.map?.Layers.Count > 0 ? location.map.Layers[0] : null;
+            if (labels == null || sizeLayer == null || labelVersion == 0 || location == null)
                 return;
 
-            int w = layer0.LayerWidth, h = layer0.LayerHeight;
+            int mapTilesWide = sizeLayer.LayerWidth, mapTilesHigh = sizeLayer.LayerHeight;
             // Heaviest of the location-entry walks: every labelled candidate tile also reads its
             // ART, which is a GPU readback the first time a tilesheet is touched.
-            _monitor.Log($"[location] emissive scan start: {location.NameOrUniqueName} {w}x{h}", LogLevel.Trace);
+            _monitor.Log($"[location] emissive scan start: {location.NameOrUniqueName} {mapTilesWide}x{mapTilesHigh}", LogLevel.Trace);
             var emissiveScanStopwatch = System.Diagnostics.Stopwatch.StartNew();
-            var emitLayers = EmissiveLayersTopToBottom(location.map).ToArray();
+            var emissiveLayers = EmissiveLayersTopToBottom(location.map).ToArray();
 
-            for (int ty = 0; ty < h; ty++)
-                for (int tx = 0; tx < w; tx++)
+            for (int tileY = 0; tileY < mapTilesHigh; tileY++)
+                for (int tileX = 0; tileX < mapTilesWide; tileX++)
                 {
-                    foreach (var el in emitLayers)
+                    foreach (var emissiveLayer in emissiveLayers)
                     {
-                        byte[]? cls = labels.Get(el, tx, ty);
-                        if (cls == null)
+                        byte[]? pixelClasses = labels.Get(emissiveLayer, tileX, tileY);
+                        if (pixelClasses == null)
                             continue;
                         int emissivePixelCount = 0;
-                        for (int p = 0; p < 256; p++) if (cls[p] == 6) emissivePixelCount++;
-                        if (emissivePixelCount < EmitMinPixels)
+                        for (int pixelIndex = 0; pixelIndex < 256; pixelIndex++) if (pixelClasses[pixelIndex] == 6) emissivePixelCount++;
+                        if (emissivePixelCount < EmissiveMinimumPixels)
                             continue;
-                        if (SampleEmissive(el, tx, ty, cls, emissivePixelCount) is { } lit)
+                        if (SampleEmissive(emissiveLayer, tileX, tileY, pixelClasses, emissivePixelCount) is { } lit)
                         {
-                            _emissiveTiles.Add((new Vector2(tx * 64 + 32, ty * 64 + 32), lit.Col, lit.Amt));
+                            _emissiveTiles.Add((new Vector2(tileX * 64 + 32, tileY * 64 + 32), lit.Col, lit.Amt));
                             break;      // one light per tile: the topmost layer that carries it wins
                         }
                     }
                 }
             emissiveScanStopwatch.Stop();
-            _emissiveTilesByLocation[location] = (ver, new List<(Vector2, Vector3, float)>(_emissiveTiles));
+            _emissiveTilesByLocation[location] = (labelVersion, new List<(Vector2, Vector3, float)>(_emissiveTiles));
             TrimScanCache(_emissiveTilesByLocation);
             _monitor.Log($"[location] emissive scan done: {_emissiveTiles.Count} tiles in {emissiveScanStopwatch.Elapsed.TotalMilliseconds:0.0}ms", LogLevel.Trace);
         }
@@ -1045,20 +1045,20 @@ namespace SDVRadiance
         /// <summary>Average the ART colour of exactly the pixels the label marked emissive, hue
         /// preserved by normalising to the brightest channel (a dim red ember still emits RED, just
         /// weakly — that "weakly" is the returned amount, not a washed-out colour).</summary>
-        private (Vector3 Col, float Amt)? SampleEmissive(xTile.Layers.Layer? layer, int tx, int ty, byte[] cls, int labeledEmissivePixelCount)
+        private (Vector3 Col, float Amt)? SampleEmissive(xTile.Layers.Layer? layer, int tileX, int tileY, byte[] pixelClasses, int labeledEmissivePixelCount)
         {
-            var tile = layer?.Tiles[tx, ty];
+            var tile = layer?.Tiles[tileX, tileY];
             if (tile?.TileSheet == null)
                 return null;
             Texture2D? texture;
             try
             {
-                string src = tile.TileSheet.ImageSource;
-                if (!_tilesheetTextureCache.TryGetValue(src, out texture))
+                string imageSource = tile.TileSheet.ImageSource;
+                if (!_tilesheetTextureCache.TryGetValue(imageSource, out texture))
                 {
-                    try { texture = Game1.content.Load<Texture2D>(src); }
+                    try { texture = Game1.content.Load<Texture2D>(imageSource); }
                     catch { texture = null; }
-                    _tilesheetTextureCache[src] = texture;
+                    _tilesheetTextureCache[imageSource] = texture;
                 }
             }
             catch { return null; }
@@ -1068,71 +1068,71 @@ namespace SDVRadiance
             Rectangle bounds;
             try
             {
-                var ib = tile.TileSheet.GetTileImageBounds(tile.TileIndex);
-                bounds = new Rectangle(ib.X, ib.Y, ib.Width, ib.Height);
+                var imageBounds = tile.TileSheet.GetTileImageBounds(tile.TileIndex);
+                bounds = new Rectangle(imageBounds.X, imageBounds.Y, imageBounds.Width, imageBounds.Height);
             }
             catch { return null; }
             if (bounds.Width != 16 || bounds.Height != 16)
                 return null;
 
             ReadTileArt(texture, bounds);            // fills _tileArtPixels from the cached whole-sheet readback
-            var buf = _tileArtPixels;
-            if (buf == null)
+            var tileArtPixels = _tileArtPixels;
+            if (tileArtPixels == null)
                 return null;
 
-            float r = 0, g = 0, b = 0, lum = 0;
+            float redSum = 0, greenSum = 0, blueSum = 0, luminance = 0;
             int sampledPixelCount = 0;
-            for (int p = 0; p < 256; p++)
+            for (int pixelIndex = 0; pixelIndex < 256; pixelIndex++)
             {
-                if (cls[p] != 6)
+                if (pixelClasses[pixelIndex] != 6)
                     continue;
-                Color c = buf[p];
-                if (c.A < 40)
+                Color pixel = tileArtPixels[pixelIndex];
+                if (pixel.A < 40)
                     continue;                    // transparent pixel carries no colour
-                r += c.R; g += c.G; b += c.B;
-                lum += (c.R * 0.299f + c.G * 0.587f + c.B * 0.114f) / 255f;
+                redSum += pixel.R; greenSum += pixel.G; blueSum += pixel.B;
+                luminance += (pixel.R * 0.299f + pixel.G * 0.587f + pixel.B * 0.114f) / 255f;
                 sampledPixelCount++;
             }
-            if (sampledPixelCount < EmitMinPixels)
+            if (sampledPixelCount < EmissiveMinimumPixels)
                 return null;
-            r /= sampledPixelCount; g /= sampledPixelCount; b /= sampledPixelCount; lum /= sampledPixelCount;
-            float peak = Math.Max(1f, Math.Max(r, Math.Max(g, b)));
-            var col = new Vector3(r / peak, g / peak, b / peak);
+            redSum /= sampledPixelCount; greenSum /= sampledPixelCount; blueSum /= sampledPixelCount; luminance /= sampledPixelCount;
+            float peak = Math.Max(1f, Math.Max(redSum, Math.Max(greenSum, blueSum)));
+            var col = new Vector3(redSum / peak, greenSum / peak, blueSum / peak);
             // How much light: how bright the art is × how much of the tile glows. A four-pixel
             // pilot light must not shine like a whole forge mouth, so area counts — capped, because
             // a fully emissive tile is not eight times a quarter-emissive one.
             float area = MathHelper.Clamp(labeledEmissivePixelCount / 96f, 0.25f, 1f);
-            return (col, MathHelper.Clamp(lum * area, 0f, 1f));
+            return (col, MathHelper.Clamp(luminance * area, 0f, 1f));
         }
 
         /// <summary>Add on-screen emissive tiles as lights. Always on — a forge burns at noon — but
         /// ramped so it reads as a glow by day and a real light source at night.</summary>
-        private void AddEmissiveLights(int vw, int vh, float boost)
+        private void AddEmissiveLights(int viewportWidth, int viewportHeight, float boost)
         {
             if (_emissiveTiles.Count == 0)
                 return;
             float night = NightFactorNow();
             float scale = (0.45f + 0.55f * night) * _daylightPoolDamping;  // visible by day, dominant after
                                                                    // dark, sunk into full daylight
-            float radius = EmissivePoolReachPx / Math.Max(1, vh);
-            float bst = Math.Max(0.4f, boost);
+            float radius = EmissivePoolReachPx / Math.Max(1, viewportHeight);
+            float boostFloor = Math.Max(0.4f, boost);
             foreach (var (pos, col, amt) in _emissiveTiles)
             {
-                float a = amt * scale;
-                if (a < 0.02f)
+                float amount = amt * scale;
+                if (amount < 0.02f)
                     continue;
                 if (_lightCandidates.Count >= MaxLightCandidates)
                     continue;
                 Vector2 local = Game1.GlobalToLocal(Game1.viewport, pos);
-                float u = local.X / vw, v = local.Y / vh;
+                float screenU = local.X / viewportWidth, screenV = local.Y / viewportHeight;
                 float reach = Math.Max(0.02f, radius * (0.6f + 0.4f * amt));
-                if (OffScreenBeyondReach(u, v, reach))
+                if (OffScreenBeyondReach(screenU, screenV, reach))
                     continue;
-                AddLightCandidate(new Vector2(u, v), new Vector4(col * a * bst, reach));
+                AddLightCandidate(new Vector2(screenU, screenV), new Vector4(col * amount * boostFloor, reach));
             }
         }
 
-        private bool _loggedLightDiag;
+        private bool _loggedLightDiagnostic;
 
         /// <summary>
         /// The per-pixel ambient multiplier for unlit areas. We only darken flat-bright
@@ -1199,32 +1199,32 @@ namespace SDVRadiance
             return true;
         }
 
-        private bool BuildOccluderMask(int w, int h)
+        private bool BuildOccluderMask(int targetWidth, int targetHeight)
         {
             GameLocation? location = Game1.currentLocation;
             var layer = location?.map?.GetLayer("Buildings");
             if (location == null || layer == null)
                 return false;
 
-            int vx = Game1.viewport.X;
-            int vy = Game1.viewport.Y;
-            int startTileX = (int)Math.Floor(vx / 64f);
-            int startTileY = (int)Math.Floor(vy / 64f);
+            int viewportX = Game1.viewport.X;
+            int viewportY = Game1.viewport.Y;
+            int startTileX = (int)Math.Floor(viewportX / 64f);
+            int startTileY = (int)Math.Floor(viewportY / 64f);
             // Viewport-based (world px): w/64 is screen px and undercounts tiles when zoomed out.
-            int tilesW = Math.Max(1, Game1.viewport.Width / 64 + 2);
-            int tilesH = Math.Max(1, Game1.viewport.Height / 64 + 2);
-            int count = tilesW * tilesH;
-            int lw = layer.LayerWidth, lh = layer.LayerHeight;
+            int tilesWide = Math.Max(1, Game1.viewport.Width / 64 + 2);
+            int tilesHigh = Math.Max(1, Game1.viewport.Height / 64 + 2);
+            int count = tilesWide * tilesHigh;
+            int layerWidth = layer.LayerWidth, layerHeight = layer.LayerHeight;
 
             // Same tile-cross + 3-tick throttle as the flood occluder path (which had it; the classic
             // path rebuilt the grid and re-uploaded the texture every single frame). Mode-gated so a
             // flood↔classic config switch never reuses the other builder's mask content.
             if (_occluderMask != null && _occluderMaskBuildMode == 1 && startTileX == _occluderTileX && startTileY == _occluderTileY
-                && _occluderMask.Width == tilesW && _occluderMask.Height == tilesH && Game1.ticks - _occluderCacheTick < 3)
+                && _occluderMask.Width == tilesWide && _occluderMask.Height == tilesHigh && Game1.ticks - _occluderCacheTick < 3)
             {
                 _occluderTilesPerScreen = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
-                _occluderWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
-                _occluderMaskSize = new Vector2(tilesW, tilesH);
+                _occluderWorldTileOffset = new Vector2(viewportX / 64f, viewportY / 64f);
+                _occluderMaskSize = new Vector2(tilesWide, tilesHigh);
                 return true;
             }
 
@@ -1232,21 +1232,21 @@ namespace SDVRadiance
                 _occluderMaskPixels = new Color[count];
 
             bool hasAnyOccluders = false;
-            for (int j = 0; j < tilesH; j++)
+            for (int j = 0; j < tilesHigh; j++)
             {
-                for (int i = 0; i < tilesW; i++)
+                for (int i = 0; i < tilesWide; i++)
                 {
-                    int tx = startTileX + i, ty = startTileY + j;
-                    bool occ = tx >= 0 && ty >= 0 && tx < lw && ty < lh && layer.Tiles[tx, ty] != null;
-                    if (occ) hasAnyOccluders = true;
-                    _occluderMaskPixels[j * tilesW + i] = occ ? Color.White : Color.Transparent;
+                    int tileX = startTileX + i, tileY = startTileY + j;
+                    bool isOccluder = tileX >= 0 && tileY >= 0 && tileX < layerWidth && tileY < layerHeight && layer.Tiles[tileX, tileY] != null;
+                    if (isOccluder) hasAnyOccluders = true;
+                    _occluderMaskPixels[j * tilesWide + i] = isOccluder ? Color.White : Color.Transparent;
                 }
             }
 
             if (!hasAnyOccluders)
                 return false;
 
-            bool sizeChanged = _occluderMask == null || _occluderMask.Width != tilesW || _occluderMask.Height != tilesH;
+            bool sizeChanged = _occluderMask == null || _occluderMask.Width != tilesWide || _occluderMask.Height != tilesHigh;
             // UPLOAD ONLY WHAT CHANGED. The throttle above stops the grid being rebuilt more than
             // every third tick, but it did not stop the RESULT being pushed to the card, so a
             // player standing still re-uploaded an identical mask twenty times a second. That
@@ -1265,7 +1265,7 @@ namespace SDVRadiance
             if (sizeChanged || !SameOccluderContent(count))
             {
                 _occluderMask = TextureDoubleBuffer.UploadIntoSpare(_device, ref _occluderMaskSpare, _occluderMask,
-                    tilesW, tilesH, SurfaceFormat.Color, "light occluder mask", _occluderMaskPixels, count);
+                    tilesWide, tilesHigh, SurfaceFormat.Color, "light occluder mask", _occluderMaskPixels, count);
                 if (_occluderMaskUploaded == null || _occluderMaskUploaded.Length < count)
                     _occluderMaskUploaded = new Color[count];
                 Array.Copy(_occluderMaskPixels, _occluderMaskUploaded, count);
@@ -1277,8 +1277,8 @@ namespace SDVRadiance
             _occluderCacheTick = Game1.ticks;
 
             _occluderTilesPerScreen = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
-            _occluderWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
-            _occluderMaskSize = new Vector2(tilesW, tilesH);
+            _occluderWorldTileOffset = new Vector2(viewportX / 64f, viewportY / 64f);
+            _occluderMaskSize = new Vector2(tilesWide, tilesHigh);
             return true;
         }
 
@@ -1294,7 +1294,13 @@ namespace SDVRadiance
         /// canopy scrolled into the mask, which read as light that follows the player around.
         /// Clouds do not do that, and neither should sun. Same fix as the water mirror's source
         /// padding, same reason.</summary>
-        private const int FloodOccPad = 8;
+        // Ten, not eight, since the window gained slack: the sun shafts and the march may read up
+        // to eight tiles past the view (SunShaftReach is capped on that), and the view may now
+        // drift FloodOccluderSlack tiles toward an edge before the window follows.
+        private const int FloodOccluderPad = 10;
+        /// <summary>How far inside the window the view may drift before the window follows.</summary>
+        private const int FloodOccluderSlack = 2;
+        private const int FloodOccluderClockTicks = 600;
 
         /// <summary>Texels per tile in the flood occluder mask. One texel per tile made every fence,
         /// bush and boulder a solid square, and a lamp behind a fence lit the far side evenly where
@@ -1306,7 +1312,7 @@ namespace SDVRadiance
         // of tap spread or step count could smooth (both were tried, at softness 0 and 2). Twice
         // the texels halves the scallop; the LOD floor in floodlight.fx softens what is left.
         // Must match the texels-per-tile constant in floodlight.fx's shadow march.
-        private const int FloodOccSubdivision = 8;
+        private const int FloodOccluderSubdivision = 8;
         /// <summary>How much of the light each kind of silhouette stops. Fences are thin wood, but a
         /// picket blocks all of what lands on it; a bush is leaves and lets a little through, but only
         /// a little: at 0.6 a hedge sprayed light out its far side, which was the first thing seen; a
@@ -1369,10 +1375,10 @@ namespace SDVRadiance
                     read++;
                 }
             }
-            catch (Exception ex)
+            catch (Exception exception)
             {
                 // A warm-up must never be the thing that breaks a warp; the lazy path still works.
-                _monitor.Log($"art base prewarm stopped early: {ex.Message}", LogLevel.Trace);
+                _monitor.Log($"art base prewarm stopped early: {exception.Message}", LogLevel.Trace);
             }
             if (read > 0)
                 _monitor.Log($"[diag] art base spans read on arrival: {read} kind(s) in {location.NameOrUniqueName}", LogLevel.Trace);
@@ -1493,11 +1499,11 @@ namespace SDVRadiance
             var lights = Game1.currentLightSources;
             if (lights == null)
                 return;
-            foreach (var kv in lights)
+            foreach (var lightEntry in lights)
             {
-                if (kv.Value.lightContext.Value == LightSource.LightContext.WindowLight)
+                if (lightEntry.Value.lightContext.Value == LightSource.LightContext.WindowLight)
                     continue;
-                _occluderLightPositions.Add(kv.Value.position.Value);
+                _occluderLightPositions.Add(lightEntry.Value.position.Value);
             }
         }
 
@@ -1516,21 +1522,44 @@ namespace SDVRadiance
         internal const int FloodOccluderSoftLevels = 3;
         // moved to ScreenState (see RenderPipeline.Screens.cs)
 
-        private bool BuildFloodOccluders(int w, int h, ModConfig config)
+        private bool BuildFloodOccluders(int targetWidth, int targetHeight, ModConfig config)
         {
             GameLocation? location = Game1.currentLocation;
             if (location == null)
                 return false;
             var layer = location.map?.GetLayer("Buildings");
 
-            int vx = Game1.viewport.X;
-            int vy = Game1.viewport.Y;
-            int startTileX = (int)Math.Floor(vx / 64f) - FloodOccPad;
-            int startTileY = (int)Math.Floor(vy / 64f) - FloodOccPad;
+            int viewportX = Game1.viewport.X;
+            int viewportY = Game1.viewport.Y;
+            int startTileX = (int)Math.Floor(viewportX / 64f) - FloodOccluderPad;
+            int startTileY = (int)Math.Floor(viewportY / 64f) - FloodOccluderPad;
             // Viewport-based (world px): w/64 is screen px and undercounts tiles when zoomed out.
-            int tilesW = Math.Max(1, Game1.viewport.Width / 64 + 2) + FloodOccPad * 2;
-            int tilesH = Math.Max(1, Game1.viewport.Height / 64 + 2) + FloodOccPad * 2;
-            int count = tilesW * tilesH;
+            int tilesWide = Math.Max(1, Game1.viewport.Width / 64 + 2) + FloodOccluderPad * 2;
+            int tilesHigh = Math.Max(1, Game1.viewport.Height / 64 + 2) + FloodOccluderPad * 2;
+            int count = tilesWide * tilesHigh;
+            // THE WINDOW HAS SLACK. Its origin used to be the view's own tile less the pad, so
+            // every tile the camera crossed moved the origin and rebuilt the whole mask, sprite
+            // draws and uploads included: 89 rebuilds on a 40-tile walk on 2026-09-07, at 0.5 to
+            // 0.8 ms each, and it was the largest item in the walk's worst frames after the water
+            // mask. The pad is eight tiles and the rays never read further than that, so the old
+            // window is kept while the view is still FloodOccluderSlack tiles inside it on every side,
+            // the way the water mask keeps its window (see WaterMaskWindow). A walk then rebuilds
+            // every few tiles instead of every one; the leading side of the pad is never thinner
+            // than the pad less the slack.
+            if (_floodOccluderMask != null && _floodOccluderMask.Width == tilesWide * FloodOccluderSubdivision
+                && _floodOccluderMask.Height == tilesHigh * FloodOccluderSubdivision)
+            {
+                int viewLeft = (int)Math.Floor(viewportX / 64f), viewTop = (int)Math.Floor(viewportY / 64f);
+                int viewRight = (int)Math.Floor((viewportX + Game1.viewport.Width) / 64f);
+                int viewBottom = (int)Math.Floor((viewportY + Game1.viewport.Height) / 64f);
+                if (viewLeft - FloodOccluderSlack >= _floodOccluderTileX && viewTop - FloodOccluderSlack >= _floodOccluderTileY
+                    && viewRight + FloodOccluderSlack <= _floodOccluderTileX + tilesWide - 1
+                    && viewBottom + FloodOccluderSlack <= _floodOccluderTileY + tilesHigh - 1)
+                {
+                    startTileX = _floodOccluderTileX;
+                    startTileY = _floodOccluderTileY;
+                }
+            }
 
             // Rebuild on an input change, not on a clock — the flood lightmap's fix, applied
             // here after the split report showed this line inheriting its crown. The old comment
@@ -1541,7 +1570,7 @@ namespace SDVRadiance
             // SurfaceMap identity), or a growth stage ticking over — which happens at day start
             // behind the save fade, and is what the lazy once-a-second fallback is for.
             long phaseStart = System.Diagnostics.Stopwatch.GetTimestamp();
-            var surf = SurfaceMap.For(location);
+            var surfaceMap = SurfaceMap.For(location);
             Approach(ref _occluderShapesEase, config.LightShadowSilhouettes ? 1f : 0f, 0.05f);
             int shapesStep = (int)MathF.Round(_occluderShapesEase * 32f);
             Approach(ref _occluderPropsEase, config.LightShadowProps ? 1f : 0f, 0.05f);
@@ -1562,23 +1591,48 @@ namespace SDVRadiance
                 occluderInputsHash = occluderInputsHash * 31 + propsStep;
             }
             if (_floodOccluderMask != null && startTileX == _floodOccluderTileX && startTileY == _floodOccluderTileY
-                // Texels, not tiles. The mask became a render target at FloodOccSubdivision texels
+                // Texels, not tiles. The mask became a render target at FloodOccluderSubdivision texels
                 // per tile when silhouettes arrived, and this test kept comparing its width against
                 // the TILE count, which it can never equal - so the cache never hit and the whole
                 // mask, sprite draws and all, was rebuilt on every frame instead of on a change.
                 // Measured at 0.33 ms per frame on the beach and 0.57 on a fenced farm.
-                && _floodOccluderMask.Width == tilesW * FloodOccSubdivision
-                && ReferenceEquals(surf, _floodOccluderSurfaceMap) && occluderInputsHash == _floodOccluderInputsHash
-                && Game1.ticks - _floodOccluderCacheTick < 60)
+                && _floodOccluderMask.Width == tilesWide * FloodOccluderSubdivision
+                && ReferenceEquals(surfaceMap, _floodOccluderSurfaceMap) && occluderInputsHash == _floodOccluderInputsHash
+                // Ten seconds, not one: the clock only exists for a change no count can see (a
+                // growth stage ticking over), and one rebuild a second was a spike a second while
+                // standing still.
+                && Game1.ticks - _floodOccluderCacheTick < FloodOccluderClockTicks)
             {
-                _floodOccluderMaskSize = new Vector2(tilesW, tilesH);
+                _floodOccluderMaskSize = new Vector2(tilesWide, tilesHigh);
                 return true;
             }
-            phaseStart = PhaseCost.NoteSince("flood occluders: gate (counts + fences)", phaseStart);
+            // Which gate opened, by name, so the report can count them: a walk should read as
+            // "the window moved" a few times, and anything else here is a rebuild to explain.
+            string why = _floodOccluderMask == null || _floodOccluderMask.Width != tilesWide * FloodOccluderSubdivision ? "first build or resize"
+                : startTileX != _floodOccluderTileX || startTileY != _floodOccluderTileY ? "the window moved"
+                : !ReferenceEquals(surfaceMap, _floodOccluderSurfaceMap) ? "the map changed"
+                : occluderInputsHash != _floodOccluderInputsHash ? "a count changed (objects, lights, fences, growth)"
+                : "the ten second clock";
+            phaseStart = PhaseCost.NoteSince("flood occluders: rebuilt because " + why, phaseStart);
+            // The generation the march window keys on. Not every rebuild is a change: the
+            // once-a-second fallback above rebuilds the same mask from the same inputs, and
+            // counting those had the window re-marching every lamp once a second while the
+            // player stood still (1,494 whole re-marches in a standing-still run, 2026-09-07).
+            // A rebuild counts when an input it can see changed; one it cannot see (a growth
+            // stage ticking over changes no count) is caught by the ten second bump, which
+            // costs one window march every ten seconds.
+            bool occluderInputsChanged = startTileX != _floodOccluderTileX || startTileY != _floodOccluderTileY
+                || !ReferenceEquals(surfaceMap, _floodOccluderSurfaceMap) || occluderInputsHash != _floodOccluderInputsHash
+                || _floodOccluderMask == null;
+            if (occluderInputsChanged || Game1.ticks - _floodOccluderGenerationTick >= 600)
+            {
+                _floodOccluderGeneration++;
+                _floodOccluderGenerationTick = Game1.ticks;
+            }
             _floodOccluderTileX = startTileX;
             _floodOccluderTileY = startTileY;
             _floodOccluderCacheTick = Game1.ticks;
-            _floodOccluderSurfaceMap = surf;
+            _floodOccluderSurfaceMap = surfaceMap;
             _floodOccluderInputsHash = occluderInputsHash;
 
             if (_floodOccluderMaskPixels == null || _floodOccluderMaskPixels.Length < count)
@@ -1587,18 +1641,18 @@ namespace SDVRadiance
             // EnsureFloodSolidBase). This loop used to ask the game three questions per tile,
             // fifteen hundred tiles, once a second and on every tile crossing, and that was the
             // 1.27 ms worst frame this grid showed on a farm walk.
-            EnsureFloodSolidBase(location, surf, layer);
-            for (int j = 0; j < tilesH; j++)
+            EnsureFloodSolidBase(location, surfaceMap, layer);
+            for (int j = 0; j < tilesHigh; j++)
             {
-                for (int i = 0; i < tilesW; i++)
+                for (int i = 0; i < tilesWide; i++)
                 {
-                    int tx = startTileX + i, ty = startTileY + j;
+                    int tileX = startTileX + i, tileY = startTileY + j;
                     bool solid;
-                    if (_floodSolidBase != null && tx >= 0 && ty >= 0 && tx < _floodSolidBaseWidth && ty < _floodSolidBaseHeight)
+                    if (_floodSolidBase != null && tileX >= 0 && tileY >= 0 && tileX < _floodSolidBaseWidth && tileY < _floodSolidBaseHeight)
                     {
-                        solid = _floodSolidBase[ty * _floodSolidBaseWidth + tx] != 0;
+                        solid = _floodSolidBase[tileY * _floodSolidBaseWidth + tileX] != 0;
                     }
-                    else if (surf != null)
+                    else if (surfaceMap != null)
                     {
                         // Walls/roofs block lamp light; decks (piers/bridges, height 1 but open)
                         // and water don't.
@@ -1617,16 +1671,16 @@ namespace SDVRadiance
                         // of the mask the day it landed, and a ring at the coop door lit the ground
                         // straight through the coop. The building's own map keeps the farmhouse
                         // porch open (it is passable there too), so this does not undo that fix.
-                        solid = (surf.BlocksLight(tx, ty) && !CanWalkOn(location, tx, ty))
-                             || BuildingBlocks(location, tx, ty);
+                        solid = (surfaceMap.BlocksLight(tileX, tileY) && !CanWalkOn(location, tileX, tileY))
+                             || BuildingBlocks(location, tileX, tileY);
                     }
                     else
                     {
-                        solid = layer != null && tx >= 0 && ty >= 0 && tx < layer.LayerWidth && ty < layer.LayerHeight
-                            && layer.Tiles[tx, ty] != null;
+                        solid = layer != null && tileX >= 0 && tileY >= 0 && tileX < layer.LayerWidth && tileY < layer.LayerHeight
+                            && layer.Tiles[tileX, tileY] != null;
                     }
-                    byte v = solid ? (byte)255 : (byte)0;
-                    _floodOccluderMaskPixels[j * tilesW + i] = new Color(v, v, v, v);
+                    byte solidByte = solid ? (byte)255 : (byte)0;
+                    _floodOccluderMaskPixels[j * tilesWide + i] = new Color(solidByte, solidByte, solidByte, solidByte);
                 }
             }
 
@@ -1637,15 +1691,15 @@ namespace SDVRadiance
             // except the cascade resolve's facade lift: rays still march through the slit
             // unchanged, so a light carried onto a porch keeps working. Runs before the tree
             // and clump stamps so only real walls count as enclosure.
-            for (int j = 0; j < tilesH; j++)
+            for (int j = 0; j < tilesHigh; j++)
             {
-                for (int i = 0; i < tilesW; i++)
+                for (int i = 0; i < tilesWide; i++)
                 {
-                    int idx = j * tilesW + i;
+                    int idx = j * tilesWide + i;
                     if (_floodOccluderMaskPixels[idx].R == 255)
                         continue;
-                    bool SolidAt(int x, int y) => x >= 0 && x < tilesW && y >= 0 && y < tilesH
-                        && _floodOccluderMaskPixels[y * tilesW + x].R == 255;
+                    bool SolidAt(int x, int y) => x >= 0 && x < tilesWide && y >= 0 && y < tilesHigh
+                        && _floodOccluderMaskPixels[y * tilesWide + x].R == 255;
                     bool above = SolidAt(i, j - 1) || SolidAt(i, j - 2);
                     bool below = SolidAt(i, j + 1) || SolidAt(i, j + 2);
                     bool left = SolidAt(i - 1, j) || SolidAt(i - 2, j);
@@ -1658,44 +1712,44 @@ namespace SDVRadiance
                 }
             }
 
-            void Stamp(int tx, int ty, byte strength)
+            void Stamp(int tileX, int tileY, byte strength)
             {
-                int i = tx - startTileX, j = ty - startTileY;
-                if (i < 0 || i >= tilesW || j < 0 || j >= tilesH)
+                int i = tileX - startTileX, j = tileY - startTileY;
+                if (i < 0 || i >= tilesWide || j < 0 || j >= tilesHigh)
                     return;
-                int idx = j * tilesW + i;
+                int idx = j * tilesWide + i;
                 if (_floodOccluderMaskPixels[idx].R < strength)
                     _floodOccluderMaskPixels[idx] = new Color(strength, strength, strength, strength);
             }
 
-            foreach (var kv in location.terrainFeatures.Pairs)
+            foreach (var featureEntry in location.terrainFeatures.Pairs)
             {
-                switch (kv.Value)
+                switch (featureEntry.Value)
                 {
                     case StardewValley.TerrainFeatures.Tree t when t.growthStage.Value >= 5:
-                        Stamp((int)kv.Key.X, (int)kv.Key.Y, 215);
+                        Stamp((int)featureEntry.Key.X, (int)featureEntry.Key.Y, 215);
                         break;
-                    case StardewValley.TerrainFeatures.FruitTree ft when ft.growthStage.Value >= 4:
-                        Stamp((int)kv.Key.X, (int)kv.Key.Y, 215);
+                    case StardewValley.TerrainFeatures.FruitTree fruitTree when fruitTree.growthStage.Value >= 4:
+                        Stamp((int)featureEntry.Key.X, (int)featureEntry.Key.Y, 215);
                         break;
                     // Bushes and clumps are drawn as their own silhouettes below; the tile stamp
                     // is what they fade back to when the silhouette switch is off.
                     case StardewValley.TerrainFeatures.Bush:
-                        Stamp((int)kv.Key.X, (int)kv.Key.Y, (byte)(150f * (1f - _occluderShapesEase)));
+                        Stamp((int)featureEntry.Key.X, (int)featureEntry.Key.Y, (byte)(150f * (1f - _occluderShapesEase)));
                         break;
                 }
             }
-            foreach (var ltf in location.largeTerrainFeatures)
+            foreach (var largeFeature in location.largeTerrainFeatures)
             {
-                if (ltf is StardewValley.TerrainFeatures.Bush b)
-                    Stamp((int)b.Tile.X, (int)b.Tile.Y, (byte)(150f * (1f - _occluderShapesEase)));
+                if (largeFeature is StardewValley.TerrainFeatures.Bush bush)
+                    Stamp((int)bush.Tile.X, (int)bush.Tile.Y, (byte)(150f * (1f - _occluderShapesEase)));
             }
             foreach (var clump in location.resourceClumps)
             {
                 if (clump == null) continue;
-                for (int cy = 0; cy < clump.height.Value; cy++)
-                    for (int cx = 0; cx < clump.width.Value; cx++)
-                        Stamp((int)clump.Tile.X + cx, (int)clump.Tile.Y + cy, (byte)(200f * (1f - _occluderShapesEase)));
+                for (int clumpRow = 0; clumpRow < clump.height.Value; clumpRow++)
+                    for (int clumpColumn = 0; clumpColumn < clump.width.Value; clumpColumn++)
+                        Stamp((int)clump.Tile.X + clumpColumn, (int)clump.Tile.Y + clumpRow, (byte)(200f * (1f - _occluderShapesEase)));
             }
             // Characters/animals/the player are NOT stamped: their shadows are owned by the
             // sprite silhouette pass — stamping them here too gave everyone standing near a
@@ -1703,24 +1757,24 @@ namespace SDVRadiance
             phaseStart = PhaseCost.NoteSince("flood occluders: window copy + tile stamps", phaseStart);
 
             // The grid above at tile resolution, then everything with a real silhouette drawn over
-            // it at FloodOccSubdivision texels per tile, by the game's own art and placement.
+            // it at FloodOccluderSubdivision texels per tile, by the game's own art and placement.
             // Into the pair's spare, never into the texture the silhouette pass may still be
             // reading from the previous window (TextureDoubleBuffer).
             _floodOccluderBaseTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _floodOccluderBaseSpare,
-                _floodOccluderBaseTexture, tilesW, tilesH, SurfaceFormat.Color, "flood occluder mask", _floodOccluderMaskPixels, count);
+                _floodOccluderBaseTexture, tilesWide, tilesHigh, SurfaceFormat.Color, "flood occluder mask", _floodOccluderMaskPixels, count);
             phaseStart = PhaseCost.NoteSince("flood occluders: base upload", phaseStart);
-            int maskW = tilesW * FloodOccSubdivision, maskH = tilesH * FloodOccSubdivision;
-            if (_floodOccluderMask is not RenderTarget2D maskTarget || maskTarget.Width != maskW || maskTarget.Height != maskH)
+            int maskWidth = tilesWide * FloodOccluderSubdivision, maskHeight = tilesHigh * FloodOccluderSubdivision;
+            if (_floodOccluderMask is not RenderTarget2D maskTarget || maskTarget.Width != maskWidth || maskTarget.Height != maskHeight)
             {
                 _floodOccluderMask?.Dispose();
-                maskTarget = VramTally.Track(new RenderTarget2D(_device, maskW, maskH, false, SurfaceFormat.Color, DepthFormat.None), "flood occluder mask");
+                maskTarget = VramTally.Track(new RenderTarget2D(_device, maskWidth, maskHeight, false, SurfaceFormat.Color, DepthFormat.None), "flood occluder mask");
                 _floodOccluderMask = maskTarget;
             }
-            DrawOccluderSilhouettes(maskTarget, location, startTileX, startTileY, tilesW, tilesH);
+            DrawOccluderSilhouettes(maskTarget, location, startTileX, startTileY, tilesWide, tilesHigh);
             phaseStart = PhaseCost.NoteSince("flood occluders: silhouettes (sprite draws)", phaseStart);
             BuildSoftOccluderLevels(maskTarget);
             PhaseCost.NoteSince("flood occluders: soft levels (GPU blur)", phaseStart);
-            _floodOccluderMaskSize = new Vector2(tilesW, tilesH);
+            _floodOccluderMaskSize = new Vector2(tilesWide, tilesHigh);
             return true;
         }
 
@@ -1856,7 +1910,8 @@ namespace SDVRadiance
             if (records.Count == 0 || _normalsEffect == null)
                 return;
             _normalSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.NonPremultiplied, SamplerState.PointClamp,
-                DepthStencilState.None, RasterizerState.CullNone);
+                DepthStencilState.None, RasterizerState.CullNone, null,
+                Matrix.CreateScale(_reliefBufferScale, _reliefBufferScale, 1f));
             try
             {
                 for (int i = 0; i < records.Count; i++)
@@ -1943,6 +1998,69 @@ namespace SDVRadiance
         private readonly HashSet<string> _bevelledSheetsThisFrame = new();
         private List<string> _bevelledSheetsLastFrame = new();
 
+        /// <summary>radiance_reliefres: null follows the setting, true is half, false is full.</summary>
+        internal static bool? ReliefHalfResolutionOverride;
+        /// <summary>radiance_reliefsort: true (the default since 1.7.6) replays the sprites grouped
+        /// by texture with a depth test; false replays them front to back with blending, the way
+        /// 1.7.5 did, which is the way back if a sheet's soft edges turn out to matter somewhere.
+        /// </summary>
+        /// <remarks>
+        /// The grouped road is faster on every axis measured: 0.7 ms of frame, 1.26 ms of GPU and
+        /// about two thousand draw calls, on the farm at 3440x1369 and 75 percent zoom. What it
+        /// gives up is the blend at a sprite's edge, because a depth test cannot blend: a sheet
+        /// texel below half opacity is not written to the relief at all. Pixel art rarely has such
+        /// texels, and the four spots measured say so: of the whole screen, the two roads disagree
+        /// about 0.20 percent at the farm by day (the pond rim and the lily pads, which do have
+        /// alpha ramps), 0.040 percent in the saloon at ten at night, and 0.026 percent in town at
+        /// nine, which is less than that scene differs from itself between two frames. At the beach
+        /// the difference measured a percent and turned out to be the fish, who keep swimming while
+        /// the render clock is frozen.
+        /// </remarks>
+        internal static bool ReliefTextureSorted = true;
+        /// <summary>radiance_reliefsort none: with the depth working, the replay does not need to be
+        /// sorted at all. Whichever sprite wins an overlap is decided by the depth test rather than
+        /// by the order the batch happens to submit in, so the batch's own sort of some 2,600 items
+        /// is work with nothing to show for it. Implies the depth road (see
+        /// <see cref="ReliefTextureSorted"/>), which is what makes an unsorted replay correct.</summary>
+        internal static bool ReliefUnsorted;
+        /// <summary>radiance_reliefdepth: which way the texture-sorted replay's depth test runs.
+        /// An experiment, to prove the test is applied at all: 'never' must leave the buffer as
+        /// the clear left it, and 'less' must keep the sprite the game drew FIRST.</summary>
+        internal static CompareFunction ReliefDepthFunction = CompareFunction.GreaterEqual;
+        /// <summary>The game's layer depth grows toward the viewer: a sprite lower on the screen
+        /// has the larger depth and is drawn last, over the ones above it. So the test that keeps
+        /// the front sprite is greater-or-equal, against a depth buffer cleared to zero. The depth
+        /// itself comes from the tint (see reliefreplay.fx): the game's MonoGame build writes zero
+        /// into every sprite vertex's z, so a depth test on what the batch hands the card orders
+        /// nothing, which the first cut of this pass proved with a frozen dump.</summary>
+        private static DepthStencilState ReliefDepthNearerIsGreater = new()
+        {
+            DepthBufferEnable = true,
+            DepthBufferWriteEnable = true,
+            DepthBufferFunction = CompareFunction.GreaterEqual,
+            Name = "ReliefDepthNearerIsGreater",
+        };
+
+        /// <summary>The depth state the replay draws with, remade when the experiment asks for
+        /// another comparison.</summary>
+        private static DepthStencilState ReliefDepthState()
+        {
+            if (ReliefDepthNearerIsGreater.DepthBufferFunction != ReliefDepthFunction)
+            {
+                ReliefDepthNearerIsGreater.Dispose();
+                ReliefDepthNearerIsGreater = new DepthStencilState
+                {
+                    DepthBufferEnable = true,
+                    DepthBufferWriteEnable = true,
+                    DepthBufferFunction = ReliefDepthFunction,
+                    Name = "ReliefDepth" + ReliefDepthFunction,
+                };
+            }
+            return ReliefDepthNearerIsGreater;
+        }
+        /// <summary>The scale the relief buffer is drawn at this frame, for the trunk-join pass.</summary>
+        private float _reliefBufferScale = 1f;
+
         private void RenderNormalPass(ModConfig config, RenderTarget2D target)
         {
             bool wanted = config.SpriteReliefEnabled && config.FloodLightingEnabled && _normalsEffect != null;
@@ -1984,27 +2102,77 @@ namespace SDVRadiance
                 }
                 return;
             }
-            int w = target.Width, h = target.Height;
-            if (_normalRenderTarget == null || _normalRenderTarget.Width != w || _normalRenderTarget.Height != h)
+            // Half the frame's size when asked (the default): the relief is a lean of a few
+            // per cent across a sprite and a rim a texel wide, and the flood shader reads this
+            // buffer with a linear filter, so at half size it is drawn into a quarter of the
+            // pixels and read back smooth. On a 3440-wide window at 75 % zoom the full-size
+            // replay filled 8.4 megapixels a frame for a sprite of a few thousand.
+            bool half = ReliefHalfResolutionOverride ?? config.SpriteReliefHalfResolution;
+            _reliefBufferScale = half ? 0.5f : 1f;
+            int bufferWidth = Math.Max(1, (int)Math.Ceiling(target.Width * _reliefBufferScale));
+            int bufferHeight = Math.Max(1, (int)Math.Ceiling(target.Height * _reliefBufferScale));
+            bool textureSorted = ReliefTextureSorted;
+            DepthFormat depthWanted = textureSorted ? DepthFormat.Depth24 : DepthFormat.None;
+            if (_normalRenderTarget == null || _normalRenderTarget.Width != bufferWidth || _normalRenderTarget.Height != bufferHeight
+                || _normalRenderTarget.DepthStencilFormat != depthWanted)
             {
                 _normalPassReady = false;
                 _normalRenderTarget?.Dispose();
                 // PreserveContents: read on frames whose replay was skipped (see above), which is
-                // a cross-frame read - rule 7.
-                _normalRenderTarget = VramTally.Track(new RenderTarget2D(_device, w, h, false, SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "sprite normals");
+                // a cross-frame read - rule 7. The depth buffer is what lets the texture-sorted
+                // replay draw the sprites in any order.
+                _normalRenderTarget = VramTally.Track(new RenderTarget2D(_device, bufferWidth, bufferHeight, false, SurfaceFormat.Color,
+                    depthWanted, 0, RenderTargetUsage.PreserveContents), "sprite normals");
             }
             _normalSpriteBatch ??= new SpriteBatch(_device);
             // Its own slot: this pass borrowed GridLightOccluders through the whole first relief
             // round, so every bench table until 2026-08-27 shows the replay's cost wearing the
             // occluder grid's name.
-            long t0 = FrameCost.Begin(FrameCost.Part.ReliefNormals);
+            long reliefStart = FrameCost.Begin(FrameCost.Part.ReliefNormals);
             try
             {
+                long reliefBind = System.Diagnostics.Stopwatch.GetTimestamp();
                 _device.SetRenderTarget(_normalRenderTarget);
-                _device.Clear(new Color(128, 128, 255, 0));
-                // FrontToBack with the recorded depths, the order the game drew them in.
-                _normalSpriteBatch.Begin(SpriteSortMode.FrontToBack, BlendState.NonPremultiplied, SamplerState.PointClamp,
-                    DepthStencilState.None, RasterizerState.CullNone);
+                reliefBind = PhaseCost.NoteSince("relief: binding the target", reliefBind);
+                _device.Clear(ClearOptions.Target | ClearOptions.DepthBuffer, new Color(128, 128, 255, 0), 0f, 0);
+                PhaseCost.NoteSince("relief: clearing the target", reliefBind);
+                Matrix toBuffer = Matrix.CreateScale(_reliefBufferScale, _reliefBufferScale, 1f);
+                if (textureSorted && _reliefReplayEffect != null)
+                {
+                    // Grouped by TEXTURE, with the recorded depth (carried in the tint, put back
+                    // into z by reliefreplay.fx) in the depth buffer deciding who is in front and
+                    // the sprite's own alpha deciding whether a pixel is written. Front to back
+                    // with blending, the order the game drew them in, cost a draw call at every
+                    // change of sheet between neighbours in depth: about two thousand a frame on
+                    // a farm at 75 % zoom on a 3440-wide window, as many as the game's own world
+                    // step, for a buffer that is read as a lean of a few per cent. Grouped by
+                    // texture the same sprites are a few dozen draw calls. What is lost is the
+                    // blend at a sprite's soft edge (pixel art has none); a fading sprite's
+                    // partial coverage still rides in the alpha the pixel keeps.
+                    _reliefReplayEffect.Parameters["MatrixTransform"]?.SetValue(
+                        toBuffer * Matrix.CreateOrthographicOffCenter(0, bufferWidth, bufferHeight, 0, 0, -1));
+                    SpriteDrawRecorder.RankSortedRecordsForReplay();
+                    SpriteDrawRecorder.DepthInTint = true;
+                    // Deferred means the batch submits in the order it was filled and never sorts.
+                    // That is only correct because the depth test decides the overlaps; it is the
+                    // whole point of having put the depth back (see reliefreplay.fx). It costs draw
+                    // calls, because a run ends at every change of sheet, and saves the sort.
+                    _normalSpriteBatch.Begin(ReliefUnsorted ? SpriteSortMode.Deferred : SpriteSortMode.Texture,
+                        BlendState.Opaque, SamplerState.PointClamp,
+                        ReliefDepthState(), RasterizerState.CullNone, _reliefReplayEffect, toBuffer);
+                }
+                else
+                {
+                    // FrontToBack with the recorded depths, the order the game drew them in.
+                    SpriteDrawRecorder.DepthInTint = false;
+                    _normalSpriteBatch.Begin(SpriteSortMode.FrontToBack, BlendState.NonPremultiplied, SamplerState.PointClamp,
+                        DepthStencilState.None, RasterizerState.CullNone, null, toBuffer);
+                }
+                // Where the relief's three milliseconds go. One dictionary lookup per phase per
+                // frame, which is nothing beside what it measures, and it is the only way to tell
+                // the sprite loop apart from the batch's own submit: the pass has always been one
+                // row, and one row cannot say whether to attack the per-sprite work or the draw.
+                long reliefPhase = PhaseCost.NoteSince("relief: target, clear and begin", reliefStart);
                 if (_flatNormalTexture == null || _flatNormalTexture.IsDisposed)
                 {
                     _flatNormalTexture = new Texture2D(_device, 1, 1, false, SurfaceFormat.Color);
@@ -2035,12 +2203,15 @@ namespace SDVRadiance
                         _bakeSheetFlat = false;
                         return map;
                     }, flat);
+                reliefPhase = PhaseCost.NoteSince("relief: world sprites, building the batch", reliefPhase);
                 _normalSpriteBatch.End();
+                reliefPhase = PhaseCost.NoteSince("relief: world sprites, submitting the batch", reliefPhase);
+                SpriteDrawRecorder.DepthInTint = false;
                 // The map's front layers, in their own batch so they land ON TOP whatever depth
                 // they were recorded with - which is the order the game drew them, and what makes
                 // a farmer standing behind a building stop showing through its wall.
                 _normalSpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.NonPremultiplied, SamplerState.PointClamp,
-                    DepthStencilState.None, RasterizerState.CullNone);
+                    DepthStencilState.None, RasterizerState.CullNone, null, toBuffer);
                 _normalPassDrawn += SpriteDrawRecorder.ReplayFront(_normalSpriteBatch,
                     (sheet, effects) =>
                     {
@@ -2058,25 +2229,28 @@ namespace SDVRadiance
                         return map;
                     }, flat);
                 _normalSpriteBatch.End();
+                reliefPhase = PhaseCost.NoteSince("relief: the map's front layers", reliefPhase);
                 FlattenTreeTrunkJoins();
+                PhaseCost.NoteSince("relief: the trunk join mend", reliefPhase);
                 _bevelledSheetsLastFrame = new List<string>(_bevelledSheetsThisFrame);
                 _normalPassReady = true;
                 // Where this screen-space buffer was drawn from, so a later frame that cannot
                 // redraw it can tell whether it is still looking at the same view.
                 _normalPassViewport = new Point(Game1.viewport.X, Game1.viewport.Y);
             }
-            catch (Exception ex)
+            catch (Exception exception)
             {
                 // A half-drawn buffer is worse than none: only a completed replay is shown.
+                SpriteDrawRecorder.DepthInTint = false;
                 _normalPassReady = false;
                 try { _normalSpriteBatch.End(); } catch { }
                 if (config.DebugLogging)
-                    _monitor.Log($"sprite normal pass failed: {ex.Message}", LogLevel.Debug);
+                    _monitor.Log($"sprite normal pass failed: {exception.Message}", LogLevel.Debug);
             }
             finally
             {
                 _device.SetRenderTarget(target);
-                FrameCost.End(FrameCost.Part.ReliefNormals, t0);
+                FrameCost.End(FrameCost.Part.ReliefNormals, reliefStart);
             }
         }
 
@@ -2104,7 +2278,7 @@ namespace SDVRadiance
         /// once; asking them for every tile of the window once a second and on every tile
         /// crossing was the grid's worst frame.
         /// </remarks>
-        private void EnsureFloodSolidBase(GameLocation location, SurfaceMap? surf, xTile.Layers.Layer? layer)
+        private void EnsureFloodSolidBase(GameLocation location, SurfaceMap? surfaceMap, xTile.Layers.Layer? layer)
         {
             int buildingCount = location.buildings?.Count ?? 0;
             xTile.Layers.Layer? size = location.map?.Layers.Count > 0 ? location.map.Layers[0] : null;
@@ -2117,8 +2291,8 @@ namespace SDVRadiance
             int width = size.LayerWidth, height = size.LayerHeight;
             // The other screen's copy of this map has its own SurfaceMap object too; same place
             // and same size is the same answer (LiveScreens.SamePlace).
-            bool sameSurface = ReferenceEquals(surf, _floodSolidBaseSurface)
-                || (surf != null && _floodSolidBaseSurface != null && surf.Width == _floodSolidBaseSurface.Width && surf.Height == _floodSolidBaseSurface.Height);
+            bool sameSurface = ReferenceEquals(surfaceMap, _floodSolidBaseSurface)
+                || (surfaceMap != null && _floodSolidBaseSurface != null && surfaceMap.Width == _floodSolidBaseSurface.Width && surfaceMap.Height == _floodSolidBaseSurface.Height);
             if (_floodSolidBase != null && LiveScreens.SamePlace(location, _floodSolidBaseLocation)
                 && sameSurface && buildingCount == _floodSolidBaseBuildingCount
                 && width == _floodSolidBaseWidth && height == _floodSolidBaseHeight)
@@ -2128,18 +2302,18 @@ namespace SDVRadiance
             _floodSolidBaseWidth = width;
             _floodSolidBaseHeight = height;
             _floodSolidBaseLocation = location;
-            _floodSolidBaseSurface = surf;
+            _floodSolidBaseSurface = surfaceMap;
             _floodSolidBaseBuildingCount = buildingCount;
-            for (int ty = 0; ty < height; ty++)
+            for (int tileY = 0; tileY < height; tileY++)
             {
-                for (int tx = 0; tx < width; tx++)
+                for (int tileX = 0; tileX < width; tileX++)
                 {
                     bool solid;
-                    if (surf != null)
-                        solid = (surf.BlocksLight(tx, ty) && !CanWalkOn(location, tx, ty)) || BuildingBlocks(location, tx, ty);
+                    if (surfaceMap != null)
+                        solid = (surfaceMap.BlocksLight(tileX, tileY) && !CanWalkOn(location, tileX, tileY)) || BuildingBlocks(location, tileX, tileY);
                     else
-                        solid = layer != null && tx < layer.LayerWidth && ty < layer.LayerHeight && layer.Tiles[tx, ty] != null;
-                    _floodSolidBase[ty * width + tx] = solid ? (byte)1 : (byte)0;
+                        solid = layer != null && tileX < layer.LayerWidth && tileY < layer.LayerHeight && layer.Tiles[tileX, tileY] != null;
+                    _floodSolidBase[tileY * width + tileX] = solid ? (byte)1 : (byte)0;
                 }
             }
         }
@@ -2252,7 +2426,7 @@ namespace SDVRadiance
         /// turns the screen pixels those calls produce into mask texels, and the mask holds the
         /// picket gaps a lamp's comb of light comes through. Only alpha is read from it.
         /// </summary>
-        private void DrawOccluderSilhouettes(RenderTarget2D target, GameLocation location, int startTileX, int startTileY, int tilesW, int tilesH)
+        private void DrawOccluderSilhouettes(RenderTarget2D target, GameLocation location, int startTileX, int startTileY, int tilesWide, int tilesHigh)
         {
             RenderTargetBinding[] previous = _device.GetRenderTargets();
             _floodOccluderSpriteBatch ??= new SpriteBatch(_device);
@@ -2271,11 +2445,11 @@ namespace SDVRadiance
                     return;
 
                 // The game draws at GlobalToLocal(viewport): put the viewport back, move to the
-                // mask's first tile, and shrink 64 world pixels to FloodOccSubdivision texels.
-                float toTexel = FloodOccSubdivision / 64f;
+                // mask's first tile, and shrink 64 world pixels to FloodOccluderSubdivision texels.
+                float toTexel = FloodOccluderSubdivision / 64f;
                 Matrix toMask = Matrix.CreateTranslation(Game1.viewport.X - startTileX * 64f, Game1.viewport.Y - startTileY * 64f, 0f)
                               * Matrix.CreateScale(toTexel, toTexel, 1f);
-                int lastTileX = startTileX + tilesW, lastTileY = startTileY + tilesH;
+                int lastTileX = startTileX + tilesWide, lastTileY = startTileY + tilesHigh;
 
                 // A picket is four game pixels, one texel here, and the LINEAR sampler halves a
                 // one-texel line before the shadow march ever sees it: a fence cast half a shadow.
@@ -2303,9 +2477,9 @@ namespace SDVRadiance
                     if (pair.Value is StardewValley.TerrainFeatures.Bush bush && !bush.sourceRect.Value.IsEmpty)
                         StampBush(spriteBatch, bush, pair.Key);
                 }
-                foreach (var large in location.largeTerrainFeatures)
+                foreach (var largeFeature in location.largeTerrainFeatures)
                 {
-                    if (large is StardewValley.TerrainFeatures.Bush bush && !bush.sourceRect.Value.IsEmpty)
+                    if (largeFeature is StardewValley.TerrainFeatures.Bush bush && !bush.sourceRect.Value.IsEmpty)
                         StampBush(spriteBatch, bush, bush.Tile);
                 }
                 spriteBatch.End();
@@ -2415,8 +2589,8 @@ namespace SDVRadiance
                             }
                             // Object.draw: a big craftable's 16x32 cell is drawn from the tile above
                             // its own, a small object's 16x16 cell fills its tile, both at scale 4.
-                            var at = new Vector2(tileX * 64f, placed.bigCraftable.Value ? tileY * 64f - 64f : tileY * 64f);
-                            spriteBatch.Draw(art, Game1.GlobalToLocal(Game1.viewport, at), source, Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
+                            var drawPosition = new Vector2(tileX * 64f, placed.bigCraftable.Value ? tileY * 64f - 64f : tileY * 64f);
+                            spriteBatch.Draw(art, Game1.GlobalToLocal(Game1.viewport, drawPosition), source, Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
                         }
                     }
                     foreach (Furniture furniture in location.furniture)
@@ -2442,8 +2616,8 @@ namespace SDVRadiance
                         footprint.Offset(-Game1.viewport.X, -Game1.viewport.Y);
                         spriteBatch.Draw(Game1.staminaRect, footprint, Color.White);
                         // Furniture.draw: the sprite's bottom edge rests on the bounding box's.
-                        var at = new Vector2(box.X, box.Bottom - source.Height * 4f);
-                        spriteBatch.Draw(art, Game1.GlobalToLocal(Game1.viewport, at), source, Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
+                        var drawPosition = new Vector2(box.X, box.Bottom - source.Height * 4f);
+                        spriteBatch.Draw(art, Game1.GlobalToLocal(Game1.viewport, drawPosition), source, Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
                     }
                     spriteBatch.End();
                 }

@@ -203,8 +203,8 @@ namespace SDVRadiance
                         continue;
                     }
 
-                    Rectangle src = who.FarmerSprite.SourceRect;
-                    var sig = (who.FarmerSprite.CurrentFrame, (int)who.FacingDirection, src);
+                    Rectangle sourceRect = who.FarmerSprite.SourceRect;
+                    var sig = (who.FarmerSprite.CurrentFrame, (int)who.FacingDirection, sourceRect);
                     // Accessory layers that animate on their own clock get the same periodic
                     // refresh the local player gets, and only when a mod that has them is loaded.
                     // Frozen stops it for the same reason it stops the player's own refresh: the
@@ -241,14 +241,14 @@ namespace SDVRadiance
                         SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "farmer bakes (co-op)");
                     previous ??= graphicsDevice.GetRenderTargets();
                     FrameCost.Count(FrameCost.Counter.FarmerBakes);
-                    BakeFarmerSilhouette(graphicsDevice, who, src, bake.OwnedMask, out Vector2 feetInRt);
+                    BakeFarmerSilhouette(graphicsDevice, who, sourceRect, bake.OwnedMask, out Vector2 feetInRt);
                     bake.Mask = bake.OwnedMask;
                     bake.Loaned = false;
                     if (reflectionNeedsFarmers)
                     {
                         bake.OwnedColour ??= VramTally.Track(new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
                             SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "farmer bakes (co-op)");
-                        BakeFarmerColour(graphicsDevice, who, src, bake.OwnedColour);
+                        BakeFarmerColour(graphicsDevice, who, sourceRect, bake.OwnedColour);
                     }
                     bake.Color = bake.OwnedColour;
                     bake.ColorFresh = reflectionNeedsFarmers;
@@ -295,10 +295,10 @@ namespace SDVRadiance
         /// was measured and tuned recently and is the single most expensive thing the mod does, so
         /// it keeps its own copy. Anything changed here has to be changed there.
         /// </remarks>
-        private void BakeFarmerSilhouette(GraphicsDevice graphicsDevice, Farmer who, Rectangle src,
+        private void BakeFarmerSilhouette(GraphicsDevice graphicsDevice, Farmer who, Rectangle sourceRect,
             RenderTarget2D target, out Vector2 feetInRenderTarget)
         {
-            float w = src.Width * 4f, h = src.Height * 4f;
+            float w = sourceRect.Width * 4f, h = sourceRect.Height * 4f;
             Vector2 pos = new Vector2((PlayerRtW - w) / 2f, PlayerRtH - h - 8f);
             feetInRenderTarget = new Vector2(PlayerRtW / 2f, PlayerRtH - 8f);
 
@@ -306,7 +306,7 @@ namespace SDVRadiance
             graphicsDevice.Clear(Color.Transparent);
             _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
             who.FarmerRenderer.draw(_renderTargetSpriteBatch, who.FarmerSprite.CurrentAnimationFrame,
-                who.FarmerSprite.CurrentFrame, src, pos, Vector2.Zero, 0f, who.FacingDirection,
+                who.FarmerSprite.CurrentFrame, sourceRect, pos, Vector2.Zero, 0f, who.FacingDirection,
                 Color.Black, 0f, 1f, who);
             _renderTargetSpriteBatch.End();
 
@@ -326,16 +326,16 @@ namespace SDVRadiance
         /// shape. The mirror flips it below their feet, so whatever their appearance mods drew is
         /// what appears in the water.
         /// </summary>
-        private void BakeFarmerColour(GraphicsDevice graphicsDevice, Farmer who, Rectangle src, RenderTarget2D target)
+        private void BakeFarmerColour(GraphicsDevice graphicsDevice, Farmer who, Rectangle sourceRect, RenderTarget2D target)
         {
-            float w = src.Width * 4f, h = src.Height * 4f;
+            float w = sourceRect.Width * 4f, h = sourceRect.Height * 4f;
             Vector2 pos = new Vector2((PlayerRtW - w) / 2f, PlayerRtH - h - 8f);
 
             graphicsDevice.SetRenderTarget(target);
             graphicsDevice.Clear(Color.Transparent);
             _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
             who.FarmerRenderer.draw(_renderTargetSpriteBatch, who.FarmerSprite.CurrentAnimationFrame,
-                who.FarmerSprite.CurrentFrame, src, pos, Vector2.Zero, 0f, who.FacingDirection,
+                who.FarmerSprite.CurrentFrame, sourceRect, pos, Vector2.Zero, 0f, who.FacingDirection,
                 Color.White, 0f, 1f, who);
             _renderTargetSpriteBatch.End();
         }
@@ -424,7 +424,7 @@ namespace SDVRadiance
         /// player and every NPC use. House rule: a body is a body, and only the image differs.
         /// </summary>
         private void DrawOtherFarmerSunShadows(SpriteBatch spriteBatch, GameLocation location,
-            float rot, float stretch, float alpha, float blur)
+            float rotation, float stretch, float alpha, float blur)
         {
             foreach (Farmer who in OtherFarmersIn(location))
             {
@@ -448,8 +448,8 @@ namespace SDVRadiance
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                     new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
                 float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
-                DrawSoftGrounded(spriteBatch, Taps9, bake.Mask, null, feet, Color.White, alpha, rot,
-                    bake.FeetInRenderTarget, new Vector2(CharacterAcrossScale(rot, stretch), stretch),
+                DrawSoftGrounded(spriteBatch, Taps9, bake.Mask, null, feet, Color.White, alpha, rotation,
+                    bake.FeetInRenderTarget, new Vector2(CharacterAcrossScale(rotation, stretch), stretch),
                     who.StandingPixel.Y, SpriteEffects.None, blur);
             }
         }
@@ -477,8 +477,8 @@ namespace SDVRadiance
                     ambAlpha * (_lightShadowCasts.Count > 0 ? 0.45f : 1f), depth, blur);
                 if (!bake.Ready || bake.Mask == null)
                     continue;
-                foreach (var (rot, st, a, _) in _lightShadowCasts)
-                    DrawSoftGrounded(spriteBatch, Taps9, bake.Mask, null, feet, Color.White, a, rot,
+                foreach (var (rotation, st, a, _) in _lightShadowCasts)
+                    DrawSoftGrounded(spriteBatch, Taps9, bake.Mask, null, feet, Color.White, a, rotation,
                         bake.FeetInRenderTarget, new Vector2(1f, st), who.StandingPixel.Y, SpriteEffects.None, blur);
             }
         }

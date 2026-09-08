@@ -46,7 +46,7 @@ namespace SDVRadiance
 
         private const int PlayerPatchSize = 640;
         private RenderTarget2D? _playerPatch;
-        private readonly List<(float rot, Vector2 scale, float alpha, float blur)> _patchCasts = new();
+        private readonly List<(float rotation, Vector2 scale, float alpha, float blur)> _patchCasts = new();
 
         private bool _patchValid;
         private bool _patchDrawnThisFrame;
@@ -101,7 +101,7 @@ namespace SDVRadiance
             _characterGroundForeshortening = config.ShadowCharacterGroundForeshortening;
             if (_sunBlend > 0.004f)
             {
-                ComputeSun(out float rot, out float stretch, out float alpha);
+                ComputeSun(out float rotation, out float stretch, out float alpha);
                 alpha *= strength * _sunBlend * MathHelper.Lerp(1f, OvercastAlpha, _overcastBlend);
                 if (alpha > 0.01f)
                 {
@@ -109,7 +109,7 @@ namespace SDVRadiance
                     float lengthScale = Math.Max(0.1f, config.DirectionalShadowLength)
                                       * MathHelper.Lerp(1f, OvercastLength, _overcastBlend);
                     stretch *= lengthScale;
-                    _patchCasts.Add((rot, new Vector2(CharacterAcrossScale(rot, stretch), stretch), alpha, sunBlur));
+                    _patchCasts.Add((rotation, new Vector2(CharacterAcrossScale(rotation, stretch), stretch), alpha, sunBlur));
                 }
             }
             if (_sunBlend < 0.996f)
@@ -124,8 +124,8 @@ namespace SDVRadiance
                 Vector2 feetScreen = Game1.GlobalToLocal(Game1.viewport,
                     new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
                 GatherCasts(feetScreen, castStrength, lenCfg);
-                foreach (var (rot, st, a, _) in _lightShadowCasts)
-                    _patchCasts.Add((rot, new Vector2(1f, st), a, blur));
+                foreach (var (rotation, st, a, _) in _lightShadowCasts)
+                    _patchCasts.Add((rotation, new Vector2(1f, st), a, blur));
             }
             if (_patchCasts.Count == 0)
             {
@@ -172,17 +172,17 @@ namespace SDVRadiance
                 // Immediate, so each cast's lean and direction reach the shader before its taps.
                 batch.Begin(SpriteSortMode.Immediate, BlendState.AlphaBlend, SamplerState.LinearClamp,
                     DepthStencilState.None, RasterizerState.CullNone, effect);
-                foreach (var (rot, scale, alpha, castBlur) in _patchCasts)
+                foreach (var (rotation, scale, alpha, castBlur) in _patchCasts)
                 {
                     effect.Parameters["Scale"]?.SetValue(scale);
-                    effect.Parameters["Rotation"]?.SetValue(rot);
+                    effect.Parameters["Rotation"]?.SetValue(rotation);
                     // Up the screen (cos > 0): the shadow climbs the wall it meets. Down the
                     // screen: it stops at the counter. See the shader for why.
-                    effect.Parameters["KeepOnSolid"]?.SetValue(Math.Cos(rot) > 0.0 ? 1f : 0f);
-                    DrawSoft(batch, Taps9, _playerRenderTarget, null, _patchFeetInPatch, Color.White, alpha, rot,
+                    effect.Parameters["KeepOnSolid"]?.SetValue(Math.Cos(rotation) > 0.0 ? 1f : 0f);
+                    DrawSoft(batch, Taps9, _playerRenderTarget, null, _patchFeetInPatch, Color.White, alpha, rotation,
                         _playerFeetInRenderTarget, scale, 0f, SpriteEffects.None, castBlur);
-                    _patchContent = Rectangle.Union(_patchContent.IsEmpty ? CastBounds(rot, scale, castBlur) : _patchContent,
-                        CastBounds(rot, scale, castBlur));
+                    _patchContent = Rectangle.Union(_patchContent.IsEmpty ? CastBounds(rotation, scale, castBlur) : _patchContent,
+                        CastBounds(rotation, scale, castBlur));
                 }
                 batch.End();
             }
@@ -200,11 +200,11 @@ namespace SDVRadiance
 
         /// <summary>The patch pixels one cast can touch: the silhouette's quad under the draw's
         /// lean and scale, plus the blur's reach, so the strips cover no more than they must.</summary>
-        private Rectangle CastBounds(float rot, Vector2 scale, float blur)
+        private Rectangle CastBounds(float rotation, Vector2 scale, float blur)
         {
             float w = _playerRenderTarget!.Width, h = _playerRenderTarget.Height;
             Vector2 origin = _playerFeetInRenderTarget;
-            float cs = (float)Math.Cos(rot), sn = (float)Math.Sin(rot);
+            float cs = (float)Math.Cos(rotation), sn = (float)Math.Sin(rotation);
             float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
             foreach (Vector2 corner in new[] { new Vector2(0, 0), new Vector2(w, 0), new Vector2(0, h), new Vector2(w, h) })
             {

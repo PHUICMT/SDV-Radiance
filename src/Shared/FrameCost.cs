@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using StardewModdingAPI;
 using StardewValley;
 
 namespace SDVRadiance
@@ -90,6 +91,14 @@ namespace SDVRadiance
             // split screen the same person is wanted by every screen at once.
             FarmerBakes,
             FarmerBakesShared,
+            // Every run of one texture MonoGame's batcher hands the card as its own draw call,
+            // over the whole frame, and the game's world step alone. A texture change between
+            // two consecutive sprites ends a run, so a sprite that is handed a texture of its
+            // own (the soft look bakes one target per sprite) is a draw call of its own, and
+            // that cost lands inside the game's draw where none of our timers reach. The number
+            // that says whether smooth art is paid for in draw calls or in pixels.
+            SpriteBatchFlushes,
+            WorldSpriteBatchFlushes,
         }
 
         private const int PartCount = 14;
@@ -143,6 +152,12 @@ namespace SDVRadiance
             public string Location = "";
             public int TimeOfDay;
             public int FramesSinceArrival;
+            /// <summary>What the game was doing while the frame ran: loading, warping behind a
+            /// fade, sitting in a menu, or playing. A frame of several seconds means one thing
+            /// while a save loads and quite another while somebody is walking, and the ledger
+            /// could not tell those apart. Written as a short word so the line stays readable.
+            /// </summary>
+            public string Doing = "";
         }
         private static readonly LongFrame[] _longest = new LongFrame[WorstFramesKept];
         private static int _longestCount;
@@ -176,6 +191,8 @@ namespace SDVRadiance
             "shadow draw calls (SpriteBatch)",
             "farmer silhouette bakes",
             "farmer bakes shared between screens",
+            "sprite batch draw calls (whole frame)",
+            "sprite batch draw calls (world step)",
         };
 
         static FrameCost()
@@ -236,6 +253,53 @@ namespace SDVRadiance
         /// </para>
         /// </summary>
         private static int _unfocusedFrames, _unfocusedWindowFrames;
+
+        /// <summary>
+        /// Frames that ran longer than a quarter of a second.
+        ///
+        /// <para>
+        /// These used to be dropped where they were measured, on the reasoning that a frame
+        /// straddling a load screen is minutes long and would drag the average somewhere no real
+        /// frame ever went. That reasoning is still right for the AVERAGE and wrong for everything
+        /// else: a player reporting a stall is reporting exactly these frames, and a report that
+        /// silently excludes them cannot show the thing it was asked about. trc666's split-screen
+        /// report on 2026-09-07 is the case: the stall he described could not have appeared in it.
+        /// They are counted here and kept out of the average, and they are still offered to the
+        /// ledger of the longest frames, which is where the attribution lives.
+        /// </para>
+        /// </summary>
+        private static int _hugeFrames;
+        private static double _hugeFrameMax;
+        private const double HugeFrameMilliseconds = 250;
+
+        /// <summary>
+        /// How many UPDATES the game ran for each frame it drew, and what this mod spent inside
+        /// them.
+        ///
+        /// <para>
+        /// This is the one number that speaks to an input complaint. MonoGame runs a fixed time
+        /// step: <c>Game.Tick</c> holds an accumulator and runs
+        /// <c>while (_accumulatedElapsedTime >= TargetElapsedTime) DoUpdate(...)</c>, capped at
+        /// half a second of catching up, while the platform reads the keyboard and the pad ONCE
+        /// per Tick, outside that loop. So a frame that takes 69 ms runs about four updates
+        /// against a single reading of the controller: a press is only seen at a frame boundary,
+        /// a release likewise, and the farmer commits to walking for the whole of it. That is
+        /// exactly what "I press a direction, nothing happens, then it walks on by itself" is,
+        /// and nothing in this mod measured it. A player reporting input lag can now say how many
+        /// updates their frames are running, which turns the complaint into a number.
+        /// </para>
+        ///
+        /// <para>
+        /// Counted on screen 0 only. SMAPI raises the update event once per screen, and the
+        /// question here is how often the GAME updated, not how many screens heard about it.
+        /// </para>
+        /// </summary>
+        private static int _ticksThisFrame;
+        private static double _tickSum, _tickMax, _tickWindowSum, _tickWindowMax;
+        private static int _tickFrames, _tickWindowFrames;
+        private static double _ourTickMs, _ourTickSum, _ourTickMax, _ourTickWindowSum, _ourTickWindowMax;
+        private static long _lastTickStamp;
+        private static double _tickGapMax, _tickGapWindowMax;
 
         /// <summary>Smoothed frame time for the on-screen readout. The window figures only move
         /// every 300 frames, which is five seconds of a number that is supposed to react.</summary>
@@ -347,6 +411,25 @@ namespace SDVRadiance
             return ms;
         }
 
+        /// <summary>One update of the game happened, and this is what this mod spent in it.
+        /// Called from the update event on screen 0 only, so what is counted is the game's
+        /// updates rather than the screens that heard about them.</summary>
+        internal static void NoteUpdateTick(double ourMilliseconds)
+        {
+            _ticksThisFrame++;
+            _ourTickMs += ourMilliseconds;
+            long now = Stopwatch.GetTimestamp();
+            if (_lastTickStamp != 0)
+            {
+                double gap = (now - _lastTickStamp) * 1000.0 / Stopwatch.Frequency;
+                // The same quarter-second line the frame meter draws: past that it is a load, not
+                // a tick that ran late.
+                if (gap < HugeFrameMilliseconds && gap > _tickGapMax)
+                    _tickGapMax = gap;
+            }
+            _lastTickStamp = now;
+        }
+
         /// <summary>Offer the frame that just ended to the ledger of the longest. The chain
         /// encloses the grid rebuilds, so they are taken off it here the way the table does.</summary>
         private static void OfferLongFrame(double frameMs, int[] countsThisFrame)
@@ -386,6 +469,28 @@ namespace SDVRadiance
             f.Location = location;
             f.TimeOfDay = Game1.timeOfDay;
             f.FramesSinceArrival = _framesSinceArrival;
+            f.Doing = WhatTheGameWasDoing();
+        }
+
+        /// <summary>One word for the state the game was in when a frame ran long. The reason this
+        /// exists: the ledger's first multi-second frames on a split screen here all landed while
+        /// the second screen was being created or a warp was under a fade, and a line saying only
+        /// "Farm 12:00" cannot say so. A stall that a player feels happens while "playing", and
+        /// that is the only one worth hunting.</summary>
+        private static string WhatTheGameWasDoing()
+        {
+            // gameMode 6 is loading a save, 0 and 3 are the title and its transitions.
+            if (Game1.gameMode != Game1.playingGameMode)
+                return "loading";
+            if (!Context.IsWorldReady)
+                return "not in world";
+            if (Game1.isWarping || Game1.globalFade || Game1.fadeToBlack)
+                return "warping";
+            if (Game1.eventUp || Game1.currentMinigame != null)
+                return "cutscene";
+            if (Game1.activeClickableMenu != null)
+                return "menu";
+            return "playing";
         }
 
         /// <summary>The longest frames since the last report, longest first, each with what this
@@ -425,17 +530,26 @@ namespace SDVRadiance
                 if (f.Counts[(int)Counter.BakeEvictions] > 0) counts += $"  evictions {f.Counts[(int)Counter.BakeEvictions]}";
                 string gc = f.Gen0 + f.Gen1 + f.Gen2 > 0 ? $"  GC gen0 +{f.Gen0} gen1 +{f.Gen1} gen2 +{f.Gen2}" : "";
                 string where = $"{f.Location} {f.TimeOfDay / 100}:{f.TimeOfDay % 100:00}"
-                             + (f.FramesSinceArrival < ArrivalFrames ? $" (arrival+{f.FramesSinceArrival})" : "");
+                             + (f.FramesSinceArrival < ArrivalFrames ? $" (arrival+{f.FramesSinceArrival})" : "")
+                             + (f.Doing.Length > 0 && f.Doing != "playing" ? $" [{f.Doing}]" : "");
                 text.AppendLine($"  {f.FrameMs,7:0.00} ms  {where,-32}  ours {f.OursMs,6:0.00}  not ours {Math.Max(0, f.FrameMs - f.OursMs),6:0.00}"
                               + (parts.Length > 0 ? $"   [{parts}]" : "") + counts + gc);
             }
             _longestCount = 0;
+            _hugeFrames = 0;
+            _hugeFrameMax = 0;
             return text.ToString();
         }
 
         /// <summary>Advance the rolling window. Called once per frame, from the first of our
         /// events that runs while the mod is switched on.</summary>
-        internal static void NextFrame()
+        /// <param name="wallClockFrame">True on the screen whose turn ends a frame the player
+        /// actually sees. In split screen this method is called once per SCREEN, so the wall clock
+        /// between two calls is half a frame: the report was printing 65 fps for a game running at
+        /// 32, and every "of which measured above" percentage was against half a frame. The parts
+        /// still fold on every call, so their averages are what this mod costs per frame the
+        /// player sees, both screens together; only the clock waits for the first screen.</param>
+        internal static void NextFrame(bool wallClockFrame = true)
         {
             // Fold the frame that just ended into the window BEFORE the roll, so the per-frame
             // worst is a real frame's count rather than a running total that only ever grows.
@@ -471,14 +585,23 @@ namespace SDVRadiance
             }
 
             long now = Stopwatch.GetTimestamp();
-            if (_lastFrameStamp != 0)
+            if (_lastFrameStamp != 0 && wallClockFrame)
             {
                 double frameMs = (now - _lastFrameStamp) * 1000.0 / Stopwatch.Frequency;
                 // A frame straddling a load screen, an alt-tab or a menu is minutes long and would
                 // drag the average somewhere no real frame ever went. Anything past a quarter of a
-                // second is one of those, not a slow frame.
+                // second is one of those, or it is the stall the player is writing to us about, so
+                // it stays out of the average and is COUNTED rather than dropped.
                 bool focused = IsWindowFocused();
-                if (frameMs < 250)
+                if (frameMs >= HugeFrameMilliseconds && focused)
+                {
+                    _hugeFrames++;
+                    if (frameMs > _hugeFrameMax) _hugeFrameMax = frameMs;
+                    // Still offered to the ledger: the whole point of a frame this long is to see
+                    // what was in it.
+                    OfferLongFrame(frameMs, countsOfLastFrame);
+                }
+                if (frameMs < HugeFrameMilliseconds)
                 {
                     if (focused)
                         OfferLongFrame(frameMs, countsOfLastFrame);
@@ -499,14 +622,29 @@ namespace SDVRadiance
                 if (!focused)
                     _unfocusedFrames++;
             }
-            _lastFrameStamp = now;
+            if (wallClockFrame)
+            {
+                _lastFrameStamp = now;
+                // Fold the updates that ran for the frame just drawn. A frame that drew without a
+                // single update in it is counted too: that is the accumulator not yet full, and
+                // dropping it would flatter the average.
+                _tickSum += _ticksThisFrame;
+                if (_ticksThisFrame > _tickMax) _tickMax = _ticksThisFrame;
+                _ourTickSum += _ourTickMs;
+                if (_ourTickMs > _ourTickMax) _ourTickMax = _ourTickMs;
+                _tickFrames++;
+                _ticksThisFrame = 0;
+                _ourTickMs = 0;
+            }
             Array.Clear(_thisFrame, 0, PartCount);
             if (!_gcBaseTaken)
             {
                 for (int g = 0; g < 3; g++) _gcBase[g] = GC.CollectionCount(g);
                 _gcBaseTaken = true;
             }
-            if (++_frames < WindowFrames)
+            // The window is counted in frames the player saw, so five seconds is five seconds
+            // whether one screen is drawing or two.
+            if (!wallClockFrame || ++_frames < WindowFrames)
                 return;
             for (int g = 0; g < 3; g++)
             {
@@ -525,6 +663,11 @@ namespace SDVRadiance
             _frameSum = _frameMax = 0;
             _unfocusedWindowFrames = _unfocusedFrames;
             _unfocusedFrames = 0;
+            _tickWindowSum = _tickSum; _tickWindowMax = _tickMax; _tickWindowFrames = _tickFrames;
+            _ourTickWindowSum = _ourTickSum; _ourTickWindowMax = _ourTickMax;
+            _tickGapWindowMax = _tickGapMax;
+            _tickSum = _tickMax = _ourTickSum = _ourTickMax = _tickGapMax = 0;
+            _tickFrames = 0;
             _windowFrameCount = _frames;
             Array.Clear(_sum, 0, PartCount);
             Array.Clear(_max, 0, PartCount);
@@ -652,6 +795,36 @@ namespace SDVRadiance
                 text.AppendLine($"  {"WHOLE FRAME (wall clock)",-26} avg {frameAvg,6:0.000} ms   worst {frameWorst,6:0.000} ms"
                               + $"   = {(frameAvg > 0 ? 1000.0 / frameAvg : 0),5:0.0} fps");
                 text.AppendLine($"  {"...of which measured above",-26}     {(frameAvg > 0 ? total / frameAvg * 100 : 0),5:0.0}%");
+                // Counted since the last report, which is the ledger's own cadence: a stall
+                // that happened four windows ago is still the thing being asked about, and a
+                // count that rolled away while its frame sat in the ledger below said nothing.
+                // How many updates the game ran per frame it drew, which is what an input
+                // complaint is really about. See the field's own note for why.
+                double tickFramesNow = complete ? _tickWindowFrames : _tickFrames;
+                if (tickFramesNow > 0)
+                {
+                    double tickSumNow = complete ? _tickWindowSum : _tickSum;
+                    double tickMaxNow = complete ? _tickWindowMax : _tickMax;
+                    double ourTickSumNow = complete ? _ourTickWindowSum : _ourTickSum;
+                    double ourTickMaxNow = complete ? _ourTickWindowMax : _ourTickMax;
+                    double gapMaxNow = complete ? _tickGapWindowMax : _tickGapMax;
+                    text.AppendLine($"  {"updates per frame drawn",-26} avg {tickSumNow / tickFramesNow,6:0.00}"
+                                  + $"        worst {tickMaxNow,6:0}"
+                                  + "   (above 1 means the game caught up: the pad is read once per frame,");
+                    text.AppendLine($"  {"",-26}                            so every extra update replays that one reading)");
+                    text.AppendLine($"  {"...of which ours",-26} avg {ourTickSumNow / tickFramesNow,6:0.000} ms"
+                                  + $"   worst {ourTickMaxNow,6:0.000} ms   longest gap between updates {gapMaxNow,6:0.0} ms");
+                }
+                int hugeNow = _hugeFrames;
+                double hugeMaxNow = _hugeFrameMax;
+                if (hugeNow > 0)
+                {
+                    // Above the average rather than inside it, because that is what they are:
+                    // frames the average was told to ignore. A stall is felt as these.
+                    text.AppendLine($"  {"frames over 250 ms",-26}     {hugeNow,5} since the last report"
+                                  + $"   worst {hugeMaxNow,7:0.0} ms   (left out of the average above;"
+                                  + " each one is in the ledger below)");
+                }
                 if (frameAvg < 17.2)
                     text.AppendLine("  The frame rate is at its cap here, so this scene has no problem to find.");
                 if (complete)

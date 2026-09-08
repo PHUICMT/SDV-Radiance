@@ -45,6 +45,102 @@ namespace SDVRadiance
         internal static long Rebinds;
         /// <summary>Texture units above the first, the ones only multi-texture effects use.</summary>
         private const int HighUnits = 16;
+        /// <summary>How many texture units MonoGame keeps a sampler slot for on this machine, or
+        /// zero before the guard has looked. It asks the driver for
+        /// GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS and does not clamp it, and it walks every one of
+        /// them on every draw call inside SamplerStateCollection.PlatformSetSamplers. On a card
+        /// that answers in the hundreds that is a loop nobody wrote and nobody can see; a shader
+        /// model 3 pixel shader can address sixteen. Reported so the number is known before anyone
+        /// spends a day on the idea of capping it.</summary>
+        internal static int SamplerSlots { get; private set; }
+
+        /// <summary>The arrays MonoGame made at startup, kept so the cap can be lifted again.</summary>
+        private static SamplerState[]? _fullSamplers, _fullActualSamplers;
+        /// <summary>How many slots the sampler collection currently holds, or zero if untouched.</summary>
+        internal static int SamplerSlotCap { get; private set; }
+        /// <summary>What a shader model 3 pixel shader can address, and four times what the
+        /// heaviest shader in this mod declares.</summary>
+        internal const int AddressableSamplerSlots = 16;
+        /// <summary>The slot count kept by default. Every slot past this one is already dead in
+        /// MonoGame: <c>TextureCollection</c>'s dirty mask is a 32-bit int, and its indexer marks
+        /// a slot with <c>1 &lt;&lt; index</c>, which for index 32 and beyond wraps and dirties
+        /// some other slot instead. So a texture can never be bound above 31, a sampler above 31
+        /// is applied to nothing, and dropping those slots cannot change a pixel. Sixteen measured
+        /// no faster than thirty-two (10.18 and 10.11 against 9.86 and 10.14 ms on the same spot),
+        /// so the safer number is the one that ships.</summary>
+        internal const int DefaultSamplerSlots = 32;
+        /// <summary>radiance_samplerslots: 0 leaves the driver's count alone.</summary>
+        internal static int WantedSamplerSlots = DefaultSamplerSlots;
+
+        /// <summary>
+        /// Shorten the sampler collection so the per-draw loop walks the slots a shader can
+        /// actually use instead of every unit the driver reports.
+        /// </summary>
+        /// <remarks>
+        /// <para><c>SamplerStateCollection.PlatformSetSamplers</c> runs on every draw call, from
+        /// <c>GraphicsDevice.ApplyState</c>, and loops the whole array with no early out: this
+        /// machine answers GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS with 192, and a busy frame here
+        /// issues about 2,750 draw calls, so that is half a million iterations a frame spent
+        /// asking whether slots nothing can address have changed. The texture collection beside it
+        /// has an early out and a dirty mask, and that mask is a 32-bit int, so MonoGame itself
+        /// cannot use a slot past 31.</para>
+        /// <para>Shortening the arrays is the only way to shorten the loop without replacing the
+        /// method. The cost of being wrong is an IndexOutOfRangeException the first time anything
+        /// sets a sampler above the cap, so the cap is sixteen (what the OpenGL profile's pixel
+        /// shaders can address; the heaviest shader in this mod declares five) and it is a switch,
+        /// off until measured.</para>
+        /// </remarks>
+        internal static bool CapSamplerSlots(GraphicsDevice device, int cap, IMonitor monitor)
+        {
+            try
+            {
+                var samplersOf = AccessTools.FieldRefAccess<SamplerStateCollection, SamplerState[]>("_samplers");
+                var actualOf = _actualSamplersOf
+                    ?? AccessTools.FieldRefAccess<SamplerStateCollection, SamplerState[]>("_actualSamplers");
+                SamplerStateCollection collection = device.SamplerStates;
+                ref SamplerState[] samplers = ref samplersOf(collection);
+                ref SamplerState[] actual = ref actualOf(collection);
+                _fullSamplers ??= samplers;
+                _fullActualSamplers ??= actual;
+                int wanted = cap <= 0 ? _fullSamplers.Length : Math.Min(cap, _fullSamplers.Length);
+                var newSamplers = new SamplerState[wanted];
+                var newActual = new SamplerState[wanted];
+                for (int i = 0; i < wanted; i++)
+                {
+                    newSamplers[i] = i < samplers.Length ? samplers[i] : _fullSamplers[i];
+                    newActual[i] = i < actual.Length ? actual[i] : _fullActualSamplers[i];
+                }
+                samplers = newSamplers;
+                actual = newActual;
+                SamplerSlotCap = wanted;
+                monitor.Log($"sampler slots walked per draw call: {wanted} of {_fullSamplers.Length}.", LogLevel.Info);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                monitor.Log($"could not change the sampler slot count ({ex.GetType().Name}: {ex.Message}).", LogLevel.Warn);
+                return false;
+            }
+        }
+
+        /// <summary>Read the sampler slot count once, without patching anything. Safe to call
+        /// before Install: it uses its own field accessor if the guard has not made one.</summary>
+        internal static int CountSamplerSlots(GraphicsDevice device)
+        {
+            if (SamplerSlots > 0)
+                return SamplerSlots;
+            try
+            {
+                var samplersOf = _actualSamplersOf
+                    ?? AccessTools.FieldRefAccess<SamplerStateCollection, SamplerState[]>("_actualSamplers");
+                SamplerSlots = samplersOf(device.SamplerStates).Length;
+            }
+            catch
+            {
+                SamplerSlots = 0;
+            }
+            return SamplerSlots;
+        }
 
         internal static void Install(Harmony harmony, IMonitor monitor)
         {
@@ -93,6 +189,41 @@ namespace SDVRadiance
                 dirty |= bit;
                 Rebinds++;
             }
+        }
+
+        /// <summary>Keep the sampler collection at the wanted length. The device rebuilds these
+        /// arrays whenever it is reset (a resolution change, a full-screen toggle), so this is
+        /// checked rather than done once: it is one length comparison on the frames where nothing
+        /// changed.</summary>
+        internal static void HoldSamplerSlots(GraphicsDevice device, IMonitor monitor)
+        {
+            if (WantedSamplerSlots <= 0)
+            {
+                // Switched off after being on: give MonoGame its own arrays back, so the setting
+                // takes effect without a restart.
+                if (SamplerSlotCap > 0 && _fullSamplers != null)
+                {
+                    CapSamplerSlots(device, 0, monitor);
+                    SamplerSlotCap = 0;
+                }
+                return;
+            }
+            try
+            {
+                var actualOf = _actualSamplersOf
+                    ?? AccessTools.FieldRefAccess<SamplerStateCollection, SamplerState[]>("_actualSamplers");
+                if (actualOf(device.SamplerStates).Length == WantedSamplerSlots)
+                    return;
+            }
+            catch
+            {
+                WantedSamplerSlots = 0;
+                return;
+            }
+            _fullSamplers = null;
+            _fullActualSamplers = null;
+            if (!CapSamplerSlots(device, WantedSamplerSlots, monitor))
+                WantedSamplerSlots = 0;
         }
 
         /// <summary>Hand every texture unit above the first back, so nothing this mod parked there

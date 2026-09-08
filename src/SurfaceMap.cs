@@ -72,8 +72,8 @@ namespace SDVRadiance
         /// and water is open too — treating either as solid turned whole piers into dark pools.</summary>
         public bool BlocksLight(int x, int y)
         {
-            var c = GetSurface(x, y);
-            return c == SurfaceClass.Wall || c == SurfaceClass.Roof;
+            var surface = GetSurface(x, y);
+            return surface == SurfaceClass.Wall || surface == SurfaceClass.Roof;
         }
 
         // ---- cache ---------------------------------------------------------------------------
@@ -84,21 +84,21 @@ namespace SDVRadiance
         {
             if (location == null)
                 return null;
-            if (_locationCache.TryGetValue(location, out SurfaceMap? map))
-                return map;
+            if (_locationCache.TryGetValue(location, out SurfaceMap? grid))
+                return grid;
             // Breadcrumbs, not a perf counter: this is a whole-map walk that runs once when a
             // location is first drawn, and a freeze report can only be pinned to it if the log
             // shows the walk STARTED and never finished. Trace always lands in the SMAPI log
             // file, so a reporter needs no debug switch for it to be there after a hard stop.
             DiagnosticMonitor?.Log($"[location] surface build start: {location.NameOrUniqueName}", LogLevel.Trace);
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            try { map = Build(location); }
-            catch (Exception ex) { map = null; DiagnosticMonitor?.Log($"[location] surface build threw: {ex.Message}", LogLevel.Warn); }
-            sw.Stop();
-            DiagnosticMonitor?.Log($"[location] surface build done: {location.NameOrUniqueName} {map?.Width ?? 0}x{map?.Height ?? 0} in {sw.Elapsed.TotalMilliseconds:0.0}ms", LogLevel.Trace);
-            if (map != null)
-                _locationCache.Add(location, map);
-            return map;
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            try { grid = Build(location); }
+            catch (Exception exception) { grid = null; DiagnosticMonitor?.Log($"[location] surface build threw: {exception.Message}", LogLevel.Warn); }
+            stopwatch.Stop();
+            DiagnosticMonitor?.Log($"[location] surface build done: {location.NameOrUniqueName} {grid?.Width ?? 0}x{grid?.Height ?? 0} in {stopwatch.Elapsed.TotalMilliseconds:0.0}ms", LogLevel.Trace);
+            if (grid != null)
+                _locationCache.Add(location, grid);
+            return grid;
         }
 
         /// <summary>Optional diagnostics sink (set at startup) — see the breadcrumbs in <see cref="For"/>.</summary>
@@ -161,9 +161,9 @@ namespace SDVRadiance
             string? mapPath = location.mapPath?.Value;
             if (mapPath != null)
             {
-                string map = NormaliseAssetName(mapPath);
+                string mapAssetName = NormaliseAssetName(mapPath);
                 foreach (string name in reloaded)
-                    if (string.Equals(map, name, StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(mapAssetName, name, StringComparison.OrdinalIgnoreCase))
                         return true;
             }
             var sheets = location.map?.TileSheets;
@@ -199,19 +199,19 @@ namespace SDVRadiance
         /// because overlay art (a surf wash, a fountain rim) is mostly transparent, so a sparse
         /// patch of labeled water pixels already means something.
         /// </summary>
-        private static SurfaceClass? ClassFromLabels(byte[] b, bool overlay)
-            => ClassFromLabels(b, overlay, out _);
+        private static SurfaceClass? ClassFromLabels(byte[] classes, bool overlay)
+            => ClassFromLabels(classes, overlay, out _);
 
         /// <inheritdoc cref="ClassFromLabels(byte[], bool)"/>
         /// <param name="deckPixels">How much of the tile the deck labels actually cover. The caller
         /// needs it because a Deck verdict is the one verdict that can be right about the art and
         /// wrong about the tile: see the plank rule in <see cref="Build"/>.</param>
-        private static SurfaceClass? ClassFromLabels(byte[] b, bool overlay, out int deckPixels)
+        private static SurfaceClass? ClassFromLabels(byte[] classes, bool overlay, out int deckPixels)
         {
             int water = 0, deck = 0, wall = 0, roof = 0, ground = 0, glass = 0;
-            for (int p = 0; p < 256; p++)
+            for (int pixelIndex = 0; pixelIndex < 256; pixelIndex++)
             {
-                switch (b[p])
+                switch (classes[pixelIndex])
                 {
                     case 1: case 9: case 10: case 11: case 14: water++; break;  // water / ice / falling / lava / hot
                     case 2: case 8: wall++; break;                      // wall / mirror (backed: blocks)
@@ -282,64 +282,64 @@ namespace SDVRadiance
 
         private static SurfaceMap? Build(GameLocation location)
         {
-            var map = location.Map;
-            if (map == null || map.Layers.Count == 0)
+            var tileMap = location.Map;
+            if (tileMap == null || tileMap.Layers.Count == 0)
                 return null;
 
-            Layer baseLayer = map.Layers[0];
-            int w = baseLayer.LayerWidth, h = baseLayer.LayerHeight;
-            if (w <= 0 || h <= 0)
+            Layer baseLayer = tileMap.Layers[0];
+            int mapWidth = baseLayer.LayerWidth, mapHeight = baseLayer.LayerHeight;
+            if (mapWidth <= 0 || mapHeight <= 0)
                 return null;
 
-            Layer? back = map.GetLayer("Back");
-            Layer? buildings = map.GetLayer("Buildings");
-            Layer? front = map.GetLayer("Front");
+            Layer? back = tileMap.GetLayer("Back");
+            Layer? buildings = tileMap.GetLayer("Buildings");
+            Layer? front = tileMap.GetLayer("Front");
             // EVERY Buildings-family layer, topmost first. A deck plank sits OVER the Back tile
             // no matter which numbered layer carries it: Aimon's festival bridge draws its planks
             // on Buildings2 (with only a support beam on Buildings-1), and consulting just the
             // base "Buildings" layer let the Back water label win the tile — the river rippled
             // straight across a bridge whose planks were painted Deck.
-            var bldsTopDown = new List<Layer>();
-            foreach (var l in MapLayers.RenderedLayers(map, topToBottom: true))
-                if (MapLayers.BelongsToFamily(l.Id, "Buildings"))
-                    bldsTopDown.Add(l);
+            var buildingsTopDown = new List<Layer>();
+            foreach (var layer in MapLayers.RenderedLayers(tileMap, topToBottom: true))
+                if (MapLayers.BelongsToFamily(layer.Id, "Buildings"))
+                    buildingsTopDown.Add(layer);
             // Layers the canonical trio never covers (SVE puts water art on Back2,
             // vanilla waterfalls live on AlwaysFront). Consulted below ONLY when the trio
             // yields no verdict, so no tile that already classifies changes class.
-            Layer? back2 = map.GetLayer("Back2");
-            Layer? front2 = map.GetLayer("Front2");
-            Layer? alwaysFront = map.GetLayer("AlwaysFront");
-            Layer? alwaysFront2 = map.GetLayer("AlwaysFront2");
+            Layer? back2 = tileMap.GetLayer("Back2");
+            Layer? front2 = tileMap.GetLayer("Front2");
+            Layer? alwaysFront = tileMap.GetLayer("AlwaysFront");
+            Layer? alwaysFront2 = tileMap.GetLayer("AlwaysFront2");
             var labels = LabelStore.Instance;
             if (labels is { Any: false })
                 labels = null;
 
-            var sm = new SurfaceMap(w, h);
+            var grid = new SurfaceMap(mapWidth, mapHeight);
             // Which tiles a painted label decided. The span pass below must never overrule them
             // (iron rule: a label beats every heuristic, including the ones that run after it).
-            bool[] labelled = new bool[w * h];
+            bool[] labelled = new bool[mapWidth * mapHeight];
             var layers = new MapLayerSet(back, buildings, front, back2, front2,
-                alwaysFront, alwaysFront2, bldsTopDown, labels);
-            ClassifyTiles(sm, labelled, w, h, location, layers);
+                alwaysFront, alwaysFront2, buildingsTopDown, labels);
+            ClassifyTiles(grid, labelled, mapWidth, mapHeight, location, layers);
 
-            SpanDecks(sm, labelled, w, h);
-            ThinRoofs(sm, labelled, w, h);
-            StampBuildingFootprints(sm, location, w);
+            SpanDecks(grid, labelled, mapWidth, mapHeight);
+            ThinRoofs(grid, labelled, mapWidth, mapHeight);
+            StampBuildingFootprints(grid, location, mapWidth);
 
-            return sm;
+            return grid;
         }
 
         /// <summary>Read every tile once and give it a class and a height: the classifier itself.
         /// <paramref name="labelled"/> comes back marking the tiles a painted label decided, which
         /// the span passes afterwards must never overrule.</summary>
-        private static void ClassifyTiles(SurfaceMap sm, bool[] labelled, int w, int h,
+        private static void ClassifyTiles(SurfaceMap grid, bool[] labelled, int mapWidth, int mapHeight,
             GameLocation location, MapLayerSet layers)
         {
-            for (int y = 0; y < h; y++)
+            for (int y = 0; y < mapHeight; y++)
             {
-                for (int x = 0; x < w; x++)
+                for (int x = 0; x < mapWidth; x++)
                 {
-                    int i = y * w + x;
+                    int tileIndex = y * mapWidth + x;
                     bool hasBuildings = layers.Buildings?.Tiles[x, y] != null;
                     bool hasFront = layers.Front?.Tiles[x, y] != null;
 
@@ -350,14 +350,14 @@ namespace SDVRadiance
                         out bool anyLabel);
                     if (painted is { } decided)
                     {
-                            Set(sm, i, decided, decided switch
+                            Set(grid, tileIndex, decided, decided switch
                             {
                                 SurfaceClass.Water => (sbyte)-1,
                                 SurfaceClass.Ground => (sbyte)0,
                                 SurfaceClass.Void => (sbyte)0,
                                 _ => (sbyte)1,
                             });
-                        labelled[i] = true;
+                        labelled[tileIndex] = true;
                         continue;
                     }
                     // A PAINTED but mixed tile (a tide pool's rock rim: water:99 + ground:157,
@@ -366,11 +366,11 @@ namespace SDVRadiance
                     // to Deck made the compose scrub the pool's march whole-tile: ripple, no
                     // reflection, on every beach tide pool.
                     if (anyLabel)
-                        labelled[i] = true;
+                        labelled[tileIndex] = true;
 
-                    SurfaceClass cls = ClassifyFromMapProperties(location, layers, x, y, hasBuildings,
+                    SurfaceClass surfaceClass = ClassifyFromMapProperties(location, layers, x, y, hasBuildings,
                         hasFront, out sbyte height);
-                    Set(sm, i, cls, height);
+                    Set(grid, tileIndex, surfaceClass, height);
                 }
             }
         }
@@ -384,15 +384,15 @@ namespace SDVRadiance
             anyLabel = false;
             if (layers.Labels == null)
                 return null;
-            SurfaceClass? lc = null;
+            SurfaceClass? paintedClass = null;
             // The Buildings family decides first, topmost layer down: the layer the
             // player sees is the layer whose label should answer for the tile.
-            foreach (Layer bLayer in layers.BuildingsTopDown)
+            foreach (Layer buildingsLayer in layers.BuildingsTopDown)
             {
-                if (layers.Labels.Get(bLayer, x, y) is not { } bb)
+                if (layers.Labels.Get(buildingsLayer, x, y) is not { } buildingsLabel)
                     continue;
                 anyLabel = true;
-                lc = ClassFromLabels(bb, overlay: true, out int bldDeck);
+                paintedClass = ClassFromLabels(buildingsLabel, overlay: true, out int deckPixels);
                 // A PLANK THAT ONLY CLIPS ITS TILE must not delete the tile's water.
                 // Deck wins at a quarter of the tile, which is the right bar for "is
                 // there a walkable surface drawn here" and much too low for "is this
@@ -406,39 +406,39 @@ namespace SDVRadiance
                 // nothing, because the planks are carved out again PER PIXEL further
                 // down the pipeline by the Buildings opacity carve. The whole-tile
                 // Deck verdict is only needed when the deck really does own the tile.
-                if (lc == SurfaceClass.Deck && bldDeck < DeckOwnsTile
+                if (paintedClass == SurfaceClass.Deck && deckPixels < DeckOwnsTile
                     && layers.Labels.Get(layers.Back, x, y) is { } underneath
                     && ClassFromLabels(underneath, overlay: false) == SurfaceClass.Water)
-                    lc = SurfaceClass.Water;
-                if (lc != null)
+                    paintedClass = SurfaceClass.Water;
+                if (paintedClass != null)
                     break;
             }
-            if (lc == null && layers.Labels.Get(layers.Back, x, y) is { } gb) { anyLabel = true; lc = ClassFromLabels(gb, overlay: false); }
-            if (lc == null && layers.Labels.Get(layers.Front, x, y) is { } fb) { anyLabel = true; lc = ClassFromLabels(fb, overlay: true); }
+            if (paintedClass == null && layers.Labels.Get(layers.Back, x, y) is { } backLabel) { anyLabel = true; paintedClass = ClassFromLabels(backLabel, overlay: false); }
+            if (paintedClass == null && layers.Labels.Get(layers.Front, x, y) is { } frontLabel) { anyLabel = true; paintedClass = ClassFromLabels(frontLabel, overlay: true); }
             // Additive fallback to the layers above — a Town waterfall labelled
             // flow:256 on AlwaysFront was never declared water at all, so its
             // liquid never reached the mask (the compose already honours these
             // layers.Labels for the carve and sub-type; classification was the gap).
-            if (lc == null && layers.Labels.Get(layers.Back2, x, y) is { } g2) { anyLabel = true; lc = ClassFromLabels(g2, overlay: false); }
-            if (lc == null && layers.Labels.Get(layers.Front2, x, y) is { } f2) { anyLabel = true; lc = ClassFromLabels(f2, overlay: true); }
-            if (lc == null && layers.Labels.Get(layers.AlwaysFront, x, y) is { } af) { anyLabel = true; lc = ClassFromLabels(af, overlay: true); }
-            if (lc == null && layers.Labels.Get(layers.AlwaysFront2, x, y) is { } af2) { anyLabel = true; lc = ClassFromLabels(af2, overlay: true); }
+            if (paintedClass == null && layers.Labels.Get(layers.Back2, x, y) is { } back2Label) { anyLabel = true; paintedClass = ClassFromLabels(back2Label, overlay: false); }
+            if (paintedClass == null && layers.Labels.Get(layers.Front2, x, y) is { } front2Label) { anyLabel = true; paintedClass = ClassFromLabels(front2Label, overlay: true); }
+            if (paintedClass == null && layers.Labels.Get(layers.AlwaysFront, x, y) is { } alwaysFrontLabel) { anyLabel = true; paintedClass = ClassFromLabels(alwaysFrontLabel, overlay: true); }
+            if (paintedClass == null && layers.Labels.Get(layers.AlwaysFront2, x, y) is { } alwaysFront2Label) { anyLabel = true; paintedClass = ClassFromLabels(alwaysFront2Label, overlay: true); }
             // A liquid OVERLAY beats a dry base verdict: a falls' base tile carries
             // Back "ground" (the cliff) under a Front/AlwaysFront falls labelled
             // flow, and what the player sees there is falling water — the Ground
             // verdict blocked the whole tile from ever entering the mask (256/256
             // missing at every falls base). Only Ground gives way; Deck/Wall/Roof
             // keep their say, so a plank over water still reads as a deck.
-            if (lc is null or SurfaceClass.Ground)
+            if (paintedClass is null or SurfaceClass.Ground)
             {
                 foreach (var overlayLayer in new[] { layers.Front, layers.Front2, layers.AlwaysFront, layers.AlwaysFront2 })
                 {
-                    if (overlayLayer == null || layers.Labels.Get(overlayLayer, x, y) is not { } ol)
+                    if (overlayLayer == null || layers.Labels.Get(overlayLayer, x, y) is not { } overlayLabel)
                         continue;
-                    if (ClassFromLabels(ol, overlay: true) == SurfaceClass.Water)
+                    if (ClassFromLabels(overlayLabel, overlay: true) == SurfaceClass.Water)
                     {
                         anyLabel = true;
-                        lc = SurfaceClass.Water;
+                        paintedClass = SurfaceClass.Water;
                         break;
                     }
                 }
@@ -453,12 +453,12 @@ namespace SDVRadiance
             //
             // The animated case is left alone: an ANIMATED passable Buildings tile
             // over water is the surf wash, which really is the water surface.
-            if (lc == SurfaceClass.Water && hasBuildings
+            if (paintedClass == SurfaceClass.Water && hasBuildings
                 && layers.Buildings!.Tiles[x, y] is not xTile.Tiles.AnimatedTile
                 && (location.doesTileHaveProperty(x, y, "Passable", "Buildings") != null
                     || location.doesTileHaveProperty(x, y, "Type", "Buildings") == "Wood"))
-                lc = SurfaceClass.Deck;
-            return lc;
+                paintedClass = SurfaceClass.Deck;
+            return paintedClass;
         }
 
         /// <summary>No painted opinion: read the tile the way the game does, from its layers and
@@ -467,52 +467,52 @@ namespace SDVRadiance
                                                              int x, int y, bool hasBuildings, bool hasFront,
                                                              out sbyte height)
         {
-            SurfaceClass cls;
-            bool passableB = hasBuildings && location.doesTileHaveProperty(x, y, "Passable", "Buildings") != null;
-            if (passableB && layers.Buildings!.Tiles[x, y] is xTile.Tiles.AnimatedTile && location.isWaterTile(x, y))
+            SurfaceClass surfaceClass;
+            bool passableBuildings = hasBuildings && location.doesTileHaveProperty(x, y, "Passable", "Buildings") != null;
+            if (passableBuildings && layers.Buildings!.Tiles[x, y] is xTile.Tiles.AnimatedTile && location.isWaterTile(x, y))
             {
                 // An ANIMATED passable Buildings tile over water IS the water surface —
                 // the beach surf wash. The deck rule below used to call it a pier and ate
                 // the whole tide line. Real decks are static art.
-                cls = SurfaceClass.Water;
+                surfaceClass = SurfaceClass.Water;
                 height = -1;
             }
-            else if (passableB)
+            else if (passableBuildings)
             {
-                cls = SurfaceClass.Deck;      // walk-on-top raised platform: pier / bridge
+                surfaceClass = SurfaceClass.Deck;      // walk-on-top raised platform: pier / bridge
                 height = 1;
             }
             else if (location.doesTileHaveProperty(x, y, "Type", "Back") == "Wood")
             {
-                cls = SurfaceClass.Deck;      // Back-layer planking: pier / bridge / porch
+                surfaceClass = SurfaceClass.Deck;      // Back-layer planking: pier / bridge / porch
                 height = 1;
             }
             else if (hasBuildings && location.doesTileHaveProperty(x, y, "Shadow", "Buildings") == null)
             {
-                cls = SurfaceClass.Wall;      // blocking Buildings tile that isn't decorative shadow art
+                surfaceClass = SurfaceClass.Wall;      // blocking Buildings tile that isn't decorative shadow art
                 height = 1;
             }
             else if (location.isWaterTile(x, y))
             {
-                cls = SurfaceClass.Water;
+                surfaceClass = SurfaceClass.Water;
                 height = -1;
             }
             else if (hasFront)
             {
-                cls = SurfaceClass.Roof;      // tall overhead art with no blocking base
+                surfaceClass = SurfaceClass.Roof;      // tall overhead art with no blocking base
                 height = 1;
             }
             else
             {
-                cls = SurfaceClass.Ground;
+                surfaceClass = SurfaceClass.Ground;
                 height = 0;
             }
-            return cls;
+            return surfaceClass;
         }
 
         /// <summary>Farm buildings are Building ENTITIES, not Buildings-layer tiles, so the
         /// per-tile pass misses them entirely.</summary>
-        private static void StampBuildingFootprints(SurfaceMap sm, GameLocation location, int w)
+        private static void StampBuildingFootprints(SurfaceMap grid, GameLocation location, int mapWidth)
         {
             // Farm buildings (coops, barns, cabins, the farmhouse) are Building ENTITIES, not
             // Buildings-layer tiles, so the per-tile pass misses them. The footprint rows are the
@@ -522,8 +522,8 @@ namespace SDVRadiance
             {
                 if (building == null)
                     continue;
-                int bx = building.tileX.Value, by = building.tileY.Value;
-                int bw = building.tilesWide.Value, bh = building.tilesHigh.Value;
+                int footprintLeft = building.tileX.Value, footprintTop = building.tileY.Value;
+                int footprintWidth = building.tilesWide.Value, footprintHeight = building.tilesHigh.Value;
                 // A fish pond is the one building whose footprint is mostly water: a knee-high
                 // masonry rim around three by three of it (FishPond.isTileFishable). As a wall it
                 // blocked lamp light as a five-by-five block, threw a sun shaft's canopy where
@@ -533,33 +533,33 @@ namespace SDVRadiance
                 // Its sprite never rises above its footprint, so there are no roof rows either.
                 if (building is StardewValley.Buildings.FishPond && building.daysOfConstructionLeft.Value <= 0)
                 {
-                    for (int y = by; y < by + bh; y++)
-                        for (int x = bx; x < bx + bw; x++)
+                    for (int y = footprintTop; y < footprintTop + footprintHeight; y++)
+                        for (int x = footprintLeft; x < footprintLeft + footprintWidth; x++)
                         {
-                            if (!sm.InBounds(x, y))
+                            if (!grid.InBounds(x, y))
                                 continue;
-                            bool rim = x == bx || x == bx + bw - 1 || y == by || y == by + bh - 1;
+                            bool rim = x == footprintLeft || x == footprintLeft + footprintWidth - 1 || y == footprintTop || y == footprintTop + footprintHeight - 1;
                             if (rim)
-                                Set(sm, y * w + x, SurfaceClass.Ground, (sbyte)0);
+                                Set(grid, y * mapWidth + x, SurfaceClass.Ground, (sbyte)0);
                             else
-                                Set(sm, y * w + x, SurfaceClass.Water, (sbyte)-1);
+                                Set(grid, y * mapWidth + x, SurfaceClass.Water, (sbyte)-1);
                         }
                     continue;
                 }
-                int spriteRows = bh;
+                int spriteRows = footprintHeight;
                 try
                 {
-                    int srcH = building.getSourceRect().Height;
-                    if (srcH > 0)
-                        spriteRows = Math.Max(bh, srcH / 16);
+                    int sourceHeight = building.getSourceRect().Height;
+                    if (sourceHeight > 0)
+                        spriteRows = Math.Max(footprintHeight, sourceHeight / 16);
                 }
                 catch { /* sprite not ready → footprint only */ }
 
-                int roofTop = by - (spriteRows - bh);
-                for (int y = roofTop; y < by + bh; y++)
-                    for (int x = bx; x < bx + bw; x++)
+                int roofTop = footprintTop - (spriteRows - footprintHeight);
+                for (int y = roofTop; y < footprintTop + footprintHeight; y++)
+                    for (int x = footprintLeft; x < footprintLeft + footprintWidth; x++)
                     {
-                        if (!sm.InBounds(x, y))
+                        if (!grid.InBounds(x, y))
                             continue;
                         // The stamp is the sprite's BOUNDING BOX, and a tall barn's box reaches
                         // several rows past its footprint. On Riverland Farm those rows land on the
@@ -569,10 +569,10 @@ namespace SDVRadiance
                         // an overhanging sprite is still water — the sprite carve already keeps the
                         // effect off the building's own pixels, which is the part that has to be
                         // rectangle-free.
-                        int i2 = y * w + x;
-                        if (sm._surfaceClasses[i2] == SurfaceClass.Water)
+                        int tileIndex = y * mapWidth + x;
+                        if (grid._surfaceClasses[tileIndex] == SurfaceClass.Water)
                             continue;
-                        Set(sm, i2, y >= by ? SurfaceClass.Wall : SurfaceClass.Roof, (sbyte)2);
+                        Set(grid, tileIndex, y >= footprintTop ? SurfaceClass.Wall : SurfaceClass.Roof, (sbyte)2);
                     }
             }
         }
@@ -597,45 +597,45 @@ namespace SDVRadiance
         /// (a blocking Buildings tile: a dam, a cave wall between two pools) keeps it, so this never
         /// turns a light blocker into an open deck. Painted labels are skipped outright.
         /// </summary>
-        private static void SpanDecks(SurfaceMap sm, bool[] labelled, int w, int h)
+        private static void SpanDecks(SurfaceMap grid, bool[] labelled, int mapWidth, int mapHeight)
         {
-            bool IsWater(int i) => sm._surfaceClasses[i] == SurfaceClass.Water;
+            bool IsWater(int tileIndex) => grid._surfaceClasses[tileIndex] == SurfaceClass.Water;
 
-            void Promote(int i)
+            void Promote(int tileIndex)
             {
-                if (!labelled[i] && sm._surfaceClasses[i] == SurfaceClass.Ground)
-                    Set(sm, i, SurfaceClass.Deck, (sbyte)1);
+                if (!labelled[tileIndex] && grid._surfaceClasses[tileIndex] == SurfaceClass.Ground)
+                    Set(grid, tileIndex, SurfaceClass.Deck, (sbyte)1);
             }
 
             // Vertical spans: a bridge crossing a river that runs east-west.
-            for (int x = 0; x < w; x++)
+            for (int x = 0; x < mapWidth; x++)
             {
                 int y = 0;
-                while (y < h)
+                while (y < mapHeight)
                 {
-                    if (IsWater(y * w + x)) { y++; continue; }
-                    int s = y;
-                    while (y < h && !IsWater(y * w + x)) y++;
-                    int e = y - 1;
-                    if (s > 0 && e < h - 1 && e - s + 1 <= MaxSpanTiles
-                        && IsWater((s - 1) * w + x) && IsWater((e + 1) * w + x))
-                        for (int yy = s; yy <= e; yy++) Promote(yy * w + x);
+                    if (IsWater(y * mapWidth + x)) { y++; continue; }
+                    int runStart = y;
+                    while (y < mapHeight && !IsWater(y * mapWidth + x)) y++;
+                    int runEnd = y - 1;
+                    if (runStart > 0 && runEnd < mapHeight - 1 && runEnd - runStart + 1 <= MaxSpanTiles
+                        && IsWater((runStart - 1) * mapWidth + x) && IsWater((runEnd + 1) * mapWidth + x))
+                        for (int spanY = runStart; spanY <= runEnd; spanY++) Promote(spanY * mapWidth + x);
                 }
             }
 
             // Horizontal spans: a bridge crossing a river that runs north-south.
-            for (int y = 0; y < h; y++)
+            for (int y = 0; y < mapHeight; y++)
             {
-                int row = y * w, x = 0;
-                while (x < w)
+                int rowStart = y * mapWidth, x = 0;
+                while (x < mapWidth)
                 {
-                    if (IsWater(row + x)) { x++; continue; }
-                    int s = x;
-                    while (x < w && !IsWater(row + x)) x++;
-                    int e = x - 1;
-                    if (s > 0 && e < w - 1 && e - s + 1 <= MaxSpanTiles
-                        && IsWater(row + s - 1) && IsWater(row + e + 1))
-                        for (int xx = s; xx <= e; xx++) Promote(row + xx);
+                    if (IsWater(rowStart + x)) { x++; continue; }
+                    int runStart = x;
+                    while (x < mapWidth && !IsWater(rowStart + x)) x++;
+                    int runEnd = x - 1;
+                    if (runStart > 0 && runEnd < mapWidth - 1 && runEnd - runStart + 1 <= MaxSpanTiles
+                        && IsWater(rowStart + runStart - 1) && IsWater(rowStart + runEnd + 1))
+                        for (int spanX = runStart; spanX <= runEnd; spanX++) Promote(rowStart + spanX);
                 }
             }
         }
@@ -660,42 +660,42 @@ namespace SDVRadiance
         /// Labels and Wall verdicts are never touched, and neighbours are counted on a SNAPSHOT so
         /// the pass cannot cascade a whole roof away one ring at a time.
         /// </summary>
-        private static void ThinRoofs(SurfaceMap sm, bool[] labelled, int w, int h)
+        private static void ThinRoofs(SurfaceMap grid, bool[] labelled, int mapWidth, int mapHeight)
         {
-            var before = (SurfaceClass[])sm._surfaceClasses.Clone();
+            var before = (SurfaceClass[])grid._surfaceClasses.Clone();
 
-            for (int y = 0; y < h; y++)
+            for (int y = 0; y < mapHeight; y++)
             {
-                for (int x = 0; x < w; x++)
+                for (int x = 0; x < mapWidth; x++)
                 {
-                    int i = y * w + x;
-                    if (labelled[i] || before[i] != SurfaceClass.Roof)
+                    int tileIndex = y * mapWidth + x;
+                    if (labelled[tileIndex] || before[tileIndex] != SurfaceClass.Roof)
                         continue;
 
                     int mass = 0;
-                    for (int dy = -1; dy <= 1; dy++)
+                    for (int offsetY = -1; offsetY <= 1; offsetY++)
                     {
-                        int yy = y + dy;
-                        if (yy < 0 || yy >= h) continue;
-                        for (int dx = -1; dx <= 1; dx++)
+                        int neighbourY = y + offsetY;
+                        if (neighbourY < 0 || neighbourY >= mapHeight) continue;
+                        for (int offsetX = -1; offsetX <= 1; offsetX++)
                         {
-                            int xx = x + dx;
-                            if ((dx == 0 && dy == 0) || xx < 0 || xx >= w) continue;
-                            var c = before[yy * w + xx];
-                            if (c == SurfaceClass.Roof || c == SurfaceClass.Wall)
+                            int neighbourX = x + offsetX;
+                            if ((offsetX == 0 && offsetY == 0) || neighbourX < 0 || neighbourX >= mapWidth) continue;
+                            var neighbourSurface = before[neighbourY * mapWidth + neighbourX];
+                            if (neighbourSurface == SurfaceClass.Roof || neighbourSurface == SurfaceClass.Wall)
                                 mass++;
                         }
                     }
                     if (mass < RoofNeighbours)
-                        Set(sm, i, SurfaceClass.Ground, (sbyte)0);
+                        Set(grid, tileIndex, SurfaceClass.Ground, (sbyte)0);
                 }
             }
         }
 
-        private static void Set(SurfaceMap sm, int i, SurfaceClass cls, sbyte height)
+        private static void Set(SurfaceMap grid, int tileIndex, SurfaceClass surfaceClass, sbyte height)
         {
-            sm._surfaceClasses[i] = cls;
-            sm._tileHeights[i] = height;
+            grid._surfaceClasses[tileIndex] = surfaceClass;
+            grid._tileHeights[tileIndex] = height;
         }
     }
 }

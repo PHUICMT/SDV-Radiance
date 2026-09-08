@@ -634,7 +634,7 @@ namespace SDVRadiance
                             box.Center.X, box.Bottom + who.yOffset, 1f);
                         if (_windowToolBakeFresh && _toolMirrorRenderTarget != null)
                             DrawBodyInPane(spriteBatch, pane, reflect, glassColour, _toolMirrorRenderTarget,
-                                new Rectangle(0, 0, ToolRtSize, (int)_toolFeetInRenderTarget.Y),
+                                new Rectangle(0, 0, ToolTargetSize, (int)_toolFeetInRenderTarget.Y),
                                 box.Center.X, box.Bottom - 10f + who.yOffset, 1f);
                     }
                     foreach (var other in ShadowRenderer.OtherFarmerImages)
@@ -847,8 +847,8 @@ namespace SDVRadiance
             if (scene == null || !SceneRTReady || SceneSourceOff || share < 0.004f)
                 return;
             int stripBottom = pane.WorldRect.Bottom + GlassSceneReachPx;
-            int sourceOriginX = Game1.viewport.X - MirrorSideReachPx;
-            int sourceOriginY = Game1.viewport.Y - MirrorTopReachPx;
+            int sourceOriginX = Game1.viewport.X - MirrorSideReachPixels;
+            int sourceOriginY = Game1.viewport.Y - MirrorTopReachPixels;
             // Premultiplied, with an alpha this time: colour times amount in the channels so the
             // road arrives in the glass's own colour, and the amount in alpha so it replaces that
             // much of the pane rather than piling light on top of it.

@@ -22,7 +22,7 @@ namespace SDVRadiance
     {
         private readonly IMonitor _monitor;
         private readonly GraphicsDevice _device;
-        private readonly string _modDir;
+        private readonly string _modDirectory;
 
         private RenderTarget2D? _sceneRenderTarget;   // full-res capture
         private RenderTarget2D? _fullResolutionPingA;     // full-res ping-pong
@@ -130,8 +130,8 @@ namespace SDVRadiance
         private bool[]? _waterMarchBits;        // march-channel bits (wider close: floats never block)
         private bool[]? _tileNearSolidFlags;          // per-tile: near-solid Buildings/Front art
         private bool[]? _tileLandConnectedFlags;           // per-tile: near-solid AND connected to land (true structures)
-        private int[]? _structScrubTopScratch;        // per-column art-top scratch for the struct march scrub (16 entries)
-        private int[]? _structScrubBottomScratch;     // per-column art-bottom scratch for the struct march scrub (16 entries)
+        private int[]? _structureScrubTopScratch;        // per-column art-top scratch for the struct march scrub (16 entries)
+        private int[]? _structureScrubBottomScratch;     // per-column art-bottom scratch for the struct march scrub (16 entries)
         private short[]? _waterlineTopRowByPixel;             // per-pixel: top row of this column's water run (waterline map)
         private int[]? _waterlineRowPrefixSums;               // per-row prefix sums for the shoreline smoothing window
         private int[]? _waterlineRowSampleCounts;
@@ -146,8 +146,7 @@ namespace SDVRadiance
         // Refusal bound only for absurd sheets — NOT a performance knob. The old 8 Mpx ceiling sat
         // just under a real SVE tilesheet (2400x3600 = 8.64 Mpx), and being 8% over it swapped one
         // readback per sheet for one per TILE: 43 s inside a single gather on a 240x156 map.
-        private const int SheetPixCap = 64_000_000;
-        private const int SheetStripRows = 512;    // rows per readback, so staging stays bounded
+        private const int SheetPixelCap = 64_000_000;
         /// <summary>Per-tile art for sheets too big to cache whole — so even the refused path costs
         /// one readback per DISTINCT tile instead of one per tile the map happens to paint.</summary>
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), Color[]> _tileArtCache = new();
@@ -258,8 +257,8 @@ namespace SDVRadiance
         private static float EaseKeep(float rate) => (float)Math.Pow(1.0 - rate, _easeSeconds * 60.0);
 
         /// <summary>One ease-in step (~0.5 s to full, at any frame rate).</summary>
-        private static float Ease01(float v) => Determinism.Frozen ? 1f
-            : v >= 0.999f ? 1f : Math.Min(1f, 1f - (1f - v) * EaseKeep(0.10f));
+        private static float Ease01(float value) => Determinism.Frozen ? 1f
+            : value >= 0.999f ? 1f : Math.Min(1f, 1f - (1f - value) * EaseKeep(0.10f));
 
 
         /// <summary>One ease-OUT step, the mirror of <see cref="Ease01"/> (~0.5 s to gone).
@@ -268,14 +267,14 @@ namespace SDVRadiance
         /// so switching an effect off, stepping indoors, or walking away from water cut
         /// instantly. A stage keeps rendering while its presence decays, and only leaves the
         /// list once it is actually invisible.</summary>
-        private static float Ease0(float v) => Determinism.Frozen ? 0f
-            : v <= 0.004f ? 0f : v * EaseKeep(0.10f);
+        private static float Ease0(float value) => Determinism.Frozen ? 0f
+            : value <= 0.004f ? 0f : value * EaseKeep(0.10f);
 
         /// <summary>One eased step of <paramref name="v"/> toward <paramref name="target"/>. The
         /// pattern was written out by hand at seven call sites; freeze mode has to land on the
         /// target at every one of them, so they share a step now.</summary>
-        private static void Approach(ref float v, float target, float rate) =>
-            v = Determinism.Settle(target + (v - target) * EaseKeep(rate), target);
+        private static void Approach(ref float value, float target, float rate) =>
+            value = Determinism.Settle(target + (value - target) * EaseKeep(rate), target);
 
         /// <summary>Presence threshold below which a stage is genuinely invisible and may be
         /// dropped from the frame's stage list.</summary>
@@ -314,10 +313,10 @@ namespace SDVRadiance
         // they check last frame's DebugLogging instead of taking a config they don't need.
         private bool _timingOn;
 
-        private void AccumulateBuildMilliseconds(int idx, double ms)
+        private void AccumulateBuildMilliseconds(int builderIndex, double milliseconds)
         {
-            _buildMilliseconds[idx] += ms;
-            if (ms > _buildMaxMilliseconds[idx]) _buildMaxMilliseconds[idx] = ms;
+            _buildMilliseconds[builderIndex] += milliseconds;
+            if (milliseconds > _buildMaxMilliseconds[builderIndex]) _buildMaxMilliseconds[builderIndex] = milliseconds;
         }
 
         /// <summary>The grid rebuilds are always timed into the frame cost meter, one line per
@@ -330,13 +329,13 @@ namespace SDVRadiance
             FrameCost.Part.GridLightOccluders, FrameCost.Part.GridWaterMask,
         };
 
-        private bool TimedBuild(ModConfig config, int idx, Func<bool> fn)
+        private bool TimedBuild(ModConfig config, int builderIndex, Func<bool> build)
         {
-            long t0 = FrameCost.Begin(_gridCostParts[idx]);
-            bool r = fn();
-            double ms = FrameCost.End(_gridCostParts[idx], t0);
-            if (config.DebugLogging) AccumulateBuildMilliseconds(idx, ms);
-            return r;
+            long buildStart = FrameCost.Begin(_gridCostParts[builderIndex]);
+            bool built = build();
+            double milliseconds = FrameCost.End(_gridCostParts[builderIndex], buildStart);
+            if (config.DebugLogging) AccumulateBuildMilliseconds(builderIndex, milliseconds);
+            return built;
         }
 
         // Per-stage timings (DebugLogging only): CPU submission cost per full-screen pass plus
@@ -374,26 +373,26 @@ namespace SDVRadiance
         private double _gpuProbeTotalMilliseconds, _gpuProbeMaxMilliseconds;
         private int _gpuProbeFrames;
 
-        private double ProbeGpuTime(SpriteBatch spriteBatch, RenderTarget2D target, int w, int h)
+        private double ProbeGpuTime(SpriteBatch spriteBatch, RenderTarget2D target, int width, int height)
         {
-            double ms = 0;
+            double milliseconds = 0;
             try
             {
                 _gpuProbeRenderTarget ??= VramTally.Track(new RenderTarget2D(_device, 1, 1, false, target.Format, DepthFormat.None), "gain probe");
-                long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                long buildStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 _device.SetRenderTarget(_gpuProbeRenderTarget);
                 spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp);
                 spriteBatch.Draw(target, new Rectangle(0, 0, 1, 1), Color.White);
                 spriteBatch.End();
                 _gpuProbeRenderTarget.GetData(_gpuProbePixel);   // stalls until the GPU catches up
-                ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-                _gpuProbeTotalMilliseconds += ms;
-                if (ms > _gpuProbeMaxMilliseconds) _gpuProbeMaxMilliseconds = ms;
+                milliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - buildStart) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                _gpuProbeTotalMilliseconds += milliseconds;
+                if (milliseconds > _gpuProbeMaxMilliseconds) _gpuProbeMaxMilliseconds = milliseconds;
                 _gpuProbeFrames++;
             }
             catch { /* a probe must never cost the player their frame */ }
             finally { try { _device.SetRenderTarget(target); } catch { } }
-            return ms;
+            return milliseconds;
         }
 
         // GAIN PROBE. The brightness-step hunt established one thing above all others: the number
@@ -424,16 +423,16 @@ namespace SDVRadiance
         /// six blur reports of September 2026 each needed a round trip to learn one of these.</summary>
         private string DescribeSharpness()
         {
-            ModConfig? c = _lastConfig;
+            ModConfig? configOfFrame = _lastConfig;
             float zoom = Game1.options?.zoomLevel ?? 1f;
             float uiScale = Game1.options?.uiScale ?? 1f;
-            if (c == null)
+            if (configOfFrame == null)
                 return $"    sharpness: game zoom {zoom:P0}, ui scale {uiScale:P0} (no frame drawn yet)";
-            string smoothArt = c.SheetUpscaleEnabled ? c.SheetUpscaleStyle.ToString() : "off";
-            return $"    sharpness: game zoom {zoom:P0}, ui scale {uiScale:P0}, render scale {c.RenderScale:0.00}"
-                 + $"{(c.RenderScaleAuto ? " (auto)" : "")}, perf preset {c.ActivePerfPreset?.ToString() ?? "none"}, look {c.ActivePreset},"
-                 + $" smooth art {smoothArt}, relief {(c.SpriteReliefEnabled ? "on" : "off")},"
-                 + $" tilt-shift {(c.TiltShiftEnabled ? "on" : "off")}, chromatic aberration {(c.ChromaticAberrationEnabled ? "on" : "off")}";
+            string smoothArt = configOfFrame.SheetUpscaleEnabled ? configOfFrame.SheetUpscaleStyle.ToString() : "off";
+            return $"    sharpness: game zoom {zoom:P0}, ui scale {uiScale:P0}, render scale {configOfFrame.RenderScale:0.00}"
+                 + $"{(configOfFrame.RenderScaleAuto ? " (auto)" : "")}, perf preset {configOfFrame.ActivePerfPreset?.ToString() ?? "none"}, look {configOfFrame.ActivePreset},"
+                 + $" smooth art {smoothArt}, relief {(configOfFrame.SpriteReliefEnabled ? "on" : "off")},"
+                 + $" tilt-shift {(configOfFrame.TiltShiftEnabled ? "on" : "off")}, chromatic aberration {(configOfFrame.ChromaticAberrationEnabled ? "on" : "off")}";
         }
 
         /// <summary>The relief pass, and which sheets it gave a bevel to last frame. A map's own
@@ -450,53 +449,54 @@ namespace SDVRadiance
 
         internal string DescribeStageState()
         {
-            var sb = new System.Text.StringBuilder();
-            sb.AppendLine($"frame {_frameWidth}x{_frameHeight}, effects computed at {_lastScaledWidth}x{_lastScaledHeight}");
-            sb.AppendLine($"ready: occluders={_isFloodOcclusionReady} shadows={_shadowsReady} waterOnScreen={_hasWaterInMask} "
+            var report = new System.Text.StringBuilder();
+            report.AppendLine($"frame {_frameWidth}x{_frameHeight}, effects computed at {_lastScaledWidth}x{_lastScaledHeight}");
+            report.AppendLine($"ready: occluders={_isFloodOcclusionReady} shadows={_shadowsReady} waterOnScreen={_hasWaterInMask} "
                         + $"lights={_lightCount} meteredExposure={_meteredExposure:F3}");
-            sb.AppendLine($"    sun shafts: strength={_dbgShaftStrength:F3} dir=({_dbgShaftDir.X:F2},{_dbgShaftDir.Y:F2}) "
+            report.AppendLine($"    sun shafts: strength={_reportedShaftStrength:F3} dir=({_reportedShaftDirection.X:F2},{_reportedShaftDirection.Y:F2}) "
                         + $"(0 = a gate closed: sun source off, indoors, or no sun)");
-            sb.AppendLine($"    lamp shafts: strength={_dbgLampShaftStrength:F3} presence={_godRayAmount:F2} "
+            report.AppendLine($"    lamp shafts: strength={_reportedLampShaftStrength:F3} presence={_godRayAmount:F2} "
                         + $"(0 = switched off, flood lighting off, overcast outdoors, or still fading)");
             // A fade at 0 means the stage is listed but contributing nothing this frame, which
             // looks identical to "switched off" from the outside and is not the same problem.
             // The GI model in words, in the file a player attaches to a report. The caption in
             // radiance_debug flood says the same thing, but that needs a keyboard and a console,
             // which is exactly what the platforms we hear the least from do not have.
-            sb.AppendLine($"    GI: {(_cascades.Refused ? $"cascades refused by this device ({_cascades.RefusedReason})" : _cascades.LastReport)}");
-            sb.AppendLine($"    GI model in use: {(_lastCascadesInUse ? "cascades" : "flood, one texel per tile")}"
+            report.AppendLine($"    GI: {(_cascades.Refused ? $"cascades refused by this device ({_cascades.RefusedReason})" : _cascades.LastReport)}");
+            report.AppendLine($"    GI model in use: {(_lastCascadesInUse ? "cascades" : "flood, one texel per tile")}"
                         + (_lastConfig != null ? $" (setting: {_lastConfig.FloodGiModel})" : ""));
-            sb.AppendLine(DescribeSharpness());
-            sb.AppendLine("    " + DescribeAutoScale().Replace("\n", "\n    "));
-            sb.AppendLine(DescribeRelief());
+            report.AppendLine(DescribeSharpness());
+            report.AppendLine("    " + DescribeAutoScale().Replace("\n", "\n    "));
+            report.AppendLine(DescribeRelief());
             // Whether the guard that keeps a sheet from being handed this mod's linear sampler is
             // running: a report that says OFF or "not installed" next to a soft mailbox is the whole
             // diagnosis (see TextureUnitGuard).
-            sb.AppendLine($"    texture unit guard: {(TextureUnitGuard.Installed ? (TextureUnitGuard.Enabled ? "on" : "OFF (radiance_unitguard on)") : "NOT INSTALLED, see the startup log")}, {TextureUnitGuard.Rebinds} slot(s) rebound this session");
-            sb.AppendLine("presence (0 = contributing nothing this frame):");
-            sb.AppendLine($"    water={_fadeWater:F2} flood={_fadeFlood:F2} lighting={_fadeLighting:F2} "
+            report.AppendLine($"    texture unit guard: {(TextureUnitGuard.Installed ? (TextureUnitGuard.Enabled ? "on" : "OFF (radiance_unitguard on)") : "NOT INSTALLED, see the startup log")}, {TextureUnitGuard.Rebinds} slot(s) rebound this session");
+            report.AppendLine($"    sampler slots walked per draw call: {(TextureUnitGuard.SamplerSlotCap > 0 ? TextureUnitGuard.SamplerSlotCap.ToString() : "all")} of {TextureUnitGuard.SamplerSlots} the driver reports (radiance_samplerslots)");
+            report.AppendLine("presence (0 = contributing nothing this frame):");
+            report.AppendLine($"    water={_fadeWater:F2} flood={_fadeFlood:F2} lighting={_fadeLighting:F2} "
                         + $"cloud={_fadeCloud:F2} tilt={_fadeTilt:F2} godRays={_godRayAmount:F2}");
-            sb.AppendLine($"    fogDay={_fogDayAmount:F2} fogMist={_fogMistAmount:F2} cloudWeather={_cloudWeatherAmount:F2} "
+            report.AppendLine($"    fogDay={_fogDayAmount:F2} fogMist={_fogMistAmount:F2} cloudWeather={_cloudWeatherAmount:F2} "
                         + $"master={_masterFade:F2}");
             // A shader that failed to load leaves its stage silently doing nothing, which reads to
             // the player as "the mod is not working" with no error anywhere they would look.
             var missing = new List<string>();
-            void Check(string name, Effect? fx) { if (fx == null) missing.Add(name); }
+            void Check(string name, Effect? effect) { if (effect == null) missing.Add(name); }
             Check("bloom", _bloom); Check("colorgrade", _colorGrade);
             Check("fog", _fogEffect); Check("cloudshadow", _cloudShadow); Check("tiltshift", _tiltShift);
             Check("water", _water); Check("floodlight", _floodEffect); Check("cascades", _cascadesEffect); Check("normals", _normalsEffect); Check("finishing", _finishing);
             Check("lighting", _lighting); Check("tail", _tail); Check("upscale", _upscale);
-            sb.AppendLine(missing.Count == 0
+            report.AppendLine(missing.Count == 0
                 ? "shaders: all loaded"
                 : "shaders: FAILED TO LOAD -> " + string.Join(", ", missing));
             // Mask staleness explains water that lags a step behind the world.
-            sb.AppendLine($"water mask: origin tile ({_lastWaterTileX},{_lastWaterTileY}) epoch {MaskEpoch} "
+            report.AppendLine($"water mask: origin tile ({_lastWaterTileX},{_lastWaterTileY}) epoch {MaskEpoch} "
                         + $"rebuildInFlight={_pendingWaterMaskJob != null}");
-            sb.AppendLine($"labels: {(LabelStore.Instance == null ? "NOT LOADED (every water verdict falls back to the game's own data)" : $"loaded, v{LabelStore.Instance.Version}")}");
+            report.AppendLine($"labels: {(LabelStore.Instance == null ? "NOT LOADED (every water verdict falls back to the game's own data)" : $"loaded, v{LabelStore.Instance.Version}")}");
             // Which file painted which sheet. A report saying one mod's water is wrong is only
             // actionable if it names the pack that painted it.
             if (LabelStore.Instance != null)
-                sb.AppendLine($"label sources: {LabelStore.Instance.DescribeSources()}");
+                report.AppendLine($"label sources: {LabelStore.Instance.DescribeSources()}");
             // "My reflections are missing" and "I am running an art mod this has no labels for"
             // are the same sentence, and nobody should be expected to work that out unaided.
             // Variants that actually matched. Worth a line of its own: a variant that never
@@ -505,12 +505,12 @@ namespace SDVRadiance
             if (LabelStore.Instance is { } store && store.VariantHits.Count > 0)
             {
                 foreach (var hit in store.VariantHits)
-                    sb.AppendLine($"labels from a variant: {hit.Value} tile(s) here used labels painted for "
+                    report.AppendLine($"labels from a variant: {hit.Value} tile(s) here used labels painted for "
                                 + $"\"{hit.Key}\" rather than the shipped ones, because that is the art loaded.");
             }
             if (LabelStore.Instance is { ArtBoundLabelsRefusedForChangedArt: > 0 } guarded)
             {
-                sb.AppendLine($"labels refused: {guarded.ArtBoundLabelsRefusedForChangedArt} tile(s) here are drawn "
+                report.AppendLine($"labels refused: {guarded.ArtBoundLabelsRefusedForChangedArt} tile(s) here are drawn "
                             + "from a picture their label was not painted on, so the glass in that label - the "
                             + "window panes and mirrors, which are a PLACE on the tile - was not used. A pack that "
                             + "merely repaints the sheet does not land here: labels/art-fingerprints.json lists the "
@@ -521,19 +521,19 @@ namespace SDVRadiance
                 // would otherwise cost three messages to answer.
                 foreach (var refused in guarded.RefusedBySheet)
                 {
-                    var claims = MapArtClaims.WhoPatches(refused.Key, _modDir, _monitor);
-                    sb.AppendLine($"  {refused.Key}: {refused.Value} tile(s)"
+                    var claims = MapArtClaims.WhoPatches(refused.Key, _modDirectory, _monitor);
+                    report.AppendLine($"  {refused.Key}: {refused.Value} tile(s)"
                                 + (claims.Count == 0
                                     ? " (no installed content pack says it repaints this sheet, so the art came"
                                       + " from somewhere this cannot see)"
                                     : ", repainted by: " + string.Join(", ", claims)));
                 }
             }
-            sb.AppendLine("indoor light (windows, room level, what a lamp pool is worth):");
-            sb.AppendLine(DescribeIndoorLight());
-            sb.AppendLine(DescribeCameraKeyedCaches());
-            sb.AppendLine(DescribeSheetCache());
-            return sb.ToString().TrimEnd();
+            report.AppendLine("indoor light (windows, room level, what a lamp pool is worth):");
+            report.AppendLine(DescribeIndoorLight());
+            report.AppendLine(DescribeCameraKeyedCaches());
+            report.AppendLine(DescribeSheetCache());
+            return report.ToString().TrimEnd();
         }
 
         /// <summary>
@@ -551,17 +551,17 @@ namespace SDVRadiance
             int cached = 0, fellBack = 0;
             long pixels = 0;
             var offenders = new List<string>();
-            foreach (var kv in _tilesheetPixelCache)
+            foreach (var sheetEntry in _tilesheetPixelCache)
             {
-                if (kv.Value == null)
+                if (sheetEntry.Value == null)
                 {
                     fellBack++;
-                    if (offenders.Count < 6 && !kv.Key.IsDisposed)
-                        offenders.Add($"{kv.Key.Width}x{kv.Key.Height}");
+                    if (offenders.Count < 6 && !sheetEntry.Key.IsDisposed)
+                        offenders.Add($"{sheetEntry.Key.Width}x{sheetEntry.Key.Height}");
                     continue;
                 }
                 cached++;
-                pixels += kv.Value.Length;
+                pixels += sheetEntry.Value.Length;
             }
             string line = $"tilesheet cache: {cached} sheet(s) read back once, {pixels / 1_000_000.0:0.0} Mpx held";
             if (fellBack == 0)
@@ -591,8 +591,8 @@ namespace SDVRadiance
                 float sum = 0f;
                 for (int i = 0; i < _gainProbePixels.Length; i++)
                 {
-                    Color c = _gainProbePixels[i];
-                    sum += (c.R * 0.299f + c.G * 0.587f + c.B * 0.114f) / 255f;
+                    Color pixel = _gainProbePixels[i];
+                    sum += (pixel.R * 0.299f + pixel.G * 0.587f + pixel.B * 0.114f) / 255f;
                 }
                 return sum / _gainProbePixels.Length;
             }
@@ -636,14 +636,14 @@ namespace SDVRadiance
             try { if (location.HasMapPropertyWithValue("indoorWater")) return true; } catch { }
             // Name fallback for MODDED caves/spas the data can't identify (their water is
             // often bare art, exactly like the vanilla bathhouse pool).
-            string n = location.Name ?? "";
-            string t = location.GetType().Name;
-            static bool NameContains(string s, string k) => s.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0;
-            return NameContains(n, "Mine") || NameContains(n, "Cave") || NameContains(n, "Volcano") || NameContains(n, "Dungeon")
-                || NameContains(n, "Sewer") || NameContains(n, "Caldera") || NameContains(n, "Swamp") || NameContains(n, "BugLand")
-                || NameContains(n, "Submarine") || NameContains(n, "Tunnel") || NameContains(n, "Grotto")
-                || NameContains(n, "BathHouse") || NameContains(n, "Spa") || NameContains(n, "HotSpring") || NameContains(n, "Bath")
-                || NameContains(t, "Mine") || NameContains(t, "Volcano") || NameContains(t, "Dungeon");
+            string locationName = location.Name ?? "";
+            string typeName = location.GetType().Name;
+            static bool NameContains(string text, string fragment) => text.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0;
+            return NameContains(locationName, "Mine") || NameContains(locationName, "Cave") || NameContains(locationName, "Volcano") || NameContains(locationName, "Dungeon")
+                || NameContains(locationName, "Sewer") || NameContains(locationName, "Caldera") || NameContains(locationName, "Swamp") || NameContains(locationName, "BugLand")
+                || NameContains(locationName, "Submarine") || NameContains(locationName, "Tunnel") || NameContains(locationName, "Grotto")
+                || NameContains(locationName, "BathHouse") || NameContains(locationName, "Spa") || NameContains(locationName, "HotSpring") || NameContains(locationName, "Bath")
+                || NameContains(typeName, "Mine") || NameContains(typeName, "Volcano") || NameContains(typeName, "Dungeon");
         }
 
         /// <summary>Whether the water effect should run in this location. Outdoors and real level
@@ -719,6 +719,8 @@ namespace SDVRadiance
         private const int NormalBakeFlat = 2;
         /// <summary>A one-texel flat normal (straight up, opaque) for sprites with no map.</summary>
         private Texture2D? _flatNormalTexture;
+        /// <summary>The texture-sorted relief replay's effect (reliefreplay.fx): depth from the tint, alpha test.</summary>
+        private Effect? _reliefReplayEffect;
         // moved to ScreenState (see RenderPipeline.Screens.cs)
         private SpriteBatch? _normalSpriteBatch;
         // moved to ScreenState (see RenderPipeline.Screens.cs)
@@ -743,12 +745,12 @@ namespace SDVRadiance
         /// captures record it (see RenderPipeline.Dump.cs) and freeze mode pins it at neutral.</summary>
         // moved to ScreenState (see RenderPipeline.Screens.cs)
 
-        public RenderPipeline(GraphicsDevice device, IMonitor monitor, string modDir)
+        public RenderPipeline(GraphicsDevice device, IMonitor monitor, string modDirectory)
         {
             Current = this;
             _device = device;
             _monitor = monitor;
-            _modDir = modDir;
+            _modDirectory = modDirectory;
             _sheetNormals = new SheetDerivedCache("sheet normal maps", 192L * 1024 * 1024, 64L * 1024 * 1024, 1, 6, "Normals",
                 (effect, sheet, variant) =>
                 {
@@ -773,6 +775,7 @@ namespace SDVRadiance
             _floodEffect = LoadEffect("floodlight.mgfxo");
             _cascadesEffect = LoadEffect("cascades.mgfxo");
             _normalsEffect = LoadEffect("normals.mgfxo");
+            _reliefReplayEffect = LoadEffect("reliefreplay.mgfxo");
             SheetUpscaler.Device = device;
             SheetUpscaler.Effect = LoadEffect("sheetscale.mgfxo");
             _finishing = LoadEffect("finishing.mgfxo");
@@ -788,7 +791,7 @@ namespace SDVRadiance
         {
             try
             {
-                string path = Path.Combine(_modDir, "assets", file);
+                string path = Path.Combine(_modDirectory, "assets", file);
                 if (!File.Exists(path))
                 {
                     _monitor.Log($"{file} not found at {path}.", LogLevel.Trace);
@@ -797,9 +800,9 @@ namespace SDVRadiance
                 using var stream = File.OpenRead(path);
                 return Texture2D.FromStream(_device, stream);
             }
-            catch (Exception ex)
+            catch (Exception exception)
             {
-                _monitor.Log($"Failed to load {file}: {ex.Message}", LogLevel.Trace);
+                _monitor.Log($"Failed to load {file}: {exception.Message}", LogLevel.Trace);
                 return null;
             }
         }
@@ -818,9 +821,9 @@ namespace SDVRadiance
                 using var stream = File.OpenRead(fullPath);
                 return Texture2D.FromStream(_device, stream);
             }
-            catch (Exception ex)
+            catch (Exception exception)
             {
-                _monitor.Log($"Failed to load {fullPath}: {ex.Message}", LogLevel.Trace);
+                _monitor.Log($"Failed to load {fullPath}: {exception.Message}", LogLevel.Trace);
                 return null;
             }
         }
@@ -829,7 +832,7 @@ namespace SDVRadiance
         {
             try
             {
-                string path = Path.Combine(_modDir, "assets", file);
+                string path = Path.Combine(_modDirectory, "assets", file);
                 if (File.Exists(path))
                 {
                     var effect = new Effect(_device, File.ReadAllBytes(path));
@@ -838,27 +841,27 @@ namespace SDVRadiance
                 }
                 _monitor.Log($"{file} not found at {path}; that effect is disabled.", LogLevel.Warn);
             }
-            catch (Exception ex)
+            catch (Exception exception)
             {
-                _monitor.Log($"Failed to load {file} (that effect is disabled): {ex.Message}", LogLevel.Warn);
+                _monitor.Log($"Failed to load {file} (that effect is disabled): {exception.Message}", LogLevel.Warn);
             }
             return null;
         }
 
-        private bool AnyEffectActive(ModConfig c) =>
-            (c.FloodLightingEnabled && _floodEffect != null)
-            || (c.LightingEnabled && _lighting != null)
-            || (c.CloudShadowEnabled && _cloudShadow != null)
-            || (c.BloomEnabled && _bloom != null)
-            || ((c.FogEnabled || c.FogNightMist) && _fogEffect != null)
-            || ((c.ColorGradeEnabled || c.BlueLightFilter > 0.001f) && _colorGrade != null)
-            || (c.TiltShiftEnabled && _tiltShift != null)
-            || ((c.WaterEnabled || c.WaterReflection) && _water != null)
-            || c.WindowReflectionEnabled || _windowReflectEase > FadeGone
-            || c.ParticlesEnabled || _fadeParticles > FadeGone
-            || c.WetWorldEnabled || _fadeWet > FadeGone
-            || ScreenEdgeDrops.WantedNow(c)
-            || ((c.VignetteEnabled || c.ChromaticAberrationEnabled) && _finishing != null)
+        private bool AnyEffectActive(ModConfig config) =>
+            (config.FloodLightingEnabled && _floodEffect != null)
+            || (config.LightingEnabled && _lighting != null)
+            || (config.CloudShadowEnabled && _cloudShadow != null)
+            || (config.BloomEnabled && _bloom != null)
+            || ((config.FogEnabled || config.FogNightMist) && _fogEffect != null)
+            || ((config.ColorGradeEnabled || config.BlueLightFilter > 0.001f) && _colorGrade != null)
+            || (config.TiltShiftEnabled && _tiltShift != null)
+            || ((config.WaterEnabled || config.WaterReflection) && _water != null)
+            || config.WindowReflectionEnabled || _windowReflectEase > FadeGone
+            || config.ParticlesEnabled || _fadeParticles > FadeGone
+            || config.WetWorldEnabled || _fadeWet > FadeGone
+            || ScreenEdgeDrops.WantedNow(config)
+            || ((config.VignetteEnabled || config.ChromaticAberrationEnabled) && _finishing != null)
             // Residual presence fades: switching the LAST enabled effect off used to stop the
             // whole Apply in that same frame, cutting the ~0.5 s fade-out short (the one hard
             // cut left in the no-popping audit). Stay awake until every decay ends, then the
@@ -883,22 +886,22 @@ namespace SDVRadiance
              + $"occluderOrigin=({_occluderTileX},{_occluderTileY}) floodOccluderOrigin=({_floodOccluderTileX},{_floodOccluderTileY}) "
              + $"stateScreen={_activeScreenId} statesKept={_screenStates.Count}";
 
-        private void EnsureTargets(int w, int h, SurfaceFormat format)
+        private void EnsureTargets(int width, int height, SurfaceFormat format)
         {
-            w = Math.Max(1, w);
-            h = Math.Max(1, h);
+            width = Math.Max(1, width);
+            height = Math.Max(1, height);
 
-            if (_sceneRenderTarget != null && _sceneRenderTarget.Width == w && _sceneRenderTarget.Height == h && _sceneRenderTarget.Format == format)
+            if (_sceneRenderTarget != null && _sceneRenderTarget.Width == width && _sceneRenderTarget.Height == height && _sceneRenderTarget.Format == format)
                 return;
 
             _sceneRenderTarget?.Dispose(); _fullResolutionPingA?.Dispose(); _fullResolutionPingB?.Dispose(); _halfResolutionScratchA?.Dispose(); _halfResolutionScratchB?.Dispose(); _cloudMaskKeep?.Dispose();
 
-            _sceneRenderTarget = CreateRenderTarget(w, h, format);
-            _fullResolutionPingA = CreateRenderTarget(w, h, format);
-            _fullResolutionPingB = CreateRenderTarget(w, h, format);
-            _halfResolutionScratchA = CreateRenderTarget(Math.Max(1, w / 2), Math.Max(1, h / 2), format);
-            _halfResolutionScratchB = CreateRenderTarget(Math.Max(1, w / 2), Math.Max(1, h / 2), format);
-            _cloudMaskKeep = CreateRenderTarget(Math.Max(1, w / 2), Math.Max(1, h / 2), format);
+            _sceneRenderTarget = CreateRenderTarget(width, height, format);
+            _fullResolutionPingA = CreateRenderTarget(width, height, format);
+            _fullResolutionPingB = CreateRenderTarget(width, height, format);
+            _halfResolutionScratchA = CreateRenderTarget(Math.Max(1, width / 2), Math.Max(1, height / 2), format);
+            _halfResolutionScratchB = CreateRenderTarget(Math.Max(1, width / 2), Math.Max(1, height / 2), format);
+            _cloudMaskKeep = CreateRenderTarget(Math.Max(1, width / 2), Math.Max(1, height / 2), format);
             _cloudMaskTick = int.MinValue;   // whatever the new target holds, it is not a sky
         }
 
@@ -966,8 +969,8 @@ namespace SDVRadiance
         /// them entirely - the tally was applied by a script that looked for "new RenderTarget2D",
         /// and this one is target-typed - so the 130.7 MB first measured was itself an
         /// understatement by about a fifth.</summary>
-        private RenderTarget2D CreateRenderTarget(int w, int h, SurfaceFormat format) =>
-            VramTally.Track(new RenderTarget2D(_device, w, h, false, format, DepthFormat.None, 0,
+        private RenderTarget2D CreateRenderTarget(int width, int height, SurfaceFormat format) =>
+            VramTally.Track(new RenderTarget2D(_device, width, height, false, format, DepthFormat.None, 0,
                 RenderTargetUsage.PreserveContents), "effect chain buffers");
 
         /// <summary>The stages that will run this frame, in their fixed order.
@@ -982,7 +985,7 @@ namespace SDVRadiance
         /// is 60 allocations a second for no reason. Nothing outside a frame may hold on to it.</para>
         /// </summary>
         private List<Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>> BuildStageList(
-            ModConfig config, int w, int h)
+            ModConfig config, int width, int height)
         {
             // Build the active stage list (fixed order), then run them ping-pong so
             // the last stage writes straight back into the game's target.
@@ -1046,14 +1049,14 @@ namespace SDVRadiance
             Approach(ref _cascadeBlend, cascadesWanted ? 1f : 0f, 0.08f);
             bool floodMapWanted = _cascadeBlend < 0.999f;
             bool floodOn = config.FloodLightingEnabled && _floodEffect != null
-                && (!floodMapWanted || TimedBuild(config, 0, () => _flood.Build(_device, w, h, config)));
+                && (!floodMapWanted || TimedBuild(config, 0, () => _flood.Build(_device, width, height, config)));
             bool classicOn = !floodOn && config.LightingEnabled && _lighting != null;
             if (floodOn)
             {
                 long lightListStart = ChainStepBegin();
-                BuildLightList(w, h, config);       // direct-light pools (shader term)
+                BuildLightList(width, height, config);       // direct-light pools (shader term)
                 ChainStepEnd(ChainStep.LightList, lightListStart);
-                _isFloodOcclusionReady = TimedBuild(config, 1, () => BuildFloodOccluders(w, h, config));
+                _isFloodOcclusionReady = TimedBuild(config, 1, () => BuildFloodOccluders(width, height, config));
                 _cascadesReady = _cascadeBlend > FadeGone && _isFloodOcclusionReady
                     && TimedBuild(config, 0, () => BuildCascades(config));
                 // Nothing to show yet (first frame, or the device refused): the flood carries the
@@ -1064,11 +1067,11 @@ namespace SDVRadiance
             else if (classicOn)
             {
                 long lightListStart = ChainStepBegin();
-                classicOn = BuildLightList(w, h, config);
+                classicOn = BuildLightList(width, height, config);
                 ChainStepEnd(ChainStep.LightList, lightListStart);
             }
             if (classicOn)
-                _shadowsReady = config.LightingShadows && TimedBuild(config, 2, () => BuildOccluderMask(w, h));
+                _shadowsReady = config.LightingShadows && TimedBuild(config, 2, () => BuildOccluderMask(width, height));
             _fadeFlood = floodOn ? Ease01(_fadeFlood) : Ease0(_fadeFlood);
             _fadeLighting = classicOn ? Ease01(_fadeLighting) : Ease0(_fadeLighting);
             if (_fadeFlood > FadeGone) AddStage(_floodStageDelegate!, 0);
@@ -1090,9 +1093,9 @@ namespace SDVRadiance
             // still decays instead of popping.
             bool waterConfigOn = config.WaterEnabled || config.WaterReflection;
             if ((waterConfigOn && waterAllowedHere) || _fadeWater > FadeGone)
-                TimedBuild(config, 3, () => BuildWaterMask(w, h));
+                TimedBuild(config, 3, () => BuildWaterMask(width, height));
             bool waterOn = waterConfigOn && _water != null && waterAllowedHere
-                && Game1.currentLocation is { } wloc && LocationHasWater(wloc);
+                && Game1.currentLocation is { } waterLocation && LocationHasWater(waterLocation);
             _fadeWater = waterOn ? Ease01(_fadeWater) : Ease0(_fadeWater);
             // Still rendered while fading: the mask is world-anchored, so the last one built
             // stays correct for the decay frames. Switching the water effect off (or opting a
@@ -1171,17 +1174,19 @@ namespace SDVRadiance
             // sit here is gone with its shader. What is decided here is only their presence, eased
             // so weather and daylight fade them rather than flip them.
             {
-                // Rain/snow: the overcast sky kills visible shafts outdoors.
-                bool overcast = outdoors && (Game1.isRaining || Game1.isSnowing || Game1.isLightning);
+                // Rain/snow: the overcast sky kills visible shafts outdoors, and under a glass
+                // roof, which is the same sky.
+                bool underSky = outdoors || ShadowRenderer.UnderAGlassRoof(Game1.currentLocation);
+                bool overcast = underSky && (Game1.isRaining || Game1.isSnowing || Game1.isLightning);
                 // Shafts are a LOW-LIGHT phenomenon: they exist where a bright source beats a
                 // dim surround. At high noon outdoors nothing on screen is dim, so ride the
                 // presence down to 30% at midday and back to full by 08:00 / 17:00. Indoors
                 // untouched: a lamp in a dark room is exactly what shafts are for.
                 float rayDay = 1f;
-                if (outdoors)
+                if (underSky)
                 {
-                    int rm = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
-                    rayDay = 1f - 0.7f * (1f - MathHelper.Clamp(Math.Abs(rm - 750) / 270f, 0f, 1f));
+                    int minutesNow = (Game1.timeOfDay / 100) * 60 + Game1.timeOfDay % 100;
+                    rayDay = 1f - 0.7f * (1f - MathHelper.Clamp(Math.Abs(minutesNow - 750) / 270f, 0f, 1f));
                 }
                 float rayTarget = (config.GodRaysEnabled && config.FloodLightingEnabled && !overcast) ? rayDay : 0f;
                 if (arrivedThisFrame) _godRayAmount = rayTarget;
@@ -1287,26 +1292,26 @@ namespace SDVRadiance
                 return;
             }
 
-            int w = target.Width, h = target.Height;
-            ChooseRenderSize(config, target, w, h, out int sw, out int sh,
+            int width = target.Width, height = target.Height;
+            ChooseRenderSize(config, target, width, height, out int scaledWidth, out int scaledHeight,
                              out bool scaled, out float renderScale);
 
             // Tracked whatever the logging setting says. radiance_bench prints this size to any
             // player who runs it, and with the tracking behind DebugLogging it printed -1x-1 to
             // everyone who had not turned debug logging on, which is a diagnostic reporting that
             // it does not know where it is.
-            if (w != _lastViewportWidth || h != _lastViewportHeight)
+            if (width != _lastViewportWidth || height != _lastViewportHeight)
             {
                 if (_lastViewportWidth != -1)
                     _renderTargetResizeCount++;
-                _lastViewportWidth = w;
-                _lastViewportHeight = h;
+                _lastViewportWidth = width;
+                _lastViewportHeight = height;
             }
 
             if (config.DebugLogging)
             {
                 _appliedFrameCount++;
-                if (!_loggedOnce) { _monitor.Log($"Post-process {w}x{h}, format={target.Format}.", LogLevel.Debug); _loggedOnce = true; }
+                if (!_loggedOnce) { _monitor.Log($"Post-process {width}x{height}, format={target.Format}.", LogLevel.Debug); _loggedOnce = true; }
                 MaybeLogDiag(config);
             }
 
@@ -1332,7 +1337,7 @@ namespace SDVRadiance
                 long stepStart = ChainStepBegin();
                 AdvanceWetness(config);
 
-                var stages = BuildStageList(config, w, h);
+                var stages = BuildStageList(config, width, height);
                 ChainStepEnd(ChainStep.StageList, stepStart);
                 // The sprite normal buffer for this frame, before the chain copies the scene: it is
                 // read by the flood stage and must be bound to nothing by then.
@@ -1345,11 +1350,11 @@ namespace SDVRadiance
                 // stage list has to exist first because it says which lighting stage will carry
                 // the emissive half.
                 stepStart = ChainStepBegin();
-                UpdateAndDrawAmbientParticles(spriteBatch, config, w);
+                UpdateAndDrawAmbientParticles(spriteBatch, config, width);
                 ChainStepEnd(ChainStep.Particles, stepStart);
 
                 stepStart = ChainStepBegin();
-                Texture2D chainSource = CaptureSceneForChain(spriteBatch, target, stages, sw, sh, scaled, ref captureTaken);
+                Texture2D chainSource = CaptureSceneForChain(spriteBatch, target, stages, scaledWidth, scaledHeight, scaled, ref captureTaken);
                 ChainStepEnd(ChainStep.Capture, stepStart);
 
                 // Auto-exposure meters the scene the chain is about to work on and eases the
@@ -1366,26 +1371,26 @@ namespace SDVRadiance
                 Texture2D current = RunStageChain(spriteBatch, chainSource, target, stages, scaled, config);
                 ChainStepEnd(ChainStep.Passes, stepStart);
                 stepStart = ChainStepBegin();
-                current = UpscaleToWindow(spriteBatch, current, target, stages.Count, scaled, config, w, h, renderScale);
+                current = UpscaleToWindow(spriteBatch, current, target, stages.Count, scaled, config, width, height, renderScale);
                 FillGainProbe(spriteBatch, target, stages.Count);
                 ChainStepEnd(ChainStep.Upscale, stepStart);
                 stepStart = ChainStepBegin();
-                FinishFrame(spriteBatch, target, stages.Count, w, h, config);
+                FinishFrame(spriteBatch, target, stages.Count, width, height, config);
                 // The lightning afterglow rides over the finished frame: a ~200 ms warm lift
                 // after the game's white flash ends, the retina holding the image.
-                LightningEffects.DrawAfterglow(spriteBatch, w, h);
+                LightningEffects.DrawAfterglow(spriteBatch, width, height);
                 // Drops on the glass and frost in the corners, over the finished frame and
                 // under the UI - so a menu is never rained on and the world always is.
-                ScreenEdgeDrops.Draw(spriteBatch, config, w, h);
+                ScreenEdgeDrops.Draw(spriteBatch, config, width, height);
                 // After every stage has had its say, so the columns are the values the frame was
                 // actually built from rather than the ones it started with.
                 ReportBrightWatch(config);
                 ReportMark(config);
                 ChainStepEnd(ChainStep.Finish, stepStart);
             }
-            catch (Exception ex)
+            catch (Exception exception)
             {
-                RecoverFromChainFailure(spriteBatch, target, ex, captureTaken, w, h);
+                RecoverFromChainFailure(spriteBatch, target, exception, captureTaken, width, height);
             }
             finally
             {
@@ -1418,9 +1423,9 @@ namespace SDVRadiance
             if (config.DebugLogging)
             {
                 _performanceStopwatch.Stop();
-                double ms = _performanceStopwatch.Elapsed.TotalMilliseconds;
-                _performanceTotalMilliseconds += ms;
-                if (ms > _performanceMaxMilliseconds) _performanceMaxMilliseconds = ms;
+                double milliseconds = _performanceStopwatch.Elapsed.TotalMilliseconds;
+                _performanceTotalMilliseconds += milliseconds;
+                if (milliseconds > _performanceMaxMilliseconds) _performanceMaxMilliseconds = milliseconds;
             }
         }
 
@@ -1429,9 +1434,9 @@ namespace SDVRadiance
         /// captured frame back on screen so the player sees the game rather than half of ours.
         /// </summary>
         private void RecoverFromChainFailure(SpriteBatch spriteBatch, RenderTarget2D target,
-                                             Exception ex, bool captureTaken, int w, int h)
+                                             Exception exception, bool captureTaken, int width, int height)
         {
-                _monitor.Log($"Post-process failed, leaving frame unmodified this frame: {ex.Message}", LogLevel.Warn);
+                _monitor.Log($"Post-process failed, leaving frame unmodified this frame: {exception.Message}", LogLevel.Warn);
                 // The message ALONE is useless. "Index was out of range" repeated forty times named
                 // neither the list nor the pass, and finding it meant reading the light code by eye
                 // looking for a plausible index - which is exactly the guessing this mod's
@@ -1442,7 +1447,7 @@ namespace SDVRadiance
                 if (!_loggedPostProcessFailure)
                 {
                     _loggedPostProcessFailure = true;
-                    _monitor.Log("First failure in full (this is logged once per session):\n" + ex, LogLevel.Error);
+                    _monitor.Log("First failure in full (this is logged once per session):\n" + exception, LogLevel.Error);
                 }
                 // A stage may have thrown between a Begin and its End — close the batch
                 // first, or the recovery Begin below throws too (and would escape).
@@ -1451,7 +1456,7 @@ namespace SDVRadiance
                 {
                     _device.SetRenderTarget(target);
                     spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
-                    if (captureTaken && _sceneRenderTarget != null) spriteBatch.Draw(_sceneRenderTarget, new Rectangle(0, 0, w, h), Color.White);
+                    if (captureTaken && _sceneRenderTarget != null) spriteBatch.Draw(_sceneRenderTarget, new Rectangle(0, 0, width, height), Color.White);
                     spriteBatch.End();
                 }
                 catch { /* give up this frame */ }
@@ -1462,8 +1467,8 @@ namespace SDVRadiance
         /// <para>The game's frame stays full size; only our passes work smaller, which is a
         /// quadratic saving on the fill rate that actually bounds this mod.</para>
         /// </summary>
-        private void ChooseRenderSize(ModConfig config, RenderTarget2D target, int w, int h,
-                                      out int sw, out int sh, out bool scaled, out float renderScale)
+        private void ChooseRenderSize(ModConfig config, RenderTarget2D target, int width, int height,
+                                      out int scaledWidth, out int scaledHeight, out bool scaled, out float renderScale)
         {
             _lastConfig = config;
                 // RENDER SCALE: the game's own frame stays full size; only our chain works on a
@@ -1507,18 +1512,18 @@ namespace SDVRadiance
                 if (zoomOut > 0.05f && zoomOut < ZoomCouplingBelow && !Game1.game1.takingMapScreenshot)
                     renderScale = Math.Max(0.25f, Math.Min(renderScale, zoomOut));
                 _scaledByZoom = renderScale < chosenScale - 0.001f;
-                sw = Math.Max(1, (int)Math.Round(w * renderScale));
-                sh = Math.Max(1, (int)Math.Round(h * renderScale));
-                scaled = sw != w || sh != h;
-                _lastScaledWidth = sw; _lastScaledHeight = sh;
-                _frameWidth = w; _frameHeight = h;
-                EnsureTargets(sw, sh, target.Format);
+                scaledWidth = Math.Max(1, (int)Math.Round(width * renderScale));
+                scaledHeight = Math.Max(1, (int)Math.Round(height * renderScale));
+                scaled = scaledWidth != width || scaledHeight != height;
+                _lastScaledWidth = scaledWidth; _lastScaledHeight = scaledHeight;
+                _frameWidth = width; _frameHeight = height;
+                EnsureTargets(scaledWidth, scaledHeight, target.Format);
         }
 
         /// <summary>Copy the game's frame into the chain's own buffer, but only for the four reasons that still
         /// earn it. Returns whatever the chain should read - the copy, or the game's target where the
         /// copy was skipped.</summary>
-        private Texture2D CaptureSceneForChain(SpriteBatch spriteBatch, RenderTarget2D target, List<Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>> stages, int sw, int sh, bool scaled, ref bool captureTaken)
+        private Texture2D CaptureSceneForChain(SpriteBatch spriteBatch, RenderTarget2D target, List<Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>> stages, int scaledWidth, int scaledHeight, bool scaled, ref bool captureTaken)
         {
             // THE CAPTURE, and the four reasons to still take one.
             //
@@ -1556,7 +1561,7 @@ namespace SDVRadiance
                 // the 1:1 path is exactly the byte-identical one that was verified.
                 spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque,
                     scaled ? SamplerState.LinearClamp : SamplerState.PointClamp);
-                spriteBatch.Draw(target, new Rectangle(0, 0, sw, sh), Color.White);
+                spriteBatch.Draw(target, new Rectangle(0, 0, scaledWidth, scaledHeight), Color.White);
                 spriteBatch.End();
                 captureTaken = true;
             }
@@ -1572,14 +1577,14 @@ namespace SDVRadiance
             // chain and many is what survives after the game's own drawing and the probe's
             // own overhead cancel out. (Stage bodies that ease a value advance faster
             // while this runs; the benchmark lasts seconds and warns that it flickers.)
-            for (int rep = 0; rep < _benchExtraChains && stages.Count > 0; rep++)
+            for (int repeat = 0; repeat < _benchExtraChains && stages.Count > 0; repeat++)
             {
                 Texture2D scratch = chainSource;
                 for (int i = 0; i < stages.Count; i++)
                 {
-                    RenderTarget2D d = ReferenceEquals(scratch, _fullResolutionPingA) ? _fullResolutionPingB! : _fullResolutionPingA!;
-                    stages[i](spriteBatch, scratch, d, config);
-                    scratch = d;
+                    RenderTarget2D destination = ReferenceEquals(scratch, _fullResolutionPingA) ? _fullResolutionPingB! : _fullResolutionPingA!;
+                    stages[i](spriteBatch, scratch, destination, config);
+                    scratch = destination;
                 }
             }
         }
@@ -1595,30 +1600,30 @@ namespace SDVRadiance
                 // blows the finished frame back up. That extra full-size write is cheaper
                 // than letting the last shader pass do the upscale, and it keeps the
                 // upscale filter under our control instead of the stage's sampler.
-                RenderTarget2D dest = i == stages.Count - 1 && !scaled
+                RenderTarget2D destination = i == stages.Count - 1 && !scaled
                     ? target
                     : (ReferenceEquals(current, _fullResolutionPingA) ? _fullResolutionPingB! : _fullResolutionPingA!);
                 // Timed unconditionally now (see RenderPipeline.StageCost.cs): the chain is the
                 // mod's largest GPU cost and the per-pass split is what a report has to carry
                 // to be worth reading. Two Stopwatch reads per pass against a 16.67 ms budget.
-                int si = _stageNameIndices[i];
-                BeginStageCost(si);
-                stages[i](spriteBatch, current, dest, config);
-                double ms = EndStageCost();
+                int stageNameIndex = _stageNameIndices[i];
+                BeginStageCost(stageNameIndex);
+                stages[i](spriteBatch, current, destination, config);
+                double milliseconds = EndStageCost();
                 if (_timingOn)
                 {
-                    _stageMilliseconds[si] += ms;
-                    if (ms > _stageMaxMilliseconds[si]) _stageMaxMilliseconds[si] = ms;
-                    _stageRunFrames[si]++;
+                    _stageMilliseconds[stageNameIndex] += milliseconds;
+                    if (milliseconds > _stageMaxMilliseconds[stageNameIndex]) _stageMaxMilliseconds[stageNameIndex] = milliseconds;
+                    _stageRunFrames[stageNameIndex]++;
                 }
-                current = dest;
+                current = destination;
             }
             EndStageCostFrame(stages.Count);
             return current;
         }
 
         /// <summary>Stretch the small buffer back to the window, with the sharpening folded into the same draw.</summary>
-        private Texture2D UpscaleToWindow(SpriteBatch spriteBatch, Texture2D current, RenderTarget2D target, int stageCount, bool scaled, ModConfig config, int w, int h, float renderScale)
+        private Texture2D UpscaleToWindow(SpriteBatch spriteBatch, Texture2D current, RenderTarget2D target, int stageCount, bool scaled, ModConfig config, int width, int height, float renderScale)
         {
             // Upscale back to the window, linear for the reason above, with RCAS
             // sharpening folded into the same draw (see upscale.fx) so the stretch costs
@@ -1629,7 +1634,7 @@ namespace SDVRadiance
             {
                 if (_upscale != null)
                 {
-                    GetParam(_upscale, "OutputTexel")?.SetValue(new Vector2(1f / w, 1f / h));
+                    GetParam(_upscale, "OutputTexel")?.SetValue(new Vector2(1f / width, 1f / height));
                     float autoSharpen = MathHelper.Lerp(0.5f, 0.25f, (renderScale - 0.5f) / 0.5f);
                     GetParam(_upscale, "Sharpness")?.SetValue(autoSharpen * MathHelper.Clamp(config.RenderSharpness, 0f, 2f));
                     _upscale.CurrentTechnique = _upscale.Techniques["Upscale"];
@@ -1639,7 +1644,7 @@ namespace SDVRadiance
                 {
                     _device.SetRenderTarget(target);
                     spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp);
-                    spriteBatch.Draw(current, new Rectangle(0, 0, w, h), Color.White);
+                    spriteBatch.Draw(current, new Rectangle(0, 0, width, height), Color.White);
                     spriteBatch.End();
                 }
                 current = target;
@@ -1669,7 +1674,7 @@ namespace SDVRadiance
 
         /// <summary>Put the device back, ease the whole stack in, redraw the skip button, then take the GPU probe
         /// and any pending dump - which has to be last, so the dump is the finished picture.</summary>
-        private void FinishFrame(SpriteBatch spriteBatch, RenderTarget2D target, int stageCount, int w, int h, ModConfig config)
+        private void FinishFrame(SpriteBatch spriteBatch, RenderTarget2D target, int stageCount, int width, int height, ModConfig config)
         {
             // Every config-enabled stage can still bail at runtime (indoors, no water,
             // no lights, rays faded out). If none ran, the device is still on _sceneRenderTarget
@@ -1686,7 +1691,7 @@ namespace SDVRadiance
             {
                 _device.SetRenderTarget(target);
                 spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
-                spriteBatch.Draw(_sceneRenderTarget, new Rectangle(0, 0, w, h), Color.White * (1f - _masterFade));
+                spriteBatch.Draw(_sceneRenderTarget, new Rectangle(0, 0, width, height), Color.White * (1f - _masterFade));
                 spriteBatch.End();
             }
 
@@ -1694,11 +1699,11 @@ namespace SDVRadiance
 
             if (GpuProbe)
             {
-                double gpuMs = ProbeGpuTime(spriteBatch, target, w, h);
+                double gpuMilliseconds = ProbeGpuTime(spriteBatch, target, width, height);
                 if (BenchRunning)
-                    BenchTick(config, gpuMs);
+                    BenchTick(config, gpuMilliseconds);
                 else if (EffectCostRunning)
-                    EffectCostTick(config, gpuMs);
+                    EffectCostTick(config, gpuMilliseconds);
             }
 
             // Last thing in the frame, so the capture is the finished picture (skip button
@@ -1706,8 +1711,8 @@ namespace SDVRadiance
             // its own guard.
             if (_pendingDump != null)
             {
-                try { WriteDump(spriteBatch, target, w, h, config); }
-                catch (Exception ex) { _monitor.Log($"radiance_dump failed: {ex.Message}", LogLevel.Warn); }
+                try { WriteDump(spriteBatch, target, width, height, config); }
+                catch (Exception exception) { _monitor.Log($"radiance_dump failed: {exception.Message}", LogLevel.Warn); }
                 finally { _pendingDump = null; }
             }
             // The burst rides the same finished frame the dump does. Its own guard, for the same
@@ -1715,9 +1720,9 @@ namespace SDVRadiance
             if (_burstFramesWanted > 0)
             {
                 try { CaptureBurstFrame(spriteBatch, target); }
-                catch (Exception ex)
+                catch (Exception exception)
                 {
-                    _monitor.Log($"radiance_dumpburst failed: {ex.Message}", LogLevel.Warn);
+                    _monitor.Log($"radiance_dumpburst failed: {exception.Message}", LogLevel.Warn);
                     _burstFramesWanted = 0;
                     foreach (var frame in _burstFrames) frame.Dispose();
                     _burstFrames.Clear();
@@ -1750,12 +1755,12 @@ namespace SDVRadiance
         /// </summary>
         private void RedrawEventSkipButton(SpriteBatch spriteBatch, RenderTarget2D target)
         {
-            Event? ev = Game1.CurrentEvent;
+            Event? currentEvent = Game1.CurrentEvent;
             // Exactly the game's own draw condition, and nothing more. An earlier version also
             // bailed on ev.skipped, which the game does not test: pressing the button set it
             // immediately while the game kept drawing for several more frames, so the tinted copy
             // came back for those frames and the button read as sinking into the scene.
-            if (ev == null || !ev.skippable
+            if (currentEvent == null || !currentEvent.skippable
                 || (Game1.options?.SnappyMenus ?? false) || (Game1.game1?.takingMapScreenshot ?? false)
                 || Game1.mouseCursors == null)
                 return;
@@ -1848,35 +1853,35 @@ namespace SDVRadiance
         // moved to ScreenState (see RenderPipeline.Screens.cs)
         // Eased effect amounts so nothing pops: day fog / night mist crossfade over time
         // of day AND ease when toggled; wading self-reflection fades at the water edge.
-        private float _pinFadeAmount;
+        private float _wadingEase;
 
-        private readonly EffectParamCache _fxParamCache = new();
+        private readonly EffectParamCache _effectParameterCache = new();
 
-        private EffectParameter? GetParam(Effect effect, string name) => _fxParamCache.Get(effect, name);
+        private EffectParameter? GetParam(Effect effect, string name) => _effectParameterCache.Get(effect, name);
 
-        private void Pass(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, Effect effect)
+        private void Pass(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, Effect effect)
         {
-            _device.SetRenderTarget(dest);
+            _device.SetRenderTarget(destination);
             spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone, effect);
-            spriteBatch.Draw(source, new Rectangle(0, 0, dest.Width, dest.Height), Color.White);
+            spriteBatch.Draw(source, new Rectangle(0, 0, destination.Width, destination.Height), Color.White);
             spriteBatch.End();
         }
 
         /// <summary>Pass that ADDS onto what the target already holds — the multi-light god-ray
         /// accumulator (each light's beams sum into one buffer instead of overwriting it).</summary>
-        private void PassAdd(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, Effect effect)
+        private void PassAdd(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, Effect effect)
         {
-            _device.SetRenderTarget(dest);
+            _device.SetRenderTarget(destination);
             spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Additive, SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone, effect);
-            spriteBatch.Draw(source, new Rectangle(0, 0, dest.Width, dest.Height), Color.White);
+            spriteBatch.Draw(source, new Rectangle(0, 0, destination.Width, destination.Height), Color.White);
             spriteBatch.End();
         }
 
-        private void DrawFull(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, Effect effect)
+        private void DrawFull(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, Effect effect)
         {
-            _device.SetRenderTarget(dest);
+            _device.SetRenderTarget(destination);
             spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone, effect);
-            spriteBatch.Draw(source, new Rectangle(0, 0, dest.Width, dest.Height), Color.White);
+            spriteBatch.Draw(source, new Rectangle(0, 0, destination.Width, destination.Height), Color.White);
             spriteBatch.End();
         }
 
@@ -1898,13 +1903,13 @@ namespace SDVRadiance
         /// it: measured at presence 0.10 the water pass came out 1.30x brighter than its input,
         /// and since that presence rises and falls as the player walks toward and away from water,
         /// it read as the picture flashing while walking. BlendFactor ignores alpha entirely.</summary>
-        private void BlendBackSource(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, float presence)
+        private void BlendBackSource(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, float presence)
         {
             if (presence >= 0.999f)
                 return;
-            _device.SetRenderTarget(dest);
+            _device.SetRenderTarget(destination);
             spriteBatch.Begin(SpriteSortMode.Deferred, LerpBlend(1f - presence), SamplerState.PointClamp);
-            spriteBatch.Draw(source, new Rectangle(0, 0, dest.Width, dest.Height), Color.White);
+            spriteBatch.Draw(source, new Rectangle(0, 0, destination.Width, destination.Height), Color.White);
             spriteBatch.End();
         }
 
@@ -1913,23 +1918,23 @@ namespace SDVRadiance
         /// <summary>dest = drawn*k + dest*(1-k), with k in the blend factor so the source
         /// texture's alpha never enters the arithmetic. Quantised to 1/255 and cached, because a
         /// BlendState cannot be modified once the device has bound it.</summary>
-        private BlendState LerpBlend(float k)
+        private BlendState LerpBlend(float weight)
         {
-            int q = MathHelper.Clamp((int)Math.Round(k * 255f), 0, 255);
-            if (!_lerpBlends.TryGetValue(q, out BlendState? bs))
+            int quantised = MathHelper.Clamp((int)Math.Round(weight * 255f), 0, 255);
+            if (!_lerpBlends.TryGetValue(quantised, out BlendState? blendState))
             {
-                float f = q / 255f;
-                bs = new BlendState
+                float factor = quantised / 255f;
+                blendState = new BlendState
                 {
                     ColorSourceBlend = Blend.BlendFactor,
                     ColorDestinationBlend = Blend.InverseBlendFactor,
                     AlphaSourceBlend = Blend.BlendFactor,
                     AlphaDestinationBlend = Blend.InverseBlendFactor,
-                    BlendFactor = new Color(f, f, f, f),
+                    BlendFactor = new Color(factor, factor, factor, factor),
                 };
-                _lerpBlends[q] = bs;
+                _lerpBlends[quantised] = blendState;
             }
-            return bs;
+            return blendState;
         }
 
         public void Dispose()
@@ -1956,13 +1961,13 @@ namespace SDVRadiance
             _floodOccluderBaseTexture = null; _floodOccluderSpriteBatch = null;
             _maskDebugTexture?.Dispose(); _maskDebugTexture = null;
             _bloom?.Dispose(); _colorGrade?.Dispose(); _fogEffect?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
-            _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose(); _floodEffect?.Dispose(); _flood.Dispose(); _cascadesEffect?.Dispose(); _cascades.Dispose(); _normalsEffect?.Dispose(); _sheetNormals.Dispose(); _normalRenderTarget?.Dispose(); _normalRenderTarget = null; _flatNormalTexture?.Dispose(); _flatNormalTexture = null; SheetUpscaler.Dispose(); _normalSpriteBatch?.Dispose(); _normalSpriteBatch = null;
+            _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose(); _floodEffect?.Dispose(); _flood.Dispose(); _cascadesEffect?.Dispose(); _cascades.Dispose(); _normalsEffect?.Dispose(); _sheetNormals.Dispose(); _normalRenderTarget?.Dispose(); _normalRenderTarget = null; _flatNormalTexture?.Dispose(); _flatNormalTexture = null; _reliefReplayEffect?.Dispose(); _reliefReplayEffect = null; SheetUpscaler.Dispose(); SpriteFlushPath.Dispose(); _normalSpriteBatch?.Dispose(); _normalSpriteBatch = null;
             _heatMapTexture?.Dispose();
             _sceneRenderTarget = _fullResolutionPingA = _fullResolutionPingB = _halfResolutionScratchA = _halfResolutionScratchB = null;
             _waterMask = null; _occluderMask = null; _floodOccluderMask = null; _luminanceRenderTarget = null;
             _spriteMaskRenderTarget = null; _spriteMaskSpriteBatch = null;
             _bloom = _colorGrade = _fogEffect = _cloudShadow = _tiltShift = _water = _finishing = _lighting = _floodEffect = _cascadesEffect = _normalsEffect = null;
-            _fxParamCache.Clear(); // parameter cache keys pin the disposed Effects otherwise
+            _effectParameterCache.Clear(); // parameter cache keys pin the disposed Effects otherwise
             _particles?.Dispose(); _particles = null;
             _labelDiffTexture?.Dispose(); _labelDiffTexture = null;
             _channelViewTexture?.Dispose(); _channelViewTexture = null;

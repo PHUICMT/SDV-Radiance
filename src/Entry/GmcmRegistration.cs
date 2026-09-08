@@ -17,11 +17,11 @@ namespace SDVRadiance
         /// <param name="replaceConfig">Swap in a fresh config instance (GMCM "reset to defaults").</param>
         /// <param name="refreshForceBufferDraw">Re-sync <see cref="HarmonyPatcher.ForceBufferDraw"/> with live config.</param>
         internal static void Register(IModHelper helper, IManifest manifest, IMonitor monitor,
-            Func<string, string> i18n, Func<ModConfig> config, Action<ModConfig> replaceConfig,
+            Func<string, string> translate, Func<ModConfig> config, Action<ModConfig> replaceConfig,
             Action refreshForceBufferDraw, Func<RenderPipeline?> getPipeline)
         {
-            var api = helper.ModRegistry.GetApi<IGenericModConfigMenuApi>("spacechase0.GenericModConfigMenu");
-            if (api is null)
+            var configMenu = helper.ModRegistry.GetApi<IGenericModConfigMenuApi>("spacechase0.GenericModConfigMenu");
+            if (configMenu is null)
             {
                 monitor.Log("GMCM not installed; config editable via config.json only.", LogLevel.Trace);
                 return;
@@ -34,101 +34,101 @@ namespace SDVRadiance
                 helper.WriteConfig(config());
             }
 
-            api.Register(manifest, () =>
+            configMenu.Register(manifest, () =>
             {
                 monitor.Log("Config reset to defaults via GMCM.", LogLevel.Debug);
                 replaceConfig(new ModConfig());
                 refreshForceBufferDraw();
             }, Save);
 
-            RegisterLandingPage(api, manifest, i18n, config, monitor, refreshForceBufferDraw);
-            RegisterBloomPage(api, manifest, i18n, config);
-            RegisterColourGradePage(api, manifest, i18n, config, LutCatalog.Discover());
-            RegisterGodRaysPage(api, manifest, i18n, config);
-            RegisterFogPage(api, manifest, i18n, config);
-            RegisterWeatherPage(api, manifest, i18n, config);
-            RegisterParticlesPage(api, manifest, i18n, config);
-            RegisterCloudShadowPage(api, manifest, i18n, config);
-            RegisterLensPage(api, manifest, i18n, config);
-            RegisterWaterPage(api, manifest, i18n, config);
-            RegisterLightingPage(api, manifest, i18n, config);
-            RegisterWindowsPage(api, manifest, i18n, config);
-            RegisterShadowsPage(api, manifest, i18n, config);
-            RegisterCameraPage(api, manifest, i18n, config);
-            RegisterSmoothingPage(api, manifest, i18n, config);
-            RegisterPerformancePage(api, manifest, i18n, config);
-            RegisterMiscPage(api, manifest, i18n, config, helper, monitor, getPipeline);
+            RegisterLandingPage(configMenu, manifest, translate, config, monitor, refreshForceBufferDraw);
+            RegisterBloomPage(configMenu, manifest, translate, config);
+            RegisterColourGradePage(configMenu, manifest, translate, config, LutCatalog.Discover());
+            RegisterGodRaysPage(configMenu, manifest, translate, config);
+            RegisterFogPage(configMenu, manifest, translate, config);
+            RegisterWeatherPage(configMenu, manifest, translate, config);
+            RegisterParticlesPage(configMenu, manifest, translate, config);
+            RegisterCloudShadowPage(configMenu, manifest, translate, config);
+            RegisterLensPage(configMenu, manifest, translate, config);
+            RegisterWaterPage(configMenu, manifest, translate, config);
+            RegisterLightingPage(configMenu, manifest, translate, config);
+            RegisterWindowsPage(configMenu, manifest, translate, config);
+            RegisterShadowsPage(configMenu, manifest, translate, config);
+            RegisterCameraPage(configMenu, manifest, translate, config);
+            RegisterSmoothingPage(configMenu, manifest, translate, config);
+            RegisterPerformancePage(configMenu, manifest, translate, config);
+            RegisterMiscPage(configMenu, manifest, translate, config, helper, monitor, getPipeline);
         }
 
         /// <summary>Master switch, the one-click look preset, and the links to every other page.</summary>
-        private static void RegisterLandingPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config, IMonitor monitor, Action refreshForceBufferDraw)
+        private static void RegisterLandingPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config, IMonitor monitor, Action refreshForceBufferDraw)
         {
             // --- Landing page: master switch, a one-click look preset, and links to each
             // effect's own page so the top level stays short instead of one giant scroll. ---
-            api.AddBoolOption(manifest, () => config().Enabled, v => config().Enabled = v,
-                () => i18n("config.enabled.name"), () => i18n("config.enabled.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().Enabled, value => config().Enabled = value,
+                () => translate("config.enabled.name"), () => translate("config.enabled.tooltip"));
 
-            api.AddTextOption(manifest,
+            configMenu.AddTextOption(manifest,
                 () => config().ActivePreset.ToString(),
-                v =>
+                value =>
                 {
-                    if (Enum.TryParse<LookPreset>(v, out var p))
+                    if (Enum.TryParse<LookPreset>(value, out var preset))
                     {
                         // GMCM re-fires every option setter on save; only re-stamp the preset
                         // when the dropdown actually changed, or it silently overwrites the
                         // individual settings tuned on the other pages ("my settings reset").
-                        bool changed = p != config().ActivePreset;
-                        config().ActivePreset = p;
-                        if (changed && p != LookPreset.Custom)
+                        bool changed = preset != config().ActivePreset;
+                        config().ActivePreset = preset;
+                        if (changed && preset != LookPreset.Custom)
                         {
-                            monitor.Log($"Preset applied via GMCM: {p}", LogLevel.Debug);
-                            config().ApplyPreset(p);
+                            monitor.Log($"Preset applied via GMCM: {preset}", LogLevel.Debug);
+                            config().ApplyPreset(preset);
                         }
                         refreshForceBufferDraw();
                     }
                 },
-                () => i18n("config.preset.name"), () => i18n("config.preset.tooltip"),
+                () => translate("config.preset.name"), () => translate("config.preset.tooltip"),
                 new[] { nameof(LookPreset.Custom), nameof(LookPreset.Subtle), nameof(LookPreset.Cinematic), nameof(LookPreset.Vibrant), nameof(LookPreset.Off) },
-                v => i18n($"config.preset.{v.ToLowerInvariant()}"));
+                choice => translate($"config.preset.{choice.ToLowerInvariant()}"));
 
-            api.AddParagraph(manifest, () => i18n("config.preset.hint"));
+            configMenu.AddParagraph(manifest, () => translate("config.preset.hint"));
 
             // Same order as the F6 tuner: how it runs first (the one setting every player has
             // an opinion about), then camera/film, then light, then the world, then the
             // troubleshooting page.
-            api.AddPageLink(manifest, "perf", () => i18n("config.section.perf"));
-            api.AddPageLink(manifest, "colorgrade", () => i18n("config.section.colorgrade"));
-            api.AddPageLink(manifest, "bloom", () => i18n("config.section.bloom"));
-            api.AddPageLink(manifest, "lens", () => i18n("config.section.lens"));
-            api.AddPageLink(manifest, "smoothing", () => i18n("tuner.tab.smoothing"));
-            api.AddPageLink(manifest, "lighting", () => i18n("config.section.lighting"));
-            api.AddPageLink(manifest, "windows", () => i18n("config.section.windows"));
-            api.AddPageLink(manifest, "shadows", () => i18n("config.section.shadows"));
-            api.AddPageLink(manifest, "godrays", () => i18n("config.section.godrays"));
-            api.AddPageLink(manifest, "water", () => i18n("config.section.water"));
-            api.AddPageLink(manifest, "cloudshadow", () => i18n("config.section.cloudshadow"));
-            api.AddPageLink(manifest, "fog", () => i18n("config.section.fog"));
-            api.AddPageLink(manifest, "weather", () => i18n("config.section.weather"));
-            api.AddPageLink(manifest, "particles", () => i18n("config.section.particles"));
-            api.AddPageLink(manifest, "camera", () => i18n("config.section.camera"));
-            api.AddPageLink(manifest, "misc", () => i18n("config.section.misc"));
+            configMenu.AddPageLink(manifest, "perf", () => translate("config.section.perf"));
+            configMenu.AddPageLink(manifest, "colorgrade", () => translate("config.section.colorgrade"));
+            configMenu.AddPageLink(manifest, "bloom", () => translate("config.section.bloom"));
+            configMenu.AddPageLink(manifest, "lens", () => translate("config.section.lens"));
+            configMenu.AddPageLink(manifest, "smoothing", () => translate("tuner.tab.smoothing"));
+            configMenu.AddPageLink(manifest, "lighting", () => translate("config.section.lighting"));
+            configMenu.AddPageLink(manifest, "windows", () => translate("config.section.windows"));
+            configMenu.AddPageLink(manifest, "shadows", () => translate("config.section.shadows"));
+            configMenu.AddPageLink(manifest, "godrays", () => translate("config.section.godrays"));
+            configMenu.AddPageLink(manifest, "water", () => translate("config.section.water"));
+            configMenu.AddPageLink(manifest, "cloudshadow", () => translate("config.section.cloudshadow"));
+            configMenu.AddPageLink(manifest, "fog", () => translate("config.section.fog"));
+            configMenu.AddPageLink(manifest, "weather", () => translate("config.section.weather"));
+            configMenu.AddPageLink(manifest, "particles", () => translate("config.section.particles"));
+            configMenu.AddPageLink(manifest, "camera", () => translate("config.section.camera"));
+            configMenu.AddPageLink(manifest, "misc", () => translate("config.section.misc"));
 
             // --- Bloom (implemented) ---
         }
 
         /// <summary>Bloom.</summary>
-        private static void RegisterBloomPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        private static void RegisterBloomPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
-            api.AddPage(manifest, "bloom", () => i18n("config.section.bloom"));
-            api.AddBoolOption(manifest, () => config().BloomEnabled, v => config().BloomEnabled = v,
-                () => i18n("config.bloom.enabled.name"), () => i18n("config.bloom.enabled.tooltip"));
-            api.AddNumberOption(manifest, () => config().BloomThreshold, v => config().BloomThreshold = v,
-                () => i18n("config.bloom.threshold.name"), null, 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().BloomIntensity, v => config().BloomIntensity = v,
-                () => i18n("config.bloom.intensity.name"), null, 0f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().BloomEmissiveBoost, v => config().BloomEmissiveBoost = v,
-                () => i18n("config.bloom.emissiveboost.name"),
-                () => i18n("config.bloom.emissiveboost.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddPage(manifest, "bloom", () => translate("config.section.bloom"));
+            configMenu.AddBoolOption(manifest, () => config().BloomEnabled, value => config().BloomEnabled = value,
+                () => translate("config.bloom.enabled.name"), () => translate("config.bloom.enabled.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().BloomThreshold, value => config().BloomThreshold = value,
+                () => translate("config.bloom.threshold.name"), null, 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().BloomIntensity, value => config().BloomIntensity = value,
+                () => translate("config.bloom.intensity.name"), null, 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().BloomEmissiveBoost, value => config().BloomEmissiveBoost = value,
+                () => translate("config.bloom.emissiveboost.name"),
+                () => translate("config.bloom.emissiveboost.tooltip"), 0f, 1f, 0.05f);
 
             // --- Color grading (implemented) ---
         }
@@ -136,25 +136,25 @@ namespace SDVRadiance
         /// <summary>Colour grading, tonemapping and the blue-light filter.</summary>
         /// <param name="userLuts">Looks found in assets/luts that did not ship with the mod. Empty
         /// for almost everyone, and when it is empty the dropdown is exactly what it always was.</param>
-        private static void RegisterColourGradePage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config, string[] userLuts)
+        private static void RegisterColourGradePage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config, string[] userLuts)
         {
-            api.AddPage(manifest, "colorgrade", () => i18n("config.section.colorgrade"));
-            api.AddBoolOption(manifest, () => config().ColorGradeEnabled, v => config().ColorGradeEnabled = v,
-                () => i18n("config.colorgrade.enabled.name"), () => i18n("config.colorgrade.enabled.tooltip"));
-            api.AddBoolOption(manifest, () => config().ColorGradeAuto, v => config().ColorGradeAuto = v,
-                () => i18n("config.colorgrade.auto.name"), () => i18n("config.colorgrade.auto.tooltip"));
-            api.AddNumberOption(manifest, () => config().ColorGradeStrength, v => config().ColorGradeStrength = v,
-                () => i18n("config.colorgrade.strength.name"), null, 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().ColorGradeContrast, v => config().ColorGradeContrast = v,
-                () => i18n("config.colorgrade.contrast.name"), null, 0.5f, 1.5f, 0.05f);
-            api.AddNumberOption(manifest, () => config().ColorGradeSaturation, v => config().ColorGradeSaturation = v,
-                () => i18n("config.colorgrade.saturation.name"), null, 0f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().ColorGradeTemperature, v => config().ColorGradeTemperature = v,
-                () => i18n("config.colorgrade.temperature.name"), () => i18n("config.colorgrade.temperature.tooltip"), -1f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().ColorGradeBrightness, v => config().ColorGradeBrightness = v,
-                () => i18n("config.colorgrade.brightness.name"), null, 0.5f, 1.5f, 0.05f);
-            api.AddBoolOption(manifest, () => config().ColorGradeToneMap, v => config().ColorGradeToneMap = v,
-                () => i18n("config.colorgrade.tonemap.name"), () => i18n("config.colorgrade.tonemap.tooltip"));
+            configMenu.AddPage(manifest, "colorgrade", () => translate("config.section.colorgrade"));
+            configMenu.AddBoolOption(manifest, () => config().ColorGradeEnabled, value => config().ColorGradeEnabled = value,
+                () => translate("config.colorgrade.enabled.name"), () => translate("config.colorgrade.enabled.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().ColorGradeAuto, value => config().ColorGradeAuto = value,
+                () => translate("config.colorgrade.auto.name"), () => translate("config.colorgrade.auto.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().ColorGradeStrength, value => config().ColorGradeStrength = value,
+                () => translate("config.colorgrade.strength.name"), null, 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().ColorGradeContrast, value => config().ColorGradeContrast = value,
+                () => translate("config.colorgrade.contrast.name"), null, 0.5f, 1.5f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().ColorGradeSaturation, value => config().ColorGradeSaturation = value,
+                () => translate("config.colorgrade.saturation.name"), null, 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().ColorGradeTemperature, value => config().ColorGradeTemperature = value,
+                () => translate("config.colorgrade.temperature.name"), () => translate("config.colorgrade.temperature.tooltip"), -1f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().ColorGradeBrightness, value => config().ColorGradeBrightness = value,
+                () => translate("config.colorgrade.brightness.name"), null, 0.5f, 1.5f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().ColorGradeToneMap, value => config().ColorGradeToneMap = value,
+                () => translate("config.colorgrade.tonemap.name"), () => translate("config.colorgrade.tonemap.tooltip"));
             // A LOOK, on top of the sliders rather than instead of them. The list is the files
             // that ship in assets/luts; anyone who drops their own PNG in there can name it in
             // config.json, which the dropdown cannot offer but the shader loads all the same.
@@ -168,196 +168,196 @@ namespace SDVRadiance
             choices.AddRange(userLuts);
             if (!choices.Contains(current, StringComparer.OrdinalIgnoreCase))
                 choices.Add(current);
-            var mine = new HashSet<string>(userLuts, StringComparer.OrdinalIgnoreCase);
-            api.AddTextOption(manifest,
+            var userLutNames = new HashSet<string>(userLuts, StringComparer.OrdinalIgnoreCase);
+            configMenu.AddTextOption(manifest,
                 () => config().ColorGradeLut,
-                v => config().ColorGradeLut = v ?? "",
-                () => i18n("config.colorgrade.lut.name"), () => i18n("config.colorgrade.lut.tooltip"),
+                value => config().ColorGradeLut = value ?? "",
+                () => translate("config.colorgrade.lut.name"), () => translate("config.colorgrade.lut.tooltip"),
                 choices.ToArray(),
-                v => v.Length == 0 ? i18n("config.colorgrade.lut.none")
-                     : mine.Contains(v) ? $"{v} ({i18n("config.colorgrade.lut.yours")})"
-                     : Array.IndexOf(ModConfig.ShippedLuts, v) >= 0 ? i18n($"config.colorgrade.lut.{v}")
-                     : $"{v} ({i18n("config.colorgrade.lut.missing")})");
-            api.AddNumberOption(manifest, () => config().ColorGradeLutAmount, v => config().ColorGradeLutAmount = v,
-                () => i18n("config.colorgrade.lutamount.name"), () => i18n("config.colorgrade.lutamount.tooltip"), 0f, 1f, 0.05f);
+                choice => choice.Length == 0 ? translate("config.colorgrade.lut.none")
+                     : userLutNames.Contains(choice) ? $"{choice} ({translate("config.colorgrade.lut.yours")})"
+                     : Array.IndexOf(ModConfig.ShippedLuts, choice) >= 0 ? translate($"config.colorgrade.lut.{choice}")
+                     : $"{choice} ({translate("config.colorgrade.lut.missing")})");
+            configMenu.AddNumberOption(manifest, () => config().ColorGradeLutAmount, value => config().ColorGradeLutAmount = value,
+                () => translate("config.colorgrade.lutamount.name"), () => translate("config.colorgrade.lutamount.tooltip"), 0f, 1f, 0.05f);
 
-            api.AddNumberOption(manifest, () => config().BlueLightFilter, v => config().BlueLightFilter = v,
-                () => i18n("config.colorgrade.bluelight.name"), () => i18n("config.colorgrade.bluelight.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().BlueLightFilter, value => config().BlueLightFilter = value,
+                () => translate("config.colorgrade.bluelight.name"), () => translate("config.colorgrade.bluelight.tooltip"), 0f, 1f, 0.05f);
 
             // --- God rays (implemented) ---
         }
 
         /// <summary>God rays. Ships off by default.</summary>
-        private static void RegisterGodRaysPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        private static void RegisterGodRaysPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
-            api.AddPage(manifest, "godrays", () => i18n("config.section.godrays"));
-            api.AddSectionTitle(manifest, () => i18n("config.godrays.sectionlamps"));
-            api.AddBoolOption(manifest, () => config().GodRaysEnabled, v => config().GodRaysEnabled = v,
-                () => i18n("config.godrays.enabled.name"), () => i18n("config.godrays.enabled.tooltip"));
-            api.AddNumberOption(manifest, () => config().GodRaysIntensity, v => config().GodRaysIntensity = v,
-                () => i18n("config.godrays.intensity.name"), null, 0f, 2f, 0.05f);
-            api.AddSectionTitle(manifest, () => i18n("config.godrays.sectionsun"));
-            api.AddBoolOption(manifest, () => config().GodRaysSun, v => config().GodRaysSun = v,
-                () => i18n("config.godrays.sun.name"), () => i18n("config.godrays.sun.tooltip"));
-            api.AddNumberOption(manifest, () => config().GodRaysSunIntensity, v => config().GodRaysSunIntensity = v,
-                () => i18n("config.godrays.sunintensity.name"), () => i18n("config.godrays.sunintensity.tooltip"), 0f, 1.5f, 0.05f);
-            api.AddNumberOption(manifest, () => config().GodRaysSunReach, v => config().GodRaysSunReach = v,
-                () => i18n("config.godrays.sunreach.name"), () => i18n("config.godrays.sunreach.tooltip"), 0.1f, 1f, 0.05f);
+            configMenu.AddPage(manifest, "godrays", () => translate("config.section.godrays"));
+            configMenu.AddSectionTitle(manifest, () => translate("config.godrays.sectionlamps"));
+            configMenu.AddBoolOption(manifest, () => config().GodRaysEnabled, value => config().GodRaysEnabled = value,
+                () => translate("config.godrays.enabled.name"), () => translate("config.godrays.enabled.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().GodRaysIntensity, value => config().GodRaysIntensity = value,
+                () => translate("config.godrays.intensity.name"), null, 0f, 2f, 0.05f);
+            configMenu.AddSectionTitle(manifest, () => translate("config.godrays.sectionsun"));
+            configMenu.AddBoolOption(manifest, () => config().GodRaysSun, value => config().GodRaysSun = value,
+                () => translate("config.godrays.sun.name"), () => translate("config.godrays.sun.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().GodRaysSunIntensity, value => config().GodRaysSunIntensity = value,
+                () => translate("config.godrays.sunintensity.name"), () => translate("config.godrays.sunintensity.tooltip"), 0f, 1.5f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().GodRaysSunReach, value => config().GodRaysSunReach = value,
+                () => translate("config.godrays.sunreach.name"), () => translate("config.godrays.sunreach.tooltip"), 0.1f, 1f, 0.05f);
 
             // --- Volumetric fog (implemented) ---
         }
 
         /// <summary>Fog, and the separate night mist that runs on the same machinery.</summary>
-        private static void RegisterFogPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        private static void RegisterFogPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
-            api.AddPage(manifest, "fog", () => i18n("config.section.fog"));
-            api.AddSectionTitle(manifest, () => i18n("config.fog.sectionday"));
-            api.AddBoolOption(manifest, () => config().FogEnabled, v => config().FogEnabled = v,
-                () => i18n("config.fog.enabled.name"), () => i18n("config.fog.enabled.tooltip"));
-            api.AddNumberOption(manifest, () => config().FogCoverage, v => config().FogCoverage = v,
-                () => i18n("config.fog.coverage.name"), () => i18n("config.fog.coverage.tooltip"), 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().FogDensity, v => config().FogDensity = v,
-                () => i18n("config.fog.density.name"), () => i18n("config.fog.density.tooltip"), 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().FogScale, v => config().FogScale = v,
-                () => i18n("config.fog.scale.name"), null, 1f, 8f, 0.5f);
-            api.AddNumberOption(manifest, () => config().FogSpeed, v => config().FogSpeed = v,
-                () => i18n("config.fog.speed.name"), null, 0f, 0.1f, 0.005f);
-            api.AddSectionTitle(manifest, () => i18n("config.fog.sectionnight"));
-            api.AddBoolOption(manifest, () => config().FogNightMist, v => config().FogNightMist = v,
-                () => i18n("config.fog.nightmist.name"), () => i18n("config.fog.nightmist.tooltip"));
-            api.AddNumberOption(manifest, () => config().FogNightMistCoverage, v => config().FogNightMistCoverage = v,
-                () => i18n("config.fog.nightmistcoverage.name"), () => i18n("config.fog.coverage.tooltip"), 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().FogNightMistDensity, v => config().FogNightMistDensity = v,
-                () => i18n("config.fog.nightmistdensity.name"), () => i18n("config.fog.density.tooltip"), 0f, 1f, 0.05f);
-            api.AddSectionTitle(manifest, () => i18n("config.fog.sectionboth"));
-            api.AddNumberOption(manifest, () => config().FogTopBias, v => config().FogTopBias = v,
-                () => i18n("config.fog.topbias.name"), () => i18n("config.fog.topbias.tooltip"), 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().FogNightMistSpeed, v => config().FogNightMistSpeed = v,
-                () => i18n("config.fog.nightmistspeed.name"), null, 0f, 0.1f, 0.002f);
-            api.AddSectionTitle(manifest, () => i18n("config.heathaze.name"));
-            api.AddBoolOption(manifest, () => config().HeatHazeEnabled, v => config().HeatHazeEnabled = v,
-                () => i18n("config.heathaze.name"), () => i18n("config.heathaze.tooltip"));
-            api.AddNumberOption(manifest, () => config().HeatHazeStrength, v => config().HeatHazeStrength = v,
-                () => i18n("config.heathaze.strength.name"), () => i18n("config.heathaze.strength.tooltip"), 0f, 2f, 0.05f);
+            configMenu.AddPage(manifest, "fog", () => translate("config.section.fog"));
+            configMenu.AddSectionTitle(manifest, () => translate("config.fog.sectionday"));
+            configMenu.AddBoolOption(manifest, () => config().FogEnabled, value => config().FogEnabled = value,
+                () => translate("config.fog.enabled.name"), () => translate("config.fog.enabled.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().FogCoverage, value => config().FogCoverage = value,
+                () => translate("config.fog.coverage.name"), () => translate("config.fog.coverage.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().FogDensity, value => config().FogDensity = value,
+                () => translate("config.fog.density.name"), () => translate("config.fog.density.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().FogScale, value => config().FogScale = value,
+                () => translate("config.fog.scale.name"), null, 1f, 8f, 0.5f);
+            configMenu.AddNumberOption(manifest, () => config().FogSpeed, value => config().FogSpeed = value,
+                () => translate("config.fog.speed.name"), null, 0f, 0.1f, 0.005f);
+            configMenu.AddSectionTitle(manifest, () => translate("config.fog.sectionnight"));
+            configMenu.AddBoolOption(manifest, () => config().FogNightMist, value => config().FogNightMist = value,
+                () => translate("config.fog.nightmist.name"), () => translate("config.fog.nightmist.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().FogNightMistCoverage, value => config().FogNightMistCoverage = value,
+                () => translate("config.fog.nightmistcoverage.name"), () => translate("config.fog.coverage.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().FogNightMistDensity, value => config().FogNightMistDensity = value,
+                () => translate("config.fog.nightmistdensity.name"), () => translate("config.fog.density.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddSectionTitle(manifest, () => translate("config.fog.sectionboth"));
+            configMenu.AddNumberOption(manifest, () => config().FogTopBias, value => config().FogTopBias = value,
+                () => translate("config.fog.topbias.name"), () => translate("config.fog.topbias.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().FogNightMistSpeed, value => config().FogNightMistSpeed = value,
+                () => translate("config.fog.nightmistspeed.name"), null, 0f, 0.1f, 0.002f);
+            configMenu.AddSectionTitle(manifest, () => translate("config.heathaze.name"));
+            configMenu.AddBoolOption(manifest, () => config().HeatHazeEnabled, value => config().HeatHazeEnabled = value,
+                () => translate("config.heathaze.name"), () => translate("config.heathaze.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().HeatHazeStrength, value => config().HeatHazeStrength = value,
+                () => translate("config.heathaze.strength.name"), () => translate("config.heathaze.strength.tooltip"), 0f, 2f, 0.05f);
 
             // --- Cloud shadows (implemented) ---
         }
 
         /// <summary>Weather: the replacement rain and snow, drawn in the game's own weather slot.</summary>
-        private static void RegisterWeatherPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        private static void RegisterWeatherPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
-            api.AddPage(manifest, "weather", () => i18n("config.section.weather"));
-            api.AddBoolOption(manifest, () => config().AuroraEnabled, v => config().AuroraEnabled = v,
-                () => i18n("config.weather.aurora.name"), () => i18n("config.weather.aurora.tooltip"));
-            api.AddNumberOption(manifest, () => config().AuroraStrength, v => config().AuroraStrength = v,
-                () => i18n("config.weather.aurorastrength.name"), () => i18n("config.weather.aurorastrength.tooltip"), 0f, 2f, 0.1f);
-            api.AddBoolOption(manifest, () => config().ShootingStarsEnabled, v => config().ShootingStarsEnabled = v,
-                () => i18n("config.weather.shootingstars.name"), () => i18n("config.weather.shootingstars.tooltip"));
-            api.AddBoolOption(manifest, () => config().FoliageSwayEnabled, v => config().FoliageSwayEnabled = v,
-                () => i18n("config.weather.foliagesway.name"), () => i18n("config.weather.foliagesway.tooltip"));
-            api.AddNumberOption(manifest, () => config().FoliageSwayStrength, v => config().FoliageSwayStrength = v,
-                () => i18n("config.weather.foliageswaystrength.name"), () => i18n("config.weather.foliageswaystrength.tooltip"), 0f, 2f, 0.1f);
-            api.AddNumberOption(manifest, () => config().FoliageSwaySpeed, v => config().FoliageSwaySpeed = v,
-                () => i18n("config.weather.foliageswayspeed.name"), () => i18n("config.weather.foliageswayspeed.tooltip"), 0.25f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().FoliageSwayGustSpan, v => config().FoliageSwayGustSpan = v,
-                () => i18n("config.weather.foliageswaygustspan.name"), () => i18n("config.weather.foliageswaygustspan.tooltip"), 4f, 40f, 1f);
-            api.AddBoolOption(manifest, () => config().PrecipitationEnabled, v => config().PrecipitationEnabled = v,
-                () => i18n("config.precipitation.enabled.name"), () => i18n("config.precipitation.enabled.tooltip"));
-            api.AddSectionTitle(manifest, () => i18n("config.precipitation.rain.name"));
-            api.AddBoolOption(manifest, () => config().PrecipitationRain, v => config().PrecipitationRain = v,
-                () => i18n("config.precipitation.rain.name"), () => i18n("config.precipitation.rain.tooltip"));
-            api.AddNumberOption(manifest, () => config().PrecipitationRainDensity, v => config().PrecipitationRainDensity = v,
-                () => i18n("config.precipitation.density.name"), () => i18n("config.precipitation.density.tooltip"), 0.25f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().PrecipitationRainSize, v => config().PrecipitationRainSize = v,
-                () => i18n("config.precipitation.size.name"), () => i18n("config.precipitation.size.tooltip"), 0.5f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().PrecipitationRainOpacity, v => config().PrecipitationRainOpacity = v,
-                () => i18n("config.precipitation.opacity.name"), () => i18n("config.precipitation.opacity.tooltip"), 0.25f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().PrecipitationStormDensity, v => config().PrecipitationStormDensity = v,
-                () => i18n("config.precipitation.stormdensity.name"), () => i18n("config.precipitation.stormdensity.tooltip"), 1f, 3f, 0.05f);
-            api.AddNumberOption(manifest, () => config().PrecipitationRainSlant, v => config().PrecipitationRainSlant = v,
-                () => i18n("config.precipitation.rainslant.name"), () => i18n("config.precipitation.rainslant.tooltip"), 0f, 3f, 0.05f);
-            api.AddSectionTitle(manifest, () => i18n("config.precipitation.snow.name"));
-            api.AddBoolOption(manifest, () => config().PrecipitationSnow, v => config().PrecipitationSnow = v,
-                () => i18n("config.precipitation.snow.name"), () => i18n("config.precipitation.snow.tooltip"));
-            api.AddNumberOption(manifest, () => config().PrecipitationSnowDensity, v => config().PrecipitationSnowDensity = v,
-                () => i18n("config.precipitation.density.name"), () => i18n("config.precipitation.density.tooltip"), 0.25f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().PrecipitationSnowSize, v => config().PrecipitationSnowSize = v,
-                () => i18n("config.precipitation.size.name"), () => i18n("config.precipitation.size.tooltip"), 0.5f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().PrecipitationSnowOpacity, v => config().PrecipitationSnowOpacity = v,
-                () => i18n("config.precipitation.opacity.name"), () => i18n("config.precipitation.opacity.tooltip"), 0.25f, 2f, 0.05f);
-            api.AddSectionTitle(manifest, () => i18n("config.precipitation.wind.name"));
-            api.AddBoolOption(manifest, () => config().PrecipitationWind, v => config().PrecipitationWind = v,
-                () => i18n("config.precipitation.wind.name"), () => i18n("config.precipitation.wind.tooltip"));
-            api.AddNumberOption(manifest, () => config().PrecipitationWindDensity, v => config().PrecipitationWindDensity = v,
-                () => i18n("config.precipitation.density.name"), () => i18n("config.precipitation.density.tooltip"), 0.25f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().PrecipitationWindSize, v => config().PrecipitationWindSize = v,
-                () => i18n("config.precipitation.size.name"), () => i18n("config.precipitation.size.tooltip"), 0.5f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().PrecipitationWindOpacity, v => config().PrecipitationWindOpacity = v,
-                () => i18n("config.precipitation.opacity.name"), () => i18n("config.precipitation.opacity.tooltip"), 0.25f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().PrecipitationWindSlant, v => config().PrecipitationWindSlant = v,
-                () => i18n("config.precipitation.windslant.name"), () => i18n("config.precipitation.windslant.tooltip"), 0.25f, 3f, 0.05f);
-            api.AddSectionTitle(manifest, () => i18n("config.lightning.name"));
-            api.AddBoolOption(manifest, () => config().LightningEffectsEnabled, v => config().LightningEffectsEnabled = v,
-                () => i18n("config.lightning.name"), () => i18n("config.lightning.tooltip"));
-            api.AddBoolOption(manifest, () => config().LightningBoltsEnabled, v => config().LightningBoltsEnabled = v,
-                () => i18n("config.lightningbolts.name"), () => i18n("config.lightningbolts.tooltip"));
+            configMenu.AddPage(manifest, "weather", () => translate("config.section.weather"));
+            configMenu.AddBoolOption(manifest, () => config().AuroraEnabled, value => config().AuroraEnabled = value,
+                () => translate("config.weather.aurora.name"), () => translate("config.weather.aurora.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().AuroraStrength, value => config().AuroraStrength = value,
+                () => translate("config.weather.aurorastrength.name"), () => translate("config.weather.aurorastrength.tooltip"), 0f, 2f, 0.1f);
+            configMenu.AddBoolOption(manifest, () => config().ShootingStarsEnabled, value => config().ShootingStarsEnabled = value,
+                () => translate("config.weather.shootingstars.name"), () => translate("config.weather.shootingstars.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().FoliageSwayEnabled, value => config().FoliageSwayEnabled = value,
+                () => translate("config.weather.foliagesway.name"), () => translate("config.weather.foliagesway.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().FoliageSwayStrength, value => config().FoliageSwayStrength = value,
+                () => translate("config.weather.foliageswaystrength.name"), () => translate("config.weather.foliageswaystrength.tooltip"), 0f, 2f, 0.1f);
+            configMenu.AddNumberOption(manifest, () => config().FoliageSwaySpeed, value => config().FoliageSwaySpeed = value,
+                () => translate("config.weather.foliageswayspeed.name"), () => translate("config.weather.foliageswayspeed.tooltip"), 0.25f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().FoliageSwayGustSpan, value => config().FoliageSwayGustSpan = value,
+                () => translate("config.weather.foliageswaygustspan.name"), () => translate("config.weather.foliageswaygustspan.tooltip"), 4f, 40f, 1f);
+            configMenu.AddBoolOption(manifest, () => config().PrecipitationEnabled, value => config().PrecipitationEnabled = value,
+                () => translate("config.precipitation.enabled.name"), () => translate("config.precipitation.enabled.tooltip"));
+            configMenu.AddSectionTitle(manifest, () => translate("config.precipitation.rain.name"));
+            configMenu.AddBoolOption(manifest, () => config().PrecipitationRain, value => config().PrecipitationRain = value,
+                () => translate("config.precipitation.rain.name"), () => translate("config.precipitation.rain.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().PrecipitationRainDensity, value => config().PrecipitationRainDensity = value,
+                () => translate("config.precipitation.density.name"), () => translate("config.precipitation.density.tooltip"), 0.25f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().PrecipitationRainSize, value => config().PrecipitationRainSize = value,
+                () => translate("config.precipitation.size.name"), () => translate("config.precipitation.size.tooltip"), 0.5f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().PrecipitationRainOpacity, value => config().PrecipitationRainOpacity = value,
+                () => translate("config.precipitation.opacity.name"), () => translate("config.precipitation.opacity.tooltip"), 0.25f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().PrecipitationStormDensity, value => config().PrecipitationStormDensity = value,
+                () => translate("config.precipitation.stormdensity.name"), () => translate("config.precipitation.stormdensity.tooltip"), 1f, 3f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().PrecipitationRainSlant, value => config().PrecipitationRainSlant = value,
+                () => translate("config.precipitation.rainslant.name"), () => translate("config.precipitation.rainslant.tooltip"), 0f, 3f, 0.05f);
+            configMenu.AddSectionTitle(manifest, () => translate("config.precipitation.snow.name"));
+            configMenu.AddBoolOption(manifest, () => config().PrecipitationSnow, value => config().PrecipitationSnow = value,
+                () => translate("config.precipitation.snow.name"), () => translate("config.precipitation.snow.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().PrecipitationSnowDensity, value => config().PrecipitationSnowDensity = value,
+                () => translate("config.precipitation.density.name"), () => translate("config.precipitation.density.tooltip"), 0.25f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().PrecipitationSnowSize, value => config().PrecipitationSnowSize = value,
+                () => translate("config.precipitation.size.name"), () => translate("config.precipitation.size.tooltip"), 0.5f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().PrecipitationSnowOpacity, value => config().PrecipitationSnowOpacity = value,
+                () => translate("config.precipitation.opacity.name"), () => translate("config.precipitation.opacity.tooltip"), 0.25f, 2f, 0.05f);
+            configMenu.AddSectionTitle(manifest, () => translate("config.precipitation.wind.name"));
+            configMenu.AddBoolOption(manifest, () => config().PrecipitationWind, value => config().PrecipitationWind = value,
+                () => translate("config.precipitation.wind.name"), () => translate("config.precipitation.wind.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().PrecipitationWindDensity, value => config().PrecipitationWindDensity = value,
+                () => translate("config.precipitation.density.name"), () => translate("config.precipitation.density.tooltip"), 0.25f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().PrecipitationWindSize, value => config().PrecipitationWindSize = value,
+                () => translate("config.precipitation.size.name"), () => translate("config.precipitation.size.tooltip"), 0.5f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().PrecipitationWindOpacity, value => config().PrecipitationWindOpacity = value,
+                () => translate("config.precipitation.opacity.name"), () => translate("config.precipitation.opacity.tooltip"), 0.25f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().PrecipitationWindSlant, value => config().PrecipitationWindSlant = value,
+                () => translate("config.precipitation.windslant.name"), () => translate("config.precipitation.windslant.tooltip"), 0.25f, 3f, 0.05f);
+            configMenu.AddSectionTitle(manifest, () => translate("config.lightning.name"));
+            configMenu.AddBoolOption(manifest, () => config().LightningEffectsEnabled, value => config().LightningEffectsEnabled = value,
+                () => translate("config.lightning.name"), () => translate("config.lightning.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().LightningBoltsEnabled, value => config().LightningBoltsEnabled = value,
+                () => translate("config.lightningbolts.name"), () => translate("config.lightningbolts.tooltip"));
             // See the note in the tuner: the wet GROUND is off and out of both menus until its
             // puddles can be placed from the map rather than guessed at.
-            api.AddSectionTitle(manifest, () => i18n("config.wetworld.sectiondrops"));
-            api.AddBoolOption(manifest, () => config().WetWorldLensDrops, v => config().WetWorldLensDrops = v,
-                () => i18n("config.wetworld.lensdrops.name"), () => i18n("config.wetworld.lensdrops.tooltip"));
-            api.AddNumberOption(manifest, () => config().WetWorldLensDropSize, v => config().WetWorldLensDropSize = v,
-                () => i18n("config.wetworld.lensdropsize.name"), () => i18n("config.wetworld.lensdropsize.tooltip"), 0.5f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WetWorldEdgeHaze, v => config().WetWorldEdgeHaze = v,
-                () => i18n("config.wetworld.edgehaze.name"), () => i18n("config.wetworld.edgehaze.tooltip"), 0f, 2f, 0.05f);
+            configMenu.AddSectionTitle(manifest, () => translate("config.wetworld.sectiondrops"));
+            configMenu.AddBoolOption(manifest, () => config().WetWorldLensDrops, value => config().WetWorldLensDrops = value,
+                () => translate("config.wetworld.lensdrops.name"), () => translate("config.wetworld.lensdrops.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().WetWorldLensDropSize, value => config().WetWorldLensDropSize = value,
+                () => translate("config.wetworld.lensdropsize.name"), () => translate("config.wetworld.lensdropsize.tooltip"), 0.5f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WetWorldEdgeHaze, value => config().WetWorldEdgeHaze = value,
+                () => translate("config.wetworld.edgehaze.name"), () => translate("config.wetworld.edgehaze.tooltip"), 0f, 2f, 0.05f);
         }
 
         /// <summary>Particles: the pool that drifts, rises and glows in the world itself.</summary>
-        private static void RegisterParticlesPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        private static void RegisterParticlesPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
-            api.AddPage(manifest, "particles", () => i18n("config.section.particles"));
-            api.AddBoolOption(manifest, () => config().ParticlesEnabled, v => config().ParticlesEnabled = v,
-                () => i18n("config.particles.enabled.name"), () => i18n("config.particles.enabled.tooltip"));
-            api.AddNumberOption(manifest, () => config().ParticleDensity, v => config().ParticleDensity = v,
-                () => i18n("config.particles.density.name"), () => i18n("config.particles.density.tooltip"), 0.25f, 2f, 0.05f);
+            configMenu.AddPage(manifest, "particles", () => translate("config.section.particles"));
+            configMenu.AddBoolOption(manifest, () => config().ParticlesEnabled, value => config().ParticlesEnabled = value,
+                () => translate("config.particles.enabled.name"), () => translate("config.particles.enabled.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().ParticleDensity, value => config().ParticleDensity = value,
+                () => translate("config.particles.density.name"), () => translate("config.particles.density.tooltip"), 0.25f, 2f, 0.05f);
 
-            AddParticleEmitter(api, manifest, i18n, "dust",
-                () => config().ParticleDust, v => config().ParticleDust = v,
-                () => config().ParticleDustAmount, v => config().ParticleDustAmount = v,
-                () => config().ParticleDustSize, v => config().ParticleDustSize = v);
-            AddParticleEmitter(api, manifest, i18n, "embers",
-                () => config().ParticleEmbers, v => config().ParticleEmbers = v,
-                () => config().ParticleEmbersAmount, v => config().ParticleEmbersAmount = v,
-                () => config().ParticleEmbersSize, v => config().ParticleEmbersSize = v);
-            AddParticleEmitter(api, manifest, i18n, "fireflies",
-                () => config().ParticleFireflies, v => config().ParticleFireflies = v,
-                () => config().ParticleFirefliesAmount, v => config().ParticleFirefliesAmount = v,
-                () => config().ParticleFirefliesSize, v => config().ParticleFirefliesSize = v);
-            AddParticleEmitter(api, manifest, i18n, "petals",
-                () => config().ParticlePetals, v => config().ParticlePetals = v,
-                () => config().ParticlePetalsAmount, v => config().ParticlePetalsAmount = v,
-                () => config().ParticlePetalsSize, v => config().ParticlePetalsSize = v);
+            AddParticleEmitter(configMenu, manifest, translate, "dust",
+                () => config().ParticleDust, value => config().ParticleDust = value,
+                () => config().ParticleDustAmount, value => config().ParticleDustAmount = value,
+                () => config().ParticleDustSize, value => config().ParticleDustSize = value);
+            AddParticleEmitter(configMenu, manifest, translate, "embers",
+                () => config().ParticleEmbers, value => config().ParticleEmbers = value,
+                () => config().ParticleEmbersAmount, value => config().ParticleEmbersAmount = value,
+                () => config().ParticleEmbersSize, value => config().ParticleEmbersSize = value);
+            AddParticleEmitter(configMenu, manifest, translate, "fireflies",
+                () => config().ParticleFireflies, value => config().ParticleFireflies = value,
+                () => config().ParticleFirefliesAmount, value => config().ParticleFirefliesAmount = value,
+                () => config().ParticleFirefliesSize, value => config().ParticleFirefliesSize = value);
+            AddParticleEmitter(configMenu, manifest, translate, "petals",
+                () => config().ParticlePetals, value => config().ParticlePetals = value,
+                () => config().ParticlePetalsAmount, value => config().ParticlePetalsAmount = value,
+                () => config().ParticlePetalsSize, value => config().ParticlePetalsSize = value);
             // Only the flat things buckle, so this one setting sits with them rather than with the
             // particles as a whole.
-            api.AddNumberOption(manifest, () => config().ParticlePetalsFlutter, v => config().ParticlePetalsFlutter = v,
-                () => i18n("config.particles.petalsflutter.name"), () => i18n("config.particles.petalsflutter.tooltip"),
+            configMenu.AddNumberOption(manifest, () => config().ParticlePetalsFlutter, value => config().ParticlePetalsFlutter = value,
+                () => translate("config.particles.petalsflutter.name"), () => translate("config.particles.petalsflutter.tooltip"),
                 0f, 1f, 0.05f);
-            AddParticleEmitter(api, manifest, i18n, "ringsparkles",
-                () => config().ParticleRingSparkles, v => config().ParticleRingSparkles = v,
-                () => config().ParticleRingSparklesAmount, v => config().ParticleRingSparklesAmount = v,
-                () => config().ParticleRingSparklesSize, v => config().ParticleRingSparklesSize = v);
-            AddParticleEmitter(api, manifest, i18n, "waterfallmist",
-                () => config().ParticleWaterfallMist, v => config().ParticleWaterfallMist = v,
-                () => config().ParticleWaterfallMistAmount, v => config().ParticleWaterfallMistAmount = v,
-                () => config().ParticleWaterfallMistSize, v => config().ParticleWaterfallMistSize = v);
-            AddParticleEmitter(api, manifest, i18n, "hotspringsteam",
-                () => config().ParticleHotSpringSteam, v => config().ParticleHotSpringSteam = v,
-                () => config().ParticleHotSpringSteamAmount, v => config().ParticleHotSpringSteamAmount = v,
-                () => config().ParticleHotSpringSteamSize, v => config().ParticleHotSpringSteamSize = v);
-            AddParticleEmitter(api, manifest, i18n, "lavasparks",
-                () => config().ParticleLavaSparks, v => config().ParticleLavaSparks = v,
-                () => config().ParticleLavaSparksAmount, v => config().ParticleLavaSparksAmount = v,
-                () => config().ParticleLavaSparksSize, v => config().ParticleLavaSparksSize = v);
+            AddParticleEmitter(configMenu, manifest, translate, "ringsparkles",
+                () => config().ParticleRingSparkles, value => config().ParticleRingSparkles = value,
+                () => config().ParticleRingSparklesAmount, value => config().ParticleRingSparklesAmount = value,
+                () => config().ParticleRingSparklesSize, value => config().ParticleRingSparklesSize = value);
+            AddParticleEmitter(configMenu, manifest, translate, "waterfallmist",
+                () => config().ParticleWaterfallMist, value => config().ParticleWaterfallMist = value,
+                () => config().ParticleWaterfallMistAmount, value => config().ParticleWaterfallMistAmount = value,
+                () => config().ParticleWaterfallMistSize, value => config().ParticleWaterfallMistSize = value);
+            AddParticleEmitter(configMenu, manifest, translate, "hotspringsteam",
+                () => config().ParticleHotSpringSteam, value => config().ParticleHotSpringSteam = value,
+                () => config().ParticleHotSpringSteamAmount, value => config().ParticleHotSpringSteamAmount = value,
+                () => config().ParticleHotSpringSteamSize, value => config().ParticleHotSpringSteamSize = value);
+            AddParticleEmitter(configMenu, manifest, translate, "lavasparks",
+                () => config().ParticleLavaSparks, value => config().ParticleLavaSparks = value,
+                () => config().ParticleLavaSparksAmount, value => config().ParticleLavaSparksAmount = value,
+                () => config().ParticleLavaSparksSize, value => config().ParticleLavaSparksSize = value);
 
             // --- Cloud shadows (implemented) ---
         }
@@ -368,128 +368,128 @@ namespace SDVRadiance
         /// <para>The amount and size labels are shared across emitters on purpose: they mean
         /// exactly the same thing every time, and a translator should not be asked to write "how
         /// many" six times.</para></summary>
-        private static void AddParticleEmitter(IGenericModConfigMenuApi api, IManifest manifest,
-            Func<string, string> i18n, string emitter,
+        private static void AddParticleEmitter(IGenericModConfigMenuApi configMenu, IManifest manifest,
+            Func<string, string> translate, string emitter,
             Func<bool> getOn, Action<bool> setOn,
             Func<float> getAmount, Action<float> setAmount,
             Func<float> getSize, Action<float> setSize)
         {
-            api.AddSectionTitle(manifest, () => i18n($"config.particles.{emitter}.name"));
-            api.AddBoolOption(manifest, getOn, setOn,
-                () => i18n($"config.particles.{emitter}.name"), () => i18n($"config.particles.{emitter}.tooltip"));
-            api.AddNumberOption(manifest, getAmount, setAmount,
-                () => i18n("config.particles.amount.name"), () => i18n("config.particles.amount.tooltip"), 0f, 2f, 0.05f);
-            api.AddNumberOption(manifest, getSize, setSize,
-                () => i18n("config.particles.size.name"), () => i18n("config.particles.size.tooltip"), 0.5f, 2f, 0.05f);
+            configMenu.AddSectionTitle(manifest, () => translate($"config.particles.{emitter}.name"));
+            configMenu.AddBoolOption(manifest, getOn, setOn,
+                () => translate($"config.particles.{emitter}.name"), () => translate($"config.particles.{emitter}.tooltip"));
+            configMenu.AddNumberOption(manifest, getAmount, setAmount,
+                () => translate("config.particles.amount.name"), () => translate("config.particles.amount.tooltip"), 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, getSize, setSize,
+                () => translate("config.particles.size.name"), () => translate("config.particles.size.tooltip"), 0.5f, 2f, 0.05f);
         }
 
         /// <summary>Cloud shadows, including hiding the vanilla ones.</summary>
-        private static void RegisterCloudShadowPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        private static void RegisterCloudShadowPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
-            api.AddPage(manifest, "cloudshadow", () => i18n("config.section.cloudshadow"));
-            api.AddBoolOption(manifest, () => config().SuppressVanillaCloudShadow, v => config().SuppressVanillaCloudShadow = v,
-                () => i18n("config.cloudshadow.hidevanilla.name"), () => i18n("config.cloudshadow.hidevanilla.tooltip"));
-            api.AddBoolOption(manifest, () => config().CloudShadowEnabled, v => config().CloudShadowEnabled = v,
-                () => i18n("config.cloudshadow.enabled.name"), () => i18n("config.cloudshadow.enabled.tooltip"));
-            api.AddNumberOption(manifest, () => config().CloudShadowCoverage, v => config().CloudShadowCoverage = v,
-                () => i18n("config.cloudshadow.coverage.name"), null, 0.1f, 0.9f, 0.05f);
-            api.AddNumberOption(manifest, () => config().CloudShadowCount, v => config().CloudShadowCount = v,
-                () => i18n("config.cloudshadow.count.name"), () => i18n("config.cloudshadow.count.tooltip"), 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().CloudShadowOpacity, v => config().CloudShadowOpacity = v,
-                () => i18n("config.cloudshadow.opacity.name"), null, 0f, 0.7f, 0.05f);
-            api.AddNumberOption(manifest, () => config().CloudShadowScale, v => config().CloudShadowScale = v,
-                () => i18n("config.cloudshadow.scale.name"), null, 1f, 5f, 0.5f);
-            api.AddNumberOption(manifest, () => config().CloudShadowSpeed, v => config().CloudShadowSpeed = v,
-                () => i18n("config.cloudshadow.speed.name"), null, 0f, 0.1f, 0.005f);
+            configMenu.AddPage(manifest, "cloudshadow", () => translate("config.section.cloudshadow"));
+            configMenu.AddBoolOption(manifest, () => config().SuppressVanillaCloudShadow, value => config().SuppressVanillaCloudShadow = value,
+                () => translate("config.cloudshadow.hidevanilla.name"), () => translate("config.cloudshadow.hidevanilla.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().CloudShadowEnabled, value => config().CloudShadowEnabled = value,
+                () => translate("config.cloudshadow.enabled.name"), () => translate("config.cloudshadow.enabled.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().CloudShadowCoverage, value => config().CloudShadowCoverage = value,
+                () => translate("config.cloudshadow.coverage.name"), null, 0.1f, 0.9f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().CloudShadowCount, value => config().CloudShadowCount = value,
+                () => translate("config.cloudshadow.count.name"), () => translate("config.cloudshadow.count.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().CloudShadowOpacity, value => config().CloudShadowOpacity = value,
+                () => translate("config.cloudshadow.opacity.name"), null, 0f, 0.7f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().CloudShadowScale, value => config().CloudShadowScale = value,
+                () => translate("config.cloudshadow.scale.name"), null, 1f, 5f, 0.5f);
+            configMenu.AddNumberOption(manifest, () => config().CloudShadowSpeed, value => config().CloudShadowSpeed = value,
+                () => translate("config.cloudshadow.speed.name"), null, 0f, 0.1f, 0.005f);
 
             // --- Lens: the camera-glass effects, grouped as the F6 tuner groups them ---
         }
 
         /// <summary>Lens effects: tilt shift, vignette, chromatic aberration.</summary>
-        private static void RegisterLensPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        private static void RegisterLensPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
-            api.AddPage(manifest, "lens", () => i18n("config.section.lens"));
-            api.AddBoolOption(manifest, () => config().TiltShiftEnabled, v => config().TiltShiftEnabled = v,
-                () => i18n("config.tiltshift.enabled.name"), () => i18n("config.tiltshift.enabled.tooltip"));
-            api.AddTextOption(manifest,
+            configMenu.AddPage(manifest, "lens", () => translate("config.section.lens"));
+            configMenu.AddBoolOption(manifest, () => config().TiltShiftEnabled, value => config().TiltShiftEnabled = value,
+                () => translate("config.tiltshift.enabled.name"), () => translate("config.tiltshift.enabled.tooltip"));
+            configMenu.AddTextOption(manifest,
                 () => config().TiltShiftMode.ToString(),
-                v => config().TiltShiftMode = Enum.TryParse<TiltShiftFocus>(v, out var m) ? m : TiltShiftFocus.Bands,
-                () => i18n("config.tiltshift.mode.name"), () => i18n("config.tiltshift.mode.tooltip"),
+                value => config().TiltShiftMode = Enum.TryParse<TiltShiftFocus>(value, out var mode) ? mode : TiltShiftFocus.Bands,
+                () => translate("config.tiltshift.mode.name"), () => translate("config.tiltshift.mode.tooltip"),
                 new[] { nameof(TiltShiftFocus.Bands), nameof(TiltShiftFocus.Radial) },
-                v => i18n($"config.tiltshift.mode.{v.ToLowerInvariant()}"));
-            api.AddNumberOption(manifest, () => config().TiltShiftStrength, v => config().TiltShiftStrength = v,
-                () => i18n("config.tiltshift.strength.name"), null, 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().TiltShiftRadius, v => config().TiltShiftRadius = v,
-                () => i18n("config.tiltshift.radius.name"), () => i18n("config.tiltshift.radius.tooltip"), 0.05f, 0.9f, 0.05f);
-            api.AddNumberOption(manifest, () => config().TiltShiftFeather, v => config().TiltShiftFeather = v,
-                () => i18n("config.tiltshift.feather.name"), () => i18n("config.tiltshift.feather.tooltip"), 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().TiltShiftTopRatio, v => config().TiltShiftTopRatio = v,
-                () => i18n("config.tiltshift.top.name"), null, 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().TiltShiftBottomRatio, v => config().TiltShiftBottomRatio = v,
-                () => i18n("config.tiltshift.bottom.name"), null, 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().TiltShiftIndoorAmount, v => config().TiltShiftIndoorAmount = v,
-                () => i18n("config.tiltshift.indoor.name"), () => i18n("config.tiltshift.indoor.tooltip"), 0f, 1f, 0.05f);
-            api.AddSectionTitle(manifest, () => i18n("config.section.finishing"));
-            api.AddBoolOption(manifest, () => config().VignetteEnabled, v => config().VignetteEnabled = v,
-                () => i18n("config.vignette.enabled.name"), () => i18n("config.vignette.enabled.tooltip"));
-            api.AddNumberOption(manifest, () => config().VignetteStrength, v => config().VignetteStrength = v,
-                () => i18n("config.vignette.strength.name"), null, 0f, 1f, 0.05f);
-            api.AddBoolOption(manifest, () => config().ChromaticAberrationEnabled, v => config().ChromaticAberrationEnabled = v,
-                () => i18n("config.ca.enabled.name"), () => i18n("config.ca.enabled.tooltip"));
-            api.AddNumberOption(manifest, () => config().ChromaticAberrationStrength, v => config().ChromaticAberrationStrength = v,
-                () => i18n("config.ca.strength.name"), null, 0f, 1f, 0.05f);
+                choice => translate($"config.tiltshift.mode.{choice.ToLowerInvariant()}"));
+            configMenu.AddNumberOption(manifest, () => config().TiltShiftStrength, value => config().TiltShiftStrength = value,
+                () => translate("config.tiltshift.strength.name"), null, 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().TiltShiftRadius, value => config().TiltShiftRadius = value,
+                () => translate("config.tiltshift.radius.name"), () => translate("config.tiltshift.radius.tooltip"), 0.05f, 0.9f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().TiltShiftFeather, value => config().TiltShiftFeather = value,
+                () => translate("config.tiltshift.feather.name"), () => translate("config.tiltshift.feather.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().TiltShiftTopRatio, value => config().TiltShiftTopRatio = value,
+                () => translate("config.tiltshift.top.name"), null, 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().TiltShiftBottomRatio, value => config().TiltShiftBottomRatio = value,
+                () => translate("config.tiltshift.bottom.name"), null, 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().TiltShiftIndoorAmount, value => config().TiltShiftIndoorAmount = value,
+                () => translate("config.tiltshift.indoor.name"), () => translate("config.tiltshift.indoor.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddSectionTitle(manifest, () => translate("config.section.finishing"));
+            configMenu.AddBoolOption(manifest, () => config().VignetteEnabled, value => config().VignetteEnabled = value,
+                () => translate("config.vignette.enabled.name"), () => translate("config.vignette.enabled.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().VignetteStrength, value => config().VignetteStrength = value,
+                () => translate("config.vignette.strength.name"), null, 0f, 1f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().ChromaticAberrationEnabled, value => config().ChromaticAberrationEnabled = value,
+                () => translate("config.ca.enabled.name"), () => translate("config.ca.enabled.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().ChromaticAberrationStrength, value => config().ChromaticAberrationStrength = value,
+                () => translate("config.ca.strength.name"), null, 0f, 1f, 0.05f);
 
             // --- Water (implemented) ---
         }
 
         /// <summary>Water surface and reflections.</summary>
-        private static void RegisterWaterPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        private static void RegisterWaterPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
-            api.AddPage(manifest, "water", () => i18n("config.section.water"));
-            api.AddBoolOption(manifest, () => config().WaterEnabled, v => config().WaterEnabled = v,
-                () => i18n("config.water.enabled.name"), () => i18n("config.water.enabled.tooltip"));
-            api.AddNumberOption(manifest, () => config().WaterStrength, v => config().WaterStrength = v,
-                () => i18n("config.water.strength.name"), null, 0f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WaterSpeed, v => config().WaterSpeed = v,
-                () => i18n("config.water.speed.name"), null, 0f, 3f, 0.1f);
-            api.AddNumberOption(manifest, () => config().WaterSparkle, v => config().WaterSparkle = v,
-                () => i18n("config.water.sparkle.name"), null, 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WaterSparkleDensity, v => config().WaterSparkleDensity = v,
-                () => i18n("config.water.sparkledensity.name"), () => i18n("config.water.sparkledensity.tooltip"), 0.2f, 2f, 0.05f);
-            api.AddBoolOption(manifest, () => config().WaterCausticsEnabled, v => config().WaterCausticsEnabled = v,
-                () => i18n("config.water.caustics.name"), () => i18n("config.water.caustics.tooltip"));
-            api.AddNumberOption(manifest, () => config().WaterCausticsStrength, v => config().WaterCausticsStrength = v,
-                () => i18n("config.water.causticsstrength.name"), null, 0f, 1f, 0.05f);
-            api.AddBoolOption(manifest, () => config().WaterReflection, v => config().WaterReflection = v,
-                () => i18n("config.water.reflection.name"), () => i18n("config.water.reflection.tooltip"));
-            api.AddNumberOption(manifest, () => config().WaterReflectStrength, v => config().WaterReflectStrength = v,
-                () => i18n("config.water.reflectstrength.name"), null, 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WaterReflectDistort, v => config().WaterReflectDistort = v,
-                () => i18n("config.water.reflectdistort.name"), () => i18n("config.water.reflectdistort.tooltip"),
+            configMenu.AddPage(manifest, "water", () => translate("config.section.water"));
+            configMenu.AddBoolOption(manifest, () => config().WaterEnabled, value => config().WaterEnabled = value,
+                () => translate("config.water.enabled.name"), () => translate("config.water.enabled.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().WaterStrength, value => config().WaterStrength = value,
+                () => translate("config.water.strength.name"), null, 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WaterSpeed, value => config().WaterSpeed = value,
+                () => translate("config.water.speed.name"), null, 0f, 3f, 0.1f);
+            configMenu.AddNumberOption(manifest, () => config().WaterSparkle, value => config().WaterSparkle = value,
+                () => translate("config.water.sparkle.name"), null, 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WaterSparkleDensity, value => config().WaterSparkleDensity = value,
+                () => translate("config.water.sparkledensity.name"), () => translate("config.water.sparkledensity.tooltip"), 0.2f, 2f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().WaterCausticsEnabled, value => config().WaterCausticsEnabled = value,
+                () => translate("config.water.caustics.name"), () => translate("config.water.caustics.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().WaterCausticsStrength, value => config().WaterCausticsStrength = value,
+                () => translate("config.water.causticsstrength.name"), null, 0f, 1f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().WaterReflection, value => config().WaterReflection = value,
+                () => translate("config.water.reflection.name"), () => translate("config.water.reflection.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().WaterReflectStrength, value => config().WaterReflectStrength = value,
+                () => translate("config.water.reflectstrength.name"), null, 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WaterReflectDistort, value => config().WaterReflectDistort = value,
+                () => translate("config.water.reflectdistort.name"), () => translate("config.water.reflectdistort.tooltip"),
                 0f, 1.5f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WaterReflectBanding, v => config().WaterReflectBanding = v,
-                () => i18n("config.water.reflectbanding.name"), () => i18n("config.water.reflectbanding.tooltip"),
+            configMenu.AddNumberOption(manifest, () => config().WaterReflectBanding, value => config().WaterReflectBanding = value,
+                () => translate("config.water.reflectbanding.name"), () => translate("config.water.reflectbanding.tooltip"),
                 0f, 16f, 1f);
-            api.AddNumberOption(manifest, () => config().WaterReflectBlur, v => config().WaterReflectBlur = v,
-                () => i18n("config.water.reflectblur.name"), () => i18n("config.water.reflectblur.tooltip"),
+            configMenu.AddNumberOption(manifest, () => config().WaterReflectBlur, value => config().WaterReflectBlur = value,
+                () => translate("config.water.reflectblur.name"), () => translate("config.water.reflectblur.tooltip"),
                 0f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WaterReflectDepth, v => config().WaterReflectDepth = v,
-                () => i18n("config.water.reflectdepth.name"), () => i18n("config.water.reflectdepth.tooltip"),
+            configMenu.AddNumberOption(manifest, () => config().WaterReflectDepth, value => config().WaterReflectDepth = value,
+                () => translate("config.water.reflectdepth.name"), () => translate("config.water.reflectdepth.tooltip"),
                 0.1f, 1.5f, 0.05f);
             // Reach has been in the config file since 1.5.6 and in no menu, which is the same as
             // not existing for almost everybody who might want it.
-            api.AddNumberOption(manifest, () => config().WaterReflectReach, v => config().WaterReflectReach = v,
-                () => i18n("config.water.reflectreach.name"), () => i18n("config.water.reflectreach.tooltip"),
+            configMenu.AddNumberOption(manifest, () => config().WaterReflectReach, value => config().WaterReflectReach = value,
+                () => translate("config.water.reflectreach.name"), () => translate("config.water.reflectreach.tooltip"),
                 0.2f, 1f, 0.05f);
-            api.AddSectionTitle(manifest, () => i18n("config.water.sectionrain"));
-            api.AddNumberOption(manifest, () => config().WaterRainRingDensity, v => config().WaterRainRingDensity = v,
-                () => i18n("config.water.rainringdensity.name"), () => i18n("config.water.rainringdensity.tooltip"),
+            configMenu.AddSectionTitle(manifest, () => translate("config.water.sectionrain"));
+            configMenu.AddNumberOption(manifest, () => config().WaterRainRingDensity, value => config().WaterRainRingDensity = value,
+                () => translate("config.water.rainringdensity.name"), () => translate("config.water.rainringdensity.tooltip"),
                 0f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WaterRainRingSize, v => config().WaterRainRingSize = v,
-                () => i18n("config.water.rainringsize.name"), () => i18n("config.water.rainringsize.tooltip"),
+            configMenu.AddNumberOption(manifest, () => config().WaterRainRingSize, value => config().WaterRainRingSize = value,
+                () => translate("config.water.rainringsize.name"), () => translate("config.water.rainringsize.tooltip"),
                 0.4f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WaterRainRingStrength, v => config().WaterRainRingStrength = v,
-                () => i18n("config.water.rainringstrength.name"), () => i18n("config.water.rainringstrength.tooltip"),
+            configMenu.AddNumberOption(manifest, () => config().WaterRainRingStrength, value => config().WaterRainRingStrength = value,
+                () => translate("config.water.rainringstrength.name"), () => translate("config.water.rainringstrength.tooltip"),
                 0f, 2f, 0.05f);
             // Reflection REACH and FADE ROWS are not offered here. They buy frames, they do not
             // change how anything looks, and the performance preset already sets both: a player
@@ -498,116 +498,120 @@ namespace SDVRadiance
             // Which water, then the classic water's look. This menu cannot hide rows by the
             // water in use the way the tuner does, so each water's dials sit under a heading
             // that says when they apply.
-            api.AddTextOption(manifest,
+            configMenu.AddTextOption(manifest,
                 () => config().WaterReflectModel.ToString(),
-                v => config().WaterReflectModel = Enum.TryParse<WaterReflectionModel>(v, out var model) ? model : WaterReflectionModel.Modern,
-                () => i18n("config.water.model.name"), () => i18n("config.water.model.tooltip"),
+                value => config().WaterReflectModel = Enum.TryParse<WaterReflectionModel>(value, out var model) ? model : WaterReflectionModel.Modern,
+                () => translate("config.water.model.name"), () => translate("config.water.model.tooltip"),
                 new[] { nameof(WaterReflectionModel.Modern), nameof(WaterReflectionModel.Classic) },
-                v => i18n($"config.water.model.{v.ToLowerInvariant()}"));
-            api.AddSectionTitle(manifest, () => i18n("config.water.classic.title"), () => i18n("config.water.classic.tooltip"));
-            api.AddTextOption(manifest,
+                choice => translate($"config.water.model.{choice.ToLowerInvariant()}"));
+            configMenu.AddSectionTitle(manifest, () => translate("config.water.classic.title"), () => translate("config.water.classic.tooltip"));
+            configMenu.AddTextOption(manifest,
                 () => config().WaterReflectStyle.ToString(),
-                v => config().WaterReflectStyle = Enum.TryParse<WaterReflectionStyle>(v, out var rs) ? rs : WaterReflectionStyle.Natural,
-                () => i18n("config.water.reflstyle.name"), () => i18n("config.water.reflstyle.tooltip"),
+                value => config().WaterReflectStyle = Enum.TryParse<WaterReflectionStyle>(value, out var style) ? style : WaterReflectionStyle.Natural,
+                () => translate("config.water.reflstyle.name"), () => translate("config.water.reflstyle.tooltip"),
                 new[] { "StillWater", "Natural", "Choppy" });
-            api.AddSectionTitle(manifest, () => i18n("config.water.modern.title"), () => i18n("config.water.modern.tooltip"));
-            api.AddNumberOption(manifest, () => config().WaterModernWobble, v => config().WaterModernWobble = v,
-                () => i18n("config.water.modernwobble.name"), () => i18n("config.water.modernwobble.tooltip"),
+            configMenu.AddSectionTitle(manifest, () => translate("config.water.modern.title"), () => translate("config.water.modern.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().WaterModernWobble, value => config().WaterModernWobble = value,
+                () => translate("config.water.modernwobble.name"), () => translate("config.water.modernwobble.tooltip"),
                 0f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WaterModernChoppiness, v => config().WaterModernChoppiness = v,
-                () => i18n("config.water.modernchoppiness.name"), () => i18n("config.water.modernchoppiness.tooltip"),
+            configMenu.AddNumberOption(manifest, () => config().WaterModernChoppiness, value => config().WaterModernChoppiness = value,
+                () => translate("config.water.modernchoppiness.name"), () => translate("config.water.modernchoppiness.tooltip"),
                 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WaterModernParallax, v => config().WaterModernParallax = v,
-                () => i18n("config.water.modernparallax.name"), () => i18n("config.water.modernparallax.tooltip"),
+            configMenu.AddNumberOption(manifest, () => config().WaterModernParallax, value => config().WaterModernParallax = value,
+                () => translate("config.water.modernparallax.name"), () => translate("config.water.modernparallax.tooltip"),
                 0f, 0.3f, 0.01f);
-            api.AddNumberOption(manifest, () => config().WaterModernFresnel, v => config().WaterModernFresnel = v,
-                () => i18n("config.water.modernfresnel.name"), () => i18n("config.water.modernfresnel.tooltip"),
+            configMenu.AddNumberOption(manifest, () => config().WaterModernFresnel, value => config().WaterModernFresnel = value,
+                () => translate("config.water.modernfresnel.name"), () => translate("config.water.modernfresnel.tooltip"),
                 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WaterModernStretch, v => config().WaterModernStretch = v,
-                () => i18n("config.water.modernstretch.name"), () => i18n("config.water.modernstretch.tooltip"),
+            configMenu.AddNumberOption(manifest, () => config().WaterModernStretch, value => config().WaterModernStretch = value,
+                () => translate("config.water.modernstretch.name"), () => translate("config.water.modernstretch.tooltip"),
                 1f, 1.4f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WaterModernEdgeSoftness, v => config().WaterModernEdgeSoftness = v,
-                () => i18n("config.water.modernedgesoftness.name"), () => i18n("config.water.modernedgesoftness.tooltip"),
+            configMenu.AddNumberOption(manifest, () => config().WaterModernEdgeSoftness, value => config().WaterModernEdgeSoftness = value,
+                () => translate("config.water.modernedgesoftness.name"), () => translate("config.water.modernedgesoftness.tooltip"),
                 0f, 6f, 0.25f);
-            api.AddNumberOption(manifest, () => config().WaterModernPlungeChurn, v => config().WaterModernPlungeChurn = v,
-                () => i18n("config.water.modernplungechurn.name"), () => i18n("config.water.modernplungechurn.tooltip"),
+            configMenu.AddNumberOption(manifest, () => config().WaterModernPlungeChurn, value => config().WaterModernPlungeChurn = value,
+                () => translate("config.water.modernplungechurn.name"), () => translate("config.water.modernplungechurn.tooltip"),
                 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WaterModernPlungeReach, v => config().WaterModernPlungeReach = v,
-                () => i18n("config.water.modernplungereach.name"), () => i18n("config.water.modernplungereach.tooltip"),
+            configMenu.AddNumberOption(manifest, () => config().WaterModernPlungeReach, value => config().WaterModernPlungeReach = value,
+                () => translate("config.water.modernplungereach.name"), () => translate("config.water.modernplungereach.tooltip"),
                 1f, 6f, 0.5f);
-            api.AddNumberOption(manifest, () => config().WaterModernLipFade, v => config().WaterModernLipFade = v,
-                () => i18n("config.water.modernlipfade.name"), () => i18n("config.water.modernlipfade.tooltip"),
+            configMenu.AddNumberOption(manifest, () => config().WaterModernLipFade, value => config().WaterModernLipFade = value,
+                () => translate("config.water.modernlipfade.name"), () => translate("config.water.modernlipfade.tooltip"),
                 0f, 1.5f, 0.05f);
-            api.AddBoolOption(manifest, () => config().WaterEffectIndoors, v => config().WaterEffectIndoors = v,
-                () => i18n("config.water.indoors.name"), () => i18n("config.water.indoors.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().WaterEffectIndoors, value => config().WaterEffectIndoors = value,
+                () => translate("config.water.indoors.name"), () => translate("config.water.indoors.tooltip"));
 
             // --- Dynamic lighting (implemented) ---
         }
 
         /// <summary>The flood grid, the light pools and the window effects.</summary>
-        private static void RegisterLightingPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        private static void RegisterLightingPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
-            api.AddPage(manifest, "lighting", () => i18n("config.section.lighting"));
-            api.AddBoolOption(manifest, () => config().FloodLightingEnabled, v => config().FloodLightingEnabled = v,
-                () => i18n("config.lighting.flood.name"), () => i18n("config.lighting.flood.tooltip"));
-            api.AddTextOption(manifest,
+            configMenu.AddPage(manifest, "lighting", () => translate("config.section.lighting"));
+            configMenu.AddBoolOption(manifest, () => config().FloodLightingEnabled, value => config().FloodLightingEnabled = value,
+                () => translate("config.lighting.flood.name"), () => translate("config.lighting.flood.tooltip"));
+            configMenu.AddTextOption(manifest,
                 () => config().FloodGiModel.ToString(),
-                v => config().FloodGiModel = Enum.TryParse<GiModel>(v, out var model) ? model : GiModel.Flood,
-                () => i18n("config.lighting.gimodel.name"), () => i18n("config.lighting.gimodel.tooltip"),
+                value => config().FloodGiModel = Enum.TryParse<GiModel>(value, out var model) ? model : GiModel.Flood,
+                () => translate("config.lighting.gimodel.name"), () => translate("config.lighting.gimodel.tooltip"),
                 new[] { nameof(GiModel.Flood), nameof(GiModel.Cascades) },
-                v => i18n($"config.lighting.gimodel.{v.ToLowerInvariant()}"));
-            api.AddBoolOption(manifest, () => config().SpriteReliefEnabled, v => config().SpriteReliefEnabled = v,
-                () => i18n("config.lighting.relief.name"), () => i18n("config.lighting.relief.tooltip"));
-            api.AddNumberOption(manifest, () => config().SpriteReliefStrength, v => config().SpriteReliefStrength = v,
-                () => i18n("config.lighting.reliefstrength.name"), () => i18n("config.lighting.reliefstrength.tooltip"), 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().SpriteReliefSun, v => config().SpriteReliefSun = v,
-                () => i18n("config.lighting.reliefsun.name"), () => i18n("config.lighting.reliefsun.tooltip"), 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().SpriteReliefRim, v => config().SpriteReliefRim = v,
-                () => i18n("config.lighting.reliefrim.name"), () => i18n("config.lighting.reliefrim.tooltip"), 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().SpriteReliefLeafShimmer, v => config().SpriteReliefLeafShimmer = v,
-                () => i18n("config.lighting.leafshimmer.name"), () => i18n("config.lighting.leafshimmer.tooltip"), 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().FloodLightingStrength, v => config().FloodLightingStrength = v,
-                () => i18n("config.lighting.floodstrength.name"), () => i18n("config.lighting.floodstrength.tooltip"), 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().FloodColourBleed, v => config().FloodColourBleed = v,
-                () => i18n("config.lighting.colourbleed.name"), () => i18n("config.lighting.colourbleed.tooltip"), 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().FloodShadowStrength, v => config().FloodShadowStrength = v,
-                () => i18n("config.lighting.floodshadow.name"), () => i18n("config.lighting.floodshadow.tooltip"), 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().LightShadowCarve, v => config().LightShadowCarve = v,
-                () => i18n("config.lighting.shadowcarve.name"), () => i18n("config.lighting.shadowcarve.tooltip"), 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().LightShadowSoftness, v => config().LightShadowSoftness = v,
-                () => i18n("config.lighting.shadowsoftness.name"), () => i18n("config.lighting.shadowsoftness.tooltip"), 0f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().LightShadowDetail, v => config().LightShadowDetail = v,
-                () => i18n("config.lighting.shadowdetail.name"), () => i18n("config.lighting.shadowdetail.tooltip"), 0f, 1f, 0.05f);
-            api.AddBoolOption(manifest, () => config().LightShadowDetailShared, v => config().LightShadowDetailShared = v,
-                () => i18n("config.lighting.shadowshared.name"), () => i18n("config.lighting.shadowshared.tooltip"));
-            api.AddBoolOption(manifest, () => config().LightShadowSharpEdges, v => config().LightShadowSharpEdges = v,
-                () => i18n("config.lighting.shadowsharp.name"), () => i18n("config.lighting.shadowsharp.tooltip"));
-            api.AddBoolOption(manifest, () => config().LightingEnabled, v => config().LightingEnabled = v,
-                () => i18n("config.lighting.enabled.name"), () => i18n("config.lighting.enabled.tooltip"));
-            api.AddNumberOption(manifest, () => config().LightingIndoorDarkness, v => config().LightingIndoorDarkness = v,
-                () => i18n("config.lighting.indoor.name"), () => i18n("config.lighting.indoor.tooltip"), 0f, 0.95f, 0.05f);
-            api.AddNumberOption(manifest, () => config().LightingNightDarkness, v => config().LightingNightDarkness = v,
-                () => i18n("config.lighting.night.name"), () => i18n("config.lighting.night.tooltip"), 0f, 0.95f, 0.05f);
-            api.AddNumberOption(manifest, () => config().LightingMorningDarkness, v => config().LightingMorningDarkness = v,
-                () => i18n("config.lighting.morning.name"), () => i18n("config.lighting.morning.tooltip"), 0f, 0.95f, 0.05f);
-            api.AddNumberOption(manifest, () => config().LightingIndoorColourWalk, v => config().LightingIndoorColourWalk = v,
-                () => i18n("config.lighting.indoorcolour.name"), () => i18n("config.lighting.indoorcolour.tooltip"), 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().LightingMorningClearSkyCool, v => config().LightingMorningClearSkyCool = v,
-                () => i18n("config.lighting.morningcool.name"), () => i18n("config.lighting.morningcool.tooltip"), 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().LightingWarmth, v => config().LightingWarmth = v,
-                () => i18n("config.lighting.warmth.name"), null, 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().LightingBoost, v => config().LightingBoost = v,
-                () => i18n("config.lighting.boost.name"), null, 0f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().LightingRadiusScale, v => config().LightingRadiusScale = v,
-                () => i18n("config.lighting.radius.name"), null, 0.2f, 3f, 0.1f);
-            api.AddBoolOption(manifest, () => config().LightingShadows, v => config().LightingShadows = v,
-                () => i18n("config.lighting.shadows.name"), () => i18n("config.lighting.shadows.tooltip"));
-            api.AddNumberOption(manifest, () => config().LightingShadowStrength, v => config().LightingShadowStrength = v,
-                () => i18n("config.lighting.shadowstrength.name"), null, 0f, 1f, 0.05f);
-            api.AddBoolOption(manifest, () => config().LightShadowSilhouettes, v => config().LightShadowSilhouettes = v,
-                () => i18n("config.lighting.silhouettes.name"), () => i18n("config.lighting.silhouettes.tooltip"));
-            api.AddBoolOption(manifest, () => config().LightShadowProps, v => config().LightShadowProps = v,
-                () => i18n("config.lighting.props.name"), () => i18n("config.lighting.props.tooltip"));
+                choice => translate($"config.lighting.gimodel.{choice.ToLowerInvariant()}"));
+            configMenu.AddBoolOption(manifest, () => config().SpriteReliefEnabled, value => config().SpriteReliefEnabled = value,
+                () => translate("config.lighting.relief.name"), () => translate("config.lighting.relief.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().SpriteReliefStrength, value => config().SpriteReliefStrength = value,
+                () => translate("config.lighting.reliefstrength.name"), () => translate("config.lighting.reliefstrength.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().SpriteReliefHalfResolution, value => config().SpriteReliefHalfResolution = value,
+                () => translate("config.lighting.reliefhalfres.name"), () => translate("config.lighting.reliefhalfres.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().SpriteReliefSun, value => config().SpriteReliefSun = value,
+                () => translate("config.lighting.reliefsun.name"), () => translate("config.lighting.reliefsun.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().SpriteReliefRim, value => config().SpriteReliefRim = value,
+                () => translate("config.lighting.reliefrim.name"), () => translate("config.lighting.reliefrim.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().SpriteReliefLeafShimmer, value => config().SpriteReliefLeafShimmer = value,
+                () => translate("config.lighting.leafshimmer.name"), () => translate("config.lighting.leafshimmer.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().FloodLightingStrength, value => config().FloodLightingStrength = value,
+                () => translate("config.lighting.floodstrength.name"), () => translate("config.lighting.floodstrength.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().FloodColourBleed, value => config().FloodColourBleed = value,
+                () => translate("config.lighting.colourbleed.name"), () => translate("config.lighting.colourbleed.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().FloodShadowStrength, value => config().FloodShadowStrength = value,
+                () => translate("config.lighting.floodshadow.name"), () => translate("config.lighting.floodshadow.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().LightShadowCarve, value => config().LightShadowCarve = value,
+                () => translate("config.lighting.shadowcarve.name"), () => translate("config.lighting.shadowcarve.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().LightShadowSoftness, value => config().LightShadowSoftness = value,
+                () => translate("config.lighting.shadowsoftness.name"), () => translate("config.lighting.shadowsoftness.tooltip"), 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().LightShadowDetail, value => config().LightShadowDetail = value,
+                () => translate("config.lighting.shadowdetail.name"), () => translate("config.lighting.shadowdetail.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().LightShadowDetailShared, value => config().LightShadowDetailShared = value,
+                () => translate("config.lighting.shadowshared.name"), () => translate("config.lighting.shadowshared.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().LightShadowSharpEdges, value => config().LightShadowSharpEdges = value,
+                () => translate("config.lighting.shadowsharp.name"), () => translate("config.lighting.shadowsharp.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().LightShadowMarchCache, value => config().LightShadowMarchCache = value,
+                () => translate("config.lighting.shadowcache.name"), () => translate("config.lighting.shadowcache.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().LightingEnabled, value => config().LightingEnabled = value,
+                () => translate("config.lighting.enabled.name"), () => translate("config.lighting.enabled.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().LightingIndoorDarkness, value => config().LightingIndoorDarkness = value,
+                () => translate("config.lighting.indoor.name"), () => translate("config.lighting.indoor.tooltip"), 0f, 0.95f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().LightingNightDarkness, value => config().LightingNightDarkness = value,
+                () => translate("config.lighting.night.name"), () => translate("config.lighting.night.tooltip"), 0f, 0.95f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().LightingMorningDarkness, value => config().LightingMorningDarkness = value,
+                () => translate("config.lighting.morning.name"), () => translate("config.lighting.morning.tooltip"), 0f, 0.95f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().LightingIndoorColourWalk, value => config().LightingIndoorColourWalk = value,
+                () => translate("config.lighting.indoorcolour.name"), () => translate("config.lighting.indoorcolour.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().LightingMorningClearSkyCool, value => config().LightingMorningClearSkyCool = value,
+                () => translate("config.lighting.morningcool.name"), () => translate("config.lighting.morningcool.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().LightingWarmth, value => config().LightingWarmth = value,
+                () => translate("config.lighting.warmth.name"), null, 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().LightingBoost, value => config().LightingBoost = value,
+                () => translate("config.lighting.boost.name"), null, 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().LightingRadiusScale, value => config().LightingRadiusScale = value,
+                () => translate("config.lighting.radius.name"), null, 0.2f, 3f, 0.1f);
+            configMenu.AddBoolOption(manifest, () => config().LightingShadows, value => config().LightingShadows = value,
+                () => translate("config.lighting.shadows.name"), () => translate("config.lighting.shadows.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().LightingShadowStrength, value => config().LightingShadowStrength = value,
+                () => translate("config.lighting.shadowstrength.name"), null, 0f, 1f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().LightShadowSilhouettes, value => config().LightShadowSilhouettes = value,
+                () => translate("config.lighting.silhouettes.name"), () => translate("config.lighting.silhouettes.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().LightShadowProps, value => config().LightShadowProps = value,
+                () => translate("config.lighting.props.name"), () => translate("config.lighting.props.tooltip"));
 
             // --- Directional sprite shadows ---
         }
@@ -617,43 +621,43 @@ namespace SDVRadiance
         /// the beam you can see, the glow after dusk, and the people in the glass by day. It lived
         /// inside Lighting, where four window rows among fifteen lighting rows were easy to miss
         /// and hard to explain as one thing.</summary>
-        private static void RegisterWindowsPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        private static void RegisterWindowsPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
-            api.AddPage(manifest, "windows", () => i18n("config.section.windows"));
+            configMenu.AddPage(manifest, "windows", () => translate("config.section.windows"));
             // Two things a window does, kept apart on the page: the light it lets through, and
             // the picture it returns.
-            api.AddSectionTitle(manifest, () => i18n("config.windows.sectionlight"));
-            api.AddBoolOption(manifest, () => config().WindowEffectsEnabled, v => config().WindowEffectsEnabled = v,
-                () => i18n("config.lighting.windoweffects.name"), () => i18n("config.lighting.windoweffects.tooltip"));
-            api.AddBoolOption(manifest, () => config().WindowBeamEnabled, v => config().WindowBeamEnabled = v,
-                () => i18n("config.lighting.windowbeam.name"), () => i18n("config.lighting.windowbeam.tooltip"));
-            api.AddNumberOption(manifest, () => config().WindowDaylightStrength, v => config().WindowDaylightStrength = v,
-                () => i18n("config.lighting.windowdaylightstrength.name"),
-                () => i18n("config.lighting.windowdaylightstrength.tooltip"), 0f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WindowDaylightStrengthElsewhere, v => config().WindowDaylightStrengthElsewhere = v,
-                () => i18n("config.lighting.windowdaylightelsewhere.name"),
-                () => i18n("config.lighting.windowdaylightelsewhere.tooltip"), 0f, 2f, 0.05f);
-            api.AddSectionTitle(manifest, () => i18n("config.windows.sectionreflection"));
-            api.AddBoolOption(manifest, () => config().WindowReflectionEnabled, v => config().WindowReflectionEnabled = v,
-                () => i18n("config.lighting.windowreflection.name"), () => i18n("config.lighting.windowreflection.tooltip"));
-            api.AddNumberOption(manifest, () => config().WindowReflectionStrength, v => config().WindowReflectionStrength = v,
-                () => i18n("config.lighting.windowreflectionstrength.name"),
-                () => i18n("config.lighting.windowreflectionstrength.tooltip"), 0f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WindowReflectionNightStrength, v => config().WindowReflectionNightStrength = v,
-                () => i18n("config.lighting.windowreflectionnight.name"),
-                () => i18n("config.lighting.windowreflectionnight.tooltip"), 0f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WindowSheenStrength, v => config().WindowSheenStrength = v,
-                () => i18n("config.lighting.windowsheen.name"),
-                () => i18n("config.lighting.windowsheen.tooltip"), 0f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WindowSceneReflectionStrength, v => config().WindowSceneReflectionStrength = v,
-                () => i18n("config.lighting.windowscene.name"),
-                () => i18n("config.lighting.windowscene.tooltip"), 0f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WindowGlareStrength, v => config().WindowGlareStrength = v,
-                () => i18n("config.lighting.windowglare.name"),
-                () => i18n("config.lighting.windowglare.tooltip"), 0f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().WindowLightGlowStrength, v => config().WindowLightGlowStrength = v,
-                () => i18n("config.lighting.windowlightglow.name"),
-                () => i18n("config.lighting.windowlightglow.tooltip"), 0f, 2f, 0.05f);
+            configMenu.AddSectionTitle(manifest, () => translate("config.windows.sectionlight"));
+            configMenu.AddBoolOption(manifest, () => config().WindowEffectsEnabled, value => config().WindowEffectsEnabled = value,
+                () => translate("config.lighting.windoweffects.name"), () => translate("config.lighting.windoweffects.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().WindowBeamEnabled, value => config().WindowBeamEnabled = value,
+                () => translate("config.lighting.windowbeam.name"), () => translate("config.lighting.windowbeam.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().WindowDaylightStrength, value => config().WindowDaylightStrength = value,
+                () => translate("config.lighting.windowdaylightstrength.name"),
+                () => translate("config.lighting.windowdaylightstrength.tooltip"), 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WindowDaylightStrengthElsewhere, value => config().WindowDaylightStrengthElsewhere = value,
+                () => translate("config.lighting.windowdaylightelsewhere.name"),
+                () => translate("config.lighting.windowdaylightelsewhere.tooltip"), 0f, 2f, 0.05f);
+            configMenu.AddSectionTitle(manifest, () => translate("config.windows.sectionreflection"));
+            configMenu.AddBoolOption(manifest, () => config().WindowReflectionEnabled, value => config().WindowReflectionEnabled = value,
+                () => translate("config.lighting.windowreflection.name"), () => translate("config.lighting.windowreflection.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().WindowReflectionStrength, value => config().WindowReflectionStrength = value,
+                () => translate("config.lighting.windowreflectionstrength.name"),
+                () => translate("config.lighting.windowreflectionstrength.tooltip"), 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WindowReflectionNightStrength, value => config().WindowReflectionNightStrength = value,
+                () => translate("config.lighting.windowreflectionnight.name"),
+                () => translate("config.lighting.windowreflectionnight.tooltip"), 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WindowSheenStrength, value => config().WindowSheenStrength = value,
+                () => translate("config.lighting.windowsheen.name"),
+                () => translate("config.lighting.windowsheen.tooltip"), 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WindowSceneReflectionStrength, value => config().WindowSceneReflectionStrength = value,
+                () => translate("config.lighting.windowscene.name"),
+                () => translate("config.lighting.windowscene.tooltip"), 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WindowGlareStrength, value => config().WindowGlareStrength = value,
+                () => translate("config.lighting.windowglare.name"),
+                () => translate("config.lighting.windowglare.tooltip"), 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WindowLightGlowStrength, value => config().WindowLightGlowStrength = value,
+                () => translate("config.lighting.windowlightglow.name"),
+                () => translate("config.lighting.windowlightglow.tooltip"), 0f, 2f, 0.05f);
         }
 
         /// <summary>One slider per caster kind, named by the shared key pattern
@@ -664,175 +668,179 @@ namespace SDVRadiance
         /// behind a picker the way the tuner tab does, so the flat list is regrouped instead: the
         /// kind is the heading and its length, softness and lean follow it, rather than three
         /// blocks of seven with a building's three dials eight rows apart.</summary>
-        private static void AddKindDials(IGenericModConfigMenuApi api, IManifest manifest,
-            Func<string, string> i18n, string kind,
+        private static void AddKindDials(IGenericModConfigMenuApi configMenu, IManifest manifest,
+            Func<string, string> translate, string kind,
             Func<float> getLength, Action<float> setLength,
             Func<float> getSoftness, Action<float> setSoftness,
             Func<float> getLean, Action<float> setLean)
         {
             // The heading reuses the name the length block already carried, so no kind was
             // renamed and no translator has to look at this again.
-            api.AddSectionTitle(manifest, () => i18n($"config.shadows.length.{kind}.name"));
-            api.AddNumberOption(manifest, getLength, setLength,
-                () => i18n("tuner.shadowkind.length"), null,
+            configMenu.AddSectionTitle(manifest, () => translate($"config.shadows.length.{kind}.name"));
+            configMenu.AddNumberOption(manifest, getLength, setLength,
+                () => translate("tuner.shadowkind.length"), null,
                 ModConfig.ShadowKindLengthMin, ModConfig.ShadowKindLengthMax, 0.05f);
-            api.AddNumberOption(manifest, getSoftness, setSoftness,
-                () => i18n("tuner.shadowkind.softness"), () => i18n("config.shadows.softness.tooltip"),
+            configMenu.AddNumberOption(manifest, getSoftness, setSoftness,
+                () => translate("tuner.shadowkind.softness"), () => translate("config.shadows.softness.tooltip"),
                 ModConfig.ShadowKindSoftnessMin, ModConfig.ShadowKindSoftnessMax, 0.1f);
-            api.AddNumberOption(manifest, getLean, setLean,
-                () => i18n("tuner.shadowkind.lean"), () => i18n("config.shadows.lean.tooltip"),
+            configMenu.AddNumberOption(manifest, getLean, setLean,
+                () => translate("tuner.shadowkind.lean"), () => translate("config.shadows.lean.tooltip"),
                 ModConfig.ShadowKindLeanMin, ModConfig.ShadowKindLeanMax, 0.05f);
         }
 
-        private static void RegisterShadowsPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        private static void RegisterShadowsPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
-            api.AddPage(manifest, "shadows", () => i18n("config.section.shadows"));
-            api.AddBoolOption(manifest, () => config().DirectionalShadowsEnabled, v => config().DirectionalShadowsEnabled = v,
-                () => i18n("config.shadows.enabled.name"), () => i18n("config.shadows.enabled.tooltip"));
+            configMenu.AddPage(manifest, "shadows", () => translate("config.section.shadows"));
+            configMenu.AddBoolOption(manifest, () => config().DirectionalShadowsEnabled, value => config().DirectionalShadowsEnabled = value,
+                () => translate("config.shadows.enabled.name"), () => translate("config.shadows.enabled.tooltip"));
             // Which shapes, named by the version each shipped in, exactly as the water is.
-            api.AddTextOption(manifest,
+            configMenu.AddTextOption(manifest,
                 () => config().DirectionalShadowModel.ToString(),
-                v => config().DirectionalShadowModel = Enum.TryParse<ShadowModel>(v, out var model) ? model : ShadowModel.Modern,
-                () => i18n("config.shadows.model.name"), () => i18n("config.shadows.model.tooltip"),
+                value => config().DirectionalShadowModel = Enum.TryParse<ShadowModel>(value, out var model) ? model : ShadowModel.Modern,
+                () => translate("config.shadows.model.name"), () => translate("config.shadows.model.tooltip"),
                 new[] { nameof(ShadowModel.Modern), nameof(ShadowModel.Classic) },
-                v => i18n($"config.shadows.model.{v.ToLowerInvariant()}"));
-            api.AddNumberOption(manifest, () => config().DirectionalShadowStrength, v => config().DirectionalShadowStrength = v,
-                () => i18n("config.shadows.strength.name"), null, 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().DirectionalShadowLength, v => config().DirectionalShadowLength = v,
-                () => i18n("config.shadows.length.name"), null, 0.2f, 2f, 0.05f);
-            api.AddNumberOption(manifest, () => config().GoldenHourStrength, v => config().GoldenHourStrength = v,
-                () => i18n("config.shadows.goldenhour.name"),
-                () => i18n("config.shadows.goldenhour.tooltip"), 0f, 1f, 0.05f);
-            api.AddNumberOption(manifest, () => config().DirectionalShadowBlur, v => config().DirectionalShadowBlur = v,
-                () => i18n("config.shadows.blur.name"), null, 0f, 5f, 0.5f);
-            api.AddBoolOption(manifest, () => config().DirectionalShadowObjects, v => config().DirectionalShadowObjects = v,
-                () => i18n("config.shadows.objects.name"), () => i18n("config.shadows.objects.tooltip"));
-            api.AddBoolOption(manifest, () => config().DirectionalShadowBuildings, v => config().DirectionalShadowBuildings = v,
-                () => i18n("config.shadows.buildings.name"), () => i18n("config.shadows.buildings.tooltip"));
-            api.AddNumberOption(manifest, () => config().ShadowGroundForeshortening, v => config().ShadowGroundForeshortening = v,
-                () => i18n("config.shadows.groundforeshortening.name"), () => i18n("config.shadows.groundforeshortening.tooltip"),
+                choice => translate($"config.shadows.model.{choice.ToLowerInvariant()}"));
+            configMenu.AddNumberOption(manifest, () => config().DirectionalShadowStrength, value => config().DirectionalShadowStrength = value,
+                () => translate("config.shadows.strength.name"), null, 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().DirectionalShadowLength, value => config().DirectionalShadowLength = value,
+                () => translate("config.shadows.length.name"), null, 0.2f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().GoldenHourStrength, value => config().GoldenHourStrength = value,
+                () => translate("config.shadows.goldenhour.name"),
+                () => translate("config.shadows.goldenhour.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().DirectionalShadowBlur, value => config().DirectionalShadowBlur = value,
+                () => translate("config.shadows.blur.name"), null, 0f, 5f, 0.5f);
+            configMenu.AddBoolOption(manifest, () => config().DirectionalShadowObjects, value => config().DirectionalShadowObjects = value,
+                () => translate("config.shadows.objects.name"), () => translate("config.shadows.objects.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().ContactShadowStrength, value => config().ContactShadowStrength = value,
+                () => translate("config.shadows.contact.name"), () => translate("config.shadows.contact.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().DirectionalShadowBuildings, value => config().DirectionalShadowBuildings = value,
+                () => translate("config.shadows.buildings.name"), () => translate("config.shadows.buildings.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().ShadowGroundForeshortening, value => config().ShadowGroundForeshortening = value,
+                () => translate("config.shadows.groundforeshortening.name"), () => translate("config.shadows.groundforeshortening.tooltip"),
                 ModConfig.ShadowGroundForeshorteningMin, ModConfig.ShadowGroundForeshorteningMax, 0.05f);
-            api.AddNumberOption(manifest, () => config().ShadowCharacterGroundForeshortening, v => config().ShadowCharacterGroundForeshortening = v,
-                () => i18n("config.shadows.charactergroundforeshortening.name"), () => i18n("config.shadows.charactergroundforeshortening.tooltip"),
+            configMenu.AddNumberOption(manifest, () => config().ShadowCharacterGroundForeshortening, value => config().ShadowCharacterGroundForeshortening = value,
+                () => translate("config.shadows.charactergroundforeshortening.name"), () => translate("config.shadows.charactergroundforeshortening.tooltip"),
                 ModConfig.ShadowGroundForeshorteningMin, ModConfig.ShadowGroundForeshorteningMax, 0.05f);
-            api.AddNumberOption(manifest, () => config().ShadowCastsPerCharacter, v => config().ShadowCastsPerCharacter = v,
-                () => i18n("config.shadows.casts.name"), () => i18n("config.shadows.casts.tooltip"),
+            configMenu.AddNumberOption(manifest, () => config().ShadowCastsPerCharacter, value => config().ShadowCastsPerCharacter = value,
+                () => translate("config.shadows.casts.name"), () => translate("config.shadows.casts.tooltip"),
                 ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax, 1);
 
             // Per kind, grouped by the kind rather than by the dial. The overall length and
             // softness above still multiply these, so a player who only wants everything shorter
             // never has to come down here at all.
-            api.AddSectionTitle(manifest, () => i18n("config.shadows.perkind.title"),
-                () => i18n("config.shadows.perkind.tooltip"));
-            AddKindDials(api, manifest, i18n, "trees",
-                () => config().ShadowLengthTrees, v => config().ShadowLengthTrees = v,
-                () => config().ShadowSoftnessTrees, v => config().ShadowSoftnessTrees = v,
-                () => config().ShadowLeanTrees, v => config().ShadowLeanTrees = v);
-            AddKindDials(api, manifest, i18n, "smalltrees",
-                () => config().ShadowLengthSmallTrees, v => config().ShadowLengthSmallTrees = v,
-                () => config().ShadowSoftnessSmallTrees, v => config().ShadowSoftnessSmallTrees = v,
-                () => config().ShadowLeanSmallTrees, v => config().ShadowLeanSmallTrees = v);
-            AddKindDials(api, manifest, i18n, "bushes",
-                () => config().ShadowLengthBushes, v => config().ShadowLengthBushes = v,
-                () => config().ShadowSoftnessBushes, v => config().ShadowSoftnessBushes = v,
-                () => config().ShadowLeanBushes, v => config().ShadowLeanBushes = v);
-            AddKindDials(api, manifest, i18n, "crops",
-                () => config().ShadowLengthCrops, v => config().ShadowLengthCrops = v,
-                () => config().ShadowSoftnessCrops, v => config().ShadowSoftnessCrops = v,
-                () => config().ShadowLeanCrops, v => config().ShadowLeanCrops = v);
-            AddKindDials(api, manifest, i18n, "grass",
-                () => config().ShadowLengthGrass, v => config().ShadowLengthGrass = v,
-                () => config().ShadowSoftnessGrass, v => config().ShadowSoftnessGrass = v,
-                () => config().ShadowLeanGrass, v => config().ShadowLeanGrass = v);
-            AddKindDials(api, manifest, i18n, "objects",
-                () => config().ShadowLengthObjects, v => config().ShadowLengthObjects = v,
-                () => config().ShadowSoftnessObjects, v => config().ShadowSoftnessObjects = v,
-                () => config().ShadowLeanObjects, v => config().ShadowLeanObjects = v);
-            AddKindDials(api, manifest, i18n, "buildings",
-                () => config().ShadowLengthBuildings, v => config().ShadowLengthBuildings = v,
-                () => config().ShadowSoftnessBuildings, v => config().ShadowSoftnessBuildings = v,
-                () => config().ShadowLeanBuildings, v => config().ShadowLeanBuildings = v);
+            configMenu.AddSectionTitle(manifest, () => translate("config.shadows.perkind.title"),
+                () => translate("config.shadows.perkind.tooltip"));
+            AddKindDials(configMenu, manifest, translate, "trees",
+                () => config().ShadowLengthTrees, value => config().ShadowLengthTrees = value,
+                () => config().ShadowSoftnessTrees, value => config().ShadowSoftnessTrees = value,
+                () => config().ShadowLeanTrees, value => config().ShadowLeanTrees = value);
+            AddKindDials(configMenu, manifest, translate, "smalltrees",
+                () => config().ShadowLengthSmallTrees, value => config().ShadowLengthSmallTrees = value,
+                () => config().ShadowSoftnessSmallTrees, value => config().ShadowSoftnessSmallTrees = value,
+                () => config().ShadowLeanSmallTrees, value => config().ShadowLeanSmallTrees = value);
+            AddKindDials(configMenu, manifest, translate, "bushes",
+                () => config().ShadowLengthBushes, value => config().ShadowLengthBushes = value,
+                () => config().ShadowSoftnessBushes, value => config().ShadowSoftnessBushes = value,
+                () => config().ShadowLeanBushes, value => config().ShadowLeanBushes = value);
+            AddKindDials(configMenu, manifest, translate, "crops",
+                () => config().ShadowLengthCrops, value => config().ShadowLengthCrops = value,
+                () => config().ShadowSoftnessCrops, value => config().ShadowSoftnessCrops = value,
+                () => config().ShadowLeanCrops, value => config().ShadowLeanCrops = value);
+            AddKindDials(configMenu, manifest, translate, "grass",
+                () => config().ShadowLengthGrass, value => config().ShadowLengthGrass = value,
+                () => config().ShadowSoftnessGrass, value => config().ShadowSoftnessGrass = value,
+                () => config().ShadowLeanGrass, value => config().ShadowLeanGrass = value);
+            AddKindDials(configMenu, manifest, translate, "objects",
+                () => config().ShadowLengthObjects, value => config().ShadowLengthObjects = value,
+                () => config().ShadowSoftnessObjects, value => config().ShadowSoftnessObjects = value,
+                () => config().ShadowLeanObjects, value => config().ShadowLeanObjects = value);
+            AddKindDials(configMenu, manifest, translate, "buildings",
+                () => config().ShadowLengthBuildings, value => config().ShadowLengthBuildings = value,
+                () => config().ShadowSoftnessBuildings, value => config().ShadowSoftnessBuildings = value,
+                () => config().ShadowLeanBuildings, value => config().ShadowLeanBuildings = value);
 
             // --- Camera (implemented) ---
         }
 
         /// <summary>Camera smoothing.</summary>
-        private static void RegisterCameraPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        private static void RegisterCameraPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
-            api.AddPage(manifest, "camera", () => i18n("config.section.camera"));
-            api.AddTextOption(manifest,
+            configMenu.AddPage(manifest, "camera", () => translate("config.section.camera"));
+            configMenu.AddTextOption(manifest,
                 () => config().CameraMode.ToString(),
-                v => config().CameraMode = Enum.TryParse<CameraMode>(v, out var m) ? m : CameraMode.Off,
-                () => i18n("config.camera.mode.name"), () => i18n("config.camera.mode.tooltip"),
+                value => config().CameraMode = Enum.TryParse<CameraMode>(value, out var mode) ? mode : CameraMode.Off,
+                () => translate("config.camera.mode.name"), () => translate("config.camera.mode.tooltip"),
                 new[] { nameof(CameraMode.Off), nameof(CameraMode.Smooth) },
-                v => i18n($"config.camera.mode.{v.ToLowerInvariant()}"));
-            api.AddNumberOption(manifest, () => config().CameraFollowSpeed, v => config().CameraFollowSpeed = v,
-                () => i18n("config.smoothcam.speed.name"), () => i18n("config.smoothcam.speed.tooltip"), 0.05f, 1f, 0.05f);
+                choice => translate($"config.camera.mode.{choice.ToLowerInvariant()}"));
+            configMenu.AddNumberOption(manifest, () => config().CameraFollowSpeed, value => config().CameraFollowSpeed = value,
+                () => translate("config.smoothcam.speed.name"), () => translate("config.smoothcam.speed.tooltip"), 0.05f, 1f, 0.05f);
 
             // --- Performance page: what the picture costs, kept away from the look settings ---
         }
 
         /// <summary>Render scale and sharpening.</summary>
-        private static void RegisterPerformancePage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        private static void RegisterPerformancePage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
-            api.AddPage(manifest, "perf", () => i18n("config.section.perf"));
-            api.AddNumberOption(manifest, () => config().RenderScale, v => config().RenderScale = v,
-                () => i18n("config.renderscale.name"), () => i18n("config.renderscale.tooltip"), 0.5f, 1f, 0.05f);
-            api.AddBoolOption(manifest, () => config().RenderScaleAuto, v => config().RenderScaleAuto = v,
-                () => i18n("config.renderscaleauto.name"), () => i18n("config.renderscaleauto.tooltip"));
-            api.AddNumberOption(manifest, () => config().RenderSharpness, v => config().RenderSharpness = v,
-                () => i18n("config.rendersharpness.name"), () => i18n("config.rendersharpness.tooltip"), 0f, 2f, 0.1f);
+            configMenu.AddPage(manifest, "perf", () => translate("config.section.perf"));
+            configMenu.AddNumberOption(manifest, () => config().RenderScale, value => config().RenderScale = value,
+                () => translate("config.renderscale.name"), () => translate("config.renderscale.tooltip"), 0.5f, 1f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().RenderScaleAuto, value => config().RenderScaleAuto = value,
+                () => translate("config.renderscaleauto.name"), () => translate("config.renderscaleauto.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().RenderSharpness, value => config().RenderSharpness = value,
+                () => translate("config.rendersharpness.name"), () => translate("config.rendersharpness.tooltip"), 0f, 2f, 0.1f);
+            configMenu.AddBoolOption(manifest, () => config().LimitSamplerSlots, value => config().LimitSamplerSlots = value,
+                () => translate("config.limitsamplerslots.name"), () => translate("config.limitsamplerslots.tooltip"));
 
             // --- Misc page: hotkeys + diagnostics + roadmap ---
         }
 
         /// <summary>The Scale2x doubling: how far it goes and which art families it touches.
         /// Its own page, mirroring the tuner's own tab, because it stopped being one switch.</summary>
-        private static void RegisterSmoothingPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config)
+        private static void RegisterSmoothingPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
-            api.AddPage(manifest, "smoothing", () => i18n("tuner.tab.smoothing"));
-            api.AddBoolOption(manifest, () => config().SheetUpscaleEnabled, v => config().SheetUpscaleEnabled = v,
-                () => i18n("config.sheetupscale.name"), () => i18n("config.sheetupscale.tooltip"));
-            api.AddTextOption(manifest,
+            configMenu.AddPage(manifest, "smoothing", () => translate("tuner.tab.smoothing"));
+            configMenu.AddBoolOption(manifest, () => config().SheetUpscaleEnabled, value => config().SheetUpscaleEnabled = value,
+                () => translate("config.sheetupscale.name"), () => translate("config.sheetupscale.tooltip"));
+            configMenu.AddTextOption(manifest,
                 () => config().SheetUpscaleStyle.ToString(),
-                v => config().SheetUpscaleStyle = Enum.TryParse<SheetSmoothingStyle>(v, out var style) ? style : SheetSmoothingStyle.Scale2x,
-                () => i18n("config.sheetupscalestyle.name"), () => i18n("config.sheetupscalestyle.tooltip"),
+                value => config().SheetUpscaleStyle = Enum.TryParse<SheetSmoothingStyle>(value, out var style) ? style : SheetSmoothingStyle.Scale2x,
+                () => translate("config.sheetupscalestyle.name"), () => translate("config.sheetupscalestyle.tooltip"),
                 new[] { nameof(SheetSmoothingStyle.Scale2x), nameof(SheetSmoothingStyle.Soft4x) },
-                v => i18n($"config.sheetupscalestyle.{v.ToLowerInvariant()}"));
-            api.AddSectionTitle(manifest, () => i18n("tuner.section.smoothingfamilies"));
-            api.AddBoolOption(manifest, () => config().SheetUpscaleWorld, v => config().SheetUpscaleWorld = v,
-                () => i18n("config.sheetupscaleworld.name"), () => i18n("config.sheetupscaleworld.tooltip"));
-            api.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessWorld, v => config().SheetUpscaleSmoothnessWorld = v,
-                () => i18n("config.sheetupscaleworld.name") + ": " + i18n("config.sheetupscalesmoothness.name"), () => i18n("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
-            api.AddBoolOption(manifest, () => config().SheetUpscaleCharacters, v => config().SheetUpscaleCharacters = v,
-                () => i18n("config.sheetupscalecharacters.name"), () => i18n("config.sheetupscalecharacters.tooltip"));
-            api.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessCharacters, v => config().SheetUpscaleSmoothnessCharacters = v,
-                () => i18n("config.sheetupscalecharacters.name") + ": " + i18n("config.sheetupscalesmoothness.name"), () => i18n("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
-            api.AddBoolOption(manifest, () => config().SheetUpscaleItems, v => config().SheetUpscaleItems = v,
-                () => i18n("config.sheetupscaleitems.name"), () => i18n("config.sheetupscaleitems.tooltip"));
-            api.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessItems, v => config().SheetUpscaleSmoothnessItems = v,
-                () => i18n("config.sheetupscaleitems.name") + ": " + i18n("config.sheetupscalesmoothness.name"), () => i18n("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
-            api.AddBoolOption(manifest, () => config().SheetUpscalePortraits, v => config().SheetUpscalePortraits = v,
-                () => i18n("config.sheetupscaleportraits.name"), () => i18n("config.sheetupscaleportraits.tooltip"));
-            api.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessPortraits, v => config().SheetUpscaleSmoothnessPortraits = v,
-                () => i18n("config.sheetupscaleportraits.name") + ": " + i18n("config.sheetupscalesmoothness.name"), () => i18n("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
-            api.AddBoolOption(manifest, () => config().SheetUpscaleInterface, v => config().SheetUpscaleInterface = v,
-                () => i18n("config.sheetupscaleinterface.name"), () => i18n("config.sheetupscaleinterface.tooltip"));
-            api.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessInterface, v => config().SheetUpscaleSmoothnessInterface = v,
-                () => i18n("config.sheetupscaleinterface.name") + ": " + i18n("config.sheetupscalesmoothness.name"), () => i18n("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
+                choice => translate($"config.sheetupscalestyle.{choice.ToLowerInvariant()}"));
+            configMenu.AddSectionTitle(manifest, () => translate("tuner.section.smoothingfamilies"));
+            configMenu.AddBoolOption(manifest, () => config().SheetUpscaleWorld, value => config().SheetUpscaleWorld = value,
+                () => translate("config.sheetupscaleworld.name"), () => translate("config.sheetupscaleworld.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessWorld, value => config().SheetUpscaleSmoothnessWorld = value,
+                () => translate("config.sheetupscaleworld.name") + ": " + translate("config.sheetupscalesmoothness.name"), () => translate("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().SheetUpscaleCharacters, value => config().SheetUpscaleCharacters = value,
+                () => translate("config.sheetupscalecharacters.name"), () => translate("config.sheetupscalecharacters.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessCharacters, value => config().SheetUpscaleSmoothnessCharacters = value,
+                () => translate("config.sheetupscalecharacters.name") + ": " + translate("config.sheetupscalesmoothness.name"), () => translate("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().SheetUpscaleItems, value => config().SheetUpscaleItems = value,
+                () => translate("config.sheetupscaleitems.name"), () => translate("config.sheetupscaleitems.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessItems, value => config().SheetUpscaleSmoothnessItems = value,
+                () => translate("config.sheetupscaleitems.name") + ": " + translate("config.sheetupscalesmoothness.name"), () => translate("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().SheetUpscalePortraits, value => config().SheetUpscalePortraits = value,
+                () => translate("config.sheetupscaleportraits.name"), () => translate("config.sheetupscaleportraits.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessPortraits, value => config().SheetUpscaleSmoothnessPortraits = value,
+                () => translate("config.sheetupscaleportraits.name") + ": " + translate("config.sheetupscalesmoothness.name"), () => translate("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().SheetUpscaleInterface, value => config().SheetUpscaleInterface = value,
+                () => translate("config.sheetupscaleinterface.name"), () => translate("config.sheetupscaleinterface.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessInterface, value => config().SheetUpscaleSmoothnessInterface = value,
+                () => translate("config.sheetupscaleinterface.name") + ": " + translate("config.sheetupscalesmoothness.name"), () => translate("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
         }
 
         /// <summary>Hotkeys, the debug switches, and the roadmap section.</summary>
-        private static void RegisterMiscPage(IGenericModConfigMenuApi api, IManifest manifest, Func<string, string> i18n, Func<ModConfig> config, IModHelper helper, IMonitor monitor, Func<RenderPipeline?> getPipeline)
+        private static void RegisterMiscPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config, IModHelper helper, IMonitor monitor, Func<RenderPipeline?> getPipeline)
         {
-            api.AddPage(manifest, "misc", () => i18n("config.section.misc"));
-            api.AddSectionTitle(manifest, () => i18n("config.section.hotkeys"));
-            api.AddKeybindList(manifest, () => config().ToggleKey, v => config().ToggleKey = v,
-                () => i18n("config.togglekey.name"), () => i18n("config.togglekey.tooltip"));
-            api.AddKeybindList(manifest, () => config().TunerKey, v => config().TunerKey = v,
-                () => i18n("config.tunerkey.name"), () => i18n("config.tunerkey.tooltip"));
-            api.AddKeybindList(manifest, () => config().InspectDrawKey, v => config().InspectDrawKey = v,
-                () => i18n("config.inspectdrawkey.name"), () => i18n("config.inspectdrawkey.tooltip"));
+            configMenu.AddPage(manifest, "misc", () => translate("config.section.misc"));
+            configMenu.AddSectionTitle(manifest, () => translate("config.section.hotkeys"));
+            configMenu.AddKeybindList(manifest, () => config().ToggleKey, value => config().ToggleKey = value,
+                () => translate("config.togglekey.name"), () => translate("config.togglekey.tooltip"));
+            configMenu.AddKeybindList(manifest, () => config().TunerKey, value => config().TunerKey = value,
+                () => translate("config.tunerkey.name"), () => translate("config.tunerkey.tooltip"));
+            configMenu.AddKeybindList(manifest, () => config().InspectDrawKey, value => config().InspectDrawKey = value,
+                () => translate("config.inspectdrawkey.name"), () => translate("config.inspectdrawkey.tooltip"));
 
             // --- Diagnostics ---
             //
@@ -841,23 +849,23 @@ namespace SDVRadiance
             // either. That leaves this menu and config.json as the whole reachable surface, so the
             // three diagnostics a reporter is ever asked for are duplicated into it. It is not only
             // for phones - plenty of people on a desktop have never opened the SMAPI console.
-            api.AddSectionTitle(manifest, () => i18n("config.section.debug"));
-            api.AddBoolOption(manifest, () => config().DebugLogging, v => config().DebugLogging = v,
-                () => i18n("config.debug.name"), () => i18n("config.debug.tooltip"));
-            api.AddBoolOption(manifest, () => PerfHud.Visible, v => PerfHud.Visible = v,
-                () => i18n("tuner.perfhud"), () => i18n("help.perfhud"));
-            api.AddBoolOption(manifest, () => GpuTimer.Ready, GpuTimer.SetWanted,
-                () => i18n("tuner.gputime"), () => i18n("help.gputime"));
+            configMenu.AddSectionTitle(manifest, () => translate("config.section.debug"));
+            configMenu.AddBoolOption(manifest, () => config().DebugLogging, value => config().DebugLogging = value,
+                () => translate("config.debug.name"), () => translate("config.debug.tooltip"));
+            configMenu.AddBoolOption(manifest, () => PerfHud.Visible, value => PerfHud.Visible = value,
+                () => translate("tuner.perfhud"), () => translate("help.perfhud"));
+            configMenu.AddBoolOption(manifest, () => GpuTimer.Ready, GpuTimer.SetWanted,
+                () => translate("tuner.gputime"), () => translate("help.gputime"));
             // A tick box rather than a button, because the API we bind has no button. It reads back
             // as unticked immediately, which is right: it is an action, not a state.
-            api.AddBoolOption(manifest,
+            configMenu.AddBoolOption(manifest,
                 () => false,
-                v => { if (v) ConsoleCommands.WriteReport(helper, monitor, getPipeline(), config(), alsoLog: true); },
-                () => i18n("config.report.name"), () => i18n("config.report.tooltip"));
+                value => { if (value) ConsoleCommands.WriteReport(helper, monitor, getPipeline(), config(), alsoLog: true); },
+                () => translate("config.report.name"), () => translate("config.report.tooltip"));
 
             // --- Not yet implemented: shown as a roadmap so options don't imply working features ---
-            api.AddSectionTitle(manifest, () => i18n("config.section.wip"));
-            api.AddParagraph(manifest, () => i18n("config.wip.text"));
+            configMenu.AddSectionTitle(manifest, () => translate("config.section.wip"));
+            configMenu.AddParagraph(manifest, () => translate("config.wip.text"));
         }
     }
 }

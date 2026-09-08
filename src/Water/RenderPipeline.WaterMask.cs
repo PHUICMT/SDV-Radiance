@@ -107,7 +107,7 @@ namespace SDVRadiance
         private const int MaskPadSideTiles = 4;
         /// <summary>Rows above the view the mask must always hold: the mirror's reach plus the
         /// one-tile fade the shader applies at the mask's top edge.</summary>
-        private const int MaskTopCoverTiles = MirrorTopReachPx / 64 + 1;
+        private const int MaskTopCoverTiles = MirrorTopReachPixels / 64 + 1;
         private const int MaskTopSlackTiles = 5;
         private const int MaskPadTopTiles = MaskTopCoverTiles + MaskTopSlackTiles;
         private const int MaskPadBottomTiles = 4;
@@ -640,7 +640,7 @@ namespace SDVRadiance
                 using (var fs = System.IO.File.Create(occluderPath))
                     _floodOccluderMask.SaveAsPng(fs, _floodOccluderMask.Width, _floodOccluderMask.Height);
                 report.Append($"saved {occluderPath} ({_floodOccluderMask.Width}x{_floodOccluderMask.Height}, "
-                            + $"first tile {_floodOccluderTileX},{_floodOccluderTileY}, {FloodOccSubdivision} texels per tile, alpha = occlusion); ");
+                            + $"first tile {_floodOccluderTileX},{_floodOccluderTileY}, {FloodOccluderSubdivision} texels per tile, alpha = occlusion); ");
                 // The shadow march reads this mask at coarser mip levels for its penumbra, and
                 // whether those levels hold anything is a question only the levels can answer: a
                 // target whose chain was never filled samples as its base level, and the softness

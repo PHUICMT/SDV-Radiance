@@ -72,19 +72,19 @@ namespace SDVRadiance
             // ONE of them per cell, so labelling in map mode used to mark a single frame and the
             // effect flickered in game. HF Studio uses these groups to fan a label out to the
             // whole cycle.
-            var animSigs = new HashSet<string>();
-            var animGroups = new List<string[]>();
+            var animationSignatures = new HashSet<string>();
+            var animationGroups = new List<string[]>();
             Utility.ForEachLocation(location =>
             {
                 try
                 {
-                    Dictionary<string, object?>? entry = DumpLocation(location, artSources, water, animSigs, animGroups);
+                    Dictionary<string, object?>? entry = DumpLocation(location, artSources, water, animationSignatures, animationGroups);
                     if (entry != null)
                         locations[location.NameOrUniqueName] = entry;
                 }
-                catch (Exception ex)
+                catch (Exception exception)
                 {
-                    monitor.Log($"mapdump: skipped {location.NameOrUniqueName}: {ex.Message}", LogLevel.Trace);
+                    monitor.Log($"mapdump: skipped {location.NameOrUniqueName}: {exception.Message}", LogLevel.Trace);
                 }
                 return true;
             }, includeInteriors: true, includeGenerated: false);
@@ -99,24 +99,24 @@ namespace SDVRadiance
             // is risky). So one dump, run in any season, yields art for all four.
             var seasons = new[] { "spring", "summer", "fall", "winter" };
             var artPaths = new Dictionary<string, List<string>>();   // normalized name -> every content path
-            foreach ((string name, List<string> srcs) in artSources)
+            foreach ((string name, List<string> sourcePaths) in artSources)
             {
-                foreach (string src in srcs)
+                foreach (string src in sourcePaths)
                 {
                     AddArtSource(artPaths, name, src);
-                    foreach (string se in seasons)
+                    foreach (string seasonToken in seasons)
                     {
-                        if (src.IndexOf(se, StringComparison.OrdinalIgnoreCase) < 0)
+                        if (src.IndexOf(seasonToken, StringComparison.OrdinalIgnoreCase) < 0)
                             continue;
                         foreach (string other in seasons)
                         {
-                            if (other == se)
+                            if (other == seasonToken)
                                 continue;
                             // swap the season token in both the path and the display name
-                            string sibPath = System.Text.RegularExpressions.Regex.Replace(src, se, other, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                            string sibName = LabelStore.NormalizeSheet(sibPath);
-                            if (!artPaths.ContainsKey(sibName))
-                                AddArtSource(artPaths, sibName, sibPath);
+                            string siblingPath = System.Text.RegularExpressions.Regex.Replace(src, seasonToken, other, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                            string siblingName = LabelStore.NormalizeSheet(siblingPath);
+                            if (!artPaths.ContainsKey(siblingName))
+                                AddArtSource(artPaths, siblingName, siblingPath);
                         }
                         break;   // one season token per path is enough
                     }
@@ -148,30 +148,30 @@ namespace SDVRadiance
             // throws SecurityError. A data URI never tainted, which is why the art was embedded
             // in the first place; a blob URL from a handle does not taint either.
             var art = new Dictionary<string, string>();          // legacy embed (embedArt only)
-            var artPng = new Dictionary<string, string>();        // name -> "sheets/<file>.png"
+            var sheetArtFiles = new Dictionary<string, string>();        // name -> "sheets/<file>.png"
             // The same PNG list keyed by the FULL content path instead of the sheet's bare name.
             // Two mods may ship different art under one file name - "spring_outdoorsTileSheet2"
             // exists in the base game, in three recolours and in two foliage packs on this install,
             // at four different sizes - and the bare name cannot tell them apart. A map names the
             // full path of the sheet it places, so this is the lookup that returns the art the map
             // actually draws with, rather than whichever mod happened to be read first.
-            var artPngBySrc = new Dictionary<string, string>();
+            var sheetArtFileBySource = new Dictionary<string, string>();
             // What the art turned out to be, in tiles-of-16: name -> [width, height]. A labeller
             // laying tile indices out over the PNG has to divide by the sheet's width, and when the
             // art it holds is a different size from the art the map was built against, every index
             // past the first row lands on the wrong tile. Recorded so that mismatch is visible
             // instead of silently drawing the wrong picture.
-            var artDim = new Dictionary<string, int[]>();
+            var sheetArtSizes = new Dictionary<string, int[]>();
             var usedLocationFiles = new HashSet<string>();        // a separate pool: a location and a sheet may share a name
-            string sheetDir = Path.Combine(HfStudioDir(), "sheets");
+            string sheetDirectory = Path.Combine(HfStudioDirectory(), "sheets");
             if (!embedArt)
             {
-                try { Directory.CreateDirectory(sheetDir); }
-                catch (Exception ex) { monitor.Log($"mapdump: cannot create {sheetDir}: {ex.Message}", LogLevel.Warn); }
+                try { Directory.CreateDirectory(sheetDirectory); }
+                catch (Exception exception) { monitor.Log($"mapdump: cannot create {sheetDirectory}: {exception.Message}", LogLevel.Warn); }
             }
-            foreach ((string name, List<string> srcs) in artPaths)
+            foreach ((string name, List<string> sourcePaths) in artPaths)
             {
-                foreach (string src in srcs)
+                foreach (string src in sourcePaths)
                 {
                     try
                     {
@@ -184,26 +184,26 @@ namespace SDVRadiance
                         {
                             if (embedArt)
                             {
-                                using var ms = new MemoryStream();
-                                texture.SaveAsPng(ms, texture.Width, texture.Height);
-                                art[name] = "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
+                                using var pngStream = new MemoryStream();
+                                texture.SaveAsPng(pngStream, texture.Width, texture.Height);
+                                art[name] = "data:image/png;base64," + Convert.ToBase64String(pngStream.ToArray());
                             }
                             else
                             {
                                 // Through memory rather than straight to the file: the name is
                                 // derived from the bytes, so the bytes have to exist first.
-                                byte[] png;
-                                using (var ms = new MemoryStream())
+                                byte[] pngBytes;
+                                using (var pngStream = new MemoryStream())
                                 {
-                                    texture.SaveAsPng(ms, texture.Width, texture.Height);
-                                    png = ms.ToArray();
+                                    texture.SaveAsPng(pngStream, texture.Width, texture.Height);
+                                    pngBytes = pngStream.ToArray();
                                 }
-                                string file = ArtFileName(name, src, png) + ".png";
-                                string full = Path.Combine(sheetDir, file);
+                                string file = ArtFileName(name, src, pngBytes) + ".png";
+                                string full = Path.Combine(sheetDirectory, file);
                                 // Same name means same bytes, so a re-dump of art nothing changed
                                 // is a no-op instead of several hundred megabytes of rewriting.
                                 if (!File.Exists(full))
-                                    File.WriteAllBytes(full, png);
+                                    File.WriteAllBytes(full, pngBytes);
                                 // ...but "same name" is case-insensitive here, and the sheet's name
                                 // comes from whichever mod loaded it. Two mods spelling one sheet
                                 // differently (Lighthouse_TileSheet / Lighthouse_Tilesheet) share the
@@ -211,16 +211,16 @@ namespace SDVRadiance
                                 // a file that exists under a spelling it does not use. Take the name
                                 // the file actually has, so the index is readable somewhere that
                                 // cares about case - which the browser reading this corpus does.
-                                file = OnDiskName(sheetDir, file);
-                                artPngBySrc[src] = "sheets/" + file;
+                                file = OnDiskName(sheetDirectory, file);
+                                sheetArtFileBySource[src] = "sheets/" + file;
                                 // First source wins the bare name, and the first is the one a loaded
                                 // map placed: DumpLocation fills artSources before the season siblings
                                 // and the disk sweep are added to it. A map that places a DIFFERENT
                                 // file under this name resolves through artPngBySrc instead.
-                                if (!artPng.ContainsKey(name))
+                                if (!sheetArtFiles.ContainsKey(name))
                                 {
-                                    artPng[name] = "sheets/" + file;
-                                    artDim[name] = new[] { texture.Width, texture.Height };
+                                    sheetArtFiles[name] = "sheets/" + file;
+                                    sheetArtSizes[name] = new[] { texture.Width, texture.Height };
                                 }
                             }
                         }
@@ -233,9 +233,9 @@ namespace SDVRadiance
                             if (fromDisk) texture.Dispose();
                         }
                     }
-                    catch (Exception ex)
+                    catch (Exception exception)
                     {
-                        monitor.Log($"mapdump: no art for {name} ({src}): {ex.Message}", LogLevel.Trace);
+                        monitor.Log($"mapdump: no art for {name} ({src}): {exception.Message}", LogLevel.Trace);
                     }
                 }
             }
@@ -246,11 +246,11 @@ namespace SDVRadiance
             // its own files draws its own art whatever else has been dumped since.
             foreach (Dictionary<string, object?> entry in locations.Values)
             {
-                if (entry.TryGetValue("sheetSrc", out object? ss) && ss is List<string?> srcList)
+                if (entry.TryGetValue("sheetSrc", out object? sheetSourcesValue) && sheetSourcesValue is List<string?> sheetSources)
                 {
-                    var files = new List<string?>(srcList.Count);
-                    foreach (string? one in srcList)
-                        files.Add(one != null && artPngBySrc.TryGetValue(one, out string? f) ? f : null);
+                    var files = new List<string?>(sheetSources.Count);
+                    foreach (string? one in sheetSources)
+                        files.Add(one != null && sheetArtFileBySource.TryGetValue(one, out string? f) ? f : null);
                     entry["sheetArt"] = files;
                 }
             }
@@ -269,11 +269,11 @@ namespace SDVRadiance
             // embedded as base64, which loses any trace of who supplied it, so HF Studio could not
             // group sheets by mod the way it groups locations. Additive field: older builds ignore
             // it, and only sheets we managed to load art for are listed.
-            var artSrc = new Dictionary<string, string>();
-            foreach ((string name, List<string> srcs) in artPaths)
+            var sheetArtSources = new Dictionary<string, string>();
+            foreach ((string name, List<string> sourcePaths) in artPaths)
             {
-                if (art.ContainsKey(name) || artPng.ContainsKey(name))
-                    artSrc[name] = srcs[0];
+                if (art.ContainsKey(name) || sheetArtFiles.ContainsKey(name))
+                    sheetArtSources[name] = sourcePaths[0];
             }
 
             // ONE FILE PER LOCATION, and an index that names them.
@@ -297,9 +297,9 @@ namespace SDVRadiance
             // it draws and what it draws it with - and every profile that produced that version
             // is listed against it. Identical is identical: a location no pack touches is dumped
             // once and merely gains another name in `from` on every later pass.
-            string studioDir = HfStudioDir();
+            string studioDirectory = HfStudioDirectory();
             string profileLabel = string.IsNullOrWhiteSpace(profile) ? "unnamed" : profile.Trim();
-            using JsonDocument? previous = ReadExistingDump(studioDir, monitor);
+            using JsonDocument? previous = ReadExistingDump(studioDirectory, monitor);
             var index = new Dictionary<string, object?>();
             var alreadyHeld = new Dictionary<string, List<(string Key, string Stamp)>>();
             var profilesSeen = new List<string>();
@@ -316,12 +316,12 @@ namespace SDVRadiance
                             continue;
                         index[held.Name] = record;
                         // Its file name is spoken for, whatever this run decides to call anything.
-                        if (held.Value.TryGetProperty("file", out JsonElement fileEl) && fileEl.ValueKind == JsonValueKind.String)
-                            usedLocationFiles.Add(Path.GetFileNameWithoutExtension(fileEl.GetString() ?? "").ToLowerInvariant());
-                        string heldName = held.Value.TryGetProperty("name", out JsonElement ne) && ne.ValueKind == JsonValueKind.String
-                            ? ne.GetString()! : held.Name;
-                        string heldStamp = held.Value.TryGetProperty("variant", out JsonElement ve) && ve.ValueKind == JsonValueKind.String
-                            ? ve.GetString()! : "";
+                        if (held.Value.TryGetProperty("file", out JsonElement fileElement) && fileElement.ValueKind == JsonValueKind.String)
+                            usedLocationFiles.Add(Path.GetFileNameWithoutExtension(fileElement.GetString() ?? "").ToLowerInvariant());
+                        string heldName = held.Value.TryGetProperty("name", out JsonElement nameElement) && nameElement.ValueKind == JsonValueKind.String
+                            ? nameElement.GetString()! : held.Name;
+                        string heldStamp = held.Value.TryGetProperty("variant", out JsonElement variantElement) && variantElement.ValueKind == JsonValueKind.String
+                            ? variantElement.GetString()! : "";
                         if (!alreadyHeld.TryGetValue(heldName, out var versions))
                             alreadyHeld[heldName] = versions = new List<(string, string)>();
                         versions.Add((held.Name, heldStamp));
@@ -332,10 +332,10 @@ namespace SDVRadiance
                         if (one.ValueKind == JsonValueKind.String && one.GetString() is string s && !profilesSeen.Contains(s))
                             profilesSeen.Add(s);
                 MergeInto(root, "art", art);
-                MergeInto(root, "artPng", artPng);
-                MergeInto(root, "artPngBySrc", artPngBySrc);
-                MergeInto(root, "artSrc", artSrc);
-                MergeDimensions(root, artDim);
+                MergeInto(root, "artPng", sheetArtFiles);
+                MergeInto(root, "artPngBySrc", sheetArtFileBySource);
+                MergeInto(root, "artSrc", sheetArtSources);
+                MergeDimensions(root, sheetArtSizes);
                 MergeWater(root, waterOut);
             }
             if (!profilesSeen.Contains(profileLabel))
@@ -343,11 +343,11 @@ namespace SDVRadiance
 
             int fresh = 0, samePicture = 0;
             var toWrite = new Dictionary<string, Dictionary<string, object?>>();
-            foreach ((string locName, Dictionary<string, object?> entry) in locations)
+            foreach ((string locationName, Dictionary<string, object?> entry) in locations)
             {
                 string stamp = VariantStamp(entry);
                 string? key = null;
-                if (alreadyHeld.TryGetValue(locName, out var versions))
+                if (alreadyHeld.TryGetValue(locationName, out var versions))
                     foreach ((string heldKey, string heldStamp) in versions)
                         if (heldStamp == stamp) { key = heldKey; break; }
                 if (key != null)
@@ -362,13 +362,13 @@ namespace SDVRadiance
                 // A name is only free the first time. Every later VERSION of one place carries the
                 // stamp of what makes it different, so Town and Town~4b17e2 sit side by side and
                 // neither has quietly become the other.
-                key = locName;
+                key = locationName;
                 for (int n = 2; index.ContainsKey(key); n++)
-                    key = n == 2 ? locName + "~" + stamp : locName + "~" + stamp + "-" + n;
+                    key = n == 2 ? locationName + "~" + stamp : locationName + "~" + stamp + "-" + n;
                 fresh++;
                 index[key] = new Dictionary<string, object?>
                 {
-                    ["name"] = locName,
+                    ["name"] = locationName,
                     ["variant"] = stamp,
                     ["from"] = new List<string> { profileLabel },
                     ["outdoors"] = entry.TryGetValue("outdoors", out object? o) ? o : null,
@@ -391,7 +391,8 @@ namespace SDVRadiance
 
             // artPng is additive: a labeller that only knows `art` still works against an
             // embedded dump, and one that knows both prefers the files.
-            var doc = new { format = "hf-mapdump-v3", season = Game1.currentSeason, profiles = profilesSeen, locations = index, art, artPng, artPngBySrc, artDim, artSrc, water = waterOut, animGroups };
+            var doc = new { format = "hf-mapdump-v3", season = Game1.currentSeason, profiles = profilesSeen, locations = index, art = art, artPng = sheetArtFiles, artPngBySrc = sheetArtFileBySource, artDim = sheetArtSizes,
+                artSrc = sheetArtSources, water = waterOut, animGroups = animationGroups };
             string json = JsonSerializer.Serialize(doc);
 
             // Primary target: Documents\HF-Studio. The mod folder lives under Program Files,
@@ -402,16 +403,16 @@ namespace SDVRadiance
             string primary;
             try
             {
-                string sdir = studioDir;
-                Directory.CreateDirectory(sdir);
-                WriteLocationFiles(sdir, toWrite, index, monitor);
-                primary = Path.Combine(sdir, "maps.json");
+                string studioDirectoryAgain = studioDirectory;
+                Directory.CreateDirectory(studioDirectoryAgain);
+                WriteLocationFiles(studioDirectoryAgain, toWrite, index, monitor);
+                primary = Path.Combine(studioDirectoryAgain, "maps.json");
                 File.WriteAllText(primary, json);
             }
-            catch (Exception ex)
+            catch (Exception exception)
             {
                 primary = "";
-                monitor.Log($"mapdump: could not write to Documents ({ex.Message}); mod-folder copy only.", LogLevel.Trace);
+                monitor.Log($"mapdump: could not write to Documents ({exception.Message}); mod-folder copy only.", LogLevel.Trace);
             }
 
             string dir = Path.Combine(helper.DirectoryPath, "mapdump");
@@ -419,9 +420,9 @@ namespace SDVRadiance
             string modPath = Path.Combine(dir, "maps.json");
             try { File.WriteAllText(modPath, json); } catch { /* Program Files may be read-only */ }
 
-            monitor.Log($"Dumped {locations.Count} locations + {art.Count + artPng.Count} sheet art"
-                + (artPng.Count > 0 ? $" (as PNG files in {sheetDir})" : " (embedded)")
-                + $" + {animGroups.Count} animation groups.", LogLevel.Info);
+            monitor.Log($"Dumped {locations.Count} locations + {art.Count + sheetArtFiles.Count} sheet art"
+                + (sheetArtFiles.Count > 0 ? $" (as PNG files in {sheetDirectory})" : " (embedded)")
+                + $" + {animationGroups.Count} animation groups.", LogLevel.Info);
             monitor.Log(primary.Length > 0
                 ? $"In HF Studio: click the map-dump button, pick:  {primary}"
                 : $"In HF Studio: click the map-dump button, pick:  {modPath}", LogLevel.Info);
@@ -451,23 +452,23 @@ namespace SDVRadiance
         /// <summary>Record every frame of an animated tile as "&lt;sheet&gt;:&lt;index&gt;", deduplicated
         /// across the whole dump. A frame's own sheet is registered for art embedding too: a cycle
         /// can step onto a sheet no static cell references, and HF Studio needs its art to paint it.</summary>
-        private static void RecordAnim(AnimatedTile anim, Dictionary<string, List<string>> artSources,
-                                      HashSet<string> sigs, List<string[]> groups)
+        private static void RecordAnimation(AnimatedTile anim, Dictionary<string, List<string>> artSources,
+                                      HashSet<string> signatures, List<string[]> groups)
         {
             var frames = new List<string>();
             foreach (StaticTile f in anim.TileFrames)
             {
                 if (f?.TileSheet == null)
                     continue;
-                string sn = LabelStore.NormalizeSheet(f.TileSheet.ImageSource ?? f.TileSheet.Id);
-                frames.Add(sn + ":" + f.TileIndex);
+                string sheetName = LabelStore.NormalizeSheet(f.TileSheet.ImageSource ?? f.TileSheet.Id);
+                frames.Add(sheetName + ":" + f.TileIndex);
                 if (f.TileSheet.ImageSource is { } src)
-                    AddArtSource(artSources, sn, src);
+                    AddArtSource(artSources, sheetName, src);
             }
             if (frames.Count < 2)
                 return;   // a one-frame "animation" has nothing to fan out to
-            string sig = string.Join("|", frames);
-            if (sigs.Add(sig))
+            string signature = string.Join("|", frames);
+            if (signatures.Add(signature))
                 groups.Add(frames.ToArray());
         }
 
@@ -488,7 +489,7 @@ namespace SDVRadiance
         /// </summary>
         /// <summary>Where the labeller reads its dump from: Documents\HF-Studio. The mod folder
         /// sits under Program Files, and Chrome refuses to hand out a directory handle there.</summary>
-        internal static string HfStudioDir()
+        internal static string HfStudioDirectory()
             => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "HF-Studio");
 
         /// <summary>
@@ -547,11 +548,11 @@ namespace SDVRadiance
             return fileName;
         }
 
-        private static string ArtFileName(string name, string src, byte[] png)
+        private static string ArtFileName(string name, string src, byte[] pngBytes)
         {
-            var sb = new System.Text.StringBuilder(name.Length + 18);
+            var fileNameBuilder = new System.Text.StringBuilder(name.Length + 18);
             foreach (char c in name)
-                sb.Append(Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c);
+                fileNameBuilder.Append(Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c);
             // FNV-1a over the path, lowercased so a case-different spelling of one file agrees
             // with itself. Eight hex digits: collisions are a curiosity here, not a hazard.
             uint hash = 2166136261;
@@ -563,8 +564,8 @@ namespace SDVRadiance
             // whichever profile had dumped most recently for every map at once. Two mods that
             // ship the SAME bytes still share one file, which is the point - a recolour nobody
             // changed is not a second copy.
-            return sb.Append('_').Append(hash.ToString("x8"))
-                     .Append('_').Append(FnvOfBytes(png).ToString("x8")).ToString();
+            return fileNameBuilder.Append('_').Append(hash.ToString("x8"))
+                     .Append('_').Append(FnvOfBytes(pngBytes).ToString("x8")).ToString();
         }
 
         /// <summary>FNV-1a 32 over a byte run. Used for content identity, never for security.</summary>
@@ -591,19 +592,19 @@ namespace SDVRadiance
 
         /// <summary>The dump as it stands on disk, so a run can add to it rather than replace it.
         /// Null when there is nothing there yet, which is an ordinary first run.</summary>
-        private static JsonDocument? ReadExistingDump(string studioDir, IMonitor monitor)
+        private static JsonDocument? ReadExistingDump(string studioDirectory, IMonitor monitor)
         {
-            string path = Path.Combine(studioDir, "maps.json");
+            string path = Path.Combine(studioDirectory, "maps.json");
             if (!File.Exists(path))
                 return null;
             try { return JsonDocument.Parse(File.ReadAllText(path)); }
-            catch (Exception ex)
+            catch (Exception exception)
             {
                 // A dump that cannot be read must not be silently thrown away: it is hours of
                 // profile switching, and the copy costs nothing next to losing it.
                 string keep = path + ".unreadable-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
                 try { File.Move(path, keep); } catch { /* then it stays and gets overwritten */ }
-                monitor.Log($"mapdump: the dump already there could not be read ({ex.Message}); "
+                monitor.Log($"mapdump: the dump already there could not be read ({exception.Message}); "
                             + $"kept as {Path.GetFileName(keep)} and this run starts fresh.", LogLevel.Warn);
                 return null;
             }
@@ -700,10 +701,10 @@ namespace SDVRadiance
 
         private static string SafeFileName(string name, HashSet<string> used)
         {
-            var sb = new System.Text.StringBuilder(name.Length);
+            var fileNameBuilder = new System.Text.StringBuilder(name.Length);
             foreach (char c in name)
-                sb.Append(Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c);
-            string baseName = sb.ToString();
+                fileNameBuilder.Append(Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c);
+            string baseName = fileNameBuilder.ToString();
             string candidate = baseName;
             for (int n = 2; !used.Add(candidate.ToLowerInvariant()); n++)
                 candidate = baseName + "~" + n;
@@ -715,15 +716,15 @@ namespace SDVRadiance
         private static int[] DistinctCells(Dictionary<string, object?> entry)
         {
             var seen = new HashSet<int>();
-            if (entry.TryGetValue("layers", out object? lo) && lo is List<object> layers)
+            if (entry.TryGetValue("layers", out object? layersValue) && layersValue is List<object> layers)
                 foreach (object layer in layers)
                 {
                     // The layer objects are anonymous types built in PackRenderedLayers, so the
                     // cells come back out through reflection rather than a cast.
                     object? cellsObj = layer.GetType().GetProperty("cells")?.GetValue(layer);
-                    if (cellsObj is not string b64)
+                    if (cellsObj is not string cellsBase64)
                         continue;
-                    byte[] bytes = Convert.FromBase64String(b64);
+                    byte[] bytes = Convert.FromBase64String(cellsBase64);
                     for (int i = 0; i + 3 < bytes.Length; i += 4)
                     {
                         int v = BitConverter.ToInt32(bytes, i);
@@ -740,26 +741,26 @@ namespace SDVRadiance
         /// <summary>Write one file per location under <c>maps/</c>, named by the index. Whatever the
         /// index says a location's file is called is what gets written, so the two cannot drift.
         /// Best effort per file: one location that fails to write must not lose the other 2,900.</summary>
-        private static void WriteLocationFiles(string studioDir, Dictionary<string, Dictionary<string, object?>> locations,
+        private static void WriteLocationFiles(string studioDirectory, Dictionary<string, Dictionary<string, object?>> locations,
                                                Dictionary<string, object?> index, IMonitor monitor)
         {
-            string dir = Path.Combine(studioDir, "maps");
+            string dir = Path.Combine(studioDirectory, "maps");
             Directory.CreateDirectory(dir);
             int written = 0, failed = 0;
             foreach ((string name, Dictionary<string, object?> entry) in locations)
             {
-                if (index[name] is not Dictionary<string, object?> idx || idx["file"] is not string rel)
+                if (index[name] is not Dictionary<string, object?> idx || idx["file"] is not string relativePath)
                     continue;
                 try
                 {
-                    File.WriteAllText(Path.Combine(studioDir, rel.Replace('/', Path.DirectorySeparatorChar)),
+                    File.WriteAllText(Path.Combine(studioDirectory, relativePath.Replace('/', Path.DirectorySeparatorChar)),
                                       JsonSerializer.Serialize(entry));
                     written++;
                 }
-                catch (Exception ex)
+                catch (Exception exception)
                 {
                     failed++;
-                    monitor.Log($"mapdump: could not write {rel}: {ex.Message}", LogLevel.Trace);
+                    monitor.Log($"mapdump: could not write {relativePath}: {exception.Message}", LogLevel.Trace);
                 }
             }
             monitor.Log($"mapdump: {written} location files in {dir}"
@@ -769,21 +770,21 @@ namespace SDVRadiance
         /// <summary>A PNG the content pipeline has never heard of, read straight off disk.</summary>
         private static Microsoft.Xna.Framework.Graphics.Texture2D LoadFromDisk(string path)
         {
-            using var fs = File.OpenRead(path);
-            return Microsoft.Xna.Framework.Graphics.Texture2D.FromStream(Game1.graphics.GraphicsDevice, fs);
+            using var stream = File.OpenRead(path);
+            return Microsoft.Xna.Framework.Graphics.Texture2D.FromStream(Game1.graphics.GraphicsDevice, stream);
         }
 
         private static void AddUnplacedSheetArt(IModHelper helper, IMonitor monitor, Dictionary<string, List<string>> artPaths)
         {
-            string? mods = helper.DirectoryPath;
-            while (mods != null && !string.Equals(Path.GetFileName(mods), "Mods", StringComparison.OrdinalIgnoreCase))
-                mods = Path.GetDirectoryName(mods);
-            if (mods == null)
+            string? modsFolder = helper.DirectoryPath;
+            while (modsFolder != null && !string.Equals(Path.GetFileName(modsFolder), "Mods", StringComparison.OrdinalIgnoreCase))
+                modsFolder = Path.GetDirectoryName(modsFolder);
+            if (modsFolder == null)
             {
                 monitor.Log("mapdump: could not find the Mods folder, so unplaced sheets were skipped.", LogLevel.Warn);
                 return;
             }
-            string[] roots = { mods, Path.Combine(Path.GetDirectoryName(mods)!, "Mods (disabled)") };
+            string[] roots = { modsFolder, Path.Combine(Path.GetDirectoryName(modsFolder)!, "Mods (disabled)") };
             // The shape test cannot tell a tilesheet from a 1080p screenshot: both are big and
             // 16-aligned. Screenshot folders were 82% of the first all-sheets dump (406MB of the
             // 495MB), all of it from our own dev capture folder, so name them out up front.
@@ -791,7 +792,7 @@ namespace SDVRadiance
                                    "hair", "shirt", "pants", "hats", "shoes", "tattoo", "bodies",
                                    "\\shots\\", "screenshot", "\\shot_" };
             int added = 0;
-            byte[] head = new byte[24];      // outside the loop: a stackalloc in there is a slow leak
+            byte[] pngHeader = new byte[24];      // outside the loop: a stackalloc in there is a slow leak
             foreach (string root in roots)
             {
                 if (!Directory.Exists(root))
@@ -811,11 +812,11 @@ namespace SDVRadiance
                     {
                         // Header only: width and height live at a fixed offset in every PNG, so the
                         // shape test costs 24 bytes rather than decoding a megabyte to reject it.
-                        using var fs = File.OpenRead(file);
-                        if (fs.Read(head, 0, 24) < 24 || head[1] != 'P' || head[2] != 'N' || head[3] != 'G')
+                        using var stream = File.OpenRead(file);
+                        if (stream.Read(pngHeader, 0, 24) < 24 || pngHeader[1] != 'P' || pngHeader[2] != 'N' || pngHeader[3] != 'G')
                             continue;
-                        int w = (head[16] << 24) | (head[17] << 16) | (head[18] << 8) | head[19];
-                        int h = (head[20] << 24) | (head[21] << 16) | (head[22] << 8) | head[23];
+                        int w = (pngHeader[16] << 24) | (pngHeader[17] << 16) | (pngHeader[18] << 8) | pngHeader[19];
+                        int h = (pngHeader[20] << 24) | (pngHeader[21] << 16) | (pngHeader[22] << 8) | pngHeader[23];
                         if (w < 128 || h < 128 || (w & 15) != 0 || (h & 15) != 0)
                             continue;
                     }
@@ -828,7 +829,7 @@ namespace SDVRadiance
         }
 
         private static Dictionary<string, object?>? DumpLocation(GameLocation location, Dictionary<string, List<string>> artSources, Dictionary<string, HashSet<int>> water,
-                                           HashSet<string> animSigs, List<string[]> animGroups)
+                                           HashSet<string> animationSignatures, List<string[]> animationGroups)
         {
             xTile.Map? map = location.Map;
             if (map == null || map.TileSheets.Count == 0)
@@ -843,20 +844,20 @@ namespace SDVRadiance
             // and the art's own pixel size is not the layout the map indexes against - a recolour
             // that ships a taller sheet than the one a map was built for shifts every index past
             // the first row if the width is read off the picture.
-            var sheetSrc = new List<string?>();
-            var sheetWH = new List<int[]>();
-            foreach (TileSheet ts in map.TileSheets)
+            var sheetSourcePaths = new List<string?>();
+            var sheetSizes = new List<int[]>();
+            foreach (TileSheet tileSheet in map.TileSheets)
             {
-                sheetIndex[ts] = sheets.Count;
-                sheets.Add(LabelStore.NormalizeSheet(ts.ImageSource ?? ts.Id));
-                sheetSrc.Add(ts.ImageSource);
-                sheetWH.Add(new[] { ts.SheetWidth, ts.SheetHeight });
-                sheetRefs.Add(ts);
+                sheetIndex[tileSheet] = sheets.Count;
+                sheets.Add(LabelStore.NormalizeSheet(tileSheet.ImageSource ?? tileSheet.Id));
+                sheetSourcePaths.Add(tileSheet.ImageSource);
+                sheetSizes.Add(new[] { tileSheet.SheetWidth, tileSheet.SheetHeight });
+                sheetRefs.Add(tileSheet);
             }
             var used = new bool[sheets.Count];
 
             List<object> layers = PackRenderedLayers(location, map, sheetIndex, sheets, used,
-                                                     artSources, water, animSigs, animGroups);
+                                                     artSources, water, animationSignatures, animationGroups);
             if (layers.Count == 0)
                 return null;
             for (int i = 0; i < sheets.Count; i++)
@@ -870,14 +871,14 @@ namespace SDVRadiance
             // map, and Water="I" tiles (water for gameplay that the game never draws an overlay
             // on — waterfall bases, decorative edges). wgrid = row-major bitmask of isWater;
             // wI = packed y*w+x indices of the invisible subset.
-            (string? wgrid, List<int> wI) = PackWaterGrid(location);
+            (string? waterGrid, List<int> waterInvisible) = PackWaterGrid(location);
 
             // One property sweep, four packed index lists (y*w+x):
             //   wBld  = "Water" on Buildings — fishable-under-bridge, NOT in waterTiles, never mirror
             //   wSrc  = "WaterSource" on Back — watering-can refill, must NOT be treated as water
             //   pBld  = "Passable" on Buildings — bridge planks etc., occluders that stay walkable
             //   noFish= "NoFishing" on Back — water where fishing is off (festival edges etc.)
-            (List<int> wBld, List<int> wSrc, List<int> pBld, List<int> noFish) = PackTileProperties(location, map);
+            (List<int> waterOnBuildings, List<int> waterSource, List<int> passableBuildings, List<int> noFishing) = PackTileProperties(location, map);
 
             // Every building = a potential occluder (footprint + sprite height feed the V4
             // reflection height gate). Fish ponds additionally draw their own water
@@ -887,9 +888,9 @@ namespace SDVRadiance
 
             // Raw map properties (indoorWater, ambient sounds, custom framework flags ...) and
             // the location's own class + per-location season (Ginger Island stays summer).
-            (Dictionary<string, string> mapProps, string? locSeason) = PackMapMetadata(location, map);
+            (Dictionary<string, string> mapProperties, string? locationSeason) = PackMapMetadata(location, map);
 
-            var wc = location.waterColor.Value;
+            var waterColorValue = location.waterColor.Value;
             var layersAll = new List<string>();
             foreach (Layer l in map.Layers)
                 layersAll.Add(l.Id);
@@ -900,19 +901,19 @@ namespace SDVRadiance
             return new Dictionary<string, object?>
             {
                 ["outdoors"] = location.IsOutdoors, ["sheets"] = sheets,
-                ["sheetSrc"] = sheetSrc, ["sheetWH"] = sheetWH, ["layers"] = layers,
+                ["sheetSrc"] = sheetSourcePaths, ["sheetWH"] = sheetSizes, ["layers"] = layers,
                 ["cls"] = location.GetType().FullName,
-                ["locSeason"] = locSeason,
-                ["waterColor"] = new[] { (int)wc.R, (int)wc.G, (int)wc.B, (int)wc.A },
+                ["locSeason"] = locationSeason,
+                ["waterColor"] = new[] { (int)waterColorValue.R, (int)waterColorValue.G, (int)waterColorValue.B, (int)waterColorValue.A },
                 ["indoorWater"] = location.HasMapPropertyWithValue("indoorWater"),
-                ["mapProps"] = mapProps.Count > 0 ? mapProps : null,
+                ["mapProps"] = mapProperties.Count > 0 ? mapProperties : null,
                 ["layersAll"] = layersAll,
-                ["wgrid"] = wgrid,
-                ["wI"] = wI.Count > 0 ? wI.ToArray() : null,
-                ["wBld"] = wBld.Count > 0 ? wBld.ToArray() : null,
-                ["wSrc"] = wSrc.Count > 0 ? wSrc.ToArray() : null,
-                ["pBld"] = pBld.Count > 0 ? pBld.ToArray() : null,
-                ["noFish"] = noFish.Count > 0 ? noFish.ToArray() : null,
+                ["wgrid"] = waterGrid,
+                ["wI"] = waterInvisible.Count > 0 ? waterInvisible.ToArray() : null,
+                ["wBld"] = waterOnBuildings.Count > 0 ? waterOnBuildings.ToArray() : null,
+                ["wSrc"] = waterSource.Count > 0 ? waterSource.ToArray() : null,
+                ["pBld"] = passableBuildings.Count > 0 ? passableBuildings.ToArray() : null,
+                ["noFish"] = noFishing.Count > 0 ? noFishing.ToArray() : null,
                 ["buildings"] = buildings.Count > 0 ? buildings : null,
                 ["fishPonds"] = fishPonds.Count > 0 ? fishPonds : null,
             };
@@ -924,7 +925,7 @@ namespace SDVRadiance
                                                        Dictionary<TileSheet, int> sheetIndex, List<string> sheets,
                                                        bool[] used, Dictionary<string, List<string>> artSources,
                                                        Dictionary<string, HashSet<int>> water,
-                                                       HashSet<string> animSigs, List<string[]> animGroups)
+                                                       HashSet<string> animationSignatures, List<string[]> animationGroups)
         {
             var layers = new List<object>();
             foreach (Layer layer in map.Layers)
@@ -952,7 +953,7 @@ namespace SDVRadiance
                 // pieces facing the wrong way - the "HF assembles it wrong" reports. Kept as a
                 // SIDE ARRAY rather than packed into the cell int: additive, so a labeler that has
                 // not learned about it still reads the map, and no risk to the existing encoding.
-                byte[] orient = new byte[w * h];
+                byte[] orientations = new byte[w * h];
                 bool layerHasOrient = false;
                 var animCells = new List<int>();   // packed y*w+x of animated cells on THIS layer
                 bool layerHasWater = false;
@@ -963,31 +964,31 @@ namespace SDVRadiance
                         Tile? t = layer.Tiles[x, y];
                         if (t is AnimatedTile anim && anim.TileFrames.Length > 0)
                         {
-                            RecordAnim(anim, artSources, animSigs, animGroups);
+                            RecordAnimation(anim, artSources, animationSignatures, animationGroups);
                             animCells.Add(y * w + x);
                             // The orientation lives on the ANIMATED tile, not on its frames.
-                            byte oA = ReadOrientation(t);
-                            if (oA != 0) { orient[y * w + x] = oA; layerHasOrient = true; }
+                            byte animatedOrientation = ReadOrientation(t);
+                            if (animatedOrientation != 0) { orientations[y * w + x] = animatedOrientation; layerHasOrient = true; }
                             t = anim.TileFrames[0];   // deterministic: first frame
                         }
                         else if (t != null)
                         {
                             byte o = ReadOrientation(t);
-                            if (o != 0) { orient[y * w + x] = o; layerHasOrient = true; }
+                            if (o != 0) { orientations[y * w + x] = o; layerHasOrient = true; }
                         }
-                        if (t == null || !sheetIndex.TryGetValue(t.TileSheet, out int si))
+                        if (t == null || !sheetIndex.TryGetValue(t.TileSheet, out int sheetNumber))
                         {
                             cells[y * w + x] = -1;
                             continue;
                         }
-                        cells[y * w + x] = si * 0x100000 + t.TileIndex;
-                        used[si] = true;
+                        cells[y * w + x] = sheetNumber * 0x100000 + t.TileIndex;
+                        used[sheetNumber] = true;
                         layerHasWater = true;
                         if (isBack && location.isWaterTile(x, y))
                         {
-                            string sn = sheets[si];
-                            if (!water.TryGetValue(sn, out HashSet<int>? set))
-                                water[sn] = set = new HashSet<int>();
+                            string sheetName = sheets[sheetNumber];
+                            if (!water.TryGetValue(sheetName, out HashSet<int>? set))
+                                water[sheetName] = set = new HashSet<int>();
                             set.Add(t.TileIndex);
                         }
                     }
@@ -1005,11 +1006,11 @@ namespace SDVRadiance
                 int ord = MapLayers.CompositeRank(layer.Id);
                 layers.Add(new
                 {
-                    id = layer.Id, fam = hasFam ? fam : null, ord, w, h,
+                    id = layer.Id, fam = hasFam ? fam : null, ord = ord, w = w, h = h,
                     cells = Convert.ToBase64String(bytes),
                     anim = animCells.Count > 0 ? animCells.ToArray() : null,
                     // Only when something on this layer is actually turned: most layers add nothing.
-                    orient = layerHasOrient ? Convert.ToBase64String(orient) : null,
+                    orientations = layerHasOrient ? Convert.ToBase64String(orientations) : null,
                 });
             }
             return layers;
@@ -1019,30 +1020,30 @@ namespace SDVRadiance
         /// invisible subset.</summary>
         private static (string? Grid, List<int> Invisible) PackWaterGrid(GameLocation location)
         {
-            string? wgrid = null;
-            var wI = new List<int>();
-            if (location.waterTiles?.waterTiles is { } wt)
+            string? waterGrid = null;
+            var waterInvisible = new List<int>();
+            if (location.waterTiles?.waterTiles is { } waterTiles)
             {
-                int ww = wt.GetLength(0), wh = wt.GetLength(1);
-                var bits = new byte[(ww * wh + 7) / 8];
-                bool anyW = false;
-                for (int y = 0; y < wh; y++)
+                int waterWidth = waterTiles.GetLength(0), waterHeight = waterTiles.GetLength(1);
+                var bits = new byte[(waterWidth * waterHeight + 7) / 8];
+                bool anyWater = false;
+                for (int y = 0; y < waterHeight; y++)
                 {
-                    for (int x = 0; x < ww; x++)
+                    for (int x = 0; x < waterWidth; x++)
                     {
-                        if (!wt[x, y].isWater)
+                        if (!waterTiles[x, y].isWater)
                             continue;
-                        int idx = y * ww + x;
+                        int idx = y * waterWidth + x;
                         bits[idx >> 3] |= (byte)(1 << (idx & 7));
-                        anyW = true;
-                        if (!wt[x, y].isVisible)
-                            wI.Add(idx);
+                        anyWater = true;
+                        if (!waterTiles[x, y].isVisible)
+                            waterInvisible.Add(idx);
                     }
                 }
-                if (anyW)
-                    wgrid = Convert.ToBase64String(bits);
+                if (anyWater)
+                    waterGrid = Convert.ToBase64String(bits);
             }
-            return (wgrid, wI);
+            return (waterGrid, waterInvisible);
         }
 
         /// <summary>One sweep of the map for the four tile properties the labeler needs, each
@@ -1050,26 +1051,26 @@ namespace SDVRadiance
         private static (List<int> WaterOnBuildings, List<int> WaterSource, List<int> PassableBuildings, List<int> NoFishing)
             PackTileProperties(GameLocation location, xTile.Map map)
         {
-            var wBld = new List<int>();
-            var wSrc = new List<int>();
-            var pBld = new List<int>();
-            var noFish = new List<int>();
-            int mw = map.Layers[0].LayerWidth, mh = map.Layers[0].LayerHeight;
-            if (mw > 0 && mh > 0 && mw * mh <= 4_000_000)
+            var waterOnBuildings = new List<int>();
+            var waterSource = new List<int>();
+            var passableBuildings = new List<int>();
+            var noFishing = new List<int>();
+            int mapWidth = map.Layers[0].LayerWidth, mapHeight = map.Layers[0].LayerHeight;
+            if (mapWidth > 0 && mapHeight > 0 && mapWidth * mapHeight <= 4_000_000)
             {
-                for (int y = 0; y < mh; y++)
+                for (int y = 0; y < mapHeight; y++)
                 {
-                    for (int x = 0; x < mw; x++)
+                    for (int x = 0; x < mapWidth; x++)
                     {
-                        int idx = y * mw + x;
-                        if (location.doesTileHaveProperty(x, y, "Water", "Buildings") != null) wBld.Add(idx);
-                        if (location.doesTileHaveProperty(x, y, "WaterSource", "Back") != null) wSrc.Add(idx);
-                        if (location.doesTileHaveProperty(x, y, "Passable", "Buildings") != null) pBld.Add(idx);
-                        if (location.doesTileHaveProperty(x, y, "NoFishing", "Back") != null) noFish.Add(idx);
+                        int idx = y * mapWidth + x;
+                        if (location.doesTileHaveProperty(x, y, "Water", "Buildings") != null) waterOnBuildings.Add(idx);
+                        if (location.doesTileHaveProperty(x, y, "WaterSource", "Back") != null) waterSource.Add(idx);
+                        if (location.doesTileHaveProperty(x, y, "Passable", "Buildings") != null) passableBuildings.Add(idx);
+                        if (location.doesTileHaveProperty(x, y, "NoFishing", "Back") != null) noFishing.Add(idx);
                     }
                 }
             }
-            return (wBld, wSrc, pBld, noFish);
+            return (waterOnBuildings, waterSource, passableBuildings, noFishing);
         }
 
         /// <summary>Buildings as occluders, and the fish ponds among them, which draw water of
@@ -1080,24 +1081,24 @@ namespace SDVRadiance
             var fishPonds = new List<object>();
             foreach (var b in location.buildings)
             {
-                int srcH = 0;
-                try { srcH = b.getSourceRect().Height; } catch { }
+                int sourceHeight = 0;
+                try { sourceHeight = b.getSourceRect().Height; } catch { }
                 buildings.Add(new
                 {
                     type = b.buildingType.Value,
                     x = b.tileX.Value, y = b.tileY.Value,
                     w = b.tilesWide.Value, h = b.tilesHigh.Value,
-                    srcH,
+                    srcH = sourceHeight,
                     building = b.daysOfConstructionLeft.Value > 0,
                 });
-                if (b is StardewValley.Buildings.FishPond fp && fp.daysOfConstructionLeft.Value <= 0)
+                if (b is StardewValley.Buildings.FishPond fishPond && fishPond.daysOfConstructionLeft.Value <= 0)
                 {
-                    var pc = fp.overrideWaterColor.Value;
+                    var pondColor = fishPond.overrideWaterColor.Value;
                     fishPonds.Add(new
                     {
-                        x = fp.tileX.Value, y = fp.tileY.Value,
-                        w = fp.tilesWide.Value, h = fp.tilesHigh.Value,
-                        color = new[] { (int)pc.R, (int)pc.G, (int)pc.B, (int)pc.A },
+                        x = fishPond.tileX.Value, y = fishPond.tileY.Value,
+                        w = fishPond.tilesWide.Value, h = fishPond.tilesHigh.Value,
+                        color = new[] { (int)pondColor.R, (int)pondColor.G, (int)pondColor.B, (int)pondColor.A },
                     });
                 }
             }
@@ -1108,16 +1109,16 @@ namespace SDVRadiance
         /// throw on a malformed map and are worth nothing rather than everything.</summary>
         private static (Dictionary<string, string> Props, string? Season) PackMapMetadata(GameLocation location, xTile.Map map)
         {
-            var mapProps = new Dictionary<string, string>();
+            var mapProperties = new Dictionary<string, string>();
             try
             {
                 foreach (var kv in map.Properties)
-                    mapProps[kv.Key] = kv.Value?.ToString() ?? "";
+                    mapProperties[kv.Key] = kv.Value?.ToString() ?? "";
             }
             catch { }
-            string? locSeason = null;
-            try { locSeason = location.GetSeason().ToString(); } catch { }
-            return (mapProps, locSeason);
+            string? locationSeason = null;
+            try { locationSeason = location.GetSeason().ToString(); } catch { }
+            return (mapProperties, locationSeason);
         }
     }
 }

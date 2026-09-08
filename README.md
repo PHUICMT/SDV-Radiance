@@ -28,6 +28,7 @@ sprites, outfit mods, and recolors work automatically, with no per-mod patches.
 **Lighting & shadows**
 - Directional shadows for characters, animals, trees, objects, crops, and map props: real sprite silhouettes that lean and stretch with the sun and fade at dusk
 - Moonlight shadows at night, scaled by lunar phase and season
+- A dark pool under every tree, rock, fence and placed thing, the way ambient occlusion grounds a thing whatever the sun is doing. Ships at zero
 - Per-light indoor shadows (lamps, torches, fireplaces)
 - Occlusion-aware dynamic lighting: darken flat/unlit interiors, pool warm light around real light sources, blocked by walls
 - Interiors that follow the clock: rooms dim at dawn, fill through the morning, sink before dusk and go genuinely dark at night, with the colour moving from cool sky light to neutral to warm to blue
@@ -62,7 +63,7 @@ sprites, outfit mods, and recolors work automatically, with no per-mod patches.
 - Wind in the trees: tree tops and bushes lean with the same wind the rain leans with, and a gust front crosses the map so a row of trees leans one after another rather than all at once. The tilt is a fraction of a degree, because pixel art has no in-between pixels to bend into
 - Leaves catch the light: patches of canopy brighten and dim the way leaf faces flip in wind
 - Sprite relief: a lamp or the sun lights the side of a tree, a building or a fence that faces it, from a normal map synthesised out of the sprite itself. Off by default
-- Sprites at twice the texels: every sheet in use is doubled on the graphics card by the Scale2x rule, per art family, so dialogue text can stay sharp while the trees soften. Off by default, and the sheets themselves are never touched
+- Sprites at twice the texels: every sheet in use is doubled on the graphics card, per art family, so dialogue text can stay sharp while the world stays as pixelated as you like. Two looks, the Scale2x rule and a softer xBR-style one baked onto shared pages, with a smoothing dial each for the world, characters, portraits, items and menus, and a switch for the items lying in the world and in the toolbar. All of it ships off
 
 **Windows & glass**
 - Reflections in windows: you at the window's own height, with the tool in your hand, keeping your stride. Glass reflects when what is behind it is darker than what is in front, so the image is plain in daylight and thins after dusk as the room lights up behind the pane
@@ -70,6 +71,7 @@ sprites, outfit mods, and recolors work automatically, with no per-mod patches.
 
 **Atmosphere & color**
 - Sun shafts: daylight cut by a canopy into slanting patches on the ground, with their own strength and reach. On by default
+- The dappled light under a canopy reaches the greenhouse floor too, cut by whatever grows there, since its roof is glass and the sun stands over it
 - Lamp shafts from in-world light sources, rebuilt in 1.7.0 from the same shapes the lamp shadows use, on a separate switch. Ships off
 - Aurora on clear winter nights: slow curtains of green and violet that the water carries too. On, and rare
 - Shooting stars on a clear night in any season, drawn into the sea as well as the sky
@@ -181,8 +183,8 @@ Per-mod test results are in [docs/compatibility.md](docs/compatibility.md).
   on load until a menu forces a redraw, and patches of the water surface lose their mirror while
   you walk. One player on Clear Glasses HD also reported the view zooming in hard or blacking out
   when walking near god rays; switching the God rays effect off avoided that without disabling
-  the rest. Use one or the other. Native high-quality upscaling is on the roadmap so the two are
-  eventually one install.
+  the rest. Use one or the other. This mod does its own sheet upscaling now, two looks with a dial per
+  art family, so it is no longer a reason to run both.
 - **Clear Monocle is NOT in this bracket.** It is a fork that keeps only the upscaling, and its
   author shipped explicit support for this mod on 2026-07-28. Two users have confirmed it working
   since. Keep it up to date.
@@ -227,7 +229,11 @@ Planned directions (not yet shipped):
 Shipped since this list was last written: radiance-cascades global illumination and
 normal-mapped sprite lighting (1.7.0, the first on by default and the second off), built-in
 sprite sharpening (1.7.0, off by default), the lamp-shaft rebuild (1.7.0, still off), and
-per-light shadows for objects and map props (1.7.0, as their own shapes).
+per-light shadows for objects and map props (1.7.0, as their own shapes). Since then: split
+screen at the price of two cameras rather than four (1.7.5), the softer upscaling look with a
+dial per art family (1.7.5), a lamp's shadow kept between frames instead of walked again,
+sunlight through a canopy reaching the greenhouse, and a dark pool under objects on a dial
+that ships at zero (1.7.6).
 
 ## Support / donate
 
@@ -239,7 +245,11 @@ Free and always will be. If it's useful to you, support is appreciated but never
 
 MIT, see [LICENSE](LICENSE). Third-party attribution (frameworks, tooling, and any reused code) is in [CREDITS.md](CREDITS.md).
 
-Translations: Simplified Chinese bundled since 1.2.2 by **Rime961**, complete at 813 of 813 keys
-in 1.7.0. Thai by the author, also complete. Separate translation mods on the Nexus, with thanks:
-Korean by [jjongleee](https://www.nexusmods.com/stardewvalley/mods/49448), Chinese by
-[Rubbish404](https://www.nexusmods.com/stardewvalley/mods/49647).
+Translations: Simplified Chinese bundled since 1.2.2 by **Rime961**, resynced against a moving key
+set every release and at 840 of 843 keys in 1.7.6. Thai by the author, complete. Six more languages are published as separate mods on the Nexus by their own authors, none of
+them asked for: French by [Deovos](https://www.nexusmods.com/stardewvalley/mods/50089), German
+by [Neko41](https://www.nexusmods.com/stardewvalley/mods/51482), Japanese by
+[tanakakaku3i](https://www.nexusmods.com/stardewvalley/mods/49750), Korean by
+[jjongleee](https://www.nexusmods.com/stardewvalley/mods/49448), Mandarin by
+[Rubbish404](https://www.nexusmods.com/stardewvalley/mods/49647) and Spanish by
+[Papaya2](https://www.nexusmods.com/stardewvalley/mods/51510).nexusmods.com/stardewvalley/mods/49647).

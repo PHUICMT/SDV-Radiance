@@ -86,6 +86,20 @@ namespace SDVRadiance
             public Texture2D? FloodOccluderBaseSpare;
             public RenderTarget2D?[] FloodOccluderSoft = new RenderTarget2D?[FloodOccluderSoftLevels];
             public bool ShadowsReady;
+            /// <summary>Counts up on every rebuild of the flood occluder mask, so a cache built
+            /// from the mask can tell a rebuild that kept the window's origin from no rebuild.</summary>
+            public int FloodOccluderGeneration;
+            public int FloodOccluderGenerationTick = int.MinValue;
+
+            // ---- the lamp shadow march window (RenderPipeline.MarchWindow.cs) ----
+            public RenderTarget2D? MarchWindowA, MarchWindowB;
+            public int MarchWindowTileX = int.MinValue, MarchWindowTileY = int.MinValue;
+            public int MarchWindowOccluderGeneration = -1;
+            public float MarchWindowStepCeiling = -1f, MarchWindowSoftness = -1f;
+            public bool[] MarchChannelOn = new bool[FloodShadowedLights];
+            public int[] MarchChannelId = new int[FloodShadowedLights];
+            public Vector2[] MarchChannelTile = new Vector2[FloodShadowedLights];
+            public float[] MarchChannelReach = new float[FloodShadowedLights];
 
             // ---- the mirror's scenery cache ----
             public RenderTarget2D? MirrorSceneCache;
@@ -177,6 +191,8 @@ namespace SDVRadiance
                 FloodOccluderBase?.Dispose();
                 FloodOccluderBaseSpare?.Dispose();
                 for (int i = 0; i < FloodOccluderSoft.Length; i++) FloodOccluderSoft[i]?.Dispose();
+                MarchWindowA?.Dispose();
+                MarchWindowB?.Dispose();
                 Flood.Dispose();
             }
         }
@@ -254,6 +270,19 @@ namespace SDVRadiance
         private ref Vector2 _occluderWorldTileOffset => ref _screen.OccluderWorldTileOffset;
         private ref Vector2 _occluderMaskSize => ref _screen.OccluderMaskSize;
         private ref Texture2D? _floodOccluderMask => ref _screen.FloodOccluderMask;
+        private ref int _floodOccluderGeneration => ref _screen.FloodOccluderGeneration;
+        private ref int _floodOccluderGenerationTick => ref _screen.FloodOccluderGenerationTick;
+        private ref RenderTarget2D? _marchWindowA => ref _screen.MarchWindowA;
+        private ref RenderTarget2D? _marchWindowB => ref _screen.MarchWindowB;
+        private ref int _marchWindowTileX => ref _screen.MarchWindowTileX;
+        private ref int _marchWindowTileY => ref _screen.MarchWindowTileY;
+        private ref int _marchWindowOccluderGeneration => ref _screen.MarchWindowOccluderGeneration;
+        private ref float _marchWindowStepCeiling => ref _screen.MarchWindowStepCeiling;
+        private ref float _marchWindowSoftness => ref _screen.MarchWindowSoftness;
+        private bool[] _marchChannelOn => _screen.MarchChannelOn;
+        private int[] _marchChannelId => _screen.MarchChannelId;
+        private Vector2[] _marchChannelTile => _screen.MarchChannelTile;
+        private float[] _marchChannelReach => _screen.MarchChannelReach;
         private ref Color[]? _floodOccluderMaskPixels => ref _screen.FloodOccluderMaskPixels;
         private ref int _floodOccluderTileX => ref _screen.FloodOccluderTileX;
         private ref int _floodOccluderTileY => ref _screen.FloodOccluderTileY;

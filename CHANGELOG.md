@@ -2,6 +2,189 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.7.6 - 2026-09-08
+
+### Performance
+
+- **The graphics layer no longer checks two hundred texture slots on every draw call.** Before
+  each draw, MonoGame walks every texture sampler slot the driver says the card has, asking
+  whether that slot's filter changed. It asks the driver for the number and does not cap it, and
+  a modern card answers with the hundreds: this machine reports 192. A shader here can use
+  sixteen, and the game's own texture side of the same check stops after the slots that actually
+  changed. So on a frame with a few thousand draw calls that is around half a million turns of a
+  loop that can never find anything. The mod now hands the graphics layer a list of 32 slots,
+  which is every slot the graphics layer itself is able to bind a texture to, so nothing that
+  could have been drawn is skipped. Measured on my machine on the farm at 75 percent zoom on a
+  3440-wide window, uncapped, alternating between the two: the whole frame 11.3 to 11.6 ms with
+  the full list and 10.0 to 10.5 with the short one, in every pair, with the same number of draw
+  calls. Frozen on one launch, the picture with the short list and with the full one is the same
+  to within less than the frame's own noise: every buffer identical, and where the frame differs
+  at all it differs by 3 of 255 where two captures of the SAME setting differ by 175.
+  `radiance_samplerslots full` puts the driver's number back for a comparison, and
+  `radiance_report` says which is in force.
+- **The sprite relief is drawn once per sheet instead of once per sprite.** The relief is the
+  picture of every sprite's sides that the lamps and the sun read, and it was drawn by replaying
+  every sprite in the order the game drew them, which ends a draw call every time the sheet changes
+  between two neighbours: about two thousand a frame. They are now drawn grouped by sheet, with a
+  depth buffer deciding which sprite is in front instead of the order they arrive in. Measured on
+  my machine on the farm at 75 percent zoom on a 3440-wide window, uncapped: the whole frame 10.3
+  to 10.5 ms before and 9.5 to 9.8 after, the relief's own cost 1.79 ms and 1.20, its GPU time 1.31
+  ms and 0.05, and the frame's draw calls 4,873 and 2,885.
+  What changes in the picture: a depth test cannot blend, so a sheet texel less than half opaque is
+  left out of the relief where before it was faded in. Almost no pixel art has such texels. Frozen
+  and compared at four places, the two ways of drawing disagree about 0.20 percent of the screen on
+  the farm by day, which is the pond rim and the lily pads; 0.040 percent in the saloon at ten at
+  night; and 0.026 percent in town at nine, which is less than that scene differs from itself
+  between two frames. `radiance_reliefsort depth` is the old way if a scene turns out to want it.
+- **Lamp shadows are remembered between frames.** Each lamp's shadow ray used to be walked again
+  on every frame, at every pixel it could reach, even standing still in a room where nothing had
+  moved, because the target it was walked into was the screen at half resolution and every
+  texel changed the ground it stood over the moment the camera moved. The rays are now walked
+  into a picture anchored to the world, a tile wider than the screen on every side, and a lamp's
+  channel of it is walked again only when that lamp moves, changes reach, or hands its slot to
+  another lamp; the whole picture is walked again on a tile crossing, an occluder rebuild, or a
+  change of the two dials the ray reads. Standing still nothing is walked at all. Measured on my machine at night, uncapped: the
+  flood pass fell from 0.17 to 0.13 ms on a town street with eight lamps and from 0.27 to 0.21
+  in the saloon, standing still and walking alike, and a frozen frame with the cache and with
+  every ray walked fresh is the same picture.
+  `radiance_marchcache on|off|auto|every` is the A/B; `every` keeps the window but fires every
+  channel every frame, and a frozen frame compared with `on` is the proof that nothing was
+  missed. `radiance_report` gains a "march window" row saying what was fired. The Remember lamp
+  shadows switch is on by default and lives beside Sharp shadow edges; split screen takes the
+  old road on its own, because one window cannot serve two cameras.
+- **The Soft 4x look no longer costs a draw call per sprite.** Since 1.7.5 each soft sprite was
+  kept as a small texture of its own, and the game's sprite batch ends a draw call every time the
+  texture changes between two sprites, so every soft sprite on screen was a draw call of its own,
+  inside the game's own draw where none of this mod's timers could see it. The sprites are now
+  baked onto shared pages, the same bake into the same pixels, and consecutive sprites draw from
+  one texture again whatever sheet they came from. Measured on my machine on the farm at 75 percent
+  zoom on a 3440-wide window, uncapped: draw calls in the world step 4,859 with the old soft
+  sprites, 2,772 with Scale2x or with smooth art off, 2,488 to 2,625 now; the whole frame 12.9 ms
+  before and 11.3 ms after, against 10.6 ms with smooth art off. A frozen frame before and after
+  differs only in the falling petals. `radiance_report` gains two rows, sprite batch draw calls for
+  the whole frame and for the world step, which is how this was found.
+- **The sprite relief is drawn at half size.** The relief buffer, the picture of every sprite's
+  sides that the lamps and the sun read, was drawn at the frame's full size; it is a lean of a few
+  per cent across a sprite and a rim a texel wide, and the lighting reads it through a smooth
+  filter, so at half size it is a quarter of the pixels and the same picture. A frozen frame at
+  the farm by day and in the saloon by night differs in a few dozen pixels out of eight million.
+  Measured on my machine on that farm at 75 percent zoom on a 3440-wide window, the whole frame
+  gains about 0.3 ms; the rest of the relief's cost is the second draw of every sprite, not the
+  pixels, and that is the next thing to look at. Relief at half size is a switch beside Sprite
+  relief, on by default; off draws the buffer at full size as 1.7.5 did.
+  `radiance_reliefres half|full|auto` is the live A/B.
+- **A tilesheet is read back from the card in one call, not once per strip of rows.** To tell
+  water from land, to find where the art on a tile really starts, and to fingerprint a sheet,
+  this mod has to read that sheet back off the card. It used to ask for one strip of 512 rows
+  at a time, which sounds like the polite way to ask and is the worst thing to ask this
+  graphics layer for: it allocates and reads back the whole picture whatever rectangle is
+  named, so a sheet read in eight strips was read eight times and seven of them thrown away.
+  It is now one call. Measured on my machine over a circuit of seven locations, the time spent
+  reading sheets back fell from 78 ms to 45 ms, and the worst single read, which lands in the
+  moment a map full of large sheets first appears, from 16.3 ms to 3.4 ms. The picture is not
+  involved: the same pixels arrive by a shorter road. `radiance_sheetread strips` reads in
+  strips again for a comparison.
+- **The soft sprite pages are a quarter the size, so less of the card is held.** The shared
+  pages the Soft 4x look bakes onto were 2048 pixels square, 16 MB each, and a page holding
+  three sprites costs what a full one costs. They are now 1024 square and 4 MB, and a sprite
+  too large for one still gets a 2048 page of its own. Measured on my machine on the farm: the
+  pages held 144 MB before and 84 MB after, and everything this mod holds on the card fell from
+  1,063 MB to 940 MB, with the same draw calls and the same picture. `radiance_report` lists
+  what each cache is holding.
+
+### Fixed
+
+- **Split screen walked both maps every frame to bake nothing.** The object shadow bake
+  enumerates a whole map once, on arrival, and then only re-bakes what the draw pass reports
+  missing. Which location it last enumerated was kept in one field for the whole mod, so with
+  the two players standing in different places each screen read the OTHER screen's location,
+  every frame looked like an arrival to both, and both walked their entire map again to find
+  every sprite already baked. It is now remembered per screen, beside the player bake that was
+  split the same way in 1.7.5. Measured on my machine with one player on the farm and one on
+  the beach, split screen at 3440x1369: the shadow bake row 2.44 ms before and 1.05 after, the
+  mod's total 6.72 ms and 6.06, the worst frames on the beach 29.3 ms and 19.1. In the report's
+  own words the walk ran 776 times in a window with 776 bake passes, and now runs twice, which
+  is the two real arrivals. Reported by trc666 on Nexus, whose log had it firing 8,426 times in
+  a nine minute session with 8,415 of those baking nothing at all.
+
+### Changed
+
+- **`radiance_report` answers a question about input, and stops hiding stalls.** Three things
+  it could not say before. It counts how many UPDATES the game ran for each frame it drew:
+  the game reads the keyboard and the pad once per frame and then runs as many updates as it
+  owes, so at 30 fps one press is replayed twice and at 15 fps four times, which is what a
+  laggy controller feels like and what nothing here measured. It keeps frames longer than a quarter of a
+  second instead of dropping them where they were measured, so a report can contain the stall
+  it was asked about; they stay out of the average and the report says how many there were and
+  how long the worst was. And each frame in the ledger of the longest now says whether the game
+  was loading, warping, in a menu or being played, because only the last kind is a stall a
+  player feels. In split screen the whole-frame figure was also measuring half a frame, since
+  it was sampled once per screen: it read 65 fps for a game running at 32, and the per-part
+  numbers now add up to a frame the player sees rather than to one screen's turn.
+
+### Translations
+
+- Chinese is complete again, all 843 keys, translated by Rime961. The fourteen keys 1.7.5 added
+  arrived unasked; the three the Skip unusable texture slots switch needed, and the ten whose
+  English was reworded so the tuner and the config menu would stop calling one setting two things,
+  came back within the day of being asked for.
+
+### Added
+
+- **Sunlight through a canopy reaches the greenhouse.** The game files the greenhouse as an
+  interior, so the dappled sunlight that lies on the farm stopped at its door; its roof is glass,
+  and the sun stands over it the way it stands over the farm. The dapple now lies on the
+  greenhouse floor too, cut by whatever grows there, and an overcast day takes it away there as
+  it does outside. The cast shadows keep their indoor path. Asked for by MyLadySeven on Nexus.
+- **A dark pool under objects.** A soft dark ellipse under every tree, rock, fence and placed
+  thing that casts a daylight shadow, at the row it stands on, the way ambient occlusion grounds
+  a thing whatever the sun is doing. Sized from the art and never wider than a tile, so a tree's
+  pool sits at its trunk. It rides the daylight shadow pass, so it fades with the shadows at
+  dusk and under a storm. Off by default (0), which is what every release before drew; the dial
+  is beside the object shadows switch. Asked for by cursedguy9997 on Nexus.
+
+### For translators
+
+Fifteen new keys in `i18n/default.json`: the Remember lamp shadows switch, the dark pool under
+objects dial, the Relief at half size switch and the Skip unusable texture slots switch. English,
+Thai and Chinese are done.
+
+```
+tuner.lightshadowcache
+help.lightshadowcache
+config.lighting.shadowcache.name
+config.lighting.shadowcache.tooltip
+tuner.contactshadow
+help.contactshadow
+config.shadows.contact.name
+config.shadows.contact.tooltip
+tuner.reliefhalfres
+help.reliefhalfres
+config.lighting.reliefhalfres.name
+config.lighting.reliefhalfres.tooltip
+config.limitsamplerslots.name
+config.limitsamplerslots.tooltip
+help.limitsamplerslots
+```
+
+**Ten keys changed their wording**, because the tuner and the config menu were calling the same
+setting two different things and a player who reads both cannot tell they are one switch. The
+settings themselves did not change. English and Thai are done; the wording in other languages
+still reads the old way and is worth a look:
+
+```
+tuner.lightindoorcolour          Room colour by hour     -> Indoor colour by hour
+tuner.lightmorningcool           Clear morning coolness  -> Cool cast on clear mornings
+config.lighting.night.name       Extra night darkness    -> Night darkness
+tuner.precipitationwind          Replace wind debris     -> Replace windblown leaves
+config.precipitation.wind.name   Windblown leaves        -> Replace windblown leaves
+config.precipitation.rain.name   Rain                    -> Replace rain
+config.precipitation.snow.name   Snow                    -> Replace snow
+config.godrays.enabled.name      Enable god rays         -> Enable lamp shafts (god rays)
+tuner.automood                   Auto mood (time/weather) -> Auto mood (time / weather / season)
+config.lighting.windowreflectionstrength.name  Window reflection strength -> Window reflection by day
+```
+
 ## 1.7.5
 
 ### Performance
@@ -3526,7 +3709,7 @@ No new keys, and no meaning changes. Nothing to do for this release.
 ### Changed
 - God rays are off by default. The effect currently treats bright surfaces as light sources, so
   large pale sprites such as festival banners blow out to white. It is being rebuilt for 1.4.0.
-  If you had it on and want it back, turn it on again in the config or with F6 — this change only
+  If you had it on and want it back, turn it on again in the config or with F6. This change only
   touches the default for new installs and is applied once for existing ones.
 - Removed the "Min light size for shadows" option. It no longer controlled anything.
 
@@ -3537,7 +3720,7 @@ No new keys, and no meaning changes. Nothing to do for this release.
 
 ### For translators
 
-No new keys. No meaning changes — god rays turning off by default is a config change, not a
+No new keys. No meaning changes: god rays turning off by default is a config change, not a
 wording change, so `config.godrays.enabled.name`/`.tooltip` stay as they are.
 
 Removed (delete these from your language file, they are no longer read):

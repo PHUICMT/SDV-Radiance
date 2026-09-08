@@ -319,7 +319,7 @@ namespace SDVRadiance
                     ["fogMist"] = _fogMistAmount,
                     ["cloudWeather"] = _cloudWeatherAmount,
                     ["exposure"] = _meteredExposure,
-                    ["wading"] = _pinFadeAmount,
+                    ["wading"] = _wadingEase,
                 },
                 ["mask"] = new Dictionary<string, object?>
                 {

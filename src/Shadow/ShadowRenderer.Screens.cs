@@ -25,13 +25,19 @@ namespace SDVRadiance
         {
             public RenderTarget2D? Mask;
             public RenderTarget2D? Color;
-            public (int frame, int facing, Rectangle src) Signature = (-1, -1, default);
+            public (int frame, int facing, Rectangle sourceRect) Signature = (-1, -1, default);
             /// <summary>Whose silhouette this is. Another screen's remote-farmer pass reads it to
             /// borrow this bake instead of making a second one of the same person (see
             /// TryBorrowPlayerBake).</summary>
             public long FarmerId;
             public Vector2 FeetInRenderTarget;
             public bool Ready, MaskFresh, ColorFresh;
+            /// <summary>Where this screen last enumerated a location for object bakes. It has to
+            /// be per screen for the same reason the pose does: two screens standing in two
+            /// different places wrote that location into one shared field, so each screen read
+            /// the OTHER one's place, every frame looked like an arrival to both, and both paid
+            /// the full walk of their whole map every frame to bake nothing at all.</summary>
+            public GameLocation? ObjectBakeLocation;
 
             public void Release()
             {
@@ -62,6 +68,7 @@ namespace SDVRadiance
                 outgoing.Ready = _playerReady;
                 outgoing.MaskFresh = _playerMaskFresh;
                 outgoing.ColorFresh = _playerColorFresh;
+                outgoing.ObjectBakeLocation = _objectBakeLocation;
             }
             _activeScreenId = screenId;
             if (!_screenBakes.TryGetValue(screenId, out ScreenBake? incoming))
@@ -74,11 +81,22 @@ namespace SDVRadiance
             _playerReady = incoming.Ready;
             _playerMaskFresh = incoming.MaskFresh;
             _playerColorFresh = incoming.ColorFresh;
+            _objectBakeLocation = incoming.ObjectBakeLocation;
             // The published pair follows the screen too: their one reader is this screen's
             // reflection, which runs between now and the next screen's turn.
             PlayerMask = _playerMaskFresh ? _playerRenderTarget : null;
             PlayerColor = _playerColorFresh ? _playerColorRenderTarget : null;
             ForgetDepartedScreens();
+        }
+
+        /// <summary>Forget where every screen last enumerated, not only the one drawing now.
+        /// The bakes are gone, so each screen has to walk its own map again on its next turn or
+        /// its draw pass finds every sprite missing and paints a screen of banded stand-ins.</summary>
+        private void ForgetObjectBakeLocations()
+        {
+            _objectBakeLocation = null;
+            foreach (ScreenBake parked in _screenBakes.Values)
+                parked.ObjectBakeLocation = null;
         }
 
         private void ForgetDepartedScreens()

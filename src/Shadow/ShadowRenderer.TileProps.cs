@@ -24,37 +24,37 @@ namespace SDVRadiance
         /// house-wall shadow is exactly the artifact we removed). The silhouette is baked from the
         /// column's REAL tile art, so whatever the prop looks like, its shadow matches.
         /// </summary>
-        private void DrawTilePropShadows(SpriteBatch spriteBatch, GameLocation location, float rot, float stretch,
+        private void DrawTilePropShadows(SpriteBatch spriteBatch, GameLocation location, float rotation, float stretch,
             float alpha, float blur, int tileX0, int tileX1, int tileY0, int tileY1)
         {
-            var front = location.map?.GetLayer("Front");
-            var always = location.map?.GetLayer("AlwaysFront");
-            var bldg = location.map?.GetLayer("Buildings");
-            if (front == null || bldg == null)
+            var frontLayer = location.map?.GetLayer("Front");
+            var alwaysFrontLayer = location.map?.GetLayer("AlwaysFront");
+            var buildingsLayer = location.map?.GetLayer("Buildings");
+            if (frontLayer == null || buildingsLayer == null)
                 return;
-            int W = Math.Min(front.LayerWidth, bldg.LayerWidth), H = Math.Min(front.LayerHeight, bldg.LayerHeight);
-            tileX0 = Math.Max(0, tileX0); tileX1 = Math.Min(W - 1, tileX1);
-            tileY0 = Math.Max(1, tileY0); tileY1 = Math.Min(H - 1, tileY1);
+            int mapWidth = Math.Min(frontLayer.LayerWidth, buildingsLayer.LayerWidth), mapHeight = Math.Min(frontLayer.LayerHeight, buildingsLayer.LayerHeight);
+            tileX0 = Math.Max(0, tileX0); tileX1 = Math.Min(mapWidth - 1, tileX1);
+            tileY0 = Math.Max(1, tileY0); tileY1 = Math.Min(mapHeight - 1, tileY1);
 
-            float rotD = rot;
-            float stD = LengthCap(stretch, 0.6f);
-            float shear = -(float)Math.Sin(rotD) * stD;
-            float shearScaleY = Math.Max(0.15f, stD * (float)Math.Cos(rotD));
+            float propRotation = rotation;
+            float propStretch = LengthCap(stretch, 0.6f);
+            float shear = -(float)Math.Sin(propRotation) * propStretch;
+            float shearScaleY = Math.Max(0.15f, propStretch * (float)Math.Cos(propRotation));
 
             // Near-player prop diagnostics (DebugLogging): every ~3s log why Buildings tiles within
             // 4 tiles of the player do or don't cast — the quick way to see why a fence stays bare.
-            bool pdiag = DiagnosticMonitor != null && !_isBakingObjects && Game1.ticks % 600 == 0;
-            Point ppt = Game1.player?.TilePoint ?? default;
-            void PD(int xx, int yy, string why)
+            bool propDiagnosticsDue = DiagnosticMonitor != null && !_isBakingObjects && Game1.ticks % 600 == 0;
+            Point playerTile = Game1.player?.TilePoint ?? default;
+            void NoteNearPlayer(int tileX, int tileY, string why)
             {
-                if (pdiag && Math.Abs(xx - ppt.X) <= 4 && Math.Abs(yy - ppt.Y) <= 4)
-                    DiagnosticMonitor!.Log($"[shadow] prop({xx},{yy}) {why}", LogLevel.Debug);
+                if (propDiagnosticsDue && Math.Abs(tileX - playerTile.X) <= 4 && Math.Abs(tileY - playerTile.Y) <= 4)
+                    DiagnosticMonitor!.Log($"[shadow] prop({tileX},{tileY}) {why}", LogLevel.Debug);
             }
 
             // Which way the shadow leans decides which neighbouring column the wall guard has to
             // look at, so it is the one part of the classification that cannot be answered without
             // the sun. All three of its possible answers are cached instead.
-            int leanDir = shear > 0.01f ? -1 : (shear < -0.01f ? 1 : 0);
+            int leanDirection = shear > 0.01f ? -1 : (shear < -0.01f ? 1 : 0);
 
             // Everything else here is a question about the MAP ART: which sheet a tile is on, how
             // opaque it is, what stands beside and above it, whether the game calls it passable.
@@ -74,22 +74,22 @@ namespace SDVRadiance
             {
                 for (int x = tileX0; x <= tileX1; x++)
                 {
-                    int cell = y * W + x;
+                    int cell = y * mapWidth + x;
                     if (!_propCache.TryGetValue(cell, out TilePropCast? cast))
-                        _propCache[cell] = cast = ClassifyTileProp(location, bldg, front, always, x, y, W, H);
+                        _propCache[cell] = cast = ClassifyTileProp(location, buildingsLayer, frontLayer, alwaysFrontLayer, x, y, mapWidth, mapHeight);
                     if (!cast.Casts)
                     {
                         if (cast.Note != null)
-                            PD(x, y, cast.Note);
+                            NoteNearPlayer(x, y, cast.Note);
                         continue;
                     }
-                    if (cast.BlockedNorth || (leanDir < 0 ? cast.BlockedWest : leanDir > 0 && cast.BlockedEast))
+                    if (cast.BlockedNorth || (leanDirection < 0 ? cast.BlockedWest : leanDirection > 0 && cast.BlockedEast))
                     {
-                        PD(x, y, "skip: wall to the north (lean would paint onto it)");
+                        NoteNearPlayer(x, y, "skip: wall to the north (lean would paint onto it)");
                         continue;
                     }
                     if (cast.Note != null)
-                        PD(x, y, cast.Note);
+                        NoteNearPlayer(x, y, cast.Note);
 
                     var key = cast.Key;
                     Texture2D texture = cast.Texture;
@@ -98,10 +98,10 @@ namespace SDVRadiance
                     {
                         if (_objectGraphicsDevice != null && !_bakedObjectCache.ContainsKey(key)
                             && BakeTileColumn(_objectGraphicsDevice, texture, cast.Sources, cast.Levels, cast.Orients, count, shear, blur,
-                                out RenderTarget2D rt, out Vector2 fInRT))
+                                out RenderTarget2D renderTarget, out Vector2 feetInRenderTarget))
                             // A tile column is 16 px wide and as many tiles tall as the prop: its lean already carries
                             // further than its width, so there is nothing for the narrowing to fix here.
-                            _bakedObjectCache[key] = new SpriteBake { Rt = rt, FeetInRt = fInRT, BakedShear = shear, BakedBlur = blur, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = Game1.ticks };
+                            _bakedObjectCache[key] = new SpriteBake { Rt = renderTarget, FeetInRt = feetInRenderTarget, BakedShear = shear, BakedBlur = blur, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = Game1.ticks };
                         continue;
                     }
                     if (!_bakedObjectCache.TryGetValue(key, out SpriteBake? bakedEntry))
@@ -141,8 +141,8 @@ namespace SDVRadiance
                     bool bodyHere = false;
                     try
                     {
-                        var tileV = new Vector2(x, y);
-                        bodyHere = location.isCharacterAtTile(tileV) != null
+                        var tileVector = new Vector2(x, y);
+                        bodyHere = location.isCharacterAtTile(tileVector) != null
                             || (Game1.player != null && Game1.player.currentLocation == location
                                 && Game1.player.TilePoint.X == x && Game1.player.TilePoint.Y == y);
                     }
@@ -170,73 +170,73 @@ namespace SDVRadiance
         /// and if so what its column is made of. Everything it reads is fixed for the map, so the
         /// answer is kept until the map changes underneath it (see the cache in the caller).
         /// </summary>
-        private TilePropCast ClassifyTileProp(GameLocation location, xTile.Layers.Layer bldg,
-            xTile.Layers.Layer front, xTile.Layers.Layer? always, int x, int y, int W, int H)
+        private TilePropCast ClassifyTileProp(GameLocation location, xTile.Layers.Layer buildingsLayer,
+            xTile.Layers.Layer frontLayer, xTile.Layers.Layer? alwaysFrontLayer, int x, int y, int mapWidth, int mapHeight)
         {
             // Reasons are only worth building when someone is reading them.
             TilePropCast NoCast(string why) => new() { Note = DiagnosticMonitor != null ? why : null };
 
             // Some maps paint the pole top on AlwaysFront instead of Front — treat them as one layer.
-            xTile.Tiles.Tile? Ft(int xx, int yy)
+            xTile.Tiles.Tile? FrontTileAt(int tileX, int tileY)
             {
-                var t = front.Tiles[xx, yy];
-                if (t == null && always != null && xx < always.LayerWidth && yy < always.LayerHeight)
-                    t = always.Tiles[xx, yy];
-                return t;
+                var frontTile = frontLayer.Tiles[tileX, tileY];
+                if (frontTile == null && alwaysFrontLayer != null && tileX < alwaysFrontLayer.LayerWidth && tileY < alwaysFrontLayer.LayerHeight)
+                    frontTile = alwaysFrontLayer.Tiles[tileX, tileY];
+                return frontTile;
             }
 
-            var bt = bldg.Tiles[x, y];
-            if (bt == null)
+            var baseTile = buildingsLayer.Tiles[x, y];
+            if (baseTile == null)
                 return new TilePropCast();
             // A prop base is a Buildings tile. Front art on the SAME row is normal for
             // fences (their upper half is painted there so the player walks behind it) —
             // it joins the silhouette as a level-0 overlay rather than disqualifying the
             // cell. Animated tiles are skipped — a frozen frame would cast a lie.
-            if (bt is xTile.Tiles.AnimatedTile || bt.TileSheet == null)
-                return NoCast(bt is xTile.Tiles.AnimatedTile ? "skip: animated tile" : "skip: no tilesheet");
-            Texture2D? texture = LoadCached(bt.TileSheet.ImageSource);
+            if (baseTile is xTile.Tiles.AnimatedTile || baseTile.TileSheet == null)
+                return NoCast(baseTile is xTile.Tiles.AnimatedTile ? "skip: animated tile" : "skip: no tilesheet");
+            Texture2D? texture = LoadCached(baseTile.TileSheet.ImageSource);
             if (texture == null)
                 return new TilePropCast();
-            var ibB = bt.TileSheet.GetTileImageBounds(bt.TileIndex);
-            var baseSrc = new Rectangle(ibB.X, ibB.Y, ibB.Width, ibB.Height);
+            var baseImageBounds = baseTile.TileSheet.GetTileImageBounds(baseTile.TileIndex);
+            var baseSourceRect = new Rectangle(baseImageBounds.X, baseImageBounds.Y, baseImageBounds.Width, baseImageBounds.Height);
             // How the MAP places this tile. A .tmx keeps mirroring and rotation in the gid, which
             // the loader cannot put in the tile index, so it arrives as the @Flip/@Rotation
             // properties MapLayers.Orientation decodes. Nothing on this path ever read them: the
             // base redraw below painted an UNTURNED copy over the game's turned one, which on a map
             // that uses them is art in the wrong orientation appearing wherever a prop was found.
             // Reported with an on/off screenshot on a farm whose .tmx turns 2,798 cells.
-            byte baseOrient = MapLayers.Orientation(bt);
-            float cov = TileCoverage(texture, baseSrc);
+            byte baseOrientation = MapLayers.Orientation(baseTile);
+            float coverage = TileCoverage(texture, baseSourceRect);
 
             // Fences paint their upper half on Front at the SAME row (so the player can
             // walk behind them). Fold that art into the prop: classification uses the
             // union coverage, and the silhouette gets it as a level-0 overlay. When the
             // Buildings tile is a bare INVISIBLE collision tile (cov≈0) under Front-drawn
             // art on another sheet, the Front art IS the prop — adopt its sheet instead.
-            Rectangle? sameSrc = null;
-            int sameIdx = 0, baseIdx = bt.TileIndex;
-            byte sameOrient = 0;
+            Rectangle? sameRowOverlay = null;
+            int sameRowTileIndex = 0, baseTileIndex = baseTile.TileIndex;
+            byte sameRowOrientation = 0;
             {
-                var st = Ft(x, y);
-                if (st != null && st is not xTile.Tiles.AnimatedTile && st.TileSheet != null
-                    && LoadCached(st.TileSheet.ImageSource) is { } stex)
+                var sameRowTile = FrontTileAt(x, y);
+                if (sameRowTile != null && sameRowTile is not xTile.Tiles.AnimatedTile && sameRowTile.TileSheet != null
+                    && LoadCached(sameRowTile.TileSheet.ImageSource) is { } sameRowTexture)
                 {
-                    var ibS = st.TileSheet.GetTileImageBounds(st.TileIndex);
-                    var srcS = new Rectangle(ibS.X, ibS.Y, ibS.Width, ibS.Height);
-                    if (ReferenceEquals(stex, texture))
+                    var sameRowImageBounds = sameRowTile.TileSheet.GetTileImageBounds(sameRowTile.TileIndex);
+                    var sameRowSourceRect = new Rectangle(sameRowImageBounds.X, sameRowImageBounds.Y, sameRowImageBounds.Width, sameRowImageBounds.Height);
+                    if (ReferenceEquals(sameRowTexture, texture))
                     {
-                        sameSrc = srcS;
-                        sameIdx = st.TileIndex;
-                        sameOrient = MapLayers.Orientation(st);
-                        cov = Math.Max(cov, TileCoverage(texture, srcS));
+                        sameRowOverlay = sameRowSourceRect;
+                        sameRowTileIndex = sameRowTile.TileIndex;
+                        sameRowOrientation = MapLayers.Orientation(sameRowTile);
+                        coverage = Math.Max(coverage, TileCoverage(texture, sameRowSourceRect));
                     }
-                    else if (cov < 0.04f)
+                    else if (coverage < 0.04f)
                     {
-                        texture = stex;
-                        baseSrc = srcS;
-                        baseIdx = st.TileIndex;
-                        baseOrient = MapLayers.Orientation(st);   // the Front art IS the prop now
-                        cov = TileCoverage(stex, srcS);
+                        texture = sameRowTexture;
+                        baseSourceRect = sameRowSourceRect;
+                        baseTileIndex = sameRowTile.TileIndex;
+                        baseOrientation = MapLayers.Orientation(sameRowTile);   // the Front art IS the prop now
+                        coverage = TileCoverage(sameRowTexture, sameRowSourceRect);
                     }
                 }
             }
@@ -253,26 +253,26 @@ namespace SDVRadiance
             // Measured on the Buildings layer in both axes, because one axis is not
             // enough on its own: a cliff's bottom row is wide, but a one-tile-wide
             // vertical spur of that same cliff is not.
-            bool aProp = cov >= 0.04f && cov <= 0.95f;
-            int spanW = 1, spanH = 1;
-            if (!aProp && cov > 0.04f)
+            bool propByCoverage = coverage >= 0.04f && coverage <= 0.95f;
+            int spanWidth = 1, spanHeight = 1;
+            if (!propByCoverage && coverage > 0.04f)
             {
-                for (int i = x - 1; i >= 0 && spanW <= MaxPropSpan && bldg.Tiles[i, y] != null; i--) spanW++;
-                for (int i = x + 1; i < W && spanW <= MaxPropSpan && bldg.Tiles[i, y] != null; i++) spanW++;
-                for (int j = y - 1; j >= 0 && spanH <= MaxPropSpan && bldg.Tiles[x, j] != null; j--) spanH++;
-                for (int j = y + 1; j < H && spanH <= MaxPropSpan && bldg.Tiles[x, j] != null; j++) spanH++;
+                for (int scanX = x - 1; scanX >= 0 && spanWidth <= MaxPropSpan && buildingsLayer.Tiles[scanX, y] != null; scanX--) spanWidth++;
+                for (int scanX = x + 1; scanX < mapWidth && spanWidth <= MaxPropSpan && buildingsLayer.Tiles[scanX, y] != null; scanX++) spanWidth++;
+                for (int scanY = y - 1; scanY >= 0 && spanHeight <= MaxPropSpan && buildingsLayer.Tiles[x, scanY] != null; scanY--) spanHeight++;
+                for (int scanY = y + 1; scanY < mapHeight && spanHeight <= MaxPropSpan && buildingsLayer.Tiles[x, scanY] != null; scanY++) spanHeight++;
             }
-            bool bProp = !aProp && cov > 0.04f && spanW <= MaxPropSpan && spanH <= MaxPropSpan;
-            if (!aProp && !bProp)
-                return NoCast($"skip: cov={cov:0.00} span={spanW}x{spanH} → not a prop");
+            bool propBySpan = !propByCoverage && coverage > 0.04f && spanWidth <= MaxPropSpan && spanHeight <= MaxPropSpan;
+            if (!propByCoverage && !propBySpan)
+                return NoCast($"skip: cov={coverage:0.00} span={spanWidth}x{spanHeight} → not a prop");
             // A "prop" sitting ON opaque art below is wall decor — a window halfway up a
             // house wall must not cast.
-            if (OpaqueMapTile(bldg, x, y + 1, H))
+            if (OpaqueMapTile(buildingsLayer, x, y + 1, mapHeight))
                 return NoCast("skip: sits on opaque art (wall decor)");
             // A transparent tile BESIDE opaque art is the fringe of a big structure (the
             // truck's edge tiles, awning ends…), not a free-standing prop — its lone-column
             // cast reads as a stray dark line. Real fences/posts never hug opaque art.
-            if (aProp && (OpaqueMapTile(bldg, x - 1, y, H) || OpaqueMapTile(bldg, x + 1, y, H)))
+            if (propByCoverage && (OpaqueMapTile(buildingsLayer, x - 1, y, mapHeight) || OpaqueMapTile(buildingsLayer, x + 1, y, mapHeight)))
                 return NoCast("skip: opaque neighbour beside (structure fringe)");
             // Skip only when the prop itself (or the tile its lean lands on) is open WATER
             // SURFACE — pier decks over water are solid ground (Height Framework separates
@@ -305,29 +305,29 @@ namespace SDVRadiance
             // what the silhouette looks like, and the same tile index mirrored is a different
             // silhouette: without this a turned tile and a plain one shared one baked shadow, and
             // whichever baked first decided the shape for both.
-            _tileColumnSourceRects[0] = baseSrc;
+            _tileColumnSourceRects[0] = baseSourceRect;
             _tileColumnLevels[0] = 0;
-            _tileColumnOrients[0] = baseOrient;
-            int count = 1, levels = 1, keyHash = (17 * 31 + baseIdx) * 31 + baseOrient;
-            if (sameSrc is Rectangle sr)
+            _tileColumnOrients[0] = baseOrientation;
+            int count = 1, levels = 1, keyHash = (17 * 31 + baseTileIndex) * 31 + baseOrientation;
+            if (sameRowOverlay is Rectangle overlaySourceRect)
             {
-                _tileColumnSourceRects[count] = sr;
-                _tileColumnOrients[count] = sameOrient;
+                _tileColumnSourceRects[count] = overlaySourceRect;
+                _tileColumnOrients[count] = sameRowOrientation;
                 _tileColumnLevels[count++] = 0;
-                keyHash = (keyHash * 31 + sameIdx) * 31 + sameOrient;
+                keyHash = (keyHash * 31 + sameRowTileIndex) * 31 + sameRowOrientation;
             }
-            for (int i = 1; count < _tileColumnSourceRects.Length && y - i >= 0; i++)
+            for (int levelsUp = 1; count < _tileColumnSourceRects.Length && y - levelsUp >= 0; levelsUp++)
             {
-                var t = Ft(x, y - i);
-                if (t == null || t is xTile.Tiles.AnimatedTile || t.TileSheet == null
-                    || !ReferenceEquals(LoadCached(t.TileSheet.ImageSource), texture))
+                var frontTile = FrontTileAt(x, y - levelsUp);
+                if (frontTile == null || frontTile is xTile.Tiles.AnimatedTile || frontTile.TileSheet == null
+                    || !ReferenceEquals(LoadCached(frontTile.TileSheet.ImageSource), texture))
                     break;
-                var ib = t.TileSheet.GetTileImageBounds(t.TileIndex);
-                _tileColumnSourceRects[count] = new Rectangle(ib.X, ib.Y, ib.Width, ib.Height);
-                _tileColumnOrients[count] = MapLayers.Orientation(t);
-                _tileColumnLevels[count++] = i;
-                levels = i + 1;
-                keyHash = (keyHash * 31 + t.TileIndex) * 31 + _tileColumnOrients[count - 1];
+                var imageBounds = frontTile.TileSheet.GetTileImageBounds(frontTile.TileIndex);
+                _tileColumnSourceRects[count] = new Rectangle(imageBounds.X, imageBounds.Y, imageBounds.Width, imageBounds.Height);
+                _tileColumnOrients[count] = MapLayers.Orientation(frontTile);
+                _tileColumnLevels[count++] = levelsUp;
+                levels = levelsUp + 1;
+                keyHash = (keyHash * 31 + frontTile.TileIndex) * 31 + _tileColumnOrients[count - 1];
             }
 
             // Wall guard, scaled to the prop's height: the up-lean cast occupies the tiles
@@ -338,23 +338,23 @@ namespace SDVRadiance
             {
                 Casts = true,
                 Texture = texture,
-                BaseSrc = baseSrc,
+                BaseSrc = baseSourceRect,
                 Height = levels,
-                BaseOrient = baseOrient,
+                BaseOrient = baseOrientation,
                 Sources = new Rectangle[count],
                 Levels = new int[count],
                 Orients = new byte[count],
                 Key = (texture, new Rectangle(keyHash, count, -1, -1), SpriteEffects.None),   // width −1 can never collide with a real source rect
-                Note = DiagnosticMonitor != null ? $"cast: col={count} cov={cov:0.00}" : null,
+                Note = DiagnosticMonitor != null ? $"cast: col={count} cov={coverage:0.00}" : null,
             };
             Array.Copy(_tileColumnSourceRects, result.Sources, count);
             Array.Copy(_tileColumnLevels, result.Levels, count);
             Array.Copy(_tileColumnOrients, result.Orients, count);
             for (int i = 1; i <= levels; i++)
             {
-                result.BlockedNorth |= OpaqueMapTile(bldg, x, y - i, H);
-                result.BlockedWest |= OpaqueMapTile(bldg, x - 1, y - i, H);
-                result.BlockedEast |= OpaqueMapTile(bldg, x + 1, y - i, H);
+                result.BlockedNorth |= OpaqueMapTile(buildingsLayer, x, y - i, mapHeight);
+                result.BlockedWest |= OpaqueMapTile(buildingsLayer, x - 1, y - i, mapHeight);
+                result.BlockedEast |= OpaqueMapTile(buildingsLayer, x + 1, y - i, mapHeight);
             }
             return result;
         }
@@ -369,45 +369,45 @@ namespace SDVRadiance
         /// from the tile's corner to its centre to match. A plain tile - the overwhelming majority
         /// - takes the corner path unchanged, so nothing about the common case moves.</para>
         /// </summary>
-        private static void DrawOrientedTile(SpriteBatch spriteBatch, Texture2D texture, Rectangle src,
-            Vector2 topLeft, float scale, byte orient, Color colour, float depth)
+        private static void DrawOrientedTile(SpriteBatch spriteBatch, Texture2D texture, Rectangle sourceRect,
+            Vector2 topLeft, float scale, byte orientation, Color colour, float depth)
         {
             FrameCost.Count(FrameCost.Counter.ShadowDrawCalls);
-            if (orient == 0)
+            if (orientation == 0)
             {
-                spriteBatch.Draw(texture, topLeft, src, colour, 0f, Vector2.Zero, scale, SpriteEffects.None, depth);
+                spriteBatch.Draw(texture, topLeft, sourceRect, colour, 0f, Vector2.Zero, scale, SpriteEffects.None, depth);
                 return;
             }
-            Vector2 centre = topLeft + new Vector2(src.Width * scale * 0.5f, src.Height * scale * 0.5f);
-            spriteBatch.Draw(texture, centre, src, colour, (orient & 3) * MathHelper.PiOver2,
-                new Vector2(src.Width * 0.5f, src.Height * 0.5f), scale,
-                (orient & 4) != 0 ? SpriteEffects.FlipHorizontally : SpriteEffects.None, depth);
+            Vector2 centre = topLeft + new Vector2(sourceRect.Width * scale * 0.5f, sourceRect.Height * scale * 0.5f);
+            spriteBatch.Draw(texture, centre, sourceRect, colour, (orientation & 3) * MathHelper.PiOver2,
+                new Vector2(sourceRect.Width * 0.5f, sourceRect.Height * 0.5f), scale,
+                (orientation & 4) != 0 ? SpriteEffects.FlipHorizontally : SpriteEffects.None, depth);
         }
 
         /// <summary>True when a Buildings tile exists at (x,y) and its art is essentially opaque
         /// (terrain/wall art, not a see-through prop). Out-of-range or empty → false.</summary>
-        private bool OpaqueMapTile(xTile.Layers.Layer bldg, int x, int y, int H)
+        private bool OpaqueMapTile(xTile.Layers.Layer buildingsLayer, int x, int y, int mapHeight)
         {
-            if (y < 0 || y >= H || x < 0 || x >= bldg.LayerWidth)
+            if (y < 0 || y >= mapHeight || x < 0 || x >= buildingsLayer.LayerWidth)
                 return false;
-            var t = bldg.Tiles[x, y];
-            if (t == null || t.TileSheet == null)
+            var tile = buildingsLayer.Tiles[x, y];
+            if (tile == null || tile.TileSheet == null)
                 return false;
-            if (t is xTile.Tiles.AnimatedTile)
+            if (tile is xTile.Tiles.AnimatedTile)
                 return true;   // animated map art next to a prop → treat as solid, don't cast
-            Texture2D? texture = LoadCached(t.TileSheet.ImageSource);
+            Texture2D? texture = LoadCached(tile.TileSheet.ImageSource);
             if (texture == null)
                 return true;
-            var ib = t.TileSheet.GetTileImageBounds(t.TileIndex);
-            // Same bound as the aProp cast test (0.95). With a LOWER bound here, dense fence
+            var imageBounds = tile.TileSheet.GetTileImageBounds(tile.TileIndex);
+            // Same bound as the propByCoverage cast test (0.95). With a LOWER bound here, dense fence
             // tiles at cov 0.91–0.95 counted as "walls" and poisoned their own neighbours —
             // every tile of the row skipped as "structure fringe" and no fence ever cast.
-            return TileCoverage(texture, new Rectangle(ib.X, ib.Y, ib.Width, ib.Height)) > 0.95f;
+            return TileCoverage(texture, new Rectangle(imageBounds.X, imageBounds.Y, imageBounds.Width, imageBounds.Height)) > 0.95f;
         }
 
         /// <summary>Fraction of a tile's art that is opaque (alpha > 48). Sampled once per
         /// (sheet, rect) and cached — this is the "look at the actual image" prop test.</summary>
-        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle src), float> _tileCoverageCache = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle sourceRect), float> _tileCoverageCache = new();
         private Color[] _tileCoveragePixels = new Color[1024];
         // Whole-tilesheet pixel cache: reading each prop tile with its own texture.GetData is a separate
         // GPU readback (pipeline flush); walking into a prop-heavy screen fired a burst of them in one
@@ -417,69 +417,56 @@ namespace SDVRadiance
         // old 8 Mpx ceiling landed under real modded tilesheets, and the fallback beneath it is a
         // GPU readback per tile.
         private const int CoverageSheetCap = 64_000_000;
-        private const int CoverageStripRows = 512;
 
         private Color[]? CoverageSheetPixels(Texture2D texture)
         {
-            if (_tilesheetCoveragePixels.TryGetValue(texture, out Color[]? px))
-                return px;
-            long n = (long)texture.Width * texture.Height;
-            if (n <= CoverageSheetCap)
-            {
-                try
-                {
-                    px = new Color[n];
-                    for (int y0 = 0; y0 < texture.Height; y0 += CoverageStripRows)
-                    {
-                        int rows = Math.Min(CoverageStripRows, texture.Height - y0);
-                        texture.GetData(0, new Rectangle(0, y0, texture.Width, rows),
-                            px, y0 * texture.Width, rows * texture.Width);
-                    }
-                }
-                catch { px = null; }
-            }
-            _tilesheetCoveragePixels[texture] = px;
-            return px;
+            if (_tilesheetCoveragePixels.TryGetValue(texture, out Color[]? sheetPixels))
+                return sheetPixels;
+            // One readback for the sheet, not one per strip of 512 rows: see SheetReadback for
+            // why the strips were costing what they were written to save.
+            sheetPixels = SheetReadback.Read(texture, CoverageSheetCap, "sheet: shadow tile coverage");
+            _tilesheetCoveragePixels[texture] = sheetPixels;
+            return sheetPixels;
         }
 
-        private float TileCoverage(Texture2D texture, Rectangle src)
+        private float TileCoverage(Texture2D texture, Rectangle sourceRect)
         {
-            if (_tileCoverageCache.TryGetValue((texture, src), out float cov))
-                return cov;
-            int len = src.Width * src.Height;
-            if (len <= 0 || src.X < 0 || src.Y < 0 || src.Right > texture.Width || src.Bottom > texture.Height)
-                return _tileCoverageCache[(texture, src)] = 1f;
+            if (_tileCoverageCache.TryGetValue((texture, sourceRect), out float coverage))
+                return coverage;
+            int pixelCount = sourceRect.Width * sourceRect.Height;
+            if (pixelCount <= 0 || sourceRect.X < 0 || sourceRect.Y < 0 || sourceRect.Right > texture.Width || sourceRect.Bottom > texture.Height)
+                return _tileCoverageCache[(texture, sourceRect)] = 1f;
             int solid = 0;
             Color[]? sheet = CoverageSheetPixels(texture);
             if (sheet != null)
             {
-                int tw = texture.Width;
-                for (int row = 0; row < src.Height; row++)
+                int sheetWidth = texture.Width;
+                for (int row = 0; row < sourceRect.Height; row++)
                 {
-                    int soff = (src.Y + row) * tw + src.X;
-                    for (int c = 0; c < src.Width; c++)
-                        if (sheet[soff + c].A > 48) solid++;
+                    int rowStart = (sourceRect.Y + row) * sheetWidth + sourceRect.X;
+                    for (int column = 0; column < sourceRect.Width; column++)
+                        if (sheet[rowStart + column].A > 48) solid++;
                 }
             }
             else
             {
-                if (_tileCoveragePixels.Length < len)
-                    _tileCoveragePixels = new Color[len];
-                try { texture.GetData(0, src, _tileCoveragePixels, 0, len); }
-                catch { return _tileCoverageCache[(texture, src)] = 1f; }
-                for (int i = 0; i < len; i++)
+                if (_tileCoveragePixels.Length < pixelCount)
+                    _tileCoveragePixels = new Color[pixelCount];
+                try { texture.GetData(0, sourceRect, _tileCoveragePixels, 0, pixelCount); }
+                catch { return _tileCoverageCache[(texture, sourceRect)] = 1f; }
+                for (int i = 0; i < pixelCount; i++)
                     if (_tileCoveragePixels[i].A > 48) solid++;
             }
-            return _tileCoverageCache[(texture, src)] = (float)solid / len;
+            return _tileCoverageCache[(texture, sourceRect)] = (float)solid / pixelCount;
         }
 
         /// <summary>Record a map-tile column for the next bake pass. The classification owns the
         /// column arrays and outlives the frame, so the request just points at them.</summary>
-        private void QueueTileColumnBake((Texture2D texture, Rectangle src, SpriteEffects effect) key, TilePropCast cast, float shear, float blurPx)
+        private void QueueTileColumnBake((Texture2D texture, Rectangle sourceRect, SpriteEffects effect) key, TilePropCast cast, float shear, float blurPixels)
         {
             if (_objectBakeQueue.Count >= ObjectBakeQueueCap || cast.Sources.Length == 0)
                 return;
-            _objectBakeQueue[key] = new ObjectBakeRequest { Shear = shear, Blur = blurPx, ColumnSources = cast.Sources, ColumnLevels = cast.Levels, ColumnOrients = cast.Orients };
+            _objectBakeQueue[key] = new ObjectBakeRequest { Shear = shear, Blur = blurPixels, ColumnSources = cast.Sources, ColumnLevels = cast.Levels, ColumnOrients = cast.Orients };
         }
 
         /// <summary>
@@ -502,7 +489,7 @@ namespace SDVRadiance
             public byte[] Orients = System.Array.Empty<byte>();
             /// <summary>How the map turns the BASE tile, for the redraw that puts it back on top.</summary>
             public byte BaseOrient;
-            public (Texture2D texture, Rectangle src, SpriteEffects effect) Key;
+            public (Texture2D texture, Rectangle sourceRect, SpriteEffects effect) Key;
             /// <summary>Is there opaque art where the cast would land, leaning each of the three
             /// ways the sun can take it? Answered here because the sun is the only part of this
             /// that changes, and it changes between three fixed choices.</summary>
@@ -530,10 +517,10 @@ namespace SDVRadiance
         /// passed in rather than read from the scan's scratch arrays, so a queued re-bake a frame
         /// later replays the same column without redoing the scan that found it.</summary>
         private bool BakeTileColumn(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle[] sources, int[] tileLevels,
-            byte[]? orients, int count, float shear, float blurPx, out RenderTarget2D renderTarget, out Vector2 feetInRT, RenderTarget2D? into = null)
+            byte[]? orientations, int count, float shear, float blurPixels, out RenderTarget2D renderTarget, out Vector2 feetInRenderTarget, RenderTarget2D? into = null)
         {
             renderTarget = null!;
-            feetInRT = default;
+            feetInRenderTarget = default;
             int levels = 0;
             for (int i = 0; i < count; i++)
                 levels = Math.Max(levels, tileLevels[i] + 1);
@@ -546,19 +533,19 @@ namespace SDVRadiance
             // nobody looked at. The ladder ends it the same way, and one fit test replaces two that
             // disagreed about whether the blur counts.
             const float tileSource = 16f;
-            if (count <= 0 || !ChooseBakeFit(tileSource, levels * tileSource, shear, blurPx, into,
-                                             out int colClass, out float scale, out float blurTexels))
+            if (count <= 0 || !ChooseBakeFit(tileSource, levels * tileSource, shear, blurPixels, into,
+                                             out int columnSlotClass, out float scale, out float blurTexels))
             {
                 NoteColumnRefusal($"{levels}-tile column with shear {shear:0.00} fits no slot at any bake scale");
                 return false;
             }
-            float tilePx = tileSource * scale;
-            float columnHeight = levels * tilePx;
-            _lastBakeClass = colClass;
+            float tileTexels = tileSource * scale;
+            float columnHeight = levels * tileTexels;
+            _lastBakeClass = columnSlotClass;
             _lastBakeScale = scale;
-            renderTarget = into ?? RentObjectRT(graphicsDevice, colClass);
-            feetInRT = new Vector2(renderTarget.Width / 2f, renderTarget.Height - 8f);
-            Matrix lean = ShearAbout(feetInRT, shear);
+            renderTarget = into ?? RentObjectRT(graphicsDevice, columnSlotClass);
+            feetInRenderTarget = new Vector2(renderTarget.Width / 2f, renderTarget.Height - 8f);
+            Matrix lean = ShearAbout(feetInRenderTarget, shear);
             try
             {
                 graphicsDevice.SetRenderTarget(renderTarget);
@@ -566,15 +553,15 @@ namespace SDVRadiance
                 _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, RasterizerState.CullNone, null, lean);
                 for (int i = 0; i < count; i++)
                     DrawOrientedTile(_renderTargetSpriteBatch, texture, sources[i],
-                        new Vector2(feetInRT.X - tilePx * 0.5f, feetInRT.Y - tilePx * (tileLevels[i] + 1)),
-                        scale, orients != null && i < orients.Length ? orients[i] : (byte)0, Color.Black, 0f);
+                        new Vector2(feetInRenderTarget.X - tileTexels * 0.5f, feetInRenderTarget.Y - tileTexels * (tileLevels[i] + 1)),
+                        scale, orientations != null && i < orientations.Length ? orientations[i] : (byte)0, Color.Black, 0f);
                 _renderTargetSpriteBatch.End();
                 _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
-                _renderTargetSpriteBatch.Draw(_propGradientTexture!, new Rectangle(0, (int)(feetInRT.Y - columnHeight), renderTarget.Width, (int)columnHeight), Color.White);
+                _renderTargetSpriteBatch.Draw(_propGradientTexture!, new Rectangle(0, (int)(feetInRenderTarget.Y - columnHeight), renderTarget.Width, (int)columnHeight), Color.White);
                 _renderTargetSpriteBatch.End();
                 BlurSlotInPlace(graphicsDevice, renderTarget, blurTexels);
-                _lastBakeContent = ContentBounds(new Vector2(feetInRT.X - tilePx * 0.5f, feetInRT.Y - columnHeight),
-                    tilePx, columnHeight, feetInRT, shear, blurTexels, renderTarget.Width, renderTarget.Height);
+                _lastBakeContent = ContentBounds(new Vector2(feetInRenderTarget.X - tileTexels * 0.5f, feetInRenderTarget.Y - columnHeight),
+                    tileTexels, columnHeight, feetInRenderTarget, shear, blurTexels, renderTarget.Width, renderTarget.Height);
                 FrameCost.Count(FrameCost.Counter.ObjectBakes);
                 return true;
             }

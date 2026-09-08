@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
 using StardewValley;
 
@@ -67,6 +68,13 @@ namespace SDVRadiance
         /// </summary>
         private static void GlDiag(IMonitor monitor)
         {
+            if (Game1.graphics?.GraphicsDevice is GraphicsDevice slotDevice)
+            {
+                int slots = TextureUnitGuard.CountSamplerSlots(slotDevice);
+                monitor.Log($"texture units: {(slots > 0 ? slots.ToString() : "unknown")} sampler slots, "
+                    + "and MonoGame walks all of them on every draw call (SamplerStateCollection.PlatformSetSamplers). "
+                    + "A pixel shader here can address sixteen.", LogLevel.Info);
+            }
             var report = new StringBuilder();
             report.AppendLine("[gldiag] --- graphics backend ---");
             try

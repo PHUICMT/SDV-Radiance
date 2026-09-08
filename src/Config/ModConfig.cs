@@ -572,6 +572,23 @@ namespace SDVRadiance
         public bool SpriteReliefEnabled { get; set; } = false;
         /// <summary>How far a lamp's light leans across a sprite's relief (0..1).</summary>
         public float SpriteReliefStrength { get; set; } = 0.5f;
+        /// <summary>Draw the relief buffer at half the frame's size (a quarter of the pixels) and
+        /// read it back smooth. The default since 1.7.6; false draws it at full size as 1.7.5 did.</summary>
+        public bool SpriteReliefHalfResolution { get; set; } = true;
+        /// <summary>Ask the graphics layer to check only the texture sampler slots it can actually
+        /// bind a texture to, instead of every slot the driver reports.</summary>
+        /// <remarks>
+        /// MonoGame walks the whole sampler collection before every draw call with no early out,
+        /// and sizes that collection from the driver's answer without capping it; this machine
+        /// reports 192 slots where a shader can use sixteen, which on a busy frame is around half
+        /// a million turns of a loop that can never find anything. Shortening the collection to 32
+        /// is worth about 1.4 ms of a 11.5 ms frame here and changes no pixel: MonoGame's own
+        /// texture side marks a slot with a shift into a 32-bit mask, so nothing can be bound above
+        /// slot 31 in the first place. This is a switch only because it reaches into another
+        /// library's fields, and a machine where that goes wrong needs a way back that does not
+        /// require the game to start. See <see cref="TextureUnitGuard.CapSamplerSlots"/>.
+        /// </remarks>
+        public bool LimitSamplerSlots { get; set; } = true;
         /// <summary>The sun's share of the relief by day, outdoors (0..1).</summary>
         public float SpriteReliefSun { get; set; } = 0.35f;
         /// <summary>The bright fringe a lamp lays along the edge of a sprite facing it, in that
@@ -704,6 +721,12 @@ namespace SDVRadiance
         /// comparison at three town spots at dawn moves 0.00% of pixels past 24 of 255. Off by
         /// default; the switch stays for anyone who can see a difference this cannot find.</para></summary>
         public bool LightShadowSharpEdges { get; set; }
+        /// <summary>Keep each lamp's shadow ray answer between frames, in a target anchored to the
+        /// world, and walk the ray again only for a lamp that moved or ground that changed. Standing
+        /// still the march costs nothing; walking, the window is re-marched at each tile crossing,
+        /// about a tenth of marching every frame. Off marches the screen every frame, as 1.7.5 did.
+        /// See RenderPipeline.MarchWindow.cs.</summary>
+        public bool LightShadowMarchCache { get; set; } = true;
         /// <summary>Gates the VISIBLE window work (the beam, the lit glass, the patch of sun on the
         /// floor) and the warm glow on house windows outdoors at night. It does NOT gate the
         /// daylight a window adds to the room's own lighting - that half answers to
@@ -1052,6 +1075,11 @@ namespace SDVRadiance
         public float DirectionalShadowBlur { get; set; } = 5.0f;
         /// <summary>Also cast directional shadows from trees and bushes (not just characters).</summary>
         public bool DirectionalShadowObjects { get; set; } = true;
+        /// <summary>A soft dark pool under every object that casts a daylight shadow, at the row it
+        /// stands on, the way ambient occlusion grounds a thing whatever the sun is doing. 0 is
+        /// none, which is what every release before 1.7.6 drew. Asked for on Nexus (cursedguy9997,
+        /// 2026-07-22). Rides the daylight shadow pass, so it fades with it at dusk.</summary>
+        public float ContactShadowStrength { get; set; } = 0f;
         /// <summary>Give a building the shape of its own shadow instead of a pool under it.
         ///
         /// <para>A building is the tallest thing on a farm and its shadow is the largest single
@@ -1363,6 +1391,7 @@ namespace SDVRadiance
             FoliageSwayGustSpan = ClampToRange(FoliageSwayGustSpan, 4f, 40f);
             LightShadowCarve = ClampToRange(LightShadowCarve, 0f, 1f);
             LightShadowSoftness = ClampToRange(LightShadowSoftness, 0f, 2f);
+            ContactShadowStrength = ClampToRange(ContactShadowStrength, 0f, 1f);
             LightShadowDetail = ClampToRange(LightShadowDetail, 0f, 1f);
             LightingIndoorDarkness = ClampToRange(LightingIndoorDarkness, 0f, 0.95f);
             LightingNightDarkness = ClampToRange(LightingNightDarkness, 0f, 0.95f);

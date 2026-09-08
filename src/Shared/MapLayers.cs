@@ -61,12 +61,12 @@ namespace SDVRadiance
             int turns = 0, flip = 0;
             try
             {
-                if (tile.Properties.TryGetValue("@Rotation", out var rot)
-                    && int.TryParse(rot.ToString(), out int r))
+                if (tile.Properties.TryGetValue("@Rotation", out var rotationProperty)
+                    && int.TryParse(rotationProperty.ToString(), out int rotationSteps))
                 {
-                    r = ((r % 360) + 360) % 360;      // TMXTile writes -90, never 270
-                    if (r is 90 or 180 or 270) turns = r / 90;
-                    else if (r is 1 or 2 or 3) turns = r;   // quarter-turn form, seen in the wild
+                    rotationSteps = ((rotationSteps % 360) + 360) % 360;      // TMXTile writes -90, never 270
+                    if (rotationSteps is 90 or 180 or 270) turns = rotationSteps / 90;
+                    else if (rotationSteps is 1 or 2 or 3) turns = rotationSteps;   // quarter-turn form, seen in the wild
                 }
                 if (tile.Properties.TryGetValue("@Flip", out var f))
                 {

@@ -100,27 +100,11 @@ namespace SDVRadiance
         {
             if (_tilesheetPixelCache.TryGetValue(texture, out Color[]? sheet))
                 return sheet;
-            long px = (long)texture.Width * texture.Height;
-            if (px <= SheetPixCap)
-            {
-                try
-                {
-                    sheet = new Color[px];
-                    // Read in STRIPS rather than one whole-surface GetData. The cap this replaces
-                    // existed to bound the driver's staging cost for a huge sheet, and its fallback
-                    // was a readback PER TILE — thousands of times more expensive than the
-                    // allocation it avoided (a 240x156 map on an 8.64 Mpx sheet spent 43 s in one
-                    // gather). Strips keep the staging bounded while still costing one readback per
-                    // strip, so size no longer decides between "fast" and "unusable".
-                    for (int y0 = 0; y0 < texture.Height; y0 += SheetStripRows)
-                    {
-                        int rows = Math.Min(SheetStripRows, texture.Height - y0);
-                        texture.GetData(0, new Rectangle(0, y0, texture.Width, rows),
-                            sheet, y0 * texture.Width, rows * texture.Width);
-                    }
-                }
-                catch { sheet = null; }
-            }
+            // One readback for the sheet. This was a loop over strips of 512 rows, on the belief
+            // that strips bound the driver's staging cost; the decompile says the staging is the
+            // whole level on every call whatever rectangle is asked for, so the loop was paying
+            // that cost once per strip. See SheetReadback.
+            sheet = SheetReadback.Read(texture, SheetPixelCap, "sheet: water tile art");
             if (sheet == null)
                 _monitor.Log($"[water] tilesheet {texture.Width}x{texture.Height} not cached — tile art falls back to per-tile reads", LogLevel.Warn);
             _tilesheetPixelCache[texture] = sheet; // null = absurd size or failed → per-tile fallback (deduped)

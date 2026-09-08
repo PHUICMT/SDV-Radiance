@@ -19,7 +19,7 @@ namespace SDVRadiance
     internal sealed class FloodLightmap
     {
         /// <summary>Off-screen margin in tiles so lights just outside the view still spill in.</summary>
-        private const int Pad = 6;
+        private const int PadTiles = 6;
         /// <summary>Per-cell survival factor while sweeping through open ground.</summary>
         private const float AirDecay = 0.86f;
         /// <summary>Per-cell survival through solid/occluding tiles (light dies in ~2-3 tiles).</summary>
@@ -38,7 +38,7 @@ namespace SDVRadiance
         /// visibly dimmed the screen. Shade, not darkness.</summary>
         private const float OccludedSeed = 0.5f;
         /// <summary>Cell values are stored ×0.5 in the texture so >1 (glow) survives; shader ×2.</summary>
-        internal const float TexScale = 0.5f;
+        internal const float StorageScale = 0.5f;
 
         private int _lastStartTileX = int.MinValue, _lastStartTileY = int.MinValue, _lastBuildTick = int.MinValue;
         private int _lastInputsHash;
@@ -78,25 +78,24 @@ namespace SDVRadiance
         {
             unchecked
             {
-                int h = 17;
+                int hash = 17;
                 var lights = Game1.currentLightSources;
                 if (lights != null)
                 {
-                    foreach (var kv in lights.Values)
+                    foreach (var lightSource in lights.Values)
                     {
-                        var ls = kv;
-                        if (!ShadowRenderer.WindowGlowing(location, ls))
+                        if (!ShadowRenderer.WindowGlowing(location, lightSource))
                             continue;
-                        h = h * 31 + (int)(ls.position.Value.X / positionPixelsPerHashStep);
-                        h = h * 31 + (int)(ls.position.Value.Y / positionPixelsPerHashStep);
-                        h = h * 31 + (int)(ls.radius.Value * 16f);
-                        h = h * 31 + ls.textureIndex.Value;
+                        hash = hash * 31 + (int)(lightSource.position.Value.X / positionPixelsPerHashStep);
+                        hash = hash * 31 + (int)(lightSource.position.Value.Y / positionPixelsPerHashStep);
+                        hash = hash * 31 + (int)(lightSource.radius.Value * 16f);
+                        hash = hash * 31 + lightSource.textureIndex.Value;
                     }
                 }
-                h = h * 31 + (int)(WindowPatchScale * 255f);
-                h = h * 31 + (int)(WindowRoomScale * 255f);
-                h = h * 31 + Game1.ambientLight.PackedValue.GetHashCode();
-                return h;
+                hash = hash * 31 + (int)(WindowPatchScale * 255f);
+                hash = hash * 31 + (int)(WindowRoomScale * 255f);
+                hash = hash * 31 + Game1.ambientLight.PackedValue.GetHashCode();
+                return hash;
             }
         }
         private Vector3[] _lightCells = Array.Empty<Vector3>();
@@ -120,13 +119,13 @@ namespace SDVRadiance
         {
             if (_lightmapTexture == null)
                 return "no texture";
-            int xi = tileX - (int)Origin.X;
-            int yi = tileY - (int)Origin.Y;
-            if (xi < 0 || yi < 0 || xi >= (int)MapSize.X || yi >= (int)MapSize.Y)
+            int cellX = tileX - (int)Origin.X;
+            int cellY = tileY - (int)Origin.Y;
+            if (cellX < 0 || cellY < 0 || cellX >= (int)MapSize.X || cellY >= (int)MapSize.Y)
                 return "off-map";
-            Color c = _lightmapPixels[yi * (int)MapSize.X + xi];
-            float v = c.R / 255f / TexScale;   // stored ×TexScale (0.5); scale back for display
-            return v.ToString("F2");
+            Color pixel = _lightmapPixels[cellY * (int)MapSize.X + cellX];
+            float stored = pixel.R / 255f / StorageScale;   // stored ×StorageScale (0.5); scale back for display
+            return stored.ToString("F2");
         }
 
         /// <summary>
@@ -162,9 +161,10 @@ namespace SDVRadiance
         /// cells. One parameter in place of the four that were threaded through every phase.</summary>
         internal readonly struct TileWindow
         {
-            public readonly int X0, Y0, W, H;
-            public TileWindow(int x0, int y0, int w, int h) { X0 = x0; Y0 = y0; W = w; H = h; }
-            public int Count => W * H;
+            public readonly int TileX, TileY, TilesWide, TilesHigh;
+            public TileWindow(int tileX, int tileY, int tilesWide, int tilesHigh)
+                { TileX = tileX; TileY = tileY; TilesWide = tilesWide; TilesHigh = tilesHigh; }
+            public int Count => TilesWide * TilesHigh;
         }
 
 
@@ -174,14 +174,14 @@ namespace SDVRadiance
             if (location == null)
                 return false;
 
-            int tx0 = (int)Math.Floor(Game1.viewport.X / 64f) - Pad;
-            int ty0 = (int)Math.Floor(Game1.viewport.Y / 64f) - Pad;
+            int windowTileX = (int)Math.Floor(Game1.viewport.X / 64f) - PadTiles;
+            int windowTileY = (int)Math.Floor(Game1.viewport.Y / 64f) - PadTiles;
             // Window size from the VIEWPORT (world px), never from the render target: screen
             // px / 64 undercounts tiles when zoomed out, and the window edge showed up as a
             // hard rectangle of missing GI in the middle of the screen.
-            int tw = Math.Max(1, Game1.viewport.Width / 64 + 2) + Pad * 2;
-            int th = Math.Max(1, Game1.viewport.Height / 64 + 2) + Pad * 2;
-            int count = tw * th;
+            int tilesWide = Math.Max(1, Game1.viewport.Width / 64 + 2) + PadTiles * 2;
+            int tilesHigh = Math.Max(1, Game1.viewport.Height / 64 + 2) + PadTiles * 2;
+            int count = tilesWide * tilesHigh;
 
             // Rebuild when an INPUT changed, not on a clock. A tile crossing or resize always
             // rebuilds; a changed light list, window ease or ambient tint rebuilds (see
@@ -197,19 +197,19 @@ namespace SDVRadiance
             // content. Between the two answers there is nothing left to guess about.
             if (RebuildMode == RebuildOverride.Freeze && _lightmapTexture != null
                 && ReferenceEquals(location, _lastBuildLocation)
-                && _lightmapTexture.Width == tw && _lightmapTexture.Height == th)
+                && _lightmapTexture.Width == tilesWide && _lightmapTexture.Height == tilesHigh)
                 return true;
             // The location is part of the identity, not the hash: two maps can put the camera at
             // the same tile with the same lights (none), and at the old 3-tick clock showing the
             // previous map's lightmap for 50 ms was invisible where a third of a second is not.
             if (RebuildMode != RebuildOverride.Every
                 && _lightmapTexture != null && ReferenceEquals(location, _lastBuildLocation)
-                && tx0 == _lastStartTileX && ty0 == _lastStartTileY
-                && _lightmapTexture.Width == tw && _lightmapTexture.Height == th
+                && windowTileX == _lastStartTileX && windowTileY == _lastStartTileY
+                && _lightmapTexture.Width == tilesWide && _lightmapTexture.Height == tilesHigh
                 && inputsHash == _lastInputsHash
                 && Game1.ticks - _lastBuildTick < cadence)
                 return true;
-            _lastStartTileX = tx0; _lastStartTileY = ty0; _lastBuildTick = Game1.ticks;
+            _lastStartTileX = windowTileX; _lastStartTileY = windowTileY; _lastBuildTick = Game1.ticks;
             _lastInputsHash = inputsHash;
             _lastBuildLocation = location;
 
@@ -226,24 +226,24 @@ namespace SDVRadiance
             // sweeps are array work that could run on a worker, the upload is the card's.
             long phaseStart = System.Diagnostics.Stopwatch.GetTimestamp();
             SceneSeed scene = DescribeScene(location, config);
-            var win = new TileWindow(tx0, ty0, tw, th);
-            SeedSkyExposure(location, scene, win);
-            SeedLightSources(location, scene, win, subTileSeeds: false);
-            SeedWindowGlows(location, scene, win);
+            var window = new TileWindow(windowTileX, windowTileY, tilesWide, tilesHigh);
+            SeedSkyExposure(location, scene, window);
+            SeedLightSources(location, scene, window, subTileSeeds: false);
+            SeedWindowGlows(location, scene, window);
             phaseStart = PhaseCost.NoteSince("flood lightmap: seeds (game questions)", phaseStart);
-            FloodSweeps(win);
-            BounceBlur(win);
-            ComposeLightmapPixels(scene, win);
+            FloodSweeps(window);
+            BounceBlur(window);
+            ComposeLightmapPixels(scene, window);
             phaseStart = PhaseCost.NoteSince("flood lightmap: sweeps + blur + compose", phaseStart);
 
             // Into the pair's spare, never into the texture the lighting pass may still be
             // reading (TextureDoubleBuffer): this is the grid whose worst frames carried a 2 ms
             // GPU column against a 0.025 ms average.
             _lightmapTexture = TextureDoubleBuffer.UploadIntoSpare(graphicsDevice, ref _lightmapTextureSpare,
-                _lightmapTexture, tw, th, SurfaceFormat.Color, "flood lightmap", _lightmapPixels, count);
+                _lightmapTexture, tilesWide, tilesHigh, SurfaceFormat.Color, "flood lightmap", _lightmapPixels, count);
             PhaseCost.NoteSince("flood lightmap: upload", phaseStart);
-            Origin = new Vector2(tx0, ty0);
-            MapSize = new Vector2(tw, th);
+            Origin = new Vector2(windowTileX, windowTileY);
+            MapSize = new Vector2(tilesWide, tilesHigh);
             return true;
         }
 
@@ -278,7 +278,7 @@ namespace SDVRadiance
             float nightSeed = vanillaDark && !scriptedDark
                 ? MathHelper.Clamp(1f - config.LightingNightDarkness * 0.38f, 0.45f, 1f)
                 : 1f;
-            Vector3 sky = SkyColor(outdoors, config);
+            Vector3 sky = SkyColour(outdoors, config);
             return new SceneSeed(outdoors, scriptedDark, vanillaDark, nightSeed, sky);
         }
 
@@ -289,9 +289,9 @@ namespace SDVRadiance
         /// to the cascades it is what a ray sees when nothing stops it, not a thing on the grid.
         /// Returns how many cells carry a seed, for the debug caption.
         /// </summary>
-        internal int SeedEmitters(GameLocation location, in SceneSeed scene, in TileWindow win, Color[] pixels, float storageScale)
+        internal int SeedEmitters(GameLocation location, in SceneSeed scene, in TileWindow window, Color[] pixels, float storageScale)
         {
-            int count = win.Count;
+            int count = window.Count;
             if (_lightCells.Length < count)
             {
                 _lightCells = new Vector3[count];
@@ -311,14 +311,14 @@ namespace SDVRadiance
             // ring rebuilds this grid every 4 px of a walk, and each rebuild re-walked every lamp
             // and window in town to re-derive a grid that had not changed.
             _movingLightIds.Clear();
-            _lightTuplesCurrent.Clear();
+            _lightSeedHashesCurrent.Clear();
             if (!ReferenceEquals(location, _staticSeedLocation))
             {
                 _staticSeedLocation = location;
-                _lightTuplesPrevious.Clear();
+                _lightSeedHashesPrevious.Clear();
                 _staticSeedValid = false;
             }
-            int signature = HashStaticSeedInputs(location, scene, win);
+            int signature = HashStaticSeedInputs(location, scene, window);
             var lightsNow = Game1.currentLightSources;
             if (lightsNow != null)
             {
@@ -326,19 +326,19 @@ namespace SDVRadiance
                 {
                     LightSource lightSource = pair.Value;
                     string id = pair.Key;
-                    int tuple = LightSeedTuple(location, lightSource);
-                    _lightTuplesCurrent[id] = tuple;
-                    bool moved = !_lightTuplesPrevious.TryGetValue(id, out int wasTuple) || wasTuple != tuple;
+                    int seedHash = LightSeedHash(location, lightSource);
+                    _lightSeedHashesCurrent[id] = seedHash;
+                    bool moved = !_lightSeedHashesPrevious.TryGetValue(id, out int previousSeedHash) || previousSeedHash != seedHash;
                     // A window light never counts as moving: the window-glow pass reads every
                     // window's position for its covered-check, so a change there has to rebuild
                     // the still half anyway - and windows do not walk.
                     if (moved && lightSource.lightContext.Value != LightSource.LightContext.WindowLight)
                         _movingLightIds.Add(id);
                     else
-                        unchecked { signature += tuple; }   // set-sum: dictionary order must not matter
+                        unchecked { signature += seedHash; }   // set-sum: dictionary order must not matter
                 }
             }
-            (_lightTuplesPrevious, _lightTuplesCurrent) = (_lightTuplesCurrent, _lightTuplesPrevious);
+            (_lightSeedHashesPrevious, _lightSeedHashesCurrent) = (_lightSeedHashesCurrent, _lightSeedHashesPrevious);
 
             if (_staticSeedCells.Length < count)
             {
@@ -351,8 +351,8 @@ namespace SDVRadiance
                 // (LastWindowSeed only refreshes here, which is honest: it describes the pass
                 // that produced the cached grid.)
                 Array.Clear(_lightCells, 0, count);
-                SeedLightSources(location, scene, win, subTileSeeds: true, skipIds: _movingLightIds);
-                SeedWindowGlows(location, scene, win);
+                SeedLightSources(location, scene, window, subTileSeeds: true, skipIds: _movingLightIds);
+                SeedWindowGlows(location, scene, window);
                 Array.Copy(_lightCells, _staticSeedCells, count);
                 _staticSeedSignature = signature;
                 _staticSeedValid = true;
@@ -362,7 +362,7 @@ namespace SDVRadiance
                 Array.Copy(_staticSeedCells, _lightCells, count);
             }
             if (_movingLightIds.Count > 0)
-                SeedLightSources(location, scene, win, subTileSeeds: true, onlyIds: _movingLightIds);
+                SeedLightSources(location, scene, window, subTileSeeds: true, onlyIds: _movingLightIds);
             // The daylight sink AGAIN, for the cascades only. The seeds already carry it once,
             // calibrated for the flood's blurred half-weight bounce - but the cascades deliver a
             // lamp's light straight to whatever stands near it, and one sink left a carried glow
@@ -376,15 +376,15 @@ namespace SDVRadiance
                 : 1f;
             float packScale = storageScale * daylightSink;
             int seeded = 0;
-            for (int idx = 0; idx < count; idx++)
+            for (int cellIndex = 0; cellIndex < count; cellIndex++)
             {
-                Vector3 c = _lightCells[idx];
-                if (c.X > 0.001f || c.Y > 0.001f || c.Z > 0.001f)
+                Vector3 cell = _lightCells[cellIndex];
+                if (cell.X > 0.001f || cell.Y > 0.001f || cell.Z > 0.001f)
                     seeded++;
-                pixels[idx] = new Color(
-                    (byte)MathHelper.Clamp(c.X * 255f * packScale, 0f, 255f),
-                    (byte)MathHelper.Clamp(c.Y * 255f * packScale, 0f, 255f),
-                    (byte)MathHelper.Clamp(c.Z * 255f * packScale, 0f, 255f), (byte)255);
+                pixels[cellIndex] = new Color(
+                    (byte)MathHelper.Clamp(cell.X * 255f * packScale, 0f, 255f),
+                    (byte)MathHelper.Clamp(cell.Y * 255f * packScale, 0f, 255f),
+                    (byte)MathHelper.Clamp(cell.Z * 255f * packScale, 0f, 255f), (byte)255);
             }
             return seeded;
         }
@@ -394,26 +394,26 @@ namespace SDVRadiance
         private int _staticSeedSignature;
         private bool _staticSeedValid;
         private GameLocation? _staticSeedLocation;
-        private Dictionary<string, int> _lightTuplesPrevious = new();
-        private Dictionary<string, int> _lightTuplesCurrent = new();
+        private Dictionary<string, int> _lightSeedHashesPrevious = new();
+        private Dictionary<string, int> _lightSeedHashesCurrent = new();
         private readonly HashSet<string> _movingLightIds = new();
 
         /// <summary>Raw-bit hash of everything one light contributes to the seed grid, including
         /// whether the glow gate lets it seed at all: a window going dark changes WHICH lights
         /// seed, not any of the numbers on the light.</summary>
-        private static int LightSeedTuple(GameLocation location, LightSource lightSource)
+        private static int LightSeedHash(GameLocation location, LightSource lightSource)
         {
             unchecked
             {
-                int h = 17;
-                h = h * 31 + lightSource.position.Value.X.GetHashCode();
-                h = h * 31 + lightSource.position.Value.Y.GetHashCode();
-                h = h * 31 + lightSource.radius.Value.GetHashCode();
-                h = h * 31 + lightSource.textureIndex.Value;
-                h = h * 31 + (int)lightSource.color.Value.PackedValue;
-                h = h * 31 + (int)lightSource.lightContext.Value;
-                h = h * 31 + (ShadowRenderer.WindowGlowing(location, lightSource) ? 1 : 0);
-                return h;
+                int hash = 17;
+                hash = hash * 31 + lightSource.position.Value.X.GetHashCode();
+                hash = hash * 31 + lightSource.position.Value.Y.GetHashCode();
+                hash = hash * 31 + lightSource.radius.Value.GetHashCode();
+                hash = hash * 31 + lightSource.textureIndex.Value;
+                hash = hash * 31 + (int)lightSource.color.Value.PackedValue;
+                hash = hash * 31 + (int)lightSource.lightContext.Value;
+                hash = hash * 31 + (ShadowRenderer.WindowGlowing(location, lightSource) ? 1 : 0);
+                return hash;
             }
         }
 
@@ -422,47 +422,47 @@ namespace SDVRadiance
         /// daylight), the weather, and the glow-sprite list some rooms publish their windows as.
         /// Bit-strict on purpose - a cache reused under a changed input would no longer be
         /// identical to a fresh pass, and identical is the whole contract.</summary>
-        private static int HashStaticSeedInputs(GameLocation location, in SceneSeed scene, in TileWindow win)
+        private static int HashStaticSeedInputs(GameLocation location, in SceneSeed scene, in TileWindow window)
         {
             unchecked
             {
-                int h = 17;
-                h = h * 31 + win.X0; h = h * 31 + win.Y0;
-                h = h * 31 + win.W; h = h * 31 + win.H;
-                h = h * 31 + ((scene.Outdoors ? 1 : 0) | (scene.ScriptedDark ? 2 : 0) | (scene.VanillaDark ? 4 : 0));
-                h = h * 31 + scene.NightSeed.GetHashCode();
-                h = h * 31 + scene.Sky.X.GetHashCode();
-                h = h * 31 + scene.Sky.Y.GetHashCode();
-                h = h * 31 + scene.Sky.Z.GetHashCode();
-                h = h * 31 + WindowPatchScale.GetHashCode();
-                h = h * 31 + WindowRoomScale.GetHashCode();
-                h = h * 31 + Game1.ambientLight.PackedValue.GetHashCode();
-                h = h * 31 + GameClock.MinutesNow().GetHashCode();
-                h = h * 31 + ((Game1.isRaining ? 1 : 0) | (Game1.isSnowing ? 2 : 0) | (Game1.isLightning ? 4 : 0));
-                h = h * 31 + (Game1.currentSeason?.GetHashCode() ?? 0);
-                h = h * 31 + Game1.dayOfMonth;
+                int hash = 17;
+                hash = hash * 31 + window.TileX; hash = hash * 31 + window.TileY;
+                hash = hash * 31 + window.TilesWide; hash = hash * 31 + window.TilesHigh;
+                hash = hash * 31 + ((scene.Outdoors ? 1 : 0) | (scene.ScriptedDark ? 2 : 0) | (scene.VanillaDark ? 4 : 0));
+                hash = hash * 31 + scene.NightSeed.GetHashCode();
+                hash = hash * 31 + scene.Sky.X.GetHashCode();
+                hash = hash * 31 + scene.Sky.Y.GetHashCode();
+                hash = hash * 31 + scene.Sky.Z.GetHashCode();
+                hash = hash * 31 + WindowPatchScale.GetHashCode();
+                hash = hash * 31 + WindowRoomScale.GetHashCode();
+                hash = hash * 31 + Game1.ambientLight.PackedValue.GetHashCode();
+                hash = hash * 31 + GameClock.MinutesNow().GetHashCode();
+                hash = hash * 31 + ((Game1.isRaining ? 1 : 0) | (Game1.isSnowing ? 2 : 0) | (Game1.isLightning ? 4 : 0));
+                hash = hash * 31 + (Game1.currentSeason?.GetHashCode() ?? 0);
+                hash = hash * 31 + Game1.dayOfMonth;
                 if (location.lightGlows is { } glows)
                 {
-                    h = h * 31 + glows.Count;
+                    hash = hash * 31 + glows.Count;
                     foreach (Vector2 glowPoint in glows)
                     {
-                        h = h * 31 + glowPoint.X.GetHashCode();
-                        h = h * 31 + glowPoint.Y.GetHashCode();
+                        hash = hash * 31 + glowPoint.X.GetHashCode();
+                        hash = hash * 31 + glowPoint.Y.GetHashCode();
                     }
                 }
-                return h;
+                return hash;
             }
         }
 
         /// <summary>Sky exposure and per-cell decay, read off the occluder grid.</summary>
-        private void SeedSkyExposure(GameLocation location, in SceneSeed scene, in TileWindow win)
+        private void SeedSkyExposure(GameLocation location, in SceneSeed scene, in TileWindow window)
         {
             var surf = SurfaceMap.For(location);
-            for (int j = 0; j < win.H; j++)
+            for (int j = 0; j < window.TilesHigh; j++)
             {
-                for (int i = 0; i < win.W; i++)
+                for (int i = 0; i < window.TilesWide; i++)
                 {
-                    int idx = j * win.W + i;
+                    int cellIndex = j * window.TilesWide + i;
                     bool solid = false;
                     // Sky occlusion only makes sense OUTDOORS. Interiors are already under a roof,
                     // and every interior tile carries Front-layer art (upper walls), which the
@@ -473,11 +473,11 @@ namespace SDVRadiance
                     // height 1 but are walk-on-top surfaces OPEN to the scene.Sky — treating them as
                     // solid turned the whole beach pier into a giant dark pool. Water is open too.
                     if (surf != null && scene.Outdoors)
-                        solid = surf.BlocksLight(win.X0 + i, win.Y0 + j);
-                    _lightDecay[idx] = solid ? SolidDecay : AirDecay;
+                        solid = surf.BlocksLight(window.TileX + i, window.TileY + j);
+                    _lightDecay[cellIndex] = solid ? SolidDecay : AirDecay;
                     // Open cells receive direct scene.Sky light; occluded cells only what floods in
                     // from their surroundings → soft shade under trees/buildings for free.
-                    _lightCells[idx] = scene.VanillaDark ? new Vector3(scene.NightSeed) : (solid ? scene.Sky * OccludedSeed : scene.Sky);
+                    _lightCells[cellIndex] = scene.VanillaDark ? new Vector3(scene.NightSeed) : (solid ? scene.Sky * OccludedSeed : scene.Sky);
                 }
             }
 
@@ -506,16 +506,16 @@ namespace SDVRadiance
         /// Occluders outside the grid are treated as air, which is the far tail of a pool the
         /// grid never showed at all before.</para>
         /// </remarks>
-        private static bool ClampSeed(ref int ci, ref int cj, ref float inten, in TileWindow win)
+        private static bool ClampSeed(ref int seedColumn, ref int seedRow, ref float intensity, in TileWindow window)
         {
-            int cx = Math.Clamp(ci, 0, win.W - 1);
-            int cy = Math.Clamp(cj, 0, win.H - 1);
-            int away = Math.Abs(ci - cx) + Math.Abs(cj - cy);
+            int clampedColumn = Math.Clamp(seedColumn, 0, window.TilesWide - 1);
+            int clampedRow = Math.Clamp(seedRow, 0, window.TilesHigh - 1);
+            int away = Math.Abs(seedColumn - clampedColumn) + Math.Abs(seedRow - clampedRow);
             if (away > 0)
-                inten *= (float)Math.Pow(AirDecay, away);
-            ci = cx;
-            cj = cy;
-            return inten > 0.002f;
+                intensity *= (float)Math.Pow(AirDecay, away);
+            seedColumn = clampedColumn;
+            seedRow = clampedRow;
+            return intensity > 0.002f;
         }
 
         /// <param name="subTileSeeds">Seed each light into the four cells around its TRUE position,
@@ -527,7 +527,7 @@ namespace SDVRadiance
         /// <param name="onlyIds">Seed only these lights (the moving half of the emitter split).</param>
         /// <param name="skipIds">Seed everything but these (the still half). Both null: everything,
         /// which is what the flood's own build wants.</param>
-        private void SeedLightSources(GameLocation location, in SceneSeed scene, in TileWindow win, bool subTileSeeds,
+        private void SeedLightSources(GameLocation location, in SceneSeed scene, in TileWindow window, bool subTileSeeds,
             HashSet<string>? onlyIds = null, HashSet<string>? skipIds = null)
         {
             // ---- Seed the game's real light sources (lamps, torches, fires, windows) ----
@@ -536,23 +536,23 @@ namespace SDVRadiance
             {
                 foreach (var pair in lights)
                 {
-                    var ls = pair.Value;
+                    var lightSource = pair.Value;
                     if (onlyIds != null && !onlyIds.Contains(pair.Key))
                         continue;
                     if (skipIds != null && skipIds.Contains(pair.Key))
                         continue;
-                    if (!ShadowRenderer.WindowGlowing(location, ls))   // stale/dark window: not emitting
+                    if (!ShadowRenderer.WindowGlowing(location, lightSource))   // stale/dark window: not emitting
                         continue;
                     // The TRUE cell, which may lie outside the grid; the columns below are laid
                     // from it so their cells stay where they are in the world. The seed itself is
                     // clamped onto the grid, decayed for the distance (see ClampSeed).
                     // The same drop the direct pool takes, or the bounce would sit a tile above
                     // the pool it is supposed to be the bounce of. See ShadowRenderer.FlameGlowOffset.
-                    Vector2 glowPosition = ls.position.Value
-                        + ShadowRenderer.FlameGlowOffset(location, ls.position.Value, ls.textureIndex.Value);
-                    int trueCi = (int)(glowPosition.X / 64f) - win.X0;
-                    int trueCj = (int)(glowPosition.Y / 64f) - win.Y0;
-                    int ci = trueCi, cj = trueCj;
+                    Vector2 glowPosition = lightSource.position.Value
+                        + ShadowRenderer.FlameGlowOffset(location, lightSource.position.Value, lightSource.textureIndex.Value);
+                    int trueSeedColumn = (int)(glowPosition.X / 64f) - window.TileX;
+                    int trueSeedRow = (int)(glowPosition.Y / 64f) - window.TileY;
+                    int seedColumn = trueSeedColumn, seedRow = trueSeedRow;
                     // INDIRECT spill (~half strength): the crisp direct pool + its per-light shadows
                     // are computed analytically in floodlight.effect; the flood carries the bounce-like
                     // glow that bends around corners and through doorways. Outdoors it sits above 1.0
@@ -567,8 +567,8 @@ namespace SDVRadiance
                     // is light that has crossed the room and come back off a wall. The flame still
                     // breathes where it is visible, in the direct pool (RenderPipeline.Lighting)
                     // and in the shadows it casts, both of which are per-frame and free.
-                    float inten = MathHelper.Clamp(0.55f + 0.30f * ls.radius.Value, 0.6f, 1.7f) * (scene.Outdoors ? 1.25f : 0.5f);
-                    if (!subTileSeeds && !ClampSeed(ref ci, ref cj, ref inten, win))
+                    float intensity = MathHelper.Clamp(0.55f + 0.30f * lightSource.radius.Value, 0.6f, 1.7f) * (scene.Outdoors ? 1.25f : 0.5f);
+                    if (!subTileSeeds && !ClampSeed(ref seedColumn, ref seedRow, ref intensity, window))
                         continue;
                     // The same midday sink the DIRECT pools got ("a street lamp at noon reads as
                     // glass"): these seeds never had it, which went unnoticed while the flat bounce
@@ -578,12 +578,12 @@ namespace SDVRadiance
                     // the shader's glow term, and it read as a bright pool at two in the afternoon.
                     // Full strength returns by 08:00/17:00; night and indoors are untouched.
                     if (scene.Outdoors)
-                        inten *= 1f - 0.65f * (1f - MathHelper.Clamp(Math.Abs(GameClock.MinutesNow() - 750f) / 270f, 0f, 1f));
+                        intensity *= 1f - 0.65f * (1f - MathHelper.Clamp(Math.Abs(GameClock.MinutesNow() - 750f) / 270f, 0f, 1f));
                     // TWO-TONE rooms: an indoor window is DAYLIGHT (cool, slightly blue) while
                     // lamps and fires stay warm — the warm-vs-cool split across a room is what
                     // makes it read as cinematic instead of uniformly orange. Outdoor window
                     // lights (town houses at night) are lamp-lit from inside, so they stay warm.
-                    bool coolDaylight = !scene.Outdoors && ls.lightContext.Value == LightSource.LightContext.WindowLight;
+                    bool coolDaylight = !scene.Outdoors && lightSource.lightContext.Value == LightSource.LightContext.WindowLight;
                     // A LIGHT'S BOUNCE IS THE LIGHT'S OWN COLOUR. This was one fixed warm constant
                     // for every source in the game, which is where the saloon's orange came from and
                     // had been coming from for a long time: all 66 of that room's map lights are
@@ -593,7 +593,7 @@ namespace SDVRadiance
                     // us. Stardew stores a light's colour inverted, the same way the direct pass
                     // already reads it, and the seed is normalised so only the HUE comes from here
                     // and the strength keeps coming from the radius rule above.
-                    Color raw = ls.color.Value;
+                    Color raw = lightSource.color.Value;
                     Vector3 emitted = new(1f - raw.R / 255f, 1f - raw.G / 255f, 1f - raw.B / 255f);
                     float emittedPeak = Math.Max(emitted.X, Math.Max(emitted.Y, emitted.Z));
                     Vector3 seedColor = emittedPeak > 0.02f
@@ -609,7 +609,7 @@ namespace SDVRadiance
                         // ×1.25 so the pool can actually show through the room's exposure (a bare
                         // sunStrength at 0.85 stays under the multiply-only floor and reads as if
                         // nothing happened when the toggle is flicked).
-                        inten *= (1.25f * sunStrength) * WindowRoomScale;
+                        intensity *= (1.25f * sunStrength) * WindowRoomScale;
                     }
                     // One seed cell; the bilinear upsample + the 5×5 bounce spread it into a soft
                     // pool. (A wide radial seed disc was tried to force a bigger pool but never read
@@ -620,29 +620,29 @@ namespace SDVRadiance
                         // split over the four cells around it. A light standing at a tile's centre
                         // (a placed torch) lands whole in its own cell, exactly as the snap put it;
                         // a CARRIED light glides between cells as its owner walks.
-                        float cellX = glowPosition.X / 64f - 0.5f - win.X0;
-                        float cellY = glowPosition.Y / 64f - 0.5f - win.Y0;
+                        float cellX = glowPosition.X / 64f - 0.5f - window.TileX;
+                        float cellY = glowPosition.Y / 64f - 0.5f - window.TileY;
                         int leftCell = (int)Math.Floor(cellX);
                         int topCell = (int)Math.Floor(cellY);
                         float rightShare = cellX - leftCell;
                         float bottomShare = cellY - topCell;
                         for (int corner = 0; corner < 4; corner++)
                         {
-                            int cornerI = leftCell + (corner & 1);
-                            int cornerJ = topCell + (corner >> 1);
+                            int cornerColumn = leftCell + (corner & 1);
+                            int cornerRow = topCell + (corner >> 1);
                             float share = ((corner & 1) == 0 ? 1f - rightShare : rightShare)
                                         * ((corner >> 1) == 0 ? 1f - bottomShare : bottomShare);
-                            float cornerInten = inten * share;
-                            if (!ClampSeed(ref cornerI, ref cornerJ, ref cornerInten, win))
+                            float cornerIntensity = intensity * share;
+                            if (!ClampSeed(ref cornerColumn, ref cornerRow, ref cornerIntensity, window))
                                 continue;
-                            int cornerIdx = cornerJ * win.W + cornerI;
-                            _lightCells[cornerIdx] = Vector3.Max(_lightCells[cornerIdx], seedColor * cornerInten);
+                            int cornerIndex = cornerRow * window.TilesWide + cornerColumn;
+                            _lightCells[cornerIndex] = Vector3.Max(_lightCells[cornerIndex], seedColor * cornerIntensity);
                         }
                     }
                     else
                     {
-                        int idx = cj * win.W + ci;
-                        _lightCells[idx] = Vector3.Max(_lightCells[idx], seedColor * inten);
+                        int cellIndex = seedRow * window.TilesWide + seedColumn;
+                        _lightCells[cellIndex] = Vector3.Max(_lightCells[cellIndex], seedColor * intensity);
                     }
 
                     // SUN SHAFT: daylight through a window falls onto the floor below it — seed a
@@ -661,35 +661,35 @@ namespace SDVRadiance
                         // halves can be turned off independently of each other.
                         Vector3 shaft = seedColor * (0.72f * WindowPatchScale);
                         int steps = Math.Max(1, (int)Math.Round(reach));
-                        for (int k = 1; k <= steps; k++)
+                        for (int step = 1; step <= steps; step++)
                         {
-                            int jj = trueCj + k;
-                            int ii = trueCi + (int)Math.Round(lean * k);
-                            if (jj >= win.H)
+                            int columnRow = trueSeedRow + step;
+                            int columnCell = trueSeedColumn + (int)Math.Round(lean * step);
+                            if (columnRow >= window.TilesHigh)
                                 break;
-                            if (jj < 0 || ii < 0 || ii >= win.W)
+                            if (columnRow < 0 || columnCell < 0 || columnCell >= window.TilesWide)
                                 continue;
-                            float f = 1.0f - 0.85f * (k / (float)(steps + 1));
-                            int sIdx = jj * win.W + ii;
-                            _lightCells[sIdx] = Vector3.Max(_lightCells[sIdx], shaft * f);
+                            float falloff = 1.0f - 0.85f * (step / (float)(steps + 1));
+                            int columnCellIndex = columnRow * window.TilesWide + columnCell;
+                            _lightCells[columnCellIndex] = Vector3.Max(_lightCells[columnCellIndex], shaft * falloff);
                         }
                     }
                     // OUTDOOR lit storefronts/windows at night pour WARM light DOWN onto the
                     // path in front (a saloon's windows lighting the ground). Short fading
                     // column, softened afterwards by the bilinear sample + the wide bounce.
-                    else if (scene.Outdoors && ls.lightContext.Value == LightSource.LightContext.WindowLight)
+                    else if (scene.Outdoors && lightSource.lightContext.Value == LightSource.LightContext.WindowLight)
                     {
                         var spill = new Vector3(1.00f, 0.84f, 0.60f);
-                        for (int k = 1; k <= 4; k++)
+                        for (int step = 1; step <= 4; step++)
                         {
-                            int jj = trueCj + k;
-                            if (jj >= win.H)
+                            int columnRow = trueSeedRow + step;
+                            if (columnRow >= window.TilesHigh)
                                 break;
-                            if (jj < 0 || trueCi < 0 || trueCi >= win.W)
+                            if (columnRow < 0 || trueSeedColumn < 0 || trueSeedColumn >= window.TilesWide)
                                 continue;
-                            float f = (1.0f - 0.22f * k) * inten * 2.2f;
-                            int sIdx = jj * win.W + trueCi;
-                            _lightCells[sIdx] = Vector3.Max(_lightCells[sIdx], spill * f);
+                            float falloff = (1.0f - 0.22f * step) * intensity * 2.2f;
+                            int columnCellIndex = columnRow * window.TilesWide + trueSeedColumn;
+                            _lightCells[columnCellIndex] = Vector3.Max(_lightCells[columnCellIndex], spill * falloff);
                         }
                     }
                 }
@@ -699,7 +699,7 @@ namespace SDVRadiance
 
         /// <summary>Seed window daylight from the room's glow sprites, for the interiors that
         /// publish their windows no other way.</summary>
-        private void SeedWindowGlows(GameLocation location, in SceneSeed scene, in TileWindow win)
+        private void SeedWindowGlows(GameLocation location, in SceneSeed scene, in TileWindow window)
         {
             var lights = Game1.currentLightSources;
             // ---- Seed window daylight from the room's window glow sprites ----
@@ -708,7 +708,7 @@ namespace SDVRadiance
             // touches them. A glow sprite IS the game saying "this window is lit", so seed the
             // same cool daylight there; otherwise the flood leaves the floor beside a real
             // window at bare scene.Sky and it reads as a dark strip in front of the glass.
-            int glowCount = location.lightGlows is { } lg ? lg.Count : -1;
+            int glowCount = location.lightGlows is { } glows ? glows.Count : -1;
             bool glowGate = !scene.Outdoors && !scene.ScriptedDark && WindowRoomScale > 0.01f && glowCount > 0;
             if (glowGate)
             {
@@ -716,40 +716,40 @@ namespace SDVRadiance
                 int seeded = 0;
                 if (sunStrength > 0.03f)
                 {
-                    foreach (Vector2 gp in location.lightGlows)
+                    foreach (Vector2 glowPoint in location.lightGlows)
                     {
-                        int trueCi = (int)(gp.X / 64f) - win.X0;
-                        int trueCj = (int)(gp.Y / 64f) - win.Y0;
-                        int ci = trueCi, cj = trueCj;
+                        int trueSeedColumn = (int)(glowPoint.X / 64f) - window.TileX;
+                        int trueSeedRow = (int)(glowPoint.Y / 64f) - window.TileY;
+                        int seedColumn = trueSeedColumn, seedRow = trueSeedRow;
                         // Skip any spot a real window light source already covered above.
                         bool covered = false;
                         if (lights != null)
-                            foreach (var ls in lights.Values)
-                                if (ls.lightContext.Value == LightSource.LightContext.WindowLight
-                                    && Math.Abs((int)(ls.position.Value.X / 64f) - (win.X0 + trueCi)) <= 1
-                                    && Math.Abs((int)(ls.position.Value.Y / 64f) - (win.Y0 + trueCj)) <= 1)
+                            foreach (var lightSource in lights.Values)
+                                if (lightSource.lightContext.Value == LightSource.LightContext.WindowLight
+                                    && Math.Abs((int)(lightSource.position.Value.X / 64f) - (window.TileX + trueSeedColumn)) <= 1
+                                    && Math.Abs((int)(lightSource.position.Value.Y / 64f) - (window.TileY + trueSeedRow)) <= 1)
                                 { covered = true; break; }
                         if (covered)
                             continue;
-                        float glowInten = 1.35f * sunStrength * WindowRoomScale;
-                        if (!ClampSeed(ref ci, ref cj, ref glowInten, win))
+                        float glowIntensity = 1.35f * sunStrength * WindowRoomScale;
+                        if (!ClampSeed(ref seedColumn, ref seedRow, ref glowIntensity, window))
                             continue;
-                        int sIdx = cj * win.W + ci;
-                        _lightCells[sIdx] = Vector3.Max(_lightCells[sIdx], sunColour * glowInten);
+                        int columnCellIndex = seedRow * window.TilesWide + seedColumn;
+                        _lightCells[columnCellIndex] = Vector3.Max(_lightCells[columnCellIndex], sunColour * glowIntensity);
                         // Spread the daylight down the first cells INTO the room, so the patch
                         // reads as light pooling in front of the glass rather than a single-cell
                         // glint that a toggle is easy to miss. Kept at/over 1.0 so it can actually
                         // ADD light - below 1.0 the flood can only darken less, which is why the
                         // old seed read as nothing next to the room's exposure.
-                        for (int k = 1; k <= 3; k++)
+                        for (int step = 1; step <= 3; step++)
                         {
-                            int jj = trueCj + k;
-                            if (jj >= win.H)
+                            int columnRow = trueSeedRow + step;
+                            if (columnRow >= window.TilesHigh)
                                 break;
-                            if (jj < 0 || trueCi < 0 || trueCi >= win.W)
+                            if (columnRow < 0 || trueSeedColumn < 0 || trueSeedColumn >= window.TilesWide)
                                 continue;
-                            _lightCells[jj * win.W + trueCi] = Vector3.Max(_lightCells[jj * win.W + trueCi],
-                                sunColour * glowInten * (1f - 0.25f * k));
+                            _lightCells[columnRow * window.TilesWide + trueSeedColumn] = Vector3.Max(_lightCells[columnRow * window.TilesWide + trueSeedColumn],
+                                sunColour * glowIntensity * (1f - 0.25f * step));
                         }
                         seeded++;
                     }
@@ -764,31 +764,31 @@ namespace SDVRadiance
         }
 
         /// <summary>Two rounds of four directional sweeps: the propagation itself.</summary>
-        private void FloodSweeps(in TileWindow win)
+        private void FloodSweeps(in TileWindow window)
         {
             // ---- Flood: two rounds of 4 directional sweeps (Terraria-style) ----
             for (int round = 0; round < 2; round++)
             {
-                for (int j = 0; j < win.H; j++)          // left → right, then right → left
+                for (int j = 0; j < window.TilesHigh; j++)          // left → right, then right → left
                 {
                     Vector3 carry = Vector3.Zero;
-                    for (int i = 0; i < win.W; i++) Propagate(ref carry, j * win.W + i);
+                    for (int i = 0; i < window.TilesWide; i++) Propagate(ref carry, j * window.TilesWide + i);
                     carry = Vector3.Zero;
-                    for (int i = win.W - 1; i >= 0; i--) Propagate(ref carry, j * win.W + i);
+                    for (int i = window.TilesWide - 1; i >= 0; i--) Propagate(ref carry, j * window.TilesWide + i);
                 }
-                for (int i = 0; i < win.W; i++)          // top → bottom, then bottom → top
+                for (int i = 0; i < window.TilesWide; i++)          // top → bottom, then bottom → top
                 {
                     Vector3 carry = Vector3.Zero;
-                    for (int j = 0; j < win.H; j++) Propagate(ref carry, j * win.W + i);
+                    for (int j = 0; j < window.TilesHigh; j++) Propagate(ref carry, j * window.TilesWide + i);
                     carry = Vector3.Zero;
-                    for (int j = win.H - 1; j >= 0; j--) Propagate(ref carry, j * win.W + i);
+                    for (int j = window.TilesHigh - 1; j >= 0; j--) Propagate(ref carry, j * window.TilesWide + i);
                 }
             }
 
         }
 
         /// <summary>The fake indirect bounce, as a separated 5x5 box blur.</summary>
-        private void BounceBlur(in TileWindow win)
+        private void BounceBlur(in TileWindow window)
         {
             // ---- Fake one indirect bounce: 5×5 blur folded back in softly ----
             // 5×5 (was 3×3): a wider bounce spreads each light into a softer, fluffier pool that
@@ -800,41 +800,41 @@ namespace SDVRadiance
             // of one term per axis, so dividing by each axis in its own pass gives the same number.
             // Worth doing where it is: the grid is the viewport in tiles, so it grows quadratically
             // as the player zooms out, which is exactly the case the reports are about.
-            for (int j = 0; j < win.H; j++)
+            for (int j = 0; j < window.TilesHigh; j++)
             {
-                int row = j * win.W;
-                for (int i = 0; i < win.W; i++)
+                int row = j * window.TilesWide;
+                for (int i = 0; i < window.TilesWide; i++)
                 {
-                    int i0 = Math.Max(0, i - 2), i1 = Math.Min(win.W - 1, i + 2);
-                    var acc = Vector3.Zero;
-                    for (int ii = i0; ii <= i1; ii++)
-                        acc += _lightCells[row + ii];
-                    _blurRowScratch[row + i] = acc / (i1 - i0 + 1);
+                    int firstColumn = Math.Max(0, i - 2), lastColumn = Math.Min(window.TilesWide - 1, i + 2);
+                    var sum = Vector3.Zero;
+                    for (int tapColumn = firstColumn; tapColumn <= lastColumn; tapColumn++)
+                        sum += _lightCells[row + tapColumn];
+                    _blurRowScratch[row + i] = sum / (lastColumn - firstColumn + 1);
                 }
             }
-            for (int j = 0; j < win.H; j++)
+            for (int j = 0; j < window.TilesHigh; j++)
             {
-                int j0 = Math.Max(0, j - 2), j1 = Math.Min(win.H - 1, j + 2);
-                int row = j * win.W;
-                for (int i = 0; i < win.W; i++)
+                int firstRow = Math.Max(0, j - 2), lastRow = Math.Min(window.TilesHigh - 1, j + 2);
+                int row = j * window.TilesWide;
+                for (int i = 0; i < window.TilesWide; i++)
                 {
-                    var acc = Vector3.Zero;
-                    for (int jj = j0; jj <= j1; jj++)
-                        acc += _blurRowScratch[jj * win.W + i];
-                    _blurredLightCells[row + i] = acc / (j1 - j0 + 1);
+                    var sum = Vector3.Zero;
+                    for (int tapRow = firstRow; tapRow <= lastRow; tapRow++)
+                        sum += _blurRowScratch[tapRow * window.TilesWide + i];
+                    _blurredLightCells[row + i] = sum / (lastRow - firstRow + 1);
                 }
             }
         }
 
         /// <summary>Fold the bounce back in, lift elevated surfaces, and pack to bytes.</summary>
-        private void ComposeLightmapPixels(in SceneSeed scene, in TileWindow win)
+        private void ComposeLightmapPixels(in SceneSeed scene, in TileWindow window)
         {
             // Walls/roofs are ELEVATED surfaces in a top-down view: the dark cell value models
             // light blocked at ground level, but the pixels DRAWN there are facades and rooftops
             // in full daylight — lift them to ambient so buildings never render dimmer than the
             // ground they stand on (dark cells still attenuate propagation for the spill/shade).
             Vector3 lift = scene.Sky * (scene.Outdoors ? 0.92f : 0.85f);
-            for (int idx = 0; idx < win.Count; idx++)
+            for (int cellIndex = 0; cellIndex < window.Count; cellIndex++)
             {
                 // The bounce FILLS SHADE. It used to be a flat add, which put every open outdoor
                 // cell at ~1.28 in broad daylight — and floodlight.effect reads anything over 1.0 as a
@@ -844,29 +844,29 @@ namespace SDVRadiance
                 // and the detail in the snow disappeared. Weighting the bounce by how far the cell
                 // is BELOW full light leaves open ground at exactly scene.Sky, still lifts real shade,
                 // and leaves lamp cells (seeded above 1.0) free to glow as intended.
-                Vector3 c = _lightCells[idx];
-                Vector3 room = new(
-                    MathHelper.Clamp(1f - c.X, 0f, 1f),
-                    MathHelper.Clamp(1f - c.Y, 0f, 1f),
-                    MathHelper.Clamp(1f - c.Z, 0f, 1f));
-                Vector3 v = c + _blurredLightCells[idx] * 0.28f * room;
-                if (_lightDecay[idx] == SolidDecay)
-                    v = Vector3.Max(v, lift);
-                _lightmapPixels[idx] = new Color(
-                    (byte)MathHelper.Clamp(v.X * 255f * TexScale, 0f, 255f),
-                    (byte)MathHelper.Clamp(v.Y * 255f * TexScale, 0f, 255f),
-                    (byte)MathHelper.Clamp(v.Z * 255f * TexScale, 0f, 255f), (byte)255);
+                Vector3 cell = _lightCells[cellIndex];
+                Vector3 headroom = new(
+                    MathHelper.Clamp(1f - cell.X, 0f, 1f),
+                    MathHelper.Clamp(1f - cell.Y, 0f, 1f),
+                    MathHelper.Clamp(1f - cell.Z, 0f, 1f));
+                Vector3 composed = cell + _blurredLightCells[cellIndex] * 0.28f * headroom;
+                if (_lightDecay[cellIndex] == SolidDecay)
+                    composed = Vector3.Max(composed, lift);
+                _lightmapPixels[cellIndex] = new Color(
+                    (byte)MathHelper.Clamp(composed.X * 255f * StorageScale, 0f, 255f),
+                    (byte)MathHelper.Clamp(composed.Y * 255f * StorageScale, 0f, 255f),
+                    (byte)MathHelper.Clamp(composed.Z * 255f * StorageScale, 0f, 255f), (byte)255);
             }
 
         }
 
-        private void Propagate(ref Vector3 carry, int idx)
+        private void Propagate(ref Vector3 carry, int cellIndex)
         {
-            float d = _lightDecay[idx];
-            carry *= d;
-            Vector3 c = _lightCells[idx];
-            carry = Vector3.Max(carry, c);
-            _lightCells[idx] = carry;
+            float decay = _lightDecay[cellIndex];
+            carry *= decay;
+            Vector3 cell = _lightCells[cellIndex];
+            carry = Vector3.Max(carry, cell);
+            _lightCells[cellIndex] = carry;
         }
 
         /// <summary>Direct-sky seed for open cells — RELATIVE only (the game's own day/night
@@ -877,22 +877,22 @@ namespace SDVRadiance
         /// truly-dark on. The one ramp every outdoor night term shares, so they arrive together.</summary>
         internal static float NightAmount()
         {
-            int t = Game1.timeOfDay;
+            int timeOfDay = Game1.timeOfDay;
             int trulyDark;
             try { trulyDark = Game1.currentLocation != null ? Game1.getTrulyDarkTime(Game1.currentLocation) : 2000; }
             catch { trulyDark = 2000; }
-            int mins = (t / 100) * 60 + t % 100;
-            int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
-            return MathHelper.Clamp((mins - (m1 - 60)) / 60f, 0f, 1f);
+            int nowMinutes = (timeOfDay / 100) * 60 + timeOfDay % 100;
+            int trulyDarkMinutes = (trulyDark / 100) * 60 + trulyDark % 100;
+            return MathHelper.Clamp((nowMinutes - (trulyDarkMinutes - 60)) / 60f, 0f, 1f);
         }
 
-        private static Vector3 SkyColor(bool outdoors, ModConfig config)
+        private static Vector3 SkyColour(bool outdoors, ModConfig config)
         {
             if (!outdoors)
             {
                 // Interiors have no sky: a flat ambient set by the indoor-darkness slider,
                 // with window/lamp seeds carving out the bright areas.
-                float amb = MathHelper.Clamp(1f - config.LightingIndoorDarkness * 0.55f, 0.3f, 1f);
+                float ambient = MathHelper.Clamp(1f - config.LightingIndoorDarkness * 0.55f, 0.3f, 1f);
                 // A room with windows is lit BY those windows, so its ambient follows the same
                 // daylight they do - dim and warm at dawn, full at noon, dim again at dusk.
                 // Flat ambient was why every interior read as noon at six in the morning.
@@ -913,10 +913,10 @@ namespace SDVRadiance
                 // The wake floor follows the morning-darkness slider: at its default (0.25) the
                 // room wakes at the historical ~0.42; 0 lifts it to a fully bright wake.
                 float wakeFloor = MathHelper.Lerp(1f, 0.42f, MathHelper.Clamp(config.LightingMorningDarkness / 0.25f, 0f, 1f));
-                amb = MathHelper.Clamp(amb * MathHelper.Lerp(wakeFloor, 1f, fill), 0.16f, 1f);
+                ambient = MathHelper.Clamp(ambient * MathHelper.Lerp(wakeFloor, 1f, fill), 0.16f, 1f);
                 // ...and takes its colour, so the air in the room agrees with the light coming
                 // through the glass rather than staying neutral grey while the patch goes gold.
-                return new Vector3(amb) * Vector3.Lerp(Vector3.One, dayColour, 0.5f);
+                return new Vector3(ambient) * Vector3.Lerp(Vector3.One, dayColour, 0.5f);
             }
             float dayProgress = MathHelper.Clamp((GameClock.MinutesNow() - 720f) / 360f, -1f, 1f);
             float warm = MathHelper.Clamp((Math.Abs(dayProgress) - 0.55f) / 0.45f, 0f, 1f);
@@ -927,7 +927,7 @@ namespace SDVRadiance
             // MOONLIGHT: after dark, open ground gets a cool lift scaled by the lunar phase
             // (SDV's 28-day month = one synthetic cycle) and season — cells under canopies
             // and buildings receive none, so a full moon paints real moon shade.
-            float nightT = NightAmount();
+            float nightAmount = NightAmount();
             // HOW DARK, AND WHAT COLOUR OF DARK. Two decisions, and both used to be hardcoded.
             //
             // The depth was a bare 0.62 that no setting reached, while the night-darkness
@@ -949,11 +949,11 @@ namespace SDVRadiance
             // volume. Asked for in exactly those words: low should look like vanilla, only lit.
             Vector3 moonCool = new(0.910f, 1.003f, 1.220f);
             float coolShare = MathHelper.Clamp(config.LightingNightDarkness / 0.56f, 0f, 1f);
-            sky *= Vector3.Lerp(Vector3.One, Vector3.Lerp(Vector3.One, moonCool, coolShare) * nightFloor, nightT);
+            sky *= Vector3.Lerp(Vector3.One, Vector3.Lerp(Vector3.One, moonCool, coolShare) * nightFloor, nightAmount);
             // Full moon lifts the night back up (cool) → a full-moon night is clearly brighter
             // and bluer than a new-moon one.
-            if (nightT > 0f)
-                sky += new Vector3(0.05f, 0.07f, 0.11f) * (ShadowRenderer.MoonStrength() * nightT);
+            if (nightAmount > 0f)
+                sky += new Vector3(0.05f, 0.07f, 0.11f) * (ShadowRenderer.MoonStrength() * nightAmount);
             return sky;
         }
 
@@ -963,7 +963,7 @@ namespace SDVRadiance
         // (scripted darkness, add-only rule), and windowless interiors — the farm cave,
         // the sewer, mod caves — have no DayTiles/NightTiles map entries and no
         // WindowLight sources, so they are never touched.
-        private static GameLocation? _windowedCacheLoc;
+        private static GameLocation? _windowedCacheLocation;
         private static bool _windowedCached;
 
         /// <summary>How much of the sun PATCH under a window to seed, 0 to 1 - the visible half,
@@ -985,16 +985,16 @@ namespace SDVRadiance
             if (location is StardewValley.Locations.MineShaft || location is StardewValley.Locations.VolcanoDungeon)
                 return false;
             // DayTiles/NightTiles is a MAP property - time independent, safe to cache per visit.
-            if (!ReferenceEquals(location, _windowedCacheLoc))
+            if (!ReferenceEquals(location, _windowedCacheLocation))
             {
-                _windowedCacheLoc = location;
+                _windowedCacheLocation = location;
                 // Windows are the map's day/night switching tiles — the standard mechanism
                 // vanilla AND content-pack interiors use to make panes glow by day and go
                 // dark at night — so the property's presence is a time-independent answer
                 // (the light sources themselves vanish after dark).
-                var props = location.Map?.Properties;
-                _windowedCached = props != null
-                    && (props.ContainsKey("DayTiles") || props.ContainsKey("NightTiles"));
+                var mapProperties = location.Map?.Properties;
+                _windowedCached = mapProperties != null
+                    && (mapProperties.ContainsKey("DayTiles") || mapProperties.ContainsKey("NightTiles"));
             }
             if (_windowedCached)
                 return true;
@@ -1003,8 +1003,8 @@ namespace SDVRadiance
             // night must not freeze the answer as "no windows" for the whole visit (that
             // freeze is what left the floor beside a real window at bare sky in the morning).
             if (Game1.currentLightSources != null)
-                foreach (var kv in Game1.currentLightSources)
-                    if (kv.Value.lightContext.Value == LightSource.LightContext.WindowLight)
+                foreach (var lightEntry in Game1.currentLightSources)
+                    if (lightEntry.Value.lightContext.Value == LightSource.LightContext.WindowLight)
                         return true;
             return location.lightGlows is { Count: > 0 };
         }
@@ -1131,16 +1131,16 @@ namespace SDVRadiance
             // allowed. The room still reads as cold - the level below is untouched and the level
             // is what "dark" means - it just stops repainting everything in it.
             const float MaxCastRatio = 1.7f;
-            float castLo = Math.Min(chroma.X, Math.Min(chroma.Y, chroma.Z));
-            float castHi = Math.Max(chroma.X, Math.Max(chroma.Y, chroma.Z));
-            if (castLo > 0.0001f && castHi > castLo * MaxCastRatio)
+            float castMinimum = Math.Min(chroma.X, Math.Min(chroma.Y, chroma.Z));
+            float castMaximum = Math.Max(chroma.X, Math.Max(chroma.Y, chroma.Z));
+            if (castMinimum > 0.0001f && castMaximum > castMinimum * MaxCastRatio)
             {
                 // Solve lerp(1, chroma, t) for the t whose ends land exactly on the ratio, so a
                 // cast already inside it is untouched and one outside is walked in, not clamped.
-                float denom = (castHi - 1f) - MaxCastRatio * (castLo - 1f);
-                if (Math.Abs(denom) > 0.0001f)
+                float denominator = (castMaximum - 1f) - MaxCastRatio * (castMinimum - 1f);
+                if (Math.Abs(denominator) > 0.0001f)
                     chroma = Vector3.Lerp(Vector3.One, chroma,
-                        MathHelper.Clamp((MaxCastRatio - 1f) / denom, 0f, 1f));
+                        MathHelper.Clamp((MaxCastRatio - 1f) / denominator, 0f, 1f));
             }
 
             // AND THE PLAYER GETS TO SAY HOW FAR IT WALKS. Everything above is a mood decided
@@ -1158,8 +1158,8 @@ namespace SDVRadiance
             // the chroma is rescaled to carry exactly the luminance the curve above asked
             // for. The darkness sliders stay the only thing that decides how dark a room is,
             // whatever colour the hour happens to be.
-            float chromaLum = 0.299f * chroma.X + 0.587f * chroma.Y + 0.114f * chroma.Z;
-            exposure = chroma * (level / Math.Max(chromaLum, 0.0001f));
+            float chromaLuminance = 0.299f * chroma.X + 0.587f * chroma.Y + 0.114f * chroma.Z;
+            exposure = chroma * (level / Math.Max(chromaLuminance, 0.0001f));
 
             // Dimming an image flattens its colour as a side effect. A small lift on the way
             // out keeps the deep blues and the wood browns reading as themselves rather than

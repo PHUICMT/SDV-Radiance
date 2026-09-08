@@ -390,6 +390,73 @@ namespace SDVRadiance
         internal static int ReplayFront(SpriteBatch batch, Func<Texture2D, SpriteEffects, Texture2D?> substitute, Texture2D flat)
             => Replay(batch, substitute, flat, SortedCount, _records.Count);
 
+        /// <summary>While set, the replay's tint carries the record's place in the game's draw
+        /// order in its red, green and blue channels (twenty-four bits) for a vertex shader to put
+        /// back into z; the game's MonoGame build writes zero into every sprite vertex's z. Only
+        /// for a batch begun with such an effect: the batch's own effect would read the channels
+        /// as a colour.</summary>
+        internal static bool DepthInTint;
+
+        /// <summary>Each sorted record's rank in the game's own draw order, as a depth in (0, 1):
+        /// by layer depth, and by the order the game drew them where the depths tie. Two grass
+        /// blades on one tile share a depth, and with the raw depth in the tint whichever the
+        /// batch happened to put last won their overlap; that changed from frame to frame as
+        /// anything entered or left the list, and the relief at every such overlap flickered.
+        /// A rank never ties, so the winner is the same every frame.</summary>
+        private static float[] _rankDepths = new float[4096];
+        private static int[] _rankOrder = new int[4096];
+        /// <summary>One sortable number per record: the layer depth in the high forty bits and the
+        /// record's own position in the low twenty, so the pair sorts by depth and then by the order
+        /// the game drew them without a comparison having to say so.</summary>
+        /// <remarks>
+        /// This used to be <c>Array.Sort(order, comparer)</c> over a <c>Comparison&lt;int&gt;</c>
+        /// that reached back into the record array for each side. Two and a half thousand sprites is
+        /// about thirty thousand comparisons, each one a delegate call and two reads of an
+        /// eighty-byte struct, and the phase it sits in measured 1.22 ms against the 0.31 ms of the
+        /// road that does not rank at all. Sorting numbers instead lets the runtime use its own
+        /// primitive path and reads each record once.
+        /// </remarks>
+        private static long[] _rankKeys = new long[4096];
+        /// <summary>The largest value the forty depth bits can hold.</summary>
+        private const double DepthKeyScale = 1099511627775.0;
+
+        /// <summary>Rank the sorted records for the replay (see <see cref="_rankDepths"/>).</summary>
+        internal static void RankSortedRecordsForReplay()
+        {
+            int count = SortedCount;
+            if (_rankOrder.Length < count)
+            {
+                _rankOrder = new int[count * 2];
+                _rankDepths = new float[count * 2];
+                _rankKeys = new long[count * 2];
+            }
+            for (int i = 0; i < count; i++)
+            {
+                // A frame has never recorded near a million sprites, which is what twenty bits hold;
+                // if one ever did, the extra ones would tie on depth again and no more than that.
+                long depth = (long)(MathHelper.Clamp(_records[i].Depth, 0f, 1f) * DepthKeyScale);
+                _rankKeys[i] = (depth << 20) | (uint)(i & 0xFFFFF);
+                _rankOrder[i] = i;
+            }
+            Array.Sort(_rankKeys, _rankOrder, 0, count);
+            for (int rank = 0; rank < count; rank++)
+                _rankDepths[_rankOrder[rank]] = (rank + 1) / (float)(count + 1);
+        }
+
+        private static Color ReplayTint(int recordIndex, float alpha)
+        {
+            int a = (int)(alpha * 255f);
+            if (!DepthInTint)
+                return new Color(255, 255, 255, a);
+            float depth = recordIndex < SortedCount && recordIndex < _rankDepths.Length ? _rankDepths[recordIndex] : _records[recordIndex].Depth;
+            // Sixteen bits, high byte in red: reliefreplay.fx reads it back with two weights
+            // that survive the six decimal places its compiler writes constants with. A
+            // twenty-four bit rank needed a weight of one over sixteen million, which that
+            // compiler wrote as zero.
+            int depthSteps = (int)(MathHelper.Clamp(depth, 0f, 1f) * 65535f);
+            return new Color((depthSteps >> 8) & 255, depthSteps & 255, 0, a);
+        }
+
         private static int Replay(SpriteBatch batch, Func<Texture2D, SpriteEffects, Texture2D?> substitute, Texture2D flat,
             int from, int to)
         {
@@ -405,7 +472,7 @@ namespace SDVRadiance
                     continue;
                 // Alpha only: the replay blends straight (NonPremultiplied) colour, and scaling
                 // the rgb would bend the normal the encoding carries.
-                Color tint = new(255, 255, 255, (int)(record.Alpha * 255f));
+                Color tint = ReplayTint(i, record.Alpha);
                 Texture2D? replacement = substitute(record.Texture, record.Effects);
                 if (replacement != null)
                 {

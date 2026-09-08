@@ -57,7 +57,7 @@ namespace SDVRadiance
             if (!SunCasts())
                 return;
 
-            ComputeSun(out float rot, out float stretch, out float alpha);
+            ComputeSun(out float rotation, out float stretch, out float alpha);
             alpha *= MathHelper.Clamp(config.DirectionalShadowStrength, 0f, 1f)
                    * MathHelper.Lerp(1f, OvercastAlpha, _overcastBlend);
             if (alpha <= 0.01f)
@@ -97,7 +97,7 @@ namespace SDVRadiance
                 graphicsDevice.Clear(Color.Transparent);
                 SpriteBatch spriteBatch = _buildingMaskSpriteBatch;
                 spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
-                int stamped = StampBuildings(spriteBatch, location, rot, stretch, alpha,
+                int stamped = StampBuildings(spriteBatch, location, rotation, stretch, alpha,
                                              Math.Max(0f, config.DirectionalShadowBlur));
                 spriteBatch.End();
                 // Then take the buildings themselves back out. A screen-space multiply has no
@@ -167,18 +167,18 @@ namespace SDVRadiance
                 try { texture = bld.texture?.Value; } catch { /* a content pack can throw while loading its art */ }
                 if (texture == null)
                     continue;
-                Rectangle src = bld.getSourceRect();
-                if (src.Width <= 0 || src.Height <= 0)
+                Rectangle sourceRect = bld.getSourceRect();
+                if (sourceRect.Width <= 0 || sourceRect.Height <= 0)
                     continue;
                 Vector2 drawOffset = (bld.GetData()?.DrawOffset ?? Vector2.Zero) * 4f;
                 float baseY = (bld.tileY.Value + bld.tilesHigh.Value) * 64f + drawOffset.Y;
                 Vector2 corner = Game1.GlobalToLocal(viewport, new Vector2(bld.tileX.Value * 64f + drawOffset.X, baseY));
-                spriteBatch.Draw(texture, corner, src, Color.White, 0f, new Vector2(0f, src.Height),
+                spriteBatch.Draw(texture, corner, sourceRect, Color.White, 0f, new Vector2(0f, sourceRect.Height),
                     4f, SpriteEffects.None, 0f);
             }
         }
 
-        private int StampBuildings(SpriteBatch spriteBatch, GameLocation location, float rot, float stretch,
+        private int StampBuildings(SpriteBatch spriteBatch, GameLocation location, float rotation, float stretch,
                                    float alpha, float blur)
         {
             xTile.Dimensions.Rectangle viewport = Game1.viewport;
@@ -194,8 +194,8 @@ namespace SDVRadiance
                 try { texture = bld.texture?.Value; } catch { /* a content pack can throw while loading its art */ }
                 if (texture == null || bld.isUnderConstruction())
                     continue;
-                Rectangle src = bld.getSourceRect();
-                if (src.Width <= 0 || src.Height <= 0)
+                Rectangle sourceRect = bld.getSourceRect();
+                if (sourceRect.Width <= 0 || sourceRect.Height <= 0)
                     continue;
                 // Same anchor as the world draw: the art hangs from its own centre, because a
                 // barn's roof overhangs the footprint it is standing on. The game draws a
@@ -206,7 +206,7 @@ namespace SDVRadiance
                 // the water mask already anchor buildings this way.
                 Vector2 drawOffset = (bld.GetData()?.DrawOffset ?? Vector2.Zero) * 4f;
                 float baseY = (bld.tileY.Value + bld.tilesHigh.Value) * 64f + drawOffset.Y;
-                float artCentreX = bld.tileX.Value * 64f + drawOffset.X + src.Width * 2f;
+                float artCentreX = bld.tileX.Value * 64f + drawOffset.X + sourceRect.Width * 2f;
                 Vector2 feet = Game1.GlobalToLocal(viewport, new Vector2(artCentreX, baseY));
                 // Depth means nothing in a mask - every stamp is coverage - so the whole thing goes
                 // in flat, and WHITE, which is what the compositing pass reads as "shadowed".
@@ -215,8 +215,8 @@ namespace SDVRadiance
                 // point: the buildings are erased from this mask afterwards, so a blur applied
                 // later would spread that hole outwards and eat the shadow hugging the wall,
                 // leaving a bright gap in the shape of the building. Soft first, then cut.
-                EmitObject(spriteBatch, texture, src, feet, new Vector2(src.Width / 2f, src.Height),
-                    alpha, LeanOf(rot, ShadowKind.Buildings), LengthOf(stretch, ShadowKind.Buildings), 0f,
+                EmitObject(spriteBatch, texture, sourceRect, feet, new Vector2(sourceRect.Width / 2f, sourceRect.Height),
+                    alpha, LeanOf(rotation, ShadowKind.Buildings), LengthOf(stretch, ShadowKind.Buildings), 0f,
                     SoftnessOf(blur, ShadowKind.Buildings), ObjectHeadFade, SpriteEffects.None,
                     ShadowGeometry.Card, groundAnchorWorldY: null, shadowColor: Color.White);
                 stamped++;

@@ -389,7 +389,9 @@ namespace SDVRadiance
             // toggle used to freeze the mirrored player at whatever pose was baked last.
             bool prepPlayer = _config.DirectionalShadowsEnabled
                 || (_config.WaterReflection && Context.IsWorldReady);
-            FrameCost.NextFrame();
+            // Screen 0 owns the clock. This runs once per SCREEN, and in split screen the gap
+            // between two of these calls is half of what the player sees.
+            FrameCost.NextFrame(Context.ScreenId == 0);
             if (prepPlayer)
             {
                 _shadows ??= new ShadowRenderer();
@@ -544,6 +546,10 @@ namespace SDVRadiance
             // Nothing this mod parked on a high texture unit last frame is still believed to be
             // there while the game draws; a slot already empty costs nothing to set.
             TextureUnitGuard.ReleaseHighUnits(Game1.graphics.GraphicsDevice);
+            // And MonoGame is not asked to walk sampler slots nothing can reach (see
+            // TextureUnitGuard.CapSamplerSlots): a length check on every frame but the first.
+            TextureUnitGuard.WantedSamplerSlots = _config.LimitSamplerSlots ? TextureUnitGuard.DefaultSamplerSlots : 0;
+            TextureUnitGuard.HoldSamplerSlots(Game1.graphics.GraphicsDevice, this.Monitor);
             if (e.Step != StardewValley.Mods.RenderSteps.World_Sorted)
                 return;
             // The sorted world batch is what the sprite relief replays (see SpriteDrawRecorder);
@@ -590,6 +596,10 @@ namespace SDVRadiance
 
         private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
         {
+            // Timed because an input complaint has to be answerable with a number: how many updates
+            // the game ran per frame it drew, and how much of each was us. Screen 0 only, since
+            // this event is raised once per screen and the question is about the game's updates.
+            long tickStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             Determinism.HoldGameClock();
             Determinism.FollowTheGamesTimeStep();
 
@@ -634,6 +644,9 @@ namespace SDVRadiance
             // Sun path only: our critter silhouettes draw only under the sun, so on rainy days the
             // vanilla critter blob stays (better a blob than no shadow at all).
             ShadowSuppression.SuppressVanillaCritterShadows = _config.DirectionalShadowObjects && ShadowRenderer.SunShadowActive(_config);
+            if (Context.ScreenId == 0)
+                FrameCost.NoteUpdateTick((System.Diagnostics.Stopwatch.GetTimestamp() - tickStarted)
+                                         * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
         }
 
         private void OnButtonsChanged(object? sender, ButtonsChangedEventArgs e)

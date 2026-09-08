@@ -42,6 +42,13 @@ namespace SDVRadiance
                 monitor.Log($"graphics: {device.Adapter?.Description}, profile {device.GraphicsProfile}, "
                     + $"back buffer {presentation?.BackBufferWidth}x{presentation?.BackBufferHeight} "
                     + $"{presentation?.BackBufferFormat}", LogLevel.Info);
+                int samplerSlots = TextureUnitGuard.CountSamplerSlots(device);
+                // MonoGame walks every one of these on every draw call, and asks the driver for the
+                // number without clamping it. Sixteen is what a shader model 3 pixel shader can
+                // address, so anything far above it is a loop with nothing at the end.
+                monitor.Log($"texture units: {(samplerSlots > 0 ? samplerSlots.ToString() : "unknown")} sampler slots"
+                    + (samplerSlots > 16 ? $" ({samplerSlots - 16} of them beyond what a pixel shader here can address)" : ""),
+                    LogLevel.Info);
                 monitor.Log($"render targets: {DescribeFormat(device, SurfaceFormat.Color)}, "
                     + $"{DescribeFormat(device, SurfaceFormat.HalfVector4)} "
                     + "(the second one is what the radiance cascades need; without it the mod keeps "

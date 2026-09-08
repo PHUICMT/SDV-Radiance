@@ -106,11 +106,12 @@ namespace SDVRadiance
             return name.StartsWith("Maps/", StringComparison.OrdinalIgnoreCase)
                 || name.StartsWith("Maps\\", StringComparison.OrdinalIgnoreCase);
         }
-        /// <summary>The soft look's sprites, one target per (sheet, rectangle) drawn: four times the
-        /// texels of each, made from its own rectangle alone (see <see cref="SoftSpriteCache"/> for
-        /// the dark frame that baking whole sheets gave every sprite). Any sheet qualifies, since a
-        /// sprite is small whatever its sheet is; eight bakes a frame, each two small passes.</summary>
-        internal static readonly SoftSpriteCache SoftSprites = new("soft sprites", 192L * 1024 * 1024, 512, SoftScale, 8, SoftSpriteBake);
+        /// <summary>The soft look's sprites, each baked from its own rectangle alone (see
+        /// <see cref="SoftSpriteCache"/> for the dark frame that baking whole sheets gave every
+        /// sprite) onto pages kept per sheet, so a sheet's sprites still draw from one texture.
+        /// Any sheet qualifies, since a sprite is small whatever its sheet is; eight bakes a
+        /// frame, each two small passes.</summary>
+        internal static readonly SoftSpriteCache SoftSprites = new("soft sprite pages", 192L * 1024 * 1024, 508, SoftScale, 8, SoftSpriteBake);
         internal static int PatchedOverloads { get; private set; }
         /// <summary>Draws redirected this frame, for the debug caption.</summary>
         internal static int RedirectedThisFrame;
@@ -175,6 +176,14 @@ namespace SDVRadiance
         /// anything else reads as its batch asked.</summary>
         private static void FlushVertexArray_Prefix(object __instance, Texture texture)
         {
+            FrameCost.Count(FrameCost.Counter.SpriteBatchFlushes);
+            if (ReferenceEquals(__instance, _gameBatcher) && SpriteDrawRecorder.InWorldStep)
+                FrameCost.Count(FrameCost.Counter.WorldSpriteBatchFlushes);
+            // Leaving early when no feature wants this, and answering from a cached reference
+            // instead of the table, were both tried on 2026-09-07 and both measured nothing: 9.64
+            // ms against 9.63 with the soft look on, 8.90 against 8.89 with it off, four pairs
+            // each. The research that proposed it guessed 0.15 to 0.3 ms. The table lookup is
+            // cheaper than five thousand calls a frame makes it sound.
             if (!_samplingByBatcher.TryGetValue(__instance, out BatchSampling? sampling))
                 return;
             if (_linearForSoftSheets || _linearRuns.Count > 0)
@@ -249,23 +258,24 @@ namespace SDVRadiance
         }
 
         /// <summary>One sprite of the soft look, baked: the xBR kernel (see SheetXbr in sheetscale.fx)
-        /// over its own rectangle of the sheet to four times its texels, then the tent. Baked once
-        /// per (sheet, rectangle) and kept.</summary>
-        private static bool SoftSpriteBake(GraphicsDevice device, SpriteBatch batch, Effect effect, Texture2D sheet, Rectangle rect, RenderTarget2D target)
+        /// over its own rectangle of the sheet to four times its texels into a scratch of the
+        /// sprite's size, then the tent from the scratch into the sprite's place on its sheet's
+        /// page. The place is the sprite plus its gutter (see SoftSpriteCache.Gutter): the scratch
+        /// is read past its own edges with a clamped sampler, so the gutter is the sprite's edge
+        /// texels repeated, which is what a target of its own would have shown a linear read.
+        /// Baked once per (sheet, rectangle) and kept.</summary>
+        private static bool SoftSpriteBake(GraphicsDevice device, SpriteBatch batch, Effect effect, Texture2D sheet, Rectangle rect,
+            RenderTarget2D page, Rectangle placeOnPage)
         {
             RenderTarget2D? kernelOutput = null;
             try
             {
-                bool soften = SoftBlurTexels > 0.01f;
-                // With a tent to follow, the kernel draws into a scratch of the target's size and
-                // the tent reads it into the target; without one it draws into the target itself.
-                RenderTarget2D kernelTarget = target;
-                if (soften)
-                    kernelTarget = kernelOutput = new RenderTarget2D(device, target.Width, target.Height, false, SurfaceFormat.Color, DepthFormat.None);
-                device.SetRenderTarget(kernelTarget);
+                int width = rect.Width * SoftScale, height = rect.Height * SoftScale;
+                kernelOutput = new RenderTarget2D(device, width, height, false, SurfaceFormat.Color, DepthFormat.None);
+                device.SetRenderTarget(kernelOutput);
                 device.Clear(Color.Transparent);
                 effect.Parameters["TexelSize"]?.SetValue(new Vector2(1f / sheet.Width, 1f / sheet.Height));
-                effect.Parameters["TargetSize"]?.SetValue(new Vector2(target.Width, target.Height));
+                effect.Parameters["TargetSize"]?.SetValue(new Vector2(width, height));
                 effect.Parameters["SourceRect"]?.SetValue(new Vector4(rect.X, rect.Y, rect.Width, rect.Height));
                 effect.Parameters["Smoothness"]?.SetValue(_bakedSmoothnessByFamily[(int)_softBakeFamily]);
                 effect.Parameters["EdgeSoftness"]?.SetValue(SoftEdgeSourcePixels);
@@ -273,20 +283,27 @@ namespace SDVRadiance
                 effect.CurrentTechnique = effect.Techniques["SheetXbr"];
                 batch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp,
                     DepthStencilState.None, RasterizerState.CullNone, effect);
-                batch.Draw(sheet, new Rectangle(0, 0, target.Width, target.Height), Color.White);
+                batch.Draw(sheet, new Rectangle(0, 0, width, height), Color.White);
                 batch.End();
+                // Onto the page, gutter included: the source rectangle reaches past the scratch
+                // by the gutter on every side and the clamped read repeats the edge into it.
+                // Opaque, no clear: the page keeps every other sprite on it (PreserveContents).
+                bool soften = SoftBlurTexels > 0.01f;
+                int gutter = SoftSpriteCache.Gutter;
+                var readPastEdges = new Rectangle(-gutter, -gutter, width + 2 * gutter, height + 2 * gutter);
+                device.SetRenderTarget(page);
+                Effect? tent = null;
                 if (soften)
                 {
-                    device.SetRenderTarget(target);
-                    device.Clear(Color.Transparent);
-                    effect.Parameters["TexelSize"]?.SetValue(new Vector2(1f / target.Width, 1f / target.Height));
+                    effect.Parameters["TexelSize"]?.SetValue(new Vector2(1f / width, 1f / height));
                     effect.Parameters["SoftRadius"]?.SetValue(SoftBlurTexels);
                     effect.CurrentTechnique = effect.Techniques["SheetSoften"];
-                    batch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp,
-                        DepthStencilState.None, RasterizerState.CullNone, effect);
-                    batch.Draw(kernelOutput!, new Rectangle(0, 0, target.Width, target.Height), Color.White);
-                    batch.End();
+                    tent = effect;
                 }
+                batch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp,
+                    DepthStencilState.None, RasterizerState.CullNone, tent);
+                batch.Draw(kernelOutput, placeOnPage, readPastEdges, Color.White);
+                batch.End();
                 return true;
             }
             catch
@@ -341,12 +358,11 @@ namespace SDVRadiance
                 if (source.X >= 0 && source.Y >= 0 && source.Right <= texture.Width && source.Bottom <= texture.Height)
                 {
                     _softBakeFamily = family;
-                    Texture2D? sprite = SoftSprites.For(Device!, Effect!, texture, source, (int)family);
-                    if (sprite != null)
+                    if (SoftSprites.TryGet(Device!, Effect!, texture, source, (int)family, out Texture2D page, out Rectangle placed))
                     {
-                        derivedSource = new Rectangle(0, 0, sprite.Width, sprite.Height);
+                        derivedSource = placed;
                         factor = SoftScale;
-                        return sprite;
+                        return page;
                     }
                 }
                 // Refused or capped this frame: the doubled sheet stands in, as it did before.

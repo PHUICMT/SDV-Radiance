@@ -50,15 +50,15 @@ namespace SDVRadiance
                 + "Sheet art is written as one PNG per sheet beside maps.json; add 'embed' for the old single inlined file. "
                 + "Any other word names the MOD SET being dumped: runs add to the dump rather than replacing it, and a "
                 + "location that differs between mod sets is kept once per version with the names of the sets that produce it.",
-                (_, args) =>
+                (_, arguments) =>
                 {
                     bool all = false, embed = false;
                     string profile = "";
-                    foreach (string a in args)
+                    foreach (string word in arguments)
                     {
-                        if (a.Equals("all", StringComparison.OrdinalIgnoreCase)) all = true;
-                        else if (a.Equals("embed", StringComparison.OrdinalIgnoreCase)) embed = true;
-                        else if (profile.Length == 0) profile = a;
+                        if (word.Equals("all", StringComparison.OrdinalIgnoreCase)) all = true;
+                        else if (word.Equals("embed", StringComparison.OrdinalIgnoreCase)) embed = true;
+                        else if (profile.Length == 0) profile = word;
                     }
                     MapDump.Run(monitor, helper, allSheets: all, embedArt: embed, profile: profile);
                 });
@@ -67,9 +67,9 @@ namespace SDVRadiance
                 + "was painted on is the one actually loaded. Name the set of art it is looking at, for example "
                 + "'radiance_artfingerprint vanilla' or 'radiance_artfingerprint elle-earthy'. Writes "
                 + "Documents\\HF-Studio\\fingerprints\\<name>.json.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    string label = args.Length > 0 ? string.Join(" ", args) : "unnamed";
+                    string label = arguments.Length > 0 ? string.Join(" ", arguments) : "unnamed";
                     ArtFingerprintDump.Run(monitor, helper, label);
                 });
             helper.ConsoleCommands.Add("radiance_lights",
@@ -89,7 +89,7 @@ namespace SDVRadiance
                 "Get or set a config value live, in memory only (config.json is not written). "
                 + "'radiance_config' lists all keys, 'radiance_config Key' prints one, "
                 + "'radiance_config Key value' sets it. Restart or GMCM-save to discard.",
-                (_, args) => LiveConfig(monitor, getConfig(), args));
+                (_, arguments) => LiveConfig(monitor, getConfig(), arguments));
             // ONE COMMAND, NO ARGUMENTS. Everything below this line is a tool for someone who
             // already knows what it does. A player who has just seen something wrong should not
             // have to pick a command, read coordinates off the screen and type them correctly
@@ -118,22 +118,22 @@ namespace SDVRadiance
         {
             helper.ConsoleCommands.Add("radiance_tile",
                 "Dump water-related data for the tile under the player, or 'radiance_tile x y' for any tile (layer properties, HF class, isWaterTile, compose flags).",
-                (_, args) => DumpTile(s => monitor.Log(s, LogLevel.Info), getPipeline(), getConfig(), args));
+                (_, arguments) => DumpTile(line => monitor.Log(line, LogLevel.Info), getPipeline(), getConfig(), arguments));
             helper.ConsoleCommands.Add("radiance_reliefdraws",
                 "Name the sprites the sprite relief is embossing over one tile: 'radiance_reliefdraws' for the "
                 + "tile under the player, or 'radiance_reliefdraws x y' for any tile. Prints each recorded draw "
                 + "that covers it - sheet name, source cell, alpha and size, and whether it is BEVELLED or "
                 + "left FLAT - so a thing that should not be wearing a bevel (water, a glow, an effect) can "
                 + "be named instead of guessed at.",
-                (_, args) => DumpReliefDraws(s => monitor.Log(s, LogLevel.Info), getPipeline(), args));
+                (_, arguments) => DumpReliefDraws(line => monitor.Log(line, LogLevel.Info), getPipeline(), arguments));
             helper.ConsoleCommands.Add("radiance_screenwatch",
                 "Trace the per-screen render pass for the next N calls (default 60). Prints which screen asked, "
                 + "whether effects were active for it, and the caches that are keyed to where the camera is. "
                 + "For split screen: if the two screens' origins keep swapping and a mask rebuild is always in "
                 + "flight, that is one pipeline being pulled between two cameras.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    int frames = args.Length >= 1 && int.TryParse(args[0], out int f) ? Math.Clamp(f, 1, 600) : 60;
+                    int frames = arguments.Length >= 1 && int.TryParse(arguments[0], out int parsedFrames) ? Math.Clamp(parsedFrames, 1, 600) : 60;
                     ModEntry.ScreenWatchFrames = frames;
                     monitor.Log($"Watching the render pass for {frames} calls (split screen spends two per frame).", LogLevel.Info);
                 });
@@ -142,9 +142,9 @@ namespace SDVRadiance
                 + "whether the bake ran, how many trees and bodies it stamped, how many creatures drew their own "
                 + "mirror and how many came out empty, and the mask window it asked. For a reflection that "
                 + "comes and goes: run it, then WALK along the water, and read which number moves.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    int frames = args.Length >= 1 && int.TryParse(args[0], out int rf) ? Math.Clamp(rf, 1, 3600) : 300;
+                    int frames = arguments.Length >= 1 && int.TryParse(arguments[0], out int parsedFrames) ? Math.Clamp(parsedFrames, 1, 3600) : 300;
                     RenderPipeline.ReflectWatchFrames = frames;
                     monitor.Log($"Watching the entity mirror for {frames} frames. Walk along the water now.", LogLevel.Info);
                 });
@@ -152,9 +152,9 @@ namespace SDVRadiance
                 "Trace the light array for the next N frames (default 60) and print only what changes: "
                 + "how many lights were offered versus how many slots exist, which ones entered or left, "
                 + "and any whose brightness moved. Stand still where it flickers and run it.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    int frames = args.Length >= 1 && int.TryParse(args[0], out int f) ? Math.Clamp(f, 1, 3600) : 60;
+                    int frames = arguments.Length >= 1 && int.TryParse(arguments[0], out int parsedFrames) ? Math.Clamp(parsedFrames, 1, 3600) : 60;
                     RenderPipeline.LightWatchFrames = frames;
                     monitor.Log($"Watching the light array for {frames} frames.", LogLevel.Info);
                 });
@@ -166,9 +166,9 @@ namespace SDVRadiance
                 + "will happily report that the lights are fine while the picture is pulsing. "
                 + "WALK while it runs - standing still is the state in which the fault does not "
                 + "happen, which is why a still capture cannot find it.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    int frames = args.Length >= 1 && int.TryParse(args[0], out int bf) ? Math.Clamp(bf, 1, 3600) : 300;
+                    int frames = arguments.Length >= 1 && int.TryParse(arguments[0], out int parsedFrames) ? Math.Clamp(parsedFrames, 1, 3600) : 300;
                     RenderPipeline.BrightWatchFrames = frames;
                     monitor.Log($"Watching everything that changes the brightness for {frames} frames. Walk now.", LogLevel.Info);
                 });
@@ -183,9 +183,9 @@ namespace SDVRadiance
                 + "when the mask was rebuilt, when the window moved, and when the shoreline the reflection is "
                 + "built against switched between the map's own and a window-local guess. If the water flashes "
                 + "while you walk, walk past it with this running and the flash will have a line next to it.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    int frames = args.Length >= 1 && int.TryParse(args[0], out int f) ? Math.Clamp(f, 1, 600) : 120;
+                    int frames = arguments.Length >= 1 && int.TryParse(arguments[0], out int parsedFrames) ? Math.Clamp(parsedFrames, 1, 600) : 120;
                     RenderPipeline.WaterWatchFrames = frames;
                     monitor.Log($"Watching the water for {frames} frames. Walk past the water now.", LogLevel.Info);
                 });
@@ -199,10 +199,10 @@ namespace SDVRadiance
                 + "grid still (anything that still moves is NOT the flood), 'every' rebuilds it every frame "
                 + "(anything that stops moving WAS the rebuild rate), 'auto' restores normal behaviour. "
                 + "Not saved, resets when the game restarts.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    if (args.Length >= 1)
-                        FloodLightmap.RebuildMode = args[0].ToLowerInvariant() switch
+                    if (arguments.Length >= 1)
+                        FloodLightmap.RebuildMode = arguments[0].ToLowerInvariant() switch
                         {
                             "freeze" or "hold" => FloodLightmap.RebuildOverride.Freeze,
                             "every" or "always" => FloodLightmap.RebuildOverride.Every,
@@ -215,9 +215,9 @@ namespace SDVRadiance
                 + "'radiance_shadowcasts 1' for a single clean shadow, higher for a room lit from several "
                 + "sides. No argument prints the current value. A look setting - watch the shadow line in "
                 + "radiance_report for what each step costs.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    if (args.Length >= 1 && int.TryParse(args[0], out int casts))
+                    if (arguments.Length >= 1 && int.TryParse(arguments[0], out int casts))
                     {
                         getConfig().ShadowCastsPerCharacter = casts;
                         getConfig().Clamp();
@@ -257,9 +257,9 @@ namespace SDVRadiance
                 + "labeldiff paints the radiance_verify verdict: RED = label says liquid but the mask has none, YELLOW = the mask ripples where the label says solid. "
                 + "window paints every pixel the labels call glass in RED, at the depth the reflection is drawn at: red visible = the pane is seen and reaches the screen, "
                 + "no red with panes>0 in radiance_report = the map draws its own art over it.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    if (args.Length < 1 || !Enum.TryParse(args[0], ignoreCase: true, out DebugOverlayChannel channel))
+                    if (arguments.Length < 1 || !Enum.TryParse(arguments[0], ignoreCase: true, out DebugOverlayChannel channel))
                     {
                         monitor.Log("usage: radiance_debug off|water|labeldiff|sdf|subtype|sprite|reflect|mirror|mirrorsource|flood|normals|lampshadow|emitter|caustic|window|sky "
                             + $"(now: {RenderPipeline.DebugChannel})", LogLevel.Info);
@@ -281,8 +281,8 @@ namespace SDVRadiance
                 + "pass does with each one, plus the event flags that decide who the game is drawing. Reaches 20 "
                 + "tiles past the screen ('*' marks anything off screen); 'radiance_shadows all' scans the whole "
                 + "map. Use it when something has no shadow, or has one with nothing above it.",
-                (_, args) => monitor.Log(
-                    ShadowRenderer.Report(getConfig(), args.Length >= 1 && args[0].Equals("all", StringComparison.OrdinalIgnoreCase)),
+                (_, arguments) => monitor.Log(
+                    ShadowRenderer.Report(getConfig(), arguments.Length >= 1 && arguments[0].Equals("all", StringComparison.OrdinalIgnoreCase)),
                     LogLevel.Info));
             helper.ConsoleCommands.Add("radiance_creatures",
                 "Where every creature is right now: horses, pets, farm animals and anything a mod adds, with the "
@@ -290,17 +290,17 @@ namespace SDVRadiance
                 + "'radiance_creatures all' scans every loaded location, which is the only way to find one you are "
                 + "not already standing next to. A wildlife mod's animals wander, so hunting for one by warping "
                 + "around a map is how a test session gets spent.",
-                (_, args) => monitor.Log(
-                    ShadowRenderer.CreatureCensus(args.Length >= 1 && args[0].Equals("all", StringComparison.OrdinalIgnoreCase),
+                (_, arguments) => monitor.Log(
+                    ShadowRenderer.CreatureCensus(arguments.Length >= 1 && arguments[0].Equals("all", StringComparison.OrdinalIgnoreCase),
                         getConfig().DirectionalShadowModel),
                     LogLevel.Info));
             helper.ConsoleCommands.Add("radiance_invincible",
                 "Set invincibility ON or OFF and say which it ended up as. The game's own 'debug invincible' TOGGLES, "
                 + "so a script that calls it twice quietly hands you back to the monsters, and a test session in the "
                 + "mines is not the place to find that out. Usage: radiance_invincible [on|off], default on.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    bool wanted = args.Length < 1 || !args[0].Equals("off", StringComparison.OrdinalIgnoreCase);
+                    bool wanted = arguments.Length < 1 || !arguments[0].Equals("off", StringComparison.OrdinalIgnoreCase);
                     Game1.player.temporarilyInvincible = wanted;
                     Game1.player.temporaryInvincibilityTimer = wanted ? -1000000000 : 0;
                     monitor.Log($"invincible = {Game1.player.temporarilyInvincible} (live only; nothing is saved)",
@@ -310,11 +310,11 @@ namespace SDVRadiance
                 "Capture every buffer this frame (composed frame, water masks, occluders, lightmap, reflection) to "
                 + "Documents\\Radiance-Dumps\\<name>\\ for offline comparison. Usage: radiance_dump <name>. "
                 + "Run radiance_freeze first or the capture cannot be compared with another run.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    string name = args.Length >= 1 ? args[0] : "capture";
-                    foreach (char c in System.IO.Path.GetInvalidFileNameChars())
-                        name = name.Replace(c, '_');
+                    string name = arguments.Length >= 1 ? arguments[0] : "capture";
+                    foreach (char invalidCharacter in System.IO.Path.GetInvalidFileNameChars())
+                        name = name.Replace(invalidCharacter, '_');
                     RenderPipeline.RequestDump(name);
                     monitor.Log($"radiance_dump: capturing '{name}' on the next rendered frame"
                         + (Determinism.Frozen ? " (clock frozen)" : " — WARNING: clock is running, run radiance_freeze first"),
@@ -327,14 +327,14 @@ namespace SDVRadiance
                 + "Do NOT freeze first — the blink under investigation is live behaviour. "
                 + "Usage: radiance_dumpburst <name> [frames=12, max 24] [stride=1]. A stride of N keeps "
                 + "every Nth frame, stretching the window to catch a POP instead of a per-frame blink.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    string name = args.Length >= 1 ? args[0] : "burst";
-                    foreach (char c in System.IO.Path.GetInvalidFileNameChars())
-                        name = name.Replace(c, '_');
-                    int frames = args.Length >= 2 && int.TryParse(args[1], out int parsed) ? parsed : 12;
+                    string name = arguments.Length >= 1 ? arguments[0] : "burst";
+                    foreach (char invalidCharacter in System.IO.Path.GetInvalidFileNameChars())
+                        name = name.Replace(invalidCharacter, '_');
+                    int frames = arguments.Length >= 2 && int.TryParse(arguments[1], out int parsed) ? parsed : 12;
                     frames = Math.Clamp(frames, 2, 24);
-                    int stride = args.Length >= 3 && int.TryParse(args[2], out int parsedStride) ? parsedStride : 1;
+                    int stride = arguments.Length >= 3 && int.TryParse(arguments[2], out int parsedStride) ? parsedStride : 1;
                     stride = Math.Clamp(stride, 1, 64);
                     RenderPipeline.RequestBurst(name, frames, stride);
                     monitor.Log($"radiance_dumpburst: capturing {frames} consecutive frames as '{name}'"
@@ -345,10 +345,10 @@ namespace SDVRadiance
                 "Pin the render clock and every eased amount so the same spot renders the same bytes twice "
                 + "(what a before/after capture needs). No args toggles; 'on'/'off' set it. Game logic is untouched — "
                 + "characters keep walking, so stand still and let the scene settle before capturing.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    bool on = args.Length >= 1
-                        ? args[0].Equals("on", StringComparison.OrdinalIgnoreCase)
+                    bool on = arguments.Length >= 1
+                        ? arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase)
                         : !Determinism.Frozen;
                     if (on)
                         monitor.Log($"Render clock FROZEN at tick {Determinism.Freeze()}: animation, presence fades and auto-exposure are pinned.", LogLevel.Info);
@@ -364,11 +364,11 @@ namespace SDVRadiance
                 + "bridge/cliff reflection can be pinned on it in one keystroke. "
                 + "(The slice height that used to live here is now the WaterReflectFadeRows setting, so "
                 + "'radiance_config WaterReflectFadeRows 8' is the same A/B and it is saveable.)",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    if (args.Length >= 2 && args[0].Equals("scene", StringComparison.OrdinalIgnoreCase))
+                    if (arguments.Length >= 2 && arguments[0].Equals("scene", StringComparison.OrdinalIgnoreCase))
                     {
-                        RenderPipeline.SceneSourceOff = args[1].Equals("off", StringComparison.OrdinalIgnoreCase);
+                        RenderPipeline.SceneSourceOff = arguments[1].Equals("off", StringComparison.OrdinalIgnoreCase);
                         monitor.Log($"Scenery mirror source (P3c): {(RenderPipeline.SceneSourceOff ? "FORCED OFF (mirror reads the composed screen)" : "ON")}", LogLevel.Info);
                         return;
                     }
@@ -382,19 +382,19 @@ namespace SDVRadiance
                 + "with the rest of the world, the sparks are added on top of the lighting. 'clear' empties "
                 + "the pool. Particles are off by default - switch them on in the config menu or on the F6 "
                 + "tuner's Particles tab first, or the fountain has nothing to draw into.",
-                (_, args) =>
+                (_, arguments) =>
                 {
                     RenderPipeline? pipeline = getPipeline();
                     if (pipeline == null) { monitor.Log("pipeline not ready", LogLevel.Info); return; }
-                    if (args.Length >= 1 && args[0].Equals("clear", StringComparison.OrdinalIgnoreCase))
+                    if (arguments.Length >= 1 && arguments[0].Equals("clear", StringComparison.OrdinalIgnoreCase))
                     {
                         pipeline.ClearParticles();
                         monitor.Log("Particle pool emptied.", LogLevel.Info);
                         return;
                     }
-                    if (args.Length >= 1 && args[0].Equals("test", StringComparison.OrdinalIgnoreCase))
+                    if (arguments.Length >= 1 && arguments[0].Equals("test", StringComparison.OrdinalIgnoreCase))
                     {
-                        int seconds = args.Length >= 2 && int.TryParse(args[1], out int typed)
+                        int seconds = arguments.Length >= 2 && int.TryParse(arguments[1], out int typed)
                             ? Math.Clamp(typed, 1, 60) : 5;
                         pipeline.StartParticleTest(seconds * 60);
                         monitor.Log(getConfig().ParticlesEnabled
@@ -414,50 +414,50 @@ namespace SDVRadiance
                 + "the first thing to go. There is no way to do this from the game's own console, and the "
                 + "gallery tool cannot click through the inventory screen. Nothing is saved, so the rings "
                 + "are back on the next time the save is loaded whatever happens here.",
-                (_, args) =>
+                (_, arguments) =>
                 {
                     if (Game1.player == null)
                     {
                         monitor.Log("Load a save first.", LogLevel.Warn);
                         return;
                     }
-                    string wanted = args.Length > 0 ? args[0].ToLowerInvariant() : "";
+                    string wanted = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
                     if (wanted is not ("off" or "on"))
                     {
                         monitor.Log("usage: radiance_rings off|on", LogLevel.Info);
                         return;
                     }
-                    Farmer who = Game1.player;
+                    Farmer player = Game1.player;
                     int moved = 0;
                     if (wanted == "off")
                     {
-                        foreach (var slot in new[] { who.leftRing, who.rightRing })
+                        foreach (var slot in new[] { player.leftRing, player.rightRing })
                         {
                             StardewValley.Objects.Ring? ring = slot.Value;
                             if (ring == null)
                                 continue;
                             // onUnequip is what removes the light the ring hung on the player. Nulling
                             // the slot without it leaves the glow behind, which is the whole problem.
-                            ring.onUnequip(who);
+                            ring.onUnequip(player);
                             slot.Value = null;
-                            if (!who.addItemToInventoryBool(ring))
+                            if (!player.addItemToInventoryBool(ring))
                                 monitor.Log("The bag is full, so one ring was dropped from the world.", LogLevel.Warn);
                             moved++;
                         }
                         monitor.Log(moved == 0 ? "No rings were being worn." : $"{moved} ring(s) off.", LogLevel.Info);
                         return;
                     }
-                    for (int i = 0; i < who.Items.Count && moved < 2; i++)
+                    for (int i = 0; i < player.Items.Count && moved < 2; i++)
                     {
-                        if (who.Items[i] is not StardewValley.Objects.Ring ring)
+                        if (player.Items[i] is not StardewValley.Objects.Ring ring)
                             continue;
-                        var slot = who.leftRing.Value == null ? who.leftRing
-                                 : who.rightRing.Value == null ? who.rightRing : null;
+                        var slot = player.leftRing.Value == null ? player.leftRing
+                                 : player.rightRing.Value == null ? player.rightRing : null;
                         if (slot == null)
                             break;
-                        who.Items[i] = null;
+                        player.Items[i] = null;
                         slot.Value = ring;
-                        ring.onEquip(who);
+                        ring.onEquip(player);
                         moved++;
                     }
                     monitor.Log(moved == 0 ? "No rings in the bag to put on." : $"{moved} ring(s) on.", LogLevel.Info);
@@ -470,9 +470,9 @@ namespace SDVRadiance
                 + "waiting is a lottery. 'on' skips the roll and the ramp and holds it at full. Nothing "
                 + "else about the gate changes: it still needs the switch, winter, a clear night "
                 + "outdoors and reflections on. Not saved.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    string wanted = args.Length > 0 ? args[0].ToLowerInvariant() : "";
+                    string wanted = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
                     if (wanted is not ("on" or "off" or "auto"))
                     {
                         monitor.Log("usage: radiance_aurora on|off|auto (now: "
@@ -492,7 +492,7 @@ namespace SDVRadiance
                 + "they are standing on as often as not. The gate is unchanged: it still needs the switch, a "
                 + "clear night outdoors and reflections on, and it reports which of those refused. Each streak "
                 + "lasts around a second, and they come in three weights, so run it a few times.",
-                (_, args) =>
+                (_, arguments) =>
                 {
                     RenderPipeline? pipeline = getPipeline();
                     if (pipeline == null) { monitor.Log("pipeline not ready", LogLevel.Info); return; }
@@ -510,7 +510,7 @@ namespace SDVRadiance
                     { monitor.Log($"Weather is {weather}; a star needs a clear sky. Try radiance_weather sun.", LogLevel.Info); return; }
                     if (Game1.timeOfDay < 1930)
                     { monitor.Log($"It is {Game1.getTimeOfDayString(Game1.timeOfDay)}; the sky is not dark enough until about 19:30.", LogLevel.Info); return; }
-                    int wanted = args.Length >= 1 && int.TryParse(args[0], out int typedStars)
+                    int wanted = arguments.Length >= 1 && int.TryParse(arguments[0], out int typedStars)
                         ? Math.Clamp(typedStars, 1, 3) : 3;
                     pipeline.MeteorRequests = wanted;
                     monitor.Log($"{wanted} star(s) requested, spread across the view - watch the open water.", LogLevel.Info);
@@ -525,25 +525,25 @@ namespace SDVRadiance
                 + "the world batch, with the map-tile clip walked out on the CPU; 'on' (the default) composes it "
                 + "into a patch cut by the map per pixel first. An A/B for the saloon counter and the farmhouse "
                 + "porch; the report's player block says which path drew.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    if (args.Length < 1 || !(args[0].Equals("on", StringComparison.OrdinalIgnoreCase)
-                                             || args[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
+                    if (arguments.Length < 1 || !(arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase)
+                                             || arguments[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
                     {
                         monitor.Log($"player shadow patch is {(ShadowRenderer.PlayerPatchEnabled ? "on" : "OFF")}. "
                             + "Usage: radiance_shadowpatch on|off", LogLevel.Info);
                         return;
                     }
-                    ShadowRenderer.PlayerPatchEnabled = args[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    ShadowRenderer.PlayerPatchEnabled = arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase);
                     monitor.Log($"player shadow patch {(ShadowRenderer.PlayerPatchEnabled ? "on" : "off")}.", LogLevel.Info);
                 });
             helper.ConsoleCommands.Add("radiance_mirrorflush",
                 "Diagnostic. 'radiance_mirrorflush on' submits the water entity mirror after every phase instead of "
                 + "once, so the report's 'mirror' block can say which phase's draws a stall inside the submit belongs "
                 + "to. It changes how mirrored things overlap, so it is for a measurement, not for play. 'off' restores.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    bool on = args.Length > 0 && args[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    bool on = arguments.Length > 0 && arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase);
                     RenderPipeline.MirrorFlushPerPhase = on;
                     monitor.Log($"mirror submit per phase {(on ? "on" : "off")}.", LogLevel.Info);
                 });
@@ -553,17 +553,17 @@ namespace SDVRadiance
                 + "lamps to a target, and the lighting pass reads the answer back. The same switch as the "
                 + "'Sharp lamp shadow edges' setting, which this writes, so the tuner and this agree; it is not "
                 + "saved to the config file. radiance_gputime's 'effect chain' row is the receipt.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    if (args.Length < 1 || !(args[0].Equals("on", StringComparison.OrdinalIgnoreCase)
-                                             || args[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
+                    if (arguments.Length < 1 || !(arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase)
+                                             || arguments[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
                     {
                         monitor.Log($"half-resolution lamp march is {(getConfig().LightShadowSharpEdges ? "OFF" : "on")}"
                             + $" (last frame {(RenderPipeline.LastMarchHalfResolution ? "read it" : "marched in the pass")}). "
                             + "Usage: radiance_marchhalf on|off", LogLevel.Info);
                         return;
                     }
-                    bool half = args[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    bool half = arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase);
                     getConfig().LightShadowSharpEdges = !half;
                     monitor.Log($"half-resolution lamp march {(half ? "on" : "off")}"
                         + $" (sharp lamp shadow edges {(half ? "off" : "ON")}).", LogLevel.Info);
@@ -572,9 +572,9 @@ namespace SDVRadiance
                 "'radiance_softedge 0.25' sets how wide the Soft 4x look's anti-aliased edge is, in source pixels "
                 + "(0 = the hard-edged xBR of the emulator shaders, 0.25 = one texel of the four-times sheet); the "
                 + "soft sheets are re-made at the new width. For tuning by eye; not saved.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    if (args.Length < 1 || !float.TryParse(args[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float width))
+                    if (arguments.Length < 1 || !float.TryParse(arguments[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float width))
                     {
                         monitor.Log($"soft edge width is {SheetUpscaler.SoftEdgeSourcePixels:0.###} source pixels. Usage: radiance_softedge <0..1>", LogLevel.Info);
                         return;
@@ -585,9 +585,9 @@ namespace SDVRadiance
             helper.ConsoleCommands.Add("radiance_softblur",
                 "'radiance_softblur 1' sets the tent that follows the Soft 4x kernel, in texels of the four-times sheet "
                 + "(0 = the kernel alone, 1 = a quarter of a source pixel). Re-makes the soft sheets. For tuning by eye; not saved.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    if (args.Length < 1 || !float.TryParse(args[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float texels))
+                    if (arguments.Length < 1 || !float.TryParse(arguments[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float texels))
                     {
                         monitor.Log($"soft blur is {SheetUpscaler.SoftBlurTexels:0.###} texels. Usage: radiance_softblur <0..3>", LogLevel.Info);
                         return;
@@ -600,17 +600,88 @@ namespace SDVRadiance
                 + "strip, the way it did before 1.7.5; 'on' (the default) bakes the softness into each character's "
                 + "silhouette once and draws each strip once. Every warm bake re-bakes on the switch. Not saved. "
                 + "radiance_report's 'shadow draw calls' row is the receipt.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    if (args.Length < 1 || !(args[0].Equals("on", StringComparison.OrdinalIgnoreCase)
-                                             || args[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
+                    if (arguments.Length < 1 || !(arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase)
+                                             || arguments[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
                     {
                         monitor.Log($"character shadow blur is {(ShadowRenderer.CasterBlurBaked ? "baked" : "drawn LIVE")}. "
                             + "Usage: radiance_casterblur on|off", LogLevel.Info);
                         return;
                     }
-                    ShadowRenderer.CasterBlurBaked = args[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    ShadowRenderer.CasterBlurBaked = arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase);
                     monitor.Log($"character shadow blur {(ShadowRenderer.CasterBlurBaked ? "baked" : "drawn live")}.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_reliefres",
+                "'radiance_reliefres half' draws the sprite relief buffer at half the frame's size, 'full' at the "
+                + "frame's size as 1.7.5 did, 'auto' follows the setting again. Live, not saved.",
+                (_, arguments) =>
+                {
+                    string mode = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
+                    RenderPipeline.ReliefHalfResolutionOverride = mode switch { "half" => true, "full" => false, _ => null };
+                    monitor.Log($"sprite relief buffer: {(RenderPipeline.ReliefHalfResolutionOverride is bool half ? (half ? "half" : "full") : "follows the setting")}", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_flushpath",
+                "'radiance_flushpath vbo' draws every run of the game's sprite batch from a vertex buffer instead of "
+                + "client-side arrays; 'user' is MonoGame's own road. Live, not saved.",
+                (_, arguments) =>
+                {
+                    string mode = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
+                    if (mode == "vbo") SpriteFlushPath.Enabled = true;
+                    else if (mode == "user") SpriteFlushPath.Enabled = false;
+                    monitor.Log($"sprite flush path: {(SpriteFlushPath.Enabled ? "vertex buffer" : "MonoGame's own")}"
+                        + (SpriteFlushPath.ClosedBecause.Length > 0 ? $" (closed: {SpriteFlushPath.ClosedBecause})" : "")
+                        + $", runs taken so far {SpriteFlushPath.RunsTaken}", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_reliefdepth",
+                "An experiment on the texture-sorted relief replay: 'never', 'less', 'greater' or 'always' for its "
+                + "depth comparison. 'never' must leave the relief buffer flat if the test is applied at all.",
+                (_, arguments) =>
+                {
+                    string mode = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
+                    RenderPipeline.ReliefDepthFunction = mode switch
+                    {
+                        "never" => CompareFunction.Never,
+                        "less" => CompareFunction.LessEqual,
+                        "always" => CompareFunction.Always,
+                        _ => CompareFunction.GreaterEqual,
+                    };
+                    monitor.Log($"relief replay depth test: {RenderPipeline.ReliefDepthFunction}", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_reliefsort",
+                "'radiance_reliefsort depth' replays the sprites for the relief front to back with blending, as 1.7.5 did; "
+                + "'texture' groups them by sheet with a depth test, a few dozen draw calls instead of thousands; "
+                + "'none' does not sort at all and lets the depth test decide, which is the batch's own sort removed.",
+                (_, arguments) =>
+                {
+                    string mode = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
+                    if (mode == "depth") { RenderPipeline.ReliefTextureSorted = false; RenderPipeline.ReliefUnsorted = false; }
+                    else if (mode == "texture") { RenderPipeline.ReliefTextureSorted = true; RenderPipeline.ReliefUnsorted = false; }
+                    else if (mode == "none") { RenderPipeline.ReliefTextureSorted = true; RenderPipeline.ReliefUnsorted = true; }
+                    monitor.Log("sprite relief replay: " + (RenderPipeline.ReliefTextureSorted
+                        ? RenderPipeline.ReliefUnsorted ? "not sorted at all, depth tested" : "grouped by texture, depth tested"
+                        : "front to back, blended"), LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_marchcache",
+                "'radiance_marchcache off' walks every lamp's shadow ray on every frame, the way 1.7.5 did; 'on' keeps "
+                + "the answers in a window anchored to the world and walks a ray again only for a lamp that moved or "
+                + "ground that changed; 'auto' follows the setting again. 'every' keeps the window but fires every "
+                + "channel every frame: a frozen frame compared with 'on' proves the cache, since any difference is a "
+                + "channel it should have fired. Not saved. radiance_report's 'march window' row is the receipt.",
+                (_, arguments) =>
+                {
+                    string mode = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
+                    switch (mode)
+                    {
+                        case "on": RenderPipeline.MarchCacheOverride = true; RenderPipeline.MarchCacheFireEveryFrame = false; break;
+                        case "off": RenderPipeline.MarchCacheOverride = false; RenderPipeline.MarchCacheFireEveryFrame = false; break;
+                        case "auto": RenderPipeline.MarchCacheOverride = null; RenderPipeline.MarchCacheFireEveryFrame = false; break;
+                        case "every": RenderPipeline.MarchCacheOverride = true; RenderPipeline.MarchCacheFireEveryFrame = true; break;
+                        default:
+                            monitor.Log($"march window: {RenderPipeline.DescribeMarchWindow()}. Usage: radiance_marchcache on|off|auto|every", LogLevel.Info);
+                            return;
+                    }
+                    monitor.Log($"lamp shadow march cache {mode}.", LogLevel.Info);
                 });
             helper.ConsoleCommands.Add("radiance_mapbake",
                 "'radiance_mapbake off' bakes only the screen's object shadows on arrival in a location, the way "
@@ -618,9 +689,9 @@ namespace SDVRadiance
                 + "default) bakes the whole map under the warp fade. 'clear' forgets every object bake, for a "
                 + "fair A/B of two walks. The SMAPI log's '[diag] object bakes on arrival' line and the report's "
                 + "'object sprite bakes' worst column are the receipt.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    string mode = args.Length > 0 ? args[0].ToLowerInvariant() : "";
+                    string mode = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
                     if (mode == "clear")
                     {
                         ShadowRenderer.ForgetObjectBakesRequested = true;
@@ -641,16 +712,16 @@ namespace SDVRadiance
                 + "did before 1.7.4; 'on' (the default) uploads one texture per frame and swaps them in together "
                 + "when the last lands. An A/B for a water edge that arrives late; the report's 'apply' line "
                 + "reads per frame while on.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    if (args.Length < 1 || !(args[0].Equals("on", StringComparison.OrdinalIgnoreCase)
-                                             || args[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
+                    if (arguments.Length < 1 || !(arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase)
+                                             || arguments[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
                     {
                         monitor.Log($"water apply spread is {(RenderPipeline.ApplySpreadEnabled ? "on" : "OFF")}. "
                             + "Usage: radiance_applyspread on|off", LogLevel.Info);
                         return;
                     }
-                    RenderPipeline.ApplySpreadEnabled = args[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    RenderPipeline.ApplySpreadEnabled = arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase);
                     monitor.Log($"water apply spread {(RenderPipeline.ApplySpreadEnabled ? "on" : "off")}.", LogLevel.Info);
                 });
             helper.ConsoleCommands.Add("radiance_gathercache",
@@ -658,16 +729,16 @@ namespace SDVRadiance
                 + "window again, the way it did before 1.7.4; 'on' (the default) copies tiles it has already asked "
                 + "about from a map-wide memory. An A/B for anything wrong at the water's edge that a fresh "
                 + "gather would fix; the report's 'water mask rebuild' block says how many tiles were copied.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    if (args.Length < 1 || !(args[0].Equals("on", StringComparison.OrdinalIgnoreCase)
-                                             || args[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
+                    if (arguments.Length < 1 || !(arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase)
+                                             || arguments[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
                     {
                         monitor.Log($"water gather cache is {(RenderPipeline.GatherCacheEnabled ? "on" : "OFF")}. "
                             + "Usage: radiance_gathercache on|off", LogLevel.Info);
                         return;
                     }
-                    RenderPipeline.GatherCacheEnabled = args[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    RenderPipeline.GatherCacheEnabled = arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase);
                     RenderPipeline.MaskEpoch++;
                     RenderPipeline.MaskEpochReason = "radiance_gathercache was switched";
                     monitor.Log($"water gather cache {(RenderPipeline.GatherCacheEnabled ? "on" : "off")}; the mask rebuilds now.", LogLevel.Info);
@@ -682,10 +753,10 @@ namespace SDVRadiance
                 + "it. Off is for an A/B only: with it off, a sheet that any GetData parked on a high "
                 + "texture unit can be given this mod's linear sampler and read soft for the rest of the "
                 + "session (a mailbox, a crop, a walking villager going blurry while the map stays crisp).",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    if (args.Length >= 1 && (args[0].Equals("on", StringComparison.OrdinalIgnoreCase) || args[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
-                        TextureUnitGuard.Enabled = args[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    if (arguments.Length >= 1 && (arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase) || arguments[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
+                        TextureUnitGuard.Enabled = arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase);
                     monitor.Log($"texture unit guard: {(TextureUnitGuard.Enabled ? "on" : "OFF")}"
                               + (TextureUnitGuard.Installed ? $", {TextureUnitGuard.Rebinds} slot(s) rebound so far." : ", but its patch is NOT installed (see the startup log)."), LogLevel.Info);
                 });
@@ -695,9 +766,9 @@ namespace SDVRadiance
                 + "and skips the write when it believes nothing changed, so a texture whose GL filter "
                 + "drifted to linear behind its back stays blurry until that memory is broken. A soft "
                 + "sprite that comes back crisp after this was that drift.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    int frames = args.Length >= 1 && int.TryParse(args[0], out int wanted) ? Math.Clamp(wanted, 1, 600) : 3;
+                    int frames = arguments.Length >= 1 && int.TryParse(arguments[0], out int wanted) ? Math.Clamp(wanted, 1, 600) : 3;
                     SheetUpscaler.ResampleFramesLeft = frames;
                     monitor.Log($"every texture run of the game's batch is re-sampled as Point for the next {frames} frame(s).", LogLevel.Info);
                 });
@@ -709,20 +780,20 @@ namespace SDVRadiance
                 + "always 4; anything else is art at another resolution or drawn at another scale, "
                 + "which is what 'that object looks blurry' usually is. The answer appears on the "
                 + "next drawn frame.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    int x, y;
-                    if (args.Length >= 2 && int.TryParse(args[0], out x) && int.TryParse(args[1], out y))
+                    int screenX, screenY;
+                    if (arguments.Length >= 2 && int.TryParse(arguments[0], out screenX) && int.TryParse(arguments[1], out screenY))
                     {
                         // taken as given
                     }
                     else
                     {
-                        x = Game1.getMouseX();
-                        y = Game1.getMouseY();
-                        monitor.Log($"no coordinates given, so asking about the mouse pointer at {x},{y}.", LogLevel.Info);
+                        screenX = Game1.getMouseX();
+                        screenY = Game1.getMouseY();
+                        monitor.Log($"no coordinates given, so asking about the mouse pointer at {screenX},{screenY}.", LogLevel.Info);
                     }
-                    SpriteDrawRecorder.AskWhatDrew(new Microsoft.Xna.Framework.Point(x, y));
+                    SpriteDrawRecorder.AskWhatDrew(new Microsoft.Xna.Framework.Point(screenX, screenY));
                     monitor.Log("asked; the answer prints once the next frame has drawn.", LogLevel.Info);
                 });
             helper.ConsoleCommands.Add("radiance_hooks",
@@ -732,16 +803,16 @@ namespace SDVRadiance
                 + "Measure it by reading WHOLE FRAME with the hooks off and on, alternating, same launch, window "
                 + "focused. While off, sprite relief, sheet doubling and the carve of a location's own art out of "
                 + "the water are off too.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    if (args.Length < 1 || !(args[0].Equals("on", StringComparison.OrdinalIgnoreCase)
-                                             || args[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
+                    if (arguments.Length < 1 || !(arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase)
+                                             || arguments[0].Equals("off", StringComparison.OrdinalIgnoreCase)))
                     {
                         monitor.Log($"draw hooks are {(HarmonyPatcher.DrawHooksInstalled ? "on" : "OFF")}. "
                             + "Usage: radiance_hooks on|off", LogLevel.Info);
                         return;
                     }
-                    HarmonyPatcher.SetDrawHooks(args[0].Equals("on", StringComparison.OrdinalIgnoreCase), monitor);
+                    HarmonyPatcher.SetDrawHooks(arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase), monitor);
                 });
             helper.ConsoleCommands.Add("radiance_bench",
                 "Measure what this mod costs on THIS machine and suggest an effect resolution. Sweeps the "
@@ -766,7 +837,7 @@ namespace SDVRadiance
                 + "effect seven times per frame and keeps the slope, which lifts the signal clear of the drift, and "
                 + "it reads the GPU's clock rather than the CPU's, because fill is what most of these cost. Stand "
                 + "somewhere demanding and do not move while it runs.",
-                (_, args) =>
+                (_, arguments) =>
                 {
                     if (!StardewModdingAPI.Context.IsWorldReady)
                     {
@@ -774,20 +845,51 @@ namespace SDVRadiance
                         return;
                     }
                     var pipeline = getPipeline();
-                    int amp = args.Length > 0 && int.TryParse(args[0], out int a) ? a : 6;
+                    int amplify = arguments.Length > 0 && int.TryParse(arguments[0], out int parsedAmplify) ? parsedAmplify : 6;
                     if (pipeline == null) monitor.Log("Pipeline not ready.", LogLevel.Info);
-                    else pipeline.StartEffectCost(getConfig(), amp);
+                    else pipeline.StartEffectCost(getConfig(), amplify);
                 });
             helper.ConsoleCommands.Add("radiance_gpu",
                 "Measure real GPU time per frame (needs Debug logging on). Every other timer here counts CPU "
                 + "submission, which the driver returns from before the GPU has done anything; this one blocks on "
                 + "the finished frame, so it can answer what a setting actually costs. It STALLS the pipeline every "
                 + "frame, so it is a measuring tool, not something to leave running.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    RenderPipeline.GpuProbe = args.Length == 0 || !args[0].Equals("off", StringComparison.OrdinalIgnoreCase);
+                    RenderPipeline.GpuProbe = arguments.Length == 0 || !arguments[0].Equals("off", StringComparison.OrdinalIgnoreCase);
                     monitor.Log($"GPU wall-clock probe: {(RenderPipeline.GpuProbe ? "ON - watch for [perf] gpu wall-clock lines" : "off")}", LogLevel.Info);
                 });
+            helper.ConsoleCommands.Add("radiance_sheetread",
+                "How a tilesheet is read back when the mod needs its pixels: one call for the whole sheet, or "
+                + "'strips' for the old loop of 512-row reads. The report's 'sheet:' rows are the comparison.",
+                (_, arguments) =>
+                {
+                    SheetReadback.WholeSheetInOneCall = (arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "") != "strips";
+                    monitor.Log($"tilesheet readback: {(SheetReadback.WholeSheetInOneCall ? "one call for the whole sheet" : "strips of 512 rows")}"
+                        + " (already-cached sheets keep the pixels they have; this decides the next one read).", LogLevel.Info);
+                });
+
+            helper.ConsoleCommands.Add("radiance_samplerslots",
+                "How many texture sampler slots MonoGame walks on every draw call. 'full' is what the driver reports "
+                + "(192 on this machine); a number caps it. A shader here can address sixteen. Measurement switch, off by default.",
+                (_, arguments) =>
+                {
+                    if (Game1.graphics?.GraphicsDevice is not GraphicsDevice device)
+                    {
+                        monitor.Log("no graphics device yet.", LogLevel.Info);
+                        return;
+                    }
+                    string wanted = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
+                    int cap = wanted == "full" ? 0
+                        : int.TryParse(wanted, out int typed) ? Math.Max(1, typed)
+                        : TextureUnitGuard.DefaultSamplerSlots;
+                    // The config is what the frame handler re-asserts, so move that too or the
+                    // next frame puts the old count straight back.
+                    getConfig().LimitSamplerSlots = cap > 0;
+                    TextureUnitGuard.WantedSamplerSlots = cap;
+                    TextureUnitGuard.CapSamplerSlots(device, cap, monitor);
+                });
+
             helper.ConsoleCommands.Add("radiance_gldiag",
                 "Report the real graphics backend and test whether a GPU timer query can be created, run and read "
                 + "back from inside this mod. Every other timer here measures CPU submission, not GPU execution, "
@@ -804,14 +906,14 @@ namespace SDVRadiance
                 + "Absolute, not a toggle (the game's own 'debug rain' flips). Storm = rain + lightning. Exists because "
                 + "vanilla has no debug command at all for snow, storm or wind. Weather is per context, so set it while "
                 + "standing in the region you want to test. Not saved; the next day's roll overwrites it.",
-                (_, args) =>
+                (_, arguments) =>
                 {
                     if (Game1.netWorldState?.Value == null || Game1.player?.currentLocation == null)
                     {
                         monitor.Log("Load a save first.", LogLevel.Warn);
                         return;
                     }
-                    string wanted = args.Length > 0 ? args[0].ToLowerInvariant() : "";
+                    string wanted = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
                     if (wanted is not ("sun" or "rain" or "storm" or "snow" or "wind" or "greenrain"))
                     {
                         monitor.Log("Usage: radiance_weather sun|rain|storm|snow|wind|greenrain", LogLevel.Info);
@@ -868,10 +970,10 @@ namespace SDVRadiance
                 + "the game takes keyboard input straight from SDL, so a keypress sent by a script never arrives "
                 + "and there was no way to reach this menu except by hand. Add part of a tab name to open on "
                 + "that tab, for example 'radiance_tuner perf' or 'radiance_tuner water'.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    if (args.Length > 0)
-                        RadianceTunerMenu.OpenAtTab(args[0]);
+                    if (arguments.Length > 0)
+                        RadianceTunerMenu.OpenAtTab(arguments[0]);
                     _toggleTuner?.Invoke();
                 });
             helper.ConsoleCommands.Add("radiance_perfhud",
@@ -879,10 +981,10 @@ namespace SDVRadiance
                 + "radiance_report, but live, so you can walk into the spot that stutters and watch which line "
                 + "moves. It also says when the game window has lost focus, which makes the frame time read far "
                 + "worse than it is.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    PerfHud.Visible = args.Length > 0
-                        ? args[0].Equals("on", StringComparison.OrdinalIgnoreCase) || args[0] == "1"
+                    PerfHud.Visible = arguments.Length > 0
+                        ? arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase) || arguments[0] == "1"
                         : !PerfHud.Visible;
                     monitor.Log($"Perf readout: {(PerfHud.Visible ? "on" : "off")}", LogLevel.Info);
                 });
@@ -891,11 +993,11 @@ namespace SDVRadiance
                 + "around MonoGame into the game's own OpenGL context, which is not a risk worth taking while "
                 + "nobody is asking a question. With it on, radiance_report grows a GPU column beside the CPU "
                 + "one, and where the two disagree the larger is the real cost.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    bool on = args.Length > 0
-                        && (args[0].Equals("on", StringComparison.OrdinalIgnoreCase)
-                            || args[0] == "1" || args[0].Equals("true", StringComparison.OrdinalIgnoreCase));
+                    bool on = arguments.Length > 0
+                        && (arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase)
+                            || arguments[0] == "1" || arguments[0].Equals("true", StringComparison.OrdinalIgnoreCase));
                     GpuTimer.SetWanted(on);
                     monitor.Log($"GPU timing: {GpuTimer.Status}"
                         + (on ? ". Play for five seconds, then run radiance_report." : ""), LogLevel.Info);
@@ -907,16 +1009,16 @@ namespace SDVRadiance
                 + "overrun and so exercises the real controller on a machine that never misses its own "
                 + "budget; 'radiance_autoscale budget off' puts the real one back. The override is never "
                 + "saved and does not survive a restart.",
-                (_, args) =>
+                (_, arguments) =>
                 {
-                    if (args.Length >= 2 && args[0].Equals("budget", StringComparison.OrdinalIgnoreCase))
+                    if (arguments.Length >= 2 && arguments[0].Equals("budget", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (args[1].Equals("off", StringComparison.OrdinalIgnoreCase))
+                        if (arguments[1].Equals("off", StringComparison.OrdinalIgnoreCase))
                         {
                             RenderPipeline.BudgetOverrideMs = 0;
                             monitor.Log("Frame budget back to the game's own.", LogLevel.Info);
                         }
-                        else if (double.TryParse(args[1], System.Globalization.NumberStyles.Float,
+                        else if (double.TryParse(arguments[1], System.Globalization.NumberStyles.Float,
                                      System.Globalization.CultureInfo.InvariantCulture, out double ms) && ms > 0.1)
                         {
                             RenderPipeline.BudgetOverrideMs = ms;
@@ -941,46 +1043,46 @@ namespace SDVRadiance
         /// value out of the range the sliders enforce.</summary>
         private static int _markCount;
 
-        private static void LiveConfig(IMonitor monitor, ModConfig config, string[] args)
+        private static void LiveConfig(IMonitor monitor, ModConfig config, string[] arguments)
         {
-            var props = typeof(ModConfig).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-            if (args.Length == 0)
+            var properties = typeof(ModConfig).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+            if (arguments.Length == 0)
             {
                 var text = new System.Text.StringBuilder("Live config values (in-memory; not saved to config.json):\n");
-                foreach (var p in props)
+                foreach (var p in properties)
                     if (p.CanWrite && (p.PropertyType == typeof(bool) || p.PropertyType == typeof(float) || p.PropertyType == typeof(int) || p.PropertyType == typeof(string) || p.PropertyType.IsEnum))
                         text.AppendLine($"  {p.Name} = {p.GetValue(config)}");
                 monitor.Log(text.ToString().TrimEnd(), LogLevel.Info);
                 return;
             }
-            var prop = Array.Find(props, p => p.Name.Equals(args[0], StringComparison.OrdinalIgnoreCase));
-            if (prop == null || !prop.CanWrite)
+            var property = Array.Find(properties, p => p.Name.Equals(arguments[0], StringComparison.OrdinalIgnoreCase));
+            if (property == null || !property.CanWrite)
             {
-                monitor.Log($"No writable config property named '{args[0]}'. Run radiance_config with no arguments for the list.", LogLevel.Warn);
+                monitor.Log($"No writable config property named '{arguments[0]}'. Run radiance_config with no arguments for the list.", LogLevel.Warn);
                 return;
             }
-            if (args.Length == 1)
+            if (arguments.Length == 1)
             {
-                monitor.Log($"{prop.Name} = {prop.GetValue(config)}", LogLevel.Info);
+                monitor.Log($"{property.Name} = {property.GetValue(config)}", LogLevel.Info);
                 return;
             }
             try
             {
                 object value =
-                    prop.PropertyType == typeof(bool) ? bool.Parse(args[1])
-                    : prop.PropertyType == typeof(float) ? float.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture)
-                    : prop.PropertyType == typeof(int) ? int.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture)
+                    property.PropertyType == typeof(bool) ? bool.Parse(arguments[1])
+                    : property.PropertyType == typeof(float) ? float.Parse(arguments[1], System.Globalization.CultureInfo.InvariantCulture)
+                    : property.PropertyType == typeof(int) ? int.Parse(arguments[1], System.Globalization.CultureInfo.InvariantCulture)
                     // Named looks (the reflection style, the camera mode) are enums, and an A/B
                     // between two looks is exactly what this command is for.
-                    : prop.PropertyType.IsEnum ? Enum.Parse(prop.PropertyType, args[1], ignoreCase: true)
-                    : args[1];
-                prop.SetValue(config, value);
+                    : property.PropertyType.IsEnum ? Enum.Parse(property.PropertyType, arguments[1], ignoreCase: true)
+                    : arguments[1];
+                property.SetValue(config, value);
                 config.Clamp();
-                monitor.Log($"{prop.Name} = {prop.GetValue(config)}  (live only; config.json untouched)", LogLevel.Info);
+                monitor.Log($"{property.Name} = {property.GetValue(config)}  (live only; config.json untouched)", LogLevel.Info);
             }
-            catch (Exception ex)
+            catch (Exception exception)
             {
-                monitor.Log($"Could not set {prop.Name} to '{args[1]}': {ex.Message}", LogLevel.Warn);
+                monitor.Log($"Could not set {property.Name} to '{arguments[1]}': {exception.Message}", LogLevel.Warn);
             }
         }
 
@@ -1004,7 +1106,7 @@ namespace SDVRadiance
             {
                 var ls = kv.Value;
                 Vector2 tile = ls.position.Value / 64f;
-                float distTiles = Vector2.Distance(ls.position.Value, playerFeetPosition) / 64f;
+                float distanceTiles = Vector2.Distance(ls.position.Value, playerFeetPosition) / 64f;
                 Vector2 screen = Game1.GlobalToLocal(Game1.viewport, ls.position.Value);
                 bool onScreen = screen.X > -640 && screen.X < Game1.viewport.Width + 640
                              && screen.Y > -640 && screen.Y < Game1.viewport.Height + 640;
@@ -1012,7 +1114,7 @@ namespace SDVRadiance
                 monitor.Log(
                     $"[{i++}] id={kv.Key} ctx={ls.lightContext.Value} texture={ls.textureIndex.Value} " +
                     $"tile=({tile.X:0.0},{tile.Y:0.0}) radius={ls.radius.Value:0.00} " +
-                    $"color(raw/subtractive)=({c.R},{c.G},{c.B},{c.A}) dist={distTiles:0.0} tiles " +
+                    $"color(raw/subtractive)=({c.R},{c.G},{c.B},{c.A}) dist={distanceTiles:0.0} tiles " +
                     $"onScreen={onScreen}", LogLevel.Info);
             }
             if (location != null)
@@ -1053,7 +1155,7 @@ namespace SDVRadiance
                     + $", fullscreen={Game1.options?.fullscreen}");
                 Write($"gpu: {Game1.graphics?.GraphicsDevice?.Adapter?.Description}");
                 Write("");
-                DumpTile(Write, pipeline, config, args: null, includePalette: false);
+                DumpTile(Write, pipeline, config, arguments: null, includePalette: false);
                 Write("");
                 Write("=== what the effect chain is actually doing this frame ===");
                 Write(pipeline?.DescribeStageState() ?? "pipeline not ready");
@@ -1085,6 +1187,9 @@ namespace SDVRadiance
                 Write("                   The cost of this mod's biggest GPU item is those two numbers");
                 Write("                   multiplied. Sharing is on when the second falls as the first");
                 Write("                   rises; 12 is the floor and is what every release up to 1.6.2 did.");
+                Write($"  march window     {RenderPipeline.DescribeMarchWindow()}");
+                Write("                   Standing still that should read 0 fired; a walk fires the whole window");
+                Write("                   once a tile crossing. radiance_marchcache off is the 1.7.5 behaviour.");
                 Write("");
                 Write("=== the frame clock, and the graphics device under it ===");
                 // Asked live, not remembered from startup: a mod is free to patch later than
@@ -1123,6 +1228,8 @@ namespace SDVRadiance
                 Write("");
                 Write("water entity mirror, main thread, per bake since the last report:");
                 Write(PhaseCost.Describe("mirror").TrimEnd());
+                Write(PhaseCost.Describe("relief").TrimEnd());
+                Write(PhaseCost.Describe("sheet").TrimEnd());
                 Write("");
                 Write(FrameCost.DescribeLongestFrames().TrimEnd());
                 Write("");
@@ -1137,18 +1244,18 @@ namespace SDVRadiance
                 Write("=== every setting, verbatim ===");
                 try
                 {
-                    var json = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
-                    json.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
-                    Write(System.Text.Json.JsonSerializer.Serialize(config, json));
+                    var jsonOptions = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+                    jsonOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
+                    Write(System.Text.Json.JsonSerializer.Serialize(config, jsonOptions));
                 }
-                catch (Exception ex) { Write("could not serialise the config: " + ex.Message); }
+                catch (Exception exception) { Write("could not serialise the config: " + exception.Message); }
 
-                string dir = System.IO.Path.Combine(
+                string directory = System.IO.Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Radiance-Dumps");
-                System.IO.Directory.CreateDirectory(dir);
+                System.IO.Directory.CreateDirectory(directory);
                 // One fixed name rather than a timestamp: the reporter has to FIND this file, and
                 // a folder with nine near-identical names is worse than one that is always current.
-                string path = System.IO.Path.Combine(dir, "radiance-report.txt");
+                string path = System.IO.Path.Combine(directory, "radiance-report.txt");
                 System.IO.File.WriteAllText(path, text.ToString());
                 // On a phone there is no console to type this from and no easy way to reach a file
                 // in app storage, but the SMAPI log uploads to smapi.io in two taps. So when the
@@ -1160,10 +1267,10 @@ namespace SDVRadiance
                 monitor.Log("Attach that file to your bug report. It already carries your version, location, "
                           + "time, weather, settings and mod list, so there is nothing else to type.", LogLevel.Info);
             }
-            catch (Exception ex)
+            catch (Exception exception)
             {
                 // Falling back to the console still gets the reporter something to copy.
-                monitor.Log("Could not write the report file: " + ex.Message, LogLevel.Warn);
+                monitor.Log("Could not write the report file: " + exception.Message, LogLevel.Warn);
                 monitor.Log(text.ToString(), LogLevel.Info);
             }
         }
@@ -1298,7 +1405,7 @@ namespace SDVRadiance
         /// <summary>What the sprite relief is embossing over one tile, from the last frame the
         /// recorder captured (see <see cref="SpriteDrawRecorder"/>): the draws whose footprint
         /// covers that tile, each named by its sheet.</summary>
-        private static void DumpReliefDraws(Action<string> write, RenderPipeline? pipeline, string[]? args = null)
+        private static void DumpReliefDraws(Action<string> write, RenderPipeline? pipeline, string[]? arguments = null)
         {
             if (!StardewModdingAPI.Context.IsWorldReady || Game1.player == null)
             {
@@ -1306,7 +1413,7 @@ namespace SDVRadiance
                 return;
             }
             Point tile = Game1.player.TilePoint;
-            if (args is { Length: >= 2 } && int.TryParse(args[0], out int ax) && int.TryParse(args[1], out int ay))
+            if (arguments is { Length: >= 2 } && int.TryParse(arguments[0], out int ax) && int.TryParse(arguments[1], out int ay))
                 tile = new Point(ax, ay);
             var records = SpriteDrawRecorder.Records;
             write($"=== relief draws over tile ({tile.X},{tile.Y}) ===");
@@ -1335,7 +1442,7 @@ namespace SDVRadiance
                 return;
             }
             // The recorder holds SCREEN pixels; the tile is world, so put the tile on the screen.
-            var want = new Rectangle(tile.X * 64 - Game1.viewport.X, tile.Y * 64 - Game1.viewport.Y, 64, 64);
+            var tileOnScreen = new Rectangle(tile.X * 64 - Game1.viewport.X, tile.Y * 64 - Game1.viewport.Y, 64, 64);
             int listed = 0, skipped = 0;
             foreach (SpriteDrawRecorder.Record record in records)
             {
@@ -1345,7 +1452,7 @@ namespace SDVRadiance
                         (int)(record.Position.Y - record.Origin.Y * record.Scale.Y),
                         (int)Math.Ceiling(record.Source.Width * record.Scale.X),
                         (int)Math.Ceiling(record.Source.Height * record.Scale.Y));
-                if (!footprint.Intersects(want))
+                if (!footprint.Intersects(tileOnScreen))
                     continue;
                 if (listed >= 24)
                 {
@@ -1374,7 +1481,7 @@ namespace SDVRadiance
                 write("  nothing recorded covers that tile.");
         }
 
-        private static void DumpTile(Action<string> write, RenderPipeline? pipeline, ModConfig config, string[]? args = null, bool includePalette = true)
+        private static void DumpTile(Action<string> write, RenderPipeline? pipeline, ModConfig config, string[]? arguments = null, bool includePalette = true)
         {
             if (!StardewModdingAPI.Context.IsWorldReady || Game1.player == null)
             {
@@ -1383,15 +1490,15 @@ namespace SDVRadiance
             }
             var location = Game1.currentLocation;
             var t = Game1.player.TilePoint;
-            if (args is { Length: >= 2 } && int.TryParse(args[0], out int ax) && int.TryParse(args[1], out int ay))
+            if (arguments is { Length: >= 2 } && int.TryParse(arguments[0], out int ax) && int.TryParse(arguments[1], out int ay))
                 t = new Point(ax, ay);
             write($"=== Tile ({t.X},{t.Y}) in {location?.NameOrUniqueName} ===");
             if (location == null) return;
             WriteSceneHeader(write, location, config, pipeline);
-            var surf = SurfaceMap.For(location);
-            WriteTileVerdict(write, location, t, surf, pipeline);
+            var surfaceMap = SurfaceMap.For(location);
+            WriteTileVerdict(write, location, t, surfaceMap, pipeline);
             WriteLayerTiles(write, location, t);
-            WriteNeighbourhood(write, location, t, surf);
+            WriteNeighbourhood(write, location, t, surfaceMap);
 
             // Palette of the Back art (top colours by count) — for tuning art classifiers.
             if (!includePalette)
@@ -1480,27 +1587,27 @@ namespace SDVRadiance
 
         /// <summary>What the game and this mod each believe about the one tile: its water
         /// properties, its surface class, and the composed mask beside the label.</summary>
-        private static void WriteTileVerdict(Action<string> write, GameLocation location, Point t,
-                                             SurfaceMap? surf, RenderPipeline? pipeline)
+        private static void WriteTileVerdict(Action<string> write, GameLocation location, Point tilePoint,
+                                             SurfaceMap? surfaceMap, RenderPipeline? pipeline)
         {
-            write($"isWaterTile={location.isWaterTile(t.X, t.Y)} drawnWater={WaterDrawHook.WasDrawn(location, t.X, t.Y)} (hook v{WaterDrawHook.Version})");
-            foreach (string prop in new[] { "Water", "WaterSource", "Passable", "Type" })
-                foreach (string layer in new[] { "Back", "Buildings" })
+            write($"isWaterTile={location.isWaterTile(tilePoint.X, tilePoint.Y)} drawnWater={WaterDrawHook.WasDrawn(location, tilePoint.X, tilePoint.Y)} (hook v{WaterDrawHook.Version})");
+            foreach (string propertyName in new[] { "Water", "WaterSource", "Passable", "Type" })
+                foreach (string layerName in new[] { "Back", "Buildings" })
                 {
-                    string? v = location.doesTileHaveProperty(t.X, t.Y, prop, layer);
-                    if (v != null)
-                        write($"{layer}.{prop} = '{v}'");
+                    string? propertyValue = location.doesTileHaveProperty(tilePoint.X, tilePoint.Y, propertyName, layerName);
+                    if (propertyValue != null)
+                        write($"{layerName}.{propertyName} = '{propertyValue}'");
                 }
-            if (surf != null)
-                write($"surface={surf.GetSurface(t.X, t.Y)} height={surf.GetHeight(t.X, t.Y)}");
+            if (surfaceMap != null)
+                write($"surface={surfaceMap.GetSurface(tilePoint.X, tilePoint.Y)} height={surfaceMap.GetHeight(tilePoint.X, tilePoint.Y)}");
             // Composed mask vs label, side by side — the acceptance test for this subsystem
             // is that the game matches the labeler, so print both from the same tile.
-            write(pipeline?.DescribeTileMask(location, t.X, t.Y) ?? "pipeline not ready");
+            write(pipeline?.DescribeTileMask(location, tilePoint.X, tilePoint.Y) ?? "pipeline not ready");
         }
 
         /// <summary>The tile on every layer the game draws, walked from the map's own layer list
         /// rather than a fixed set of names.</summary>
-        private static void WriteLayerTiles(Action<string> write, GameLocation location, Point t)
+        private static void WriteLayerTiles(Action<string> write, GameLocation location, Point tilePoint)
         {
             // Walk the map's OWN layer list rather than a fixed set of names: a map may carry
             // Back3, Buildings4 or a negative suffix, and naming them here by hand is how this
@@ -1509,12 +1616,12 @@ namespace SDVRadiance
             {
                 if (!MapLayers.TryGetFamily(layer.Id, out _))
                     continue;
-                if (t.X >= layer.LayerWidth || t.Y >= layer.LayerHeight)
+                if (tilePoint.X >= layer.LayerWidth || tilePoint.Y >= layer.LayerHeight)
                     continue;
-                var tile = layer.Tiles[t.X, t.Y];
+                var tile = layer.Tiles[tilePoint.X, tilePoint.Y];
                 if (tile == null)
                     continue;
-                bool anim = tile is xTile.Tiles.AnimatedTile;
+                bool isAnimated = tile is xTile.Tiles.AnimatedTile;
                 // Tile PROPERTIES, because a flip or rotation does not live in the tile index.
                 // The .tmx stores it in the gid's top bits, and whichever loader brought the map
                 // in has to put it somewhere the index cannot carry. Neither the dump nor this
@@ -1533,15 +1640,15 @@ namespace SDVRadiance
                 }
                 catch { /* a property bag that throws is not worth failing the report over */ }
                 // ImageSource (the asset path) is what the labeler keys on; Id is the map-local alias.
-                write($"{layer.Id}: sheet={tile.TileSheet?.Id} src={tile.TileSheet?.ImageSource} index={tile.TileIndex} animated={anim}"
+                write($"{layer.Id}: sheet={tile.TileSheet?.Id} src={tile.TileSheet?.ImageSource} index={tile.TileIndex} animated={isAnimated}"
                     + $"  [{AttributeAsset(tile.TileSheet?.ImageSource)}]{props}");
             }
         }
 
         /// <summary>The block around the tile as a picture. Almost every water report is about a
         /// SHAPE, and one tile cannot show a shape.</summary>
-        private static void WriteNeighbourhood(Action<string> write, GameLocation location, Point t,
-                                               SurfaceMap? surf)
+        private static void WriteNeighbourhood(Action<string> write, GameLocation location, Point tilePoint,
+                                               SurfaceMap? surfaceMap)
         {
             // THE NEIGHBOURHOOD, not just the tile. Almost every water report is about a SHAPE:
             // a bridge that reads as a hole, a shoreline that stops early, a pier with a square
@@ -1550,18 +1657,18 @@ namespace SDVRadiance
             write("neighbourhood (W=water, D=deck/bridge, #=wall, G=glass, ^=roof, o=void, .=ground):");
             {
                 var header = new System.Text.StringBuilder("        ");
-                for (int x = t.X - 4; x <= t.X + 4; x++)
+                for (int x = tilePoint.X - 4; x <= tilePoint.X + 4; x++)
                     header.Append(x.ToString().PadLeft(5));
                 write(header.ToString());
-                for (int y = t.Y - 3; y <= t.Y + 3; y++)
+                for (int y = tilePoint.Y - 3; y <= tilePoint.Y + 3; y++)
                 {
                     var row = new System.Text.StringBuilder($"y={y,-6}");
-                    for (int x = t.X - 4; x <= t.X + 4; x++)
+                    for (int x = tilePoint.X - 4; x <= tilePoint.X + 4; x++)
                     {
-                        char c;
+                        char glyph;
                         try
                         {
-                            c = surf?.GetSurface(x, y) switch
+                            glyph = surfaceMap?.GetSurface(x, y) switch
                             {
                                 SurfaceClass.Water => 'W',
                                 SurfaceClass.Deck => 'D',
@@ -1573,9 +1680,9 @@ namespace SDVRadiance
                                 _ => '?',
                             };
                         }
-                        catch { c = '?'; }
+                        catch { glyph = '?'; }
                         // The tile actually asked about is marked so it can be found in the paste.
-                        string cell = x == t.X && y == t.Y ? $"[{c}]" : c.ToString();
+                        string cell = x == tilePoint.X && y == tilePoint.Y ? $"[{glyph}]" : glyph.ToString();
                         row.Append(cell.PadLeft(5));
                     }
                     write(row.ToString());
@@ -1586,29 +1693,29 @@ namespace SDVRadiance
         }
 
         /// <summary>Top colours of the Back art, for tuning art classifiers.</summary>
-        private static void WriteBackPalette(Action<string> write, GameLocation location, Point t)
+        private static void WriteBackPalette(Action<string> write, GameLocation location, Point tilePoint)
         {
-            var back = location.map?.GetLayer("Back");
-            var bt = back?.Tiles[t.X, t.Y];
-            if (bt is xTile.Tiles.AnimatedTile at && at.TileFrames is { Length: > 0 })
-                bt = at.TileFrames[0];
-            if (bt?.TileSheet != null)
+            var backLayer = location.map?.GetLayer("Back");
+            var backTile = backLayer?.Tiles[tilePoint.X, tilePoint.Y];
+            if (backTile is xTile.Tiles.AnimatedTile at && at.TileFrames is { Length: > 0 })
+                backTile = at.TileFrames[0];
+            if (backTile?.TileSheet != null)
             {
                 try
                 {
-                    var texture = Game1.content.Load<Texture2D>(bt.TileSheet.ImageSource);
-                    var ib = bt.TileSheet.GetTileImageBounds(bt.TileIndex);
-                    var buf = new Color[ib.Width * ib.Height];
-                    texture.GetData(0, new Rectangle(ib.X, ib.Y, ib.Width, ib.Height), buf, 0, buf.Length);
+                    var texture = Game1.content.Load<Texture2D>(backTile.TileSheet.ImageSource);
+                    var imageBounds = backTile.TileSheet.GetTileImageBounds(backTile.TileIndex);
+                    var pixels = new Color[imageBounds.Width * imageBounds.Height];
+                    texture.GetData(0, new Rectangle(imageBounds.X, imageBounds.Y, imageBounds.Width, imageBounds.Height), pixels, 0, pixels.Length);
                     var groups = new System.Collections.Generic.Dictionary<Color, int>();
-                    foreach (Color c in buf)
-                        groups[c] = groups.TryGetValue(c, out int cn) ? cn + 1 : 1;
+                    foreach (Color c in pixels)
+                        groups[c] = groups.TryGetValue(c, out int count) ? count + 1 : 1;
                     write("Back art palette (top 10):");
                     foreach (var kv in System.Linq.Enumerable.Take(
                         System.Linq.Enumerable.OrderByDescending(groups, g => g.Value), 10))
                         write($"    RGBA({kv.Key.R},{kv.Key.G},{kv.Key.B},{kv.Key.A}) x{kv.Value}");
                 }
-                catch (Exception ex) { write("palette read failed: " + ex.Message); }
+                catch (Exception exception) { write("palette read failed: " + exception.Message); }
             }
         }
     }

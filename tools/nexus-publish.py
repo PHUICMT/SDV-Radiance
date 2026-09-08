@@ -1025,6 +1025,17 @@ def publish_description(ctx, draft, version, confirm, stage=False):
                 break
         return 0
 
+    # The page enables Save on an input event, and filling the editor through its API fires
+    # none: one typed space and its backspace in the source box is what wakes the button
+    # (found on 1.7.5, when a correct draft sat in the editor with every Save dead).
+    try:
+        box = page.locator(".sceditor-container textarea").first
+        if box.count() and box.is_visible():
+            box.click(); page.keyboard.press("End"); page.keyboard.type(" "); page.keyboard.press("Backspace")
+        page.evaluate("""() => { for (const t of document.querySelectorAll('.sceditor-container textarea, textarea[name*=description], textarea[name*=Description]')) { t.dispatchEvent(new Event('input', {bubbles: true})); t.dispatchEvent(new Event('change', {bubbles: true})); } }""")
+        time.sleep(1.5)
+    except Exception as ex:
+        print(f"  could not nudge the form: {ex}")
     if not click_save(page):
         print("no enabled Save button found")
         return 1

@@ -130,6 +130,7 @@ namespace SDVRadiance
             HoldTemporarySpritesWhileFrozen(harmony, monitor);
             SpriteDrawRecorder.Install(harmony, monitor);
             SheetUpscaler.Install(harmony, monitor);
+            SpriteFlushPath.Install(harmony, monitor);
             // Before MonoGame writes a sampler to a texture unit, make sure the unit holds the
             // texture it believes is there; see TextureUnitGuard for the blur this stops.
             TextureUnitGuard.Install(harmony, monitor);

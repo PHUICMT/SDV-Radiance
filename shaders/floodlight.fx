@@ -115,10 +115,10 @@ float2 MapSize;          // lightmap size in cells
 float Strength;          // 0..1 how strongly the flood modulates the scene
 float AmbientFloor;      // lower bound so nothing ever goes fully black
 
-float2 OccOrigin;        // world tile coordinate of the occluder mask's (0,0) cell
-float2 OccMapSize;       // occluder mask size in cells
-float4 LightPosArr[8];   // xy = per-light screen UV, z = 1 when this light is an actual flame
-float4 LightColArr[8];   // rgb = colour, w = radius in UV (height units)
+float2 OccluderOrigin;        // world tile coordinate of the occluder mask's (0,0) cell
+float2 OccluderMapSize;       // occluder mask size in cells
+float4 LightPositions[8];   // xy = per-light screen UV, z = 1 when this light is an actual flame
+float4 LightColours[8];   // rgb = colour, w = radius in UV (height units)
 float DirectCount;       // how many entries are live
 
 // SECOND TIER: more lights, same pools, no shadow ray. What costs real money per pixel
@@ -136,8 +136,8 @@ float DirectCount;       // how many entries are live
 // is skipped in one branch where its pool cannot touch the pixel, so an empty or distant slot
 // costs a test and nothing else.
 #define SOFT_LIGHTS 40
-float4 SoftPosArr[SOFT_LIGHTS];   // xy = UV, z = flame flag
-float4 SoftColArr[SOFT_LIGHTS];
+float4 SoftLightPositions[SOFT_LIGHTS];   // xy = UV, z = flame flag
+float4 SoftLightColours[SOFT_LIGHTS];
 float SoftCount;
 float Aspect;            // w/h so light pools stay round
 float ShadowStrength;    // 0..1 how dark a fully occluded ray gets
@@ -166,13 +166,28 @@ float DebugLampShadow;
 float MarchFromTexture;
 // Which four lamps the LampMarch pass fires: 0 for lamps 0..3 (the first target), 4 for 4..7
 // (the second). A UNIFORM, not a literal per technique, and that is the whole point of it.
-// With a literal base of 4 the compiled shader touched only LightPosArr[4..7], and the GL
+// With a literal base of 4 the compiled shader touched only LightPositions[4..7], and the GL
 // build packs each shader's constants from the lowest register it uses: the array's base moved,
 // the values written for it landed on the wrong lamps, and lamps 4 to 7 marched from another
 // lamp's position. Read through a uniform, the shader references the whole array and the pack
 // keeps its base; the pass costs the same. Found on the Town pavement at dawn, where a pool
 // vanished and returned as the walk re-ranked which lamp sat in slot 4.
 float MarchBase;
+// WHERE THE MARCH PASS IS PAINTING, in world tiles: the top-left of its target and how many
+// tiles it spans. Until 1.7.5 that target was simply the screen at half resolution, so every
+// texel changed the world position it stood over the moment the camera moved a pixel, and the
+// whole pass had to be fired again on every frame of a walk. Anchored to the world instead, a
+// texel keeps its ground while the camera scrolls inside the window, which is what lets the
+// answer be kept (see MarchChannelWanted) - and it steadies the picture as well, because the
+// sampling grid no longer slides over the world as you walk.
+// With the cache switched off these two describe the screen exactly, so the same shader draws
+// the old picture: (wt - MarchOrigin) / MarchSize is then the screen UV it always was.
+float2 MarchOrigin;
+float2 MarchSize;
+// Which of this target's four lamps to fire this pass, one per channel. A lamp that has not
+// moved over ground that has not changed keeps the answer already in its channel: the write
+// mask stops the draw touching it and this stops the march being walked for it.
+float4 MarchChannelWanted;
 texture MarchATexture;
 sampler2D MarchASampler = sampler_state
 {
@@ -204,7 +219,7 @@ sampler2D NormalSampler = sampler_state
 float ReliefStrength;      // the lamps' lean, 0 = off
 float ReliefLampHeight;    // how high a lamp hangs above the ground, in screen heights
 float ReliefSunStrength;   // the sun's lean, 0 indoors and after dark
-float3 ReliefSunDir;       // toward the sun: screen xy, and up
+float3 ReliefSunDirection;       // toward the sun: screen xy, and up
 // RIM LIGHT: the bright fringe along the edge of a sprite that faces a lamp, in that lamp's own
 // colour. The lean above is a MODULATION - it can only make a side lighter or darker than the
 // art already is - and a modulation cannot put light ON an outline, which is the thing that
@@ -259,7 +274,7 @@ float HearthFloor;
 
 // Window light shafts: a sheared beam of daylight falling from each visible window,
 // leaning with the same sun the shadows use. Positions are the BOTTOM of the pane.
-float2 WindowPosArr[6];  // per-window screen UV
+float2 WindowPositions[6];  // per-window screen UV
 float WindowCount;       // how many entries are live
 float3 WindowColour;     // daylight colour x strength (premultiplied, eased on CPU)
 float4 WindowBeam;       // x = lean (tiles sideways per tile of drop), y = reach (tiles),
@@ -277,7 +292,7 @@ float PaneDaylight;      // 1 while there is sky light outside, 0 after dark (ea
 // toward the sun instead: blocked path = shade, open path beside a blocked one = a shaft.
 // Strength is zero unless god rays AND the sun source are both switched on, outdoors, in
 // daylight; the branch below makes the whole block free when it is off.
-float2 SunShaftDir;      // tile-space direction the light travels (normalised, leaning like the sun)
+float2 SunShaftDirection;      // tile-space direction the light travels (normalised, leaning like the sun)
 float3 SunShaftColour;   // the sun's own colour x strength (premultiplied on CPU)
 float SunShaftStrength;
 float SunShaftDrift;     // slow time drift so the shafts shimmer instead of standing painted
@@ -318,7 +333,7 @@ float NightLift;
 // filmed or painted night trades on that: the moonlit world runs cool and drained while anything
 // on fire keeps its full colour. The desaturation therefore skips pixels a lamp is reaching -
 // lampness gates it - which is what makes a torch at night read as an EVENT instead of a texture.
-float NightDesat;
+float NightDesaturation;
 
 // 1 = paint the emitter test over the world instead of the lit scene (radiance_debug emitter).
 // Whether a flame is being recognised as a light source, and how much of it, has been reasoned
@@ -388,10 +403,10 @@ float Bayer(float2 p)
 
 // Occlusion at a screen-UV point (linear across tiles â†’ soft shadow edges).
 // tex2Dlod: no gradient instructions, so the per-light [branch] stays legal in ps_3_0.
-float OccAt(float2 p)
+float OcclusionAt(float2 p)
 {
     float2 wt = p * TilesPerScreen + WorldTileOffset;
-    float2 muv = (wt - OccOrigin) / OccMapSize;
+    float2 muv = (wt - OccluderOrigin) / OccluderMapSize;
     return tex2Dlod(OccluderSampler, float4(muv, 0.0, 0.0)).a;
 }
 
@@ -399,10 +414,9 @@ float OccAt(float2 p)
 // half-size copy, 4 the quarter, 8 the eighth, and anything between a blend of its neighbours.
 // Two reads per call. The shadow march uses it for both of its needs: a footprint at least as
 // wide as the gap between two steps, so nothing thin falls between them, and the penumbra.
-float OccAtBlur(float2 p, float radiusTexels)
+float OcclusionAtBlurTiles(float2 worldTile, float radiusTexels)
 {
-    float2 wt = p * TilesPerScreen + WorldTileOffset;
-    float4 muv = float4((wt - OccOrigin) / OccMapSize, 0.0, 0.0);
+    float4 muv = float4((worldTile - OccluderOrigin) / OccluderMapSize, 0.0, 0.0);
     float k = clamp(log2(max(radiusTexels, 1.0)), 0.0, 3.0);
     float lo, hi;
     if (k < 1.0)      { lo = tex2Dlod(OccluderSampler, muv).a;      hi = tex2Dlod(OccluderSoft1Sampler, muv).a; }
@@ -411,12 +425,18 @@ float OccAtBlur(float2 p, float radiusTexels)
     return lerp(lo, hi, frac(min(k, 2.999)));
 }
 
+// The same read from a SCREEN uv, for the passes that work in screen space.
+float OcclusionAtBlur(float2 p, float radiusTexels)
+{
+    return OcclusionAtBlurTiles(p * TilesPerScreen + WorldTileOffset, radiusTexels);
+}
+
 // One lamp's shadow ray from the lamp to this pixel: the deepest occlusion it meets, before
 // the lamp's own openness and the pixel's are applied. Shared by FloodPS (the full-resolution
 // road) and the LampMarch passes (the half-resolution one), so the two can never disagree.
-float MarchOcc(float2 uv, float2 lp, float dist)
+float MarchOcclusionTiles(float2 pixelTile, float2 lampTile, float distanceTiles)
 {
-    float occ = 0.0;
+    float occlusion = 0.0;
     // THE MARCH STEPS ONE MASK TEXEL AT A TIME. With a fixed count of steps the gap
     // between them grows with the ray, and once it is wider than the thing in the way -
     // a plant, a post, a keg - some rays hit it and their neighbours pass between two
@@ -428,10 +448,9 @@ float MarchOcc(float2 uv, float2 lp, float dist)
     // The penumbra is a mip read too: the further a step is from the pixel, the wider a
     // lamp's own width smears the edge, and a coarser level IS that smear. It replaces
     // five taps across the ray, which could only ever give the edge a handful of levels.
-    float distTiles = dist * TilesPerScreen.y;
-    float distTexels = distTiles * 8.0;
-    float stepCount = clamp(ceil(distTexels), 8.0, max(8.0, MarchStepCeiling));
-    float stepTexels = distTexels / stepCount;
+    float distanceTexels = distanceTiles * 8.0;
+    float stepCount = clamp(ceil(distanceTexels), 8.0, max(8.0, MarchStepCeiling));
+    float stepTexels = distanceTexels / stepCount;
     // The blur is decided ONCE per ray, where the ray first meets something. Left to vary
     // step by step, the steps on the occluder's far side (nearer the pixel, so less blur)
     // read it sharp and won the max() every time, and the softness dial did nothing.
@@ -444,53 +463,68 @@ float MarchOcc(float2 uv, float2 lp, float dist)
         // TILES rather than as a fraction of the ray, and only a hand's breadth of each:
         // selfOpen and pixelOpen (in FloodPS) do the rest, and a longer fade left a lit
         // gap between every keg and its shadow.
-        float fromLightTiles = f * distTiles;
-        float fromPixelTiles = (1.0 - f) * distTiles;
-        float wgt = smoothstep(0.10, 0.40, fromLightTiles) * smoothstep(0.0, 0.08, fromPixelTiles);
-        float2 onRay = lerp(lp, uv, f);
+        float fromLightTiles = f * distanceTiles;
+        float fromPixelTiles = (1.0 - f) * distanceTiles;
+        float stepWeight = smoothstep(0.10, 0.40, fromLightTiles) * smoothstep(0.0, 0.08, fromPixelTiles);
+        float2 onRay = lerp(lampTile, pixelTile, f);
         // At the dial's 1 a step a tile and a half from the pixel reads at a three-texel
         // blur, the width a lamp's own body smears an edge that far out; at 2 six texels;
         // the ceiling is a whole tile. Wider blur also thins a fence's pickets with
         // distance, which is what a penumbra does to a comb.
-        float penumbraTexels = (1.0 - f) * distTiles * 2.0 * ShadowSoftness;
+        float penumbraTexels = (1.0 - f) * distanceTiles * 2.0 * ShadowSoftness;
         float radiusHere = max(stepTexels, penumbraTexels);
         float radius = lockedRadius >= 0.0 ? lockedRadius : radiusHere;
-        float blocked = OccAtBlur(onRay, radius);
+        float blocked = OcclusionAtBlurTiles(onRay, radius);
         if (lockedRadius < 0.0 && blocked > 0.2)
             lockedRadius = radius;
-        occ = max(occ, blocked * wgt);
+        occlusion = max(occlusion, blocked * stepWeight);
     }
-    return occ;
+    return occlusion;
 }
 
-// Four lamps' rays from this (half-resolution) pixel, one per channel: lamps MarchBase..+3.
+// The same ray from SCREEN coordinates, for the full-resolution road inside FloodPS. One
+// implementation, two ways in: a pixel that reads its shadow out of the march target and one
+// that walks the ray itself have to agree about where the ray went.
+float MarchOcclusion(float2 uv, float2 lampUv, float distanceUv)
+{
+    return MarchOcclusionTiles(uv * TilesPerScreen + WorldTileOffset,
+                         lampUv * TilesPerScreen + WorldTileOffset,
+                         distanceUv * TilesPerScreen.y);
+}
+
+// Four lamps' rays to this texel of the march window, one per channel: lamps MarchBase..+3.
 // The base is a uniform (see MarchBase for why a literal was a bug); the index is resolved
-// by the compiler as a select over the array, which a pixel
-// shader on this profile requires.
-float4 LampMarchFour(float2 uv)
+// by the compiler as a select over the array, which a pixel shader on this profile requires.
+//
+// Everything here is in WORLD TILES, because the target is (see MarchOrigin). The lamp arrives
+// in screen UV like every other pass reads it, and is converted once; its reach converts by the
+// same factor, so the pool this fades out at is the pool the lighting pass draws.
+float4 LampMarchFour(float2 windowUv)
 {
     float4 result = float4(0.0, 0.0, 0.0, 0.0);
     int base = (int)(MarchBase + 0.5);
+    float2 pixelTile = MarchOrigin + windowUv * MarchSize;
     [unroll]
     for (int k = 0; k < 4; k++)
     {
-        int li = base + k;
-        float on = step((float)li + 0.5, DirectCount);
-        float2 lp = LightPosArr[li].xy;
-        float4 lc = LightColArr[li];
-        float2 dvec = uv - lp;
-        dvec.x *= Aspect;
-        float dist = length(dvec);
-        float att = saturate(1.0 - dist / max(lc.w, 0.02));
-        att = att * (0.55 + 0.45 * att);
-        float occ = 0.0;
+        int lightIndex = base + k;
+        float wanted = k == 0 ? MarchChannelWanted.x : k == 1 ? MarchChannelWanted.y
+                     : k == 2 ? MarchChannelWanted.z : MarchChannelWanted.w;
+        float on = step((float)lightIndex + 0.5, DirectCount);
+        float2 lampTile = LightPositions[lightIndex].xy * TilesPerScreen + WorldTileOffset;
+        float4 lampColour = LightColours[lightIndex];
+        float distanceTiles = length(pixelTile - lampTile);
+        float reachTiles = max(lampColour.w, 0.02) * TilesPerScreen.y;
+        float attenuation = saturate(1.0 - distanceTiles / reachTiles);
+        attenuation = attenuation * (0.55 + 0.45 * attenuation);
+        float occlusion = 0.0;
         [branch]
-        if (on * att > 0.004)
-            occ = MarchOcc(uv, lp, dist);
-        if (k == 0) result.x = occ;
-        else if (k == 1) result.y = occ;
-        else if (k == 2) result.z = occ;
-        else result.w = occ;
+        if (wanted > 0.5 && on * attenuation > 0.004)
+            occlusion = MarchOcclusionTiles(pixelTile, lampTile, distanceTiles);
+        if (k == 0) result.x = occlusion;
+        else if (k == 1) result.y = occlusion;
+        else if (k == 2) result.z = occlusion;
+        else result.w = occlusion;
     }
     return result;
 }
@@ -500,7 +534,7 @@ float4 LampMarchPS(PixelInput input) : SV_TARGET { return LampMarchFour(input.UV
 float4 FloodPS(PixelInput input) : SV_TARGET
 {
     float2 uv = input.UV;
-    float4 src = tex2D(SourceSampler, uv);
+    float4 scene = tex2D(SourceSampler, uv);
     float4 normalSample = tex2D(NormalSampler, uv);
     float3 normalHere = float3(normalSample.rg * 2.0 - 1.0, normalSample.b);
     float reliefCoverage = normalSample.a * step(0.001, ReliefStrength + ReliefSunStrength);
@@ -520,9 +554,9 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     [branch]
     if (LightMapBlend > 0.0)
     {
-        float2 muv2 = (wt - Map2Origin) / Map2Size;
+        float2 secondLightMapUv = (wt - Map2Origin) / Map2Size;
         // tex2Dlod: no gradient, so the branch around it stays legal in ps_3_0.
-        light = lerp(light, tex2Dlod(LightMap2Sampler, float4(muv2, 0.0, 0.0)).rgb * 2.0, LightMapBlend);
+        light = lerp(light, tex2Dlod(LightMap2Sampler, float4(secondLightMapUv, 0.0, 0.0)).rgb * 2.0, LightMapBlend);
     }
 
     // DIRECT light with per-light shadows: each real light adds a round pool whose ray
@@ -556,7 +590,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // still showed the round glow the game painted there, so the shadow only dimmed what the
     // mod had added and the pool stayed round. This takes part of that glow back.
     float shadowCarve = 0.0;
-    float occDebug = 0.0;
+    float occlusionDebug = 0.0;
     // WHETHER ANY MARCH CAN BE SEEN. A ray's whole product, occ, reaches the picture through
     // three terms and no others: the shadow (times ShadowStrength, and the carve rides on that
     // same factor at the end of the pass), the lamp shafts (gated on LampShaftStrength) and the
@@ -572,20 +606,20 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // faint dusk shadow round differently from the build before this line existed.
     float marchWanted = (ShadowStrength > 0.0 ? 1.0 : 0.0) + step(0.004, LampShaftStrength) + step(0.5, DebugLampShadow);
     [unroll]
-    for (int li = 0; li < 8; li++)
+    for (int lightIndex = 0; lightIndex < 8; lightIndex++)
     {
-        float on = step((float)li + 0.5, DirectCount);
-        float2 lp = LightPosArr[li].xy;
-        float4 lc = LightColArr[li];
-        float2 dvec = uv - lp;
-        dvec.x *= Aspect;
-        float dist = length(dvec);
-        float att = saturate(1.0 - dist / max(lc.w, 0.02));
+        float on = step((float)lightIndex + 0.5, DirectCount);
+        float2 lampUv = LightPositions[lightIndex].xy;
+        float4 lampColour = LightColours[lightIndex];
+        float2 fromLamp = uv - lampUv;
+        fromLamp.x *= Aspect;
+        float distanceUv = length(fromLamp);
+        float attenuation = saturate(1.0 - distanceUv / max(lampColour.w, 0.02));
         // Softer than a pure square: the mid-pool stays brighter so the light reads as a
         // wide, diffuse glow that fades out gently, instead of a small hot dot.
-        att = att * (0.55 + 0.45 * att);
+        attenuation = attenuation * (0.55 + 0.45 * attenuation);
         [branch]
-        if (on * att > 0.004)
+        if (on * attenuation > 0.004)
         {
             // How much of this light's own shadow to apply. Only the first eight lights get a
             // shadow ray at all, and which eight changes as the camera moves, so switching it on
@@ -595,8 +629,8 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             // flicker still there. The weight is eased on the CPU and rides in .w, so a light
             // arriving in this tier starts identical to the tier below it and grows a shadow
             // instead of gaining one.
-            float shadowW = LightPosArr[li].w;
-            float occ = 0.0;
+            float shadowWeight = LightPositions[lightIndex].w;
+            float occlusion = 0.0;
             // The light's own openness, read once the march is worth reading at all; 1 leaves
             // the shaft term below untouched on the frames the march is skipped.
             float selfOpen = 1.0;
@@ -607,18 +641,21 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             if (MarchFromTexture > 0.5)
             {
                 // The ray was fired from the LampMarch pass at half resolution; read it back
-                // bilinearly. li is a literal here (the loop is unrolled), so the target and the
-                // channel are chosen at compile time. tex2Dlod: no gradients, so the per-light
-                // [branch] this sits in stays legal.
-                float4 packed = li < 4 ? tex2Dlod(MarchASampler, float4(uv, 0.0, 0.0))
-                                       : tex2Dlod(MarchBSampler, float4(uv, 0.0, 0.0));
-                int channel = li < 4 ? li : li - 4;
+                // bilinearly, at this pixel's place in the march window rather than at its place
+                // on the screen - the two are the same rectangle only when the cache is off.
+                // li is a literal here (the loop is unrolled), so the target and the channel are
+                // chosen at compile time. tex2Dlod: no gradients, so the per-light [branch] this
+                // sits in stays legal.
+                float2 marchUv = (wt - MarchOrigin) / MarchSize;
+                float4 packed = lightIndex < 4 ? tex2Dlod(MarchASampler, float4(marchUv, 0.0, 0.0))
+                                       : tex2Dlod(MarchBSampler, float4(marchUv, 0.0, 0.0));
+                int channel = lightIndex < 4 ? lightIndex : lightIndex - 4;
                 float4 pick = float4(channel == 0 ? 1.0 : 0.0, channel == 1 ? 1.0 : 0.0,
                                      channel == 2 ? 1.0 : 0.0, channel == 3 ? 1.0 : 0.0);
-                occ = dot(packed, pick);
+                occlusion = dot(packed, pick);
             }
             else
-                occ = MarchOcc(uv, lp, dist);
+                occlusion = MarchOcclusion(uv, lampUv, distanceUv);
             // A light standing INSIDE something does not get to shadow itself. The farmhouse
             // porch is part of the building's footprint and the mask stamps that footprint
             // solid, so a ring worn while standing on it sent every ray out through an occluder:
@@ -644,28 +681,28 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             // And it never reaches zero. A term that decides rather than fades is what made a
             // quarter tile of movement switch a room's shadows off; the floor keeps a pressed-in
             // light most of its shadows and still spares the porch its pool.
-            selfOpen = lerp(1.0, 0.15, smoothstep(0.55, 0.95, OccAtBlur(lp, 8.0)));
+            selfOpen = lerp(1.0, 0.15, smoothstep(0.55, 0.95, OcclusionAtBlur(lampUv, 8.0)));
             // And a wall is not shadowed by its own footprint. The mask stamps a building solid
             // across its tiles, but the game draws that building's face and roof OVER the tiles
             // north of them, so a lamp in front of the farmhouse threw the house's shadow across
             // the house itself: the boards went dark as the player stepped off the porch and lit
             // again as they stepped back on. A pixel that IS an occluder keeps the light that
             // reaches its face; the ground in front of it still takes the shadow.
-            float pixelOpen = 1.0 - smoothstep(0.35, 0.85, OccAt(uv));
-            occ *= selfOpen * pixelOpen;
+            float pixelOpen = 1.0 - smoothstep(0.35, 0.85, OcclusionAt(uv));
+            occlusion *= selfOpen * pixelOpen;
             }
             // A shadow lives inside its light's reach and thins with it: the contrast of the
             // shadow falls with the pool (att, again) so it is gone where the pool is gone, and
             // ground the game shows as night never gets a wedge cut into it.
-            float shadowHere = occ * ShadowStrength * shadowW * att;
-            float lit01 = att * (1.0 - shadowHere);
+            float shadowHere = occlusion * ShadowStrength * shadowWeight * attenuation;
+            float litFraction = attenuation * (1.0 - shadowHere);
             // Relief: the side of a sprite that faces this lamp leans toward its light, the far
             // side away, round the flat answer (see NormalTexture), as much as the pool reaches.
             [branch]
             if (reliefCoverage > 0.001)
             {
-                float3 toLamp = normalize(float3(-dvec.x, -dvec.y, ReliefLampHeight));
-                reliefLamps += (dot(normalHere, toLamp) - toLamp.z) * lit01;
+                float3 toLamp = normalize(float3(-fromLamp.x, -fromLamp.y, ReliefLampHeight));
+                reliefLamps += (dot(normalHere, toLamp) - toLamp.z) * litFraction;
             }
             // BLACKBODY WALK, flames only: real firelight is not one colour, it is a gradient -
             // near white at the source, gold a step out, deep warm at the tail. One flat orange
@@ -673,23 +710,23 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             // thing that is burning. The core third of the pool walks the lamp's own colour
             // toward white-hot; the tail keeps the colour untouched, so the reach of the pool
             // and everything tuned against it stays exactly where it was.
-            float coreT = saturate(1.0 - dist / max(lc.w * 0.30, 0.01));
-            coreT = coreT * coreT * LightPosArr[li].z;
-            float3 lcol = lerp(lc.rgb, float3(1.06, 0.98, 0.82) * max(max(lc.r, lc.g), lc.b), coreT);
-            direct += lcol * lit01;
+            float coreBlend = saturate(1.0 - distanceUv / max(lampColour.w * 0.30, 0.01));
+            coreBlend = coreBlend * coreBlend * LightPositions[lightIndex].z;
+            float3 walkedLampColour = lerp(lampColour.rgb, float3(1.06, 0.98, 0.82) * max(max(lampColour.r, lampColour.g), lampColour.b), coreBlend);
+            direct += walkedLampColour * litFraction;
             // The rim, in this lamp's walked colour and inside this lamp's reach, so a fringe
             // can never be brighter or wider than the pool that is supposed to be casting it.
             [branch]
             if (reliefCoverage > 0.001 && RimStrength > 0.001)
             {
-                float3 toLampRim = normalize(float3(-dvec.x, -dvec.y, ReliefLampHeight));
+                float3 toLampRim = normalize(float3(-fromLamp.x, -fromLamp.y, ReliefLampHeight));
                 // How edge-on this pixel is, cubed. Cubed rather than raw because the maps give
                 // a gentle slope right across a sprite's interior and a raw term lit the whole
                 // face, which is the lean's job; the cube leaves all but the outermost pixels
                 // alone. And only the side actually turned toward the lamp.
                 float edgeOn = saturate(1.0 - normalHere.z);
                 float facing = saturate(dot(normalHere.xy, toLampRim.xy));
-                rimLight += lcol * (edgeOn * edgeOn * edgeOn * facing * lit01);
+                rimLight += walkedLampColour * (edgeOn * edgeOn * edgeOn * facing * litFraction);
             }
             // Lamp shaft (see LampShaftStrength). Two more rays from the same lamp, to a point a
             // little to each side of this pixel, marched like the shadow ray above with fewer
@@ -707,39 +744,39 @@ float4 FloodPS(PixelInput input) : SV_TARGET
                 // WEAKER side is what counts. A wider pair was tried for the space between two
                 // trees and it made an alley three tiles wide, open all round the player, throw
                 // streaks: too far apart to read as a gap, so it is not one here either.
-                float2 acrossPixels = normalize(float2(-dvec.y, dvec.x));
+                float2 acrossPixels = normalize(float2(-fromLamp.y, fromLamp.x));
                 float2 acrossUv = float2(acrossPixels.x / Aspect, acrossPixels.y) / TilesPerScreen.y;
-                float2 uvNearL = uv + acrossUv * 0.9, uvNearR = uv - acrossUv * 0.9;
-                float occNearL = 0.0, occNearR = 0.0;
+                float2 uvBesideLeft = uv + acrossUv * 0.9, uvBesideRight = uv - acrossUv * 0.9;
+                float occlusionBesideLeft = 0.0, occlusionBesideRight = 0.0;
                 [unroll]
                 for (int t = 1; t <= 5; t++)
                 {
                     float ft = t / 5.0;
-                    float wgtT = smoothstep(0.06, 0.28, ft) * smoothstep(1.02, 0.86, ft);
-                    occNearL = max(occNearL, OccAt(lerp(lp, uvNearL, ft)) * wgtT);
-                    occNearR = max(occNearR, OccAt(lerp(lp, uvNearR, ft)) * wgtT);
+                    float probeWeight = smoothstep(0.06, 0.28, ft) * smoothstep(1.02, 0.86, ft);
+                    occlusionBesideLeft = max(occlusionBesideLeft, OcclusionAt(lerp(lampUv, uvBesideLeft, ft)) * probeWeight);
+                    occlusionBesideRight = max(occlusionBesideRight, OcclusionAt(lerp(lampUv, uvBesideRight, ft)) * probeWeight);
                 }
-                float gap = min(occNearL, occNearR);
+                float gap = min(occlusionBesideLeft, occlusionBesideRight);
                 // Never on the thing that blocks: a roof beside the path is "open" to the march
                 // (the lit-side-of-a-wall fade) and took the beam across its tiles.
-                float beamEdge = saturate((gap - occ) * 1.6) * (1.0 - OccAt(uv));
-                float2 lampTile = lp * TilesPerScreen + WorldTileOffset;
-                float beamAngle = atan2(dvec.y, dvec.x);
+                float beamEdge = saturate((gap - occlusion) * 1.6) * (1.0 - OcclusionAt(uv));
+                float2 lampTile = lampUv * TilesPerScreen + WorldTileOffset;
+                float beamAngle = atan2(fromLamp.y, fromLamp.x);
                 // Narrow bright rays with dark air between, not a gentle swell: a soft band read as
                 // the pool getting warmer, and only the rays read as light with structure.
                 float beamBand = pow(0.5 + 0.5 * sin(beamAngle * 9.0 + SunShaftDrift * 0.7 + dot(lampTile, float2(2.3, 4.1))), 2.5);
                 // A beam is seen against dark air, so it lives in the outer half of the pool:
                 // right round the lamp everything is lit and a streak there reads as a fault.
-                float beamRing = smoothstep(0.5, 1.3, dist * TilesPerScreen.y)
-                               * smoothstep(0.30, 0.60, dist / max(lc.w, 0.02));
+                float beamRing = smoothstep(0.5, 1.3, distanceUv * TilesPerScreen.y)
+                               * smoothstep(0.30, 0.60, distanceUv / max(lampColour.w, 0.02));
                 // A beam needs an OPEN path: through leaves at half occlusion the pool still
                 // glows a little, a beam must not, or a hedge sprays streaks out its far side.
-                float openPath = saturate(1.0 - 2.0 * occ);
+                float openPath = saturate(1.0 - 2.0 * occlusion);
                 // A lamp INSIDE something throws no shafts either (selfOpen, above). Without this
                 // the self-shadow cancel worked backwards here: a beam is (gap - occ), so taking
                 // occ away from a ring worn on the farmhouse porch turned the whole footprint into
                 // one wide gap and the house wore a crown of streaks at dawn.
-                lampShaft += lcol * (att * openPath * beamEdge * beamBand * beamRing * shadowW * selfOpen);
+                lampShaft += walkedLampColour * (attenuation * openPath * beamEdge * beamBand * beamRing * shadowWeight * selfOpen);
             }
             // A HEARTH IS A CIRCLE ON THE FLOOR, NOT A WASH OVER THE ROOM. The reach above
             // is deliberately generous so a single lamp can light a street; borrowing it
@@ -753,7 +790,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             // it had been doing that since at least 1.5.1. Taking the strongest pool at each
             // pixel keeps a single hearth's circle exactly as it was, and stops a row of wall
             // lamps from adding up into a wash. Same reason the emitter term below uses max.
-            float attP = saturate(1.0 - dist / max(lc.w * 0.6, 0.02));
+            float poolAttenuation = saturate(1.0 - distanceUv / max(lampColour.w * 0.6, 0.02));
             // The carve follows the game's own glow, which sits in the core of the pool and is
             // gone long before the pool's gentle tail: the tighter pool radius, squared. Out where
             // the tail still lights a little there is no glow left to take, so nothing is taken,
@@ -762,54 +799,54 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             // tighter radius, so the carve follows attP itself; squaring it, and thinning it by
             // att again, left a quarter of the glow at most to take and the shadows read as faint
             // at every dial.
-            shadowCarve = max(shadowCarve, attP * occ * shadowW);
-            occDebug = max(occDebug, occ * shadowW);
-            float peak = max(max(lc.r, lc.g), max(lc.b, 0.0001));
-            float3 poolHere = (lc.rgb / peak) * (attP * attP) * (1.0 - shadowHere);
+            shadowCarve = max(shadowCarve, poolAttenuation * occlusion * shadowWeight);
+            occlusionDebug = max(occlusionDebug, occlusion * shadowWeight);
+            float peak = max(max(lampColour.r, lampColour.g), max(lampColour.b, 0.0001));
+            float3 poolHere = (lampColour.rgb / peak) * (poolAttenuation * poolAttenuation) * (1.0 - shadowHere);
             pool = max(pool, poolHere);
-            firePool = max(firePool, poolHere * LightPosArr[li].z);
-            float attE = saturate(1.0 - dist / max(lc.w * 0.12, 0.004));
-            emitter = max(emitter, attE * attE * LightPosArr[li].z);
-            float attH = saturate(1.0 - dist * TilesPerScreen.y / HearthCircleTiles);
-            hearthLit = max(hearthLit, attH * attH * (1.0 - shadowHere) * LightPosArr[li].z);
+            firePool = max(firePool, poolHere * LightPositions[lightIndex].z);
+            float emitterAttenuation = saturate(1.0 - distanceUv / max(lampColour.w * 0.12, 0.004));
+            emitter = max(emitter, emitterAttenuation * emitterAttenuation * LightPositions[lightIndex].z);
+            float hearthAttenuation = saturate(1.0 - distanceUv * TilesPerScreen.y / HearthCircleTiles);
+            hearthLit = max(hearthLit, hearthAttenuation * hearthAttenuation * (1.0 - shadowHere) * LightPositions[lightIndex].z);
         }
     }
     // Second tier: pools only, no ray. Same maths as above with the march left out.
     [unroll]
-    for (int si = 0; si < SOFT_LIGHTS; si++)
+    for (int softIndex = 0; softIndex < SOFT_LIGHTS; softIndex++)
     {
-        float son = step((float)si + 0.5, SoftCount);
-        float4 sc = SoftColArr[si];
-        float2 sdv = uv - SoftPosArr[si].xy;
-        sdv.x *= Aspect;
-        float sdist = length(sdv);
-        float sa = saturate(1.0 - sdist / max(sc.w, 0.02));
-        sa = sa * (0.55 + 0.45 * sa) * son;
+        float softOn = step((float)softIndex + 0.5, SoftCount);
+        float4 softColour = SoftLightColours[softIndex];
+        float2 softDelta = uv - SoftLightPositions[softIndex].xy;
+        softDelta.x *= Aspect;
+        float softDistance = length(softDelta);
+        float softAttenuation = saturate(1.0 - softDistance / max(softColour.w, 0.02));
+        softAttenuation = softAttenuation * (0.55 + 0.45 * softAttenuation) * softOn;
         // Every term below is zero when the pool does not reach this pixel (the hearth circle
         // is inside every fire's reach, and only fires have one), so the branch is exact and an
         // empty slot costs a distance test. Without it forty slots would price like forty lights.
         [branch]
-        if (sa <= 0.0)
+        if (softAttenuation <= 0.0)
             continue;
         // Same blackbody walk as the shadowed tier above.
-        float softCoreT = saturate(1.0 - sdist / max(sc.w * 0.30, 0.01));
-        softCoreT = softCoreT * softCoreT * SoftPosArr[si].z;
+        float softCoreBlend = saturate(1.0 - softDistance / max(softColour.w * 0.30, 0.01));
+        softCoreBlend = softCoreBlend * softCoreBlend * SoftLightPositions[softIndex].z;
         [branch]
         if (reliefCoverage > 0.001)
         {
-            float3 toSoftLamp = normalize(float3(-sdv.x, -sdv.y, ReliefLampHeight));
-            reliefLamps += (dot(normalHere, toSoftLamp) - toSoftLamp.z) * sa;
+            float3 toSoftLamp = normalize(float3(-softDelta.x, -softDelta.y, ReliefLampHeight));
+            reliefLamps += (dot(normalHere, toSoftLamp) - toSoftLamp.z) * softAttenuation;
         }
-        direct += lerp(sc.rgb, float3(1.06, 0.98, 0.82) * max(max(sc.r, sc.g), sc.b), softCoreT) * sa;
-        float saP = saturate(1.0 - sdist / max(sc.w * 0.6, 0.02));
-        float speak = max(max(sc.r, sc.g), max(sc.b, 0.0001));
-        float3 softPoolHere = (sc.rgb / speak) * (saP * saP * son);
+        direct += lerp(softColour.rgb, float3(1.06, 0.98, 0.82) * max(max(softColour.r, softColour.g), softColour.b), softCoreBlend) * softAttenuation;
+        float softPoolAttenuation = saturate(1.0 - softDistance / max(softColour.w * 0.6, 0.02));
+        float softPeak = max(max(softColour.r, softColour.g), max(softColour.b, 0.0001));
+        float3 softPoolHere = (softColour.rgb / softPeak) * (softPoolAttenuation * softPoolAttenuation * softOn);
         pool = max(pool, softPoolHere);
-        firePool = max(firePool, softPoolHere * SoftPosArr[si].z);
-        float saE = saturate(1.0 - sdist / max(sc.w * 0.12, 0.004));
-        emitter = max(emitter, saE * saE * son * SoftPosArr[si].z);
-        float saH = saturate(1.0 - sdist * TilesPerScreen.y / HearthCircleTiles);
-        hearthLit = max(hearthLit, saH * saH * son * SoftPosArr[si].z);
+        firePool = max(firePool, softPoolHere * SoftLightPositions[softIndex].z);
+        float softEmitterAttenuation = saturate(1.0 - softDistance / max(softColour.w * 0.12, 0.004));
+        emitter = max(emitter, softEmitterAttenuation * softEmitterAttenuation * softOn * SoftLightPositions[softIndex].z);
+        float softHearthAttenuation = saturate(1.0 - softDistance * TilesPerScreen.y / HearthCircleTiles);
+        hearthLit = max(hearthLit, softHearthAttenuation * softHearthAttenuation * softOn * SoftLightPositions[softIndex].z);
     }
 
     // THE BOUNCE FIELD SAYS HOW MUCH LIGHT REACHES A PIXEL. IT DOES NOT GET TO SAY WHAT
@@ -857,7 +894,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // read into src, which is the cheapest read a texture unit can do, and the lerp below
     // then returns exactly white. Off costs four cache hits and no branch at all.
     float2 ring = (2.0 / TilesPerScreen) * step(0.001, ColourBleed);
-    float3 around = src.rgb
+    float3 around = scene.rgb
                   + tex2D(SourceSampler, clamp(uv + float2( ring.x, 0.0), 0.0, 1.0)).rgb
                   + tex2D(SourceSampler, clamp(uv + float2(-ring.x, 0.0), 0.0, 1.0)).rgb
                   + tex2D(SourceSampler, clamp(uv + float2(0.0,  ring.y), 0.0, 1.0)).rgb
@@ -871,32 +908,32 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     light += direct;
 
     // Ordered dither breaks the bilinear ramps of the low-res map into pixel noise.
-    float dith = (Bayer(wt * 16.0) - 0.5) * 0.035;
+    float dither = (Bayer(wt * 16.0) - 0.5) * 0.035;
 
-    float3 mul = saturate(light + AmbientFloor + dith);
-    float3 lit = src.rgb * lerp(float3(1.0, 1.0, 1.0), mul, Strength);
+    float3 lightMultiplier = saturate(light + AmbientFloor + dither);
+    float3 litScene = scene.rgb * lerp(float3(1.0, 1.0, 1.0), lightMultiplier, Strength);
     // The relief, over the lit result: the lamps' lean (clamped, so a row of lamps does not
     // add up past what one lamp could do) and the sun's, the same modulation with the sun as
     // the light. Zero wherever the buffer has no coverage, so bare ground is untouched.
     float lean = ReliefStrength * 0.8 * clamp(reliefLamps, -1.0, 1.0)
-               + ReliefSunStrength * (dot(normalHere, ReliefSunDir) - ReliefSunDir.z);
-    lit *= saturate(1.0 + reliefCoverage * lean);
+               + ReliefSunStrength * (dot(normalHere, ReliefSunDirection) - ReliefSunDirection.z);
+    litScene *= saturate(1.0 + reliefCoverage * lean);
     // ADDED, not multiplied: the whole point is to put light on an outline that the art may
     // have drawn near black, and a multiply of near black is near black.
-    lit += rimLight * (RimStrength * reliefCoverage);
+    litScene += rimLight * (RimStrength * reliefCoverage);
     // See LeafShimmer. Two travelling sines make tile-scale patches drifting through the
     // canopy; up to nine percent either way at the dial's top, which reads as leaves turning
     // rather than a light flashing.
-    float leafLike = saturate((src.g - max(src.r, src.b)) * 5.0);
+    float leafLike = saturate((scene.g - max(scene.r, scene.b)) * 5.0);
     float shimmer = sin(wt.x * 2.3 + wt.y * 3.1 + ShimmerClock * 2.1)
                   * sin(wt.y * 5.3 - ShimmerClock * 3.4 + wt.x * 0.7);
-    lit *= 1.0 + reliefCoverage * leafLike * LeafShimmer * shimmer * 0.09;
+    litScene *= 1.0 + reliefCoverage * leafLike * LeafShimmer * shimmer * 0.09;
     // Carve the game's own glow where a light's ray is blocked (see shadowCarve). The dial is
     // how much of that glow goes: at the default a little over half, so a shadowed patch inside
     // a pool drops toward the night around the pool rather than below it.
     // At the dial's top 95% of the glow goes, never all of it: what is left under the glow is
     // the night the game drew, and that stays.
-    lit *= 1.0 - shadowCarve * ShadowStrength * (ShadowCarve * 0.95 * Strength);
+    litScene *= 1.0 - shadowCarve * ShadowStrength * (ShadowCarve * 0.95 * Strength);
     // See the param note. Two shapes of lift failed before this one, each on its own arithmetic.
     // A multiply: the vanilla night ground sits near black, and 1.5 times nearly nothing is
     // nearly nothing. A screen blend, x + moon(1-x): it raises a black pixel to a FLAT value, and
@@ -928,7 +965,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // never runs. Guarding it was worth doing regardless of which GPU does what with log2(0).
     [branch]
     if (NightLift > 0.0005)
-        lit = pow(max(lit, 1e-4), float3(1.0, 1.0, 1.0) - NightLift.xxx);
+        litScene = pow(max(litScene, 1e-4), float3(1.0, 1.0, 1.0) - NightLift.xxx);
 
     // THE GLASS IS NOT PART OF THE ROOM. A pane is a hole with the sky behind it, so the
     // interior exposure must not touch it: multiplying a bright white pane by a dim
@@ -937,14 +974,14 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // colour is added on top, so the glass stays the brightest thing in a dark room.
     float pane = 0.0;
     [unroll]
-    for (int pi = 0; pi < 6; pi++)
+    for (int paneIndex = 0; paneIndex < 6; paneIndex++)
     {
-        float pon = step((float)pi + 0.5, WindowCount);
-        float2 pd = (uv - WindowPosArr[pi]) * TilesPerScreen;
-        pd.y += WindowPane.z;                    // the beam starts below the pane's centre
-        float2 q = pd / max(WindowPane.xy, 0.001);
+        float paneOn = step((float)paneIndex + 0.5, WindowCount);
+        float2 paneDelta = (uv - WindowPositions[paneIndex]) * TilesPerScreen;
+        paneDelta.y += WindowPane.z;                    // the beam starts below the pane's centre
+        float2 q = paneDelta / max(WindowPane.xy, 0.001);
         float r = saturate(1.0 - dot(q, q));
-        pane = max(pane, pon * r * r);
+        pane = max(pane, paneOn * r * r);
     }
     // ...but only while there is daylight on the other side of it. After dark the pane is a
     // dark rectangle in a dark room, and exempting it from the room's exposure left a window
@@ -964,13 +1001,13 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // colour with it. AND bright in the source art, or a dark floor tile under a lamp gets
     // exempted too - "bright pixel = light source" on its own is what made god rays stream
     // out of a white-painted sign.
-    float srcLum = dot(src.rgb, float3(0.299, 0.587, 0.114));
-    float emitterLit = emitter * smoothstep(EmitterGateLow, EmitterGateHigh, srcLum);
+    float sceneLuminance = dot(scene.rgb, float3(0.299, 0.587, 0.114));
+    float emitterLit = emitter * smoothstep(EmitterGateLow, EmitterGateHigh, sceneLuminance);
     float roomExempt = max(paneLit, emitterLit);
 
     // Time-of-day room level, applied BEFORE the lamp-glow and window-shaft terms so
     // lamps and daylight beams punch through a dark room instead of dimming with it.
-    float3 expo = lerp(Exposure, float3(1.0, 1.0, 1.0), roomExempt);
+    float3 roomExposure = lerp(Exposure, float3(1.0, 1.0, 1.0), roomExempt);
 
     // A FIRE'S LIGHT IS NOT THE SKY'S.
     //
@@ -989,8 +1026,8 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // saloon. Nothing here can make a pixel brighter than the same pixel with no cast at all;
     // it can only stop it being tinted. The visible result is a warm circle on a dim floor,
     // which is what a fire in a dark room looks like, and what was asked for by name.
-    float expoGrey = dot(expo, float3(0.299, 0.587, 0.114));
-    expo = lerp(expo, float3(expoGrey, expoGrey, expoGrey), saturate(hearthLit));
+    float roomExposureGrey = dot(roomExposure, float3(0.299, 0.587, 0.114));
+    roomExposure = lerp(roomExposure, float3(roomExposureGrey, roomExposureGrey, roomExposureGrey), saturate(hearthLit));
 
     // The room is dimmed by a straight MULTIPLY, and 1.5.5 put it back to one after 1.5.4 tried
     // to be cleverer than that. The history is worth keeping, because the clever version is an
@@ -1022,7 +1059,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // So: if this is revisited, the thing to fix is that a flame is dimmed with the room, and the
     // fix has to be measured in Pierre's at dawn and a farmhouse in the morning, not just in a
     // dark saloon where every version looks fine.
-    lit *= expo;
+    litScene *= roomExposure;
 
     // Applied HERE, before the glass, the hearth and the sunbeam are added, so those
     // three - the only light in the picture that is not room light - keep their own
@@ -1031,8 +1068,8 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     [branch]
     if (RoomLookOn > 0.5)
     {
-        float sat = clamp(lerp(RoomSaturation, 1.0, saturate(roomExempt)), 0.0, 2.0);
-        float roomLum = dot(lit, float3(0.299, 0.587, 0.114));
+        float saturation = clamp(lerp(RoomSaturation, 1.0, saturate(roomExempt)), 0.0, 2.0);
+        float roomLum = dot(litScene, float3(0.299, 0.587, 0.114));
         // A BOOST MUST NOT BE ABLE TO PUSH A CHANNEL THROUGH ZERO, and clamping the RESULT at
         // zero is not the same thing: a channel that lands at zero is just as black as one that
         // lands below it, which is why the fireplace stayed black after the last clamp. Solve for
@@ -1043,10 +1080,10 @@ float4 FloodPS(PixelInput input) : SV_TARGET
         // lift at full strength on everything with the headroom for it - which is most of a room
         // - and quietly eases off exactly on the dark, low-chroma surfaces that have none.
         // Never below 1.0, since 1.0 is the identity and is always safe.
-        float3 below = max(float3(roomLum, roomLum, roomLum) - lit, 1e-5);
-        float satSafe = roomLum / max(max(below.r, below.g), below.b);
-        sat = min(sat, max(satSafe, 1.0));
-        lit = lerp(float3(roomLum, roomLum, roomLum), lit, sat);
+        float3 below = max(float3(roomLum, roomLum, roomLum) - litScene, 1e-5);
+        float saturationSafe = roomLum / max(max(below.r, below.g), below.b);
+        saturation = min(saturation, max(saturationSafe, 1.0));
+        litScene = lerp(float3(roomLum, roomLum, roomLum), litScene, saturation);
     }
     // A LERP THAT EXTRAPOLATES CAN LAND OUTSIDE ITS OWN ENDPOINTS. sat runs above 1.0 by
     // design (it is a BOOST, not a blend) - measured at 1.22 in the room this was found in,
@@ -1060,7 +1097,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // shader only adds, and this was the sole place actually capable of the sign flipping.
     // Clamped rather than re-derived, because the boost itself is doing its job everywhere
     // this doesn't happen; it only needs a floor for the cases it overshoots.
-    lit = max(lit, 0.0);
+    litScene = max(litScene, 0.0);
 
     // CAPPED, so the glow reveals the glass instead of replacing it. Uncapped, a window at
     // midday asked for about 1.6 where the display stops at 1: the panes, the bars between
@@ -1069,8 +1106,8 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // that mornings were still fine, which is the half of the day the sum stays under the
     // ceiling. Letting it climb to the ceiling and no further keeps every difference the art
     // has below that point, so the bars stay dark and the frame keeps its shape.
-    float3 paneGlow = src.rgb * WindowColour * (pane * WindowPane.w);
-    lit += min(paneGlow, max(1.0 - lit, 0.0));
+    float3 paneGlow = scene.rgb * WindowColour * (pane * WindowPane.w);
+    litScene += min(paneGlow, max(1.0 - litScene, 0.0));
 
     // A FIRE IN A ROOM WE DARKENED HAS TO LOOK LIKE IT IS DOING THE LIGHTING. Every
     // other path a light takes to the screen runs through Strength AND the brightness
@@ -1096,7 +1133,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // entire job is to let a lit room answer its own dimming - was switched off at precisely the
     // hour it exists for. Outdoors the exposure is (1,1,1) either way, so this stays exactly zero
     // there and nothing outside a windowed interior moves.
-    float dim = saturate(1.0 - dot(expo, float3(0.299, 0.587, 0.114)));
+    float dimmingTaken = saturate(1.0 - dot(roomExposure, float3(0.299, 0.587, 0.114)));
     // Scaled by Strength like everything else in this pass. It was not, and that made the GI
     // slider a lie in any room with a few lights in it: the saloon has 66, so `pool` saturates
     // across the whole floor and this line added 1.15 x dim x the pixel's OWN colour - about 59%
@@ -1118,7 +1155,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // 0.740, and this term reads 0.769 at zero (the room compounding its own colour, seen as
     // "too orange") against 0.715 at a quarter (below the game's own, seen as "milky"). 0.13
     // lands on 0.740, so the mod brightens the room without touching how colourful it is.
-    float3 addTint = lerp(src.rgb, dot(src.rgb, float3(0.299, 0.587, 0.114)).xxx, 0.13);
+    float3 addTint = lerp(scene.rgb, dot(scene.rgb, float3(0.299, 0.587, 0.114)).xxx, 0.13);
     // THE FLOOR IS FOR FIRES. It was written for one - a hearth must keep laying a circle on
     // the boards after the sun comes up - and then applied to every pool in the pass, which in
     // a room with sixty-six wall lamps means the floor alone repaints the entire room at noon,
@@ -1126,10 +1163,10 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // 12:10 against the same room with the mod off, and reported as the room being far more
     // orange than the game's own. Every pool still gives back exactly what the exposure took;
     // only a fire keeps a floor under that, which is the case the floor was reasoned about.
-    float3 give = addTint * (1.15 * Strength);
-    lit += give * (saturate(pool) * dim + saturate(firePool) * max(HearthFloor - dim, 0.0));
+    float3 giveBack = addTint * (1.15 * Strength);
+    litScene += giveBack * (saturate(pool) * dimmingTaken + saturate(firePool) * max(HearthFloor - dimmingTaken, 0.0));
     // >1 light (lamp cores) adds a soft warm glow rather than clipping at white.
-    lit += addTint * saturate(light - 1.0) * 0.45 * Strength;   // same reasoning as the pool above
+    litScene += addTint * saturate(light - 1.0) * 0.45 * Strength;   // same reasoning as the pool above
 
     // THE FLAME BURNS ABOVE ITS OWN ART. The exemption above stops a fire being dimmed with the
     // room, which gets it back to exactly the sprite's painted brightness and no further - and a
@@ -1137,7 +1174,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // reads as dull. A modest lift on the emitter pixels puts the flame back on top of everything
     // it lights. Src-modulated so the dark pixels inside the fire art stay dark, and safe against
     // the ceiling because the shoulder below rolls anything this pushes over the knee.
-    lit += src.rgb * (emitterLit * 0.30);
+    litScene += scene.rgb * (emitterLit * 0.30);
 
     // Window shafts: each pane lays a widening patch of daylight across the boards.
     //
@@ -1152,24 +1189,24 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // term painted grey haze over the dark floor and read as murk, not as light.
     float shaft = 0.0;
     [unroll]
-    for (int wi = 0; wi < 6; wi++)
+    for (int windowIndex = 0; windowIndex < 6; windowIndex++)
     {
-        float won = step((float)wi + 0.5, WindowCount);
-        float2 wd = (uv - WindowPosArr[wi]) * TilesPerScreen;
-        float along = wd.y / max(WindowBeam.y, 0.001);
-        float x = wd.x - WindowBeam.x * wd.y;
+        float windowOn = step((float)windowIndex + 0.5, WindowCount);
+        float2 windowDelta = (uv - WindowPositions[windowIndex]) * TilesPerScreen;
+        float along = windowDelta.y / max(WindowBeam.y, 0.001);
+        float x = windowDelta.x - WindowBeam.x * windowDelta.y;
         // Spreads as it falls: a pane-wide band at the sill opening into a pool.
-        float hw = max(WindowBeam.z * (1.0 + 1.1 * saturate(along)), 0.001);
-        float t = saturate(abs(x) / hw);
+        float halfWidth = max(WindowBeam.z * (1.0 + 1.1 * saturate(along)), 0.001);
+        float t = saturate(abs(x) / halfWidth);
         float across = 1.0 - t * t;
         across *= across;                       // soft shoulders, zero at the edge
         // Brightest just inside the room, thinning out to nothing at the far end. A
         // flat core with a quick edge is what reads as a painted stripe.
         float f = saturate(1.0 - along);
-        float len = smoothstep(0.0, 0.22, along) * f * (0.3 + 0.7 * f);
-        shaft += won * across * len;
+        float alongFalloff = smoothstep(0.0, 0.22, along) * f * (0.3 + 0.7 * f);
+        shaft += windowOn * across * alongFalloff;
     }
-    lit += (src.rgb * 1.2 + 0.03) * WindowColour * (shaft * WindowBeam.w);
+    litScene += (scene.rgb * 1.2 + 0.03) * WindowColour * (shaft * WindowBeam.w);
 
     // A flame used to be lifted above its own art here, so it could come out brighter than the
     // room it was lighting. That term is gone, and nothing replaced it, because nothing needs to:
@@ -1191,27 +1228,27 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     {
         float blocked = 0.0;
         [unroll]
-        for (int ss = 1; ss <= 8; ss++)
+        for (int shaftStep = 1; shaftStep <= 8; shaftStep++)
         {
-            float2 sp = wt - SunShaftDir * (ss * 0.9 * SunShaftReach);
-            blocked = max(blocked, tex2Dlod(OccluderBaseSampler, float4((sp - OccOrigin) / OccMapSize, 0.0, 0.0)).a);
+            float2 sp = wt - SunShaftDirection * (shaftStep * 0.9 * SunShaftReach);
+            blocked = max(blocked, tex2Dlod(OccluderBaseSampler, float4((sp - OccluderOrigin) / OccluderMapSize, 0.0, 0.0)).a);
         }
         float visibility = 1.0 - blocked;
-        float2 sperp = float2(-SunShaftDir.y, SunShaftDir.x);
+        float2 sunPerpendicular = float2(-SunShaftDirection.y, SunShaftDirection.x);
         // Two pairs of side samples, near and far, so a shaft extends a few tiles out from the
         // canopy that makes it instead of hugging the trunk: the x4 shape probe showed correct
         // slant and placement but streaks a tile wide, pinned to the trees. All four ride the
         // reach scale with the march above, so a short reach tightens the dapple to the canopy
         // and a long one lets it spill, instead of the two halves disagreeing about distance.
-        float2 nb = wt - SunShaftDir * (2.0 * SunShaftReach);
-        float occNear = max(
-            tex2Dlod(OccluderBaseSampler, float4((nb + sperp * (1.5 * SunShaftReach) - OccOrigin) / OccMapSize, 0.0, 0.0)).a,
-            tex2Dlod(OccluderBaseSampler, float4((nb - sperp * (1.5 * SunShaftReach) - OccOrigin) / OccMapSize, 0.0, 0.0)).a);
-        float occFar = max(
-            tex2Dlod(OccluderBaseSampler, float4((nb + sperp * (3.2 * SunShaftReach) - OccOrigin) / OccMapSize, 0.0, 0.0)).a,
-            tex2Dlod(OccluderBaseSampler, float4((nb - sperp * (3.2 * SunShaftReach) - OccOrigin) / OccMapSize, 0.0, 0.0)).a);
-        float edge = saturate(max(occNear, occFar * 0.7) * 1.6);
-        float perpCoord = dot(wt, sperp);
+        float2 besideBase = wt - SunShaftDirection * (2.0 * SunShaftReach);
+        float occlusionNear = max(
+            tex2Dlod(OccluderBaseSampler, float4((besideBase + sunPerpendicular * (1.5 * SunShaftReach) - OccluderOrigin) / OccluderMapSize, 0.0, 0.0)).a,
+            tex2Dlod(OccluderBaseSampler, float4((besideBase - sunPerpendicular * (1.5 * SunShaftReach) - OccluderOrigin) / OccluderMapSize, 0.0, 0.0)).a);
+        float occlusionFar = max(
+            tex2Dlod(OccluderBaseSampler, float4((besideBase + sunPerpendicular * (3.2 * SunShaftReach) - OccluderOrigin) / OccluderMapSize, 0.0, 0.0)).a,
+            tex2Dlod(OccluderBaseSampler, float4((besideBase - sunPerpendicular * (3.2 * SunShaftReach) - OccluderOrigin) / OccluderMapSize, 0.0, 0.0)).a);
+        float edge = saturate(max(occlusionNear, occlusionFar * 0.7) * 1.6);
+        float perpCoord = dot(wt, sunPerpendicular);
         // One broad band with a whisper of a second: two deep frequencies multiplied together
         // made patchy cells, and a ray that comes and goes along its own length reads as broken
         // light, not as light through leaves. Reported as exactly that, with "is this on
@@ -1225,17 +1262,17 @@ float4 FloodPS(PixelInput input) : SV_TARGET
         // Cloud coupling (see the CloudMaskTexture note). Branchless on purpose: with the couple
         // at zero both factors collapse to exactly 1 whatever the sampler holds, so a frame with
         // no kept mask, or a stale one, costs two dead taps and changes nothing.
-        float2 cuv = uv + CloudMaskShift;
-        float cHere = tex2Dlod(CloudMaskSampler, float4(cuv, 0.0, 0.0)).r;
-        float2 cupUv = cuv - (SunShaftDir * 3.0) / TilesPerScreen;   // a few tiles toward the sun
-        float cUp = tex2Dlod(CloudMaskSampler, float4(cupUv, 0.0, 0.0)).r;
+        float2 cloudUv = uv + CloudMaskShift;
+        float cloudHere = tex2Dlod(CloudMaskSampler, float4(cloudUv, 0.0, 0.0)).r;
+        float2 cloudSunwardUv = cloudUv - (SunShaftDirection * 3.0) / TilesPerScreen;   // a few tiles toward the sun
+        float cloudSunward = tex2Dlod(CloudMaskSampler, float4(cloudSunwardUv, 0.0, 0.0)).r;
         // Die under the cloud; blaze where clear ground sits just past a cloud's sunward edge -
         // a gap in the clouds is the same shape as a gap in a canopy, and rays live at gaps.
-        float cloudGate = (1.0 - saturate(cHere * 1.2) * CloudCouple)
-                        * (1.0 + saturate(cUp - cHere) * (1.8 * CloudCouple));
+        float cloudGate = (1.0 - saturate(cloudHere * 1.2) * CloudCouple)
+                        * (1.0 + saturate(cloudSunward - cloudHere) * (1.8 * CloudCouple));
         // Mostly src-modulated with a whisper of flat "air", same reasoning as the window beam.
         // The 3.0 is the measured gain: at 1.0 the shafts were provably drawn and invisible.
-        lit += (src.rgb * 0.85 + shaftAir) * SunShaftColour * (visibility * edge * stripe * cloudGate * SunShaftStrength * 3.0);
+        litScene += (scene.rgb * 0.85 + shaftAir) * SunShaftColour * (visibility * edge * stripe * cloudGate * SunShaftStrength * 3.0);
         // DUST MOTES. A shaft with nothing floating in it reads as a projection on the ground;
         // what sells the air is the dust drifting through the beam, visible only while it is
         // inside one. Two scales of the shared fbm multiplied and thresholded leave sparse
@@ -1243,11 +1280,11 @@ float4 FloodPS(PixelInput input) : SV_TARGET
         // same slow clock as the stripes. Confined to the shaft (visibility AND edge, the same
         // gates as the beam itself) so open ground and full shade stay clean, and weighted
         // toward the bright bands, which is where lit dust would actually be.
-        float2 mdrift = float2(SunShaftDrift * 0.06, SunShaftDrift * 0.11);
-        float mfine   = tex2Dlod(NoiseSampler, float4(wt * 1.31 + mdrift, 0.0, 0.0)).r;
-        float mcoarse = tex2Dlod(NoiseSampler, float4(wt * 0.37 - mdrift * 0.6, 0.0, 0.0)).r;
-        float motes = smoothstep(0.36, 0.47, mfine * mcoarse);
-        lit += SunShaftColour * (motes * visibility * edge * (0.4 + 0.6 * stripe) * cloudGate * SunShaftStrength * 1.2);
+        float2 moteDrift = float2(SunShaftDrift * 0.06, SunShaftDrift * 0.11);
+        float moteFine   = tex2Dlod(NoiseSampler, float4(wt * 1.31 + moteDrift, 0.0, 0.0)).r;
+        float moteCoarse = tex2Dlod(NoiseSampler, float4(wt * 0.37 - moteDrift * 0.6, 0.0, 0.0)).r;
+        float motes = smoothstep(0.36, 0.47, moteFine * moteCoarse);
+        litScene += SunShaftColour * (motes * visibility * edge * (0.4 + 0.6 * stripe) * cloudGate * SunShaftStrength * 1.2);
     }
 
     // Lamp shafts, gathered in the shadowed light loop. Mostly src-modulated with a whisper of
@@ -1255,23 +1292,23 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // pool at the default dial, measured against the same frame with the dial at zero.
     [branch]
     if (LampShaftStrength > 0.004)
-        lit += (src.rgb * 0.85 + 0.10) * lampShaft * (LampShaftStrength * 3.2);
+        litScene += (scene.rgb * 0.85 + 0.10) * lampShaft * (LampShaftStrength * 3.2);
 
     // Purkinje: drain colour from night ground a lamp is NOT reaching (see the param note).
     [branch]
-    if (NightDesat > 0.004)
+    if (NightDesaturation > 0.004)
     {
         float lampness = saturate(max(max(direct.r, direct.g), direct.b) * 2.0 + emitter);
-        float nsat = 1.0 - NightDesat * (1.0 - lampness);
-        float nlum = dot(lit, float3(0.299, 0.587, 0.114));
-        lit = lerp(float3(nlum, nlum, nlum), lit, nsat);
+        float nightSaturation = 1.0 - NightDesaturation * (1.0 - lampness);
+        float nightLuminance = dot(litScene, float3(0.299, 0.587, 0.114));
+        litScene = lerp(float3(nightLuminance, nightLuminance, nightLuminance), litScene, nightSaturation);
     }
 
     // Debug view, last so it wins: RED = this pixel is treated as being the light itself, GREEN =
     // it is near enough a light but not bright enough in the art to qualify. Reading the two apart
     // says which half of the test is the one failing, which is exactly what could not be worked
     // out by staring at a screenshot of a fireplace.
-    lit = lerp(lit, float3(emitterLit, saturate(emitter - emitterLit) * 0.6, 0.0), DebugEmitter);
+    litScene = lerp(litScene, float3(emitterLit, saturate(emitter - emitterLit) * 0.6, 0.0), DebugEmitter);
 
     // Soft shoulder, because everything above adds and nothing above catches the top.
     //
@@ -1288,14 +1325,14 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // red arrives at the ceiling first and stops, green follows, blue keeps climbing, and the hue
     // walks toward the nearest primary as the room gets brighter. Below the knee this is exactly
     // the identity, so a dim room and every outdoor scene are untouched.
-    float peak = max(max(lit.r, lit.g), lit.b);
+    float peak = max(max(litScene.r, litScene.g), litScene.b);
     float over = max(peak - ShoulderKnee, 0.0);
     float rolled = min(peak, ShoulderKnee) + over / (1.0 + over / (1.0 - ShoulderKnee));
-    lit *= rolled / max(peak, 1e-4);
+    litScene *= rolled / max(peak, 1e-4);
 
     if (DebugLampShadow > 0.5)
-        return float4(occDebug, shadowCarve, OccAt(uv), 1.0);
-    return float4(lit, src.a);
+        return float4(occlusionDebug, shadowCarve, OcclusionAt(uv), 1.0);
+    return float4(litScene, scene.a);
 }
 
 technique FloodLight { pass P0 { PixelShader = compile PS_SHADERMODEL FloodPS(); } }

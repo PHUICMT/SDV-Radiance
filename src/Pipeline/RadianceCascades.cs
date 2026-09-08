@@ -11,7 +11,7 @@ namespace SDVRadiance
     /// of the CPU sweep in <see cref="FloodLightmap"/>. Same inputs (the flood's own light seeds,
     /// the per-light occluder mask and its softened copies, the tile grid under them), same
     /// output contract (a texture floodlight.fx reads through LightMapTexture/MapOrigin/MapSize,
-    /// stored x<see cref="FloodLightmap.TexScale"/>), so the two models are interchangeable at
+    /// stored x<see cref="FloodLightmap.StorageScale"/>), so the two models are interchangeable at
     /// the composite and can cross-fade. What differs is what the map SAYS: shade is where rays
     /// met something, a lamp's spill round a corner is the rays that could still see it, and
     /// the map is two probes per tile instead of one cell.
@@ -183,7 +183,7 @@ namespace SDVRadiance
                 Set(effect, "SkyCascade", (float)SkyCascade);
                 Set(effect, "EmitterGain", EmitterGain);
                 Set(effect, "EmitterTexScale", 1f / EmitterStorageScale);
-                Set(effect, "OutputScale", FloodLightmap.TexScale);
+                Set(effect, "OutputScale", FloodLightmap.StorageScale);
                 Set(effect, "LiftRadiance", lift);
                 effect.Parameters["EmitterTexture"]?.SetValue(emitterTexture);
                 effect.Parameters["BaseTexture"]?.SetValue(occluderBase);

@@ -26,12 +26,12 @@ namespace SDVRadiance
             int trulyDark;
             try { trulyDark = Game1.currentLocation != null ? Game1.getTrulyDarkTime(Game1.currentLocation) : 2000; }
             catch { trulyDark = 2000; }
-            float mins = GameClock.MinutesNow();
-            int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
+            float minutesNow = GameClock.MinutesNow();
+            int trulyDarkMinutes = (trulyDark / 100) * 60 + trulyDark % 100;
             float moon = 0.35f * ShadowRenderer.MoonStrength();
-            if (mins >= m1)
+            if (minutesNow >= trulyDarkMinutes)
                 return moon;
-            return Math.Max(moon, MathHelper.Clamp((m1 - mins) / 40f, 0f, 1f));
+            return Math.Max(moon, MathHelper.Clamp((trulyDarkMinutes - minutesNow) / 40f, 0f, 1f));
         }
 
         /// <summary>Night ramp 0→1 over 19:00→21:00 (0 by day). Shared by the night-only
@@ -39,11 +39,11 @@ namespace SDVRadiance
         private static float NightFactorNow()
             => MathHelper.Clamp((GameClock.MinutesNow() - 1140) / 120f, 0f, 1f);
 
-        private void RenderCloudShadow(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, ModConfig config)
+        private void RenderCloudShadow(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, ModConfig config)
         {
             var effect = _cloudShadow!;
-            var rtA = _halfResolutionScratchA!;
-            var rtB = _halfResolutionScratchB!;
+            var halfScratchA = _halfResolutionScratchA!;
+            var halfScratchB = _halfResolutionScratchB!;
 
             // The hard straight seam reported after long sessions was a float-precision cliff:
             // Time (and so drift = Time*Speed) grows without bound as the session runs, and once
@@ -73,32 +73,32 @@ namespace SDVRadiance
             // whole thing can fall in one dark bank (the "cutscene too dark" report). Boost the
             // cluster frequency by how many times the map fits inside the viewport.
             GetParam(effect, "SmallMapBoost")?.SetValue(SmallMapCloudBoost());
-            GetParam(effect, "WorldOffset")?.SetValue(WorldOffset(dest.Width, dest.Height));
+            GetParam(effect, "WorldOffset")?.SetValue(WorldOffset());
             GetParam(effect, "NoiseTexture")?.SetValue(NoiseTex());
             effect.CurrentTechnique = effect.Techniques["Mask"];
-            Pass(spriteBatch, source, rtA, effect);
+            Pass(spriteBatch, source, halfScratchA, effect);
 
             // Pass 2/3: separable Gaussian blur -> soft, feathered penumbra edges.
-            GetParam(effect, "TexelSize")?.SetValue(new Vector2(1f / rtA.Width, 0f));
+            GetParam(effect, "TexelSize")?.SetValue(new Vector2(1f / halfScratchA.Width, 0f));
             effect.CurrentTechnique = effect.Techniques["BlurH"];
-            Pass(spriteBatch, rtA, rtB, effect);
+            Pass(spriteBatch, halfScratchA, halfScratchB, effect);
 
             // The last blur lands in the KEPT target, not the scratch one: god rays and bloom
             // rewrite the scratch buffers later this same frame, and the sun shafts need this
             // mask still intact NEXT frame (see _cloudMaskKeep). Same pass, different address.
             // The keep is per screen (ScreenState): a screen whose keep was made for another
             // frame size, or that has none yet, gets its own here rather than borrowing.
-            if (_cloudMaskKeep != null && (_cloudMaskKeep.IsDisposed || _cloudMaskKeep.Width != rtA.Width || _cloudMaskKeep.Height != rtA.Height))
+            if (_cloudMaskKeep != null && (_cloudMaskKeep.IsDisposed || _cloudMaskKeep.Width != halfScratchA.Width || _cloudMaskKeep.Height != halfScratchA.Height))
             {
                 if (!_cloudMaskKeep.IsDisposed) _cloudMaskKeep.Dispose();
                 _cloudMaskKeep = null;
                 _cloudMaskTick = int.MinValue;
             }
-            _cloudMaskKeep ??= CreateRenderTarget(rtA.Width, rtA.Height, rtA.Format);
+            _cloudMaskKeep ??= CreateRenderTarget(halfScratchA.Width, halfScratchA.Height, halfScratchA.Format);
             var keep = _cloudMaskKeep;
-            GetParam(effect, "TexelSize")?.SetValue(new Vector2(0f, 1f / rtB.Height));
+            GetParam(effect, "TexelSize")?.SetValue(new Vector2(0f, 1f / halfScratchB.Height));
             effect.CurrentTechnique = effect.Techniques["BlurV"];
-            Pass(spriteBatch, rtB, keep, effect);
+            Pass(spriteBatch, halfScratchB, keep, effect);
 
             // Pass 4: composite the blurred shadow onto the scene.
             float cloudOpacity = config.CloudShadowOpacity * _cloudDayFactor * _fadeCloud;
@@ -108,7 +108,7 @@ namespace SDVRadiance
             GetParam(effect, "LightProtect")?.SetValue(NightFactorNow());
             GetParam(effect, "ShadowTexture")?.SetValue(keep);
             effect.CurrentTechnique = effect.Techniques["Composite"];
-            DrawFull(spriteBatch, source, dest, effect);
+            DrawFull(spriteBatch, source, destination, effect);
 
             // What the sun shafts will read back next frame, and the facts they need to trust
             // it: when it was drawn, from where, and how dark the sky actually was.
@@ -133,7 +133,7 @@ namespace SDVRadiance
         /// shadow lying over the whole picture" is written down, and no second shader to compile.
         /// </para>
         /// </remarks>
-        private void RenderBuildingShadow(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, ModConfig config)
+        private void RenderBuildingShadow(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, ModConfig config)
         {
             Effect? effect = _cloudShadow;
             Texture2D? mask = ShadowRenderer.BuildingSunShadowMask;
@@ -141,10 +141,10 @@ namespace SDVRadiance
             {
                 // The stage stays listed while its presence eases out, so a frame with no mask has
                 // to hand the picture on untouched rather than skip and leave the chain a hole.
-                DrawFull(spriteBatch, source, dest, null!);
+                DrawFull(spriteBatch, source, destination, null!);
                 return;
             }
-            var rtA = _halfResolutionScratchA!;
+            var halfScratchA = _halfResolutionScratchA!;
 
             // The stamped mask holds its shape in ALPHA - the silhouettes are baked black, and a
             // SpriteBatch tint can only darken, so their colour channels are zero. Everything after
@@ -154,16 +154,16 @@ namespace SDVRadiance
             // when it was stamped, because the buildings are cut out of it afterwards: blurring
             // here would spread that cut outwards and leave a bright gap hugging every wall.
             effect.CurrentTechnique = effect.Techniques["AlphaToCoverage"];
-            Pass(spriteBatch, mask, rtA, effect);
+            Pass(spriteBatch, mask, halfScratchA, effect);
 
             GetParam(effect, "Opacity")?.SetValue(BuildingShadowOpacity(config));
             // The sun is the light here, so a building's shadow shades everything under it,
             // white art included. That is the same call the cloud shadow makes by day, and for
             // the same reason: anything allowed to resist punches a hole in the shadow.
             GetParam(effect, "LightProtect")?.SetValue(0f);
-            GetParam(effect, "ShadowTexture")?.SetValue(rtA);
+            GetParam(effect, "ShadowTexture")?.SetValue(halfScratchA);
             effect.CurrentTechnique = effect.Techniques["Composite"];
-            DrawFull(spriteBatch, source, dest, effect);
+            DrawFull(spriteBatch, source, destination, effect);
         }
 
         /// <summary>How dark a building's shadow gets, riding the same strength dial every other
@@ -179,41 +179,41 @@ namespace SDVRadiance
             var layer = location?.map?.Layers.Count > 0 ? location.map.Layers[0] : null;
             if (layer == null)
                 return 1f;
-            float mapW = Math.Max(1, layer.LayerWidth), mapH = Math.Max(1, layer.LayerHeight);
-            float vpW = Game1.viewport.Width / 64f, vpH = Game1.viewport.Height / 64f;
-            return MathHelper.Clamp(Math.Max(vpW / mapW, vpH / mapH), 1f, 4f);
+            float mapTilesWide = Math.Max(1, layer.LayerWidth), mapTilesTall = Math.Max(1, layer.LayerHeight);
+            float viewportTilesWide = Game1.viewport.Width / 64f, viewportTilesTall = Game1.viewport.Height / 64f;
+            return MathHelper.Clamp(Math.Max(viewportTilesWide / mapTilesWide, viewportTilesTall / mapTilesTall), 1f, 4f);
         }
 
-        private void RenderBloom(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, ModConfig config)
+        private void RenderBloom(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, ModConfig config)
         {
             var bloom = _bloom!;
-            var rtA = _halfResolutionScratchA!;
-            var rtB = _halfResolutionScratchB!;
-            int w = dest.Width, h = dest.Height;
+            var halfScratchA = _halfResolutionScratchA!;
+            var halfScratchB = _halfResolutionScratchB!;
+            int width = destination.Width, height = destination.Height;
 
             // At night, bloom blooms more (lower threshold, a bit stronger) and turns warm so
             // lamps/windows glow amber.
             float bloomNight = NightFactorNow();
 
             GetParam(bloom, "Threshold")?.SetValue(MathHelper.Clamp(config.BloomThreshold - 0.08f * bloomNight, 0f, 1f));
-            GetParam(bloom, "TexelSize")?.SetValue(new Vector2(1f / w, 1f / h));
+            GetParam(bloom, "TexelSize")?.SetValue(new Vector2(1f / width, 1f / height));
             bloom.CurrentTechnique = bloom.Techniques["BrightPass"];
-            Pass(spriteBatch, source, rtA, bloom);
+            Pass(spriteBatch, source, halfScratchA, bloom);
 
-            GetParam(bloom, "TexelSize")?.SetValue(new Vector2(1f / rtA.Width, 0f));
+            GetParam(bloom, "TexelSize")?.SetValue(new Vector2(1f / halfScratchA.Width, 0f));
             bloom.CurrentTechnique = bloom.Techniques["BlurHorizontal"];
-            Pass(spriteBatch, rtA, rtB, bloom);
+            Pass(spriteBatch, halfScratchA, halfScratchB, bloom);
 
-            GetParam(bloom, "TexelSize")?.SetValue(new Vector2(0f, 1f / rtB.Height));
+            GetParam(bloom, "TexelSize")?.SetValue(new Vector2(0f, 1f / halfScratchB.Height));
             bloom.CurrentTechnique = bloom.Techniques["BlurVertical"];
-            Pass(spriteBatch, rtB, rtA, bloom);
+            Pass(spriteBatch, halfScratchB, halfScratchA, bloom);
 
             GetParam(bloom, "Intensity")?.SetValue(config.BloomIntensity * (1f + 0.2f * bloomNight));
             GetParam(bloom, "EmissiveBoost")?.SetValue(MathHelper.Clamp(config.BloomEmissiveBoost, 0f, 1f));
             GetParam(bloom, "BloomWarm")?.SetValue(bloomNight);
-            GetParam(bloom, "BloomTexture")?.SetValue(rtA);
+            GetParam(bloom, "BloomTexture")?.SetValue(halfScratchA);
             bloom.CurrentTechnique = bloom.Techniques["Composite"];
-            DrawFull(spriteBatch, source, dest, bloom);
+            DrawFull(spriteBatch, source, destination, bloom);
         }
 
         // Baked, TILEABLE 5-octave value-noise fbm. GPU sin()-hash noise has NO precision
@@ -226,51 +226,51 @@ namespace SDVRadiance
         {
             if (_noiseTexture != null)
                 return _noiseTexture;
-            const int N = 256;
-            var acc = new float[N * N];
-            float amp = 0.5f, norm = 0f;
+            const int NoiseSize = 256;
+            var accumulated = new float[NoiseSize * NoiseSize];
+            float amplitude = 0.5f, amplitudeSum = 0f;
             int cells = 4;                       // 4,8,16,32,64 — every octave tiles at 256
-            for (int o = 0; o < 5; o++)
+            for (int octave = 0; octave < 5; octave++)
             {
-                for (int y = 0; y < N; y++)
+                for (int y = 0; y < NoiseSize; y++)
                 {
-                    float fy = (float)y / N * cells;
-                    int y0 = (int)fy;
-                    float ty = fy - y0;
-                    ty = ty * ty * ty * (ty * (ty * 6f - 15f) + 10f);
-                    for (int x = 0; x < N; x++)
+                    float latticeY = (float)y / NoiseSize * cells;
+                    int cellY = (int)latticeY;
+                    float weightY = latticeY - cellY;
+                    weightY = weightY * weightY * weightY * (weightY * (weightY * 6f - 15f) + 10f);
+                    for (int x = 0; x < NoiseSize; x++)
                     {
-                        float effect = (float)x / N * cells;
-                        int x0 = (int)effect;
-                        float tx = effect - x0;
-                        tx = tx * tx * tx * (tx * (tx * 6f - 15f) + 10f);
-                        float a = NoiseHash(x0, y0, o, cells), b = NoiseHash(x0 + 1, y0, o, cells);
-                        float c = NoiseHash(x0, y0 + 1, o, cells), d = NoiseHash(x0 + 1, y0 + 1, o, cells);
-                        acc[y * N + x] += amp * MathHelper.Lerp(MathHelper.Lerp(a, b, tx), MathHelper.Lerp(c, d, tx), ty);
+                        float latticeX = (float)x / NoiseSize * cells;
+                        int cellX = (int)latticeX;
+                        float weightX = latticeX - cellX;
+                        weightX = weightX * weightX * weightX * (weightX * (weightX * 6f - 15f) + 10f);
+                        float cornerTopLeft = NoiseHash(cellX, cellY, octave, cells), cornerTopRight = NoiseHash(cellX + 1, cellY, octave, cells);
+                        float cornerBottomLeft = NoiseHash(cellX, cellY + 1, octave, cells), cornerBottomRight = NoiseHash(cellX + 1, cellY + 1, octave, cells);
+                        accumulated[y * NoiseSize + x] += amplitude * MathHelper.Lerp(MathHelper.Lerp(cornerTopLeft, cornerTopRight, weightX), MathHelper.Lerp(cornerBottomLeft, cornerBottomRight, weightX), weightY);
                     }
                 }
-                norm += amp; amp *= 0.5f; cells *= 2;
+                amplitudeSum += amplitude; amplitude *= 0.5f; cells *= 2;
             }
-            var data = new Color[N * N];
-            for (int i = 0; i < acc.Length; i++)
+            var data = new Color[NoiseSize * NoiseSize];
+            for (int i = 0; i < accumulated.Length; i++)
             {
-                byte v = (byte)MathHelper.Clamp(acc[i] / norm * 255f, 0f, 255f);
-                data[i] = new Color(v, v, v, (byte)255);
+                byte grey = (byte)MathHelper.Clamp(accumulated[i] / amplitudeSum * 255f, 0f, 255f);
+                data[i] = new Color(grey, grey, grey, (byte)255);
             }
-            _noiseTexture = VramTally.Track(new Texture2D(_device, N, N), "fog noise");
+            _noiseTexture = VramTally.Track(new Texture2D(_device, NoiseSize, NoiseSize), "fog noise");
             _noiseTexture.SetData(data);
             return _noiseTexture;
         }
-        private static float NoiseHash(int x, int y, int o, int cells)
+        private static float NoiseHash(int latticeX, int latticeY, int octave, int cells)
         {
-            x = ((x % cells) + cells) % cells;   // wrap the lattice → texture tiles perfectly
-            y = ((y % cells) + cells) % cells;
-            uint h = (uint)(x * 374761393 + y * 668265263 + (o + 1) * 2246822519);
-            h = (h ^ (h >> 13)) * 1274126177u;
-            return ((h ^ (h >> 16)) & 0xFFFF) / 65535f;
+            latticeX = ((latticeX % cells) + cells) % cells;   // wrap the lattice → texture tiles perfectly
+            latticeY = ((latticeY % cells) + cells) % cells;
+            uint hash = (uint)(latticeX * 374761393 + latticeY * 668265263 + (octave + 1) * 2246822519);
+            hash = (hash ^ (hash >> 13)) * 1274126177u;
+            return ((hash ^ (hash >> 16)) & 0xFFFF) / 65535f;
         }
 
-        private void RenderFog(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, ModConfig config)
+        private void RenderFog(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, ModConfig config)
         {
             var effect = _fogEffect!;
             // One shader pass renders the blend of two separate effects: DAY fog and NIGHT
@@ -278,38 +278,38 @@ namespace SDVRadiance
             // liked the night wisps and wants day fog to match); each keeps its own density
             // slider, day also keeps its scale/speed sliders. Amounts crossfade over dusk.
             float total = _fogDayAmount + _fogMistAmount;
-            float mistW = total > 0f ? _fogMistAmount / total : 0f;
+            float mistWeight = total > 0f ? _fogMistAmount / total : 0f;
             GetParam(effect, "Time")?.SetValue(Time());
-            GetParam(effect, "Speed")?.SetValue(MathHelper.Lerp(config.FogSpeed, config.FogNightMistSpeed, mistW));
-            GetParam(effect, "Scale")?.SetValue(MathHelper.Lerp(config.FogScale, 3.2f, mistW));
+            GetParam(effect, "Speed")?.SetValue(MathHelper.Lerp(config.FogSpeed, config.FogNightMistSpeed, mistWeight));
+            GetParam(effect, "Scale")?.SetValue(MathHelper.Lerp(config.FogScale, 3.2f, mistWeight));
             // Our rain thickens the air a touch: one scalar into the stage that already exists,
             // gated on the replacement being live so vanilla days cannot change by a wisp.
             GetParam(effect, "Density")?.SetValue(total * (1f + 0.15f * PrecipitationSystem.ActiveRainPresence));
             GetParam(effect, "Patchiness")?.SetValue(1f);
-            GetParam(effect, "Coverage")?.SetValue(MathHelper.Lerp(config.FogCoverage, config.FogNightMistCoverage, mistW));
+            GetParam(effect, "Coverage")?.SetValue(MathHelper.Lerp(config.FogCoverage, config.FogNightMistCoverage, mistWeight));
             GetParam(effect, "TopBias")?.SetValue(config.FogTopBias);
             GetParam(effect, "NoiseTexture")?.SetValue(NoiseTex());
             GetParam(effect, "FogColor")?.SetValue(FogColor());
-            GetParam(effect, "WorldOffset")?.SetValue(WorldOffset(dest.Width, dest.Height));
+            GetParam(effect, "WorldOffset")?.SetValue(WorldOffset());
             GetParam(effect, "ScreenPixels")?.SetValue(new Vector2(Game1.viewport.Width, Game1.viewport.Height));
             effect.CurrentTechnique = effect.Techniques["Fog"];
-            DrawFull(spriteBatch, source, dest, effect);
+            DrawFull(spriteBatch, source, destination, effect);
         }
 
-        private void RenderTiltShift(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, ModConfig config)
+        private void RenderTiltShift(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, ModConfig config)
         {
             var effect = _tiltShift!;
-            var rtA = _halfResolutionScratchA!;
-            var rtB = _halfResolutionScratchB!;
+            var halfScratchA = _halfResolutionScratchA!;
+            var halfScratchB = _halfResolutionScratchB!;
 
             // blur at half-res: source(full) -> rtA (H) -> rtB (V)
-            GetParam(effect, "TexelSize")?.SetValue(new Vector2(1f / rtA.Width, 0f));
+            GetParam(effect, "TexelSize")?.SetValue(new Vector2(1f / halfScratchA.Width, 0f));
             effect.CurrentTechnique = effect.Techniques["BlurH"];
-            Pass(spriteBatch, source, rtA, effect);
+            Pass(spriteBatch, source, halfScratchA, effect);
 
-            GetParam(effect, "TexelSize")?.SetValue(new Vector2(0f, 1f / rtB.Height));
+            GetParam(effect, "TexelSize")?.SetValue(new Vector2(0f, 1f / halfScratchB.Height));
             effect.CurrentTechnique = effect.Techniques["BlurV"];
-            Pass(spriteBatch, rtA, rtB, effect);
+            Pass(spriteBatch, halfScratchA, halfScratchB, effect);
 
             // composite sharp + blurred by vertical position.
             // Config stores intuitive "blur amount" (higher = more blur from that edge);
@@ -325,12 +325,12 @@ namespace SDVRadiance
             Approach(ref _tiltModeEase, config.TiltShiftMode == TiltShiftFocus.Radial ? 1f : 0f, 0.08f);
             GetParam(effect, "Mode")?.SetValue(_tiltModeEase);
             GetParam(effect, "Center")?.SetValue(PlayerScreenUV());
-            GetParam(effect, "Aspect")?.SetValue(dest.Height > 0 ? dest.Width / (float)dest.Height : 1f);
+            GetParam(effect, "Aspect")?.SetValue(destination.Height > 0 ? destination.Width / (float)destination.Height : 1f);
             GetParam(effect, "RadRadius")?.SetValue(MathHelper.Clamp(config.TiltShiftRadius, 0.05f, 0.9f));
             GetParam(effect, "Feather")?.SetValue(MathHelper.Clamp(config.TiltShiftFeather, 0f, 1f));
-            GetParam(effect, "BlurTexture")?.SetValue(rtB);
+            GetParam(effect, "BlurTexture")?.SetValue(halfScratchB);
             effect.CurrentTechnique = effect.Techniques["Composite"];
-            DrawFull(spriteBatch, source, dest, effect);
+            DrawFull(spriteBatch, source, destination, effect);
         }
 
         // ---- 3D LUT ----------------------------------------------------------------------
@@ -352,18 +352,18 @@ namespace SDVRadiance
         /// </summary>
         private float BindLut(Effect effect, ModConfig config)
         {
-            string want = (config.ColorGradeLut ?? "").Trim();
+            string wantedLut = (config.ColorGradeLut ?? "").Trim();
             float amount = MathHelper.Clamp(config.ColorGradeLutAmount, 0f, 1f);
-            if (want.Length == 0 || amount <= 0f)
+            if (wantedLut.Length == 0 || amount <= 0f)
                 return 0f;
-            if (!string.Equals(want, _lutLoaded, StringComparison.OrdinalIgnoreCase) || _lutTexture == null)
+            if (!string.Equals(wantedLut, _lutLoaded, StringComparison.OrdinalIgnoreCase) || _lutTexture == null)
             {
-                _lutTexture = LoadTextureAt(LutCatalog.Resolve(want));
-                _lutLoaded = want;
+                _lutTexture = LoadTextureAt(LutCatalog.Resolve(wantedLut));
+                _lutLoaded = wantedLut;
                 if (_lutTexture == null)
-                    _monitor.Log($"Colour LUT \"{want}\" not found in assets/luts or {LutCatalog.UserDir} - grading without it.", LogLevel.Warn);
+                    _monitor.Log($"Colour LUT \"{wantedLut}\" not found in assets/luts or {LutCatalog.UserDir} - grading without it.", LogLevel.Warn);
                 else if (_lutTexture.Width != 1024 || _lutTexture.Height != 32)
-                    _monitor.Log($"Colour LUT \"{want}\" is {_lutTexture.Width}x{_lutTexture.Height}; "
+                    _monitor.Log($"Colour LUT \"{wantedLut}\" is {_lutTexture.Width}x{_lutTexture.Height}; "
                                  + "a 32-cube strip is 1024x32. It will be read as if it were one.", LogLevel.Warn);
             }
             if (_lutTexture == null)
@@ -372,27 +372,27 @@ namespace SDVRadiance
             return amount;
         }
 
-        private void ColorGrade(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, ModConfig config)
+        private void ColorGrade(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, ModConfig config)
         {
             var effect = _colorGrade!;
             // The stage may run for the BLUE-LIGHT FILTER alone (grading toggled off): the
             // artistic controls go neutral so only the warm eye-comfort shift applies.
             bool gradeOn = config.ColorGradeEnabled;
-            float temp = config.ColorGradeTemperature;
-            float sat = config.ColorGradeSaturation;
+            float temperature = config.ColorGradeTemperature;
+            float saturation = config.ColorGradeSaturation;
             if (gradeOn && config.ColorGradeAuto)
             {
-                ComputeAuto(out float autoTemp, out float autoSatMul);
-                temp += autoTemp;
-                sat *= autoSatMul;
+                ComputeAuto(out float autoTemperature, out float autoSaturationMultiplier);
+                temperature += autoTemperature;
+                saturation *= autoSaturationMultiplier;
             }
 
             // _meteredExposure is measured & eased per frame in UpdateAutoExposure
             // (1.0 when auto is off), so bright scenes dim smoothly with no pop.
             GetParam(effect, "Strength")?.SetValue(gradeOn ? MathHelper.Clamp(config.ColorGradeStrength, 0f, 1f) : 1f);
             GetParam(effect, "Contrast")?.SetValue(gradeOn ? config.ColorGradeContrast : 1f);
-            GetParam(effect, "Saturation")?.SetValue(gradeOn ? sat : 1f);
-            GetParam(effect, "Temperature")?.SetValue(gradeOn ? MathHelper.Clamp(temp, -1f, 1f) : 0f);
+            GetParam(effect, "Saturation")?.SetValue(gradeOn ? saturation : 1f);
+            GetParam(effect, "Temperature")?.SetValue(gradeOn ? MathHelper.Clamp(temperature, -1f, 1f) : 0f);
             GetParam(effect, "Brightness")?.SetValue(gradeOn ? config.ColorGradeBrightness * _meteredExposure : 1f);
             // _toneMapEase advances once per frame in Apply (shared with the fused tail).
             GetParam(effect, "ToneMap")?.SetValue(_toneMapEase);
@@ -400,24 +400,24 @@ namespace SDVRadiance
             GetParam(effect, "ScreenPixels")?.SetValue(new Vector2(Game1.viewport.Width, Game1.viewport.Height));
             GetParam(effect, "LutAmount")?.SetValue(BindLut(effect, config));
             effect.CurrentTechnique = effect.Techniques["ColorGrade"];
-            DrawFull(spriteBatch, source, dest, effect);
+            DrawFull(spriteBatch, source, destination, effect);
         }
 
         /// <summary>Fused grade + vignette tail pass (see tail.fx): the ColorGrade and
         /// Finishing stages in ONE full-screen draw. Selected in Apply only when both are
         /// wanted, CA is dormant and tilt-shift is out of the chain, so the parameter set is
         /// exactly the union of the two stage bodies (grade always on here) minus CA.</summary>
-        private void RenderTail(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, ModConfig config)
+        private void RenderTail(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, ModConfig config)
         {
             var effect = _tail!;
             bool gradeOn = config.ColorGradeEnabled;
-            float temp = config.ColorGradeTemperature;
-            float sat = config.ColorGradeSaturation;
+            float temperature = config.ColorGradeTemperature;
+            float saturation = config.ColorGradeSaturation;
             if (gradeOn && config.ColorGradeAuto)
             {
-                ComputeAuto(out float autoTemp, out float autoSatMul);
-                temp += autoTemp;
-                sat *= autoSatMul;
+                ComputeAuto(out float autoTemperature, out float autoSaturationMultiplier);
+                temperature += autoTemperature;
+                saturation *= autoSaturationMultiplier;
             }
             // The fused pass does the finishing stage's work, so it carries the sky tint too;
             // without it the world stops taking the aurora's colour whenever the pipeline
@@ -426,8 +426,8 @@ namespace SDVRadiance
             GetParam(effect, "GradeOn")?.SetValue(1f);
             GetParam(effect, "Strength")?.SetValue(gradeOn ? MathHelper.Clamp(config.ColorGradeStrength, 0f, 1f) : 1f);
             GetParam(effect, "Contrast")?.SetValue(gradeOn ? config.ColorGradeContrast : 1f);
-            GetParam(effect, "Saturation")?.SetValue(gradeOn ? sat : 1f);
-            GetParam(effect, "Temperature")?.SetValue(gradeOn ? MathHelper.Clamp(temp, -1f, 1f) : 0f);
+            GetParam(effect, "Saturation")?.SetValue(gradeOn ? saturation : 1f);
+            GetParam(effect, "Temperature")?.SetValue(gradeOn ? MathHelper.Clamp(temperature, -1f, 1f) : 0f);
             GetParam(effect, "Brightness")?.SetValue(gradeOn ? config.ColorGradeBrightness * _meteredExposure : 1f);
             GetParam(effect, "ToneMap")?.SetValue(_toneMapEase);
             GetParam(effect, "BlueLight")?.SetValue(MathHelper.Clamp(config.BlueLightFilter, 0f, 1f));
@@ -436,14 +436,14 @@ namespace SDVRadiance
             GetParam(effect, "ScreenPixels")?.SetValue(new Vector2(Game1.viewport.Width, Game1.viewport.Height));
             GetParam(effect, "LutAmount")?.SetValue(BindLut(effect, config));
             effect.CurrentTechnique = effect.Techniques["Tail"];
-            DrawFull(spriteBatch, source, dest, effect);
+            DrawFull(spriteBatch, source, destination, effect);
         }
 
         // Eased twins of raw on/off drivers (house rule: nothing visible changes in one
-        // frame). Structural readiness gates (SpriteMaskOn/ReflectRTOn/SceneOn) stay
+        // frame). Structural readiness gates (SpriteMaskOn/ReflectedEntitiesOn/SceneOn) stay
         // binary on purpose - there is no texture to fade until the bake exists - and
         // indoor/outdoor multipliers snap behind the game's own warp fade.
-        private float _dispGateEase = 1f, _tiltModeEase, _heatHazeEase;
+        private float _displacementGateEase = 1f, _tiltModeEase, _heatHazeEase;
         /// <summary>1 while the camera is in a room, 0 outdoors. Unlike <see cref="_tiltModeEase"/>,
         /// which follows a setting every screen shares, this one follows the location, so in split
         /// screen one player can be inside while the other is not: it is saved per screen.</summary>
@@ -519,6 +519,10 @@ namespace SDVRadiance
         // still costs a whole register per element, so the flag rides in for nothing.
         private readonly Vector4[] _floodLightPositions = new Vector4[FloodShadowedLights];
         private readonly Vector4[] _floodLightColors = new Vector4[FloodShadowedLights];
+        /// <summary>The light id in each shadowed slot, and how many slots are live, so the
+        /// march window can tell a lamp that moved from a slot that changed hands.</summary>
+        private readonly int[] _floodLightIds = new int[FloodShadowedLights];
+        private int _floodDirectCount;
         private readonly Vector4[] _floodSoftPositions = new Vector4[FloodSoftLights];
         private readonly Vector4[] _floodSoftColors = new Vector4[FloodSoftLights];
         private readonly Vector2[] _classicLightPositions = new Vector2[ClassicLightSlots];
@@ -548,24 +552,24 @@ namespace SDVRadiance
         // windowed, the game published no WindowLight to stand a beam under, or the beam is being
         // drawn but is washed out by everything else - and no screenshot can tell them apart.
         // Recorded rather than recomputed so the report reads the frame that was actually drawn.
-        private bool _dbgWindowsHere, _dbgWindowBeamOn;
-        private bool _dbgInteriorWindowed;                 // layout truth, before the effects master switch
-        private float _dbgWindowRoomScale = 1f;            // what the flood actually used for window room light
-        private string _dbgWindowGlowPos = "";             // world tiles of the room's glow sprites
-        private int _dbgWindowCount, _dbgWindowLightsSeen, _dbgWindowLightsDark;
-        private int _dbgWindowGlows = -1;   // lightGlows count in this location (0 or more)
-        private Vector3 _dbgWindowColour, _dbgExposure = Vector3.One;
-        private float _dbgRoomSaturation = 1f, _dbgGiStrength;
+        private bool _reportedWindowsHere, _reportedWindowBeamOn;
+        private bool _reportedInteriorWindowed;                 // layout truth, before the effects master switch
+        private float _reportedWindowRoomScale = 1f;            // what the flood actually used for window room light
+        private string _reportedWindowGlowTiles = "";             // world tiles of the room's glow sprites
+        private int _reportedWindowCount, _reportedWindowLightsSeen, _reportedWindowLightsDark;
+        private int _reportedWindowGlows = -1;   // lightGlows count in this location (0 or more)
+        private Vector3 _reportedWindowColour, _reportedExposure = Vector3.One;
+        private float _reportedRoomSaturation = 1f, _reportedGiStrength;
         /// <summary>Sun shaft term as last handed to the shader, for the report: "no shafts" has
         /// four gates (both switches, outdoors, sun up) and a strength of zero does not say which.</summary>
-        internal float _dbgShaftStrength;
-        internal float _dbgLampShaftStrength;
-        internal Vector2 _dbgShaftDir;
+        internal float _reportedShaftStrength;
+        internal float _reportedLampShaftStrength;
+        internal Vector2 _reportedShaftDirection;
         private float _shaftStrengthEase;
-        private Vector2 _shaftDirEase = new(0f, 1f);
+        private Vector2 _shaftDirectionEase = new(0f, 1f);
         private Vector3 _shaftColourEase;
-        private float _dbgPaneDaylight, _dbgWindowLean, _dbgWindowReach;
-        private float _dbgHearthFloor, _dbgDirectScale;
+        private float _reportedPaneDaylight, _reportedWindowLean, _reportedWindowReach;
+        private float _reportedHearthFloor, _reportedDirectScale;
 
         /// <summary>
         /// The indoor half of the flood pass, as it was last handed to the shader.
@@ -580,31 +584,31 @@ namespace SDVRadiance
         /// </summary>
         private string DescribeIndoorLight()
         {
-            var sb = new System.Text.StringBuilder();
-            sb.AppendLine($"flood presence {_fadeFlood:F2} (0 = the numbers below were not applied this frame)");
-            sb.AppendLine($"    windowed interior: {_dbgWindowsHere}, beam setting on: {_dbgWindowBeamOn}");
-            sb.AppendLine($"    interior windowed (layout): {_dbgInteriorWindowed}, room-light scale: {_dbgWindowRoomScale:F2}");
-            sb.AppendLine($"    window glows at tile: {(_dbgWindowGlowPos.Length > 0 ? _dbgWindowGlowPos : "none")}");
-            sb.AppendLine($"    window lights: {_dbgWindowLightsSeen} published by the game, "
-                        + $"{_dbgWindowLightsDark} not glowing, {_dbgWindowCount} used as beams (max 6)");
-            sb.AppendLine($"    window glow sprites in this room: {_dbgWindowGlows}");
-            if (_dbgWindowsHere && _dbgWindowBeamOn && _dbgWindowCount == 0)
-                sb.AppendLine("    -> NO BEAM IS POSSIBLE: the room is windowed but nothing in it is emitting "
+            var report = new System.Text.StringBuilder();
+            report.AppendLine($"flood presence {_fadeFlood:F2} (0 = the numbers below were not applied this frame)");
+            report.AppendLine($"    windowed interior: {_reportedWindowsHere}, beam setting on: {_reportedWindowBeamOn}");
+            report.AppendLine($"    interior windowed (layout): {_reportedInteriorWindowed}, room-light scale: {_reportedWindowRoomScale:F2}");
+            report.AppendLine($"    window glows at tile: {(_reportedWindowGlowTiles.Length > 0 ? _reportedWindowGlowTiles : "none")}");
+            report.AppendLine($"    window lights: {_reportedWindowLightsSeen} published by the game, "
+                        + $"{_reportedWindowLightsDark} not glowing, {_reportedWindowCount} used as beams (max 6)");
+            report.AppendLine($"    window glow sprites in this room: {_reportedWindowGlows}");
+            if (_reportedWindowsHere && _reportedWindowBeamOn && _reportedWindowCount == 0)
+                report.AppendLine("    -> NO BEAM IS POSSIBLE: the room is windowed but nothing in it is emitting "
                             + "window light, so there is nowhere to stand a beam. Two things look like this. A "
                             + "window-art mod that draws glass without a light source is one. The other is not a "
                             + "bug at all: the game only refreshes its window glows when a room is ENTERED, so "
                             + "moving the clock past dawn while already standing inside leaves them at their "
                             + "night state until you walk out and back in.");
-            sb.AppendLine($"    daylight through the glass: colour ({_dbgWindowColour.X:F2},{_dbgWindowColour.Y:F2},"
-                        + $"{_dbgWindowColour.Z:F2}) pane {_dbgPaneDaylight:F2}");
-            sb.AppendLine($"    beam shape: lean {_dbgWindowLean:F2} tiles sideways per tile down, reach {_dbgWindowReach:F1} tiles");
+            report.AppendLine($"    daylight through the glass: colour ({_reportedWindowColour.X:F2},{_reportedWindowColour.Y:F2},"
+                        + $"{_reportedWindowColour.Z:F2}) pane {_reportedPaneDaylight:F2}");
+            report.AppendLine($"    beam shape: lean {_reportedWindowLean:F2} tiles sideways per tile down, reach {_reportedWindowReach:F1} tiles");
             // Luminance, the same way the exposure was built and the same way the shader's own
             // give-back reads it. An arithmetic mean answered 0% dimmed for a room measurably
             // dimmed by a fifth, because a cool cast puts blue above 1 and the mean hides the
             // whole thing - a diagnostic that agreed with the bug rather than reporting it.
-            float dim = Math.Clamp(1f - (0.299f * _dbgExposure.X + 0.587f * _dbgExposure.Y
-                                         + 0.114f * _dbgExposure.Z), 0f, 1f);
-            sb.AppendLine($"    room exposure ({_dbgExposure.X:F2},{_dbgExposure.Y:F2},{_dbgExposure.Z:F2}) "
+            float dim = Math.Clamp(1f - (0.299f * _reportedExposure.X + 0.587f * _reportedExposure.Y
+                                         + 0.114f * _reportedExposure.Z), 0f, 1f);
+            report.AppendLine($"    room exposure ({_reportedExposure.X:F2},{_reportedExposure.Y:F2},{_reportedExposure.Z:F2}) "
                         + $"-> we dimmed this room by {dim:P0}");
             // The two terms behind "the colours look wrong indoors". The exposure above is a
             // COLOUR: its three channels apart is the hour's cast, cool in the morning and warm
@@ -612,23 +616,23 @@ namespace SDVRadiance
             // own colour. Saturation is the lift that is supposed to answer that, and the GI
             // strength is the separate soft glow laid over the room. Each has its own switch, so
             // naming which one is doing it takes one number rather than one argument.
-            float spread = Math.Max(Math.Max(_dbgExposure.X, _dbgExposure.Y), _dbgExposure.Z)
-                         - Math.Min(Math.Min(_dbgExposure.X, _dbgExposure.Y), _dbgExposure.Z);
-            sb.AppendLine($"    hour cast: channels spread {spread:F2} "
-                        + $"({(_dbgExposure.Z > _dbgExposure.X ? "cool" : "warm")}), saturation lift {_dbgRoomSaturation:F2}, GI strength {_dbgGiStrength:F2}");
-            sb.AppendLine($"    light pools give back {1.15f * Math.Max(dim, _dbgHearthFloor):F2}x "
-                        + $"(floor {_dbgHearthFloor:F2}), direct pools scaled {_dbgDirectScale:F2}");
-            return sb.ToString().TrimEnd();
+            float spread = Math.Max(Math.Max(_reportedExposure.X, _reportedExposure.Y), _reportedExposure.Z)
+                         - Math.Min(Math.Min(_reportedExposure.X, _reportedExposure.Y), _reportedExposure.Z);
+            report.AppendLine($"    hour cast: channels spread {spread:F2} "
+                        + $"({(_reportedExposure.Z > _reportedExposure.X ? "cool" : "warm")}), saturation lift {_reportedRoomSaturation:F2}, GI strength {_reportedGiStrength:F2}");
+            report.AppendLine($"    light pools give back {1.15f * Math.Max(dim, _reportedHearthFloor):F2}x "
+                        + $"(floor {_reportedHearthFloor:F2}), direct pools scaled {_reportedDirectScale:F2}");
+            return report.ToString().TrimEnd();
         }
 
-        private void RenderFloodLight(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, ModConfig config)
+        private void RenderFloodLight(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, ModConfig config)
         {
             var effect = _floodEffect!;
             float floodCarry = SetFloodMapParams(effect, config);
             SetNightVisionParams(effect, config);
             SetSunShaftParams(effect, config);
             SetCloudCoupling(effect);
-            float directScale = SetLightArrays(effect, config, dest, floodCarry);
+            float directScale = SetLightArrays(effect, config, destination, floodCarry);
             SetRoomAndWindowParams(effect, config, directScale);
             SetReliefParams(effect, config);
 
@@ -641,54 +645,49 @@ namespace SDVRadiance
             {
                 // One technique, the base of the four lamps handed over as a uniform: see
                 // MarchBase in floodlight.fx for the constant-packing bug two techniques had.
-                effect.CurrentTechnique = effect.Techniques["LampMarch"];
-                GetParam(effect, "MarchBase")?.SetValue(0f);
-                DrawFull(spriteBatch, source, _halfResolutionScratchA!, effect);
-                GetParam(effect, "MarchBase")?.SetValue(4f);
-                DrawFull(spriteBatch, source, _halfResolutionScratchB!, effect);
-                GetParam(effect, "MarchATexture")?.SetValue(_halfResolutionScratchA);
-                GetParam(effect, "MarchBTexture")?.SetValue(_halfResolutionScratchB);
+                // Which road, and which channels, is the march window's decision.
+                RunLampMarch(spriteBatch, source, effect, config);
             }
             GetParam(effect, "MarchFromTexture")?.SetValue(marchHalf ? 1f : 0f);
             LastMarchHalfResolution = marchHalf;
 
             effect.CurrentTechnique = effect.Techniques["FloodLight"];
-            DrawFull(spriteBatch, source, dest, effect);
+            DrawFull(spriteBatch, source, destination, effect);
             // After the multiply, in the target it just wrote: a spark is what makes light, so
             // being darkened by the lightmap is exactly backwards for it.
-            DrawEmissiveParticlesOnLighting(spriteBatch, dest, EmissiveParticleHost.Flood);
+            DrawEmissiveParticlesOnLighting(spriteBatch, destination, EmissiveParticleHost.Flood);
         }
 
         /// <summary>The sprite relief terms (see RenderNormalPass): the normal buffer, the lamps' lean and the
         /// sun's, all zero unless a buffer was drawn this frame, so the shader's terms vanish exactly.</summary>
         private void SetReliefParams(Effect effect, ModConfig config)
         {
-            bool on = _normalPassReady && _normalRenderTarget != null && _reliefEase > FadeGone;
-            float lamps = on ? MathHelper.Clamp(config.SpriteReliefStrength, 0f, 1f) * _reliefEase * _fadeFlood : 0f;
-            GetParam(effect, "NormalTexture")?.SetValue(on ? _normalRenderTarget : null);
-            GetParam(effect, "ReliefStrength")?.SetValue(lamps);
+            bool reliefOn = _normalPassReady && _normalRenderTarget != null && _reliefEase > FadeGone;
+            float lampRelief = reliefOn ? MathHelper.Clamp(config.SpriteReliefStrength, 0f, 1f) * _reliefEase * _fadeFlood : 0f;
+            GetParam(effect, "NormalTexture")?.SetValue(reliefOn ? _normalRenderTarget : null);
+            GetParam(effect, "ReliefStrength")?.SetValue(lampRelief);
             // A lamp hangs about a third of a screen above the ground it lights: lower and every
             // sprite beside a lamp is lit only on its very edge, higher and the lean vanishes.
             GetParam(effect, "ReliefLampHeight")?.SetValue(0.35f);
-            float sun = 0f;
+            float sunRelief = 0f;
             Vector3 sunDirection = new(0f, 0f, 1f);
             bool outdoors = Game1.currentLocation?.IsOutdoors ?? false;
-            if (on && outdoors && ShadowRenderer.SunInSky(out float lean, out float _))
+            if (reliefOn && outdoors && ShadowRenderer.SunInSky(out float lean, out float _))
             {
                 ShadowRenderer.WindowDaylight(out Vector3 _, out float sunStrength);
                 // The shadows fall the way the light travels, (lean, +1) down the screen, so the sun
                 // stands on the opposite side, above the picture.
                 sunDirection = Vector3.Normalize(new Vector3(-lean, -1f, 1.6f));
-                sun = MathHelper.Clamp(config.SpriteReliefSun, 0f, 1f) * sunStrength * _reliefEase * _fadeFlood;
+                sunRelief = MathHelper.Clamp(config.SpriteReliefSun, 0f, 1f) * sunStrength * _reliefEase * _fadeFlood;
             }
-            GetParam(effect, "ReliefSunStrength")?.SetValue(sun);
-            GetParam(effect, "ReliefSunDir")?.SetValue(sunDirection);
+            GetParam(effect, "ReliefSunStrength")?.SetValue(sunRelief);
+            GetParam(effect, "ReliefSunDirection")?.SetValue(sunDirection);
             // The rim and the shimmer ride the same buffer and the same fades as the lean, so
             // they appear and leave with it rather than hanging on after the relief has gone.
             GetParam(effect, "RimStrength")?.SetValue(
-                on ? MathHelper.Clamp(config.SpriteReliefRim, 0f, 1f) * _reliefEase * _fadeFlood : 0f);
+                reliefOn ? MathHelper.Clamp(config.SpriteReliefRim, 0f, 1f) * _reliefEase * _fadeFlood : 0f);
             GetParam(effect, "LeafShimmer")?.SetValue(
-                on ? MathHelper.Clamp(config.SpriteReliefLeafShimmer, 0f, 1f) * _reliefEase * _fadeFlood : 0f);
+                reliefOn ? MathHelper.Clamp(config.SpriteReliefLeafShimmer, 0f, 1f) * _reliefEase * _fadeFlood : 0f);
             GetParam(effect, "ShimmerClock")?.SetValue((float)(Determinism.Seconds % 6283.185));
         }
 
@@ -734,7 +733,7 @@ namespace SDVRadiance
             float purkinje = purkinjeOutdoors
                 ? Math.Min(0.45f, 0.35f * FloodLightmap.NightAmount() * (config.LightingNightDarkness / 0.56f))
                 : 0f;
-            GetParam(effect, "NightDesat")?.SetValue(purkinje * _fadeFlood);
+            GetParam(effect, "NightDesaturation")?.SetValue(purkinje * _fadeFlood);
             // The brighten half of the night slider (see the shader's NightLift note). Below ~0.32
             // the night is LIFTED above vanilla, cool and readable; at the default and above this
             // is exactly zero and the dim side of the slider rules alone. Same one-hour ramp.
@@ -751,19 +750,23 @@ namespace SDVRadiance
             // so both blocks ask the game rather than one threading it into the other.
             bool purkinjeOutdoors = Game1.currentLocation?.IsOutdoors ?? false;
             // Sun shafts: the occluder-marched god rays (see the shader's param block for why the
-            // bright-pass version could never work top-down). Both switches, outdoors, sun up.
+            // bright-pass version could never work top-down). Both switches, under the sky, sun up.
+            // Under the sky includes a glass roof: the greenhouse is an interior to the game, but
+            // the sun stands over it the way it stands over the farm, and the dappled light on
+            // its floor was asked for by name (MyLadySeven, Nexus, 2026-09-04).
+            bool underTheSun = purkinjeOutdoors || ShadowRenderer.UnderAGlassRoof(Game1.currentLocation);
             float shaftTarget = 0f;
-            Vector2 shaftDir = _shaftDirEase;
+            Vector2 shaftDirection = _shaftDirectionEase;
             Vector3 shaftColour = _shaftColourEase;
             // The sun switch stands on its own. It lived under the lamp-ray master for a day, and
             // that read as one switch too many: the two effects share nothing but a word - lamp
             // rays are a bright-pass streak, sun shafts are an occluder march - so tying the sun
             // to the lamp toggle only meant two clicks to get one effect.
-            if (config.GodRaysSun && purkinjeOutdoors
-                && ShadowRenderer.SunInSky(out float shaftLean, out float _))
+            if (config.GodRaysSun && underTheSun
+                && ShadowRenderer.SunInSky(out float shaftLean, out float _, glassRoofCounts: true))
             {
                 ShadowRenderer.WindowDaylight(out Vector3 sunColour, out float sunStrength);
-                shaftDir = Vector2.Normalize(new Vector2(shaftLean, 1f));
+                shaftDirection = Vector2.Normalize(new Vector2(shaftLean, 1f));
                 shaftColour = sunColour;
                 // The sun's OWN intensity, not the lamp rays'. They shared one for a while and
                 // that meant turning the lamps down at night also thinned the morning through the
@@ -777,25 +780,25 @@ namespace SDVRadiance
             _shaftStrengthEase += (shaftTarget - _shaftStrengthEase) * 0.05f;
             if (Math.Abs(shaftTarget - _shaftStrengthEase) < 0.002f) _shaftStrengthEase = shaftTarget;
             _shaftStrengthEase = Determinism.Settle(_shaftStrengthEase, shaftTarget);
-            _shaftDirEase = Vector2.Lerp(_shaftDirEase, shaftDir, 0.05f);
-            if (_shaftDirEase.LengthSquared() > 0.001f) _shaftDirEase = Vector2.Normalize(_shaftDirEase);
-            else _shaftDirEase = shaftDir;
-            _shaftDirEase = Determinism.Settle(_shaftDirEase, shaftDir);
+            _shaftDirectionEase = Vector2.Lerp(_shaftDirectionEase, shaftDirection, 0.05f);
+            if (_shaftDirectionEase.LengthSquared() > 0.001f) _shaftDirectionEase = Vector2.Normalize(_shaftDirectionEase);
+            else _shaftDirectionEase = shaftDirection;
+            _shaftDirectionEase = Determinism.Settle(_shaftDirectionEase, shaftDirection);
             _shaftColourEase = Determinism.Settle(
                 Vector3.Lerp(_shaftColourEase, shaftColour, 0.05f), shaftColour);
             float shaftStrength = _shaftStrengthEase;
-            shaftDir = _shaftDirEase;
+            shaftDirection = _shaftDirectionEase;
             shaftColour = _shaftColourEase;
-            _dbgShaftStrength = shaftStrength;
-            _dbgShaftDir = shaftDir;
-            GetParam(effect, "SunShaftDir")?.SetValue(shaftDir);
+            _reportedShaftStrength = shaftStrength;
+            _reportedShaftDirection = shaftDirection;
+            GetParam(effect, "SunShaftDirection")?.SetValue(shaftDirection);
             GetParam(effect, "SunShaftColour")?.SetValue(shaftColour);
             GetParam(effect, "SunShaftStrength")?.SetValue(shaftStrength);
             GetParam(effect, "SunShaftDrift")?.SetValue((float)(Determinism.Seconds * 0.35 % 6283.185) );
             // How far the dapple stretches from its canopy, on the sun's own dial. Normalised
             // so the DEFAULT (0.6) is exactly the tuned look - binding the raw slider would have
             // silently shortened every shaft by 40% at defaults - and capped at 1.1 because the
-            // occluder mask is padded 8 tiles (FloodOccPad): march past the padding and shafts
+            // occluder mask is padded 8 tiles (FloodOccluderPad): march past the padding and shafts
             // appear as you walk, the exact bug the padding was added to fix.
             GetParam(effect, "SunShaftReach")?.SetValue(MathHelper.Clamp(config.GodRaysSunReach / 0.6f, 0.15f, 1.1f));
             // The fog stage's own eased amount, so a misty morning thickens the shafts in step
@@ -809,7 +812,7 @@ namespace SDVRadiance
             float lampShafts = config.GodRaysEnabled
                 ? MathHelper.Clamp(config.GodRaysIntensity, 0f, 2f) * _godRayAmount * _fadeFlood
                 : 0f;
-            _dbgLampShaftStrength = lampShafts;
+            _reportedLampShaftStrength = lampShafts;
             GetParam(effect, "LampShaftStrength")?.SetValue(lampShafts);
         }
 
@@ -826,9 +829,9 @@ namespace SDVRadiance
             Vector2 cloudShift = Vector2.Zero;
             if (GpuContent.Usable(_cloudMaskKeep) && Determinism.Ticks - _cloudMaskTick <= 2)
             {
-                var tilesPer = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
+                var tilesPerScreen = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
                 Vector2 shiftTiles = new Vector2(Game1.viewport.X / 64f, Game1.viewport.Y / 64f) - _cloudMaskTileOffset;
-                cloudShift = shiftTiles / tilesPer;
+                cloudShift = shiftTiles / tilesPerScreen;
                 if (Math.Abs(cloudShift.X) < 0.5f && Math.Abs(cloudShift.Y) < 0.5f)
                     // 2.2: the mask's opacity is a SHADE strength (0.35 by default), but a cloud
                     // between the sun and the ground cuts the direct beam much harder than it
@@ -869,7 +872,7 @@ namespace SDVRadiance
         /// entirely or the occluder grid is not ready yet.</summary>
         internal static bool LastMarchHalfResolution;
 
-        private float SetLightArrays(Effect effect, ModConfig config, RenderTarget2D dest, float floodCarry)
+        private float SetLightArrays(Effect effect, ModConfig config, RenderTarget2D destination, float floodCarry)
         {
             // Direct pools: the ranked leaders get the shadow ray, everything behind them
             // still gets its pool.
@@ -905,10 +908,10 @@ namespace SDVRadiance
                 _floodLiveIds.Add(_lightWrite[i].Id);
                 _floodRankedSlots.Add(i);
             }
-            _floodByRankThenId ??= (a, b) =>
+            _floodByRankThenId ??= (first, second) =>
             {
-                int byRank = _lightWrite[b].Rank.CompareTo(_lightWrite[a].Rank);
-                return byRank != 0 ? byRank : _lightWrite[a].Id.CompareTo(_lightWrite[b].Id);
+                int byRank = _lightWrite[second].Rank.CompareTo(_lightWrite[first].Rank);
+                return byRank != 0 ? byRank : _lightWrite[first].Id.CompareTo(_lightWrite[second].Id);
             };
             _floodRankedSlots.Sort(_floodByRankThenId);
             _floodRankedIds.Clear();
@@ -916,40 +919,42 @@ namespace SDVRadiance
                 _floodRankedIds.Add(_lightWrite[slot].Id);
             List<int> shadowed = AdvanceFloodShadowTier(_floodLiveIds, _floodRankedIds);
 
-            int n = 0;
-            for (int i = 0; i < _lightCount && i < _floodLiveIds.Count && n < FloodShadowedLights; i++)
+            int shadowedCount = 0;
+            for (int i = 0; i < _lightCount && i < _floodLiveIds.Count && shadowedCount < FloodShadowedLights; i++)
             {
                 int slot = shadowed.IndexOf(_floodLiveIds[i]);
                 if (slot < 0)
                     continue;
-                _floodLightPositions[n] = new Vector4(_lightPositions[i].X, _lightPositions[i].Y,
+                _floodLightPositions[shadowedCount] = new Vector4(_lightPositions[i].X, _lightPositions[i].Y,
                     _lightIsFire[i], FloodShadowWeight(_floodLiveIds[i]));
-                var d = _lightShaderData[i];
-                _floodLightColors[n] = new Vector4(d.X * directScale, d.Y * directScale, d.Z * directScale, d.W);
-                n++;
+                _floodLightIds[shadowedCount] = _floodLiveIds[i];
+                var lightData = _lightShaderData[i];
+                _floodLightColors[shadowedCount] = new Vector4(lightData.X * directScale, lightData.Y * directScale, lightData.Z * directScale, lightData.W);
+                shadowedCount++;
             }
-            for (int i = n; i < FloodShadowedLights; i++) { _floodLightPositions[i] = Vector4.Zero; _floodLightColors[i] = Vector4.Zero; }
-            int m = 0;
-            for (int i = 0; i < _lightCount && i < _floodLiveIds.Count && m < FloodSoftLights; i++)
+            for (int i = shadowedCount; i < FloodShadowedLights; i++) { _floodLightPositions[i] = Vector4.Zero; _floodLightColors[i] = Vector4.Zero; }
+            int softCount = 0;
+            for (int i = 0; i < _lightCount && i < _floodLiveIds.Count && softCount < FloodSoftLights; i++)
             {
                 // Everything the shadowed tier did not take. A light waiting for a shadowed slot
                 // shows here meanwhile, which is what makes its arrival invisible: it is already
                 // drawn, and all that changes is that a shadow grows into it.
                 if (shadowed.Contains(_floodLiveIds[i]))
                     continue;
-                _floodSoftPositions[m] = new Vector4(_lightPositions[i].X, _lightPositions[i].Y, _lightIsFire[i], 0f);
-                var d = _lightShaderData[i];
-                _floodSoftColors[m] = new Vector4(d.X * directScale, d.Y * directScale, d.Z * directScale, d.W);
-                m++;
+                _floodSoftPositions[softCount] = new Vector4(_lightPositions[i].X, _lightPositions[i].Y, _lightIsFire[i], 0f);
+                var lightData = _lightShaderData[i];
+                _floodSoftColors[softCount] = new Vector4(lightData.X * directScale, lightData.Y * directScale, lightData.Z * directScale, lightData.W);
+                softCount++;
             }
-            for (int i = m; i < FloodSoftLights; i++) { _floodSoftPositions[i] = Vector4.Zero; _floodSoftColors[i] = Vector4.Zero; }
-            GetParam(effect, "LightPosArr")?.SetValue(_floodLightPositions);
-            GetParam(effect, "LightColArr")?.SetValue(_floodLightColors);
-            GetParam(effect, "DirectCount")?.SetValue((float)(_isFloodOcclusionReady ? n : 0));
-            GetParam(effect, "SoftPosArr")?.SetValue(_floodSoftPositions);
-            GetParam(effect, "SoftColArr")?.SetValue(_floodSoftColors);
-            GetParam(effect, "SoftCount")?.SetValue((float)m);
-            GetParam(effect, "Aspect")?.SetValue(dest.Width / (float)Math.Max(1, dest.Height));
+            for (int i = softCount; i < FloodSoftLights; i++) { _floodSoftPositions[i] = Vector4.Zero; _floodSoftColors[i] = Vector4.Zero; }
+            GetParam(effect, "LightPositions")?.SetValue(_floodLightPositions);
+            GetParam(effect, "LightColours")?.SetValue(_floodLightColors);
+            _floodDirectCount = _isFloodOcclusionReady ? shadowedCount : 0;
+            GetParam(effect, "DirectCount")?.SetValue((float)_floodDirectCount);
+            GetParam(effect, "SoftLightPositions")?.SetValue(_floodSoftPositions);
+            GetParam(effect, "SoftLightColours")?.SetValue(_floodSoftColors);
+            GetParam(effect, "SoftCount")?.SetValue((float)softCount);
+            GetParam(effect, "Aspect")?.SetValue(destination.Width / (float)Math.Max(1, destination.Height));
             // FLOOD's own mask, own origin, own size fields — see the note on _floodOccluderMask
             // for why these must never be the classic path's shared fields. They used to be, and
             // classic's build runs later in the same frame and always overwrote them, so flood's
@@ -965,8 +970,8 @@ namespace SDVRadiance
             GetParam(effect, "OccluderSoft1Texture")?.SetValue(_floodOccluderSoft[0]);
             GetParam(effect, "OccluderSoft2Texture")?.SetValue(_floodOccluderSoft[1]);
             GetParam(effect, "OccluderSoft3Texture")?.SetValue(_floodOccluderSoft[2]);
-            GetParam(effect, "OccOrigin")?.SetValue(new Vector2(_floodOccluderTileX, _floodOccluderTileY));
-            GetParam(effect, "OccMapSize")?.SetValue(_floodOccluderMaskSize);
+            GetParam(effect, "OccluderOrigin")?.SetValue(new Vector2(_floodOccluderTileX, _floodOccluderTileY));
+            GetParam(effect, "OccluderMapSize")?.SetValue(_floodOccluderMaskSize);
             // A lamp's shadow is only as visible as the lamp's glow. Outdoors by day the game
             // paints no glow for a ring or a torch, yet the carve went on taking its full share
             // out of the scene, so a plant beside the player threw a black wedge at 6:20 in the
@@ -1003,7 +1008,7 @@ namespace SDVRadiance
             // (see marchWanted in floodlight.fx). The shaft strength is the value the last shaft
             // update handed over, which is this frame's or the one before; a report flag, not a
             // gate, so a frame of easing either way is fine.
-            LastMarchSkipped = shadowStrengthNow <= 0f && _dbgLampShaftStrength <= 0.004f
+            LastMarchSkipped = shadowStrengthNow <= 0f && _reportedLampShaftStrength <= 0.004f
                 && DebugChannel != DebugOverlayChannel.LampShadow;
             // 0 on the dial is the twelve samples every release up to 1.6.2 took, 1 is the
             // forty-eight that 1.7 traces with. The mapping lives here so the shader is handed
@@ -1027,7 +1032,7 @@ namespace SDVRadiance
             // of 1.6.2, which is the floor by construction: this can never look coarser than a
             // release everybody was happy with. And it gives up detail exactly where detail is
             // hardest to see, since a shadow's edge is read against the other seven lamps' light.
-            float marchingLamps = Math.Max(1f, _isFloodOcclusionReady ? n : 0);
+            float marchingLamps = Math.Max(1f, _isFloodOcclusionReady ? shadowedCount : 0);
             float shared = config.LightShadowDetailShared
                 ? MathHelper.Clamp(dialCeiling * 2f / marchingLamps, 12f, dialCeiling)
                 : dialCeiling;
@@ -1047,7 +1052,7 @@ namespace SDVRadiance
         {
             // ---- Time-of-day room exposure + window shafts (windowed interiors only) ----
             var location = Game1.currentLocation;
-            FloodLightmap.IndoorLook(location, config, out Vector3 exposureTarget, out float satTarget);
+            FloodLightmap.IndoorLook(location, config, out Vector3 exposureTarget, out float saturationTarget);
             bool interiorWindowed = FloodLightmap.IsWindowedInterior(location);
             // The master "window effects" toggle gates the VISIBLE half (the beam, the lit glass,
             // the patch on the floor) and the outdoor window glow. The daylight a window adds to
@@ -1077,7 +1082,7 @@ namespace SDVRadiance
                 _exposureLocation = location;
                 _exposureEase = exposureTarget;          // snap behind the warp fade
                 _windowColourEase = windowColourTarget;
-                _roomSaturationEase = satTarget;
+                _roomSaturationEase = saturationTarget;
                 _paneDaylightEase = paneDaylightTarget;
                 _windowDaylightEase = windowedRoom ? 1f : 0f;
                 _windowRoomLightEase = interiorWindowed ? 1f : 0f;
@@ -1096,7 +1101,7 @@ namespace SDVRadiance
                 _windowColourEase = Determinism.Settle(
                     Vector3.Lerp(_windowColourEase, windowColourTarget, 0.03f), windowColourTarget);
                 _roomSaturationEase = Determinism.Settle(
-                    MathHelper.Lerp(_roomSaturationEase, satTarget, 0.03f), satTarget);
+                    MathHelper.Lerp(_roomSaturationEase, saturationTarget, 0.03f), saturationTarget);
                 _paneDaylightEase = Determinism.Settle(
                     MathHelper.Lerp(_paneDaylightEase, paneDaylightTarget, 0.03f), paneDaylightTarget);
                 _windowDaylightEase = Determinism.Settle(
@@ -1126,33 +1131,33 @@ namespace SDVRadiance
             GetParam(effect, "HearthFloor")?.SetValue(windowedRoom ? HearthLitRoomFloor * _fadeFlood : 0f);
 
             int windowCount = 0;
-            _dbgWindowLightsSeen = 0;
-            _dbgWindowLightsDark = 0;
+            _reportedWindowLightsSeen = 0;
+            _reportedWindowLightsDark = 0;
             if (windowedRoom && Game1.currentLightSources != null && location != null)
             {
-                int vw = Math.Max(1, Game1.viewport.Width);
-                int vh = Math.Max(1, Game1.viewport.Height);
-                foreach (var kv in Game1.currentLightSources)
+                int viewportWidth = Math.Max(1, Game1.viewport.Width);
+                int viewportHeight = Math.Max(1, Game1.viewport.Height);
+                foreach (var lightEntry in Game1.currentLightSources)
                 {
                     if (windowCount >= 6)
                         break;
-                    var ls = kv.Value;
-                    if (ls.lightContext.Value != LightSource.LightContext.WindowLight)
+                    var light = lightEntry.Value;
+                    if (light.lightContext.Value != LightSource.LightContext.WindowLight)
                         continue;
-                    _dbgWindowLightsSeen++;
-                    if (!ShadowRenderer.WindowGlowing(location, ls))
+                    _reportedWindowLightsSeen++;
+                    if (!ShadowRenderer.WindowGlowing(location, light))
                     {
-                        _dbgWindowLightsDark++;
+                        _reportedWindowLightsDark++;
                         continue;
                     }
                     // Beam origin: just under the pane's centre, so the light visibly
                     // CONNECTS to the glass instead of materialising half a tile below it.
-                    Vector2 local = Game1.GlobalToLocal(Game1.viewport, ls.position.Value + new Vector2(0f, 12f));
-                    float u = local.X / vw;
-                    float v = local.Y / vh;
-                    if (u < -0.3f || u > 1.3f || v < -0.5f || v > 1.2f)
+                    Vector2 screenPosition = Game1.GlobalToLocal(Game1.viewport, light.position.Value + new Vector2(0f, 12f));
+                    float beamU = screenPosition.X / viewportWidth;
+                    float beamV = screenPosition.Y / viewportHeight;
+                    if (beamU < -0.3f || beamU > 1.3f || beamV < -0.5f || beamV > 1.2f)
                         continue;   // beam could not land on screen
-                    _windowShaftPositions[windowCount++] = new Vector2(u, v);
+                    _windowShaftPositions[windowCount++] = new Vector2(beamU, beamV);
                 }
             }
             for (int i = windowCount; i < 6; i++)
@@ -1160,7 +1165,7 @@ namespace SDVRadiance
             // Beam geometry is handed over in TILES — the shader works in tile space, where
             // a sideways lean means the same thing on any aspect ratio.
             ShadowRenderer.WindowShaft(out float lean, out float reachTiles);
-            GetParam(effect, "WindowPosArr")?.SetValue(_windowShaftPositions);
+            GetParam(effect, "WindowPositions")?.SetValue(_windowShaftPositions);
             GetParam(effect, "WindowCount")?.SetValue((float)windowCount);
             GetParam(effect, "WindowColour")?.SetValue(_windowColourEase * _fadeFlood);
             GetParam(effect, "PaneDaylight")?.SetValue(_paneDaylightEase * _fadeFlood);
@@ -1172,29 +1177,29 @@ namespace SDVRadiance
             GetParam(effect, "DebugEmitter")?.SetValue(DebugChannel == DebugOverlayChannel.Emitter ? 1f : 0f);
             GetParam(effect, "DebugLampShadow")?.SetValue(DebugChannel == DebugOverlayChannel.LampShadow ? 1f : 0f);
 
-            _dbgWindowsHere = windowsHere;
-            _dbgWindowBeamOn = config.WindowBeamEnabled;
-            _dbgInteriorWindowed = interiorWindowed;
-            _dbgWindowGlows = location?.lightGlows.Count ?? -1;
-            var glowSb = new System.Text.StringBuilder();
+            _reportedWindowsHere = windowsHere;
+            _reportedWindowBeamOn = config.WindowBeamEnabled;
+            _reportedInteriorWindowed = interiorWindowed;
+            _reportedWindowGlows = location?.lightGlows.Count ?? -1;
+            var glowTiles = new System.Text.StringBuilder();
             if (location != null)
-                foreach (Vector2 g in location.lightGlows)
-                { if (glowSb.Length > 0) glowSb.Append(", "); glowSb.Append($"({g.X / 64f:F0},{g.Y / 64f:F0})"); }
-            _dbgWindowGlowPos = glowSb.ToString();
-            _dbgWindowRoomScale = FloodLightmap.WindowRoomScale;
-            _dbgWindowCount = windowCount;
-            _dbgWindowColour = _windowColourEase * _fadeFlood;
-            _dbgPaneDaylight = _paneDaylightEase * _fadeFlood;
-            _dbgWindowLean = lean;
-            _dbgWindowReach = reachTiles;
-            _dbgExposure = Vector3.Lerp(Vector3.One, _exposureEase, _fadeFlood);
-            _dbgRoomSaturation = MathHelper.Lerp(1f, _roomSaturationEase, _fadeFlood);
-            _dbgGiStrength = config.FloodLightingStrength;
-            _dbgHearthFloor = windowedRoom ? HearthLitRoomFloor * _fadeFlood : 0f;
-            _dbgDirectScale = directScale;
+                foreach (Vector2 glow in location.lightGlows)
+                { if (glowTiles.Length > 0) glowTiles.Append(", "); glowTiles.Append($"({glow.X / 64f:F0},{glow.Y / 64f:F0})"); }
+            _reportedWindowGlowTiles = glowTiles.ToString();
+            _reportedWindowRoomScale = FloodLightmap.WindowRoomScale;
+            _reportedWindowCount = windowCount;
+            _reportedWindowColour = _windowColourEase * _fadeFlood;
+            _reportedPaneDaylight = _paneDaylightEase * _fadeFlood;
+            _reportedWindowLean = lean;
+            _reportedWindowReach = reachTiles;
+            _reportedExposure = Vector3.Lerp(Vector3.One, _exposureEase, _fadeFlood);
+            _reportedRoomSaturation = MathHelper.Lerp(1f, _roomSaturationEase, _fadeFlood);
+            _reportedGiStrength = config.FloodLightingStrength;
+            _reportedHearthFloor = windowedRoom ? HearthLitRoomFloor * _fadeFlood : 0f;
+            _reportedDirectScale = directScale;
         }
 
-        private void RenderWater(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, ModConfig config)
+        private void RenderWater(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, ModConfig config)
         {
             var effect = _water!;
             var who = Game1.player;
@@ -1209,14 +1214,14 @@ namespace SDVRadiance
             SetWadingParam(effect, who);
 
             effect.CurrentTechnique = effect.Techniques["Water"];
-            DrawFull(spriteBatch, source, dest, effect);
+            DrawFull(spriteBatch, source, destination, effect);
             // Presence enforced outside the shader (see BlendBackSource): the in-shader uniform
             // measured inert, and the wet-rim early return never passes through it anyway.
             // The blend weight carries BOTH fades: the config toggle's and the one for water
             // scrolling out of the mask window. This is the term that covers every other term in
             // the shader, including its early returns, so folding the window fade in here is what
             // makes the pass leave gradually instead of being cut out from under the frame.
-            BlendBackSource(spriteBatch, source, dest, _fadeWater * MathHelper.Clamp(_waterInMaskEase, 0f, 1f));
+            BlendBackSource(spriteBatch, source, destination, _fadeWater * MathHelper.Clamp(_waterInMaskEase, 0f, 1f));
             // The sky half of the precipitation lands here, on the rippled result, so streaks
             // hang straight over the river instead of waving with it. This side of the capture
             // never meets the vanilla lightmap, so the particles' own ambient dims it instead.
@@ -1224,7 +1229,7 @@ namespace SDVRadiance
             // taken back out of this stage's CPU column, which double-counted it and read as the
             // water pass costing ten times more in rain.
             long precipitationStart = Stopwatch.GetTimestamp();
-            PrecipitationSystem.DrawSkyForChain(spriteBatch, dest, _frameWidth, AmbientLightOnParticles());
+            PrecipitationSystem.DrawSkyForChain(spriteBatch, destination, _frameWidth, AmbientLightOnParticles());
             ExcludeTicksFromOpenStage(Stopwatch.GetTimestamp() - precipitationStart);
         }
 
@@ -1234,7 +1239,7 @@ namespace SDVRadiance
         {
             // Weather/season drive how agitated the water is: choppier & faster in
             // rain/storm, sluggish in winter; sparkle fades when there's no sun.
-            ComputeWaterDynamics(out float strengthMul, out float speedMul, out float sparkleMul, out _causticWeatherMultiplier);
+            ComputeWaterDynamics(out float strengthMultiplier, out float speedMultiplier, out float sparkleMultiplier, out _causticWeatherMultiplier);
             // The stage can run for the REFLECTION alone (shimmer toggled off): ripple,
             // sparkle, tint and rim all zero out; the mirror keeps working independently.
             // The toggle itself eases too: with the reflection keeping the stage alive,
@@ -1248,25 +1253,25 @@ namespace SDVRadiance
             // still reads correctly in the cinematic. Eased over ~0.1s: events can start
             // without a screen fade, and the flat-water snap was the tell.
             bool eventUp = Game1.eventUp || Game1.CurrentEvent != null;
-            Approach(ref _dispGateEase, eventUp ? 0f : 1f, 0.15f);
-            float dispGate = _dispGateEase;
+            Approach(ref _displacementGateEase, eventUp ? 0f : 1f, 0.15f);
+            float displacementGate = _displacementGateEase;
             // Indoor water (hot spring, sewer, caves) sits under a ceiling, often in steam:
             // there is no sun to sparkle, no sky to mirror sharply, and the pale pool art
             // blows out under the full outdoor treatment. Calmer waves, faint reflection.
             bool indoors = !(Game1.currentLocation?.IsOutdoors ?? true);
-            float inWave = indoors ? 0.6f : 1f;
-            float inSpark = indoors ? 0.35f : 1f;
-            float inRefl = indoors ? 0.35f : 1f;
-            float inTint = indoors ? 0.5f : 1f;
+            float indoorWave = indoors ? 0.6f : 1f;
+            float indoorSparkle = indoors ? 0.35f : 1f;
+            float indoorReflection = indoors ? 0.35f : 1f;
+            float indoorTint = indoors ? 0.5f : 1f;
             // Whole-pass presence (see water.effect): the per-term fades below do not reach every
             // term, so the pass held full strength down to a fade of 0.02 and then popped out.
             GetParam(effect, "Presence")?.SetValue(_fadeWater);
             GetParam(effect, "Time")?.SetValue(Time());
-            GetParam(effect, "Strength")?.SetValue(config.WaterStrength * strengthMul * shimmer * dispGate * inWave);
-            GetParam(effect, "Speed")?.SetValue(config.WaterSpeed * speedMul);
-            GetParam(effect, "Sparkle")?.SetValue(config.WaterSparkle * sparkleMul * shimmer * inSpark);
-            GetParam(effect, "TintAmt")?.SetValue(0.35f * shimmer * inTint);
-            GetParam(effect, "ReflectStrength")?.SetValue((config.WaterReflection ? config.WaterReflectStrength : 0f) * _fadeWater * inRefl);
+            GetParam(effect, "Strength")?.SetValue(config.WaterStrength * strengthMultiplier * shimmer * displacementGate * indoorWave);
+            GetParam(effect, "Speed")?.SetValue(config.WaterSpeed * speedMultiplier);
+            GetParam(effect, "Sparkle")?.SetValue(config.WaterSparkle * sparkleMultiplier * shimmer * indoorSparkle);
+            GetParam(effect, "TintAmount")?.SetValue(0.35f * shimmer * indoorTint);
+            GetParam(effect, "ReflectStrength")?.SetValue((config.WaterReflection ? config.WaterReflectStrength : 0f) * _fadeWater * indoorReflection);
         }
 
         private float _causticWeatherMultiplier = 1f;
@@ -1313,7 +1318,7 @@ namespace SDVRadiance
                         * _causticEase * _shimmerEase * _fadeWater * daylight * indoorSoften;
                 }
             }
-            GetParam(effect, "CausticAmt")?.SetValue(causticAmount);
+            GetParam(effect, "CausticAmount")?.SetValue(causticAmount);
             // One: the net covers the whole surface evenly, by decision (19/8). The shore shelf
             // was tried at several widths and floors and either vanished under the foam band or
             // read as no different from the open water; the shader keeps the shelf math so a
@@ -1335,9 +1340,9 @@ namespace SDVRadiance
             // P3b: flipped-entity reflection layer — the mirror's PREFERRED source. Where
             // this RT has content, it is the correct reflection by construction; the
             // screen-space flip only fills in scenery behind it (until P3c replaces that too).
-            GetParam(effect, "ReflectRTOn")?.SetValue(ReflectRTReady && _reflectionRenderTarget != null ? 1f : 0f);
-            GetParam(effect, "ReflectRTPlayer")?.SetValue(ReflectRTReady && ReflectRTHasPlayer ? 1f : 0f);
-            GetParam(effect, "ReflectRTTexture")?.SetValue(_reflectionRenderTarget);
+            GetParam(effect, "ReflectedEntitiesOn")?.SetValue(ReflectRTReady && _reflectionRenderTarget != null ? 1f : 0f);
+            GetParam(effect, "ReflectedEntitiesHasPlayer")?.SetValue(ReflectRTReady && ReflectRTHasPlayer ? 1f : 0f);
+            GetParam(effect, "ReflectedEntitiesTexture")?.SetValue(_reflectionRenderTarget);
             // P3c: sprite-free scenery source — the mirror reads the map's own pixels, so
             // an excluded sprite can't leave a body-shaped sky hole in the reflection.
             // The raw layer render carries no lighting; ambient rescales it to the scene.
@@ -1355,7 +1360,7 @@ namespace SDVRadiance
             // to displace the MIRROR were one number, so the only way to read a reflection on a
             // rainy day - where the game makes the surface half again as choppy on its own - was
             // to turn the water down everywhere. Two questions, two answers.
-            (float reflWobble, Vector3 reflTint) = config.WaterReflectStyle switch
+            (float reflectionWobble, Vector3 reflectionTint) = config.WaterReflectStyle switch
             {
                 WaterReflectionStyle.StillWater => (0.15f, new Vector3(0.80f, 0.86f, 0.96f)),
                 WaterReflectionStyle.Choppy     => (1.90f, new Vector3(0.60f, 0.72f, 0.90f)),
@@ -1365,32 +1370,32 @@ namespace SDVRadiance
             // numbers: the classic shear and ripple terms are zeroed and the travelling field,
             // the contact anchor, the parallax and the photographic operators take over. Its
             // five settings of its own reach the shader whatever the water, and do nothing there
-            // until ReflModel is 1.
+            // until ReflectionModel is 1.
             bool realistic = config.WaterReflectModel == WaterReflectionModel.Modern;
             // One amount scaling BOTH halves of the distortion. The named look above chooses the
             // character; this chooses how much of it there is, and at zero the reflection is a flat
             // mirror no matter which look is selected. The wave shear is the half the named looks
             // never touched, which is why none of them could reach a mirror on their own.
-            float reflDistort = config.WaterReflectDistort;
-            GetParam(effect, "MirrorShear")?.SetValue(realistic ? 0f : reflDistort);
-            GetParam(effect, "ReflWobble")?.SetValue(reflWobble * config.WaterReflectDistort);
-            GetParam(effect, "ReflModel")?.SetValue(realistic ? 1f : 0f);
-            GetParam(effect, "ReflWobbleAmount")?.SetValue(config.WaterModernWobble);
-            GetParam(effect, "ReflChoppiness")?.SetValue(config.WaterModernChoppiness);
-            GetParam(effect, "ReflParallax")?.SetValue(config.WaterModernParallax);
-            GetParam(effect, "ReflFresnel")?.SetValue(config.WaterModernFresnel);
-            GetParam(effect, "ReflStretch")?.SetValue(config.WaterModernStretch);
-            GetParam(effect, "ReflEdgeSoftness")?.SetValue(config.WaterModernEdgeSoftness);
-            GetParam(effect, "ReflPlungeChurn")?.SetValue(config.WaterModernPlungeChurn);
-            GetParam(effect, "ReflPlungeReach")?.SetValue(config.WaterModernPlungeReach);
-            GetParam(effect, "ReflLipFade")?.SetValue(config.WaterModernLipFade);
-            GetParam(effect, "ReflSoftness")?.SetValue(config.WaterReflectBlur);
-            GetParam(effect, "ReflDepthScale")?.SetValue(config.WaterReflectDepth);
+            float reflectionDistort = config.WaterReflectDistort;
+            GetParam(effect, "MirrorShear")?.SetValue(realistic ? 0f : reflectionDistort);
+            GetParam(effect, "ReflectionWobble")?.SetValue(reflectionWobble * config.WaterReflectDistort);
+            GetParam(effect, "ReflectionModel")?.SetValue(realistic ? 1f : 0f);
+            GetParam(effect, "ReflectionWobbleAmount")?.SetValue(config.WaterModernWobble);
+            GetParam(effect, "ReflectionChoppiness")?.SetValue(config.WaterModernChoppiness);
+            GetParam(effect, "ReflectionParallax")?.SetValue(config.WaterModernParallax);
+            GetParam(effect, "ReflectionFresnel")?.SetValue(config.WaterModernFresnel);
+            GetParam(effect, "ReflectionStretch")?.SetValue(config.WaterModernStretch);
+            GetParam(effect, "ReflectionEdgeSoftness")?.SetValue(config.WaterModernEdgeSoftness);
+            GetParam(effect, "ReflectionPlungeChurn")?.SetValue(config.WaterModernPlungeChurn);
+            GetParam(effect, "ReflectionPlungeReach")?.SetValue(config.WaterModernPlungeReach);
+            GetParam(effect, "ReflectionLipFade")?.SetValue(config.WaterModernLipFade);
+            GetParam(effect, "ReflectionSoftness")?.SetValue(config.WaterReflectBlur);
+            GetParam(effect, "ReflectionDepthScale")?.SetValue(config.WaterReflectDepth);
             // Passed as steps per TILE, which is what the shader needs to round with, rather than
             // as the pixel height the setting is written in. Zero means do not round at all.
             GetParam(effect, "ShearSteps")?.SetValue(
                 config.WaterReflectBanding > 0.01f ? 64f / config.WaterReflectBanding : 0f);
-            GetParam(effect, "ReflTint")?.SetValue(reflTint);
+            GetParam(effect, "ReflectionTint")?.SetValue(reflectionTint);
             GetParam(effect, "SceneAmbient")?.SetValue(Vector3.Lerp(Vector3.One, ComputeLightingAmbient(config), _fadeLighting));
             GetParam(effect, "WaterKind")?.SetValue(WaterKind());
             GetParam(effect, "TilesPerScreen")?.SetValue(_waterMaskTilesPerScreen);
@@ -1435,12 +1440,12 @@ namespace SDVRadiance
             // would buy those players the ten pixels for a second FarmerRenderer draw, which is
             // not a trade to make without measuring it on somebody who turned reflections off to
             // go faster.
-            var pmask = ShadowRenderer.PlayerColor ?? ShadowRenderer.PlayerMask;
-            var playerRect = new Vector4(2f, 2f, -1f, -1f);   // empty box (never matches)
+            var playerMask = ShadowRenderer.PlayerColor ?? ShadowRenderer.PlayerMask;
+            var playerBox = new Vector4(2f, 2f, -1f, -1f);   // empty box (never matches)
             // A seated farmer is on a bench, not in the water, and the silhouette that would be
             // laid over them is the standing bake, taller than the body it covers: what it covered
             // over the beach pier bench was a rectangle of dead water above the player's head.
-            if (who != null && pmask != null && !who.IsSitting())
+            if (who != null && playerMask != null && !who.IsSitting())
             {
                 // The box has to overlay the DRAWN sprite, whose bottom edge the bake pins to the
                 // anchor, so the anchor is where the game drew the body this frame and not the
@@ -1448,14 +1453,14 @@ namespace SDVRadiance
                 // (see FarmerDrawnAnchor). Anchoring at the shadow's feet line (bottom - 10) or a
                 // whole yOffset above the box both left a strip of dead water over the head.
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport, ShadowRenderer.FarmerDrawnAnchor(who));
-                Vector2 tl = feet - new Vector2(ShadowRenderer.PlayerRtW / 2f, ShadowRenderer.PlayerRtH - 8f);
+                Vector2 topLeft = feet - new Vector2(ShadowRenderer.PlayerRtW / 2f, ShadowRenderer.PlayerRtH - 8f);
                 // Screen px -> UV against the FRAME the game drew, not this pass's target
                 // (see _frameWidth): with render scale on they are different sizes.
-                playerRect = new Vector4(tl.X / _frameWidth, tl.Y / _frameHeight,
-                    (tl.X + ShadowRenderer.PlayerRtW) / _frameWidth, (tl.Y + ShadowRenderer.PlayerRtH) / _frameHeight);
+                playerBox = new Vector4(topLeft.X / _frameWidth, topLeft.Y / _frameHeight,
+                    (topLeft.X + ShadowRenderer.PlayerRtW) / _frameWidth, (topLeft.Y + ShadowRenderer.PlayerRtH) / _frameHeight);
             }
-            GetParam(effect, "PlayerRect")?.SetValue(playerRect);
-            GetParam(effect, "PlayerMaskTexture")?.SetValue(pmask);
+            GetParam(effect, "PlayerRect")?.SetValue(playerBox);
+            GetParam(effect, "PlayerMaskTexture")?.SetValue(playerMask);
         }
 
         /// <summary>Golden hour, night glow, moonlight and raindrop rings. Returns the two amounts the sky
@@ -1474,7 +1479,7 @@ namespace SDVRadiance
             // so rain on Ginger Island rang no rings at all while a dry valley rang them.
             bool rainingHere = Game1.currentLocation?.IsRainingHere() ?? false;
             Approach(ref _rainRingsEase, rainingHere ? 1f : 0f, 0.04f);
-            GetParam(effect, "RainAmt")?.SetValue(_rainRingsEase);
+            GetParam(effect, "RainAmount")?.SetValue(_rainRingsEase);
             GetParam(effect, "RainRingDensity")?.SetValue(config.WaterRainRingDensity);
             GetParam(effect, "RainRingSize")?.SetValue(config.WaterRainRingSize);
             GetParam(effect, "RainRingStrength")?.SetValue(config.WaterRainRingStrength);
@@ -1485,7 +1490,7 @@ namespace SDVRadiance
         /// method because the glass wants the same two numbers with no effect to set them on.</summary>
         private static (float SunWarm, float NightGlow) TimeOfDayAmounts()
         {
-            float mins = ClockMinutes();
+            float minutesNow = ClockMinutes();
             // Golden hour, on the clock and without a cliff. This read the raw HHMM value (so it
             // lurched at every hour boundary) and then cut to zero the instant the clock passed
             // 19:00 - full warmth at 18:50, none at 19:00, in one step, which is the flash of a
@@ -1494,11 +1499,11 @@ namespace SDVRadiance
             float sunWarm = 0f;
             if (!Game1.isRaining)
             {
-                float dayProgress = MathHelper.Clamp((mins - 12 * 60) / 360f, -1f, 1f);
+                float dayProgress = MathHelper.Clamp((minutesNow - 12 * 60) / 360f, -1f, 1f);
                 sunWarm = MathHelper.Clamp((Math.Abs(dayProgress) - 0.55f) / 0.45f, 0f, 1f);
-                sunWarm *= MathHelper.Clamp((19 * 60 - mins) / 30f, 0f, 1f);
+                sunWarm *= MathHelper.Clamp((19 * 60 - minutesNow) / 30f, 0f, 1f);
             }
-            float nightGlow = MathHelper.Clamp((mins - 1140) / 90f, 0f, 1f);   // 19:00 → 20:30
+            float nightGlow = MathHelper.Clamp((minutesNow - 1140) / 90f, 0f, 1f);   // 19:00 → 20:30
             return (sunWarm, nightGlow);
         }
 
@@ -1513,7 +1518,7 @@ namespace SDVRadiance
             // stage's ambient so water never stays bright inside a darkened scene.
             Vector3 sky = SynthesisedSkyColour(sunWarm, nightGlow);
             sky *= Vector3.Lerp(Vector3.One, ComputeLightingAmbient(config), _fadeLighting);
-            GetParam(effect, "SkyColor")?.SetValue(sky);
+            GetParam(effect, "SkyColour")?.SetValue(sky);
             // B6: aurora - on a clear winter night the sky is not one flat colour, and the
             // water is the only mirror this camera ever sees the sky in. The whole gate (the
             // switch, winter, outdoors, clear weather, real night) rides ONE eased amount, so
@@ -1527,7 +1532,7 @@ namespace SDVRadiance
             // The dial rides the eased gate rather than the shader, so the whole no-popping
             // argument above still holds and the shader keeps one number to early-out on.
             float auroraUploaded = _auroraAmount * config.AuroraStrength;
-            GetParam(effect, "AuroraAmt")?.SetValue(auroraUploaded);
+            GetParam(effect, "AuroraAmount")?.SetValue(auroraUploaded);
             SkyAuroraUploaded = auroraUploaded;
             UpdateShootingStar(effect, config, nightGlow);
         }
@@ -1763,22 +1768,22 @@ namespace SDVRadiance
         /// <summary>Lamp glimmer after dusk: up to eight on-screen lights, in frame UV.</summary>
         private void SetGlimmerLights(Effect effect, float nightGlow)
         {
-            int lc = 0;
+            int lightCount = 0;
             if (nightGlow > 0f && Game1.currentLightSources != null)
             {
-                foreach (var kv in Game1.currentLightSources.Values)
+                foreach (var light in Game1.currentLightSources.Values)
                 {
-                    if (lc >= 8)
+                    if (lightCount >= 8)
                         break;
-                    Vector2 sp = Game1.GlobalToLocal(Game1.viewport, kv.position.Value);
+                    Vector2 screenPosition = Game1.GlobalToLocal(Game1.viewport, light.position.Value);
                     // Screen px throughout, so the bounds test and the UV both use the frame
                     // the game drew rather than this pass's (possibly scaled) target.
-                    if (sp.X < -160 || sp.X > _frameWidth + 160 || sp.Y < -160 || sp.Y > _frameHeight + 160)
+                    if (screenPosition.X < -160 || screenPosition.X > _frameWidth + 160 || screenPosition.Y < -160 || screenPosition.Y > _frameHeight + 160)
                         continue;
-                    _waterGlimmerLights[lc++] = new Vector4(sp.X / _frameWidth, sp.Y / _frameHeight, kv.radius.Value, 0.9f);
+                    _waterGlimmerLights[lightCount++] = new Vector4(screenPosition.X / _frameWidth, screenPosition.Y / _frameHeight, light.radius.Value, 0.9f);
                 }
             }
-            GetParam(effect, "LightCount")?.SetValue((float)lc);
+            GetParam(effect, "LightCount")?.SetValue((float)lightCount);
             GetParam(effect, "Lights")?.SetValue(_waterGlimmerLights);
         }
 
@@ -1790,23 +1795,23 @@ namespace SDVRadiance
             // SWIMMING is excluded: half the body is already underwater, so a mirrored
             // silhouette below the feet reads as a glitch, not a reflection — the ripple
             // exclusion (silhouette gate) is what protects the visible half instead.
-            float pin = 0f;
+            float wading = 0f;
             if (who != null && !who.swimming.Value)
             {
-                Rectangle bb = who.GetBoundingBox();
-                Color? underFeet = ReadWaterMaskPixel(bb.Center.X / 4 - _lastWaterTileX * 16,
-                                                     (bb.Bottom - 4) / 4 - _lastWaterTileY * 16);
+                Rectangle boundingBox = who.GetBoundingBox();
+                Color? underFeet = ReadWaterMaskPixel(boundingBox.Center.X / 4 - _lastWaterTileX * 16,
+                                                     (boundingBox.Bottom - 4) / 4 - _lastWaterTileY * 16);
                 if (underFeet is { R: > 100 })
-                    pin = 1f;
+                    wading = 1f;
             }
             // Ease the wading state so the under-feet self-reflection fades in/out (~0.3s)
             // instead of popping the moment the feet cross the water edge.
-            Approach(ref _pinFadeAmount, pin, 0.12f);
-            if (Math.Abs(pin - _pinFadeAmount) < 0.01f) _pinFadeAmount = pin;
-            GetParam(effect, "PlayerInWater")?.SetValue(_pinFadeAmount);
+            Approach(ref _wadingEase, wading, 0.12f);
+            if (Math.Abs(wading - _wadingEase) < 0.01f) _wadingEase = wading;
+            GetParam(effect, "PlayerInWater")?.SetValue(_wadingEase);
         }
 
-        private void RenderFinishing(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, ModConfig config)
+        private void RenderFinishing(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, ModConfig config)
         {
             var effect = _finishing!;
             // Both finishing toggles ease (advanced once per frame in Apply, shared with the
@@ -1841,17 +1846,17 @@ namespace SDVRadiance
                 GetParam(effect, "PlayerWorldTile")?.SetValue(new Vector2(feet.X / 64f, (feet.Y - 56f) / 64f));
             }
             effect.CurrentTechnique = effect.Techniques["Finishing"];
-            DrawFull(spriteBatch, source, dest, effect);
+            DrawFull(spriteBatch, source, destination, effect);
         }
 
-        private void RenderLighting(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D dest, ModConfig config)
+        private void RenderLighting(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, ModConfig config)
         {
             var effect = _lighting!;
             // Presence fade: ambient darkening eases in from "no change" (white) on appearance.
             GetParam(effect, "AmbientColor")?.SetValue(Vector3.Lerp(Vector3.One, ComputeLightingAmbient(config), _fadeLighting));
             // Whole-pass presence (see lighting.effect): the light pools are not scaled by the fade.
             GetParam(effect, "Presence")?.SetValue(_fadeLighting);
-            GetParam(effect, "Aspect")?.SetValue(dest.Height > 0 ? dest.Width / (float)dest.Height : 1f);
+            GetParam(effect, "Aspect")?.SetValue(destination.Height > 0 ? destination.Width / (float)destination.Height : 1f);
             // The classic shader's arrays are shorter than the ranked list, so it takes the
             // top of it. The ranking already put the lights that matter most in front.
             Array.Copy(_lightPositions, _classicLightPositions, ClassicLightSlots);
@@ -1882,19 +1887,19 @@ namespace SDVRadiance
                 GetParam(effect, "OccluderTexture")?.SetValue(source);
             }
             effect.CurrentTechnique = effect.Techniques["Lighting"];
-            DrawFull(spriteBatch, source, dest, effect);
+            DrawFull(spriteBatch, source, destination, effect);
             // Same out-of-shader presence as the water pass: the light POOLS never rode the
             // fade, so this stage popped its full contribution in and out with the light list.
-            BlendBackSource(spriteBatch, source, dest, _fadeLighting);
+            BlendBackSource(spriteBatch, source, destination, _fadeLighting);
             // Last, after the blend-back as well as after the multiply: this stage runs behind
             // the flood one during a crossfade, so it is the one that owns the sparks.
-            DrawEmissiveParticlesOnLighting(spriteBatch, dest, EmissiveParticleHost.Classic);
+            DrawEmissiveParticlesOnLighting(spriteBatch, destination, EmissiveParticleHost.Classic);
         }
 
         // World-anchor for drifting noise (fog/clouds): the offset must be in units of the
         // VISIBLE world span (viewport, world px) — dividing by the render target's screen px
         // made patterns slide against the world when zoom != 100%.
-        private static Vector2 WorldOffset(int w, int h) =>
+        private static Vector2 WorldOffset() =>
             new(Game1.viewport.X / (float)Math.Max(1, Game1.viewport.Width),
                 Game1.viewport.Y / (float)Math.Max(1, Game1.viewport.Height));
 
@@ -1905,9 +1910,9 @@ namespace SDVRadiance
                 return new Vector2(0.5f, 0.5f);
             Vector2 world = Game1.player.Position + new Vector2(32f, 32f); // sprite centre-ish
             Vector2 local = Game1.GlobalToLocal(Game1.viewport, world);
-            int vw = Math.Max(1, Game1.viewport.Width);
-            int vh = Math.Max(1, Game1.viewport.Height);
-            return new Vector2(local.X / vw, local.Y / vh);
+            int viewportWidth = Math.Max(1, Game1.viewport.Width);
+            int viewportHeight = Math.Max(1, Game1.viewport.Height);
+            return new Vector2(local.X / viewportWidth, local.Y / viewportHeight);
         }
 
         /// <summary>Game clock as MINUTES since midnight.
@@ -1922,20 +1927,20 @@ namespace SDVRadiance
         /// <summary>Fog tint by time of day: neutral haze by day, warm at dusk, blue at night.</summary>
         private static Vector3 FogColor()
         {
-            float m = ClockMinutes();
+            float minutes = ClockMinutes();
             Vector3 day = new(0.72f, 0.76f, 0.82f);
             Vector3 dusk = new(0.85f, 0.68f, 0.55f);
             Vector3 night = new(0.38f, 0.44f, 0.60f);
             const int Dusk = 17 * 60, Late = 19 * 60 + 30, Night = 21 * 60, Dawn = 6 * 60;
-            if (m >= Dusk && m < Late) return Vector3.Lerp(day, dusk, (m - Dusk) / (float)(Late - Dusk));
-            if (m >= Late && m < Night) return Vector3.Lerp(dusk, night, (m - Late) / (float)(Night - Late));
-            if (m >= Night || m < Dawn) return night;
+            if (minutes >= Dusk && minutes < Late) return Vector3.Lerp(day, dusk, (minutes - Dusk) / (float)(Late - Dusk));
+            if (minutes >= Late && minutes < Night) return Vector3.Lerp(dusk, night, (minutes - Late) / (float)(Night - Late));
+            if (minutes >= Night || minutes < Dawn) return night;
             return day;
         }
 
-        private static void ComputeAuto(out float temp, out float satMul)
+        private static void ComputeAuto(out float temperature, out float saturationMultiplier)
         {
-            temp = 0f; satMul = 1f;
+            temperature = 0f; saturationMultiplier = 1f;
             // Every term below describes the SKY: the hour's colour, rain, snow, the season. A
             // room with no window onto any of it was being graded by all four anyway, and the
             // interior lighting stage already walks the room's own colour through the day, so an
@@ -1951,16 +1956,16 @@ namespace SDVRadiance
             if (!underSky)
                 return;
 
-            float m = ClockMinutes();
+            float minutes = ClockMinutes();
             const int Dusk = 17 * 60, Late = 19 * 60 + 30, Night = 21 * 60, Dawn = 6 * 60;
-            if (m >= Dusk && m < Late) temp += 0.25f * ((m - Dusk) / (float)(Late - Dusk));
-            else if (m >= Late && m < Night) temp += 0.25f - 0.55f * ((m - Late) / (float)(Night - Late));
-            else if (m >= Night || m < Dawn) temp -= 0.30f;
+            if (minutes >= Dusk && minutes < Late) temperature += 0.25f * ((minutes - Dusk) / (float)(Late - Dusk));
+            else if (minutes >= Late && minutes < Night) temperature += 0.25f - 0.55f * ((minutes - Late) / (float)(Night - Late));
+            else if (minutes >= Night || minutes < Dawn) temperature -= 0.30f;
 
-            if (Game1.isRaining) { temp -= 0.12f; satMul *= 0.85f; }
-            if (Game1.isSnowing) { temp -= 0.15f; satMul *= 0.90f; }
-            if (Game1.season == Season.Winter) temp -= 0.08f;
-            else if (Game1.season == Season.Summer) temp += 0.05f;
+            if (Game1.isRaining) { temperature -= 0.12f; saturationMultiplier *= 0.85f; }
+            if (Game1.isSnowing) { temperature -= 0.15f; saturationMultiplier *= 0.90f; }
+            if (Game1.season == Season.Winter) temperature -= 0.08f;
+            else if (Game1.season == Season.Summer) temperature += 0.05f;
         }
 
         /// <summary>
@@ -1998,12 +2003,12 @@ namespace SDVRadiance
                 float sum = 0f;
                 for (int i = 0; i < _luminancePixels.Length; i++)
                 {
-                    Color c = _luminancePixels[i];
-                    sum += (0.2126f * c.R + 0.7152f * c.G + 0.0722f * c.B) / 255f;
+                    Color pixel = _luminancePixels[i];
+                    sum += (0.2126f * pixel.R + 0.7152f * pixel.G + 0.0722f * pixel.B) / 255f;
                 }
-                float lum = sum / _luminancePixels.Length;
+                float luminance = sum / _luminancePixels.Length;
                 // key/lum > 1 brightens, < 1 dims; clamp so it only gently corrects.
-                float target = MathHelper.Clamp(0.5f / Math.Max(lum, 0.05f), 0.7f, 1.15f);
+                float target = MathHelper.Clamp(0.5f / Math.Max(luminance, 0.05f), 0.7f, 1.15f);
                 // ARRIVING SOMEWHERE IS NOT A CHANGE IN THE LIGHT. The meter carries the last
                 // room's reading through the door and then eases to the new one, and the ease is
                 // slow on purpose: walking into Town measured a climb from 1.000 to 1.150 taking
@@ -2039,16 +2044,16 @@ namespace SDVRadiance
             if (location is StardewValley.Locations.Beach
                 || (location is StardewValley.Locations.IslandLocation && location.IsOutdoors))
                 return 1f;
-            string n = location?.Name ?? "";
-            if (n.Contains("Beach") || n.Contains("Island") || n == "Docks")
+            string locationName = location?.Name ?? "";
+            if (locationName.Contains("Beach") || locationName.Contains("Island") || locationName == "Docks")
                 return 1f;
             // Beach Farm answers to none of the above and is the ocean anyway: its class is Farm,
             // its name is "Farm", and it is not an island — so the swell stopped at the property
             // line and the same sea that rolls a hundred tiles east lay flat here. The MAP it was
             // built from is the tell, and reading that also covers the farm layouts mods derive
             // from Farm_Beach, which no class or location name could ever have caught.
-            string map = location?.mapPath?.Value ?? "";
-            if (map.Contains("Beach") || map.Contains("Island"))
+            string mapPath = location?.mapPath?.Value ?? "";
+            if (mapPath.Contains("Beach") || mapPath.Contains("Island"))
                 return 1f;
             return 0f;
         }

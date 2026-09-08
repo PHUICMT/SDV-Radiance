@@ -118,10 +118,10 @@ namespace SDVRadiance
 
         public void BakeWaterReflection(ModConfig config)
         {
-            long t0 = FrameCost.Begin(FrameCost.Part.EntityReflection);
+            long bakeStart = FrameCost.Begin(FrameCost.Part.EntityReflection);
             BakeWaterReflectionCore(config);
-            double ms = FrameCost.End(FrameCost.Part.EntityReflection, t0);
-            if (_timingOn) AccumulateBuildMilliseconds(5, ms);
+            double bakeMilliseconds = FrameCost.End(FrameCost.Part.EntityReflection, bakeStart);
+            if (_timingOn) AccumulateBuildMilliseconds(5, bakeMilliseconds);
         }
 
         /// <summary>
@@ -201,7 +201,7 @@ namespace SDVRadiance
         /// <summary>Scratch target the held tool is drawn into before it is mirrored. Small: it
         /// only has to hold one swing around one body.</summary>
         private RenderTarget2D? _toolMirrorRenderTarget;
-        private const int ToolRtSize = 192;
+        private const int ToolTargetSize = 192;
         /// <summary>Where the player's feet ended up inside that target, so the mirror hangs from
         /// the same line a body does.</summary>
         private Vector2 _toolFeetInRenderTarget;
@@ -244,13 +244,13 @@ namespace SDVRadiance
             if (!who.UsingTool && !timingCast)
                 return false;
 
-            _toolMirrorRenderTarget ??= VramTally.Track(new RenderTarget2D(_device, ToolRtSize, ToolRtSize, false,
+            _toolMirrorRenderTarget ??= VramTally.Track(new RenderTarget2D(_device, ToolTargetSize, ToolTargetSize, false,
                 SurfaceFormat.Color, DepthFormat.None), "tool mirror");
             var box = who.GetBoundingBox();
             float feetY = box.Bottom - 10f + who.yOffset;
             Vector2 feetOnScreen = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, feetY));
             // Feet at the bottom centre of the target, so a swing above and to either side has room.
-            _toolFeetInRenderTarget = new Vector2(ToolRtSize / 2f, ToolRtSize - 24f);
+            _toolFeetInRenderTarget = new Vector2(ToolTargetSize / 2f, ToolTargetSize - 24f);
             Matrix toTarget = Matrix.CreateTranslation(
                 _toolFeetInRenderTarget.X - feetOnScreen.X, _toolFeetInRenderTarget.Y - feetOnScreen.Y, 0f);
 
@@ -289,21 +289,21 @@ namespace SDVRadiance
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, feetY));
             float depth = StampDepth(feetY);
             const int bandHeight = 16;
-            int bands = ToolRtSize / bandHeight;
+            int bands = ToolTargetSize / bandHeight;
             for (int i = 0; i < bands; i++)
             {
-                var srcR = new Rectangle(0, (int)_toolFeetInRenderTarget.Y - (i + 1) * bandHeight,
-                    ToolRtSize, bandHeight);
-                if (srcR.Y < 0)
+                var sliceSourceRect = new Rectangle(0, (int)_toolFeetInRenderTarget.Y - (i + 1) * bandHeight,
+                    ToolTargetSize, bandHeight);
+                if (sliceSourceRect.Y < 0)
                 {
-                    srcR.Height += srcR.Y;
-                    srcR.Y = 0;
-                    if (srcR.Height <= 0)
+                    sliceSourceRect.Height += sliceSourceRect.Y;
+                    sliceSourceRect.Y = 0;
+                    if (sliceSourceRect.Height <= 0)
                         break;
                 }
-                float a = MathHelper.Lerp(1f, ReflHeadFade, (i + 0.5f) / bands);
-                spriteBatch.Draw(bake, feet + new Vector2(-ToolRtSize / 2f, i * bandHeight * MirrorSquash),
-                    srcR, Color.White * a, 0f, Vector2.Zero, new Vector2(1f, MirrorSquash),
+                float sliceFade = MathHelper.Lerp(1f, ReflectionHeadFade, (i + 0.5f) / bands);
+                spriteBatch.Draw(bake, feet + new Vector2(-ToolTargetSize / 2f, i * bandHeight * MirrorSquash),
+                    sliceSourceRect, Color.White * sliceFade, 0f, Vector2.Zero, new Vector2(1f, MirrorSquash),
                     SpriteEffects.FlipVertically, depth);
             }
         }
@@ -320,11 +320,11 @@ namespace SDVRadiance
             int bands = ShadowRenderer.PlayerRtH / bandHeight;
             for (int i = 0; i < bands; i++)
             {
-                var srcR = new Rectangle(0, ShadowRenderer.PlayerRtH - (i + 1) * bandHeight,
+                var sliceSourceRect = new Rectangle(0, ShadowRenderer.PlayerRtH - (i + 1) * bandHeight,
                     ShadowRenderer.PlayerRtW, bandHeight);
-                float a = MathHelper.Lerp(1f, ReflHeadFade, (i + 0.5f) / bands);
+                float sliceFade = MathHelper.Lerp(1f, ReflectionHeadFade, (i + 0.5f) / bands);
                 spriteBatch.Draw(bake, feet + new Vector2(-ShadowRenderer.PlayerRtW / 2f, (i * bandHeight - 8f) * MirrorSquash),
-                    srcR, Color.White * a, 0f, Vector2.Zero, new Vector2(1f, MirrorSquash),
+                    sliceSourceRect, Color.White * sliceFade, 0f, Vector2.Zero, new Vector2(1f, MirrorSquash),
                     SpriteEffects.FlipVertically, depth);
             }
         }
@@ -383,17 +383,17 @@ namespace SDVRadiance
             _selfDrawnMirrorWanted.Clear();
             _selfDrawnMirrorMeasured.Clear();
             _selfDrawnMirrorOverflow = 0;
-            foreach (NPC c in ShadowRenderer.CharactersIn(location))
+            foreach (NPC character in ShadowRenderer.CharactersIn(location))
             {
-                if (c?.Sprite?.Texture == null || c.IsInvisible || c.swimming.Value
-                    || DrawnUnderTheWater(c) || !PositionsItself(c))
+                if (character?.Sprite?.Texture == null || character.IsInvisible || character.swimming.Value
+                    || DrawnUnderTheWater(character) || !PositionsItself(character))
                     continue;
-                Rectangle bb = c.GetBoundingBox();
+                Rectangle characterBox = character.GetBoundingBox();
                 // The same reach gate the hand-built stamp uses: the mirror hangs downward, so only
                 // bodies whose mirror can land on water are worth a slot.
-                if (!WaterWithinTiles(bb.Center.X / 64, bb.Bottom / 64 + 2, 4))
+                if (!WaterWithinTiles(characterBox.Center.X / 64, characterBox.Bottom / 64 + 2, 4))
                     continue;
-                _selfDrawnMirrorWanted.Add(c);
+                _selfDrawnMirrorWanted.Add(character);
             }
             // Every farm animal, not only the ones from mods. A farm animal draws itself in all the
             // ways this file cannot predict - a baby is drawn smaller, a swimming duck is drawn with
@@ -402,14 +402,14 @@ namespace SDVRadiance
             // The sprite MASK has asked every animal to draw itself since the duck report; this is
             // the same question, asked on the same frame, by the pass next door.
             // Not gated on swimming: a duck in the pond is the whole reason this exists.
-            foreach (FarmAnimal a in location.animals.Values)
+            foreach (FarmAnimal animal in location.animals.Values)
             {
-                if (a?.Sprite?.Texture == null)
+                if (animal?.Sprite?.Texture == null)
                     continue;
-                Rectangle abb = a.GetBoundingBox();
-                if (!WaterWithinTiles(abb.Center.X / 64, abb.Bottom / 64 + 2, 4))
+                Rectangle animalBox = animal.GetBoundingBox();
+                if (!WaterWithinTiles(animalBox.Center.X / 64, animalBox.Bottom / 64 + 2, 4))
                     continue;
-                _selfDrawnMirrorWanted.Add(a);
+                _selfDrawnMirrorWanted.Add(animal);
             }
             if (_selfDrawnMirrorWanted.Count == 0)
                 return;
@@ -425,8 +425,8 @@ namespace SDVRadiance
 
             var batch = _spriteMaskSpriteBatch!;
             var gameBatch = Game1.spriteBatch;
-            RenderTargetBinding[] prev = _device.GetRenderTargets();
-            Rectangle prevScissor = _device.ScissorRectangle;
+            RenderTargetBinding[] previousTargets = _device.GetRenderTargets();
+            Rectangle previousScissor = _device.ScissorRectangle;
             try
             {
                 _device.SetRenderTarget(_selfDrawnMirrorAtlas);
@@ -439,13 +439,13 @@ namespace SDVRadiance
                         _selfDrawnMirrorOverflow = _selfDrawnMirrorWanted.Count - _selfDrawnMirrorBakes.Count;
                         break;
                     }
-                    Character c = _selfDrawnMirrorWanted[i];
-                    Rectangle bb = c.GetBoundingBox();
+                    Character character = _selfDrawnMirrorWanted[i];
+                    Rectangle characterBox = character.GetBoundingBox();
                     // The parity anchor every body in this file hangs from: the collision box's
                     // bottom, lifted 10 px because a collision box sits a little below the drawn
                     // shoes. The player, the NPCs and the farm animals all use it.
-                    float contactWorldX = bb.Center.X;
-                    float contactWorldY = bb.Bottom - 10f;
+                    float contactWorldX = characterBox.Center.X;
+                    float contactWorldY = characterBox.Bottom - 10f;
                     Vector2 contactOnScreen = Game1.GlobalToLocal(Game1.viewport,
                         new Vector2(contactWorldX, contactWorldY));
                     int slot = _selfDrawnMirrorBakes.Count;
@@ -461,7 +461,7 @@ namespace SDVRadiance
                         batch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp,
                             null, ScissoredRasterizer, null, toSlot);
                         Game1.spriteBatch = batch;
-                        c.draw(batch);
+                        character.draw(batch);
                         batch.End();
                     }
                     catch
@@ -472,15 +472,15 @@ namespace SDVRadiance
                     }
                     finally { Game1.spriteBatch = gameBatch; }
                     _selfDrawnMirrorBakes.Add((slot, contactWorldX, contactWorldY, float.NaN));
-                    _selfDrawnMirrorTaken.Add(c);
-                    _selfDrawnMirrorMeasured.Add((slot, c, c.GetType(), c.Sprite.Texture, c.Sprite.SourceRect));
+                    _selfDrawnMirrorTaken.Add(character);
+                    _selfDrawnMirrorMeasured.Add((slot, character, character.GetType(), character.Sprite.Texture, character.Sprite.SourceRect));
                 }
             }
             finally
             {
                 Game1.spriteBatch = gameBatch;
-                _device.SetRenderTargets(prev);
-                _device.ScissorRectangle = prevScissor;
+                _device.SetRenderTargets(previousTargets);
+                _device.ScissorRectangle = previousScissor;
             }
 
             // Now that the atlas is off the device, ask it where each body actually ends. Only for
@@ -538,12 +538,12 @@ namespace SDVRadiance
                 // for the frame: a reflection that is predicted is better than one that is missing.
                 if (float.IsNaN(lift))
                     _selfDrawnMirrorTaken.Remove(who);
-                for (int b = 0; b < _selfDrawnMirrorBakes.Count; b++)
+                for (int bakeIndex = 0; bakeIndex < _selfDrawnMirrorBakes.Count; bakeIndex++)
                 {
-                    var bake = _selfDrawnMirrorBakes[b];
+                    var bake = _selfDrawnMirrorBakes[bakeIndex];
                     if (bake.Slot == slot)
                     {
-                        _selfDrawnMirrorBakes[b] = (bake.Slot, bake.ContactWorldX, bake.ContactWorldY, lift);
+                        _selfDrawnMirrorBakes[bakeIndex] = (bake.Slot, bake.ContactWorldX, bake.ContactWorldY, lift);
                         break;
                     }
                 }
@@ -625,17 +625,17 @@ namespace SDVRadiance
                 int slotX = baked.Slot * SelfDrawnSlotWidth;
                 for (int i = 0; i < bands; i++)
                 {
-                    var srcR = new Rectangle(slotX, axisRow - (i + 1) * bandHeight, SelfDrawnSlotWidth, bandHeight);
-                    if (srcR.Y < 0)
+                    var sliceSourceRect = new Rectangle(slotX, axisRow - (i + 1) * bandHeight, SelfDrawnSlotWidth, bandHeight);
+                    if (sliceSourceRect.Y < 0)
                     {
-                        srcR.Height += srcR.Y;
-                        srcR.Y = 0;
-                        if (srcR.Height <= 0)
+                        sliceSourceRect.Height += sliceSourceRect.Y;
+                        sliceSourceRect.Y = 0;
+                        if (sliceSourceRect.Height <= 0)
                             break;
                     }
-                    float a = MathHelper.Lerp(1f, ReflHeadFade, (i + 0.5f) / bands);
+                    float sliceFade = MathHelper.Lerp(1f, ReflectionHeadFade, (i + 0.5f) / bands);
                     spriteBatch.Draw(atlas, contact + new Vector2(-SelfDrawnSlotWidth / 2f, i * bandHeight * MirrorSquash),
-                        srcR, Color.White * a, 0f, Vector2.Zero, new Vector2(1f, MirrorSquash),
+                        sliceSourceRect, Color.White * sliceFade, 0f, Vector2.Zero, new Vector2(1f, MirrorSquash),
                         SpriteEffects.FlipVertically, depth);
                 }
             }
@@ -654,20 +654,20 @@ namespace SDVRadiance
                 return;
             }
 
-            RenderTargetBinding[] prev = _device.GetRenderTargets();
-            int w = prev.Length > 0 && prev[0].RenderTarget is RenderTarget2D rt ? rt.Width : Game1.viewport.Width;
-            int h = prev.Length > 0 && prev[0].RenderTarget is RenderTarget2D rt2 ? rt2.Height : Game1.viewport.Height;
-            if (w <= 0 || h <= 0)
+            RenderTargetBinding[] previousTargets = _device.GetRenderTargets();
+            int targetWidth = previousTargets.Length > 0 && previousTargets[0].RenderTarget is RenderTarget2D boundTarget ? boundTarget.Width : Game1.viewport.Width;
+            int targetHeight = previousTargets.Length > 0 && previousTargets[0].RenderTarget is RenderTarget2D boundTargetForHeight ? boundTargetForHeight.Height : Game1.viewport.Height;
+            if (targetWidth <= 0 || targetHeight <= 0)
                 return;
             // Timed phase by phase (radiance_report, the 'mirror' block): the ledger of the
             // longest frames caught this whole bake at 96 ms once per session, on the first
             // frame a farm pond came into view, and a single bracket cannot say which of the
             // first-use costs below that was.
             long phaseStart = System.Diagnostics.Stopwatch.GetTimestamp();
-            if (_reflectionRenderTarget == null || _reflectionRenderTarget.Width != w || _reflectionRenderTarget.Height != h)
+            if (_reflectionRenderTarget == null || _reflectionRenderTarget.Width != targetWidth || _reflectionRenderTarget.Height != targetHeight)
             {
                 _reflectionRenderTarget?.Dispose();
-                _reflectionRenderTarget = VramTally.Track(new RenderTarget2D(_device, w, h, false, SurfaceFormat.Color, DepthFormat.None), "entity mirror");
+                _reflectionRenderTarget = VramTally.Track(new RenderTarget2D(_device, targetWidth, targetHeight, false, SurfaceFormat.Color, DepthFormat.None), "entity mirror");
                 phaseStart = PhaseCost.NoteSince("mirror: target allocated", phaseStart);
             }
             _spriteMaskSpriteBatch ??= new SpriteBatch(_device);
@@ -735,11 +735,11 @@ namespace SDVRadiance
                 if (MirrorFlushPerPhase)
                 {
                     spriteBatch.End();
-                    double submitMs = PhaseCost.MillisecondsSince(phaseStart);
+                    double submitMilliseconds = PhaseCost.MillisecondsSince(phaseStart);
                     phaseStart = PhaseCost.NoteSince("mirror: plants SUBMIT", phaseStart);
                     spriteBatch.Begin(SpriteSortMode.BackToFront, BlendState.AlphaBlend, SamplerState.PointClamp);
-                    if (submitMs > 8 || _mirrorNewTexturesThisFrame.Count > 0)
-                        _monitor.Log($"[diag] mirror plants submit {submitMs:0.00} ms in {location.NameOrUniqueName} at {Game1.timeOfDay}: "
+                    if (submitMilliseconds > 8 || _mirrorNewTexturesThisFrame.Count > 0)
+                        _monitor.Log($"[diag] mirror plants submit {submitMilliseconds:0.00} ms in {location.NameOrUniqueName} at {Game1.timeOfDay}: "
                             + $"draws trees {_mirrorTreeDraws} fruit {_mirrorFruitTreeDraws} bushes {_mirrorBushDraws} grass {_mirrorGrassDraws}; "
                             + (_mirrorNewTexturesThisFrame.Count == 0 ? "no texture drawn for the first time"
                                : "FIRST time for: " + string.Join(" | ", _mirrorNewTexturesThisFrame)), StardewModdingAPI.LogLevel.Info);
@@ -754,7 +754,7 @@ namespace SDVRadiance
             }
             finally
             {
-                _device.SetRenderTargets(prev);
+                _device.SetRenderTargets(previousTargets);
             }
         }
 
@@ -765,10 +765,10 @@ namespace SDVRadiance
             // Player — the colour bake, flipped below the feet. Swimming is skipped:
             // half the body is underwater, a full mirrored silhouette reads as a glitch.
             var who = Game1.player;
-            var pcol = ShadowRenderer.PlayerColor;
-            if (who != null && pcol != null && !who.swimming.Value)
+            var playerColourBake = ShadowRenderer.PlayerColor;
+            if (who != null && playerColourBake != null && !who.swimming.Value)
             {
-                StampFarmerBake(spriteBatch, pcol, who);
+                StampFarmerBake(spriteBatch, playerColourBake, who);
                 if (toolBaked)
                     StampToolBake(spriteBatch, who);
                 ReflectRTHasPlayer = true;
@@ -798,23 +798,23 @@ namespace SDVRadiance
             // Only bodies whose mirror can land on water: the image hangs DOWNWARD from the
             // feet, so the search reaches below them. On a map with water in one corner this
             // skips a screenful of stamps per frame (same gate the sprite mask uses).
-            foreach (NPC c in ShadowRenderer.CharactersIn(location))
+            foreach (NPC character in ShadowRenderer.CharactersIn(location))
             {
-                if (c?.Sprite?.Texture == null || c.IsInvisible || c.swimming.Value
-                    || DrawnUnderTheWater(c))
+                if (character?.Sprite?.Texture == null || character.IsInvisible || character.swimming.Value
+                    || DrawnUnderTheWater(character))
                     continue;
                 // Already mirrored from its own bake, which knows where it really put itself.
                 // Anything that positions itself but missed a slot falls through to here.
-                if (_selfDrawnMirrorTaken.Contains(c))
+                if (_selfDrawnMirrorTaken.Contains(character))
                     continue;
-                Rectangle cbb = c.GetBoundingBox();
-                if (!WaterWithinTiles(cbb.Center.X / 64, cbb.Bottom / 64 + 2, 4))
+                Rectangle characterBox = character.GetBoundingBox();
+                if (!WaterWithinTiles(characterBox.Center.X / 64, characterBox.Bottom / 64 + 2, 4))
                     continue;
                 // Where the game REALLY draws this frame (NPC.draw: anchor at position +
                 // bbHeight/2 + drawOffset, origin at 3/4 of the frame height, scale 4):
-                float drawnTop = c.Position.Y + cbb.Height / 2f + c.drawOffset.Y + c.yJumpOffset
-                    - 3f * c.Sprite.SpriteHeight;
-                float drawnBottom = drawnTop + 4f * c.Sprite.SpriteHeight;
+                float drawnTop = character.Position.Y + characterBox.Height / 2f + character.drawOffset.Y + character.yJumpOffset
+                    - 3f * character.Sprite.SpriteHeight;
+                float drawnBottom = drawnTop + 4f * character.Sprite.SpriteHeight;
                 // The FEET in the art are the bottom of the standard 32-row body block at
                 // the TOP of the frame. Verified against the winter derby actors (16x64
                 // frames, drawOffset 96: the body fills the first 32 rows, the rod and line
@@ -823,10 +823,10 @@ namespace SDVRadiance
                 // true boot row for the tall festival frames - where bb-based anchoring
                 // sat 1.5 tiles low ("the reflection starts at the rod tip") and a
                 // bystander's far tail painted a disembodied head into the water.
-                float feetWorld = drawnTop + 4f * Math.Min(c.Sprite.SpriteHeight, 32);
+                float feetWorld = drawnTop + 4f * Math.Min(character.Sprite.SpriteHeight, 32);
                 int belowFeet = Math.Max(0, (int)Math.Round((drawnBottom - feetWorld) / 4f));
-                StampFlippedAt(spriteBatch, c.Sprite.Texture, c.Sprite.SourceRect,
-                    cbb.Center.X + c.drawOffset.X, feetWorld - 10f, belowFeet);
+                StampFlippedAt(spriteBatch, character.Sprite.Texture, character.Sprite.SourceRect,
+                    characterBox.Center.X + character.drawOffset.X, feetWorld - 10f, belowFeet);
             }
         }
 
@@ -915,10 +915,10 @@ namespace SDVRadiance
         {
             var property = type.GetProperty(name, AnyMember);
             if (property != null && property.PropertyType == typeof(bool) && property.CanRead)
-                return o => (bool)(property.GetValue(o) ?? false);
+                return instance => (bool)(property.GetValue(instance) ?? false);
             var field = type.GetField(name, AnyMember);
             if (field != null && field.FieldType == typeof(bool))
-                return o => (bool)(field.GetValue(o) ?? false);
+                return instance => (bool)(field.GetValue(instance) ?? false);
             return null;
         }
 
@@ -938,40 +938,40 @@ namespace SDVRadiance
         private void MirrorAnimalsAndCritters(SpriteBatch spriteBatch, GameLocation location)
         {
             // Farm animals.
-            foreach (var a in location.animals.Values)
+            foreach (var animal in location.animals.Values)
             {
-                if (a?.Sprite?.Texture == null)
+                if (animal?.Sprite?.Texture == null)
                     continue;
                 // Already mirrored from its own bake, which knows where it really put itself.
                 // What is left here is the animal that ran out of slots, or whose draw threw:
                 // the built stamp is its fallback, not its normal path.
-                if (_selfDrawnMirrorTaken.Contains(a))
+                if (_selfDrawnMirrorTaken.Contains(animal))
                     continue;
-                Rectangle abb = a.GetBoundingBox();
-                if (!WaterWithinTiles(abb.Center.X / 64, abb.Bottom / 64 + 2, 4))
+                Rectangle animalBox = animal.GetBoundingBox();
+                if (!WaterWithinTiles(animalBox.Center.X / 64, animalBox.Bottom / 64 + 2, 4))
                     continue;
-                StampFlipped(spriteBatch, a.Sprite.Texture, a.Sprite.SourceRect, abb);
+                StampFlipped(spriteBatch, animal.Sprite.Texture, animal.Sprite.SourceRect, animalBox);
             }
             // Critters: bottom edge at position.Y, centred on position.X (Critter.draw).
             if (location.critters != null)
             {
-                foreach (var cr in location.critters)
+                foreach (var critter in location.critters)
                 {
-                    if (cr?.sprite?.Texture == null || DrawnUnderTheWater(cr))
+                    if (critter?.sprite?.Texture == null || DrawnUnderTheWater(critter))
                         continue;
                     // Same stamp every body uses (one anchor rule, the same feet->head
                     // fade): a butterfly's reflection was drawn at full opacity by its own
                     // code path while every body faded, so it read as a sticker.
-                    if (!WaterWithinTiles((int)(cr.position.X / 64f), (int)(cr.position.Y / 64f) + 2, 4))
+                    if (!WaterWithinTiles((int)(critter.position.X / 64f), (int)(critter.position.Y / 64f) + 2, 4))
                         continue;
-                    Rectangle crs = cr.sprite.SourceRect;
-                    var crBox = new Rectangle((int)cr.position.X - crs.Width * 2,
-                        (int)cr.position.Y - crs.Height * 4, crs.Width * 4, crs.Height * 4);
+                    Rectangle critterSourceRect = critter.sprite.SourceRect;
+                    var critterBox = new Rectangle((int)critter.position.X - critterSourceRect.Width * 2,
+                        (int)critter.position.Y - critterSourceRect.Height * 4, critterSourceRect.Width * 4, critterSourceRect.Height * 4);
                     // A bird's sheet only holds one direction; the game faces it the other way by
                     // flipping it, and the mirror has to be told, or a bird taking off to the left
                     // flies left over the water and right in it. The shadow pass already asks the
                     // critter this same question.
-                    StampFlipped(spriteBatch, cr.sprite.Texture, crs, crBox, default, cr.flip);
+                    StampFlipped(spriteBatch, critter.sprite.Texture, critterSourceRect, critterBox, default, critter.flip);
                 }
             }
         }
@@ -1009,7 +1009,7 @@ namespace SDVRadiance
             for (int tileY = objectTileY0; tileY <= objectTileY1; tileY++)
             for (int tileX = objectTileX0; tileX <= objectTileX1; tileX++)
             {
-                if (!location.objects.TryGetValue(new Vector2(tileX, tileY), out var obj) || obj == null)
+                if (!location.objects.TryGetValue(new Vector2(tileX, tileY), out var placedObject) || placedObject == null)
                     continue;
                 bool standsOnWater = surfaceMap != null ? surfaceMap.IsWater(tileX, tileY) : location.isWaterTile(tileX, tileY);
                 if (!standsOnWater || !WaterWithinTiles(tileX, tileY + 1, 2))
@@ -1018,7 +1018,7 @@ namespace SDVRadiance
                 // A crab pot: its own sheet, its own frame while it holds a catch, and its own
                 // bob. Reflecting the inventory sprite at the tile line instead gives the wrong
                 // picture in the wrong place, which is exactly what was seen the first time.
-                if (obj is StardewValley.Objects.CrabPot crabPot)
+                if (placedObject is StardewValley.Objects.CrabPot crabPot)
                 {
                     int crabPotFrame = crabPot.tileIndexToShow != 0 ? crabPot.tileIndexToShow : crabPot.ParentSheetIndex;
                     var crabPotSourceRect = Game1.getSourceRectForStandardTileSheet(Game1.objectSpriteSheet, crabPotFrame, 16, 16);
@@ -1029,7 +1029,7 @@ namespace SDVRadiance
                 }
 
                 ParsedItemData objectData;
-                try { objectData = ItemRegistry.GetDataOrErrorItem(obj.QualifiedItemId); }
+                try { objectData = ItemRegistry.GetDataOrErrorItem(placedObject.QualifiedItemId); }
                 catch { continue; }
                 Texture2D? objectTexture = objectData.GetTexture();
                 if (objectTexture == null)
@@ -1038,9 +1038,9 @@ namespace SDVRadiance
                 // tile taller, both ending on the tile's bottom edge. StampFlipped lifts its
                 // anchor ten pixels the way a body's collision box sits below the shoes, and that
                 // lift lands the axis on the shadow the game draws under the object.
-                bool isBigCraftable = obj.bigCraftable.Value;
+                bool isBigCraftable = placedObject.bigCraftable.Value;
                 Rectangle objectSourceRect = isBigCraftable
-                    ? objectData.GetSourceRect(obj.showNextIndex.Value ? 1 : 0, obj.ParentSheetIndex)
+                    ? objectData.GetSourceRect(placedObject.showNextIndex.Value ? 1 : 0, placedObject.ParentSheetIndex)
                     : objectData.GetSourceRect();
                 var objectBox = new Rectangle(tileX * 64, tileY * 64 + 64 - objectSourceRect.Height * 4,
                     objectSourceRect.Width * 4, objectSourceRect.Height * 4);
@@ -1175,7 +1175,7 @@ namespace SDVRadiance
             // mirror IS cancels against a sprite that was already drawn upside down.
             SpriteEffects effects = (flipVertical ? SpriteEffects.None : SpriteEffects.FlipVertically)
                 | (flipHorizontal ? SpriteEffects.FlipHorizontally : SpriteEffects.None);
-            float averageFade = (1f + ReflHeadFade) * 0.5f;
+            float averageFade = (1f + ReflectionHeadFade) * 0.5f;
             spriteBatch.Draw(texture, feet, sourceRect, tint * averageFade, -rotation,
                 new Vector2(sourceRect.Width / 2f, 0f), new Vector2(scale, scale * MirrorSquash),
                 effects, StampDepth(feetY));
@@ -1189,25 +1189,25 @@ namespace SDVRadiance
             // (P3c) can't see them, so their reflections are built here, flipped around
             // the trunk/stem base. Same tile-walk culling as the sprite mask.
             var viewport = Game1.viewport;
-            var tfDict = location.terrainFeatures;
-            int ctx0 = (int)Math.Floor((viewport.X - 256) / 64f), ctx1 = (int)Math.Floor((viewport.X + viewport.Width + 256) / 64f);
-            int cty0 = (int)Math.Floor((viewport.Y - 512) / 64f), cty1 = (int)Math.Floor((viewport.Y + viewport.Height + 768) / 64f);
+            var terrainFeatures = location.terrainFeatures;
+            int plantTileX0 = (int)Math.Floor((viewport.X - 256) / 64f), plantTileX1 = (int)Math.Floor((viewport.X + viewport.Width + 256) / 64f);
+            int plantTileY0 = (int)Math.Floor((viewport.Y - 512) / 64f), plantTileY1 = (int)Math.Floor((viewport.Y + viewport.Height + 768) / 64f);
             // Same sweep, same gate, same narrowing as the sprite mask: outside the water's own
             // box grown by the reach below, WaterWithinTiles cannot answer yes, so those tiles
             // were only ever visited to be turned away.
-            if (ClampWalkToWater(4, plantReach, ref ctx0, ref ctx1, ref cty0, ref cty1))
-            for (int cvY = cty0; cvY <= cty1; cvY++)
-            for (int cvX = ctx0; cvX <= ctx1; cvX++)
+            if (ClampWalkToWater(4, plantReach, ref plantTileX0, ref plantTileX1, ref plantTileY0, ref plantTileY1))
+            for (int tileY = plantTileY0; tileY <= plantTileY1; tileY++)
+            for (int tileX = plantTileX0; tileX <= plantTileX1; tileX++)
             {
-                Vector2 tile = new(cvX, cvY);
-                if (!tfDict.TryGetValue(tile, out var tf))
+                Vector2 tile = new(tileX, tileY);
+                if (!terrainFeatures.TryGetValue(tile, out var feature))
                     continue;
                 // A tree's mirror hangs BELOW its trunk and a crown is six tiles tall, then
                 // stretched by MirrorSquash — so the reach downward has to be the largest of
                 // any stamp here. Centred four tiles under the base with slack on both sides.
-                if (!WaterWithinTiles(cvX, cvY + 4, plantReach))
+                if (!WaterWithinTiles(tileX, tileY + 4, plantReach))
                     continue;
-                switch (tf)
+                switch (feature)
                 {
                     // Grown tree: canopy 48×96 with the trunk base at tile*64+(32,64).
                     // Flipped: origin moves to the TOP of the source (24, 0).
@@ -1234,15 +1234,15 @@ namespace SDVRadiance
                     // Mature fruit tree: 48×64 seasonal foliage, base at tile*64+(32,64).
                     // Same gate and same turn as the wild tree above: FruitTree.draw carries its
                     // canopy through the fall too, and shakes it while it goes.
-                    case StardewValley.TerrainFeatures.FruitTree ft when ft.growthStage.Value >= 4 && (!ft.stump.Value || ft.falling.Value) && ft.texture != null:
+                    case StardewValley.TerrainFeatures.FruitTree fruitTree when fruitTree.growthStage.Value >= 4 && (!fruitTree.stump.Value || fruitTree.falling.Value) && fruitTree.texture != null:
                         _watchTreeStamps++;
-                        int season = Game1.GetSeasonIndexForLocation(ft.Location);
-                        var fsrc = new Rectangle((12 + season * 3) * 16, ft.GetSpriteRowNumber() * 5 * 16, 48, 64);
-                        NoteMirrorTexture(ft.texture); _mirrorFruitTreeDraws++;
-                        spriteBatch.Draw(ft.texture,
+                        int season = Game1.GetSeasonIndexForLocation(fruitTree.Location);
+                        var fruitTreeSourceRect = new Rectangle((12 + season * 3) * 16, fruitTree.GetSpriteRowNumber() * 5 * 16, 48, 64);
+                        NoteMirrorTexture(fruitTree.texture); _mirrorFruitTreeDraws++;
+                        spriteBatch.Draw(fruitTree.texture,
                             Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
-                            fsrc, Color.White, -ft.shakeRotation, new Vector2(24f, fsrc.Height - 80f), 4f,
-                            SpriteEffects.FlipVertically | (ft.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None),
+                            fruitTreeSourceRect, Color.White, -fruitTree.shakeRotation, new Vector2(24f, fruitTreeSourceRect.Height - 80f), 4f,
+                            SpriteEffects.FlipVertically | (fruitTree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None),
                             StampDepth(tile.Y * 64f + 64f));
                         break;
                     // Bush: bottom-centre at (tile.X*64 + (eff+1)*32, (tile.Y+1)*64).
@@ -1261,14 +1261,14 @@ namespace SDVRadiance
             // the small stuff; the decorative bushes a map places, and everything a content pack
             // adds as scenery, are largeTerrainFeatures. Only the first list was walked, so a
             // planted bush reflected and the bush beside it - identical to look at - did not.
-            foreach (var ltf in location.largeTerrainFeatures)
+            foreach (var largeFeature in location.largeTerrainFeatures)
             {
-                if (ltf is not StardewValley.TerrainFeatures.Bush lbush || lbush.sourceRect.Value.IsEmpty)
+                if (largeFeature is not StardewValley.TerrainFeatures.Bush largeBush || largeBush.sourceRect.Value.IsEmpty)
                     continue;
-                Vector2 ltile = lbush.Tile;
-                if (!WaterWithinTiles((int)ltile.X, (int)ltile.Y + 4, plantReach))
+                Vector2 largeBushTile = largeBush.Tile;
+                if (!WaterWithinTiles((int)largeBushTile.X, (int)largeBushTile.Y + 4, plantReach))
                     continue;
-                StampBushReflection(spriteBatch, lbush, ltile);
+                StampBushReflection(spriteBatch, largeBush, largeBushTile);
             }
         }
 
@@ -1286,26 +1286,26 @@ namespace SDVRadiance
             // (tileX*64, (tileY + tilesHigh)*64) + DrawOffset*4, at scale 4, so the base line
             // and the centre both come off that. A building under construction or in the middle
             // of being moved is not drawn, so it must not be mirrored either.
-            foreach (var bld in location.buildings)
+            foreach (var building in location.buildings)
             {
-                if (bld?.texture?.Value == null || bld.isMoving || bld.daysOfConstructionLeft.Value > 0)
+                if (building?.texture?.Value == null || building.isMoving || building.daysOfConstructionLeft.Value > 0)
                     continue;
-                bool fishPond = bld is StardewValley.Buildings.FishPond;
+                bool fishPond = building is StardewValley.Buildings.FishPond;
                 // FishPond.draw ignores the data's source rect and draws its 80x80 rim, so the
                 // mirror reads that same 80x80 rather than whatever the sheet's bounds are.
-                Rectangle bsrcRect = fishPond ? FishPondRimSourceRect : bld.getSourceRect();
-                if (bsrcRect.IsEmpty)
+                Rectangle buildingSourceRect = fishPond ? FishPondRimSourceRect : building.getSourceRect();
+                if (buildingSourceRect.IsEmpty)
                     continue;
-                Vector2 bOffset = (bld.GetData()?.DrawOffset ?? Vector2.Zero) * 4f;
-                float bBaseY = (bld.tileY.Value + bld.tilesHigh.Value) * 64f + bOffset.Y;
+                Vector2 buildingDrawOffset = (building.GetData()?.DrawOffset ?? Vector2.Zero) * 4f;
+                float buildingBaseY = (building.tileY.Value + building.tilesHigh.Value) * 64f + buildingDrawOffset.Y;
                 if (fishPond)
-                    MirrorFishPondWall(spriteBatch, bld);
-                float bCentreX = bld.tileX.Value * 64f + bOffset.X + bsrcRect.Width * 2f;
+                    MirrorFishPondWall(spriteBatch, building);
+                float buildingCentreX = building.tileX.Value * 64f + buildingDrawOffset.X + buildingSourceRect.Width * 2f;
                 // Reaches further than anything else here: a barn is six source tiles tall and
                 // the mirror stretches that again, so the water it can land on is a long way down.
-                if (!WaterWithinTiles((int)(bCentreX / 64f), (int)(bBaseY / 64f) + 5, buildingReach))
+                if (!WaterWithinTiles((int)(buildingCentreX / 64f), (int)(buildingBaseY / 64f) + 5, buildingReach))
                     continue;
-                StampFlippedAt(spriteBatch, bld.texture.Value, bsrcRect, bCentreX, bBaseY, 0);
+                StampFlippedAt(spriteBatch, building.texture.Value, buildingSourceRect, buildingCentreX, buildingBaseY, 0);
             }
         }
 
@@ -1352,51 +1352,51 @@ namespace SDVRadiance
         /// line. Faded to ~this, that scrap all but disappears on its own, while a body
         /// at the edge keeps a strong reflection near the feet. Chosen over a gap-cut
         /// rule (per-column land detection the shader can't see) by the author.</summary>
-        private const float ReflHeadFade = 0.32f;   // 0.18 + the shader-side cut stacked too faint
+        private const float ReflectionHeadFade = 0.32f;   // 0.18 + the shader-side cut stacked too faint
 
         /// <summary>Flipped twin of StampSprite: bottom-centre anchor becomes top-centre,
         /// the sprite hangs downward from the feet, squashed like the scenery mirror —
         /// drawn in 4-source-row slices so the opacity can fall feet→head (see
         /// <see cref="ReflHeadFade"/>); one draw per slice, same depth, no overlap.</summary>
-        private void StampFlipped(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, Rectangle bb,
+        private void StampFlipped(SpriteBatch spriteBatch, Texture2D texture, Rectangle sourceRect, Rectangle boundingBox,
             Vector2 drawOffset = default, bool flipHorizontal = false)
         {
             // The SAME feet rule the player's stamp uses: the 10 px lift (a collision box sits a
             // little below the drawn shoes) and the sprite's own draw offset. Without them an NPC
             // mirrored 10 px lower than the player standing beside it, and a seated one mirrored
             // where it was not drawn. House rule: an NPC and the player get identical treatment.
-            StampFlippedAt(spriteBatch, texture, src, bb.Center.X + drawOffset.X, bb.Bottom - 10f + drawOffset.Y, 0,
+            StampFlippedAt(spriteBatch, texture, sourceRect, boundingBox.Center.X + drawOffset.X, boundingBox.Bottom - 10f + drawOffset.Y, 0,
                 flipHorizontal);
         }
 
         /// <summary>Core of the flipped stamp: explicit feet anchor, plus how many source rows
         /// at the frame's bottom sit BELOW the feet (tall festival frames) and stay out of the
         /// mirror - the flip axis is the feet, those rows live under it.</summary>
-        private void StampFlippedAt(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, float centerX, float feetY,
+        private void StampFlippedAt(SpriteBatch spriteBatch, Texture2D texture, Rectangle sourceRect, float centerX, float feetY,
             int belowFeetRows, bool flipHorizontal = false)
         {
             if (belowFeetRows > 0)
-                src.Height = Math.Max(1, src.Height - belowFeetRows);
+                sourceRect.Height = Math.Max(1, sourceRect.Height - belowFeetRows);
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(centerX, feetY));
             float depth = StampDepth(feetY);
             _watchFlippedStamps++;
-            var origin = new Vector2(src.Width / 2f, 0f);
+            var origin = new Vector2(sourceRect.Width / 2f, 0f);
             var scale = new Vector2(4f, 4f * MirrorSquash);
             // A mirror in the surface turns the picture over, it does not turn it around, so a
             // sprite the game drew facing left has to be facing left in the water too. The flip
             // is about the origin, which is already the sprite's centre, so nothing moves sideways.
             SpriteEffects effects = SpriteEffects.FlipVertically
                 | (flipHorizontal ? SpriteEffects.FlipHorizontally : SpriteEffects.None);
-            int hs = Math.Max(1, _mirrorSliceRows);        // source rows per slice
-            int n = (src.Height + hs - 1) / hs;
-            for (int i = 0; i < n; i++)
+            int sliceRows = Math.Max(1, _mirrorSliceRows);        // source rows per slice
+            int sliceCount = (sourceRect.Height + sliceRows - 1) / sliceRows;
+            for (int i = 0; i < sliceCount; i++)
             {
-                int rows = Math.Min(hs, src.Height - i * hs);
+                int rows = Math.Min(sliceRows, sourceRect.Height - i * sliceRows);
                 // Full flip shows src's BOTTOM row at the feet, so slice i (downward from the
                 // feet) reads the i-th band counted from the sprite's bottom, itself flipped.
-                var srcR = new Rectangle(src.X, src.Y + src.Height - i * hs - rows, src.Width, rows);
-                float a = MathHelper.Lerp(1f, ReflHeadFade, (i + 0.5f) / n);
-                spriteBatch.Draw(texture, feet + new Vector2(0f, i * hs * scale.Y), srcR, Color.White * a,
+                var sliceSourceRect = new Rectangle(sourceRect.X, sourceRect.Y + sourceRect.Height - i * sliceRows - rows, sourceRect.Width, rows);
+                float sliceFade = MathHelper.Lerp(1f, ReflectionHeadFade, (i + 0.5f) / sliceCount);
+                spriteBatch.Draw(texture, feet + new Vector2(0f, i * sliceRows * scale.Y), sliceSourceRect, Color.White * sliceFade,
                     0f, origin, scale, effects, depth);
             }
         }
@@ -1406,12 +1406,12 @@ namespace SDVRadiance
         /// filed it under terrainFeatures or largeTerrainFeatures.</summary>
         private void StampBushReflection(SpriteBatch spriteBatch, StardewValley.TerrainFeatures.Bush bush, Vector2 tile)
         {
-            var bsrc = bush.sourceRect.Value;
-            int eff = bush.size.Value switch { 3 => 0, 4 => 1, _ => bush.size.Value };
+            var bushSourceRect = bush.sourceRect.Value;
+            int effectiveSize = bush.size.Value switch { 3 => 0, 4 => 1, _ => bush.size.Value };
             NoteMirrorTexture(StardewValley.TerrainFeatures.Bush.texture.Value); _mirrorBushDraws++;
             spriteBatch.Draw(StardewValley.TerrainFeatures.Bush.texture.Value,
-                Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + (eff + 1) * 32f, (tile.Y + 1) * 64f)),
-                bsrc, Color.White, 0f, new Vector2(bsrc.Width / 2f, 0f), 4f,
+                Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + (effectiveSize + 1) * 32f, (tile.Y + 1) * 64f)),
+                bushSourceRect, Color.White, 0f, new Vector2(bushSourceRect.Width / 2f, 0f), 4f,
                 SpriteEffects.FlipVertically | (bush.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None),
                 StampDepth((tile.Y + 1) * 64f));
         }
@@ -1427,14 +1427,14 @@ namespace SDVRadiance
         /// </summary>
         private void StampGrassReflection(SpriteBatch spriteBatch, StardewValley.TerrainFeatures.Grass grass, Vector2 tile)
         {
-            if (!GrassArt.TryRead(grass, out int blades, out int[] which, out int[] ox, out int[] oy))
+            if (!GrassArt.TryRead(grass, out int blades, out int[] bladeArtIndices, out int[] offsetX, out int[] offsetY))
                 return;
             Texture2D texture = grass.texture.Value;
             NoteMirrorTexture(texture); _mirrorGrassDraws++;
             for (int i = 0; i < blades; i++)
             {
-                Vector2 at = GrassArt.BladeAt(tile, i, ox, oy);
-                StampFlippedAt(spriteBatch, texture, GrassArt.BladeSource(grass, i, which), at.X, at.Y, 3);
+                Vector2 bladeAnchor = GrassArt.BladeAt(tile, i, offsetX, offsetY);
+                StampFlippedAt(spriteBatch, texture, GrassArt.BladeSource(grass, i, bladeArtIndices), bladeAnchor.X, bladeAnchor.Y, 3);
             }
         }
 
@@ -1461,10 +1461,10 @@ namespace SDVRadiance
         /// as the other bakes (render-target swaps are safe there).</summary>
         public void BakeSceneryReflection()
         {
-            long t0 = FrameCost.Begin(FrameCost.Part.SceneryReflection);
+            long bakeStart = FrameCost.Begin(FrameCost.Part.SceneryReflection);
             BakeSceneryReflectionCore();
-            double ms = FrameCost.End(FrameCost.Part.SceneryReflection, t0);
-            if (_timingOn) AccumulateBuildMilliseconds(6, ms);
+            double bakeMilliseconds = FrameCost.End(FrameCost.Part.SceneryReflection, bakeStart);
+            if (_timingOn) AccumulateBuildMilliseconds(6, bakeMilliseconds);
         }
 
         // P2 (1.5.0): the xTile layer walk was the single most expensive item in the mod and
@@ -1528,10 +1528,10 @@ namespace SDVRadiance
             // hand the disposed target straight back on the next BeginScreen. Single screen never
             // hits it (BeginScreen returns early when the id has not changed), which is exactly
             // the kind of hole that ships and then only breaks for the people using co-op.
-            foreach (var st in _screenStates.Values)
+            foreach (var screenState in _screenStates.Values)
             {
-                st.MirrorSceneCache = null;
-                st.SceneCacheLocation = null;
+                screenState.MirrorSceneCache = null;
+                screenState.SceneCacheLocation = null;
             }
             // The scene cache's validity test starts with "is the target there", so nulling it is
             // enough to invalidate; the location stamp goes too so a return to the same map
@@ -1542,8 +1542,8 @@ namespace SDVRadiance
         // moved to ScreenState (see RenderPipeline.Screens.cs)
         // moved to ScreenState (see RenderPipeline.Screens.cs)   // world px of the cache's top-left
         // moved to ScreenState (see RenderPipeline.Screens.cs)
-        private const int SceneCachePadPx = 128;              // 2 tiles of camera drift per side
-        private const int SceneCacheTtlTicks = 6;             // animated-tile refresh (~100 ms)
+        private const int SceneCachePadPixels = 128;              // 2 tiles of camera drift per side
+        private const int SceneCacheRefreshTicks = 6;             // animated-tile refresh (~100 ms)
 
         /// <summary>
         /// Where the animated tiles are on the layers the mirror draws.
@@ -1602,17 +1602,17 @@ namespace SDVRadiance
             {
                 foreach (var layer in MapLayers.RenderedLayers(location.map, topToBottom: false))
                 {
-                    if (!MapLayers.TryGetFamily(layer.Id, out string fam) || fam == "AlwaysFront")
+                    if (!MapLayers.TryGetFamily(layer.Id, out string family) || family == "AlwaysFront")
                         continue;
-                    for (int ty = 0; ty < layer.LayerHeight; ty++)
-                    for (int tx = 0; tx < layer.LayerWidth; tx++)
+                    for (int tileY = 0; tileY < layer.LayerHeight; tileY++)
+                    for (int tileX = 0; tileX < layer.LayerWidth; tileX++)
                     {
-                        if (layer.Tiles[tx, ty] is not xTile.Tiles.AnimatedTile at)
+                        if (layer.Tiles[tileX, tileY] is not xTile.Tiles.AnimatedTile animatedTile)
                             continue;
-                        if (at.FrameInterval > 0 && !_sceneAnimatedIntervals.Contains(at.FrameInterval))
-                            _sceneAnimatedIntervals.Add(at.FrameInterval);
-                        if (seen.Add(new Point(tx, ty)))
-                            _sceneAnimatedTiles.Add(new Point(tx, ty));
+                        if (animatedTile.FrameInterval > 0 && !_sceneAnimatedIntervals.Contains(animatedTile.FrameInterval))
+                            _sceneAnimatedIntervals.Add(animatedTile.FrameInterval);
+                        if (seen.Add(new Point(tileX, tileY)))
+                            _sceneAnimatedTiles.Add(new Point(tileX, tileY));
                     }
                 }
             }
@@ -1657,40 +1657,40 @@ namespace SDVRadiance
         /// </para>
         /// </summary>
         private void RefreshAnimatedTilesIntoCache(GameLocation location, SpriteBatch spriteBatch,
-            List<Point> tiles, int cacheW, int cacheH)
+            List<Point> tiles, int cacheWidth, int cacheHeight)
         {
-            var dd = Game1.mapDisplayDevice;
+            var displayDevice = Game1.mapDisplayDevice;
             _device.SetRenderTarget(_mirrorSceneCache);
             spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
-            foreach (Point t in tiles)
+            foreach (Point tilePoint in tiles)
             {
-                int px = t.X * 64 - _sceneCacheAnchorX, py = t.Y * 64 - _sceneCacheAnchorY;
-                if (px + 64 <= 0 || py + 64 <= 0 || px >= cacheW || py >= cacheH)
+                int cachePixelX = tilePoint.X * 64 - _sceneCacheAnchorX, cachePixelY = tilePoint.Y * 64 - _sceneCacheAnchorY;
+                if (cachePixelX + 64 <= 0 || cachePixelY + 64 <= 0 || cachePixelX >= cacheWidth || cachePixelY >= cacheHeight)
                     continue;
-                spriteBatch.Draw(Game1.fadeToBlackRect, new Rectangle(px, py, 64, 64), Color.Black);
+                spriteBatch.Draw(Game1.fadeToBlackRect, new Rectangle(cachePixelX, cachePixelY, 64, 64), Color.Black);
             }
             spriteBatch.End();
 
             spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
-            dd.BeginScene(spriteBatch);
+            displayDevice.BeginScene(spriteBatch);
             foreach (var layer in MapLayers.RenderedLayers(location.map, topToBottom: false))
             {
-                if (!MapLayers.TryGetFamily(layer.Id, out string fam) || fam == "AlwaysFront")
+                if (!MapLayers.TryGetFamily(layer.Id, out string family) || family == "AlwaysFront")
                     continue;
-                foreach (Point t in tiles)
+                foreach (Point tilePoint in tiles)
                 {
-                    if (t.X >= layer.LayerWidth || t.Y >= layer.LayerHeight)
+                    if (tilePoint.X >= layer.LayerWidth || tilePoint.Y >= layer.LayerHeight)
                         continue;
-                    var tile = layer.Tiles[t.X, t.Y];
+                    var tile = layer.Tiles[tilePoint.X, tilePoint.Y];
                     if (tile == null)
                         continue;
-                    int px = t.X * 64 - _sceneCacheAnchorX, py = t.Y * 64 - _sceneCacheAnchorY;
-                    if (px + 64 <= 0 || py + 64 <= 0 || px >= cacheW || py >= cacheH)
+                    int cachePixelX = tilePoint.X * 64 - _sceneCacheAnchorX, cachePixelY = tilePoint.Y * 64 - _sceneCacheAnchorY;
+                    if (cachePixelX + 64 <= 0 || cachePixelY + 64 <= 0 || cachePixelX >= cacheWidth || cachePixelY >= cacheHeight)
                         continue;
-                    dd.DrawTile(tile, new xTile.Dimensions.Location(px, py), 0f);
+                    displayDevice.DrawTile(tile, new xTile.Dimensions.Location(cachePixelX, cachePixelY), 0f);
                 }
             }
-            dd.EndScene();
+            displayDevice.EndScene();
             spriteBatch.End();
             _sceneCacheBuiltTick = Game1.ticks;
         }
@@ -1729,7 +1729,7 @@ namespace SDVRadiance
         /// screen-sized layer and still cannot be mirrored from above the screen edge.
         /// </para>
         /// </summary>
-        private const int MirrorTopReachPx = 768;
+        private const int MirrorTopReachPixels = 768;
 
         /// <summary>
         /// How far past the LEFT and RIGHT edges of the screen the mirror may read, in world pixels.
@@ -1748,7 +1748,7 @@ namespace SDVRadiance
         /// (ripple.x * 3 is a fraction of a tile), and it costs one more tile of cache either side.
         /// </para>
         /// </summary>
-        private const int MirrorSideReachPx = 192;
+        private const int MirrorSideReachPixels = 192;
 
         private void BakeSceneryReflectionCore()
         {
@@ -1760,28 +1760,28 @@ namespace SDVRadiance
                 || Game1.game1.takingMapScreenshot)
                 return;
 
-            RenderTargetBinding[] prev = _device.GetRenderTargets();
-            int w = prev.Length > 0 && prev[0].RenderTarget is RenderTarget2D rt ? rt.Width : Game1.viewport.Width;
-            int h = prev.Length > 0 && prev[0].RenderTarget is RenderTarget2D rt2 ? rt2.Height : Game1.viewport.Height;
-            if (w <= 0 || h <= 0)
+            RenderTargetBinding[] previousTargets = _device.GetRenderTargets();
+            int targetWidth = previousTargets.Length > 0 && previousTargets[0].RenderTarget is RenderTarget2D boundTarget ? boundTarget.Width : Game1.viewport.Width;
+            int targetHeight = previousTargets.Length > 0 && previousTargets[0].RenderTarget is RenderTarget2D boundTargetForHeight ? boundTargetForHeight.Height : Game1.viewport.Height;
+            if (targetWidth <= 0 || targetHeight <= 0)
                 return;
             // The mirror source is TALLER than the screen: the extra rows sit above it, which is
-            // the only direction a reflection ever reads. See MirrorTopReachPx.
-            int sourceW = w + 2 * MirrorSideReachPx, sourceH = h + MirrorTopReachPx;
-            if (_mirrorSourceRenderTarget == null || _mirrorSourceRenderTarget.Width != sourceW || _mirrorSourceRenderTarget.Height != sourceH)
+            // the only direction a reflection ever reads. See MirrorTopReachPixels.
+            int sourceWidth = targetWidth + 2 * MirrorSideReachPixels, sourceHeight = targetHeight + MirrorTopReachPixels;
+            if (_mirrorSourceRenderTarget == null || _mirrorSourceRenderTarget.Width != sourceWidth || _mirrorSourceRenderTarget.Height != sourceHeight)
             {
                 _mirrorSourceRenderTarget?.Dispose();
-                _mirrorSourceRenderTarget = VramTally.Track(new RenderTarget2D(_device, sourceW, sourceH, false, SurfaceFormat.Color, DepthFormat.None), "mirror source");
+                _mirrorSourceRenderTarget = VramTally.Track(new RenderTarget2D(_device, sourceWidth, sourceHeight, false, SurfaceFormat.Color, DepthFormat.None), "mirror source");
             }
-            MirrorSourceTopPad = MirrorTopReachPx / (float)sourceH;
-            MirrorSourceSidePad = MirrorSideReachPx / (float)sourceW;
+            MirrorSourceTopPad = MirrorTopReachPixels / (float)sourceHeight;
+            MirrorSourceSidePad = MirrorSideReachPixels / (float)sourceWidth;
             _spriteMaskSpriteBatch ??= new SpriteBatch(_device);
 
-            int vpX = Game1.viewport.X, vpY = Game1.viewport.Y;
+            int viewportX = Game1.viewport.X, viewportY = Game1.viewport.Y;
             // The region the blit needs is the screen plus the reach around it; the guard band is
             // the slack around THAT, so the walk still only re-runs when the camera leaves it.
-            int wantX = vpX - MirrorSideReachPx, wantY = vpY - MirrorTopReachPx;
-            int cacheW = sourceW + 2 * SceneCachePadPx, cacheH = sourceH + 2 * SceneCachePadPx;
+            int wantX = viewportX - MirrorSideReachPixels, wantY = viewportY - MirrorTopReachPixels;
+            int cacheWidth = sourceWidth + 2 * SceneCachePadPixels, cacheHeight = sourceHeight + 2 * SceneCachePadPixels;
             // The clock is no longer part of this. What invalidates the whole cache is the camera
             // leaving the band it was baked for, which is the only thing that can put unbaked
             // ground on screen; stale animation is handled below by redrawing the tiles that
@@ -1793,13 +1793,13 @@ namespace SDVRadiance
             long animationStamp = AnimationStamp(location);
             // A map we could not read has no interval list to lock onto, so that one path keeps
             // the old timer rather than never refreshing at all.
-            bool timeExpired = Game1.ticks - _sceneCacheBuiltTick >= SceneCacheTtlTicks;
+            bool timeExpired = Game1.ticks - _sceneCacheBuiltTick >= SceneCacheRefreshTicks;
             bool cacheValid = _mirrorSceneCache != null
                 && ReferenceEquals(_sceneCacheLocation, location)
-                && _mirrorSceneCache.Width == cacheW && _mirrorSceneCache.Height == cacheH
+                && _mirrorSceneCache.Width == cacheWidth && _mirrorSceneCache.Height == cacheHeight
                 && !(_sceneAnimatedUnknown && timeExpired)
                 && wantX >= _sceneCacheAnchorX && wantY >= _sceneCacheAnchorY
-                && vpX + w <= _sceneCacheAnchorX + cacheW && vpY + h <= _sceneCacheAnchorY + cacheH
+                && viewportX + sourceWidth <= _sceneCacheAnchorX + cacheWidth && viewportY + sourceHeight <= _sceneCacheAnchorY + cacheHeight
                 && _pendingDump == null;
 
             try
@@ -1807,31 +1807,31 @@ namespace SDVRadiance
                 var spriteBatch = _spriteMaskSpriteBatch;
                 if (!cacheValid)
                 {
-                    if (_mirrorSceneCache == null || _mirrorSceneCache.Width != cacheW || _mirrorSceneCache.Height != cacheH)
+                    if (_mirrorSceneCache == null || _mirrorSceneCache.Width != cacheWidth || _mirrorSceneCache.Height != cacheHeight)
                     {
                         _mirrorSceneCache?.Dispose();
                         // PreserveContents: the whole point is reading it back on later frames.
-                        _mirrorSceneCache = VramTally.Track(new RenderTarget2D(_device, cacheW, cacheH, false, SurfaceFormat.Color,
+                        _mirrorSceneCache = VramTally.Track(new RenderTarget2D(_device, cacheWidth, cacheHeight, false, SurfaceFormat.Color,
                             DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "mirror scene cache");
                     }
                     _sceneCacheLocation = location;
-                    _sceneCacheAnchorX = wantX - SceneCachePadPx;
-                    _sceneCacheAnchorY = wantY - SceneCachePadPx;
+                    _sceneCacheAnchorX = wantX - SceneCachePadPixels;
+                    _sceneCacheAnchorY = wantY - SceneCachePadPixels;
                     _sceneCacheBuiltTick = Game1.ticks;
                     _sceneAnimationStamp = animationStamp;
 
                     _device.SetRenderTarget(_mirrorSceneCache);
                     _device.Clear(Color.Black);
                     spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
-                    var dd = Game1.mapDisplayDevice;
-                    dd.BeginScene(spriteBatch);
+                    var displayDevice = Game1.mapDisplayDevice;
+                    displayDevice.BeginScene(spriteBatch);
                     // Bottom-up families, same order the game composes them. AlwaysFront is
                     // deliberately out: it is mostly weather + translucent shadow washes.
                     // The main target in this event is WORLD-pixel sized, so the padded
                     // viewport maps 1:1 onto the padded cache.
                     var paddedViewport = new xTile.Dimensions.Rectangle(
                         new xTile.Dimensions.Location(_sceneCacheAnchorX, _sceneCacheAnchorY),
-                        new xTile.Dimensions.Size(cacheW, cacheH));
+                        new xTile.Dimensions.Size(cacheWidth, cacheHeight));
                     // Bottom-to-top by the one shared sort key, then drawn family-by-family.
                     // AlwaysFront is deliberately out (weather + translucent shadow washes), so it
                     // is filtered after the sort — a map that declares "Front2" before "Front" or
@@ -1839,12 +1839,12 @@ namespace SDVRadiance
                     // and the mask do, instead of whichever way the declaration order happened to
                     // fall. The actual layer.Draw is the game's own rasteriser, so orientation is
                     // still the game's, this only fixes the ORDER.
-                    foreach (var l in MapLayers.RenderedLayers(location.map, topToBottom: false))
+                    foreach (var layer in MapLayers.RenderedLayers(location.map, topToBottom: false))
                     {
-                        if (MapLayers.TryGetFamily(l.Id, out string fam) && fam != "AlwaysFront")
-                            l.Draw(dd, paddedViewport, xTile.Dimensions.Location.Origin, false, 4);
+                        if (MapLayers.TryGetFamily(layer.Id, out string family) && family != "AlwaysFront")
+                            layer.Draw(displayDevice, paddedViewport, xTile.Dimensions.Location.Origin, false, 4);
                     }
-                    dd.EndScene();
+                    displayDevice.EndScene();
                     spriteBatch.End();
                 }
                 else if (animated.Count > 0 && animationStamp != _sceneAnimationStamp)
@@ -1853,7 +1853,7 @@ namespace SDVRadiance
                     // of tiles rather than every layer of the padded window, and only on the
                     // frames the art actually turns over.
                     _sceneAnimationStamp = animationStamp;
-                    RefreshAnimatedTilesIntoCache(location, spriteBatch, animated, cacheW, cacheH);
+                    RefreshAnimatedTilesIntoCache(location, spriteBatch, animated, cacheWidth, cacheHeight);
                 }
 
                 // Screen-aligned mirror source = one quad from the cache, shifted by the
@@ -1864,14 +1864,14 @@ namespace SDVRadiance
                 spriteBatch.End();
                 SceneRTReady = true;
             }
-            catch (Exception ex)
+            catch (Exception exception)
             {
                 try { _spriteMaskSpriteBatch!.End(); } catch { }
-                if (!_sceneErrorLogged) { _sceneErrorLogged = true; _monitor.Log($"[water] scenery source bake threw: {ex}", StardewModdingAPI.LogLevel.Warn); }
+                if (!_sceneErrorLogged) { _sceneErrorLogged = true; _monitor.Log($"[water] scenery source bake threw: {exception}", StardewModdingAPI.LogLevel.Warn); }
             }
             finally
             {
-                _device.SetRenderTargets(prev);
+                _device.SetRenderTargets(previousTargets);
             }
         }
 
@@ -1892,19 +1892,19 @@ namespace SDVRadiance
 
         /// <summary>Mean colour of a small block of a render target around a screen point.
         /// A GPU readback, so console-command only — never per frame.</summary>
-        private static Vector4 MeanAt(RenderTarget2D? rt, int cx, int cy, int half = 6)
+        private static Vector4 MeanAt(RenderTarget2D? target, int centerX, int centerY, int half = 6)
         {
-            if (rt == null)
+            if (target == null)
                 return new Vector4(-1f);
-            int x0 = Math.Clamp(cx - half, 0, rt.Width - 1), x1 = Math.Clamp(cx + half, 0, rt.Width - 1);
-            int y0 = Math.Clamp(cy - half, 0, rt.Height - 1), y1 = Math.Clamp(cy + half, 0, rt.Height - 1);
-            int w = Math.Max(1, x1 - x0), h = Math.Max(1, y1 - y0);
-            var buf = new Color[w * h];
-            try { rt.GetData(0, new Rectangle(x0, y0, w, h), buf, 0, buf.Length); }
+            int left = Math.Clamp(centerX - half, 0, target.Width - 1), right = Math.Clamp(centerX + half, 0, target.Width - 1);
+            int top = Math.Clamp(centerY - half, 0, target.Height - 1), bottom = Math.Clamp(centerY + half, 0, target.Height - 1);
+            int blockWidth = Math.Max(1, right - left), blockHeight = Math.Max(1, bottom - top);
+            var pixels = new Color[blockWidth * blockHeight];
+            try { target.GetData(0, new Rectangle(left, top, blockWidth, blockHeight), pixels, 0, pixels.Length); }
             catch { return new Vector4(-1f); }
             Vector4 sum = Vector4.Zero;
-            foreach (var c in buf) sum += c.ToVector4();
-            return sum / buf.Length;
+            foreach (var pixel in pixels) sum += pixel.ToVector4();
+            return sum / pixels.Length;
         }
 
         /// <summary>Human-readable report of every input the reflection depends on, sampled
@@ -1932,23 +1932,23 @@ namespace SDVRadiance
                 + $"drawnLocal=({playerDrawn.X:0},{playerDrawn.Y:0}) boxBottomLocal={Game1.GlobalToLocal(Game1.viewport, new Vector2(playerBox.Center.X, playerBox.Bottom)).Y:0}");
 
             Rectangle box = who.GetBoundingBox();
-            for (int t = 0; t <= 4; t++)
+            for (int tilesBelow = 0; tilesBelow <= 4; tilesBelow++)
             {
-                int wx = box.Center.X / 4 - _lastWaterTileX * 16;
-                int wy = (box.Bottom - 4) / 4 - _lastWaterTileY * 16 + t * 16;
-                if (ReadWaterMaskPixel(wx, wy) is not Color m)
-                { report.AppendLine($"[reflect] +{t} tile: outside the mask window"); continue; }
-                string kind = m.A < 64 ? "ice" : m.A < 192 ? "lava" : "water";
-                report.AppendLine($"[reflect] +{t} tile below feet: effectR={m.R} marchG={m.G} edgeDistB={m.B} ({m.B * 0.5f:0.0} texels to the waterline) type={kind}"
-                            + (m.G == 0 ? "   <- NO entity reflection here (not march water)" : ""));
+                int maskPixelX = box.Center.X / 4 - _lastWaterTileX * 16;
+                int maskPixelY = (box.Bottom - 4) / 4 - _lastWaterTileY * 16 + tilesBelow * 16;
+                if (ReadWaterMaskPixel(maskPixelX, maskPixelY) is not Color maskPixel)
+                { report.AppendLine($"[reflect] +{tilesBelow} tile: outside the mask window"); continue; }
+                string kind = maskPixel.A < 64 ? "ice" : maskPixel.A < 192 ? "lava" : "water";
+                report.AppendLine($"[reflect] +{tilesBelow} tile below feet: effectR={maskPixel.R} marchG={maskPixel.G} edgeDistB={maskPixel.B} ({maskPixel.B * 0.5f:0.0} texels to the waterline) type={kind}"
+                            + (maskPixel.G == 0 ? "   <- NO entity reflection here (not march water)" : ""));
             }
 
-            var scr = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, box.Bottom));
-            int sx = (int)scr.X, sy = (int)scr.Y;
-            Vector4 sceneMean = MeanAt(_mirrorSourceRenderTarget, sx, sy - 96);
-            Vector4 entMean = MeanAt(_reflectionRenderTarget, sx, sy + 32);
+            var feetOnScreen = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, box.Bottom));
+            int screenX = (int)feetOnScreen.X, screenY = (int)feetOnScreen.Y;
+            Vector4 sceneMean = MeanAt(_mirrorSourceRenderTarget, screenX, screenY - 96);
+            Vector4 entityMean = MeanAt(_reflectionRenderTarget, screenX, screenY + 32);
             report.AppendLine($"[reflect] sceneRT mean 1.5 tiles ABOVE the feet (the mirror's source) = {(sceneMean.X < 0 ? "unreadable" : $"rgb({sceneMean.X:0.00},{sceneMean.Y:0.00},{sceneMean.Z:0.00}) a={sceneMean.W:0.00}")}");
-            report.AppendLine($"[reflect] entityRT mean 0.5 tile BELOW the feet (your own reflection) = {(entMean.X < 0 ? "unreadable" : $"rgb({entMean.X:0.00},{entMean.Y:0.00},{entMean.Z:0.00}) a={entMean.W:0.00}")}");
+            report.AppendLine($"[reflect] entityRT mean 0.5 tile BELOW the feet (your own reflection) = {(entityMean.X < 0 ? "unreadable" : $"rgb({entityMean.X:0.00},{entityMean.Y:0.00},{entityMean.Z:0.00}) a={entityMean.W:0.00}")}");
             report.AppendLine("[reflect] a near-black sceneRT mean with lit map art on screen = the P3c source is the bug; run 'radiance_reflect scene off' and compare.");
 
             // Which characters were asked to draw their own mirror and which had one built for
@@ -1960,23 +1960,23 @@ namespace SDVRadiance
             if (here != null)
             {
                 int listed = 0;
-                foreach (NPC c in ShadowRenderer.CharactersIn(here))
+                foreach (NPC character in ShadowRenderer.CharactersIn(here))
                 {
-                    if (c?.Sprite?.Texture == null || c.IsInvisible)
+                    if (character?.Sprite?.Texture == null || character.IsInvisible)
                         continue;
-                    Rectangle cbb = c.GetBoundingBox();
-                    if (!WaterWithinTiles(cbb.Center.X / 64, cbb.Bottom / 64 + 2, 4))
+                    Rectangle characterBox = character.GetBoundingBox();
+                    if (!WaterWithinTiles(characterBox.Center.X / 64, characterBox.Bottom / 64 + 2, 4))
                         continue;
                     if (listed++ == 0)
                         report.AppendLine("[reflect] characters near water (drawsItself = its mirror is drawn by the character, not predicted):");
                     Vector2 anchorOnScreen = Game1.GlobalToLocal(Game1.viewport,
-                        new Vector2(cbb.Center.X, cbb.Bottom - 10f));
-                    _selfDrawnContactLift.TryGetValue((c.GetType(), c.Sprite.Texture, c.Sprite.SourceRect), out float lift);
-                    Rectangle src = c.Sprite.SourceRect;
-                    report.AppendLine($"[reflect]   {c.Name,-16} {c.GetType().Name,-14} drawsItself={PositionsItself(c)} "
-                        + $"baked={_selfDrawnMirrorTaken.Contains(c)} bbBottom={cbb.Bottom} anchorScreenY={(int)anchorOnScreen.Y} "
-                        + $"src=({src.X},{src.Y},{src.Width},{src.Height}) frame={c.Sprite.CurrentFrame} lift={lift:0.#} "
-                        + $"drawOffsetY={c.drawOffset.Y} yJump={c.yJumpOffset} liftCache={_selfDrawnContactLift.Count}");
+                        new Vector2(characterBox.Center.X, characterBox.Bottom - 10f));
+                    _selfDrawnContactLift.TryGetValue((character.GetType(), character.Sprite.Texture, character.Sprite.SourceRect), out float lift);
+                    Rectangle sourceRect = character.Sprite.SourceRect;
+                    report.AppendLine($"[reflect]   {character.Name,-16} {character.GetType().Name,-14} drawsItself={PositionsItself(character)} "
+                        + $"baked={_selfDrawnMirrorTaken.Contains(character)} bbBottom={characterBox.Bottom} anchorScreenY={(int)anchorOnScreen.Y} "
+                        + $"src=({sourceRect.X},{sourceRect.Y},{sourceRect.Width},{sourceRect.Height}) frame={character.Sprite.CurrentFrame} lift={lift:0.#} "
+                        + $"drawOffsetY={character.drawOffset.Y} yJump={character.yJumpOffset} liftCache={_selfDrawnContactLift.Count}");
                     if (listed >= 12)
                     {
                         report.AppendLine("[reflect]   (list capped at 12)");
@@ -1984,22 +1984,22 @@ namespace SDVRadiance
                     }
                 }
                 int animalsListed = 0;
-                foreach (FarmAnimal a in here.animals.Values)
+                foreach (FarmAnimal animal in here.animals.Values)
                 {
-                    if (a?.Sprite?.Texture == null)
+                    if (animal?.Sprite?.Texture == null)
                         continue;
-                    Rectangle abb = a.GetBoundingBox();
-                    if (!WaterWithinTiles(abb.Center.X / 64, abb.Bottom / 64 + 2, 4))
+                    Rectangle animalBox = animal.GetBoundingBox();
+                    if (!WaterWithinTiles(animalBox.Center.X / 64, animalBox.Bottom / 64 + 2, 4))
                         continue;
                     if (animalsListed++ == 0)
                         report.AppendLine("[reflect] farm animals near water (baked=no means its mirror is predicted from the collision box):");
                     Vector2 animalAnchor = Game1.GlobalToLocal(Game1.viewport,
-                        new Vector2(abb.Center.X, abb.Bottom - 10f));
-                    _selfDrawnContactLift.TryGetValue((a.GetType(), a.Sprite.Texture, a.Sprite.SourceRect), out float animalLift);
-                    Rectangle animalSrc = a.Sprite.SourceRect;
-                    report.AppendLine($"[reflect]   {a.Name,-16} {a.GetType().Name,-14} baked={_selfDrawnMirrorTaken.Contains(a)} "
-                        + $"bbBottom={abb.Bottom} anchorScreenY={(int)animalAnchor.Y} "
-                        + $"src=({animalSrc.X},{animalSrc.Y},{animalSrc.Width},{animalSrc.Height}) frame={a.Sprite.CurrentFrame} lift={animalLift:0.#}");
+                        new Vector2(animalBox.Center.X, animalBox.Bottom - 10f));
+                    _selfDrawnContactLift.TryGetValue((animal.GetType(), animal.Sprite.Texture, animal.Sprite.SourceRect), out float animalLift);
+                    Rectangle animalSourceRect = animal.Sprite.SourceRect;
+                    report.AppendLine($"[reflect]   {animal.Name,-16} {animal.GetType().Name,-14} baked={_selfDrawnMirrorTaken.Contains(animal)} "
+                        + $"bbBottom={animalBox.Bottom} anchorScreenY={(int)animalAnchor.Y} "
+                        + $"src=({animalSourceRect.X},{animalSourceRect.Y},{animalSourceRect.Width},{animalSourceRect.Height}) frame={animal.Sprite.CurrentFrame} lift={animalLift:0.#}");
                     if (animalsListed >= 12)
                     {
                         report.AppendLine("[reflect]   (list capped at 12)");

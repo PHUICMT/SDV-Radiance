@@ -153,7 +153,7 @@ namespace SDVRadiance
                 ["sheets"] = sheetsOut,
             };
 
-            string directory = Path.Combine(MapDump.HfStudioDir(), "fingerprints");
+            string directory = Path.Combine(MapDump.HfStudioDirectory(), "fingerprints");
             Directory.CreateDirectory(directory);
             string path = Path.Combine(directory, SafeLabel(label) + ".json");
             File.WriteAllText(path, JsonSerializer.Serialize(document,

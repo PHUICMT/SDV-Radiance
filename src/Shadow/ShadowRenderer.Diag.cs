@@ -327,10 +327,10 @@ namespace SDVRadiance
                                                 : " -> drawn as leaned strips with the CPU-walked tile clip"));
             // The reach, from the same numbers the draw uses, so a drift between this and the
             // geometry line above is itself the finding.
-            ComputeSun(out float rot, out float stretch, out float _);
+            ComputeSun(out float rotation, out float stretch, out float _);
             float sunStretch = stretch * Math.Max(0.1f, config.DirectionalShadowLength)
                              * MathHelper.Lerp(1f, OvercastLength, OvercastNow());
-            float upScreenPerTexel = (float)Math.Cos(rot) * sunStretch;
+            float upScreenPerTexel = (float)Math.Cos(rotation) * sunStretch;
             float reachPixels = Math.Abs(renderer._playerFeetInRenderTarget.Y * upScreenPerTexel);
             int strips = (int)MathHelper.Clamp(reachPixels / GroundStripPixels, 1f, MaxGroundStrips);
             float feetDepth = ShadowPieceDepth(who.StandingPixel.Y, 0f);
@@ -500,13 +500,13 @@ namespace SDVRadiance
         /// drawn, glass shades exactly like a wall and there is nothing in the art to read.
         /// <para>Read on demand and not cached: this runs when somebody types the command.</para>
         /// </remarks>
-        private static void MeasureArtSolidity(Texture2D texture, Rectangle src, out float opaque, out float partlyClear)
+        private static void MeasureArtSolidity(Texture2D texture, Rectangle sourceRect, out float opaque, out float partlyClear)
         {
             opaque = partlyClear = -1f;
             try
             {
-                var pixels = new Color[src.Width * src.Height];
-                texture.GetData(0, src, pixels, 0, pixels.Length);
+                var pixels = new Color[sourceRect.Width * sourceRect.Height];
+                texture.GetData(0, sourceRect, pixels, 0, pixels.Length);
                 int solid = 0, part = 0;
                 foreach (Color pixel in pixels)
                 {
@@ -588,7 +588,7 @@ namespace SDVRadiance
         /// </summary>
         private static void AppendSunGeometry(StringBuilder report, ModConfig config)
         {
-            ComputeSun(out float rot, out float stretch, out float _);
+            ComputeSun(out float rotation, out float stretch, out float _);
             // The drawn value is eased toward this one over about a second, so a report taken in
             // the middle of a shower reads a few percent off. Nothing here turns on that.
             float overcast = OvercastNow();
@@ -596,9 +596,9 @@ namespace SDVRadiance
                               * MathHelper.Lerp(1f, OvercastLength, overcast);
             float sunStretch = stretch * lengthScale;
             const float Deg = 180f / (float)Math.PI;
-            report.AppendLine($"[shadows] sun rot={rot * Deg:0.0}deg stretch={sunStretch:0.00} lengthScale={lengthScale:0.00} "
+            report.AppendLine($"[shadows] sun rot={rotation * Deg:0.0}deg stretch={sunStretch:0.00} lengthScale={lengthScale:0.00} "
                         + $"overcast={overcast:0.00}");
-            report.AppendLine($"[shadows] geometry: character (rotated) angle={rot * Deg:0.0}deg stretch={sunStretch:0.00}");
+            report.AppendLine($"[shadows] geometry: character (rotated) angle={rotation * Deg:0.0}deg stretch={sunStretch:0.00}");
 
             // Read from the live per-kind settings rather than repeating them. The numbers here
             // were copied by hand and had drifted: it still printed a crop cap of 0.55 and an
@@ -611,7 +611,7 @@ namespace SDVRadiance
                 // Reading rot straight here would have gone on printing one angle for everything
                 // while the screen showed several, and that is the report this table exists for.
                 float lean = LeanFor(config, kind);
-                float kindRot = rot * lean;
+                float kindRot = rotation * lean;
                 float st = Math.Min(sunStretch, cap * lengthScale);
                 float shear = -(float)Math.Sin(kindRot) * st;
                 float raw = st * (float)Math.Cos(kindRot);
@@ -636,8 +636,8 @@ namespace SDVRadiance
             {
                 float st = Math.Min(sunStretch, cap * lengthScale);
                 ShadowProjection projection = geometry == ShadowGeometry.Card
-                    ? ShadowProjection.ForCard(rot, st)
-                    : ShadowProjection.ForSolid(rot, st, foreshortening);
+                    ? ShadowProjection.ForCard(rotation, st)
+                    : ShadowProjection.ForSolid(rotation, st, foreshortening);
                 projection.Bounds(w, h, w / 2f, h, out float left, out float right, out float top, out float bottom);
                 report.AppendLine($"[shadows]   {what,-12} {geometry,-5} across=({projection.AcrossX:0.00},{projection.AcrossY:0.00}) "
                             + $"along=({projection.AlongX:0.00},{projection.AlongY:0.00}) "
@@ -650,8 +650,8 @@ namespace SDVRadiance
             // People are not baked through the projection; they are rotated and scaled by the
             // nearest thing to it, so what to print is that scale, and what it would have been on
             // the ground's own number.
-            float personAcross = ShadowProjection.ForSolid(rot, sunStretch, characterForeshortening).AcrossScaleForRotation();
-            float personAcrossOnGround = ShadowProjection.ForSolid(rot, sunStretch, foreshortening).AcrossScaleForRotation();
+            float personAcross = ShadowProjection.ForSolid(rotation, sunStretch, characterForeshortening).AcrossScaleForRotation();
+            float personAcrossOnGround = ShadowProjection.ForSolid(rotation, sunStretch, foreshortening).AcrossScaleForRotation();
             report.AppendLine($"[shadows]   a person     Solid rotate+scale, width x{personAcross:0.00} "
                         + $"(x{personAcrossOnGround:0.00} on the ground's own)");
         }

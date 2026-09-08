@@ -80,7 +80,7 @@ namespace SDVRadiance
             // own pixels (the bathhouse "wavy body").
             long whoStep = RenderPipeline.ChainStepBegin();
             Farmer who = Game1.player;
-            bool swim = who != null && who.swimming.Value;
+            bool swimming = who != null && who.swimming.Value;
             if (who == null || who.currentLocation != Game1.currentLocation || who.isRidingHorse())
             {
                 ForgetPlayerBake();
@@ -89,7 +89,7 @@ namespace SDVRadiance
 
             RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakeWho, whoStep);
             long poseStep = RenderPipeline.ChainStepBegin();
-            BakePlayerPose(graphicsDevice, who, swim, reflectionNeedsPlayer);
+            BakePlayerPose(graphicsDevice, who, swimming, reflectionNeedsPlayer);
             RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakePose, poseStep);
             // With the pose baked, compose every cast of its shadow into the patch, cut by the
             // map, while a render-target swap is still allowed (see ShadowRenderer.PlayerPatch).
@@ -179,10 +179,10 @@ namespace SDVRadiance
             // "directional shadows on trees and bushes are unplayably slow with Simple Foliage,
             // fine with the setting off". Say so once per location, with both numbers.
             if (_bakedObjectCache.Count > ObjectBakeCapTotal && DiagnosticMonitor != null
-                && Game1.currentLocation is { } capLoc && capLoc != _objectCapLoggedLocation)
+                && Game1.currentLocation is { } overCapLocation && overCapLocation != _objectCapLoggedLocation)
             {
-                _objectCapLoggedLocation = capLoc;
-                DiagnosticMonitor.Log($"[shadow] object bake cache over cap at {capLoc.NameOrUniqueName}: "
+                _objectCapLoggedLocation = overCapLocation;
+                DiagnosticMonitor.Log($"[shadow] object bake cache over cap at {overCapLocation.NameOrUniqueName}: "
                        + $"{_bakedObjectCache.Count} distinct sprites still hot (cap {ObjectBakeCapTotal}, "
                        + $"{ObjectSlotsAllocated()} slots allocated) — more sprites are on screen at once "
                        + "than the cache can hold, so some object shadows re-bake as they scroll.", LogLevel.Debug);
@@ -210,7 +210,7 @@ namespace SDVRadiance
             {
                 _isBakingObjects = true;
                 _objectGraphicsDevice = graphicsDevice;
-                RenderTargetBinding[] objPrev = graphicsDevice.GetRenderTargets();
+                RenderTargetBinding[] previousObjectTargets = graphicsDevice.GetRenderTargets();
                 try
                 {
                     if (locationChanged || _bakedObjectCache.Count == 0)
@@ -242,8 +242,8 @@ namespace SDVRadiance
                         RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakeObjectsQueued, queuedStep);
                     }
                 }
-                catch (Exception ex) { if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log($"[shadow] obj bake threw: {ex}", LogLevel.Warn); } }
-                finally { graphicsDevice.SetRenderTargets(objPrev); _isBakingObjects = false; _bakeWholeMap = false; }
+                catch (Exception exception) { if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log($"[shadow] obj bake threw: {exception}", LogLevel.Warn); } }
+                finally { graphicsDevice.SetRenderTargets(previousObjectTargets); _isBakingObjects = false; _bakeWholeMap = false; }
             }
             // Either path leaves the queue spent, including anything the refresh budget did not
             // reach. Nothing is lost by that: an entry the sun has moved off is still stale next
@@ -255,7 +255,7 @@ namespace SDVRadiance
         /// <summary>Render the player's current pose to the persistent silhouette target (and
         /// its full-colour twin when the reflection wants it), reusing the last bake when the
         /// pose has not moved.</summary>
-        private void BakePlayerPose(GraphicsDevice graphicsDevice, Farmer who, bool swim, bool reflectionNeedsPlayer)
+        private void BakePlayerPose(GraphicsDevice graphicsDevice, Farmer who, bool swimming, bool reflectionNeedsPlayer)
         {
             // PreserveContents is REQUIRED for every persistent bake target: the default
             // DiscardContents only guarantees the pixels until the next target swap/present,
@@ -264,7 +264,7 @@ namespace SDVRadiance
             _playerRenderTarget ??= VramTally.Track(new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
                 SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "player silhouette");
 
-            Rectangle src = who.FarmerSprite.SourceRect;
+            Rectangle sourceRect = who.FarmerSprite.SourceRect;
             _playerBakeFarmerId = who.UniqueMultiplayerID;
 
             // Same pose as the last bake → the RT is still correct, skip the 3-batch redraw.
@@ -284,36 +284,36 @@ namespace SDVRadiance
             // colour inside an otherwise byte-identical silhouette, at the same place on every map,
             // which is what a fixed character with fixed hair cycling two phases looks like. It
             // failed the harness gate, so nothing could be verified through it at all.
-            var sig = (who.FarmerSprite.CurrentFrame, (int)who.FacingDirection, src);
+            var poseSignature = (who.FarmerSprite.CurrentFrame, (int)who.FacingDirection, sourceRect);
             // Staggered by who it is, so two screens' players do not fall due on the same frame
             // (see the same line in ShadowRenderer.Farmers).
             bool accessoryRefreshDue = PlayerAccessoriesAnimate && !Determinism.Frozen
                                        && (Game1.ticks + (int)(who.UniqueMultiplayerID & 7L)) % 8 == 0;
             // Fresh says the pose still matches. Usable says the pixels are still there: a
             // device reset empties a render target without touching any flag this mod keeps.
-            if (_playerMaskFresh && sig == _playerBakeSignature && !accessoryRefreshDue
+            if (_playerMaskFresh && poseSignature == _playerBakeSignature && !accessoryRefreshDue
                 && GpuContent.Usable(_playerRenderTarget)
                 && (!reflectionNeedsPlayer || (_playerColorFresh && GpuContent.Usable(_playerColorRenderTarget))))
             {
-                _playerReady = !swim && !IsSeated(who);
+                _playerReady = !swimming && !IsSeated(who);
                 PlayerMask = _playerRenderTarget;
                 PlayerColor = _playerColorFresh ? _playerColorRenderTarget : null;
                 return;
             }
-            _playerBakeSignature = sig;
+            _playerBakeSignature = poseSignature;
 
-            float w = src.Width * 4f, h = src.Height * 4f;
-            Vector2 pos = new Vector2((PlayerRtW - w) / 2f, PlayerRtH - h - 8f);
+            float spriteWidth = sourceRect.Width * 4f, spriteHeight = sourceRect.Height * 4f;
+            Vector2 spriteTopLeft = new Vector2((PlayerRtW - spriteWidth) / 2f, PlayerRtH - spriteHeight - 8f);
             _playerFeetInRenderTarget = new Vector2(PlayerRtW / 2f, PlayerRtH - 8f);
 
-            RenderTargetBinding[] prev = graphicsDevice.GetRenderTargets();
+            RenderTargetBinding[] previousTargets = graphicsDevice.GetRenderTargets();
             try
             {
                 graphicsDevice.SetRenderTarget(_playerRenderTarget);
                 graphicsDevice.Clear(Color.Transparent);
                 _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
                 who.FarmerRenderer.draw(_renderTargetSpriteBatch, who.FarmerSprite.CurrentAnimationFrame, who.FarmerSprite.CurrentFrame,
-                    src, pos, Vector2.Zero, 0f, who.FacingDirection, Color.Black, 0f, 1f, who);
+                    sourceRect, spriteTopLeft, Vector2.Zero, 0f, who.FacingDirection, Color.Black, 0f, 1f, who);
                 _renderTargetSpriteBatch.End();
 
                 // Scrub COLOUR out of the bake (RGB→0, alpha kept): appearance mods (Fashion
@@ -346,24 +346,24 @@ namespace SDVRadiance
                     graphicsDevice.Clear(Color.Transparent);
                     _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
                     who.FarmerRenderer.draw(_renderTargetSpriteBatch, who.FarmerSprite.CurrentAnimationFrame, who.FarmerSprite.CurrentFrame,
-                        src, pos, Vector2.Zero, 0f, who.FacingDirection, Color.White, 0f, 1f, who);
+                        sourceRect, spriteTopLeft, Vector2.Zero, 0f, who.FacingDirection, Color.White, 0f, 1f, who);
                     _renderTargetSpriteBatch.End();
                 }
                 _playerColorFresh = reflectionNeedsPlayer;
 
                 _playerMaskFresh = true;
-                _playerReady = !swim && !IsSeated(who);
+                _playerReady = !swimming && !IsSeated(who);
                 PlayerMask = _playerRenderTarget;
                 PlayerColor = _playerColorFresh ? _playerColorRenderTarget : null;
             }
-            catch (Exception ex)
+            catch (Exception exception)
             {
                 try { _renderTargetSpriteBatch!.End(); } catch { }
-                if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log($"[shadow] player RT prep threw: {ex}", LogLevel.Warn); }
+                if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log($"[shadow] player RT prep threw: {exception}", LogLevel.Warn); }
             }
             finally
             {
-                graphicsDevice.SetRenderTargets(prev);
+                graphicsDevice.SetRenderTargets(previousTargets);
             }
         }
 
@@ -374,23 +374,23 @@ namespace SDVRadiance
         /// Runs during RenderingWorld (render-target swaps are safe there). Warm frames are a
         /// dictionary hit — only frames never seen before actually bake.
         /// </summary>
-        private void BakeCasters(GraphicsDevice graphicsDevice, GameLocation location, float blurPx)
+        private void BakeCasters(GraphicsDevice graphicsDevice, GameLocation location, float blurPixels)
         {
             if (location == null)
                 return;
             var viewport = Game1.viewport;
-            int tx0 = viewport.X / 64 - 3, tx1 = (viewport.X + viewport.Width) / 64 + 3;
-            int ty0 = viewport.Y / 64 - 3, ty1 = (viewport.Y + viewport.Height) / 64 + 3;
+            int tileX0 = viewport.X / 64 - 3, tileX1 = (viewport.X + viewport.Width) / 64 + 3;
+            int tileY0 = viewport.Y / 64 - 3, tileY1 = (viewport.Y + viewport.Height) / 64 + 3;
 
-            RenderTargetBinding[]? prev = null;   // fetched lazily: only a cache MISS pays for it
+            RenderTargetBinding[]? previousTargets = null;   // fetched lazily: only a cache MISS pays for it
             try
             {
                 foreach (NPC npc in CharactersIn(location))
                 {
                     if (npc == null || npc.IsInvisible || ShadowHiddenFor(npc) || npc.swimming.Value || npc.Sprite?.Texture == null)
                         continue;
-                    Point t = npc.TilePoint;
-                    if (t.X < tx0 || t.X > tx1 || t.Y < ty0 || t.Y > ty1)
+                    Point tile = npc.TilePoint;
+                    if (tile.X < tileX0 || tile.X > tileX1 || tile.Y < tileY0 || tile.Y > tileY1)
                         continue;
                     var key = (npc.Sprite.Texture, npc.Sprite.SourceRect);
                     // Stamping the tick on a HIT is what keeps eviction honest: this loop already
@@ -399,40 +399,40 @@ namespace SDVRadiance
                     if (_casterBakeCache.TryGetValue(key, out SpriteBake? warm))
                     {
                         warm.LastUsedTick = Game1.ticks;
-                        RefreshCasterBlur(graphicsDevice, key.Item1, key.Item2, warm, blurPx, ref prev);
+                        RefreshCasterBlur(graphicsDevice, key.Item1, key.Item2, warm, blurPixels, ref previousTargets);
                         continue;
                     }
-                    prev ??= graphicsDevice.GetRenderTargets();
-                    if (BakeSprite(graphicsDevice, key.Item1, key.Item2, blurPx, out RenderTarget2D rt, out Vector2 feet))
-                        _casterBakeCache[key] = new SpriteBake { Rt = rt, FeetInRt = feet, BakedBlur = blurPx, LastUsedTick = Game1.ticks };
+                    previousTargets ??= graphicsDevice.GetRenderTargets();
+                    if (BakeSprite(graphicsDevice, key.Item1, key.Item2, blurPixels, out RenderTarget2D renderTarget, out Vector2 feet))
+                        _casterBakeCache[key] = new SpriteBake { Rt = renderTarget, FeetInRt = feet, BakedBlur = blurPixels, LastUsedTick = Game1.ticks };
                 }
-                foreach (FarmAnimal a in AnimalsIn(location))
+                foreach (FarmAnimal animal in AnimalsIn(location))
                 {
-                    if (a?.Sprite?.Texture == null)
+                    if (animal?.Sprite?.Texture == null)
                         continue;
-                    Point t = a.TilePoint;
-                    if (t.X < tx0 || t.X > tx1 || t.Y < ty0 || t.Y > ty1)
+                    Point tile = animal.TilePoint;
+                    if (tile.X < tileX0 || tile.X > tileX1 || tile.Y < tileY0 || tile.Y > tileY1)
                         continue;
-                    var key = (a.Sprite.Texture, a.Sprite.SourceRect);
+                    var key = (animal.Sprite.Texture, animal.Sprite.SourceRect);
                     if (_casterBakeCache.TryGetValue(key, out SpriteBake? warm))
                     {
                         warm.LastUsedTick = Game1.ticks;
-                        RefreshCasterBlur(graphicsDevice, key.Item1, key.Item2, warm, blurPx, ref prev);
+                        RefreshCasterBlur(graphicsDevice, key.Item1, key.Item2, warm, blurPixels, ref previousTargets);
                         continue;
                     }
-                    prev ??= graphicsDevice.GetRenderTargets();
-                    if (BakeSprite(graphicsDevice, key.Item1, key.Item2, blurPx, out RenderTarget2D rt, out Vector2 feet))
-                        _casterBakeCache[key] = new SpriteBake { Rt = rt, FeetInRt = feet, BakedBlur = blurPx, LastUsedTick = Game1.ticks };
+                    previousTargets ??= graphicsDevice.GetRenderTargets();
+                    if (BakeSprite(graphicsDevice, key.Item1, key.Item2, blurPixels, out RenderTarget2D renderTarget, out Vector2 feet))
+                        _casterBakeCache[key] = new SpriteBake { Rt = renderTarget, FeetInRt = feet, BakedBlur = blurPixels, LastUsedTick = Game1.ticks };
                 }
             }
-            catch (Exception ex)
+            catch (Exception exception)
             {
-                if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log($"[shadow] caster bake threw: {ex}", LogLevel.Warn); }
+                if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log($"[shadow] caster bake threw: {exception}", LogLevel.Warn); }
             }
             finally
             {
-                if (prev != null)
-                    graphicsDevice.SetRenderTargets(prev);
+                if (previousTargets != null)
+                    graphicsDevice.SetRenderTargets(previousTargets);
             }
         }
 
@@ -446,16 +446,16 @@ namespace SDVRadiance
         /// leave every old bake at its old edge. The same 0.3 px tolerance the object bakes
         /// use; the slider moves in tenths, so a nudge of it re-bakes once and a bake never
         /// chases a value that is settling.</summary>
-        private void RefreshCasterBlur(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle src, SpriteBake warm,
-            float blurPx, ref RenderTargetBinding[]? prev)
+        private void RefreshCasterBlur(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle sourceRect, SpriteBake warm,
+            float blurPixels, ref RenderTargetBinding[]? previousTargets)
         {
-            if (Math.Abs(blurPx - warm.BakedBlur) <= 0.3f)
+            if (Math.Abs(blurPixels - warm.BakedBlur) <= 0.3f)
                 return;
-            prev ??= graphicsDevice.GetRenderTargets();
-            if (BakeSprite(graphicsDevice, texture, src, blurPx, out _, out Vector2 feet, into: warm.Rt))
+            previousTargets ??= graphicsDevice.GetRenderTargets();
+            if (BakeSprite(graphicsDevice, texture, sourceRect, blurPixels, out _, out Vector2 feet, into: warm.Rt))
             {
                 warm.FeetInRt = feet;
-                warm.BakedBlur = blurPx;
+                warm.BakedBlur = blurPixels;
             }
         }
 
@@ -475,36 +475,36 @@ namespace SDVRadiance
         /// </summary>
         /// <param name="into">A slot the entry already owns, to re-render in place; null leases
         /// one from the pool.</param>
-        private bool BakeSprite(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle src, float blurPx,
-            out RenderTarget2D rt, out Vector2 feetInRT, RenderTarget2D? into = null)
+        private bool BakeSprite(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle sourceRect, float blurPixels,
+            out RenderTarget2D renderTarget, out Vector2 feetInRenderTarget, RenderTarget2D? into = null)
         {
-            rt = null!;
-            feetInRT = default;
-            if (texture == null || src.IsEmpty)
+            renderTarget = null!;
+            feetInRenderTarget = default;
+            if (texture == null || sourceRect.IsEmpty)
                 return false;
-            float w = src.Width * 4f, h = src.Height * 4f;
-            float blurTexels = Math.Max(0f, blurPx);
+            float spriteWidth = sourceRect.Width * 4f, spriteHeight = sourceRect.Height * 4f;
+            float blurTexels = Math.Max(0f, blurPixels);
             // The soft edge spreads the silhouette by the radius on every side; without the slack
             // it clips at the slot wall and the shadow's head comes out with a flat top.
-            if (w + 2f * blurTexels > CasterRtW || h + blurTexels > CasterRtH - 8f)
+            if (spriteWidth + 2f * blurTexels > CasterRtW || spriteHeight + blurTexels > CasterRtH - 8f)
                 return false;
 
-            rt = into ?? RentCasterRT(graphicsDevice);
-            var pos = new Vector2((CasterRtW - w) / 2f, CasterRtH - h - 8f);
-            feetInRT = new Vector2(CasterRtW / 2f, CasterRtH - 8f);
+            renderTarget = into ?? RentCasterRT(graphicsDevice);
+            var spriteTopLeft = new Vector2((CasterRtW - spriteWidth) / 2f, CasterRtH - spriteHeight - 8f);
+            feetInRenderTarget = new Vector2(CasterRtW / 2f, CasterRtH - 8f);
             try
             {
-                graphicsDevice.SetRenderTarget(rt);
+                graphicsDevice.SetRenderTarget(renderTarget);
                 graphicsDevice.Clear(Color.Transparent);
                 _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
-                _renderTargetSpriteBatch.Draw(texture, pos, src, Color.Black, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
+                _renderTargetSpriteBatch.Draw(texture, spriteTopLeft, sourceRect, Color.Black, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
                 _renderTargetSpriteBatch.End();
 
                 // Fade only the sprite's vertical extent (full at the feet, faint at the head).
                 _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
-                _renderTargetSpriteBatch.Draw(_gradientTexture!, new Rectangle(0, (int)pos.Y, CasterRtW, (int)h), Color.White);
+                _renderTargetSpriteBatch.Draw(_gradientTexture!, new Rectangle(0, (int)spriteTopLeft.Y, CasterRtW, (int)spriteHeight), Color.White);
                 _renderTargetSpriteBatch.End();
-                BlurSlotInPlace(graphicsDevice, rt, blurTexels);
+                BlurSlotInPlace(graphicsDevice, renderTarget, blurTexels);
                 FrameCost.Count(FrameCost.Counter.CasterBakes);
                 return true;
             }
@@ -518,8 +518,8 @@ namespace SDVRadiance
                 // and that is exactly what was removed to stop the cache thrashing. A slot that
                 // was already owned stays owned.
                 if (into == null)
-                    _casterFreeTargets.Add(rt);
-                rt = null!;
+                    _casterFreeTargets.Add(renderTarget);
+                renderTarget = null!;
                 return false;
             }
         }
@@ -533,10 +533,10 @@ namespace SDVRadiance
                 _casterFreeTargets.RemoveAt(_casterFreeTargets.Count - 1);
                 return reused;
             }
-            var rt = VramTally.Track(new RenderTarget2D(graphicsDevice, CasterRtW, CasterRtH, false,
+            var renderTarget = VramTally.Track(new RenderTarget2D(graphicsDevice, CasterRtW, CasterRtH, false,
                 SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "character bake slots");
-            _casterRenderTargetPool.Add(rt);
-            return rt;
+            _casterRenderTargetPool.Add(renderTarget);
+            return renderTarget;
         }
 
         /// <summary>Consecutive frames with nothing to bake for. Not a tick count: the release
@@ -598,12 +598,12 @@ namespace SDVRadiance
             int freed = ObjectSlotsAllocated() + _casterRenderTargetPool.Count;
             foreach (var pool in _objectRenderTargetPools)
             {
-                foreach (RenderTarget2D rt in pool)
-                    try { rt.Dispose(); } catch { }
+                foreach (RenderTarget2D renderTarget in pool)
+                    try { renderTarget.Dispose(); } catch { }
                 pool.Clear();
             }
-            foreach (RenderTarget2D rt in _casterRenderTargetPool)
-                try { rt.Dispose(); } catch { }
+            foreach (RenderTarget2D renderTarget in _casterRenderTargetPool)
+                try { renderTarget.Dispose(); } catch { }
             _casterRenderTargetPool.Clear();
             for (int i = 0; i < _objectBlurScratches.Length; i++)
             {
@@ -614,7 +614,7 @@ namespace SDVRadiance
             _casterBlurScratch = null;
             // A full re-enumeration has to happen if the shadows come back, or the draw pass
             // would find every sprite missing and paint a screen of banded stand-ins.
-            _objectBakeLocation = null;
+            ForgetObjectBakeLocations();
             DiagnosticMonitor?.Log($"[shadow] released {freed} idle bake targets - shadows have been off for a while.", LogLevel.Debug);
         }
 
@@ -630,12 +630,12 @@ namespace SDVRadiance
             int keep = (int)(CasterBakeCap * EvictHeadroom);
             bool desperate = _casterBakeCache.Count > CasterBakeCap * 2;
             int coldBefore = Game1.ticks - HotBakeTicks;
-            foreach (var kv in _casterBakeCache)
+            foreach (var entry in _casterBakeCache)
             {
-                if (desperate || kv.Value.LastUsedTick < coldBefore)
-                    _casterEvictScratch.Add(kv.Key);
+                if (desperate || entry.Value.LastUsedTick < coldBefore)
+                    _casterEvictScratch.Add(entry.Key);
             }
-            _casterEvictScratch.Sort((a, b) => _casterBakeCache[a].LastUsedTick.CompareTo(_casterBakeCache[b].LastUsedTick));
+            _casterEvictScratch.Sort((first, second) => _casterBakeCache[first].LastUsedTick.CompareTo(_casterBakeCache[second].LastUsedTick));
             int drop = Math.Min(_casterBakeCache.Count - keep, _casterEvictScratch.Count);
             for (int i = 0; i < drop; i++)
             {
@@ -680,11 +680,11 @@ namespace SDVRadiance
         /// comparable when neither starts with the other's bakes.</summary>
         internal void ForgetObjectBakes()
         {
-            foreach (var kv in _bakedObjectCache)
-                _objectFreeTargetsByClass[kv.Value.SlotClass].Add(kv.Value.Rt);
+            foreach (var entry in _bakedObjectCache)
+                _objectFreeTargetsByClass[entry.Value.SlotClass].Add(entry.Value.Rt);
             _bakedObjectCache.Clear();
             _objectBakeQueue.Clear();
-            _objectBakeLocation = null;
+            ForgetObjectBakeLocations();
         }
 
         private void EvictColdObjectBakes()
@@ -693,12 +693,12 @@ namespace SDVRadiance
             // on a farm holding four hundred bakes three walks to learn that nothing is over its
             // cap were most of what the method did.
             Array.Clear(_objectLiveByClass, 0, _objectLiveByClass.Length);
-            foreach (var kv in _bakedObjectCache)
-                _objectLiveByClass[kv.Value.SlotClass]++;
-            for (int cls = 0; cls < ObjectSlotClasses.Length; cls++)
+            foreach (var entry in _bakedObjectCache)
+                _objectLiveByClass[entry.Value.SlotClass]++;
+            for (int slotClass = 0; slotClass < ObjectSlotClasses.Length; slotClass++)
             {
-                int cap = ObjectClassCap(cls);
-                int live = _objectLiveByClass[cls];
+                int cap = ObjectClassCap(slotClass);
+                int live = _objectLiveByClass[slotClass];
                 if (live <= cap)
                     continue;
 
@@ -706,13 +706,13 @@ namespace SDVRadiance
                 int keep = (int)(cap * EvictHeadroom);
                 bool desperate = live > cap * 2;
                 int coldBefore = Game1.ticks - HotBakeTicks;
-                foreach (var kv in _bakedObjectCache)
+                foreach (var entry in _bakedObjectCache)
                 {
-                    if (kv.Value.SlotClass != cls) continue;
-                    if (desperate || kv.Value.LastUsedTick < coldBefore)
-                        _objectEvictScratch.Add(kv.Key);
+                    if (entry.Value.SlotClass != slotClass) continue;
+                    if (desperate || entry.Value.LastUsedTick < coldBefore)
+                        _objectEvictScratch.Add(entry.Key);
                 }
-                _objectEvictScratch.Sort((a, b) => _bakedObjectCache[a].LastUsedTick.CompareTo(_bakedObjectCache[b].LastUsedTick));
+                _objectEvictScratch.Sort((first, second) => _bakedObjectCache[first].LastUsedTick.CompareTo(_bakedObjectCache[second].LastUsedTick));
                 int drop = Math.Min(live - keep, _objectEvictScratch.Count);
                 for (int i = 0; i < drop; i++)
                 {
@@ -729,19 +729,19 @@ namespace SDVRadiance
         /// <summary>A 64×64 soft radial disc (white, radial alpha) for ambient contact pools.</summary>
         private static Texture2D BuildBlob(GraphicsDevice graphicsDevice)
         {
-            const int N = 64;
-            var texture = new Texture2D(graphicsDevice, N, N);
-            var data = new Color[N * N];
-            float r = N / 2f;
-            for (int y = 0; y < N; y++)
+            const int BlobSize = 64;
+            var texture = new Texture2D(graphicsDevice, BlobSize, BlobSize);
+            var data = new Color[BlobSize * BlobSize];
+            float radius = BlobSize / 2f;
+            for (int y = 0; y < BlobSize; y++)
             {
-                for (int x = 0; x < N; x++)
+                for (int x = 0; x < BlobSize; x++)
                 {
-                    float dx = (x + 0.5f - r) / r, dy = (y + 0.5f - r) / r;
-                    float dist = (float)Math.Sqrt(dx * dx + dy * dy);
-                    float a = MathHelper.Clamp(1f - dist, 0f, 1f);
-                    a *= a;   // soft falloff toward the rim
-                    data[y * N + x] = new Color((byte)255, (byte)255, (byte)255, (byte)(a * 255f));
+                    float offsetX = (x + 0.5f - radius) / radius, offsetY = (y + 0.5f - radius) / radius;
+                    float distance = (float)Math.Sqrt(offsetX * offsetX + offsetY * offsetY);
+                    float rimAlpha = MathHelper.Clamp(1f - distance, 0f, 1f);
+                    rimAlpha *= rimAlpha;   // soft falloff toward the rim
+                    data[y * BlobSize + x] = new Color((byte)255, (byte)255, (byte)255, (byte)(rimAlpha * 255f));
                 }
             }
             texture.SetData(data);
@@ -755,10 +755,10 @@ namespace SDVRadiance
             var data = new Color[PlayerRtH];
             for (int y = 0; y < PlayerRtH; y++)
             {
-                float tBottom = (float)y / (PlayerRtH - 1);      // 0 at top, 1 at bottom
+                float bottomFraction = (float)y / (PlayerRtH - 1);      // 0 at top, 1 at bottom
                 // Non-linear: stays dark near the feet, fades toward the far tip.
-                float a = headFade + (1f - headFade) * (float)Math.Pow(tBottom, 1.8);
-                data[y] = new Color(255, 255, 255, (int)(a * 255f));
+                float rampAlpha = headFade + (1f - headFade) * (float)Math.Pow(bottomFraction, 1.8);
+                data[y] = new Color(255, 255, 255, (int)(rampAlpha * 255f));
             }
             texture.SetData(data);
             return texture;
@@ -776,8 +776,8 @@ namespace SDVRadiance
         {
             new(0f, 0f), new(1f, 0f), new(-1f, 0f), new(0f, 1f), new(0f, -1f),
         };
-        private static void DrawSoft(SpriteBatch spriteBatch, Vector2[] taps, Texture2D texture, Rectangle? src, Vector2 pos,
-            Color baseColor, float alpha, float rot, Vector2 origin, Vector2 scale, float depth,
+        private static void DrawSoft(SpriteBatch spriteBatch, Vector2[] taps, Texture2D texture, Rectangle? sourceRect, Vector2 feet,
+            Color baseColor, float alpha, float rotation, Vector2 origin, Vector2 scale, float depth,
             SpriteEffects effects, float blur)
         {
             // No blur → one draw at full alpha (the tap disc would just stack N identical
@@ -785,16 +785,16 @@ namespace SDVRadiance
             if (blur <= 0f)
             {
                 FrameCost.Count(FrameCost.Counter.ShadowDrawCalls);
-                spriteBatch.Draw(texture, pos, src, baseColor * MathHelper.Clamp(alpha, 0f, 1f), rot, origin, scale, effects, depth);
+                spriteBatch.Draw(texture, feet, sourceRect, baseColor * MathHelper.Clamp(alpha, 0f, 1f), rotation, origin, scale, effects, depth);
                 return;
             }
 
             // Per-tap alpha so 1-(1-a)^N ≈ target alpha at the fully-covered core.
-            float a = 1f - (float)Math.Pow(1f - MathHelper.Clamp(alpha, 0f, 1f), 1f / taps.Length);
-            Color c = baseColor * a;
+            float tapAlpha = 1f - (float)Math.Pow(1f - MathHelper.Clamp(alpha, 0f, 1f), 1f / taps.Length);
+            Color tapColor = baseColor * tapAlpha;
             FrameCost.Count(FrameCost.Counter.ShadowDrawCalls, taps.Length);
-            foreach (Vector2 t in taps)
-                spriteBatch.Draw(texture, pos + t * blur, src, c, rot, origin, scale, effects, depth);
+            foreach (Vector2 tap in taps)
+                spriteBatch.Draw(texture, feet + tap * blur, sourceRect, tapColor, rotation, origin, scale, effects, depth);
         }
 
         /// <summary>Number of horizontal bands used to fake the NPC opacity gradient.</summary>
@@ -861,12 +861,12 @@ namespace SDVRadiance
             BuildingFootprints.Clear();
             if (location?.buildings == null)
                 return;
-            foreach (Building bld in location.buildings)
+            foreach (Building building in location.buildings)
             {
-                if (bld == null)
+                if (building == null)
                     continue;
-                BuildingFootprints.Add(new Rectangle(bld.tileX.Value * 64, bld.tileY.Value * 64,
-                    bld.tilesWide.Value * 64, bld.tilesHigh.Value * 64));
+                BuildingFootprints.Add(new Rectangle(building.tileX.Value * 64, building.tileY.Value * 64,
+                    building.tilesWide.Value * 64, building.tilesHigh.Value * 64));
             }
         }
 
@@ -904,11 +904,11 @@ namespace SDVRadiance
         /// map tiles and are sorted like any sprite, so they are not consulted here.
         /// </remarks>
         private static float ShadowClipDistance(GameLocation? location, float feetWorldX, float anchorWorldY,
-            float rot, float scaleY, float lengthTexels)
+            float rotation, float scaleY, float lengthTexels)
         {
             if (location == null)
                 return float.MaxValue;
-            float sin = (float)Math.Sin(rot), cos = (float)Math.Cos(rot);
+            float leanSin = (float)Math.Sin(rotation), leanCos = (float)Math.Cos(rotation);
             float lengthPixels = lengthTexels * scaleY;
             const float step = 8f;
             // Which way the shadow runs decides which edge of the solid tiles ends it. A map
@@ -919,12 +919,12 @@ namespace SDVRadiance
             // the thing, whose visible face is then in its own shade, so the shadow has nowhere
             // to land there and stops at the near edge: this is a shadow meeting the counter from
             // behind the bar, where painting it on the counter's front read as passing through.
-            bool towardViewer = cos < 0f;
+            bool towardViewer = leanCos < 0f;
             int feetTileX = (int)Math.Floor(feetWorldX / 64f), feetTileY = (int)Math.Floor(anchorWorldY / 64f);
-            bool SolidAt(float d)
+            bool SolidAt(float distance)
             {
-                int tileX = (int)Math.Floor((feetWorldX + sin * d) / 64f);
-                int tileY = (int)Math.Floor((anchorWorldY - cos * d) / 64f);
+                int tileX = (int)Math.Floor((feetWorldX + leanSin * distance) / 64f);
+                int tileY = (int)Math.Floor((anchorWorldY - leanCos * distance) / 64f);
                 // The tile under a pair of feet is never the thing that cuts their shadow.
                 if (tileX == feetTileX && tileY == feetTileY)
                     return false;
@@ -932,9 +932,9 @@ namespace SDVRadiance
                     && location.doesTileHaveProperty(tileX, tileY, "Passable", "Buildings") == null;
             }
             float near = -1f, far = -1f, previous = 0f;
-            for (float d = step; d < lengthPixels; d += step)
+            for (float distance = step; distance < lengthPixels; distance += step)
             {
-                if (SolidAt(d))
+                if (SolidAt(distance))
                 {
                     if (near < 0f)
                     {
@@ -942,7 +942,7 @@ namespace SDVRadiance
                         // against the counter the feet are a dozen pixels from it, so a sample's
                         // width of slack was a visible spill of shadow onto its front: bisect to
                         // within a pixel of the tile's edge instead.
-                        float clear = previous, solid = d;
+                        float clear = previous, solid = distance;
                         for (int i = 0; i < 4; i++)
                         {
                             float mid = (clear + solid) * 0.5f;
@@ -950,11 +950,11 @@ namespace SDVRadiance
                         }
                         near = solid;
                     }
-                    far = d;
+                    far = distance;
                 }
                 else if (far >= 0f)
                     break;
-                previous = d;
+                previous = distance;
             }
             if (far < 0f)
                 return float.MaxValue;
@@ -992,23 +992,23 @@ namespace SDVRadiance
         /// sort depth when <paramref name="anchorIsSortDepth"/> is set.</param>
         /// <param name="anchorIsSortDepth">Whether the anchor is already a sort depth rather than
         /// a world row. Objects arrive that way; see <see cref="ShadowPieceDepthUnder"/>.</param>
-        private static void DrawSoftGrounded(SpriteBatch spriteBatch, Vector2[] taps, Texture2D texture, Rectangle? src,
-            Vector2 pos, Color baseColor, float alpha, float rot, Vector2 origin, Vector2 scale, float anchorWorldY,
+        private static void DrawSoftGrounded(SpriteBatch spriteBatch, Vector2[] taps, Texture2D texture, Rectangle? sourceRect,
+            Vector2 feet, Color baseColor, float alpha, float rotation, Vector2 origin, Vector2 scale, float anchorWorldY,
             SpriteEffects effects, float blur, bool anchorIsSortDepth = false)
         {
             // Only the part of the silhouette's length that runs along the screen's Y moves it to
             // another floor row. The sideways lean moves it along the row it is already on, which
             // no sort depth has an opinion about. Signed, because a lamp overhead throws the
             // shadow DOWN the screen and those pieces belong in front of the caster.
-            float upScreenPerTexel = (float)Math.Cos(rot) * scale.Y;
-            float feetWorldX = pos.X + Game1.viewport.X;
-            Rectangle area = src ?? new Rectangle(0, 0, texture.Width, texture.Height);
+            float upScreenPerTexel = (float)Math.Cos(rotation) * scale.Y;
+            float feetWorldX = feet.X + Game1.viewport.X;
+            Rectangle area = sourceRect ?? new Rectangle(0, 0, texture.Width, texture.Height);
             // Where a solid map tile ends the shadow, the silhouette itself is cut there, from its
             // tip end, BEFORE the strips are decided. Skipping strips alone left the short shadows
             // untouched: a lamp's cast is often under one strip long, took the single-draw path
             // below, and went on through the counter whole.
             float clipDistance = anchorIsSortDepth ? float.MaxValue
-                : ShadowClipDistance(Game1.currentLocation, feetWorldX, anchorWorldY, rot, scale.Y, origin.Y);
+                : ShadowClipDistance(Game1.currentLocation, feetWorldX, anchorWorldY, rotation, scale.Y, origin.Y);
             if (clipDistance < float.MaxValue)
             {
                 // The soft edge is drawn as taps offset by the blur radius in every direction, so
@@ -1029,28 +1029,28 @@ namespace SDVRadiance
             int strips = (int)MathHelper.Clamp(alongScreenY / GroundStripPixels, 1f, MaxGroundStrips);
             if (strips <= 1 || area.Height < strips * 2)
             {
-                DrawSoft(spriteBatch, taps, texture, area, pos, baseColor, alpha, rot, origin, scale,
+                DrawSoft(spriteBatch, taps, texture, area, feet, baseColor, alpha, rotation, origin, scale,
                     anchorIsSortDepth ? ShadowPieceDepthUnder(anchorWorldY, 0f)
                                       : ShadowPieceDepth(anchorWorldY, 0f), effects, blur);
                 return;
             }
             for (int i = 0; i < strips; i++)
             {
-                int y0 = area.Height * i / strips;
-                int y1 = area.Height * (i + 1) / strips;
-                var strip = new Rectangle(area.X, area.Y + y0, area.Width, y1 - y0);
+                int stripTop = area.Height * i / strips;
+                int stripBottom = area.Height * (i + 1) / strips;
+                var strip = new Rectangle(area.X, area.Y + stripTop, area.Width, stripBottom - stripTop);
                 // The origin has to keep naming the same feet row, so it rises with the strip -
                 // the same correction the banded gradient makes for its bands.
-                var stripOrigin = new Vector2(origin.X, origin.Y - y0);
-                float texelsAboveFeet = origin.Y - (y0 + y1) * 0.5f;
+                var stripOrigin = new Vector2(origin.X, origin.Y - stripTop);
+                float texelsAboveFeet = origin.Y - (stripTop + stripBottom) * 0.5f;
                 // Past a solid map tile the shadow is over (see ShadowClipDistance).
                 if (texelsAboveFeet * scale.Y > clipDistance)
                     continue;
                 float upScreen = texelsAboveFeet * upScreenPerTexel;
                 // Where the strip's centre lands sideways, for the building test: the lean moves
                 // a piece along its row as well as up the screen.
-                float sideways = texelsAboveFeet * (float)Math.Sin(rot) * scale.Y;
-                DrawSoft(spriteBatch, taps, texture, strip, pos, baseColor, alpha, rot, stripOrigin, scale,
+                float sideways = texelsAboveFeet * (float)Math.Sin(rotation) * scale.Y;
+                DrawSoft(spriteBatch, taps, texture, strip, feet, baseColor, alpha, rotation, stripOrigin, scale,
                     anchorIsSortDepth ? ShadowPieceDepthUnder(anchorWorldY, upScreen)
                                       : GroundedPieceDepth(anchorWorldY, upScreen, feetWorldX, sideways), effects, blur);
             }
@@ -1073,8 +1073,8 @@ namespace SDVRadiance
         /// shadow is an absence of light; WHITE when the caller is filling a coverage mask that a
         /// later pass reads as "how much of this pixel is in shadow", where black would read as
         /// nothing at all.</param>
-        private void DrawBandedGradient(SpriteBatch spriteBatch, Texture2D texture, Rectangle src, Vector2 feet,
-            Vector2 baseOrigin, float alpha, float rot, Vector2 scale, float anchorWorldY, float blur,
+        private void DrawBandedGradient(SpriteBatch spriteBatch, Texture2D texture, Rectangle sourceRect, Vector2 feet,
+            Vector2 baseOrigin, float alpha, float rotation, Vector2 scale, float anchorWorldY, float blur,
             float headFade = HeadFade, SpriteEffects effects = SpriteEffects.None,
             bool anchorIsSortDepth = false, Color? shadowColor = null)
         {
@@ -1083,7 +1083,7 @@ namespace SDVRadiance
             // the depth of the floor row it lies on for nothing (see ShadowPieceDepth). Only the
             // part of the lean that runs along the screen's Y changes a band's row, and its sign
             // matters: a lamp overhead lays the shadow down the screen rather than up it.
-            float upScreenPerTexel = (float)Math.Cos(rot) * scale.Y;
+            float upScreenPerTexel = (float)Math.Cos(rotation) * scale.Y;
             // The ramp runs from the FEET row up, not from the sprite's bottom edge. On a sprite
             // the game has stretched, the character occupies the upper half and the rest is water
             // or tackle: measuring from the bottom edge handed the person the pale end of the ramp
@@ -1094,30 +1094,30 @@ namespace SDVRadiance
             // Band count set by the sprite's SOURCE height (it's drawn ~4× on screen, so a short
             // stump at height/6 showed coarse steps). Finer division → the per-band alpha gradient
             // reads as a smooth ramp, not layers. Capped so tall sprites don't explode the draw count.
-            int bands = (int)MathHelper.Clamp(src.Height / 2f, 12f, 28f);
+            int bands = (int)MathHelper.Clamp(sourceRect.Height / 2f, 12f, 28f);
             float feetWorldX = feet.X + Game1.viewport.X;
             float clipDistance = anchorIsSortDepth ? float.MaxValue
-                : ShadowClipDistance(Game1.currentLocation, feetWorldX, anchorWorldY, rot, scale.Y, feetRow);
+                : ShadowClipDistance(Game1.currentLocation, feetWorldX, anchorWorldY, rotation, scale.Y, feetRow);
             for (int i = 0; i < bands; i++)
             {
-                int y0 = src.Height * i / bands;
-                int y1 = src.Height * (i + 1) / bands;
-                var band = new Rectangle(src.X, src.Y + y0, src.Width, y1 - y0);
+                int bandTop = sourceRect.Height * i / bands;
+                int bandBottom = sourceRect.Height * (i + 1) / bands;
+                var band = new Rectangle(sourceRect.X, sourceRect.Y + bandTop, sourceRect.Width, bandBottom - bandTop);
                 // Origin so the (virtual) full-sprite ground-anchor row still maps to the feet position.
-                var origin = new Vector2(baseOrigin.X, baseOrigin.Y - y0);
+                var origin = new Vector2(baseOrigin.X, baseOrigin.Y - bandTop);
                 // 0 at the head band, 1 at the feet band. Rows below the feet (a stretched sprite's
                 // water half) clamp to 1 rather than running past it.
-                float tBottom = MathHelper.Clamp(src.Height * (i + 0.5f) / bands / feetRow, 0f, 1f);
-                float ga = headFade + (1f - headFade) * (float)Math.Pow(tBottom, 1.8);
-                float texelsAboveFeet = baseOrigin.Y - (y0 + y1) * 0.5f;
+                float bottomFraction = MathHelper.Clamp(sourceRect.Height * (i + 0.5f) / bands / feetRow, 0f, 1f);
+                float bandAlpha = headFade + (1f - headFade) * (float)Math.Pow(bottomFraction, 1.8);
+                float texelsAboveFeet = baseOrigin.Y - (bandTop + bandBottom) * 0.5f;
                 if (texelsAboveFeet * scale.Y > clipDistance)
                     continue;
                 float upScreen = texelsAboveFeet * upScreenPerTexel;
-                float sideways = texelsAboveFeet * (float)Math.Sin(rot) * scale.Y;
+                float sideways = texelsAboveFeet * (float)Math.Sin(rotation) * scale.Y;
                 float bandDepth = anchorIsSortDepth
                     ? ShadowPieceDepthUnder(anchorWorldY, upScreen)
                     : GroundedPieceDepth(anchorWorldY, upScreen, feetWorldX, sideways);
-                DrawSoft(spriteBatch, Taps5, texture, band, feet, bandColor, alpha * ga, rot, origin, scale,
+                DrawSoft(spriteBatch, Taps5, texture, band, feet, bandColor, alpha * bandAlpha, rotation, origin, scale,
                     bandDepth, effects, blur);
             }
         }
@@ -1135,7 +1135,7 @@ namespace SDVRadiance
         /// across the surface in reality, the skip made a wading player's shadow vanish
         /// outright, and crossing the open-water boundary popped it. Swimming and riding
         /// keep their own gates at the call sites.</summary>
-        private static bool OnOpenWater(GameLocation location, Point t) => false;
+        private static bool OnOpenWater(GameLocation location, Point tile) => false;
 
         private static bool OnWater(GameLocation location, Point tile)
         {
@@ -1144,9 +1144,9 @@ namespace SDVRadiance
                 // The surface grid distinguishes open water from pier/bridge DECKS over water, so
                 // it is the robust answer. Fall back to the isWaterTile + no-Buildings-tile
                 // heuristic (which approximates the same deck check) if the map isn't ready.
-                var surf = SurfaceMap.For(location);
-                if (surf != null)
-                    return surf.IsWater(tile.X, tile.Y);
+                var surfaceMap = SurfaceMap.For(location);
+                if (surfaceMap != null)
+                    return surfaceMap.IsWater(tile.X, tile.Y);
                 return location.isWaterTile(tile.X, tile.Y)
                     && !location.hasTileAt(tile.X, tile.Y, "Buildings");
             }
@@ -1160,33 +1160,33 @@ namespace SDVRadiance
         /// <see cref="ComputeSun"/> is static and has no config within reach.</summary>
         internal static float GoldenHourStrengthNow;
 
-        private static void ComputeSun(out float rot, out float stretch, out float alpha)
+        private static void ComputeSun(out float rotation, out float stretch, out float alpha)
         {
             // Continuous minutes: the raw HHMM value made the angle lurch once per tick
             // (and extra hard across hour boundaries, where HHMM skips 40).
-            float mins = GameClock.MinutesNow();
+            float minutesNow = GameClock.MinutesNow();
             int trulyDark = TrulyDark();
-            int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
-            if (mins >= m1)
+            int trulyDarkMinutes = (trulyDark / 100) * 60 + trulyDark % 100;
+            if (minutesNow >= trulyDarkMinutes)
             {
                 // MOON: track its transit from true dark to 02:00 (day's end), same geometry
                 // as the sun. Faint, phase-scaled shadows — full moon in winter is clearest.
                 // Ease in over the first half hour: the sun fade reaches zero AT dark, and
                 // the moon used to arrive at full (phase) strength on the very same tick.
-                float moonProgress = MathHelper.Clamp((mins - m1) / Math.Max(1f, 1560f - m1), 0f, 1f);
+                float moonProgress = MathHelper.Clamp((minutesNow - trulyDarkMinutes) / Math.Max(1f, 1560f - trulyDarkMinutes), 0f, 1f);
                 float moonSkyOffset = moonProgress * 2f - 1f;
-                rot = 1.15f * moonSkyOffset;
+                rotation = 1.15f * moonSkyOffset;
                 stretch = MathHelper.Lerp(0.3f, 1.1f, Math.Abs(moonSkyOffset));
-                alpha = 0.9f * 0.35f * MoonStrength() * MathHelper.Clamp((mins - m1) / 30f, 0f, 1f);
-                LightningEffects.OverrideShadowKey(ref rot, ref stretch, ref alpha);
+                alpha = 0.9f * 0.35f * MoonStrength() * MathHelper.Clamp((minutesNow - trulyDarkMinutes) / 30f, 0f, 1f);
+                LightningEffects.OverrideShadowKey(ref rotation, ref stretch, ref alpha);
                 return;
             }
             // Low sun (dawn/dusk) → long, far-leaning shadow; high sun (noon) → short & upright.
-            float sunSkyOffset = MathHelper.Clamp((mins - 720f) / 360f, -1f, 1f);
+            float sunSkyOffset = MathHelper.Clamp((minutesNow - 720f) / 360f, -1f, 1f);
             // Lean more sideways (was 0.8) so the shadow lies to the side of the body instead of
             // straight up over it — reduces the "shadow on the sprite" overlap while staying
             // upright (not the rejected upside-down flip).
-            rot = 1.15f * sunSkyOffset;                                     // <0 morning lean-left, >0 evening lean-right
+            rotation = 1.15f * sunSkyOffset;                                     // <0 morning lean-left, >0 evening lean-right
             stretch = MathHelper.Lerp(0.3f, 1.2f, Math.Abs(sunSkyOffset));  // stretched LONG when the sun is low
             // Golden hour: the true edges of the day stretch further still. Quartic in the
             // offset, so noon and mid-afternoon feel nothing and only a genuinely low sun
@@ -1197,7 +1197,7 @@ namespace SDVRadiance
             alpha = 0.9f * TimeFade();                           // opacity at the feet (× strength; fades toward the tip)
             // A lightning strike momentarily overrides both branches: every bake and draw path
             // funnels through this method, so keying it here keys every shadow at once.
-            LightningEffects.OverrideShadowKey(ref rot, ref stretch, ref alpha);
+            LightningEffects.OverrideShadowKey(ref rotation, ref stretch, ref alpha);
         }
 
         /// <summary>
@@ -1221,13 +1221,13 @@ namespace SDVRadiance
         /// <summary>The game's seasonal nightfall, in minutes since midnight.</summary>
         internal static float TrulyDarkMinutes()
         {
-            int t = TrulyDark();
-            return (t / 100) * 60 + t % 100;
+            int trulyDark = TrulyDark();
+            return (trulyDark / 100) * 60 + trulyDark % 100;
         }
 
         internal static void WindowDaylight(out Vector3 colour, out float strength)
         {
-            float mins = GameClock.MinutesNow();
+            float minutesNow = GameClock.MinutesNow();
             int trulyDark = TrulyDark();
 
             // The sun is ALREADY up when the player wakes - the game's own outdoor light is at
@@ -1235,20 +1235,20 @@ namespace SDVRadiance
             // starting there. Ramping from 06:00 put this at exactly zero on the stroke of six,
             // which dropped through to the after-dark branch and lit the bedroom with moonlight
             // at sunrise.
-            float risen = MathHelper.Clamp((mins - 320f) / 60f, 0f, 1f);   // 05:20 -> 06:20
+            float risen = MathHelper.Clamp((minutesNow - 320f) / 60f, 0f, 1f);   // 05:20 -> 06:20
             float notYetDark = 1f - GameClock.RampAt(trulyDark, 60f);
             float day = Math.Min(risen, notYetDark);
 
             // Low sun = warm. Squared, so only the real edges of the day go golden and the
             // middle stays daylight-white instead of everything looking like a sunset.
-            float lowSun = Math.Abs(MathHelper.Clamp((mins - 720f) / 360f, -1f, 1f));
+            float lowSun = Math.Abs(MathHelper.Clamp((minutesNow - 720f) / 360f, -1f, 1f));
             Vector3 noon = new(0.86f, 0.93f, 1.06f);
             Vector3 gold = new(1.08f, 0.86f, 0.60f);
             colour = Vector3.Lerp(noon, gold, lowSun * lowSun);
 
             // The year: winter's sun is low and pale all day and the light is thin; summer is
             // the opposite; autumn light is famously warm.
-            (float mul, Vector3 tint) season = Game1.season switch
+            (float multiplier, Vector3 tint) season = Game1.season switch
             {
                 Season.Winter => (0.80f, new Vector3(0.93f, 0.98f, 1.10f)),
                 Season.Summer => (1.12f, new Vector3(1.03f, 1.00f, 0.95f)),
@@ -1259,7 +1259,7 @@ namespace SDVRadiance
             if (weather < 1f)
                 colour = Vector3.Lerp(colour, new Vector3(0.90f, 0.94f, 1.00f), 0.6f);   // flat overcast
 
-            strength = day * season.mul * weather;
+            strength = day * season.multiplier * weather;
             colour *= season.tint;
 
             if (strength <= 0.03f)
@@ -1277,13 +1277,13 @@ namespace SDVRadiance
         /// patch across the boards in the same direction everything else is leaning.</summary>
         internal static void WindowShaft(out float lean, out float reach)
         {
-            ComputeSun(out float rot, out float stretch, out float alpha);
+            ComputeSun(out float rotation, out float stretch, out float alpha);
             // Far shallower than a cast shadow's rotation. A shadow leans hard because it is
             // measured on the ground away from a standing body; a patch of daylight seen from
             // above mostly just drops into the room. At the shadow's own 0.7 the patch crossed
             // more sideways than it travelled inward, which reads as a diagonal streak laid
             // over the furniture rather than as light coming through the glass.
-            lean = MathHelper.Clamp(rot * 0.30f, -0.45f, 0.45f);
+            lean = MathHelper.Clamp(rotation * 0.30f, -0.45f, 0.45f);
             reach = alpha <= 0.01f ? 2.2f : MathHelper.Clamp(2.2f + stretch * 2.5f, 2.2f, 5f);
         }
 
@@ -1293,12 +1293,12 @@ namespace SDVRadiance
         /// clearly up. No dawn ramp — the day starts at 06:00 with the player active.</summary>
         private static float TimeFade()
         {
-            float mins = GameClock.MinutesNow();
+            float minutesNow = GameClock.MinutesNow();
             int trulyDark = TrulyDark();
-            int m1 = (trulyDark / 100) * 60 + trulyDark % 100;
-            if (mins >= m1)
+            int trulyDarkMinutes = (trulyDark / 100) * 60 + trulyDark % 100;
+            if (minutesNow >= trulyDarkMinutes)
                 return 0f;
-            return MathHelper.Clamp((m1 - mins) / 40f, 0f, 1f);
+            return MathHelper.Clamp((trulyDarkMinutes - minutesNow) / 40f, 0f, 1f);
         }
     }
 }

@@ -15,6 +15,14 @@ and loaded at runtime. The compiled `.mgfxo` files are committed under
 | `finishing.fx` | vignette + chromatic aberration |
 | `lighting.fx` | dynamic 2D lighting (darken flat areas, pool light) |
 | `floodlight.fx` | flood-propagation GI lightmap composite |
+| `cascades.fx` | radiance cascades: the bounce lightmap worked out on the card, as rays over a probe grid |
+| `normals.fx` | a normal map for a whole sheet, read off the art itself, for the sprite relief |
+| `reliefreplay.fx` | every world sprite drawn a second time into the relief buffer, grouped by sheet with the depth carried in the tint |
+| `shadowmask.fx` | the player's shadow cut by the map, per pixel, while it is drawn into its world-anchored patch |
+| `sheetscale.fx` | a sheet at twice its size: the Scale2x (EPX) rule, and an xBR-style rule for the softer look |
+| `tail.fx` | the fused tail: colour grade and vignette in one full-screen draw |
+| `upscale.fx` | render-scale upscale with contrast-adaptive sharpening (RCAS) |
+| `wet.fx` | ground that remembers the rain, plus the damp band along a shoreline |
 
 ## Compiling
 

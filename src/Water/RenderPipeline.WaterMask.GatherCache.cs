@@ -74,7 +74,7 @@ namespace SDVRadiance
                     }
                 }
                 Fold(ctx.Backs);
-                Fold(ctx.Blds);
+                Fold(ctx.BuildingsLayers);
                 Fold(ctx.Fronts);
                 Fold(ctx.Always);
                 return hash;
