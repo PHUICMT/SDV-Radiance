@@ -2,6 +2,25 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 1.7.7 - 2026-09-09
+
+### Fixed
+
+- **A graphics card with few texture units was rebuilt every frame, and stuttered for it.** The
+  mod shortens the list of texture slots the graphics layer walks on every draw call, which is
+  where most of 1.7.6's speed came from. It asked for thirty two and then applied whatever the
+  card could actually give, but it checked its work against the number it asked for. A card with
+  fewer than thirty two slots therefore never looked finished: it was rebuilt, and a line was
+  written to the log, on every render step for the whole session. Nothing was drawn differently,
+  so the frame rate looked normal while the worst frames collapsed, which is how it was reported:
+  stuttering into the low forties on a Mac, whose driver offers sixteen. Standing in for such a
+  card here produced 373,244 log lines in one short session, and one line after the fix. Reported
+  by ghi3038 with the log line that named the cause.
+
+### For translators
+
+No new keys. Nothing in this release is visible in any menu.
+
 ## 1.7.6 - 2026-09-08
 
 ### Performance

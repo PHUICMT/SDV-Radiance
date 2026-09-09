@@ -212,7 +212,19 @@ namespace SDVRadiance
             {
                 var actualOf = _actualSamplersOf
                     ?? AccessTools.FieldRefAccess<SamplerStateCollection, SamplerState[]>("_actualSamplers");
-                if (actualOf(device.SamplerStates).Length == WantedSamplerSlots)
+                // Against what the cap will ACTUALLY leave behind, which is never more slots than
+                // the driver has. This used to compare against the number ASKED FOR, and a card
+                // that offers fewer than that could never match it: every render step found the
+                // length wrong, rebuilt both arrays and wrote a log line, for the whole session.
+                // Nothing was drawn differently, so the frame rate looked untouched while the
+                // minimum collapsed, which is exactly how it was reported: an Apple M4 Max whose
+                // Metal driver has 16 slots against the 32 asked for here, stuttering into the low
+                // forties. Standing in for that card by asking for 400 on a 192 slot one produced
+                // 373,244 of those lines in one short session; with this check it produces one.
+                int haveNow = actualOf(device.SamplerStates).Length;
+                int driverHas = _fullSamplers?.Length ?? SamplerSlots;
+                int willApply = driverHas > 0 ? Math.Min(WantedSamplerSlots, driverHas) : WantedSamplerSlots;
+                if (haveNow == willApply)
                     return;
             }
             catch
