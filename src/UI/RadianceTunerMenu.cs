@@ -38,6 +38,17 @@ namespace SDVRadiance
         /// height, box and text size so the whole panel grows together.</summary>
         private float _uiScale = 1f;
         private int Scaled(int basePixels) => (int)Math.Round(basePixels * _uiScale);
+
+        /// <summary>The heights every row in this panel is built from, before the ui scale. They
+        /// were spelled as bare numbers at eleven places that build a row by hand, while the
+        /// Toggle and Slider helpers beside them used the scaled versions, so at a ui scale of
+        /// 1.6 those eleven rows drew at base size and lapped over the scaled rows around them.
+        /// RowHeight is the row itself, RowPitch the step to the next one.</summary>
+        private const int RowHeightBase = 38, RowPitchBase = 44, ButtonHeightBase = 40, ChipPitchBase = 46, SectionGapBase = 52;
+
+        private int RowHeight => Scaled(RowHeightBase);
+        private int RowPitch => Scaled(RowPitchBase);
+        private int ButtonHeight => Scaled(ButtonHeightBase);
         private const int BodyPadding = 12;   // breathing room at the top/bottom of the scrolling content
         private const int NaturalTabPitch = 54;   // rail button spacing, now always honoured
         /// <summary>How wide the rail's own scrollbar is, when the rail has more tabs than
@@ -52,6 +63,7 @@ namespace SDVRadiance
         private readonly Action _onSave;
 
         private readonly List<TunerSlider> _sliders = new();
+        private readonly List<TunerCompass> _compasses = new();
         private readonly List<TunerToggle> _toggles = new();
         private readonly List<TunerTextButton> _buttons = new();   // content-area buttons (scroll with content)
         private readonly List<TunerChip> _chips = new();
@@ -101,9 +113,41 @@ namespace SDVRadiance
         private float _iconScale;
         private readonly List<(TunerTextButton button, int tabIndex)> _tabRailButtons = new();  // fixed, never scroll
         private TunerSlider? _dragging;
+        /// <summary>A dial keeps the drag once it has it, exactly as a track does, so the pointer
+        /// can leave the circle and keep turning it instead of snapping back at the edge.</summary>
+        private TunerCompass? _draggingCompass;
 
-        // Tabs: (label key, one-line description key, content builder). Remembered across reopens.
-        private readonly (string key, string descriptionKey, Action build)[] _tabDefinitions;
+        /// <summary>Every tab, in the order the rail shows them. STATIC, and the only list of
+        /// them: the console names a tab before any menu exists, so a second hand-written copy
+        /// lived in OpenAtTab, and a tab added to one list and not the other sent
+        /// "radiance_tuner water" to whichever tab the shift landed on. The build step takes the
+        /// menu as an argument, which is what lets the table be static while the builders stay
+        /// instance methods. The active tab is remembered across reopens.</summary>
+        private static readonly (string Key, string DescriptionKey, Action<RadianceTunerMenu> Build)[] Tabs =
+        {
+            // Ordered the way a game's video settings are: the two global answers first
+            // ("make it look right", "make it run"), then the detail grouped by family -
+            // camera/film, then light, then the world - and the troubleshooting switch
+            // last. The old order was the order the effects happened to be built in, which
+            // left the quality control that everyone needs sitting eleventh.
+            ("tuner.tab.looks", "tuner.desc.looks", menu => menu.BuildLooks()),
+            ("config.section.perf", "tuner.desc.perf", menu => menu.BuildPerformance()),
+            ("tuner.section.colorgrade", "tuner.desc.colorgrade", menu => menu.BuildColorGrade()),
+            ("tuner.section.bloom", "tuner.desc.bloom", menu => menu.BuildBloom()),
+            ("tuner.tab.lens", "tuner.desc.lens", menu => menu.BuildLens()),
+            ("tuner.tab.smoothing", "tuner.desc.smoothing", menu => menu.BuildSmoothing()),
+            ("tuner.section.lighting", "tuner.desc.lighting", menu => menu.BuildLighting()),
+            ("tuner.section.windows", "tuner.desc.windows", menu => menu.BuildWindows()),
+            ("tuner.section.shadows", "tuner.desc.shadows", menu => menu.BuildShadows()),
+            ("tuner.section.godrays", "tuner.desc.godrays", menu => menu.BuildGodRays()),
+            ("tuner.section.water", "tuner.desc.water", menu => menu.BuildWater()),
+            ("tuner.section.cloudshadow", "tuner.desc.cloudshadow", menu => menu.BuildCloud()),
+            ("tuner.tab.fog", "tuner.desc.fog", menu => menu.BuildFog()),
+            ("config.section.weather", "tuner.desc.weather", menu => menu.BuildWeather()),
+            ("config.section.particles", "tuner.desc.particles", menu => menu.BuildParticles()),
+            ("config.section.camera", "tuner.desc.camera", menu => menu.BuildCamera()),
+            ("config.section.debug", "tuner.desc.debug", menu => menu.BuildDiagnostics()),
+        };
         private static int _lastTab;
 
         /// <summary>Which tab the next open should land on, by the KEY of the tab rather than by
@@ -112,17 +156,9 @@ namespace SDVRadiance
         /// click a tab, and checking a change on one meant asking a person to do it.</summary>
         internal static void OpenAtTab(string keyFragment)
         {
-            string[] keys =
+            for (int i = 0; i < Tabs.Length; i++)
             {
-                "tuner.tab.looks", "config.section.perf", "tuner.section.colorgrade",
-                "tuner.section.bloom", "tuner.tab.lens", "tuner.tab.smoothing", "tuner.section.lighting",
-                "tuner.section.windows", "tuner.section.shadows", "tuner.section.godrays", "tuner.section.water",
-                "tuner.section.cloudshadow", "tuner.tab.fog", "config.section.weather",
-                "config.section.particles", "config.section.camera", "config.section.debug",
-            };
-            for (int i = 0; i < keys.Length; i++)
-            {
-                if (keys[i].IndexOf(keyFragment, StringComparison.OrdinalIgnoreCase) >= 0)
+                if (Tabs[i].Key.IndexOf(keyFragment, StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     _lastTab = i;
                     return;
@@ -145,32 +181,7 @@ namespace SDVRadiance
             _translate = translate;
             _onChange = onChange;
             _onSave = onSave;
-            _tabDefinitions = new (string, string, Action)[]
-            {
-                // Ordered the way a game's video settings are: the two global answers first
-                // ("make it look right", "make it run"), then the detail grouped by family -
-                // camera/film, then light, then the world - and the troubleshooting switch
-                // last. The old order was the order the effects happened to be built in, which
-                // left the quality control that everyone needs sitting eleventh.
-                ("tuner.tab.looks",       "tuner.desc.looks",      BuildLooks),
-                ("config.section.perf",   "tuner.desc.perf",       BuildPerformance),
-                ("tuner.section.colorgrade", "tuner.desc.colorgrade", BuildColorGrade),
-                ("tuner.section.bloom",   "tuner.desc.bloom",      BuildBloom),
-                ("tuner.tab.lens",        "tuner.desc.lens",       BuildLens),
-                ("tuner.tab.smoothing",   "tuner.desc.smoothing",  BuildSmoothing),
-                ("tuner.section.lighting", "tuner.desc.lighting",  BuildLighting),
-                ("tuner.section.windows", "tuner.desc.windows",    BuildWindows),
-                ("tuner.section.shadows", "tuner.desc.shadows",    BuildShadows),
-                ("tuner.section.godrays", "tuner.desc.godrays",    BuildGodRays),
-                ("tuner.section.water",   "tuner.desc.water",      BuildWater),
-                ("tuner.section.cloudshadow", "tuner.desc.cloudshadow", BuildCloud),
-                ("tuner.tab.fog",         "tuner.desc.fog",        BuildFog),
-                ("config.section.weather", "tuner.desc.weather",   BuildWeather),
-                ("config.section.particles", "tuner.desc.particles", BuildParticles),
-                ("config.section.camera", "tuner.desc.camera",     BuildCamera),
-                ("config.section.debug",  "tuner.desc.debug",      BuildDiagnostics),
-            };
-            _activeTab = Math.Clamp(_lastTab, 0, _tabDefinitions.Length - 1);
+            _activeTab = Math.Clamp(_lastTab, 0, Tabs.Length - 1);
             Reflow();
         }
 
@@ -222,16 +233,35 @@ namespace SDVRadiance
             Help(row, help);
             _contentCursorY += Scaled(44);
         }
-        private void Slider(string key, float min, float max, Func<float> getValue, Action<float> setValue, string? help = null, Func<bool>? enabledWhen = null)
+        /// <summary>A labelled slider row. <paramref name="step"/> is the smallest move it makes,
+        /// and defaults to a hundredth, which suits a dial that runs 0 to 1 or wider; a dial whose
+        /// whole range is a fraction of that has to say so or it gets a handful of positions.</summary>
+        private void Slider(string key, float min, float max, Func<float> getValue, Action<float> setValue,
+            string? help = null, Func<bool>? enabledWhen = null, float step = 0.01f)
         {
             Func<bool>? rowEnabledWhen = enabledWhen ?? _rowsEnabledWhen;
             if (rowEnabledWhen != null && !rowEnabledWhen())
                 return;
             _sliders.Add(new TunerSlider(_translate(key), _contentCursorX, _contentCursorY, _contentColumnWidth, min, max, getValue, setValue, Scaled(26), Scaled(20))
-                { TextScale = _uiScale, Enabled = rowEnabledWhen });
+                { TextScale = _uiScale, Enabled = rowEnabledWhen, Step = step });
             // The label sits above the track, so the hover area is the whole row, not the bar.
             Help(new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, Scaled(50)), help);
             _contentCursorY += Scaled(50);
+        }
+
+        /// <summary>A round bearing dial. Taller than a slider because it is a picture of the
+        /// answer rather than a number, which is what makes it worth the room.</summary>
+        private void Compass(string key, Func<float> getDegrees, Action<float> setDegrees, string? help = null, Func<bool>? enabledWhen = null)
+        {
+            Func<bool>? rowEnabledWhen = enabledWhen ?? _rowsEnabledWhen;
+            if (rowEnabledWhen != null && !rowEnabledWhen())
+                return;
+            var compass = new TunerCompass(_translate(key), _contentCursorX, _contentCursorY, _contentColumnWidth,
+                Scaled(26), Scaled(120), getDegrees, setDegrees)
+            { TextScale = _uiScale, Enabled = rowEnabledWhen };
+            _compasses.Add(compass);
+            Help(compass.Row, help);
+            _contentCursorY += compass.Row.Height + Scaled(10);
         }
 
         /// <summary>Register the plain-language note for the row just laid out. Only rows that
@@ -267,7 +297,7 @@ namespace SDVRadiance
             xPositionOnScreen = viewportWidth - width - Scaled(24);
             yPositionOnScreen = Scaled(20);
 
-            _sliders.Clear(); _toggles.Clear(); _buttons.Clear(); _chips.Clear(); _sectionTitles.Clear(); _tabRailButtons.Clear(); _infoLines.Clear(); _help.Clear();
+            _sliders.Clear(); _compasses.Clear(); _toggles.Clear(); _buttons.Clear(); _chips.Clear(); _sectionTitles.Clear(); _tabRailButtons.Clear(); _infoLines.Clear(); _help.Clear();
             _rowsEnabledWhen = null;   // a tab's dependency must not survive into the next one
 
             int contentTop = yPositionOnScreen + HeaderHeight;
@@ -281,8 +311,8 @@ namespace SDVRadiance
             // rail carries whatever it can, one whole tab at a time.
             int maxBody = (viewportHeight - Scaled(40)) - HeaderHeight - FooterHeight;
             int tabPitch = Scaled(NaturalTabPitch);
-            int railVisibleTabs = Math.Max(1, Math.Min(_tabDefinitions.Length, maxBody / tabPitch));
-            _maxRailScroll = _tabDefinitions.Length - railVisibleTabs;
+            int railVisibleTabs = Math.Max(1, Math.Min(Tabs.Length, maxBody / tabPitch));
+            _maxRailScroll = Tabs.Length - railVisibleTabs;
             // Never leave the chosen tab off the end of what is showing: opening the menu on a
             // tab near the bottom, or being sent to one by name, has to bring it into view.
             _railScroll = Math.Clamp(_railScroll, 0, _maxRailScroll);
@@ -309,7 +339,7 @@ namespace SDVRadiance
             {
                 int tabIndex = i;
                 var rect = new Rectangle(railButtonX, contentTop + (i - _railScroll) * tabPitch, railButtonWidth, tabPitch - Scaled(4));
-                _tabRailButtons.Add((new TunerTextButton(_translate(_tabDefinitions[i].key), rect, () =>
+                _tabRailButtons.Add((new TunerTextButton(_translate(Tabs[i].Key), rect, () =>
                 {
                     _activeTab = tabIndex; _lastTab = tabIndex; _scroll = 0; Reflow();
                 })
@@ -323,9 +353,9 @@ namespace SDVRadiance
             _contentCursorY = contentTop + BodyPadding;
             // One line saying what this tab is for, before anything else on it. A column of
             // sliders assumes the reader already knows which effect they belong to.
-            Paragraph(_translate(_tabDefinitions[_activeTab].descriptionKey));
+            Paragraph(_translate(Tabs[_activeTab].DescriptionKey));
             _contentCursorY += Scaled(6);
-            _tabDefinitions[_activeTab].build();
+            Tabs[_activeTab].Build(this);
             int contentHeight = _contentCursorY - (contentTop + BodyPadding);
 
             // CONSISTENT panel height across tabs: the frame is sized to the tab rail, capped
@@ -358,7 +388,7 @@ namespace SDVRadiance
             for (int i = 0; i < presets.Length; i++)
             {
                 var (preset, key) = presets[i];
-                var rect = new Rectangle(_contentCursorX + i * (presetButtonWidth + 6), _contentCursorY, presetButtonWidth, 44);
+                var rect = new Rectangle(_contentCursorX + i * (presetButtonWidth + 6), _contentCursorY, presetButtonWidth, RowPitch);
                 var presetButton = new TunerTextButton(_translate($"config.preset.{key}"), rect, () =>
                 {
                     // Record WHICH look was picked, not only its numbers. Without this the
@@ -377,8 +407,8 @@ namespace SDVRadiance
             foreach (var profile in _config.SavedProfiles)
             {
                 int chipWidth = Math.Min(160, 44 + (int)(Game1.smallFont.MeasureString(profile.Name).X * 0.7f));
-                if (chipX + chipWidth > _contentCursorX + _contentColumnWidth - 100) { chipX = _contentCursorX; _contentCursorY += 46; }
-                var rect = new Rectangle(chipX, _contentCursorY, chipWidth, 40);
+                if (chipX + chipWidth > _contentCursorX + _contentColumnWidth - 100) { chipX = _contentCursorX; _contentCursorY += Scaled(ChipPitchBase); }
+                var rect = new Rectangle(chipX, _contentCursorY, chipWidth, ButtonHeight);
                 var captured = profile;
                 var load = new TunerTextButton(profile.Name, rect, () => { _config.ApplyProfile(captured); _onChange(); _onSave(); Reflow(); });
                 // Lit while the live settings are still exactly what this look holds, so the
@@ -392,8 +422,8 @@ namespace SDVRadiance
                 });
                 chipX += chipWidth + 12;
             }
-            _buttons.Add(new TunerTextButton(_translate("tuner.save"), new Rectangle(_contentCursorX + _contentColumnWidth - 96, _contentCursorY, 96, 40), PromptSaveProfile));
-            _contentCursorY += 52;
+            _buttons.Add(new TunerTextButton(_translate("tuner.save"), new Rectangle(_contentCursorX + _contentColumnWidth - 96, _contentCursorY, 96, ButtonHeight), PromptSaveProfile));
+            _contentCursorY += Scaled(SectionGapBase);
 
             Toggle("tuner.master", () => _config.Enabled, value => _config.Enabled = value, "help.master");
         }
@@ -562,12 +592,23 @@ namespace SDVRadiance
             Slider("tuner.shadowstrength", 0f, 1f, () => _config.DirectionalShadowStrength, value => _config.DirectionalShadowStrength = value);
             Slider("tuner.shadowlength", 0.2f, 2f, () => _config.DirectionalShadowLength, value => _config.DirectionalShadowLength = value, "help.shadowlength");
             Slider("tuner.goldenhour", 0f, 1f, () => _config.GoldenHourStrength, value => _config.GoldenHourStrength = value, "help.goldenhour");
+            Slider("tuner.sunseason", 0f, 1f, () => _config.SunSeasonStrength, value => _config.SunSeasonStrength = value, "help.sunseason");
+            Compass("tuner.shadowsunbearing", () => _config.ShadowSunBearing, value => _config.ShadowSunBearing = value, "help.shadowsunbearing");
+            Compass("tuner.sunlightbearing", () => _config.SunlightBearing, value => _config.SunlightBearing = value, "help.sunlightbearing");
+            Slider("tuner.shadowtint", 0f, 1f, () => _config.ShadowTint, value => _config.ShadowTint = value, "help.shadowtint");
             Slider("tuner.shadowblur", 0f, 5f, () => _config.DirectionalShadowBlur, value => _config.DirectionalShadowBlur = value, "help.shadowblur");
+            Slider("tuner.shadowcontacthardness", 0f, 1f, () => _config.ShadowContactHardness, value => _config.ShadowContactHardness = value, "help.shadowcontacthardness");
+            Slider("tuner.shadowpenumbrastretch", 0f, 1f, () => _config.ShadowPenumbraStretch, value => _config.ShadowPenumbraStretch = value, "help.shadowpenumbrastretch");
             Slider("tuner.shadowcasts", ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax,
                 () => _config.ShadowCastsPerCharacter,
                 value => _config.ShadowCastsPerCharacter = (int)MathF.Round(value), "help.shadowcasts");
+            Toggle("tuner.shadowplayer", () => _config.DirectionalShadowPlayer, value => _config.DirectionalShadowPlayer = value, "help.shadowplayer");
+            Toggle("tuner.shadowvillagers", () => _config.DirectionalShadowVillagers, value => _config.DirectionalShadowVillagers = value, "help.shadowvillagers");
+            Toggle("tuner.shadowfarmanimals", () => _config.DirectionalShadowFarmAnimals, value => _config.DirectionalShadowFarmAnimals = value, "help.shadowfarmanimals");
+            Toggle("tuner.shadowcreatures", () => _config.DirectionalShadowCreatures, value => _config.DirectionalShadowCreatures = value, "help.shadowcreatures");
             Toggle("tuner.shadowobjects", () => _config.DirectionalShadowObjects, value => _config.DirectionalShadowObjects = value, "help.shadowobjects");
             Slider("tuner.contactshadow", 0f, 1f, () => _config.ContactShadowStrength, value => _config.ContactShadowStrength = value, "help.contactshadow");
+            Slider("tuner.contactshadowpeople", 0f, 1f, () => _config.ContactShadowPeopleStrength, value => _config.ContactShadowPeopleStrength = value, "help.contactshadowpeople");
             Toggle("tuner.shadowbuildings", () => _config.DirectionalShadowBuildings, value => _config.DirectionalShadowBuildings = value, "help.shadowbuildings");
             Slider("tuner.shadowgroundforeshortening", ModConfig.ShadowGroundForeshorteningMin, ModConfig.ShadowGroundForeshorteningMax,
                 () => _config.ShadowGroundForeshortening, value => _config.ShadowGroundForeshortening = value, "help.shadowgroundforeshortening");
@@ -640,6 +681,7 @@ namespace SDVRadiance
             Toggle("tuner.lightshadowshared", () => _config.LightShadowDetailShared, value => _config.LightShadowDetailShared = value, "help.lightshadowshared");
             Toggle("tuner.lightshadowsharp", () => _config.LightShadowSharpEdges, value => _config.LightShadowSharpEdges = value, "help.lightshadowsharp");
             Toggle("tuner.lightshadowcache", () => _config.LightShadowMarchCache, value => _config.LightShadowMarchCache = value, "help.lightshadowcache");
+            Slider("tuner.wateredsoil", 0f, 1f, () => _config.WateredSoilSparkle, value => _config.WateredSoilSparkle = value, "help.wateredsoil");
             DependsOn(() => _config.LightingEnabled);
             Section("tuner.section.gi");
             Toggle("tuner.floodgi", () => _config.FloodLightingEnabled, value => _config.FloodLightingEnabled = value, "help.floodgi");
@@ -685,6 +727,9 @@ namespace SDVRadiance
             // The beam and the daylight it lays on the floor belong to the window-light master;
             // the glass rows below belong to the reflection switch. Two families, two gates.
             DependsOn(() => _config.WindowEffectsEnabled);
+            Slider("tuner.windowopensnight", 0f, 1f, () => _config.WindowGlowOpensNight, value => _config.WindowGlowOpensNight = value, "help.windowopensnight");
+            Slider("tuner.lamphalo", 0f, 1f, () => _config.LampHalo, value => _config.LampHalo = value, "help.lamphalo");
+            Slider("tuner.aquariumripple", 0f, 1f, () => _config.AquariumRipple, value => _config.AquariumRipple = value, "help.aquariumripple");
             Toggle("tuner.windowbeam", () => _config.WindowBeamEnabled, value => _config.WindowBeamEnabled = value, "help.windowbeam");
             Slider("tuner.windowdaylightstrength", 0f, 2f, () => _config.WindowDaylightStrength,
                 value => _config.WindowDaylightStrength = value, "help.windowdaylightstrength");
@@ -694,6 +739,7 @@ namespace SDVRadiance
             Section("tuner.section.windowreflection");
             Toggle("tuner.windowreflection", () => _config.WindowReflectionEnabled, value => _config.WindowReflectionEnabled = value, "help.windowreflection");
             DependsOn(() => _config.WindowReflectionEnabled);
+            Toggle("tuner.windowreflectionindoors", () => _config.WindowReflectionIndoors, value => _config.WindowReflectionIndoors = value, "help.windowreflectionindoors");
             Slider("tuner.windowreflectionstrength", 0f, 2f, () => _config.WindowReflectionStrength,
                 value => _config.WindowReflectionStrength = value, "help.windowreflectionstrength");
             Slider("tuner.windowreflectionnight", 0f, 2f, () => _config.WindowReflectionNightStrength,
@@ -733,6 +779,8 @@ namespace SDVRadiance
                 value => _config.GodRaysSunIntensity = value, "help.godrayssunintensity");
             Slider("tuner.godrayssunreach", 0.1f, 1f, () => _config.GodRaysSunReach,
                 value => _config.GodRaysSunReach = value, "help.godrayssunreach");
+            Toggle("tuner.godrayssunglassroof", () => _config.GodRaysSunGlassRoof,
+                value => _config.GodRaysSunGlassRoof = value, "help.godrayssunglassroof");
             EndDependsOn();
         }
 
@@ -745,9 +793,13 @@ namespace SDVRadiance
             Slider("tuner.cloudcoverage", 0.1f, 0.9f, () => _config.CloudShadowCoverage, value => _config.CloudShadowCoverage = value, "help.cloudcoverage");
             Slider("tuner.cloudcount", 0f, 1f, () => _config.CloudShadowCount, value => _config.CloudShadowCount = value, "help.cloudcount");
             Slider("tuner.cloudopacity", 0f, 0.7f, () => _config.CloudShadowOpacity, value => _config.CloudShadowOpacity = value);
-            Slider("tuner.cloudspeed", 0f, 0.06f, () => _config.CloudShadowSpeed, value => _config.CloudShadowSpeed = value);
+            // A sixteenth of the range per step, matching the other menu's interval for it.
+            Slider("tuner.cloudspeed", 0f, 0.06f, () => _config.CloudShadowSpeed, value => _config.CloudShadowSpeed = value, step: 0.005f);
             Slider("tuner.cloudscale", 1f, 5f, () => _config.CloudShadowScale, value => _config.CloudShadowScale = value, "help.cloudscale");
             EndDependsOn();
+            // Outside the dependency on purpose: the afternoon before rain also takes a little
+            // warmth out of the light, which it still does with the cloud shadows switched off.
+            Slider("tuner.stormwarning", 0f, 1f, () => _config.StormWarningStrength, value => _config.StormWarningStrength = value, "help.stormwarning");
         }
 
         private void BuildFog()
@@ -761,7 +813,7 @@ namespace SDVRadiance
             DependsOn(() => _config.FogEnabled);
             Slider("tuner.fogcoverage", 0f, 1f, () => _config.FogCoverage, value => _config.FogCoverage = value);
             Slider("tuner.fogdensity", 0f, 1f, () => _config.FogDensity, value => _config.FogDensity = value);
-            Slider("tuner.fogspeed", 0f, 0.1f, () => _config.FogSpeed, value => _config.FogSpeed = value);
+            Slider("tuner.fogspeed", 0f, 0.1f, () => _config.FogSpeed, value => _config.FogSpeed = value, step: 0.005f);
             Slider("tuner.fogscale", 1f, 8f, () => _config.FogScale, value => _config.FogScale = value, "help.fogscale");
             EndDependsOn();
             _contentCursorY += 12;
@@ -770,6 +822,8 @@ namespace SDVRadiance
             DependsOn(() => _config.FogNightMist);
             Slider("tuner.fognightmistcoverage", 0f, 1f, () => _config.FogNightMistCoverage, value => _config.FogNightMistCoverage = value);
             Slider("tuner.fognightmistdensity", 0f, 1f, () => _config.FogNightMistDensity, value => _config.FogNightMistDensity = value);
+            Slider("tuner.minefogmist", 0f, 1f, () => _config.MineFogMist, value => _config.MineFogMist = value, "help.minefogmist");
+            Slider("tuner.fognightmistlampglow", 0f, 1f, () => _config.FogNightMistLampGlow, value => _config.FogNightMistLampGlow = value, "help.fognightmistlampglow");
             Slider("tuner.fognightmistspeed", 0f, 0.1f, () => _config.FogNightMistSpeed, value => _config.FogNightMistSpeed = value);
             EndDependsOn();
             _contentCursorY += 12;
@@ -798,10 +852,12 @@ namespace SDVRadiance
                 value => _config.FoliageSwaySpeed = value, "config.weather.foliageswayspeed.tooltip");
             Slider("config.weather.foliageswaygustspan.name", 4f, 40f, () => _config.FoliageSwayGustSpan,
                 value => _config.FoliageSwayGustSpan = value, "config.weather.foliageswaygustspan.tooltip");
+            Toggle("tuner.foliageswaycrops", () => _config.FoliageSwayCrops, value => _config.FoliageSwayCrops = value, "help.foliageswaycrops");
             EndDependsOn();
             _contentCursorY += 12;
             Section("tuner.section.sky");
             Toggle("tuner.precipitation", () => _config.PrecipitationEnabled, value => _config.PrecipitationEnabled = value, "help.precipitation");
+            Slider("tuner.snowglint", 0f, 1f, () => _config.SnowGlintStrength, value => _config.SnowGlintStrength = value, "help.snowglint");
             Toggle("tuner.aurora", () => _config.AuroraEnabled, value => _config.AuroraEnabled = value, "help.aurora");
             Slider("tuner.aurorastrength", 0f, 2f, () => _config.AuroraStrength,
                 value => _config.AuroraStrength = value, "help.aurorastrength",
@@ -901,9 +957,27 @@ namespace SDVRadiance
             Emitter("ringsparkles", () => _config.ParticleRingSparkles, value => _config.ParticleRingSparkles = value,
                 () => _config.ParticleRingSparklesAmount, value => _config.ParticleRingSparklesAmount = value,
                 () => _config.ParticleRingSparklesSize, value => _config.ParticleRingSparklesSize = value);
+            Emitter("footdust", () => _config.ParticleFootDust, value => _config.ParticleFootDust = value,
+                () => _config.ParticleFootDustAmount, value => _config.ParticleFootDustAmount = value,
+                () => _config.ParticleFootDustSize, value => _config.ParticleFootDustSize = value);
+            Emitter("festivelights", () => _config.ParticleFestiveLights, value => _config.ParticleFestiveLights = value,
+                () => _config.ParticleFestiveLightsAmount, value => _config.ParticleFestiveLightsAmount = value,
+                () => _config.ParticleFestiveLightsSize, value => _config.ParticleFestiveLightsSize = value);
+            Emitter("chimney", () => _config.ParticleChimney, value => _config.ParticleChimney = value,
+                () => _config.ParticleChimneyAmount, value => _config.ParticleChimneyAmount = value,
+                () => _config.ParticleChimneySize, value => _config.ParticleChimneySize = value);
+            // Not one emitter's setting: it belongs to every glowing particle at once, so it sits
+            // on its own under them rather than inside any of their groups.
+            Slider("tuner.particleglowlight", 0f, 1f, () => _config.ParticleGlowLight,
+                value => _config.ParticleGlowLight = value, "help.particleglowlight",
+                () => _config.ParticlesEnabled);
             Emitter("waterfallmist", () => _config.ParticleWaterfallMist, value => _config.ParticleWaterfallMist = value,
                 () => _config.ParticleWaterfallMistAmount, value => _config.ParticleWaterfallMistAmount = value,
                 () => _config.ParticleWaterfallMistSize, value => _config.ParticleWaterfallMistSize = value);
+            Toggle("tuner.waterfallrainbowsun", () => _config.WaterfallRainbowFollowsSun, value => _config.WaterfallRainbowFollowsSun = value, "help.waterfallrainbowsun");
+            Slider("tuner.waterfallrainbow", 0f, 1f, () => _config.WaterfallRainbowStrength,
+                value => _config.WaterfallRainbowStrength = value, "help.waterfallrainbow",
+                () => _config.ParticlesEnabled && _config.ParticleWaterfallMist);
             Emitter("hotspringsteam", () => _config.ParticleHotSpringSteam, value => _config.ParticleHotSpringSteam = value,
                 () => _config.ParticleHotSpringSteamAmount, value => _config.ParticleHotSpringSteamAmount = value,
                 () => _config.ParticleHotSpringSteamSize, value => _config.ParticleHotSpringSteamSize = value);
@@ -940,6 +1014,8 @@ namespace SDVRadiance
             Slider("tuner.waterstrength", 0f, 2f, () => _config.WaterStrength, value => _config.WaterStrength = value, "help.waterstrength");
             Slider("tuner.watersparkle", 0f, 1f, () => _config.WaterSparkle, value => _config.WaterSparkle = value, "help.watersparkle");
             Slider("tuner.watersparkledensity", 0.2f, 2f, () => _config.WaterSparkleDensity, value => _config.WaterSparkleDensity = value);
+            Toggle("tuner.watersparklecloud", () => _config.WaterSparkleCloudShade, value => _config.WaterSparkleCloudShade = value, "help.watersparklecloud");
+            Slider("tuner.waterglitterpath", 0f, 1f, () => _config.WaterGlitterPath, value => _config.WaterGlitterPath = value, "help.waterglitterpath");
             Toggle("tuner.watercaustics", () => _config.WaterCausticsEnabled, value => _config.WaterCausticsEnabled = value, "help.watercaustics");
             Slider("tuner.watercausticsstrength", 0f, 1f, () => _config.WaterCausticsStrength, value => _config.WaterCausticsStrength = value, null,
                 () => _config.WaterEnabled && _config.WaterCausticsEnabled);
@@ -983,7 +1059,7 @@ namespace SDVRadiance
                 Slider("tuner.watermodernchoppiness", 0f, 1f, () => _config.WaterModernChoppiness,
                     value => _config.WaterModernChoppiness = value, "help.watermodernchoppiness");
                 Slider("tuner.watermodernparallax", 0f, 0.3f, () => _config.WaterModernParallax,
-                    value => _config.WaterModernParallax = value, "help.watermodernparallax");
+                    value => _config.WaterModernParallax = value, "help.watermodernparallax", step: 0.005f);
                 Slider("tuner.watermodernfresnel", 0f, 1f, () => _config.WaterModernFresnel,
                     value => _config.WaterModernFresnel = value, "help.watermodernfresnel");
                 Slider("tuner.watermodernstretch", 1f, 1.4f, () => _config.WaterModernStretch,
@@ -1046,6 +1122,16 @@ namespace SDVRadiance
                 value => _config.WaterRainRingSize = value, "help.waterrainringsize");
             Slider("tuner.waterrainringstrength", 0f, 2f, () => _config.WaterRainRingStrength,
                 value => _config.WaterRainRingStrength = value, "help.waterrainringstrength");
+            Slider("tuner.waterwakerings", 0f, 2f, () => _config.WaterWakeRings,
+                value => _config.WaterWakeRings = value, "help.waterwakerings");
+            // Greyed out while the rings themselves are off, the way the rainbow rides the mist:
+            // a fish spot's rings are drawn by the same surface, so with that at 0 there is
+            // nothing for this to move.
+            Slider("tuner.waterfishspot", 0f, 2f, () => _config.WaterFishSpotRings,
+                value => _config.WaterFishSpotRings = value, "help.waterfishspot",
+                () => _config.WaterEnabled && _config.WaterWakeRings > 0f);
+            Slider("tuner.waterwind", 0f, 2f, () => _config.WaterWind,
+                value => _config.WaterWind = value, "help.waterwind");
             // Reach and fade rows used to sit here, and they were the wrong kind of control for a
             // panel you open to look at something. Both buy frames without changing how the water
             // looks, which is exactly the setting a player moves, sees nothing, and files as
@@ -1058,14 +1144,14 @@ namespace SDVRadiance
             if (_config.WaterEnabled && location != null && !location.IsOutdoors && !RenderPipeline.HasLevelWater(location))
             {
                 string key = location.NameOrUniqueName;
-                _toggles.Add(new TunerToggle($"{_translate("tuner.waterhere")} · {location.Name}", new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, 38),
+                _toggles.Add(new TunerToggle($"{_translate("tuner.waterhere")} · {location.Name}", new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, RowHeight),
                     () => !_config.WaterDisabledLocations.Contains(key),
                     value =>
                     {
                         if (value) _config.WaterDisabledLocations.Remove(key);
                         else if (!_config.WaterDisabledLocations.Contains(key)) _config.WaterDisabledLocations.Add(key);
-                    }));
-                _contentCursorY += 44;
+                    }) { TextScale = _uiScale });
+                _contentCursorY += RowPitch;
             }
             EndDependsOn();
         }
@@ -1077,10 +1163,10 @@ namespace SDVRadiance
             DependsOn(() => _config.TiltShiftEnabled);
             if (_config.TiltShiftEnabled)
             {
-                _toggles.Add(new TunerToggle(_translate("tuner.tiltradial"), new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, 38),
+                _toggles.Add(new TunerToggle(_translate("tuner.tiltradial"), new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, RowHeight),
                     () => _config.TiltShiftMode == TiltShiftFocus.Radial,
-                    value => _config.TiltShiftMode = value ? TiltShiftFocus.Radial : TiltShiftFocus.Bands));
-                _contentCursorY += 44;
+                    value => _config.TiltShiftMode = value ? TiltShiftFocus.Radial : TiltShiftFocus.Bands) { TextScale = _uiScale });
+                _contentCursorY += RowPitch;
             }
             // The radius is the radial focus's own; the top and bottom ratios are the bands'.
             // The shader reads one set or the other by mode, so only the set in use is shown.
@@ -1164,7 +1250,7 @@ namespace SDVRadiance
             for (int i = 0; i < perfPresets.Length; i++)
             {
                 var (preset, key) = perfPresets[i];
-                var rect = new Rectangle(_contentCursorX + i * (perfButtonWidth + 6), _contentCursorY, perfButtonWidth, 44);
+                var rect = new Rectangle(_contentCursorX + i * (perfButtonWidth + 6), _contentCursorY, perfButtonWidth, RowPitch);
                 var perfButton = new TunerTextButton(_translate($"config.perfpreset.{key}"), rect, () =>
                 {
                     _config.ApplyPerfPreset(preset); _onChange(); _onSave(); Reflow();
@@ -1196,7 +1282,7 @@ namespace SDVRadiance
             // Measure this machine instead of guessing at it.
             Section("config.bench.section");
             _buttons.Add(new TunerTextButton(_translate("config.bench.run"),
-                new Rectangle(_contentCursorX, _contentCursorY, Math.Min(300, _contentColumnWidth), 44), () =>
+                new Rectangle(_contentCursorX, _contentCursorY, Math.Min(300, _contentColumnWidth), RowPitch), () =>
                 {
                     RenderPipeline.Current?.StartBenchmark(_config);
                     Reflow();
@@ -1215,7 +1301,7 @@ namespace SDVRadiance
             {
                 _contentCursorY += 6;
                 _buttons.Add(new TunerTextButton(_translate("config.bench.apply"),
-                    new Rectangle(_contentCursorX, _contentCursorY, Math.Min(300, _contentColumnWidth), 44), () =>
+                    new Rectangle(_contentCursorX, _contentCursorY, Math.Min(300, _contentColumnWidth), RowPitch), () =>
                     {
                         _config.RenderScale = RenderPipeline.BenchSuggestedScale;
                         _config.Clamp(); _onChange(); _onSave(); Reflow();
@@ -1343,6 +1429,8 @@ namespace SDVRadiance
                     if (Visible(toggle.Row) && toggle.Hit(x, y + _scroll)) { toggle.Set(!toggle.Get()); Game1.playSound("drumkit6"); _onChange(); _onSave(); Reflow(); return; }
                 foreach (var slider in _sliders)
                     if (Visible(slider.Track) && slider.IsEnabled && slider.Track.Contains(x, y + _scroll)) { _dragging = slider; slider.SetFromX(x); _onChange(); return; }
+                foreach (var compass in _compasses)
+                    if (Visible(compass.Row) && compass.Hit(x, y + _scroll)) { _draggingCompass = compass; compass.SetFromPoint(x, y + _scroll); _onChange(); return; }
             }
             base.receiveLeftClick(x, y, playSound);
         }
@@ -1376,11 +1464,13 @@ namespace SDVRadiance
         public override void leftClickHeld(int x, int y)
         {
             if (_dragging != null) { _dragging.SetFromX(x); _onChange(); }
+            if (_draggingCompass != null) { _draggingCompass.SetFromPoint(x, y + _scroll); _onChange(); }
         }
 
         public override void releaseLeftClick(int x, int y)
         {
             if (_dragging != null) { _dragging = null; _onSave(); }
+            if (_draggingCompass != null) { _draggingCompass = null; _onSave(); }
             base.releaseLeftClick(x, y);
         }
 
@@ -1439,8 +1529,8 @@ namespace SDVRadiance
                 int trackTop = _bodyTop - Scaled(4), trackHeight = (_bodyBottom - _bodyTop) + Scaled(8);
                 spriteBatch.Draw(Game1.staminaRect, new Rectangle(barX, trackTop, Scaled(RailBarWidth), trackHeight),
                     new Color(72, 38, 12) * 0.22f);
-                int shown = _tabDefinitions.Length - _maxRailScroll;
-                int thumbHeight = Math.Max(Scaled(16), trackHeight * shown / Math.Max(1, _tabDefinitions.Length));
+                int shown = Tabs.Length - _maxRailScroll;
+                int thumbHeight = Math.Max(Scaled(16), trackHeight * shown / Math.Max(1, Tabs.Length));
                 int thumbTop = trackTop + (trackHeight - thumbHeight) * _railScroll / _maxRailScroll;
                 spriteBatch.Draw(Game1.staminaRect, new Rectangle(barX, thumbTop, Scaled(RailBarWidth), thumbHeight),
                     new Color(96, 48, 14) * 0.85f);
@@ -1476,6 +1566,7 @@ namespace SDVRadiance
                 }
             foreach (var toggle in _toggles) if (Visible(toggle.Row)) toggle.Draw(spriteBatch, scrollOffsetY);
             foreach (var slider in _sliders) if (Visible(slider.Track)) slider.Draw(spriteBatch, scrollOffsetY);
+            foreach (var compass in _compasses) if (Visible(compass.Row)) compass.Draw(spriteBatch, scrollOffsetY);
 
             spriteBatch.End();
             device.ScissorRectangle = previousScissor;

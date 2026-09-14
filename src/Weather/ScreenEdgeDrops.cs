@@ -150,10 +150,19 @@ namespace SDVRadiance
             float dt = Determinism.Frozen ? 0f
                 : (float)(Game1.currentGameTime?.ElapsedGameTime.TotalSeconds ?? 0.0);
             dt = Math.Min(dt, 0.1f);
-            screen.RainPresence = Approach(screen.RainPresence, rainWanted ? 1f : 0f,
+            float rainTarget = rainWanted ? 1f : 0f, frostTarget = frostWanted ? 1f : 0f;
+            screen.RainPresence = Approach(screen.RainPresence, rainTarget,
                 dt / (rainWanted ? PresenceSecondsIn : RainPresenceSecondsOut));
-            screen.FrostPresence = Approach(screen.FrostPresence, frostWanted ? 1f : 0f,
+            screen.FrostPresence = Approach(screen.FrostPresence, frostTarget,
                 dt / (frostWanted ? PresenceSecondsIn : FrostPresenceSecondsOut));
+            // A frozen frame has no elapsed time, so these would sit wherever the fade happened
+            // to be when freeze was switched on and a capture would depend on how the player got
+            // there. Land them, the way the rain's own presence already does.
+            if (Determinism.Frozen)
+            {
+                screen.RainPresence = rainTarget;
+                screen.FrostPresence = frostTarget;
+            }
             if (screen.RainPresence <= FadeGone && screen.FrostPresence <= FadeGone)
                 return;
 

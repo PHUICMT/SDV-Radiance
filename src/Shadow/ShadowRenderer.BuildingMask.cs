@@ -78,8 +78,11 @@ namespace SDVRadiance
                 || _buildingMaskRenderTarget.Height != height)
             {
                 _buildingMaskRenderTarget?.Dispose();
+                // PreserveContents: the bind below clears it, and a DiscardContents bind would
+                // have cleared the whole mask once already.
                 _buildingMaskRenderTarget = VramTally.Track(
-                    new RenderTarget2D(graphicsDevice, width, height, false, SurfaceFormat.Color, DepthFormat.None),
+                    new RenderTarget2D(graphicsDevice, width, height, false, SurfaceFormat.Color,
+                        DepthFormat.None, 0, RenderTargetUsage.PreserveContents),
                     "building shadow mask");
             }
             _buildingMaskSpriteBatch ??= new SpriteBatch(graphicsDevice);

@@ -103,7 +103,7 @@ namespace SDVRadiance
             _hasWaterInMask = job.WaterAny;
             // Published for the player colour bake, which runs before this pipeline gets a look
             // at the frame. One compose late is fine: its reader gates on the same flag.
-            ShadowRenderer.WaterOnScreen = job.WaterAny;
+            ShadowRenderer.WaterOnScreen = _screen.WaterOnScreen = job.WaterAny;
 
             if (job.WaterAny)
             {

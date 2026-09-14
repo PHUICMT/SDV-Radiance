@@ -24,9 +24,6 @@ namespace SDVRadiance
         private const float LampPoolReachPx = 430f;
         /// <summary>Exterior window lamp pool reach (px): reads as a bright pool on the street.</summary>
         private const float WindowPoolExteriorPx = 190f;
-        /// <summary>Interior daylight-through-glass pool reach (px): a SOFT, tight wash so it
-        /// never blows the window to white (vanilla's window-light already lifts the room).</summary>
-        private const float WindowPoolInteriorPx = 100f;
         /// <summary>Emissive-art pool reach (px): tighter than a window — a local pool, not a wash.</summary>
         private const float EmissivePoolReachPx = 130f;
 
@@ -151,11 +148,13 @@ namespace SDVRadiance
                 EnsureEmissiveCache(Game1.currentLocation);
                 AddEmissiveLights(viewportWidth, viewportHeight, boost);
                 ChainStepEnd(ChainStep.LightEmissive, lightStep);
-                lightStep = ChainStepBegin();
             }
 
-            ChainStepEnd(ChainStep.LightSelect, lightStep);
+            // Timed around the call. The end mark used to sit above SelectLights, so the row read
+            // 0.000 in every report and the selection's cost landed in no row at all.
+            lightStep = ChainStepBegin();
             SelectLights();
+            ChainStepEnd(ChainStep.LightSelect, lightStep);
 
             // Run the stage if we have lights, or if we're darkening a flat interior
             // (so the room actually gets darker even with no lamps in view).
@@ -610,7 +609,7 @@ namespace SDVRadiance
                 float ramp = _lightRamp.TryGetValue(candidate.Id, out LightFade previousFade)
                     ? previousFade.Ramp
                     : (sameRoom ? 0f : 1f);
-                _lightRamp[candidate.Id] = new LightFade { Ramp = ramp, Uv = candidate.Uv, Data = candidate.Data, Flick = candidate.Flick, Fire = candidate.Fire };
+                _lightRamp[candidate.Id] = new LightFade { Ramp = ramp, Uv = candidate.Uv, Data = candidate.Data, Flick = candidate.Flick, Fire = candidate.Fire, World = candidate.World };
             }
 
             // Rank everything that could hold a slot by how bright it is ON SCREEN RIGHT NOW, so a
@@ -791,24 +790,26 @@ namespace SDVRadiance
             public Vector4 Data;
             public float Flick;
             public bool Fire;
+            /// <summary>Where the light is in world pixels. Kept because the lighting needs to
+            /// know where the lamp stands in the draw order, and the draw order is built from
+            /// world position.</summary>
+            public Vector2 World;
         }
 
-        /// <summary>How lit each light is on THIS screen, and which lights hold the shader's
-        /// slots on it. Per screen (swapped in ScreenState), because the two cameras want
-        /// different lights: with one shared set, every frame screen 0 ramped its lights up and
-        /// screen 1 ramped the same lights down again for not being on its half, and the pools
-        /// pulsed and changed places between the two answers. Reported as the light flickering
-        /// and jumping about the moment a second player joined.</summary>
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
+        // How lit each light is on THIS screen, and which lights hold the shader's
+        // slots on it. Per screen (swapped in ScreenState), because the two cameras want
+        // different lights: with one shared set, every frame screen 0 ramped its lights up and
+        // screen 1 ramped the same lights down again for not being on its half, and the pools
+        // pulsed and changed places between the two answers. Reported as the light flickering
+        // and jumping about the moment a second player joined.
+        // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
         private readonly HashSet<int> _lightWanted = new();
         private readonly List<(int Id, LightFade Fade, float Rank)> _lightWrite = new();
         private readonly List<int> _rampDrop = new();
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
 
         // ---- labeled-window glow (HF class 12) ----
         private GameLocation? _windowCacheLocation;
-        private int _windowLabelVersion = -1;
+        private MapAnswerKey _windowCacheKey = new(-1, -1);
         private readonly List<Vector2> _windowTiles = new();   // world-px centres of window tiles
 
         /// <summary>The window and emissive scans, kept for the few locations in play rather than
@@ -826,27 +827,53 @@ namespace SDVRadiance
         /// <para>Four locations, dropped oldest first: two screens in two rooms is two, and the
         /// spare pair covers walking between them without paying for a rescan on the way back.</para></summary>
         private const int LocationScanCacheSlots = 4;
-        private readonly Dictionary<GameLocation, (int Version, List<Vector2> Tiles)> _windowTilesByLocation = new();
-        private readonly Dictionary<GameLocation, (int Version, List<(Vector2 Pos, Vector3 Col, float Amt)> Tiles)> _emissiveTilesByLocation = new();
-        private readonly List<GameLocation> _scanCacheDropScratch = new();
+        private readonly Dictionary<GameLocation, WholeMapAnswer<Vector2>> _windowTilesByLocation = new();
+        private readonly Dictionary<GameLocation, WholeMapAnswer<(Vector2 Pos, Vector3 Col, float Amt)>> _emissiveTilesByLocation = new();
 
-        /// <summary>Keep the cache small: the oldest entries go when it outgrows its slots. The
-        /// dictionary preserves insertion order well enough for this, and a wrong guess costs one
-        /// rescan.</summary>
-        private void TrimScanCache<TValue>(Dictionary<GameLocation, TValue> cache)
+        /// <summary>This location's answer, made if it is the first time of asking, stamped as the
+        /// most recently wanted, and the cache trimmed around it.</summary>
+        private WholeMapAnswer<TFound> AnswerFor<TFound>(Dictionary<GameLocation, WholeMapAnswer<TFound>> cache,
+                                                         GameLocation location)
         {
-            if (cache.Count <= LocationScanCacheSlots)
-                return;
-            _scanCacheDropScratch.Clear();
-            int drop = cache.Count - LocationScanCacheSlots;
-            foreach (var key in cache.Keys)
+            if (!cache.TryGetValue(location, out WholeMapAnswer<TFound>? answer))
+                cache[location] = answer = new WholeMapAnswer<TFound>();
+            answer.LastAskedFor = WholeMapScan.NextAskStamp();
+            TrimScanCache(cache);
+            return answer;
+        }
+
+        /// <summary>Held rather than written out at the call, because a method group becomes a new
+        /// delegate object every time it is converted and these are converted every frame.</summary>
+        private Action<GameLocation, int, List<Vector2>>? _windowRowScanner;
+        private Action<GameLocation, int, List<(Vector2 Pos, Vector3 Col, float Amt)>>? _emissiveRowScanner;
+
+        /// <summary>Keep the cache small: the location nobody has asked about for longest goes
+        /// when it outgrows its slots.
+        ///
+        /// <para>This used to drop whatever the dictionary handed back first, on the belief that
+        /// enumeration order is insertion order. It is not, once anything has ever been removed: a
+        /// Dictionary reuses the freed slot for the next Add, so the entry just created landed at
+        /// the front and was the one thrown away. From the fifth location visited in a session
+        /// onwards that meant rebuilding the whole map EVERY FRAME, measured at sixty window scan
+        /// starts a second standing still on the farm. It was invisible while a single-slot guard
+        /// sat in front of the cache and answered first; spreading the walks over frames took that
+        /// guard away and the fault came straight out.</para></summary>
+        private void TrimScanCache<TFound>(Dictionary<GameLocation, WholeMapAnswer<TFound>> cache)
+        {
+            while (cache.Count > LocationScanCacheSlots)
             {
-                if (_scanCacheDropScratch.Count >= drop)
+                GameLocation? leastWanted = null;
+                long oldestStamp = long.MaxValue;
+                foreach (var pair in cache)
+                    if (pair.Value.LastAskedFor < oldestStamp)
+                    {
+                        oldestStamp = pair.Value.LastAskedFor;
+                        leastWanted = pair.Key;
+                    }
+                if (leastWanted == null)
                     break;
-                _scanCacheDropScratch.Add(key);
+                cache.Remove(leastWanted);
             }
-            foreach (var key in _scanCacheDropScratch)
-                cache.Remove(key);
         }
         // Every drawn layer, TOP to BOTTOM (Front wins over Buildings over Back), from the shared
         // sort key. It used to be the three bare names, which missed Back2 / negative-suffix /
@@ -855,50 +882,55 @@ namespace SDVRadiance
         private static List<xTile.Layers.Layer> WindowLayersTopToBottom(xTile.Map? map)
             => MapLayers.RenderedLayers(map, topToBottom: true);
 
-        /// <summary>Scan the whole map ONCE per location (or when labels reload) for window
-        /// tiles, caching their world-pixel centres. Cheap enough as a one-off.</summary>
+        /// <summary>Keep this location's window tiles up to date, a slice of the walk per frame,
+        /// and serve whatever answer is currently whole. While a rebuild is under way that is the
+        /// PREVIOUS answer, which is the point: a lit window does not go dark for a tenth of a
+        /// second because a pack re-patched the sheet it is painted on.</summary>
         private void EnsureWindowCache(GameLocation location)
         {
-            var labels = LabelStore.Instance;
-            int labelVersion = labels?.Version ?? 0;
-            if (LiveScreens.SamePlace(location, _windowCacheLocation) && labelVersion == _windowLabelVersion)
-                return;
-            _windowCacheLocation = location; _windowLabelVersion = labelVersion; _windowTiles.Clear();
-            // Another screen may have scanned this very room already this frame.
-            if (_windowTilesByLocation.TryGetValue(location, out var remembered) && remembered.Version == labelVersion)
-            {
-                _windowTiles.AddRange(remembered.Tiles);
-                return;
-            }
+            MapAnswerKey answerKey = MapAnswerKey.For(location);
+            WholeMapAnswer<Vector2> answer = AnswerFor(_windowTilesByLocation, location);
             var map = location.map;
-            var layer = map != null && map.Layers.Count > 0 ? map.Layers[0] : null;
+            var firstLayer = map != null && map.Layers.Count > 0 ? map.Layers[0] : null;
             // Windows are 100% label-driven: no labels loaded (version 0 = empty DB) means no window
             // can exist, so skip the whole-map scan entirely. Without this we paid a w×h×3-layer scan
             // on every location change even though it could never find anything.
-            if (labels == null || layer == null || map == null || labelVersion == 0)
+            if (LabelStore.Instance != null && firstLayer != null && !answerKey.NoLabels)
+            {
+                if (answer.NextRow < 0 && answer.Key != answerKey)
+                    _monitor.Log($"[location] window scan start: {location.NameOrUniqueName} {firstLayer.LayerWidth}x{firstLayer.LayerHeight}", LogLevel.Trace);
+                if (WholeMapScan.Advance(answer, location, answerKey, firstLayer.LayerHeight, _mapScanBudget,
+                                         _windowRowScanner ??= ScanWindowRow))
+                    _monitor.Log($"[location] window scan done: {answer.Found.Count} tiles in {answer.ScanMilliseconds:0.0}ms over {answer.ScanFrames} frames", LogLevel.Trace);
+            }
+            // Another screen may have walked this very room already, and finds the answer waiting.
+            if (LiveScreens.SamePlace(location, _windowCacheLocation) && answer.Key == _windowCacheKey)
                 return;
-            int mapTilesWide = layer.LayerWidth, mapTilesHigh = layer.LayerHeight;
-            _monitor.Log($"[location] window scan start: {location.NameOrUniqueName} {mapTilesWide}x{mapTilesHigh}", LogLevel.Trace);
-            var windowScanStopwatch = System.Diagnostics.Stopwatch.StartNew();
-            // Resolve every drawn layer once instead of per tile: this is a w×h walk over however
-            // many drawn layers the map carries, top to bottom.
-            var windowLayers = WindowLayersTopToBottom(map).ToArray();
-            for (int tileY = 0; tileY < mapTilesHigh; tileY++)
-                for (int tileX = 0; tileX < mapTilesWide; tileX++)
+            _windowCacheLocation = location;
+            _windowCacheKey = answer.Key;
+            _windowTiles.Clear();
+            _windowTiles.AddRange(answer.Found);
+        }
+
+        /// <summary>One map row's worth of the window walk. The drawn layers are resolved per row
+        /// rather than per tile, which is what the whole-map version did and for the same reason.</summary>
+        private void ScanWindowRow(GameLocation location, int tileY, List<Vector2> into)
+        {
+            var labels = LabelStore.Instance;
+            var map = location.map;
+            if (labels == null || map == null || map.Layers.Count == 0)
+                return;
+            int mapTilesWide = map.Layers[0].LayerWidth;
+            var windowLayers = WindowLayersTopToBottom(map);
+            for (int tileX = 0; tileX < mapTilesWide; tileX++)
+                foreach (var windowLayer in windowLayers)
                 {
-                    foreach (var windowLayer in windowLayers)
-                    {
-                        byte[]? pixelClasses = labels.Get(windowLayer, tileX, tileY);
-                        if (pixelClasses == null) continue;
-                        int windowPixelCount = 0;
-                        for (int pixelIndex = 0; pixelIndex < 256; pixelIndex++) if (pixelClasses[pixelIndex] == 12) windowPixelCount++;
-                        if (windowPixelCount >= 8) { _windowTiles.Add(new Vector2(tileX * 64 + 32, tileY * 64 + 32)); break; }
-                    }
+                    byte[]? pixelClasses = labels.Get(windowLayer, tileX, tileY);
+                    if (pixelClasses == null) continue;
+                    int windowPixelCount = 0;
+                    for (int pixelIndex = 0; pixelIndex < 256; pixelIndex++) if (pixelClasses[pixelIndex] == LabelClass.Window) windowPixelCount++;
+                    if (windowPixelCount >= SurfaceMap.WindowPanePixels) { into.Add(new Vector2(tileX * 64 + 32, tileY * 64 + 32)); break; }
                 }
-            windowScanStopwatch.Stop();
-            _windowTilesByLocation[location] = (labelVersion, new List<Vector2>(_windowTiles));
-            TrimScanCache(_windowTilesByLocation);
-            _monitor.Log($"[location] window scan done: {_windowTiles.Count} tiles in {windowScanStopwatch.Elapsed.TotalMilliseconds:0.0}ms", LogLevel.Trace);
         }
 
         /// <summary>Add on-screen window tiles as lights. OUTDOORS (a house exterior): warm lamp
@@ -909,54 +941,339 @@ namespace SDVRadiance
         /// down instead of snapping every lit house dark in one frame.</summary>
         private float _windowEffectsEase = 1f;
 
+        // ---- watered soil -------------------------------------------------------------------
+        // A hoed tile the player watered is wet, and wet ground under the sun sparkles. The game
+        // only darkens the dirt (HoeDirt.state == 1 draws a darker tile). The sparkle itself is
+        // drawn by WateredSoilSparkle inside the game's own batch, right after each dirt tile, so
+        // whatever stands on the tile covers it; this is only the per-screen ease it reads.
+
+        /// <summary>Settle this screen's sparkle strength for the frame, before the world draws.
+        /// Sunlight is what makes wet ground sparkle: no sky, rain, snow or night and there is
+        /// none.</summary>
+        internal void UpdateWateredSoilSparkle(ModConfig config)
+        {
+            GameLocation? location = Game1.currentLocation;
+            bool underSky = location != null && (location.IsOutdoors || location.IsGreenhouse);
+            bool sunOut = underSky && !location!.IsRainingHere() && !location.IsSnowingHere();
+            float target = sunOut ? MathHelper.Clamp(config.WateredSoilSparkle, 0f, 1f) * (1f - NightFactorNow()) : 0f;
+            Approach(ref _wateredSparkleEase, target, 0.03f);
+            WateredSoilSparkle.Strength = _wateredSparkleEase > FadeGone ? _wateredSparkleEase : 0f;
+            WateredSoilSparkle.BeginFrame();
+        }
+
+        /// <summary>The lit windows this frame, for the game's own lightmap (see
+        /// <see cref="DrawWindowGlowIntoGameLightmap"/>): world centre, colour, and how lit.</summary>
+        private readonly List<(Vector2 Position, Vector3 Colour, float Amount)> _gameLightmapWindows = new();
+        /// <summary>How many windows were pushed into the game's lightmap this frame, for the report.</summary>
+        internal int WindowGlowsIntoGameLightmap { get; private set; }
+
+        /// <summary>
+        /// Push this frame's lit windows into the GAME'S lightmap, from inside the batch the game
+        /// has open on it (the World_RenderLightmap step, after the game drew its own lights).
+        ///
+        /// <para>Everything this mod adds as light is added on top of a frame the game has already
+        /// darkened: a town window at night lit the ground in our lightmap, but the game's night had
+        /// already taken that ground down, and light multiplied onto a dark pixel stays dim. The
+        /// game's lightmap is DARKNESS, subtracted from the frame (ReverseSubtract, source colour
+        /// squared), and a light source drawn into it replaces darkness with the light's stored
+        /// colour, which is the light's colour inverted. So a window drawn here, the way the game
+        /// draws a lantern, opens the night around it: the ground in front of a lit house comes back
+        /// to what the art painted, and our own pool then lands on ground that can show it. Town
+        /// houses have no light source of their own (radiance_lights at Town 22:00 lists forty map
+        /// lamps and not one window), which is why this mattered.</para>
+        /// </summary>
+        internal void DrawWindowGlowIntoGameLightmap(SpriteBatch spriteBatch, ModConfig config)
+        {
+            WindowGlowsIntoGameLightmap = 0;
+            float dial = MathHelper.Clamp(config.WindowGlowOpensNight, 0f, 1f);
+            if (dial <= 0f || _gameLightmapWindows.Count == 0)
+                return;
+            Texture2D? texture = Game1.sconceLight;
+            if (texture == null || texture.IsDisposed)
+                return;
+            // The same arithmetic as LightSource.Draw: the lightmap is the world at a quarter or
+            // half scale (lightingQuality), and a light of radius r spans r times its texture's
+            // width in world pixels. Our exterior pool is a radius in screen pixels.
+            float quality = Math.Max(1, Game1.options.lightingQuality / 2);
+            float zoom = Math.Max(0.25f, Game1.options.zoomLevel);
+            // Smaller and fainter than our own pool, on purpose. The first capture (Town 14,55
+            // at 22:00, 8 Sep) drew the pool's full radius at the dial's full alpha, and the whole
+            // clinic front came back to its daylight colours: a building lit like noon in the
+            // middle of the night, 45 levels over a sixth of the frame. A window opens the night
+            // a little, close to it; the warm pool our own lighting lays on top is what says
+            // "lamp". So the light here reaches 70% as far and, at the dial's top, replaces less
+            // than half of the darkness under its centre.
+            float radius = 2f * WindowPoolExteriorPx * 0.7f / zoom / texture.Width;
+            const float openAtMost = 0.4f;
+            Vector2 origin = new(texture.Bounds.Width / 2f, texture.Bounds.Height / 2f);
+            foreach (var (position, colour, amount) in _gameLightmapWindows)
+            {
+                Color stored = new(1f - colour.X, 1f - colour.Y, 1f - colour.Z, amount * dial * openAtMost);
+                spriteBatch.Draw(texture, Game1.GlobalToLocal(Game1.viewport, position) / quality, texture.Bounds,
+                    stored, 0f, origin, radius / quality, SpriteEffects.None, 0.9f);
+                WindowGlowsIntoGameLightmap++;
+            }
+        }
+
+        /// <summary>The sheet the game hangs on a fish tank. A tank is the only light in the game
+        /// whose source is water, and it was being lit like a lantern.</summary>
+        private const int AquariumLightSheet = 8;
+        /// <summary>How many wavering pools one tank throws. Three is enough for them to slide
+        /// across each other and never enough for the room to strobe.</summary>
+        private const int AquariumPoolCount = 3;
+        /// <summary>How far a pool wanders from the tank, in world pixels.</summary>
+        private const float AquariumWanderPixels = 26f;
+        /// <summary>How much of the darkness a tank's ripple may take away at the dial's top.</summary>
+        private const float AquariumOpensAtMost = 0.22f;
+        /// <summary>How many tanks rippled this frame, for the report.</summary>
+        internal int AquariumLights { get; private set; }
+
+        /// <summary>
+        /// A fish tank lights the room the way water lights a room: in slow wandering pools rather
+        /// than in one steady circle.
+        ///
+        /// <para>The game gives a tank a light source on a sheet of its own and this mod lit it
+        /// like a lantern, which is the same mistake as lighting a string of fairy lights like
+        /// one. What comes off a tank is light that has been through moving water, and the thing
+        /// that says so is not its colour, it is that it will not hold still.</para>
+        ///
+        /// <para>Three soft pools, each wandering on its own slow circle and breathing on its own
+        /// clock, drawn into the game's lightmap beside the lamp's own. Every clock is
+        /// <see cref="Determinism.Seconds"/>, so a frozen capture holds still.</para>
+        /// </summary>
+        internal void DrawAquariumLightIntoGameLightmap(SpriteBatch spriteBatch, ModConfig config)
+        {
+            AquariumLights = 0;
+            float dial = MathHelper.Clamp(config.AquariumRipple, 0f, 1f);
+            if (dial <= 0f)
+                return;
+            var lights = Game1.currentLightSources;
+            if (lights == null)
+                return;
+            Texture2D? texture = Game1.sconceLight;
+            if (texture == null || texture.IsDisposed)
+                return;
+
+            float quality = Math.Max(1, Game1.options.lightingQuality / 2);
+            float zoom = Math.Max(0.25f, Game1.options.zoomLevel);
+            Vector2 origin = new(texture.Bounds.Width / 2f, texture.Bounds.Height / 2f);
+            double seconds = Determinism.Seconds;
+            foreach (var lightSource in lights.Values)
+            {
+                if (lightSource == null || lightSource.textureIndex.Value != AquariumLightSheet)
+                    continue;
+                Color tankColour = lightSource.color.Value;
+                float lampRadius = Math.Max(0.5f, lightSource.radius.Value);
+                Vector2 tank = lightSource.position.Value;
+                for (int pool = 0; pool < AquariumPoolCount; pool++)
+                {
+                    double phase = seconds * (0.31 + 0.11 * pool) + pool * 2.1;
+                    var wander = new Vector2((float)Math.Sin(phase) * AquariumWanderPixels,
+                                             (float)Math.Cos(phase * 0.73 + pool) * AquariumWanderPixels * 0.55f);
+                    float breath = 0.55f + 0.45f * (float)Math.Sin(seconds * (0.9 + 0.23 * pool) + pool);
+                    float amount = dial * AquariumOpensAtMost * breath / AquariumPoolCount;
+                    Color stored = new(tankColour.R, tankColour.G, tankColour.B,
+                                       (byte)Math.Clamp((int)(amount * 255f), 0, 255));
+                    float radius = lampRadius * (0.8f + 0.25f * pool) / zoom;
+                    spriteBatch.Draw(texture, Game1.GlobalToLocal(Game1.viewport, tank + wander) / quality,
+                        texture.Bounds, stored, 0f, origin, radius / quality, SpriteEffects.None, 0.9f);
+                }
+                AquariumLights++;
+            }
+        }
+
+        /// <summary>How many lamps wore a halo this frame, for the report.</summary>
+        internal int LampHalos { get; private set; }
+        /// <summary>How far a halo reaches against the lamp's own radius. A halo is the wide, very
+        /// faint ring a lens puts around a bright thing; at its own radius it would just be the
+        /// lamp again, and much wider than this it stops belonging to the lamp at all.</summary>
+        private const float LampHaloReachAgainstRadius = 3.2f;
+        /// <summary>The most darkness a halo may take away under its centre, at the dial's top.
+        /// Very little on purpose: a halo is felt rather than seen, and one strong enough to read
+        /// as a shape is a lamp drawn twice.</summary>
+        private const float LampHaloOpensAtMost = 0.13f;
+        /// <summary>The radius, in the game's own light units, under which a light is not a lamp
+        /// but a glint on something, and gets no halo. A lantern is 2 and a sconce about 1.5.</summary>
+        private const float LampHaloSmallestRadius = 0.9f;
+
+        /// <summary>
+        /// A wide, faint halo around each real lamp at night: the ring a lens puts around a bright
+        /// point, which is what makes a light read as a LIGHT rather than as a bright patch of
+        /// paint.
+        ///
+        /// <para>Built from the light list and not from the picture. Reading brightness back off
+        /// the frame is how the god rays came to treat a white sign as a light source; the game's
+        /// own light list knows what is a lamp and a sign is not in it. The same reason the window
+        /// glow beside it works from windows rather than from bright pixels.</para>
+        ///
+        /// <para>Drawn into the game's lightmap, from inside its own batch, like the window glow
+        /// and the particle glow: see <see cref="DrawWindowGlowIntoGameLightmap"/> for why the
+        /// lightmap holds darkness and a light is stored inverted.</para>
+        /// </summary>
+        internal void DrawLampHaloIntoGameLightmap(SpriteBatch spriteBatch, ModConfig config)
+        {
+            LampHalos = 0;
+            float dial = MathHelper.Clamp(config.LampHalo, 0f, 1f);
+            if (dial <= 0f)
+                return;
+            var lights = Game1.currentLightSources;
+            if (lights == null)
+                return;
+            GameLocation? location = Game1.currentLocation;
+            bool underSky = location == null || location.IsOutdoors || location.IsGreenhouse;
+            float darkness = underSky ? NightFactorNow() : 1f;
+            if (darkness < 0.02f)
+                return;
+            Texture2D? texture = Game1.sconceLight;
+            if (texture == null || texture.IsDisposed)
+                return;
+
+            float quality = Math.Max(1, Game1.options.lightingQuality / 2);
+            float zoom = Math.Max(0.25f, Game1.options.zoomLevel);
+            Vector2 origin = new(texture.Bounds.Width / 2f, texture.Bounds.Height / 2f);
+            float amount = dial * darkness * LampHaloOpensAtMost;
+            foreach (var lightSource in lights.Values)
+            {
+                if (lightSource == null || lightSource.lightContext.Value == LightSource.LightContext.WindowLight)
+                    continue;
+                float lampRadius = lightSource.radius.Value;
+                if (lampRadius < LampHaloSmallestRadius)
+                    continue;
+                Color lampColour = lightSource.color.Value;
+                // The light list stores a lamp's colour already inverted, which is what the
+                // lightmap wants, so it goes in as it comes out. Only the alpha is ours.
+                Color stored = new(lampColour.R, lampColour.G, lampColour.B, (byte)Math.Clamp((int)(amount * 255f), 0, 255));
+                float radius = lampRadius * LampHaloReachAgainstRadius / zoom;
+                spriteBatch.Draw(texture, Game1.GlobalToLocal(Game1.viewport, lightSource.position.Value) / quality,
+                    texture.Bounds, stored, 0f, origin, radius / quality, SpriteEffects.None, 0.9f);
+                LampHalos++;
+            }
+        }
+
+        /// <summary>Where this frame's glowing particles have gathered, for the light they cast.</summary>
+        private readonly List<(Vector2 Centre, Vector3 Colour, float Weight)> _particleGlowClusters = new();
+        /// <summary>How many gatherings of glowing particles lit their surroundings this frame.</summary>
+        internal int ParticleGlowLights { get; private set; }
+        /// <summary>The weight of the heaviest gathering this frame, and the share of the darkness
+        /// its light actually took away. Both are in the report because the size of a gathering is
+        /// the one number this feature is tuned against, and guessing at it twice is how an
+        /// afternoon goes missing.</summary>
+        internal float ParticleGlowStrongestWeight { get; private set; }
+        internal float ParticleGlowStrongestAmount { get; private set; }
+
+        /// <summary>How wide a cell the gatherings are found in: three tiles, which is about the
+        /// spread of one fire's embers and small enough that two fires in a room stay two.</summary>
+        private const float ParticleGlowCellPixels = 192f;
+        /// <summary>At most this many gatherings light anything in one frame. A screen with more
+        /// than this many separate fires on it is already lit by something else.</summary>
+        private const int ParticleGlowLightLimit = 6;
+        /// <summary>The weight at which a gathering counts as a full light. Below it the light
+        /// comes up in proportion, so the first ember of a fire that is catching does not switch
+        /// a light on.</summary>
+        private const float ParticleGlowFullWeight = 90f;
+        /// <summary>How much of the darkness under it a full gathering may replace. Well under the
+        /// window's own share: embers light the wall beside them, they do not turn the night off.</summary>
+        private const float ParticleGlowOpensAtMost = 0.30f;
+        /// <summary>How far the pool reaches, in world pixels, at a full gathering.</summary>
+        private const float ParticleGlowReachPixels = 150f;
+
+        /// <summary>
+        /// Glowing particles light what is around them.
+        ///
+        /// <para>Embers, fireflies and lava sparks were drawn as light and cast none: the wall
+        /// beside a brazier was exactly as dark as the wall across the room, which is the one
+        /// thing a person standing by a fire knows is not true. This finds where the glowing
+        /// particles have gathered and opens the night around each gathering, in the gathering's
+        /// own colour, from inside the game's own lightmap batch (see
+        /// <see cref="DrawWindowGlowIntoGameLightmap"/> for why that is the place).</para>
+        ///
+        /// <para>It follows the particles rather than the emitters, so it needs no list of which
+        /// emitters glow, and the light breathes on its own: as a fire throws more sparks the pool
+        /// swells, and as they die it fades, without anything having to animate it.</para>
+        /// </summary>
+        internal void DrawParticleGlowIntoGameLightmap(SpriteBatch spriteBatch, ModConfig config)
+        {
+            ParticleGlowLights = 0;
+            float dial = MathHelper.Clamp(config.ParticleGlowLight, 0f, 1f);
+            if (dial <= 0f || _particles == null || !config.ParticlesEnabled)
+                return;
+            // Only where there is darkness to open. Outdoors that is the night; a room the game
+            // has darkened is dark whatever the hour, and the greenhouse is a room with the sky
+            // in it, so it follows the clock like the outdoors does.
+            GameLocation? location = Game1.currentLocation;
+            bool underSky = location == null || location.IsOutdoors || location.IsGreenhouse;
+            float darkness = underSky ? NightFactorNow() : 1f;
+            if (darkness < 0.02f)
+                return;
+            Texture2D? texture = Game1.sconceLight;
+            if (texture == null || texture.IsDisposed)
+                return;
+
+            _particles.GatherEmissiveClusters(ParticleGlowCellPixels, ParticleGlowLightLimit, _particleGlowClusters);
+            ParticleGlowStrongestWeight = 0f;
+            ParticleGlowStrongestAmount = 0f;
+            if (_particleGlowClusters.Count == 0)
+                return;
+
+            float quality = Math.Max(1, Game1.options.lightingQuality / 2);
+            float zoom = Math.Max(0.25f, Game1.options.zoomLevel);
+            Vector2 origin = new(texture.Bounds.Width / 2f, texture.Bounds.Height / 2f);
+            foreach (var (centre, colour, weight) in _particleGlowClusters)
+            {
+                float share = Math.Min(1f, weight / ParticleGlowFullWeight);
+                float amount = dial * darkness * share * ParticleGlowOpensAtMost * _fadeParticles;
+                if (amount > ParticleGlowStrongestAmount)
+                {
+                    ParticleGlowStrongestAmount = amount;
+                    ParticleGlowStrongestWeight = weight;
+                }
+                if (amount < 0.004f)
+                    continue;
+                // The lightmap holds DARKNESS, so a light is stored as its own colour inverted.
+                Color stored = new(1f - colour.X, 1f - colour.Y, 1f - colour.Z, amount);
+                float radius = 2f * ParticleGlowReachPixels * (0.5f + 0.5f * share) / zoom / texture.Width;
+                spriteBatch.Draw(texture, Game1.GlobalToLocal(Game1.viewport, centre) / quality, texture.Bounds,
+                    stored, 0f, origin, radius / quality, SpriteEffects.None, 0.9f);
+                ParticleGlowLights++;
+            }
+        }
+
         private void AddWindowLights(int viewportWidth, int viewportHeight, float boost, ModConfig config)
         {
+            _gameLightmapWindows.Clear();
             if (_windowTiles.Count == 0)
                 return;
             float windowEffectsTarget = config.WindowEffectsEnabled ? 1f : 0f;
             _windowEffectsEase = Determinism.Settle(
-                MathHelper.Lerp(_windowEffectsEase, windowEffectsTarget, 0.03f), windowEffectsTarget);
+                EasedToward(_windowEffectsEase, windowEffectsTarget, RoomEaseRate), windowEffectsTarget);
             if (_windowEffectsEase < 0.02f)
                 return;
-            bool outdoors = _windowCacheLocation?.IsOutdoors ?? true;
-            // PHASE 1 = exterior windows only (getting the night-street look right first).
-            // Interior daylight-through-glass is parked for a later phase — the code path
-            // below stays so it's a one-line re-enable, but we skip it for now.
-            if (!outdoors)
+            // EXTERIOR WINDOWS ONLY. Daylight coming in through an interior window is a different
+            // effect and is done elsewhere (the window beam and the room's own lighting); this
+            // one is the lit pane seen from the street after dark. There used to be an indoor
+            // branch below, kept as "a one-line re-enable", which meant a day colour, an indoor
+            // radius, a rain tint and a whole else-branch were carried and computed for a path
+            // that returned two lines earlier. It is in the history if it is ever wanted.
+            if (!(_windowCacheLocation?.IsOutdoors ?? true))
                 return;
             float night = NightFactorNow();
-            float day = 1f - night;
             if (night < 0.02f)
                 return;   // exterior windows only glow after dusk
             float nowMinutes = GameClock.MinutesNow();
             float boostFloor = Math.Max(0.4f, boost);
             float radiusOut = WindowPoolExteriorPx / Math.Max(1, viewportHeight);
-            float radiusIn = WindowPoolInteriorPx / Math.Max(1, viewportHeight);
-            Vector3 warm = new(1.0f, 0.72f, 0.42f);          // exterior lamp behind the glass
-            Vector3 cool = new(0.80f, 0.88f, 1.05f);         // daylight coming in
-            bool rain = Game1.isRaining || Game1.isSnowing;
+            Vector3 warm = new(1.0f, 0.72f, 0.42f);          // the lamp behind the glass
             foreach (var windowPosition in _windowTiles)
             {
-                float amt; Vector3 col;
-                if (outdoors)
-                {
-                    // bedtime is hashed per ~6-tile BLOCK, so all the windows of one house go
-                    // dark together but different houses sleep at different times — the street
-                    // dims house-by-house, not all at once. Range 21:30–25:00, then a ~1h fade.
-                    int blockX = ((int)windowPosition.X - 32) / 64 / 6, blockY = ((int)windowPosition.Y - 32) / 64 / 6;
-                    int houseBlockHash = (blockX * 73856093) ^ (blockY * 19349663);
-                    int bedtimeMinutes = 1290 + (Math.Abs(houseBlockHash) % 8) * 30;     // 21:30 … 25:00, 8 steps
-                    float bedFade = nowMinutes <= bedtimeMinutes ? 1f : MathHelper.Clamp(1f - (nowMinutes - bedtimeMinutes) / 60f, 0f, 1f);
-                    amt = night * bedFade;
-                    col = warm;
-                }
-                else
-                {
-                    // soft daylight through the glass — kept low so it never blows the window to
-                    // white (vanilla's own window light already lifts the room); dimmer in rain.
-                    amt = day * (rain ? 0.28f : 0.45f);
-                    col = rain ? new Vector3(0.8f, 0.84f, 0.92f) : cool;
-                }
+                // bedtime is hashed per ~6-tile BLOCK, so all the windows of one house go
+                // dark together but different houses sleep at different times — the street
+                // dims house-by-house, not all at once. Range 21:30–25:00, then a ~1h fade.
+                int blockX = ((int)windowPosition.X - 32) / 64 / 6, blockY = ((int)windowPosition.Y - 32) / 64 / 6;
+                int houseBlockHash = (blockX * 73856093) ^ (blockY * 19349663);
+                int bedtimeMinutes = 1290 + (Math.Abs(houseBlockHash) % 8) * 30;     // 21:30 … 25:00, 8 steps
+                float bedFade = nowMinutes <= bedtimeMinutes ? 1f : MathHelper.Clamp(1f - (nowMinutes - bedtimeMinutes) / 60f, 0f, 1f);
+                float amt = night * bedFade;
+                Vector3 col = warm;
                 amt *= _windowEffectsEase;
                 if (amt < 0.02f)
                     continue;
@@ -964,10 +1281,11 @@ namespace SDVRadiance
                     continue;
                 Vector2 local = Game1.GlobalToLocal(Game1.viewport, windowPosition);
                 float screenU = local.X / viewportWidth, screenV = local.Y / viewportHeight;
-                float reach = Math.Max(0.02f, outdoors ? radiusOut : radiusIn);
+                float reach = Math.Max(0.02f, radiusOut);
                 if (OffScreenBeyondReach(screenU, screenV, reach))
                     continue;
                 AddLightCandidate(new Vector2(screenU, screenV), new Vector4(col * amt * boostFloor, reach));
+                _gameLightmapWindows.Add((windowPosition, col, amt));
             }
         }
 
@@ -984,7 +1302,21 @@ namespace SDVRadiance
         // Unlike windows there is no night gate: a forge is lit at noon too. It just reads as more
         // at night, so the strength ramps rather than switches.
         private GameLocation? _emissiveCacheLocation;
-        private int _emissiveLabelVersion = -1;
+        private MapAnswerKey _emissiveCacheKey = new(-1, -1);
+
+        /// <summary>Forget which place the window and emissive lists were last filled for. Called on
+        /// the way back to the title. Those two remember the place by name and the answer by its
+        /// key, and a different save's farmhouse has the same name and, when no label changed in
+        /// between, the same key: the new save was served the old save's window lights.</summary>
+        internal void ForgetScansOfTheLastSave()
+        {
+            _windowCacheLocation = null;
+            _windowCacheKey = new(-1, -1);
+            _windowTiles.Clear();
+            _emissiveCacheLocation = null;
+            _emissiveCacheKey = new(-1, -1);
+            _emissiveTiles.Clear();
+        }
         private float _daylightPoolDamping = 1f;   // outdoor midday sink shared by lamp pools and emissive
         private readonly List<(Vector2 Pos, Vector3 Col, float Amt)> _emissiveTiles = new();
         private const int EmissiveMinimumPixels = 6;    // below this it is a stray dab, not a light
@@ -995,51 +1327,51 @@ namespace SDVRadiance
 
         private void EnsureEmissiveCache(GameLocation location)
         {
-            var labels = LabelStore.Instance;
-            int labelVersion = labels?.Version ?? 0;
-            if (LiveScreens.SamePlace(location, _emissiveCacheLocation) && labelVersion == _emissiveLabelVersion)
-                return;
-            _emissiveCacheLocation = location; _emissiveLabelVersion = labelVersion; _emissiveTiles.Clear();
-            if (location != null && _emissiveTilesByLocation.TryGetValue(location, out var rememberedEmissive)
-                && rememberedEmissive.Version == labelVersion)
-            {
-                _emissiveTiles.AddRange(rememberedEmissive.Tiles);
-                return;
-            }
-            var sizeLayer = location?.map?.Layers.Count > 0 ? location.map.Layers[0] : null;
-            if (labels == null || sizeLayer == null || labelVersion == 0 || location == null)
-                return;
-
-            int mapTilesWide = sizeLayer.LayerWidth, mapTilesHigh = sizeLayer.LayerHeight;
+            MapAnswerKey answerKey = MapAnswerKey.For(location);
+            WholeMapAnswer<(Vector2 Pos, Vector3 Col, float Amt)> answer = AnswerFor(_emissiveTilesByLocation, location);
+            var sizeLayer = location.map?.Layers.Count > 0 ? location.map.Layers[0] : null;
             // Heaviest of the location-entry walks: every labelled candidate tile also reads its
             // ART, which is a GPU readback the first time a tilesheet is touched.
-            _monitor.Log($"[location] emissive scan start: {location.NameOrUniqueName} {mapTilesWide}x{mapTilesHigh}", LogLevel.Trace);
-            var emissiveScanStopwatch = System.Diagnostics.Stopwatch.StartNew();
-            var emissiveLayers = EmissiveLayersTopToBottom(location.map).ToArray();
+            if (LabelStore.Instance != null && sizeLayer != null && !answerKey.NoLabels)
+            {
+                if (answer.NextRow < 0 && answer.Key != answerKey)
+                    _monitor.Log($"[location] emissive scan start: {location.NameOrUniqueName} {sizeLayer.LayerWidth}x{sizeLayer.LayerHeight}", LogLevel.Trace);
+                if (WholeMapScan.Advance(answer, location, answerKey, sizeLayer.LayerHeight, _mapScanBudget,
+                                         _emissiveRowScanner ??= ScanEmissiveRow))
+                    _monitor.Log($"[location] emissive scan done: {answer.Found.Count} tiles in {answer.ScanMilliseconds:0.0}ms over {answer.ScanFrames} frames", LogLevel.Trace);
+            }
+            if (LiveScreens.SamePlace(location, _emissiveCacheLocation) && answer.Key == _emissiveCacheKey)
+                return;
+            _emissiveCacheLocation = location;
+            _emissiveCacheKey = answer.Key;
+            _emissiveTiles.Clear();
+            _emissiveTiles.AddRange(answer.Found);
+        }
 
-            for (int tileY = 0; tileY < mapTilesHigh; tileY++)
-                for (int tileX = 0; tileX < mapTilesWide; tileX++)
+        private void ScanEmissiveRow(GameLocation location, int tileY, List<(Vector2 Pos, Vector3 Col, float Amt)> into)
+        {
+            var labels = LabelStore.Instance;
+            var map = location.map;
+            if (labels == null || map == null || map.Layers.Count == 0)
+                return;
+            int mapTilesWide = map.Layers[0].LayerWidth;
+            var emissiveLayers = EmissiveLayersTopToBottom(map);
+            for (int tileX = 0; tileX < mapTilesWide; tileX++)
+                foreach (var emissiveLayer in emissiveLayers)
                 {
-                    foreach (var emissiveLayer in emissiveLayers)
+                    byte[]? pixelClasses = labels.Get(emissiveLayer, tileX, tileY);
+                    if (pixelClasses == null)
+                        continue;
+                    int emissivePixelCount = 0;
+                    for (int pixelIndex = 0; pixelIndex < 256; pixelIndex++) if (pixelClasses[pixelIndex] == LabelClass.Emissive) emissivePixelCount++;
+                    if (emissivePixelCount < EmissiveMinimumPixels)
+                        continue;
+                    if (SampleEmissive(emissiveLayer, tileX, tileY, pixelClasses, emissivePixelCount) is { } lit)
                     {
-                        byte[]? pixelClasses = labels.Get(emissiveLayer, tileX, tileY);
-                        if (pixelClasses == null)
-                            continue;
-                        int emissivePixelCount = 0;
-                        for (int pixelIndex = 0; pixelIndex < 256; pixelIndex++) if (pixelClasses[pixelIndex] == 6) emissivePixelCount++;
-                        if (emissivePixelCount < EmissiveMinimumPixels)
-                            continue;
-                        if (SampleEmissive(emissiveLayer, tileX, tileY, pixelClasses, emissivePixelCount) is { } lit)
-                        {
-                            _emissiveTiles.Add((new Vector2(tileX * 64 + 32, tileY * 64 + 32), lit.Col, lit.Amt));
-                            break;      // one light per tile: the topmost layer that carries it wins
-                        }
+                        into.Add((new Vector2(tileX * 64 + 32, tileY * 64 + 32), lit.Col, lit.Amt));
+                        break;      // one light per tile: the topmost layer that carries it wins
                     }
                 }
-            emissiveScanStopwatch.Stop();
-            _emissiveTilesByLocation[location] = (labelVersion, new List<(Vector2, Vector3, float)>(_emissiveTiles));
-            TrimScanCache(_emissiveTilesByLocation);
-            _monitor.Log($"[location] emissive scan done: {_emissiveTiles.Count} tiles in {emissiveScanStopwatch.Elapsed.TotalMilliseconds:0.0}ms", LogLevel.Trace);
         }
 
         /// <summary>Average the ART colour of exactly the pixels the label marked emissive, hue
@@ -1344,8 +1676,9 @@ namespace SDVRadiance
         /// warp frame, so no readback is left to happen the first time a thing scrolls into view.
         /// </summary>
         /// <remarks>
-        /// <see cref="ArtBaseSpan"/> is a <c>GetData</c>, which on this backend makes the CPU wait
-        /// for the card. It is cached per picture, so a farm pays it once per KIND of thing rather
+        /// <see cref="ArtBaseSpan"/> reads the sheet through <see cref="SheetPixels"/>, which pulls a
+        /// whole sheet off the card the first time any reader asks for it and serves every rectangle
+        /// from memory after that. It is cached per picture, so a farm pays it once per KIND of thing rather
         /// than once per thing, but that once used to land mid-stride: walk into a new part of the
         /// farm and every kind first seen there stalled the frame it appeared in, which is the
         /// "stutter while working the farm" shape. A location is a few dozen kinds at most, and the
@@ -1397,7 +1730,12 @@ namespace SDVRadiance
                     && source.Right <= texture.Width && source.Bottom <= texture.Height)
                 {
                     var pixels = new Color[source.Width * source.Height];
-                    texture.GetData(0, source, pixels, 0, pixels.Length);
+                    // Through the held sheet, never GetData on a rectangle: on this backend a
+                    // rectangle read pulls the WHOLE texture back off the card and allocates it
+                    // (MonoGame's PlatformGetData), so a 4096-square texture pack sheet was 67 MB
+                    // read and thrown away on the main thread the first time a thing scrolled in.
+                    // This was the one art reader in the mod not going through SheetPixels.
+                    SheetPixels.Read(texture, source, pixels);
                     // The bottom quarter, and never fewer than four rows: enough of the base to
                     // catch both legs of a table, little enough that a wide top does not decide it.
                     int rows = Math.Max(4, source.Height / 4);
@@ -1426,9 +1764,8 @@ namespace SDVRadiance
             _artBaseSpan[key] = span;
             return span;
         }
-        /// <summary>The tile-resolution grid (walls, tree trunks) that the silhouettes are drawn over.</summary>
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)   // its pair - see TextureDoubleBuffer
+        // The tile-resolution grid (walls, tree trunks) that the silhouettes are drawn over.
+        // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
         private SpriteBatch? _floodOccluderSpriteBatch;
         /// <summary>Additive with a per-tier factor: a wall under a bush stays a wall (the sum
         /// saturates at 1), and a bush over open ground is exactly its share.</summary>
@@ -1520,7 +1857,6 @@ namespace SDVRadiance
         /// the level a pixel shader asks tex2Dlod for reaches the GPU as a bias through MonoGame's
         /// GLSL path and the softness dial did nothing.</summary>
         internal const int FloodOccluderSoftLevels = 3;
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
 
         private bool BuildFloodOccluders(int targetWidth, int targetHeight, ModConfig config)
         {
@@ -1575,6 +1911,7 @@ namespace SDVRadiance
             int shapesStep = (int)MathF.Round(_occluderShapesEase * 32f);
             Approach(ref _occluderPropsEase, config.LightShadowProps ? 1f : 0f, 0.05f);
             int propsStep = (int)MathF.Round(_occluderPropsEase * 32f);
+            long hashStart = System.Diagnostics.Stopwatch.GetTimestamp();
             int occluderInputsHash;
             unchecked
             {
@@ -1590,6 +1927,7 @@ namespace SDVRadiance
                 occluderInputsHash = occluderInputsHash * 31 + (Game1.currentLightSources?.Count ?? 0);
                 occluderInputsHash = occluderInputsHash * 31 + propsStep;
             }
+            PhaseCost.NoteSince("flood occluders: the change test (counts, every frame)", hashStart);
             if (_floodOccluderMask != null && startTileX == _floodOccluderTileX && startTileY == _floodOccluderTileY
                 // Texels, not tiles. The mask became a render target at FloodOccluderSubdivision texels
                 // per tile when silhouettes arrived, and this test kept comparing its width against
@@ -1767,7 +2105,10 @@ namespace SDVRadiance
             if (_floodOccluderMask is not RenderTarget2D maskTarget || maskTarget.Width != maskWidth || maskTarget.Height != maskHeight)
             {
                 _floodOccluderMask?.Dispose();
-                maskTarget = VramTally.Track(new RenderTarget2D(_device, maskWidth, maskHeight, false, SurfaceFormat.Color, DepthFormat.None), "flood occluder mask");
+                // PreserveContents: DrawOccluderSilhouettes clears it on entry, and a
+                // DiscardContents bind would have cleared the whole mask before that.
+                maskTarget = VramTally.Track(new RenderTarget2D(_device, maskWidth, maskHeight, false,
+                    SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "flood occluder mask");
                 _floodOccluderMask = maskTarget;
             }
             DrawOccluderSilhouettes(maskTarget, location, startTileX, startTileY, tilesWide, tilesHigh);
@@ -1800,18 +2141,14 @@ namespace SDVRadiance
         /// different folders cannot be confused for each other. Rebuilt when the map changes and
         /// once a second besides, because a content patch reloads assets under a map that never
         /// changed and the old instances would go on being matched.</summary>
-        private readonly HashSet<Texture2D> _mapTileSheetTextures = new();
+        // Per screen, with the rest of this memo below: RenderPipeline.Screens.cs.
         /// <summary>The same sheets by NAME, as a second way in. Asking the content manager for
         /// "Maps/fall_town" on a game running in Thai hands back the base asset, while the display
         /// device drew from "Maps/fall_town.th" - a different instance of a translated sheet, which
         /// the set above cannot match. So a whole season's tiles wore the bevel the fix removed,
         /// and only the seasons whose sheet the translation pack had not replaced looked right,
         /// which is why this came back as "summer was fine".</summary>
-        private readonly HashSet<string> _mapTileSheetNames = new(StringComparer.OrdinalIgnoreCase);
-        private xTile.Map? _mapTileSheetSource;
-        private int _mapTileSheetTick = -1000;
-        private Texture2D? _lastSheetAsked;
-        private bool _lastSheetWasMapTile;
+        // Also per screen: RenderPipeline.Screens.cs.
 
         /// <summary>A drawn sheet's name with any locale suffix taken off: the game appends the
         /// language to a translated asset ("Maps/fall_town.th"), and the map still calls it by the
@@ -1845,6 +2182,44 @@ namespace SDVRadiance
         internal bool ReliefLeavesSheetFlat(Texture2D sheet)
             => sheet is RenderTarget2D || DrawnFromMapTileSheet(sheet);
 
+        /// <summary>Whether the map's sheets now point at different images than the list was built
+        /// from. Indexed rather than a foreach, because the collection's enumerator is boxed and
+        /// this runs once per tick.</summary>
+        private bool TileSheetImagesMoved(xTile.Map map)
+        {
+            var sheets = map.TileSheets;
+            int kept = 0;
+            for (int i = 0; i < sheets.Count; i++)
+            {
+                string? imageSource = sheets[i].ImageSource;
+                if (string.IsNullOrEmpty(imageSource))
+                    continue;
+                if (kept >= _mapTileSheetImageSources.Count
+                    || !string.Equals(_mapTileSheetImageSources[kept], imageSource, StringComparison.Ordinal))
+                    return true;
+                kept++;
+            }
+            return kept != _mapTileSheetImageSources.Count;
+        }
+
+        /// <summary>Forget a screen's list of map sheets when one of the sheets on it is reloaded, so
+        /// the next draw fetches the new texture. Reads the names: reloading anything else leaves
+        /// every list as it is.</summary>
+        internal void ForgetTileSheetListsDrawnFrom(IEnumerable<string> reloadedAssetNames)
+        {
+            foreach (string name in reloadedAssetNames)
+            {
+                string sheet = LabelStore.NormalizeSheet(WithoutLocaleSuffix(name));
+                if (_screen.MapTileSheetNames.Contains(sheet))
+                    _screen.MapTileSheetSource = null;
+                foreach (ScreenState state in _screenStates.Values)
+                {
+                    if (state.MapTileSheetNames.Contains(sheet))
+                        state.MapTileSheetSource = null;
+                }
+            }
+        }
+
         private bool DrawnFromMapTileSheet(Texture2D sheet)
         {
             if (ReferenceEquals(sheet, _lastSheetAsked))
@@ -1852,16 +2227,30 @@ namespace SDVRadiance
             xTile.Map? map = Game1.currentLocation?.Map;
             if (map == null)
                 return false;
-            if (!ReferenceEquals(map, _mapTileSheetSource) || Game1.ticks - _mapTileSheetTick > 60)
+            // Rebuilt when the map changes, when one of its sheets is reloaded (the invalidation
+            // handler calls ForgetTileSheetListsDrawnFrom), or when the map's sheets now point at
+            // other images, which is how the game changes a map's season in place. It used to be
+            // rebuilt on a one-second clock instead, and every rebuild asks the content manager for
+            // every sheet the map draws from: 1.126 ms a time in split screen, once a second per
+            // screen, to find the same list again.
+            bool imagesMoved = false;
+            if (_mapTileSheetTick != Game1.ticks)
             {
-                _mapTileSheetSource = map;
                 _mapTileSheetTick = Game1.ticks;
+                imagesMoved = ReferenceEquals(map, _mapTileSheetSource) && TileSheetImagesMoved(map);
+            }
+            if (!ReferenceEquals(map, _mapTileSheetSource) || imagesMoved)
+            {
+                long sheetRefreshStep = ChainStepBegin();
+                _mapTileSheetSource = map;
                 _mapTileSheetTextures.Clear();
                 _mapTileSheetNames.Clear();
+                _mapTileSheetImageSources.Clear();
                 foreach (xTile.Tiles.TileSheet tileSheet in map.TileSheets)
                 {
                     if (string.IsNullOrEmpty(tileSheet.ImageSource))
                         continue;
+                    _mapTileSheetImageSources.Add(tileSheet.ImageSource);
                     _mapTileSheetNames.Add(LabelStore.NormalizeSheet(tileSheet.ImageSource));
                     try
                     {
@@ -1876,6 +2265,7 @@ namespace SDVRadiance
                     }
                 }
                 _lastSheetAsked = null;
+                ChainStepEnd(ChainStep.ReliefSheetRefresh, sheetRefreshStep);
             }
             bool isMapTile = _mapTileSheetTextures.Contains(sheet);
             if (!isMapTile && !string.IsNullOrEmpty(sheet.Name))
@@ -2023,6 +2413,17 @@ namespace SDVRadiance
         /// is work with nothing to show for it. Implies the depth road (see
         /// <see cref="ReliefTextureSorted"/>), which is what makes an unsorted replay correct.</summary>
         internal static bool ReliefUnsorted;
+        /// <summary>radiance_reliefpath: build the sorted relief sprites' vertices ourselves and
+        /// hand the card one indexed draw per sheet, instead of putting them through a
+        /// SpriteBatch (see <see cref="ReliefVertexPath"/>). Only the sorted half; the map's
+        /// front layers keep their batch. On by default: the buffer it draws is byte-identical
+        /// to the batch's and the pass measured 1.13 ms through the batch against 0.75 ms
+        /// through this, twice over, on the farm at 75 per cent zoom on a 3440-wide window.</summary>
+        internal static bool ReliefVertexRoad = true;
+        /// <summary>The vertex road's buffers, made on first use and kept.</summary>
+        private ReliefVertexPath? _reliefVertexPath;
+        /// <summary>Said once: the vertex road refused and the batch drew the frame instead.</summary>
+        private string _reliefVertexRoadClosedSaid = "";
         /// <summary>radiance_reliefdepth: which way the texture-sorted replay's depth test runs.
         /// An experiment, to prove the test is applied at all: 'never' must leave the buffer as
         /// the clear left it, and 'less' must keep the sprite the game drew FIRST.</summary>
@@ -2123,7 +2524,24 @@ namespace SDVRadiance
                 // replay draw the sprites in any order.
                 _normalRenderTarget = VramTally.Track(new RenderTarget2D(_device, bufferWidth, bufferHeight, false, SurfaceFormat.Color,
                     depthWanted, 0, RenderTargetUsage.PreserveContents), "sprite normals");
+                _spriteRankRenderTarget?.Dispose();
+                _spriteRankRenderTarget = null;
             }
+            // Which sprite won the depth test at each pixel, written by the same pass, in the
+            // same draw, out of a value the vertex shader had already read. It is the only way
+            // the answer can be SAMPLED: a render target's depth on this build is a renderbuffer
+            // with no texture behind it. It follows the normal buffer's size, so the relief's
+            // half-resolution dial halves this too, and it is only written on the texture-sorted
+            // road, which is the one with a depth test to have an opinion in the first place.
+            if (SpriteRankWanted && textureSorted && (_spriteRankRenderTarget == null
+                || _spriteRankRenderTarget.Width != bufferWidth || _spriteRankRenderTarget.Height != bufferHeight))
+            {
+                _spriteRankRenderTarget?.Dispose();
+                _spriteRankRenderTarget = VramTally.Track(new RenderTarget2D(_device, bufferWidth, bufferHeight, false,
+                    SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "sprite rank");
+            }
+            bool rankThisFrame = SpriteRankWanted && textureSorted && _spriteRankRenderTarget != null;
+            _spriteRankReady = false;
             _normalSpriteBatch ??= new SpriteBatch(_device);
             // Its own slot: this pass borrowed GridLightOccluders through the whole first relief
             // round, so every bench table until 2026-08-27 shows the replay's cost wearing the
@@ -2132,11 +2550,50 @@ namespace SDVRadiance
             try
             {
                 long reliefBind = System.Diagnostics.Stopwatch.GetTimestamp();
-                _device.SetRenderTarget(_normalRenderTarget);
+                if (rankThisFrame)
+                    _device.SetRenderTargets(_normalRenderTarget, _spriteRankRenderTarget);
+                else
+                    _device.SetRenderTarget(_normalRenderTarget);
                 reliefBind = PhaseCost.NoteSince("relief: binding the target", reliefBind);
+                // ONE clear for both, because Clear takes one colour and both targets are bound.
+                // The rank buffer therefore starts at the flat normal's bytes, which decode to a
+                // rank in the middle of the range and mean nothing: alpha is zero there, and a
+                // reader must gate on alpha rather than on the rank. Said again in the shader.
                 _device.Clear(ClearOptions.Target | ClearOptions.DepthBuffer, new Color(128, 128, 255, 0), 0f, 0);
                 PhaseCost.NoteSince("relief: clearing the target", reliefBind);
                 Matrix toBuffer = Matrix.CreateScale(_reliefBufferScale, _reliefBufferScale, 1f);
+                if (_flatNormalTexture == null || _flatNormalTexture.IsDisposed)
+                {
+                    _flatNormalTexture = new Texture2D(_device, 1, 1, false, SurfaceFormat.Color);
+                    _flatNormalTexture.SetData(new[] { new Color(128, 128, 255, 255) });
+                }
+                Texture2D flat = _flatNormalTexture;
+                Effect normals = _normalsEffect!;
+                // The map from a sheet, asked for once here and used by both roads and by the
+                // front layers below.
+                Func<Texture2D, SpriteEffects, Texture2D?> substituteSheet = (sheet, effects) =>
+                {
+                    // A sheet that is itself a render target is a COMPOSED picture (Fashion
+                    // Sense builds the farmer that way) and a fresh instance can arrive any
+                    // frame: deriving a map from each one churned the cache without end. The
+                    // flat stand-in carries those sprites instead.
+                    if (sheet is RenderTarget2D)
+                        return null;
+                    // A map's own tilesheet is baked FLAT (see _bakeSheetFlat): it must cover
+                    // what stands behind it without wearing a bevel of its own. Mirroring a
+                    // flat map changes nothing, so they share one entry.
+                    _bakeSheetFlat = DrawnFromMapTileSheet(sheet);
+                    bool flipped = !_bakeSheetFlat && (effects & SpriteEffects.FlipHorizontally) != 0;
+                    // Three derivations, three keys. Flat used to share the unflipped key, so
+                    // whichever was baked first stood in for the other from then on.
+                    int variant = _bakeSheetFlat ? NormalBakeFlat : flipped ? NormalBakeMirrored : NormalBakeBevelled;
+                    if (variant != NormalBakeFlat)
+                        _bevelledSheetsThisFrame.Add(sheet.Name ?? "(unnamed sheet)");
+                    Texture2D? map = _sheetNormals.For(_device, normals, sheet, variant);
+                    _bakeSheetFlat = false;
+                    return map;
+                };
+                bool vertexRoad = textureSorted && ReliefVertexRoad && _reliefReplayEffect != null;
                 if (textureSorted && _reliefReplayEffect != null)
                 {
                     // Grouped by TEXTURE, with the recorded depth (carried in the tint, put back
@@ -2157,9 +2614,10 @@ namespace SDVRadiance
                     // That is only correct because the depth test decides the overlaps; it is the
                     // whole point of having put the depth back (see reliefreplay.fx). It costs draw
                     // calls, because a run ends at every change of sheet, and saves the sort.
-                    _normalSpriteBatch.Begin(ReliefUnsorted ? SpriteSortMode.Deferred : SpriteSortMode.Texture,
-                        BlendState.Opaque, SamplerState.PointClamp,
-                        ReliefDepthState(), RasterizerState.CullNone, _reliefReplayEffect, toBuffer);
+                    if (!vertexRoad)
+                        _normalSpriteBatch.Begin(ReliefUnsorted ? SpriteSortMode.Deferred : SpriteSortMode.Texture,
+                            BlendState.Opaque, SamplerState.PointClamp,
+                            ReliefDepthState(), RasterizerState.CullNone, _reliefReplayEffect, toBuffer);
                 }
                 else
                 {
@@ -2173,67 +2631,59 @@ namespace SDVRadiance
                 // the sprite loop apart from the batch's own submit: the pass has always been one
                 // row, and one row cannot say whether to attack the per-sprite work or the draw.
                 long reliefPhase = PhaseCost.NoteSince("relief: target, clear and begin", reliefStart);
-                if (_flatNormalTexture == null || _flatNormalTexture.IsDisposed)
+                if (vertexRoad)
                 {
-                    _flatNormalTexture = new Texture2D(_device, 1, 1, false, SurfaceFormat.Color);
-                    _flatNormalTexture.SetData(new[] { new Color(128, 128, 255, 255) });
-                }
-                Texture2D flat = _flatNormalTexture;
-                Effect normals = _normalsEffect!;
-                _normalPassDrawn = SpriteDrawRecorder.Replay(_normalSpriteBatch,
-                    // A sheet that is itself a render target is a COMPOSED picture (Fashion
-                    // Sense builds the farmer that way) and a fresh instance can arrive any
-                    // frame: deriving a map from each one churned the cache without end. The
-                    // flat stand-in carries those sprites instead.
-                    (sheet, effects) =>
+                    // Our own vertices, one indexed draw per sheet. It refuses by returning -1,
+                    // and the batch draws the frame instead, so a fault here is a frame of the
+                    // old road rather than a frame with no relief.
+                    _reliefVertexPath ??= new ReliefVertexPath();
+                    _normalPassDrawn = _reliefVertexPath.Draw(_device, _reliefReplayEffect!, SpriteDrawRecorder.Records,
+                        0, SpriteDrawRecorder.SortedCount, substituteSheet, flat, ReliefDepthState());
+                    if (_normalPassDrawn < 0)
                     {
-                        if (sheet is RenderTarget2D)
-                            return null;
-                        // A map's own tilesheet is baked FLAT (see _bakeSheetFlat): it must cover
-                        // what stands behind it without wearing a bevel of its own. Mirroring a
-                        // flat map changes nothing, so they share one entry.
-                        _bakeSheetFlat = DrawnFromMapTileSheet(sheet);
-                        bool flipped = !_bakeSheetFlat && (effects & SpriteEffects.FlipHorizontally) != 0;
-                        // Three derivations, three keys. Flat used to share the unflipped key, so
-                        // whichever was baked first stood in for the other from then on.
-                        int variant = _bakeSheetFlat ? NormalBakeFlat : flipped ? NormalBakeMirrored : NormalBakeBevelled;
-                        if (variant != NormalBakeFlat)
-                            _bevelledSheetsThisFrame.Add(sheet.Name ?? "(unnamed sheet)");
-                        Texture2D? map = _sheetNormals.For(_device, normals, sheet, variant);
-                        _bakeSheetFlat = false;
-                        return map;
-                    }, flat);
-                reliefPhase = PhaseCost.NoteSince("relief: world sprites, building the batch", reliefPhase);
-                _normalSpriteBatch.End();
-                reliefPhase = PhaseCost.NoteSince("relief: world sprites, submitting the batch", reliefPhase);
+                        if (_reliefVertexRoadClosedSaid != _reliefVertexPath.ClosedBecause)
+                        {
+                            _reliefVertexRoadClosedSaid = _reliefVertexPath.ClosedBecause;
+                            _monitor.Log($"the relief's vertex road refused ({_reliefVertexPath.ClosedBecause}); "
+                                       + "the batch is drawing the sprites instead.", LogLevel.Warn);
+                        }
+                        _normalSpriteBatch.Begin(ReliefUnsorted ? SpriteSortMode.Deferred : SpriteSortMode.Texture,
+                            BlendState.Opaque, SamplerState.PointClamp,
+                            ReliefDepthState(), RasterizerState.CullNone, _reliefReplayEffect, toBuffer);
+                        _normalPassDrawn = SpriteDrawRecorder.Replay(_normalSpriteBatch, substituteSheet, flat);
+                        _normalSpriteBatch.End();
+                    }
+                    reliefPhase = PhaseCost.NoteSince("relief: world sprites, vertices and draws", reliefPhase);
+                }
+                else
+                {
+                    _normalPassDrawn = SpriteDrawRecorder.Replay(_normalSpriteBatch, substituteSheet, flat);
+                    reliefPhase = PhaseCost.NoteSince("relief: world sprites, building the batch", reliefPhase);
+                    _normalSpriteBatch.End();
+                    reliefPhase = PhaseCost.NoteSince("relief: world sprites, submitting the batch", reliefPhase);
+                }
                 SpriteDrawRecorder.DepthInTint = false;
                 // The map's front layers, in their own batch so they land ON TOP whatever depth
                 // they were recorded with - which is the order the game drew them, and what makes
                 // a farmer standing behind a building stop showing through its wall.
+                //
+                // Back to ONE target first: this batch draws with no effect of its own, so the
+                // built-in sprite shader writes one output and the second target would keep
+                // whatever the world sprites left under these tiles. The rank buffer therefore
+                // describes the world sprites, not the map's front layers, and the reader is
+                // told so rather than left to find out.
+                if (rankThisFrame)
+                    _device.SetRenderTarget(_normalRenderTarget);
                 _normalSpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.NonPremultiplied, SamplerState.PointClamp,
                     DepthStencilState.None, RasterizerState.CullNone, null, toBuffer);
-                _normalPassDrawn += SpriteDrawRecorder.ReplayFront(_normalSpriteBatch,
-                    (sheet, effects) =>
-                    {
-                        if (sheet is RenderTarget2D)
-                            return null;
-                        _bakeSheetFlat = DrawnFromMapTileSheet(sheet);
-                        bool flipped = !_bakeSheetFlat && (effects & SpriteEffects.FlipHorizontally) != 0;
-                        // Three derivations, three keys. Flat used to share the unflipped key, so
-                        // whichever was baked first stood in for the other from then on.
-                        int variant = _bakeSheetFlat ? NormalBakeFlat : flipped ? NormalBakeMirrored : NormalBakeBevelled;
-                        if (variant != NormalBakeFlat)
-                            _bevelledSheetsThisFrame.Add(sheet.Name ?? "(unnamed sheet)");
-                        Texture2D? map = _sheetNormals.For(_device, normals, sheet, variant);
-                        _bakeSheetFlat = false;
-                        return map;
-                    }, flat);
+                _normalPassDrawn += SpriteDrawRecorder.ReplayFront(_normalSpriteBatch, substituteSheet, flat);
                 _normalSpriteBatch.End();
                 reliefPhase = PhaseCost.NoteSince("relief: the map's front layers", reliefPhase);
                 FlattenTreeTrunkJoins();
                 PhaseCost.NoteSince("relief: the trunk join mend", reliefPhase);
                 _bevelledSheetsLastFrame = new List<string>(_bevelledSheetsThisFrame);
                 _normalPassReady = true;
+                _spriteRankReady = rankThisFrame;
                 // Where this screen-space buffer was drawn from, so a later frame that cannot
                 // redraw it can tell whether it is still looking at the same view.
                 _normalPassViewport = new Point(Game1.viewport.X, Game1.viewport.Y);
@@ -2243,6 +2693,7 @@ namespace SDVRadiance
                 // A half-drawn buffer is worse than none: only a completed replay is shown.
                 SpriteDrawRecorder.DepthInTint = false;
                 _normalPassReady = false;
+                _spriteRankReady = false;
                 try { _normalSpriteBatch.End(); } catch { }
                 if (config.DebugLogging)
                     _monitor.Log($"sprite normal pass failed: {exception.Message}", LogLevel.Debug);
@@ -2261,9 +2712,28 @@ namespace SDVRadiance
         /// Gathered once per (map, surface map, building count) and read by every window rebuild.</summary>
         private byte[]? _floodSolidBase;
         private int _floodSolidBaseWidth, _floodSolidBaseHeight;
-        private GameLocation? _floodSolidBaseLocation;
-        private SurfaceMap? _floodSolidBaseSurface;
-        private int _floodSolidBaseBuildingCount = -1;
+
+        /// <summary>One place's solid base, and what it was gathered for.</summary>
+        private sealed class FloodSolidBaseForPlace
+        {
+            internal byte[]? Solid;
+            internal int Width, Height;
+            internal SurfaceMap? Surface;
+            internal int BuildingCount = -1;
+            internal long LastAskedFor;
+        }
+
+        /// <summary>The solid base kept per place, a few places.
+        ///
+        /// <para>It was one slot, gathered again whenever the place asked for was not the place it
+        /// held. The gather walks every tile of the map asking three questions, one of them the
+        /// buildings' collision maps, and two screens in two different places took turns at it:
+        /// the whole-map walk this base exists to do once on arrival ran for both screens every
+        /// frame. Found 13/9 with the shadow patch's solid tiles and the tile prop classifications,
+        /// which had the same one slot.</para></summary>
+        private readonly Dictionary<string, FloodSolidBaseForPlace> _floodSolidBaseByPlace = new();
+        private long _floodSolidBaseAsks;
+        private const int FloodSolidBasePlacesKept = 4;
 
         /// <summary>
         /// Refresh the map-wide solid base when its inputs changed; otherwise nothing.
@@ -2285,25 +2755,37 @@ namespace SDVRadiance
             if (size == null)
             {
                 _floodSolidBase = null;
-                _floodSolidBaseLocation = null;
                 return;
             }
             int width = size.LayerWidth, height = size.LayerHeight;
-            // The other screen's copy of this map has its own SurfaceMap object too; same place
-            // and same size is the same answer (LiveScreens.SamePlace).
-            bool sameSurface = ReferenceEquals(surfaceMap, _floodSolidBaseSurface)
-                || (surfaceMap != null && _floodSolidBaseSurface != null && surfaceMap.Width == _floodSolidBaseSurface.Width && surfaceMap.Height == _floodSolidBaseSurface.Height);
-            if (_floodSolidBase != null && LiveScreens.SamePlace(location, _floodSolidBaseLocation)
-                && sameSurface && buildingCount == _floodSolidBaseBuildingCount
-                && width == _floodSolidBaseWidth && height == _floodSolidBaseHeight)
+            // Keyed by the place's name, which is what LiveScreens.SamePlace compares: the other
+            // screen's copy of this map is a different object with the same answer.
+            string place = location.NameOrUniqueName;
+            if (!_floodSolidBaseByPlace.TryGetValue(place, out FloodSolidBaseForPlace? kept))
+                _floodSolidBaseByPlace[place] = kept = new FloodSolidBaseForPlace();
+            kept.LastAskedFor = ++_floodSolidBaseAsks;
+            TrimFloodSolidBasePlaces();
+            // The other screen's copy of this map has its own SurfaceMap object too; same size is
+            // the same answer.
+            bool sameSurface = ReferenceEquals(surfaceMap, kept.Surface)
+                || (surfaceMap != null && kept.Surface != null && surfaceMap.Width == kept.Surface.Width && surfaceMap.Height == kept.Surface.Height);
+            if (kept.Solid != null && sameSurface && buildingCount == kept.BuildingCount
+                && width == kept.Width && height == kept.Height)
+            {
+                _floodSolidBase = kept.Solid;
+                _floodSolidBaseWidth = kept.Width;
+                _floodSolidBaseHeight = kept.Height;
                 return;
-            if (_floodSolidBase == null || _floodSolidBase.Length != width * height)
-                _floodSolidBase = new byte[width * height];
+            }
+            if (kept.Solid == null || kept.Solid.Length != width * height)
+                kept.Solid = new byte[width * height];
+            kept.Width = width;
+            kept.Height = height;
+            kept.Surface = surfaceMap;
+            kept.BuildingCount = buildingCount;
+            _floodSolidBase = kept.Solid;
             _floodSolidBaseWidth = width;
             _floodSolidBaseHeight = height;
-            _floodSolidBaseLocation = location;
-            _floodSolidBaseSurface = surfaceMap;
-            _floodSolidBaseBuildingCount = buildingCount;
             for (int tileY = 0; tileY < height; tileY++)
             {
                 for (int tileX = 0; tileX < width; tileX++)
@@ -2315,6 +2797,26 @@ namespace SDVRadiance
                         solid = layer != null && tileX < layer.LayerWidth && tileY < layer.LayerHeight && layer.Tiles[tileX, tileY] != null;
                     _floodSolidBase[tileY * width + tileX] = solid ? (byte)1 : (byte)0;
                 }
+            }
+        }
+
+        /// <summary>Drop the place nobody has asked about for longest once more are kept than
+        /// <see cref="FloodSolidBasePlacesKept"/>. The place just asked for is stamped first.</summary>
+        private void TrimFloodSolidBasePlaces()
+        {
+            while (_floodSolidBaseByPlace.Count > FloodSolidBasePlacesKept)
+            {
+                string? leastWanted = null;
+                long oldest = long.MaxValue;
+                foreach (var pair in _floodSolidBaseByPlace)
+                    if (pair.Value.LastAskedFor < oldest)
+                    {
+                        oldest = pair.Value.LastAskedFor;
+                        leastWanted = pair.Key;
+                    }
+                if (leastWanted == null)
+                    break;
+                _floodSolidBaseByPlace.Remove(leastWanted);
             }
         }
 
@@ -2392,7 +2894,9 @@ namespace SDVRadiance
                     if (target == null || target.Width != width || target.Height != height)
                     {
                         target?.Dispose();
-                        target = VramTally.Track(new RenderTarget2D(_device, width, height, false, SurfaceFormat.Color, DepthFormat.None), "flood occluder mask");
+                        // PreserveContents: cleared on the bind below, three levels per rebuild.
+                        target = VramTally.Track(new RenderTarget2D(_device, width, height, false, SurfaceFormat.Color,
+                            DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "flood occluder mask");
                         _floodOccluderSoft[level] = target;
                     }
                     _device.SetRenderTarget(target);

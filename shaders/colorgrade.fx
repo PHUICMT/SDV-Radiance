@@ -67,8 +67,10 @@ float3 SampleLut(float3 c)
     float v = (c.g * (LUT_N - 1.0) + 0.5) / LUT_N;
     float sliceU = 1.0 / LUT_N;
 
-    float3 a = tex2D(LutSampler, float2(u + s0 * sliceU, v)).rgb;
-    float3 b = tex2D(LutSampler, float2(u + s1 * sliceU, v)).rgb;
+    // Explicit level 0 (the LUT has no mips), so the branch around the LUT can be a real one:
+    // with tex2D here the compiler flattened it and every pixel read the LUT with it switched off.
+    float3 a = tex2Dlod(LutSampler, float4(u + s0 * sliceU, v, 0.0, 0.0)).rgb;
+    float3 b = tex2Dlod(LutSampler, float4(u + s1 * sliceU, v, 0.0, 0.0)).rgb;
     return lerp(a, b, f);
 }
 
@@ -168,7 +170,7 @@ float4 GradePS(PixelInput input) : SV_TARGET
     // meaning exactly what they meant and the LUT is a look laid over the result rather than a
     // replacement for them. It stays ahead of the blue-light filter, which is eye comfort rather
     // than art and has to survive whatever look is chosen.
-    if (LutAmount > 0.0)
+    [branch] if (LutAmount > 0.0)
         outc = lerp(outc, SampleLut(outc), saturate(LutAmount));
 
     // Blue-light / eye-comfort filter: cut blue and lift red a touch. Applied AFTER the

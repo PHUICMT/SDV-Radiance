@@ -105,7 +105,7 @@ Two independent systems joined at one point:
 System A: post-processing (RenderPipeline.* + shaders/*.fx)
    Game1 render ──(hook)──> capture the game's active target during RenderedWorld
    └─ shader chain (ping-pong buffers on the GPU), in this order:
-        [flood GI] → [lighting] → [water] → [cloud shadows] → [rays]
+        [flood GI] → [lighting] → [water] → [cloud shadows] → [building shadows]
            → [bloom] → [fog] → [colour grade] → [tilt-shift]
            → [finish: vignette / CA] → [tail] → [wet]
    └─ result drawn back into that same target

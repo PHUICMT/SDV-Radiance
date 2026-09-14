@@ -63,10 +63,13 @@ namespace SDVRadiance
             SpawnFireflies(config);
             SpawnBlossom(config);
             SpawnRingSparkles(config);
-            ScanWaterBreathSources();
+            SpawnFootDust(config);
+            SpawnFestiveLights(config);
+            ScanWaterBreathSources(config);
             SpawnWaterfallMist(config);
             SpawnHotSpringSteam(config);
             SpawnLavaSparks(config);
+            SpawnChimneySparks(config);
         }
 
         /// <summary>How fast the player is moving and in which direction, in world pixels a second,
@@ -176,7 +179,7 @@ namespace SDVRadiance
         /// curve the window's own daylight colour uses to decide how golden the light is, so the
         /// dust thickens exactly as the light through the glass turns warm.</summary>
         private static float SunLowInSkyShare()
-            => Math.Abs(MathHelper.Clamp((GameClock.MinutesNow() - 720f) / 360f, -1f, 1f));
+            => Math.Abs(ShadowRenderer.SunSkyOffsetAt(GameClock.MinutesNow()));
 
         /// <summary>Sparks a second from a fire of ordinary size, at density 1.
         ///
@@ -319,12 +322,8 @@ namespace SDVRadiance
         /// the person carrying it instead of travelling along beside them.</summary>
         private const float CarriedFlameSparkInheritance = 0.75f;
 
-        /// <summary>Where the player was on the previous simulated tick, for the speed above.
-        /// Taken from the position rather than from the game's movement-speed field, which is a
-        /// number about how fast they COULD move and says nothing about which way.</summary>
-        private Vector2 _previousPlayerPosition;
-        private bool _previousPlayerPositionKnown;
-        private Vector2 _playerVelocity;
+        // Where the player was on the previous simulated tick, and the speed from it, are per
+        // screen: RenderPipeline.Screens.cs.
 
         internal int ParticleEmberFires => _emberFiresLit;
 
@@ -470,7 +469,9 @@ namespace SDVRadiance
 
         /// <summary>The rings whose whole point is that they glow. The iridium band is in the list
         /// because it carries the glow ring's effect along with everything else it does.</summary>
-        private static readonly string[] GlowRingIds = { "516", "517", "527" };
+        // 888 is the Glowstone Ring: the game gives it the same light as 527 (Ring.cs, one case for
+        // both), so it sparkles like the rings it combines.
+        private static readonly string[] GlowRingIds = { "516", "517", "527", "888" };
 
         private float _ringSparkleCarry;
         private bool _ringSparkling;
@@ -614,7 +615,7 @@ namespace SDVRadiance
             _firefliesFlying = false;
             GameLocation? location = Game1.currentLocation;
             if (_particles == null || !config.ParticleFireflies || location == null
-                || !location.IsOutdoors || Game1.season != Season.Summer || !Game1.isDarkOut(location))
+                || !location.IsOutdoors || LocalSky.Season != Season.Summer || !Game1.isDarkOut(location))
                 return;
             _firefliesFlying = true;
 
@@ -651,6 +652,237 @@ namespace SDVRadiance
                 dragPerSecond: 0.25f,
                 swayPixelsPerSecond: pool.RandomBetween(10f, 26f),
                 swayPerSecond: pool.RandomBetween(0.7f, 1.8f));
+        }
+
+        /// <summary>The sheet the game hangs on the town's winter tree. It is the only light kind
+        /// that is decoration rather than illumination, and the only one that should twinkle.</summary>
+        private const int FestiveLightSheet = 9;
+        /// <summary>Twinkles one festive light throws in a second, at density 1.</summary>
+        private const float FestiveTwinklesPerLightPerSecond = 1.1f;
+        /// <summary>The colours a string of lights comes in. Picked per light by its own position,
+        /// so the same bulb keeps its colour rather than flickering through the set.</summary>
+        private static readonly Vector3[] FestiveColours =
+        {
+            new(1.00f, 0.25f, 0.22f), new(0.25f, 0.85f, 0.35f),
+            new(0.30f, 0.55f, 1.00f), new(1.00f, 0.82f, 0.28f),
+        };
+
+        /// <summary>
+        /// The town's winter tree: a coloured twinkle at each bulb.
+        ///
+        /// <para>The game hangs a whole string of lights on that tree as light sources of a sheet
+        /// of their own, and this mod treated them as it treats a lantern, which is to say as a
+        /// pool of warm white. A string of fairy lights is not warm white and it is not steady:
+        /// what it is, is coloured, and it winks. This is the only light kind in the game that is
+        /// decoration rather than illumination, and it is worth telling apart from the rest.</para>
+        /// </summary>
+        private void SpawnFestiveLights(ModConfig config)
+        {
+            _festiveLightsLit = 0;
+            if (_particles == null || !config.ParticleFestiveLights || Game1.currentLightSources == null)
+                return;
+            var viewportTopLeft = new Vector2(Game1.viewport.X, Game1.viewport.Y);
+            float viewportWidth = Game1.viewport.Width, viewportHeight = Game1.viewport.Height;
+            _festiveLights.Clear();
+            foreach (var pair in Game1.currentLightSources)
+            {
+                LightSource light = pair.Value;
+                if (light.textureIndex.Value != FestiveLightSheet)
+                    continue;
+                Vector2 position = light.position.Value;
+                Vector2 fromCamera = position - viewportTopLeft;
+                if (fromCamera.X < -64f || fromCamera.X > viewportWidth + 64f
+                    || fromCamera.Y < -64f || fromCamera.Y > viewportHeight + 64f)
+                    continue;
+                _festiveLights.Add(position);
+            }
+            _festiveLightsLit = _festiveLights.Count;
+            if (_festiveLightsLit == 0)
+                return;
+
+            float rate = FestiveTwinklesPerLightPerSecond * _festiveLightsLit
+                       * Math.Max(0f, config.ParticleDensity) * Math.Max(0f, config.ParticleFestiveLightsAmount);
+            _festiveSpawnCarry += rate / 60f;
+            int toSpawn = Math.Min((int)_festiveSpawnCarry, 6);
+            if (toSpawn <= 0)
+                return;
+            _festiveSpawnCarry -= toSpawn;
+
+            ParticleSystem pool = _particles;
+            float sizeScale = Math.Max(0.1f, config.ParticleFestiveLightsSize);
+            for (int i = 0; i < toSpawn; i++)
+            {
+                Vector2 bulb = _festiveLights[(int)(pool.RandomUnit() * _festiveLightsLit) % _festiveLightsLit];
+                // The bulb keeps its colour: a string where every lamp changes hue every second is
+                // a fairground, not a tree.
+                int colourIndex = (int)((Math.Abs(bulb.X) * 7 + Math.Abs(bulb.Y) * 13) / 64f) % FestiveColours.Length;
+                Vector3 colour = FestiveColours[colourIndex];
+                var position = new Vector2(bulb.X + pool.RandomBetween(-4f, 4f), bulb.Y + pool.RandomBetween(-4f, 4f));
+                pool.Spawn(ParticleSystem.AtlasCell.SoftGlow, position, Vector2.Zero,
+                    lifetimeSeconds: pool.RandomBetween(0.5f, 1.3f),
+                    sizePixels: pool.RandomBetween(8f, 15f) * sizeScale,
+                    tint: new Color(colour.X, colour.Y, colour.Z), emissive: true,
+                    dragPerSecond: 1f);
+            }
+        }
+
+        /// <summary>The festive bulbs on screen this frame, and how many, for the report.</summary>
+        private readonly System.Collections.Generic.List<Vector2> _festiveLights = new();
+        private int _festiveLightsLit;
+        private float _festiveSpawnCarry;
+        internal int ParticleFestiveLightsLit => _festiveLightsLit;
+
+        /// <summary>How many puffs somebody at a full run lifts in a second, at density 1. Half of
+        /// that at a walk, and nothing at all standing still.</summary>
+        private const float FootDustPuffsPerSecondRunning = 9f;
+        /// <summary>The speed, in world pixels a second, that counts as a full run.</summary>
+        private const float RunningPixelsPerSecond = 300f;
+        /// <summary>Below this somebody is turning on the spot rather than travelling, and lifts
+        /// nothing. A walk into a wall would otherwise raise dust from a stationary farmer.</summary>
+        private const float WalkingPixelsPerSecond = 40f;
+        /// <summary>What a villager's walk is worth. They are moved a step at a time by their own
+        /// pathing rather than by a velocity anything can read, so their pace is a figure rather
+        /// than a measurement; it sits between a farmer's walk and their run.</summary>
+        private const float VillagerWalkPixelsPerSecond = 170f;
+        /// <summary>How opaque one puff starts. Dust is the thinnest thing in the picture and the
+        /// only mistake worth making here is making it too faint to notice.</summary>
+        private const float FootDustOpacity = 0.38f;
+        /// <summary>The colour lifted off tilled soil, and off sand. Not sampled from the ground:
+        /// what the ground is is a question the map already answers per tile, and sampling the
+        /// frame would read whatever happened to be drawn over it, shadow included.
+        /// <para>Both are LIGHTER than the ground they come off, which is the whole reason a puff
+        /// is visible at all: dust is loose grains hanging in the air with daylight on every side
+        /// of them, while the ground is packed and shadowed between its grains. The first version
+        /// used the ground's own colour and could only ever read as a smudge on it.</para></summary>
+        private static readonly Vector3 DirtDustColour = new(0.80f, 0.70f, 0.58f);
+        private static readonly Vector3 SandDustColour = new(0.97f, 0.93f, 0.84f);
+
+        /// <summary>How far behind the walker a puff starts, in world pixels. A puff belongs where
+        /// the foot pushed off, which by the time it is drawn is already behind them; born under
+        /// the body it reads as something the character is wearing rather than leaving.</summary>
+        private const float FootDustTrailPixels = 14f;
+        /// <summary>How much of the walker's own speed the puff keeps, backwards. Air the foot
+        /// shoved goes the other way, and a puff that hangs perfectly still while somebody runs
+        /// away from it is the thing that says "sprite" rather than "dust".</summary>
+        private const float FootDustBackwardShare = 0.22f;
+
+        /// <summary>Every puff lifted since the mod started, for the report. A running total
+        /// rather than this frame's: a puff happens on a step, and a report is read while standing
+        /// still, so a per-frame count is nearly always zero and says nothing.</summary>
+        private int _footDustPuffs;
+
+        /// <summary>
+        /// Dust kicked up under the feet of anyone crossing dry dirt or sand.
+        ///
+        /// <para>The game raises dust when you HOE a tile and never when you walk over it, which
+        /// leaves the one surface that should show a footfall showing nothing. The tile's own
+        /// <c>Type</c> property is the test, because it is the same one the game reads to decide
+        /// which footstep to play: a stone path sounds like stone and lifts nothing, and so does
+        /// grass, and so does a plank bridge.</para>
+        ///
+        /// <para>Villagers raise it too. A rule that applied to the player alone would say, every
+        /// time somebody walks past, that the world is only solid where you are standing.</para>
+        /// </summary>
+        private void SpawnFootDust(ModConfig config)
+        {
+            GameLocation? location = Game1.currentLocation;
+            if (_particles == null || !config.ParticleFootDust || location == null || !location.IsOutdoors)
+                return;
+            // Wet ground does not lift, and it stays damp for a while after the rain stops. The
+            // puddles already keep that reading, so this asks them rather than keeping a second one.
+            float dryness = 1f - PuddleAmountNow;
+            if (LocalSky.IsRaining || LocalSky.IsSnowing || dryness <= 0.05f)
+                return;
+
+            float rate = FootDustPuffsPerSecondRunning * dryness
+                       * Math.Max(0f, config.ParticleDensity) * Math.Max(0f, config.ParticleFootDustAmount);
+            float sizeScale = Math.Max(0.1f, config.ParticleFootDustSize);
+            if (rate <= 0f)
+                return;
+
+            Farmer? player = Game1.player;
+            if (player != null)
+            {
+                float speed = _playerVelocity.Length();
+                Vector2 travel = speed > 0.01f ? _playerVelocity / speed : Vector2.Zero;
+                LiftFootDust(location, player.GetBoundingBox(), speed, travel, rate, sizeScale);
+            }
+            // Everyone else on their feet, and everything else on ITS feet. A villager, the horse
+            // and the pets all arrive through the character list, because the game makes them all
+            // NPCs; the farm animals do not, because it keeps them somewhere else entirely, and
+            // leaving them out would say a cow crossing a dry yard disturbs nothing.
+            foreach (NPC villager in ShadowRenderer.CharactersIn(location))
+                if (villager.isMoving())
+                    LiftFootDust(location, villager.GetBoundingBox(), VillagerWalkPixelsPerSecond,
+                        FacingDirection(villager.FacingDirection), rate, sizeScale);
+            foreach (FarmAnimal animal in location.animals.Values)
+                if (animal.isMoving())
+                    LiftFootDust(location, animal.GetBoundingBox(), VillagerWalkPixelsPerSecond,
+                        FacingDirection(animal.FacingDirection), rate, sizeScale);
+        }
+
+        /// <summary>Which way a villager is walking. They are moved by their own pathing rather
+        /// than by a velocity anything outside them can read, so their facing is the direction of
+        /// travel; it is the same thing for anyone who is not walking backwards.</summary>
+        private static Vector2 FacingDirection(int facing) => facing switch
+        {
+            0 => new Vector2(0f, -1f),
+            1 => new Vector2(1f, 0f),
+            2 => new Vector2(0f, 1f),
+            _ => new Vector2(-1f, 0f),
+        };
+
+        /// <summary>One walker's chance of a puff this tick. Spread by chance rather than counted
+        /// out per footfall: a puff every few steps at a walk and one under nearly every step at a
+        /// run is what the eye reads as dust, and chance gets there without this having to keep a
+        /// stride clock for every villager on the map.</summary>
+        private void LiftFootDust(GameLocation location, Rectangle feet, float speed, Vector2 travel,
+            float rate, float sizeScale)
+        {
+            if (speed < WalkingPixelsPerSecond)
+                return;
+            ParticleSystem pool = _particles!;
+            float share = Math.Min(1f, speed / RunningPixelsPerSecond);
+            if (pool.RandomUnit() > rate * share / 60f)
+                return;
+
+            int tileX = feet.Center.X / 64, tileY = (feet.Bottom - 1) / 64;
+            Vector3 colour;
+            switch (location.doesTileHaveProperty(tileX, tileY, "Type", "Back"))
+            {
+                case "Dirt": colour = DirtDustColour; break;
+                case "Sand": colour = SandDustColour; break;
+                default:
+                    // A hoed tile IS bare soil, whatever the map says is painted under it. The
+                    // Type property belongs to the map and a farm's whole field is painted Grass,
+                    // so without this the one place in the valley made of loose earth was the one
+                    // place that lifted nothing.
+                    if (location.terrainFeatures.TryGetValue(new Vector2(tileX, tileY), out var feature)
+                        && feature is StardewValley.TerrainFeatures.HoeDirt)
+                    {
+                        colour = DirtDustColour;
+                        break;
+                    }
+                    return;
+            }
+
+            // Behind the heel and low: a puff is the ground being disturbed, so it starts on the
+            // ground where the foot pushed off, rises a little, drifts back the way the air was
+            // shoved, and settles through its own fall.
+            var position = new Vector2(
+                feet.Center.X - travel.X * FootDustTrailPixels + pool.RandomBetween(-6f, 6f),
+                feet.Bottom - 5f - travel.Y * FootDustTrailPixels * 0.35f);
+            var velocity = new Vector2(pool.RandomBetween(-9f, 9f), pool.RandomBetween(-20f, -7f))
+                         - travel * speed * FootDustBackwardShare;
+            var tint = new Color(colour.X, colour.Y, colour.Z) * FootDustOpacity;
+            pool.Spawn(ParticleSystem.AtlasCell.SoftGlow, position, velocity,
+                lifetimeSeconds: pool.RandomBetween(0.35f, 0.62f),
+                sizePixels: pool.RandomBetween(10f, 19f) * sizeScale,
+                tint: tint, emissive: false,
+                fallPixelsPerSecondSquared: 26f,
+                dragPerSecond: 3.2f,
+                ground: true);
+            _footDustPuffs++;
         }
 
         /// <summary>Petals or leaves lit a second over the whole screen, at density 1. A
@@ -702,7 +934,7 @@ namespace SDVRadiance
             // Winter's air belongs to the snow, which is its own piece of work.
             ParticleSystem.AtlasCell cell;
             Vector3 colour;
-            switch (Game1.season)
+            switch (LocalSky.Season)
             {
                 // Darker than the colours these things are usually drawn in. A petal is a thin
                 // pale thing seen against a lit street, not a light of its own, and at full
@@ -725,7 +957,7 @@ namespace SDVRadiance
             }
             // Rain flattens what is in the air, and a petal drifting through a downpour reads as
             // a mistake rather than as spring.
-            if (Game1.isRaining || Game1.isSnowing)
+            if (LocalSky.IsRaining || LocalSky.IsSnowing)
                 return;
             _blossomFalling = true;
 

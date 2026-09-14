@@ -70,9 +70,9 @@ namespace SDVRadiance
         /// </summary>
         private static void AdvanceWetness(ModConfig config)
         {
-            if (Game1.ticks == _wetnessSteppedTick || Determinism.Frozen)
+            if (SharedTicks.Now == _wetnessSteppedTick || Determinism.Frozen)
                 return;
-            _wetnessSteppedTick = Game1.ticks;
+            _wetnessSteppedTick = SharedTicks.Now;
 
             GameLocation? location = Game1.currentLocation;
             if (location == null)
@@ -119,12 +119,35 @@ namespace SDVRadiance
         private bool _wetPuddleMirrorWanted;
         internal bool WetWorldWantsEntityMirror => _wetPuddleMirrorWanted;
 
-        private Texture2D? _wetSuitabilityTexture;
-        private GameLocation? _wetSuitabilityLocation;
-        private Vector2 _wetSuitabilityMapTiles = Vector2.One;
+        // Everything from here to the texture pair's resting half belongs to one screen:
+        // RenderPipeline.Screens.cs says why.
+        private ref Texture2D? _wetSuitabilityTexture => ref _screen.WetSuitabilityTexture;
+        private ref GameLocation? _wetSuitabilityLocation => ref _screen.WetSuitabilityLocation;
+        private ref Vector2 _wetSuitabilityMapTiles => ref _screen.WetSuitabilityMapTiles;
         /// <summary>What the suitability was built against: placing or picking up an object
         /// changes which tiles may pool, so a changed count rebuilds the texture.</summary>
-        private int _wetSuitabilityObjectCount = -1, _wetSuitabilityFurnitureCount = -1;
+        private ref int _wetSuitabilityObjectCount => ref _screen.WetSuitabilityObjectCount;
+        private ref int _wetSuitabilityFurnitureCount => ref _screen.WetSuitabilityFurnitureCount;
+        /// <summary>The map's own answer, one byte per tile, before any placed thing is vetoed:
+        /// what the ground is and whether art covers it. Built once per location (and again when
+        /// its SurfaceMap is replaced, which is what a building placed or removed does), because
+        /// nothing a player can place changes it, and it is the expensive half: every tile of
+        /// the map asked twice through the map's property lookup. Picking up one stone used to
+        /// pay for that whole walk again.</summary>
+        private ref byte[]? _wetGroundCells => ref _screen.WetGroundCells;
+        private ref GameLocation? _wetGroundCellsLocation => ref _screen.WetGroundCellsLocation;
+        private ref SurfaceMap? _wetGroundCellsSurface => ref _screen.WetGroundCellsSurface;
+        /// <summary>The ground cells with the placed things vetoed: what the texture holds.
+        /// Reused between rebuilds; only its contents change.</summary>
+        private ref byte[]? _wetSuitabilityCells => ref _screen.WetSuitabilityCells;
+        /// <summary>What was last handed to the card. Most count changes do not move a single
+        /// texel: a chest placed on a wooden floor, a torch on grass, anything on a tile that was
+        /// never going to pool. Comparing five kilobytes costs microseconds and the upload it
+        /// skips was the expensive half of the rebuild here.</summary>
+        private ref byte[]? _wetSuitabilityUploaded => ref _screen.WetSuitabilityUploaded;
+        /// <summary>The texture pair's resting half (<see cref="TextureDoubleBuffer"/>), so a
+        /// rebuild never writes into the texture the card may still be reading.</summary>
+        private ref Texture2D? _wetSuitabilitySpare => ref _screen.WetSuitabilitySpare;
 
         /// <summary>
         /// Draw the wet-ground pass: source in, dampened scene out. Sits after water (puddles on
@@ -186,9 +209,12 @@ namespace SDVRadiance
 
         /// <summary>
         /// One texel per tile for the whole map: 0 = never wet, 128 = damp only, 255 = can pool.
-        /// Built once per location from the SurfaceMap's classes plus the map's own vocabulary
-        /// (Type Dirt/Stone, Diggable) - the same rule Dynamic Reflections proved across vanilla
-        /// and SVE. Grass darkens but never pools; decks, water and roofs never even darken.
+        /// The map's half (<see cref="BuildWetGroundCells"/>) is built once per location from the
+        /// SurfaceMap's classes plus the map's own vocabulary (Type Dirt/Stone, Diggable) - the
+        /// same rule Dynamic Reflections proved across vanilla and SVE. Grass darkens but never
+        /// pools; decks, water and roofs never even darken. The placed things are vetoed on top
+        /// whenever their counts change, which is the cheap half and the only one a placement
+        /// or a pickup has to pay for.
         /// </summary>
         private void EnsureWetSuitability()
         {
@@ -203,9 +229,61 @@ namespace SDVRadiance
             SurfaceMap? surface = SurfaceMap.For(location);
             if (surface == null)
                 return;
+            long phaseStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            int width = surface.Width, height = surface.Height;
+            if (_wetGroundCells == null || _wetGroundCells.Length != width * height
+                || !ReferenceEquals(location, _wetGroundCellsLocation) || !ReferenceEquals(surface, _wetGroundCellsSurface))
+            {
+                _wetGroundCells = BuildWetGroundCells(location, surface);
+                _wetGroundCellsLocation = location;
+                _wetGroundCellsSurface = surface;
+                phaseStart = PhaseCost.NoteSince("wet ground: map cells (every tile asked)", phaseStart);
+            }
             _wetSuitabilityLocation = location;
             _wetSuitabilityObjectCount = location.objects.Length;
             _wetSuitabilityFurnitureCount = location.furniture.Count;
+            if (_wetSuitabilityCells == null || _wetSuitabilityCells.Length != _wetGroundCells.Length)
+                _wetSuitabilityCells = new byte[_wetGroundCells.Length];
+            byte[] cells = _wetSuitabilityCells;
+            Buffer.BlockCopy(_wetGroundCells, 0, cells, 0, cells.Length);
+            // Placed things are not map tiles: a fence, a keg or a couch stands ON a stone tile
+            // and a pool painted across its sprite reads as a leak in the world. Their tiles go
+            // fully dry; the counts above rebuild this when something is placed or picked up.
+            foreach (var pair in location.objects.Pairs)
+            {
+                int tileX = (int)pair.Key.X, tileY = (int)pair.Key.Y;
+                if (tileX >= 0 && tileY >= 0 && tileX < width && tileY < height)
+                    cells[tileY * width + tileX] = 0;
+            }
+            foreach (StardewValley.Objects.Furniture piece in location.furniture)
+            {
+                Rectangle box = piece.boundingBox.Value;
+                for (int tileY = box.Top / 64; tileY <= (box.Bottom - 1) / 64; tileY++)
+                    for (int tileX = box.Left / 64; tileX <= (box.Right - 1) / 64; tileX++)
+                        if (tileX >= 0 && tileY >= 0 && tileX < width && tileY < height)
+                            cells[tileY * width + tileX] = 0;
+            }
+            if (_wetSuitabilityUploaded != null && _wetSuitabilityUploaded.Length == cells.Length
+                && _wetSuitabilityTexture is { IsDisposed: false }
+                && cells.AsSpan().SequenceEqual(_wetSuitabilityUploaded))
+            {
+                PhaseCost.NoteSince("wet ground: placed things vetoed, nothing moved", phaseStart);
+                return;
+            }
+            _wetSuitabilityTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _wetSuitabilitySpare,
+                _wetSuitabilityTexture, width, height, SurfaceFormat.Alpha8, null, cells, cells.Length);
+            if (_wetSuitabilityUploaded == null || _wetSuitabilityUploaded.Length != cells.Length)
+                _wetSuitabilityUploaded = new byte[cells.Length];
+            Buffer.BlockCopy(cells, 0, _wetSuitabilityUploaded, 0, cells.Length);
+            _wetSuitabilityMapTiles = new Vector2(width, height);
+            PhaseCost.NoteSince("wet ground: placed things vetoed + upload", phaseStart);
+        }
+
+        /// <summary>The map's half of the suitability: what each ground tile is, with any tile
+        /// that upper-layer art covers left dry. Asks every tile of the map, so it is built once
+        /// per location and kept (<see cref="_wetGroundCells"/>).</summary>
+        private static byte[] BuildWetGroundCells(GameLocation location, SurfaceMap surface)
+        {
             int width = surface.Width, height = surface.Height;
             var cells = new byte[width * height];
             // Every layer that draws OVER the ground, by enumeration rather than by name:
@@ -244,27 +322,7 @@ namespace SDVRadiance
                     cells[y * width + x] = puddleable ? (byte)255 : (byte)128;
                 }
             }
-            // Placed things are not map tiles: a fence, a keg or a couch stands ON a stone tile
-            // and a pool painted across its sprite reads as a leak in the world. Their tiles go
-            // fully dry; the counts above rebuild this when something is placed or picked up.
-            foreach (var pair in location.objects.Pairs)
-            {
-                int tileX = (int)pair.Key.X, tileY = (int)pair.Key.Y;
-                if (tileX >= 0 && tileY >= 0 && tileX < width && tileY < height)
-                    cells[tileY * width + tileX] = 0;
-            }
-            foreach (StardewValley.Objects.Furniture piece in location.furniture)
-            {
-                Rectangle box = piece.boundingBox.Value;
-                for (int tileY = box.Top / 64; tileY <= (box.Bottom - 1) / 64; tileY++)
-                    for (int tileX = box.Left / 64; tileX <= (box.Right - 1) / 64; tileX++)
-                        if (tileX >= 0 && tileY >= 0 && tileX < width && tileY < height)
-                            cells[tileY * width + tileX] = 0;
-            }
-            _wetSuitabilityTexture?.Dispose();
-            _wetSuitabilityTexture = new Texture2D(_device, width, height, false, SurfaceFormat.Alpha8);
-            _wetSuitabilityTexture.SetData(cells);
-            _wetSuitabilityMapTiles = new Vector2(width, height);
+            return cells;
         }
 
         /// <summary>One line for radiance_report: the timeline and the gate in one place, because

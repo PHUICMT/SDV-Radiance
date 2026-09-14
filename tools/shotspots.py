@@ -15,7 +15,7 @@ art there. Two things disqualify a spot:
     python tools/shotspots.py                 check every spot
     python tools/shotspots.py --spot beach-sea
 
-Results land in docs/local/description/shotspots-<date>.txt, one block per spot, and a
+Results land in docs/local/nexus/description/shotspots-<date>.txt, one block per spot, and a
 verdict table at the end.
 """
 import argparse, json, os, re, subprocess, sys, time, urllib.error, urllib.request

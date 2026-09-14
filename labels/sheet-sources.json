@@ -1,0 +1,4522 @@
+{
+ "format": 2,
+ "//": "Which mod supplies the art behind each labelled sheet name, from the files on disk: a pack that ships <name>.png is where that art comes from. Written by tools/labelops/modsheets.py --sources. from: 'the base game' no pack ships this name and the base game does; 'a mod' a pack ships it; 'a mod, over a base game name' a pack ships a name the base game also owns, so which one the game loaded is load order; 'unknown' nothing on this machine ships it and the base game does not either, so it came from a mod that is no longer installed. mods lists every pack that ships the name, by unique id and by the name in its own manifest, because only one of them won and which is load order, so choosing one here would be inventing an answer. The pack FOLDERS are deliberately not here: this library files mods under categories of the author's own invention, which mean nothing on anybody else's machine and are nobody else's business. They are written beside the author's own notes instead. A sheet names its packs by id only and mods holds the id to name table once, because 404 packs share 262 sheets and writing each name where it is used more than doubled the file.",
+ "mods": {
+  "1oOwOo1.SimpleFoliageRidgesideVillage": "Simple Foliage - Ridgeside Village",
+  "8BitAlien_DesaturatedTreesSVE": "Desaturated Trees for Stardew Valley Expanded",
+  "ASLane.MBO2": "More Building Options - Pack 2",
+  "A_TK.AToMS": "Archie's Tilesheets of Miscellaneous Stuff",
+  "A_TK.FarmProjectForaging": "Waterfall Forest 1: Medium Farm (WaFF)",
+  "A_TK.FarmProjectForaging.Extra": "Waterfall Forest 3: Map, Path & Shed",
+  "A_TK.FarmProjectForaging.FTM": "Waterfall Forest 4: FTM Files",
+  "A_TK.FarmProjectForaging.LE": "Waterfall Forest 2: Large Farm (WaFFLE)",
+  "Acerbicon.AECslime": "Ace Caves Expanded - Slime Cave",
+  "Acerbicon.HouseMods": "House 1.5 Mobile",
+  "ActionJackson.MultiPlayerGreenhouse": "Multi Player Greenhouse",
+  "Aimon.MoreLivelyFarmCave": "Aimon's More Lively Farm Cave",
+  "Aimon111.AimonsFancyGreenhouse": "Aimon's Fancy Greenhouse",
+  "Aimon111.AimonsTidyCozyFarmhouse": "Aimon's Tidy Cozy Farmhouse",
+  "Aimon111.MeadowsFarm": "Aimon's More Lively Meadowlands Farm",
+  "Aimon111.MeadowsFarmFTM": "Aimon's More Lively Meadowlands Farm [FTM]",
+  "Aimon111.MoreLivelyQuarryOverhaul": "Aimon's More Lively Quarry Overhaul",
+  "Aimon111.MoreLivelyQuarryOverhaulFTM": "Aimon's More Lively Quarry Overhaul FTM",
+  "Aimon111.MoreLivelySewerOverhaul": "Aimon's More Lively Sewer Overhaul",
+  "Aimon111.MoreLivelySewerOverhaulFTM": "Aimon's More Lively Sewer Overhaul FTM",
+  "Aimon_WitchyDGR": "Aimon's Witchy Dirt&Grass Recolor",
+  "AimonsMoreLivelySewerOverhaulPatches": "AimonsMoreLivelySewerOverhaulPatches",
+  "An.Shed": "An's Even Bigger Shed",
+  "ApryllForever.CPPolyamorySweet": "[CP] Polyamory Sweet!",
+  "ApryllForever.PolyamorySweetBed": "เตียง Polyamory Sweet",
+  "ApryllForever.PolyamorySweetKiss": "จูบ PolyamorySweet",
+  "ApryllForever.PolyamorySweetLove": "ความรัก Polyamory Sweet",
+  "ApryllForever.PolyamorySweetRooms": "ห้อง PolyamorySweet",
+  "ApryllForever.PolyamorySweetWedding": "งานแต่งงาน Polyamory Sweet",
+  "ApryllForever.QuonsetBarn": "[CP] Quonset Barn",
+  "Arkmenhah.ColorsValley": "New Colors of the Valley",
+  "Athelinde.LargerPuffinCoveFarmForage": "Larger Puffin Cove Farm Forage",
+  "Athelinde.PuffinBeachFarm": "Puffin Beach Farm",
+  "Az.Foliage": "Simple Foliage",
+  "BHArtifacts": "Artifact Fragments",
+  "BHForageables": "Lost Valley Forageables",
+  "BHMachinerules": "[PFM] Boarding House Machines",
+  "BackedPotatoes.CrystalIsland": "Crystal Island",
+  "BananaShpeel.BogWitchyFoliage2.0AT": "[AT] Bog's Witchy Foliage 2.0",
+  "BananaShpeel.BogWitchyFoliageAT": "[AT] Bog's Witchy Foliage",
+  "BeckyShark.MonsterShed": "Monster Shed",
+  "BeckyShark.VillageFarm": "Village Farm",
+  "BeneathThePlass.MoreBuildingsforCuteValleyBlue": "[CP] More Buildings for Cute Valley Blue",
+  "BeneathThePlass.slimehutchinteriorvanilla": "[CP] More Buildings for Cute Valley Pink-Slime Hutch Interior Vanilla",
+  "Blaklyte.Faegate": "Fae Gate",
+  "BogWyytch.SVETreesRecolor": "Bogs SVE Trees Recolor",
+  "Bogs.WitchyFoliageCP": "[CP] Bog's Witchy Foliage 2.0 Extras",
+  "Bogs.WitchyFoliageExtras": "Bog's Witchy Foliage Extras",
+  "Bonster.Prismatic.Greenhouse": "Bonster's Prismatic Greenhouse",
+  "Braindead2013.50x50Greenhouse": "Massive Greenhouse 50x50",
+  "BusStopExpansion": "BusStop Expansion Expansion",
+  "CHA0T1CxD3M0N.WaterfallFarm": "Waterfall Farm",
+  "CP.EoW.EasterEggs": "[CP] Bigger Easter Eggs",
+  "CP.Halloween.Fellings": "[CP] Halloween Fellings All Seasons",
+  "CP.Hippie.Trailer.Trader": "[CP] Hippie Trailer Trader",
+  "CPBoardingHouse": "CP Boarding House",
+  "Celestia87.MoreCellars": "BuildMoreCellars",
+  "Celestia87.MoreGreenhouses": "ZZZ_MoreGreenhouses",
+  "Childfarm.Jojacorp": "Visit Jojacorp",
+  "Childfarm.Jojacorpshop": "Dead body shop",
+  "Childfarm.Jojacorptrain": "Joja corp",
+  "Creative.CWS": "Creative Warehouse Shed",
+  "DEBAN.HotSpringCave": "Hot Spring Cave",
+  "DEN2.Orchard": "[CP] Mega Greenhouse Orchard",
+  "DTZ.DowntownZuzuBL": "[BL] Downtown Zuzu",
+  "DTZ.DowntownZuzuCC": "[CC] Downtown Zuzu",
+  "DTZ.DowntownZuzuCP": "[CP] Downtown Zuzu",
+  "DTZ.DowntownZuzuDLL": "[DLL] Downtown Zuzu",
+  "DTZ.DowntownZuzuFTM": "[FTM] Downtown Zuzu",
+  "DTZ.DowntownZuzuMFM": "[MFM] Downtown Zuzu",
+  "DTZ.DowntownZuzuTS": "[TS] Downtown Zuzu",
+  "DaisyNiko.EarthyInteriors": "Earthy Interiors",
+  "DaisyNiko.EarthyRecolour": "Earthy Recolour",
+  "DaisyNiko.Tilesheets": "DaisyNiko's Tilesheets",
+  "Delaney1035.EnergeticBuildings": "Delaney's Energetic Buildings",
+  "DevilishDemigod.DDGreenhouse": "DDs Greenhouse",
+  "Draylon.DirttoGrassCP": "Dirt to Grass",
+  "DustBeauty.FlummeEditSGFv2": "F SV Flumme Farmhouse Interior, from Seasonal Garden Farmhouse V2",
+  "ELL.StardewValleyTHAI": "Stardew Valley - THAI",
+  "ES.BarberShop": "East Scarp: Barber Shop",
+  "EduAnttunes.IslandSecret.TMX": "IslandSecret.TMX",
+  "Elaho.JosephsSeedShopCP": "[CP] Joseph's Seed Shop",
+  "Elaho.JosephsSeedShopJA": "[JA] Josephs' Seed Shop 2.0.0",
+  "Elaho.JosephsSeedShopPFM": "[PFM] Joseph's Seed Shop Producers",
+  "Elaho.LouvierFromagerieCheeseRecipes": "[JA] Louvier Fromagerie Cheese Recipes",
+  "Elaho.LouvierFromagerieProducersJA": "[JA] Louvier Fromagerie Producers",
+  "Elaho.LouvierFromagerieProducersPFM": "[PFM] Louvier Fromagerie Producers PFM",
+  "Elaho.LouvierFromagerieSTFAmelie": "[STF] Louvier Fromagerie Amelie",
+  "Elaho.LouvierFromagerieSTFPatrice": "[STF] Louvier Fromagerie Patrice",
+  "Elaho.LouvierFromagerieStorefront": "[CP] Louvier Fromagerie Shop Storefront",
+  "Elaho.PaisleysBridalBoutiqueCP": "[CP] Paisley's Bridal Boutique",
+  "Elle.DirtCliffRecolor": "Elle's Dirt and Cliff Recolor",
+  "Elle.SeasonalBuildings": "Elle's Seasonal Buildings",
+  "Elle.SeasonalVanillaBuildings": "Elle's Seasonal Vanilla Buildings",
+  "Ellie.CCRSV": "Calm Colors Ridgeside Village",
+  "ExpandedPokemon": "ExpandedPokemon",
+  "FTMBdHouse": "Forage Settings Boarding House",
+  "FallSpice.SlightlyBiggerFarm": "SlightlyBiggerFarm",
+  "Fippsie.TinyPam": "Tidy Pam",
+  "FireRedLily.NPCApartments": "[CP] Fireredlily's Pelican Valley Loft Apartments",
+  "FlashShifter.SVE-FTM": "Stardew Valley Expanded Farm Type Manager",
+  "FlashShifter.SVECode": "Stardew Valley Expanded",
+  "FlashShifter.StardewValleyExpandedCP": "Stardew Valley Expanded",
+  "Ghilminion.Ghilland_Building_Price": "Ghilland Barn, Coop and Silo",
+  "Ghilminion_Ghilland.Big.Coop": "Ghilland Bigger Coop",
+  "Ghilminion_Ghilland.Bigger.Barn": "Ghilland Bigger Barn",
+  "Gweniaczek.Grandpas_Tools": "Grandpas Tools",
+  "Gweniaczek.Medieval_DNT": "Medieval_DNT",
+  "Gweniaczek.WayBackPT": "Way Back PT",
+  "HC.AdditionalMiniFarm": "Additional Mini Farm - Scenic Edition",
+  "HC.WalkToGingerIsland": "Walk To Ginger Island",
+  "HXW.Buildings_Complete": "H&W Custom Buildings All in One Pack",
+  "HXW.Buildings_Florist": "H&W Custom Florist Building",
+  "HXW.Buildings_TeaRoom": "HxW Tea Conservatory",
+  "HalfAlive.SpiritFieldsContentPack": "SpiritFieldsContentPack",
+  "HalfAlive.SpiritFieldsMod": "SpiritFieldsMod",
+  "Hana.GNhotspring": "Gender Neutral Bathhouse Hot Spring - Content Patcher",
+  "Hesper.HotSpringFarmcave": "Hot Spring Farmcave",
+  "Hoshikuzu.HouseInDesertForaging": "A House In The Desert Forageables",
+  "Hoshikuzu.HouseInTheDesert": "A House in the Desert",
+  "ILoveFish.VietnameseTranslation": "Stardew Valley - Vietnamese",
+  "Indie.VerdantHollowJunimoNexus": "Verdant Hollow ~ A Junimo Nexus",
+  "IslandSecret": "IslandSecret",
+  "IslandTMX": "Island",
+  "JAISland": "Island Fruits",
+  "Jesse.SauvignonInStardew": "Sauvignon in Stardew",
+  "Jessebot.moddingFarm": "#modding Farm",
+  "Juanpa98ar.Code.TheResourcer": "(JP98) The Resourcer Code AM",
+  "Juanpa98ar.TheResoucer.Source": "(JP98) The Resourcer AM",
+  "Kana.ComfortableSlimeHutch": "ComfortableSlimeHutch",
+  "Kana.DesertShortcut": "Desert Shortcut",
+  "Kana.DesertShortcutForage": "Desert Shortcut Forage",
+  "Kana.Grotta": "Grotta",
+  "Kana.GrottaFrutta": "GrottaFrutta",
+  "Kana.WalkAroundFarm": "WalkAroundFarm",
+  "KittyKaninka.ClayQuarry": "Clay Quarry",
+  "KokoroIppai.ExpandedForestFarm": "Expanded Forest Farm by Koko",
+  "KokoroIppai.ExpandedForestFarmFTM": "Expanded Forest Farm FTM",
+  "Kookiefroggie.Recolor": "[CP] Kookiefroggie's Recolor",
+  "Kreeate.HotspringRedux": "Hot Spring behind Joja Market Redux",
+  "Kurimiu.PlantableFarmcave": "[CP] Kuri's Plantable Farmcave",
+  "LMMM.Bathroom": "Bathroom PIF",
+  "Lantern.dewfarm": "Dewdrop Forest Farm",
+  "Lantern.lavenderfarm": "Lavender Springs Farm",
+  "Lavliette.CalmColourValley": "Calm Colour Valley",
+  "Lavliette.LittleCottage": "Little Cottage",
+  "Lavliette.NaturallyValley": " Naturally Valley",
+  "Legacy_Farm_Forage": "Legacy Farm FTM",
+  "LemurKat.CleanerSewer.CP": "CP Nicer Sewer",
+  "Lemurkat.EastScarp": "East Scarp: Locations",
+  "Lemurkat.EastScarpNPCs": "East Scarp: NPCs",
+  "Lemurkat.EastScarpe.FTM": "Forage Settings East Scarp",
+  "Lita.StarblueValley": "Starblue Valley",
+  "Lita.StarblueValleyUnofficial": "Starblue Valley Unofficial",
+  "Lnh.AdditionalAreasForage": "Stardew Valley Additional Areas Forage",
+  "Lnh.Barn": "Lnh's Barn",
+  "Lnh.Coop": "Lnh's Coop",
+  "Lnh.CustomMpas": "Stardew Valley Additional Areas",
+  "Lnh.FarmCave": "Lnh Farm Cave",
+  "Lnh.FarmCaveForage": "Farm Cave Forage",
+  "Lnh.FarmForage": "Farm Forage",
+  "Lnh.MoonSummitFarm": "Lnh's Moon Summit Farm",
+  "Lnh.MoreCustomFarms": "Lnh's More Custom Farms",
+  "Lnh.NaturalAerialGreenhouse": "Lnh's Natural Aerial Greenhouse",
+  "Lnh.NewFarm": "Lnh's New Farm",
+  "Lnh.NewFarmForage": "Lnh's New Farm Forage",
+  "Lnh.PeakTowerFarm": "Lnh's Peak Tower Farm",
+  "Lnh.RoseGardenFarm": "Lnh's Rose Garden Farm",
+  "Lnh.RoseGardenFarmForage": "Lnh's Rose Garden Farm Forage",
+  "Lnh.SequesteredFarm": "Lnh's Sequestered Farm",
+  "Lnh.SequesteredFarmForage": "Lnh's Sequestered Farm Forage",
+  "Lnh.SimpleAndRoughGreenhouse": "Lnh's Simple And Rough Greenhouse",
+  "Lnh.SimpleFarm": "Lnh's Simple Farm",
+  "Lnh.SimpleFarmForage": "Lnh's Simple Farm Forage",
+  "Lnh.TheTidyFarm": "Lnh's The Tidy Farm",
+  "Lnh.WalkToTheDesertFromAdditionalArea": "Walk to the Desert from Additional area",
+  "Lnh.WalkToTheDesertFromAdditionalAreaForage": "Walk to the Desert from Additional area Forage",
+  "Lnh.YunXiFarm": "Lnh's YunXi Farm",
+  "LordSnowFox.FairFarm": "Fair Farm",
+  "Lou.PretSpouse": "Prettier Spouse Rooms",
+  "LuckyKitsune.SoberShaneMod": "Non-Alcoholic Shane Mod",
+  "Lumisteria.MtVapius": "Lumisteria - Visit Mount Vapius",
+  "Lumisteria.MtVapius.FTM": "Lumisteria Mt Vapius Spawn",
+  "Lumisteria.TtilesheetsOutdoor": "Lumisteria Tilesheets - Outdoor",
+  "Lunatyx.DesertedIslandFarm": "Deserted Island Farm",
+  "Lunatyx.DesertedIslandFarmCave": "Deserted Island Farm Cave",
+  "Lunatyx.DesertedIslandFarmCaveForage": "Deserted Island Farm Cave Forage FTM",
+  "Lunatyx.DesertedIslandFarmForage": "Deserted Island Farm Forage",
+  "Lunatyx.LegacyCellar": "Legacy Cellar",
+  "Lunatyx.LegacyCoopsAndBarns": "Legacy Coops and Barns",
+  "Lunatyx.LegacyFarm": "Legacy Farm",
+  "Lunatyx.LegacyFarmCave": "Legacy Farm Cave",
+  "Lunatyx.LegacyFarmCaveForage": "Legacy Farm Cave Forage FTM",
+  "Lunatyx.LegacyGreenhouse": "Legacy Greenhouse",
+  "M99.CutestyleWitch": "Cute Style Witch",
+  "Mila.Foliage": "Mila's Foliage",
+  "Morghoula.EnchantedGroveFarm": "Enchanted Grove Farm",
+  "Morghoula.SVETreesRecolored": "SVE Trees Recolored",
+  "N3cro92.CP.GardenVillage": "Garden Village Reloaded",
+  "N3cro92.CP.GardenVillageTourists": "Garden Village Reloaded Tourists",
+  "Nanogamer7.hotspring": "Bathhouse Hot Spring w Solarium Compatibility - CP",
+  "Narianka.TinyWildFarm": "Tiny Wild Farm",
+  "Neopffe.BetterWater": "Better Water",
+  "Nessephanie.DarkerDirtandCliffsTemporaryFixfor1.6": "(CP) Darker Dirt and Cliffs Temporary Fix for 1.6",
+  "NoFogBob.PocketRooms.CP": "Pocket Rooms",
+  "NoFogBob.PocketRooms.CPA": "Pocket Rooms CPA",
+  "NoFogBob.PocketRooms.JA": "Pocket Rooms JA",
+  "NoFogBob.PocketRooms.STF": "Pocket Rooms STF",
+  "Nook.BetterBuildingUpgrades": "BetterBuildingUpgrades",
+  "Novaphene.DustbeautyFoliageRedone": "(CP) Dustbeauty's Stardew Foliage Redone",
+  "Novaphene.SunnyfieldBusLocation": "[BL] Sunnyfield Bus Location",
+  "Nullnnow.MS-CommunityUpgrades": "Money Sinks - Community Upgrades",
+  "Oversizedhoody.Greenhouse": "Hoody's Greenhouse with Cellar",
+  "Parrot.Island": "[CP] Parrot Island",
+  "Pathoschild.CentralStation": "Central Station",
+  "Pathoschild.CentralStation.Content": "Central Station content",
+  "Peachyogurt.SVETreesRecoloredForBlueGrass": "SVE Trees Recolored For Blue Grass",
+  "Peehell.Peehells_Big_Cellar": "Peehell's Big Cellar",
+  "Peehell.Peehells_Big_Coop": "Peehell's Big Coop",
+  "Peehell.Peehells_Big_GreenHouse": "Peehell's Big GreenHouse",
+  "Peehell.Peehells_Big_Shed": "Peehell's Big Shed",
+  "Peehell.Peehells_Bigger_Barn": "Peehell's Bigger Barn",
+  "PicGriffith.SourGrapesGreenhouse": "Sour Grapes Greenhouse",
+  "Pillow.AlwaysFlowerDance": "[TMX] Lavil and Luma Maps",
+  "Pillow.AlwaysFlowerDance.CP": "AlwaysFlowerDance",
+  "Pillow.DBJ": "Double Bed Jodi",
+  "Pillow.SandyRoom": "Sandy's room",
+  "Pillow.Summit": "Old summit",
+  "PinkStations.CottonCandyRecolor": "PinkStations Cotton Candy Recolor",
+  "Poltergeister.SeasonalCuteSpritesSVE": "ตัวละครน่ารักตามฤดูกาล SVE",
+  "Pookachu.OneLargePlotGreenhouse": "One Large Plot Greenhouse",
+  "Pookachu.PookachusGreenhouse": "Pookachus Greenhouse",
+  "Pookachu.PookachusInsaneGreenhouse": "Pookachus Insane Greenhouse",
+  "Priff13.FourCorners_Overhauled": "FourCorners_Overhauled",
+  "Pwna-1337sa.CleanRiverFarm": "Less Grass Riverland Farm",
+  "Rafseazz.LunnaCP": "Lunna - Astray in StardewValley",
+  "Rafseazz.LunnaFTM": "LASV Forage",
+  "Rafseazz.RSVCC": "Ridgeside Village [Custom Companions component]",
+  "Rafseazz.RSVCP": "Ridgeside Village [Content Patcher component]",
+  "Rafseazz.RSVFTM": "Ridgeside Village [Farm Type Manager component]",
+  "Rafseazz.RidgesideVillage": "Ridgeside Village [SMAPI component]",
+  "ResoNight.IslandExpansion": "[CP]_IslandExpansion",
+  "ResoNight.IslandExpansion.FTM": "[FTM]_IslandExpansion",
+  "ResoNight.IslandExpansionCode": "Island Expansion",
+  "Ria.Guntherhouse": "Gunther House",
+  "Rosalie.CuteValley": "Cute Valley - Pink",
+  "STFBuffaloRanch": "Buffalo Ranch",
+  "Salaam.Recolor": "[CP] Kitsch Blue Grass Recolor 1.4.1 Kor (Basic, SVE, SDS, Mines)",
+  "Sandman53.hotspring": "Bathhouse Hot Spring",
+  "SdAkuma.BlackBike": "Sebastians black bike",
+  "SeaSea.GrandpasShed.OvergrownFairyRecolor": "Grandpa's Shed - Ali's Overgrown Fairy Inspired",
+  "SeaSea.SVE.Earthy": "(CP) Earthy Style Stardew Valley Expanded",
+  "SeaSea.VanillaTweaks.RSVPatch": "Vanilla Tweaks RSV Patch",
+  "SeaSea.VanillaTweaks.SVEPatch": "Vanilla Tweaks SVE Patch",
+  "Sexynes.CP.ImmersiveFarm3": "Immersive Farm 3",
+  "Sexynes.CP.ImmersiveFarm4": "Immersive Farm 4",
+  "Sharogg.PuffinCliff": "Puffin Cliff Farm",
+  "Soup.SquareSoftSewer": "Soup's SquareSoft Sewer",
+  "SpringTHZ_Seasonal_Witchy_Gothic_Buildings_Addition": "Seasonal Witchy-Gothic Buildings Addition",
+  "Sqbr.CuteMines": "Cuter Mines",
+  "Squishface.blues": "blues",
+  "StravaJD.Pokefy": "Pokefy",
+  "Stuyk.HardwareStoreCP": "[CP] Hardware Store",
+  "Stuyk.HardwareStoreSTF": "[STF] Hardware Store",
+  "SunberryTeam.SBVSMAPI": "[C#] Sunberry Village",
+  "SundropTeam.SundropCity": "Sundrop City",
+  "Sylvie.Farm_AdorbsBeach": "Farm_AdorbsBeach",
+  "Tarniyar.BL.GardenVillage": "[BL] GardenVillage",
+  "Tarniyar.CP.GardenVillage": "Garden Village",
+  "Tarniyar.CP.WalkToDesert": "[CP] Walk to the Desert Redux",
+  "Tarniyar.FTM.WalkToDesert": "[FTM] Walk to the Desert Redux",
+  "Tarniyar.JA.GardenVillage": "New objects for Garden Village",
+  "Tarniyar.MFM.GardenVillage": "[MFM] Garden Village",
+  "Tarniyar.NPC.GV.mod": "Garden Village NPCs",
+  "Tarniyar.PFM.GardenVillage": "[PFM] Garden Village",
+  "Tarniyar.STF.GardenVillage": "[STF] Garden Village Shops",
+  "TerraBubbles.WC": "Witchy Crystal Farm",
+  "TerraBubbles.WC-FTM": "Witchy Crystal Farm Forage Locations",
+  "TerraBubbles.WC-TMX": "Witchy Crystal Farm Warp Locations",
+  "ThatGirlFinley.FiveCornersFarm": "Five Corners Farm",
+  "ThatGirlFinley.FiveCornersFarmCP": "Five Corners Farm Content Patches",
+  "ThatGirlFinley.FiveCornersFarmTS": "Five Corners Farm Extended [TS]",
+  "TheKrominator.PokemaniaRevised": "Pokemania Revised",
+  "Tikamin557.CP.FishingPondFacilities": "[CP] Fishing Pond Facilities",
+  "Tikamin557.CP.MySubmarine": "[CP] My Submarine",
+  "Trashracc.Lustdew": "Lustdew Valley",
+  "Trashracc.LustdewFTM": "FTM Lustdew Valley",
+  "Trojan073.AccesibleLocations": "Trojan073's Accesible Locations - Now with ten percent more left facing bus!",
+  "Trojan073.AccesibleLocationsThePit": "[BL] Accesible Locations Bus Warp",
+  "UncannyValley.UncannyValleyCP": "UncannyValleyCP",
+  "UncannyValley.UncannyValleyMod": "UncannyValleyMod",
+  "UncannyValley.UncannyValleyPotions": "UncannyValleyPotions",
+  "UncannyValley.UncannyValleyShop": "UncannyValleyShop",
+  "Undare.MineralMageItems": "Mineral Mage Items",
+  "Undare.MineralMageMachinesPFM": "[PFM] Mineral Mage",
+  "Undare.MineralOptions": "Options",
+  "Vanillin.VanFarm": "Vanillin Farmland Fields",
+  "Vanillin.VanFarmFTM": "Vanillin Farmland Fields FTM",
+  "Vanillin.VanMine": "Vanillin Deep Mines",
+  "Vanillin.VanMineFTM": "VanMineFTM",
+  "Vanillin.Van_Mine_Clumps": "Vanillin Mine Clumps",
+  "VibrantPastoral.C": "Vibrant Pastoral",
+  "VinillaBean.EarthyRSV": "Earthy Ridgeside CP Conversion",
+  "VvVvVvV2222222222.CB": "Coop and Barn",
+  "Wandox99.MagicGreenhouseGarden": "[CP] Magic Greenhouse Garden",
+  "Waterice.FallLeaves": "Fall Leaves",
+  "Wildflour.NooksCrannies": "Forager's Nooks and Crannies - New Maps for Stardew Valley",
+  "Wildflour.NooksCranniesCC": "Custom Companions for Nooks and Crannies",
+  "Xiddav.FestivalsRecolored": "Recolor Festival",
+  "YOHEL.RoseandWisteriaSVE": "Rose and Wisteria SVE Buildings",
+  "Yris.RetroRecolor-1.6-Community-Patch": "Yri's Retro Recolor",
+  "Zilch.BirdieHutInterior": "Birdie Hut Interior",
+  "Zilch.GardenVillageRetexture": "[CP] GardenVillage Retexture",
+  "acearohippo.HideawayCellar": "Hideaway Cellar",
+  "aedenthorn.GemIsles": "Gem Isles",
+  "ahri1014.DwarvenArchaeologist": "[CP] Dwarven Archaeologist",
+  "aliyach.PortraitAccurateNPCSprites": "PortraitAccurateNPCSprites",
+  "atravita.EastScarp": "East Scarp: C#",
+  "belight.Moonjellyfishbeautify": "Moon jellyfish beautify star Dew Valley",
+  "cat.betterfruittrees": "Better Fruit Trees",
+  "colling.beachhhouse": "Island beach house",
+  "colling.bluegrass": "Blue Grass Recolor",
+  "colling.seacellar": "Sea Breeze Cellar",
+  "crystalinerose.RusticGreenhouse": "(CR) Kisaa's Cozy Rustic Greenhouse",
+  "crystalinerose.Tilesheets": "crystalinerose Tilesheets",
+  "dedpeech.campsite": "Campsite",
+  "dedpeech.campsiteforage": "Campsite forage",
+  "dedpeech.forestpatch": "forest patch",
+  "dedpeech.seacave": "SeaCave",
+  "dreamy.ORb": "OrbOfTheTidesCP",
+  "dreamy.kickitspot": "CapeStardew",
+  "dreamygloom.AnnettaFTM": "AnnettesRetreat [Farm Type Manager component]",
+  "dreamygloom.AnnettaNPC": "AnnettaNPC",
+  "dreamygloom.CapeStardewCode": "CapeStardewCode",
+  "grapeponta.SecretGarden": "Secret Garden Farm",
+  "grapeponta.VibrantPastoralRecolor": "Vibrant Pastoral Redrawn",
+  "harvz.ACM.CP": "[CP] Arena Challenges Mod",
+  "harvz.ACM.SMAPI": "[DLL] Arena Challenges Mod",
+  "harvz.TinyFarm": "Tiny Farm",
+  "herbivoor.UniversalRecolors": "Universal Recolors",
+  "heyseth.pierrebalcony": "Pierre's Balcony",
+  "hippo.FTMHideawayCellar": "Hideaway Forage",
+  "ibelieveicanfall.GrandpasShed.BogWyytchBuildings": "Grandpa's Shed Recolor - BogWyytch Witchy Buildings",
+  "idaida.FairyMSVE": "IDAIDAs Muted Fairy SVE Farm Buildings",
+  "imclueless0.CleanerFarm": "CleanerFarm",
+  "linbun.moreovergrownfairybuildings": "More Overgrown Fairy Buildings",
+  "liyumeng1999": "Japanese Ice Cream Shop",
+  "lumisteria.visitmountvapius.code": "VisitMountVapius",
+  "lydocia.HuelessHavenMapRecolour": "Hueless Haven - Desaturated Map Recolour",
+  "marchareui.DirtToGrass1.6": "Dirt To Grass 1.6",
+  "melnoelle.underdarksewer": "UnderdarkSewer",
+  "melnoelle.underdarksewerCP": "CP Underdark Sewer",
+  "mentlesoul.BiggerGreenhouse": "BiggerGreenhouse",
+  "nanis.kitchen": "Kitchen Starter",
+  "novaphene.sunnymap": "[CP] Sunnyfield Shops",
+  "nraittanna.LifeCycleAthanaeriCP": "[CP] Athanaeri Corner",
+  "nraittanna.LifeCycleAthanaeriMap": "[TMX] Athanaeri Corner",
+  "penny3.BuildableGreenhouseBig": "[TMX] Buildable Greenhouse (Big)",
+  "phuicmt.MyAnimeVisuals": "[CP] MyAnime Visuals",
+  "pokemaniaAnimated.Krominator": "Pokemon Animated",
+  "pokemaniaSprites.Krominator": "Pokemon Sprites",
+  "prism99.advize.stardewrealty": "Stardew Realty Framework",
+  "proudunicorn.tilesrearranged": "[CP] Proudunicorn's Tiles Rearranged",
+  "rainkius.SeasideValley": "Seaside Valley",
+  "ravenly.MossyGrove": "Mossy Grove",
+  "recolorstardewfoliage": "Recolor Stardew Foliage Snow cover",
+  "regndropar.VictorianBathhouse": "Victorian Bathhouse",
+  "ricehit.maprecoloredCP": "ricehit.maprecolored-CP",
+  "rikai.SeasonalOvergrownGreenhouse": "rikai's Seasonal Overgrown Greenhouse",
+  "sabiyato.farmonsen": "Farm Onsen",
+  "sadnumbme.JasVincentShop": "[CP]Jas and Vincent's Shop.",
+  "silvermoonchan.Aviary": "[CP] Aviary",
+  "simezi21.Dark_Club_CC": "Dark_Club_CC",
+  "simezi21.Dark_Club_CP": "Dark_Club_CP",
+  "simezi21.Dark_Club_CP_Animals": "Dark_Club_CP_Animals",
+  "simezi21.Dark_Club_CP_Crops": "Dark_Club_CP_Crops",
+  "simezi21.Dark_Club_CP_Furniture": "Dark_Club_CP_Furniture",
+  "simezi21.Dark_Club_CP_Scarecrows": "Dark_Club_CP_Scarecrows",
+  "simezi21.Dark_Club_FTM": "Dark_Club_FTM",
+  "simezi21.Dark_Club_PFM": "Dark_Club_PFM",
+  "skellady.SBVCC": "Sunberry Village - Custom Companions",
+  "skellady.SBVCP": "Sunberry Village - Content Patcher",
+  "skellady.SBVFTM": "Sunberry Village - Farm Type Manager",
+  "stardust.spritesretexture": "StarDust's Maps Retexture",
+  "tern.DesaturatedSVE": "Desaturated SVE",
+  "twistfaria.StylishGreenhouse": "Stylish Greenhouse",
+  "undare.MineralGuildShopStock": "[STF] Mineral Guild Shops",
+  "undare.MineralGuildShops": "Mineral Guild Shops",
+  "user.animeNpcGirls": "[CP] สาวๆ NPC สไตล์อนิเมะ",
+  "vamoosi.RosierColoredGlasses": "Rosier Colored Glasses",
+  "wildflour.fancygardenfarm": "Wildflour's Fancy Garden Farm",
+  "wildflour.seasonalgreenhouse": "Wildflour's Seasonal Greenhouse Map",
+  "wildflour.witchygreenhouse": "Witchy Greenhouse",
+  "wz.FTM.island": "(FTM) Explore the Island",
+  "wz.IslandCP": "(CP) Ginger Island",
+  "wz.JA.island": "(JA) Ginger Island",
+  "wz.STF.Island": "(STF) Ginger Island Shop",
+  "wz.TMX.Island": "(TMX) Ginger Island",
+  "xetyaj.HS": "Hot Spring",
+  "yangZ.SuperiorLuxuryAnimalRoom": "SuperiorLuxuryAnimalRoom",
+  "yourdorkbrains": "Lemonade Stand",
+  "yri.RetroRecolor": "Yri's Retro Recolor",
+  "yuninocorn.homespa": "Farm Building - Home Spa",
+  "zander.immersivefarm2": "Immersive Farm 2 Update"
+ },
+ "sheets": {
+  ".spring_beach": {
+   "from": "a mod",
+   "mods": [
+    "nraittanna.LifeCycleAthanaeriCP",
+    "nraittanna.LifeCycleAthanaeriMap"
+   ]
+  },
+  ".spring_island_tilesheet_1": {
+   "from": "a mod",
+   "mods": [
+    "nraittanna.LifeCycleAthanaeriCP",
+    "nraittanna.LifeCycleAthanaeriMap"
+   ]
+  },
+  "ALL_Waterfall_Shed": {
+   "from": "a mod",
+   "mods": [
+    "A_TK.FarmProjectForaging",
+    "A_TK.FarmProjectForaging.Extra",
+    "A_TK.FarmProjectForaging.FTM",
+    "A_TK.FarmProjectForaging.LE"
+   ]
+  },
+  "ATK_AToMS_INcave": {
+   "from": "a mod",
+   "mods": [
+    "A_TK.AToMS"
+   ]
+  },
+  "ATK_AToMS_INextra": {
+   "from": "a mod",
+   "mods": [
+    "A_TK.AToMS"
+   ]
+  },
+  "AceCave": {
+   "from": "a mod",
+   "mods": [
+    "Acerbicon.AECslime"
+   ]
+  },
+  "AnnettaHouseSprites": {
+   "from": "a mod",
+   "mods": [
+    "dreamy.ORb",
+    "dreamy.kickitspot",
+    "dreamygloom.AnnettaFTM",
+    "dreamygloom.AnnettaNPC",
+    "dreamygloom.CapeStardewCode"
+   ]
+  },
+  "Annotation 2019-06-08 144326": {
+   "from": "a mod",
+   "mods": [
+    "Jessebot.moddingFarm"
+   ]
+  },
+  "CR_ghmain": {
+   "from": "a mod",
+   "mods": [
+    "crystalinerose.RusticGreenhouse"
+   ]
+  },
+  "CarolineGreenhouseTiles": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "CP.Halloween.Fellings",
+    "DaisyNiko.EarthyInteriors",
+    "HXW.Buildings_Complete",
+    "HXW.Buildings_Florist",
+    "HXW.Buildings_TeaRoom",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "SundropTeam.SundropCity",
+    "VibrantPastoral.C",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "twistfaria.StylishGreenhouse",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "CastleVillage_Tilesheet": {
+   "from": "a mod",
+   "mods": [
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "CaveLitTiles": {
+   "from": "a mod",
+   "mods": [
+    "dreamy.ORb",
+    "dreamy.kickitspot",
+    "dreamygloom.AnnettaFTM",
+    "dreamygloom.AnnettaNPC",
+    "dreamygloom.CapeStardewCode"
+   ]
+  },
+  "DeepDark_outdoorsTileSheet": {
+   "from": "a mod",
+   "mods": [
+    "ES.BarberShop",
+    "Lemurkat.EastScarp",
+    "Lemurkat.EastScarpNPCs",
+    "Lemurkat.EastScarpe.FTM",
+    "atravita.EastScarp"
+   ]
+  },
+  "DesertTiles": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "Az.Foliage",
+    "CP.Halloween.Fellings",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyRecolour",
+    "ELL.StardewValleyTHAI",
+    "Gweniaczek.WayBackPT",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Mila.Foliage",
+    "Novaphene.DustbeautyFoliageRedone",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "SundropTeam.SundropCity",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS",
+    "VibrantPastoral.C",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "lydocia.HuelessHavenMapRecolour",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "vamoosi.RosierColoredGlasses",
+    "yri.RetroRecolor"
+   ]
+  },
+  "DesertTiles_Extended": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "CP.Halloween.Fellings",
+    "DaisyNiko.EarthyRecolour",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Mila.Foliage",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "SundropTeam.SundropCity",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS",
+    "VibrantPastoral.C",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "lydocia.HuelessHavenMapRecolour",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "twistfaria.StylishGreenhouse",
+    "vamoosi.RosierColoredGlasses",
+    "yri.RetroRecolor"
+   ]
+  },
+  "ESUnderwaterMap": {
+   "from": "a mod",
+   "mods": [
+    "ES.BarberShop",
+    "Lemurkat.EastScarp",
+    "Lemurkat.EastScarpNPCs",
+    "Lemurkat.EastScarpe.FTM",
+    "atravita.EastScarp"
+   ]
+  },
+  "ES_mine_desert": {
+   "from": "a mod",
+   "mods": [
+    "ES.BarberShop",
+    "Lemurkat.EastScarp",
+    "Lemurkat.EastScarpNPCs",
+    "Lemurkat.EastScarpe.FTM",
+    "atravita.EastScarp"
+   ]
+  },
+  "ES_mine_lexi": {
+   "from": "a mod",
+   "mods": [
+    "ES.BarberShop",
+    "Lemurkat.EastScarp",
+    "Lemurkat.EastScarpNPCs",
+    "Lemurkat.EastScarpe.FTM",
+    "atravita.EastScarp"
+   ]
+  },
+  "ElliottHouseTiles": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "DaisyNiko.EarthyInteriors",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Lou.PretSpouse",
+    "SundropTeam.SundropCity",
+    "VibrantPastoral.C",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "Exp_Ship": {
+   "from": "a mod",
+   "mods": [
+    "ResoNight.IslandExpansion",
+    "ResoNight.IslandExpansion.FTM",
+    "ResoNight.IslandExpansionCode"
+   ]
+  },
+  "FRL_NPCAptExterior": {
+   "from": "a mod",
+   "mods": [
+    "FireRedLily.NPCApartments"
+   ]
+  },
+  "Festivals": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "ApryllForever.CPPolyamorySweet",
+    "ApryllForever.PolyamorySweetBed",
+    "ApryllForever.PolyamorySweetKiss",
+    "ApryllForever.PolyamorySweetLove",
+    "ApryllForever.PolyamorySweetRooms",
+    "ApryllForever.PolyamorySweetWedding",
+    "Arkmenhah.ColorsValley",
+    "CP.EoW.EasterEggs",
+    "CP.Halloween.Fellings",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyRecolour",
+    "ELL.StardewValleyTHAI",
+    "Kookiefroggie.Recolor",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Pillow.AlwaysFlowerDance",
+    "Pillow.AlwaysFlowerDance.CP",
+    "PinkStations.CottonCandyRecolor",
+    "Poltergeister.SeasonalCuteSpritesSVE",
+    "Ria.Guntherhouse",
+    "Salaam.Recolor",
+    "SundropTeam.SundropCity",
+    "VibrantPastoral.C",
+    "Waterice.FallLeaves",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "belight.Moonjellyfishbeautify",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "lydocia.HuelessHavenMapRecolour",
+    "rainkius.SeasideValley",
+    "recolorstardewfoliage",
+    "stardust.spritesretexture",
+    "vamoosi.RosierColoredGlasses",
+    "yri.RetroRecolor"
+   ]
+  },
+  "FirstSlashGuildBuilding": {
+   "from": "a mod",
+   "mods": [
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "PinkStations.CottonCandyRecolor",
+    "Poltergeister.SeasonalCuteSpritesSVE",
+    "Salaam.Recolor",
+    "SeaSea.SVE.Earthy",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "GrampletonTrainStationTilesheet": {
+   "from": "a mod",
+   "mods": [
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "Poltergeister.SeasonalCuteSpritesSVE",
+    "Salaam.Recolor",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "Greenhouse_TileSheet_1": {
+   "from": "a mod",
+   "mods": [
+    "Lnh.NaturalAerialGreenhouse"
+   ]
+  },
+  "HSCave": {
+   "from": "a mod",
+   "mods": [
+    "Hesper.HotSpringFarmcave"
+   ]
+  },
+  "Hawthorns_House": {
+   "from": "a mod",
+   "mods": [
+    "ES.BarberShop",
+    "Lemurkat.EastScarp",
+    "Lemurkat.EastScarpNPCs",
+    "Lemurkat.EastScarpe.FTM",
+    "atravita.EastScarp"
+   ]
+  },
+  "Island_FieldOffice_Tilesheet": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "BackedPotatoes.CrystalIsland",
+    "CP.Halloween.Fellings",
+    "Lita.StarblueValleyUnofficial",
+    "SundropTeam.SundropCity",
+    "cat.betterfruittrees",
+    "herbivoor.UniversalRecolors",
+    "vamoosi.RosierColoredGlasses",
+    "wz.FTM.island",
+    "wz.IslandCP",
+    "wz.JA.island",
+    "wz.STF.Island",
+    "wz.TMX.Island"
+   ]
+  },
+  "JojaHQ": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "JojaMini-ZuzuApartments": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "JojaPetStore": {
+   "from": "a mod",
+   "mods": [
+    "ExpandedPokemon",
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "MBO_FishingShackTilesheet": {
+   "from": "a mod",
+   "mods": [
+    "ASLane.MBO2"
+   ]
+  },
+  "MallInterior": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "MoonSummitFarmTileSheet": {
+   "from": "a mod",
+   "mods": [
+    "Lnh.MoonSummitFarm"
+   ]
+  },
+  "MovieTheater_TileSheet": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "DaisyNiko.EarthyInteriors",
+    "Lita.StarblueValleyUnofficial",
+    "SundropTeam.SundropCity",
+    "VibrantPastoral.C",
+    "aliyach.PortraitAccurateNPCSprites",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "phuicmt.MyAnimeVisuals",
+    "stardust.spritesretexture",
+    "user.animeNpcGirls",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "Pathoschild.CentralStation_Tiles": {
+   "from": "a mod",
+   "mods": [
+    "Pathoschild.CentralStation",
+    "Pathoschild.CentralStation.Content"
+   ]
+  },
+  "SBV_mine_mushroom": {
+   "from": "a mod",
+   "mods": [
+    "SunberryTeam.SBVSMAPI",
+    "skellady.SBVCC",
+    "skellady.SBVCP",
+    "skellady.SBVFTM"
+   ]
+  },
+  "SBV_mine_quarryshaftvines": {
+   "from": "a mod",
+   "mods": [
+    "SunberryTeam.SBVSMAPI",
+    "skellady.SBVCC",
+    "skellady.SBVCP",
+    "skellady.SBVFTM"
+   ]
+  },
+  "SakuraVineyardDiningRoomTilesheet": {
+   "from": "a mod",
+   "mods": [
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "Poltergeister.SeasonalCuteSpritesSVE",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "SakuraVineyardTilesheet": {
+   "from": "a mod",
+   "mods": [
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "SeaBreeze_cellar": {
+   "from": "a mod",
+   "mods": [
+    "colling.seacellar"
+   ]
+  },
+  "SeaBreeze_house": {
+   "from": "unknown",
+   "mods": []
+  },
+  "SeaBreeze_islandhouse": {
+   "from": "a mod",
+   "mods": [
+    "colling.beachhhouse"
+   ]
+  },
+  "SequesteredFarm_TileSheet": {
+   "from": "a mod",
+   "mods": [
+    "Lnh.SequesteredFarm",
+    "Lnh.SequesteredFarmForage"
+   ]
+  },
+  "SewerTiles": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Aimon111.MoreLivelySewerOverhaul",
+    "Aimon111.MoreLivelySewerOverhaulFTM",
+    "AimonsMoreLivelySewerOverhaulPatches",
+    "Arkmenhah.ColorsValley",
+    "CP.Halloween.Fellings",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DustBeauty.FlummeEditSGFv2",
+    "Lita.StarblueValleyUnofficial",
+    "LuckyKitsune.SoberShaneMod",
+    "Neopffe.BetterWater",
+    "Soup.SquareSoftSewer",
+    "SundropTeam.SundropCity",
+    "VibrantPastoral.C",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "melnoelle.underdarksewer",
+    "melnoelle.underdarksewerCP",
+    "vamoosi.RosierColoredGlasses",
+    "yri.RetroRecolor"
+   ]
+  },
+  "SimpleFarm_sky": {
+   "from": "a mod",
+   "mods": [
+    "Lnh.MoreCustomFarms",
+    "Lnh.SimpleFarm",
+    "Lnh.SimpleFarmForage"
+   ]
+  },
+  "Spring_Waterfall_Cave": {
+   "from": "a mod",
+   "mods": [
+    "TerraBubbles.WC",
+    "TerraBubbles.WC-FTM",
+    "TerraBubbles.WC-TMX"
+   ]
+  },
+  "TidyCozyRoof_spring_default": {
+   "from": "a mod",
+   "mods": [
+    "Aimon111.AimonsTidyCozyFarmhouse"
+   ]
+  },
+  "VanillaFurniture": {
+   "from": "a mod",
+   "mods": [
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "Salaam.Recolor",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "Waterfalls": {
+   "from": "a mod",
+   "mods": [
+    "CP.Halloween.Fellings",
+    "Lnh.RoseGardenFarm",
+    "Lnh.RoseGardenFarmForage",
+    "PinkStations.CottonCandyRecolor"
+   ]
+  },
+  "WitchHutTiles": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "Lita.StarblueValleyUnofficial",
+    "M99.CutestyleWitch",
+    "Salaam.Recolor",
+    "SundropTeam.SundropCity",
+    "VibrantPastoral.C",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "YunXiFarm_TileSheet": {
+   "from": "a mod",
+   "mods": [
+    "Lnh.YunXiFarm"
+   ]
+  },
+  "ZCCC_Entrance_Tilesheet": {
+   "from": "a mod",
+   "mods": [
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "Poltergeister.SeasonalCuteSpritesSVE",
+    "Salaam.Recolor",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "ZCCC_FoodCourt_Tilesheet": {
+   "from": "a mod",
+   "mods": [
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "Poltergeister.SeasonalCuteSpritesSVE",
+    "Salaam.Recolor",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "ZCCC_MainHall_Tilesheet": {
+   "from": "a mod",
+   "mods": [
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "Salaam.Recolor",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "Zmine": {
+   "from": "a mod",
+   "mods": [
+    "Lantern.lavenderfarm"
+   ]
+  },
+  "ZuzuCityStreet_Tilesheet": {
+   "from": "a mod",
+   "mods": [
+    "ExpandedPokemon",
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "Poltergeister.SeasonalCuteSpritesSVE",
+    "Salaam.Recolor",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "ZuzuPermitOffice": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "art gallery exterior": {
+   "from": "a mod",
+   "mods": [
+    "prism99.advize.stardewrealty"
+   ]
+  },
+  "bathhouse_tiles": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "CP.Halloween.Fellings",
+    "DaisyNiko.EarthyInteriors",
+    "ELL.StardewValleyTHAI",
+    "Hana.GNhotspring",
+    "Lita.StarblueValleyUnofficial",
+    "Nanogamer7.hotspring",
+    "Peehell.Peehells_Big_Cellar",
+    "Salaam.Recolor",
+    "SundropTeam.SundropCity",
+    "VibrantPastoral.C",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "regndropar.VictorianBathhouse",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "bathhouse_tiles.es-ES": {
+   "from": "the base game",
+   "mods": []
+  },
+  "beachcave": {
+   "from": "a mod",
+   "mods": [
+    "Sharogg.PuffinCliff"
+   ]
+  },
+  "boatTunnelTiles": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "CP.Halloween.Fellings",
+    "Lita.StarblueValleyUnofficial",
+    "Salaam.Recolor",
+    "SundropTeam.SundropCity",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "herbivoor.UniversalRecolors",
+    "rainkius.SeasideValley",
+    "vamoosi.RosierColoredGlasses",
+    "yri.RetroRecolor"
+   ]
+  },
+  "bugLandTiles": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "BHArtifacts",
+    "BHForageables",
+    "BHMachinerules",
+    "BusStopExpansion",
+    "CP.Halloween.Fellings",
+    "CPBoardingHouse",
+    "FTMBdHouse",
+    "Lita.StarblueValleyUnofficial",
+    "STFBuffaloRanch",
+    "SundropTeam.SundropCity",
+    "VibrantPastoral.C",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "rainkius.SeasideValley",
+    "vamoosi.RosierColoredGlasses",
+    "yri.RetroRecolor"
+   ]
+  },
+  "cave decor": {
+   "from": "a mod",
+   "mods": [
+    "grapeponta.SecretGarden"
+   ]
+  },
+  "cave_Waterfalls": {
+   "from": "a mod",
+   "mods": [
+    "Sharogg.PuffinCliff"
+   ]
+  },
+  "cave_beach": {
+   "from": "a mod",
+   "mods": [
+    "ES.BarberShop",
+    "Lemurkat.EastScarp",
+    "Lemurkat.EastScarpNPCs",
+    "Lemurkat.EastScarpe.FTM",
+    "atravita.EastScarp"
+   ]
+  },
+  "cave_daisyextras": {
+   "from": "a mod",
+   "mods": [
+    "DaisyNiko.Tilesheets",
+    "Gweniaczek.Medieval_DNT",
+    "Lnh.FarmCave",
+    "Lnh.FarmCaveForage",
+    "Lunatyx.DesertedIslandFarm",
+    "Lunatyx.DesertedIslandFarmCave",
+    "Lunatyx.DesertedIslandFarmCaveForage",
+    "Lunatyx.DesertedIslandFarmForage",
+    "Lunatyx.LegacyFarmCave",
+    "Lunatyx.LegacyFarmCaveForage",
+    "Salaam.Recolor"
+   ]
+  },
+  "cavetreasure": {
+   "from": "a mod",
+   "mods": [
+    "dreamy.ORb",
+    "dreamy.kickitspot",
+    "dreamygloom.AnnettaFTM",
+    "dreamygloom.AnnettaNPC",
+    "dreamygloom.CapeStardewCode"
+   ]
+  },
+  "coopTiles": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "ApryllForever.QuonsetBarn",
+    "Arkmenhah.ColorsValley",
+    "BeneathThePlass.MoreBuildingsforCuteValleyBlue",
+    "BeneathThePlass.slimehutchinteriorvanilla",
+    "CP.Halloween.Fellings",
+    "DaisyNiko.EarthyInteriors",
+    "ELL.StardewValleyTHAI",
+    "Ghilminion.Ghilland_Building_Price",
+    "Ghilminion_Ghilland.Big.Coop",
+    "Ghilminion_Ghilland.Bigger.Barn",
+    "Lita.StarblueValleyUnofficial",
+    "Lunatyx.LegacyCoopsAndBarns",
+    "Nook.BetterBuildingUpgrades",
+    "Peehell.Peehells_Big_Coop",
+    "Peehell.Peehells_Bigger_Barn",
+    "Salaam.Recolor",
+    "SundropTeam.SundropCity",
+    "VibrantPastoral.C",
+    "VvVvVvV2222222222.CB",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "silvermoonchan.Aviary",
+    "vamoosi.RosierColoredGlasses",
+    "yangZ.SuperiorLuxuryAnimalRoom"
+   ]
+  },
+  "desert_festival_tilesheet": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "CP.Halloween.Fellings",
+    "CP.Hippie.Trailer.Trader",
+    "DaisyNiko.EarthyRecolour",
+    "Gweniaczek.WayBackPT",
+    "HC.AdditionalMiniFarm",
+    "ILoveFish.VietnameseTranslation",
+    "Lita.StarblueValleyUnofficial",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "StravaJD.Pokefy",
+    "VibrantPastoral.C",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "lydocia.HuelessHavenMapRecolour",
+    "phuicmt.MyAnimeVisuals",
+    "rainkius.SeasideValley",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "user.animeNpcGirls"
+   ]
+  },
+  "dinertiles": {
+   "from": "a mod",
+   "mods": [
+    "N3cro92.CP.GardenVillage",
+    "N3cro92.CP.GardenVillageTourists"
+   ]
+  },
+  "extra1": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "fall_ATK_AToMS_EXaqua": {
+   "from": "a mod",
+   "mods": [
+    "A_TK.AToMS"
+   ]
+  },
+  "fall_CR_outdoor": {
+   "from": "a mod",
+   "mods": [
+    "crystalinerose.Tilesheets"
+   ]
+  },
+  "fall_EastScarp": {
+   "from": "a mod",
+   "mods": [
+    "ES.BarberShop",
+    "Lemurkat.EastScarp",
+    "Lemurkat.EastScarpNPCs",
+    "Lemurkat.EastScarpe.FTM",
+    "atravita.EastScarp"
+   ]
+  },
+  "fall_FishingPondFacilitiesMap": {
+   "from": "a mod",
+   "mods": [
+    "Tikamin557.CP.FishingPondFacilities"
+   ]
+  },
+  "fall_GrampletonSuburbsTilesheet": {
+   "from": "a mod",
+   "mods": [
+    "ExpandedPokemon",
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "PinkStations.CottonCandyRecolor",
+    "Poltergeister.SeasonalCuteSpritesSVE",
+    "Salaam.Recolor",
+    "SeaSea.SVE.Earthy",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "fall_JojaEnergy": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "fall_MagicalFishingRaft": {
+   "from": "a mod",
+   "mods": [
+    "Tikamin557.CP.FishingPondFacilities"
+   ]
+  },
+  "fall_MorrisModernHouse": {
+   "from": "a mod",
+   "mods": [
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "Salaam.Recolor",
+    "SeaSea.SVE.Earthy",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "fall_Umuwi": {
+   "from": "a mod",
+   "mods": [
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM"
+   ]
+  },
+  "fall_Waterfalls": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "DaisyNiko.EarthyRecolour",
+    "HC.AdditionalMiniFarm",
+    "HC.WalkToGingerIsland",
+    "Lita.StarblueValleyUnofficial",
+    "LordSnowFox.FairFarm",
+    "Neopffe.BetterWater",
+    "Salaam.Recolor",
+    "VibrantPastoral.C",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "imclueless0.CleanerFarm",
+    "xetyaj.HS"
+   ]
+  },
+  "fall_beach": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Aimon_WitchyDGR",
+    "Arkmenhah.ColorsValley",
+    "Az.Foliage",
+    "BananaShpeel.BogWitchyFoliage2.0AT",
+    "BananaShpeel.BogWitchyFoliageAT",
+    "Bogs.WitchyFoliageCP",
+    "Bogs.WitchyFoliageExtras",
+    "CP.Halloween.Fellings",
+    "DaisyNiko.EarthyRecolour",
+    "ELL.StardewValleyTHAI",
+    "Gweniaczek.WayBackPT",
+    "IslandTMX",
+    "JAISland",
+    "Kookiefroggie.Recolor",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Mila.Foliage",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS",
+    "VibrantPastoral.C",
+    "Waterice.FallLeaves",
+    "aedenthorn.GemIsles",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "lydocia.HuelessHavenMapRecolour",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "fall_daisyextras": {
+   "from": "a mod",
+   "mods": [
+    "Aimon_WitchyDGR",
+    "DaisyNiko.Tilesheets",
+    "Gweniaczek.Medieval_DNT",
+    "Legacy_Farm_Forage",
+    "Lunatyx.DesertedIslandFarm",
+    "Lunatyx.DesertedIslandFarmCave",
+    "Lunatyx.DesertedIslandFarmCaveForage",
+    "Lunatyx.DesertedIslandFarmForage",
+    "Lunatyx.LegacyFarm",
+    "Lunatyx.LegacyGreenhouse",
+    "Salaam.Recolor",
+    "Waterice.FallLeaves",
+    "colling.bluegrass"
+   ]
+  },
+  "fall_extra3": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "fall_extrasTileSheet": {
+   "from": "a mod",
+   "mods": [
+    "BeckyShark.VillageFarm",
+    "CHA0T1CxD3M0N.WaterfallFarm",
+    "Lavliette.LittleCottage",
+    "Morghoula.EnchantedGroveFarm",
+    "Narianka.TinyWildFarm",
+    "TerraBubbles.WC",
+    "TerraBubbles.WC-FTM",
+    "TerraBubbles.WC-TMX",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS"
+   ]
+  },
+  "fall_fixedhouse": {
+   "from": "a mod",
+   "mods": [
+    "dreamy.ORb",
+    "dreamy.kickitspot",
+    "dreamygloom.AnnettaFTM",
+    "dreamygloom.AnnettaNPC",
+    "dreamygloom.CapeStardewCode"
+   ]
+  },
+  "fall_island_tilesheet_1": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Aimon_WitchyDGR",
+    "Az.Foliage",
+    "BackedPotatoes.CrystalIsland",
+    "CP.Halloween.Fellings",
+    "DaisyNiko.EarthyRecolour",
+    "Gweniaczek.WayBackPT",
+    "Kookiefroggie.Recolor",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Mila.Foliage",
+    "Novaphene.DustbeautyFoliageRedone",
+    "PinkStations.CottonCandyRecolor",
+    "Priff13.FourCorners_Overhauled",
+    "ResoNight.IslandExpansion",
+    "ResoNight.IslandExpansion.FTM",
+    "ResoNight.IslandExpansionCode",
+    "Salaam.Recolor",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS",
+    "VibrantPastoral.C",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "imclueless0.CleanerFarm",
+    "lydocia.HuelessHavenMapRecolour",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "twistfaria.StylishGreenhouse",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "fall_lumisteria_mtvapius_c_buildings": {
+   "from": "a mod",
+   "mods": [
+    "Lumisteria.MtVapius",
+    "Lumisteria.MtVapius.FTM",
+    "lumisteria.visitmountvapius.code"
+   ]
+  },
+  "fall_lumisteria_mtvapius_c_outdoors": {
+   "from": "a mod",
+   "mods": [
+    "Lumisteria.MtVapius",
+    "Lumisteria.MtVapius.FTM",
+    "lumisteria.visitmountvapius.code"
+   ]
+  },
+  "fall_lumisteria_mtvapius_v_outdoorsTileSheet": {
+   "from": "a mod",
+   "mods": [
+    "Lumisteria.MtVapius",
+    "Lumisteria.MtVapius.FTM",
+    "lumisteria.visitmountvapius.code"
+   ]
+  },
+  "fall_mod_lumisteria_tilesheetsoutdoor_buildings": {
+   "from": "a mod",
+   "mods": [
+    "Lumisteria.TtilesheetsOutdoor"
+   ]
+  },
+  "fall_outdoorsTileSheet": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "Az.Foliage",
+    "BananaShpeel.BogWitchyFoliage2.0AT",
+    "BananaShpeel.BogWitchyFoliageAT",
+    "BeneathThePlass.MoreBuildingsforCuteValleyBlue",
+    "BeneathThePlass.slimehutchinteriorvanilla",
+    "Bogs.WitchyFoliageCP",
+    "Bogs.WitchyFoliageExtras",
+    "CP.Halloween.Fellings",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyRecolour",
+    "Delaney1035.EnergeticBuildings",
+    "ELL.StardewValleyTHAI",
+    "Elaho.JosephsSeedShopCP",
+    "Elaho.JosephsSeedShopJA",
+    "Elaho.JosephsSeedShopPFM",
+    "Elaho.PaisleysBridalBoutiqueCP",
+    "Elle.SeasonalBuildings",
+    "FallSpice.SlightlyBiggerFarm",
+    "HC.AdditionalMiniFarm",
+    "HC.WalkToGingerIsland",
+    "HalfAlive.SpiritFieldsContentPack",
+    "HalfAlive.SpiritFieldsMod",
+    "KittyKaninka.ClayQuarry",
+    "Kreeate.HotspringRedux",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Lnh.SimpleAndRoughGreenhouse",
+    "LordSnowFox.FairFarm",
+    "Mila.Foliage",
+    "Neopffe.BetterWater",
+    "Nessephanie.DarkerDirtandCliffsTemporaryFixfor1.6",
+    "Nook.BetterBuildingUpgrades",
+    "Novaphene.DustbeautyFoliageRedone",
+    "Peehell.Peehells_Big_GreenHouse",
+    "PinkStations.CottonCandyRecolor",
+    "Priff13.FourCorners_Overhauled",
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM",
+    "Salaam.Recolor",
+    "SdAkuma.BlackBike",
+    "SpringTHZ_Seasonal_Witchy_Gothic_Buildings_Addition",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS",
+    "VibrantPastoral.C",
+    "Waterice.FallLeaves",
+    "Xiddav.FestivalsRecolored",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "harvz.TinyFarm",
+    "herbivoor.UniversalRecolors",
+    "imclueless0.CleanerFarm",
+    "linbun.moreovergrownfairybuildings",
+    "lydocia.HuelessHavenMapRecolour",
+    "proudunicorn.tilesrearranged",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "vamoosi.RosierColoredGlasses",
+    "xetyaj.HS"
+   ]
+  },
+  "fall_outdoorsTileSheet2": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "Az.Foliage",
+    "BananaShpeel.BogWitchyFoliage2.0AT",
+    "BananaShpeel.BogWitchyFoliageAT",
+    "Bogs.WitchyFoliageCP",
+    "Bogs.WitchyFoliageExtras",
+    "CP.Halloween.Fellings",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyRecolour",
+    "FallSpice.SlightlyBiggerFarm",
+    "Gweniaczek.WayBackPT",
+    "HC.AdditionalMiniFarm",
+    "HC.WalkToGingerIsland",
+    "KittyKaninka.ClayQuarry",
+    "Kookiefroggie.Recolor",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "LordSnowFox.FairFarm",
+    "Mila.Foliage",
+    "Neopffe.BetterWater",
+    "Nessephanie.DarkerDirtandCliffsTemporaryFixfor1.6",
+    "Novaphene.DustbeautyFoliageRedone",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "VibrantPastoral.C",
+    "cat.betterfruittrees",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "imclueless0.CleanerFarm",
+    "lydocia.HuelessHavenMapRecolour",
+    "proudunicorn.tilesrearranged",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "vamoosi.RosierColoredGlasses",
+    "wz.FTM.island",
+    "wz.IslandCP",
+    "wz.JA.island",
+    "wz.STF.Island",
+    "wz.TMX.Island",
+    "xetyaj.HS"
+   ]
+  },
+  "fall_sunberrybuildings": {
+   "from": "a mod",
+   "mods": [
+    "SunberryTeam.SBVSMAPI",
+    "skellady.SBVCC",
+    "skellady.SBVCP",
+    "skellady.SBVFTM"
+   ]
+  },
+  "fall_town": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "Az.Foliage",
+    "BananaShpeel.BogWitchyFoliage2.0AT",
+    "BananaShpeel.BogWitchyFoliageAT",
+    "Bogs.WitchyFoliageCP",
+    "Bogs.WitchyFoliageExtras",
+    "CP.Halloween.Fellings",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyRecolour",
+    "Draylon.DirttoGrassCP",
+    "ELL.StardewValleyTHAI",
+    "Elaho.JosephsSeedShopCP",
+    "Elaho.JosephsSeedShopJA",
+    "Elaho.JosephsSeedShopPFM",
+    "Elaho.LouvierFromagerieCheeseRecipes",
+    "Elaho.LouvierFromagerieProducersJA",
+    "Elaho.LouvierFromagerieProducersPFM",
+    "Elaho.LouvierFromagerieSTFAmelie",
+    "Elaho.LouvierFromagerieSTFPatrice",
+    "Elaho.LouvierFromagerieStorefront",
+    "Elaho.PaisleysBridalBoutiqueCP",
+    "Fippsie.TinyPam",
+    "HC.AdditionalMiniFarm",
+    "HC.WalkToGingerIsland",
+    "HalfAlive.SpiritFieldsContentPack",
+    "HalfAlive.SpiritFieldsMod",
+    "Kookiefroggie.Recolor",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Mila.Foliage",
+    "Novaphene.DustbeautyFoliageRedone",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "VibrantPastoral.C",
+    "Waterice.FallLeaves",
+    "Xiddav.FestivalsRecolored",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "heyseth.pierrebalcony",
+    "lydocia.HuelessHavenMapRecolour",
+    "marchareui.DirtToGrass1.6",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "fall_van_extra": {
+   "from": "a mod",
+   "mods": [
+    "Vanillin.VanFarm",
+    "Vanillin.VanFarmFTM",
+    "Vanillin.VanMine",
+    "Vanillin.VanMineFTM",
+    "Vanillin.Van_Mine_Clumps"
+   ]
+  },
+  "fall_z_extras": {
+   "from": "a mod",
+   "mods": [
+    "Aimon_WitchyDGR",
+    "ExpandedPokemon",
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "Legacy_Farm_Forage",
+    "Lunatyx.DesertedIslandFarm",
+    "Lunatyx.DesertedIslandFarmCave",
+    "Lunatyx.DesertedIslandFarmCaveForage",
+    "Lunatyx.DesertedIslandFarmForage",
+    "Lunatyx.LegacyFarm",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "SeaSea.GrandpasShed.OvergrownFairyRecolor",
+    "SeaSea.SVE.Earthy",
+    "SeaSea.VanillaTweaks.SVEPatch",
+    "YOHEL.RoseandWisteriaSVE",
+    "ibelieveicanfall.GrandpasShed.BogWyytchBuildings",
+    "idaida.FairyMSVE",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "fall_zridgeside": {
+   "from": "a mod",
+   "mods": [
+    "1oOwOo1.SimpleFoliageRidgesideVillage",
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "SeaSea.VanillaTweaks.RSVPatch",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "fall_zridgesidebuildings": {
+   "from": "a mod",
+   "mods": [
+    "Ellie.CCRSV",
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "fall_zridgetiles": {
+   "from": "a mod",
+   "mods": [
+    "Ellie.CCRSV",
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "fall_zrsvcablecar": {
+   "from": "a mod",
+   "mods": [
+    "Ellie.CCRSV",
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "fall_zzlasvbuildings": {
+   "from": "a mod",
+   "mods": [
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM"
+   ]
+  },
+  "farm_services_exterior": {
+   "from": "a mod",
+   "mods": [
+    "prism99.advize.stardewrealty"
+   ]
+  },
+  "flashExtras": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "furniture": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "BackedPotatoes.CrystalIsland",
+    "CP.Halloween.Fellings",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyInteriors",
+    "ELL.StardewValleyTHAI",
+    "Jesse.SauvignonInStardew",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Lnh.FarmForage",
+    "Lnh.NewFarm",
+    "Lnh.NewFarmForage",
+    "Lnh.TheTidyFarm",
+    "Lou.PretSpouse",
+    "Novaphene.SunnyfieldBusLocation",
+    "Nullnnow.MS-CommunityUpgrades",
+    "Pathoschild.CentralStation",
+    "Pathoschild.CentralStation.Content",
+    "Rosalie.CuteValley",
+    "Salaam.Recolor",
+    "StravaJD.Pokefy",
+    "SundropTeam.SundropCity",
+    "Trashracc.Lustdew",
+    "Trashracc.LustdewFTM",
+    "VibrantPastoral.C",
+    "Zilch.BirdieHutInterior",
+    "acearohippo.HideawayCellar",
+    "dedpeech.forestpatch",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "hippo.FTMHideawayCellar",
+    "novaphene.sunnymap",
+    "nraittanna.LifeCycleAthanaeriCP",
+    "nraittanna.LifeCycleAthanaeriMap",
+    "vamoosi.RosierColoredGlasses",
+    "yuninocorn.homespa"
+   ]
+  },
+  "furniturereverse": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "grotta": {
+   "from": "a mod",
+   "mods": [
+    "Kana.ComfortableSlimeHutch",
+    "Kana.DesertShortcut",
+    "Kana.DesertShortcutForage",
+    "Kana.Grotta",
+    "Kana.GrottaFrutta",
+    "Kana.WalkAroundFarm"
+   ]
+  },
+  "hardware_store": {
+   "from": "a mod",
+   "mods": [
+    "Stuyk.HardwareStoreCP",
+    "Stuyk.HardwareStoreSTF"
+   ]
+  },
+  "hime_fountainscentered": {
+   "from": "a mod",
+   "mods": [
+    "SunberryTeam.SBVSMAPI",
+    "skellady.SBVCC",
+    "skellady.SBVCP",
+    "skellady.SBVFTM"
+   ]
+  },
+  "hotspringcave": {
+   "from": "a mod",
+   "mods": [
+    "Hesper.HotSpringFarmcave",
+    "Legacy_Farm_Forage",
+    "Lunatyx.LegacyFarm"
+   ]
+  },
+  "island_tilesheet_1": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Az.Foliage",
+    "CP.Halloween.Fellings",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyRecolour",
+    "Delaney1035.EnergeticBuildings",
+    "EduAnttunes.IslandSecret.TMX",
+    "Elle.DirtCliffRecolor",
+    "Gweniaczek.WayBackPT",
+    "HC.WalkToGingerIsland",
+    "IslandSecret",
+    "Kookiefroggie.Recolor",
+    "Lita.StarblueValleyUnofficial",
+    "Mila.Foliage",
+    "Neopffe.BetterWater",
+    "Nessephanie.DarkerDirtandCliffsTemporaryFixfor1.6",
+    "Novaphene.DustbeautyFoliageRedone",
+    "Parrot.Island",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "SpringTHZ_Seasonal_Witchy_Gothic_Buildings_Addition",
+    "SundropTeam.SundropCity",
+    "VibrantPastoral.C",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "cat.betterfruittrees",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "lydocia.HuelessHavenMapRecolour",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "vamoosi.RosierColoredGlasses",
+    "wz.FTM.island",
+    "wz.IslandCP",
+    "wz.JA.island",
+    "wz.STF.Island",
+    "wz.TMX.Island",
+    "yri.RetroRecolor"
+   ]
+  },
+  "island_tilesheet_2": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "CP.Halloween.Fellings",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyRecolour",
+    "EduAnttunes.IslandSecret.TMX",
+    "HC.WalkToGingerIsland",
+    "IslandSecret",
+    "Kookiefroggie.Recolor",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValleyUnofficial",
+    "Neopffe.BetterWater",
+    "Novaphene.DustbeautyFoliageRedone",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "SundropTeam.SundropCity",
+    "VibrantPastoral.C",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "cat.betterfruittrees",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "ricehit.maprecoloredCP",
+    "vamoosi.RosierColoredGlasses",
+    "wz.FTM.island",
+    "wz.IslandCP",
+    "wz.JA.island",
+    "wz.STF.Island",
+    "wz.TMX.Island",
+    "yri.RetroRecolor"
+   ]
+  },
+  "lemurfurniture": {
+   "from": "a mod",
+   "mods": [
+    "ES.BarberShop",
+    "Lemurkat.EastScarp",
+    "Lemurkat.EastScarpNPCs",
+    "Lemurkat.EastScarpe.FTM",
+    "atravita.EastScarp"
+   ]
+  },
+  "lumisteria_mtvapius_c_allseasons": {
+   "from": "a mod",
+   "mods": [
+    "Lumisteria.MtVapius",
+    "Lumisteria.MtVapius.FTM",
+    "lumisteria.visitmountvapius.code"
+   ]
+  },
+  "mine": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Aimon111.MoreLivelyQuarryOverhaul",
+    "Aimon111.MoreLivelyQuarryOverhaulFTM",
+    "Athelinde.LargerPuffinCoveFarmForage",
+    "Athelinde.PuffinBeachFarm",
+    "BackedPotatoes.CrystalIsland",
+    "CP.Halloween.Fellings",
+    "DEBAN.HotSpringCave",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "HalfAlive.SpiritFieldsContentPack",
+    "HalfAlive.SpiritFieldsMod",
+    "Juanpa98ar.Code.TheResourcer",
+    "Juanpa98ar.TheResoucer.Source",
+    "Kana.DesertShortcut",
+    "Kana.DesertShortcutForage",
+    "Kana.Grotta",
+    "Kana.GrottaFrutta",
+    "Kana.WalkAroundFarm",
+    "Lantern.dewfarm",
+    "Legacy_Farm_Forage",
+    "Lnh.AdditionalAreasForage",
+    "Lnh.CustomMpas",
+    "Lnh.FarmCave",
+    "Lnh.FarmCaveForage",
+    "LordSnowFox.FairFarm",
+    "Lunatyx.DesertedIslandFarm",
+    "Lunatyx.DesertedIslandFarmCave",
+    "Lunatyx.DesertedIslandFarmCaveForage",
+    "Lunatyx.DesertedIslandFarmForage",
+    "Lunatyx.LegacyFarm",
+    "Lunatyx.LegacyFarmCave",
+    "Lunatyx.LegacyFarmCaveForage",
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM",
+    "Salaam.Recolor",
+    "Sexynes.CP.ImmersiveFarm3",
+    "Sexynes.CP.ImmersiveFarm4",
+    "Sharogg.PuffinCliff",
+    "Sqbr.CuteMines",
+    "VibrantPastoral.C",
+    "Wildflour.NooksCrannies",
+    "Wildflour.NooksCranniesCC",
+    "cat.betterfruittrees",
+    "grapeponta.VibrantPastoralRecolor",
+    "harvz.ACM.CP",
+    "harvz.ACM.SMAPI",
+    "herbivoor.UniversalRecolors",
+    "lydocia.HuelessHavenMapRecolour",
+    "vamoosi.RosierColoredGlasses",
+    "wz.FTM.island",
+    "wz.IslandCP",
+    "wz.JA.island",
+    "wz.STF.Island",
+    "wz.TMX.Island",
+    "zander.immersivefarm2"
+   ]
+  },
+  "mine_dangerous": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "HalfAlive.SpiritFieldsContentPack",
+    "HalfAlive.SpiritFieldsMod",
+    "Salaam.Recolor",
+    "dedpeech.seacave",
+    "herbivoor.UniversalRecolors",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "mine_dark": {
+   "from": "a mod",
+   "mods": [
+    "Aimon.MoreLivelyFarmCave",
+    "Aimon111.MeadowsFarm",
+    "Aimon111.MeadowsFarmFTM",
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM",
+    "Salaam.Recolor",
+    "Sqbr.CuteMines",
+    "herbivoor.UniversalRecolors",
+    "lydocia.HuelessHavenMapRecolour",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "mine_desert": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "Lunatyx.DesertedIslandFarm",
+    "Lunatyx.DesertedIslandFarmCave",
+    "Lunatyx.DesertedIslandFarmCaveForage",
+    "Lunatyx.DesertedIslandFarmForage",
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM",
+    "Salaam.Recolor",
+    "Sqbr.CuteMines",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS",
+    "VibrantPastoral.C",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "lydocia.HuelessHavenMapRecolour",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "mine_frost": {
+   "from": "a mod",
+   "mods": [
+    "CP.Halloween.Fellings",
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM",
+    "Salaam.Recolor",
+    "Sqbr.CuteMines",
+    "VibrantPastoral.C",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "lydocia.HuelessHavenMapRecolour",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "mine_frost_dangerous": {
+   "from": "a mod",
+   "mods": [
+    "ApryllForever.CPPolyamorySweet",
+    "ApryllForever.PolyamorySweetBed",
+    "ApryllForever.PolyamorySweetKiss",
+    "ApryllForever.PolyamorySweetLove",
+    "ApryllForever.PolyamorySweetRooms",
+    "ApryllForever.PolyamorySweetWedding",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "Lnh.WalkToTheDesertFromAdditionalArea",
+    "Lnh.WalkToTheDesertFromAdditionalAreaForage",
+    "Salaam.Recolor",
+    "dedpeech.forestpatch",
+    "herbivoor.UniversalRecolors",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "mine_lava": {
+   "from": "a mod",
+   "mods": [
+    "CP.Halloween.Fellings",
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM",
+    "Salaam.Recolor",
+    "Sqbr.CuteMines",
+    "VibrantPastoral.C",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "mine_lava_dangerous": {
+   "from": "a mod",
+   "mods": [
+    "CP.Halloween.Fellings",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "Salaam.Recolor",
+    "herbivoor.UniversalRecolors",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "mine_lava_dark": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM",
+    "Salaam.Recolor",
+    "Sqbr.CuteMines",
+    "VibrantPastoral.C",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "mine_quarryshaft": {
+   "from": "a mod",
+   "mods": [
+    "CP.Halloween.Fellings",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "Gweniaczek.Grandpas_Tools",
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM",
+    "Salaam.Recolor",
+    "Sqbr.CuteMines",
+    "UncannyValley.UncannyValleyCP",
+    "UncannyValley.UncannyValleyMod",
+    "UncannyValley.UncannyValleyPotions",
+    "UncannyValley.UncannyValleyShop",
+    "herbivoor.UniversalRecolors",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "mine_slime": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM",
+    "Salaam.Recolor",
+    "Sqbr.CuteMines",
+    "VibrantPastoral.C",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "lydocia.HuelessHavenMapRecolour",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "mine_slime_dangerous": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "Salaam.Recolor",
+    "herbivoor.UniversalRecolors"
+   ]
+  },
+  "mine_volcano": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "night_market_tilesheet_objects": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "CP.Halloween.Fellings",
+    "DaisyNiko.EarthyRecolour",
+    "Gweniaczek.WayBackPT",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "StravaJD.Pokefy",
+    "SundropTeam.SundropCity",
+    "VibrantPastoral.C",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "stardust.spritesretexture",
+    "twistfaria.StylishGreenhouse",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "onsentiles": {
+   "from": "a mod",
+   "mods": [
+    "sabiyato.farmonsen"
+   ]
+  },
+  "outdoorsTileSheet": {
+   "from": "a mod",
+   "mods": [
+    "PinkStations.CottonCandyRecolor",
+    "Pookachu.PookachusGreenhouse",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "yri.RetroRecolor"
+   ]
+  },
+  "pizza-place": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "qiNutRoom_tilesheet": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Lita.StarblueValleyUnofficial",
+    "SundropTeam.SundropCity",
+    "cat.betterfruittrees",
+    "herbivoor.UniversalRecolors",
+    "wz.FTM.island",
+    "wz.IslandCP",
+    "wz.JA.island",
+    "wz.STF.Island",
+    "wz.TMX.Island"
+   ]
+  },
+  "real estate office exterior": {
+   "from": "a mod",
+   "mods": [
+    "prism99.advize.stardewrealty"
+   ]
+  },
+  "samshowEDITED": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "samshowtiles": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "ELL.StardewValleyTHAI",
+    "Lita.StarblueValleyUnofficial",
+    "SundropTeam.SundropCity",
+    "Trojan073.AccesibleLocations",
+    "Trojan073.AccesibleLocationsThePit",
+    "VibrantPastoral.C",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "twistfaria.StylishGreenhouse",
+    "vamoosi.RosierColoredGlasses",
+    "yri.RetroRecolor"
+   ]
+  },
+  "spring_ATK_AToMS_EXaqua": {
+   "from": "a mod",
+   "mods": [
+    "A_TK.AToMS"
+   ]
+  },
+  "spring_CR_outdoor": {
+   "from": "a mod",
+   "mods": [
+    "crystalinerose.Tilesheets"
+   ]
+  },
+  "spring_EastScarp": {
+   "from": "a mod",
+   "mods": [
+    "ES.BarberShop",
+    "Lemurkat.EastScarp",
+    "Lemurkat.EastScarpNPCs",
+    "Lemurkat.EastScarpe.FTM",
+    "atravita.EastScarp"
+   ]
+  },
+  "spring_FishingPondFacilitiesMap": {
+   "from": "a mod",
+   "mods": [
+    "Tikamin557.CP.FishingPondFacilities"
+   ]
+  },
+  "spring_GrampletonSuburbsTilesheet": {
+   "from": "a mod",
+   "mods": [
+    "ExpandedPokemon",
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "PinkStations.CottonCandyRecolor",
+    "Poltergeister.SeasonalCuteSpritesSVE",
+    "Salaam.Recolor",
+    "SeaSea.SVE.Earthy",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "spring_JojaEnergy": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "spring_MagicalFishingRaft": {
+   "from": "a mod",
+   "mods": [
+    "Tikamin557.CP.FishingPondFacilities"
+   ]
+  },
+  "spring_MorrisModernHouse": {
+   "from": "a mod",
+   "mods": [
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "Salaam.Recolor",
+    "SeaSea.SVE.Earthy",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "spring_Umuwi": {
+   "from": "a mod",
+   "mods": [
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM"
+   ]
+  },
+  "spring_Waterfalls": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "DaisyNiko.EarthyRecolour",
+    "HC.AdditionalMiniFarm",
+    "HC.WalkToGingerIsland",
+    "HalfAlive.SpiritFieldsContentPack",
+    "HalfAlive.SpiritFieldsMod",
+    "Lita.StarblueValleyUnofficial",
+    "LordSnowFox.FairFarm",
+    "Neopffe.BetterWater",
+    "Salaam.Recolor",
+    "UncannyValley.UncannyValleyCP",
+    "UncannyValley.UncannyValleyMod",
+    "UncannyValley.UncannyValleyPotions",
+    "UncannyValley.UncannyValleyShop",
+    "VibrantPastoral.C",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "imclueless0.CleanerFarm",
+    "xetyaj.HS"
+   ]
+  },
+  "spring_beach": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Aimon_WitchyDGR",
+    "Arkmenhah.ColorsValley",
+    "Az.Foliage",
+    "BananaShpeel.BogWitchyFoliage2.0AT",
+    "BananaShpeel.BogWitchyFoliageAT",
+    "Bogs.WitchyFoliageCP",
+    "Bogs.WitchyFoliageExtras",
+    "DaisyNiko.EarthyRecolour",
+    "ELL.StardewValleyTHAI",
+    "Gweniaczek.WayBackPT",
+    "IslandTMX",
+    "JAISland",
+    "Kookiefroggie.Recolor",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Mila.Foliage",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "SundropTeam.SundropCity",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS",
+    "VibrantPastoral.C",
+    "Waterice.FallLeaves",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "aedenthorn.GemIsles",
+    "cat.betterfruittrees",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "lydocia.HuelessHavenMapRecolour",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "vamoosi.RosierColoredGlasses",
+    "wz.FTM.island",
+    "wz.IslandCP",
+    "wz.JA.island",
+    "wz.STF.Island",
+    "wz.TMX.Island",
+    "yri.RetroRecolor"
+   ]
+  },
+  "spring_daisyextras": {
+   "from": "a mod",
+   "mods": [
+    "Aimon_WitchyDGR",
+    "DEN2.Orchard",
+    "DaisyNiko.Tilesheets",
+    "Gweniaczek.Medieval_DNT",
+    "Indie.VerdantHollowJunimoNexus",
+    "Legacy_Farm_Forage",
+    "Lunatyx.DesertedIslandFarm",
+    "Lunatyx.DesertedIslandFarmCave",
+    "Lunatyx.DesertedIslandFarmCaveForage",
+    "Lunatyx.DesertedIslandFarmForage",
+    "Lunatyx.LegacyFarm",
+    "Lunatyx.LegacyGreenhouse",
+    "Salaam.Recolor",
+    "Waterice.FallLeaves",
+    "colling.bluegrass"
+   ]
+  },
+  "spring_extra3": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "spring_extrasTileSheet": {
+   "from": "a mod",
+   "mods": [
+    "BeckyShark.VillageFarm",
+    "CHA0T1CxD3M0N.WaterfallFarm",
+    "Lavliette.LittleCottage",
+    "Morghoula.EnchantedGroveFarm",
+    "Narianka.TinyWildFarm",
+    "TerraBubbles.WC",
+    "TerraBubbles.WC-FTM",
+    "TerraBubbles.WC-TMX",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS"
+   ]
+  },
+  "spring_fixedhouse": {
+   "from": "a mod",
+   "mods": [
+    "dreamy.ORb",
+    "dreamy.kickitspot",
+    "dreamygloom.AnnettaFTM",
+    "dreamygloom.AnnettaNPC",
+    "dreamygloom.CapeStardewCode"
+   ]
+  },
+  "spring_island_tilesheet_1": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Aimon_WitchyDGR",
+    "Az.Foliage",
+    "BackedPotatoes.CrystalIsland",
+    "DaisyNiko.EarthyRecolour",
+    "Gweniaczek.WayBackPT",
+    "Kookiefroggie.Recolor",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Mila.Foliage",
+    "Novaphene.DustbeautyFoliageRedone",
+    "PinkStations.CottonCandyRecolor",
+    "Priff13.FourCorners_Overhauled",
+    "ResoNight.IslandExpansion",
+    "ResoNight.IslandExpansion.FTM",
+    "ResoNight.IslandExpansionCode",
+    "Salaam.Recolor",
+    "SundropTeam.SundropCity",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS",
+    "VibrantPastoral.C",
+    "Wandox99.MagicGreenhouseGarden",
+    "cat.betterfruittrees",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "imclueless0.CleanerFarm",
+    "lydocia.HuelessHavenMapRecolour",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "twistfaria.StylishGreenhouse",
+    "vamoosi.RosierColoredGlasses",
+    "wz.FTM.island",
+    "wz.IslandCP",
+    "wz.JA.island",
+    "wz.STF.Island",
+    "wz.TMX.Island"
+   ]
+  },
+  "spring_lumisteria_mtvapius_c_buildings": {
+   "from": "a mod",
+   "mods": [
+    "Lumisteria.MtVapius",
+    "Lumisteria.MtVapius.FTM",
+    "lumisteria.visitmountvapius.code"
+   ]
+  },
+  "spring_lumisteria_mtvapius_c_outdoors": {
+   "from": "a mod",
+   "mods": [
+    "Lumisteria.MtVapius",
+    "Lumisteria.MtVapius.FTM",
+    "lumisteria.visitmountvapius.code"
+   ]
+  },
+  "spring_lumisteria_mtvapius_v_outdoorsTileSheet": {
+   "from": "a mod",
+   "mods": [
+    "Lumisteria.MtVapius",
+    "Lumisteria.MtVapius.FTM",
+    "lumisteria.visitmountvapius.code"
+   ]
+  },
+  "spring_mod_lumisteria_tilesheetsoutdoor_buildings": {
+   "from": "a mod",
+   "mods": [
+    "Lumisteria.TtilesheetsOutdoor"
+   ]
+  },
+  "spring_outdoorsTileSheet": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "Az.Foliage",
+    "BananaShpeel.BogWitchyFoliage2.0AT",
+    "BananaShpeel.BogWitchyFoliageAT",
+    "BeneathThePlass.MoreBuildingsforCuteValleyBlue",
+    "BeneathThePlass.slimehutchinteriorvanilla",
+    "Blaklyte.Faegate",
+    "Bogs.WitchyFoliageCP",
+    "Bogs.WitchyFoliageExtras",
+    "Braindead2013.50x50Greenhouse",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyRecolour",
+    "Delaney1035.EnergeticBuildings",
+    "ELL.StardewValleyTHAI",
+    "Elaho.JosephsSeedShopCP",
+    "Elaho.JosephsSeedShopJA",
+    "Elaho.JosephsSeedShopPFM",
+    "Elaho.PaisleysBridalBoutiqueCP",
+    "Elle.SeasonalBuildings",
+    "FallSpice.SlightlyBiggerFarm",
+    "HC.AdditionalMiniFarm",
+    "HC.WalkToGingerIsland",
+    "HalfAlive.SpiritFieldsContentPack",
+    "HalfAlive.SpiritFieldsMod",
+    "Indie.VerdantHollowJunimoNexus",
+    "Jesse.SauvignonInStardew",
+    "KittyKaninka.ClayQuarry",
+    "Kreeate.HotspringRedux",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Lnh.SimpleAndRoughGreenhouse",
+    "LordSnowFox.FairFarm",
+    "Mila.Foliage",
+    "Neopffe.BetterWater",
+    "Novaphene.DustbeautyFoliageRedone",
+    "Parrot.Island",
+    "Peehell.Peehells_Big_GreenHouse",
+    "Pillow.AlwaysFlowerDance",
+    "Pillow.AlwaysFlowerDance.CP",
+    "Pillow.Summit",
+    "PinkStations.CottonCandyRecolor",
+    "Priff13.FourCorners_Overhauled",
+    "Pwna-1337sa.CleanRiverFarm",
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM",
+    "Salaam.Recolor",
+    "SdAkuma.BlackBike",
+    "SpringTHZ_Seasonal_Witchy_Gothic_Buildings_Addition",
+    "SundropTeam.SundropCity",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS",
+    "Trojan073.AccesibleLocations",
+    "Trojan073.AccesibleLocationsThePit",
+    "UncannyValley.UncannyValleyCP",
+    "UncannyValley.UncannyValleyMod",
+    "UncannyValley.UncannyValleyPotions",
+    "UncannyValley.UncannyValleyShop",
+    "Undare.MineralMageItems",
+    "Undare.MineralMageMachinesPFM",
+    "Undare.MineralOptions",
+    "VibrantPastoral.C",
+    "Wandox99.MagicGreenhouseGarden",
+    "Waterice.FallLeaves",
+    "Xiddav.FestivalsRecolored",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "harvz.ACM.CP",
+    "harvz.ACM.SMAPI",
+    "harvz.TinyFarm",
+    "herbivoor.UniversalRecolors",
+    "imclueless0.CleanerFarm",
+    "linbun.moreovergrownfairybuildings",
+    "lydocia.HuelessHavenMapRecolour",
+    "proudunicorn.tilesrearranged",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "silvermoonchan.Aviary",
+    "twistfaria.StylishGreenhouse",
+    "undare.MineralGuildShopStock",
+    "undare.MineralGuildShops",
+    "vamoosi.RosierColoredGlasses",
+    "wildflour.fancygardenfarm",
+    "xetyaj.HS",
+    "yri.RetroRecolor"
+   ]
+  },
+  "spring_outdoorsTileSheet2": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "Az.Foliage",
+    "BananaShpeel.BogWitchyFoliage2.0AT",
+    "BananaShpeel.BogWitchyFoliageAT",
+    "Bogs.WitchyFoliageCP",
+    "Bogs.WitchyFoliageExtras",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyRecolour",
+    "FallSpice.SlightlyBiggerFarm",
+    "Gweniaczek.WayBackPT",
+    "HC.AdditionalMiniFarm",
+    "HC.WalkToGingerIsland",
+    "HalfAlive.SpiritFieldsContentPack",
+    "HalfAlive.SpiritFieldsMod",
+    "KittyKaninka.ClayQuarry",
+    "Kookiefroggie.Recolor",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "LordSnowFox.FairFarm",
+    "Lunatyx.DesertedIslandFarm",
+    "Lunatyx.DesertedIslandFarmCave",
+    "Lunatyx.DesertedIslandFarmCaveForage",
+    "Lunatyx.DesertedIslandFarmForage",
+    "Mila.Foliage",
+    "Neopffe.BetterWater",
+    "Nessephanie.DarkerDirtandCliffsTemporaryFixfor1.6",
+    "Novaphene.DustbeautyFoliageRedone",
+    "Pillow.AlwaysFlowerDance",
+    "Pillow.AlwaysFlowerDance.CP",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "SundropTeam.SundropCity",
+    "UncannyValley.UncannyValleyCP",
+    "UncannyValley.UncannyValleyMod",
+    "UncannyValley.UncannyValleyPotions",
+    "UncannyValley.UncannyValleyShop",
+    "VibrantPastoral.C",
+    "Waterice.FallLeaves",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "cat.betterfruittrees",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "imclueless0.CleanerFarm",
+    "lydocia.HuelessHavenMapRecolour",
+    "proudunicorn.tilesrearranged",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "vamoosi.RosierColoredGlasses",
+    "wildflour.fancygardenfarm",
+    "wz.FTM.island",
+    "wz.IslandCP",
+    "wz.JA.island",
+    "wz.STF.Island",
+    "wz.TMX.Island",
+    "xetyaj.HS",
+    "yri.RetroRecolor"
+   ]
+  },
+  "spring_sunberrybuildings": {
+   "from": "a mod",
+   "mods": [
+    "SunberryTeam.SBVSMAPI",
+    "skellady.SBVCC",
+    "skellady.SBVCP",
+    "skellady.SBVFTM"
+   ]
+  },
+  "spring_town": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "Az.Foliage",
+    "BananaShpeel.BogWitchyFoliage2.0AT",
+    "BananaShpeel.BogWitchyFoliageAT",
+    "Bogs.WitchyFoliageCP",
+    "Bogs.WitchyFoliageExtras",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyRecolour",
+    "Draylon.DirttoGrassCP",
+    "ELL.StardewValleyTHAI",
+    "Elaho.JosephsSeedShopCP",
+    "Elaho.JosephsSeedShopJA",
+    "Elaho.JosephsSeedShopPFM",
+    "Elaho.LouvierFromagerieCheeseRecipes",
+    "Elaho.LouvierFromagerieProducersJA",
+    "Elaho.LouvierFromagerieProducersPFM",
+    "Elaho.LouvierFromagerieSTFAmelie",
+    "Elaho.LouvierFromagerieSTFPatrice",
+    "Elaho.LouvierFromagerieStorefront",
+    "Elaho.PaisleysBridalBoutiqueCP",
+    "Fippsie.TinyPam",
+    "HC.AdditionalMiniFarm",
+    "HC.WalkToGingerIsland",
+    "HalfAlive.SpiritFieldsContentPack",
+    "HalfAlive.SpiritFieldsMod",
+    "Kookiefroggie.Recolor",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "LordSnowFox.FairFarm",
+    "Mila.Foliage",
+    "Novaphene.DustbeautyFoliageRedone",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "SundropTeam.SundropCity",
+    "UncannyValley.UncannyValleyCP",
+    "UncannyValley.UncannyValleyMod",
+    "UncannyValley.UncannyValleyPotions",
+    "UncannyValley.UncannyValleyShop",
+    "Undare.MineralMageItems",
+    "Undare.MineralMageMachinesPFM",
+    "Undare.MineralOptions",
+    "VibrantPastoral.C",
+    "Waterice.FallLeaves",
+    "Xiddav.FestivalsRecolored",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "heyseth.pierrebalcony",
+    "lydocia.HuelessHavenMapRecolour",
+    "marchareui.DirtToGrass1.6",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "undare.MineralGuildShopStock",
+    "undare.MineralGuildShops",
+    "vamoosi.RosierColoredGlasses",
+    "yourdorkbrains"
+   ]
+  },
+  "spring_van_extra": {
+   "from": "a mod",
+   "mods": [
+    "Vanillin.VanFarm",
+    "Vanillin.VanFarmFTM",
+    "Vanillin.VanMine",
+    "Vanillin.VanMineFTM",
+    "Vanillin.Van_Mine_Clumps"
+   ]
+  },
+  "spring_z_extras": {
+   "from": "a mod",
+   "mods": [
+    "Aimon_WitchyDGR",
+    "ExpandedPokemon",
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "Indie.VerdantHollowJunimoNexus",
+    "Legacy_Farm_Forage",
+    "Lunatyx.DesertedIslandFarm",
+    "Lunatyx.DesertedIslandFarmCave",
+    "Lunatyx.DesertedIslandFarmCaveForage",
+    "Lunatyx.DesertedIslandFarmForage",
+    "Lunatyx.LegacyFarm",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "SeaSea.GrandpasShed.OvergrownFairyRecolor",
+    "SeaSea.SVE.Earthy",
+    "SeaSea.VanillaTweaks.SVEPatch",
+    "YOHEL.RoseandWisteriaSVE",
+    "ibelieveicanfall.GrandpasShed.BogWyytchBuildings",
+    "idaida.FairyMSVE",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "spring_zridgeside": {
+   "from": "a mod",
+   "mods": [
+    "1oOwOo1.SimpleFoliageRidgesideVillage",
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "SeaSea.VanillaTweaks.RSVPatch",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "spring_zridgesidebuildings": {
+   "from": "a mod",
+   "mods": [
+    "Ellie.CCRSV",
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "spring_zridgetiles": {
+   "from": "a mod",
+   "mods": [
+    "Ellie.CCRSV",
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "spring_zrsvcablecar": {
+   "from": "a mod",
+   "mods": [
+    "Ellie.CCRSV",
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "spring_zzlasvbuildings": {
+   "from": "a mod",
+   "mods": [
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM"
+   ]
+  },
+  "submarine_tilesheet": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "DaisyNiko.EarthyInteriors",
+    "Lita.StarblueValleyUnofficial",
+    "SundropTeam.SundropCity",
+    "TheKrominator.PokemaniaRevised",
+    "VibrantPastoral.C",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "pokemaniaAnimated.Krominator",
+    "pokemaniaSprites.Krominator",
+    "stardust.spritesretexture",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "summer_ATK_AToMS_EXaqua": {
+   "from": "a mod",
+   "mods": [
+    "A_TK.AToMS"
+   ]
+  },
+  "summer_CR_outdoor": {
+   "from": "a mod",
+   "mods": [
+    "crystalinerose.Tilesheets"
+   ]
+  },
+  "summer_EastScarp": {
+   "from": "a mod",
+   "mods": [
+    "ES.BarberShop",
+    "Lemurkat.EastScarp",
+    "Lemurkat.EastScarpNPCs",
+    "Lemurkat.EastScarpe.FTM",
+    "atravita.EastScarp"
+   ]
+  },
+  "summer_FishingPondFacilitiesMap": {
+   "from": "a mod",
+   "mods": [
+    "Tikamin557.CP.FishingPondFacilities"
+   ]
+  },
+  "summer_GrampletonSuburbsTilesheet": {
+   "from": "a mod",
+   "mods": [
+    "ExpandedPokemon",
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "PinkStations.CottonCandyRecolor",
+    "Poltergeister.SeasonalCuteSpritesSVE",
+    "Salaam.Recolor",
+    "SeaSea.SVE.Earthy",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "summer_JojaEnergy": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "summer_MagicalFishingRaft": {
+   "from": "a mod",
+   "mods": [
+    "Tikamin557.CP.FishingPondFacilities"
+   ]
+  },
+  "summer_MorrisModernHouse": {
+   "from": "a mod",
+   "mods": [
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "Salaam.Recolor",
+    "SeaSea.SVE.Earthy",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "summer_Umuwi": {
+   "from": "a mod",
+   "mods": [
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM"
+   ]
+  },
+  "summer_Waterfalls": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "DaisyNiko.EarthyRecolour",
+    "HC.AdditionalMiniFarm",
+    "HC.WalkToGingerIsland",
+    "Lita.StarblueValleyUnofficial",
+    "LordSnowFox.FairFarm",
+    "Neopffe.BetterWater",
+    "Salaam.Recolor",
+    "VibrantPastoral.C",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "imclueless0.CleanerFarm",
+    "xetyaj.HS"
+   ]
+  },
+  "summer_beach": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Aimon_WitchyDGR",
+    "Arkmenhah.ColorsValley",
+    "Az.Foliage",
+    "BananaShpeel.BogWitchyFoliage2.0AT",
+    "BananaShpeel.BogWitchyFoliageAT",
+    "Bogs.WitchyFoliageCP",
+    "Bogs.WitchyFoliageExtras",
+    "DaisyNiko.EarthyRecolour",
+    "ELL.StardewValleyTHAI",
+    "Gweniaczek.WayBackPT",
+    "IslandTMX",
+    "JAISland",
+    "Kookiefroggie.Recolor",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Mila.Foliage",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS",
+    "VibrantPastoral.C",
+    "aedenthorn.GemIsles",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "lydocia.HuelessHavenMapRecolour",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "summer_daisyextras": {
+   "from": "a mod",
+   "mods": [
+    "Aimon_WitchyDGR",
+    "DaisyNiko.Tilesheets",
+    "Gweniaczek.Medieval_DNT",
+    "Legacy_Farm_Forage",
+    "Lunatyx.DesertedIslandFarm",
+    "Lunatyx.DesertedIslandFarmCave",
+    "Lunatyx.DesertedIslandFarmCaveForage",
+    "Lunatyx.DesertedIslandFarmForage",
+    "Lunatyx.LegacyFarm",
+    "Lunatyx.LegacyGreenhouse",
+    "Salaam.Recolor",
+    "colling.bluegrass"
+   ]
+  },
+  "summer_extra3": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "summer_extrasTileSheet": {
+   "from": "a mod",
+   "mods": [
+    "BeckyShark.VillageFarm",
+    "CHA0T1CxD3M0N.WaterfallFarm",
+    "Lavliette.LittleCottage",
+    "Morghoula.EnchantedGroveFarm",
+    "Narianka.TinyWildFarm",
+    "TerraBubbles.WC",
+    "TerraBubbles.WC-FTM",
+    "TerraBubbles.WC-TMX",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS"
+   ]
+  },
+  "summer_fixedhouse": {
+   "from": "a mod",
+   "mods": [
+    "dreamy.ORb",
+    "dreamy.kickitspot",
+    "dreamygloom.AnnettaFTM",
+    "dreamygloom.AnnettaNPC",
+    "dreamygloom.CapeStardewCode"
+   ]
+  },
+  "summer_island_tilesheet_1": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Aimon_WitchyDGR",
+    "Az.Foliage",
+    "BackedPotatoes.CrystalIsland",
+    "DaisyNiko.EarthyRecolour",
+    "Gweniaczek.WayBackPT",
+    "Kookiefroggie.Recolor",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Mila.Foliage",
+    "Novaphene.DustbeautyFoliageRedone",
+    "PinkStations.CottonCandyRecolor",
+    "Priff13.FourCorners_Overhauled",
+    "ResoNight.IslandExpansion",
+    "ResoNight.IslandExpansion.FTM",
+    "ResoNight.IslandExpansionCode",
+    "Salaam.Recolor",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS",
+    "VibrantPastoral.C",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "imclueless0.CleanerFarm",
+    "lydocia.HuelessHavenMapRecolour",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "vamoosi.RosierColoredGlasses",
+    "yri.RetroRecolor"
+   ]
+  },
+  "summer_lumisteria_mtvapius_c_buildings": {
+   "from": "a mod",
+   "mods": [
+    "Lumisteria.MtVapius",
+    "Lumisteria.MtVapius.FTM",
+    "lumisteria.visitmountvapius.code"
+   ]
+  },
+  "summer_lumisteria_mtvapius_c_outdoors": {
+   "from": "a mod",
+   "mods": [
+    "Lumisteria.MtVapius",
+    "Lumisteria.MtVapius.FTM",
+    "lumisteria.visitmountvapius.code"
+   ]
+  },
+  "summer_lumisteria_mtvapius_v_outdoorsTileSheet": {
+   "from": "a mod",
+   "mods": [
+    "Lumisteria.MtVapius",
+    "Lumisteria.MtVapius.FTM",
+    "lumisteria.visitmountvapius.code"
+   ]
+  },
+  "summer_mod_lumisteria_tilesheetsoutdoor_buildings": {
+   "from": "a mod",
+   "mods": [
+    "Lumisteria.TtilesheetsOutdoor"
+   ]
+  },
+  "summer_outdoorsTileSheet": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "Az.Foliage",
+    "BananaShpeel.BogWitchyFoliage2.0AT",
+    "BananaShpeel.BogWitchyFoliageAT",
+    "BeneathThePlass.MoreBuildingsforCuteValleyBlue",
+    "BeneathThePlass.slimehutchinteriorvanilla",
+    "Bogs.WitchyFoliageCP",
+    "Bogs.WitchyFoliageExtras",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyRecolour",
+    "Delaney1035.EnergeticBuildings",
+    "ELL.StardewValleyTHAI",
+    "EduAnttunes.IslandSecret.TMX",
+    "Elaho.JosephsSeedShopCP",
+    "Elaho.JosephsSeedShopJA",
+    "Elaho.JosephsSeedShopPFM",
+    "Elaho.PaisleysBridalBoutiqueCP",
+    "Elle.SeasonalBuildings",
+    "FallSpice.SlightlyBiggerFarm",
+    "HC.AdditionalMiniFarm",
+    "HC.WalkToGingerIsland",
+    "IslandSecret",
+    "KittyKaninka.ClayQuarry",
+    "Kreeate.HotspringRedux",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Lnh.SimpleAndRoughGreenhouse",
+    "LordSnowFox.FairFarm",
+    "Mila.Foliage",
+    "Neopffe.BetterWater",
+    "Novaphene.DustbeautyFoliageRedone",
+    "Parrot.Island",
+    "Peehell.Peehells_Big_GreenHouse",
+    "PinkStations.CottonCandyRecolor",
+    "Priff13.FourCorners_Overhauled",
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM",
+    "Salaam.Recolor",
+    "SdAkuma.BlackBike",
+    "SpringTHZ_Seasonal_Witchy_Gothic_Buildings_Addition",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS",
+    "VibrantPastoral.C",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "harvz.TinyFarm",
+    "herbivoor.UniversalRecolors",
+    "imclueless0.CleanerFarm",
+    "linbun.moreovergrownfairybuildings",
+    "lydocia.HuelessHavenMapRecolour",
+    "proudunicorn.tilesrearranged",
+    "ravenly.MossyGrove",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "vamoosi.RosierColoredGlasses",
+    "xetyaj.HS"
+   ]
+  },
+  "summer_outdoorsTileSheet2": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "Az.Foliage",
+    "BananaShpeel.BogWitchyFoliage2.0AT",
+    "BananaShpeel.BogWitchyFoliageAT",
+    "Bogs.WitchyFoliageCP",
+    "Bogs.WitchyFoliageExtras",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyRecolour",
+    "FallSpice.SlightlyBiggerFarm",
+    "Gweniaczek.WayBackPT",
+    "HC.AdditionalMiniFarm",
+    "HC.WalkToGingerIsland",
+    "KittyKaninka.ClayQuarry",
+    "Kookiefroggie.Recolor",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "LordSnowFox.FairFarm",
+    "Mila.Foliage",
+    "Neopffe.BetterWater",
+    "Nessephanie.DarkerDirtandCliffsTemporaryFixfor1.6",
+    "Novaphene.DustbeautyFoliageRedone",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "VibrantPastoral.C",
+    "cat.betterfruittrees",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "imclueless0.CleanerFarm",
+    "lydocia.HuelessHavenMapRecolour",
+    "proudunicorn.tilesrearranged",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "twistfaria.StylishGreenhouse",
+    "vamoosi.RosierColoredGlasses",
+    "wz.FTM.island",
+    "wz.IslandCP",
+    "wz.JA.island",
+    "wz.STF.Island",
+    "wz.TMX.Island",
+    "xetyaj.HS"
+   ]
+  },
+  "summer_sunberrybuildings": {
+   "from": "a mod",
+   "mods": [
+    "SunberryTeam.SBVSMAPI",
+    "skellady.SBVCC",
+    "skellady.SBVCP",
+    "skellady.SBVFTM"
+   ]
+  },
+  "summer_town": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "Az.Foliage",
+    "BananaShpeel.BogWitchyFoliage2.0AT",
+    "BananaShpeel.BogWitchyFoliageAT",
+    "Bogs.WitchyFoliageCP",
+    "Bogs.WitchyFoliageExtras",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyRecolour",
+    "Draylon.DirttoGrassCP",
+    "ELL.StardewValleyTHAI",
+    "Elaho.JosephsSeedShopCP",
+    "Elaho.JosephsSeedShopJA",
+    "Elaho.JosephsSeedShopPFM",
+    "Elaho.LouvierFromagerieCheeseRecipes",
+    "Elaho.LouvierFromagerieProducersJA",
+    "Elaho.LouvierFromagerieProducersPFM",
+    "Elaho.LouvierFromagerieSTFAmelie",
+    "Elaho.LouvierFromagerieSTFPatrice",
+    "Elaho.LouvierFromagerieStorefront",
+    "Elaho.PaisleysBridalBoutiqueCP",
+    "Fippsie.TinyPam",
+    "HC.AdditionalMiniFarm",
+    "HC.WalkToGingerIsland",
+    "Kookiefroggie.Recolor",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Mila.Foliage",
+    "Nessephanie.DarkerDirtandCliffsTemporaryFixfor1.6",
+    "Novaphene.DustbeautyFoliageRedone",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "VibrantPastoral.C",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "heyseth.pierrebalcony",
+    "liyumeng1999",
+    "lydocia.HuelessHavenMapRecolour",
+    "marchareui.DirtToGrass1.6",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "summer_van_extra": {
+   "from": "a mod",
+   "mods": [
+    "Vanillin.VanFarm",
+    "Vanillin.VanFarmFTM",
+    "Vanillin.VanMine",
+    "Vanillin.VanMineFTM",
+    "Vanillin.Van_Mine_Clumps"
+   ]
+  },
+  "summer_z_extras": {
+   "from": "a mod",
+   "mods": [
+    "Aimon_WitchyDGR",
+    "ExpandedPokemon",
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "Legacy_Farm_Forage",
+    "Lunatyx.DesertedIslandFarm",
+    "Lunatyx.DesertedIslandFarmCave",
+    "Lunatyx.DesertedIslandFarmCaveForage",
+    "Lunatyx.DesertedIslandFarmForage",
+    "Lunatyx.LegacyFarm",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "SeaSea.GrandpasShed.OvergrownFairyRecolor",
+    "SeaSea.SVE.Earthy",
+    "SeaSea.VanillaTweaks.SVEPatch",
+    "YOHEL.RoseandWisteriaSVE",
+    "ibelieveicanfall.GrandpasShed.BogWyytchBuildings",
+    "idaida.FairyMSVE",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "summer_zridgeside": {
+   "from": "a mod",
+   "mods": [
+    "1oOwOo1.SimpleFoliageRidgesideVillage",
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "SeaSea.VanillaTweaks.RSVPatch",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "summer_zridgesidebuildings": {
+   "from": "a mod",
+   "mods": [
+    "Ellie.CCRSV",
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "summer_zridgetiles": {
+   "from": "a mod",
+   "mods": [
+    "Ellie.CCRSV",
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "summer_zrsvcablecar": {
+   "from": "a mod",
+   "mods": [
+    "Ellie.CCRSV",
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "summer_zzlasvbuildings": {
+   "from": "a mod",
+   "mods": [
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM"
+   ]
+  },
+  "townInterior": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Acerbicon.HouseMods",
+    "ActionJackson.MultiPlayerGreenhouse",
+    "An.Shed",
+    "Arkmenhah.ColorsValley",
+    "BeckyShark.MonsterShed",
+    "BeneathThePlass.MoreBuildingsforCuteValleyBlue",
+    "BeneathThePlass.slimehutchinteriorvanilla",
+    "Bonster.Prismatic.Greenhouse",
+    "Braindead2013.50x50Greenhouse",
+    "CP.Halloween.Fellings",
+    "Celestia87.MoreCellars",
+    "Celestia87.MoreGreenhouses",
+    "Creative.CWS",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyInteriors",
+    "DevilishDemigod.DDGreenhouse",
+    "DustBeauty.FlummeEditSGFv2",
+    "ELL.StardewValleyTHAI",
+    "Elle.DirtCliffRecolor",
+    "Hana.GNhotspring",
+    "IslandTMX",
+    "JAISland",
+    "Jesse.SauvignonInStardew",
+    "LMMM.Bathroom",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "LordSnowFox.FairFarm",
+    "LuckyKitsune.SoberShaneMod",
+    "Lunatyx.LegacyCellar",
+    "Lunatyx.LegacyCoopsAndBarns",
+    "NoFogBob.PocketRooms.CP",
+    "NoFogBob.PocketRooms.CPA",
+    "NoFogBob.PocketRooms.JA",
+    "NoFogBob.PocketRooms.STF",
+    "Nook.BetterBuildingUpgrades",
+    "Oversizedhoody.Greenhouse",
+    "Peehell.Peehells_Big_Cellar",
+    "Peehell.Peehells_Big_GreenHouse",
+    "Peehell.Peehells_Big_Shed",
+    "PicGriffith.SourGrapesGreenhouse",
+    "Pillow.AlwaysFlowerDance",
+    "Pillow.AlwaysFlowerDance.CP",
+    "Pillow.DBJ",
+    "Pillow.SandyRoom",
+    "PinkStations.CottonCandyRecolor",
+    "Pookachu.OneLargePlotGreenhouse",
+    "Pookachu.PookachusGreenhouse",
+    "Pookachu.PookachusInsaneGreenhouse",
+    "Ria.Guntherhouse",
+    "Rosalie.CuteValley",
+    "Salaam.Recolor",
+    "Squishface.blues",
+    "SundropTeam.SundropCity",
+    "Tarniyar.BL.GardenVillage",
+    "Tarniyar.CP.GardenVillage",
+    "Tarniyar.JA.GardenVillage",
+    "Tarniyar.MFM.GardenVillage",
+    "Tarniyar.NPC.GV.mod",
+    "Tarniyar.PFM.GardenVillage",
+    "Tarniyar.STF.GardenVillage",
+    "Trojan073.AccesibleLocations",
+    "Trojan073.AccesibleLocationsThePit",
+    "UncannyValley.UncannyValleyCP",
+    "UncannyValley.UncannyValleyMod",
+    "UncannyValley.UncannyValleyPotions",
+    "UncannyValley.UncannyValleyShop",
+    "VibrantPastoral.C",
+    "VvVvVvV2222222222.CB",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "Zilch.GardenVillageRetexture",
+    "aliyach.PortraitAccurateNPCSprites",
+    "cat.betterfruittrees",
+    "grapeponta.VibrantPastoralRecolor",
+    "harvz.ACM.CP",
+    "harvz.ACM.SMAPI",
+    "herbivoor.UniversalRecolors",
+    "mentlesoul.BiggerGreenhouse",
+    "nanis.kitchen",
+    "nraittanna.LifeCycleAthanaeriCP",
+    "nraittanna.LifeCycleAthanaeriMap",
+    "penny3.BuildableGreenhouseBig",
+    "phuicmt.MyAnimeVisuals",
+    "rikai.SeasonalOvergrownGreenhouse",
+    "sadnumbme.JasVincentShop",
+    "simezi21.Dark_Club_CC",
+    "simezi21.Dark_Club_CP",
+    "simezi21.Dark_Club_CP_Animals",
+    "simezi21.Dark_Club_CP_Crops",
+    "simezi21.Dark_Club_CP_Furniture",
+    "simezi21.Dark_Club_CP_Scarecrows",
+    "simezi21.Dark_Club_FTM",
+    "simezi21.Dark_Club_PFM",
+    "twistfaria.StylishGreenhouse",
+    "user.animeNpcGirls",
+    "vamoosi.RosierColoredGlasses",
+    "wz.FTM.island",
+    "wz.IslandCP",
+    "wz.JA.island",
+    "wz.STF.Island",
+    "wz.TMX.Island"
+   ]
+  },
+  "townInterior_2": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "CP.Halloween.Fellings",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyInteriors",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Pillow.DBJ",
+    "Rosalie.CuteValley",
+    "Salaam.Recolor",
+    "SundropTeam.SundropCity",
+    "UncannyValley.UncannyValleyCP",
+    "UncannyValley.UncannyValleyMod",
+    "UncannyValley.UncannyValleyPotions",
+    "UncannyValley.UncannyValleyShop",
+    "VibrantPastoral.C",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "townInterior_DustBeauty": {
+   "from": "a mod",
+   "mods": [
+    "Indie.VerdantHollowJunimoNexus",
+    "Legacy_Farm_Forage",
+    "Lunatyx.LegacyFarm",
+    "Lunatyx.LegacyGreenhouse",
+    "wildflour.seasonalgreenhouse"
+   ]
+  },
+  "townInterioreverse": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "townhouses_lightson": {
+   "from": "a mod",
+   "mods": [
+    "ES.BarberShop",
+    "Lemurkat.EastScarp",
+    "Lemurkat.EastScarpNPCs",
+    "Lemurkat.EastScarpe.FTM",
+    "atravita.EastScarp"
+   ]
+  },
+  "volcano_caldera": {
+   "from": "a mod",
+   "mods": [
+    "BackedPotatoes.CrystalIsland",
+    "CP.Halloween.Fellings",
+    "Lita.StarblueValleyUnofficial",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "VibrantPastoral.C",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "volcano_dungeon": {
+   "from": "a mod",
+   "mods": [
+    "BackedPotatoes.CrystalIsland",
+    "CP.Halloween.Fellings",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "Kana.Grotta",
+    "Kana.GrottaFrutta",
+    "Lita.StarblueValleyUnofficial",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "Sexynes.CP.ImmersiveFarm4",
+    "aliyach.PortraitAccurateNPCSprites",
+    "herbivoor.UniversalRecolors",
+    "user.animeNpcGirls",
+    "vamoosi.RosierColoredGlasses"
+   ]
+  },
+  "winter_ATK_AToMS_EXaqua": {
+   "from": "a mod",
+   "mods": [
+    "A_TK.AToMS"
+   ]
+  },
+  "winter_CR_outdoor": {
+   "from": "a mod",
+   "mods": [
+    "crystalinerose.Tilesheets"
+   ]
+  },
+  "winter_EastScarp": {
+   "from": "a mod",
+   "mods": [
+    "ES.BarberShop",
+    "Lemurkat.EastScarp",
+    "Lemurkat.EastScarpNPCs",
+    "Lemurkat.EastScarpe.FTM",
+    "atravita.EastScarp"
+   ]
+  },
+  "winter_FishingPondFacilitiesMap": {
+   "from": "a mod",
+   "mods": [
+    "Tikamin557.CP.FishingPondFacilities"
+   ]
+  },
+  "winter_GrampletonSuburbsTilesheet": {
+   "from": "a mod",
+   "mods": [
+    "ExpandedPokemon",
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "PinkStations.CottonCandyRecolor",
+    "Poltergeister.SeasonalCuteSpritesSVE",
+    "Salaam.Recolor",
+    "SeaSea.SVE.Earthy",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "winter_JojaEnergy": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "winter_MagicalFishingRaft": {
+   "from": "a mod",
+   "mods": [
+    "Tikamin557.CP.FishingPondFacilities"
+   ]
+  },
+  "winter_MorrisModernHouse": {
+   "from": "a mod",
+   "mods": [
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "Salaam.Recolor",
+    "SeaSea.SVE.Earthy",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "winter_SVE_Tilesheet2": {
+   "from": "a mod",
+   "mods": [
+    "8BitAlien_DesaturatedTreesSVE",
+    "BogWyytch.SVETreesRecolor",
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "Kookiefroggie.Recolor",
+    "Morghoula.SVETreesRecolored",
+    "Peachyogurt.SVETreesRecoloredForBlueGrass",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "SeaSea.SVE.Earthy",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "winter_Umuwi": {
+   "from": "a mod",
+   "mods": [
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM"
+   ]
+  },
+  "winter_ValleyBackdrop": {
+   "from": "a mod",
+   "mods": [
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "Salaam.Recolor",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "winter_Waterfalls": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "DaisyNiko.EarthyRecolour",
+    "HC.AdditionalMiniFarm",
+    "HC.WalkToGingerIsland",
+    "Lita.StarblueValleyUnofficial",
+    "LordSnowFox.FairFarm",
+    "Neopffe.BetterWater",
+    "Salaam.Recolor",
+    "VibrantPastoral.C",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "imclueless0.CleanerFarm",
+    "xetyaj.HS"
+   ]
+  },
+  "winter_Waterway": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "winter_beach": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "Az.Foliage",
+    "BananaShpeel.BogWitchyFoliage2.0AT",
+    "BananaShpeel.BogWitchyFoliageAT",
+    "Bogs.WitchyFoliageCP",
+    "Bogs.WitchyFoliageExtras",
+    "DaisyNiko.EarthyRecolour",
+    "ELL.StardewValleyTHAI",
+    "Elle.SeasonalVanillaBuildings",
+    "Gweniaczek.WayBackPT",
+    "IslandTMX",
+    "JAISland",
+    "Kookiefroggie.Recolor",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Mila.Foliage",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS",
+    "VibrantPastoral.C",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "aedenthorn.GemIsles",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "lydocia.HuelessHavenMapRecolour",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "vamoosi.RosierColoredGlasses",
+    "yri.RetroRecolor"
+   ]
+  },
+  "winter_daisyextras": {
+   "from": "a mod",
+   "mods": [
+    "DaisyNiko.Tilesheets",
+    "Gweniaczek.Medieval_DNT",
+    "Legacy_Farm_Forage",
+    "Lunatyx.DesertedIslandFarm",
+    "Lunatyx.DesertedIslandFarmCave",
+    "Lunatyx.DesertedIslandFarmCaveForage",
+    "Lunatyx.DesertedIslandFarmForage",
+    "Lunatyx.LegacyFarm",
+    "Lunatyx.LegacyGreenhouse",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "colling.bluegrass"
+   ]
+  },
+  "winter_extra3": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "winter_extrasTileSheet": {
+   "from": "a mod",
+   "mods": [
+    "BeckyShark.VillageFarm",
+    "CHA0T1CxD3M0N.WaterfallFarm",
+    "Lavliette.LittleCottage",
+    "Morghoula.EnchantedGroveFarm",
+    "Narianka.TinyWildFarm",
+    "TerraBubbles.WC",
+    "TerraBubbles.WC-FTM",
+    "TerraBubbles.WC-TMX",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS"
+   ]
+  },
+  "winter_fixedhouse": {
+   "from": "a mod",
+   "mods": [
+    "dreamy.ORb",
+    "dreamy.kickitspot",
+    "dreamygloom.AnnettaFTM",
+    "dreamygloom.AnnettaNPC",
+    "dreamygloom.CapeStardewCode"
+   ]
+  },
+  "winter_flooring": {
+   "from": "a mod",
+   "mods": [
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS"
+   ]
+  },
+  "winter_island_tilesheet_1": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Az.Foliage",
+    "BackedPotatoes.CrystalIsland",
+    "DaisyNiko.EarthyRecolour",
+    "Gweniaczek.WayBackPT",
+    "Kookiefroggie.Recolor",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Mila.Foliage",
+    "Novaphene.DustbeautyFoliageRedone",
+    "PinkStations.CottonCandyRecolor",
+    "Priff13.FourCorners_Overhauled",
+    "ResoNight.IslandExpansion",
+    "ResoNight.IslandExpansion.FTM",
+    "ResoNight.IslandExpansionCode",
+    "Salaam.Recolor",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS",
+    "VibrantPastoral.C",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "imclueless0.CleanerFarm",
+    "lydocia.HuelessHavenMapRecolour",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "vamoosi.RosierColoredGlasses",
+    "yri.RetroRecolor"
+   ]
+  },
+  "winter_lumisteria_mtvapius_c_buildings": {
+   "from": "a mod",
+   "mods": [
+    "Lumisteria.MtVapius",
+    "Lumisteria.MtVapius.FTM",
+    "lumisteria.visitmountvapius.code"
+   ]
+  },
+  "winter_lumisteria_mtvapius_c_outdoors": {
+   "from": "a mod",
+   "mods": [
+    "Lumisteria.MtVapius",
+    "Lumisteria.MtVapius.FTM",
+    "lumisteria.visitmountvapius.code"
+   ]
+  },
+  "winter_lumisteria_mtvapius_v_outdoorsTileSheet": {
+   "from": "a mod",
+   "mods": [
+    "Lumisteria.MtVapius",
+    "Lumisteria.MtVapius.FTM",
+    "lumisteria.visitmountvapius.code"
+   ]
+  },
+  "winter_mod_lumisteria_tilesheetsoutdoor_buildings": {
+   "from": "a mod",
+   "mods": [
+    "Lumisteria.TtilesheetsOutdoor"
+   ]
+  },
+  "winter_outdoorTileSheet_extra": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "DaisyNiko.EarthyRecolour",
+    "FallSpice.SlightlyBiggerFarm",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValleyUnofficial",
+    "Novaphene.DustbeautyFoliageRedone",
+    "Salaam.Recolor",
+    "VibrantPastoral.C",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "imclueless0.CleanerFarm",
+    "lydocia.HuelessHavenMapRecolour",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP"
+   ]
+  },
+  "winter_outdoorsTileSheet": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "Az.Foliage",
+    "BananaShpeel.BogWitchyFoliage2.0AT",
+    "BananaShpeel.BogWitchyFoliageAT",
+    "BeneathThePlass.MoreBuildingsforCuteValleyBlue",
+    "BeneathThePlass.slimehutchinteriorvanilla",
+    "Bogs.WitchyFoliageCP",
+    "Bogs.WitchyFoliageExtras",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyRecolour",
+    "Delaney1035.EnergeticBuildings",
+    "ELL.StardewValleyTHAI",
+    "Elle.SeasonalBuildings",
+    "Elle.SeasonalVanillaBuildings",
+    "FallSpice.SlightlyBiggerFarm",
+    "HC.AdditionalMiniFarm",
+    "HC.WalkToGingerIsland",
+    "KittyKaninka.ClayQuarry",
+    "Kreeate.HotspringRedux",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Lnh.SimpleAndRoughGreenhouse",
+    "LordSnowFox.FairFarm",
+    "Mila.Foliage",
+    "Neopffe.BetterWater",
+    "Novaphene.DustbeautyFoliageRedone",
+    "Peehell.Peehells_Big_GreenHouse",
+    "PinkStations.CottonCandyRecolor",
+    "Priff13.FourCorners_Overhauled",
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM",
+    "Salaam.Recolor",
+    "SdAkuma.BlackBike",
+    "SpringTHZ_Seasonal_Witchy_Gothic_Buildings_Addition",
+    "ThatGirlFinley.FiveCornersFarm",
+    "ThatGirlFinley.FiveCornersFarmCP",
+    "ThatGirlFinley.FiveCornersFarmTS",
+    "VibrantPastoral.C",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "harvz.TinyFarm",
+    "herbivoor.UniversalRecolors",
+    "imclueless0.CleanerFarm",
+    "linbun.moreovergrownfairybuildings",
+    "lydocia.HuelessHavenMapRecolour",
+    "proudunicorn.tilesrearranged",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "vamoosi.RosierColoredGlasses",
+    "xetyaj.HS",
+    "yri.RetroRecolor"
+   ]
+  },
+  "winter_outdoorsTileSheet2": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "Az.Foliage",
+    "BananaShpeel.BogWitchyFoliage2.0AT",
+    "BananaShpeel.BogWitchyFoliageAT",
+    "Bogs.WitchyFoliageCP",
+    "Bogs.WitchyFoliageExtras",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyRecolour",
+    "FallSpice.SlightlyBiggerFarm",
+    "Gweniaczek.WayBackPT",
+    "HC.AdditionalMiniFarm",
+    "HC.WalkToGingerIsland",
+    "KittyKaninka.ClayQuarry",
+    "Kookiefroggie.Recolor",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "LordSnowFox.FairFarm",
+    "Mila.Foliage",
+    "Neopffe.BetterWater",
+    "Novaphene.DustbeautyFoliageRedone",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "VibrantPastoral.C",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "cat.betterfruittrees",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "imclueless0.CleanerFarm",
+    "lydocia.HuelessHavenMapRecolour",
+    "proudunicorn.tilesrearranged",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "vamoosi.RosierColoredGlasses",
+    "wz.FTM.island",
+    "wz.IslandCP",
+    "wz.JA.island",
+    "wz.STF.Island",
+    "wz.TMX.Island",
+    "xetyaj.HS",
+    "yri.RetroRecolor"
+   ]
+  },
+  "winter_sunberrybuildings": {
+   "from": "a mod",
+   "mods": [
+    "SunberryTeam.SBVSMAPI",
+    "skellady.SBVCC",
+    "skellady.SBVCP",
+    "skellady.SBVFTM"
+   ]
+  },
+  "winter_town": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "Az.Foliage",
+    "BananaShpeel.BogWitchyFoliage2.0AT",
+    "BananaShpeel.BogWitchyFoliageAT",
+    "Bogs.WitchyFoliageCP",
+    "Bogs.WitchyFoliageExtras",
+    "DTZ.DowntownZuzuBL",
+    "DTZ.DowntownZuzuCC",
+    "DTZ.DowntownZuzuCP",
+    "DTZ.DowntownZuzuDLL",
+    "DTZ.DowntownZuzuFTM",
+    "DTZ.DowntownZuzuMFM",
+    "DTZ.DowntownZuzuTS",
+    "DaisyNiko.EarthyRecolour",
+    "ELL.StardewValleyTHAI",
+    "Elle.SeasonalVanillaBuildings",
+    "Fippsie.TinyPam",
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "HC.AdditionalMiniFarm",
+    "HC.WalkToGingerIsland",
+    "Kookiefroggie.Recolor",
+    "Lavliette.CalmColourValley",
+    "Lavliette.NaturallyValley",
+    "Lita.StarblueValley",
+    "Lita.StarblueValleyUnofficial",
+    "Mila.Foliage",
+    "Novaphene.DustbeautyFoliageRedone",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "SeaSea.SVE.Earthy",
+    "VibrantPastoral.C",
+    "Xiddav.FestivalsRecolored",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "colling.bluegrass",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "heyseth.pierrebalcony",
+    "lydocia.HuelessHavenMapRecolour",
+    "recolorstardewfoliage",
+    "ricehit.maprecoloredCP",
+    "tern.DesaturatedSVE",
+    "vamoosi.RosierColoredGlasses",
+    "yri.RetroRecolor"
+   ]
+  },
+  "winter_van_extra": {
+   "from": "a mod",
+   "mods": [
+    "Vanillin.VanFarm",
+    "Vanillin.VanFarmFTM",
+    "Vanillin.VanMine",
+    "Vanillin.VanMineFTM",
+    "Vanillin.Van_Mine_Clumps"
+   ]
+  },
+  "winter_z_extras": {
+   "from": "a mod",
+   "mods": [
+    "ExpandedPokemon",
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "Legacy_Farm_Forage",
+    "Lunatyx.DesertedIslandFarm",
+    "Lunatyx.DesertedIslandFarmCave",
+    "Lunatyx.DesertedIslandFarmCaveForage",
+    "Lunatyx.DesertedIslandFarmForage",
+    "Lunatyx.LegacyFarm",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "SeaSea.GrandpasShed.OvergrownFairyRecolor",
+    "SeaSea.SVE.Earthy",
+    "SeaSea.VanillaTweaks.SVEPatch",
+    "YOHEL.RoseandWisteriaSVE",
+    "ibelieveicanfall.GrandpasShed.BogWyytchBuildings",
+    "idaida.FairyMSVE",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "winter_zridgeside": {
+   "from": "a mod",
+   "mods": [
+    "1oOwOo1.SimpleFoliageRidgesideVillage",
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "winter_zridgesidebuildings": {
+   "from": "a mod",
+   "mods": [
+    "Ellie.CCRSV",
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "winter_zridgetiles": {
+   "from": "a mod",
+   "mods": [
+    "Ellie.CCRSV",
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "winter_zrsvcablecar": {
+   "from": "a mod",
+   "mods": [
+    "Ellie.CCRSV",
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "winter_zzlasvbuildings": {
+   "from": "a mod",
+   "mods": [
+    "Rafseazz.LunnaCP",
+    "Rafseazz.LunnaFTM"
+   ]
+  },
+  "witchSwampTiles": {
+   "from": "a mod, over a base game name",
+   "mods": [
+    "Arkmenhah.ColorsValley",
+    "CP.Halloween.Fellings",
+    "Lita.StarblueValleyUnofficial",
+    "M99.CutestyleWitch",
+    "PinkStations.CottonCandyRecolor",
+    "Salaam.Recolor",
+    "SundropTeam.SundropCity",
+    "VibrantPastoral.C",
+    "Yris.RetroRecolor-1.6-Community-Patch",
+    "grapeponta.VibrantPastoralRecolor",
+    "herbivoor.UniversalRecolors",
+    "lydocia.HuelessHavenMapRecolour",
+    "rainkius.SeasideValley",
+    "vamoosi.RosierColoredGlasses",
+    "yri.RetroRecolor"
+   ]
+  },
+  "z_Island_W_CoralReefs": {
+   "from": "a mod",
+   "mods": [
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "PinkStations.CottonCandyRecolor",
+    "tern.DesaturatedSVE"
+   ]
+  },
+  "z_MySubmarine_IslandBeach": {
+   "from": "a mod",
+   "mods": [
+    "Tikamin557.CP.MySubmarine"
+   ]
+  },
+  "z_Neighbor Cabin": {
+   "from": "a mod",
+   "mods": [
+    "Hoshikuzu.HouseInDesertForaging",
+    "Hoshikuzu.HouseInTheDesert"
+   ]
+  },
+  "z_RGtiles": {
+   "from": "a mod",
+   "mods": [
+    "Aimon111.AimonsFancyGreenhouse"
+   ]
+  },
+  "z_bathhouse_tiles": {
+   "from": "a mod",
+   "mods": [
+    "Sandman53.hotspring"
+   ]
+  },
+  "z_cave_daisyextras": {
+   "from": "a mod",
+   "mods": [
+    "DEBAN.HotSpringCave"
+   ]
+  },
+  "z_coopTiles": {
+   "from": "a mod",
+   "mods": [
+    "DevilishDemigod.DDGreenhouse",
+    "Lnh.Barn",
+    "Lnh.Coop"
+   ]
+  },
+  "z_custom_sewertiles_aimon111": {
+   "from": "a mod",
+   "mods": [
+    "Aimon111.MoreLivelySewerOverhaul",
+    "Aimon111.MoreLivelySewerOverhaulFTM",
+    "AimonsMoreLivelySewerOverhaulPatches"
+   ]
+  },
+  "z_custom_sewertileswater_aimon111": {
+   "from": "a mod",
+   "mods": [
+    "Aimon111.MoreLivelySewerOverhaul",
+    "Aimon111.MoreLivelySewerOverhaulFTM",
+    "AimonsMoreLivelySewerOverhaulPatches"
+   ]
+  },
+  "z_farmGrove": {
+   "from": "a mod",
+   "mods": [
+    "Sylvie.Farm_AdorbsBeach"
+   ]
+  },
+  "z_mine": {
+   "from": "a mod",
+   "mods": [
+    "FlashShifter.SVE-FTM",
+    "FlashShifter.SVECode",
+    "FlashShifter.StardewValleyExpandedCP",
+    "KokoroIppai.ExpandedForestFarm",
+    "KokoroIppai.ExpandedForestFarmFTM",
+    "Kurimiu.PlantableFarmcave",
+    "Salaam.Recolor",
+    "ahri1014.DwarvenArchaeologist",
+    "tern.DesaturatedSVE",
+    "wildflour.witchygreenhouse"
+   ]
+  },
+  "z_mine_desert": {
+   "from": "a mod",
+   "mods": [
+    "LemurKat.CleanerSewer.CP",
+    "Tarniyar.CP.WalkToDesert",
+    "Tarniyar.FTM.WalkToDesert"
+   ]
+  },
+  "z_mine_frost_dangerous": {
+   "from": "a mod",
+   "mods": [
+    "dedpeech.campsite",
+    "dedpeech.campsiteforage"
+   ]
+  },
+  "z_spring_overgrowngreenhouse": {
+   "from": "a mod",
+   "mods": [
+    "rikai.SeasonalOvergrownGreenhouse"
+   ]
+  },
+  "zrsv3brosInterior": {
+   "from": "a mod",
+   "mods": [
+    "Ellie.CCRSV",
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "zrsvspiritrealm": {
+   "from": "a mod",
+   "mods": [
+    "Rafseazz.RSVCC",
+    "Rafseazz.RSVCP",
+    "Rafseazz.RSVFTM",
+    "Rafseazz.RidgesideVillage",
+    "VinillaBean.EarthyRSV"
+   ]
+  },
+  "zz_Farm_TileSheet_1": {
+   "from": "a mod",
+   "mods": [
+    "Lnh.PeakTowerFarm"
+   ]
+  },
+  "zzzzzadded": {
+   "from": "a mod",
+   "mods": [
+    "Childfarm.Jojacorp",
+    "Childfarm.Jojacorpshop",
+    "Childfarm.Jojacorptrain"
+   ]
+  }
+ }
+}

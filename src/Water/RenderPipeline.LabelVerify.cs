@@ -75,7 +75,7 @@ namespace SDVRadiance
         private Color[]? _labelDiffPixels;
 
 
-        private static bool IsLiquidClass(byte c) => c is 1 or 9 or 10 or 11 or 14;
+        private static bool IsLiquidClass(byte labelClass) => LabelClass.IsLiquid(labelClass);
 
         /// <summary>16x16 opacity bits of the art a layer draws at this tile (first frame for
         /// animated tiles), from the same cached OpaqueBits the compose carve uses — so the
@@ -459,7 +459,7 @@ namespace SDVRadiance
                     Game1.smallFont, new Vector2(12, 36), Color.Yellow);
             if (DebugChannel == DebugOverlayChannel.Normals)
                 Utility.drawTextWithShadow(spriteBatch,
-                    $"sway strips {FoliageSway.StripDrawsThisFrame}   upscaled draws {SheetUpscaler.RedirectedThisFrame} ({SheetUpscaler.PatchedOverloads} overloads)   {SheetUpscaler.Cache.Describe()}   {SheetUpscaler.SoftSprites.Describe()}",
+                    $"sway strips {FoliageSway.StripDrawsThisFrame}   crops leaned {FoliageSway.CropSwaysThisFrame}   upscaled draws {SheetUpscaler.RedirectedThisFrame} ({SheetUpscaler.PatchedOverloads} overloads)   {SheetUpscaler.Cache.Describe()}   {SheetUpscaler.SoftSprites.Describe()}",
                     Game1.smallFont, new Vector2(12, 60), Color.Yellow);
             if (DebugChannel == DebugOverlayChannel.Flood && Game1.currentLocation != null)
             {

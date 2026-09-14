@@ -49,6 +49,18 @@ namespace SDVRadiance
             /// is no water to reflect into, so this is what makes that skip safe to reverse.</summary>
             internal bool ColorFresh;
             internal int LastSeenTick;
+            /// <summary>The silhouette laid down by the sun, made from <see cref="Mask"/> exactly
+            /// as the local player's is (see LayDownPlayerSun), and what it was laid down with.
+            /// Always this entry's own, even while the mask is borrowed from another screen.</summary>
+            internal RenderTarget2D? SunMask;
+            internal Vector2 SunFeet;
+            internal float SunUnbake = 1f;
+            internal Rectangle SunContent;
+            internal ShadowProjection SunProjection;
+            internal float SunBlur = -1f;
+            internal bool SunFresh;
+            internal (int Frame, int Facing, Rectangle Src) SunSignature;
+            internal float SunContactHardness = -1f, SunPenumbraStretch = -1f;
         }
 
         private readonly Dictionary<long, FarmerBake> _otherFarmerBakes = new();
@@ -193,7 +205,7 @@ namespace SDVRadiance
                         bake = new FarmerBake();
                         _otherFarmerBakes[who.UniqueMultiplayerID] = bake;
                     }
-                    bake.LastSeenTick = Game1.ticks;
+                    bake.LastSeenTick = SharedTicks.Now;
 
                     // Same three questions the local player's bake asks, and the same answers: a
                     // rider is covered by the horse's own shadow, and a swimmer casts none.
@@ -214,7 +226,7 @@ namespace SDVRadiance
                     // both players and both remote copies at once, which is four of the most
                     // expensive bakes in the mod landing on one frame (measured worst 3.95 ms).
                     bool accessoryRefreshDue = PlayerAccessoriesAnimate && !Determinism.Frozen
-                                               && (Game1.ticks + (int)(who.UniqueMultiplayerID & 7L)) % 8 == 0;
+                                               && (SharedTicks.Now + (int)(who.UniqueMultiplayerID & 7L)) % 8 == 0;
                     // The other screen's own player is this screen's remote farmer, and that screen
                     // baked them earlier in this very frame: borrow it rather than bake the same
                     // person a second time. Asked first and re-asked every frame, because the
@@ -223,6 +235,7 @@ namespace SDVRadiance
                     {
                         FrameCost.Count(FrameCost.Counter.FarmerBakesShared);
                         bake.Ready = !IsSeated(who);
+                        LayDownFarmerSun(graphicsDevice, bake, sourceRect);
                         PublishRemoteFarmer(who, bake);
                         continue;
                     }
@@ -230,6 +243,7 @@ namespace SDVRadiance
                         && (!reflectionNeedsFarmers || bake.ColorFresh))
                     {
                         bake.Ready = !IsSeated(who);
+                        LayDownFarmerSun(graphicsDevice, bake, sourceRect);
                         PublishRemoteFarmer(who, bake);
                         continue;
                     }
@@ -256,6 +270,7 @@ namespace SDVRadiance
                     bake.Signature = sig;
                     bake.HasSignature = true;
                     bake.Ready = !IsSeated(who);
+                    LayDownFarmerSun(graphicsDevice, bake, sourceRect);
                     PublishRemoteFarmer(who, bake);
                 }
             }
@@ -311,9 +326,7 @@ namespace SDVRadiance
             _renderTargetSpriteBatch.End();
 
             _gradientTexture ??= BuildGradient(graphicsDevice);
-            _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, ZeroColor, SamplerState.PointClamp);
-            _renderTargetSpriteBatch.Draw(_gradientTexture, new Rectangle(0, 0, PlayerRtW, PlayerRtH), Color.White);
-            _renderTargetSpriteBatch.End();
+            WhitenBake(graphicsDevice, new Rectangle(0, 0, PlayerRtW, PlayerRtH));
 
             _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
             _renderTargetSpriteBatch.Draw(_gradientTexture, new Rectangle(0, 0, PlayerRtW, PlayerRtH), Color.White);
@@ -406,7 +419,7 @@ namespace SDVRadiance
                 return;
             _farmerBakeEvictions.Clear();
             foreach (var kv in _otherFarmerBakes)
-                if (Game1.ticks - kv.Value.LastSeenTick > RemoteFarmerBakeTtl)
+                if (SharedTicks.Now - kv.Value.LastSeenTick > RemoteFarmerBakeTtl)
                     _farmerBakeEvictions.Add(kv.Key);
             foreach (long id in _farmerBakeEvictions)
             {
@@ -414,6 +427,7 @@ namespace SDVRadiance
                 {
                     bake.OwnedMask?.Dispose();
                     bake.OwnedColour?.Dispose();
+                    bake.SunMask?.Dispose();
                 }
                 _otherFarmerBakes.Remove(id);
             }
@@ -448,9 +462,20 @@ namespace SDVRadiance
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                     new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
                 float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
-                DrawSoftGrounded(spriteBatch, Taps9, bake.Mask, null, feet, Color.White, alpha, rotation,
-                    bake.FeetInRenderTarget, new Vector2(CharacterAcrossScale(rotation, stretch), stretch),
-                    who.StandingPixel.Y, SpriteEffects.None, blur);
+                DrawPeoplePoolUnder(spriteBatch, feet, 22f, alpha, depth, blur);
+                // Laid down by the sun already, the way the local player's is: skew and soft edge
+                // in the pixels, one unrotated stamp per strip.
+                if (bake.SunFresh && bake.SunMask != null)
+                {
+                    DrawSoftGrounded(spriteBatch, Taps9, bake.SunMask, bake.SunContent, feet, ShadowInk, alpha, 0f,
+                        bake.SunFeet - new Vector2(bake.SunContent.X, bake.SunContent.Y), new Vector2(bake.SunUnbake, bake.SunUnbake),
+                        who.StandingPixel.Y, SpriteEffects.None, 0f, laidDownLean: rotation);
+                    continue;
+                }
+                float farmerWidth = LaidDownWidth(CharacterAcrossScale(rotation, stretch), SpriteEffects.None, out SpriteEffects farmerFacing);
+                DrawSoftGrounded(spriteBatch, Taps9, bake.Mask, null, feet, ShadowInk, alpha, rotation,
+                    bake.FeetInRenderTarget, new Vector2(farmerWidth, stretch),
+                    who.StandingPixel.Y, farmerFacing, blur, shadowLengthPerHeight: stretch);
             }
         }
 
@@ -478,9 +503,41 @@ namespace SDVRadiance
                 if (!bake.Ready || bake.Mask == null)
                     continue;
                 foreach (var (rotation, st, a, _) in _lightShadowCasts)
-                    DrawSoftGrounded(spriteBatch, Taps9, bake.Mask, null, feet, Color.White, a, rotation,
-                        bake.FeetInRenderTarget, new Vector2(1f, st), who.StandingPixel.Y, SpriteEffects.None, blur);
+                    DrawSoftGrounded(spriteBatch, Taps9, bake.Mask, null, feet, ShadowInk, a, rotation,
+                        bake.FeetInRenderTarget, new Vector2(1f, st), who.StandingPixel.Y, SpriteEffects.None, blur,
+                        shadowLengthPerHeight: st);
             }
+        }
+
+        /// <summary>
+        /// A remote farmer's daylight shadow, laid down by the sun exactly as the local player's is
+        /// (see <see cref="LayDownPlayerSun"/>): parity is the rule here, and the skew is part of
+        /// it. Made again on a new pose, a moved sun or a moved softness dial, otherwise kept.
+        /// </summary>
+        private void LayDownFarmerSun(GraphicsDevice graphicsDevice, FarmerBake bake, Rectangle sourceRect)
+        {
+            if (!_characterSunLive || !_castPlayer || !bake.Ready || bake.Mask == null)
+            {
+                bake.SunFresh = false;
+                return;
+            }
+            ShadowProjection projection = ShadowProjection.ForSolid(_characterSunRotation, _characterSunStretch, _characterGroundForeshortening);
+            Rectangle sprite = PlayerSpriteInBake(sourceRect);
+            if (bake.SunFresh && bake.SunMask != null && GpuContent.Usable(bake.SunMask)
+                && bake.SunSignature == bake.Signature
+                && Math.Abs(_characterSunBlur - bake.SunBlur) <= 0.3f
+                && bake.SunContactHardness == ContactHardnessNow && bake.SunPenumbraStretch == PenumbraStretchNow
+                && projection.Drift(bake.SunProjection, sprite.Width, sprite.Height) <= ShearRefreshPixels)
+                return;
+            bake.SunMask ??= VramTally.Track(new RenderTarget2D(graphicsDevice, PlayerSunRtSize, PlayerSunRtSize, false,
+                SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "farmer sun silhouettes (co-op)");
+            bake.SunFresh = LayDownSilhouette(graphicsDevice, bake.Mask, sprite, bake.FeetInRenderTarget, projection,
+                _characterSunBlur, bake.SunMask, out bake.SunFeet, out bake.SunUnbake, out bake.SunContent);
+            bake.SunProjection = projection;
+            bake.SunBlur = _characterSunBlur;
+            bake.SunSignature = bake.Signature;
+            bake.SunContactHardness = ContactHardnessNow;
+            bake.SunPenumbraStretch = PenumbraStretchNow;
         }
     }
 }

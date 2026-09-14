@@ -99,6 +99,15 @@ namespace SDVRadiance
             // that says whether smooth art is paid for in draw calls or in pixels.
             SpriteBatchFlushes,
             WorldSpriteBatchFlushes,
+            // MonoGame's own counters, read once a frame off GraphicsDevice.Metrics, which resets
+            // itself every frame. Binding a render target whose usage is DiscardContents makes
+            // ApplyRenderTargets clear it in full before anything is drawn, and that clear is
+            // counted here alongside the ones the mod asks for, so this is the only place the
+            // implicit ones are visible at all. A clear is also not just a fill: PlatformClear
+            // saves the scissor, depth stencil and blend states, applies its own, clears, then
+            // restores all three and dirties them for the next draw.
+            RenderTargetClears,
+            RenderTargetBinds,
         }
 
         private const int PartCount = 14;
@@ -149,6 +158,7 @@ namespace SDVRadiance
             public readonly double[] Parts = new double[PartCount];
             public readonly int[] Counts = new int[8];
             public int Gen0, Gen1, Gen2;
+            public long AllocatedBytes;
             public string Location = "";
             public int TimeOfDay;
             public int FramesSinceArrival;
@@ -177,6 +187,14 @@ namespace SDVRadiance
         // stutter hunt needs beside the worst frames it is trying to explain.
         private static readonly int[] _gcBase = new int[3];
         private static readonly int[] _gcWindow = new int[3];
+
+        // ---- bytes allocated per frame ----
+        // The collection counts say THAT the collector ran, not what fed it. Bytes allocated on the
+        // game thread between two frames are the feed, read straight from the runtime. Game thread
+        // only, so the game and every mod are in it; a jump that follows one of our toggles is ours.
+        private static long _allocatedAtLastFrame;
+        private static long _allocatedSum, _allocatedMax, _allocatedWindowSum, _allocatedWindowMax;
+        private static int _allocatedFrames, _allocatedWindowFrames;
         private static bool _gcBaseTaken;
 
         private static readonly string[] CounterNames =
@@ -193,6 +211,8 @@ namespace SDVRadiance
             "farmer bakes shared between screens",
             "sprite batch draw calls (whole frame)",
             "sprite batch draw calls (world step)",
+            "render target clears (ours + implicit)",
+            "render target binds",
         };
 
         static FrameCost()
@@ -381,6 +401,27 @@ namespace SDVRadiance
 
         internal static void Count(Counter counter, int n = 1) => _countThisFrame[(int)counter] += n;
 
+        /// <summary>
+        /// Record a counter that is already a running total for this frame, keeping the largest
+        /// value seen. MonoGame's own metrics reset in <c>Present</c>, so they climb through the
+        /// frame and every read is a partial sum; on a split screen this is read once per screen
+        /// and adding those reads would count the earlier screens again.
+        /// </summary>
+        internal static void CountHighWater(Counter counter, int total)
+        {
+            if (total > _countThisFrame[(int)counter])
+                _countThisFrame[(int)counter] = total;
+        }
+
+        /// <summary>Read the graphics device's own per-frame counters. Called from the last hook
+        /// of the frame, because they are cleared in <c>Present</c> and count up until then.</summary>
+        internal static void NoteDeviceMetrics(Microsoft.Xna.Framework.Graphics.GraphicsDevice device)
+        {
+            var metrics = device.Metrics;
+            CountHighWater(Counter.RenderTargetClears, (int)metrics.ClearCount);
+            CountHighWater(Counter.RenderTargetBinds, (int)metrics.TargetCount);
+        }
+
         internal static void CacheOccupancy(int objects, int objectCap, int casters, int casterCap)
         {
             _objectCacheSize = objects; _objectCacheCap = objectCap;
@@ -432,7 +473,7 @@ namespace SDVRadiance
 
         /// <summary>Offer the frame that just ended to the ledger of the longest. The chain
         /// encloses the grid rebuilds, so they are taken off it here the way the table does.</summary>
-        private static void OfferLongFrame(double frameMs, int[] countsThisFrame)
+        private static void OfferLongFrame(double frameMs, int[] countsThisFrame, long allocatedBytes)
         {
             double ours = 0;
             double grids = 0;
@@ -466,6 +507,7 @@ namespace SDVRadiance
             Array.Copy(_thisFrame, f.Parts, PartCount);
             Array.Copy(countsThisFrame, f.Counts, Math.Min(countsThisFrame.Length, f.Counts.Length));
             f.Gen0 = d0; f.Gen1 = d1; f.Gen2 = d2;
+            f.AllocatedBytes = allocatedBytes;
             f.Location = location;
             f.TimeOfDay = Game1.timeOfDay;
             f.FramesSinceArrival = _framesSinceArrival;
@@ -533,7 +575,8 @@ namespace SDVRadiance
                              + (f.FramesSinceArrival < ArrivalFrames ? $" (arrival+{f.FramesSinceArrival})" : "")
                              + (f.Doing.Length > 0 && f.Doing != "playing" ? $" [{f.Doing}]" : "");
                 text.AppendLine($"  {f.FrameMs,7:0.00} ms  {where,-32}  ours {f.OursMs,6:0.00}  not ours {Math.Max(0, f.FrameMs - f.OursMs),6:0.00}"
-                              + (parts.Length > 0 ? $"   [{parts}]" : "") + counts + gc);
+                              + (parts.Length > 0 ? $"   [{parts}]" : "") + counts + gc
+                              + (f.AllocatedBytes >= 1024 ? $"  alloc {f.AllocatedBytes / 1024} KB" : ""));
             }
             _longestCount = 0;
             _hugeFrames = 0;
@@ -585,9 +628,11 @@ namespace SDVRadiance
             }
 
             long now = Stopwatch.GetTimestamp();
+            long allocatedNow = GC.GetAllocatedBytesForCurrentThread();
             if (_lastFrameStamp != 0 && wallClockFrame)
             {
                 double frameMs = (now - _lastFrameStamp) * 1000.0 / Stopwatch.Frequency;
+                long allocatedThisFrame = allocatedNow - _allocatedAtLastFrame;
                 // A frame straddling a load screen, an alt-tab or a menu is minutes long and would
                 // drag the average somewhere no real frame ever went. Anything past a quarter of a
                 // second is one of those, or it is the stall the player is writing to us about, so
@@ -599,12 +644,15 @@ namespace SDVRadiance
                     if (frameMs > _hugeFrameMax) _hugeFrameMax = frameMs;
                     // Still offered to the ledger: the whole point of a frame this long is to see
                     // what was in it.
-                    OfferLongFrame(frameMs, countsOfLastFrame);
+                    OfferLongFrame(frameMs, countsOfLastFrame, allocatedThisFrame);
                 }
                 if (frameMs < HugeFrameMilliseconds)
                 {
                     if (focused)
-                        OfferLongFrame(frameMs, countsOfLastFrame);
+                        OfferLongFrame(frameMs, countsOfLastFrame, allocatedThisFrame);
+                    _allocatedSum += allocatedThisFrame;
+                    if (allocatedThisFrame > _allocatedMax) _allocatedMax = allocatedThisFrame;
+                    _allocatedFrames++;
                     _frameSum += frameMs;
                     if (frameMs > _frameMax) _frameMax = frameMs;
                     _frameEmaMs = _frameEmaMs <= 0 ? frameMs : _frameEmaMs * 0.9 + frameMs * 0.1;
@@ -625,6 +673,7 @@ namespace SDVRadiance
             if (wallClockFrame)
             {
                 _lastFrameStamp = now;
+                _allocatedAtLastFrame = allocatedNow;
                 // Fold the updates that ran for the frame just drawn. A frame that drew without a
                 // single update in it is counted too: that is the accumulator not yet full, and
                 // dropping it would flatter the average.
@@ -660,6 +709,10 @@ namespace SDVRadiance
             Array.Copy(_gpuMax, _gpuWindowMax, PartCount);
             Array.Copy(_gpuSamples, _gpuWindowSamples, PartCount);
             _frameWindowSum = _frameSum; _frameWindowMax = _frameMax;
+            _allocatedWindowSum = _allocatedSum; _allocatedWindowMax = _allocatedMax;
+            _allocatedWindowFrames = _allocatedFrames;
+            _allocatedSum = _allocatedMax = 0;
+            _allocatedFrames = 0;
             _frameSum = _frameMax = 0;
             _unfocusedWindowFrames = _unfocusedFrames;
             _unfocusedFrames = 0;
@@ -713,6 +766,8 @@ namespace SDVRadiance
             Array.Clear(_gpuWindowMax, 0, PartCount);
             Array.Clear(_gpuWindowSamples, 0, PartCount);
             _frameSum = _frameMax = _frameWindowSum = _frameWindowMax = 0;
+            _allocatedSum = _allocatedMax = _allocatedWindowSum = _allocatedWindowMax = 0;
+            _allocatedFrames = _allocatedWindowFrames = 0;
             _lastFrameStamp = 0;
             _frames = _windowFrameCount = 0;
             Array.Clear(_thisFrame, 0, PartCount);
@@ -834,6 +889,9 @@ namespace SDVRadiance
                     // count here may be the collector wearing a stage's name.
                     text.AppendLine($"  {"GC collections this window",-26} gen0 {_gcWindow[0]}   gen1 {_gcWindow[1]}   gen2 {_gcWindow[2]}"
                                   + "   (whole process, game and every mod)");
+                    if (_allocatedWindowFrames > 0)
+                        text.AppendLine($"  {"allocated per frame",-26} avg {_allocatedWindowSum / (double)_allocatedWindowFrames / 1024.0,8:0.0} KB"
+                                      + $"   worst {_allocatedWindowMax / 1024.0,8:0.0} KB   (game thread: the game and every mod)");
                 }
                 int unfocused = complete ? _unfocusedWindowFrames : _unfocusedFrames;
                 if (unfocused > 0)

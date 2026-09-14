@@ -42,11 +42,20 @@ namespace SDVRadiance
         internal static bool PlayerPatchEnabled = true;
 
         /// <summary>What the patch did this frame, for radiance_shadows.</summary>
-        internal static string PlayerPatchReport = "not attempted";
+        /// <summary>The fixed sentence for an outcome that is not a composed patch, or null when
+        /// the patch WAS composed and <see cref="PlayerPatchLine"/> should describe it.</summary>
+        internal static string? PlayerPatchReport = "not attempted";
 
         private const int PlayerPatchSize = 640;
         private RenderTarget2D? _playerPatch;
-        private readonly List<(float rotation, Vector2 scale, float alpha, float blur)> _patchCasts = new();
+        /// <summary>One cast onto the patch. The scale's width is already POSITIVE and the sign it
+        /// carried is in <c>facing</c>: the shader and the draw both want the same geometry, and a
+        /// SpriteBatch cannot be handed a negative width (see <see cref="LaidDownWidth"/>).</summary>
+        /// <remarks>The source is the upright bake for a lamp's cast and the laid-down one for
+        /// the sun's, whose lean is then in its pixels and its rotation zero; <c>lean</c> says
+        /// which way the shadow runs either way, for the choice of wall rule.</remarks>
+        private readonly List<(Texture2D source, Rectangle? sourceRect, Vector2 origin, float rotation, Vector2 scale,
+            float alpha, float blur, SpriteEffects facing, float lean)> _patchCasts = new();
 
         private bool _patchValid;
         private bool _patchDrawnThisFrame;
@@ -56,10 +65,31 @@ namespace SDVRadiance
         private float _patchFeetWorldX;
         private Rectangle _patchContent;
 
+        /// <summary>The solid-tile texture this frame's patch reads: the one kept for the place the
+        /// screen being drawn stands in.</summary>
         private Texture2D? _solidTiles;
-        private GameLocation? _solidTilesFor;
-        private xTile.Map? _solidTilesMap;
         private Color[]? _solidTilesPixels;
+
+        /// <summary>One solid-tile texture per place, a few places kept.
+        ///
+        /// <para>It was one slot, rebuilt whenever the place asked for was not the place it held. The
+        /// same place from the other screen was already accepted (a different object with the same
+        /// Buildings layer), but two screens in two DIFFERENT places took turns: every call walked
+        /// the whole Buildings layer and uploaded a texture, for both screens, every frame. Measured
+        /// 13/9 with one screen in Town and one on the mountain: "patch: solid tiles" 0.95 ms a frame
+        /// in split screen against 0.001 and 0.000 for the same two places on one screen each.</para></summary>
+        private sealed class SolidTilesForPlace
+        {
+            internal Texture2D? Texture;
+            internal xTile.Map? Map;
+            internal bool HasNoBuildingsLayer;
+            internal long LastAskedFor;
+        }
+
+        private readonly Dictionary<string, SolidTilesForPlace> _solidTilesByPlace = new();
+        private long _solidTilesAsks;
+        /// <summary>Two screens in two places is two; the spare pair covers walking between them.</summary>
+        private const int SolidTilesPlacesKept = 4;
 
         /// <summary>
         /// Compose every cast of the player's shadow into the patch, cut by the map. Runs from
@@ -88,6 +118,11 @@ namespace SDVRadiance
             }
             if (!ShouldCast(config))
                 return;
+            if (!config.DirectionalShadowPlayer)
+            {
+                PlayerPatchReport = "switched off (Shadows for the player)";
+                return;
+            }
             float strength = MathHelper.Clamp(config.DirectionalShadowStrength, 0f, 1f);
             if (strength <= 0.01f)
                 return;
@@ -109,7 +144,18 @@ namespace SDVRadiance
                     float lengthScale = Math.Max(0.1f, config.DirectionalShadowLength)
                                       * MathHelper.Lerp(1f, OvercastLength, _overcastBlend);
                     stretch *= lengthScale;
-                    _patchCasts.Add((rotation, new Vector2(CharacterAcrossScale(rotation, stretch), stretch), alpha, sunBlur));
+                    if (_playerSunFresh && _playerSunRenderTarget != null)
+                        // Laid down already, soft edge and skew in the pixels: no rotation, no
+                        // blur taps, one scale. See LayDownPlayerSun.
+                        _patchCasts.Add((_playerSunRenderTarget, _playerSunContent,
+                            _playerSunFeet - new Vector2(_playerSunContent.X, _playerSunContent.Y), 0f,
+                            new Vector2(_playerSunUnbake, _playerSunUnbake), alpha, 0f, SpriteEffects.None, rotation));
+                    else
+                    {
+                        float patchWidth = LaidDownWidth(CharacterAcrossScale(rotation, stretch), SpriteEffects.None, out SpriteEffects patchFacing);
+                        _patchCasts.Add((_playerRenderTarget, null, _playerFeetInRenderTarget, rotation,
+                            new Vector2(patchWidth, stretch), alpha, sunBlur, patchFacing, rotation));
+                    }
                 }
             }
             if (_sunBlend < 0.996f)
@@ -125,7 +171,8 @@ namespace SDVRadiance
                     new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
                 GatherCasts(feetScreen, castStrength, lenCfg);
                 foreach (var (rotation, st, a, _) in _lightShadowCasts)
-                    _patchCasts.Add((rotation, new Vector2(1f, st), a, blur));
+                    _patchCasts.Add((_playerRenderTarget, null, _playerFeetInRenderTarget, rotation, new Vector2(1f, st), a, blur,
+                        SpriteEffects.None, rotation));
             }
             if (_patchCasts.Count == 0)
             {
@@ -159,8 +206,6 @@ namespace SDVRadiance
             effect.Parameters["SolidTexture"]?.SetValue(_solidTiles);
             effect.Parameters["SolidMapTiles"]?.SetValue(new Vector2(_solidTiles.Width, _solidTiles.Height));
             effect.Parameters["FeetWorld"]?.SetValue(feetWorld);
-            effect.Parameters["SpriteOrigin"]?.SetValue(_playerFeetInRenderTarget);
-            effect.Parameters["SpriteSize"]?.SetValue(new Vector2(_playerRenderTarget.Width, _playerRenderTarget.Height));
 
             RenderTargetBinding[] previous = device.GetRenderTargets();
             var batch = _renderTargetSpriteBatch!;
@@ -172,17 +217,24 @@ namespace SDVRadiance
                 // Immediate, so each cast's lean and direction reach the shader before its taps.
                 batch.Begin(SpriteSortMode.Immediate, BlendState.AlphaBlend, SamplerState.LinearClamp,
                     DepthStencilState.None, RasterizerState.CullNone, effect);
-                foreach (var (rotation, scale, alpha, castBlur) in _patchCasts)
+                foreach (var (source, sourceRect, origin, rotation, scale, alpha, castBlur, facing, lean) in _patchCasts)
                 {
+                    Rectangle area = sourceRect ?? source.Bounds;
+                    // Per cast, because the sun's cast comes from the laid-down bake and a lamp's
+                    // from the upright one, and the shader maps each texel back to the world
+                    // through the size and origin of whichever it was handed.
+                    effect.Parameters["SpriteOrigin"]?.SetValue(origin);
+                    effect.Parameters["SpriteSize"]?.SetValue(new Vector2(area.Width, area.Height));
                     effect.Parameters["Scale"]?.SetValue(scale);
                     effect.Parameters["Rotation"]?.SetValue(rotation);
                     // Up the screen (cos > 0): the shadow climbs the wall it meets. Down the
-                    // screen: it stops at the counter. See the shader for why.
-                    effect.Parameters["KeepOnSolid"]?.SetValue(Math.Cos(rotation) > 0.0 ? 1f : 0f);
-                    DrawSoft(batch, Taps9, _playerRenderTarget, null, _patchFeetInPatch, Color.White, alpha, rotation,
-                        _playerFeetInRenderTarget, scale, 0f, SpriteEffects.None, castBlur);
-                    _patchContent = Rectangle.Union(_patchContent.IsEmpty ? CastBounds(rotation, scale, castBlur) : _patchContent,
-                        CastBounds(rotation, scale, castBlur));
+                    // screen: it stops at the counter. See the shader for why. Asked of the lean
+                    // the shadow really has, which a laid-down cast carries in its pixels.
+                    effect.Parameters["KeepOnSolid"]?.SetValue(Math.Cos(lean) > 0.0 ? 1f : 0f);
+                    DrawSoft(batch, Taps9, source, sourceRect, _patchFeetInPatch, Color.White, alpha, rotation,
+                        origin, scale, 0f, facing, castBlur, shadowLengthPerHeight: scale.Y);
+                    Rectangle castBounds = CastBounds(area.Width, area.Height, origin, rotation, scale, castBlur);
+                    _patchContent = _patchContent.IsEmpty ? castBounds : Rectangle.Union(_patchContent, castBounds);
                 }
                 batch.End();
             }
@@ -195,15 +247,32 @@ namespace SDVRadiance
             _patchAnchorWorldY = feetWorld.Y;
             _patchFeetWorldX = feetWorld.X;
             _patchValid = !_patchContent.IsEmpty;
-            PlayerPatchReport = $"composed {_patchCasts.Count} cast(s) into a {PlayerPatchSize}x{PlayerPatchSize} patch, content {_patchContent.Width}x{_patchContent.Height}";
+            _patchContentSize = new Point(_patchContent.Width, _patchContent.Height);
+            // Counted, not written out: this runs on every frame the player has a shadow, and the
+            // sentence is only ever read by radiance_shadows. Report() spells it out from these.
+            PlayerPatchReport = null;
+            _patchCastsComposed = _patchCasts.Count;
         }
+
+        /// <summary>How many casts the last patch was composed from, for the diagnostic. The
+        /// sentence that used to be built here is in <see cref="PlayerPatchLine"/>.</summary>
+        private static int _patchCastsComposed;
+
+        /// <summary>The size of the last composed patch's content, for the diagnostic.</summary>
+        private static Point _patchContentSize;
+
+        /// <summary>What the patch did last frame, in words. A composed patch leaves
+        /// <see cref="PlayerPatchReport"/> null and is described from the numbers here; every
+        /// other outcome is a fixed sentence set where it happened.</summary>
+        internal static string PlayerPatchLine
+            => PlayerPatchReport
+               ?? $"composed {_patchCastsComposed} cast(s) into a {PlayerPatchSize}x{PlayerPatchSize} patch, "
+                  + $"content {_patchContentSize.X}x{_patchContentSize.Y}";
 
         /// <summary>The patch pixels one cast can touch: the silhouette's quad under the draw's
         /// lean and scale, plus the blur's reach, so the strips cover no more than they must.</summary>
-        private Rectangle CastBounds(float rotation, Vector2 scale, float blur)
+        private Rectangle CastBounds(float w, float h, Vector2 origin, float rotation, Vector2 scale, float blur)
         {
-            float w = _playerRenderTarget!.Width, h = _playerRenderTarget.Height;
-            Vector2 origin = _playerFeetInRenderTarget;
             float cs = (float)Math.Cos(rotation), sn = (float)Math.Sin(rotation);
             float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
             foreach (Vector2 corner in new[] { new Vector2(0, 0), new Vector2(w, 0), new Vector2(0, h), new Vector2(w, h) })
@@ -242,7 +311,7 @@ namespace SDVRadiance
                 float upScreen = _patchFeetInPatch.Y - (y + h * 0.5f);
                 float depth = GroundedPieceDepth(_patchAnchorWorldY, upScreen, _patchFeetWorldX, sideways);
                 FrameCost.Count(FrameCost.Counter.ShadowDrawCalls);
-                spriteBatch.Draw(_playerPatch, _patchScreenTopLeft + new Vector2(strip.X, strip.Y), strip, Color.White,
+                spriteBatch.Draw(_playerPatch, _patchScreenTopLeft + new Vector2(strip.X, strip.Y), strip, ShadowInk,
                     0f, Vector2.Zero, 1f, SpriteEffects.None, depth);
             }
             return true;
@@ -260,19 +329,30 @@ namespace SDVRadiance
                 _solidTiles = null;
                 return;
             }
-            // The same place seen from the other screen is a different object with the same
-            // Buildings layer: the texture built for one serves both (LiveScreens.SamePlace).
-            if (SDVRadiance.LiveScreens.SamePlace(location, _solidTilesFor) && SDVRadiance.LiveScreens.SameMapSize(map, _solidTilesMap)
-                && _solidTiles is { IsDisposed: false })
+            // Keyed by the place's name, which is what LiveScreens.SamePlace compares: the same place
+            // seen from the other screen is a different object with the same Buildings layer.
+            string place = location.NameOrUniqueName;
+            if (!_solidTilesByPlace.TryGetValue(place, out SolidTilesForPlace? kept))
+                _solidTilesByPlace[place] = kept = new SolidTilesForPlace();
+            kept.LastAskedFor = ++_solidTilesAsks;
+            TrimSolidTilesPlaces();
+            if (SDVRadiance.LiveScreens.SameMapSize(map, kept.Map)
+                && (kept.HasNoBuildingsLayer || kept.Texture is { IsDisposed: false }))
+            {
+                _solidTiles = kept.HasNoBuildingsLayer ? null : kept.Texture;
                 return;
+            }
             var buildings = map.GetLayer("Buildings");
             if (buildings == null)
             {
+                kept.Texture?.Dispose();
+                kept.Texture = null;
+                kept.HasNoBuildingsLayer = true;
+                kept.Map = map;
                 _solidTiles = null;
-                _solidTilesFor = location;
-                _solidTilesMap = map;
                 return;
             }
+            kept.HasNoBuildingsLayer = false;
             int width = buildings.LayerWidth, height = buildings.LayerHeight;
             if (_solidTilesPixels == null || _solidTilesPixels.Length != width * height)
                 _solidTilesPixels = new Color[width * height];
@@ -283,14 +363,36 @@ namespace SDVRadiance
                         && location.doesTileHaveProperty(x, y, "Passable", "Buildings") == null;
                     _solidTilesPixels[y * width + x] = solid ? Color.White : Color.Transparent;
                 }
-            if (_solidTiles == null || _solidTiles.IsDisposed || _solidTiles.Width != width || _solidTiles.Height != height)
+            if (kept.Texture == null || kept.Texture.IsDisposed || kept.Texture.Width != width || kept.Texture.Height != height)
             {
-                _solidTiles?.Dispose();
-                _solidTiles = VramTally.Track(new Texture2D(device, width, height, false, SurfaceFormat.Color), "player shadow solid tiles");
+                kept.Texture?.Dispose();
+                kept.Texture = VramTally.Track(new Texture2D(device, width, height, false, SurfaceFormat.Color), "player shadow solid tiles");
             }
-            _solidTiles.SetData(_solidTilesPixels);
-            _solidTilesFor = location;
-            _solidTilesMap = map;
+            kept.Texture.SetData(_solidTilesPixels);
+            kept.Map = map;
+            _solidTiles = kept.Texture;
+        }
+
+        /// <summary>Drop the place nobody has asked about for longest once more are kept than
+        /// <see cref="SolidTilesPlacesKept"/>. The place just asked for is stamped first, so it is
+        /// never the one dropped.</summary>
+        private void TrimSolidTilesPlaces()
+        {
+            while (_solidTilesByPlace.Count > SolidTilesPlacesKept)
+            {
+                string? leastWanted = null;
+                long oldest = long.MaxValue;
+                foreach (var pair in _solidTilesByPlace)
+                    if (pair.Value.LastAskedFor < oldest)
+                    {
+                        oldest = pair.Value.LastAskedFor;
+                        leastWanted = pair.Key;
+                    }
+                if (leastWanted == null)
+                    break;
+                _solidTilesByPlace[leastWanted].Texture?.Dispose();
+                _solidTilesByPlace.Remove(leastWanted);
+            }
         }
     }
 }

@@ -36,10 +36,35 @@ namespace SDVRadiance
         /// <summary>Log sink, set alongside <see cref="LiveConfig"/> at install time.</summary>
         internal static StardewModdingAPI.IMonitor? Monitor;
 
-        /// <summary>True when some other mod has its own prefix or transpiler on drawWeather.
-        /// Two mods fighting over the same draw slot ends with one of them broken and a player
-        /// who cannot tell which; yielding costs us a feature and costs them nothing.</summary>
+        /// <summary>Switched off for the whole session: another mod REWRITES drawWeather with a
+        /// transpiler, which leaves no way to tell what it draws, or our own draw threw once.
+        ///
+        /// <para>A prefix no longer lands here. This used to be set for any other mod's prefix at
+        /// all, and Cloudy Skies has one: everybody running it, and everybody running Weather
+        /// Wonders on top of it, never saw this rain once, not even on an ordinary rainy day.
+        /// Reading its source says why that was wrong. Its prefix takes the draw only when the
+        /// weather here is one of its own custom types and hands vanilla rain, storm and snow
+        /// straight back to the game, so the slot is free on exactly the days ours is for. A
+        /// prefix is now read frame by frame instead; see <see cref="DrawWeather_Prefix"/>.</para></summary>
         internal static bool AnotherModOwnsWeatherDraw;
+
+        /// <summary>Set for the call in progress: another mod skipped the game's weather draw,
+        /// whether its prefix ran before ours or ours was never asked. Cleared at the end of every
+        /// call by the postfix, which always runs.</summary>
+        private static bool _anotherModDrawsThisCall;
+
+        /// <summary>Set for the call in progress: OUR prefix is the one that skipped the game's
+        /// weather draw. What tells a skip of ours from a skip of somebody else's.</summary>
+        private static bool _weSkippedTheGameThisCall;
+
+        /// <summary>How many weather draws another mod has taken since launch, for the report: a
+        /// player asking where the rain went is answered by this number moving.</summary>
+        internal static long CallsAnotherModDrew;
+
+        /// <summary>Whether the most recent weather draw went to another mod. The report reads it:
+        /// asking the gate from outside a draw would say rain is wanted while nothing of ours draws,
+        /// which reads as a bug to anybody pasting the line.</summary>
+        private static bool _anotherModDrewLastCall;
 
         // ---- rain look -----------------------------------------------------------------------
 
@@ -211,17 +236,31 @@ namespace SDVRadiance
 
         // ---- the Harmony pair -----------------------------------------------------------------
 
-        /// <summary>Prefix on Game1.drawWeather: false = skip the vanilla draw this frame.</summary>
-        internal static bool DrawWeather_Prefix()
+        /// <summary>Prefix on Game1.drawWeather: false = skip the vanilla draw this frame.
+        ///
+        /// <para>Installed to run LAST among prefixes, so that by the time it is asked every other
+        /// mod has had its say. If the game's draw is already skipped, some other mod is drawing
+        /// weather of its own this frame, and ours stays out of it rather than lay a second rain
+        /// over theirs.</para></summary>
+        internal static bool DrawWeather_Prefix(bool __runOriginal)
         {
-            return !SuppressVanillaThisCall();
+            _anotherModDrawsThisCall = !__runOriginal;
+            _weSkippedTheGameThisCall = !_anotherModDrawsThisCall && SuppressVanillaThisCall();
+            return !_weSkippedTheGameThisCall;
         }
 
         /// <summary>Postfix on Game1.drawWeather: step and draw our precipitation. Runs whether
         /// or not the vanilla body ran, which is what lets a fade-out finish after the gate has
         /// already handed the slot back.</summary>
-        internal static void DrawWeather_Postfix(GameTime time)
+        internal static void DrawWeather_Postfix(GameTime time, bool __runOriginal)
         {
+            // Harmony may not have asked our prefix at all once another prefix skipped the draw,
+            // so the postfix reads the outcome rather than the order: a skip we did not make
+            // belongs to somebody else, whichever prefix ran first.
+            if (!__runOriginal && !_weSkippedTheGameThisCall)
+                _anotherModDrawsThisCall = true;
+            if (_anotherModDrawsThisCall)
+                CallsAnotherModDrew++;
             try
             {
                 StepAndDraw(time);
@@ -232,6 +271,12 @@ namespace SDVRadiance
                 // the feature off is strictly better than that, and the log says why it went.
                 AnotherModOwnsWeatherDraw = true;
                 Monitor?.Log($"Precipitation draw failed and switched itself off: {exception}", StardewModdingAPI.LogLevel.Error);
+            }
+            finally
+            {
+                _anotherModDrewLastCall = _anotherModDrawsThisCall;
+                _anotherModDrawsThisCall = false;
+                _weSkippedTheGameThisCall = false;
             }
         }
 
@@ -265,6 +310,11 @@ namespace SDVRadiance
             raining = snowing = windy = false;
             ModConfig? config = LiveConfig?.Invoke();
             if (config == null || !config.Enabled || !config.PrecipitationEnabled || AnotherModOwnsWeatherDraw)
+                return false;
+            // Another mod is drawing weather of its own this frame. Not wanted, rather than not
+            // drawn: the presence eases down, so rain already on screen fades instead of vanishing,
+            // and it eases back up the frame that mod hands the slot back.
+            if (_anotherModDrawsThisCall)
                 return false;
             if (Game1.game1?.takingMapScreenshot == true)
                 return false;   // a map screenshot would show a viewport-sized patch of rain
@@ -394,9 +444,9 @@ namespace SDVRadiance
         private static int _windSteppedTick = -1;
         private static void UpdateSharedWind(float dt)
         {
-            if (Game1.ticks == _windSteppedTick)
+            if (SharedTicks.Now == _windSteppedTick)
                 return;
-            _windSteppedTick = Game1.ticks;
+            _windSteppedTick = SharedTicks.Now;
             float seconds = (float)Determinism.Seconds;
             float target = StardewValley.WeatherDebris.globalWind * 480f
                 + MathF.Sin(seconds * 0.29f) * 28f
@@ -978,15 +1028,19 @@ namespace SDVRadiance
             if (config == null || !config.PrecipitationEnabled)
                 return "precipitation: vanilla (replacement not switched on)";
             if (AnotherModOwnsWeatherDraw)
-                return "precipitation: yielded (another mod patches drawWeather, or our draw failed once)";
+                return "precipitation: yielded for the session (another mod rewrites drawWeather, or our draw failed once)";
             bool wanted = ReplacementWanted(out bool raining, out bool snowing, out bool windy);
             ScreenPrecipitation? screen = _screens.TryGetValue(CurrentScreenId(), out var s) ? s : null;
             string state = screen == null ? "idle (never drawn on this screen)"
                 : $"presence={screen.Presence:0.000} storm={screen.StormEase:0.00} "
                 + $"drawn rain={screen.LastDrawnRain} snow={screen.LastDrawnSnow} splashes={screen.LastDrawnSplashes} windPieces={screen.LastDrawnWind}";
             bool greenNow = raining && (Game1.currentLocation?.IsGreenRainingHere() ?? false);
-            return $"precipitation: replacing={(wanted ? (greenNow ? "greenrain" : raining ? "rain" : snowing ? "snow" : "wind") : "nothing (gate closed)")} "
-                + $"wind={_windPixelsPerSecond:0} px/s {state}";
+            return $"precipitation: weather draws taken by another mod={CallsAnotherModDrew} replacing={(_anotherModDrewLastCall ? "nothing (another mod is drawing the weather)" : wanted ? (greenNow ? "greenrain" : raining ? "rain" : snowing ? "snow" : "wind") : "nothing (gate closed)")} "
+                + $"wind={_windPixelsPerSecond:0} px/s {state} "
+                // The two things the wind moves through the draw itself rather than through
+                // a stage, so a picture that shows neither can be told from a patch that
+                // never applied.
+                + $"| sway strips={FoliageSway.StripDrawsThisFrame} crops drawn={FoliageSway.CropDrawsThisFrame} leaned={FoliageSway.CropSwaysThisFrame} lastRefusal={FoliageSway.LastCropRefusal}";
         }
     }
 }

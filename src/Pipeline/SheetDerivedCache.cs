@@ -48,7 +48,7 @@ namespace SDVRadiance
         /// front of the player. On a warp the game is showing its fade-to-black, and a long frame
         /// under a black screen is a frame nobody sees, so that is where the whole set is made.
         /// </remarks>
-        internal void AllowBurstThisTick() => _burstUntilTick = Game1.ticks + 1;
+        internal void AllowBurstThisTick() => _burstUntilTick = SharedTicks.Now + 1;
         /// <summary>Sets the shader's parameters for one sheet: (effect, sheet, variant).</summary>
         private readonly Action<Effect, Texture2D, int> _setParameters;
         private readonly string _technique;
@@ -115,16 +115,16 @@ namespace SDVRadiance
                 }
                 else
                 {
-                    entry.LastUsedTick = Game1.ticks;
+                    entry.LastUsedTick = SharedTicks.Now;
                     return entry.Target;
                 }
             }
-            if (_frameTick != Game1.ticks)
+            if (_frameTick != SharedTicks.Now)
             {
-                _frameTick = Game1.ticks;
+                _frameTick = SharedTicks.Now;
                 _generatedThisFrame = 0;
             }
-            if (_generatedThisFrame >= _generatePerFrameCap && Game1.ticks > _burstUntilTick)
+            if (_generatedThisFrame >= _generatePerFrameCap && SharedTicks.Now > _burstUntilTick)
                 return null;
             long inputBytes = (long)sheet.Width * sheet.Height * 4;
             if (inputBytes > _largestInputBytes)
@@ -184,7 +184,7 @@ namespace SDVRadiance
                 if (previous.Length > 0) device.SetRenderTargets(previous);
                 else device.SetRenderTarget(null);
             }
-            _entries[key] = new Entry { Target = target, LastUsedTick = Game1.ticks, Bytes = bytes };
+            _entries[key] = new Entry { Target = target, LastUsedTick = SharedTicks.Now, Bytes = bytes };
             _ownTargets.Add(target);
             _heldBytes += bytes;
             _generatedThisFrame++;
@@ -227,7 +227,7 @@ namespace SDVRadiance
                 if (_heldBytes + incoming <= _budgetBytes)
                     break;
                 // Never evict what this very frame is still using: it would be regenerated at once.
-                if (_entries[key].LastUsedTick == Game1.ticks)
+                if (_entries[key].LastUsedTick == SharedTicks.Now)
                     continue;
                 Entry entry = _entries[key];
                 entry.Target.Dispose();

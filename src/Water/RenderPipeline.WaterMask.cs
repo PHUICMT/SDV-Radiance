@@ -52,8 +52,9 @@ namespace SDVRadiance
             return index < pixels.Length ? pixels[index] : null;
         }
 
-        private GameLocation? _locationWaterLocation;
-        private bool _locationHasWater;
+        // Per screen: RenderPipeline.Screens.cs.
+        private ref GameLocation? _locationWaterLocation => ref _screen.LocationWaterLocation;
+        private ref bool _locationHasWater => ref _screen.LocationHasWater;
 
         /// <summary>
         /// Does THIS LOCATION have water anywhere, as opposed to "is water inside the mask window
@@ -216,7 +217,14 @@ namespace SDVRadiance
             // rebuilding for everybody the moment a split-screen player dropped out.
             if (_pendingWaterMaskJob is { } orphan && orphan.ScreenId != _activeScreenId
                 && !ScreenStillExists(orphan.ScreenId))
+            {
+                // Only once its worker has finished. The compose reads the shared gather scratch
+                // without a lock, and letting go of a job that was still running let this screen's
+                // next gather write that scratch underneath it.
+                if (!orphan.Done)
+                    return true;
                 _pendingWaterMaskJob = null;
+            }
 
             if (_pendingWaterMaskJob is { } job)
             {
@@ -240,7 +248,7 @@ namespace SDVRadiance
                 else if (job.Failed)
                 {
                     _pendingWaterMaskJob = null;
-                    if (!_waterMaskJobFailureLogged) { _monitor.Log("Water mask compose failed once; rebuilding synchronously.", LogLevel.Warn); _waterMaskJobFailureLogged = true; }
+                    if (!_waterMaskJobFailureLogged) { _monitor.Log($"Water mask compose failed once ({job.FailureMessage ?? "no message"}); it is gathered again from the start.", LogLevel.Warn); _waterMaskJobFailureLogged = true; }
                 }
                 else if (job.Location == location && job.StartTileX == startTileX && job.StartTileY == startTileY
                     && job.TileWidth == tilesW && job.TileHeight == tilesH)
@@ -384,7 +392,7 @@ namespace SDVRadiance
             // world-anchored, so the old origin+size still map correctly.
             if (location != _lastWaterLocation || _waterMask == null)
                 _hasWaterInMask = false;
-            ShadowRenderer.WaterOnScreen = _hasWaterInMask;
+            ShadowRenderer.WaterOnScreen = _screen.WaterOnScreen = _hasWaterInMask;
 
             // The gather already knows, on this thread, whether the window it just read contains
             // water — but `_hasWaterInMask` was only ever updated when a COMPOSE landed, and a compose
@@ -400,13 +408,17 @@ namespace SDVRadiance
             // Keep the bake gate's copy current from every write site, not just the compose:
             // a stale FALSE here is the visible direction (water arrives, the mirror has no
             // player in it until the flag catches up).
-            ShadowRenderer.WaterOnScreen = _hasWaterInMask;
+            ShadowRenderer.WaterOnScreen = _screen.WaterOnScreen = _hasWaterInMask;
 
             newWaterMaskJob.Task = System.Threading.Tasks.Task.Run(() =>
             {
                 long composeStartTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
                 try { ComposeWaterMask(newWaterMaskJob); }
-                catch { newWaterMaskJob.Failed = true; }
+                catch (System.Exception exception)
+                {
+                    newWaterMaskJob.FailureMessage = exception.GetType().Name + ": " + exception.Message;
+                    newWaterMaskJob.Failed = true;
+                }
                 finally
                 {
                     newWaterMaskJob.ComposeDurationMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - composeStartTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
@@ -442,8 +454,30 @@ namespace SDVRadiance
         /// deck, 128 water (the mirror has a rule of its own for that), 255 a wall, a roof or glass.
         /// Rebuilt only when the location's surface map is a different object, so it costs a walk of
         /// the tile grid once per location and a dictionary lookup per frame.</summary>
-        private Texture2D? _surfaceClassTexture;
-        private SurfaceMap? _surfaceClassSource;
+        /// <summary>One surface-class texture per surface map, a few kept.
+        ///
+        /// <para>It was one texture tested with ReferenceEquals against the one surface map it was
+        /// built from. Every screen has its own SurfaceMap object, even in the same place, because
+        /// the second screen holds its own copy of every location; so with two screens every call
+        /// allocated a whole-map byte array, walked the grid and uploaded a texture, for both
+        /// screens, every frame. That was the water pass's CPU cost in split screen: 1.17 ms against
+        /// 0.02 for one screen, and switching water off took 4.2 ms off the whole frame.</para>
+        ///
+        /// <para>Keyed by the SurfaceMap object rather than the place, so a map rebuilt under a
+        /// player (a new SurfaceMap) gets a fresh texture on its own, and the textures of the
+        /// surface maps nobody asks for any more are disposed as they age out.</para></summary>
+        private sealed class SurfaceClassTextureForMap
+        {
+            internal Texture2D? Texture;
+            internal long LastAskedFor;
+        }
+
+        private readonly Dictionary<SurfaceMap, SurfaceClassTextureForMap> _surfaceClassTextures = new();
+        private long _surfaceClassAsks;
+        private byte[] _surfaceClassTexels = System.Array.Empty<byte>();
+        /// <summary>Two screens each on its own copy of a map is two; the spare pair covers walking
+        /// between two places without rebuilding on the way back.</summary>
+        private const int SurfaceClassTexturesKept = 4;
         /// <summary>Bound when there is no surface map: the water value, which the mirror treats as
         /// nothing special. An unbound slot samples 0, which is ground, and would end every mirror
         /// a tile down.</summary>
@@ -461,16 +495,17 @@ namespace SDVRadiance
                 }
                 return _neutralSurfaceTexture;
             }
-            if (ReferenceEquals(surf, _surfaceClassSource) && _surfaceClassTexture != null && !_surfaceClassTexture.IsDisposed)
-                return _surfaceClassTexture;
+            if (!_surfaceClassTextures.TryGetValue(surf, out SurfaceClassTextureForMap? kept))
+                _surfaceClassTextures[surf] = kept = new SurfaceClassTextureForMap();
+            kept.LastAskedFor = ++_surfaceClassAsks;
+            TrimSurfaceClassTextures();
+            if (kept.Texture is { IsDisposed: false })
+                return kept.Texture;
             int width = surf.Width, height = surf.Height;
-            if (_surfaceClassTexture == null || _surfaceClassTexture.IsDisposed
-                || _surfaceClassTexture.Width != width || _surfaceClassTexture.Height != height)
-            {
-                _surfaceClassTexture?.Dispose();
-                _surfaceClassTexture = new Texture2D(_device, width, height, false, SurfaceFormat.Alpha8);
-            }
-            var texels = new byte[width * height];
+            kept.Texture = new Texture2D(_device, width, height, false, SurfaceFormat.Alpha8);
+            if (_surfaceClassTexels.Length < width * height)
+                _surfaceClassTexels = new byte[width * height];
+            byte[] texels = _surfaceClassTexels;
             for (int y = 0; y < height; y++)
                 for (int x = 0; x < width; x++)
                     texels[y * width + x] = surf.GetSurface(x, y) switch
@@ -481,9 +516,30 @@ namespace SDVRadiance
                         SurfaceClass.Water => (byte)128,
                         _ => (byte)255,
                     };
-            _surfaceClassTexture.SetData(texels);
-            _surfaceClassSource = surf;
-            return _surfaceClassTexture;
+            kept.Texture.SetData(texels, 0, width * height);
+            return kept.Texture;
+        }
+
+        /// <summary>Dispose the texture of the surface map nobody has asked about for longest once
+        /// more are kept than <see cref="SurfaceClassTexturesKept"/>. The one just asked for is
+        /// stamped first, so it is never the one dropped.</summary>
+        private void TrimSurfaceClassTextures()
+        {
+            while (_surfaceClassTextures.Count > SurfaceClassTexturesKept)
+            {
+                SurfaceMap? leastWanted = null;
+                long oldest = long.MaxValue;
+                foreach (var pair in _surfaceClassTextures)
+                    if (pair.Value.LastAskedFor < oldest)
+                    {
+                        oldest = pair.Value.LastAskedFor;
+                        leastWanted = pair.Key;
+                    }
+                if (leastWanted == null)
+                    break;
+                _surfaceClassTextures[leastWanted].Texture?.Dispose();
+                _surfaceClassTextures.Remove(leastWanted);
+            }
         }
 
         private bool WaterWithinTiles(int tileX, int tileY, int radiusTiles)
@@ -626,7 +682,7 @@ namespace SDVRadiance
         // Wrapped like the cloud shadow's Time: unbounded seconds eventually push the
         // shader noise hashes past float/sin precision, which reads as hard axis-aligned
         // seams. 100-minute period, multiple of 60 so whole seconds stay whole.
-        private static float Time() => (Determinism.Ticks % 360000) / 60f;
+        private static float Time() => Determinism.ShaderSeconds;
 
         /// <summary>Debug: save the water masks to PNG (R=effect, G=march, B=edge distance).</summary>
         public string DumpMasks(string dir)

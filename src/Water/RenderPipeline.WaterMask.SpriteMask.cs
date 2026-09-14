@@ -202,7 +202,10 @@ namespace SDVRadiance
             if (_spriteMaskRenderTarget == null || _spriteMaskRenderTarget.Width != w || _spriteMaskRenderTarget.Height != h)
             {
                 _spriteMaskRenderTarget?.Dispose();
-                _spriteMaskRenderTarget = VramTally.Track(new RenderTarget2D(_device, w, h, false, SurfaceFormat.Color, DepthFormat.None), "water sprite mask");
+                // PreserveContents to drop the implicit clear: bound and cleared every frame
+                // water is on screen, and a DiscardContents bind clears it first.
+                _spriteMaskRenderTarget = VramTally.Track(new RenderTarget2D(_device, w, h, false,
+                    SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "water sprite mask");
             }
             _spriteMaskSpriteBatch ??= new SpriteBatch(_device);
 

@@ -69,7 +69,21 @@ PixelInput ReliefReplayVS(VertexInput input)
     return output;
 }
 
-float4 ReliefReplayPS(PixelInput input) : SV_TARGET
+// TWO TARGETS out of the one pass that already draws every world sprite. COLOR0 is the normal
+// buffer this pass has always written; COLOR1 is the rank the depth test just decided, which is
+// the only place the answer to "which sprite is in FRONT here" exists as a picture. The depth
+// buffer itself cannot be read: on this build a render target's depth is a renderbuffer with no
+// texture behind it, so the number has to be written as colour or it cannot be sampled at all.
+//
+// Free in every sense that matters: the same draw, the same sprites, the same depth test, and
+// the value is already sitting in input.Color where the vertex shader read it.
+struct ReliefTargets
+{
+    float4 Normal : COLOR0;
+    float4 Rank   : COLOR1;
+};
+
+ReliefTargets ReliefReplayPS(PixelInput input)
 {
     float4 sample = tex2D(SheetSampler, input.UV);
     // The SHEET's alpha decides whether the pixel exists; the tint's alpha (a canopy fading
@@ -87,7 +101,14 @@ float4 ReliefReplayPS(PixelInput input) : SV_TARGET
     // the flat normal standing in for whatever was behind.
     float coverage = sample.a * input.Color.a;
     float3 flatNormal = float3(0.5, 0.5, 1.0);
-    return float4(lerp(flatNormal, sample.rgb, saturate(coverage)), coverage);
+    ReliefTargets output;
+    output.Normal = float4(lerp(flatNormal, sample.rgb, saturate(coverage)), coverage);
+    // The rank goes back out in the two bytes it arrived in, so whoever reads it puts it back
+    // together with the same two weights the vertex shader used and no third rounding creeps in
+    // between. Alpha says a sprite is here at all: the clear cannot be given a colour of its own
+    // when two targets share one Clear, so a reader must gate on this and never on the rank.
+    output.Rank = float4(input.Color.r, input.Color.g, 0.0, coverage);
+    return output;
 }
 
 technique ReliefReplay

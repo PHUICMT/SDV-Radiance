@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
+using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
 using StardewValley;
 using xTile.Layers;
@@ -42,6 +44,17 @@ namespace SDVRadiance
         /// has no way to say "this one is for a different picture"; that is what a variant is.</summary>
         internal const string ArtVariantFileName = "art-variants.json";
 
+        /// <summary>Where the art behind each labelled sheet name comes from. Written by
+        /// <c>tools/labelops/modsheets.py --sources</c>.
+        ///
+        /// <para>This file MUST be named here rather than left to fall through to
+        /// <see cref="Load"/>, and the reason is not tidiness. Load replaces a whole sheet and
+        /// never merges it, so an unhandled file listing all 262 sheet names with no tiles in
+        /// them would have replaced every one of them with nothing: 45,543 painted tiles gone,
+        /// reported at Trace. Any future file that lands in this folder and is not labels needs
+        /// its own line here for the same reason.</para></summary>
+        internal const string SheetSourceFileName = "sheet-sources.json";
+
         /// <summary>One label painted for one specific set of art.</summary>
         private readonly struct LabelVariant
         {
@@ -60,7 +73,13 @@ namespace SDVRadiance
 
         /// <summary>How many tiles were drawn from a variant rather than the base label, by the
         /// name of whoever painted it. Reported, because a variant that never matches anything is
-        /// indistinguishable from one that was never installed.</summary>
+        /// indistinguishable from one that was never installed.
+        ///
+        /// <para>A running total of decisions taken since the mod loaded, not of tiles standing on
+        /// a variant right now: <see cref="ForgetArtVerdictsFor"/> drops the verdicts for one sheet
+        /// at a time and the hits are counted by the pack that painted them, so there is nothing to
+        /// subtract. A tile decided twice across a sheet reload is counted twice, which is the
+        /// honest reading of "how often was this pack's answer used".</para></summary>
         private readonly Dictionary<string, int> _variantHits = new(StringComparer.OrdinalIgnoreCase);
         public IReadOnlyDictionary<string, int> VariantHits => _variantHits;
 
@@ -97,17 +116,56 @@ namespace SDVRadiance
             out ulong fingerprint);
         internal static TileArtFingerprintReader? ArtFingerprintReader;
 
-        /// <summary>Throw away every art verdict, because a mod reloaded a tilesheet and the answer
-        /// may have changed. Moves <see cref="Version"/>, which is what makes the window panes and
-        /// every other consumer keyed on it rebuild.</summary>
-        public void ForgetArtVerdicts()
+        /// <summary>The same reading, for art that is not on the tile grid: a furniture sprite, a
+        /// placed object, anything drawn from a sheet cell rather than from a map layer. Supplied
+        /// by the same pipeline and reading through the same sheet cache.</summary>
+        internal delegate bool SheetCellFingerprintReader(Texture2D texture, Rectangle cell,
+            out ulong fingerprint);
+        internal static SheetCellFingerprintReader? SheetFingerprintReader;
+
+        /// <summary>Reused by <see cref="ForgetArtVerdictsFor"/>. On a modded install an asset is
+        /// invalidated every few seconds, so neither of these may allocate.</summary>
+        private readonly HashSet<string> _reloadedSheetScratch = new(StringComparer.OrdinalIgnoreCase);
+        private readonly List<(string sheet, int index)> _forgottenVerdictScratch = new();
+
+        /// <summary>Throw away the art verdicts for the sheets a mod has just reloaded, because the
+        /// picture those labels were painted for may have changed. Moves <see cref="Version"/>,
+        /// which is what makes the window panes and every other consumer keyed on it rebuild, so it
+        /// moves only when a verdict was really dropped.
+        ///
+        /// <para>This used to take no argument and throw away EVERY verdict on EVERY invalidation,
+        /// of any asset at all. Three whole-map scans hang off that version, so a mod that
+        /// invalidates a data asset on a timer rebuilt all three every few seconds. Reported on a
+        /// 5800X: Buff Framework reloading <c>aedenthorn.BuffFramework/dictionary</c> gave a 15 to
+        /// 17 ms window scan and a 14 to 25 ms emissive scan in town, and 34.6 and 32.3 ms on a
+        /// 163x156 farm, for a dictionary of buffs that cannot change what a tile is made of. A
+        /// name no label was ever painted on now costs a hash lookup and nothing else.</para></summary>
+        public void ForgetArtVerdictsFor(IEnumerable<string> reloadedAssetNames)
         {
             if (_artVerdict.Count == 0 && this.ArtBoundLabelsRefusedForChangedArt == 0)
                 return;
-            _artVerdict.Clear();
-            _refusedBySheet.Clear();
-            _variantHits.Clear();
-            this.ArtBoundLabelsRefusedForChangedArt = 0;
+            _reloadedSheetScratch.Clear();
+            foreach (string name in reloadedAssetNames)
+                _reloadedSheetScratch.Add(NormalizeSheet(SurfaceMap.NormaliseAssetName(name)));
+            if (_reloadedSheetScratch.Count == 0)
+                return;
+
+            _forgottenVerdictScratch.Clear();
+            foreach ((string sheet, int index) memo in _artVerdict.Keys)
+                if (_reloadedSheetScratch.Contains(memo.sheet))
+                    _forgottenVerdictScratch.Add(memo);
+            bool forgotARefusal = false;
+            foreach (string sheet in _reloadedSheetScratch)
+                if (_refusedBySheet.TryGetValue(sheet, out int refusedOnThisSheet))
+                {
+                    this.ArtBoundLabelsRefusedForChangedArt -= refusedOnThisSheet;
+                    _refusedBySheet.Remove(sheet);
+                    forgotARefusal = true;
+                }
+            if (_forgottenVerdictScratch.Count == 0 && !forgotARefusal)
+                return;
+            foreach ((string sheet, int index) memo in _forgottenVerdictScratch)
+                _artVerdict.Remove(memo);
             _artVerdictGeneration++;
         }
 
@@ -162,6 +220,12 @@ namespace SDVRadiance
                     {
                         try { LoadArtVariants(file, monitor); }
                         catch (Exception ex) { monitor.Log($"Bad art variant file: {ex.Message}", LogLevel.Warn); }
+                        continue;
+                    }
+                    if (string.Equals(Path.GetFileName(file), SheetSourceFileName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        try { LoadSheetSources(file, monitor); }
+                        catch (Exception ex) { monitor.Log($"Bad sheet source file: {ex.Message}", LogLevel.Warn); }
                         continue;
                     }
                     try { Load(file, "labels/" + Path.GetFileName(file), owned: null, monitor); }
@@ -373,7 +437,7 @@ namespace SDVRadiance
 
         /// <summary>Mirror, window and glass: the classes whose whole meaning is a reflection
         /// drawn at an exact place on the tile.</summary>
-        private static bool IsGlassClass(byte one) => one == 8 || one == 12 || one == 13;
+        private static bool IsGlassClass(byte one) => LabelClass.IsGlassy(one);
 
         /// <summary>
         /// The classes this guard may take back out. Glass, window and mirror, and only those.
@@ -422,11 +486,68 @@ namespace SDVRadiance
         /// will not hand back behaves exactly as it did before any of this existed.
         /// </para>
         /// </remarks>
-        private byte[] GuardAgainstChangedArt(string sheetName, int index, Layer layer, int x, int y, byte[] label)
+        /// <summary>Where to go and read the picture a label is about to be checked against: a
+        /// tile on a map layer, or a cell of a sheet that something draws itself from. Both end at
+        /// the same sixteen by sixteen pixels and only the directions to them differ, so the guard
+        /// takes one of these rather than one set of parameters per kind of caller.</summary>
+        private readonly struct ArtToCheck
+        {
+            private readonly Layer? _layer;
+            private readonly int _tileX;
+            private readonly int _tileY;
+            private readonly Texture2D? _sheet;
+            private readonly Rectangle _cell;
+
+            internal ArtToCheck(Layer layer, int tileX, int tileY)
+            {
+                _layer = layer; _tileX = tileX; _tileY = tileY; _sheet = null; _cell = default;
+            }
+
+            internal ArtToCheck(Texture2D sheet, Rectangle cell)
+            {
+                _layer = null; _tileX = 0; _tileY = 0; _sheet = sheet; _cell = cell;
+            }
+
+            /// <summary>False means "cannot tell", which the guard treats as no disagreement
+            /// rather than as a mismatch. A reader that is not wired up yet, a disposed sheet and
+            /// a tile with no art all land here.</summary>
+            internal bool TryFingerprint(out ulong fingerprint)
+            {
+                fingerprint = 0;
+                if (_layer != null)
+                    return ArtFingerprintReader is { } tileReader
+                        && tileReader(_layer, _tileX, _tileY, out fingerprint);
+                return _sheet != null && SheetFingerprintReader is { } sheetReader
+                    && sheetReader(_sheet, _cell, out fingerprint);
+            }
+        }
+
+        private byte[] GuardAgainstChangedArt(string sheetName, int index, ArtToCheck art, byte[] label)
         {
             string key = NormalizeSheet(sheetName);
-            bool hasVariants = _variantsBySheet.TryGetValue(key, out Dictionary<int, List<LabelVariant>>? variantsHere)
-                            && variantsHere.ContainsKey(index);
+            _variantsBySheet.TryGetValue(key, out Dictionary<int, List<LabelVariant>>? variantsForSheet);
+            return GuardAgainstChangedArt(key, variantsForSheet, index, art, label);
+        }
+
+        /// <summary>The same guard for a caller that has already found the sheet, which is the map
+        /// tile path: it holds a <see cref="SheetLabels"/> and must not re-normalise the name or
+        /// look the variants up again for every tile of the map.</summary>
+        private byte[] GuardAgainstChangedArt(SheetLabels sheetLabels, int index, ArtToCheck art, byte[] label)
+        {
+            // The fast path, and it is nearly every tile. Same question as the one below, asked of
+            // a set worked out once for the sheet rather than by reading the label through: that
+            // read was 256 bytes per ask, and the surface build asks around eight times per tile.
+            if ((sheetLabels.Variants == null || !sheetLabels.Variants.ContainsKey(index))
+                && (_artBySheet.Count == 0 || sheetLabels.ArtBoundTiles?.Contains(index) != true))
+                return label;
+            return GuardAgainstChangedArt(sheetLabels.Sheet, sheetLabels.Variants, index, art, label);
+        }
+
+        private byte[] GuardAgainstChangedArt(string key, Dictionary<int, List<LabelVariant>>? variantsForSheet,
+                                              int index, ArtToCheck art, byte[] label)
+        {
+            bool hasVariants = variantsForSheet != null && variantsForSheet.ContainsKey(index);
+            Dictionary<int, List<LabelVariant>>? variantsHere = variantsForSheet;
             // The fast path, and it is nearly every tile: nothing painted for other art, and a
             // label with no glass in it has nothing this guard can take away. No hashing at all.
             if (!hasVariants && (_artBySheet.Count == 0 || !CarriesArtBoundClass(label)))
@@ -442,8 +563,7 @@ namespace SDVRadiance
             if (!hasVariants && wasPaintedOn == null)
                 return label;      // never fingerprinted, so there is nothing to disagree with
 
-            TileArtFingerprintReader? reader = ArtFingerprintReader;
-            if (reader == null || !reader(layer, x, y, out ulong live))
+            if (!art.TryFingerprint(out ulong live))
                 return label;      // no reading to disagree with; see the remarks above
 
             // A variant painted FOR this exact art wins outright. It is not a fallback and it is
@@ -478,6 +598,69 @@ namespace SDVRadiance
                 _refusedBySheet[key] = _refusedBySheet.TryGetValue(key, out int already) ? already + 1 : 1;
             }
             return verdict;
+        }
+
+        /// <summary>Where the art behind one labelled sheet name comes from. <paramref name="From"/>
+        /// is prose meant to be printed; <paramref name="ModIds"/> is the half another install can
+        /// be asked about, since the pack folder names the tool also records are one machine's
+        /// filing and mean nothing anywhere else.</summary>
+        internal readonly record struct SheetSource(string From, IReadOnlyList<string> ModIds);
+
+        private readonly Dictionary<string, SheetSource> _sheetSource = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _modNameById = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Unique id to the name the pack calls itself, for every pack that supplies art
+        /// the labels cover. The name a mod gives itself is the only one worth printing: the pack
+        /// folders the tool also sees are the author's own filing and never leave that machine.</summary>
+        public IReadOnlyDictionary<string, string> ModNameById => _modNameById;
+
+        /// <summary>Provenance for every sheet the shipped labels cover, or empty when the file
+        /// is absent - which is not a fault, only an older build's labels folder.</summary>
+        public IReadOnlyDictionary<string, SheetSource> SheetSources => _sheetSource;
+
+        /// <summary>
+        /// Read <c>labels/sheet-sources.json</c>: which mod supplies the art behind each sheet
+        /// name the labels cover.
+        /// </summary>
+        /// <remarks>
+        /// The labels themselves say nothing about where a sheet name comes from, so nothing
+        /// could answer which mods this data covers, rank what to paint next by who ships it, or
+        /// tell a player whether their expansion is one we know about. The answer is taken from
+        /// the files on disk by the tool, not guessed at here.
+        /// </remarks>
+        private void LoadSheetSources(string file, IMonitor monitor)
+        {
+            using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(file));
+            // The id to name table is held once at the top rather than beside every use: 404
+            // packs share 262 sheets, and writing each name where it is used more than doubled
+            // the file for nothing.
+            if (doc.RootElement.TryGetProperty("mods", out JsonElement catalogue)
+                && catalogue.ValueKind == JsonValueKind.Object)
+            {
+                foreach (JsonProperty mod in catalogue.EnumerateObject())
+                    if (mod.Value.ValueKind == JsonValueKind.String && mod.Value.GetString() is { Length: > 0 } named)
+                        _modNameById[mod.Name] = named;
+            }
+            if (!doc.RootElement.TryGetProperty("sheets", out JsonElement sheets))
+                return;
+            foreach (JsonProperty sheet in sheets.EnumerateObject())
+            {
+                string from = sheet.Value.TryGetProperty("from", out JsonElement said)
+                              && said.ValueKind == JsonValueKind.String
+                    ? said.GetString() ?? "unknown"
+                    : "unknown";
+                var ids = new List<string>();
+                if (sheet.Value.TryGetProperty("mods", out JsonElement listed)
+                    && listed.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (JsonElement one in listed.EnumerateArray())
+                        if (one.ValueKind == JsonValueKind.String && one.GetString() is { Length: > 0 } id)
+                            ids.Add(id);
+                }
+                _sheetSource[NormalizeSheet(sheet.Name)] = new SheetSource(from, ids);
+            }
+            monitor.Log($"Sheet sources loaded: where the art behind {_sheetSource.Count} labelled "
+                        + $"sheet(s) comes from, across {_modNameById.Count} pack(s).", LogLevel.Trace);
         }
 
         /// <summary>
@@ -557,55 +740,169 @@ namespace SDVRadiance
         }
 
         public byte[]? Get(string? imageSource, int tileIndex)
-            => imageSource != null
-                && _tilesBySheet.TryGetValue(NormalizeSheet(imageSource), out var tiles)
-                && tiles.TryGetValue(tileIndex, out byte[]? bytes) ? bytes : null;
+        {
+            if (imageSource == null)
+                return null;
+            // The sheet's normalised name is REMEMBERED per image source. This is asked once per
+            // tile of every layer of the whole map on a mask rebuild, tens of thousands of times,
+            // and normalising is a Replace and a Substring: two short-lived strings each. A map
+            // holds a handful of distinct image sources, so the table stays tiny and the answer
+            // never changes for a given source.
+            if (!_normalisedSheetNames.TryGetValue(imageSource, out string? sheet))
+            {
+                sheet = NormalizeSheet(imageSource);
+                _normalisedSheetNames[imageSource] = sheet;
+            }
+            return _tilesBySheet.TryGetValue(sheet, out var tiles)
+                   && tiles.TryGetValue(tileIndex, out byte[]? bytes) ? bytes : null;
+        }
+
+        /// <summary>Image source as the map spells it, to the sheet name labels are keyed by. A
+        /// pure mapping of one string to another, so it never goes stale and needs no clearing;
+        /// it is bounded by how many distinct image sources the loaded maps name, which is tens.</summary>
+        private readonly Dictionary<string, string> _normalisedSheetNames = new(StringComparer.Ordinal);
+
+        /// <summary>Everything this store knows about one tile sheet, worked out once for the sheet
+        /// OBJECT rather than once per tile that draws from it. Null <see cref="Tiles"/> means the
+        /// sheet carries no labels at all, which is the answer for most sheets and has to be as
+        /// cheap to give as a hit.
+        ///
+        /// <para>The path used to be two string dictionary lookups per ask, one of them case
+        /// insensitive, and the surface build asks up to thirteen times per tile: Pelican Town is
+        /// fifteen thousand tiles, so around three hundred and sixty thousand string hashes to
+        /// build one grid. Measured by removing the work rather than by guessing at it: taking the
+        /// whole map-property half of the classifier away saved 2.8 ms of 26.8, and taking the
+        /// pixel counting away made it SLOWER, because without a verdict the walk stops asking
+        /// nowhere. What is left is the asking itself.</para></summary>
+        private sealed class SheetLabels
+        {
+            /// <summary>The sheet name the labels are keyed by, normalised once.</summary>
+            internal readonly string Sheet;
+            internal readonly Dictionary<int, byte[]>? Tiles;
+            internal readonly Dictionary<int, List<LabelVariant>>? Variants;
+
+            /// <summary>Which tile indices on this sheet carry a class the art can take back: the
+            /// glass, the water, the light. Worked out once for the sheet by reading each of its
+            /// labels through, so that the guard on the tile path can answer with one int lookup
+            /// instead of reading 256 bytes for every tile of the map that draws from it.</summary>
+            internal readonly HashSet<int>? ArtBoundTiles;
+
+            internal SheetLabels(string sheet, Dictionary<int, byte[]>? tiles,
+                                 Dictionary<int, List<LabelVariant>>? variants, HashSet<int>? artBoundTiles)
+            { this.Sheet = sheet; this.Tiles = tiles; this.Variants = variants; this.ArtBoundTiles = artBoundTiles; }
+        }
+
+        /// <summary>Weak, because a map reload builds new tile sheet objects and the old ones must
+        /// be free to go with it.</summary>
+        private readonly System.Runtime.CompilerServices.ConditionalWeakTable<xTile.Tiles.TileSheet, SheetLabels> _labelsByTileSheet = new();
+
+        private SheetLabels LabelsFor(xTile.Tiles.TileSheet tileSheet)
+        {
+            if (_labelsByTileSheet.TryGetValue(tileSheet, out SheetLabels? known))
+                return known;
+            string sheet = NormalizeSheet(tileSheet.ImageSource ?? "");
+            _tilesBySheet.TryGetValue(sheet, out Dictionary<int, byte[]>? tiles);
+            _variantsBySheet.TryGetValue(sheet, out Dictionary<int, List<LabelVariant>>? variants);
+            HashSet<int>? artBoundTiles = null;
+            if (tiles != null)
+                foreach (var labelledTile in tiles)
+                    if (CarriesArtBoundClass(labelledTile.Value))
+                        (artBoundTiles ??= new HashSet<int>()).Add(labelledTile.Key);
+            var found = new SheetLabels(sheet, tiles, variants, artBoundTiles);
+            _labelsByTileSheet.Add(tileSheet, found);
+            return found;
+        }
 
         /// <summary>Per-pixel classes for the art a layer draws at a tile, or null if unlabeled.
         /// Takes the Layer directly — the mask gather already holds Back/Buildings/Front, so
         /// looking them up by name once per tile would be pure overhead.</summary>
         public byte[]? Get(Layer? layer, int x, int y)
         {
-            if (_tilesBySheet.Count == 0
-                || !TryTileArt(layer, x, y, out string? sheet, out int index, out byte orient))
+            if (_tilesBySheet.Count == 0 || layer == null
+                || !TryTileArt(layer, x, y, out xTile.Tiles.TileSheet? tileSheet, out int index,
+                               out xTile.Tiles.Tile? mapTile))
+                return null;
+            SheetLabels sheetLabels = LabelsFor(tileSheet!);
+            if (sheetLabels.Tiles == null || !sheetLabels.Tiles.TryGetValue(index, out byte[]? bytes))
                 return null;
             // Labels are painted on the sheet, upright. The map may place the tile mirrored or
             // turned, so the marks have to be turned the same way before they can be compared with
             // anything on screen - otherwise a mirrored waterfall's liquid pixels sit on the wrong
             // side of the tile and the mask disagrees with the art by exactly that reflection.
-            byte[]? bytes = Get(sheet, index);
-            if (bytes == null || sheet == null || layer == null)
-                return null;
+            //
+            // The turn is worked out HERE, once the tile is known to carry a label, rather than
+            // while the tile is being identified: it is only ever used on a label. Measured on its
+            // own it changed nothing, and it is kept because it puts the work where its answer is
+            // used rather than on the path every tile of the map walks.
+            byte orient = MapLayers.Orientation(mapTile);
             // A label describes a PICTURE, and the picture behind a sheet name can be replaced by
             // another mod without the name or the tile index moving an inch. Glass is the part
             // that cannot survive that; see GuardAgainstChangedArt for why only glass.
-            return MapLayers.Orient(GuardAgainstChangedArt(sheet, index, layer, x, y, bytes), orient);
+            return MapLayers.Orient(
+                GuardAgainstChangedArt(sheetLabels, index, new ArtToCheck(layer, x, y), bytes), orient);
+        }
+
+        /// <summary>
+        /// Per-pixel classes for one sixteen by sixteen cell of a sheet that something draws
+        /// itself from - a furniture sprite, a placed object - rather than of a map tile.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The labels were already there. Four furniture sheets carry them (VanillaFurniture alone
+        /// has 1,268 pixels of glass and 1,269 of emissive, painted by hand), and nothing could
+        /// read them: every other way into this store asks for a map layer and a tile, and a
+        /// mirror standing in a bedroom is on neither. That is data somebody looked at and marked
+        /// which no code could reach.
+        /// </para>
+        /// <para>
+        /// Same key space as a map tile, so the guard, the variants and the memo all work
+        /// unchanged: a sheet is a sheet and a cell index is a cell index whether the thing
+        /// drawing it is a map layer or a chair.
+        /// </para>
+        /// </remarks>
+        /// <param name="textureName">The asset name the sheet is loaded under. For an item this is
+        /// <c>ParsedItemData.TextureName</c>, which is the name the game itself resolved, so a
+        /// content pack that redirects the art is followed rather than guessed at.</param>
+        /// <param name="cell">The cell in SHEET pixels. Art taller or wider than one cell is asked
+        /// for one cell at a time, which is how it was painted.</param>
+        /// <param name="orient">Turn to apply, for art the world places flipped. Zero is upright.</param>
+        public byte[]? GetSheetCell(string? textureName, Texture2D? texture, Rectangle cell,
+            byte orient = 0)
+        {
+            if (textureName == null || texture == null || texture.Width <= 0)
+                return null;
+            int cellsAcross = texture.Width / 16;
+            if (cellsAcross <= 0)
+                return null;
+            int index = cell.Y / 16 * cellsAcross + cell.X / 16;
+            byte[]? bytes = Get(textureName, index);
+            if (bytes == null)
+                return null;
+            return MapLayers.Orient(
+                GuardAgainstChangedArt(textureName, index, new ArtToCheck(texture, cell), bytes),
+                orient);
         }
 
         public byte[]? Get(GameLocation? location, int x, int y, string layerName)
             => _tilesBySheet.Count > 0 ? Get(location?.map?.GetLayer(layerName), x, y) : null;
 
-        /// <summary>Frame 0 of an animated tile is the frame labels are keyed to (HF Studio fans a
-        /// stroke out to every frame of a cycle, so any frame resolves to the same marks).</summary>
-        private static bool TryTileArt(Layer? layer, int x, int y, out string? sheet, out int index)
-            => TryTileArt(layer, x, y, out sheet, out index, out _);
-
-        private static bool TryTileArt(Layer? layer, int x, int y, out string? sheet, out int index,
-                                       out byte orient)
+        /// <summary>The sheet and cell a map tile draws from, plus the tile the MAP holds, which is
+        /// what carries the turn: an animation frame inside it does not.</summary>
+        private static bool TryTileArt(Layer? layer, int x, int y, out xTile.Tiles.TileSheet? tileSheet,
+                                       out int index, out xTile.Tiles.Tile? mapTile)
         {
-            sheet = null;
+            tileSheet = null;
             index = -1;
-            orient = 0;
+            mapTile = null;
             if (layer == null || x < 0 || y < 0 || x >= layer.LayerWidth || y >= layer.LayerHeight)
                 return false;
             var t = layer.Tiles[x, y];
-            // The turn is on the tile the MAP holds, not on an animation frame inside it.
-            orient = MapLayers.Orientation(t);
+            mapTile = t;
             if (t is xTile.Tiles.AnimatedTile at && at.TileFrames is { Length: > 0 })
                 t = at.TileFrames[0];
             if (t?.TileSheet == null)
                 return false;
-            sheet = t.TileSheet.ImageSource;
+            tileSheet = t.TileSheet;
             index = t.TileIndex;
             return true;
         }

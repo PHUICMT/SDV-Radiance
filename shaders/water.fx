@@ -8,6 +8,15 @@
 // Target: MonoGame OpenGL (Shader Model 3.0), used as a SpriteBatch effect.
 //=============================================================================
 
+// Every sample in this file reads mip level 0 explicitly. None of its textures has mips (each
+// sampler says MipFilter = None and the targets are made without them), so level 0 is exactly what
+// tex2D read. What changes is what the compiler may do: a tex2D needs screen-space derivatives, a
+// shader model 3 compiler cannot keep such a sample inside a branch that depends on the pixel, and
+// so it had flattened the two early returns below into a select at the very end. Every pixel on
+// screen paid for the whole water pass, 48 samples and every wave and sparkle, and then kept the
+// scene it started with. With explicit levels the two returns are real branches again.
+#define tex2D(s, uv) tex2Dlod(s, float4((uv), 0.0, 0.0))
+
 #if OPENGL
     #define SV_POSITION POSITION
     #define VS_SHADERMODEL vs_3_0
@@ -103,6 +112,17 @@ sampler2D CausticSampler = sampler_state
 };
 float CausticAmount;        // 0 = the term vanishes; strength, weather, night and the toggle's
                          // ease all folded in on the CPU
+// The cloud shadow's kept mask from last frame (see _cloudMaskKeep and the same coupling in
+// floodlight.fx): a cloud between the sun and the water takes the sun's glitter with it.
+texture CloudMaskTexture;
+sampler2D CloudMaskSampler = sampler_state
+{
+    Texture = <CloudMaskTexture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+float CloudCouple;       // 0..1 eased on the CPU; 0 when the kept mask is stale, clouds are off, or the switch is off
+float2 CloudMaskShift;   // how far the camera moved since the mask was drawn, in screen UV
 float CausticDeepFloor;  // what little survives in open water, far from any shore
 float DebugCaustic;      // 1 = paint the caustic term as pure red instead of adding it (radiance_debug caustic)
 float DebugMirrorSource; // 1 = paint what the mirror reads instead of the water (radiance_debug mirrorsource)
@@ -129,12 +149,57 @@ float WaterKind;        // 0 = still (pond/river), 1 = ocean/beach (big directio
 float ReflectStrength;  // 0 = off; screen-space reflection of the scene above the surface
 float SparkleDensity;   // ~0.2–2: glint count per area; glint size follows inversely
 float SunWarm;          // 0–1 golden-hour factor: sparkle + sheen turn warm at low sun
+// THE SUN HAS A DIRECTION, AND THE GLITTER FOLLOWS IT. Every glint on real water is the sun
+// mirrored by a wave face that happens to tilt the right way, and the faces that do are not
+// spread evenly: Cox and Munk photographed sun glitter from an aircraft in 1954 and measured
+// that the glints run in a lane toward the sun and each one is drawn out along it, wider the
+// harder the wind blows. The hash grid below knew nothing of where the sun was. SunAxis is the
+// sun's line on the screen in tile space (x right, y down, unit, along the light), the same
+// lean the shadows lie at, and GlitterPath is how far the glints take it: 0 is the round,
+// even glitter of every earlier release, to the pixel.
+float2 SunAxis;
+float GlitterPath;      // dial x ease x how low the sun is (a noon sun stretches little)
 float NightGlow;        // 0–1 after dusk: star reflections + lamp glimmer fade in
 float MoonGlow;         // 0–1 lunar phase × season × clouds: moonlit swell shimmer
 float RainAmount;
 float RainRingDensity;  // how many strikes, against the amount the rain brings on its own
 float RainRingSize;     // how wide one ring grows before it dies
 float RainRingStrength; // how plainly the rings and their impacts show          // 0–1 raining: expanding drop rings on the surface
+// Rings left by whatever is IN the water: a farmer wading a ford, a duck paddling into the
+// pond, a float landing where it was cast. Eight live at once, each one born on the CPU at the
+// tile something moved on. xy = that world tile, z = how many seconds ago it was struck (an age
+// rather than a birth time, because this shader's clock wraps and a ring must not jump when it
+// does), w = how hard. WakeRingCount says how many slots carry a live ring, so still water pays
+// nothing at all.
+#define WAKE_RING_SLOTS 12
+#define WAKE_RING_LIFE 1.05          // seconds from the strike to the last of it
+#define WAKE_RING_CALM_SPEED 0.18    // tiles/s the still centre grows at (the slowest wave group there is)
+#define WAKE_RING_FRONT_SPEED 0.6    // tiles/s the outer edge of the train travels at
+#define WAKE_RING_FRONT_START 0.12   // tiles across the strike itself before anything has travelled
+#define WAKE_RING_DISPERSION 11.0    // g in tiles/s^2, a little over the real 9.81 so a ring holds two crests sooner
+#define WAKE_RING_REFRACTION 0.0012  // tiles of image shift per unit of slope
+#define WAKE_RING_SHADE 0.026        // brightness per unit of slope facing the sun
+float4 WakeRings[WAKE_RING_SLOTS];
+float WakeRingCount;
+float WakeRingStrength;  // the dial; 0 is the water of every earlier release, to the pixel
+// The wind the rest of the weather already leans with. The rain slants along it, the tree crowns
+// and the grass sway with it, the leaves ride it; the water alone knew nothing about it and
+// rippled the same way on a still morning as in a gale.
+//
+// WindDrift is how far the surface pattern has been carried downwind, in world tiles, added up on
+// the CPU from that same shared wind. It is wrapped at 20*pi tiles, which is a whole number of
+// wavelengths for every wave in the ripple below (all their frequencies are tenths, and
+// 0.1 * 20*pi is exactly 2*pi), so the wrap lands the pattern back on itself and there is no
+// moment where the water jumps. WIND_PATCH_SCALE is 1/(2*pi) for the same reason: at that scale
+// the wrap moves the noise field by exactly 16 whole cells.
+//
+// WindAmount is the dial times how hard it blows, eased on the CPU. It is NOT a multiplier on the
+// drift - the dial is already inside the sum, so turning the dial down stops the surface moving
+// rather than sliding it back to where it would have been - it only says how strongly the gusts
+// and the glitter answer. At 0 every term below reads exactly as it did before this existed.
+#define WIND_PATCH_SCALE 0.15915494
+float2 WindDrift;
+float WindAmount;
 float4 Lights[8];       // xy = screen UV, z = radius (unused), w = intensity
 float LightCount;       // how many entries of Lights are live
 float PlayerInWater;    // 0..1 eased: the player's feet are on water pixels (wading). C# fades
@@ -586,7 +651,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float shoreDistanceTexels = (tex2D(SdfSampler, maskUV).a - 0.501961) * 63.75;
 
     float4 scene = tex2D(SourceSampler, uv);
-    if (tileWater <= 0.001)
+    [branch] if (tileWater <= 0.001)
     {
         // NOT WATER: the pass leaves the pixel exactly as it found it.
         //
@@ -650,25 +715,127 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // water. 0.5 over one texel keeps the edge soft without ever looking absent.
     float edgeQuantised = floor(saturate(shoreDistanceTexels) * 3.0 + 0.5) / 3.0;
     water *= max(edgeQuantised, 0.5);
-    if (water <= 0.002)
+    [branch] if (water <= 0.002)
         return scene;
+
+    // ---- What moves in the water leaves rings behind it: the SURFACE first ----
+    //
+    // The first two cuts of this drew each ring as brightness and added the brightnesses, and
+    // every source consulted says that is the mistake: overlapping rings read as a stack of
+    // hoops because each hoop keeps its own outline. Water is one surface. So the rings are
+    // summed as HEIGHTS into one field, and one gradient is taken of the sum: two crests that
+    // overlap become a single taller crest, a crest meeting a trough cancels, and nothing has
+    // an outline of its own. The gradient then does two jobs below. It shifts the image the
+    // way a real surface refracts what is under it, which is the cue the eye actually reads
+    // water by (Kawabe, Maruya and Nishida: a MOVING deformation alone is enough, and a still
+    // one is not), and it lights the side of each crest that faces the sun.
+    //
+    // The shape of one ring is the physics of a stone in a pond rather than a circle drawn on
+    // one. The middle goes still and the still patch grows (the slowest wave group there is
+    // travels at about 0.18 m/s), so a ring is a widening annulus with a calm hole. Inside the
+    // annulus the phase is g*t*t/(4*r), the stationary-phase result for gravity waves, which
+    // makes the crests crowd toward the inside and open outward, and makes each crest slide
+    // out through the annulus at twice the speed the annulus itself travels: crests are born at
+    // the inner edge and die at the outer one. The envelope across the annulus is a raised
+    // cosine (Yuksel's wave particle kernel), zero AND flat at both edges, so a deposit leaves
+    // no rim where it ends. Each ring carries its own phase seed, hashed from where it was
+    // struck, so a farmer's footfalls do not beat in step.
+    float wakeHeight = 0.0;
+    float2 wakeGradient = float2(0.0, 0.0);
+    float wakeImpact = 0.0;
+    if (WakeRingStrength > 0.001 && WakeRingCount > 0.5)
+    {
+        for (int wakeSlot = 0; wakeSlot < WAKE_RING_SLOTS; wakeSlot++)
+        {
+            float4 wakeRing = WakeRings[wakeSlot];
+            float wakeLive = step((float)wakeSlot + 0.5, WakeRingCount);
+            float wakeAge = wakeRing.z;
+            float2 fromStrike = worldTile - wakeRing.xy;
+            float wakeRadius = max(length(fromStrike), 0.001);
+            float2 outward = fromStrike / wakeRadius;
+
+            float innerEdge = WAKE_RING_CALM_SPEED * wakeAge;
+            float outerEdge = WAKE_RING_FRONT_START + WAKE_RING_FRONT_SPEED * wakeAge;
+            float bandWidth = max(outerEdge - innerEdge, 0.02);
+            float across = (wakeRadius - innerEdge) / bandWidth;             // 0 at the calm edge, 1 at the front
+            float inBand = step(0.0, across) * step(across, 1.0) * wakeLive;
+            // Raised cosine across the band: zero and flat at both edges.
+            float envelope = 0.5 - 0.5 * cos(across * 6.2831853);
+            float envelopeSlope = 3.14159265 * sin(across * 6.2831853) / bandWidth;   // d(envelope)/d(radius)
+
+            // Amplitude: in over the first frames (a stamp appears at full strength on frame
+            // one, water does not), out as the square of the life left, and thinner with
+            // radius as the same energy spreads round a longer ring.
+            float lifeLeft = saturate(1.0 - wakeAge / WAKE_RING_LIFE);
+            // The radius is floored at a third of a tile before the spreading law, or the first
+            // tenth of a second is a small hard bead where a ring is barely wider than its own
+            // wall.
+            float amplitude = wakeRing.w * smoothstep(0.0, 0.15, wakeAge) * lifeLeft * lifeLeft
+                            * (0.6 * rsqrt(max(wakeRadius, 0.3)));
+
+            // The dispersive phase. Its rate of change with radius is the local wavenumber,
+            // which is what the gradient needs. The radius is floored so the innermost texels
+            // cannot ask for a wavelength shorter than a screen pixel.
+            float phaseRadius = max(wakeRadius, 0.1);
+            float phase = WAKE_RING_DISPERSION * wakeAge * wakeAge / (4.0 * phaseRadius) + Hash(wakeRing.xy * 7.31) * 6.2831853;
+            float wavenumber = -WAKE_RING_DISPERSION * wakeAge * wakeAge / (4.0 * phaseRadius * phaseRadius);
+            float wave, waveSlope;
+            sincos(phase, waveSlope, wave);                                   // sin -> waveSlope, cos -> wave
+            float height = amplitude * envelope * wave * inBand;
+            float radialSlope = amplitude * (envelopeSlope * wave - envelope * waveSlope * wavenumber) * inBand;
+            wakeHeight += height;
+            wakeGradient += outward * radialSlope;
+
+            // The strike itself, for the hard ones only (a cast landing, a fish falling back):
+            // a soft bright point that is gone in under half a second, the one moment there is
+            // anything white about it.
+            wakeImpact += smoothstep(0.14, 0.0, wakeRadius) * smoothstep(0.45, 0.0, wakeAge) * step(1.35, wakeRing.w) * wakeLive;
+        }
+    }
 
     // Refraction in WORLD space so the ripple travels with the water:
     //  - pond: fine crossing ripples, small & quick (still surface).
     //  - ocean: long directional swell, bigger & slower.
     //  - lava: the SAME molten motion but crawling (thick, viscous) — slow the phase hard.
     float t = Time * Speed * lerp(1.0, 0.12, isLava);
-    float pondWaveX = sin(worldTile.y * 6.3 + t * 6.0) + 0.5 * sin(worldTile.x * 4.1 - t * 4.0);
-    float pondWaveY = cos(worldTile.x * 5.7 - t * 5.0) + 0.5 * cos(worldTile.y * 4.7 + t * 3.5);
+    // Lava is far too thick for a breeze to push, so it keeps the surface it always had.
+    float windHere = WindAmount * (1.0 - isLava);
+    // The pattern is CARRIED by the wind: it is sampled a little downwind of where it sits,
+    // further every second, so a ripple crosses the pond the way the rain is slanting and the
+    // trees are leaning rather than standing still in place. The drift has a cross component as
+    // well as a downwind one because these are two crossing wave families, one running along each
+    // axis, and a drift on one axis alone leaves half of the surface motionless.
+    float2 windedTile = worldTile - WindDrift * (1.0 - isLava);
+    float pondWaveX = sin(windedTile.y * 6.3 + t * 6.0) + 0.5 * sin(windedTile.x * 4.1 - t * 4.0);
+    float pondWaveY = cos(windedTile.x * 5.7 - t * 5.0) + 0.5 * cos(windedTile.y * 4.7 + t * 3.5);
     float2 pondRipple = float2(pondWaveX, pondWaveY) * (Strength * 0.0025);
 
-    float swell = sin(worldTile.y * 2.1 + t * 1.6) + 0.35 * sin(worldTile.x * 1.4 - t * 1.0);
+    float swell = sin(windedTile.y * 2.1 + t * 1.6) + 0.35 * sin(windedTile.x * 1.4 - t * 1.0);
     float2 oceanRipple = float2(swell * 0.25, swell) * (Strength * 0.006);
+
+    // Cat's paws: the darker patches of ruffled water that run across a lake ahead of a gust.
+    // Wind does not arrive evenly over a surface, it arrives in cells, and the cells travel
+    // downwind faster than the water under them. One noise field at two scales, thresholded
+    // softly so a patch has an edge without a rim, and nothing at all on a still day.
+    float windRuffle = 0.0;
+    if (windHere > 0.002)
+    {
+        float2 patchTile = (worldTile - WindDrift * 1.6) * WIND_PATCH_SCALE;
+        float patchField = ValueNoise(patchTile) * 0.65 + ValueNoise(patchTile * 2.0 + 11.7) * 0.35;
+        windRuffle = smoothstep(0.52, 0.78, patchField) * saturate(windHere);
+    }
+    pondRipple *= 1.0 + 0.55 * windRuffle;
+    oceanRipple *= 1.0 + 0.55 * windRuffle;
 
     // Puddle pixels (mask < full) always ripple POND-style: an ocean map's long slow swell
     // barely moves inside a 3-tile walk-through pool, which read as "no effect up close".
     float kind = WaterKind * step(0.95, tileWater);
-    float2 ripple = lerp(pondRipple, oceanRipple, kind) * water * rippleGate;
+    // The wake's slope shifts the image too, a pixel or so at most: a real surface refracts what
+    // is under it, and under a top-down camera that shift is small (a quarter of an art pixel
+    // in ankle-deep water). It rides inside the same gate and the same edge fade as the ripple,
+    // so it never drags a sprite or reaches across a shore.
+    float2 wakeRefraction = wakeGradient * (WAKE_RING_REFRACTION / TilesPerScreen);
+    float2 ripple = (lerp(pondRipple, oceanRipple, kind) + wakeRefraction) * water * rippleGate;
     // A displaced tap must never land on a sprite, on the player, or on the map's own solid
     // art. That rule is old and right: a water pixel beside a boat, a pier post or a fountain
     // statue used to drag those pixels sideways with the wave and the whole object read as
@@ -1260,7 +1427,29 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // organic sun-glitter. Ocean glints are sparser/slower (kind).
     float sparklePulse = lerp(1.1, 0.55, kind);
     float sparkleDrift = lerp(0.05, 0.12, kind);
-    float baseDensity = lerp(5.0, 3.0, kind) * max(SparkleDensity, 0.05);
+    // Wind tilts more of the surface toward the sun at once, so a breeze shows as MORE glints
+    // scattered wider rather than as one brighter patch: Cox and Munk photographed exactly this
+    // from an aircraft in 1954, and the glitter is a readout of how widely the surface slopes are
+    // spread, which is what the wind widens. Inside a cat's paw there are more again, which is
+    // what makes a patch read as ruffled water rather than as a stain.
+    float windGlitter = saturate(windHere) * (0.30 + 0.70 * windRuffle);
+    float baseDensity = lerp(5.0, 3.0, kind) * max(SparkleDensity, 0.05) * (1.0 + 0.35 * windGlitter);
+    // The lane: when the sun is low (SunWarm) the half of the screen it stands over glitters
+    // more, more glints and brighter ones, and the far half a little less, a gradient across
+    // the screen height measured from the screen's centre in tiles, so a wide window leans the
+    // same as a narrow one. The first capture only took glints away from the far side and
+    // nothing showed, because the glints are faint to begin with (Sparkle 0.24); a lane has to
+    // be brighter than the water around it to read as one.
+    float2 fromScreenCentreTiles = (uv - 0.5) * TilesPerScreen;
+    float towardSun = dot(fromScreenCentreTiles, -SunAxis) / max(TilesPerScreen.y * 0.5, 1.0);
+    float laneHere = saturate(0.5 + 0.5 * towardSun);                    // 0 far side, 1 the sun's side
+    float laneStrength = GlitterPath * SunWarm;
+    float sunSideWeight = lerp(1.0, lerp(0.5, 2.2, laneHere), laneStrength);
+    // More of the cells hold a glint inside the lane: 45% everywhere as shipped, up to 80%.
+    float glintGateShift = 0.35 * laneStrength * laneHere;
+    // Each glint drawn out along the sun's line: its distance is measured with the along-axis
+    // part shrunk, so the same radius reaches further that way. At 0 it is the round distance.
+    float glintStretch = 1.0 + 1.6 * GlitterPath;
     float glint = 0.0;
     [unroll]
     for (int layer = 0; layer < 2; layer++)
@@ -1274,17 +1463,30 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         float glintChanceHash = Hash(cell + layerOffset);
         float wanderHash = Hash(cell + layerOffset + float2(19.7, 7.3));
         float sizeHash = Hash(cell + layerOffset + float2(41.3, 5.1));
-        float holdsGlint = step(0.55, glintChanceHash);                                     // ~45% of cells hold a glint
+        float holdsGlint = step(0.55 - glintGateShift - 0.12 * windGlitter, glintChanceHash);  // ~45% of cells hold a glint, more in the lane and in a gust
         float2 wander = (float2(wanderHash, frac(glintChanceHash * 7.3)) - 0.5) * 0.7;          // wander off-centre
         float glintRadius = lerp(0.09, 0.30, sizeHash * sizeHash);                          // per-glint size (biased small)
-        float d = length(f - wander);
+        float2 fromGlint = f - wander;
+        float alongSun = dot(fromGlint, SunAxis);
+        float acrossSun = length(fromGlint - alongSun * SunAxis);
+        float d = GlitterPath > 0.0 ? length(float2(alongSun / glintStretch, acrossSun)) : length(fromGlint);
         // Twinkle in BRIGHTNESS, never fully off: floor at 0.35 so a glint dims and
         // brightens instead of blinking out (the surface kept a steady base sparkle,
         // no more moments where it nearly all disappears).
         float pulse = 0.675 + 0.325 * sin(t * sparklePulse + glintChanceHash * 6.2831853);
-        glint += smoothstep(glintRadius, 0.0, d) * pulse * holdsGlint;
+        glint += smoothstep(glintRadius, 0.0, d) * pulse * holdsGlint * sunSideWeight;
     }
     glint = saturate(glint);
+    // A cloud over this water stands between the sun and it, and the glitter is the sun: the
+    // ground beside the lake goes dark under the bank, so the water stops sparkling under it
+    // too. The kept mask is one frame old, which a cloud cannot outrun. With the coupling at 0
+    // the multiplier is exactly one and the mask is never read.
+    [branch]
+    if (CloudCouple > 0.0)
+    {
+        float cloudHere = tex2Dlod(CloudMaskSampler, float4(uv + CloudMaskShift, 0.0, 0.0)).r;
+        glint *= 1.0 - saturate(cloudHere * 1.2) * CloudCouple;
+    }
     // Golden hour: the glints warm up with the low sun instead of staying white.
     float3 glintColour = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.82, 0.5), SunWarm);
     colour.rgb += glint * Sparkle * water * glintColour * rippleGate * (1.0 - isLava);   // ice/lava: no sun glints
@@ -1371,6 +1573,24 @@ float4 WaterPS(PixelInput input) : SV_TARGET
             impacts += smoothstep(0.055 * RainRingSize, 0.0, toDrop) * smoothstep(0.14, 0.0, phase) * fires;
         }
         colour.rgb += (rings * 0.15 + impacts * 0.30) * RainAmount * water * RainRingStrength;
+    }
+
+    // ---- What moves in the water leaves rings behind it: the LIGHT on the surface ----
+    //
+    // The surface itself was summed above, before the refraction tap. Here the one gradient
+    // lights it: the side of a crest that faces the sun is bright and the side behind it is
+    // dark, the bright line and the dark line under it that pixel art draws a ripple as, and a
+    // little of the height itself so a ring reads from any direction. Rings from different
+    // strikes were added as heights, so where two meet there is one crest, not two outlines.
+    if (WakeRingStrength > 0.001 && WakeRingCount > 0.5)
+    {
+        float crestLit = dot(wakeGradient, -SunAxis);
+        // The shaded side of a crest is quieter than the lit side: the lit side is the sun
+        // itself mirrored by a tilt, the shaded side only loses a little sky.
+        crestLit *= lerp(0.55, 1.0, step(0.0, crestLit));
+        float wakeShade = clamp((0.7 * crestLit + 0.3 * wakeHeight * 12.0) * WAKE_RING_SHADE, -0.3, 0.45)
+                        + wakeImpact * 0.35;
+        colour.rgb = max(colour.rgb + wakeShade * water * WakeRingStrength, 0.0);
     }
 
     // Dither, one LSB either way and triangular, before this surface is written to eight bits.

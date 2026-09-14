@@ -112,14 +112,31 @@ namespace SDVRadiance
             helper.Events.Display.RenderedStep += OnRenderedStep;
             // Over the UI, not under it: the readout has to stay visible while a menu is open,
             // because "it stutters when I open my inventory" is one of the things it is for.
-            helper.Events.Display.RenderedHud += (_, e) => PerfHud.Draw(e.SpriteBatch);
+            helper.Events.Display.RenderedHud += (_, e) =>
+            {
+                PerfHud.Draw(e.SpriteBatch);
+                // Last hook of the frame, which is where the device's own counters are worth
+                // reading: they are cleared in Present and count up until then.
+                FrameCost.NoteDeviceMetrics(e.SpriteBatch.GraphicsDevice);
+            };
 
             // Surface grids are inferred per location and cached for the visit. A save load means
             // a whole new world, and placing/removing a farm building changes a map in place.
             helper.Events.GameLoop.SaveLoaded += (_, _) => SurfaceMap.Clear();
+            // Held sheet pixels describe art that is loaded for THIS save. Leaving the save
+            // unloads the textures they were read from, so the answers stop meaning anything.
+            helper.Events.GameLoop.ReturnedToTitle += (_, _) =>
+            {
+                SheetPixels.Forget();
+                _pipeline?.ForgetScansOfTheLastSave();
+            };
             // The draw hook's sticky sets are per location now and outlive a warp (see
             // WaterDrawHook); a new day is where they start over, as one set used to on every warp.
-            helper.Events.GameLoop.DayStarted += (_, _) => WaterDrawHook.ForgetAll();
+            helper.Events.GameLoop.DayStarted += (_, _) =>
+            {
+                WaterDrawHook.ForgetAll();
+                Determinism.RestartShaderClock();
+            };
             helper.Events.World.BuildingListChanged += (_, e) =>
             {
                 SurfaceMap.Invalidate(e.Location);
@@ -166,10 +183,16 @@ namespace SDVRadiance
                 }
                 if (anyMap)
                     SurfaceMap.InvalidateAffectedBy(System.Linq.Enumerable.Select(e.Names, n => n.Name));
-                // Every reload, map or tilesheet: a label's verdict is an answer about ART, and
-                // this is the event that says the art may have been swapped. Cheap to throw away
-                // (a few dozen fingerprints per map) and wrong to keep.
-                LabelStore.Instance?.ForgetArtVerdicts();
+                // A label's verdict is an answer about ART, and this is the event that says the
+                // art may have been swapped - but only for the sheets actually named. It used to
+                // throw away every verdict whatever had reloaded, which moved the label version,
+                // which rebuilt three whole-map scans: a mod invalidating a data asset on a timer
+                // therefore cost 30 ms every few seconds in town for nothing at all.
+                LabelStore.Instance?.ForgetArtVerdictsFor(
+                    System.Linq.Enumerable.Select(e.Names, n => n.Name));
+                // The relief pass's list of the map's sheets holds the textures themselves, so a
+                // reloaded sheet has to be fetched again. Only the sheets named.
+                _pipeline?.ForgetTileSheetListsDrawnFrom(System.Linq.Enumerable.Select(e.Names, n => n.Name));
             };
 
             SurfaceMap.DiagnosticMonitor = this.Monitor;
@@ -273,6 +296,7 @@ namespace SDVRadiance
                     // constructor so the store keeps working, unguarded, if the pipeline never
                     // starts at all.
                     LabelStore.ArtFingerprintReader = _pipeline.TryFingerprintTileArt;
+                    LabelStore.SheetFingerprintReader = _pipeline.TryFingerprintSheetCell;
                 }
                 return _pipeline;
             }
@@ -312,6 +336,8 @@ namespace SDVRadiance
             bool watching = ScreenWatchFrames > 0;
             if (watching)
                 ScreenWatchFrames--;
+            if (HarmonyPatcher.GameIsTakingMapScreenshot)
+                return;
             if (!EffectsActive && !RenderPipeline.DumpPending)
             {
                 if (watching)
@@ -326,7 +352,18 @@ namespace SDVRadiance
             // Logged AFTER the pass so the frame size is this screen's, not the previous screen's.
             if (watching)
                 this.Monitor.Log($"[screenwatch] screen={Context.ScreenId} location={Game1.currentLocation?.NameOrUniqueName} "
+                    // The clock every time-driven curve reads. Split screen runs one Game1 per screen,
+                    // so two screens can disagree about the fraction of the current ten minutes, and
+                    // anything shared between them that is keyed on the sun (the object shadow bakes)
+                    // is then asked for two different angles in turn.
+                    + $"time={Game1.timeOfDay} interval={Game1.gameTimeInterval} clock={GameClock.MinutesNow():0.00} "
+                    // Game1.ticks is per screen too; the shared caches age their entries by
+                    // SharedTicks, printed beside it, which should read the same on every screen.
+                    + $"ticks={Game1.ticks} sharedTicks={SharedTicks.Now} "
+                    + $"arrivalWalks={ShadowRenderer.ArrivalWalksFor(Context.ScreenId)}({ShadowRenderer.ArrivalReasonFor(Context.ScreenId)}) "
                     + Pipeline.DescribeCameraKeyedCaches(), LogLevel.Info);
+            if (watching)
+                ShadowRenderer.ForgetArrivalWalks(Context.ScreenId);
             if (RenderPipeline.DebugChannel != DebugOverlayChannel.Off)
                 Pipeline.DrawDebugOverlay(e.SpriteBatch);
         }
@@ -344,8 +381,11 @@ namespace SDVRadiance
             FoliageSway.Strength = Math.Clamp(_config.FoliageSwayStrength, 0f, 2f);
             FoliageSway.Speed = Math.Clamp(_config.FoliageSwaySpeed, 0.25f, 2f);
             FoliageSway.GustSpanTiles = Math.Clamp(_config.FoliageSwayGustSpan, 4f, 40f);
+            FoliageSway.CropsEnabled = _config.FoliageSwayCrops;
             FoliageSway.WindPixelsPerSecond = PrecipitationSystem.WindPixelsPerSecond;
             FoliageSway.StripDrawsThisFrame = 0;
+            FoliageSway.CropSwaysThisFrame = 0;
+            FoliageSway.CropDrawsThisFrame = 0;
             SheetUpscaler.Enabled = _config.Enabled && _config.SheetUpscaleEnabled;
             SheetUpscaler.WorldEnabled = _config.SheetUpscaleWorld;
             SheetUpscaler.CharactersEnabled = _config.SheetUpscaleCharacters;
@@ -361,8 +401,10 @@ namespace SDVRadiance
             SheetUpscaler.BeginFrame();
             // The mine's floor number leaves the world layer whenever the chain will run over it,
             // and OnRenderedWorld draws it back after the chain.
-            HarmonyPatcher.HoistMineFloorNumber = EffectsActive;
-            if (!_config.Enabled)
+            HarmonyPatcher.HoistMineFloorNumber = EffectsActive && !HarmonyPatcher.GameIsTakingMapScreenshot;
+            // A map screenshot is the game's own picture of the whole location, drawn in chunks:
+            // no bakes, shadows, reflections or chain for it (see GameIsTakingMapScreenshot).
+            if (!_config.Enabled || HarmonyPatcher.GameIsTakingMapScreenshot)
                 return;
             // Author freeze: the game's own draw-time clock is pinned along with ours, or a
             // campfire's flame keeps two captures of one frozen frame from ever matching.
@@ -375,6 +417,27 @@ namespace SDVRadiance
             // Golden hour: ComputeSun is static, so the day's-edge stretch dial is captured
             // here once per frame, before any bake or draw asks where the sun is.
             ShadowRenderer.GoldenHourStrengthNow = Math.Clamp(_config.GoldenHourStrength, 0f, 1f);
+            ShadowRenderer.SunSeasonStrengthNow = Math.Clamp(_config.SunSeasonStrength, 0f, 1f);
+            // And which side the sun stands on, for the same reason and at the same moment: every
+            // bake and every draw this frame has to be told the same answer, or half the scene
+            // lights from one side and half from the other.
+            ShadowRenderer.SunBearingRadiansNow = Microsoft.Xna.Framework.MathHelper.ToRadians(_config.ShadowSunBearing);
+            // And where the sun stands for the LIGHT, which is its own answer: the two halves of
+            // this mod have never agreed about it, so each carries its own and equal numbers mean
+            // they finally do.
+            ShadowRenderer.SunlightBearingRadiansNow = Microsoft.Xna.Framework.MathHelper.ToRadians(_config.SunlightBearing);
+            // And how much sharper a shadow is at the contact than at its tip, read by the bake
+            // paths, which are static for the same reason the two above are.
+            ShadowRenderer.ContactHardnessNow = Math.Clamp(_config.ShadowContactHardness, 0f, 1f);
+            // And how far the soft edge is stretched along the shadow rather than being the same
+            // width all the way round, read by the same static bake paths.
+            ShadowRenderer.PenumbraStretchNow = Math.Clamp(_config.ShadowPenumbraStretch, 0f, 1f);
+            // And the colour the shadows are drawn in, settled once per screen per frame for the
+            // same reason: every bake path and both shadow shaders read it.
+            ShadowRenderer.UpdateShadowInk(_config, Context.ScreenId);
+            // And how much the watered dirt sparkles, read by the HoeDirt draw hook inside the
+            // game's batch a moment later.
+            _pipeline?.UpdateWateredSoilSparkle(_config);
 
             // Hand both renderers over to this screen before anything reads a cache. On a split
             // screen this handler runs once per screen per frame, and everything remembered
@@ -535,6 +598,8 @@ namespace SDVRadiance
         // reports can be pinned to a subsystem instead of guessed at.
         private readonly System.Diagnostics.Stopwatch _performanceStopwatch = new();
         private double _prepareMilliseconds, _drawMilliseconds, _maxDrawMilliseconds;
+        /// <summary>The frame the texture-unit guard was last run for; see OnRenderingStep.</summary>
+        private int _samplerGuardFrame = -1;
         private int _performanceFrameCount;
 
         /// <summary>
@@ -543,24 +608,37 @@ namespace SDVRadiance
         /// </summary>
         private void OnRenderingStep(object? sender, RenderingStepEventArgs e)
         {
-            // Nothing this mod parked on a high texture unit last frame is still believed to be
-            // there while the game draws; a slot already empty costs nothing to set.
-            TextureUnitGuard.ReleaseHighUnits(Game1.graphics.GraphicsDevice);
-            // And MonoGame is not asked to walk sampler slots nothing can reach (see
-            // TextureUnitGuard.CapSamplerSlots): a length check on every frame but the first.
-            TextureUnitGuard.WantedSamplerSlots = _config.LimitSamplerSlots ? TextureUnitGuard.DefaultSamplerSlots : 0;
-            TextureUnitGuard.HoldSamplerSlots(Game1.graphics.GraphicsDevice, this.Monitor);
+            // ONCE A FRAME, not once a step. The game raises a dozen render steps per frame per
+            // screen and this pair is frame's work: fifteen texture-unit writes and a field read
+            // through reflection, repeated for every step, for a state that cannot change between
+            // them.
+            if (_samplerGuardFrame != Game1.ticks)
+            {
+                _samplerGuardFrame = Game1.ticks;
+                // Nothing this mod parked on a high texture unit last frame is still believed to
+                // be there while the game draws; a slot already empty costs nothing to set.
+                TextureUnitGuard.ReleaseHighUnits(Game1.graphics.GraphicsDevice);
+                // And MonoGame is not asked to walk sampler slots nothing can reach (see
+                // TextureUnitGuard.CapSamplerSlots): a length check on every frame but the first.
+                TextureUnitGuard.WantedSamplerSlots = _config.LimitSamplerSlots ? TextureUnitGuard.DefaultSamplerSlots : 0;
+                TextureUnitGuard.HoldSamplerSlots(Game1.graphics.GraphicsDevice, this.Monitor);
+            }
             if (e.Step != StardewValley.Mods.RenderSteps.World_Sorted)
                 return;
             // The sorted world batch is what the sprite relief replays (see SpriteDrawRecorder);
             // the recorder decides for itself whether anyone wants this frame.
             SpriteDrawRecorder.BeginWorldSorted();
-            if (!_config.Enabled)
+            if (!_config.Enabled || HarmonyPatcher.GameIsTakingMapScreenshot)
                 return;
             // The people in the glass go into the same sorted batch, at the sill's depth, so a
             // body in front of a window covers its own reflection.
             if (Context.IsWorldReady)
+            {
                 _pipeline?.DrawWindowReflections(e.SpriteBatch, _config);
+                // Dust lies ON the ground, beside the people standing on it, so it goes into the
+                // sorted batch at its own depth rather than being stamped over the finished frame.
+                _pipeline?.DrawGroundParticles(e.SpriteBatch, _config);
+            }
             if (!_config.DirectionalShadowsEnabled)
                 return;
             _shadows ??= new ShadowRenderer();
@@ -592,6 +670,16 @@ namespace SDVRadiance
                 SpriteDrawRecorder.EndWorldSorted();
             else if (e.Step == StardewValley.Mods.RenderSteps.World_AlwaysFront)
                 SpriteDrawRecorder.EndWorldFront();
+            // The game has just drawn its own lights into its lightmap and the batch is still
+            // open on it: the one moment our lit windows can push the night back too.
+            else if (e.Step == StardewValley.Mods.RenderSteps.World_RenderLightmap
+                     && _config.Enabled && Context.IsWorldReady && !HarmonyPatcher.GameIsTakingMapScreenshot)
+            {
+                _pipeline?.DrawWindowGlowIntoGameLightmap(e.SpriteBatch, _config);
+                _pipeline?.DrawParticleGlowIntoGameLightmap(e.SpriteBatch, _config);
+                _pipeline?.DrawLampHaloIntoGameLightmap(e.SpriteBatch, _config);
+                _pipeline?.DrawAquariumLightIntoGameLightmap(e.SpriteBatch, _config);
+            }
         }
 
         private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
@@ -600,8 +688,16 @@ namespace SDVRadiance
             // the game ran per frame it drew, and how much of each was us. Screen 0 only, since
             // this event is raised once per screen and the question is about the game's updates.
             long tickStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            // First, before anything on this screen's turn reads the shared clock (see SharedTicks).
+            SharedTicks.NoteHostTick();
             Determinism.HoldGameClock();
             Determinism.FollowTheGamesTimeStep();
+            // The entity mirror's slot readback, on the tick and not in the draw. Read mid-draw it
+            // waited for everything the card had queued, one frame late or two: an 8 to 14 ms
+            // frame per new body on the pier with twelve ducks. Here the last frame has been
+            // presented and the card is between frames, so the same read is the copy alone.
+            _pipeline?.CollectSelfDrawnMeasure();
+            _pipeline?.CollectExposureMeter();
 
             // Resource maintenance lives HERE, on the game's own tick, and not on any render
             // path, because every render path in this mod is gated on the mod being switched on.
@@ -619,9 +715,13 @@ namespace SDVRadiance
                 && (_config.DirectionalShadowsEnabled || _config.WaterReflection);
             _shadows?.ReleaseIdleTargets(shadowsWanted);
             Pipeline.ReleaseIdleChainTargets(EffectsActive);
+            // Glass that returns the street wants the mirror's scenery as much as water does. Left
+            // out, a street with windows and no water released the cache every five seconds and
+            // rebuilt the whole of it on the next frame.
             Pipeline.ReleaseIdleWaterTargets(_config.Enabled
-                && (((_config.WaterEnabled || _config.WaterReflection) && ShadowRenderer.WaterOnScreen)
-                    || Pipeline.WetWorldWantsEntityMirror));
+                && (((_config.WaterEnabled || _config.WaterReflection) && Pipeline.AnyScreenHasWaterOnScreen)
+                    || Pipeline.WetWorldWantsEntityMirror
+                    || Pipeline.WindowsWantSceneryMirror));
             _camera.Update(_config);
             LightningEffects.Update(_config);
             ShadowSuppression.SuppressVanillaShadows = ShadowRenderer.ShadowsActiveNow(_config);

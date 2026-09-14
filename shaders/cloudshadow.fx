@@ -42,6 +42,8 @@ float Coverage;      // fraction of area shadowed (0..1)
 float2 WorldOffset;  // viewport origin (world-anchor), pre-scaled on the CPU
 float2 TexelSize;    // blur step (1/width, 0) or (0, 1/height)
 float LightProtect;  // 0 by day .. 1 at night: only then do near-white cores resist the shadow
+float3 ShadowInk;    // what fills the shade: black darkens as every release did, a sky blue or a
+                     // rain grey lifts the shaded ground toward that colour instead (ShadowTint)
 float Count;         // 0..1 how many SEPARATE cloud banks are on screen (cluster frequency)
 float SmallMapBoost; // >=1: extra cluster frequency when the map is smaller than the viewport,
                      // so a tiny map spans several banks instead of falling in one dark cell
@@ -168,7 +170,10 @@ float4 CompositePS(PixelInput input) : SV_TARGET
     float protect = smoothstep(0.955, 0.995, lum) * saturate(LightProtect);
     float shade = 1.0 - cloud * Opacity * (1.0 - protect);
 
-    return float4(c.rgb * shade, c.a);
+    // The shaded ground is pulled toward the ink by the amount it is shaded. With a black ink
+    // this is the plain darkening it always was, and written as a product plus zero rather than
+    // a lerp so that it stays the same to the bit.
+    return float4(c.rgb * shade + ShadowInk * (1.0 - shade), c.a);
 }
 
 // A coverage mask that was STAMPED by a SpriteBatch (the building shadows) carries its shape in

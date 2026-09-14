@@ -38,8 +38,38 @@ namespace SDVRadiance
 
             float propRotation = rotation;
             float propStretch = LengthCap(stretch, 0.6f);
-            float shear = -(float)Math.Sin(propRotation) * propStretch;
-            float shearScaleY = Math.Max(0.15f, propStretch * (float)Math.Cos(propRotation));
+            // A post, a sign and a fence are flat faces standing on their edge, so their width
+            // stays level on the screen and keeps its size whatever the sun does: ForCard. What
+            // this replaces was a shear and a vertical squash worked out here by hand, with a
+            // floor under the squash. The floor was put there to stop a shadow vanishing when the
+            // sun stood square to the post, and while the sun could only ever be above the screen
+            // nobody could see what it did the rest of the way round: it held the column at a
+            // fifteenth of its height while the lean ran on to full, which is a sliver leaning
+            // hard, and it is what a lamp post's shadow had become by mid afternoon.
+            // ForSolid, not ForCard. A card keeps its width flat along the screen, which reads
+            // right while the sun stays near the top of it and has no area left at all once the
+            // sun is square to the post: width and length both lie along the screen's x and the
+            // parallelogram closes up. A solid's width is always at right angles to its own
+            // length, so there is a shadow at every angle of the circle the compass can reach.
+            ShadowProjection projection = ShadowProjection.ForSolid(propRotation, propStretch, _groundForeshortening);
+            // How much of the column's height survives as screen height, and WHICH WAY it goes.
+            // A sun more than a quarter turn from the top of the screen throws the shadow toward
+            // the viewer, and the cosine turns negative to say so. Clamping that sign away was the
+            // one thing left in the shadow pass that could not describe the lower half of the sky:
+            // the lamp post's shadow stood up the screen while every tree beside it lay down
+            // toward the viewer, in the same light. Only the LENGTH is floored now, so a sun at
+            // exactly a quarter turn still leaves a readable sliver instead of nothing.
+            //
+            // The sign is spent as a vertical FLIP rather than a negative scale. A negative
+            // scale.Y makes SpriteBatch build the quad inside out (it multiplies the source
+            // height by the scale to get the quad's height), and this draw goes into the game's
+            // own batch, whose rasteriser culls by winding. A flip only swaps the texture
+            // coordinates, so the quad stays wound the way it was.
+            // Only the SIGN of the lean is read here now: how far a prop's shadow is laid over is
+            // decided by the projection, in the bake. The length this used to work out was left
+            // over from the draw-time squash and had not been read since the map columns started
+            // going through ShadowProjection like every other caster.
+            bool propPointsDownScreen = propStretch * (float)Math.Cos(propRotation) < 0f;
 
             // Near-player prop diagnostics (DebugLogging): every ~3s log why Buildings tiles within
             // 4 tiles of the player do or don't cast — the quick way to see why a fence stays bare.
@@ -54,21 +84,17 @@ namespace SDVRadiance
             // Which way the shadow leans decides which neighbouring column the wall guard has to
             // look at, so it is the one part of the classification that cannot be answered without
             // the sun. All three of its possible answers are cached instead.
-            int leanDirection = shear > 0.01f ? -1 : (shear < -0.01f ? 1 : 0);
+            // The lean's own sign, read off the projection now that it owns the lay-down: a
+            // source pixel one above the feet lands AlongX to the side, so that is which way the
+            // shadow runs and which neighbour the wall guard has to look at.
+            int leanDirection = projection.AlongX < -0.01f ? -1 : (projection.AlongX > 0.01f ? 1 : 0);
 
             // Everything else here is a question about the MAP ART: which sheet a tile is on, how
             // opaque it is, what stands beside and above it, whether the game calls it passable.
             // None of that changes while you are standing there, and all of it was being worked out
             // again for every tile on screen, in two passes, sixty times a second. Now it is worked
             // out once per tile and kept until the map itself changes.
-            if (!SDVRadiance.LiveScreens.SamePlace(location, _propCacheLocation) || !SDVRadiance.LiveScreens.SameMapSize(location.map, _propCacheMap)
-                || Game1.Date.TotalDays != _propCacheDay)
-            {
-                _propCache.Clear();
-                _propCacheLocation = location;
-                _propCacheMap = location.map;
-                _propCacheDay = Game1.Date.TotalDays;
-            }
+            _propCache = PropCacheFor(location);
 
             for (int y = tileY0; y <= tileY1; y++)
             {
@@ -83,9 +109,13 @@ namespace SDVRadiance
                             NoteNearPlayer(x, y, cast.Note);
                         continue;
                     }
-                    if (cast.BlockedNorth || (leanDirection < 0 ? cast.BlockedWest : leanDirection > 0 && cast.BlockedEast))
+                    // The northern wall only stands in the way while the shadow actually runs
+                    // north. With the sun past a quarter turn the cast goes the other way, and
+                    // holding it back for a wall behind it would delete a shadow for no reason.
+                    if ((cast.BlockedNorth && !propPointsDownScreen)
+                        || (leanDirection < 0 ? cast.BlockedWest : leanDirection > 0 && cast.BlockedEast))
                     {
-                        NoteNearPlayer(x, y, "skip: wall to the north (lean would paint onto it)");
+                        NoteNearPlayer(x, y, "skip: wall in the way (the lean would paint onto it)");
                         continue;
                     }
                     if (cast.Note != null)
@@ -97,11 +127,11 @@ namespace SDVRadiance
                     if (_isBakingObjects)
                     {
                         if (_objectGraphicsDevice != null && !_bakedObjectCache.ContainsKey(key)
-                            && BakeTileColumn(_objectGraphicsDevice, texture, cast.Sources, cast.Levels, cast.Orients, count, shear, blur,
+                            && BakeTileColumn(_objectGraphicsDevice, texture, cast.Sources, cast.Levels, cast.Orients, count, projection, blur,
                                 out RenderTarget2D renderTarget, out Vector2 feetInRenderTarget))
                             // A tile column is 16 px wide and as many tiles tall as the prop: its lean already carries
                             // further than its width, so there is nothing for the narrowing to fix here.
-                            _bakedObjectCache[key] = new SpriteBake { Rt = renderTarget, FeetInRt = feetInRenderTarget, BakedShear = shear, BakedBlur = blur, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = Game1.ticks };
+                            _bakedObjectCache[key] = new SpriteBake { Rt = renderTarget, FeetInRt = feetInRenderTarget, BakedProjection = projection, BakedBlur = blur, BakedContactHardness = ContactHardnessNow, BakedPenumbraStretch = PenumbraStretchNow, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = SharedTicks.Now };
                         continue;
                     }
                     if (!_bakedObjectCache.TryGetValue(key, out SpriteBake? bakedEntry))
@@ -113,22 +143,25 @@ namespace SDVRadiance
                         // Unless it can never be baked at all, which is a request that fails for
                         // the rest of the session and reads as ordinary cache churn while it does.
                         // The sprite path stopped making those; this one had gone on making them.
-                        if (!ChooseBakeFit(16f, cast.Height * 16f, shear, blur, null, out _, out _, out _))
+                        if (!ObjectBakeCouldFit(new Rectangle(0, 0, 16, cast.Height * 16), new Vector2(8f, cast.Height * 16f), projection, blur))
                         {
                             FrameCost.Count(FrameCost.Counter.BakeTooBig);
                             continue;
                         }
                         FrameCost.Count(FrameCost.Counter.BakeMisses);
-                        QueueTileColumnBake(key, cast, shear, blur);
+                        QueueTileColumnBake(key, cast, projection, blur);
                         continue;
                     }
                     FrameCost.Count(FrameCost.Counter.ShadowSprites);
-                    bakedEntry.LastUsedTick = Game1.ticks;
-                    // Same per-sprite staleness rule as EmitObject: the lean lives in the pixels, so
-                    // the column earns a re-bake once the sun has moved its tip a pixel and a half.
-                    if (Math.Abs(shear - bakedEntry.BakedShear) * (cast.Height + 1) * 64f > ShearRefreshPixels
-                        || Math.Abs(blur - bakedEntry.BakedBlur) > 0.3f)
-                        QueueTileColumnBake(key, cast, shear, blur);
+                    bakedEntry.LastUsedTick = SharedTicks.Now;
+                    // The same staleness rule every other caster uses, now that a column is laid
+                    // down by the same projection: how far its farthest pixel has moved between the
+                    // lay-down in the pixels and the one the sun asks for.
+                    if (projection.Drift(bakedEntry.BakedProjection, 16f, cast.Height * 16f) * 4f > ShearRefreshPixels
+                        || Math.Abs(blur - bakedEntry.BakedBlur) > 0.3f
+                        || bakedEntry.BakedContactHardness != ContactHardnessNow
+                        || bakedEntry.BakedPenumbraStretch != PenumbraStretchNow)
+                        QueueTileColumnBake(key, cast, projection, blur);
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(x * 64f + 32f, (y + 1f) * 64f - 2f));
                     // A body ON this tile (someone sitting on a map bench, standing against a
                     // fence) sorts at roughly y*64/10000 - a full tile BELOW this prop's normal
@@ -151,9 +184,17 @@ namespace SDVRadiance
                     float depth = MathHelper.Clamp(rowY / 10000f + x * 1e-5f - ShadowDepthBias, 0f, 1f);
                     Rectangle propContent = bakedEntry.Content.IsEmpty ? new Rectangle(0, 0, bakedEntry.Rt.Width, bakedEntry.Rt.Height) : bakedEntry.Content;
                     float unbake = 4f / bakedEntry.BakedScale;   // 1 unless the lean forced a coarser bake
+                    // The column is baked upright with its lean already sheared in, and the feet
+                    // row named by FeetInRt. Flipping samples the slot bottom-to-top, so the feet
+                    // row only stays under the post if the origin is measured from the other end
+                    // of the content; the sideways lean rides along untouched, which is what a
+                    // shadow falling the other way should do.
+                    Vector2 propOrigin = bakedEntry.FeetInRt - new Vector2(propContent.X, propContent.Y);
+                    if (propPointsDownScreen)
+                        propOrigin.Y = propContent.Height - propOrigin.Y;
                     DrawSoft(spriteBatch, Taps9, bakedEntry.Rt, propContent,
-                        feet, Color.White, alpha, 0f, bakedEntry.FeetInRt - new Vector2(propContent.X, propContent.Y),
-                        new Vector2(unbake, unbake * shearScaleY), depth, SpriteEffects.None, 0f);
+                        feet, ShadowInk, alpha, 0f, propOrigin,
+                        new Vector2(unbake, unbake), depth, SpriteEffects.None, 0f);
                     // Redraw the base tile OVER its own shadow: the map layer painted before this
                     // batch, so without this the near end of the cast darkens the prop itself
                     // (the "shadow on the lamp post" complaint). Front-stack tiles need no redraw —
@@ -409,24 +450,16 @@ namespace SDVRadiance
         /// (sheet, rect) and cached — this is the "look at the actual image" prop test.</summary>
         private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle sourceRect), float> _tileCoverageCache = new();
         private Color[] _tileCoveragePixels = new Color[1024];
-        // Whole-tilesheet pixel cache: reading each prop tile with its own texture.GetData is a separate
-        // GPU readback (pipeline flush); walking into a prop-heavy screen fired a burst of them in one
-        // frame. Read each sheet back ONCE, then count coverage from the CPU array (zero GPU work).
-        private readonly System.Collections.Generic.Dictionary<Texture2D, Color[]?> _tilesheetCoveragePixels = new();
-        // Refusal bound for absurd sheets only — see the note on RenderPipeline.SheetPixCap. The
-        // old 8 Mpx ceiling landed under real modded tilesheets, and the fallback beneath it is a
-        // GPU readback per tile.
-        private const int CoverageSheetCap = 64_000_000;
+        // The whole-tilesheet pixel cache lives in SheetPixels now, shared with the water mask,
+        // which asks these same sheets. Reading each prop tile with its own texture.GetData is a
+        // separate GPU readback (pipeline flush); walking into a prop-heavy screen fired a burst of
+        // them in one frame. Sheets over SheetPixels.PixelCap still fall back to a read per tile.
 
         private Color[]? CoverageSheetPixels(Texture2D texture)
         {
-            if (_tilesheetCoveragePixels.TryGetValue(texture, out Color[]? sheetPixels))
-                return sheetPixels;
-            // One readback for the sheet, not one per strip of 512 rows: see SheetReadback for
-            // why the strips were costing what they were written to save.
-            sheetPixels = SheetReadback.Read(texture, CoverageSheetCap, "sheet: shadow tile coverage");
-            _tilesheetCoveragePixels[texture] = sheetPixels;
-            return sheetPixels;
+            // Held by SheetPixels, shared with the water mask, which asks the same tilesheets.
+            // Before they shared, a map's sheets were read back twice and held twice.
+            return SheetPixels.WholeSheet(texture, "sheet: shadow tile coverage");
         }
 
         private float TileCoverage(Texture2D texture, Rectangle sourceRect)
@@ -462,11 +495,13 @@ namespace SDVRadiance
 
         /// <summary>Record a map-tile column for the next bake pass. The classification owns the
         /// column arrays and outlives the frame, so the request just points at them.</summary>
-        private void QueueTileColumnBake((Texture2D texture, Rectangle sourceRect, SpriteEffects effect) key, TilePropCast cast, float shear, float blurPixels)
+        private void QueueTileColumnBake((Texture2D texture, Rectangle sourceRect, SpriteEffects effect) key, TilePropCast cast,
+            ShadowProjection projection, float blurPixels)
         {
             if (_objectBakeQueue.Count >= ObjectBakeQueueCap || cast.Sources.Length == 0)
                 return;
-            _objectBakeQueue[key] = new ObjectBakeRequest { Shear = shear, Blur = blurPixels, ColumnSources = cast.Sources, ColumnLevels = cast.Levels, ColumnOrients = cast.Orients };
+            _objectBakeQueue[key] = new ObjectBakeRequest { Projection = projection, Blur = blurPixels,
+                ColumnSources = cast.Sources, ColumnLevels = cast.Levels, ColumnOrients = cast.Orients };
         }
 
         /// <summary>
@@ -496,13 +531,60 @@ namespace SDVRadiance
             public bool BlockedNorth, BlockedWest, BlockedEast;
         }
 
-        private readonly System.Collections.Generic.Dictionary<int, TilePropCast> _propCache = new();
-        private GameLocation? _propCacheLocation;
-        private xTile.Map? _propCacheMap;
-        /// <summary>Day the classification was taken on. Map art is edited by content packs at the
-        /// day boundary (seasonal sheets, festival layouts) and buildings finish overnight, so a
-        /// new day is the one moment the answers can change without the map object being replaced.</summary>
-        private int _propCacheDay = -1;
+        /// <summary>The classifications this call reads: the set kept for the place being drawn.</summary>
+        private System.Collections.Generic.Dictionary<int, TilePropCast> _propCache = new();
+
+        /// <summary>One place's tile classifications, and what they were taken for.</summary>
+        private sealed class PropCacheForPlace
+        {
+            internal readonly System.Collections.Generic.Dictionary<int, TilePropCast> Casts = new();
+            internal xTile.Map? Map;
+            /// <summary>Day the classification was taken on. Map art is edited by content packs at
+            /// the day boundary (seasonal sheets, festival layouts) and buildings finish overnight,
+            /// so a new day is the one moment the answers can change without the map being replaced.</summary>
+            internal int Day = -1;
+            internal long LastAskedFor;
+        }
+
+        /// <summary>The classifications kept per place, a few places.
+        ///
+        /// <para>It was one set, thrown away whenever the place asked for was not the place it held.
+        /// Two screens in two different places took turns, so every call cleared it and classified
+        /// every tile on screen again, for both screens, every frame: the work the cache exists to
+        /// save, done twice as often as with no cache at all. Found 13/9 beside the solid-tile
+        /// texture of the shadow patch, which had the same one slot.</para></summary>
+        private readonly System.Collections.Generic.Dictionary<string, PropCacheForPlace> _propCacheByPlace = new();
+        private long _propCacheAsks;
+        private const int PropCachePlacesKept = 4;
+
+        private System.Collections.Generic.Dictionary<int, TilePropCast> PropCacheFor(GameLocation location)
+        {
+            string place = location.NameOrUniqueName;
+            if (!_propCacheByPlace.TryGetValue(place, out PropCacheForPlace? kept))
+                _propCacheByPlace[place] = kept = new PropCacheForPlace();
+            kept.LastAskedFor = ++_propCacheAsks;
+            if (!SDVRadiance.LiveScreens.SameMapSize(location.map, kept.Map) || Game1.Date.TotalDays != kept.Day)
+            {
+                kept.Casts.Clear();
+                kept.Map = location.map;
+                kept.Day = Game1.Date.TotalDays;
+            }
+            while (_propCacheByPlace.Count > PropCachePlacesKept)
+            {
+                string? leastWanted = null;
+                long oldest = long.MaxValue;
+                foreach (var pair in _propCacheByPlace)
+                    if (pair.Value.LastAskedFor < oldest)
+                    {
+                        oldest = pair.Value.LastAskedFor;
+                        leastWanted = pair.Key;
+                    }
+                if (leastWanted == null)
+                    break;
+                _propCacheByPlace.Remove(leastWanted);
+            }
+            return kept.Casts;
+        }
 
         /// <summary>Per-column tile source rects, filled by the scan then baked.</summary>
         private readonly Rectangle[] _tileColumnSourceRects = new Rectangle[7];
@@ -517,7 +599,8 @@ namespace SDVRadiance
         /// passed in rather than read from the scan's scratch arrays, so a queued re-bake a frame
         /// later replays the same column without redoing the scan that found it.</summary>
         private bool BakeTileColumn(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle[] sources, int[] tileLevels,
-            byte[]? orientations, int count, float shear, float blurPixels, out RenderTarget2D renderTarget, out Vector2 feetInRenderTarget, RenderTarget2D? into = null)
+            byte[]? orientations, int count, ShadowProjection projection, float blurPixels,
+            out RenderTarget2D renderTarget, out Vector2 feetInRenderTarget, RenderTarget2D? into = null)
         {
             renderTarget = null!;
             feetInRenderTarget = default;
@@ -533,10 +616,17 @@ namespace SDVRadiance
             // nobody looked at. The ladder ends it the same way, and one fit test replaces two that
             // disagreed about whether the blur counts.
             const float tileSource = 16f;
-            if (count <= 0 || !ChooseBakeFit(tileSource, levels * tileSource, shear, blurPixels, into,
-                                             out int columnSlotClass, out float scale, out float blurTexels))
+            // A column is a sprite like any other now: sixteen wide, as many tiles tall as it has,
+            // pinned at the middle of its bottom edge. Laid down by the same ShadowProjection every
+            // other caster uses, so it answers to the same rules and there is one place left in the
+            // mod that decides what the sun does to a silhouette.
+            var columnRect = new Rectangle(0, 0, (int)tileSource, (int)(levels * tileSource));
+            var columnOrigin = new Vector2(tileSource * 0.5f, levels * tileSource);
+            if (count <= 0 || !ChooseBakeFit(columnRect, columnOrigin, projection, blurPixels, into,
+                                             out int columnSlotClass, out float scale, out float blurTexels, out float rimTexels,
+                                             out float left, out float right, out float top, out float bottom))
             {
-                NoteColumnRefusal($"{levels}-tile column with shear {shear:0.00} fits no slot at any bake scale");
+                NoteColumnRefusal($"{levels}-tile column laid {projection.AlongX:0.00},{projection.AlongY:0.00} fits no slot at any bake scale");
                 return false;
             }
             float tileTexels = tileSource * scale;
@@ -544,8 +634,10 @@ namespace SDVRadiance
             _lastBakeClass = columnSlotClass;
             _lastBakeScale = scale;
             renderTarget = into ?? RentObjectRT(graphicsDevice, columnSlotClass);
-            feetInRenderTarget = new Vector2(renderTarget.Width / 2f, renderTarget.Height - 8f);
-            Matrix lean = ShearAbout(feetInRenderTarget, shear);
+            feetInRenderTarget = new Vector2(
+                (float)Math.Round(renderTarget.Width * 0.5f - (left + right) * 0.5f),
+                (float)Math.Round(renderTarget.Height - bottom - rimTexels - 1f));
+            Matrix lean = projection.About(feetInRenderTarget);
             try
             {
                 graphicsDevice.SetRenderTarget(renderTarget);
@@ -556,12 +648,25 @@ namespace SDVRadiance
                         new Vector2(feetInRenderTarget.X - tileTexels * 0.5f, feetInRenderTarget.Y - tileTexels * (tileLevels[i] + 1)),
                         scale, orientations != null && i < orientations.Length ? orientations[i] : (byte)0, Color.Black, 0f);
                 _renderTargetSpriteBatch.End();
-                _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
-                _renderTargetSpriteBatch.Draw(_propGradientTexture!, new Rectangle(0, (int)(feetInRenderTarget.Y - columnHeight), renderTarget.Width, (int)columnHeight), Color.White);
+                WhitenBake(graphicsDevice, renderTarget.Bounds);
+                // The fade rides the same matrix as the silhouette. Drawn upright over a slot the
+                // projection has already laid down, it would fade rows the column no longer has.
+                _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp, null, RasterizerState.CullNone, null, lean);
+                _renderTargetSpriteBatch.Draw(_propGradientTexture!,
+                    new Rectangle((int)(feetInRenderTarget.X - tileTexels * 0.5f), (int)(feetInRenderTarget.Y - columnHeight),
+                                  (int)tileTexels, (int)columnHeight), Color.White);
                 _renderTargetSpriteBatch.End();
-                BlurSlotInPlace(graphicsDevice, renderTarget, blurTexels);
-                _lastBakeContent = ContentBounds(new Vector2(feetInRenderTarget.X - tileTexels * 0.5f, feetInRenderTarget.Y - columnHeight),
-                    tileTexels, columnHeight, feetInRenderTarget, shear, blurTexels, renderTarget.Width, renderTarget.Height);
+                // Screen pixels in the slot now, so the rim is stamped the way a sprite's is, held
+                // to a third of each of the column's own two extents.
+                float alongPerHeight = (float)Math.Sqrt(projection.AlongX * projection.AlongX + projection.AlongY * projection.AlongY);
+                float acrossPerWidth = (float)Math.Sqrt(projection.AcrossX * projection.AcrossX + projection.AcrossY * projection.AcrossY);
+                float rimRoot = (float)Math.Sqrt(PenumbraElongation(alongPerHeight));
+                var columnRim = new Vector2(
+                    PenumbraHeldToShadow(blurTexels / rimRoot, tileTexels * acrossPerWidth),
+                    PenumbraHeldToShadow(blurTexels * rimRoot, columnHeight * alongPerHeight));
+                BlurSlotInPlace(graphicsDevice, renderTarget, blurTexels, feetInRenderTarget,
+                    new Vector2(projection.AlongX, projection.AlongY), alongPerHeight, columnRim);
+                _lastBakeContent = ContentBounds(feetInRenderTarget, left, right, top, bottom, rimTexels, renderTarget.Width, renderTarget.Height);
                 FrameCost.Count(FrameCost.Counter.ObjectBakes);
                 return true;
             }

@@ -113,7 +113,8 @@ namespace SDVRadiance
             var report = new StringBuilder();
             Event? ev = Game1.CurrentEvent;
             report.AppendLine($"[shadows] location={location.NameOrUniqueName} outdoors={location.IsOutdoors} time={Game1.timeOfDay} season={Game1.season}");
-            report.AppendLine($"[shadows] path={(SunCasts() ? "SUN" : "PER-LIGHT")} shouldCast={ShouldCast(config)} strength={config.DirectionalShadowStrength:0.00} objectsEnabled={config.DirectionalShadowObjects}");
+            report.AppendLine($"[shadows] path={(SunCasts() ? "SUN" : "PER-LIGHT")} shouldCast={ShouldCast(config)} strength={config.DirectionalShadowStrength:0.00} objectsEnabled={config.DirectionalShadowObjects} "
+                + $"player={config.DirectionalShadowPlayer} villagers={config.DirectionalShadowVillagers} farmAnimals={config.DirectionalShadowFarmAnimals} creatures={config.DirectionalShadowCreatures}");
             AppendSunGeometry(report, config);
             // The event flags decide who the game is drawing at all. Every one of them has caught
             // an assumption out at least once, so all of them are printed, not just the relevant one.
@@ -264,6 +265,11 @@ namespace SDVRadiance
             if (shown == 0)
                 report.AppendLine("  (none — if you can see NPCs, they are not in the list the pass reads)");
             report.AppendLine($"  character bake cache: {_diagInstance?._casterBakeCache.Count ?? -1} entries, blur baked = {CasterBlurBaked}");
+            // What the off-screen cull is worth on THIS map, rather than on the one it was
+            // reported from: a body whose shadow cannot reach the screen is not drawn and, under
+            // the sun, not baked either. Reported by palmhacker13 on Nexus.
+            report.AppendLine($"  bodies offered to the shadow pass last frame: {CastersOfferedThisFrame}, "
+                + $"of which too far off screen to cast onto it: {CastersOffScreenThisFrame}");
         }
 
         /// <summary>
@@ -313,7 +319,7 @@ namespace SDVRadiance
                 : "CASTS";
             report.AppendLine($"{w.Mark(tile.X, tile.Y)} {who.Name,-16} tile={tile.X},{tile.Y} "
                         + $"{w.Screen(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom)} "
-                        + $"standingY={who.StandingPixel.Y} bakeReady={ready} bakeTarget={hasTarget} "
+                        + $"standingY={who.StandingPixel.Y} bakeReady={ready} bakeTarget={hasTarget} sunLaidDown={renderer._playerSunFresh} "
                         + $"seated={seated} swimming={who.swimming.Value} riding={who.isRidingHorse()} "
                         + $"-> {verdict}");
             report.AppendLine($"  the same verdict applies on both paths here, and the live one is "
@@ -322,7 +328,7 @@ namespace SDVRadiance
                         + "been taken away by then.");
             if (verdict != "CASTS")
                 return;
-            report.AppendLine($"  patch: {PlayerPatchReport}"
+            report.AppendLine($"  patch: {PlayerPatchLine}"
                         + (renderer._patchValid ? " -> drawn as strips of the patch, cut by the map per pixel"
                                                 : " -> drawn as leaned strips with the CPU-walked tile clip"));
             // The reach, from the same numbers the draw uses, so a drift between this and the
@@ -413,9 +419,22 @@ namespace SDVRadiance
                 // The second gate in Object.draw, and the one that hid the Squid Fest clam while
                 // showGroundObjects said the objects were being drawn.
                 bool walked = Game1.eventUp && (Game1.CurrentEvent?.isTileWalkedOn((int)tile.X, (int)tile.Y) ?? false);
+                // Where this object's own art stops, and so where its shadow is anchored. Printed
+                // because the difference between the art's last row and the cell's bottom row is
+                // invisible in a picture until the sun is turned round, at which point it is a
+                // strip of lit ground under the object and there is no way to tell from the
+                // outside whether the anchor or something else put it there.
+                string foot = "art foot unread";
+                if (_diagInstance != null && _diagInstance.TryItemArt(o.QualifiedItemId, out Texture2D footTexture, out Rectangle footRect)
+                    && !footRect.IsEmpty)
+                {
+                    float footRow = _diagInstance.ArtFootRow(footTexture, footRect);
+                    foot = $"solid art ends on row {footRow:0.#} of {footRect.Height}, "
+                         + $"so its foot is {(footRect.Height - footRow) * 4f:0.#}px above the cell's line";
+                }
                 report.AppendLine($"{w.Mark((int)tile.X, (int)tile.Y)} {o.Name,-20} tile={tile.X},{tile.Y} {w.Screen(tile.X * 64 + 32, tile.Y * 64 + 64)} {kind} passable={o.isPassable()} "
                             + $"tempInvisible={o.isTemporarilyInvisible} fragility={o.Fragility} "
-                            + $"eventWalkedOn={walked}{(walked ? " -> game hides it, no shadow" : "")}");
+                            + $"eventWalkedOn={walked}{(walked ? " -> game hides it, no shadow" : "")} {foot}");
             }
             foreach (Furniture f in location.furniture)
             {
@@ -598,7 +617,21 @@ namespace SDVRadiance
             const float Deg = 180f / (float)Math.PI;
             report.AppendLine($"[shadows] sun rot={rotation * Deg:0.0}deg stretch={sunStretch:0.00} lengthScale={lengthScale:0.00} "
                         + $"overcast={overcast:0.00}");
+            // The angle above is the two of these added together, and a report that printed only
+            // the total left no way to tell a sun the player has turned from a sun the clock has
+            // carried round, which are the two reasons a shadow points somewhere unexpected.
+            report.AppendLine($"[shadows] sun bearing={config.ShadowSunBearing:0.0}deg (0 = toward the viewer, the old picture), "
+                        + $"the clock's own swing={SunSweepOnly(rotation) * Deg:0.0}deg");
+            // Its twin, on the same scale. Printed beside it because the only way to tell whether a
+            // shaft of light and the shadow under it are meant to agree is to see both numbers.
+            report.AppendLine($"[shadows] the LIGHT's sun bearing={config.SunlightBearing:0.0}deg "
+                        + $"({(Math.Abs(((config.SunlightBearing - config.ShadowSunBearing) % 360f + 360f) % 360f) < 0.5f ? "same as the shadows: one sun" : $"{((config.SunlightBearing - config.ShadowSunBearing) % 360f + 360f) % 360f:0.0}deg away from the shadows")})");
             report.AppendLine($"[shadows] geometry: character (rotated) angle={rotation * Deg:0.0}deg stretch={sunStretch:0.00}");
+            // The shape of the soft edge, which the picture cannot be read for: both dials are off
+            // by default and both change the rim without changing how wide the blur is set.
+            report.AppendLine($"[shadows] soft edge: contact hardness={ContactHardnessNow:0.00} "
+                        + $"(0 = one softness end to end), stretch along the shadow={PenumbraStretchNow:0.00} "
+                        + $"giving a rim {PenumbraElongation(sunStretch):0.00}x longer than it is wide");
 
             // Read from the live per-kind settings rather than repeating them. The numbers here
             // were copied by hand and had drifted: it still printed a crop cap of 0.55 and an
@@ -611,15 +644,21 @@ namespace SDVRadiance
                 // Reading rot straight here would have gone on printing one angle for everything
                 // while the screen showed several, and that is the report this table exists for.
                 float lean = LeanFor(config, kind);
-                float kindRot = rotation * lean;
+                // The same split the draw pass makes: the damping is spent on the day's swing and
+                // the bearing is added back whole, so a damped kind still points at the side of
+                // the screen the player chose.
+                float kindRot = SunBearingRadiansNow + SunSweepOnly(rotation) * lean;
                 float st = Math.Min(sunStretch, cap * lengthScale);
                 float shear = -(float)Math.Sin(kindRot) * st;
                 float raw = st * (float)Math.Cos(kindRot);
-                float sy = Math.Max(0.15f, raw);
+                // Only the LENGTH is floored; the sign says which way the shadow runs and is spent
+                // as a flip instead. Reporting the floored value unsigned would have printed every
+                // shadow past a quarter turn as though it still ran up the screen.
+                float sy = Math.Max(0.15f, Math.Abs(raw)) * (raw < 0f ? -1f : 1f);
                 float angle = (float)Math.Atan2(-shear, sy) * Deg;
                 report.AppendLine($"[shadows]   {kind,-12} cap={cap:0.00} soft={SoftnessFor(config, kind):0.00}x lean={lean:0.00}x "
                             + $"stretch={st:0.00} shear={shear:0.000} "
-                            + $"squash={sy:0.000}{(raw < 0.15f ? " floor" : "")} angle={angle:0.0}deg");
+                            + $"squash={sy:0.000}{(Math.Abs(raw) < 0.15f ? " floor" : "")} angle={angle:0.0}deg");
             }
             foreach (ShadowKind kind in Enum.GetValues<ShadowKind>())
                 Kind(kind);

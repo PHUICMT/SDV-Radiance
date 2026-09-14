@@ -19,22 +19,51 @@ namespace SDVRadiance
         /// exactly 1E-06f, an intentional fingerprint the tree/bush shims key on.</summary>
         private const float VanillaCanopyShadowDepth = 1E-06f;
 
+        // The five switches below read false while the game takes a map screenshot: this mod
+        // stands down for that picture (see HarmonyPatcher.GameIsTakingMapScreenshot), so the
+        // game's own shadows have to be in it. The update tick keeps setting them as before.
+
+        private static bool _suppressVanillaShadows;
         /// <summary>When true, the vanilla blob shadow is skipped (we draw a directional one instead).</summary>
-        internal static bool SuppressVanillaShadows;
+        internal static bool SuppressVanillaShadows
+        {
+            get => _suppressVanillaShadows && !HarmonyPatcher.GameIsTakingMapScreenshot;
+            set => _suppressVanillaShadows = value;
+        }
 
+        private static bool _suppressVanillaObjectShadows;
         /// <summary>When true, vanilla tree/bush baked blob shadows are skipped (our object shadows replace them).</summary>
-        internal static bool SuppressVanillaObjectShadows;
+        internal static bool SuppressVanillaObjectShadows
+        {
+            get => _suppressVanillaObjectShadows && !HarmonyPatcher.GameIsTakingMapScreenshot;
+            set => _suppressVanillaObjectShadows = value;
+        }
 
+        private static bool _suppressVanillaBlobShadows;
         /// <summary>When true, vanilla <see cref="Game1.shadowTexture"/> blob shadows (big craftables) are
         /// skipped. Gated on ShadowsActiveNow so it also covers the indoor/night ambient path.</summary>
-        internal static bool SuppressVanillaBlobShadows;
+        internal static bool SuppressVanillaBlobShadows
+        {
+            get => _suppressVanillaBlobShadows && !HarmonyPatcher.GameIsTakingMapScreenshot;
+            set => _suppressVanillaBlobShadows = value;
+        }
 
+        private static bool _suppressVanillaCritterShadows;
         /// <summary>When true, critters' vanilla blob shadows are skipped (our directional critter
         /// shadows replace them — sun path only, so rainy days keep the vanilla blob).</summary>
-        internal static bool SuppressVanillaCritterShadows;
+        internal static bool SuppressVanillaCritterShadows
+        {
+            get => _suppressVanillaCritterShadows && !HarmonyPatcher.GameIsTakingMapScreenshot;
+            set => _suppressVanillaCritterShadows = value;
+        }
 
+        private static bool _suppressVanillaClouds;
         /// <summary>When true, the vanilla drifting Cloud critter shadow is hidden.</summary>
-        internal static bool SuppressVanillaClouds;
+        internal static bool SuppressVanillaClouds
+        {
+            get => _suppressVanillaClouds && !HarmonyPatcher.GameIsTakingMapScreenshot;
+            set => _suppressVanillaClouds = value;
+        }
 
         /// <summary>Character classes from other mods that draw a <see cref="Game1.shadowTexture"/>
         /// blob of their own inside their own draw. Custom Companions does this for every companion:
@@ -199,6 +228,26 @@ namespace SDVRadiance
                 return;
             spriteBatch.Draw(texture, pos, repaired, color, rotation, origin, scale, effects, layerDepth);
         }
+
+        /// <summary>
+        /// Shim for Crop.draw: add the lean this crop carries to whatever rotation the game asked
+        /// for. The game already rotates a crop about the point where its stem meets the soil (it
+        /// does this itself when you walk into one), so the wind's lean rides that same pivot and
+        /// the plant tips as one rigid piece with no seam anywhere in it.
+        /// <para>The lean is settled once for the crop rather than here, because a crop makes
+        /// several draws - the plant, then the fruit or flower standing on it - and all of them
+        /// have to lean by the same amount (see <see cref="FoliageSway.BeginCrop"/>).</para>
+        /// </summary>
+        public static void Draw_CropSway(SpriteBatch spriteBatch, Texture2D texture, Vector2 pos,
+            Rectangle? src, Color color, float rotation, Vector2 origin, float scale,
+            SpriteEffects effects, float layerDepth)
+            => spriteBatch.Draw(texture, pos, src, color, rotation + FoliageSway.CropTilt, origin, scale, effects, layerDepth);
+
+        /// <summary>Vector2-scale twin of <see cref="Draw_CropSway"/>.</summary>
+        public static void Draw_CropSwayV(SpriteBatch spriteBatch, Texture2D texture, Vector2 pos,
+            Rectangle? src, Color color, float rotation, Vector2 origin, Vector2 scale,
+            SpriteEffects effects, float layerDepth)
+            => spriteBatch.Draw(texture, pos, src, color, rotation + FoliageSway.CropTilt, origin, scale, effects, layerDepth);
 
         /// <summary>Vector2-scale twin of <see cref="Draw_SkipVanillaShadow"/>.</summary>
         public static void Draw_SkipVanillaShadowV(SpriteBatch spriteBatch, Texture2D texture, Vector2 pos,
@@ -397,6 +446,11 @@ namespace SDVRadiance
                     yield return instruction;
             }
         }
+
+        /// <summary>Crop: lean every sprite the plant draws with the wind.</summary>
+        internal static System.Collections.Generic.IEnumerable<CodeInstruction> CropSway_Transpiler(
+            System.Collections.Generic.IEnumerable<CodeInstruction> instructions)
+            => RedirectDraws(instructions, nameof(Draw_CropSway));
 
         /// <summary>Tree/Bush: drop the depth==1E-06 blob draws.</summary>
         internal static System.Collections.Generic.IEnumerable<CodeInstruction> DrawShadow_Transpiler(

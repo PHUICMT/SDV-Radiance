@@ -271,7 +271,10 @@ namespace SDVRadiance
             try
             {
                 int width = rect.Width * SoftScale, height = rect.Height * SoftScale;
-                kernelOutput = new RenderTarget2D(device, width, height, false, SurfaceFormat.Color, DepthFormat.None);
+                // PreserveContents: the next line clears it, and a DiscardContents bind would
+                // have cleared it once already.
+                kernelOutput = new RenderTarget2D(device, width, height, false, SurfaceFormat.Color,
+                    DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
                 device.SetRenderTarget(kernelOutput);
                 device.Clear(Color.Transparent);
                 effect.Parameters["TexelSize"]?.SetValue(new Vector2(1f / sheet.Width, 1f / sheet.Height));
@@ -393,22 +396,47 @@ namespace SDVRadiance
 
         /// <summary>Which art family a sheet belongs to. The portrait check comes first because a
         /// portrait is drawn in UI mode too, and it has its own switch and dial precisely so a
-        /// player can keep the menus crisp while smoothing the faces, or the other way.</summary>
+        /// player can keep the menus crisp while smoothing the faces, or the other way.
+        ///
+        /// <para>A SHEET'S NAME NEVER CHANGES, so it is read once. This runs inside the prefix on
+        /// the game's own SpriteBatch.Draw, which is thousands of calls a frame, and it was doing
+        /// up to nine case-insensitive StartsWith comparisons and a Replace on every one of them.
+        /// Only <see cref="Game1.uiMode"/> varies between draws of the same sheet, so what is
+        /// remembered is the answer WITHOUT it, and the ui-mode question is asked here.</para></summary>
         private static ArtFamily FamilyOf(Texture2D texture)
         {
-            string name = texture.Name ?? "";
+            ArtFamily family;
+            if (_familyBySheet.TryGetValue(texture, out object? remembered) && remembered is ArtFamily known)
+                family = known;
+            else
+            {
+                family = FamilyOfName(texture.Name ?? "");
+                _familyBySheet.AddOrUpdate(texture, family);
+            }
+            // Everything drawn in UI mode is the interface, items included: a tool in the toolbar
+            // or the inventory follows the Menus switch and dial, and the same tool lying on the
+            // ground follows Items. The families are named for where the player sees them, and the
+            // author chose that over "the same sheet reads the same everywhere" once the toolbar
+            // could be smoothed at all (see _linearRuns). Portraits keep their own family in UI
+            // mode, which is the whole reason they are asked about first.
+            if (Game1.uiMode && family != ArtFamily.Portraits)
+                return ArtFamily.Interface;
+            return family;
+        }
+
+        /// <summary>The family a sheet belongs to by its name alone, ui mode aside. Keyed by the
+        /// texture rather than by the name so a repainted sheet under the same content path is
+        /// asked about once as well; the table holds no reference of its own, so a sheet the game
+        /// unloads leaves it.</summary>
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Texture2D, object> _familyBySheet = new();
+
+        private static ArtFamily FamilyOfName(string name)
+        {
             if (name.StartsWith("Portraits", StringComparison.OrdinalIgnoreCase))
                 return ArtFamily.Portraits;
             if (name.StartsWith("Characters", StringComparison.OrdinalIgnoreCase)
                 || name.StartsWith("Animals", StringComparison.OrdinalIgnoreCase))
                 return ArtFamily.Characters;
-            // Everything drawn in UI mode is the interface, items included: a tool in the toolbar
-            // or the inventory follows the Menus switch and dial, and the same tool lying on the
-            // ground follows Items. The families are named for where the player sees them, and the
-            // author chose that over "the same sheet reads the same everywhere" once the toolbar
-            // could be smoothed at all (see _linearRuns).
-            if (Game1.uiMode)
-                return ArtFamily.Interface;
             // Items lying in the world are their own family, known by their sheet, so a placed
             // object, tool or piece of furniture can be rounded differently from the terrain.
             if (IsItemSheet(name))
@@ -543,6 +571,29 @@ namespace SDVRadiance
                 if (SoftSprites.Count > 0)
                     SoftSprites.Clear();
             }
+        }
+
+        /// <summary>
+        /// What the soft look actually managed this frame, which decides whether the picture is
+        /// smooth all over or a patchwork.
+        /// </summary>
+        /// <remarks>
+        /// Two ways a sprite ends up drawn raw beside a smoothed neighbour, and until this line
+        /// existed neither could be seen from the game. REFUSED: a sprite wider or taller than the
+        /// cache's largest side never gets a soft copy at all, so a big piece of art stays sharp
+        /// next to small ones for as long as it is on screen. BEHIND: only a handful are baked per
+        /// frame, so walking into a new view smooths it over several frames and everything not yet
+        /// reached is sharp meanwhile. The first is permanent and the second passes; they look the
+        /// same in a screenshot and they need opposite fixes.
+        /// </remarks>
+        internal static string DescribeSoftSprites()
+        {
+            if (!Enabled || Style != SheetSmoothingStyle.Soft4x)
+                return "    soft sprites: the soft look is off, so every sprite draws as the game drew it.";
+            return $"    soft sprites: {SoftSprites.Count} held on {SoftSprites.PageCount} page(s), "
+                 + $"{SoftSprites.Generated} baked since the last report, {SoftSprites.Refused} REFUSED "
+                 + $"(too big for a page: over {SoftSprites.LargestSpriteSide} texels a side, so they stay sharp), "
+                 + $"{SoftSprites.Evicted} evicted (over budget), at most {SoftSprites.GeneratePerFrameCap} baked a frame.";
         }
 
         internal static void Dispose()

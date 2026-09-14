@@ -116,7 +116,16 @@ namespace SDVRadiance
         {
             if (_monitor == null)
                 return;
+            // WALK THE STACK ONLY FOR A RESTART THAT HAS NOT BEEN NAMED YET. The caller is part of
+            // what makes a restart distinct, so it has to be known before the set can answer -
+            // but a mod that restarts the batch every frame would otherwise pay a StackTrace, a
+            // list and four strings on every frame of the whole session for a line that is logged
+            // once. Counting the restart by its cheap half first bounds that to the first few.
             string filter = sampler == null ? "none given, so MonoGame reads LINEAR" : sampler.Filter.ToString();
+            if (!_restartShapesSeen.Add(((int)sortMode << 8) ^ filter.GetHashCode())
+                && _restartsTraced >= RestartsTracedPerSession)
+                return;
+            _restartsTraced++;
             string caller = CallerOfBegin();
             if (!_restartsSeen.Add(caller + "|" + filter + "|" + sortMode))
                 return;
@@ -125,6 +134,14 @@ namespace SDVRadiance
                        + (filtered ? " Every sprite the game draws after this point in the frame is filtered, not pixel art." : ""),
                 filtered ? LogLevel.Warn : LogLevel.Info);
         }
+
+        /// <summary>Sort mode and sampler of every restart seen, which is the half of "is this
+        /// restart new" that can be answered without walking the stack.</summary>
+        private static readonly HashSet<int> _restartShapesSeen = new();
+        private static int _restartsTraced;
+        /// <summary>How many stacks are walked in a session once every shape has been seen. A mod
+        /// that restarts the batch every frame is a steady cost otherwise, for nothing new.</summary>
+        private const int RestartsTracedPerSession = 32;
 
         /// <summary>Who called SpriteBatch.Begin: the first frames above the patch that belong to
         /// neither Harmony nor MonoGame nor this file, by assembly and method.</summary>
@@ -442,6 +459,10 @@ namespace SDVRadiance
             for (int rank = 0; rank < count; rank++)
                 _rankDepths[_rankOrder[rank]] = (rank + 1) / (float)(count + 1);
         }
+
+        /// <summary>The tint a record is replayed with, for a road that builds its own vertices
+        /// (see ReliefVertexPath): the same rank-in-the-colour rule the batch road uses.</summary>
+        internal static Color TintFor(int recordIndex, float alpha) => ReplayTint(recordIndex, alpha);
 
         private static Color ReplayTint(int recordIndex, float alpha)
         {

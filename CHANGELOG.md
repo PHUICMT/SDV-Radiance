@@ -2,6 +2,724 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.0.0 - 2026-09-14
+
+### Fixed
+
+- **In split screen, tree and object shadows flickered in daylight, and the second screen's sun
+  moved in jumps.** The game advances the fraction of the current ten minutes only on the host's
+  screen. The other screen read zero, so its clock stood still for ten game minutes and then jumped,
+  up to ten minutes behind the host's. The object shadows are shared between the two screens and
+  were asked for two different sun angles in turn, so every tree re-baked back and forth: that is
+  the flicker, and it cost frames too. Every screen now reads the host's clock. Measured on my
+  machine with one screen in Pelican Town and one on the mountain, same window both times: shadow
+  re-bakes per frame went from 16.6 to 3.1 and the frame from 21.1 to 19.0 ms.
+
+- **This mod's rain and snow came back for anyone running Cloudy Skies.** Both mods draw weather by
+  taking over the same method in the game, so at startup this one looked for anybody else holding
+  it and stepped aside for the whole session if it found them. Cloudy Skies only takes that draw
+  when the weather is one of its own custom types, though, and hands ordinary rain, storm and snow
+  straight back to the game: everyone running it, and everyone running Weather Wonders on top of it,
+  had lost this rain even on days nothing else was drawing any. The decision is made every frame
+  now. On a day Cloudy Skies draws its own weather this mod steps aside, fading rather than
+  vanishing, and on an ordinary rainy day its rain is back. Tested with Cloudy Skies 1.9.1 installed,
+  on its own and with a weather pack that draws rain of its own. A mod that rewrites the method
+  outright, rather than stepping in front of it, is still given the whole session, because there is
+  no way to tell from outside what it draws. Reported by LawrenceindaSky on Nexus, with a log.
+
+- **The picture could stay dim after the automatic exposure was switched off.** The meter that
+  decides how bright a scene is only runs while it is switched on, and it is the only thing that
+  writes that number, so turning it off left whatever it had last read multiplying the whole
+  picture for the rest of the session. Stand somewhere bright, switch it off, and the screen
+  stayed dark with nothing in the settings to explain it. It returns to neutral now, easing rather
+  than snapping.
+
+- **Glass stopped shining when it had nobody to reflect.** How much a window returns the people in
+  front of it is one setting and how much it shines is another, but the first was skipping the
+  second: with reflections of people turned down to zero, or while they eased away, a pane lost
+  its glare as well.
+
+- **In split screen, every fade on the second screen took about ten times too long.** Fades are
+  paced by the time since the last frame, and that gap was measured between screens rather than
+  between one screen's own frames, so the second player's water, lighting, cloud shadows and god
+  rays crept in instead of arriving. A co-op player leaving also left their share of the newer
+  lighting's memory behind.
+
+- **In split screen, the ambient particles never appeared.** There was one pool of fireflies,
+  sparks, mist and petals for the whole game, and it was emptied whenever the game moved on to the
+  other screen, so with two screens every frame began with nothing in it. Each screen keeps its own
+  now. Measured on my machine with one screen in Pelican Town and one on the mountain: none alive
+  before, 67 in sunshine after, for about 0.2 ms.
+
+- **After a house upgrade, the new rooms were lit as if the old house were still there.** The game
+  loads the bigger house onto the same farmhouse without reloading anything this mod listens for,
+  so its picture of which tiles are walls stayed the old one for the rest of the session: lamp
+  light went through the new walls and stopped at the old ones in the middle of a room. The same
+  happens when a repaired bridge or a new greenhouse is written into a map. The mod now notices the
+  map itself changed and builds its picture again.
+
+- **Resetting this mod in Generic Mod Config Menu no longer undoes settings on the next launch.**
+  The reset saved a config that looked older than it was, so the next start ran the upgrade steps
+  meant for configs from earlier versions and put back the god ray strength and the smoothing
+  settings the player had chosen after the reset.
+
+- **Console commands that take a decimal read it the same on every system language.** On a
+  German or Brazilian Windows, "0.35" in the shadow commands was read as 35.
+
+- **Ginger Island and the desert stopped borrowing the valley's season and weather.** In the
+  valley's winter the island's sand glittered with snow and an aurora could hang over its sea, its
+  fireflies only came out while the valley was in summer, and rain in the valley stopped the
+  island's petals and footstep dust. Every effect now asks what season and weather the place the
+  player is standing in has.
+
+- **In split screen, the sunbeams, heat haze and window reflections no longer pull between the two
+  players.** With one player indoors and one outside, a few effects that fade in and out were
+  shared by both screens and tugged toward each player's scene in turn. The same went for knowing
+  whether water was on screen, so one player walking away from a pond could make the water
+  reflection rebuild for the other.
+
+- **Water, clouds and fog no longer jump once every hundred minutes of play.** Their movement is
+  timed on a clock that has to be restarted now and then, and the restart was visible as a
+  one-frame jump. It now happens at the start of each day, while the screen is dark.
+
+- **Loading another save after returning to the title shows that farm's window lights, not the
+  previous farm's.**
+
+- **A pixel exactly at the centre of a lamp could go black when lamp beams were on.**
+
+- **The Glowstone Ring sparkles like the glow rings it is made from.**
+
+- **Map screenshots came out black.** The game's Screenshot button draws the whole location in
+  pieces into a picture of its own, and this mod kept telling it to draw into the usual buffer
+  instead, so the saved file held only the mod's clouds, mist and sparkles on black. This also hit
+  mods that take the picture for you, such as Daily Screenshot. The mod now stands aside while a map
+  screenshot is taken, and the picture is the game's own. Reported by ChangAn24 on Nexus.
+
+- **A config.json edited by hand with an empty value for a list or a key no longer causes an error
+  on every frame.**
+
+- **On a machine running without the sixty frame cap, ten effects still faded too fast.** The sun
+  shafts' strength, direction and colour, the six changes a lit room settles through and the whole
+  mod's fade-in when it is switched on were all counting frames rather than time. They travel at
+  the same speed at any frame rate now, and at sixty are exactly what they were.
+
+- **The tuner's rows overlapped at a large interface scale**, and three of its sliders had almost
+  no positions to stop at. Eleven rows in the panel were built without the scale applied, so they
+  stayed small while the rows around them grew; and every slider moved in hundredths, which is far
+  too coarse for a dial whose whole range is six hundredths, such as the cloud shadow speed.
+
+- **A future Stardew update can no longer take the whole mod down with one renamed method.** Twelve
+  of the mod's patches handed whatever the game gave them straight to Harmony, and a missing
+  method there throws out of the loader: somebody who installed this for the water would have lost
+  the lighting, the shadows and the weather with it. Each one now says in the log which feature is
+  off and carries on. The one patch the mod cannot draw anything without still stops it.
+
+- **Particles kept their leftovers across a warp.** Each emitter keeps the fraction of a particle
+  it has not spawned yet, and five of them (festive lights, mist, steam, lava, chimney sparks) were
+  not being cleared when the map changed.
+
+- **The morning darkness dial was the one setting not checked on load.** A hand-edited config file
+  goes to the shader as written, which is why the file is checked; that dial was missed, though it
+  reaches the same shader as the two beside it.
+
+- **A lamp post's shadow could never fall toward you.** Shadows cast by things painted into the
+  map, street lamps and signposts and poles, were the one kind still drawn by squashing the
+  silhouette downward, and the squash was held above zero. That reads as "this shadow runs away
+  from the viewer" and nothing else, so with the sun anywhere on the near side of the screen a
+  post's shadow stood up behind it while the tree beside it lay down in front, in the same light.
+  The floor now holds only the LENGTH, never the direction.
+
+- **Sunlight came through the roof of caves and cellars.** 1.7.6 let the dappled sunlight reach
+  the greenhouse, whose roof is glass, and it decided which rooms those were by asking the game
+  whether a place is a greenhouse. That flag reads like architecture and is not: every one of the
+  game's own uses of it is about farming, never about light. It makes seeds ignore the season,
+  keeps crops alive through a season change, stops hoed dirt decaying and holds a tree's art at
+  spring, and it is switched on by a single map property with no glass anywhere in the test. So a
+  content pack that wants year-round crops in a cave, a cellar or a shed sets it there, means
+  nothing at all about the roof, and got daylight on the floor for it. A room is now taken to be
+  under glass when its name says so, which is a claim about the building rather than about what
+  grows in it. Reported by Elacro on Nexus.
+
+- **A shaken tree's shadow stood still.** The tree swayed, its reflection in the water swayed
+  with it, and the shadow on the ground did not move. It sways now, turned about the trunk's
+  base by the same angle the game turns the tree.
+
+- **Every shadow on the screen jumped when a warp totem went off.** The game flashes the screen
+  for a totem, the return sceptre, a frog or a gem found in a rock, the casino's cards and a
+  firework, and the lightning response read every one of those flashes as a strike: the shadows
+  kicked to one side and an afterglow hung in the air, on a clear afternoon. A rising flash is a
+  strike only in a storm now, the same test the visible bolt already made.
+
+- **A rainbow stood in the spray with the sun straight overhead.** A bow stands opposite the sun
+  and needs it under forty-two degrees, so there is none through the middle of a summer day and
+  one all day in winter. The bow now fades out while the sun is high and comes back as it drops,
+  with a switch to keep the old always-on bow.
+
+- **A person's shadow flattened sideways without twisting.** Every object's shadow is laid on
+  the ground by the sun's projection, which skews it as it lies down; a person's was drawn as a
+  rotation and a squash, which cannot skew, and at the tip the difference is over twenty pixels
+  once the ground foreshortening for people is turned down. People, animals, the player and co-op
+  partners are laid down the way objects are now. With that foreshortening at its default there
+  was nothing to see, which is why it went unnoticed.
+
+- **A shadow came out mirrored whenever the sun was on the far side of the screen.** A solid's
+  width was laid on the ground with the sign of the sun's angle still on it, so past a quarter
+  turn it swung round to the other side and an asymmetric thing's shadow was its own reflection.
+  That is the honest answer for a real solid, whose far side really would be facing you, and the
+  wrong one for what a shadow here is cut from, which is a front view. There is no back of a
+  barrel in the sprite to cast, so casting one showed a side of the object nobody ever drew.
+  Nothing jumps at the crossing: the term passes through zero there either way. It went unseen
+  until now because until now the sun could not get to that side of the screen.
+
+- **A shadow lying sideways could soften away to nothing.** The ground is seen at a slant, so a
+  shadow pointing across the screen is squashed to a third of its width, and a soft edge set for a
+  shadow lying the long way then reached clean across it from both sides at once. A thin caster, a
+  fence post, lost its shadow entirely at the softest settings. A soft edge is now held to a third
+  of whatever it is softening, so a third of the dark always survives in the middle.
+
+- **A box's shadow started a little below the box, and with the sun turned round you could see
+  it.** Anything placed on a tile was hung from the tile's own ground line, or from a few pixels
+  above it picked by eye, while the thing itself stands wherever its art stops. On the one path
+  where that had been noticed, the silhouette was given the art's real foot to pivot on but the
+  anchor was left on the cell's line, so the fix was half a fix and the other half showed up as a
+  strip of lit ground under a bin. The foot and the anchor are now read from the art together, for
+  boxes, machines, forage, furniture and anything else standing on a tile. Furniture was the worst
+  of them, hung thirty pixels above its own footprint. And where the art ends is now asked as
+  "where does it stop being SOLID", not "where does it stop having anything in it at all": a great
+  many sprites have their own little shadow painted under them or fade out at the bottom edge, and
+  reading those as the object anchored the shadow at the bottom of a shadow that is part of the
+  picture. That is the last few pixels of daylight between a bin and the shadow it casts.
+
+- **A crop's shadow started below the plant, and with the sun turned round you could see it.** The
+  shadow was hung from a point twenty pixels under where the game draws the plant, a number picked
+  by eye that works out to guessing that every crop's art ends three rows above its cell. While
+  every shadow leant up the screen the mistake sat behind the plant, which covered it. Point the
+  sun at yourself and the same mistake is bare lit ground between a sprout and its shadow. The
+  contact point is read from the plant's own art now, which gives the same answer for the plants
+  the old number happened to suit and the right one for the rest.
+
+### Performance
+
+- **Split screen is much lighter.** Five things this mod works out once per map were each kept in a
+  single slot, so the two screens took turns throwing each other's answer away and working it out
+  again, every frame: the shadow patch's map of solid tiles, which tiles cast a prop shadow, the
+  lighting's map of what blocks a lamp, where the animated tiles are for the water's reflection, and
+  the water's map of what height each tile stands at. The last one did it even with both players in
+  the same place, because each screen holds its own copy of the map. Each is kept per place or per
+  map now. Measured on my machine with one screen in Pelican Town and one on the mountain, same
+  window and settings every time: the frame went from 19.0 to 12.1 ms and the mod's share from 10.3
+  to 3.9, against 3.6 for the same two places on one screen each.
+  Rain was the case left over: the wet ground's map, where the waterline sits, and five smaller answers
+  about the map were still kept once for both screens, so in rain the wet ground rebuilt its whole
+  map on every frame. They are kept per screen too, and the frame counters every shared cache ages
+  by now come from one clock. Same two places in rain, the same run for both builds: 17.5 to 13.2 ms
+  for the frame and 14.4 to 5.3 for the mod's share.
+
+- **The water effect costs far less where there is little water on screen.** The shader was meant
+  to stop at once on a pixel with no water, but the way it was written made the graphics card work
+  out the whole effect for every pixel and then throw it away. It now stops, and the picture is the
+  same to the byte. Measured on my machine: the water pass went from about 0.7 to 0.2 ms in Pelican
+  Town, and from 1.37 to 1.00 ms on the beach. The colour grading's LUT was paid for the same way
+  while no LUT was chosen, and is not any more.
+
+- **Streets with windows and no water stopped rebuilding the reflection every five seconds.** The
+  glass uses the same picture of the scenery as water does, but only water counted as needing it,
+  so it was thrown away and rebuilt on a timer. Standing 40 seconds by Robin's house: 8 rebuilds
+  before, none after.
+
+- **Split screen no longer reloads every map sheet once a second.** A list the sprite relief keeps of
+  the current map's art sheets was rebuilt on a clock, asking the game for each sheet again. It is
+  rebuilt now only when the map, its season or one of its sheets changes: about a millisecond a
+  second per screen in split screen, measured on my machine.
+
+- **Another mod reloading an asset no longer made this one rescan the whole map.** Four of its
+  caches are keyed on "have the labels changed their mind about the art", and any reload of any
+  asset at all moved that number, whether or not it had anything to do with a tile: three of the
+  four then walked every tile of the map again. On a modded install that is a steady drip. With
+  Buff Framework installed, which reloads its own dictionary of buffs every few seconds, it was a
+  reported 15 to 17 ms window scan plus a 14 to 25 ms emissive scan in Pelican Town every time,
+  and 34.6 plus 32.3 ms on a 163 by 156 farm. Reported by EvilCowNinja on Nexus, with the
+  measurements that named it.
+
+- **Walking into a map builds this mod's picture of it faster.** Before the mod can light or wet or
+  reflect anything it reads the whole map once, tile by tile, and asks what each tile is made of.
+  Three answers inside that were being worked out again for every single tile, rather than once for
+  the art sheet or the painted label they come from, and two of them meant reading 256 bytes each
+  time, about eight times per tile. Pelican Town went from 27.2 to 16.5 ms, the forest from 17.2 to
+  8.2, the mountain from 5.8 to 3.0, the farm from 11.1 to 7.5, measured on my machine. That is the
+  pause when a map loads, and it is also paid again whenever another mod re-patches the map you are
+  standing on.
+
+- **The three whole-map scans no longer land in one frame.** Finding every window, every glowing
+  tile and every pane of glass means walking every tile of the map on every drawn layer, and it
+  has to be done again whenever a pack re-patches the art underneath. On a 163 by 156 farm that
+  was a reported 41.4 and 47.3 ms on walking in, and it was paid in a single frame. Each walk is
+  spread across frames now, a slice at a time, with the previous answer still lit while the next
+  one is gathered: a lit window does not go dark for a tenth of a second because a mod reloaded
+  the sheet it is painted on. The log line says how long the whole walk took and how many frames
+  it was spread over. The store that lets a second screen reuse the first screen's walk was also
+  throwing away the entry it had just made, once a session had been in more than four places, so
+  in split screen both cameras were doing the work from the fifth room onwards.
+
+- **The automatic exposure stopped asking the graphics card for an answer in the middle of the
+  frame.** It squeezes the scene into a small image and reads it back to decide how bright the
+  picture is, and reading from the card waits for everything the card has been given: on the beach
+  at nine at night that was a hundred and two waits in ten seconds, the worst of them six
+  milliseconds, paid by everyone with the colour grade turned on. The read happens between frames
+  now and twice a second rather than fifteen times: one wait in fourteen seconds at the same spot.
+  The easing moved the other way, from once per reading to every frame, so the exposure travels
+  more smoothly than it did.
+
+- **Less work in the path that runs for every sprite the game draws.** The check that decides which
+  smoothing family an art sheet belongs to was comparing its name against nine prefixes on every
+  draw call; a sheet's name never changes, so it is worked out once per sheet. The heat map behind
+  the steam and shimmer was also being written into the same texture the finishing pass had just
+  read, which makes the driver wait.
+
+- **Three things that were being done more often than once**: the note about another mod restarting
+  the sprite batch walked the call stack before checking whether it had already been reported, the
+  texture-unit guard ran on every render step instead of once a frame, and a held tool was drawn
+  into the mirror twice on any frame with both a window and water on screen.
+
+- **Smaller repeated work**: the label store worked out a sheet's short name on every tile it was
+  asked about, which is tens of thousands of times when the water mask rebuilds; the glass pass
+  walked every character in the location once per window pane on screen; and three lines of the
+  frame report were being written out every frame for a page nobody reads until they ask for it.
+
+- **The reflection's scenery picture was redrawn from every map layer on every frame.** The
+  water and the windows mirror the map from a cached rendering that is meant to be kept while the
+  camera stays inside a band around it, and the test that decides whether the camera has left
+  that band compared the wrong two corners, so it never passed: standing still beside water the
+  whole padded screen was rendered again sixty times a second. That was the "scenery mirror" line
+  of the frame-cost report at its worst, and half of what ghi3038 measured on Nexus. The cache is
+  kept now, refreshed only on the frames the map's own animated tiles change, and rebuilt when
+  the camera really does leave its band. The picture is the same: held against a fresh rendering
+  on one frozen frame at four water spots, byte for byte.
+
+- **Less work per pixel in the lighting shader, for the same picture.** The pixel's own occlusion
+  was read once per lamp that reached it, up to eight times, for one answer; the sprite relief's
+  normal was read for every pixel with the relief switched off; and the six window slots were
+  walked on every pixel of a street with no window in sight. Each is read or walked once now,
+  or not at all, and the frame is byte for byte what it was: proven by swapping the old and the
+  new shader on one frozen frame in three rooms. Bloom at an intensity of zero and tilt-shift at a
+  strength of zero also stop running their passes, since both returned the frame untouched.
+
+- **A flock arriving at a pond made the frame stutter.** Every creature near water is drawn into
+  a slot and that slot read back off the graphics card to find where the body meets the water,
+  and the read waited for everything the card had queued: on the beach pier with twelve ducks the
+  worst frame was 18 ms on my machine, and it came back with every new frame of their walk. The
+  read now happens on the game's own tick, between frames, when the card is idle, and the same
+  pier's worst frame is 0.6 ms. Bodies more than three tiles off the screen are not baked at all
+  any more, and the reader that measures a placed object's base stopped pulling whole texture
+  sheets back from the card. Reported by ghi3038 on Nexus.
+
+- **Putting one thing down in the rain re-read the whole map.** The wet ground keeps a small
+  picture of which tiles can hold a puddle, and a placed object has to be stamped dry on it, so
+  the picture is rebuilt whenever the count of objects or furniture changes. The rebuild asked
+  every tile of the map what it was made of, twice, which is the part that has nothing to do with
+  what was just placed: it is the map, and the map did not move. That half is now built once per
+  visit and kept, the placed things are stamped onto a copy of it, and the copy is only sent to
+  the graphics card when a texel actually changed, which a chest on a wooden floor never does.
+  On the farm here the part no longer repeated measures half a millisecond to one and a third.
+
+- **Villagers standing off the screen were still given shadows.** Trees, crops and placed
+  objects have always been asked for by the tile the camera can see, but the characters and the
+  farm animals were walked in full: every resident of the map, every frame, drawn where nobody
+  could look. Under the sun that costs more than a wasted draw, because a person's shadow is
+  baked from their walking frame as it changes, so bodies nowhere near the picture were baking
+  too. A body is now skipped once it stands further off the screen than its own shadow can reach,
+  and that reach is measured from the sprite and the sun's length rather than fixed, so a long
+  dawn shadow still reaches in from somebody just out of view. At the north east bridge in
+  Pelican Town all ten of the map's residents were off screen, and the pass drew ten fewer shadow
+  sprites for the same picture. Reported, with the fix, by palmhacker13 on Nexus.
+
+### Added
+
+- **Glass reflects indoors too.** Windows and glass inside a building return the floor in front
+  of them and whoever stands there, at their true size, standing on the sill and clipped to the
+  pane, so a short pane cuts the top of the image off. Indoors the rule that runs the glass turns
+  round: by day the outside is the brighter
+  side and the image is faint, after dark the window goes black and turns to a mirror of the
+  room, its lamps standing in it. The day and night dials trade places indoors, and a switch keeps
+  it outdoors only. The bathhouse mirrors and the shop windows carry glass labels already; a
+  building whose art has none shows nothing until its sheet is labelled.
+
+- **The sun follows the season.** A new dial lets the sun's height and the length of its day
+  change with the season the way they do at the fortieth parallel: a summer noon at seventy-three
+  degrees throws a shadow a third of a person's height, a winter noon at twenty-seven throws one
+  twice their height, and the winter sun is up four hours and forty minutes either side of noon
+  against seven in summer. Everything the sun touches follows, the shadows and their colour, the
+  shafts through the trees, the light through a window and the mist, because they all ask one
+  question now about where the sun is in its day. 0 is every earlier release, where every day
+  was a summer day.
+
+- **Who casts, one switch each.** The player and co-op partners, the villagers, the farm animals
+  and the other creatures (the horse, the pets, whatever a wildlife mod adds) each have their own
+  switch now, beside the ones trees and buildings already had. A villager is every character that
+  stands like a person, monsters and festival guests included; a creature is every character that
+  lies along the ground. All on by default, which is every earlier release.
+
+- **A dark pool under people.** At midday the cast shadow is short and runs up the screen behind
+  the body, where the sprite covers it, so a person standing in full sun at noon had no shadow to
+  be seen at all and read as floating. A new dial puts under every person and animal the same
+  soft pool the objects have had since 1.7.6, at the row they stand on, fading with the daylight
+  shadows at dusk. It starts at 0.5, so nobody floats at noon out of the box; 0 is every earlier
+  release.
+
+- **The light has its own sun direction, on the same scale as the shadows'.** Turning the sun
+  moved every shadow and left the shafts through the trees, the lit side of things, the daylight
+  through a window and the glitter on the water exactly where they were, because those four never
+  saw the dial at all. They have one now. Equal numbers mean one sun: the two ship a half turn
+  apart, which is where both halves of this mod have stood since they were written and is every
+  earlier release exactly, and setting them to match is what makes a shaft of light and a shadow
+  finally point the same way. The four also used to read the sun's angle as though it were a
+  slope, which at the ends of the day put the light in nearly seventeen degrees off from the sun
+  it was describing.
+
+- **A shadow's soft edge follows the light instead of being the same width all the way round.**
+  The blurred rim of a shadow is the sun's own disc thrown onto the ground, and a disc thrown at a
+  slant is an ellipse: it stretches along the shadow, more and more as the sun drops, and is only
+  round when the sun is straight overhead, which it never is here. How far it stretches comes out
+  of the length the shadow already has, so there is no figure to guess at. The rim keeps its area
+  as it stretches, so this changes the shape of the softness and not how much of it there is. Soft
+  edge follows the light, on the Shadows page and in F6, is on; take it to 0 for the round edge of
+  every earlier release.
+
+- **A person's shadow had its soft edge squashed along with them.** A character is drawn standing
+  up and laid down at the last moment, and the soft edge was being laid down with the body. It is
+  not part of the body: it is the sun's disc on the ground, and it belongs to the light rather than
+  to the thing in the light. At the end of the day that was nearly right and around midday it was
+  badly wrong, the edge pressed to a third of its width where it should have been very nearly
+  round. Characters, the player, map posts and signs all now keep their soft edge the shape the
+  light gives it, whatever the draw does with the body.
+- **Shadows can be sharp where a thing touches the ground and soften toward the tip.** The sun is
+  a disc about half a degree across, not a point, so a shadow's soft edge is not a constant: it is
+  nothing at all at the contact and opens out by about a pixel for every hundred it travels. One
+  softness over the whole length, which is what every release so far has drawn, is the one shape
+  the real thing never takes. Sharp where it touches, on the Shadows page and in F6, is on; take it
+  to 0 for exactly the picture of every earlier release. A shadow can never be softened by less
+  than half a pixel of the art it is stamped from, because an edge harder than that is a staircase
+  rather than a sharp edge.
+- **You can choose which side the sun is on.** Every release so far has put it toward you, below
+  the bottom of the screen, so shadows run away from whatever casts them. That is one answer of
+  many, and it is not the one the light coming through a window gives, which is why more than one
+  player has written in about it. Sun direction is a round dial in F6, on the Shadows page, and a
+  number in degrees in the other menu. It turns the sun, never the clock: shadows still swing
+  through the day from one side to the other, and this only decides where that journey passes
+  through at noon. 0 is exactly the picture of every earlier release.
+- **Sunlight through a glass roof is its own switch.** 1.7.6 let the dapple reach the greenhouse
+  and gave it no dial of its own, so the only way to be rid of daylight indoors was the sun shafts
+  switch, which also takes the morning through the trees off the farm. It has its own switch now,
+  beside the sun's other dials on the God rays page and in F6. Off is the plain greenhouse of every
+  release before 1.7.6, and it leaves the shafts outdoors exactly as they were.
+- **A fish tank lights the room the way water lights a room.** The game gives a tank a light of
+  its own kind and this mod lit it like a lantern: one steady circle. What comes off a tank is
+  light that has been through moving water, and the thing that says so is not its colour, it is
+  that it will not hold still. Three slow pools now wander and breathe across each other. Fish
+  tanks light like water, on the Windows page and in F6, goes to 0 for the steady pool of every
+  earlier release.
+- **Our mist drifts over a foggy mine level.** The game stamps one fog tile across the screen
+  down there. It does not move and it does not know where the torches are, so a mine full of fog
+  looked like a mine with a pattern on it. Ours goes over the top of the game's, drifting, and
+  takes the glow of the torches out of the lightmap the way the night mist above ground already
+  does. Mist in the mine, on the Fog page and in F6, goes to 0 for the mine of every earlier
+  release.
+- **What glows now lights what is around it.** Embers over a hearth, fireflies, lava sparks and
+  the sparks off a chimney were drawn as light and cast none, so the wall beside a brazier was
+  exactly as dark as the wall across the room. Where glowing particles gather, they now open the
+  night around them in their own colour, and the pool follows the particles rather than the
+  emitter: it swells as a fire throws more and dies back with them, with nothing animating it.
+  Glowing particles cast light, on the Particles page and in F6, goes to 0 for the unlit
+  surroundings of every earlier release.
+- **A halo around every lamp at night.** The wide, very faint ring a lens puts around a bright
+  point is most of what makes a light read as a light rather than as a bright patch of paint.
+  Taken from the game's own list of lights, so a white sign, a snowfield or a lit shop window
+  never wears one, which is the mistake that kind of effect usually makes. Halo around lamps, on
+  the Windows page and in F6, goes to 0 for the bare lamps of every earlier release.
+- **Heat and sparks over a chimney.** The game draws the smoke and cannot draw the air, so a stack
+  read as a puff of grey paint rather than as something with a fire under it. The air over one now
+  shimmers, and after dark a spark or two rides the smoke up. Any building that publishes a
+  chimney gets it, which includes modded ones; a building without a chimney gets neither.
+- **The town's winter tree twinkles.** The game hangs a whole string of lights on it as a light
+  kind of its own, and every release before this one lit them like lanterns: warm, white and
+  steady. A string of fairy lights is none of those things. Each bulb now winks in its own colour,
+  and keeps that colour rather than cycling, which is a tree rather than a fairground.
+- **Dust under your feet.** The game raises dust when a tile is hoed and never when anyone walks
+  over it, so the one surface that should answer a footfall answered nothing. Crossing dry dirt or
+  sand now lifts a little of it, more at a run than at a walk, and villagers raise it too: a rule
+  that applied only to the player would say the ground is solid just where you happen to be
+  standing, and so do the horse, the pets and the farm animals. Each puff is left where the foot
+  pushed off, behind the walker, and drifts back the way the air was shoved, so it stays put while
+  you run away from it. It is drawn in the game's own sorted world, at the depth of the ground it
+  is lying on, so anyone standing in front of a puff covers it. Stone, grass and wood lift
+  nothing, because the tile's own type is the test, the same one the game reads to decide which
+  footstep to play, and a hoed tile counts as soil whatever the map is painted underneath it. Wet
+  ground lifts nothing either, and stays quiet for as long as the puddles do. Dust under your
+  feet, on the Particles page and in F6.
+- **Crops lean with the wind.** The rain slants along the wind, the tree crowns and bushes tip
+  with it, the grass moves, the leaves ride it; a field of corn stood dead still through a gale.
+  Grown crops now tip on the same gust front, about the point where the stem meets the soil, which
+  is the pivot the game itself uses when you walk into a plant, so the whole plant moves as one
+  piece with no seam anywhere in it. They lean at three times a tree's angle, because a crop's head
+  sits a quarter as far above the ground it turns on and the same angle would move it a quarter as
+  far. Seeds and shoots have nothing to lean and stay still. Crops lean with the wind, on the
+  Weather page and in F6, turns it off for the still field of every earlier release.
+- **The sky closes in before the rain.** Tomorrow's weather is settled at dawn and the television
+  reads it out over breakfast, so everyone in the valley knows what is coming except the sky
+  itself, which looked the same on the afternoon before a storm as on the afternoon before a
+  clear day. Now more of the ground goes under cloud through that afternoon, the banks draw
+  together into fewer masses, and the light loses a little of its warmth: about half of what the
+  rain itself does, so the two do not read as the same thing. It arrives across three hours from
+  mid afternoon rather than at a stroke of the clock, and an evening that is golden and cooling
+  at once is what a front coming in over a sunset actually looks like. Before the rain, on the
+  Cloud shadows page and in F6, goes to 0 for the unchanged afternoon of every earlier release.
+- **The wind moves the water.** The rain slants along the wind, the tree crowns and the grass
+  lean with it, the leaves ride it; the water knew nothing about it and rippled the same way on
+  a still morning as in a gale. It is now the same wind. The ripple is carried downwind instead
+  of standing in place, patches of ruffled surface run across a lake ahead of a gust the way a
+  cat's paw does, and the sun leaves more glints on it, scattered wider, while it blows: wind
+  spreads the surface slopes, and glitter is a readout of that spread (Cox and Munk photographed
+  it from an aircraft in 1954). Lava is too thick for a breeze to push and never moves with it.
+  The drift adds up on the CPU and wraps on a whole number of wavelengths, so there is no moment
+  where the water jumps and nothing new is drawn. Wind moves the water, on the Water page and in
+  F6, goes to 0 for the windless water of every earlier release.
+- **Shadows carry the colour of what lights them.** A shadow was black in every release
+  before this one. A real one is not: it is the ground lit by whatever the sun is not, which
+  outdoors is the sky, so a clear day fills it with blue, rain fills it with grey, a low sun
+  leaves violet in it, and a room fills it with the warmth bounced off its walls. Every sky-cast
+  shadow, the cloud shadows and the building shadows now take that fill, and the new Shadow
+  colour dial (Dynamic shadows page, and F6) says how much of it. The bakes did not change: a
+  silhouette is stored as a white shape and drawn in the hour's colour, so nothing is baked
+  again when the light turns and the frame costs what it did. 0 is the black of every earlier
+  release, to the byte.
+- **The night mist glows where a lamp stands in it.** The wisps that drift by after dark were
+  one flat blue from edge to edge, however many street lamps they crossed. Mist is lit by what
+  stands in it, so a wisp passing a lamp now takes that lamp's light, in its colour, and fades
+  back to blue as it drifts on. It reads the lightmap the lamps already painted (the same map
+  the dynamic lighting composites), one read per misty pixel and none at all when the new
+  Glow near lamps dial (Fog page, and F6) is at 0, which is the mist of every earlier release
+  to the bit.
+- **A cloud shadow over the water takes the sparkle with it.** The glitter on a lake is the
+  sun, and a cloud bank drifting over the lake darkened the shore on either side while the
+  water under it went on sparkling as if in full sun. The water now reads the cloud shadow the
+  cloud stage already drew, one read per water pixel, and dims its glints under the bank by the
+  same amount the ground beside it dims. Clouds dim the sparkle, on the Water page and in F6,
+  switches it off, which is the water of every earlier release.
+- **Snow glitters in the sun.** On a clear winter day, single flakes of snow catch the sun and
+  twinkle, each on its own clock, anchored to the ground so they stay put while you walk.
+  Sunlit snow glitters most, snow in a shadow less, and a cloud bank passing over takes the
+  glitter away with the sun. It reads the snow off the art, so anything white and flat may
+  catch a flake or two, and only winter days outdoors pay for it at all: the term is skipped
+  outright in every other season. Snow glitters in the sun, on the Weather page and in F6,
+  goes to 0 for the still snow of every earlier release.
+- **A lit window pushes the night back.** Everything this mod adds as light was added on top
+  of a frame the game had already darkened, so a town window lit after dark laid its glow on
+  ground the night had taken down, and light on a dark pixel stays dim. The lit windows are now
+  drawn into the game's own lightmap as well, the way the game draws its lanterns, from inside
+  the batch it has open on it. The ground in front of a lit house comes back to what the art
+  painted, and our pool lands on ground that can show it. Town houses have no light of their
+  own in the game's list, which is why it shows there most. Lit windows push the night back,
+  on the Dynamic lighting page and in F6, goes to 0 for the night of every earlier release.
+- **A rainbow in the spray.** While the sun is out, a rainbow stands in the mist at the foot
+  of a waterfall, one per fall, red outside to violet inside, fading at its feet the way one in
+  spray does. It is drawn where the mist emitter already knows the fall lands, one sprite per
+  fall in the batch the glowing particles already use, and it goes with the sun: rain, night
+  and an overcast sky take it away. Asked for on Nexus by sfbs97. Rainbow in the spray, on
+  the Particles page and in F6, goes to 0 for none.
+
+- **The glitter on the water follows the sun.** Every glint on real water is the sun mirrored
+  by a wave face tilted the right way, and those faces run in a lane toward the sun with each
+  glint drawn out along it (Cox and Munk photographed it from an aircraft in 1954). The glints
+  here were an even field of round dots that knew nothing of where the sun was. They now
+  stretch along the sun's line, most when it is low and a third as much at noon, and in the
+  golden hour they gather on the side of the screen the sun stands over. It is the same lean
+  the shadows lie at, and it costs nothing new to draw. Glitter follows the sun, on the Water
+  page and in F6, is off by default (0, the round, even glitter of every earlier release) and
+  is there for whoever wants the lane.
+- **The fish working a bubbling spot stir the water.** The game marks a fishing spot with a
+  patch of white bubbles and leaves it at that: the water around it was as still as the rest of
+  the lake, and a fish frenzy churning under the surface moved nothing. That patch now keeps
+  being stirred, a ring every half second or so and somewhere different in the tile each time,
+  faster and harder while a frenzy is on. And wherever the game itself says something touched
+  the water, the surface answers: a float landing on its cast, a fish falling back in during a
+  frenzy, an item dropped in, a farmer stepping into the shallows. Fish stir a bubbling spot, on
+  the Water page and in F6, goes to 0 for a spot as still as the rest of the water.
+- **What moves in the water leaves rings behind it.** A duck paddling across the pond, a
+  farmer wading a ford, a cast landing where it was thrown: the water took no notice of any of
+  it, and the only rings on the surface were the ones the rain made. Whatever is in the water
+  now leaves rings where it moves. They are drawn the way a pond does it rather than the way a
+  stamp does: a ring is a widening band with a still centre, its crests slide outward through
+  the band and crowd toward the inside, and where two rings meet the water rises once, not
+  twice, because they are added as one surface and lit as one surface, the sunward side of
+  each crest bright and the side behind it dark. The surface also bends what is under it by a
+  pixel or so as it passes, which is most of what makes it read as water. What is only standing
+  on the water leaves none, and a gull on the wing leaves none either: it is what touches the
+  surface that pushes it. Rings from things in the water, on the Water page and in F6, goes to
+  0 for the still surface of every earlier release.
+- **Watered soil sparkles.** A hoed tile you watered is wet, and wet ground under the sun
+  sparkles here and there, each glint on its own clock; the game only darkened the dirt. The
+  sparkle is one small sprite drawn right after each watered tile, in the game's own draw, so
+  a tree, a stump or a crop standing on the tile covers it, a cloud shades it, and a farm with
+  nothing watered draws nothing. It fades with the sun, in rain and at night. Watered soil
+  sparkles, on the Dynamic lighting page and in F6, goes to 0 for dirt that only darkens.
+
+### For translators
+
+A hundred and thirty-five new keys in `i18n/default.json`: the Reflections indoors too switch, the Rainbow only under a low sun switch, the Sun follows the season dial, the four Who casts switches, the Dark pool under people dial, the Sun direction for the light dial, the Soft edge follows the light dial, the Sharp where it touches dial, the Sun direction dial, the Sun through a glass roof switch, the Shadow colour dial, the night mist's Glow
+near lamps dial, the water's Clouds dim the sparkle switch, the Snow glitters in the sun dial,
+the Lit windows push the night back dial, the Rainbow in the spray dial, the Watered soil
+sparkles dial, the water's Glitter follows the sun dial, its Rings from things in the
+water and Fish stir a bubbling spot dials, and the cloud shadows' Before the rain dial.
+English, Thai and Chinese are done, the Chinese by Rime961, including the one changed sentence below.
+
+The Thai file was also reread from start to finish against the English. A few lines said something
+the English does not (the look list said X deletes a look, where it is a right-click), one setting
+was carrying another setting's description, and many names now match between Generic Mod Config
+Menu and F6. No keys were added or removed.
+
+One existing key changed what it says, so a translation of it is now wrong rather than missing:
+`config.lighting.windowreflection.tooltip` ended with "Outdoors only for now." and now ends with
+"Indoors too, with the switch below.", because glass reflects inside buildings as well. Only that
+last sentence changed.
+
+```
+config.lighting.windowreflectionindoors.name
+config.lighting.windowreflectionindoors.tooltip
+tuner.windowreflectionindoors
+help.windowreflectionindoors
+config.particles.waterfallrainbowsun.name
+config.particles.waterfallrainbowsun.tooltip
+tuner.waterfallrainbowsun
+help.waterfallrainbowsun
+config.shadows.sunseason.name
+config.shadows.sunseason.tooltip
+tuner.sunseason
+help.sunseason
+config.shadows.player.name
+config.shadows.player.tooltip
+config.shadows.villagers.name
+config.shadows.villagers.tooltip
+config.shadows.farmanimals.name
+config.shadows.farmanimals.tooltip
+config.shadows.creatures.name
+config.shadows.creatures.tooltip
+tuner.shadowplayer
+tuner.shadowvillagers
+tuner.shadowfarmanimals
+tuner.shadowcreatures
+help.shadowplayer
+help.shadowvillagers
+help.shadowfarmanimals
+help.shadowcreatures
+config.shadows.contactpeople.name
+config.shadows.contactpeople.tooltip
+tuner.contactshadowpeople
+help.contactshadowpeople
+config.shadows.sunlightbearing.name
+config.shadows.sunlightbearing.tooltip
+tuner.sunlightbearing
+help.sunlightbearing
+config.shadows.penumbrastretch.name
+config.shadows.penumbrastretch.tooltip
+tuner.shadowpenumbrastretch
+help.shadowpenumbrastretch
+config.shadows.contacthardness.name
+config.shadows.contacthardness.tooltip
+tuner.shadowcontacthardness
+help.shadowcontacthardness
+config.shadows.sunbearing.name
+config.shadows.sunbearing.tooltip
+tuner.shadowsunbearing
+help.shadowsunbearing
+config.shadows.tint.name
+config.shadows.tint.tooltip
+tuner.shadowtint
+help.shadowtint
+config.fog.nightmistlampglow.name
+config.fog.nightmistlampglow.tooltip
+tuner.fognightmistlampglow
+help.fognightmistlampglow
+config.water.sparklecloud.name
+config.water.sparklecloud.tooltip
+tuner.watersparklecloud
+help.watersparklecloud
+config.weather.snowglint.name
+config.weather.snowglint.tooltip
+tuner.snowglint
+help.snowglint
+config.lighting.windowopensnight.name
+config.lighting.windowopensnight.tooltip
+tuner.windowopensnight
+help.windowopensnight
+config.particles.waterfallrainbow.name
+config.particles.waterfallrainbow.tooltip
+tuner.waterfallrainbow
+help.waterfallrainbow
+config.lighting.wateredsoil.name
+config.lighting.wateredsoil.tooltip
+tuner.wateredsoil
+help.wateredsoil
+tuner.waterglitterpath
+help.waterglitterpath
+config.water.wakerings.name
+config.water.wakerings.tooltip
+tuner.waterwakerings
+help.waterwakerings
+config.water.fishspotrings.name
+config.water.fishspotrings.tooltip
+tuner.waterfishspot
+help.waterfishspot
+config.water.glitterpath.name
+config.water.glitterpath.tooltip
+config.water.wind.name
+config.water.wind.tooltip
+tuner.waterwind
+help.waterwind
+config.cloudshadow.stormwarning.name
+config.cloudshadow.stormwarning.tooltip
+tuner.stormwarning
+help.stormwarning
+config.weather.foliageswaycrops.name
+config.weather.foliageswaycrops.tooltip
+tuner.foliageswaycrops
+help.foliageswaycrops
+config.particles.footdust.name
+config.particles.footdust.tooltip
+tuner.section.particlefootdust
+tuner.particlefootdust
+help.particlefootdust
+config.particles.glowlight.name
+config.particles.glowlight.tooltip
+tuner.particleglowlight
+help.particleglowlight
+config.particles.chimney.name
+config.particles.chimney.tooltip
+tuner.section.particlechimney
+tuner.particlechimney
+help.particlechimney
+config.particles.festivelights.name
+config.particles.festivelights.tooltip
+tuner.section.particlefestivelights
+tuner.particlefestivelights
+help.particlefestivelights
+config.lighting.lamphalo.name
+config.lighting.lamphalo.tooltip
+tuner.lamphalo
+help.lamphalo
+config.lighting.aquariumripple.name
+config.lighting.aquariumripple.tooltip
+tuner.aquariumripple
+help.aquariumripple
+config.fog.minemist.name
+config.fog.minemist.tooltip
+tuner.minefogmist
+help.minefogmist
+config.godrays.sunglassroof.name
+config.godrays.sunglassroof.tooltip
+tuner.godrayssunglassroof
+help.godrayssunglassroof
+```
+
 ## 1.7.7 - 2026-09-09
 
 ### Fixed
@@ -25,6 +743,17 @@ No new keys. Nothing in this release is visible in any menu.
 
 ### Performance
 
+- **The sprite relief draws its own corners now, with no SpriteBatch in the way.** The relief
+  pass redraws the frame's sprites into a small buffer to read their shape. It handed them to a
+  SpriteBatch, which sorted them by sheet, built each sprite's four corners into an array of its
+  own and flushed a run at every change of sheet. The corners are the same arithmetic every
+  time, and the sprites are already in a list this mod owns, so the pass now groups them by
+  sheet itself, writes the corners straight into one buffer the card reads, and asks for one
+  draw per sheet. Measured on my machine on the farm at 75 percent zoom on a 3440-wide window,
+  uncapped, two rounds: the pass 1.13 ms through the batch against 0.75 ms through the new road,
+  the same both rounds. The buffer it produces is the same to the byte, checked on a frozen
+  frame, so nothing about the picture changes. `radiance_reliefpath batch` puts the old road
+  back for a comparison; there is no setting to change and nothing to turn on.
 - **The graphics layer no longer checks two hundred texture slots on every draw call.** Before
   each draw, MonoGame walks every texture sampler slot the driver says the card has, asking
   whether that slot's filter changed. It asks the driver for the number and does not cap it, and
@@ -208,7 +937,6 @@ config.lighting.windowreflectionstrength.name  Window reflection strength -> Win
 
 ### Performance
 
-
 - **One farmer silhouette now serves every screen that wants it.** A farmer's shadow is baked from
   a full character draw, which is the most expensive single thing this mod does, and on a split
   screen the same person was baked twice a frame: once as their own screen's player, once as the
@@ -249,7 +977,6 @@ config.lighting.windowreflectionstrength.name  Window reflection strength -> Win
   chain into its steps, the light list into its five parts, and the shadow row into the player bake,
   the other farmers and the building mask.
 
-
 - **A character's shadow is drawn once per strip, not nine times.** Every villager's, animal's and
   horse's shadow was softened at draw time: each strip of it was drawn nine times a frame, each
   copy shifted by the blur radius, which with six villagers in the saloon was 536 draw calls a
@@ -261,7 +988,6 @@ config.lighting.windowreflectionstrength.name  Window reflection strength -> Win
   `radiance_shadows` now says for each character whether it draws from a bake and at what blur.
 
 ### Fixed
-
 
 - **A mailbox, a crop, a scarecrow or one villager no longer turns soft while the map around it
   stays crisp.** Six reports since 1.7.0 described the same thing: one object blurred as if a
@@ -348,7 +1074,6 @@ config.lighting.windowreflectionstrength.name  Window reflection strength -> Win
   back a frame later was a single buffer, so each screen's beams were shaped by the other camera's
   clouds, drawn eighteen tiles away.
 
-
 - **The on-screen performance readout no longer throws every frame.** Its rows were held in
   arrays of a hand-typed sixteen, which was right when the mod had eleven parts to list; the wet
   world and the sprite relief normals brought it to fourteen, and three headings plus fourteen
@@ -394,7 +1119,6 @@ config.lighting.windowreflectionstrength.name  Window reflection strength -> Win
   map's tile sheets, with the game's language suffix taken off the name.
 
 ### Added
-
 
 - **Smooth art has an Items switch, for items lying in the world.** Tools, weapons, crops, forage,
   big craftables and furniture placed in the world are their own family, known by their sheet, so
@@ -451,7 +1175,6 @@ config.lighting.windowreflectionstrength.name  Window reflection strength -> Win
 
 ### Changed
 
-
 - **Smooth art's smoothing amount is one dial per art family.** The world, the characters, the
   portraits, the items and the menus each have their own, under their own switch on the Smooth art
   page and in GMCM, so the world can be rounded all the way while the faces or the lettering keep
@@ -491,11 +1214,9 @@ config.lighting.windowreflectionstrength.name  Window reflection strength -> Win
 
 ### Translations
 
-
 - Chinese is complete again at 814 of 814: the four sharp lamp shadow edges keys, from Rime961.
 
 ### For translators
-
 
 Fourteen new keys in `i18n/default.json` since 1.7.4: the window daylight dial for other houses,
 the inspect key, the smoothing look, and the Items switch under Smooth art. English and Thai are
@@ -1143,7 +1864,6 @@ still holds the same 813 keys it did at 1.7.0, and Chinese and Thai are both com
 Everything 1.7.1 changes is either a fix with no words attached or a diagnostic that only ever
 writes to the SMAPI log, which is English by design so that a log can be read by whoever is asked
 to look at it.
-
 
 ## 1.7.0
 

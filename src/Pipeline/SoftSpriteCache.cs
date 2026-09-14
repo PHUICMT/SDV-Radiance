@@ -111,6 +111,10 @@ namespace SDVRadiance
         internal int Refused { get; private set; }
         internal int Evicted { get; private set; }
         internal int Generated { get; private set; }
+        /// <summary>A sprite bigger than this in either direction never gets a soft copy.</summary>
+        internal int LargestSpriteSide => _largestSpriteSide;
+        /// <summary>How many may be baked in one frame; the rest wait, drawn sharp meanwhile.</summary>
+        internal int GeneratePerFrameCap => _generatePerFrameCap;
 
         internal bool IsOwnOutput(Texture2D texture) => _ownTargets.Contains(texture);
 
@@ -133,15 +137,15 @@ namespace SDVRadiance
                 }
                 else
                 {
-                    entry.Page.LastUsedTick = Game1.ticks;
+                    entry.Page.LastUsedTick = SharedTicks.Now;
                     page = entry.Page.Target;
                     placed = entry.Rect;
                     return true;
                 }
             }
-            if (_frameTick != Game1.ticks)
+            if (_frameTick != SharedTicks.Now)
             {
-                _frameTick = Game1.ticks;
+                _frameTick = SharedTicks.Now;
                 _generatedThisFrame = 0;
             }
             if (_generatedThisFrame >= _generatePerFrameCap)
@@ -201,7 +205,7 @@ namespace SDVRadiance
             var inner = new Rectangle(paddedRect.X + Gutter, paddedRect.Y + Gutter, rect.Width * _scale, rect.Height * _scale);
             _entries[key] = new Entry(home, inner);
             home.Keys.Add(key);
-            home.LastUsedTick = Game1.ticks;
+            home.LastUsedTick = SharedTicks.Now;
             _generatedThisFrame++;
             Generated++;
             page = home.Target;
@@ -269,7 +273,7 @@ namespace SDVRadiance
                 if (previous.Length > 0) device.SetRenderTargets(previous);
                 else device.SetRenderTarget(null);
             }
-            var page = new Page { Target = target, Bytes = bytes, LastUsedTick = Game1.ticks };
+            var page = new Page { Target = target, Bytes = bytes, LastUsedTick = SharedTicks.Now };
             _pages.Add(page);
             _ownTargets.Add(target);
             _heldBytes += bytes;

@@ -258,8 +258,9 @@ namespace SDVRadiance
             // name the constant rather than leaving the reader to find it.
             double fastestTicks = lo / MsPerTick;
             monitor.Log($"[anim] the fastest tile here advances every {fastestTicks:0.0} ticks. "
-                + $"The mirror scene cache refreshes every {6} ticks (SceneCacheTtlTicks), so it "
-                + (fastestTicks >= 6 ? "keeps up with this map." : "cannot keep up with this map and will judder."),
+                + $"The mirror scene cache refreshes every {RenderPipeline.SceneCacheRefreshTicks} ticks, so it "
+                + (fastestTicks >= RenderPipeline.SceneCacheRefreshTicks
+                   ? "keeps up with this map." : "cannot keep up with this map and will judder."),
                 LogLevel.Info);
         }
     }

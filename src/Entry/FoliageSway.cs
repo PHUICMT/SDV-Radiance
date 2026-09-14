@@ -51,6 +51,8 @@ namespace SDVRadiance
         internal static float GustSpanTiles = 14f;
         /// <summary>The rain's wind, signed, in world pixels per second (see PrecipitationSystem).</summary>
         internal static float WindPixelsPerSecond;
+        /// <summary>Whether a planted crop leans with the same wind the canopies do.</summary>
+        internal static bool CropsEnabled;
 
         /// <summary>How far the sprite tips on a calm day, in degrees, at Strength 1. A grown
         /// canopy is 96 art pixels tall, so a third of a degree carries its crown about two drawn
@@ -65,6 +67,36 @@ namespace SDVRadiance
 
         /// <summary>The recorded count of foliage sprites swayed this frame, for the debug caption.</summary>
         internal static int StripDrawsThisFrame;
+        /// <summary>The recorded count of crops that leaned this frame, for the debug caption. A
+        /// number here is the proof the patch is live at all: the lean is under four pixels, which
+        /// is small enough that an absent patch and a calm moment look the same in a picture.</summary>
+        internal static int CropSwaysThisFrame;
+        /// <summary>Every crop draw the patch saw this frame, gates included or not.</summary>
+        internal static int CropDrawsThisFrame;
+        /// <summary>Why the last crop that was offered did not lean. A count of refusals with no
+        /// reason attached is the shape of an afternoon spent guessing.
+        ///
+        /// <para>Kept as a REASON AND A NUMBER rather than a sentence. This is set inside a Harmony
+        /// prefix that runs for every crop the game draws, so a freshly sown field built hundreds
+        /// of "phase 1" strings a frame for a line only the diagnostic ever reads.</para></summary>
+        internal enum CropRefusal { NoneOffered, NoCrop, SwayOff, CropsOff, StrengthZero, Dead, Forage, TooYoung, None }
+        internal static CropRefusal LastCropRefusalReason = CropRefusal.NoneOffered;
+        /// <summary>The growth phase behind <see cref="CropRefusal.TooYoung"/>, and -1 otherwise.</summary>
+        internal static int LastCropRefusalPhase = -1;
+
+        /// <summary>The reason in words, built where it is read rather than where it is set.</summary>
+        internal static string LastCropRefusal => LastCropRefusalReason switch
+        {
+            CropRefusal.NoneOffered => "none offered",
+            CropRefusal.NoCrop => "no crop",
+            CropRefusal.SwayOff => "sway off",
+            CropRefusal.CropsOff => "crops off",
+            CropRefusal.StrengthZero => "strength 0",
+            CropRefusal.Dead => "dead",
+            CropRefusal.Forage => "forage",
+            CropRefusal.TooYoung => $"phase {LastCropRefusalPhase}",
+            _ => "none",
+        };
 
         /// <summary>The last canopy this frame swayed, so the trunk the game draws right after it
         /// can tip WITH it. Tree.draw makes two draws - the 48x96 top first, then the 16x32 trunk
@@ -107,6 +139,66 @@ namespace SDVRadiance
         /// same number the canopy's own draw did.</summary>
         internal static float TiltForTileBase(float tileX, float tileY)
             => TiltAt(tileX + 0.5f, tileY + 1f);
+
+        /// <summary>How much further a crop leans than a tree does for the same wind. A grown
+        /// canopy hangs 96 art pixels above the point it tips about; a crop's sprite reaches 24
+        /// above its own, a quarter of the distance, so the same angle moves its head a quarter as
+        /// far and reads as nothing at all. Three times the angle puts a crop's head through about
+        /// the same fraction of its own height as a tree's crown, which is what the eye compares.
+        /// It is still under a degree of tilt: a field leaning, not a field hinged.</summary>
+        private const float CropTiltMultiplier = 3f;
+
+        /// <summary>The growth stage from which a plant has enough of itself above the soil to be
+        /// worth moving. Below it a crop is a seed or a shoot a few pixels tall, and the wind that
+        /// bends a full plant does not visibly bend those.</summary>
+        private const int SwayingCropPhase = 2;
+
+        /// <summary>The lean of the crop being drawn right now, in radians, or 0 outside a crop's
+        /// own draw. Worked out once per crop rather than once per sprite: a crop makes several
+        /// draws (the plant, and the fruit or flower on it) and every one of them has to carry the
+        /// same lean or the plant comes apart at the wrong moment.</summary>
+        internal static float CropTilt;
+
+        /// <summary>A crop is about to draw itself: settle how far it leans.</summary>
+        internal static void BeginCrop(Crop crop)
+        {
+            CropTilt = 0f;
+            // Counted before every gate: this is what says whether the patch is running at all,
+            // which no picture can, because a crop that is not leaning and a crop that was never
+            // offered look exactly the same.
+            CropDrawsThisFrame++;
+            if (!Enabled || !CropsEnabled || Strength <= 0.001f || crop == null)
+            {
+                LastCropRefusalReason = crop == null ? CropRefusal.NoCrop
+                    : !Enabled ? CropRefusal.SwayOff : !CropsEnabled ? CropRefusal.CropsOff : CropRefusal.StrengthZero;
+                LastCropRefusalPhase = -1;
+                return;
+            }
+            if (crop.dead.Value || crop.forageCrop.Value || crop.currentPhase.Value < SwayingCropPhase)
+            {
+                LastCropRefusalReason = crop.dead.Value ? CropRefusal.Dead
+                    : crop.forageCrop.Value ? CropRefusal.Forage
+                    : CropRefusal.TooYoung;
+                LastCropRefusalPhase = crop.dead.Value || crop.forageCrop.Value ? -1 : crop.currentPhase.Value;
+                return;
+            }
+            Vector2 drawPosition = crop.drawPosition;
+            CropTilt = CropTiltMultiplier * TiltAt(drawPosition.X / 64f, drawPosition.Y / 64f);
+            CropSwaysThisFrame++;
+        }
+
+        /// <summary>The crop's draw is over: nothing after it leans.</summary>
+        internal static void EndCrop() => CropTilt = 0f;
+
+        /// <summary>Harmony prefix on the crop's draw: it is the only place the plant itself is in
+        /// hand, and the lean depends on which plant this is (a shoot does not sway) and where it
+        /// stands. Takes nothing but the instance, so it does not care what the game calls the
+        /// rest of the arguments or how many of them there are.</summary>
+        internal static void Crop_Draw_Prefix(Crop __instance) => BeginCrop(__instance);
+
+        /// <summary>Harmony postfix on the crop's draw: put the lean back to nothing, so a draw
+        /// made outside a crop can never pick one up.</summary>
+        internal static void Crop_Draw_Postfix() => EndCrop();
 
         /// <summary>Draw this sprite swaying in the wind if it is foliage. False = not foliage, draw
         /// it the ordinary way.</summary>

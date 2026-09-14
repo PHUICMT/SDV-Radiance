@@ -42,6 +42,7 @@ import argparse, collections, glob, io, json, os, sys, base64, hashlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gensoloprofiles                    # for MUST, the tooling every profile carries
+from whopaintedtile import tolerant_json  # manifests are JSON with comments; json.load is not
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -55,8 +56,12 @@ LABELLER = os.environ.get("HF_LABELER_DIR") or r"E:\Games\GamesMods\DevStardew\S
 BASE_PASS = "Label-BaseArt"
 CELL_SHEET_STRIDE = 0x100000
 TILE_PIXELS = 16
-PROFILE_DIR = os.path.join(r"C:\Program Files (x86)\Steam\steamapps\common\Stardew Valley",
-                           "mod-profiles")
+GAME_DIR = r"C:\Program Files (x86)\Steam\steamapps\common\Stardew Valley"
+PROFILE_DIR = os.path.join(GAME_DIR, "mod-profiles")
+# Both halves of the library: a sheet whose pack is switched off is still where that art came
+# from, and this machine keeps far more parked than installed.
+MODS_FOLDER = os.path.join(GAME_DIR, "Mods")
+MODS_PARKED = os.path.join(GAME_DIR, "Mods (disabled)")
 # Sheets that carry no surface anybody labels: shadow, darkness and mask overlays, lighting and
 # ore layers, palette strips and skyboxes. Measured once: they held the largest piles of
 # unlabelled tiles in the corpus and none of them wants a label.
@@ -458,10 +463,180 @@ def write_outputs(groups, version_of, per_mod, base_layout_keys, owner_of):
     return rows, mods
 
 
+def write_sheet_sources():
+    """Say which mod SUPPLIES the art behind each sheet name we have labels for.
+
+    The label file keys a sheet by name and records nothing about where that name comes from, so
+    nothing downstream can answer "which mods do our labels cover", rank what to paint next by
+    who ships it, find the sheets of a mod that has been abandoned, or tell a player which of
+    their mods this data knows about.
+
+    The evidence is the FILE. A pack that ships <name>.png is where that name's art comes from;
+    a pack whose maps merely place tiles of it is a user of it, and conflating the two names half
+    the library for every popular tilesheet. That was the first cut of this and it was wrong:
+    asked about SVE's own ZCCC_Entrance_Tilesheet it answered SVE and Central Station and more,
+    because Central Station's maps draw it.
+
+    Where several packs ship one name they are all listed, for the reason whoowns.py gives: only
+    one of them won and which is load order, so choosing here would be inventing an answer. A
+    name no pack ships is the base game's, which is the answer for most of the ones it is not.
+    """
+    root = os.path.dirname(os.path.dirname(HERE))
+    # The SHIPPED file, not the labeller's working folder: this is provenance for the data that
+    # goes out, and the two disagree whenever painting is ahead of the last export.
+    with io.open(os.path.join(root, "labels", "water-labels.json"), encoding="utf-8") as handle:
+        labelled = sorted(json.load(handle)["sheets"])
+    with io.open(os.path.join(HERE, "vanilla-maps.json"), encoding="utf-8") as handle:
+        base_game = {name.lower() for name in json.load(handle)["sheetAssets"]}
+    # vanilla-maps.json lists Maps/ assets only, so on its own it calls TileSheets/furniture a
+    # mod's sheet the moment any recolour ships a furniture.png. The base game's own Content is
+    # the authority on what the base game owns.
+    for folder in ("TileSheets", "LooseSprites", "Maps", "Buildings", "Characters"):
+        inside = os.path.join(GAME_DIR, "Content", folder)
+        if os.path.isdir(inside):
+            for one in os.listdir(inside):
+                if one.lower().endswith((".xnb", ".png")):
+                    base_game.add(os.path.splitext(one)[0].lower())
+
+    ships = collections.defaultdict(set)
+    identifiers = {}
+    ids_of = collections.defaultdict(set)
+    named_by_id = {}
+    scanned = 0
+    for folder in (MODS_FOLDER, MODS_PARKED):
+        if not os.path.isdir(folder):
+            continue
+        parked = folder is MODS_PARKED
+        for path, _directories, files in os.walk(folder):
+            inside = os.path.relpath(path, folder).replace("\\", "/").split("/")
+            # <category>/<mod>, which is how this library is arranged and how modsheets names a
+            # mod everywhere else. A png loose at the top of Mods has no mod to name.
+            if len(inside) < 2:
+                continue
+            owner = "/".join(inside[:2]) + (" (parked)" if parked else "")
+            for one in files:
+                if one.lower().endswith(".png"):
+                    scanned += 1
+                    ships[os.path.splitext(one)[0].lower()].add(owner)
+                elif one.lower() == "manifest.json":
+                    # The second signal, and the only one that answers a fully qualified asset
+                    # name. A mod that loads its art as "Pathoschild.CentralStation_Tiles" ships
+                    # it on disk under some quite different file name, so the scan above cannot
+                    # see it; the asset name carries the mod's unique id as its prefix, which
+                    # nothing else does. This is the same trap the coverage plan recorded from
+                    # the other side: the png a mod ships is not the asset name the game uses.
+                    #
+                    # tolerant_json, not json.load. A manifest is JSON with comments and trailing
+                    # commas as often as not, and json.load refuses the whole file for one of
+                    # them: 44 sheets came back with a supplier and no identity at all, and the
+                    # first one opened by hand (Lunna Astray) failed on a trailing comma at line
+                    # sixteen. An unread manifest reads exactly like a mod that claims nothing,
+                    # which is the failure whopaintedtile's own docstring was written about.
+                    try:
+                        with io.open(os.path.join(path, one), encoding="utf-8-sig") as handle:
+                            manifest = tolerant_json(handle.read()) or {}
+                    except (ValueError, OSError, UnicodeDecodeError):
+                        continue
+                    unique = manifest.get("UniqueID")
+                    if unique:
+                        identifiers[unique.lower()] = owner
+                        # A folder name is this machine's filing, not the mod's identity, and it
+                        # is not fit to ship: this library files mods under categories of the
+                        # author's own invention. The unique id and the mod's own name are what
+                        # another install can be asked about, so they are what goes out.
+                        ids_of[owner].add(unique)
+                        named_by_id[unique] = manifest.get("Name") or unique
+
+    sheets, local, catalogue = {}, {}, {}
+    for sheet in labelled:
+        low = sheet.lower()
+        suppliers = set(ships.get(low, ()))
+        by_identifier = sorted(owner for unique, owner in identifiers.items()
+                               if low.startswith(unique + "_") or low.startswith(unique + "."))
+        suppliers.update(by_identifier)
+        if suppliers:
+            where = "a mod" if low not in base_game else "a mod, over a base game name"
+        elif low in base_game:
+            where = "the base game"
+        else:
+            where = "unknown"
+        wearing = sorted({one for mod in suppliers for one in ids_of.get(mod, ())})
+        sheets[sheet] = {"from": where, "mods": wearing}
+        for one in wearing:
+            catalogue[one] = named_by_id.get(one, one)
+        local[sheet] = sorted(suppliers)
+
+    payload = {
+        "format": 2,
+        "//": "Which mod supplies the art behind each labelled sheet name, from the files on "
+              "disk: a pack that ships <name>.png is where that art comes from. Written by "
+              "tools/labelops/modsheets.py --sources. from: 'the base game' no pack ships this "
+              "name and the base game does; 'a mod' a pack ships it; 'a mod, over a base game "
+              "name' a pack ships a name the base game also owns, so which one the game loaded "
+              "is load order; 'unknown' nothing on this machine ships it and the base game does "
+              "not either, so it came from a mod that is no longer installed. mods lists every "
+              "pack that ships the name, by unique id and by the name in its own manifest, "
+              "because only one of them won and which is load order, so choosing one here "
+              "would be inventing an answer. The pack FOLDERS are deliberately not here: this "
+              "library files mods under categories of the author's own invention, which mean "
+              "nothing on anybody else's machine and are nobody else's business. They are "
+              "written beside the author's own notes instead. A sheet names its packs by id "
+              "only and mods holds the id to name table once, because 404 packs share 262 "
+              "sheets and writing each name where it is used more than doubled the file.",
+        "mods": dict(sorted(catalogue.items())),
+        "sheets": sheets,
+    }
+    out = os.path.join(root, "labels", "sheet-sources.json")
+    with io.open(out, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=1)
+    # The folder half, kept out of the shipped file and out of git: it is the author's own
+    # filing (07_NSFW among the categories) and it goes out to every player for no gain.
+    beside = os.path.join(root, "docs", "local", "project", "sheet-source-folders.local.json")
+    if os.path.isdir(os.path.dirname(beside)):
+        with io.open(beside, "w", encoding="utf-8") as handle:
+            json.dump({"//": "Which folder of THIS machine's library ships each labelled sheet. "
+                             "Local only, and the reason it is local is that the categories are "
+                             "this author's own and one of them is nobody else's business.",
+                       "sheets": local}, handle, ensure_ascii=False, indent=1)
+    counted = collections.Counter(entry["from"] for entry in sheets.values())
+    named = {mod for pack in local.values() for mod in pack}
+    print(f"wrote {out}")
+    print(f"  scanned {scanned:,} png(s) under Mods and Mods (disabled)")
+    print(f"  {len(sheets):,} labelled sheets: {dict(counted)}")
+    print(f"  {len(named):,} distinct packs supply at least one labelled sheet")
+
+    # Ranked apart on purpose. A recolour ships spring_town.png and so supplies that name, which
+    # is true and is not the question anybody asks: ranked together, the packs that BROUGHT art
+    # we painted are buried under every palette swap in the library.
+    brought = collections.Counter()
+    repainted = collections.Counter()
+    for sheet, entry in sheets.items():
+        into = repainted if entry["from"].endswith("base game name") else brought
+        for mod in local.get(sheet, ()):
+            into[mod] += 1
+    for heading, ranked in (("art of their own that we have labelled", brought),
+                            ("base game names they repaint that we have labelled", repainted)):
+        print(f"\n  packs by {heading}:")
+        for mod, count in ranked.most_common(10):
+            print(f"    {count:4}  {mod}")
+    return sheets
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--report", action="store_true", help="print only, write nothing")
+    parser.add_argument("--sources", action="store_true",
+                        help="also write labels/sheet-sources.json: which mod supplies each "
+                             "labelled sheet name")
     arguments = parser.parse_args()
+
+    # Standalone on purpose: the supplier question is answered by the files on disk, so it needs
+    # neither the dump nor a two minute build, and an author who only wants provenance should not
+    # have to wait for one.
+    if arguments.sources:
+        write_sheet_sources()
+        if arguments.report:
+            return
 
     index, owners, groups, version_of, per_mod, baseline, base_layout_keys, owner_of = build()
     rows, mods = (write_outputs(groups, version_of, per_mod, base_layout_keys, owner_of) if not arguments.report

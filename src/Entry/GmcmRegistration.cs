@@ -37,7 +37,7 @@ namespace SDVRadiance
             configMenu.Register(manifest, () =>
             {
                 monitor.Log("Config reset to defaults via GMCM.", LogLevel.Debug);
-                replaceConfig(new ModConfig());
+                replaceConfig(new ModConfig { ConfigVersion = ModConfig.CurrentConfigVersion });
                 refreshForceBufferDraw();
             }, Save);
 
@@ -203,6 +203,8 @@ namespace SDVRadiance
                 () => translate("config.godrays.sunintensity.name"), () => translate("config.godrays.sunintensity.tooltip"), 0f, 1.5f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().GodRaysSunReach, value => config().GodRaysSunReach = value,
                 () => translate("config.godrays.sunreach.name"), () => translate("config.godrays.sunreach.tooltip"), 0.1f, 1f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().GodRaysSunGlassRoof, value => config().GodRaysSunGlassRoof = value,
+                () => translate("config.godrays.sunglassroof.name"), () => translate("config.godrays.sunglassroof.tooltip"));
 
             // --- Volumetric fog (implemented) ---
         }
@@ -229,6 +231,10 @@ namespace SDVRadiance
                 () => translate("config.fog.nightmistcoverage.name"), () => translate("config.fog.coverage.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().FogNightMistDensity, value => config().FogNightMistDensity = value,
                 () => translate("config.fog.nightmistdensity.name"), () => translate("config.fog.density.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().MineFogMist, value => config().MineFogMist = value,
+                () => translate("config.fog.minemist.name"), () => translate("config.fog.minemist.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().FogNightMistLampGlow, value => config().FogNightMistLampGlow = value,
+                () => translate("config.fog.nightmistlampglow.name"), () => translate("config.fog.nightmistlampglow.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddSectionTitle(manifest, () => translate("config.fog.sectionboth"));
             configMenu.AddNumberOption(manifest, () => config().FogTopBias, value => config().FogTopBias = value,
                 () => translate("config.fog.topbias.name"), () => translate("config.fog.topbias.tooltip"), 0f, 1f, 0.05f);
@@ -247,6 +253,8 @@ namespace SDVRadiance
         private static void RegisterWeatherPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
             configMenu.AddPage(manifest, "weather", () => translate("config.section.weather"));
+            configMenu.AddNumberOption(manifest, () => config().SnowGlintStrength, value => config().SnowGlintStrength = value,
+                () => translate("config.weather.snowglint.name"), () => translate("config.weather.snowglint.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddBoolOption(manifest, () => config().AuroraEnabled, value => config().AuroraEnabled = value,
                 () => translate("config.weather.aurora.name"), () => translate("config.weather.aurora.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().AuroraStrength, value => config().AuroraStrength = value,
@@ -261,6 +269,8 @@ namespace SDVRadiance
                 () => translate("config.weather.foliageswayspeed.name"), () => translate("config.weather.foliageswayspeed.tooltip"), 0.25f, 2f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().FoliageSwayGustSpan, value => config().FoliageSwayGustSpan = value,
                 () => translate("config.weather.foliageswaygustspan.name"), () => translate("config.weather.foliageswaygustspan.tooltip"), 4f, 40f, 1f);
+            configMenu.AddBoolOption(manifest, () => config().FoliageSwayCrops, value => config().FoliageSwayCrops = value,
+                () => translate("config.weather.foliageswaycrops.name"), () => translate("config.weather.foliageswaycrops.tooltip"));
             configMenu.AddBoolOption(manifest, () => config().PrecipitationEnabled, value => config().PrecipitationEnabled = value,
                 () => translate("config.precipitation.enabled.name"), () => translate("config.precipitation.enabled.tooltip"));
             configMenu.AddSectionTitle(manifest, () => translate("config.precipitation.rain.name"));
@@ -346,10 +356,28 @@ namespace SDVRadiance
                 () => config().ParticleRingSparkles, value => config().ParticleRingSparkles = value,
                 () => config().ParticleRingSparklesAmount, value => config().ParticleRingSparklesAmount = value,
                 () => config().ParticleRingSparklesSize, value => config().ParticleRingSparklesSize = value);
+            AddParticleEmitter(configMenu, manifest, translate, "footdust",
+                () => config().ParticleFootDust, value => config().ParticleFootDust = value,
+                () => config().ParticleFootDustAmount, value => config().ParticleFootDustAmount = value,
+                () => config().ParticleFootDustSize, value => config().ParticleFootDustSize = value);
+            AddParticleEmitter(configMenu, manifest, translate, "festivelights",
+                () => config().ParticleFestiveLights, value => config().ParticleFestiveLights = value,
+                () => config().ParticleFestiveLightsAmount, value => config().ParticleFestiveLightsAmount = value,
+                () => config().ParticleFestiveLightsSize, value => config().ParticleFestiveLightsSize = value);
+            AddParticleEmitter(configMenu, manifest, translate, "chimney",
+                () => config().ParticleChimney, value => config().ParticleChimney = value,
+                () => config().ParticleChimneyAmount, value => config().ParticleChimneyAmount = value,
+                () => config().ParticleChimneySize, value => config().ParticleChimneySize = value);
+            configMenu.AddNumberOption(manifest, () => config().ParticleGlowLight, value => config().ParticleGlowLight = value,
+                () => translate("config.particles.glowlight.name"), () => translate("config.particles.glowlight.tooltip"), 0f, 1f, 0.05f);
             AddParticleEmitter(configMenu, manifest, translate, "waterfallmist",
                 () => config().ParticleWaterfallMist, value => config().ParticleWaterfallMist = value,
                 () => config().ParticleWaterfallMistAmount, value => config().ParticleWaterfallMistAmount = value,
                 () => config().ParticleWaterfallMistSize, value => config().ParticleWaterfallMistSize = value);
+            configMenu.AddBoolOption(manifest, () => config().WaterfallRainbowFollowsSun, value => config().WaterfallRainbowFollowsSun = value,
+                () => translate("config.particles.waterfallrainbowsun.name"), () => translate("config.particles.waterfallrainbowsun.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().WaterfallRainbowStrength, value => config().WaterfallRainbowStrength = value,
+                () => translate("config.particles.waterfallrainbow.name"), () => translate("config.particles.waterfallrainbow.tooltip"), 0f, 1f, 0.05f);
             AddParticleEmitter(configMenu, manifest, translate, "hotspringsteam",
                 () => config().ParticleHotSpringSteam, value => config().ParticleHotSpringSteam = value,
                 () => config().ParticleHotSpringSteamAmount, value => config().ParticleHotSpringSteamAmount = value,
@@ -401,6 +429,8 @@ namespace SDVRadiance
                 () => translate("config.cloudshadow.scale.name"), null, 1f, 5f, 0.5f);
             configMenu.AddNumberOption(manifest, () => config().CloudShadowSpeed, value => config().CloudShadowSpeed = value,
                 () => translate("config.cloudshadow.speed.name"), null, 0f, 0.1f, 0.005f);
+            configMenu.AddNumberOption(manifest, () => config().StormWarningStrength, value => config().StormWarningStrength = value,
+                () => translate("config.cloudshadow.stormwarning.name"), () => translate("config.cloudshadow.stormwarning.tooltip"), 0f, 1f, 0.05f);
 
             // --- Lens: the camera-glass effects, grouped as the F6 tuner groups them ---
         }
@@ -456,6 +486,10 @@ namespace SDVRadiance
                 () => translate("config.water.sparkle.name"), null, 0f, 1f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().WaterSparkleDensity, value => config().WaterSparkleDensity = value,
                 () => translate("config.water.sparkledensity.name"), () => translate("config.water.sparkledensity.tooltip"), 0.2f, 2f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().WaterSparkleCloudShade, value => config().WaterSparkleCloudShade = value,
+                () => translate("config.water.sparklecloud.name"), () => translate("config.water.sparklecloud.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().WaterGlitterPath, value => config().WaterGlitterPath = value,
+                () => translate("config.water.glitterpath.name"), () => translate("config.water.glitterpath.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddBoolOption(manifest, () => config().WaterCausticsEnabled, value => config().WaterCausticsEnabled = value,
                 () => translate("config.water.caustics.name"), () => translate("config.water.caustics.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().WaterCausticsStrength, value => config().WaterCausticsStrength = value,
@@ -490,6 +524,15 @@ namespace SDVRadiance
                 0.4f, 2f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().WaterRainRingStrength, value => config().WaterRainRingStrength = value,
                 () => translate("config.water.rainringstrength.name"), () => translate("config.water.rainringstrength.tooltip"),
+                0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WaterWakeRings, value => config().WaterWakeRings = value,
+                () => translate("config.water.wakerings.name"), () => translate("config.water.wakerings.tooltip"),
+                0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WaterFishSpotRings, value => config().WaterFishSpotRings = value,
+                () => translate("config.water.fishspotrings.name"), () => translate("config.water.fishspotrings.tooltip"),
+                0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WaterWind, value => config().WaterWind = value,
+                () => translate("config.water.wind.name"), () => translate("config.water.wind.tooltip"),
                 0f, 2f, 0.05f);
             // Reflection REACH and FADE ROWS are not offered here. They buy frames, they do not
             // change how anything looks, and the performance preset already sets both: a player
@@ -540,7 +583,6 @@ namespace SDVRadiance
                 0f, 1.5f, 0.05f);
             configMenu.AddBoolOption(manifest, () => config().WaterEffectIndoors, value => config().WaterEffectIndoors = value,
                 () => translate("config.water.indoors.name"), () => translate("config.water.indoors.tooltip"));
-
             // --- Dynamic lighting (implemented) ---
         }
 
@@ -586,6 +628,8 @@ namespace SDVRadiance
                 () => translate("config.lighting.shadowsharp.name"), () => translate("config.lighting.shadowsharp.tooltip"));
             configMenu.AddBoolOption(manifest, () => config().LightShadowMarchCache, value => config().LightShadowMarchCache = value,
                 () => translate("config.lighting.shadowcache.name"), () => translate("config.lighting.shadowcache.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().WateredSoilSparkle, value => config().WateredSoilSparkle = value,
+                () => translate("config.lighting.wateredsoil.name"), () => translate("config.lighting.wateredsoil.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddBoolOption(manifest, () => config().LightingEnabled, value => config().LightingEnabled = value,
                 () => translate("config.lighting.enabled.name"), () => translate("config.lighting.enabled.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().LightingIndoorDarkness, value => config().LightingIndoorDarkness = value,
@@ -629,6 +673,12 @@ namespace SDVRadiance
             configMenu.AddSectionTitle(manifest, () => translate("config.windows.sectionlight"));
             configMenu.AddBoolOption(manifest, () => config().WindowEffectsEnabled, value => config().WindowEffectsEnabled = value,
                 () => translate("config.lighting.windoweffects.name"), () => translate("config.lighting.windoweffects.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().WindowGlowOpensNight, value => config().WindowGlowOpensNight = value,
+                () => translate("config.lighting.windowopensnight.name"), () => translate("config.lighting.windowopensnight.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().LampHalo, value => config().LampHalo = value,
+                () => translate("config.lighting.lamphalo.name"), () => translate("config.lighting.lamphalo.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().AquariumRipple, value => config().AquariumRipple = value,
+                () => translate("config.lighting.aquariumripple.name"), () => translate("config.lighting.aquariumripple.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddBoolOption(manifest, () => config().WindowBeamEnabled, value => config().WindowBeamEnabled = value,
                 () => translate("config.lighting.windowbeam.name"), () => translate("config.lighting.windowbeam.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().WindowDaylightStrength, value => config().WindowDaylightStrength = value,
@@ -640,6 +690,8 @@ namespace SDVRadiance
             configMenu.AddSectionTitle(manifest, () => translate("config.windows.sectionreflection"));
             configMenu.AddBoolOption(manifest, () => config().WindowReflectionEnabled, value => config().WindowReflectionEnabled = value,
                 () => translate("config.lighting.windowreflection.name"), () => translate("config.lighting.windowreflection.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().WindowReflectionIndoors, value => config().WindowReflectionIndoors = value,
+                () => translate("config.lighting.windowreflectionindoors.name"), () => translate("config.lighting.windowreflectionindoors.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().WindowReflectionStrength, value => config().WindowReflectionStrength = value,
                 () => translate("config.lighting.windowreflectionstrength.name"),
                 () => translate("config.lighting.windowreflectionstrength.tooltip"), 0f, 2f, 0.05f);
@@ -707,12 +759,42 @@ namespace SDVRadiance
             configMenu.AddNumberOption(manifest, () => config().GoldenHourStrength, value => config().GoldenHourStrength = value,
                 () => translate("config.shadows.goldenhour.name"),
                 () => translate("config.shadows.goldenhour.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().SunSeasonStrength, value => config().SunSeasonStrength = value,
+                () => translate("config.shadows.sunseason.name"),
+                () => translate("config.shadows.sunseason.tooltip"), 0f, 1f, 0.05f);
+            // Degrees here, a round dial in the mod's own menu: this config screen has no circle
+            // to offer, and a number the player can type is better than a track with a seam in it.
+            configMenu.AddNumberOption(manifest, () => config().ShadowSunBearing, value => config().ShadowSunBearing = value,
+                () => translate("config.shadows.sunbearing.name"),
+                () => translate("config.shadows.sunbearing.tooltip"), 0f, 359f, 5f);
+            configMenu.AddNumberOption(manifest, () => config().SunlightBearing, value => config().SunlightBearing = value,
+                () => translate("config.shadows.sunlightbearing.name"),
+                () => translate("config.shadows.sunlightbearing.tooltip"), 0f, 359f, 5f);
+            configMenu.AddNumberOption(manifest, () => config().ShadowContactHardness, value => config().ShadowContactHardness = value,
+                () => translate("config.shadows.contacthardness.name"),
+                () => translate("config.shadows.contacthardness.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().ShadowPenumbraStretch, value => config().ShadowPenumbraStretch = value,
+                () => translate("config.shadows.penumbrastretch.name"),
+                () => translate("config.shadows.penumbrastretch.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().ShadowTint, value => config().ShadowTint = value,
+                () => translate("config.shadows.tint.name"),
+                () => translate("config.shadows.tint.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().DirectionalShadowBlur, value => config().DirectionalShadowBlur = value,
                 () => translate("config.shadows.blur.name"), null, 0f, 5f, 0.5f);
+            configMenu.AddBoolOption(manifest, () => config().DirectionalShadowPlayer, value => config().DirectionalShadowPlayer = value,
+                () => translate("config.shadows.player.name"), () => translate("config.shadows.player.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().DirectionalShadowVillagers, value => config().DirectionalShadowVillagers = value,
+                () => translate("config.shadows.villagers.name"), () => translate("config.shadows.villagers.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().DirectionalShadowFarmAnimals, value => config().DirectionalShadowFarmAnimals = value,
+                () => translate("config.shadows.farmanimals.name"), () => translate("config.shadows.farmanimals.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().DirectionalShadowCreatures, value => config().DirectionalShadowCreatures = value,
+                () => translate("config.shadows.creatures.name"), () => translate("config.shadows.creatures.tooltip"));
             configMenu.AddBoolOption(manifest, () => config().DirectionalShadowObjects, value => config().DirectionalShadowObjects = value,
                 () => translate("config.shadows.objects.name"), () => translate("config.shadows.objects.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().ContactShadowStrength, value => config().ContactShadowStrength = value,
                 () => translate("config.shadows.contact.name"), () => translate("config.shadows.contact.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().ContactShadowPeopleStrength, value => config().ContactShadowPeopleStrength = value,
+                () => translate("config.shadows.contactpeople.name"), () => translate("config.shadows.contactpeople.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddBoolOption(manifest, () => config().DirectionalShadowBuildings, value => config().DirectionalShadowBuildings = value,
                 () => translate("config.shadows.buildings.name"), () => translate("config.shadows.buildings.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().ShadowGroundForeshortening, value => config().ShadowGroundForeshortening = value,

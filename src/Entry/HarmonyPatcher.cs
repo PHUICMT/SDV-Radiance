@@ -112,6 +112,45 @@ namespace SDVRadiance
             monitor.Log("draw hooks back on every SpriteBatch.Draw overload this mod patches.", LogLevel.Info);
         }
 
+        /// <summary>
+        /// Patch a game method that ONE FEATURE depends on, and carry on without that feature if
+        /// the game no longer has the method.
+        ///
+        /// <para>Nine of the patches below asked <c>AccessTools.Method</c> for a method and handed
+        /// the answer straight to <c>harmony.Patch</c>. A null answer throws, the throw leaves
+        /// this method, and SMAPI puts the WHOLE mod on the skipped list: one renamed parameter in
+        /// a Stardew update and a player who came for the water loses the lighting, the shadows
+        /// and the weather as well. A missing method should cost exactly the feature that needed
+        /// it, and say so by name in the log.</para>
+        ///
+        /// <para>One patch is deliberately NOT routed through here. <c>ShouldDrawOnBuffer</c> is
+        /// not a feature: without it the mod draws onto a surface the game is about to throw
+        /// away, which is not a degraded picture but a broken one, so that one still throws.
+        /// <c>updateWater</c> used to be kept out with it, but all it does for a player is hold
+        /// the game's own water frames still under this mod's water, and losing that costs the
+        /// water effect a little, not the mod.</para>
+        /// </summary>
+        private static bool TryPatch(Harmony harmony, IMonitor monitor, System.Reflection.MethodBase? original,
+            string feature, HarmonyMethod? prefix = null, HarmonyMethod? postfix = null, HarmonyMethod? transpiler = null)
+        {
+            if (original == null)
+            {
+                monitor.Log($"{feature}: off this session, because the game method it patches is not in this build of Stardew Valley.", LogLevel.Warn);
+                return false;
+            }
+            try
+            {
+                harmony.Patch(original, prefix: prefix, postfix: postfix, transpiler: transpiler);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                monitor.Log($"{feature}: off this session, because patching {original.DeclaringType?.Name}.{original.Name} threw "
+                    + $"{exception.GetType().Name}: {exception.Message}", LogLevel.Warn);
+                return false;
+            }
+        }
+
         /// <summary>Install all game patches: buffer-draw forcing, water frame freeze, and
         /// the vanilla-shadow suppression shims (see <see cref="ShadowSuppression"/>).</summary>
         internal static void InstallAll(Harmony harmony, IMonitor monitor)
@@ -122,8 +161,8 @@ namespace SDVRadiance
             harmony.Patch(
                 original: AccessTools.Method(typeof(Game1), nameof(Game1.ShouldDrawOnBuffer)),
                 postfix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(ShouldDrawOnBuffer_Postfix)));
-            harmony.Patch(
-                original: AccessTools.Method(typeof(GameLocation), nameof(GameLocation.updateWater)),
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(GameLocation), nameof(GameLocation.updateWater)),
+                "holding the game's water frames still under this mod's water",
                 postfix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(UpdateWater_Postfix)));
             HoldCrittersWhileFrozen(harmony, monitor);
             HoldMapAnimationWhileFrozen(harmony, monitor);
@@ -137,38 +176,59 @@ namespace SDVRadiance
             // Replace the vanilla rain/snow draw on the days the player asked for ours. The
             // prefix skips vanilla only when the PrecipitationSystem gate says this exact frame
             // is ours; the postfix draws the replacement in the same slot (before the lightmap,
-            // under the effect chain) so it darkens at night and grades with the world.
-            harmony.Patch(
-                original: AccessTools.Method(typeof(Game1), nameof(Game1.drawWeather)),
-                prefix: new HarmonyMethod(typeof(PrecipitationSystem), nameof(PrecipitationSystem.DrawWeather_Prefix)),
+            // under the effect chain) so it darkens at night and grades with the world. The
+            // prefix runs LAST, so a weather mod's own prefix has already decided whether it is
+            // drawing this frame by the time ours looks.
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(Game1), nameof(Game1.drawWeather)),
+                "our own rain and snow",
+                prefix: new HarmonyMethod(typeof(PrecipitationSystem), nameof(PrecipitationSystem.DrawWeather_Prefix)) { priority = Priority.Last },
                 postfix: new HarmonyMethod(typeof(PrecipitationSystem), nameof(PrecipitationSystem.DrawWeather_Postfix)));
             PrecipitationSystem.Monitor = monitor;
             // Suppress the vanilla blob shadow while our directional shadow is casting,
             // so casters don't show both. Farmer overrides DrawShadow, so patch both.
-            harmony.Patch(
-                original: AccessTools.Method(typeof(Character), nameof(Character.DrawShadow)),
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(Character), nameof(Character.DrawShadow)),
+                "hiding the vanilla blob under a character",
                 prefix: new HarmonyMethod(typeof(ShadowSuppression), nameof(ShadowSuppression.DrawShadow_Prefix)));
-            harmony.Patch(
-                original: AccessTools.Method(typeof(Farmer), nameof(Farmer.DrawShadow)),
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(Farmer), nameof(Farmer.DrawShadow)),
+                "hiding the vanilla blob under a farmer",
                 prefix: new HarmonyMethod(typeof(ShadowSuppression), nameof(ShadowSuppression.DrawShadow_Prefix)));
             // Trees and bushes bake their blob shadow inline in draw() at a FIXED direction that
             // fights our directional cast; route their Draw calls through a shim that drops just
             // the depth==1E-06 (shadow) draws while our object shadows are active.
-            harmony.Patch(
-                original: AccessTools.Method(typeof(StardewValley.TerrainFeatures.Tree), nameof(StardewValley.TerrainFeatures.Tree.draw)),
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(StardewValley.TerrainFeatures.Tree), nameof(StardewValley.TerrainFeatures.Tree.draw)),
+                "hiding the vanilla blob under a tree",
                 transpiler: new HarmonyMethod(typeof(ShadowSuppression), nameof(ShadowSuppression.DrawShadow_Transpiler)));
-            harmony.Patch(
-                original: AccessTools.Method(typeof(StardewValley.TerrainFeatures.Bush), nameof(StardewValley.TerrainFeatures.Bush.draw), new[] { typeof(SpriteBatch) }),
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(StardewValley.TerrainFeatures.Bush), nameof(StardewValley.TerrainFeatures.Bush.draw), new[] { typeof(SpriteBatch) }),
+                "hiding the vanilla blob under a bush",
                 transpiler: new HarmonyMethod(typeof(ShadowSuppression), nameof(ShadowSuppression.DrawShadow_Transpiler)));
+            // A planted crop stands in the same wind the trees do and was the only tall thing in
+            // the valley that ignored it. The game rotates a crop about its own base already, so
+            // routing its Draw calls through a shim that adds a fraction of a degree gives a field
+            // that leans in the gust without a single seam in a sprite. Both entry points are
+            // patched because the game has two and reaches a crop by either.
+            foreach (string cropDrawName in new[] { "draw", "drawWithOffset" })
+            {
+                TryPatch(harmony, monitor, AccessTools.Method(typeof(StardewValley.Crop), cropDrawName),
+                    $"crops leaning in the wind through Crop.{cropDrawName}",
+                    prefix: new HarmonyMethod(typeof(FoliageSway), nameof(FoliageSway.Crop_Draw_Prefix)),
+                    postfix: new HarmonyMethod(typeof(FoliageSway), nameof(FoliageSway.Crop_Draw_Postfix)),
+                    transpiler: new HarmonyMethod(typeof(ShadowSuppression), nameof(ShadowSuppression.CropSway_Transpiler)));
+            }
+            // Watered dirt sparkles: one small additive sprite after each watered HoeDirt, in the
+            // game's own batch at the dirt's depth, so a trunk, a stump or a crop on the tile
+            // covers it the way it covers the dirt.
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(StardewValley.TerrainFeatures.HoeDirt), nameof(StardewValley.TerrainFeatures.HoeDirt.DrawOptimized)),
+                "watered soil sparkling",
+                postfix: new HarmonyMethod(typeof(WateredSoilSparkle), nameof(WateredSoilSparkle.DrawOptimized_Postfix)));
             // Big craftables draw a vanilla Game1.shadowTexture blob in Object.draw(b,x,y,alpha);
             // drop it while our object shadows are active so it doesn't double up.
-            harmony.Patch(
-                original: AccessTools.Method(typeof(StardewValley.Object), nameof(StardewValley.Object.draw), new[] { typeof(SpriteBatch), typeof(int), typeof(int), typeof(float) }),
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(StardewValley.Object), nameof(StardewValley.Object.draw), new[] { typeof(SpriteBatch), typeof(int), typeof(int), typeof(float) }),
+                "hiding the vanilla blob under a big craftable",
                 transpiler: new HarmonyMethod(typeof(ShadowSuppression), nameof(ShadowSuppression.BlobShadow_Transpiler)));
             // The vanilla drifting cloud shadow is a Cloud critter drawn in drawAboveFrontLayer;
             // skip it (opt-out) so it doesn't compete with our own cloud-shadow effect.
-            harmony.Patch(
-                original: AccessTools.Method(typeof(StardewValley.BellsAndWhistles.Cloud), nameof(StardewValley.BellsAndWhistles.Cloud.drawAboveFrontLayer), new[] { typeof(SpriteBatch) }),
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(StardewValley.BellsAndWhistles.Cloud), nameof(StardewValley.BellsAndWhistles.Cloud.drawAboveFrontLayer), new[] { typeof(SpriteBatch) }),
+                "skipping the vanilla drifting cloud shadow",
                 prefix: new HarmonyMethod(typeof(ShadowSuppression), nameof(ShadowSuppression.Cloud_Draw_Prefix)));
             // Critters draw their own Game1.shadowTexture blob inside draw()/drawAboveFrontLayer()
             // (base class + several overrides). Route every Critter subclass's declared draw
@@ -227,6 +287,14 @@ namespace SDVRadiance
         /// <summary>What takingMapScreenshot was before a capture borrowed it.</summary>
         private static bool _mapScreenshotFlagWas;
         private static bool _mapScreenshotFlagHeld;
+
+        /// <summary>True while the GAME is taking a map screenshot (the Options button, the
+        /// mapscreenshot chat command, or a mod such as Daily Screenshot calling it), and not while
+        /// this mod borrows the same flag for the mine floor number. Everything this mod draws is
+        /// built around one camera on one screen; a map screenshot walks the whole location in
+        /// chunks, so the mod stands down for it and the picture is the game's own.</summary>
+        internal static bool GameIsTakingMapScreenshot =>
+            Game1.game1?.takingMapScreenshot == true && !_mapScreenshotFlagHeld;
         /// <summary>Set once a frame by ModEntry: whether the effect chain will run on this frame,
         /// so the mine's floor number is kept out of the world layer and drawn after the chain
         /// instead. With this false the game draws it where it always did.</summary>
@@ -463,13 +531,13 @@ namespace SDVRadiance
             var patches = Harmony.GetPatchInfo(AccessTools.Method(typeof(Game1), nameof(Game1.drawWeather)));
             if (patches == null)
                 return;
+            // A prefix is shared, not yielded to: whether that mod draws is read frame by frame
+            // from the draw itself (PrecipitationSystem.DrawWeather_Prefix). Yielding for the
+            // session was the old answer, and it cost every Cloudy Skies player this rain on
+            // plain rainy days that Cloudy Skies hands straight back to the game.
             foreach (var patch in patches.Prefixes)
                 if (patch.owner != null && !patch.owner.Contains("Radiance", StringComparison.OrdinalIgnoreCase))
-                {
-                    PrecipitationSystem.AnotherModOwnsWeatherDraw = true;
-                    monitor.Log($"'{patch.owner}' also patches the weather draw; Radiance precipitation is yielding to it for this session.", LogLevel.Info);
-                    return;
-                }
+                    monitor.Log($"'{patch.owner}' also patches the weather draw; Radiance shares it frame by frame and steps aside whenever that mod draws weather of its own.", LogLevel.Info);
             foreach (var patch in patches.Transpilers)
                 if (patch.owner != null && !patch.owner.Contains("Radiance", StringComparison.OrdinalIgnoreCase))
                 {
@@ -482,7 +550,10 @@ namespace SDVRadiance
         /// <summary>Force the game to draw the world into its buffer so a render target is bound during graphics events.</summary>
         internal static void ShouldDrawOnBuffer_Postfix(ref bool __result)
         {
-            if (ForceBufferDraw && Game1.gameMode == Game1.playingGameMode)
+            // Not while the game takes a map screenshot: it draws the location in chunks into a
+            // render target of its own, and forcing the buffer sent the world into the buffer
+            // instead, so the saved picture was black with only this mod's overlays on it.
+            if (ForceBufferDraw && Game1.gameMode == Game1.playingGameMode && !GameIsTakingMapScreenshot)
                 __result = true;
         }
 
@@ -601,7 +672,8 @@ namespace SDVRadiance
                 monitor.Log("xTile.Map.Update(long) not found; animated tiles will run through a frozen capture.", LogLevel.Trace);
                 return;
             }
-            harmony.Patch(update, prefix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(MapUpdate_Prefix)));
+            TryPatch(harmony, monitor, update, "holding animated map tiles during a frozen capture",
+                prefix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(MapUpdate_Prefix)));
         }
 
         internal static bool MapUpdate_Prefix() => !Determinism.Frozen;
@@ -622,7 +694,8 @@ namespace SDVRadiance
                 monitor.Log("TemporaryAnimatedSprite.update(GameTime) not found; temporary sprites will run through a frozen capture.", LogLevel.Trace);
                 return;
             }
-            harmony.Patch(update, prefix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(TemporarySpriteUpdate_Prefix)));
+            TryPatch(harmony, monitor, update, "holding temporary sprites during a frozen capture",
+                prefix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(TemporarySpriteUpdate_Prefix)));
         }
 
         internal static bool TemporarySpriteUpdate_Prefix(ref bool __result)

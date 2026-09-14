@@ -237,6 +237,18 @@ namespace SDVRadiance
         /// </summary>
         private bool BakeHeldToolForMirror()
         {
+            // ONCE A FRAME. Both the window pass and the water pass ask for this, and on a frame
+            // with a pane and a lake on screen that was two render-target binds, two clears and
+            // two draws of the same swing into the same target.
+            // Keyed by the SCREEN as well as the frame: in split screen each camera has its own
+            // player holding their own tool, and the target is shared, so screen two must bake
+            // its own rather than be handed screen one's swing.
+            int screenId = StardewModdingAPI.Context.ScreenId;
+            if (_toolBakeFrame == Game1.ticks && _toolBakeScreen == screenId)
+                return _toolBakeFresh;
+            _toolBakeFrame = Game1.ticks;
+            _toolBakeScreen = screenId;
+            _toolBakeFresh = false;
             Farmer? who = Game1.player;
             if (who == null || who.swimming.Value || who.CurrentTool == null)
                 return false;
@@ -244,8 +256,11 @@ namespace SDVRadiance
             if (!who.UsingTool && !timingCast)
                 return false;
 
+            // PreserveContents so the card is not asked to clear this twice. A DiscardContents
+            // target is cleared to DiscardColor by ApplyRenderTargets on every bind, and every bind
+            // here clears it again on the next line, which is the clear that decides the pixels.
             _toolMirrorRenderTarget ??= VramTally.Track(new RenderTarget2D(_device, ToolTargetSize, ToolTargetSize, false,
-                SurfaceFormat.Color, DepthFormat.None), "tool mirror");
+                SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "tool mirror");
             var box = who.GetBoundingBox();
             float feetY = box.Bottom - 10f + who.yOffset;
             Vector2 feetOnScreen = Game1.GlobalToLocal(Game1.viewport, new Vector2(box.Center.X, feetY));
@@ -267,6 +282,7 @@ namespace SDVRadiance
                     heldRod.draw(batch);
                 Game1.drawTool(who);
                 batch.End();
+                _toolBakeFresh = true;
                 return true;
             }
             catch
@@ -276,6 +292,12 @@ namespace SDVRadiance
             }
             finally { Game1.spriteBatch = gameBatch; }
         }
+
+        /// <summary>The frame the held tool was last baked for, and what that bake returned, so
+        /// the window pass and the water pass share one bake rather than doing it each.</summary>
+        private int _toolBakeFrame = -1;
+        private int _toolBakeScreen = -1;
+        private bool _toolBakeFresh;
 
         /// <summary>Mirror the baked tool below the player's feet, through the same banded fade
         /// every other body here uses.</summary>
@@ -383,6 +405,8 @@ namespace SDVRadiance
             _selfDrawnMirrorWanted.Clear();
             _selfDrawnMirrorMeasured.Clear();
             _selfDrawnMirrorOverflow = 0;
+            SelfDrawnReadbacksThisFrame = 0;
+            SelfDrawnEmptyReadbacksThisFrame = 0;
             foreach (NPC character in ShadowRenderer.CharactersIn(location))
             {
                 if (character?.Sprite?.Texture == null || character.IsInvisible || character.swimming.Value
@@ -392,6 +416,15 @@ namespace SDVRadiance
                 // The same reach gate the hand-built stamp uses: the mirror hangs downward, so only
                 // bodies whose mirror can land on water are worth a slot.
                 if (!WaterWithinTiles(characterBox.Center.X / 64, characterBox.Bottom / 64 + 2, 4))
+                    continue;
+                // And only bodies the game itself will draw. Its own draw paints nothing for a
+                // body more than two tiles off the screen, so a creature standing above the view
+                // came out of its slot EMPTY, an empty answer is not remembered (see the note
+                // where it is written), and the slot was read back off the card again on every
+                // frame for as long as the creature stood there: a bill paid per frame for a body
+                // nobody could see. The reach is a tile wider than the game's so nothing that is
+                // drawn is missed at the edge.
+                if (!SelfDrawnBodyIsDrawn(characterBox))
                     continue;
                 _selfDrawnMirrorWanted.Add(character);
             }
@@ -408,6 +441,8 @@ namespace SDVRadiance
                     continue;
                 Rectangle animalBox = animal.GetBoundingBox();
                 if (!WaterWithinTiles(animalBox.Center.X / 64, animalBox.Bottom / 64 + 2, 4))
+                    continue;
+                if (!SelfDrawnBodyIsDrawn(animalBox))
                     continue;
                 _selfDrawnMirrorWanted.Add(animal);
             }
@@ -427,6 +462,7 @@ namespace SDVRadiance
             var gameBatch = Game1.spriteBatch;
             RenderTargetBinding[] previousTargets = _device.GetRenderTargets();
             Rectangle previousScissor = _device.ScissorRectangle;
+            long atlasStart = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
                 _device.SetRenderTarget(_selfDrawnMirrorAtlas);
@@ -483,11 +519,13 @@ namespace SDVRadiance
                 _device.ScissorRectangle = previousScissor;
             }
 
+            long copyStart = PhaseCost.NoteSince("mirror: creature atlas draw", atlasStart);
             // Now that the atlas is off the device, ask it where each body actually ends. Only for
             // a creature-and-sheet pair never seen before: the answer is the same every frame after
             // that, and a readback stalls the pipeline, so paying it once per creature is the whole
             // budget for this.
             ResolveSelfDrawnContactLifts(_selfDrawnMirrorMeasured);
+            PhaseCost.NoteSince("mirror: creature measure copy", copyStart);
 
             // No silent caps: a scene that runs out of slots says so once, rather than quietly
             // mirroring some of its creatures and not others.
@@ -502,6 +540,109 @@ namespace SDVRadiance
             {
                 _selfDrawnMirrorOverflowReported = 0;
             }
+        }
+
+        /// <summary>How many slots were read back off the card this frame, and how many of those
+        /// came back EMPTY.
+        ///
+        /// <para>A readback stalls the pipeline, and the budget for this pass is one per creature
+        /// and sheet frame, ever. An empty answer is deliberately not remembered (see the note
+        /// where it is written), so an empty slot is read back again on the NEXT frame, and the
+        /// frame after that, for as long as the creature keeps coming out empty. These two numbers
+        /// are what says whether that is happening: a steady empties count above zero is a bill
+        /// being paid every frame for a body nobody can see.</para></summary>
+        internal int SelfDrawnReadbacksThisFrame;
+        internal int SelfDrawnEmptyReadbacksThisFrame;
+
+        /// <summary>How far past the screen a body may stand and still be baked, in world pixels:
+        /// the game's own two tiles for drawing a character, and one more so nothing drawn at the
+        /// edge is missed.</summary>
+        private const int SelfDrawnDrawReachPx = 64 * 3;
+
+        private static bool SelfDrawnBodyIsDrawn(Rectangle box)
+        {
+            var viewport = Game1.viewport;
+            var reach = new Rectangle(viewport.X - SelfDrawnDrawReachPx, viewport.Y - SelfDrawnDrawReachPx,
+                viewport.Width + 2 * SelfDrawnDrawReachPx, viewport.Height + 2 * SelfDrawnDrawReachPx);
+            return reach.Intersects(box);
+        }
+
+        /// <summary>One slot's worth of target, which is what the measurement is read from, a
+        /// frame after it was written.
+        ///
+        /// <para>MonoGame's GetData reads the WHOLE texture back off the card and allocates it
+        /// whatever rectangle it was asked for, and copies the rectangle out afterwards. Read from
+        /// the atlas, one slot cost the whole sixteen-slot strip: 2.75 MB pulled and dropped on the
+        /// large object heap per body per frame of its walk. The slot is copied into this target
+        /// first, a draw the card does in its stride, and the readback is then the slot alone.</para>
+        ///
+        /// <para>And it is read on the NEXT frame, not this one. Reading a target the card is still
+        /// drawing makes the processor wait for everything queued before it, which is the whole of
+        /// this frame's work so far: measured on the beach pier with twelve ducks, one same-frame
+        /// read of the slot alone still cost a 14.6 ms frame, against 18.3 for reading the atlas,
+        /// because the wait was the bill and not the bytes. A frame later the card finished with
+        /// the target long ago and the read is the copy alone. The body it measures draws from the
+        /// built stamp for that one frame, which is what it does while its slot is empty anyway.</para></summary>
+        private RenderTarget2D? _selfDrawnMeasureTarget;
+        /// <summary>The body whose slot was copied into the measure target last frame, waiting to
+        /// be read at the top of this one. Null when nothing is waiting.</summary>
+        private (Type Kind, Texture2D Sheet, Rectangle Frame, int ContactRow, int WrittenTick)? _selfDrawnMeasurePending;
+
+        /// <summary>How many ticks a copied slot waits before it is read: the next one. The read
+        /// happens on the game's update tick rather than in the draw (see ModEntry.OnUpdateTicked),
+        /// which is the one moment the card is between frames. Read mid-draw, one frame late or
+        /// two, it waited on everything the card had queued: 8.3 and 14.3 ms at the worst on the
+        /// pier with twelve ducks. The delay is not the cure, the moment is; the tick keeps a read
+        /// from landing on the very frame that wrote the target.</summary>
+        private const int SelfDrawnMeasureDelayTicks = 1;
+
+        /// <summary>Copy one slot of the atlas into the measure target, to be read next frame.</summary>
+        private void QueueSelfDrawnMeasure(RenderTarget2D atlas, int slot, (Type, Texture2D, Rectangle) key, int contactRow)
+        {
+            _selfDrawnMeasureTarget ??= VramTally.Track(new RenderTarget2D(_device, SelfDrawnSlotWidth, SelfDrawnSlotHeight,
+                false, SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "self-drawn mirror measure");
+            var slotRect = new Rectangle(slot * SelfDrawnSlotWidth, 0, SelfDrawnSlotWidth, SelfDrawnSlotHeight);
+            RenderTargetBinding[] previousTargets = _device.GetRenderTargets();
+            var batch = _spriteMaskSpriteBatch!;
+            try
+            {
+                _device.SetRenderTarget(_selfDrawnMeasureTarget);
+                _device.Clear(Color.Transparent);
+                batch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
+                batch.Draw(atlas, Vector2.Zero, slotRect, Color.White);
+                batch.End();
+                _selfDrawnMeasurePending = (key.Item1, key.Item2, key.Item3, contactRow, SharedTicks.Now);
+            }
+            catch
+            {
+                try { batch.End(); } catch { }
+                _selfDrawnMeasurePending = null;
+            }
+            finally
+            {
+                _device.SetRenderTargets(previousTargets);
+            }
+        }
+
+        /// <summary>Read the slot copied out last frame and remember where its body ends. An empty
+        /// answer is not remembered, for the reason given where the cache is written. Called from
+        /// the game's update tick, where the card is between frames; see
+        /// <see cref="SelfDrawnMeasureDelayTicks"/>.</summary>
+        internal void CollectSelfDrawnMeasure()
+        {
+            if (_selfDrawnMeasurePending is not { } pending || _selfDrawnMeasureTarget == null)
+                return;
+            if (SharedTicks.Now - pending.WrittenTick < SelfDrawnMeasureDelayTicks)
+                return;
+            _selfDrawnMeasurePending = null;
+            long readStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            SelfDrawnReadbacksThisFrame++;
+            float lift = MeasureSlotContactLift(_selfDrawnMeasureTarget, pending.ContactRow);
+            if (float.IsNaN(lift))
+                SelfDrawnEmptyReadbacksThisFrame++;
+            else
+                _selfDrawnContactLift[(pending.Kind, pending.Sheet, pending.Frame)] = lift;
+            PhaseCost.NoteSince("mirror: creature measure read (on the tick)", readStart);
         }
 
         /// <summary>A rasterizer that respects the scissor rectangle, so one slot's bake cannot
@@ -523,16 +664,19 @@ namespace SDVRadiance
                 var key = (kind, sheet, frame);
                 if (!_selfDrawnContactLift.TryGetValue(key, out float lift))
                 {
-                    lift = MeasureSlotContactLift(atlas, slot, contactRow);
-                    // An EMPTY slot is not remembered. The game's own NPC draw paints nothing for a
-                    // body more than two tiles off the screen, and the mask window this bake gathers
-                    // from reaches well past that, so a creature standing above the view came out
-                    // empty; remembered against its sheet and frame, that emptiness then hid every
-                    // creature of its kind on that frame of the walk for the rest of the session,
-                    // which reads as a reflection blinking with the animation. Measured again next
-                    // frame instead, and the frame it does draw is the one that is kept.
-                    if (!float.IsNaN(lift))
-                        _selfDrawnContactLift[key] = lift;
+                    // Not measured yet: its slot is copied out for next frame's read, one body a
+                    // frame, and the built stamp has it until the answer is in. An EMPTY slot is
+                    // not remembered when it is read (see CollectSelfDrawnMeasure). The game's own
+                    // NPC draw paints nothing for a body more than two tiles off the screen, and
+                    // the mask window this bake gathers from reaches well past that, so a creature
+                    // standing above the view came out empty; remembered against its sheet and
+                    // frame, that emptiness then hid every creature of its kind on that frame of
+                    // the walk for the rest of the session, which reads as a reflection blinking
+                    // with the animation. Measured again on a later frame instead, and the frame
+                    // it does draw is the one that is kept.
+                    lift = float.NaN;
+                    if (_selfDrawnMeasurePending == null)
+                        QueueSelfDrawnMeasure(atlas, slot, key, contactRow);
                 }
                 // Nothing drawn means nothing to turn over, so the built stamp has this body back
                 // for the frame: a reflection that is predicted is better than one that is missing.
@@ -565,15 +709,16 @@ namespace SDVRadiance
 
         /// <summary>The distance from a slot's contact row up to the lowest pixel of the BODY the
         /// creature drew there. NaN when the slot came out empty, which means nothing to mirror.</summary>
-        private static float MeasureSlotContactLift(RenderTarget2D atlas, int slot, int contactRow)
+        private static float MeasureSlotContactLift(RenderTarget2D measureTarget, int contactRow)
         {
             try
             {
                 int count = SelfDrawnSlotWidth * SelfDrawnSlotHeight;
                 if (_selfDrawnSlotReadback == null || _selfDrawnSlotReadback.Length < count)
                     _selfDrawnSlotReadback = new Color[count];
-                var slotRect = new Rectangle(slot * SelfDrawnSlotWidth, 0, SelfDrawnSlotWidth, SelfDrawnSlotHeight);
-                atlas.GetData(0, slotRect, _selfDrawnSlotReadback, 0, count);
+                // The slot alone, from the target it was copied into a frame ago: see
+                // _selfDrawnMeasureTarget for why the atlas itself must not be read, and why not now.
+                measureTarget.GetData(0, null, _selfDrawnSlotReadback, 0, count);
                 int faintest = -1;
                 for (int y = SelfDrawnSlotHeight - 1; y >= 0; y--)
                 {
@@ -667,7 +812,10 @@ namespace SDVRadiance
             if (_reflectionRenderTarget == null || _reflectionRenderTarget.Width != targetWidth || _reflectionRenderTarget.Height != targetHeight)
             {
                 _reflectionRenderTarget?.Dispose();
-                _reflectionRenderTarget = VramTally.Track(new RenderTarget2D(_device, targetWidth, targetHeight, false, SurfaceFormat.Color, DepthFormat.None), "entity mirror");
+                // PreserveContents to drop the implicit clear: this target is bound and cleared
+                // every frame water is on screen, and a DiscardContents bind clears it first.
+                _reflectionRenderTarget = VramTally.Track(new RenderTarget2D(_device, targetWidth, targetHeight, false,
+                    SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "entity mirror");
                 phaseStart = PhaseCost.NoteSince("mirror: target allocated", phaseStart);
             }
             _spriteMaskSpriteBatch ??= new SpriteBatch(_device);
@@ -1475,7 +1623,6 @@ namespace SDVRadiance
         // pending dump (captures must be same-frame exact), and every few ticks so animated
         // map tiles (waterfall art) keep moving in the mirror - at worst their reflection lags
         // by SceneCacheTtlTicks, invisible in a squashed wavy mirror.
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
 
         /// <summary>Consecutive frames with no water on screen and nothing wanting a mirror.</summary>
         private int _waterIdleFrames;
@@ -1496,6 +1643,23 @@ namespace SDVRadiance
         /// <para>They cost nothing to rebuild compared to a screen of shadow bakes (one frame of
         /// re-render), so the idle delay here can be short.</para>
         /// </summary>
+        /// <summary>Whether any screen's water mask holds water. The water targets are shared by
+        /// the screens, so they are wanted while any one of them has water to use them on.</summary>
+        internal bool AnyScreenHasWaterOnScreen
+        {
+            get
+            {
+                if (_screen.WaterOnScreen)
+                    return true;
+                foreach (ScreenState state in _screenStates.Values)
+                {
+                    if (state.WaterOnScreen)
+                        return true;
+                }
+                return false;
+            }
+        }
+
         internal void ReleaseIdleWaterTargets(bool wanted)
         {
             const int IdleTicksBeforeRelease = 300;       // five seconds at the game's 60 Hz tick
@@ -1504,6 +1668,10 @@ namespace SDVRadiance
                 _waterIdleFrames = 0;
                 return;
             }
+            // The update event is raised once per screen, so with two screens the count ran twice
+            // as fast and five seconds was two and a half. Counted on the first screen only.
+            if (StardewModdingAPI.Context.ScreenId != 0)
+                return;
             if (_mirrorSceneCache == null && _mirrorSourceRenderTarget == null
                 && _reflectionRenderTarget == null && _spriteMaskRenderTarget == null)
                 return;
@@ -1530,6 +1698,10 @@ namespace SDVRadiance
             // the kind of hole that ships and then only breaks for the people using co-op.
             foreach (var screenState in _screenStates.Values)
             {
+                // Disposed, not only dropped. The active screen's cache was disposed above, but the
+                // other screens' were let go still holding their memory until the collector found
+                // them: split-screen reports counted three 58.6 MB caches for two screens.
+                try { screenState.MirrorSceneCache?.Dispose(); } catch { }
                 screenState.MirrorSceneCache = null;
                 screenState.SceneCacheLocation = null;
             }
@@ -1539,11 +1711,12 @@ namespace SDVRadiance
             SceneRTReady = false;
             _sceneCacheLocation = null;
         }
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)   // world px of the cache's top-left
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
         private const int SceneCachePadPixels = 128;              // 2 tiles of camera drift per side
-        private const int SceneCacheRefreshTicks = 6;             // animated-tile refresh (~100 ms)
+        /// <summary>How often the mirror's scenery cache takes the map's animated tiles again,
+        /// about a tenth of a second. Internal because the GL diagnostic quotes it: it used to
+        /// print a 6 of its own beside the words "SceneCacheTtlTicks", which named a constant that
+        /// did not exist.</summary>
+        internal const int SceneCacheRefreshTicks = 6;
 
         /// <summary>
         /// Where the animated tiles are on the layers the mirror draws.
@@ -1574,26 +1747,73 @@ namespace SDVRadiance
         /// times a second and not sixty.
         /// </para>
         /// </summary>
-        private readonly List<Point> _sceneAnimatedTiles = new();
+        private List<Point> _sceneAnimatedTiles = new();
         /// <summary>The distinct frame intervals of the animated tiles on this map, in ms. Small:
         /// most maps have one, a few have two.</summary>
-        private readonly List<long> _sceneAnimatedIntervals = new();
-        /// <summary>The animation clock reading the cache was last drawn at.</summary>
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        private GameLocation? _sceneAnimatedFor;
-        private int _sceneAnimatedEpoch = -1;
+        private List<long> _sceneAnimatedIntervals = new();
+        // The animation clock reading the cache was last drawn at.
+        // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
         /// <summary>Set when the map could not be read. Falls back to the old whole-map rebuild
         /// rather than quietly showing frozen art.</summary>
         private bool _sceneAnimatedUnknown;
+
+        /// <summary>One place's animated mirror tiles and frame intervals, and the map epoch they
+        /// were read at. The three fields above point at the entry for the place being drawn.</summary>
+        private sealed class AnimatedTilesForPlace
+        {
+            internal readonly List<Point> Tiles = new();
+            internal readonly List<long> Intervals = new();
+            internal bool Unknown;
+            internal int Epoch = -1;
+            internal long LastAskedFor;
+        }
+
+        /// <summary>The animated tiles kept per place, a few places.
+        ///
+        /// <para>It was one slot, tested with ReferenceEquals, and walked every mirrored layer of
+        /// the whole map again whenever the location asked for was not the one it held. Two
+        /// screens take turns, and even the same place seen from the farmhand screen is a
+        /// different object, so it walked on every call. Worse, AnimationStamp summed THIS
+        /// screen's clock over the OTHER place's intervals, so the stamp jumped every call and the
+        /// animated tiles were redrawn into the cache every call as well. Measured 13/9 with one
+        /// screen in Town and one on the mountain: "water scenery mirror" 1.17 ms a frame in split
+        /// screen against 0.04 and 0.07 for the same two places on one screen each.</para></summary>
+        private readonly Dictionary<string, AnimatedTilesForPlace> _animatedTilesByPlace = new();
+        private long _animatedTilesAsks;
+        private const int AnimatedTilesPlacesKept = 4;
 
         /// <summary>Walk the mirrored layers once per location and record where the animated tiles
         /// are. Re-run when the map is re-patched under us, which is what MaskEpoch tracks.</summary>
         private List<Point> AnimatedMirrorTiles(GameLocation location)
         {
-            if (ReferenceEquals(_sceneAnimatedFor, location) && _sceneAnimatedEpoch == MaskEpoch)
+            string place = location.NameOrUniqueName;
+            if (!_animatedTilesByPlace.TryGetValue(place, out AnimatedTilesForPlace? kept))
+                _animatedTilesByPlace[place] = kept = new AnimatedTilesForPlace();
+            kept.LastAskedFor = ++_animatedTilesAsks;
+            while (_animatedTilesByPlace.Count > AnimatedTilesPlacesKept)
+            {
+                string? leastWanted = null;
+                long oldest = long.MaxValue;
+                foreach (var pair in _animatedTilesByPlace)
+                    if (pair.Value.LastAskedFor < oldest)
+                    {
+                        oldest = pair.Value.LastAskedFor;
+                        leastWanted = pair.Key;
+                    }
+                if (leastWanted == null)
+                    break;
+                _animatedTilesByPlace.Remove(leastWanted);
+            }
+            // The three fields the rest of the scene pass reads follow the place being drawn, so
+            // AnimationStamp sums this place's intervals and the rebuild test reads this place's flag.
+            _sceneAnimatedTiles = kept.Tiles;
+            _sceneAnimatedIntervals = kept.Intervals;
+            if (kept.Epoch == MaskEpoch)
+            {
+                _sceneAnimatedUnknown = kept.Unknown;
                 return _sceneAnimatedTiles;
-            _sceneAnimatedFor = location;
-            _sceneAnimatedEpoch = MaskEpoch;
+            }
+            kept.Epoch = MaskEpoch;
             _sceneAnimatedTiles.Clear();
             _sceneAnimatedIntervals.Clear();
             _sceneAnimatedUnknown = false;
@@ -1617,6 +1837,7 @@ namespace SDVRadiance
                 }
             }
             catch { _sceneAnimatedUnknown = true; }
+            kept.Unknown = _sceneAnimatedUnknown;
             return _sceneAnimatedTiles;
         }
 
@@ -1794,14 +2015,25 @@ namespace SDVRadiance
             // A map we could not read has no interval list to lock onto, so that one path keeps
             // the old timer rather than never refreshing at all.
             bool timeExpired = Game1.ticks - _sceneCacheBuiltTick >= SceneCacheRefreshTicks;
-            bool cacheValid = _mirrorSceneCache != null
+            // The window the blit needs is [want, want + source] on each axis, and the cache holds
+            // [anchor, anchor + cacheSize]. The far-edge test compared the VIEWPORT'S corner plus
+            // the source size against the cache's far edge, which is the want corner plus the
+            // reach plus the source size: further than the cache ever reaches, by 64 pixels
+            // sideways and 640 up, on every frame. So the cache was never valid, the whole padded
+            // window was drawn from every map layer on every frame, and what this method held
+            // was a cache in name only. Measured on the beach standing still: a rebuild on
+            // every one of 298 frames at 0.47 ms each on my machine, which is the "scenery
+            // mirror" line of ghi3038's report, and the blit it was blamed on cost 0.008.
+            bool cacheValid = !SceneCacheForceRebuild
+                && _mirrorSceneCache != null
                 && ReferenceEquals(_sceneCacheLocation, location)
                 && _mirrorSceneCache.Width == cacheWidth && _mirrorSceneCache.Height == cacheHeight
                 && !(_sceneAnimatedUnknown && timeExpired)
                 && wantX >= _sceneCacheAnchorX && wantY >= _sceneCacheAnchorY
-                && viewportX + sourceWidth <= _sceneCacheAnchorX + cacheWidth && viewportY + sourceHeight <= _sceneCacheAnchorY + cacheHeight
+                && wantX + sourceWidth <= _sceneCacheAnchorX + cacheWidth && wantY + sourceHeight <= _sceneCacheAnchorY + cacheHeight
                 && _pendingDump == null;
 
+            long scenePhaseStart = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
                 var spriteBatch = _spriteMaskSpriteBatch;
@@ -1846,6 +2078,7 @@ namespace SDVRadiance
                     }
                     displayDevice.EndScene();
                     spriteBatch.End();
+                    scenePhaseStart = PhaseCost.NoteSince("scene: cache rebuild (all layers)", scenePhaseStart);
                 }
                 else if (animated.Count > 0 && animationStamp != _sceneAnimationStamp)
                 {
@@ -1854,6 +2087,7 @@ namespace SDVRadiance
                     // frames the art actually turns over.
                     _sceneAnimationStamp = animationStamp;
                     RefreshAnimatedTilesIntoCache(location, spriteBatch, animated, cacheWidth, cacheHeight);
+                    scenePhaseStart = PhaseCost.NoteSince("scene: animated tiles refresh", scenePhaseStart);
                 }
 
                 // Screen-aligned mirror source = one quad from the cache, shifted by the
@@ -1862,6 +2096,7 @@ namespace SDVRadiance
                 spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
                 spriteBatch.Draw(_mirrorSceneCache, new Vector2(_sceneCacheAnchorX - wantX, _sceneCacheAnchorY - wantY), Color.White);
                 spriteBatch.End();
+                PhaseCost.NoteSince("scene: blit cache to source", scenePhaseStart);
                 SceneRTReady = true;
             }
             catch (Exception exception)
@@ -1887,6 +2122,10 @@ namespace SDVRadiance
         /// Defaulting it off (tried once, to pin the look to 1.2.x) brought the hole straight
         /// back. `radiance_reflect scene off` remains for the Phase-D bridge diagnosis.</summary>
         internal static bool SceneSourceOff;
+        /// <summary>A/B switch (radiance_reflect cache off): rebuild the scenery cache from every
+        /// map layer on every frame, which is what the broken validity test did until 12/9, so the
+        /// cached picture can be held against a fresh one on the same frozen frame.</summary>
+        internal static bool SceneCacheForceRebuild;
 
         // ---- diagnostics: what is each reflection layer actually doing right here? ----
 

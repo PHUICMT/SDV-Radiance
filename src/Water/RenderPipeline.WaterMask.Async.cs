@@ -55,6 +55,9 @@ namespace SDVRadiance
             public System.Threading.Tasks.Task? Task;
             public volatile bool Done;
             public volatile bool Failed;
+            /// <summary>What the worker threw, kept for the one log line: the catch used to discard
+            /// it, so a compose that failed said only that it had.</summary>
+            public string? FailureMessage;
             // P3a — location-wide waterline anchor (RenderPipeline.Waterline.cs):
             public bool AnchorOnly;            // full-map job: stop after Pass D, emit run lists
             public WaterlineAnchor? Anchor;    // window job: fresh anchor to override run tops with
@@ -99,7 +102,7 @@ namespace SDVRadiance
             try
             {
                 var pixels = new Color[src.Width * src.Height];
-                texture.GetData(0, src, pixels, 0, pixels.Length);
+                SheetPixels.Read(texture, src, pixels);
                 var bits = new bool[pixels.Length];
                 for (int i = 0; i < pixels.Length; i++)
                     bits[i] = pixels[i].A >= 128;
@@ -442,7 +445,7 @@ namespace SDVRadiance
             for (int pixelIndex = 0; pixelIndex < 256; pixelIndex++)
             {
                 byte labelClass = classes[pixelIndex];
-                if (labelClass == 1 || labelClass == 14) { bits[pixelIndex] = true; nW++; }   // 14 = hot spring: water, steam comes in v2
+                if (labelClass == LabelClass.Water || labelClass == LabelClass.Hot) { bits[pixelIndex] = true; nW++; }   // a hot spring is water; the steam over it comes in v2
                 else if (labelClass == 9) { bits[pixelIndex] = true; nI++; }
                 else if (labelClass == 10) { bits[pixelIndex] = true; nF++; }
                 else if (labelClass == 11) { bits[pixelIndex] = true; nL++; }   // lava: slow molten flow + self-glow
@@ -510,7 +513,7 @@ namespace SDVRadiance
             for (int pixelIndex = 0; pixelIndex < 256; pixelIndex++)
             {
                 byte labelClass = classes[pixelIndex];
-                bits[pixelIndex] = labelClass == 1 || labelClass == 9 || labelClass == 10 || labelClass == 11 || labelClass == 14 || labelClass == 255;
+                bits[pixelIndex] = LabelClass.IsLiquid(labelClass) || labelClass == LabelClass.Unlabelled;
             }
             return bits;
         }
@@ -581,16 +584,19 @@ namespace SDVRadiance
             for (int pixelIndex = 0; pixelIndex < 256; pixelIndex++)
             {
                 byte labelClass = classes[pixelIndex];
-                if (labelClass == 1 || labelClass == 9 || labelClass == 10 || labelClass == 11 || labelClass == 14) liquidCount++;
+                if (LabelClass.IsLiquid(labelClass)) liquidCount++;
             }
             return liquidCount;
         }
 
         // ---- location-wide water body sizes (main thread builds, worker reads) ----
-        private SurfaceMap? _bodySizeSourceSurfaceMap;
-        private int _bodySizeEpoch = -1;
-        private int[]? _bodyTileCounts;      // per map tile: how many tiles its water body holds (0 = not water)
-        private int _bodyGridWidth, _bodyGridHeight;
+        // The answer and what it was built from are per screen (RenderPipeline.Screens.cs); the
+        // flood's stack below is scratch, used and finished inside one call.
+        private ref SurfaceMap? _bodySizeSourceSurfaceMap => ref _screen.BodySizeSourceSurfaceMap;
+        private ref int _bodySizeEpoch => ref _screen.BodySizeEpoch;
+        private ref int[]? _bodyTileCounts => ref _screen.BodyTileCounts;      // per map tile: how many tiles its water body holds (0 = not water)
+        private ref int _bodyGridWidth => ref _screen.BodyGridWidth;
+        private ref int _bodyGridHeight => ref _screen.BodyGridHeight;
         private int[]? _bodySizeFloodStack;
 
         /// <summary>
@@ -811,7 +817,11 @@ namespace SDVRadiance
                     // (a location/mod with custom drawWater logic). Only when isWaterTile is false —
                     // isWaterTile-true tiles keep their pipeline above, so HF's deck-over-water veto
                     // is never overridden by the hook.
-                    if (!water && !desert && !location.isWaterTile(tileX, tileY) && WaterDrawHook.WasDrawn(location, tileX, tileY))
+                    // The hook's set is asked first. Both questions are free of side effects, so the
+                    // answer is the same, but isWaterTile walks every building and every piece of
+                    // furniture in the location before it reads the map, and almost every tile says
+                    // no to the hook: on a farm with buildings the old order paid that walk per tile.
+                    if (!water && !desert && WaterDrawHook.WasDrawn(location, tileX, tileY) && !location.isWaterTile(tileX, tileY))
                         water = true;
                     if (!water && pondRects != null)
                     {
@@ -1391,7 +1401,7 @@ namespace SDVRadiance
                         for (int texelIndex = 0; texelIndex < 256; texelIndex++)
                         {
                             byte labelClass = label[texelIndex];
-                            if (labelClass == 1 || labelClass == 9 || labelClass == 10 || labelClass == 11 || labelClass == 14 || labelClass == 255)
+                            if (LabelClass.IsLiquid(labelClass) || labelClass == LabelClass.Unlabelled)
                             {
                                 union[texelIndex] = true;
                                 anyLiquid = true;

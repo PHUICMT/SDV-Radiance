@@ -438,8 +438,8 @@ namespace SDVRadiance
                 hash = hash * 31 + WindowRoomScale.GetHashCode();
                 hash = hash * 31 + Game1.ambientLight.PackedValue.GetHashCode();
                 hash = hash * 31 + GameClock.MinutesNow().GetHashCode();
-                hash = hash * 31 + ((Game1.isRaining ? 1 : 0) | (Game1.isSnowing ? 2 : 0) | (Game1.isLightning ? 4 : 0));
-                hash = hash * 31 + (Game1.currentSeason?.GetHashCode() ?? 0);
+                hash = hash * 31 + ((LocalSky.IsRaining ? 1 : 0) | (LocalSky.IsSnowing ? 2 : 0) | (LocalSky.IsLightning ? 4 : 0));
+                hash = hash * 31 + ((int)LocalSky.Season);
                 hash = hash * 31 + Game1.dayOfMonth;
                 if (location.lightGlows is { } glows)
                 {
@@ -886,7 +886,9 @@ namespace SDVRadiance
             return MathHelper.Clamp((nowMinutes - (trulyDarkMinutes - 60)) / 60f, 0f, 1f);
         }
 
-        private static Vector3 SkyColour(bool outdoors, ModConfig config)
+        /// <summary>The sky both GI models seed an open cell with, in lightmap units. Internal so the
+        /// night mist can subtract it and keep only what the lamps add.</summary>
+        internal static Vector3 SkyColour(bool outdoors, ModConfig config)
         {
             if (!outdoors)
             {
@@ -918,10 +920,10 @@ namespace SDVRadiance
                 // through the glass rather than staying neutral grey while the patch goes gold.
                 return new Vector3(ambient) * Vector3.Lerp(Vector3.One, dayColour, 0.5f);
             }
-            float dayProgress = MathHelper.Clamp((GameClock.MinutesNow() - 720f) / 360f, -1f, 1f);
+            float dayProgress = ShadowRenderer.SunSkyOffsetAt(GameClock.MinutesNow());
             float warm = MathHelper.Clamp((Math.Abs(dayProgress) - 0.55f) / 0.45f, 0f, 1f);
             Vector3 sky = Vector3.Lerp(new Vector3(1f, 1f, 1f), new Vector3(1.03f, 0.96f, 0.88f), warm);
-            if (Game1.isRaining)
+            if (LocalSky.IsRaining)
                 sky *= 0.93f;   // gentle overcast dimming; vanilla already grays rain out
 
             // MOONLIGHT: after dark, open ground gets a cool lift scaled by the lunar phase
@@ -1039,7 +1041,7 @@ namespace SDVRadiance
             float floorMorning = MathHelper.Clamp(1f - config.LightingIndoorDarkness * 0.78f, 0.2f, 1f);
             float floorNight = MathHelper.Clamp(1f - config.LightingNightDarkness * 0.8f, 0.16f, 1f);
             float level = MathHelper.Lerp(MathHelper.Lerp(floorMorning, floorNight, nightness), 1f, dayFill);
-            if (Game1.isRaining || Game1.isLightning || Game1.isSnowing)
+            if (LocalSky.IsRaining || LocalSky.IsLightning || LocalSky.IsSnowing)
                 level *= MathHelper.Lerp(0.88f, 1f, 1f - dayFill);   // overcast steals midday, night is dark already
 
             // COLOUR WALKS THE DAY, and it is not the same walk the brightness takes.
@@ -1099,8 +1101,8 @@ namespace SDVRadiance
             // How much a clear morning keeps is the player's, because this moves a look that every
             // release so far has painted the same way. At 1 they get that look back exactly; rain
             // is on the far end of the same lerp and never moves with the dial at all.
-            float overcast = Game1.isRaining || Game1.isLightning ? 1f
-                : Game1.isSnowing ? SnowOvercastShare : 0f;
+            float overcast = LocalSky.IsRaining || LocalSky.IsLightning ? 1f
+                : LocalSky.IsSnowing ? SnowOvercastShare : 0f;
             morning *= MathHelper.Lerp(
                 MathHelper.Clamp(config.LightingMorningClearSkyCool, 0f, 1f), 1f, overcast);
             float evening = MathHelper.Clamp((nowMinutes - (darkMinutes - 110f)) / 110f, 0f, 1f);

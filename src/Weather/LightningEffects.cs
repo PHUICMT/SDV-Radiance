@@ -69,9 +69,9 @@ namespace SDVRadiance
             // the time it is written to last, and the shadow flick with it. The two neighbours
             // in this same handler, the wind and the wetness, each keep a tick stamp for exactly
             // this reason; this one claimed in a comment that it ran once per tick and did not.
-            if (Game1.ticks == _updatedTick)
+            if (SharedTicks.Now == _updatedTick)
                 return;
-            _updatedTick = Game1.ticks;
+            _updatedTick = SharedTicks.Now;
 
             float flash = Game1.flashAlpha;
             bool rising = flash > _lastFlashAlpha + 0.05f;
@@ -82,13 +82,20 @@ namespace SDVRadiance
             const float dt = 1f / 60f;
             bool wanted = config.Enabled && config.LightningEffectsEnabled;
             bool visibleFlashesAllowed = Game1.options?.screenFlash ?? true;
+            // The game raises flashAlpha for more than lightning: a warp totem, the return
+            // sceptre, a frog or a gem out of a rock, the casino's card game, a firework. Read as
+            // a strike, each of them kicked every shadow on the screen to one side and left an
+            // afterglow, on a sunny afternoon. Only a storm here makes a rising flash a strike,
+            // the same gate the visible bolt already asks. The burst below rides the game's own
+            // overlay and stays with it: the screen really is flashing, whatever for.
+            bool stormHere = Game1.currentLocation is { } here && Game1.IsLightningHere(here);
 
-            if (rising && wanted)
+            if (rising && wanted && stormHere)
             {
                 // Seeded from the tick so a strike picks one lean and every consumer this frame
                 // sees the same bolt, both split-screen halves included. The stamp above is what
                 // makes that true; it used to be asserted here and nothing enforced it.
-                var strikeRandom = new Random(unchecked(Game1.ticks * 747796405));
+                var strikeRandom = new Random(unchecked(SharedTicks.Now * 747796405));
                 float boltAcross01 = 0.12f + 0.76f * (float)strikeRandom.NextDouble();
                 // The shadows lean AWAY from the bolt, so the flash and the shadow key tell one
                 // story: a bolt on the right of the screen throws every shadow to the left.

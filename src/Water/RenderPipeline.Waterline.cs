@@ -36,8 +36,8 @@ namespace SDVRadiance
             public short[] RunBottomRows = null!;     // run bottom row (exclusive)
         }
 
-        private WaterlineAnchor? _waterlineAnchorData;
-        private int _waterlineFreshFrameCount;              // consecutive frames the window mask was fresh
+        // The published anchor, the count of fresh frames before one is gathered, and the one-shot
+        // failure flag belong to one screen: RenderPipeline.Screens.cs.
 
         /// <summary>The whole-map anchor gather that is part way through, between resting frames.
         /// See <see cref="GatherInProgress"/> for why it is not taken in one frame.</summary>
@@ -48,8 +48,6 @@ namespace SDVRadiance
         private const double AnchorGatherBudgetMilliseconds = 2.5;
         private int _anchorGathersCompleted, _anchorGathersAbandoned, _anchorSliceCount;
         private double _anchorSliceTotalMilliseconds, _anchorSliceWorstMilliseconds;
-        private bool _waterlineAnchorFailedForLocation;         // one shot: don't retry a failed anchor for this location
-        private GameLocation? _waterlineFailedLocation;
 
         /// <summary>Full-map pixel budget for the anchor precompute. Guards absurd custom
         /// maps: past this the anchor is skipped and Pass D keeps its window-local answer.</summary>
@@ -300,6 +298,17 @@ namespace SDVRadiance
         /// Returns true on the frame the job was kicked.</summary>
         private bool MaybeKickAnchorJob(GameLocation location)
         {
+            // One gather at a time across all screens, because they share the scratch it writes. A
+            // gather another screen started is that screen's to continue or to drop. Dropped here,
+            // because this screen's anchor was fresh, or its player was walking, or it stood in a
+            // different place, one split-screen report with both players standing still counted
+            // 378 of 487 whole-map gathers abandoned part way.
+            if (_anchorGatherInProgress is { } otherScreensGather && otherScreensGather.Job.ScreenId != _activeScreenId)
+            {
+                if (ScreenStillExists(otherScreensGather.Job.ScreenId))
+                    return false;
+                AbandonAnchorGather();
+            }
             if (AnchorFresh(location))
             {
                 AbandonAnchorGather();
@@ -369,7 +378,11 @@ namespace SDVRadiance
             {
                 long composeStartTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
                 try { ComposeWaterMask(newWaterMaskJob); }
-                catch { newWaterMaskJob.Failed = true; }
+                catch (System.Exception exception)
+                {
+                    newWaterMaskJob.FailureMessage = exception.GetType().Name + ": " + exception.Message;
+                    newWaterMaskJob.Failed = true;
+                }
                 finally
                 {
                     newWaterMaskJob.ComposeDurationMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - composeStartTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;

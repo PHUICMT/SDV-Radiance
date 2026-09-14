@@ -25,9 +25,8 @@ namespace SDVRadiance
         /// one's output.</summary>
         private enum EmissiveParticleHost { None, Flood, Classic }
 
-        private ParticleSystem? _particles;
+        // The pool itself and the location it belongs to are per screen: RenderPipeline.Screens.cs.
         private float _fadeParticles;
-        private GameLocation? _particleLocation;
         private EmissiveParticleHost _emissiveParticleHost;
         /// <summary>Window width the chain buffers are a scaled copy of, so a draw into one of
         /// them can work out its own scale from its target.</summary>
@@ -58,8 +57,20 @@ namespace SDVRadiance
         internal void ClearParticles()
         {
             _particles?.Clear();
+            ForgetEmitterCarry();
+        }
+
+        /// <summary>Throw away every emitter's fraction of a particle.
+        ///
+        /// <para>ONE LIST, because there were two and both were short. Each emitter keeps the
+        /// fraction it has not spawned yet, and five of them (festive lights, mist, steam, lava and
+        /// chimney sparks) were in neither list, so a warp carried their leftovers into a map that
+        /// had never seen them. Adding an emitter means adding a line here, once.</para></summary>
+        private void ForgetEmitterCarry()
+        {
             _dustSpawnCarry = _emberSpawnCarry = _fireflySpawnCarry = _blossomSpawnCarry = 0f;
-            _ringSparkleCarry = 0f;
+            _ringSparkleCarry = _festiveSpawnCarry = _chimneySparkCarry = 0f;
+            _mistSpawnCarry = _steamSpawnCarry = _lavaSpawnCarry = 0f;
             _previousPlayerPositionKnown = false;
         }
 
@@ -86,9 +97,7 @@ namespace SDVRadiance
             {
                 _particleLocation = Game1.currentLocation;
                 _particles.Clear();
-                _dustSpawnCarry = _emberSpawnCarry = _fireflySpawnCarry = _blossomSpawnCarry = 0f;
-                _ringSparkleCarry = 0f;
-                _previousPlayerPositionKnown = false;
+                ForgetEmitterCarry();
             }
 
             _particleWindowWidth = Math.Max(1, windowWidth);
@@ -99,7 +108,7 @@ namespace SDVRadiance
             float waveAmount = Math.Clamp(config.ParticlePetalsFlutter, 0f, 1f) * _fadeParticles;
             var rippleUv = new Vector2(config.WaterStrength * 0.0025f);
             // The water pass's own clock, phase for phase, so the two waves are one wave.
-            float waveTime = (Determinism.Ticks % 360000) / 60f * config.WaterSpeed;
+            float waveTime = Determinism.ShaderSeconds * config.WaterSpeed;
             _particleSurfaceWave = new ParticleSystem.SurfaceWave(waveAmount, waveTime,
                 new Vector2(rippleUv.X * Game1.viewport.Width, rippleUv.Y * Game1.viewport.Height));
             _emissiveParticleHost = _fadeLighting > FadeGone ? EmissiveParticleHost.Classic
@@ -107,6 +116,9 @@ namespace SDVRadiance
                 : EmissiveParticleHost.None;
 
             long started = FrameCost.Begin(FrameCost.Part.Particles);
+            // The rainbow's presence settles here, every frame and frozen or not, because its
+            // dial is a setting and a frozen capture has to land on it (see the snow glint).
+            UpdateRainbowPresence(config);
             // Frozen means frozen: the harness compares captures byte for byte, and a pool that
             // keeps stepping under it makes every comparison after this one worthless.
             // Spawning is tied to the STEP, not to this call: a split screen runs the pipeline
@@ -149,6 +161,22 @@ namespace SDVRadiance
             FrameCost.End(FrameCost.Part.Particles, started);
         }
 
+        /// <summary>How many ground particles went into the game's own batch this frame.</summary>
+        internal int GroundParticlesDrawn { get; private set; }
+
+        /// <summary>
+        /// Draw the particles that lie on the ground into the batch the game has open on its
+        /// sorted world, so the things standing on it cover them. See
+        /// <see cref="ParticleSystem.DrawGround"/> for why they cannot go in the pool's own pass.
+        /// </summary>
+        internal void DrawGroundParticles(SpriteBatch spriteBatch, ModConfig config)
+        {
+            GroundParticlesDrawn = 0;
+            if (_particles == null || !config.ParticlesEnabled || _fadeParticles <= FadeGone)
+                return;
+            GroundParticlesDrawn = _particles.DrawGround(spriteBatch, _fadeParticles, AmbientLightOnParticles());
+        }
+
         private int DrawParticleGroup(SpriteBatch spriteBatch, bool emissive, Vector2 screenOffset, float pixelScale)
         {
             spriteBatch.Begin(SpriteSortMode.Deferred,
@@ -156,6 +184,10 @@ namespace SDVRadiance
                 SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone);
             int drawn = _particles!.Draw(spriteBatch, emissive, _fadeParticles, screenOffset, pixelScale,
                 emissive ? Vector3.One : AmbientLightOnParticles(), _particleSurfaceWave);
+            // The rainbows ride with the emissive group: sunlight in spray adds to the frame the
+            // way a spark does, and this batch already has the blend for it.
+            if (emissive)
+                drawn += DrawWaterfallRainbows(spriteBatch, screenOffset, pixelScale);
             spriteBatch.End();
             return drawn;
         }
@@ -189,7 +221,7 @@ namespace SDVRadiance
             var (sunWarm, nightGlow) = TimeOfDayAmounts();
             Vector3 light = Vector3.Lerp(Vector3.One, new Vector3(1.0f, 0.86f, 0.68f), sunWarm);
             light = Vector3.Lerp(light, new Vector3(0.20f, 0.24f, 0.42f), nightGlow);
-            if (Game1.isRaining || Game1.isSnowing)
+            if (LocalSky.IsRaining || LocalSky.IsSnowing)
                 light = Vector3.Lerp(light, new Vector3(0.60f, 0.64f, 0.70f), 0.5f);
             return light;
         }
@@ -223,14 +255,14 @@ namespace SDVRadiance
                 EmissiveParticleHost.Classic => "classic lighting",
                 _ => "none (drawn with the ambient group)",
             };
-            return $"particles: live={_particles.LiveCount}/{ParticleSystem.Capacity} presence={_fadeParticles:0.000} "
+            return $"particles: live={_particles.LiveCount}/{ParticleSystem.Capacity} presence={_fadeParticles:0.000} rainbows={RainbowsDrawn} "
                  + $"drawn ambient={_particleAmbientDrawn} emissive={_particleEmissiveDrawn} "
                  + $"refused={_particles.SpawnsRefused} atlas={(_particles.AtlasReady ? "built" : "MISSING")} "
                  + $"dustWindows={_dustWindowsLit} emberFires={_emberFiresLit} (biggest {ParticleEmberBiggestFire}) "
                  + $"mistFeet={_mistFeet.Count}{MistFeetTiles()} steamTiles={_steamTiles.Count} lavaTiles={_lavaTiles.Count} "
                  + $"fireflies={(_firefliesFlying ? "flying" : "not tonight")} "
                  + $"blossom={(_blossomFalling ? "falling" : "not today")} "
-                 + $"ringSparkles={(_ringSparkling ? "on" : "no ring")} carried[{ParticleCarriedFlame}] "
+                 + $"ringSparkles={(_ringSparkling ? "on" : "no ring")} footDustLifted={_footDustPuffs} onGround={GroundParticlesDrawn} glowLights={ParticleGlowLights} (strongest weight {ParticleGlowStrongestWeight:0.0} opening {ParticleGlowStrongestAmount:0.000}) chimneys={ChimneysFound} festiveBulbs={ParticleFestiveLightsLit} carried[{ParticleCarriedFlame}] "
                  + $"emissiveHost={host} test={(_particles.TestFountainRunning ? "running" : "off")}";
         }
     }

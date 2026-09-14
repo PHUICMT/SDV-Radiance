@@ -314,6 +314,13 @@ namespace SDVRadiance
         /// runs exactly once and then records that it did.</summary>
         public int ConfigVersion { get; set; }
 
+        /// <summary>The version the newest migration in ModEntry records. A config built fresh in
+        /// code, which is what GMCM's reset does, must carry it: otherwise it is saved as version 0
+        /// and the next launch runs every migration over the defaults it just wrote, putting back the
+        /// god ray intensity and the smoothing dials the player had set after the reset. Raise it
+        /// with each new migration.</summary>
+        internal const int CurrentConfigVersion = 4;
+
         // --- God rays ---
         // Lamp shafts: beams a lamp throws through whatever stands beside its light, drawn inside
         // the flood pass from the occluder mask (floodlight.fx, LampShaftStrength). Off from 1.3.1
@@ -337,6 +344,12 @@ namespace SDVRadiance
         public float GodRaysSunIntensity { get; set; } = 0.68f;
         /// <summary>How far the sun's dapple reaches from the canopy that cuts it.</summary>
         public float GodRaysSunReach { get; set; } = 0.6f;
+        /// <summary>Whether the dapple also lies on the floor of a room whose roof is glass. The
+        /// greenhouse is an interior to the game, so this is a separate question from the sun
+        /// shafts outdoors, and it gets its own switch: somebody who does not want daylight in a
+        /// room should not have to give up the morning through the trees on the farm to be rid of
+        /// it. Off is the picture of every release before 1.7.6.</summary>
+        public bool GodRaysSunGlassRoof { get; set; } = true;
 
         // --- Volumetric fog ---
         public bool FogEnabled { get; set; } = false;
@@ -345,6 +358,10 @@ namespace SDVRadiance
         public bool FogNightMist { get; set; } = true;
         /// <summary>How thick the night-mist wisps get at deep night (0..1).</summary>
         public float FogNightMistDensity { get; set; } = 0.6f;
+        /// <summary>How much of a lamp's light the wisps drifting past it take (0..1). Read off
+        /// the lightmap the lamps already painted; 0 is the flat blue mist of every release
+        /// before 1.7.7 and skips the read.</summary>
+        public float FogNightMistLampGlow { get; set; } = 0.5f;
         public float FogDensity { get; set; } = 0.5f;   // wisp OPACITY (how strong each wisp tints)
         /// <summary>How much of the frame the day-fog wisps occupy (amount, not opacity).</summary>
         public float FogCoverage { get; set; } = 0.2f;
@@ -352,6 +369,11 @@ namespace SDVRadiance
         public float FogNightMistCoverage { get; set; } = 0.25f;
         /// <summary>Night-mist drift speed.</summary>
         public float FogNightMistSpeed { get; set; } = 0.01f;
+        /// <summary>How much of our own drifting mist goes over a mine level whose air is thick,
+        /// 0..1. The game stamps one fog tile across the screen there, which does not move and does
+        /// not know where the torches are; ours does both, and it lays OVER the game's rather than
+        /// replacing it. 0 is the mine of every earlier release.</summary>
+        public float MineFogMist { get; set; } = 0.4f;
         public float FogScale { get; set; } = 3.0f;
         public float FogSpeed { get; set; } = 0.02f;
         public float FogTopBias { get; set; } = 0.5f;
@@ -367,6 +389,15 @@ namespace SDVRadiance
         /// <summary>Default kept well under the 0.7 cap: 0.61 read as near-black to players.</summary>
         public float CloudShadowOpacity { get; set; } = 0.34f;
         public float CloudShadowCoverage { get; set; } = 0.38f;
+        /// <summary>How far the sky closes in through the afternoon of a day whose tomorrow brings
+        /// rain, storm, green rain or snow, 0..1: more of the ground under cloud, the banks merged
+        /// into fewer masses, and a little of the warmth taken out of the light.
+        /// <para>The game decides tomorrow's weather at dawn and tells the player on the television,
+        /// so the sky is allowed to know it too, which is what a sky does. It arrives over three
+        /// hours from mid afternoon rather than at a stroke of the clock, so there is no hour where
+        /// the picture changes while you stand still. 0 is the unchanged afternoon of every release
+        /// before this one.</para></summary>
+        public float StormWarningStrength { get; set; } = 0.5f;
 
         public bool TiltShiftEnabled { get; set; } = true;
         public TiltShiftFocus TiltShiftMode { get; set; } = TiltShiftFocus.Bands;
@@ -393,6 +424,16 @@ namespace SDVRadiance
         public float WaterSpeed { get; set; } = 0.81f;     // ripple animation speed
         public float WaterSparkle { get; set; } = 0.24f;   // specular glint intensity
         public float WaterSparkleDensity { get; set; } = 0.5f; // glint count/size (1 = old look)
+        /// <summary>A cloud shadow over the water takes the sun's glitter with it, read off the
+        /// cloud stage's kept mask. Off is the glitter of every release before 1.7.7, which
+        /// sparkled under a cloud bank as brightly as in the sun.</summary>
+        public bool WaterSparkleCloudShade { get; set; } = true;
+        /// <summary>How far the glitter follows the sun, 0..1: the glints drawn out along the
+        /// sun's line and thicker on the side of the screen the sun stands over when it is low.
+        /// 0 is the round, even glitter of every release before 1.7.7, and the default: the author
+        /// looked at the lane on 8 Sep and preferred the even glitter, so it is there for whoever
+        /// wants it and changes nothing until asked.</summary>
+        public float WaterGlitterPath { get; set; } = 0f;
         public bool WaterCausticsEnabled { get; set; } = true;  // the light net on shallow beds
         public float WaterCausticsStrength { get; set; } = 0.15f;
         public bool WaterReflection { get; set; } = true;  // screen-space reflection on water
@@ -539,6 +580,25 @@ namespace SDVRadiance
         public float WaterRainRingSize { get; set; } = 1.11f;
         /// <summary>How plainly the rings and the bright point each drop lands on show.</summary>
         public float WaterRainRingStrength { get; set; } = 1.35f;
+        /// <summary>How plainly the rings left by things moving IN the water show: a farmer wading,
+        /// a duck paddling, a float landing where it was cast. 0 draws none of them, which is the
+        /// water of every release before this one.</summary>
+        public float WaterWakeRings { get; set; } = 1f;
+        /// <summary>How hard the fish working a bubbling spot stir the water around it. Rides
+        /// <see cref="WaterWakeRings"/>, since a fish spot's rings are drawn by the same surface;
+        /// 0 leaves the spot as still as the rest of the water, which is every earlier release.</summary>
+        public float WaterFishSpotRings { get; set; } = 1f;
+        /// <summary>How much the shared wind moves the water: the ripple carried downwind, patches
+        /// of ruffled surface running ahead of a gust, and more glints while it blows. The same
+        /// wind the rain slants along and the tree crowns lean with. 0 is the windless water of
+        /// every earlier release.
+        ///
+        /// <para>0.3, after 1 was looked at and called too strong and 0.6 was still more than was
+        /// wanted. The dial is multiplied by how hard it is actually blowing, which on an ordinary
+        /// day is about 0.6 of a full wind, so this lays under a tenth of the ripple's own motion
+        /// on top of it: a lean you catch on a gusty day and not at all on a calm one. The dial
+        /// still reaches 2 for anyone who wants the gale.</para></summary>
+        public float WaterWind { get; set; } = 0.3f;
         /// <summary>Apply the water effect inside building interiors (farmhouse, cabins, custom
         /// home mods). Off = skip it there — some house mods have decorative rivers/ponds inside
         /// the user may not want rippling. Real level water ALWAYS keeps the effect regardless of
@@ -610,6 +670,11 @@ namespace SDVRadiance
         public float FoliageSwaySpeed { get; set; } = 1f;
         /// <summary>How many tiles one gust spans as it sweeps downwind across the map (4..40).</summary>
         public float FoliageSwayGustSpan { get; set; } = 14f;
+        /// <summary>Whether a planted crop leans in the same wind, at three times the angle a tree
+        /// tips at, because a crop's head sits a quarter as far above the ground it pivots on.
+        /// Grown plants only: a seed or a shoot has nothing to lean. Off is the field of every
+        /// release before this one, which stood still through a gale.</summary>
+        public bool FoliageSwayCrops { get; set; } = true;
         /// <summary>Sprites drawn from sheets doubled on the graphics card by the Scale2x rule (see
         /// SheetUpscaler): two texels where the game put one. Off until it has been looked at.</summary>
         public bool SheetUpscaleEnabled { get; set; } = false;
@@ -727,12 +792,30 @@ namespace SDVRadiance
         /// about a tenth of marching every frame. Off marches the screen every frame, as 1.7.5 did.
         /// See RenderPipeline.MarchWindow.cs.</summary>
         public bool LightShadowMarchCache { get; set; } = true;
+        /// <summary>Watered soil under the sun sparkles, 0..1. The game only darkens the dirt.
+        /// 0 is every release before 1.7.7.</summary>
+        public float WateredSoilSparkle { get; set; } = 0.5f;
         /// <summary>Gates the VISIBLE window work (the beam, the lit glass, the patch of sun on the
         /// floor) and the warm glow on house windows outdoors at night. It does NOT gate the
         /// daylight a window adds to the room's own lighting - that half answers to
         /// WindowRoomLightEnabled, so a player who turns the flashy effect off still has lit
         /// rooms. Rooms also still follow the time of day; that is not a window effect.</summary>
         public bool WindowEffectsEnabled { get; set; } = true;
+        /// <summary>How far a lit town window pushes the game's own night back, drawn into the
+        /// game's lightmap the way its lanterns are. 0 is every release before 1.7.7, where our
+        /// window pool sat on ground the night had already taken down.</summary>
+        public float WindowGlowOpensNight { get; set; } = 0.6f;
+        /// <summary>A wide, very faint halo around each real lamp at night, 0..1: the ring a lens
+        /// puts around a bright point, which is what makes a light read as a light rather than as
+        /// a bright patch of paint. Built from the game's own light list, so a white sign or a
+        /// snowfield never wears one. 0 is the bare lamps of every release before this one.</summary>
+        public float LampHalo { get; set; } = 0.35f;
+        /// <summary>How much a fish tank's light wanders, 0..1. A tank is the only light in the
+        /// game whose source is water, and it was lit like a lantern: one steady circle. What comes
+        /// off a tank is light that has been through moving water, and what says so is not its
+        /// colour but that it will not hold still. 0 is the steady pool of every earlier
+        /// release.</summary>
+        public float AquariumRipple { get; set; } = 0.5f;
         /// <summary>The VISIBLE half of indoor window daylight: the lit glass, the beam leaning out
         /// of it, and the patch of sun it lays on the floor. This is the half a dedicated window mod
         /// draws too (Dynamic Windows ships a shaft sprite and a fill sprite for exactly these), so
@@ -753,8 +836,15 @@ namespace SDVRadiance
         /// <summary>People walking past a window show faintly in its glass by day. Glass reflects
         /// when what is behind it is darker than what is in front, so this is the daytime twin of
         /// the night glow and fades out as the glow fades in; no setting can make a window do
-        /// both. Outdoors only for now.</summary>
+        /// both. Indoors too while <see cref="WindowReflectionIndoors"/> is on.</summary>
         public bool WindowReflectionEnabled { get; set; } = true;
+        /// <summary>Windows and glass INSIDE a building return the floor in front of them and
+        /// whoever stands there, true size, standing on the sill and clipped to the pane, so a short
+        /// pane cuts the top of the image off. Indoors the rule turns round:
+        /// by day the outside is the brighter side and the image is faint, after dark the glass is
+        /// black and turns to a mirror, so the day and night dials trade places. Off is every
+        /// earlier release, which reflected outdoors only.</summary>
+        public bool WindowReflectionIndoors { get; set; } = true;
         /// <summary>How strong the image in the glass is by day, as a multiple of the built-in
         /// ladder (a mirror full, glass a third, a house window a fifth).</summary>
         /// <remarks>The five window numbers here are not round because they are not guesses: they
@@ -833,6 +923,14 @@ namespace SDVRadiance
         public float ParticleWaterfallMistAmount { get; set; } = 1.0f;
         /// <summary>How big one puff is, against its own size.</summary>
         public float ParticleWaterfallMistSize { get; set; } = 1.0f;
+        /// <summary>A rainbow standing in the spray at the foot of a fall while the sun is out,
+        /// 0..1. Rides the mist switch, because it is the mist the sun bends through. 0 is every
+        /// release before 1.7.7. Asked for on Nexus (sfbs97).</summary>
+        public float WaterfallRainbowStrength { get; set; } = 0.5f;
+        /// <summary>A bow stands opposite the sun and needs it under forty-two degrees, so there is
+        /// none through the middle of a summer day and one all day in winter. Off is every earlier
+        /// release, where the bow stood in the spray whenever the sun was out.</summary>
+        public bool WaterfallRainbowFollowsSun { get; set; } = true;
 
         /// <summary>Steam standing over water labelled hot: the bathhouse pool, a modded onsen.</summary>
         public bool ParticleHotSpringSteam { get; set; } = true;
@@ -880,6 +978,40 @@ namespace SDVRadiance
         public float ParticleRingSparklesAmount { get; set; } = 1.0f;
         /// <summary>How big one is, against its own size.</summary>
         public float ParticleRingSparklesSize { get; set; } = 1.0f;
+
+        /// <summary>Dust kicked up under the feet of anyone crossing dry dirt or sand. The game
+        /// raises dust when a tile is hoed and never when it is walked over, so the one surface
+        /// that should answer a footfall answered nothing. Villagers raise it as well.</summary>
+        public bool ParticleFootDust { get; set; } = true;
+        /// <summary>How much a step lifts, against what a step lifts on its own.</summary>
+        public float ParticleFootDustAmount { get; set; } = 1.0f;
+        /// <summary>How big one puff is, against its own size.</summary>
+        public float ParticleFootDustSize { get; set; } = 1.0f;
+
+        /// <summary>A coloured twinkle at each bulb of the town's winter tree. It is the one light
+        /// kind in the game that is decoration rather than illumination, and every release before
+        /// this one lit it like a lantern: warm, white and steady.</summary>
+        public bool ParticleFestiveLights { get; set; } = true;
+        /// <summary>How often a bulb winks, against how often it winks on its own.</summary>
+        public float ParticleFestiveLightsAmount { get; set; } = 1.0f;
+        /// <summary>How big one twinkle is, against its own size.</summary>
+        public float ParticleFestiveLightsSize { get; set; } = 1.0f;
+
+        /// <summary>Hot air over a chimney, and a spark or two riding the smoke after dark. The
+        /// game draws the smoke and cannot draw the air, so a stack read as a puff of grey paint
+        /// rather than as something with a fire under it.</summary>
+        public bool ParticleChimney { get; set; } = true;
+        /// <summary>How many sparks a chimney throws, against the number it throws on its own.</summary>
+        public float ParticleChimneyAmount { get; set; } = 1.0f;
+        /// <summary>How big one is, against its own size.</summary>
+        public float ParticleChimneySize { get; set; } = 1.0f;
+
+        /// <summary>How much light a gathering of glowing particles casts on what is around it,
+        /// 0..1. Embers, fireflies and lava sparks were drawn as light and cast none, so the wall
+        /// beside a brazier was as dark as the wall across the room. The pool follows the
+        /// particles themselves, so it swells as a fire throws more and dies back with them.
+        /// 0 is the unlit surroundings of every release before this one.</summary>
+        public float ParticleGlowLight { get; set; } = 0.5f;
         // --- Precipitation (replacement rain and snow) ---
         /// <summary>Draw rain and snow ourselves instead of letting the game draw them.
         /// <para>Off for its first release, like the particles: rain is something every player has
@@ -887,6 +1019,9 @@ namespace SDVRadiance
         /// this mod's way. On, rain becomes layered streaks with wind and splashes, and snow
         /// becomes drifting flakes instead of a scrolling tiled texture.</para></summary>
         public bool PrecipitationEnabled { get; set; } = true;
+        /// <summary>Sun on snow glitters, one texel at a time, on clear winter days outdoors. 0 is
+        /// the still snow of every release before 1.7.7 and skips the term entirely.</summary>
+        public float SnowGlintStrength { get; set; } = 0.5f;
         /// <summary>Aurora curtains in the water's reflected sky on clear winter nights.</summary>
         public bool AuroraEnabled { get; set; } = true;
         /// <summary>How brightly the aurora curtains show, 0 to 2, 1 being the shipped look.
@@ -1065,12 +1200,89 @@ namespace SDVRadiance
         public ShadowModel DirectionalShadowModel { get; set; } = ShadowModel.Modern;
         /// <summary>Cast directional shadows from sprites (NPCs, later player/objects), by sun angle.</summary>
         public bool DirectionalShadowsEnabled { get; set; } = true;
+        /// <summary>Who casts, under the sun and under the lamps, one switch each and all on by
+        /// default: the player (co-op partners with them), the villagers (every character that
+        /// stands like a person, monsters and festival guests included), the farm animals, and
+        /// the other creatures (the horse, the pets, and whatever a wildlife mod adds: every
+        /// character that lies along the ground). Trees and buildings have their own switches.</summary>
+        public bool DirectionalShadowPlayer { get; set; } = true;
+        public bool DirectionalShadowVillagers { get; set; } = true;
+        public bool DirectionalShadowFarmAnimals { get; set; } = true;
+        public bool DirectionalShadowCreatures { get; set; } = true;
         /// <summary>Opacity of the directional shadows. 0 = none, 1 = full.</summary>
         public float DirectionalShadowStrength { get; set; } = 0.7f;
         /// <summary>Length multiplier for the cast shadow (1 = default sun-driven length).</summary>
         public float DirectionalShadowLength { get; set; } = 1.0f;
         /// <summary>Extra stretch at the day's edges only (quartic in the sun offset).</summary>
         public float GoldenHourStrength { get; set; } = 0f;
+        /// <summary>How much the sun's height and the length of its day follow the season, the
+        /// way they do at the fortieth parallel: a summer noon at seventy-three degrees, a winter
+        /// noon at twenty-seven, seven hours either side of noon in summer against four and two
+        /// thirds in winter. 0 is every earlier release, where every day was a summer day. See
+        /// <see cref="ShadowRenderer.SunStretchAt"/>.</summary>
+        public float SunSeasonStrength { get; set; } = 0f;
+        /// <summary>
+        /// Which side of the screen the sun stands on, in degrees clockwise, with the shadows
+        /// falling away from it. 0 is the sun toward the viewer, below the bottom of the screen,
+        /// which is where every earlier release put it; 180 stands it beyond the top, so shadows
+        /// come forward instead of running away.
+        /// <para>
+        /// It only turns the sun, never the clock: the shadows still swing through the day from
+        /// wherever this puts noon, because a fixed angle would stop the whole day moving.
+        /// </para>
+        /// </summary>
+        public float ShadowSunBearing { get; set; } = 0f;
+        /// <summary>
+        /// Which side the sun stands on for everything that is LIGHT rather than shadow: the shafts
+        /// through the trees, the lean a sprite is lit from, the daylight through a window and the
+        /// glitter on the water. Degrees clockwise, on the SAME scale as
+        /// <see cref="ShadowSunBearing"/>, so equal numbers mean one sun.
+        /// </summary>
+        /// <remarks>
+        /// It ships at 180 and the shadows' at 0, which is where the two halves of this mod have
+        /// stood since they were written: the light coming from above the picture, the shadows
+        /// running away from a sun below it. Both at their own defaults is every earlier release
+        /// exactly. Setting the shadows' dial to 180 as well is what makes the whole scene agree
+        /// about where the sun is, which is what a scene with visible shafts of light wants.
+        /// </remarks>
+        public float SunlightBearing { get; set; } = 180f;
+        /// <summary>
+        /// How much sharper a shadow is where the thing casting it touches the ground than it is
+        /// at the tip. 1 is the shape the geometry gives; 0 is one softness over the whole shadow,
+        /// which is what every release before this one drew.
+        /// </summary>
+        /// <remarks>
+        /// The sun is a disc about half a degree across, so a shadow's soft edge opens out at
+        /// roughly 9.3 mm per metre of gap between the caster and the ground it lands on. At the
+        /// contact point that gap is zero and so is the softness; at the tip of a two-tile
+        /// caster's shadow it is about two and a half pixels. One radius over the whole length is
+        /// therefore wrong at both ends: it dissolves the narrow part near the feet, which is the
+        /// very part that says the shadow belongs to that object, and it under-softens the tip.
+        /// </remarks>
+        public float ShadowContactHardness { get; set; } = 1f;
+        /// <summary>
+        /// How much of a shadow's soft edge is stretched ALONG the shadow rather than being the
+        /// same width all the way round. 1 is the shape the sun's own disc actually casts; 0 is the
+        /// round soft edge every release before this one drew.
+        /// </summary>
+        /// <remarks>
+        /// The sun is a disc, so the blurred rim of a shadow is that disc projected onto the
+        /// ground, and a disc seen at a slant is an ellipse. Its long axis lies along the shadow
+        /// and is longer than the short axis by exactly one over the sine of the sun's height,
+        /// which is the same number as the square root of one plus the shadow's own length per
+        /// unit of caster height. So this needs no figure of its own: the shape comes out of the
+        /// length the shadow already has. The round rim every earlier release drew is the shape
+        /// only a sun straight overhead would cast.
+        /// <para>
+        /// The rim keeps its area as it stretches, so this changes the SHAPE of the softness and
+        /// not how much of it there is; <see cref="DirectionalShadowBlur"/> still owns that.
+        /// </para>
+        /// </remarks>
+        public float ShadowPenumbraStretch { get; set; } = 1f;
+        /// <summary>How much of the sky's fill a shadow carries: blue under a clear sky, grey under
+        /// rain, violet at the day's edges, warm in a room. 0 is the black every release before
+        /// 1.7.7 drew. See <see cref="ShadowRenderer.ShadowInk"/>.</summary>
+        public float ShadowTint { get; set; } = 0.35f;
         /// <summary>Edge softness of the shadow, in pixels (0 = crisp).</summary>
         public float DirectionalShadowBlur { get; set; } = 5.0f;
         /// <summary>Also cast directional shadows from trees and bushes (not just characters).</summary>
@@ -1080,6 +1292,12 @@ namespace SDVRadiance
         /// none, which is what every release before 1.7.6 drew. Asked for on Nexus (cursedguy9997,
         /// 2026-07-22). Rides the daylight shadow pass, so it fades with it at dusk.</summary>
         public float ContactShadowStrength { get; set; } = 0f;
+        /// <summary>The same soft pool under every person and animal. At midday the cast shadow
+        /// is short and runs up the screen behind the body, where the sprite covers it, so a
+        /// person standing in full sun at noon had no shadow to be seen at all. 0 is none, which
+        /// is what every earlier release drew; the default is 0.5 so nobody floats at noon out of
+        /// the box. Rides the daylight shadow pass like the objects'.</summary>
+        public float ContactShadowPeopleStrength { get; set; } = 0.5f;
         /// <summary>Give a building the shape of its own shadow instead of a pool under it.
         ///
         /// <para>A building is the tallest thing on a farm and its shadow is the largest single
@@ -1262,6 +1480,10 @@ namespace SDVRadiance
         public void Clamp()
         {
             static float ClampToRange(float v, float lo, float hi) => float.IsNaN(v) ? lo : Math.Clamp(v, lo, hi);
+            // A bearing is a circle, so it WRAPS rather than clamping: dragging a compass past
+            // north has to come out the other side, and clamping would have parked it on the
+            // seam instead.
+            static float WrapDegrees(float v) => float.IsNaN(v) ? 0f : (v % 360f + 360f) % 360f;
 
             RenderScale = ClampToRange(RenderScale, 0.5f, 1f);
             RenderSharpness = ClampToRange(RenderSharpness, 0f, 2f);
@@ -1274,14 +1496,24 @@ namespace SDVRadiance
             ColorGradeTemperature = ClampToRange(ColorGradeTemperature, -1f, 1f);
             ColorGradeLutAmount = ClampToRange(ColorGradeLutAmount, 0f, 1f);
             ColorGradeLut = ColorGradeLut ?? "";
+            // A hand-edited config.json can say null for a list or a key binding, and the JSON
+            // reader takes it at its word. Each of these is read every frame or on every key press,
+            // so a null here was an exception per frame rather than a missing setting.
+            WaterDisabledLocations ??= new();
+            SavedProfiles ??= new();
+            ToggleKey ??= new(SButton.F7);
+            TunerKey ??= new(SButton.F6);
+            InspectDrawKey ??= new();
             ColorGradeBrightness = ClampToRange(ColorGradeBrightness, 0.5f, 1.5f);
             GodRaysIntensity = ClampToRange(GodRaysIntensity, 0f, 2f);
             GodRaysSunIntensity = ClampToRange(GodRaysSunIntensity, 0f, 1.5f);
             GodRaysSunReach = ClampToRange(GodRaysSunReach, 0.1f, 1f);
             FogDensity = ClampToRange(FogDensity, 0f, 1f);
             FogNightMistDensity = ClampToRange(FogNightMistDensity, 0f, 1f);
+            FogNightMistLampGlow = ClampToRange(FogNightMistLampGlow, 0f, 1f);
             FogCoverage = ClampToRange(FogCoverage, 0f, 1f);
             FogNightMistCoverage = ClampToRange(FogNightMistCoverage, 0f, 1f);
+            MineFogMist = ClampToRange(MineFogMist, 0f, 1f);
             FogNightMistSpeed = ClampToRange(FogNightMistSpeed, 0f, 0.1f);
             FogScale = ClampToRange(FogScale, 1f, 8f);
             FogSpeed = ClampToRange(FogSpeed, 0f, 0.1f);
@@ -1291,6 +1523,7 @@ namespace SDVRadiance
             CloudShadowScale = ClampToRange(CloudShadowScale, 1f, 5f);
             CloudShadowCount = ClampToRange(CloudShadowCount, 0f, 1f);
             CloudShadowSpeed = ClampToRange(CloudShadowSpeed, 0f, 0.1f);
+            StormWarningStrength = ClampToRange(StormWarningStrength, 0f, 1f);
             TiltShiftStrength = ClampToRange(TiltShiftStrength, 0f, 1f);
             TiltShiftRadius = ClampToRange(TiltShiftRadius, 0.05f, 0.9f);
             TiltShiftFeather = ClampToRange(TiltShiftFeather, 0f, 1f);
@@ -1301,6 +1534,7 @@ namespace SDVRadiance
             WaterSpeed = ClampToRange(WaterSpeed, 0f, 3f);
             WaterSparkle = ClampToRange(WaterSparkle, 0f, 1f);
             WaterSparkleDensity = ClampToRange(WaterSparkleDensity, 0.2f, 2f);
+            WaterGlitterPath = ClampToRange(WaterGlitterPath, 0f, 1f);
             WaterCausticsStrength = ClampToRange(WaterCausticsStrength, 0f, 1f);
             WaterReflectStrength = ClampToRange(WaterReflectStrength, 0f, 1f);
             WaterReflectBanding = ClampToRange(WaterReflectBanding, 0f, 16f);
@@ -1327,6 +1561,9 @@ namespace SDVRadiance
             WaterRainRingDensity = ClampToRange(WaterRainRingDensity, 0f, 2f);
             WaterRainRingSize = ClampToRange(WaterRainRingSize, 0.4f, 2f);
             WaterRainRingStrength = ClampToRange(WaterRainRingStrength, 0f, 2f);
+            WaterWakeRings = ClampToRange(WaterWakeRings, 0f, 2f);
+            WaterFishSpotRings = ClampToRange(WaterFishSpotRings, 0f, 2f);
+            WaterWind = ClampToRange(WaterWind, 0f, 2f);
             WindowReflectionStrength = ClampToRange(WindowReflectionStrength, 0f, 2f);
             WindowReflectionNightStrength = ClampToRange(WindowReflectionNightStrength, 0f, 2f);
             WindowSheenStrength = ClampToRange(WindowSheenStrength, 0f, 2f);
@@ -1334,6 +1571,10 @@ namespace SDVRadiance
             WindowSceneReflectionStrength = ClampToRange(WindowSceneReflectionStrength, 0f, 2f);
             WindowLightGlowStrength = ClampToRange(WindowLightGlowStrength, 0f, 2f);
             WindowDaylightStrength = ClampToRange(WindowDaylightStrength, 0f, 2f);
+            WindowGlowOpensNight = ClampToRange(WindowGlowOpensNight, 0f, 1f);
+            LampHalo = ClampToRange(LampHalo, 0f, 1f);
+            AquariumRipple = ClampToRange(AquariumRipple, 0f, 1f);
+            WateredSoilSparkle = ClampToRange(WateredSoilSparkle, 0f, 1f);
             WindowDaylightStrengthElsewhere = ClampToRange(WindowDaylightStrengthElsewhere, 0f, 2f);
             ParticleDensity = ClampToRange(ParticleDensity, 0.25f, 2f);
             ParticleDustAmount = ClampToRange(ParticleDustAmount, 0f, 2f);
@@ -1342,6 +1583,7 @@ namespace SDVRadiance
             ParticleEmbersSize = ClampToRange(ParticleEmbersSize, 0.5f, 2f);
             HeatHazeStrength = ClampToRange(HeatHazeStrength, 0f, 2f);
             ParticleWaterfallMistAmount = ClampToRange(ParticleWaterfallMistAmount, 0f, 2f);
+            WaterfallRainbowStrength = ClampToRange(WaterfallRainbowStrength, 0f, 1f);
             ParticleWaterfallMistSize = ClampToRange(ParticleWaterfallMistSize, 0.5f, 2f);
             ParticleHotSpringSteamAmount = ClampToRange(ParticleHotSpringSteamAmount, 0f, 2f);
             ParticleHotSpringSteamSize = ClampToRange(ParticleHotSpringSteamSize, 0.5f, 2f);
@@ -1354,6 +1596,13 @@ namespace SDVRadiance
             ParticlePetalsFlutter = ClampToRange(ParticlePetalsFlutter, 0f, 1f);
             ParticleRingSparklesAmount = ClampToRange(ParticleRingSparklesAmount, 0f, 2f);
             ParticleRingSparklesSize = ClampToRange(ParticleRingSparklesSize, 0.5f, 2f);
+            ParticleFootDustAmount = ClampToRange(ParticleFootDustAmount, 0f, 2f);
+            ParticleFootDustSize = ClampToRange(ParticleFootDustSize, 0.5f, 2f);
+            ParticleGlowLight = ClampToRange(ParticleGlowLight, 0f, 1f);
+            ParticleChimneyAmount = ClampToRange(ParticleChimneyAmount, 0f, 2f);
+            ParticleChimneySize = ClampToRange(ParticleChimneySize, 0.5f, 2f);
+            ParticleFestiveLightsAmount = ClampToRange(ParticleFestiveLightsAmount, 0f, 2f);
+            ParticleFestiveLightsSize = ClampToRange(ParticleFestiveLightsSize, 0.5f, 2f);
             PrecipitationRainDensity = ClampToRange(PrecipitationRainDensity, 0.25f, 2f);
             PrecipitationSnowDensity = ClampToRange(PrecipitationSnowDensity, 0.25f, 2f);
             PrecipitationWindDensity = ClampToRange(PrecipitationWindDensity, 0.25f, 2f);
@@ -1392,9 +1641,15 @@ namespace SDVRadiance
             LightShadowCarve = ClampToRange(LightShadowCarve, 0f, 1f);
             LightShadowSoftness = ClampToRange(LightShadowSoftness, 0f, 2f);
             ContactShadowStrength = ClampToRange(ContactShadowStrength, 0f, 1f);
+            ContactShadowPeopleStrength = ClampToRange(ContactShadowPeopleStrength, 0f, 1f);
             LightShadowDetail = ClampToRange(LightShadowDetail, 0f, 1f);
             LightingIndoorDarkness = ClampToRange(LightingIndoorDarkness, 0f, 0.95f);
             LightingNightDarkness = ClampToRange(LightingNightDarkness, 0f, 0.95f);
+            // The one numeric dial this method used to walk straight past. Every other
+            // range in here exists because a hand-edited config.json goes to the shader
+            // as written, and the morning dial reaches the same shader as the two above
+            // it. Both menus already offer 0 to 0.95; this is the same range, enforced.
+            LightingMorningDarkness = ClampToRange(LightingMorningDarkness, 0f, 0.95f);
             LightingIndoorColourWalk = ClampToRange(LightingIndoorColourWalk, 0f, 1f);
             LightingMorningClearSkyCool = ClampToRange(LightingMorningClearSkyCool, 0f, 1f);
             LightingWarmth = ClampToRange(LightingWarmth, 0f, 1f);
@@ -1404,7 +1659,14 @@ namespace SDVRadiance
             DirectionalShadowStrength = ClampToRange(DirectionalShadowStrength, 0f, 1f);
             DirectionalShadowLength = ClampToRange(DirectionalShadowLength, 0.2f, 2f);
             GoldenHourStrength = ClampToRange(GoldenHourStrength, 0f, 1f);
+            SunSeasonStrength = ClampToRange(SunSeasonStrength, 0f, 1f);
+            ShadowSunBearing = WrapDegrees(ShadowSunBearing);
+            SunlightBearing = WrapDegrees(SunlightBearing);
+            ShadowContactHardness = ClampToRange(ShadowContactHardness, 0f, 1f);
+            ShadowPenumbraStretch = ClampToRange(ShadowPenumbraStretch, 0f, 1f);
+            ShadowTint = ClampToRange(ShadowTint, 0f, 1f);
             AuroraStrength = ClampToRange(AuroraStrength, 0f, 2f);
+            SnowGlintStrength = ClampToRange(SnowGlintStrength, 0f, 1f);
             DirectionalShadowBlur = ClampToRange(DirectionalShadowBlur, 0f, 5f);
             ShadowGroundForeshortening = ClampToRange(ShadowGroundForeshortening, ShadowGroundForeshorteningMin, ShadowGroundForeshorteningMax);
             ShadowCharacterGroundForeshortening = ClampToRange(ShadowCharacterGroundForeshortening, ShadowGroundForeshorteningMin, ShadowGroundForeshorteningMax);
@@ -1648,6 +1910,7 @@ namespace SDVRadiance
                     // the screen it covers, which is the wrong shape of cost for a weak machine.
                     GodRaysEnabled = false;
                     GodRaysSun = false;
+                    GodRaysSunGlassRoof = false;
                     // REFLECTIONS STAY ON HERE TOO, at the shortest reach and the coarser fade.
                     //
                     // They used to be switched off, and switching them off is what prompted this

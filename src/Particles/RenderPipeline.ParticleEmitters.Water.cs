@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 using StardewValley;
 using xTile.Layers;
 
@@ -71,6 +72,8 @@ namespace SDVRadiance
         /// depend on the particle switch, so the pipeline calls the scan itself each frame too
         /// (it early-outs unless the camera crossed a tile).</summary>
         private Microsoft.Xna.Framework.Graphics.Texture2D? _heatMapTexture;
+        /// <summary>The heat map pair's resting half; see <see cref="UploadHeatMap"/>.</summary>
+        private Microsoft.Xna.Framework.Graphics.Texture2D? _heatMapSpare;
         private Color[] _heatGridCells = Array.Empty<Color>();
         private Vector2 _heatMapOriginTiles, _heatMapSizeTiles;
         private bool _heatOnScreen;
@@ -81,10 +84,7 @@ namespace SDVRadiance
         /// covers is the camera's, so this one is per screen on purpose: with a single slot the
         /// two screens' crossings undid each other and the scan ran twice a frame forever
         /// (0.34 ms a frame against 0.003 with one screen, measured on a farm).</summary>
-        private readonly Dictionary<int, (GameLocation? Location, int TileX, int TileY, int LabelVersion)> _breathScanByScreen = new();
-        private GameLocation? _breathScanLocation;
-        private int _breathScanTileX = int.MinValue, _breathScanTileY = int.MinValue;
-        private int _breathScanLabelVersion = -1;
+        private readonly Dictionary<int, (GameLocation? Location, int TileX, int TileY, MapAnswerKey Answer, bool ChimneyHeat)> _breathScanByScreen = new();
 
         /// <summary>What the scan learned about each tile of the current map, kept for the
         /// location: how many pixels flow, run hot, are molten. A tile is asked of the labels
@@ -97,17 +97,20 @@ namespace SDVRadiance
         /// other's early-out. The report's "stage list + builders" step read 5.2 ms with two
         /// screens on one farm against 0.14 for one. The window still decides what is on
         /// screen; only the label reads are remembered.</para></summary>
-        private GameLocation? _breathTileCacheLocation;
-        private int _breathTileCacheLabelVersion = -1;
-        private int _breathTileCacheWidth, _breathTileCacheHeight;
-        private byte[] _breathTileFlow = Array.Empty<byte>();
-        private byte[] _breathTileHot = Array.Empty<byte>();
-        private byte[] _breathTileLava = Array.Empty<byte>();
-        private bool[] _breathTileScanned = Array.Empty<bool>();
+        private ref GameLocation? _breathTileCacheLocation => ref _screen.BreathTileCacheLocation;
+        // Per screen with the location above: each screen holds its own copy of the map, so one
+        // set compared by reference was rebuilt at every screen switch (RenderPipeline.Screens.cs).
+        private ref MapAnswerKey _breathTileCacheKey => ref _screen.BreathTileCacheKey;
+        private ref int _breathTileCacheWidth => ref _screen.BreathTileCacheWidth;
+        private ref int _breathTileCacheHeight => ref _screen.BreathTileCacheHeight;
+        private ref byte[] _breathTileFlow => ref _screen.BreathTileFlow;
+        private ref byte[] _breathTileHot => ref _screen.BreathTileHot;
+        private ref byte[] _breathTileLava => ref _screen.BreathTileLava;
+        private ref bool[] _breathTileScanned => ref _screen.BreathTileScanned;
 
-        private void EnsureBreathTileCache(GameLocation location, int labelVersion)
+        private void EnsureBreathTileCache(GameLocation location, MapAnswerKey answerKey)
         {
-            if (ReferenceEquals(location, _breathTileCacheLocation) && labelVersion == _breathTileCacheLabelVersion)
+            if (ReferenceEquals(location, _breathTileCacheLocation) && answerKey == _breathTileCacheKey)
                 return;
             int width = 0, height = 0;
             foreach (Layer layer in _breathScanLayers)
@@ -116,7 +119,7 @@ namespace SDVRadiance
                 height = Math.Max(height, layer.LayerHeight);
             }
             _breathTileCacheLocation = location;
-            _breathTileCacheLabelVersion = labelVersion;
+            _breathTileCacheKey = answerKey;
             _breathTileCacheWidth = width;
             _breathTileCacheHeight = height;
             int tiles = width * height;
@@ -174,22 +177,22 @@ namespace SDVRadiance
         /// or the labels were reloaded. Between those, spawning reads the lists and touches no
         /// label at all: LabelStore answers cost a dictionary walk and an orient per tile, which
         /// is fine on a tile crossing and is not fine sixty times a second.</summary>
-        private void ScanWaterBreathSources()
+        private void ScanWaterBreathSources(ModConfig config)
         {
             GameLocation? location = Game1.currentLocation;
             int cameraTileX = Game1.viewport.X / 64, cameraTileY = Game1.viewport.Y / 64;
-            int labelVersion = LabelStore.Instance?.Version ?? 0;
+            MapAnswerKey answerKey = MapAnswerKey.For(location);
             int screenId = _activeScreenId;
+            // The chimney switch is part of what makes a scan stale, because the heat it puts in
+            // the grid is written here and nowhere else. Without this the switch would look dead
+            // until the camera crossed a tile, which is exactly the shape of a bug report.
+            bool chimneyHeat = config.ParticleChimney;
             if (_breathScanByScreen.TryGetValue(screenId, out var last)
                 && ReferenceEquals(location, last.Location)
                 && cameraTileX == last.TileX && cameraTileY == last.TileY
-                && labelVersion == last.LabelVersion)
+                && answerKey == last.Answer && chimneyHeat == last.ChimneyHeat)
                 return;
-            _breathScanByScreen[screenId] = (location, cameraTileX, cameraTileY, labelVersion);
-            _breathScanLocation = location;
-            _breathScanTileX = cameraTileX;
-            _breathScanTileY = cameraTileY;
-            _breathScanLabelVersion = labelVersion;
+            _breathScanByScreen[screenId] = (location, cameraTileX, cameraTileY, answerKey, chimneyHeat);
             _mistFeet.Clear();
             _steamTiles.Clear();
             _lavaTiles.Clear();
@@ -206,7 +209,7 @@ namespace SDVRadiance
                 if (MapLayers.BelongsToFamily(layer.Id, "Back") || MapLayers.BelongsToFamily(layer.Id, "Buildings")
                     || MapLayers.BelongsToFamily(layer.Id, "Front") || MapLayers.BelongsToFamily(layer.Id, "AlwaysFront"))
                     _breathScanLayers.Add(layer);
-            EnsureBreathTileCache(location, labelVersion);
+            EnsureBreathTileCache(location, answerKey);
 
             int firstTileX = Math.Max(0, cameraTileX - 1);
             int firstTileY = Math.Max(0, cameraTileY - MistScanAboveScreen);
@@ -288,22 +291,135 @@ namespace SDVRadiance
                 }
             }
 
+            ScanChimneys(location, chimneyHeat, firstTileX, firstTileY, columns, rows);
             UploadHeatMap(columns, rows, firstTileX, firstTileY);
         }
 
-        /// <summary>Hand the scan's heat cells to the GPU. Recreated only when the window size
-        /// changes; a scan that found no heat still uploads, so the texture the shader samples
-        /// is never a stale window's.</summary>
+        /// <summary>Where the chimneys on this screen stand, in world pixels, found with the scan
+        /// and kept until the camera leaves the tile. Buildings do not move.</summary>
+        private readonly List<Vector2> _chimneyTops = new();
+        /// <summary>How many chimneys the scan found, for the report.</summary>
+        internal int ChimneysFound => _chimneyTops.Count;
+
+        /// <summary>
+        /// The chimneys on screen: hot air over each one, and after dark a spark or two riding it.
+        ///
+        /// <para>A chimney is a hole with a fire under it, and the game already draws the smoke.
+        /// What it cannot draw is the air: smoke that leaves a stack cold reads as a puff of grey
+        /// paint, and the shimmer is what says the thing under it is burning.</para>
+        ///
+        /// <para>The position comes from the building's own data. Every building that has a
+        /// chimney publishes it as ChimneyPosition, an offset in world pixels from the building's
+        /// top left corner, and a building that does not publish one has no chimney; that is the
+        /// same answer the game gives itself, so a modded building with a stack gets this for
+        /// free and one without never does.</para>
+        /// </summary>
+        private void ScanChimneys(GameLocation? location, bool withHeat, int firstTileX, int firstTileY, int columns, int rows)
+        {
+            _chimneyTops.Clear();
+            if (location?.buildings == null || !withHeat)
+                return;
+            foreach (StardewValley.Buildings.Building building in location.buildings)
+            {
+                if (!TryReadChimneyOffset(building, out Vector2 offset))
+                    continue;
+                var top = new Vector2(building.tileX.Value * 64f + offset.X, building.tileY.Value * 64f + offset.Y);
+                _chimneyTops.Add(top);
+                // The air right over the mouth, and the cell above that: heat rises, and one cell
+                // alone reads as a smudge sitting on the roof rather than as a column leaving it.
+                for (int cellsUp = 0; cellsUp <= 1; cellsUp++)
+                {
+                    int column = (int)(top.X / 64f) - firstTileX;
+                    int row = (int)(top.Y / 64f) - firstTileY - cellsUp;
+                    if (column < 0 || column >= columns || row < 0 || row >= rows)
+                        continue;
+                    _heatGridCells[row * columns + column] = Color.White;
+                    _heatOnScreen = true;
+                }
+            }
+        }
+
+        /// <summary>The building's chimney offset, in world pixels from its top left corner, or
+        /// false if it has no chimney. Parsed rather than read off the building, because the
+        /// building keeps its own copy where nothing outside the game can reach it.</summary>
+        private static bool TryReadChimneyOffset(StardewValley.Buildings.Building building, out Vector2 offset)
+        {
+            offset = Vector2.Zero;
+            string? published = building.GetMetadata("ChimneyPosition");
+            if (string.IsNullOrWhiteSpace(published))
+                return false;
+            string[] parts = published.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2
+                || !int.TryParse(parts[0], out int offsetX)
+                || !int.TryParse(parts[1], out int offsetY))
+                return false;
+            offset = new Vector2(offsetX, offsetY);
+            return true;
+        }
+
+        /// <summary>Sparks a chimney throws in a second, at density 1. A hearth is not a bonfire:
+        /// this is a couple of embers riding the smoke, not a shower.</summary>
+        private const float ChimneySparksPerSecond = 1.6f;
+        /// <summary>How far above the mouth a spark first appears, and how far it may wander.</summary>
+        private const float ChimneySparkRisePixels = 10f;
+        private static readonly Vector3 ChimneySparkColour = new(1.0f, 0.62f, 0.28f);
+
+        /// <summary>Embers leaving a chimney, once it is dark enough for one to be seen. In
+        /// daylight a spark this small is invisible and would only be a cost.</summary>
+        private void SpawnChimneySparks(ModConfig config)
+        {
+            if (_particles == null || !config.ParticleChimney || _chimneyTops.Count == 0)
+                return;
+            GameLocation? location = Game1.currentLocation;
+            if (location == null || !location.IsOutdoors || !Game1.isDarkOut(location))
+                return;
+            float rate = ChimneySparksPerSecond * _chimneyTops.Count
+                       * Math.Max(0f, config.ParticleDensity) * Math.Max(0f, config.ParticleChimneyAmount);
+            _chimneySparkCarry += rate / 60f;
+            int toSpawn = Math.Min((int)_chimneySparkCarry, 4);
+            if (toSpawn <= 0)
+                return;
+            _chimneySparkCarry -= toSpawn;
+
+            ParticleSystem pool = _particles;
+            float sizeScale = Math.Max(0.1f, config.ParticleChimneySize);
+            for (int i = 0; i < toSpawn; i++)
+            {
+                Vector2 top = _chimneyTops[(int)(pool.RandomUnit() * _chimneyTops.Count) % _chimneyTops.Count];
+                var position = new Vector2(top.X + pool.RandomBetween(-5f, 5f), top.Y - pool.RandomBetween(0f, ChimneySparkRisePixels));
+                var velocity = new Vector2(pool.RandomBetween(-8f, 8f) + FoliageSway.WindPixelsPerSecond * 0.08f,
+                                           pool.RandomBetween(-34f, -18f));
+                var tint = new Color(ChimneySparkColour.X, ChimneySparkColour.Y, ChimneySparkColour.Z);
+                pool.Spawn(ParticleSystem.AtlasCell.Spark, position, velocity,
+                    lifetimeSeconds: pool.RandomBetween(0.8f, 1.6f),
+                    sizePixels: pool.RandomBetween(3f, 6f) * sizeScale,
+                    tint: tint, emissive: true,
+                    fallPixelsPerSecondSquared: 6f,
+                    dragPerSecond: 0.7f,
+                    swayPixelsPerSecond: pool.RandomBetween(6f, 16f),
+                    swayPerSecond: pool.RandomBetween(0.8f, 1.9f));
+            }
+        }
+
+        private float _chimneySparkCarry;
+
+        /// <summary>Hand the scan's heat cells to the GPU. A scan that found no heat still uploads,
+        /// so the texture the shader samples is never a stale window's.
+        ///
+        /// <para>Written into the resting half of a pair, never into the texture the finishing pass
+        /// sampled last frame: writing to a texture the card may still be reading makes the driver
+        /// wait, which is the stall <see cref="TextureDoubleBuffer"/> exists to remove and which
+        /// measured 2.4 ms on the worst frame when the water mask did it. This uploads on every
+        /// tile the camera crosses.</para></summary>
         private void UploadHeatMap(int columns, int rows, int firstTileX, int firstTileY)
         {
-            if (_heatMapTexture == null || _heatMapTexture.Width != columns || _heatMapTexture.Height != rows)
-            {
-                _heatMapTexture?.Dispose();
-                _heatMapTexture = new Microsoft.Xna.Framework.Graphics.Texture2D(_device, columns, rows);
-            }
-            _heatMapTexture.SetData(_heatGridCells, 0, columns * rows);
+            long uploadStep = ChainStepBegin();
+            _heatMapTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _heatMapSpare, _heatMapTexture,
+                columns, rows, Microsoft.Xna.Framework.Graphics.SurfaceFormat.Color, "heat map",
+                _heatGridCells, columns * rows);
             _heatMapOriginTiles = new Vector2(firstTileX, firstTileY);
             _heatMapSizeTiles = new Vector2(columns, rows);
+            ChainStepEnd(ChainStep.HeatMapUpload, uploadStep);
         }
 
         private static void CountBreathClasses(byte[]? classes, ref int flowing, ref int hot, ref int lava)
@@ -352,6 +468,95 @@ namespace SDVRadiance
                     swayPixelsPerSecond: pool.RandomBetween(6f, 14f),
                     swayPerSecond: pool.RandomBetween(0.5f, 1.2f));
             }
+        }
+
+        // ---- a rainbow in the spray -----------------------------------------------------------
+        // Sunlight through the mist at the foot of a fall bends into a rainbow; the mist emitter
+        // already knows where every fall lands (its feet), so the arc stands where the spray is,
+        // one per fall rather than one per foot. Not a particle: it does not move, it does not
+        // die, and there is one of it, so it is drawn straight from the atlas in the emissive
+        // group's batch. Asked for on Nexus (sfbs97, 30 Aug 2026).
+        private readonly List<(Vector2 Base, float SpanPixels)> _rainbowArches = new();
+        /// <summary>How many arches were drawn this frame, for the report.</summary>
+        internal int RainbowsDrawn { get; private set; }
+
+        /// <summary>The rainbow's presence: the dial, under the sun, eased. Settled every frame
+        /// whether the pool steps or not, so a frozen capture lands on the dial.</summary>
+        private void UpdateRainbowPresence(ModConfig config)
+        {
+            GameLocation? here = Game1.currentLocation;
+            bool sunOut = here != null && here.IsOutdoors && !here.IsRainingHere() && !here.IsSnowingHere();
+            // A bow stands opposite the sun, forty-two degrees out from the point the sun's rays
+            // aim at, so it needs a sun under forty-two degrees: none through the middle of a
+            // summer day, one all day in winter. Asked of the sun's place in its day rather than
+            // of the clock, so the season dial moves this with everything else the sun touches.
+            float lowEnough = 1f;
+            if (config.WaterfallRainbowFollowsSun && LocalSky.Season != Season.Winter)
+            {
+                float edge = Math.Abs(ShadowRenderer.SunSkyOffsetAt(GameClock.MinutesNow()));
+                lowEnough = MathHelper.SmoothStep(0f, 1f, MathHelper.Clamp((edge - 0.30f) / 0.25f, 0f, 1f));
+            }
+            float target = sunOut && config.ParticleWaterfallMist
+                ? MathHelper.Clamp(config.WaterfallRainbowStrength, 0f, 1f) * (1f - NightFactorNow()) * lowEnough
+                : 0f;
+            Approach(ref _rainbowEase, target, 0.03f);
+        }
+
+        /// <summary>One arch per fall: the feet the mist scan found, grouped by neighbourhood.
+        /// The arch's base sits on the lowest foot of its fall, and its span is the fall's width.</summary>
+        private void GatherRainbowArches()
+        {
+            _rainbowArches.Clear();
+            if (_mistFeet.Count == 0)
+                return;
+            // Feet arrive column by column; a fall is a run of feet within a tile of each other.
+            var feet = new List<Vector2>(_mistFeet);
+            feet.Sort((a, b) => a.X.CompareTo(b.X));
+            int start = 0;
+            for (int i = 1; i <= feet.Count; i++)
+            {
+                bool breaks = i == feet.Count
+                    || feet[i].X - feet[i - 1].X > 72f
+                    || Math.Abs(feet[i].Y - feet[i - 1].Y) > 96f;
+                if (!breaks)
+                    continue;
+                float left = feet[start].X, right = feet[i - 1].X, lowest = feet[start].Y;
+                for (int j = start; j < i; j++)
+                    lowest = Math.Max(lowest, feet[j].Y);
+                _rainbowArches.Add((new Vector2((left + right) * 0.5f, lowest + 8f), right - left));
+                start = i;
+            }
+        }
+
+        /// <summary>Draw this frame's arches into the emissive batch. Returns how many.</summary>
+        private int DrawWaterfallRainbows(SpriteBatch spriteBatch, Vector2 screenOffset, float pixelScale)
+        {
+            RainbowsDrawn = 0;
+            if (_particles == null || _rainbowEase <= FadeGone || _mistFeet.Count == 0)
+                return 0;
+            GatherRainbowArches();
+            var viewportTopLeft = new Vector2(Game1.viewport.X, Game1.viewport.Y);
+            // A rainbow in spray does not move, it BREATHES: the spray thickens and thins, so the
+            // bow brightens and fades over a few seconds and drifts a few pixels with the mist.
+            // On the mod's own clock, so a frozen capture holds one breath still. Each fall gets
+            // its own phase from where it stands, so two falls on one screen never breathe in step.
+            float clock = (float)(Determinism.Seconds % 6283.185);
+            foreach (var (arcBase, span) in _rainbowArches)
+            {
+                float phase = arcBase.X * 0.013f + arcBase.Y * 0.007f;
+                float breath = 1f + 0.2f * (float)Math.Sin(clock * 1.5f + phase);
+                float sway = 3f * (float)Math.Sin(clock * 0.9f + phase * 1.7f);
+                Color tint = Color.White * MathHelper.Clamp(_rainbowEase * _fadeParticles * breath, 0f, 1f);
+                // Wider than the fall by a tile and a half on each side, because the spray is;
+                // half as tall as it is wide, the proportion of a rainbow seen whole.
+                float width = span + 192f;
+                float height = width * 0.5f;
+                Vector2 screen = (arcBase + new Vector2(sway, 0f) - viewportTopLeft + screenOffset) * pixelScale;
+                _particles.DrawCell(spriteBatch, ParticleSystem.AtlasCell.Rainbow, screen,
+                    new Vector2(width, height) * pixelScale, tint, new Vector2(0.5f, 1f));
+                RainbowsDrawn++;
+            }
+            return RainbowsDrawn;
         }
 
         /// <summary>Steam standing over water labelled hot (class 14): the bathhouse pool, the

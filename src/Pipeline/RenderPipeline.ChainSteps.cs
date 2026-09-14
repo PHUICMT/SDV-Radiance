@@ -57,6 +57,9 @@ namespace SDVRadiance
             LightWindows,     // EnsureWindowCache + AddWindowLights
             LightEmissive,    // EnsureEmissiveCache + AddEmissiveLights
             LightSelect,      // SelectLights
+            ReliefSheetRefresh, // DrawnFromMapTileSheet: the map's tilesheet list, rebuilt when the map or its sheets change
+            HeatMapUpload,    // UploadHeatMap: the breath scan's heat cells handed to the card
+            ShadowClip,       // ShadowRenderer.ShadowClipDistance: the wall walk under every lit character
             Count,
         }
 
@@ -74,6 +77,7 @@ namespace SDVRadiance
             "    bake: objects arrival walk", "    bake: objects queued", "    patch: solid tiles",
             "    light: gather", "    light: candidates", "    light: windows", "    light: emissive",
             "    light: select",
+            "    relief: sheet list refresh", "    breath: heat map upload", "    shadow: wall clip walk",
         };
 
         private readonly double[] _chainStepAccumulated = new double[(int)ChainStep.Count];

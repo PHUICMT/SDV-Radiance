@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewValley;
@@ -50,6 +51,10 @@ namespace SDVRadiance
             Petal,
             /// <summary>A lens shape, pointed at both ends. Autumn leaves.</summary>
             Leaf,
+            /// <summary>A coloured arc standing on the cell's bottom edge, red outside to violet
+            /// inside, fading at its feet. The only cell that carries colour of its own: a rainbow
+            /// is not a tint on a shape, it IS the colour. Drawn once per waterfall, not spawned.</summary>
+            Rainbow,
         }
 
         /// <summary>
@@ -75,7 +80,7 @@ namespace SDVRadiance
         private const float FadeInShare = 0.15f;
         private const float FadeOutShare = 0.35f;
 
-        private const int AtlasCellCount = 5;
+        private const int AtlasCellCount = 6;
         private const int AtlasCellSizePixels = 32;
 
         /// <summary>
@@ -114,6 +119,12 @@ namespace SDVRadiance
             internal Color Tint;
             internal AtlasCell Cell;
             internal bool Emissive;
+            /// <summary>Drawn in the GAME'S own sorted world batch at its own depth, rather than
+            /// in the pool's pass over the finished frame. A pass over a finished frame does not
+            /// know what is in front of what, so dust kicked up behind somebody was painted over
+            /// them. Anything that lies ON the ground, beside things that stand on it, belongs
+            /// here; anything in the air does not.</summary>
+            internal bool Ground;
         }
 
         private readonly Particle[] _pool = new Particle[Capacity];
@@ -143,6 +154,56 @@ namespace SDVRadiance
 
         internal float RandomBetween(float low, float high) => low + (high - low) * (float)_random.NextDouble();
 
+        /// <summary>Where the glowing particles have gathered, as a world centre, a colour and a
+        /// weight, one entry per cell of <paramref name="cellSizePixels"/>.
+        ///
+        /// <para>Grouped rather than taken one at a time on purpose. A single ember is a speck and
+        /// lights nothing; forty of them over a hearth are a fire, and it is the fire that lights
+        /// the wall. Binning to a grid finds those gatherings without anything having to be told
+        /// which emitter made them, so a new emissive emitter lights its surroundings the day it
+        /// is written and nothing has to be wired up for it.</para>
+        ///
+        /// <para>Weight is alpha times size: what a particle contributes to what the eye sees, so
+        /// a cluster that is fading gives up its light as it goes rather than at the end.</para>
+        /// </summary>
+        internal void GatherEmissiveClusters(float cellSizePixels, int maximum,
+            List<(Vector2 Centre, Vector3 Colour, float Weight)> into)
+        {
+            into.Clear();
+            if (_liveCount == 0 || maximum <= 0 || cellSizePixels < 1f)
+                return;
+            _clusterCells.Clear();
+            for (int i = 0; i < _liveCount; i++)
+            {
+                ref Particle particle = ref _pool[i];
+                if (!particle.Emissive)
+                    continue;
+                float weight = particle.Tint.A / 255f * particle.SizePixels;
+                if (weight <= 0.01f)
+                    continue;
+                long key = (long)(int)Math.Floor(particle.WorldPosition.X / cellSizePixels) * 100003L
+                         + (int)Math.Floor(particle.WorldPosition.Y / cellSizePixels);
+                _clusterCells.TryGetValue(key, out var cell);
+                cell.Position += particle.WorldPosition * weight;
+                cell.Colour += new Vector3(particle.Tint.R, particle.Tint.G, particle.Tint.B) / 255f * weight;
+                cell.Weight += weight;
+                _clusterCells[key] = cell;
+            }
+            foreach (var cell in _clusterCells.Values)
+            {
+                if (cell.Weight <= 0.01f)
+                    continue;
+                into.Add((cell.Position / cell.Weight, cell.Colour / cell.Weight, cell.Weight));
+            }
+            into.Sort((left, right) => right.Weight.CompareTo(left.Weight));
+            if (into.Count > maximum)
+                into.RemoveRange(maximum, into.Count - maximum);
+        }
+
+        /// <summary>Reused by <see cref="GatherEmissiveClusters"/> so a per-frame walk of the pool
+        /// allocates nothing.</summary>
+        private readonly Dictionary<long, (Vector2 Position, Vector3 Colour, float Weight)> _clusterCells = new();
+
         internal ParticleSystem(GraphicsDevice device)
         {
             _atlas = BuildAtlas(device);
@@ -156,7 +217,8 @@ namespace SDVRadiance
                             float lifetimeSeconds, float sizePixels, Color tint, bool emissive,
                             float fallPixelsPerSecondSquared = 0f, float dragPerSecond = 0f,
                             float rotationPerSecond = 0f,
-                            float swayPixelsPerSecond = 0f, float swayPerSecond = 0f)
+                            float swayPixelsPerSecond = 0f, float swayPerSecond = 0f,
+                            bool ground = false)
         {
             if (_liveCount >= Capacity) { SpawnsRefused++; return false; }
             ref Particle particle = ref _pool[_liveCount++];
@@ -175,6 +237,7 @@ namespace SDVRadiance
             particle.Tint = tint;
             particle.Cell = cell;
             particle.Emissive = emissive;
+            particle.Ground = ground;
             return true;
         }
 
@@ -337,6 +400,52 @@ namespace SDVRadiance
         /// draws instead of one for a leaf, and only for leaves.</summary>
         private const int SurfaceWaveBands = 8;
 
+        /// <summary>
+        /// Draw the GROUND particles into the batch the game has open on its sorted world, each at
+        /// its own depth, so the things standing on the ground cover the things lying on it.
+        ///
+        /// <para>This is the same move the watered-soil sparkle had to make. A pass over the
+        /// finished frame can only paint over what is already there, and dust kicked up behind a
+        /// walker is behind them: it has to be sorted, not stamped. The game sorts a world sprite
+        /// by its foot position over ten thousand, so a puff uses its own world Y and lands among
+        /// the characters exactly where it belongs.</para>
+        ///
+        /// <para>No screen offset and no pixel scale here, unlike the pool's own pass: this batch
+        /// is the world's, in the world's own coordinates.</para>
+        /// </summary>
+        internal int DrawGround(SpriteBatch spriteBatch, float systemPresence, Vector3 worldLight)
+        {
+            if (_atlas == null || systemPresence <= 0f || _liveCount == 0)
+                return 0;
+            var viewportTopLeft = new Vector2(Game1.viewport.X, Game1.viewport.Y);
+            float viewportWidth = Game1.viewport.Width, viewportHeight = Game1.viewport.Height;
+            var origin = new Vector2(AtlasCellSizePixels * 0.5f);
+            int drawn = 0;
+            for (int i = 0; i < _liveCount; i++)
+            {
+                ref Particle particle = ref _pool[i];
+                if (!particle.Ground)
+                    continue;
+                float alpha = Presence(particle) * systemPresence;
+                if (alpha <= 0.004f)
+                    continue;
+                Vector2 fromCamera = particle.WorldPosition - viewportTopLeft;
+                float margin = particle.SizePixels;
+                if (fromCamera.X < -margin || fromCamera.X > viewportWidth + margin
+                    || fromCamera.Y < -margin || fromCamera.Y > viewportHeight + margin)
+                    continue;
+                Color tint = particle.Tint * alpha;
+                tint = new Color((byte)(tint.R * worldLight.X), (byte)(tint.G * worldLight.Y),
+                                 (byte)(tint.B * worldLight.Z), tint.A);
+                float scale = particle.SizePixels / AtlasCellSizePixels;
+                float depth = Math.Clamp(particle.WorldPosition.Y / 10000f, 0f, 1f);
+                spriteBatch.Draw(_atlas, fromCamera, CellSource(particle.Cell), tint,
+                    particle.Rotation, origin, scale, SpriteEffects.None, depth);
+                drawn++;
+            }
+            return drawn;
+        }
+
         internal int Draw(SpriteBatch spriteBatch, bool emissive, float systemPresence,
                           Vector2 screenOffsetPixels, float pixelScale, Vector3 worldLight,
                           SurfaceWave wave = default)
@@ -350,7 +459,7 @@ namespace SDVRadiance
             for (int i = 0; i < _liveCount; i++)
             {
                 ref Particle particle = ref _pool[i];
-                if (particle.Emissive != emissive)
+                if (particle.Emissive != emissive || particle.Ground)
                     continue;
                 float alpha = Presence(particle) * systemPresence;
                 if (alpha <= 0.004f)
@@ -425,6 +534,23 @@ namespace SDVRadiance
         private static Rectangle CellSource(AtlasCell cell)
             => new((int)cell * AtlasCellSizePixels, 0, AtlasCellSizePixels, AtlasCellSizePixels);
 
+        /// <summary>
+        /// Draw one atlas cell directly, outside the pool: for the things that are one per place
+        /// rather than many per second (a rainbow over a fall). Must be called between the same
+        /// Begin and End the pool's group is drawn in, so it shares its blend and its scale.
+        /// </summary>
+        /// <param name="sizePixels">Width and height on screen, already in screen pixels.</param>
+        /// <param name="originFraction">Where in the cell the position points: (0.5, 1) is the
+        /// bottom centre.</param>
+        internal void DrawCell(SpriteBatch spriteBatch, AtlasCell cell, Vector2 screenPosition, Vector2 sizePixels,
+                               Color tint, Vector2 originFraction)
+        {
+            if (_atlas == null)
+                return;
+            spriteBatch.Draw(_atlas, screenPosition, CellSource(cell), tint, 0f,
+                originFraction * AtlasCellSizePixels, sizePixels / AtlasCellSizePixels, SpriteEffects.None, 0f);
+        }
+
         /// <summary>How much of a particle is showing: up over the first slice of its life, down
         /// over the last. Both ends, always, so nothing appears or vanishes on a frame boundary.</summary>
         private static float Presence(in Particle particle)
@@ -459,6 +585,11 @@ namespace SDVRadiance
                         // same space whatever the cell size ends up being.
                         float across = (x + 0.5f) / AtlasCellSizePixels * 2f - 1f;
                         float down = (y + 0.5f) / AtlasCellSizePixels * 2f - 1f;
+                        if ((AtlasCell)cell == AtlasCell.Rainbow)
+                        {
+                            pixels[y * width + cell * AtlasCellSizePixels + x] = RainbowPixel(across, down);
+                            continue;
+                        }
                         float alpha = (AtlasCell)cell switch
                         {
                             AtlasCell.SoftGlow => SoftGlowAlpha(across, down),
@@ -475,6 +606,51 @@ namespace SDVRadiance
             var texture = new Texture2D(device, width, AtlasCellSizePixels, false, SurfaceFormat.Color);
             texture.SetData(pixels);
             return texture;
+        }
+
+        /// <summary>
+        /// A rainbow: a band of hue standing on the bottom edge of the cell as a half ring, red at
+        /// the outside and violet at the inside, the way water bends sunlight. Soft at both rims,
+        /// and fading out toward its feet, because a rainbow in spray stands in the spray and has
+        /// no feet on the rock. Premultiplied, like every cell, so the pool's additive blend and a
+        /// plain white tint draw it as it is.
+        /// </summary>
+        private static Color RainbowPixel(float across, float down)
+        {
+            const float outer = 0.98f, inner = 0.60f;
+            // Rise is halved so the arc fills the whole cell: drawn twice as wide as it is tall
+            // (the caller's proportion) that makes a true semicircle standing on the bottom edge.
+            // With rise unhalved the arc sat in the bottom half of the cell and reached the
+            // screen as a flat band at the water's edge (the author asked why it was so low).
+            float rise = (1f - down) * 0.5f;                // 0 at the bottom edge, 1 at the top
+            float radius = (float)Math.Sqrt(across * across + rise * rise);
+            float band = (radius - inner) / (outer - inner);
+            if (band <= 0f || band >= 1f || rise <= 0f)
+                return Color.Transparent;
+            float rims = SoftEdge(0f, 0.16f, band) * SoftEdge(1f, 0.84f, band);
+            float standing = rise / Math.Max(radius, 0.001f);   // 1 at the crown, 0 at the feet
+            float alpha = rims * SoftEdge(0f, 0.45f, standing) * 0.55f;
+            if (alpha <= 0.002f)
+                return Color.Transparent;
+            // Hue from red (outside) to violet (inside), 270 degrees of the wheel.
+            float hue = (1f - band) * 270f;
+            Vector3 colour = HueToRgb(hue);
+            return new Color(colour.X * alpha, colour.Y * alpha, colour.Z * alpha, alpha);
+        }
+
+        private static Vector3 HueToRgb(float hueDegrees)
+        {
+            float h = hueDegrees / 60f;
+            float x = 1f - Math.Abs(h % 2f - 1f);
+            return (int)h switch
+            {
+                0 => new Vector3(1f, x, 0f),
+                1 => new Vector3(x, 1f, 0f),
+                2 => new Vector3(0f, 1f, x),
+                3 => new Vector3(0f, x, 1f),
+                4 => new Vector3(x, 0f, 1f),
+                _ => new Vector3(1f, 0f, x),
+            };
         }
 
         private static float SoftGlowAlpha(float across, float down)

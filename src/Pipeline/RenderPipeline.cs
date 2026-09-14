@@ -84,22 +84,15 @@ namespace SDVRadiance
         /// colour vector are spoken for, and it rides into the shader in the unused z of the
         /// position instead.</summary>
         private readonly float[] _lightIsFire = new float[MaxLights];
+
         private int _lightCount;
 
-        // moved to ScreenState (see RenderPipeline.Screens.cs)         // PIXEL-accurate water mask (16 texels/tile): true water tiles + the painted
                                                // water inside shore-tile art, minus opaque Buildings/Front art (pier posts,
                                                // bridges, lily pads). Effects end exactly at the real waterline.
         // Each uploaded mask is a PAIR: the spare takes the next upload while the card finishes
         // with the front (TextureDoubleBuffer). Spares are per screen, exactly as their fronts
         // are: handing one screen's front to another screen as a spare would write into a
         // texture the first screen's draw still reads, which is the wait this exists to remove.
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)          // Alpha8 signed shore distance (Pass F): 128 = waterline, ±4/texel
-        // moved to ScreenState (see RenderPipeline.Screens.cs)       // the same, measured with the art standing in the water put back
-        // moved to ScreenState (see RenderPipeline.Screens.cs)             // Color: R = distance below the nearest falling face (0 at the foot, 255 six tiles out),
                                                                  // G = distance above the face in this column (0 on the lip, 255 two tiles up) (Pass E2)
         private Texture2D? _fallDistanceFarTexture;              // one texel reading "far from any fall", bound when there is no field yet
 
@@ -117,14 +110,14 @@ namespace SDVRadiance
         }
         private bool[]? _waterTileFlags;         // pre-dilation water flags — GATHER/COMPOSE scratch, owned by the
                                                  // rebuild in flight, not by any screen
-        /// <summary>The composed water flags for the mask currently on screen. A copy taken when a
-        /// rebuild lands, because <see cref="_waterTileFlags"/> belongs to whatever rebuild is
-        /// running next and a worker thread is writing it.</summary>
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        /// <summary>Bumped every time <see cref="_waterTilesInMask"/> is refilled. The array is
-        /// reused in place, so nothing downstream can tell it changed by looking at it; the
-        /// summed-area table that answers "is there water near here" keys its cache off this.</summary>
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
+        // The composed water flags for the mask currently on screen. A copy taken when a
+        // rebuild lands, because _waterTileFlags belongs to whatever rebuild is
+        // running next and a worker thread is writing it.
+        // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
+        // Bumped every time _waterTilesInMask is refilled. The array is
+        // reused in place, so nothing downstream can tell it changed by looking at it; the
+        // summed-area table that answers "is there water near here" keys its cache off this.
+        // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
         private Color[]? _waterMaskPixels;         // pixel-mask upload buffer (tilesW*16 × tilesH*16)
         private bool[]? _waterEffectBits;         // scratch bits for the close/carve passes (effect channel)
         private bool[]? _waterMarchBits;        // march-channel bits (wider close: floats never block)
@@ -136,67 +129,49 @@ namespace SDVRadiance
         private int[]? _waterlineRowPrefixSums;               // per-row prefix sums for the shoreline smoothing window
         private int[]? _waterlineRowSampleCounts;
         private Color[]? _tileArtPixels;              // 16×16 scratch for tile-art reads
-        // Whole-tilesheet pixel cache. Reading each 16×16 tile with its own texture.GetData is a
-        // separate GPU→CPU readback (a pipeline flush ~1-3 ms EACH, regardless of the tiny size);
-        // walking into a fresh forest/town screen touched 100+ new tiles in one gather → a ~300 ms
-        // main-thread stall. Reading a sheet ONCE into a CPU array turns that into a single readback
-        // per sheet (a forest uses a handful), then every tile samples the array with zero GPU work.
-        // Huge sheets (> cap) fall back to per-region GetData so we never allocate a giant array.
-        private readonly System.Collections.Generic.Dictionary<Texture2D, Color[]?> _tilesheetPixelCache = new();
-        // Refusal bound only for absurd sheets — NOT a performance knob. The old 8 Mpx ceiling sat
-        // just under a real SVE tilesheet (2400x3600 = 8.64 Mpx), and being 8% over it swapped one
-        // readback per sheet for one per TILE: 43 s inside a single gather on a 240x156 map.
-        private const int SheetPixelCap = 64_000_000;
+        // The whole-tilesheet pixel cache moved to SheetPixels, which the shadow pass shares: it
+        // asks the same tilesheets this does and used to read and hold every one of them a second
+        // time. Reading each 16×16 tile with its own texture.GetData is a separate GPU→CPU readback
+        // (a pipeline flush ~1-3 ms EACH, regardless of the tiny size); walking into a fresh
+        // forest/town screen touched 100+ new tiles in one gather → a ~300 ms main-thread stall.
+        // Huge sheets (over SheetPixels.PixelCap) still fall back to per-region GetData.
         /// <summary>Per-tile art for sheets too big to cache whole — so even the refused path costs
         /// one readback per DISTINCT tile instead of one per tile the map happens to paint.</summary>
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), Color[]> _tileArtCache = new();
-        private GameLocation? _prewarmedLocation;   // last location whose tilesheets we bulk-read back
+        private ref GameLocation? _prewarmedLocation => ref _screen.PrewarmedLocation;   // last location whose tilesheets we bulk-read back
         private readonly System.Collections.Generic.Dictionary<string, Texture2D?> _tilesheetTextureCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), (bool[] bits, int count, int water)> _tileSolidBitsCache = new();
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), bool[]> _tileAnyAlphaBitsCache = new();
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)              // feature/clump counts: chop a tree, rebuild now
-        // moved to ScreenState (see RenderPipeline.Screens.cs)      // identity: a placed building makes a new one
-        // moved to ScreenState (see RenderPipeline.Screens.cs)   // 1 = classic has ever built into _occluderMask (diagnostic only now)
-        /// <summary>
-        /// FLOOD's own occluder mask, kept fully separate from classic's above.
-        ///
-        /// <para>
-        /// They used to share one texture and one set of origin fields, on the reasoning that
-        /// only one of the two builders would be "the one currently needed" per frame - written
-        /// down at the time as "they share it + the throttle, and are mutually exclusive per
-        /// frame". That was true only because both builders happened to compute the SAME
-        /// unpadded window, so whichever one clobbered the shared fields left behind a texture
-        /// and an origin that were still numerically interchangeable with what the other wanted.
-        /// </para>
-        ///
-        /// <para>
-        /// Padding flood's window past the screen for the sun shafts broke that coincidence.
-        /// Classic's build always runs after flood's in the same frame (build slot 2 follows
-        /// slot 1), so with both lighting systems on - the shipped default, since flood does
-        /// not switch classic off - classic's smaller, unpadded, Buildings-layer-only mask was
-        /// overwriting flood's padded one every single frame, and flood's shader read the origin
-        /// AND the texture back from whatever classic had just left there.
-        /// </para>
-        ///
-        /// <para>
-        /// This was found while chasing something else (a solid black fireplace, which turned out
-        /// to be an unrelated saturation overshoot in floodlight.fx) and split anyway, because two
-        /// systems quietly overwriting one shared cache is a landmine regardless of what it
-        /// happens to produce on any given frame. Two independent sets of fields cannot clobber
-        /// each other, whatever window size either one ever needs.
-        /// </para>
-        /// </summary>
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
+        //
+        // FLOOD's own occluder mask, kept fully separate from classic's above.
+        //
+        //
+        // They used to share one texture and one set of origin fields, on the reasoning that
+        // only one of the two builders would be "the one currently needed" per frame - written
+        // down at the time as "they share it + the throttle, and are mutually exclusive per
+        // frame". That was true only because both builders happened to compute the SAME
+        // unpadded window, so whichever one clobbered the shared fields left behind a texture
+        // and an origin that were still numerically interchangeable with what the other wanted.
+        //
+        //
+        //
+        // Padding flood's window past the screen for the sun shafts broke that coincidence.
+        // Classic's build always runs after flood's in the same frame (build slot 2 follows
+        // slot 1), so with both lighting systems on - the shipped default, since flood does
+        // not switch classic off - classic's smaller, unpadded, Buildings-layer-only mask was
+        // overwriting flood's padded one every single frame, and flood's shader read the origin
+        // AND the texture back from whatever classic had just left there.
+        //
+        //
+        //
+        // This was found while chasing something else (a solid black fireplace, which turned out
+        // to be an unrelated saturation overshoot in floodlight.fx) and split anyway, because two
+        // systems quietly overwriting one shared cache is a landmine regardless of what it
+        // happens to produce on any given frame. Two independent sets of fields cannot clobber
+        // each other, whatever window size either one ever needs.
+        //
+        //
+        // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
         /// <summary>Bumped by world events that change where water is without touching any other
         /// cache key: a fish pond placed/moved/removed (its water is in the mask now) or a map
         /// asset re-patched in place (Content Patcher seasonal/conditional edits). The next
@@ -209,8 +184,6 @@ namespace SDVRadiance
         internal static string MaskEpochReason = "nothing yet";
 
         // Presence fades (0..1): stages ease IN when they (re)appear instead of popping.
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
 
         /// <summary>
         /// SECONDS SINCE THE LAST FRAME, WHICH IS WHAT EVERY FADE IN THIS MOD IS PACED BY.
@@ -233,9 +206,19 @@ namespace SDVRadiance
         /// as much as any one step may take.</para>
         /// </summary>
         private static double _easeSeconds = 1.0 / 60.0;
-        private static long _easeStamp;
+        /// <summary>When this screen last ran <see cref="Apply"/>, by screen id.
+        ///
+        /// <para>PER SCREEN, because <see cref="Apply"/> runs once per screen per frame. A single
+        /// stamp measured the gap between CALLS, so in split screen the second screen saw the
+        /// millisecond or two since the first screen's Apply rather than the time since its own
+        /// last frame: clamped to the floor, every fade on that screen stepped at a tenth to a
+        /// sixteenth of the first screen's speed. The fix for fades running too fast when the
+        /// frame cap is lifted had quietly made the mirror of it on anyone playing in split
+        /// screen, where a fade can take ten seconds to arrive.</para></summary>
+        private static readonly Dictionary<int, long> _easeStampByScreen = new();
         private const double EaseSecondsFloor = 1.0 / 1000.0;
         private const double EaseSecondsCeiling = 3.0 / 60.0;
+        private const double EaseSecondsDefault = 1.0 / 60.0;
 
         /// <summary>Read the clock once for the frame. Called at the top of <see cref="Apply"/>,
         /// so every ease in the frame that follows steps by the same amount. Asking per ease would
@@ -243,13 +226,22 @@ namespace SDVRadiance
         private static void StampEaseClock()
         {
             long now = System.Diagnostics.Stopwatch.GetTimestamp();
-            if (_easeStamp != 0)
+            int screenId = StardewModdingAPI.Context.ScreenId;
+            if (_easeStampByScreen.TryGetValue(screenId, out long previous))
             {
-                double seconds = (now - _easeStamp) / (double)System.Diagnostics.Stopwatch.Frequency;
+                double seconds = (now - previous) / (double)System.Diagnostics.Stopwatch.Frequency;
                 _easeSeconds = Math.Clamp(seconds, EaseSecondsFloor, EaseSecondsCeiling);
             }
-            _easeStamp = now;
+            else
+                // A screen's first frame has nothing to measure, and the other screen's gap is not
+                // an answer for it: one frame at sixty is the honest guess until it has its own.
+                _easeSeconds = EaseSecondsDefault;
+            _easeStampByScreen[screenId] = now;
         }
+
+        /// <summary>Drop a departed screen's ease clock, so a screen id that comes back later
+        /// starts over rather than measuring against whenever its predecessor last drew.</summary>
+        private static void ForgetEaseClock(int screenId) => _easeStampByScreen.Remove(screenId);
 
         /// <summary>How much of the distance to the target SURVIVES one frame, for a rate that was
         /// written as a per-frame fraction at sixty frames a second. At exactly sixty this returns
@@ -276,24 +268,70 @@ namespace SDVRadiance
         private static void Approach(ref float value, float target, float rate) =>
             value = Determinism.Settle(target + (value - target) * EaseKeep(rate), target);
 
+        /// <summary>The same step for a direction or a colour. Written out at five call sites as a
+        /// Lerp with a per-frame fraction, which is a machine rather than a unit: at an uncapped
+        /// frame rate those five arrive between three and seven times too fast, and a fade that
+        /// fast is the pop this family exists to prevent.</summary>
+        private static void Approach(ref Vector2 value, Vector2 target, float rate) =>
+            value = Determinism.Settle(target + (value - target) * EaseKeep(rate), target);
+
+        private static void Approach(ref Vector3 value, Vector3 target, float rate) =>
+            value = Determinism.Settle(target + (value - target) * EaseKeep(rate), target);
+
+        /// <summary>One eased step toward a target, RETURNED rather than assigned, for the call
+        /// sites that hand the result to Determinism.Settle themselves. Same clock as Approach.</summary>
+        private static float EasedToward(float value, float target, float rate)
+            => target + (value - target) * EaseKeep(rate);
+
+        private static Vector3 EasedToward(Vector3 value, Vector3 target, float rate)
+            => target + (value - target) * EaseKeep(rate);
+
+        /// <summary>How fast a room's own eases travel: the exposure it settles at, the colour of
+        /// its windows, its saturation, the daylight through the glass. Slow on purpose, because
+        /// they are whole-room changes a player walks into. A per-frame fraction at sixty.</summary>
+        private const float RoomEaseRate = 0.03f;
+
+        /// <summary>How fast the sun shafts take a new strength, direction and colour. Every gate
+        /// on them is a hard flip (rain starting, the toggle, a warp) and a hard flip on a
+        /// whole-screen effect is a pop, so all three ease together over about a second.</summary>
+        private const float ShaftEaseRate = 0.05f;
+
+        /// <summary>One step of a ramp that climbs by a fixed amount per frame rather than by a
+        /// fraction of what is left: the whole stack fading in when the mod is switched on. Same
+        /// unit problem, same answer - the step is what it was at sixty frames a second.</summary>
+        private static float RampTo1(float value, float perFrameAtSixty) =>
+            Determinism.Settle(Math.Min(1f, value + perFrameAtSixty * (float)(_easeSeconds * 60.0)), 1f);
+
         /// <summary>Presence threshold below which a stage is genuinely invisible and may be
         /// dropped from the frame's stage list.</summary>
         private const float FadeGone = 0.004f;
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
+
+        /// <summary>Hoed dirt in the location, watered or not, and where it lies: the answer to
+        /// "is there anything for the watered-soil sheen to find here" without a walk in game.</summary>
+        private static string DescribeHoedDirt()
+        {
+            GameLocation? location = Game1.currentLocation;
+            if (location?.terrainFeatures == null)
+                return "";
+            int hoed = 0, watered = 0, minX = int.MaxValue, minY = int.MaxValue, maxX = int.MinValue, maxY = int.MinValue;
+            foreach (var pair in location.terrainFeatures.Pairs)
+            {
+                if (pair.Value is not StardewValley.TerrainFeatures.HoeDirt dirt)
+                    continue;
+                hoed++;
+                if (dirt.state.Value == 1) watered++;
+                minX = Math.Min(minX, (int)pair.Key.X); maxX = Math.Max(maxX, (int)pair.Key.X);
+                minY = Math.Min(minY, (int)pair.Key.Y); maxY = Math.Max(maxY, (int)pair.Key.Y);
+            }
+            return hoed == 0 ? "hoed dirt in location: none" : $"hoed dirt in location: {hoed} ({watered} watered) tiles x {minX}-{maxX} y {minY}-{maxY}";
+        }
         /// <summary>Whether this session has already written one post-process failure out in full.</summary>
         private bool _loggedPostProcessFailure;
-        /// <summary>Eased twin of <see cref="_hasWaterInMask"/>: water scrolling into or out of
-        /// the mask window must not add or remove a whole pass in one frame.</summary>
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
+        // Eased twin of _hasWaterInMask: water scrolling into or out of
+        // the mask window must not add or remove a whole pass in one frame.
+        // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
         private readonly Vector4[] _waterGlimmerLights = new Vector4[8];   // on-screen lights → water glimmer
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
 
-        // moved to ScreenState (see RenderPipeline.Screens.cs)      // per-tile occluder mask (walls/structures) for shadows
-        // moved to ScreenState (see RenderPipeline.Screens.cs) // its pair - see the water mask spares above
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)            // true when an occluder mask was built this frame
 
         private bool _loggedOnce;
         private long _chainCostStarted;
@@ -342,7 +380,13 @@ namespace SDVRadiance
         // how many frames each pass actually ran — the pass-count number the 1.5.0 work is
         // judged against. GPU fill cost doesn't show here (measure that as FPS A/B); what this
         // pins down is WHICH passes ran and what their draw-call setup costs.
-        private static readonly string[] _stageNames = { "flood", "lighting", "water", "cloud", "rays", "bloom", "fog", "grade", "tilt", "finish", "tail", "wet" };
+        // Slot 4 was "rays" until the sun shafts moved inside the flood pass and their stage was
+        // deleted with its shader, leaving a name nothing could ever print. The building shadow
+        // needed one: it borrows the cloud shadow's effect (see RenderBuildingShadow) and was
+        // registered under the cloud's name, so the report said the cloud pass ran twice a frame
+        // when it ran once and the building shadow ran once. A pass nobody can name is a pass
+        // nobody can measure.
+        private static readonly string[] _stageNames = { "flood", "lighting", "water", "cloud", "building", "bloom", "fog", "grade", "tilt", "finish", "tail", "wet" };
         /// <summary>How many pass slots the GPU timer has to reserve. Read by GpuTimer rather
         /// than copied into it: the copy was wrong by one for long enough that the last pass
         /// never reported a GPU figure.</summary>
@@ -432,7 +476,8 @@ namespace SDVRadiance
             return $"    sharpness: game zoom {zoom:P0}, ui scale {uiScale:P0}, render scale {configOfFrame.RenderScale:0.00}"
                  + $"{(configOfFrame.RenderScaleAuto ? " (auto)" : "")}, perf preset {configOfFrame.ActivePerfPreset?.ToString() ?? "none"}, look {configOfFrame.ActivePreset},"
                  + $" smooth art {smoothArt}, relief {(configOfFrame.SpriteReliefEnabled ? "on" : "off")},"
-                 + $" tilt-shift {(configOfFrame.TiltShiftEnabled ? "on" : "off")}, chromatic aberration {(configOfFrame.ChromaticAberrationEnabled ? "on" : "off")}";
+                 + $" tilt-shift {(configOfFrame.TiltShiftEnabled ? "on" : "off")}, chromatic aberration {(configOfFrame.ChromaticAberrationEnabled ? "on" : "off")}"
+                 + System.Environment.NewLine + SheetUpscaler.DescribeSoftSprites();
         }
 
         /// <summary>The relief pass, and which sheets it gave a bevel to last frame. A map's own
@@ -444,7 +489,11 @@ namespace SDVRadiance
                 return "    relief: off";
             var names = _bevelledSheetsLastFrame;
             string list = names.Count == 0 ? "none" : string.Join(", ", names.Take(10)) + (names.Count > 10 ? $" and {names.Count - 10} more" : "");
-            return $"    relief: presence {_reliefEase:F2}, sheets bevelled last frame {names.Count}: {list}";
+            string road = ReliefVertexRoad && _reliefVertexPath != null
+                ? $"our own vertices ({_reliefVertexPath.SpritesLastFrame} sprites, {_reliefVertexPath.SheetsLastFrame} sheets, "
+                  + $"{_reliefVertexPath.DrawsLastFrame} draws{(_reliefVertexPath.ClosedBecause.Length > 0 ? ", last refusal: " + _reliefVertexPath.ClosedBecause : "")})"
+                : ReliefVertexRoad ? "our own vertices (nothing drawn yet)" : "the SpriteBatch";
+            return $"    relief: presence {_reliefEase:F2}, road {road}, sheets bevelled last frame {names.Count}: {list}";
         }
 
         internal string DescribeStageState()
@@ -478,6 +527,13 @@ namespace SDVRadiance
                         + $"cloud={_fadeCloud:F2} tilt={_fadeTilt:F2} godRays={_godRayAmount:F2}");
             report.AppendLine($"    fogDay={_fogDayAmount:F2} fogMist={_fogMistAmount:F2} cloudWeather={_cloudWeatherAmount:F2} "
                         + $"master={_masterFade:F2}");
+            report.AppendLine($"    snowGlint={_snowGlintEase:F2} (season={LocalSky.Season} outdoors={Game1.currentLocation?.IsOutdoors} "
+                        + $"snowing={Game1.currentLocation?.IsSnowingHere()} raining={Game1.currentLocation?.IsRainingHere()} night={NightFactorNow():F2})");
+            report.AppendLine($"    wateredSoil={_wateredSparkleEase:F2} tilesDrawn={WateredSoilSparkle.TilesDrawnLastFrame} {DescribeHoedDirt()}");
+            report.AppendLine($"    waterGlitter={_glitterPathEase:F2} sunAxis=({_glitterSunAxis.X:F2},{_glitterSunAxis.Y:F2}) (dial {_lastConfig?.WaterGlitterPath ?? 0f:F2})");
+            report.AppendLine($"    wakeRings={_wakeRingsLive} live of {WakeRingSlots}, {_wakeRingMakers.Count} thing(s) in the water (dial {_lastConfig?.WaterWakeRings ?? 0f:F2}): {DescribeWakeRingMakers()}");
+            report.AppendLine($"    fishSpot={DescribeFishSpot()} (dial {_lastConfig?.WaterFishSpotRings ?? 0f:F2})");
+            report.AppendLine($"    wind={DescribeWaterWind()} (dial {_lastConfig?.WaterWind ?? 0f:F2})");
             // A shader that failed to load leaves its stage silently doing nothing, which reads to
             // the player as "the mod is not working" with no error anywhere they would look.
             var missing = new List<string>();
@@ -551,7 +607,7 @@ namespace SDVRadiance
             int cached = 0, fellBack = 0;
             long pixels = 0;
             var offenders = new List<string>();
-            foreach (var sheetEntry in _tilesheetPixelCache)
+            foreach (var sheetEntry in SheetPixels.Entries)
             {
                 if (sheetEntry.Value == null)
                 {
@@ -659,8 +715,14 @@ namespace SDVRadiance
         }
 
         private int _lastViewportWidth = -1, _lastViewportHeight = -1;
-        // moved to ScreenState (see RenderPipeline.Screens.cs) // 0..1 eased presence so rays fade in/out instead of popping
+        /// <summary>What the window, emissive and window-pane walks may spend between them this
+        /// frame. One object, so three rebuilds coming due together cost one slice.</summary>
+        private readonly MapScanBudget _mapScanBudget = new();
+
         private float _masterFade;              // 0..1 ease-in of the whole stack when it turns on
+        /// <summary>How much of the master fade-in one frame at sixty carries: about four
+        /// tenths of a second from switched on to fully there.</summary>
+        private const float MasterFadeInPerFrame = 0.045f;
 
         // Reused per-frame stage list + cached stage delegates (see Apply).
         private readonly List<Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig>> _stages = new();
@@ -688,16 +750,13 @@ namespace SDVRadiance
 
         // Flood-propagation GI lightmap (see FloodLightmap.cs).
         private Effect? _floodEffect;
-        /// <summary>Not readonly: in split screen each camera keeps its own grid, and this holds
-        /// whichever screen's turn it currently is (see RenderPipeline.Screens.cs).</summary>
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
+        // Not readonly: in split screen each camera keeps its own grid, and this holds
+        // whichever screen's turn it currently is (see RenderPipeline.Screens.cs).
+        // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
         // Radiance cascades: the same lightmap computed on the GPU (see RadianceCascades.cs), per
         // screen like the flood grid. The blend is the cross-fade between the two models' maps,
         // eased in BuildStageList; the ready flag says the cascades' texture is fit to read.
         private Effect? _cascadesEffect;
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
         // Sprite relief: the sheet normal maps and the buffer this frame's recorded world draw
         // is replayed into with them (see SpriteDrawRecorder, SheetNormalCache). Shared by the
         // screens - each replays before its own chain reads it.
@@ -721,29 +780,23 @@ namespace SDVRadiance
         private Texture2D? _flatNormalTexture;
         /// <summary>The texture-sorted relief replay's effect (reliefreplay.fx): depth from the tint, alpha test.</summary>
         private Effect? _reliefReplayEffect;
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
         private SpriteBatch? _normalSpriteBatch;
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        /// <summary>Where the camera was when the sprite-normal buffer was last drawn. The buffer
-        /// is screen space, so a frame that cannot redraw it may only reuse it from the same view.</summary>
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
+        // Where the camera was when the sprite-normal buffer was last drawn. The buffer
+        // is screen space, so a frame that cannot redraw it may only reuse it from the same view.
+        // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
         private int _normalPassDrawn;
 
         // Metered auto-exposure: average the scene each frame (downsampled to a
         // tiny RT, read back a frame late so there's no GPU stall) and ease the
         // exposure toward a target so bright scenes (sand/snow/rooms) dim smoothly.
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        /// <summary>Whose light the meter is currently exposed for. A new one means arrive
-        /// already exposed rather than easing in from the last place's reading.</summary>
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
+        // Whose light the meter is currently exposed for. A new one means arrive
+        // already exposed rather than easing in from the last place's reading.
+        // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
 
-        /// <summary>Eased exposure multiplier from the metering above. It scales the WHOLE frame,
-        /// which makes it the first suspect whenever the picture brightens or dims on its own —
-        /// captures record it (see RenderPipeline.Dump.cs) and freeze mode pins it at neutral.</summary>
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
+        // Eased exposure multiplier from the metering above. It scales the WHOLE frame,
+        // which makes it the first suspect whenever the picture brightens or dims on its own —
+        // captures record it (see RenderPipeline.Dump.cs) and freeze mode pins it at neutral.
+        // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
 
         public RenderPipeline(GraphicsDevice device, IMonitor monitor, string modDirectory)
         {
@@ -848,11 +901,52 @@ namespace SDVRadiance
             return null;
         }
 
+        /// <summary>
+        /// Reload one compiled shader from the assets folder without restarting the game: the
+        /// author's tool for comparing two builds of a shader on ONE frozen frame, which is the
+        /// only comparison that can call them byte-identical. Two launches differ by whatever the
+        /// game itself animated between them, and measured on 12/9 that drift spread a hundred
+        /// pixels and more through the effect chain, which is the whole screen.
+        /// </summary>
+        internal string ReloadShader(string name)
+        {
+            Effect? loaded = LoadEffect(name + ".mgfxo");
+            if (loaded == null)
+                return $"{name}.mgfxo did not load; the old one stays";
+            Effect? old;
+            switch (name)
+            {
+                case "floodlight": old = _floodEffect; _floodEffect = loaded; break;
+                case "bloom": old = _bloom; _bloom = loaded; break;
+                case "tiltshift": old = _tiltShift; _tiltShift = loaded; break;
+                case "water": old = _water; _water = loaded; break;
+                case "lighting": old = _lighting; _lighting = loaded; break;
+                case "fog": old = _fogEffect; _fogEffect = loaded; break;
+                case "cloudshadow": old = _cloudShadow; _cloudShadow = loaded; break;
+                case "colorgrade": old = _colorGrade; _colorGrade = loaded; break;
+                case "finishing": old = _finishing; _finishing = loaded; break;
+                case "tail": old = _tail; _tail = loaded; break;
+                case "wet": old = _wetEffect; _wetEffect = loaded; break;
+                case "upscale": old = _upscale; _upscale = loaded; break;
+                case "cascades": old = _cascadesEffect; _cascadesEffect = loaded; break;
+                case "normals": old = _normalsEffect; _normalsEffect = loaded; break;
+                case "reliefreplay": old = _reliefReplayEffect; _reliefReplayEffect = loaded; break;
+                case "shadowmask": old = ShadowRenderer.ShadowMaskEffect; ShadowRenderer.ShadowMaskEffect = loaded; break;
+                case "sheetscale": old = SheetUpscaler.Effect; SheetUpscaler.Effect = loaded; break;
+                default: loaded.Dispose(); return $"no shader named {name}";
+            }
+            // The parameter cache is keyed by effect instance, so the old entries are only dead
+            // weight; cleared so nothing can hand back a parameter of a disposed effect.
+            _effectParameterCache.Clear();
+            old?.Dispose();
+            return $"{name} reloaded from assets";
+        }
+
         private bool AnyEffectActive(ModConfig config) =>
             (config.FloodLightingEnabled && _floodEffect != null)
             || (config.LightingEnabled && _lighting != null)
             || (config.CloudShadowEnabled && _cloudShadow != null)
-            || (config.BloomEnabled && _bloom != null)
+            || (config.BloomEnabled && _bloom != null && config.BloomIntensity > 0f)
             || ((config.FogEnabled || config.FogNightMist) && _fogEffect != null)
             || ((config.ColorGradeEnabled || config.BlueLightFilter > 0.001f) && _colorGrade != null)
             || (config.TiltShiftEnabled && _tiltShift != null)
@@ -884,7 +978,8 @@ namespace SDVRadiance
              + $"waterMaskOrigin=({_lastWaterTileX},{_lastWaterTileY}) maskJobInFlight={_pendingWaterMaskJob != null} "
              + $"maskJobScreen={(_pendingWaterMaskJob?.ScreenId.ToString() ?? "-")} "
              + $"occluderOrigin=({_occluderTileX},{_occluderTileY}) floodOccluderOrigin=({_floodOccluderTileX},{_floodOccluderTileY}) "
-             + $"stateScreen={_activeScreenId} statesKept={_screenStates.Count}";
+             + $"stateScreen={_activeScreenId} statesKept={_screenStates.Count} "
+             + $"exposureSnaps={((uint)_activeScreenId < (uint)_exposureSnapsByScreen.Length ? _exposureSnapsByScreen[_activeScreenId] : 0)}";
 
         private void EnsureTargets(int width, int height, SurfaceFormat format)
         {
@@ -969,6 +1064,30 @@ namespace SDVRadiance
         /// them entirely - the tally was applied by a script that looked for "new RenderTarget2D",
         /// and this one is target-typed - so the 130.7 MB first measured was itself an
         /// understatement by about a fifth.</summary>
+        /// <summary>Which world sprite won the depth test at each pixel of the relief buffer,
+        /// as the sixteen bit rank the recorder handed the replay, high byte in red and low in
+        /// green, with the sprite's coverage in alpha. Alpha is the only thing that says a
+        /// sprite is there: the clear cannot give two bound targets different colours, so a
+        /// pixel with no sprite carries the flat normal's bytes and a meaningless rank.
+        /// <para>Written by the relief replay as its second output, so it costs that pass one
+        /// more write and no draws of its own. It exists because a render target's DEPTH cannot
+        /// be sampled on this build: it is a renderbuffer with no texture behind it.</para></summary>
+        private RenderTarget2D? _spriteRankRenderTarget;
+        private bool _spriteRankReady;
+
+        /// <summary>radiance_spriterank: whether the relief replay writes the rank buffer at all.
+        /// <para>OFF, because nothing reads it. The one thing that did - a lamp refusing to light
+        /// what ranks in front of it - was built, measured and taken out again: draw order says
+        /// what is drawn later, not what stands between the viewer and the lamp, and in a top-down
+        /// room that meant a wall lamp lit nothing below itself. The buffer itself was never the
+        /// thing that was wrong (proven at +0.932 against screen row, no measurable cost), so it
+        /// stays here switched off rather than being deleted and rediscovered.</para>
+        /// <para>Turn it on and dump a frame to see it: the dump carries it as sprite_rank.</para></summary>
+        internal static bool SpriteRankWanted;
+
+        /// <summary>The rank buffer, or null when this frame did not draw one.</summary>
+        internal RenderTarget2D? SpriteRankBuffer => _spriteRankReady ? _spriteRankRenderTarget : null;
+
         private RenderTarget2D CreateRenderTarget(int width, int height, SurfaceFormat format) =>
             VramTally.Track(new RenderTarget2D(_device, width, height, false, format, DepthFormat.None, 0,
                 RenderTargetUsage.PreserveContents), "effect chain buffers");
@@ -1153,9 +1272,15 @@ namespace SDVRadiance
             //
             // Eased rather than switched: weather mods (Cloudy Skies) can flip this mid-day, and
             // the presence fade only ramps a stage back IN, so a hard cut here would pop.
-            bool cloudOvercast = Game1.isRaining || Game1.isSnowing || Game1.isLightning;
+            bool cloudOvercast = LocalSky.IsRaining || LocalSky.IsSnowing || LocalSky.IsLightning;
             Approach(ref _cloudWeatherAmount, cloudOvercast ? 0f : 1f, 0.05f);   // ~1s
             _cloudOvercastBlend = 1f - _cloudWeatherAmount;
+            // Tomorrow's weather is already settled and already public: the television forecast
+            // reads it out over breakfast. A sky that gives no sign of it is the one thing on
+            // screen that does not know. So on the afternoon before rain the cover thickens and
+            // the light loses a little of its warmth, arriving across the whole of the afternoon
+            // rather than at an hour, and it is worth nothing on a day that stays clear.
+            Approach(ref _stormWarningEased, StormWarningTarget(config), 0.05f);
             _cloudDayFactor = CloudDayFactor() * MathHelper.Lerp(OvercastCloudStrength, 1f, _cloudWeatherAmount);
             bool cloudOn = config.CloudShadowEnabled && _cloudShadow != null && outdoors && _cloudDayFactor > 0.02f;
             _fadeCloud = cloudOn ? Ease01(_fadeCloud) : Ease0(_fadeCloud);
@@ -1168,7 +1293,7 @@ namespace SDVRadiance
                                     && config.DirectionalShadowBuildings && outdoors
                                     && ShadowRenderer.BuildingSunShadowReady;
             _fadeBuildingShadow = buildingShadowOn ? Ease01(_fadeBuildingShadow) : Ease0(_fadeBuildingShadow);
-            if (_fadeBuildingShadow > FadeGone && _cloudShadow != null) AddStage(_buildingShadowStageDelegate!, 3);
+            if (_fadeBuildingShadow > FadeGone && _cloudShadow != null) AddStage(_buildingShadowStageDelegate!, 4);
             // Lamp shafts are drawn INSIDE the flood pass now, from the same occluder mask the sun
             // shafts march (floodlight.fx, LampShaftStrength); the bright-pass stage that used to
             // sit here is gone with its shader. What is decided here is only their presence, eased
@@ -1176,8 +1301,9 @@ namespace SDVRadiance
             {
                 // Rain/snow: the overcast sky kills visible shafts outdoors, and under a glass
                 // roof, which is the same sky.
-                bool underSky = outdoors || ShadowRenderer.UnderAGlassRoof(Game1.currentLocation);
-                bool overcast = underSky && (Game1.isRaining || Game1.isSnowing || Game1.isLightning);
+                bool underSky = outdoors
+                    || (config.GodRaysSunGlassRoof && ShadowRenderer.UnderAGlassRoof(Game1.currentLocation));
+                bool overcast = underSky && (LocalSky.IsRaining || LocalSky.IsSnowing || LocalSky.IsLightning);
                 // Shafts are a LOW-LIGHT phenomenon: they exist where a bright source beats a
                 // dim surround. At high noon outdoors nothing on screen is dim, so ride the
                 // presence down to 30% at midday and back to full by 08:00 / 17:00. Indoors
@@ -1192,15 +1318,29 @@ namespace SDVRadiance
                 if (arrivedThisFrame) _godRayAmount = rayTarget;
                 else Approach(ref _godRayAmount, rayTarget, 0.05f); // ~0.5s fade
             }
-            if (config.BloomEnabled && _bloom != null) AddStage(_bloomStageDelegate!, 5);
+            // At an intensity of zero the composite returns the scene untouched, so the four
+            // passes were fill for nothing; the stage is left out until there is something to add.
+            if (config.BloomEnabled && _bloom != null && config.BloomIntensity > 0f) AddStage(_bloomStageDelegate!, 5);
             // Fog is a weak, patchy effect indoors (and covers the black border), so outdoors only.
             // DAY fog and NIGHT mist are separate effects with separate toggles: day fog
             // fades out over dusk exactly as the night mist (sparse blue wisps, clear
             // weather only) fades in. Both amounts are EASED so toggling never pops.
             float night = NightFactorNow();
             float dayTarget = (config.FogEnabled && outdoors) ? config.FogDensity * (1f - night) : 0f;
-            float mistTarget = (config.FogNightMist && outdoors && !Game1.isRaining && !Game1.isSnowing)
-                ? config.FogNightMistDensity * night : 0f;
+            // A mine level whose air is thick is the one INDOOR place with real fog in it, and the
+            // game draws it as one tile stamped across the screen. Ours goes over the top of it,
+            // which does two things the tiling cannot: it moves, and it takes the glow of the
+            // torches out of the lightmap, so a lamp in the fog reads as a lamp in fog. The mine's
+            // own fog is left alone underneath; this adds, it does not replace.
+            // Two different thicknesses of air down there: the timed fog of an infested level
+            // (isFogUp, which the game raises and clears on its own clock) and the standing haze
+            // of the mushroom levels (ambientFog). Either counts.
+            bool mineAirIsThick = Game1.currentLocation is StardewValley.Locations.MineShaft mineHere
+                                  && (mineHere.isFogUp.Value || mineHere.ambientFog);
+            MineAirIsThick = mineAirIsThick;
+            float mistTarget = (config.FogNightMist && outdoors && !LocalSky.IsRaining && !LocalSky.IsSnowing)
+                ? config.FogNightMistDensity * night
+                : (mineAirIsThick ? config.MineFogMist : 0f);
             if (arrivedThisFrame) { _fogDayAmount = dayTarget; _fogMistAmount = mistTarget; }
             else
             {
@@ -1209,7 +1349,8 @@ namespace SDVRadiance
             }
             if (Math.Abs(dayTarget - _fogDayAmount) < 0.003f) _fogDayAmount = dayTarget;
             if (Math.Abs(mistTarget - _fogMistAmount) < 0.003f) _fogMistAmount = mistTarget;
-            if ((_fogDayAmount > 0.004f || _fogMistAmount > 0.004f) && _fogEffect != null && outdoors) AddStage(_fogStageDelegate!, 6);
+            if ((_fogDayAmount > 0.004f || _fogMistAmount > 0.004f) && _fogEffect != null
+                && (outdoors || mineAirIsThick)) AddStage(_fogStageDelegate!, 6);
             // Grade / finishing eases live HERE (not in the stage bodies) so the fused
             // tail path and the fallback path advance them exactly once per frame each.
             bool eventNow = Game1.eventUp || Game1.CurrentEvent != null;
@@ -1220,7 +1361,7 @@ namespace SDVRadiance
             // scan is called here too so the haze works with the particle switch off. It
             // early-outs unless the camera crossed a tile.
             long breathScanStart = ChainStepBegin();
-            ScanWaterBreathSources();
+            ScanWaterBreathSources(config);
             ChainStepEnd(ChainStep.BreathScan, breathScanStart);
             Approach(ref _heatHazeEase, config.HeatHazeEnabled && HeatOnScreen ? 1f : 0f, 0.05f);
             bool hazeLive = _heatHazeEase > FadeGone && _heatMapTexture != null;
@@ -1230,7 +1371,9 @@ namespace SDVRadiance
             // NOT during events - the game draws the event UI (SKIP button) as part of the
             // world frame, and the bottom blur band smears it unreadable. Cutscenes keep
             // the rest of the stack (grade/bloom/fog/clouds) for the cinematic look.
-            bool tiltOn = config.TiltShiftEnabled && _tiltShift != null && !eventNow;
+            // And not at a strength of zero, where the composite returns the sharp frame and the
+            // two blur passes are fill for nothing; the fade below eases it out as it always did.
+            bool tiltOn = config.TiltShiftEnabled && _tiltShift != null && !eventNow && config.TiltShiftStrength > 0f;
             _fadeTilt = tiltOn ? Ease01(_fadeTilt) : Ease0(_fadeTilt);
             // Kept moving even while the blur is off, so it is already where it belongs on the
             // frame the blur comes back. A location that turns its own roof on and off without a
@@ -1269,6 +1412,8 @@ namespace SDVRadiance
             // frame the chain sat out is still a frame that passed, and the fade that resumes
             // afterwards should not be handed the whole gap at once.
             StampEaseClock();
+            // One slice of this frame for the whole-map walks, shared between all three of them.
+            _mapScanBudget.BeginFrame();
             if (!AnyEffectActive(config))
             {
                 _masterFade = 0f; // reset so the stack fades back in next time it's enabled
@@ -1363,6 +1508,16 @@ namespace SDVRadiance
                 stepStart = ChainStepBegin();
                 if (config.ColorGradeEnabled && config.ColorGradeAuto)
                     UpdateAutoExposure(spriteBatch, chainSource);
+                else
+                    // AND BACK TO NEUTRAL WHEN THE METER IS SWITCHED OFF. The meter is the only
+                    // writer of this number, so turning auto off used to leave whatever it was
+                    // reading at that moment multiplying the whole picture for the rest of the
+                    // session: stand somewhere bright, switch auto off, and the screen stays dim
+                    // with no setting that explains it. It eases rather than snapping, because a
+                    // whole-frame gain that jumps is the pop this family exists to avoid, and it
+                    // eases every frame rather than every fourth, so the picture the player just
+                    // asked for arrives within about a fifth of a second.
+                    Approach(ref _meteredExposure, 1f, MeteredExposureEaseRate);
                 ChainStepEnd(ChainStep.Exposure, stepStart);
 
                 RunBenchExtraChains(spriteBatch, chainSource, stages, config);
@@ -1686,7 +1841,7 @@ namespace SDVRadiance
             // Ease the whole stack in: blend the untouched scene back over the
             // result and let it fade out, so effects don't pop on when enabled
             // or after a load. `current` is the game's target at this point.
-            _masterFade = Determinism.Settle(Math.Min(1f, _masterFade + 0.045f), 1f);
+            _masterFade = RampTo1(_masterFade, MasterFadeInPerFrame);
             if (_masterFade < 1f && stageCount > 0)
             {
                 _device.SetRenderTarget(target);
@@ -1831,41 +1986,77 @@ namespace SDVRadiance
         /// <summary>What is left of the cloud-shadow strength under a full overcast. Not zero:
         /// an overcast sky still varies, and cutting the effect outright reads as a bug.</summary>
         private const float OvercastCloudStrength = 0.45f;
-        /// <summary>The cloud stage's blurred density mask, kept in its OWN target so it survives
-        /// to the next frame — the scratch buffers it used to live in are rewritten by god rays
-        /// and bloom later in the same frame. The sun shafts read it one frame late (flood is
-        /// stage 0, clouds are stage 3), which for a mask that drifts a texel a second is
-        /// invisible; what it buys is shafts that die under a cloud and blaze at its sunward
-        /// edge, instead of the two effects being painted over each other as strangers.
-        /// Cross-frame RT — PreserveContents (CreateRenderTarget default) is load-bearing.</summary>
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        /// <summary>Tick <see cref="_cloudMaskKeep"/> was last written; the flood stage refuses a
-        /// stale mask (cloud stage off, or just faded out) rather than gating on old sky.</summary>
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        /// <summary>Viewport origin in world tiles when the kept mask was drawn, so the flood
-        /// stage can shift its sample by however far the camera moved since.</summary>
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        /// <summary>The opacity the kept mask was composited at (already carries day factor and
-        /// fade), so the shafts respect a faint moon-cloud faintly and a storm ceiling hard.</summary>
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
-        /// <summary>Eased coupling strength, so shafts do not pop when the cloud stage joins or
-        /// leaves the frame — same house rule as every other gate on this effect.</summary>
-        // moved to ScreenState (see RenderPipeline.Screens.cs)
+        /// <summary>0 .. 1: how far the sky has closed in ahead of tomorrow's rain. Static because
+        /// the colour grade's automatic mood is a static method and reads the same number the cloud
+        /// stage does; there is one pipeline and one sky.</summary>
+        private static float _stormWarningEased;
+        /// <summary>Whether the mine level on screen has its fog up, for the report. A mist that
+        /// does not appear and a level that was never foggy are the same picture.</summary>
+        internal static bool MineAirIsThick;
+        /// <summary>The middle of the close-in, and how long it takes. Centred at half past five
+        /// with three hours of width, so it begins around four and is fully arrived by seven, and
+        /// no single hour carries a visible change.</summary>
+        private const int StormWarningCentreHhmm = 1730;
+        private const float StormWarningHalfWidthMinutes = 90f;
+        /// <summary>Vanilla's weather ids for tomorrow. There are no constants for these in 1.6:
+        /// weather moved into Data/LocationContexts and the ids are plain strings, so the ones
+        /// vanilla ships are written out here. An id from a weather mod that is none of these is
+        /// simply not a storm as far as this is concerned, which is the safe way to be wrong.</summary>
+        private static readonly string[] StormWarningWeatherIds = { "Rain", "Storm", "GreenRain", "Snow" };
+        /// <summary>How much more of the ground is under cloud at a full close-in. A fifth on top of
+        /// the player's own coverage, which is well short of the 0.32 a real overcast adds.</summary>
+        private const float StormWarningExtraCoverage = 0.20f;
+
+        /// <summary>How closed in the sky should be right now, before easing: the dial, held back
+        /// until the afternoon, and only on a day whose tomorrow brings weather.</summary>
+        private static float StormWarningTarget(ModConfig config)
+        {
+            if (config.StormWarningStrength <= 0.001f)
+                return 0f;
+            string tomorrow = Game1.weatherForTomorrow;
+            if (string.IsNullOrEmpty(tomorrow))
+                return 0f;
+            bool weatherIsComing = false;
+            foreach (string id in StormWarningWeatherIds)
+                if (string.Equals(tomorrow, id, StringComparison.OrdinalIgnoreCase)) { weatherIsComing = true; break; }
+            if (!weatherIsComing)
+                return 0f;
+            return config.StormWarningStrength * GameClock.RampAt(StormWarningCentreHhmm, StormWarningHalfWidthMinutes);
+        }
+        // The cloud stage's blurred density mask, kept in its OWN target so it survives
+        // to the next frame — the scratch buffers it used to live in are rewritten by god rays
+        // and bloom later in the same frame. The sun shafts read it one frame late (flood is
+        // stage 0, clouds are stage 3), which for a mask that drifts a texel a second is
+        // invisible; what it buys is shafts that die under a cloud and blaze at its sunward
+        // edge, instead of the two effects being painted over each other as strangers.
+        // Cross-frame RT — PreserveContents (CreateRenderTarget default) is load-bearing.
+        // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
+        // Tick _cloudMaskKeep was last written; the flood stage refuses a
+        // stale mask (cloud stage off, or just faded out) rather than gating on old sky.
+        // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
+        // Viewport origin in world tiles when the kept mask was drawn, so the flood
+        // stage can shift its sample by however far the camera moved since.
+        // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
+        // The opacity the kept mask was composited at (already carries day factor and
+        // fade), so the shafts respect a faint moon-cloud faintly and a storm ceiling hard.
+        // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
+        // Eased coupling strength, so shafts do not pop when the cloud stage joins or
+        // leaves the frame — same house rule as every other gate on this effect.
+        // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
         // Eased effect amounts so nothing pops: day fog / night mist crossfade over time
         // of day AND ease when toggled; wading self-reflection fades at the water edge.
-        private float _wadingEase;
+        // _wadingEase lives in ScreenState: it follows whether this screen's player stands in water.
 
         private readonly EffectParamCache _effectParameterCache = new();
 
         private EffectParameter? GetParam(Effect effect, string name) => _effectParameterCache.Get(effect, name);
 
+        /// <summary>Draw one full-screen pass of <paramref name="effect"/> from
+        /// <paramref name="source"/> into <paramref name="destination"/>. This was written twice,
+        /// as Pass and as DrawFull, byte for byte the same; two names for one thing is two places
+        /// for a future change to land in and one of them to be missed.</summary>
         private void Pass(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, Effect effect)
-        {
-            _device.SetRenderTarget(destination);
-            spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone, effect);
-            spriteBatch.Draw(source, new Rectangle(0, 0, destination.Width, destination.Height), Color.White);
-            spriteBatch.End();
-        }
+            => DrawFull(spriteBatch, source, destination, effect);
 
         /// <summary>Pass that ADDS onto what the target already holds — the multi-light god-ray
         /// accumulator (each light's beams sum into one buffer instead of overwriting it).</summary>
@@ -1951,7 +2142,12 @@ namespace SDVRadiance
             _waterRealShoreDistanceSpare?.Dispose(); _waterRealShoreDistanceSpare = null;
             _waterPlungeChurnSpare?.Dispose(); _waterPlungeChurnSpare = null;
             _occluderMaskSpare?.Dispose(); _occluderMaskSpare = null;
-            _surfaceClassTexture?.Dispose(); _surfaceClassTexture = null; _surfaceClassSource = null;
+            _wetSuitabilityTexture?.Dispose(); _wetSuitabilityTexture = null;
+            _wetSuitabilitySpare?.Dispose(); _wetSuitabilitySpare = null;
+            _wetSuitabilityUploaded = null;
+            foreach (var kept in _surfaceClassTextures.Values)
+                kept.Texture?.Dispose();
+            _surfaceClassTextures.Clear();
             _neutralSurfaceTexture?.Dispose(); _neutralSurfaceTexture = null;
             _fallDistanceFarTexture?.Dispose(); _fallDistanceFarTexture = null;
             _sceneRenderTarget?.Dispose(); _fullResolutionPingA?.Dispose(); _fullResolutionPingB?.Dispose(); _halfResolutionScratchA?.Dispose(); _halfResolutionScratchB?.Dispose(); _cloudMaskKeep?.Dispose(); _cloudMaskKeep = null; _waterMask?.Dispose(); _occluderMask?.Dispose(); _floodOccluderMask?.Dispose(); _luminanceRenderTarget?.Dispose(); _noiseTexture?.Dispose(); _noiseTexture = null;
@@ -1961,8 +2157,9 @@ namespace SDVRadiance
             _floodOccluderBaseTexture = null; _floodOccluderSpriteBatch = null;
             _maskDebugTexture?.Dispose(); _maskDebugTexture = null;
             _bloom?.Dispose(); _colorGrade?.Dispose(); _fogEffect?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
-            _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose(); _floodEffect?.Dispose(); _flood.Dispose(); _cascadesEffect?.Dispose(); _cascades.Dispose(); _normalsEffect?.Dispose(); _sheetNormals.Dispose(); _normalRenderTarget?.Dispose(); _normalRenderTarget = null; _flatNormalTexture?.Dispose(); _flatNormalTexture = null; _reliefReplayEffect?.Dispose(); _reliefReplayEffect = null; SheetUpscaler.Dispose(); SpriteFlushPath.Dispose(); _normalSpriteBatch?.Dispose(); _normalSpriteBatch = null;
+            _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose(); _floodEffect?.Dispose(); _flood.Dispose(); _cascadesEffect?.Dispose(); _cascades.Dispose(); _normalsEffect?.Dispose(); _sheetNormals.Dispose(); _normalRenderTarget?.Dispose(); _normalRenderTarget = null; _flatNormalTexture?.Dispose(); _flatNormalTexture = null; _reliefReplayEffect?.Dispose(); _reliefReplayEffect = null; _reliefVertexPath?.Dispose(); _reliefVertexPath = null; SheetUpscaler.Dispose(); SpriteFlushPath.Dispose(); _normalSpriteBatch?.Dispose(); _normalSpriteBatch = null;
             _heatMapTexture?.Dispose();
+            _heatMapSpare?.Dispose(); _heatMapSpare = null;
             _sceneRenderTarget = _fullResolutionPingA = _fullResolutionPingB = _halfResolutionScratchA = _halfResolutionScratchB = null;
             _waterMask = null; _occluderMask = null; _floodOccluderMask = null; _luminanceRenderTarget = null;
             _spriteMaskRenderTarget = null; _spriteMaskSpriteBatch = null;

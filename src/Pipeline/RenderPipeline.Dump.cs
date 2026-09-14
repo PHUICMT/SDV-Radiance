@@ -203,6 +203,9 @@ namespace SDVRadiance
             // game's (a different save, a mod update, a cloud that moved) and the capture is void.
             Add("frame_out", capture);
             Add("frame_in", _sceneRenderTarget);
+            // Looked at as a picture before anything is built on it: a buffer nobody has
+            // seen is a buffer nobody knows is right.
+            Add("sprite_rank", _spriteRankReady ? _spriteRankRenderTarget : null);
             Add("mask_water", _waterMask);
             Add("mask_water_sdf", _waterSignedDistanceTexture);
             Add("mask_water_sdf_realshore", _waterRealShoreDistanceTexture);
@@ -311,6 +314,7 @@ namespace SDVRadiance
                     ["master"] = _masterFade,
                     ["water"] = _fadeWater,
                     ["cloud"] = _fadeCloud,
+                    ["buildingShadow"] = _fadeBuildingShadow,
                     ["lighting"] = _fadeLighting,
                     ["flood"] = _fadeFlood,
                     ["tilt"] = _fadeTilt,

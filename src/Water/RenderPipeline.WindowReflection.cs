@@ -43,8 +43,12 @@ namespace SDVRadiance
     /// one that only ever showed on dark cottage windows.
     /// </para>
     /// <para>
-    /// Outdoors only for now. Indoors the rule flips (the outside is darker at night than the room
-    /// is), and that half waits for the indoor window work.
+    /// Indoors the same rule turns the other way round: by day the outside is the brighter side
+    /// and the pane shows the sky, after dark the window is black and turns to a mirror of the
+    /// room. The two strength dials trade places indoors, the image stands on the sill at the
+    /// body's true size with no shrinking for distance (a short pane shows the legs and cuts the
+    /// top off), and the floor in front of the pane takes the street's place. A switch keeps it
+    /// outdoors only.
     /// </para>
     /// </remarks>
     internal sealed partial class RenderPipeline
@@ -70,9 +74,9 @@ namespace SDVRadiance
             { WorldRect = worldRect; GlassRects = glassRects; Strength = strength; TilesAboveGround = tilesAboveGround; }
         }
 
-        private const byte LabelClassMirror = 8;
-        private const byte LabelClassWindow = 12;
-        private const byte LabelClassGlass = 13;
+        private const byte LabelClassMirror = LabelClass.Mirror;
+        private const byte LabelClassWindow = LabelClass.Window;
+        private const byte LabelClassGlass = LabelClass.Glass;
 
         /// <summary>How far below a pane's sill a body still reflects in it, in world pixels.</summary>
         private const float WindowReflectReachPx = 64f * 4f;
@@ -179,6 +183,13 @@ namespace SDVRadiance
         /// multiply is most of a half.</summary>
         private const float GlassGlowAlpha = 1.3f;
         private const float GlassGlowFarScale = 0.5f;
+        /// <summary>A lamp's highlight in INTERIOR glass: the bulb, not the pool. Sized to a bulb
+        /// on screen and held to a share of the outdoor strength, because the room is lit and an
+        /// added light that survives the night lightmap on a street comes out white in a shop.
+        /// Read off the first indoor capture (Pierre's display case, 12/9): at the outdoor size
+        /// and strength the blot was the whole case, and the case was white.</summary>
+        private const float IndoorLampHighlightPx = 24f;
+        private const float IndoorLampHighlightShare = 0.35f;
         /// <summary>Lamps sit between the sky wash and the people, all at one sill.</summary>
         private const float GlassGlowDepthNudge = 0.000005f;
         /// <summary>Where the debug overlay's lamps go: above its own red glass, which is drawn at
@@ -215,8 +226,10 @@ namespace SDVRadiance
 
         private readonly List<WindowPane> _windowPanes = new();
         private GameLocation? _windowPaneLocation;
-        private int _windowPaneLabelVersion = -1;
-        private float _windowReflectEase;
+        private MapAnswerKey _windowPaneCacheKey = new(-1, -1);
+        private readonly Dictionary<GameLocation, WholeMapAnswer<(Point Tile, WindowPane Pane)>> _windowPanesByLocation = new();
+        private Action<GameLocation, int, List<(Point Tile, WindowPane Pane)>>? _paneRowScanner;
+        // _windowReflectEase lives in ScreenState: it follows where this screen's player is.
 
         /// <summary>How much smaller the image is at the far end of its reach: glass across a
         /// street is not a mirror held to the face, and a body that shrinks as it walks away reads
@@ -275,7 +288,7 @@ namespace SDVRadiance
             WindowsWantSceneryMirror = false;
             var who = Game1.player;
             var location = Game1.currentLocation;
-            if (!config.WindowReflectionEnabled || location == null || !location.IsOutdoors)
+            if (!config.WindowReflectionEnabled || location == null || !(location.IsOutdoors || config.WindowReflectionIndoors))
                 return;
             EnsureWindowPaneCache(location);
             if (_windowPanes.Count == 0)
@@ -357,44 +370,61 @@ namespace SDVRadiance
 
         /// <summary>Scan the map once per location (or when labels reload) for every tile that
         /// carries pane pixels, and remember the pane's box and class.</summary>
+        /// <summary>Keep this location's panes up to date, a slice of the walk per frame, and
+        /// serve whatever set is currently whole. A rebuild leaves the previous panes reflecting
+        /// while it runs rather than emptying the glass for a tenth of a second.</summary>
         private void EnsureWindowPaneCache(GameLocation location)
         {
-            var labels = LabelStore.Instance;
-            int version = labels?.Version ?? 0;
-            if (ReferenceEquals(location, _windowPaneLocation) && version == _windowPaneLabelVersion)
-                return;
-            _windowPaneLocation = location;
-            _windowPaneLabelVersion = version;
-            _windowPanes.Clear();
+            MapAnswerKey answerKey = MapAnswerKey.For(location);
+            WholeMapAnswer<(Point Tile, WindowPane Pane)> answer = AnswerFor(_windowPanesByLocation, location);
             var map = location.map;
             var firstLayer = map != null && map.Layers.Count > 0 ? map.Layers[0] : null;
-            if (labels == null || firstLayer == null || map == null || version == 0)
+            if (LabelStore.Instance != null && firstLayer != null && !answerKey.NoLabels)
+                WholeMapScan.Advance(answer, location, answerKey, firstLayer.LayerHeight, _mapScanBudget,
+                                     _paneRowScanner ??= ScanWindowPaneRow);
+            if (ReferenceEquals(location, _windowPaneLocation) && answer.Key == _windowPaneCacheKey)
                 return;
-            int width = firstLayer.LayerWidth, height = firstLayer.LayerHeight;
+            _windowPaneLocation = location;
+            _windowPaneCacheKey = answer.Key;
+            MergeTilePanes(location, answer.Found);
+        }
+
+        /// <summary>One map row's worth of the pane walk: the per-tile pane boxes, before any
+        /// merging. The drawn layers are resolved per row rather than per tile.</summary>
+        private void ScanWindowPaneRow(GameLocation location, int tileY, List<(Point Tile, WindowPane Pane)> into)
+        {
+            var labels = LabelStore.Instance;
+            var map = location.map;
+            if (labels == null || map == null || map.Layers.Count == 0)
+                return;
+            int width = map.Layers[0].LayerWidth;
             var layers = MapLayers.RenderedLayers(map, topToBottom: true);
-            // Per-tile pane boxes first...
-            var tilePanes = new Dictionary<Point, WindowPane>();
-            for (int tileY = 0; tileY < height; tileY++)
-                for (int tileX = 0; tileX < width; tileX++)
+            for (int tileX = 0; tileX < width; tileX++)
+                foreach (var layer in layers)
                 {
-                    foreach (var layer in layers)
+                    byte[]? classes = labels.Get(layer, tileX, tileY);
+                    if (classes == null)
+                        continue;
+                    if (TryPaneBox(classes, out Rectangle paneBox, out float strength))
                     {
-                        byte[]? classes = labels.Get(layer, tileX, tileY);
-                        if (classes == null)
-                            continue;
-                        if (TryPaneBox(classes, out Rectangle paneBox, out float strength))
-                        {
-                            var glassRect = new Rectangle(tileX * 64 + paneBox.X * 4, tileY * 64 + paneBox.Y * 4,
-                                paneBox.Width * 4, paneBox.Height * 4);
-                            tilePanes[new Point(tileX, tileY)] = new WindowPane(glassRect,
-                                GlassRuns(classes, tileX, tileY).ToArray(), strength);
-                            break;
-                        }
+                        var glassRect = new Rectangle(tileX * 64 + paneBox.X * 4, tileY * 64 + paneBox.Y * 4,
+                            paneBox.Width * 4, paneBox.Height * 4);
+                        into.Add((new Point(tileX, tileY), new WindowPane(glassRect,
+                            GlassRuns(classes, tileX, tileY).ToArray(), strength)));
+                        break;
                     }
                 }
-            // ...then merged: a shop front two tiles tall is ONE window, and a body standing in it
-            // is one image standing on one sill. Drawn per tile, the same person appeared twice at
-            // two heights, cut at the tile seam, which is exactly what was reported.
+        }
+
+        /// <summary>A shop front two tiles tall is ONE window, and a body standing in it is one
+        /// image standing on one sill. Drawn per tile, the same person appeared twice at two
+        /// heights, cut at the tile seam, which is exactly what was reported.</summary>
+        private void MergeTilePanes(GameLocation location, List<(Point Tile, WindowPane Pane)> found)
+        {
+            _windowPanes.Clear();
+            var tilePanes = new Dictionary<Point, WindowPane>();
+            foreach ((Point tile, WindowPane pane) in found)
+                tilePanes[tile] = pane;
             var merged = new HashSet<Point>();
             var stack = new Stack<Point>();
             foreach (var start in tilePanes.Keys)
@@ -539,7 +569,8 @@ namespace SDVRadiance
         internal void DrawWindowReflections(SpriteBatch spriteBatch, ModConfig config)
         {
             var location = Game1.currentLocation;
-            float target = config.WindowReflectionEnabled && location != null && location.IsOutdoors ? 1f : 0f;
+            float target = config.WindowReflectionEnabled && location != null
+                && (location.IsOutdoors || config.WindowReflectionIndoors) ? 1f : 0f;
             Approach(ref _windowReflectEase, target, 0.06f);
             // The overlay is a diagnostic and answers for the feature when it is off, so it is
             // allowed past the ease that everything else waits behind.
@@ -559,27 +590,49 @@ namespace SDVRadiance
                 return;
             // Day and night are two different pictures and get two dials; the ramp between them is
             // the one the window glow already rides, so the image thins as the pane lights up.
+            // One rule runs the glass: it mirrors when what is behind it is darker than what is in
+            // front. Outdoors that is the day (a dark room behind, a lit street before) and the
+            // image thins after dusk. INDOORS it is the night (a black window behind, a lit room
+            // before) and the image is faint by day, when the pane shows the sky. So the same two
+            // dials serve both sides with their roles swapped, and everything that is a PICTURE in
+            // the glass, the people, the floor and the glare, rides the swapped ramp. The sky wash
+            // does not: a pane shows the sky by day from either side of it.
+            bool indoors = !location.IsOutdoors;
+            float night = NightFactorNow();
             float dayStrength = MathHelper.Clamp(config.WindowReflectionStrength, 0f, 2f);
             float nightStrength = MathHelper.Clamp(config.WindowReflectionNightStrength, 0f, 2f);
-            float reflect = MathHelper.Lerp(dayStrength, nightStrength, NightFactorNow()) * _windowReflectEase;
+            float reflect = (indoors ? MathHelper.Lerp(nightStrength, dayStrength, night)
+                                     : MathHelper.Lerp(dayStrength, nightStrength, night)) * _windowReflectEase;
             Vector3 glassColour = GlassReflectionTint();
             // The glass itself, which is there whether or not anyone is walking past it.
             float sheen = MathHelper.Clamp(config.WindowSheenStrength, 0f, 2f)
-                * MathHelper.Lerp(1f, GlassSheenNightShare, NightFactorNow()) * _windowReflectEase;
-            // The street in the glass rides the daylight ramp too: after dusk the pane is lit from
-            // inside and what it returns of the road goes with the rest of the daytime picture.
-            float streetInGlass = MathHelper.Clamp(config.WindowSceneReflectionStrength, 0f, 2f)
-                * MathHelper.Lerp(1f, GlassSheenNightShare, NightFactorNow()) * _windowReflectEase;
-            // The glare rides the same ramp as the wash: both are the sky on the pane.
-            float glare = MathHelper.Clamp(config.WindowGlareStrength, 0f, 2f)
-                * MathHelper.Lerp(1f, GlassSheenNightShare, NightFactorNow()) * _windowReflectEase;
+                * MathHelper.Lerp(1f, GlassSheenNightShare, night) * _windowReflectEase;
+            // The street in the glass, and the floor of a room, are pictures: outdoors they go
+            // with the daytime picture once the pane is lit from inside, indoors they come up
+            // after dark when the pane goes black.
+            float pictureShare = indoors ? MathHelper.Lerp(GlassSheenNightShare, 1f, night)
+                                         : MathHelper.Lerp(1f, GlassSheenNightShare, night);
+            float streetInGlass = MathHelper.Clamp(config.WindowSceneReflectionStrength, 0f, 2f) * pictureShare * _windowReflectEase;
+            // The glare is light returned by the near face of the pane, so it rides the same ramp.
+            float glare = MathHelper.Clamp(config.WindowGlareStrength, 0f, 2f) * pictureShare * _windowReflectEase;
             // The glass returns the lamps as brightly as the ground shows them, on the very ramp the
             // lighting stage dims outdoor pools with: full while a lamp is worth something, a third
             // of that at midday. It used to be the night ramp, which is zero until seven in the
             // evening, so the dial did nothing at all for most of a day and was reported as broken
             // twice before this. A lantern carried at noon now shows in the glass it passes.
             float lampGlow = MathHelper.Clamp(config.WindowLightGlowStrength, 0f, 2f)
-                * OutdoorLampDaylightDamping() * _windowReflectEase;
+                * (indoors ? 1f : OutdoorLampDaylightDamping()) * _windowReflectEase;
+            // Interior glass has no sky on it: the wash and the glare are the sky and the sun
+            // caught on a pane from outside, and from inside a room the pane shows the sky
+            // THROUGH itself, which the art already paints. What interior glass returns is the
+            // room: its floor, its people and its lamps, and the lamps as small highlights of the
+            // bulb rather than the flood the street lamps make on a shop front (see
+            // DrawGlassLightGlows). The room is lit all day, so the lamps are not damped by daylight.
+            if (indoors)
+            {
+                sheen = 0f;
+                glare = 0f;
+            }
             // One round texture serves both: the lamps are it at a lamp's size, the glare is it
             // stretched past the pane's own edges.
             if ((lampGlow > 0.004f || glare > 0.004f) && _glassGlowTexture == null && !_glassGlowTextureMissing)
@@ -600,6 +653,18 @@ namespace SDVRadiance
 
             var viewport = Game1.viewport;
             var screen = new Rectangle(viewport.X - 64, viewport.Y - 64, viewport.Width + 128, viewport.Height + 128);
+            // THE BODIES ARE GATHERED ONCE, not once per pane. CharactersIn is an iterator, so
+            // asking it inside the pane loop allocated an enumerator and re-walked every character
+            // in the location for each pane on screen: a street in town at dusk is fifteen panes
+            // and ten characters, fifteen enumerators and a hundred and fifty tests a frame.
+            _panePeople.Clear();
+            if (reflect >= 0.01f)
+                foreach (NPC character in ShadowRenderer.CharactersIn(location))
+                {
+                    if (character?.Sprite?.Texture == null || character.IsInvisible || character.swimming.Value)
+                        continue;
+                    _panePeople.Add(character);
+                }
             {
                 foreach (var pane in _windowPanes)
                 {
@@ -618,53 +683,62 @@ namespace SDVRadiance
                     }
                     DrawGlassSkyWash(spriteBatch, pane, glassColour, sheen);
                     DrawGlassSceneReflection(spriteBatch, pane, glassColour, streetInGlass);
-                    DrawGlassLightGlows(spriteBatch, pane, lampGlow);
+                    DrawGlassLightGlows(spriteBatch, pane, lampGlow, indoors: indoors);
                     // The player, from the colour bake the shadow pass keeps: feet sit eight rows
                     // above the bake's bottom edge.
                     // The player, from this frame's own bake.
                     var who = Game1.player;
                     var playerBake = _windowPlayerBakeFresh ? _windowPlayerBake : null;
-                    if (reflect < 0.01f)
-                        continue;   // the glass still holds sky and lamps; it just returns nobody
-                    if (who != null && playerBake != null && !who.swimming.Value)
+                    // WHAT THE GLASS RETURNS is the people dial's business; what it SHINES is the
+                    // glare dial's. This used to `continue` here, which skipped the glare at the
+                    // bottom of the loop as well, so a pane lost its shine whenever the people
+                    // dial sat at zero or eased out - a second dial switched off by the first,
+                    // and the comment beside it claimed only the bodies were being skipped.
+                    // Skipping the bodies alone keeps the draw order the glare was tuned in:
+                    // sky, scene, lamps, bodies, then the glare over all of them.
+                    if (reflect >= 0.01f)
                     {
-                        Rectangle box = who.GetBoundingBox();
-                        DrawBodyInPane(spriteBatch, pane, reflect, glassColour, playerBake,
-                            new Rectangle(0, 0, ShadowRenderer.PlayerRtW, ShadowRenderer.PlayerRtH - 8),
-                            box.Center.X, box.Bottom + who.yOffset, 1f);
-                        if (_windowToolBakeFresh && _toolMirrorRenderTarget != null)
-                            DrawBodyInPane(spriteBatch, pane, reflect, glassColour, _toolMirrorRenderTarget,
-                                new Rectangle(0, 0, ToolTargetSize, (int)_toolFeetInRenderTarget.Y),
-                                box.Center.X, box.Bottom - 10f + who.yOffset, 1f);
-                    }
-                    foreach (var other in ShadowRenderer.OtherFarmerImages)
-                    {
-                        if (other.Colour == null || other.Who == null)
-                            continue;
-                        Rectangle box = other.Who.GetBoundingBox();
-                        DrawBodyInPane(spriteBatch, pane, reflect, glassColour, other.Colour,
-                            new Rectangle(0, 0, ShadowRenderer.PlayerRtW, ShadowRenderer.PlayerRtH - 8),
-                            box.Center.X, box.Bottom + other.Who.yOffset, 1f);
-                    }
-                    foreach (NPC character in ShadowRenderer.CharactersIn(location))
-                    {
-                        if (character?.Sprite?.Texture == null || character.IsInvisible || character.swimming.Value)
-                            continue;
-                        Rectangle box = character.GetBoundingBox();
-                        // Same feet rule the water mirror uses: the boots are the bottom of the
-                        // standard 32-row body block at the top of the frame.
-                        float drawnTop = character.Position.Y + box.Height / 2f + character.drawOffset.Y
-                            + character.yJumpOffset - 3f * character.Sprite.SpriteHeight;
-                        float feetY = drawnTop + 4f * Math.Min(character.Sprite.SpriteHeight, 32);
-                        var source = TurnedCharacterFrame(character);
-                        source.Height = Math.Min(source.Height, 32);
-                        DrawBodyInPane(spriteBatch, pane, reflect, glassColour, character.Sprite.Texture,
-                            source, box.Center.X + character.drawOffset.X, feetY, 4f);
+                        if (who != null && playerBake != null && !who.swimming.Value)
+                        {
+                            Rectangle box = who.GetBoundingBox();
+                            DrawBodyInPane(spriteBatch, pane, reflect, glassColour, playerBake,
+                                new Rectangle(0, 0, ShadowRenderer.PlayerRtW, ShadowRenderer.PlayerRtH - 8),
+                                box.Center.X, box.Bottom + who.yOffset, 1f, indoors);
+                            if (_windowToolBakeFresh && _toolMirrorRenderTarget != null)
+                                DrawBodyInPane(spriteBatch, pane, reflect, glassColour, _toolMirrorRenderTarget,
+                                    new Rectangle(0, 0, ToolTargetSize, (int)_toolFeetInRenderTarget.Y),
+                                    box.Center.X, box.Bottom - 10f + who.yOffset, 1f, indoors);
+                        }
+                        foreach (var other in ShadowRenderer.OtherFarmerImages)
+                        {
+                            if (other.Colour == null || other.Who == null)
+                                continue;
+                            Rectangle box = other.Who.GetBoundingBox();
+                            DrawBodyInPane(spriteBatch, pane, reflect, glassColour, other.Colour,
+                                new Rectangle(0, 0, ShadowRenderer.PlayerRtW, ShadowRenderer.PlayerRtH - 8),
+                                box.Center.X, box.Bottom + other.Who.yOffset, 1f, indoors);
+                        }
+                        foreach (NPC character in _panePeople)
+                        {
+                            Rectangle box = character.GetBoundingBox();
+                            // Same feet rule the water mirror uses: the boots are the bottom of the
+                            // standard 32-row body block at the top of the frame.
+                            float drawnTop = character.Position.Y + box.Height / 2f + character.drawOffset.Y
+                                + character.yJumpOffset - 3f * character.Sprite.SpriteHeight;
+                            float feetY = drawnTop + 4f * Math.Min(character.Sprite.SpriteHeight, 32);
+                            var source = TurnedCharacterFrame(character);
+                            source.Height = Math.Min(source.Height, 32);
+                            DrawBodyInPane(spriteBatch, pane, reflect, glassColour, character.Sprite.Texture,
+                                source, box.Center.X + character.drawOffset.X, feetY, 4f, indoors);
+                        }
                     }
                     DrawGlassGlare(spriteBatch, pane, glassColour, glare);
                 }
             }
         }
+
+        /// <summary>The bodies worth reflecting this frame, gathered once before the pane loop.</summary>
+        private readonly List<NPC> _panePeople = new();
 
         /// <summary>The character's current frame turned to face the glass's way: a standard
         /// sheet keeps down in frames 0-3, right in 4-7, up in 8-11 and left in 12-15, so facing
@@ -756,7 +830,7 @@ namespace SDVRadiance
         /// </para>
         /// </remarks>
         private void DrawGlassLightGlows(SpriteBatch spriteBatch, WindowPane pane, float amount,
-            bool paintGreen = false)
+            bool paintGreen = false, bool indoors = false)
         {
             var texture = _glassGlowTexture;
             if (texture == null || amount < 0.004f)
@@ -787,12 +861,17 @@ namespace SDVRadiance
                 // The flattened ladder, as with the sky and the street: a cottage window returns a
                 // street lamp about as well as a shop front does. The ladder used raw left a house
                 // window at a fifth of an already faint amount, and the dial read as dead.
-                float alpha = GlassGlowAlpha * amount * (1f - distance) * GroundShareFor(pane)
+                // Indoors the lamp is in the room with the glass and the room is lit: the blot
+                // that reads as a lamp across a dark street reads as a floodlight on a display
+                // case, so what is returned is the bulb, small and at a share of the strength.
+                float alpha = GlassGlowAlpha * (indoors ? IndoorLampHighlightShare : 1f) * amount * (1f - distance) * GroundShareFor(pane)
                     * (GlassSheenLadderFloor + (1f - GlassSheenLadderFloor) * pane.Strength);
                 if (alpha < 0.004f)
                     continue;
                 float size = Math.Max(16f, light.Radius * LampPoolReachPx * GlassGlowSizeShare
                     * MathHelper.Lerp(1f, GlassGlowFarScale, distance));
+                if (indoors)
+                    size = Math.Min(size, IndoorLampHighlightPx);
                 // Where the lamp is, PULLED ONTO THE GLASS. A lamp standing beside a window is
                 // still returned by that window - its image lies inside the pane, near the edge it
                 // stands past - and left at the lamp's own coordinates the blot sat outside the
@@ -936,9 +1015,13 @@ namespace SDVRadiance
         /// One body in one pane: the body's frame drawn upright as if standing at the glass, clipped
         /// to the pane's box, faded by how far below the sill the body stands.
         /// </summary>
+        /// <param name="trueSize">Indoors: the image keeps the body's own size however far the
+        /// body stands from the glass. Outdoors it recedes with distance, the storefront look. It
+        /// stands on the sill either way: put at the body's own feet, as a wall mirror would show
+        /// it, the image sat exactly under the body's own sprite and could never be seen.</param>
         private void DrawBodyInPane(SpriteBatch spriteBatch, WindowPane pane, float reflect,
             Vector3 glassColour, Texture2D texture, Rectangle source, float bodyCenterX, float bodyFeetY,
-            float scale)
+            float scale, bool trueSize = false)
         {
             float below = bodyFeetY - pane.WorldRect.Bottom;
             if (below < -16f || below > WindowReflectReachPx)
@@ -948,9 +1031,12 @@ namespace SDVRadiance
             float alpha = reflect * pane.Strength * distanceFade * GroundShareFor(pane);
             if (alpha < 0.01f)
                 return;
-            // Smaller as they walk away, feet still on the sill, so the image recedes into the
-            // glass instead of sliding over it.
-            scale *= MathHelper.Lerp(1f, WindowReflectFarScale, distance);
+            // Outdoors: smaller as they walk away, feet still on the sill, so the image recedes
+            // into the glass instead of sliding over it. Indoors the image keeps the body's own
+            // size: a short pane then shows the legs and cuts the top off, which is what was asked
+            // for, and a tall one shows the whole person.
+            if (!trueSize)
+                scale *= MathHelper.Lerp(1f, WindowReflectFarScale, distance);
 
             // The image in world pixels: feet on the sill, centred on the body.
             float drawnWidth = source.Width * scale, drawnHeight = source.Height * scale;

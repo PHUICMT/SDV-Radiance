@@ -52,6 +52,7 @@ namespace SDVRadiance
             if (!shadowsOn && !reflectionNeedsPlayer)
             {
                 ForgetPlayerBake();
+                _characterSunLive = false;
                 return;
             }
             if (_renderDepth > 0)
@@ -71,6 +72,7 @@ namespace SDVRadiance
             bakeStep = RenderPipeline.ChainStepBegin();
             RunSceneBakes(graphicsDevice, config, shadowsOn);
             RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakeScene, bakeStep);
+            CaptureCharacterSun(config, shadowsOn);
 
             // Sitting still casts (the bake captures the current SEATED animation frame, so the
             // silhouette matches the pose); horseback skips — the horse's own shadow covers the
@@ -91,6 +93,10 @@ namespace SDVRadiance
             long poseStep = RenderPipeline.ChainStepBegin();
             BakePlayerPose(graphicsDevice, who, swimming, reflectionNeedsPlayer);
             RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakePose, poseStep);
+            // The daylight shadow is laid down by the sun's projection, skew and all, from the
+            // upright bake the water and the lamps go on reading (see LayDownPlayerSun).
+            if (shadowsOn)
+                LayDownPlayerSun(graphicsDevice, config);
             // With the pose baked, compose every cast of its shadow into the patch, cut by the
             // map, while a render-target swap is still allowed (see ShadowRenderer.PlayerPatch).
             if (shadowsOn)
@@ -113,6 +119,7 @@ namespace SDVRadiance
             _playerReady = false;
             _playerMaskFresh = false;
             _playerColorFresh = false;
+            _playerSunFresh = false;
             PlayerMask = null;
             PlayerColor = null;
         }
@@ -152,6 +159,7 @@ namespace SDVRadiance
         /// missing or stale.</summary>
         private void RunSceneBakes(GraphicsDevice graphicsDevice, ModConfig config, bool shadowsOn)
         {
+            CaptureCasterSwitches(config);
             bool objectsOn = shadowsOn && SunCasts() && config.DirectionalShadowObjects;
             float sunRotation = 0f, sunStretch = 0f;
             if (objectsOn)
@@ -172,7 +180,13 @@ namespace SDVRadiance
             }
             // By place, not by object: the other screen's copy of this map is not an arrival.
             bool locationChanged = !SDVRadiance.LiveScreens.SamePlace(Game1.currentLocation, _objectBakeLocation);
+            string previousBakePlace = _objectBakeLocation?.NameOrUniqueName ?? "none";
             _objectBakeLocation = Game1.currentLocation;
+            // Named on both sides: the host screen standing still in Town was seen to start this walk
+            // twice in sixty calls with "location changed", and only the two names can say from what.
+            _arrivalWalkReason = locationChanged
+                ? $"location changed {previousBakePlace} -> {Game1.currentLocation?.NameOrUniqueName ?? "none"}"
+                : _bakedObjectCache.Count == 0 ? "cache empty" : null;
 
             // Over cap AFTER eviction means the hot set alone does not fit: a foliage pack that
             // multiplies the distinct (texture, frame, flip) bakes is the suspected cause of
@@ -191,8 +205,10 @@ namespace SDVRadiance
             // Bake NPC + animal silhouettes (single-sprite casters) — cheap when warm: cache
             // hits only, no RT switch. Runs every frame so new animation frames bake instantly.
             // Shadow-only: the reflection stamps NPCs from their live sprite, not from a bake.
+            // Only while a lamp may cast: the sun's shadow of a person is laid down through the
+            // object pool now (see DrawNpcShadow), and these upright slots serve the lamps alone.
             long casterStep = RenderPipeline.ChainStepBegin();
-            if (shadowsOn && Game1.currentLocation is { } casterLocation)
+            if (shadowsOn && _sunBlend < 0.996f && Game1.currentLocation is { } casterLocation)
                 BakeCasters(graphicsDevice, casterLocation, CasterBlurBaked ? Math.Max(0f, config.DirectionalShadowBlur) : 0f);
             RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakeCasters, casterStep);
 
@@ -206,15 +222,25 @@ namespace SDVRadiance
             // brand-new sprite pays one frame of the banded stand-in — at the screen edge it is
             // scrolling in over, not the 15 ticks of it that got the old heartbeat attempt
             // reverted.
-            if (objectsOn && Game1.currentLocation is { } objectLocation)
+            // The queue is worked whenever the sun is up at all, objects on or off: a person's
+            // daylight shadow bakes through it too (see DrawNpcShadow), and with the object switch
+            // off every villager would otherwise stand in a banded stand-in for good.
+            bool sunOn = shadowsOn && (SunCasts() || _sunBlend > 0.004f);
+            if (sunOn && Game1.currentLocation is { } objectLocation)
             {
                 _isBakingObjects = true;
                 _objectGraphicsDevice = graphicsDevice;
                 RenderTargetBinding[] previousObjectTargets = graphicsDevice.GetRenderTargets();
                 try
                 {
-                    if (locationChanged || _bakedObjectCache.Count == 0)
+                    if (objectsOn && (locationChanged || _bakedObjectCache.Count == 0))
                     {
+                        int walkingScreen = StardewModdingAPI.Context.ScreenId;
+                        if (walkingScreen >= 0 && walkingScreen < _arrivalWalksByScreen.Length)
+                        {
+                            _arrivalWalksByScreen[walkingScreen]++;
+                            _arrivalReasonByScreen[walkingScreen] = _arrivalWalkReason ?? "?";
+                        }
                         // The blur is an ARGUMENT now, not a field the bake reads behind the draw
                         // pass's back, so the full enumeration has to hand over the real one. It
                         // passed a zero here for as long as the bake had its own copy, which would
@@ -288,7 +314,7 @@ namespace SDVRadiance
             // Staggered by who it is, so two screens' players do not fall due on the same frame
             // (see the same line in ShadowRenderer.Farmers).
             bool accessoryRefreshDue = PlayerAccessoriesAnimate && !Determinism.Frozen
-                                       && (Game1.ticks + (int)(who.UniqueMultiplayerID & 7L)) % 8 == 0;
+                                       && (SharedTicks.Now + (int)(who.UniqueMultiplayerID & 7L)) % 8 == 0;
             // Fresh says the pose still matches. Usable says the pixels are still there: a
             // device reset empties a render target without touching any flag this mod keeps.
             if (_playerMaskFresh && poseSignature == _playerBakeSignature && !accessoryRefreshDue
@@ -316,14 +342,12 @@ namespace SDVRadiance
                     sourceRect, spriteTopLeft, Vector2.Zero, 0f, who.FacingDirection, Color.Black, 0f, 1f, who);
                 _renderTargetSpriteBatch.End();
 
-                // Scrub COLOUR out of the bake (RGB→0, alpha kept): appearance mods (Fashion
-                // Sense etc.) draw through their own patches and ignore the black tint above,
-                // so without this a white dress cast a white shadow. Works for ANY current or
-                // future appearance mod — whatever got drawn, only its shape survives.
+                // Keep the SHAPE and nothing else: appearance mods (Fashion Sense etc.) draw
+                // through their own patches and ignore the black tint above, so without this a
+                // white dress cast a white shadow. Works for ANY current or future appearance mod:
+                // whatever got drawn, only its shape survives, white, to take the ink at draw time.
                 _gradientTexture ??= BuildGradient(graphicsDevice);
-                _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, ZeroColor, SamplerState.PointClamp);
-                _renderTargetSpriteBatch.Draw(_gradientTexture, new Rectangle(0, 0, PlayerRtW, PlayerRtH), Color.White);
-                _renderTargetSpriteBatch.End();
+                WhitenBake(graphicsDevice, new Rectangle(0, 0, PlayerRtW, PlayerRtH));
 
                 // Fade the silhouette's opacity from the feet (full) to the head/far tip (faint),
                 // so the stretched far end reads as a soft penumbra rather than a hard clone.
@@ -368,11 +392,169 @@ namespace SDVRadiance
         }
 
         /// <summary>
-        /// Ensure every on-screen NPC/animal sprite FRAME has a baked silhouette in the
-        /// persistent cache (black + feet→head alpha gradient), so <see cref="DrawNpcShadow"/> /
-        /// <see cref="DrawAnimalShadow"/> can composite one smooth image instead of banding.
-        /// Runs during RenderingWorld (render-target swaps are safe there). Warm frames are a
-        /// dictionary hit — only frames never seen before actually bake.
+        /// This frame's sun as the character passes will draw it: the same numbers
+        /// <see cref="DrawSunShadows"/> and the player patch work out, taken once during the bakes
+        /// so a silhouette laid down now and the draw made later in the frame agree about the
+        /// projection. The cross-fades read here are last frame's, one ease step behind; a frozen
+        /// capture settles them, and a sixtieth of a fade is not a picture.
+        /// </summary>
+        private void CaptureCharacterSun(ModConfig config, bool shadowsOn)
+        {
+            _characterSunLive = shadowsOn && _sunBlend > 0.004f;
+            if (!_characterSunLive)
+                return;
+            ComputeSun(out _characterSunRotation, out _characterSunStretch, out _);
+            _characterSunStretch *= Math.Max(0.1f, config.DirectionalShadowLength)
+                                  * MathHelper.Lerp(1f, OvercastLength, _overcastBlend);
+            _characterSunBlur = Math.Max(0f, config.DirectionalShadowBlur) + OvercastExtraBlur * _overcastBlend;
+            _characterGroundForeshortening = config.ShadowCharacterGroundForeshortening;
+        }
+
+        /// <summary>Where the farmer's sprite sits inside an upright player bake: the layout
+        /// <see cref="BakePlayerPose"/> and <see cref="BakeFarmerSilhouette"/> both use.</summary>
+        private static Rectangle PlayerSpriteInBake(Rectangle sourceRect)
+        {
+            int width = sourceRect.Width * 4, height = sourceRect.Height * 4;
+            return new Rectangle((PlayerRtW - width) / 2, PlayerRtH - height - 8, width, height);
+        }
+
+        /// <summary>
+        /// Lay the player's upright silhouette down by the sun, into a target of its own, with the
+        /// soft edge stamped in (see <see cref="LayDownSilhouette"/>). Made again when the pose
+        /// changes, when the sun has moved the shadow's far end by more than a pixel or so, or when
+        /// a softness dial moves; otherwise reused frame after frame like the pose bake itself.
+        ///
+        /// <para>Why a second target rather than the first laid down: the upright one is read by
+        /// the water reflection and the sprite mask, which want the person standing up, and by
+        /// every lamp, which leans it its own way. The sun is the one light whose direction is
+        /// the same for the whole frame, so it is the one that can afford the lay-down.</para>
+        /// </summary>
+        private void LayDownPlayerSun(GraphicsDevice graphicsDevice, ModConfig config)
+        {
+            if (!_characterSunLive || !config.DirectionalShadowPlayer || !_playerReady || !_playerMaskFresh || _playerRenderTarget == null)
+            {
+                _playerSunFresh = false;
+                return;
+            }
+            ShadowProjection projection = ShadowProjection.ForSolid(_characterSunRotation, _characterSunStretch, _characterGroundForeshortening);
+            Rectangle sprite = PlayerSpriteInBake(_playerBakeSignature.sourceRect);
+            // Drift is in the slot's own texels, which for an upright player bake are screen
+            // pixels already, so it meets the refresh threshold as it is.
+            if (_playerSunFresh && _playerSunRenderTarget != null && GpuContent.Usable(_playerSunRenderTarget)
+                && _playerSunSignature == _playerBakeSignature
+                && Math.Abs(_characterSunBlur - _playerSunBlur) <= 0.3f
+                && _playerSunContactHardness == ContactHardnessNow && _playerSunPenumbraStretch == PenumbraStretchNow
+                && projection.Drift(_playerSunProjection, sprite.Width, sprite.Height) <= ShearRefreshPixels)
+                return;
+            // PreserveContents, like every persistent bake target: it is read back frames later.
+            _playerSunRenderTarget ??= VramTally.Track(new RenderTarget2D(graphicsDevice, PlayerSunRtSize, PlayerSunRtSize, false,
+                SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "player sun silhouette");
+            _playerSunFresh = LayDownSilhouette(graphicsDevice, _playerRenderTarget, sprite, _playerFeetInRenderTarget, projection,
+                _characterSunBlur, _playerSunRenderTarget, out _playerSunFeet, out _playerSunUnbake, out _playerSunContent);
+            _playerSunProjection = projection;
+            _playerSunBlur = _characterSunBlur;
+            _playerSunSignature = _playerBakeSignature;
+            _playerSunContactHardness = ContactHardnessNow;
+            _playerSunPenumbraStretch = PenumbraStretchNow;
+        }
+
+        /// <summary>
+        /// Lay an upright silhouette down by a projection about its feet, into a square target,
+        /// and stamp the soft edge in. The upright bake is drawn through the same matrix every
+        /// object's sprite is drawn through, at whatever scale lets the laid-down shape fit, so
+        /// what comes out is the shadow's true shape on the ground, skew included, ready to be
+        /// stamped with no rotation and one scale. False when it fits at no scale.
+        /// </summary>
+        /// <param name="sprite">Where the silhouette sits inside the upright bake, in its texels.</param>
+        /// <param name="feetInUpright">The feet inside the upright bake.</param>
+        /// <param name="unbake">Screen pixels per texel of the laid-down target at draw time.</param>
+        private bool LayDownSilhouette(GraphicsDevice graphicsDevice, Texture2D upright, Rectangle sprite, Vector2 feetInUpright,
+            ShadowProjection projection, float blurPixels, RenderTarget2D target,
+            out Vector2 feetInTarget, out float unbake, out Rectangle content)
+        {
+            feetInTarget = default;
+            unbake = 1f;
+            content = Rectangle.Empty;
+            float originX = feetInUpright.X - sprite.X, originY = feetInUpright.Y - sprite.Y;
+            float alongPerHeight = (float)Math.Sqrt(projection.AlongX * projection.AlongX + projection.AlongY * projection.AlongY);
+            float acrossPerWidth = (float)Math.Sqrt(projection.AcrossX * projection.AcrossX + projection.AcrossY * projection.AcrossY);
+            float rimGrowth = (float)Math.Sqrt(PenumbraElongation(alongPerHeight));
+            projection.Bounds(sprite.Width, sprite.Height, originX, originY, out float left, out float right, out float top, out float bottom);
+            // The finest fit that leaves room for the rim on every side and the same eight texels
+            // under the feet every other slot keeps.
+            float fit = 0f, blurTexels = 0f, rimTexels = 0f;
+            foreach (float candidate in LayDownScales)
+            {
+                float candidateBlur = Math.Max(0f, blurPixels) * candidate;
+                float candidateRim = candidateBlur * rimGrowth;
+                if ((right - left) * candidate + 2f * candidateRim <= target.Width
+                    && (bottom - top) * candidate + 2f * candidateRim + 1f <= target.Height - 8f)
+                {
+                    fit = candidate;
+                    blurTexels = candidateBlur;
+                    rimTexels = candidateRim;
+                    break;
+                }
+            }
+            if (fit <= 0f)
+                return false;
+            unbake = 1f / fit;
+            left *= fit;
+            right *= fit;
+            top *= fit;
+            bottom *= fit;
+            feetInTarget = new Vector2(
+                (float)Math.Round(target.Width * 0.5f - (left + right) * 0.5f),
+                (float)Math.Round(target.Height - bottom - rimTexels - 1f));
+            Matrix lean = projection.About(feetInTarget);
+            RenderTargetBinding[] previous = graphicsDevice.GetRenderTargets();
+            try
+            {
+                graphicsDevice.SetRenderTarget(target);
+                graphicsDevice.Clear(Color.Transparent);
+                // The upright bake is already a white, faded, premultiplied shape, so it is
+                // carried across as it is: the projection is applied by the batch and the fit by
+                // the draw, both about the feet. Linear sampling, because a silhouette turned
+                // through an arbitrary angle at point sampling is a staircase down every edge.
+                _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp,
+                    null, RasterizerState.CullNone, null, lean);
+                _renderTargetSpriteBatch.Draw(upright, feetInTarget, sprite, Color.White, 0f, new Vector2(originX, originY), fit, SpriteEffects.None, 0f);
+                _renderTargetSpriteBatch.End();
+                // The rim as an object's is stamped: the sun's disc thrown along the shadow, held
+                // to a third of each of the shadow's own two extents.
+                var rim = new Vector2(
+                    PenumbraHeldToShadow(blurTexels / rimGrowth, sprite.Width * fit * acrossPerWidth),
+                    PenumbraHeldToShadow(blurTexels * rimGrowth, sprite.Height * fit * alongPerHeight));
+                BlurSlotInPlace(graphicsDevice, target, blurTexels, feetInTarget,
+                    new Vector2(projection.AlongX, projection.AlongY), alongPerHeight, rim);
+                content = ContentBounds(feetInTarget, left, right, top, bottom, rimTexels, target.Width, target.Height);
+                FrameCost.Count(FrameCost.Counter.CasterBakes);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                try { _renderTargetSpriteBatch!.End(); } catch { }
+                if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log($"[shadow] lay-down threw: {exception}", LogLevel.Warn); }
+                return false;
+            }
+            finally
+            {
+                graphicsDevice.SetRenderTargets(previous);
+            }
+        }
+
+        /// <summary>The scales a laid-down farmer silhouette is tried at, finest first. A person
+        /// at the longest shadow the dials allow lies down to several times their own height,
+        /// and the coarsest step here is what still fits a target of <see cref="PlayerSunRtSize"/>.</summary>
+        private static readonly float[] LayDownScales = { 1f, 0.75f, 0.5f, 0.25f };
+
+        /// <summary>
+        /// Ensure every on-screen NPC/animal sprite FRAME has an UPRIGHT baked silhouette in the
+        /// persistent cache (black + feet→head alpha gradient), for the lamp path: each lamp leans
+        /// and squashes the one bake its own way at draw time. The sun's cast of the same frame is
+        /// laid down through the object pool instead (see <see cref="DrawNpcShadow"/>), so this
+        /// only runs while a lamp may cast. Runs during RenderingWorld (render-target swaps are
+        /// safe there). Warm frames are a dictionary hit — only frames never seen before bake.
         /// </summary>
         private void BakeCasters(GraphicsDevice graphicsDevice, GameLocation location, float blurPixels)
         {
@@ -387,7 +569,8 @@ namespace SDVRadiance
             {
                 foreach (NPC npc in CharactersIn(location))
                 {
-                    if (npc == null || npc.IsInvisible || ShadowHiddenFor(npc) || npc.swimming.Value || npc.Sprite?.Texture == null)
+                    if (npc == null || npc.IsInvisible || ShadowHiddenFor(npc) || npc.swimming.Value || npc.Sprite?.Texture == null
+                        || !CharacterCasts(npc))
                         continue;
                     Point tile = npc.TilePoint;
                     if (tile.X < tileX0 || tile.X > tileX1 || tile.Y < tileY0 || tile.Y > tileY1)
@@ -398,17 +581,17 @@ namespace SDVRadiance
                     // question as "is this bake still wanted".
                     if (_casterBakeCache.TryGetValue(key, out SpriteBake? warm))
                     {
-                        warm.LastUsedTick = Game1.ticks;
+                        warm.LastUsedTick = SharedTicks.Now;
                         RefreshCasterBlur(graphicsDevice, key.Item1, key.Item2, warm, blurPixels, ref previousTargets);
                         continue;
                     }
                     previousTargets ??= graphicsDevice.GetRenderTargets();
                     if (BakeSprite(graphicsDevice, key.Item1, key.Item2, blurPixels, out RenderTarget2D renderTarget, out Vector2 feet))
-                        _casterBakeCache[key] = new SpriteBake { Rt = renderTarget, FeetInRt = feet, BakedBlur = blurPixels, LastUsedTick = Game1.ticks };
+                        _casterBakeCache[key] = new SpriteBake { Rt = renderTarget, FeetInRt = feet, BakedBlur = blurPixels, BakedContactHardness = ContactHardnessNow, BakedPenumbraStretch = PenumbraStretchNow, LastUsedTick = SharedTicks.Now };
                 }
                 foreach (FarmAnimal animal in AnimalsIn(location))
                 {
-                    if (animal?.Sprite?.Texture == null)
+                    if (animal?.Sprite?.Texture == null || !_castFarmAnimals)
                         continue;
                     Point tile = animal.TilePoint;
                     if (tile.X < tileX0 || tile.X > tileX1 || tile.Y < tileY0 || tile.Y > tileY1)
@@ -416,13 +599,13 @@ namespace SDVRadiance
                     var key = (animal.Sprite.Texture, animal.Sprite.SourceRect);
                     if (_casterBakeCache.TryGetValue(key, out SpriteBake? warm))
                     {
-                        warm.LastUsedTick = Game1.ticks;
+                        warm.LastUsedTick = SharedTicks.Now;
                         RefreshCasterBlur(graphicsDevice, key.Item1, key.Item2, warm, blurPixels, ref previousTargets);
                         continue;
                     }
                     previousTargets ??= graphicsDevice.GetRenderTargets();
                     if (BakeSprite(graphicsDevice, key.Item1, key.Item2, blurPixels, out RenderTarget2D renderTarget, out Vector2 feet))
-                        _casterBakeCache[key] = new SpriteBake { Rt = renderTarget, FeetInRt = feet, BakedBlur = blurPixels, LastUsedTick = Game1.ticks };
+                        _casterBakeCache[key] = new SpriteBake { Rt = renderTarget, FeetInRt = feet, BakedBlur = blurPixels, BakedContactHardness = ContactHardnessNow, BakedPenumbraStretch = PenumbraStretchNow, LastUsedTick = SharedTicks.Now };
                 }
             }
             catch (Exception exception)
@@ -449,13 +632,16 @@ namespace SDVRadiance
         private void RefreshCasterBlur(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle sourceRect, SpriteBake warm,
             float blurPixels, ref RenderTargetBinding[]? previousTargets)
         {
-            if (Math.Abs(blurPixels - warm.BakedBlur) <= 0.3f)
+            if (Math.Abs(blurPixels - warm.BakedBlur) <= 0.3f && warm.BakedContactHardness == ContactHardnessNow
+                && warm.BakedPenumbraStretch == PenumbraStretchNow)
                 return;
             previousTargets ??= graphicsDevice.GetRenderTargets();
             if (BakeSprite(graphicsDevice, texture, sourceRect, blurPixels, out _, out Vector2 feet, into: warm.Rt))
             {
                 warm.FeetInRt = feet;
                 warm.BakedBlur = blurPixels;
+                warm.BakedContactHardness = ContactHardnessNow;
+                warm.BakedPenumbraStretch = PenumbraStretchNow;
             }
         }
 
@@ -499,12 +685,20 @@ namespace SDVRadiance
                 _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
                 _renderTargetSpriteBatch.Draw(texture, spriteTopLeft, sourceRect, Color.Black, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
                 _renderTargetSpriteBatch.End();
+                WhitenBake(graphicsDevice, renderTarget.Bounds);
 
                 // Fade only the sprite's vertical extent (full at the feet, faint at the head).
                 _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
                 _renderTargetSpriteBatch.Draw(_gradientTexture!, new Rectangle(0, (int)spriteTopLeft.Y, CasterRtW, (int)spriteHeight), Color.White);
                 _renderTargetSpriteBatch.End();
-                BlurSlotInPlace(graphicsDevice, renderTarget, blurTexels);
+                // This slot serves the LAMPS: one upright bake, leant and squashed at draw time by
+                // each lamp in the room in turn, so the rim is stamped round here and takes what
+                // each lamp's draw does to it. The sun's cast of a person no longer comes from
+                // here at all: it is laid down through the same projection as every object's,
+                // skew and all, and stamped with no rotation (see DrawNpcShadow and
+                // LayDownPlayerSun). Inside the slot the shadow runs from the feet toward the
+                // head, straight up it.
+                BlurSlotInPlace(graphicsDevice, renderTarget, blurTexels, feetInRenderTarget, new Vector2(0f, -1f));
                 FrameCost.Count(FrameCost.Counter.CasterBakes);
                 return true;
             }
@@ -612,6 +806,8 @@ namespace SDVRadiance
             }
             try { _casterBlurScratch?.Dispose(); } catch { }
             _casterBlurScratch = null;
+            try { _playerSunBlurScratch?.Dispose(); } catch { }
+            _playerSunBlurScratch = null;
             // A full re-enumeration has to happen if the shadows come back, or the draw pass
             // would find every sprite missing and paint a screen of banded stand-ins.
             ForgetObjectBakeLocations();
@@ -629,7 +825,7 @@ namespace SDVRadiance
             _casterEvictScratch.Clear();
             int keep = (int)(CasterBakeCap * EvictHeadroom);
             bool desperate = _casterBakeCache.Count > CasterBakeCap * 2;
-            int coldBefore = Game1.ticks - HotBakeTicks;
+            int coldBefore = SharedTicks.Now - HotBakeTicks;
             foreach (var entry in _casterBakeCache)
             {
                 if (desperate || entry.Value.LastUsedTick < coldBefore)
@@ -705,7 +901,7 @@ namespace SDVRadiance
                 _objectEvictScratch.Clear();
                 int keep = (int)(cap * EvictHeadroom);
                 bool desperate = live > cap * 2;
-                int coldBefore = Game1.ticks - HotBakeTicks;
+                int coldBefore = SharedTicks.Now - HotBakeTicks;
                 foreach (var entry in _bakedObjectCache)
                 {
                     if (entry.Value.SlotClass != slotClass) continue;
@@ -741,7 +937,14 @@ namespace SDVRadiance
                     float distance = (float)Math.Sqrt(offsetX * offsetX + offsetY * offsetY);
                     float rimAlpha = MathHelper.Clamp(1f - distance, 0f, 1f);
                     rimAlpha *= rimAlpha;   // soft falloff toward the rim
-                    data[y * BlobSize + x] = new Color((byte)255, (byte)255, (byte)255, (byte)(rimAlpha * 255f));
+                    // Premultiplied, like every bake (see Whiten). The game's batch blends
+                    // src + dst * (1 - src.a), so a texel carrying colour where it has no alpha
+                    // ADDS that colour to whatever is under it and takes nothing away. White at
+                    // full strength with the alpha doing the shaping made the whole square of the
+                    // texture add the ink's colour outside the ellipse: invisible while the ink was
+                    // black, and a pale box round every pool once the ink took the sky's colour.
+                    byte level = (byte)(rimAlpha * 255f);
+                    data[y * BlobSize + x] = new Color(level, level, level, level);
                 }
             }
             texture.SetData(data);
@@ -749,6 +952,14 @@ namespace SDVRadiance
         }
 
         /// <summary>1×H alpha ramp: 1.0 at the bottom (feet) fading to <paramref name="headFade"/> at the top (far tip).</summary>
+        /// <summary>What the one feet-to-tip fade is worth a given share of the way up a caster.
+        /// The same curve <see cref="BuildGradient"/> bakes, evaluated on the CPU, so a piece that
+        /// covers only the bottom of a caster can be told where its own fade has to stop and the
+        /// next piece's has to start. Without a shared answer the two pieces each run the whole
+        /// ramp and meet at a step.</summary>
+        internal static float FadeAtShareFromFeet(float share01)
+            => HeadFade + (1f - HeadFade) * (float)Math.Pow(MathHelper.Clamp(1f - share01, 0f, 1f), 1.8);
+
         private static Texture2D BuildGradient(GraphicsDevice graphicsDevice, float headFade = HeadFade)
         {
             var texture = new Texture2D(graphicsDevice, 1, PlayerRtH);
@@ -776,9 +987,153 @@ namespace SDVRadiance
         {
             new(0f, 0f), new(1f, 0f), new(-1f, 0f), new(0f, 1f), new(0f, -1f),
         };
+        /// <summary>
+        /// How soft the shadow is a given fraction of the way from the caster's feet to the tip,
+        /// as a multiple of the full blur radius.
+        ///
+        /// <para>
+        /// The sun is a disc, not a point, so a shadow's edge is a penumbra whose width grows with
+        /// the gap between the caster and the ground the shadow lands on. At the contact that gap
+        /// is nothing and the edge is sharp; it opens out from there, and it is what tells the eye
+        /// the shadow is lying on the ground rather than painted on it. Every release before this
+        /// one used ONE radius for the whole length, which is the one shape the real thing never
+        /// takes: it rubbed out the narrow near end (a tree's trunk, a post) while leaving the far
+        /// end too crisp.
+        /// </para>
+        ///
+        /// <para>
+        /// Linear in the distance, which is what the geometry gives: one pixel of penumbra per
+        /// hundred-odd pixels of gap, whatever the sun's height. The hardness dial says how much
+        /// of that to spend; a floor remains at the contact because the silhouette is drawn from
+        /// art four times the size of its texels, and a perfectly hard edge there is a staircase.
+        /// </para>
+        /// </summary>
+        /// <param name="alongShadow01">0 at the feet, 1 at the tip. Values outside are clamped.</param>
+        internal static float PenumbraScaleAt(float alongShadow01)
+        {
+            float hardness = MathHelper.Clamp(ContactHardnessNow, 0f, 1f);
+            if (hardness <= 0f)
+                return 1f;
+            return (1f - hardness) + hardness * MathHelper.Clamp(alongShadow01, 0f, 1f);
+        }
+
+        /// <summary>
+        /// The blur radius a given point along the shadow gets, never sharper than the art it was
+        /// stamped from can express.
+        ///
+        /// <para>
+        /// A silhouette is drawn at four times its own texels, so its edge is a four-step
+        /// staircase before anything softens it. Softening by less than about half a source pixel
+        /// leaves that staircase standing, and a staircase is what the eye reads as the shadow
+        /// being drawn rather than cast - which is the opposite of what a hard contact is for. The
+        /// floor never RAISES the softness above what was asked for: a shadow set crisp on purpose
+        /// stays crisp end to end.
+        /// </para>
+        /// </summary>
+        /// <param name="blur">The full radius for this shadow, in whatever unit the caller stamps
+        /// in: screen pixels for the strip paths, slot texels for a bake.</param>
+        /// <param name="alongShadow01">0 at the feet, 1 at the tip.</param>
+        internal static float PenumbraRadiusAt(float blur, float alongShadow01)
+            => Math.Max(Math.Min(blur, SharpestEdge), blur * PenumbraScaleAt(alongShadow01));
+
+        /// <summary>Half a source pixel of the art a silhouette is stamped from, which is stamped
+        /// at four times its texels. See <see cref="PenumbraRadiusAt"/>.</summary>
+        private const float SharpestEdge = 2f;
+
+        /// <summary>
+        /// A soft edge held to what the shadow it is softening can carry.
+        ///
+        /// <para>
+        /// A shadow laid down sideways is squashed to a third of its width by the ground's own
+        /// slant, and a soft edge of the same radius as ever then reaches clean across it from
+        /// both sides: the dark middle is eaten from both edges at once and the shadow DISSOLVES
+        /// as the sun passes a quarter turn. The blur dial is set for a shadow lying the long way;
+        /// nothing warns it when the shadow it is applied to has become a ribbon.
+        /// </para>
+        ///
+        /// <para>
+        /// So the radius is capped at a share of the extent it is softening. A third leaves a
+        /// third of the width as untouched dark whatever the sun does, which is a shadow; a half
+        /// leaves nothing at the middle, which is a smudge.
+        /// </para>
+        /// </summary>
+        /// <param name="extentTexels">How wide the shadow is across the axis this radius softens.</param>
+        internal static float PenumbraHeldToShadow(float radiusTexels, float extentTexels)
+            => Math.Min(radiusTexels, Math.Max(0.5f, extentTexels * PenumbraShareOfShadow));
+
+        /// <summary>The most of a shadow's own width a soft edge may eat from one side. See
+        /// <see cref="PenumbraHeldToShadow"/>.</summary>
+        private const float PenumbraShareOfShadow = 1f / 3f;
+
+        /// <summary>
+        /// The width scale a SpriteBatch can actually be handed, with the sign spent as a flip.
+        ///
+        /// <para>
+        /// Past a quarter turn a solid's width points the other way round the shadow's own axis,
+        /// and that is a real part of the answer rather than a rounding wobble. It cannot be
+        /// handed over as a negative scale: SpriteBatch works the quad's size out as the source
+        /// size times the scale, so a negative one winds it backwards and the game's own batch
+        /// culls it, and the shadow simply disappears. A flip only swaps which end of the texture
+        /// each corner samples, which is the same picture and a quad the right way round.
+        /// </para>
+        ///
+        /// <para>
+        /// The mirror is exact only because every slot this is used on is pinned bottom-CENTRE:
+        /// the origin's mirror image inside the sprite is the origin. A slot pinned anywhere else
+        /// would have to mirror its origin too, the way the map-tile columns mirror theirs.
+        /// </para>
+        /// </summary>
+        private static float LaidDownWidth(float across, SpriteEffects effects, out SpriteEffects laidDown)
+        {
+            laidDown = across < 0f ? effects ^ SpriteEffects.FlipHorizontally : effects;
+            return Math.Abs(across);
+        }
+
+        /// <summary>The contact-hardness dial, captured once per frame beside the golden hour and
+        /// the sun's bearing, and for the same reason: the bake paths are static.</summary>
+        internal static float ContactHardnessNow;
+
+        /// <summary>The penumbra-shape dial, captured once per frame for the same reason as
+        /// <see cref="ContactHardnessNow"/>. 0 is the round soft edge of every earlier release.</summary>
+        internal static float PenumbraStretchNow;
+
+        /// <summary>
+        /// How many times longer a shadow's soft edge is ALONG the shadow than it is across, for a
+        /// shadow of this length.
+        ///
+        /// <para>
+        /// The sun is a disc, so the soft rim is that disc thrown onto the ground, and a disc
+        /// thrown onto a surface at a slant is an ellipse whose long axis is one over the sine of
+        /// the angle the light makes with that surface. Writing the shadow's length per unit of
+        /// caster height as the cotangent of that angle turns the ratio into the square root of
+        /// one plus the length squared, so this number is already contained in the shadow's own
+        /// projection and needs nothing tuned by eye. A round rim is what a sun straight overhead
+        /// casts, and the sun is never straight overhead here.
+        /// </para>
+        ///
+        /// <para>
+        /// The cap is what the bake slots can hold: a slot reserves two blur radii of slack on
+        /// each side, and an area-preserving ellipse of this ratio reaches the square root of the
+        /// ratio plus its reciprocal, which stays inside two up to about three and three quarters.
+        /// The sun in this mod goes to roughly three at the deepest golden hour, so the cap is
+        /// headroom rather than a limit that is reached.
+        /// </para>
+        /// </summary>
+        /// <param name="shadowLengthPerHeight">Screen pixels of shadow per source pixel of caster
+        /// height: the length of a projection's along vector. 0 means the caller does not know,
+        /// and the rim stays round.</param>
+        internal static float PenumbraElongation(float shadowLengthPerHeight)
+        {
+            float dial = MathHelper.Clamp(PenumbraStretchNow, 0f, 1f);
+            if (dial <= 0f || shadowLengthPerHeight <= 0f)
+                return 1f;
+            float physical = (float)Math.Sqrt(1f + shadowLengthPerHeight * shadowLengthPerHeight);
+            return MathHelper.Lerp(1f, Math.Min(physical, 3.5f), dial);
+        }
+
         private static void DrawSoft(SpriteBatch spriteBatch, Vector2[] taps, Texture2D texture, Rectangle? sourceRect, Vector2 feet,
             Color baseColor, float alpha, float rotation, Vector2 origin, Vector2 scale, float depth,
-            SpriteEffects effects, float blur)
+            SpriteEffects effects, float blur, float shadowLengthPerHeight = 0f)
         {
             // No blur → one draw at full alpha (the tap disc would just stack N identical
             // copies on the same pixel, costing N× the draw calls for nothing).
@@ -793,12 +1148,26 @@ namespace SDVRadiance
             float tapAlpha = 1f - (float)Math.Pow(1f - MathHelper.Clamp(alpha, 0f, 1f), 1f / taps.Length);
             Color tapColor = baseColor * tapAlpha;
             FrameCost.Count(FrameCost.Counter.ShadowDrawCalls, taps.Length);
+            // These offsets are SCREEN pixels, so the rim's shape can be stamped straight into
+            // them: no slot to run out of, and nothing cached to go stale. The shadow runs up the
+            // sprite and is turned by the same rotation the draw uses, so that is where along is.
+            float root = (float)Math.Sqrt(PenumbraElongation(shadowLengthPerHeight));
+            if (root <= 1f)
+            {
+                foreach (Vector2 tap in taps)
+                    spriteBatch.Draw(texture, feet + tap * blur, sourceRect, tapColor, rotation, origin, scale, effects, depth);
+                return;
+            }
+            float alongX = (float)Math.Sin(rotation), alongY = -(float)Math.Cos(rotation);
+            float alongRadius = blur * root, acrossRadius = blur / root;
             foreach (Vector2 tap in taps)
-                spriteBatch.Draw(texture, feet + tap * blur, sourceRect, tapColor, rotation, origin, scale, effects, depth);
+            {
+                float along = (tap.X * alongX + tap.Y * alongY) * alongRadius;
+                float across = (tap.Y * alongX - tap.X * alongY) * acrossRadius;
+                var offset = new Vector2(along * alongX - across * alongY, along * alongY + across * alongX);
+                spriteBatch.Draw(texture, feet + offset, sourceRect, tapColor, rotation, origin, scale, effects, depth);
+            }
         }
-
-        /// <summary>Number of horizontal bands used to fake the NPC opacity gradient.</summary>
-        private const int NpcBands = 7;
 
         /// <summary>
         /// Sort depth for a piece of shadow lying <paramref name="upScreenPixels"/> up the screen
@@ -906,6 +1275,18 @@ namespace SDVRadiance
         private static float ShadowClipDistance(GameLocation? location, float feetWorldX, float anchorWorldY,
             float rotation, float scaleY, float lengthTexels)
         {
+            long clipStep = RenderPipeline.ChainStepBegin();
+            float distance = WalkToShadowClip(location, feetWorldX, anchorWorldY, rotation, scaleY, lengthTexels);
+            RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.ShadowClip, clipStep);
+            return distance;
+        }
+
+        /// <summary>The walk behind <see cref="ShadowClipDistance"/>, kept apart so the wrapper can
+        /// time it: it runs for every lit character shadow on every frame and had no row of its own.
+        /// </summary>
+        private static float WalkToShadowClip(GameLocation? location, float feetWorldX, float anchorWorldY,
+            float rotation, float scaleY, float lengthTexels)
+        {
             if (location == null)
                 return float.MaxValue;
             float leanSin = (float)Math.Sin(rotation), leanCos = (float)Math.Cos(rotation);
@@ -994,44 +1375,77 @@ namespace SDVRadiance
         /// a world row. Objects arrive that way; see <see cref="ShadowPieceDepthUnder"/>.</param>
         private static void DrawSoftGrounded(SpriteBatch spriteBatch, Vector2[] taps, Texture2D texture, Rectangle? sourceRect,
             Vector2 feet, Color baseColor, float alpha, float rotation, Vector2 origin, Vector2 scale, float anchorWorldY,
-            SpriteEffects effects, float blur, bool anchorIsSortDepth = false)
+            SpriteEffects effects, float blur, bool anchorIsSortDepth = false, float shadowLengthPerHeight = 0f,
+            float? laidDownLean = null)
         {
+            // A slot laid down by its projection carries the lean in its pixels and is stamped
+            // with no rotation, so its rows are screen rows already. What it cannot say is which
+            // way the shadow RUNS, which the wall test and the building rule both need, so the
+            // caller hands over the lean the pixels were laid down with.
+            bool laidDown = laidDownLean.HasValue;
+            float lean = laidDownLean ?? rotation;
+            float leanCos = (float)Math.Cos(lean), leanSin = (float)Math.Sin(lean);
             // Only the part of the silhouette's length that runs along the screen's Y moves it to
             // another floor row. The sideways lean moves it along the row it is already on, which
             // no sort depth has an opinion about. Signed, because a lamp overhead throws the
-            // shadow DOWN the screen and those pieces belong in front of the caster.
-            float upScreenPerTexel = (float)Math.Cos(rotation) * scale.Y;
+            // shadow DOWN the screen and those pieces belong in front of the caster. A laid-down
+            // slot's rows are screen rows, one texel each at the draw's scale.
+            float upScreenPerTexel = (laidDown ? 1f : leanCos) * scale.Y;
             float feetWorldX = feet.X + Game1.viewport.X;
             Rectangle area = sourceRect ?? new Rectangle(0, 0, texture.Width, texture.Height);
             // Where a solid map tile ends the shadow, the silhouette itself is cut there, from its
             // tip end, BEFORE the strips are decided. Skipping strips alone left the short shadows
             // untouched: a lamp's cast is often under one strip long, took the single-draw path
             // below, and went on through the counter whole.
+            // A laid-down slot's reach along the lean is its rows over the cosine; the wall comes
+            // back as a distance along the lean and is turned into rows the same way.
             float clipDistance = anchorIsSortDepth ? float.MaxValue
-                : ShadowClipDistance(Game1.currentLocation, feetWorldX, anchorWorldY, rotation, scale.Y, origin.Y);
+                : ShadowClipDistance(Game1.currentLocation, feetWorldX, anchorWorldY, lean, scale.Y,
+                    laidDown ? area.Height / Math.Max(0.2f, Math.Abs(leanCos)) : origin.Y);
             if (clipDistance < float.MaxValue)
             {
+                if (laidDown)
+                    clipDistance *= Math.Abs(leanCos);
                 // The soft edge is drawn as taps offset by the blur radius in every direction, so
                 // the silhouette must end a blur's width short of the tile for its softness to end
                 // AT the tile rather than a few pixels onto it; and a texel more for the rounding.
                 float clipInsideBlur = Math.Max(0f, clipDistance - blur - scale.Y);
-                int cut = (int)Math.Ceiling(origin.Y - clipInsideBlur / Math.Max(scale.Y, 0.001f));
-                if (cut >= area.Height)
-                    return;
-                if (cut > 0)
+                if (laidDown && leanCos < 0f)
                 {
-                    area = new Rectangle(area.X, area.Y + cut, area.Width, area.Height - cut);
-                    // The origin keeps naming the feet row of what is left.
-                    origin.Y -= cut;
+                    // The tip lies BELOW the feet in a laid-down slot pointing down the screen, so
+                    // the cut comes off the bottom: the rows past the wall are dropped and the
+                    // origin, which names the top, stays where it is.
+                    int keepBelow = (int)Math.Floor(clipInsideBlur / Math.Max(scale.Y, 0.001f));
+                    int keptHeight = (int)Math.Ceiling(origin.Y) + keepBelow;
+                    if (keptHeight <= 0)
+                        return;
+                    if (keptHeight < area.Height)
+                        area = new Rectangle(area.X, area.Y, area.Width, keptHeight);
+                }
+                else
+                {
+                    int cut = (int)Math.Ceiling(origin.Y - clipInsideBlur / Math.Max(scale.Y, 0.001f));
+                    if (cut >= area.Height)
+                        return;
+                    if (cut > 0)
+                    {
+                        area = new Rectangle(area.X, area.Y + cut, area.Width, area.Height - cut);
+                        // The origin keeps naming the feet row of what is left.
+                        origin.Y -= cut;
+                    }
                 }
             }
-            float alongScreenY = Math.Abs(origin.Y * upScreenPerTexel);
+            // A laid-down slot has shadow on both sides of the feet when the sun is low behind the
+            // caster, so its whole height decides the strips, not only the part above the feet.
+            float alongScreenY = laidDown ? area.Height * scale.Y : Math.Abs(origin.Y * upScreenPerTexel);
             int strips = (int)MathHelper.Clamp(alongScreenY / GroundStripPixels, 1f, MaxGroundStrips);
             if (strips <= 1 || area.Height < strips * 2)
             {
+                // One strip is a shadow barely longer than its own contact, so it takes the
+                // softness of its middle rather than a tip's.
                 DrawSoft(spriteBatch, taps, texture, area, feet, baseColor, alpha, rotation, origin, scale,
                     anchorIsSortDepth ? ShadowPieceDepthUnder(anchorWorldY, 0f)
-                                      : ShadowPieceDepth(anchorWorldY, 0f), effects, blur);
+                                      : ShadowPieceDepth(anchorWorldY, 0f), effects, PenumbraRadiusAt(blur, 0.5f), shadowLengthPerHeight);
                 return;
             }
             for (int i = 0; i < strips; i++)
@@ -1043,16 +1457,25 @@ namespace SDVRadiance
                 // the same correction the banded gradient makes for its bands.
                 var stripOrigin = new Vector2(origin.X, origin.Y - stripTop);
                 float texelsAboveFeet = origin.Y - (stripTop + stripBottom) * 0.5f;
-                // Past a solid map tile the shadow is over (see ShadowClipDistance).
-                if (texelsAboveFeet * scale.Y > clipDistance)
+                // Past a solid map tile the shadow is over (see ShadowClipDistance). Either side
+                // of the feet counts in a laid-down slot, whose tip may lie below them.
+                if ((laidDown ? Math.Abs(texelsAboveFeet) : texelsAboveFeet) * scale.Y > clipDistance)
                     continue;
                 float upScreen = texelsAboveFeet * upScreenPerTexel;
                 // Where the strip's centre lands sideways, for the building test: the lean moves
-                // a piece along its row as well as up the screen.
-                float sideways = texelsAboveFeet * (float)Math.Sin(rotation) * scale.Y;
+                // a piece along its row as well as up the screen. In a laid-down slot the row is
+                // known and the lean says how far along it the shadow's own axis has got.
+                float sideways = laidDown
+                    ? (Math.Abs(leanCos) > 0.05f
+                        ? MathHelper.Clamp(upScreen * leanSin / leanCos, -area.Width * scale.X, area.Width * scale.X)
+                        : 0f)
+                    : texelsAboveFeet * leanSin * scale.Y;
+                // Each strip is already a slice at a known distance from the feet, so the penumbra
+                // ramp costs nothing here: it is the radius this draw was going to make anyway.
                 DrawSoft(spriteBatch, taps, texture, strip, feet, baseColor, alpha, rotation, stripOrigin, scale,
                     anchorIsSortDepth ? ShadowPieceDepthUnder(anchorWorldY, upScreen)
-                                      : GroundedPieceDepth(anchorWorldY, upScreen, feetWorldX, sideways), effects, blur);
+                                      : GroundedPieceDepth(anchorWorldY, upScreen, feetWorldX, sideways), effects,
+                    PenumbraRadiusAt(blur, texelsAboveFeet / Math.Max(1f, origin.Y)), shadowLengthPerHeight);
             }
         }
 
@@ -1069,16 +1492,16 @@ namespace SDVRadiance
         /// that no world Y can hold; see <see cref="ShadowPieceDepthUnder"/> for why that never
         /// stood in the way of grounding them. Every band is sorted at the floor row it lies on
         /// either way.</param>
-        /// <param name="shadowColor">What the bands are stamped in. Black on the world, because a
-        /// shadow is an absence of light; WHITE when the caller is filling a coverage mask that a
-        /// later pass reads as "how much of this pixel is in shadow", where black would read as
-        /// nothing at all.</param>
+        /// <param name="shadowColor">What the bands are stamped in. The frame's <see cref="ShadowInk"/>
+        /// on the world (black at dial 0, the sky's fill above it); WHITE when the caller is
+        /// filling a coverage mask that a later pass reads as "how much of this pixel is in
+        /// shadow", where black would read as nothing at all.</param>
         private void DrawBandedGradient(SpriteBatch spriteBatch, Texture2D texture, Rectangle sourceRect, Vector2 feet,
             Vector2 baseOrigin, float alpha, float rotation, Vector2 scale, float anchorWorldY, float blur,
             float headFade = HeadFade, SpriteEffects effects = SpriteEffects.None,
-            bool anchorIsSortDepth = false, Color? shadowColor = null)
+            bool anchorIsSortDepth = false, Color? shadowColor = null, float shadowLengthPerHeight = 0f)
         {
-            Color bandColor = shadowColor ?? Color.Black;
+            Color bandColor = shadowColor ?? ShadowInk;
             // The bands are already cut across the shadow's length, so each one can be sorted at
             // the depth of the floor row it lies on for nothing (see ShadowPieceDepth). Only the
             // part of the lean that runs along the screen's Y changes a band's row, and its sign
@@ -1118,7 +1541,7 @@ namespace SDVRadiance
                     ? ShadowPieceDepthUnder(anchorWorldY, upScreen)
                     : GroundedPieceDepth(anchorWorldY, upScreen, feetWorldX, sideways);
                 DrawSoft(spriteBatch, Taps5, texture, band, feet, bandColor, alpha * bandAlpha, rotation, origin, scale,
-                    bandDepth, effects, blur);
+                    bandDepth, effects, PenumbraRadiusAt(blur, texelsAboveFeet / feetRow), shadowLengthPerHeight);
             }
         }
 
@@ -1160,6 +1583,89 @@ namespace SDVRadiance
         /// <see cref="ComputeSun"/> is static and has no config within reach.</summary>
         internal static float GoldenHourStrengthNow;
 
+        /// <summary>
+        /// Which side the sun stands on, in radians clockwise, captured once per frame by ModEntry
+        /// for the same reason the golden hour is: <see cref="ComputeSun"/> is static and has no
+        /// config within reach. 0 is every earlier release.
+        /// </summary>
+        /// <remarks>
+        /// This is a ROTATION OF THE WHOLE SKY, not a fixed angle for the shadows. The day's swing
+        /// is added on top of it, so noon lands where this points and morning and evening still
+        /// lean off to either side of that. It is also why anything that wants the time of day
+        /// rather than the direction of the light has to take this back off again first: see
+        /// <see cref="SunSweepOnly"/>, and the two callers that use it.
+        /// </remarks>
+        internal static float SunBearingRadiansNow;
+
+        /// <summary>
+        /// Which side the sun stands on for everything that is LIGHT: the shafts through the trees,
+        /// the lean a sprite is lit from, the daylight through a window, the glitter on the water.
+        /// Radians clockwise, on the same scale as <see cref="SunBearingRadiansNow"/>, so equal
+        /// numbers mean one sun. It ships a half turn from the shadows' because that is where the
+        /// two halves of this mod have stood since they were written. See <see cref="SunInSky"/>.
+        /// </summary>
+        internal static float SunlightBearingRadiansNow = (float)Math.PI;
+
+        /// <summary>How far the sun swings from noon to either edge of the day, in radians. Shared
+        /// so the shadows and the light cannot drift apart in a copied constant.</summary>
+        internal const float SunSwingRadians = 1.15f;
+
+        /// <summary>The sun-follows-the-season dial, captured once per frame like the golden hour
+        /// and for the same reason: everything that asks where the sun is, is static.</summary>
+        internal static float SunSeasonStrengthNow;
+
+        /// <summary>Half the day's length in minutes, by season: the real figures for the fortieth
+        /// parallel north (summer 05:30 to 19:30, spring and autumn 06:00 to 18:00, winter 07:20
+        /// to 16:40), blended by the dial with the six hours either side of noon every earlier
+        /// release used all year round.</summary>
+        internal static float HalfDayMinutesNow()
+        {
+            float seasonal = LocalSky.Season switch { Season.Summer => 420f, Season.Winter => 280f, _ => 360f };
+            return MathHelper.Lerp(360f, seasonal, MathHelper.Clamp(SunSeasonStrengthNow, 0f, 1f));
+        }
+
+        /// <summary>Where the sun is in its day: -1 at sunrise, 0 at noon, +1 at sunset, held
+        /// there beyond. Everything that reads the sun's position asks this one question, so the
+        /// season moves the shadows, their colour, the shafts through the trees, the light
+        /// through a window and the mist together, and never one without the others.</summary>
+        internal static float SunSkyOffsetAt(float minutesNow)
+            => MathHelper.Clamp((minutesNow - 720f) / HalfDayMinutesNow(), -1f, 1f);
+
+        /// <summary>
+        /// Shadow length per unit of caster height for a sun this far through its day, before the
+        /// golden hour and the length dial. At dial 0 the line every earlier release drew, 0.3 at
+        /// noon to 1.2 at the day's edges; at dial 1 the cotangent of the sun's height at this
+        /// latitude and season, noon at 73 degrees in summer, 50 in spring and autumn, 27 in
+        /// winter, falling toward the edges in the same proportion as the old line's 73 to 40. A
+        /// winter noon really does throw a shadow six times a summer one's. Held under three, which
+        /// is where a winter sunset would otherwise take a person's shadow across half a screen.
+        /// </summary>
+        internal static float SunStretchAt(float sunSkyOffset)
+        {
+            float edge = Math.Abs(sunSkyOffset);
+            float classic = MathHelper.Lerp(0.3f, 1.2f, edge);
+            float dial = MathHelper.Clamp(SunSeasonStrengthNow, 0f, 1f);
+            if (dial <= 0f)
+                return classic;
+            float noonDegrees = LocalSky.Season switch { Season.Summer => 73f, Season.Winter => 27f, _ => 50f };
+            float elevationDegrees = MathHelper.Lerp(noonDegrees, noonDegrees * (40f / 73f), edge);
+            float seasonal = Math.Min(3f, 1f / (float)Math.Tan(MathHelper.ToRadians(Math.Max(5f, elevationDegrees))));
+            return MathHelper.Lerp(classic, seasonal, dial);
+        }
+
+        /// <summary>
+        /// The part of a sun angle that came from the CLOCK, with the bearing taken back off.
+        ///
+        /// <para>
+        /// Anything that damps or scales the sun's angle has to work on this and add the bearing
+        /// back afterwards, because damping the whole angle damps the direction the player chose.
+        /// A crop at 0.62 lean, with the sun turned right round to 180, would otherwise point at
+        /// 112 degrees: not where the sun says, and not where the player pointed it either, but a
+        /// third direction belonging to nobody.
+        /// </para>
+        /// </summary>
+        internal static float SunSweepOnly(float rotation) => rotation - SunBearingRadiansNow;
+
         private static void ComputeSun(out float rotation, out float stretch, out float alpha)
         {
             // Continuous minutes: the raw HHMM value made the angle lurch once per tick
@@ -1175,19 +1681,22 @@ namespace SDVRadiance
                 // the moon used to arrive at full (phase) strength on the very same tick.
                 float moonProgress = MathHelper.Clamp((minutesNow - trulyDarkMinutes) / Math.Max(1f, 1560f - trulyDarkMinutes), 0f, 1f);
                 float moonSkyOffset = moonProgress * 2f - 1f;
-                rotation = 1.15f * moonSkyOffset;
+                rotation = SunSwingRadians * moonSkyOffset;
                 stretch = MathHelper.Lerp(0.3f, 1.1f, Math.Abs(moonSkyOffset));
                 alpha = 0.9f * 0.35f * MoonStrength() * MathHelper.Clamp((minutesNow - trulyDarkMinutes) / 30f, 0f, 1f);
+                // The moon crosses the same sky, so it takes the same bearing: turning the sun
+                // and leaving the moon behind would make the shadows swap sides at nightfall.
+                rotation += SunBearingRadiansNow;
                 LightningEffects.OverrideShadowKey(ref rotation, ref stretch, ref alpha);
                 return;
             }
             // Low sun (dawn/dusk) → long, far-leaning shadow; high sun (noon) → short & upright.
-            float sunSkyOffset = MathHelper.Clamp((minutesNow - 720f) / 360f, -1f, 1f);
+            float sunSkyOffset = SunSkyOffsetAt(minutesNow);
             // Lean more sideways (was 0.8) so the shadow lies to the side of the body instead of
             // straight up over it — reduces the "shadow on the sprite" overlap while staying
             // upright (not the rejected upside-down flip).
-            rotation = 1.15f * sunSkyOffset;                                     // <0 morning lean-left, >0 evening lean-right
-            stretch = MathHelper.Lerp(0.3f, 1.2f, Math.Abs(sunSkyOffset));  // stretched LONG when the sun is low
+            rotation = SunSwingRadians * sunSkyOffset;                           // <0 morning lean-left, >0 evening lean-right
+            stretch = SunStretchAt(sunSkyOffset);                              // stretched LONG when the sun is low
             // Golden hour: the true edges of the day stretch further still. Quartic in the
             // offset, so noon and mid-afternoon feel nothing and only a genuinely low sun
             // goes long; every consumer of this method (characters, objects, the window
@@ -1195,6 +1704,11 @@ namespace SDVRadiance
             float lowSunEdge = sunSkyOffset * sunSkyOffset * sunSkyOffset * sunSkyOffset;
             stretch *= 1f + GoldenHourStrengthNow * 1.3f * lowSunEdge;
             alpha = 0.9f * TimeFade();                           // opacity at the feet (× strength; fades toward the tip)
+            // Where the player put the sun. Added to the day's swing rather than replacing it, so
+            // the shadows still travel from one side to the other between dawn and dusk; the
+            // bearing only decides where that journey passes through at noon. Before the strike
+            // override, because a bolt is its own light in its own place and owes the sun nothing.
+            rotation += SunBearingRadiansNow;
             // A lightning strike momentarily overrides both branches: every bake and draw path
             // funnels through this method, so keying it here keys every shadow at once.
             LightningEffects.OverrideShadowKey(ref rotation, ref stretch, ref alpha);
@@ -1241,21 +1755,21 @@ namespace SDVRadiance
 
             // Low sun = warm. Squared, so only the real edges of the day go golden and the
             // middle stays daylight-white instead of everything looking like a sunset.
-            float lowSun = Math.Abs(MathHelper.Clamp((minutesNow - 720f) / 360f, -1f, 1f));
+            float lowSun = Math.Abs(SunSkyOffsetAt(minutesNow));
             Vector3 noon = new(0.86f, 0.93f, 1.06f);
             Vector3 gold = new(1.08f, 0.86f, 0.60f);
             colour = Vector3.Lerp(noon, gold, lowSun * lowSun);
 
             // The year: winter's sun is low and pale all day and the light is thin; summer is
             // the opposite; autumn light is famously warm.
-            (float multiplier, Vector3 tint) season = Game1.season switch
+            (float multiplier, Vector3 tint) season = LocalSky.Season switch
             {
                 Season.Winter => (0.80f, new Vector3(0.93f, 0.98f, 1.10f)),
                 Season.Summer => (1.12f, new Vector3(1.03f, 1.00f, 0.95f)),
                 Season.Fall => (0.94f, new Vector3(1.06f, 0.98f, 0.90f)),
                 _ => (1f, Vector3.One),
             };
-            float weather = (Game1.isRaining || Game1.isSnowing || Game1.isLightning) ? 0.62f : 1f;
+            float weather = (LocalSky.IsRaining || LocalSky.IsSnowing || LocalSky.IsLightning) ? 0.62f : 1f;
             if (weather < 1f)
                 colour = Vector3.Lerp(colour, new Vector3(0.90f, 0.94f, 1.00f), 0.6f);   // flat overcast
 
@@ -1283,7 +1797,13 @@ namespace SDVRadiance
             // above mostly just drops into the room. At the shadow's own 0.7 the patch crossed
             // more sideways than it travelled inward, which reads as a diagonal streak laid
             // over the furniture rather than as light coming through the glass.
-            lean = MathHelper.Clamp(rotation * 0.30f, -0.45f, 0.45f);
+            // The SWING only, not the bearing. This lean is a sideways slope handed to three
+            // things that all march the light DOWN into the room by construction (the patch on
+            // the lightmap, the beam in the shader, the dust in it), so the direction they travel
+            // is theirs and not ours to turn. Handing them a beared angle would tilt the patch
+            // without moving where the light comes from, which is a slope belonging to nobody.
+            // Indoor light gets its own direction the day those three can be told one.
+            lean = MathHelper.Clamp(SunSweepOnly(rotation) * 0.30f, -0.45f, 0.45f);
             reach = alpha <= 0.01f ? 2.2f : MathHelper.Clamp(2.2f + stretch * 2.5f, 2.2f, 5f);
         }
 

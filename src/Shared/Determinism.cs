@@ -50,6 +50,37 @@ namespace SDVRadiance
         /// <summary>Tick count every animated stage reads while frozen (always <see cref="CanonicalTick"/>).</summary>
         internal static int PinnedTicks;
 
+        /// <summary>
+        /// Seconds for the shaders' moving patterns: water, clouds, fog and the heat haze.
+        ///
+        /// <para>
+        /// Kept small, because a sin hash fed a large time loses precision and draws a hard seam
+        /// across the screen. It was wrapped every 100 minutes of play, which no frequency in the
+        /// shaders shares, so every pattern jumped once per wrap wherever the player happened to be
+        /// standing. It now counts from the start of the day, when the screen is black, and the
+        /// 100 minute wrap is only a backstop for a day that runs longer than that.
+        /// </para>
+        ///
+        /// <para>A frozen frame reads the pinned tick exactly as before, so captures do not move.</para>
+        /// </summary>
+        internal static float ShaderSeconds
+        {
+            get
+            {
+                int sinceOrigin = Frozen ? PinnedTicks : Ticks - _shaderClockOriginTicks;
+                return (((sinceOrigin % 360000) + 360000) % 360000) / 60f;
+            }
+        }
+
+        private static int _shaderClockOriginTicks;
+
+        /// <summary>Start the shader clock again. Called at the start of a day.</summary>
+        internal static void RestartShaderClock()
+        {
+            if (!Frozen)
+                _shaderClockOriginTicks = Ticks;
+        }
+
         /// <summary>The tick count the render stages animate from.
         ///
         /// <para>SIXTY OF THESE IS A SECOND, and every caller spends it that way
@@ -80,7 +111,7 @@ namespace SDVRadiance
         /// </summary>
         internal static int Ticks => Frozen ? PinnedTicks
             : _clockIsOurs ? (int)_ourTicks
-            : Game1.ticks;
+            : SharedTicks.Now;
 
         /// <summary>True once an uncapper has lifted the frame cap at least once this session.
         /// One way: see the note above about jumping back.</summary>
@@ -96,9 +127,9 @@ namespace SDVRadiance
         /// time. Called every update tick.</summary>
         internal static void FollowTheGamesTimeStep()
         {
-            if (_advancedOnTick == Game1.ticks)
+            if (_advancedOnTick == SharedTicks.Now)
                 return;
-            _advancedOnTick = Game1.ticks;
+            _advancedOnTick = SharedTicks.Now;
             double secondsNow = Seconds;
             bool cappedNow = Game1.game1?.IsFixedTimeStep ?? true;
             // Counted on every EDGE, not once. The first version only counted the handover, so it
@@ -119,7 +150,7 @@ namespace SDVRadiance
                 }
                 // Seeded where the two clocks still agree, so lifting the cap moves nothing.
                 _clockIsOurs = true;
-                _ourTicks = Game1.ticks;
+                _ourTicks = SharedTicks.Now;
             }
             double elapsed = secondsNow - _lastSecondsSeen;
             _lastSecondsSeen = secondsNow;

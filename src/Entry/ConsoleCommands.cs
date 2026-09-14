@@ -35,6 +35,14 @@ namespace SDVRadiance
             RegisterBufferDiagnostics(helper, monitor, getConfig, getPipeline);
             RegisterCostMeasurements(helper, monitor, getConfig, getPipeline);
             RegisterOverlaysAndSwitches(helper, monitor);
+            helper.ConsoleCommands.Add("radiance_reloadshaders",
+                "Reload one compiled shader from the mod's assets folder without restarting the game. "
+                + "Usage: radiance_reloadshaders <name>, one of floodlight, bloom, tiltshift, water, lighting, fog, cloudshadow, "
+                + "colorgrade, finishing, tail, wet, upscale, cascades, normals, reliefreplay, shadowmask, sheetscale. "
+                + "The author's tool for comparing two builds of a shader on one frozen frame.",
+                (_, arguments) => monitor.Log(arguments.Length == 0
+                    ? "Name the shader to reload; run the command with no arguments for the list."
+                    : getPipeline()?.ReloadShader(arguments[0]) ?? "The pipeline is not up yet.", LogLevel.Info));
         }
 
         /// <summary>Ask the mod what it can see: the map dump, the light list, the live config and the report.</summary>
@@ -276,6 +284,14 @@ namespace SDVRadiance
                 + "labeled tile on screen, pixel for pixel. Reports accuracy, missing/false water, and the worst tiles. "
                 + "Pair with 'radiance_debug labeldiff' to SEE the disagreements in the world.",
                 (_, _) => monitor.Log(getPipeline()?.VerifyLabels(Game1.currentLocation) ?? "pipeline not ready", LogLevel.Info));
+            helper.ConsoleCommands.Add("radiance_spritelabels",
+                "What the hand-painted labels say about the furniture standing in this room, cell by cell. Furniture "
+                + "sheets carry glass and emissive marks that nothing could read until now, because every other way "
+                + "into the label store asks for a map layer and a tile, and a mirror on a bedroom wall is on neither. "
+                + "Prints each piece, the sheet the game resolved it to, and the classes found; 'all' lists pieces "
+                + "whose sheet carries no labels at all.",
+                (_, arguments) => monitor.Log(ReportSpriteLabels(arguments.Length > 0
+                    && string.Equals(arguments[0], "all", StringComparison.OrdinalIgnoreCase)), LogLevel.Info));
             helper.ConsoleCommands.Add("radiance_shadows",
                 "Report every character, object, plant, animal and critter that could cast, and what the shadow "
                 + "pass does with each one, plus the event flags that decide who the game is drawing. Reaches 20 "
@@ -284,6 +300,24 @@ namespace SDVRadiance
                 (_, arguments) => monitor.Log(
                     ShadowRenderer.Report(getConfig(), arguments.Length >= 1 && arguments[0].Equals("all", StringComparison.OrdinalIgnoreCase)),
                     LogLevel.Info));
+            helper.ConsoleCommands.Add("radiance_shadowcull",
+                "Whether a character or animal standing too far off the screen for any part of its shadow to land "
+                + "on it is skipped. Turning it OFF restores the old walk over every character on the map, which is "
+                + "how the cull is proved to change no pixel: freeze the frame and dump it each way. "
+                + "Usage: radiance_shadowcull [on|off], or 'margin N' to set how far past the edge a body may "
+                + "stand before its own shadow length is considered. Default on, 384. Live only; nothing is saved.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length >= 2 && arguments[0].Equals("margin", StringComparison.OrdinalIgnoreCase)
+                        && float.TryParse(arguments[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float margin))
+                        ShadowRenderer.OffScreenCasterMarginPixels = Math.Max(0f, margin);
+                    else
+                        ShadowRenderer.OffScreenCasterCull = arguments.Length < 1
+                            || !arguments[0].Equals("off", StringComparison.OrdinalIgnoreCase);
+                    monitor.Log($"off-screen caster cull = {ShadowRenderer.OffScreenCasterCull}, "
+                        + $"floor {ShadowRenderer.OffScreenCasterMarginPixels:0} px past the edge "
+                        + "(live only; nothing is saved)", LogLevel.Info);
+                });
             helper.ConsoleCommands.Add("radiance_creatures",
                 "Where every creature is right now: horses, pets, farm animals and anything a mod adds, with the "
                 + "tile to warp to, its frame size and how its shadow is laid down. "
@@ -343,8 +377,9 @@ namespace SDVRadiance
                 });
             helper.ConsoleCommands.Add("radiance_freeze",
                 "Pin the render clock and every eased amount so the same spot renders the same bytes twice "
-                + "(what a before/after capture needs). No args toggles; 'on'/'off' set it. Game logic is untouched — "
-                + "characters keep walking, so stand still and let the scene settle before capturing.",
+                + "(what a before/after capture needs). No args toggles; 'on'/'off' set it. Critters, characters, "
+                + "the map's own animated tiles and temporary sprites are held still as well, so a capture does not "
+                + "depend on where a bird happened to be; the game's clock and its logic are untouched.",
                 (_, arguments) =>
                 {
                     bool on = arguments.Length >= 1
@@ -361,7 +396,8 @@ namespace SDVRadiance
             helper.ConsoleCommands.Add("radiance_reflect",
                 "Reflection diagnostics/A-B. No args = report what each reflection layer is doing under the player. "
                 + "'scene on|off' forces the sprite-free scenery mirror source (P3c) on or off, so a missing "
-                + "bridge/cliff reflection can be pinned on it in one keystroke. "
+                + "bridge/cliff reflection can be pinned on it in one keystroke. 'cache on|off' holds the scenery "
+                + "cache between frames or rebuilds it from every map layer every frame, for a same-frame A/B. "
                 + "(The slice height that used to live here is now the WaterReflectFadeRows setting, so "
                 + "'radiance_config WaterReflectFadeRows 8' is the same A/B and it is saveable.)",
                 (_, arguments) =>
@@ -370,6 +406,12 @@ namespace SDVRadiance
                     {
                         RenderPipeline.SceneSourceOff = arguments[1].Equals("off", StringComparison.OrdinalIgnoreCase);
                         monitor.Log($"Scenery mirror source (P3c): {(RenderPipeline.SceneSourceOff ? "FORCED OFF (mirror reads the composed screen)" : "ON")}", LogLevel.Info);
+                        return;
+                    }
+                    if (arguments.Length >= 2 && arguments[0].Equals("cache", StringComparison.OrdinalIgnoreCase))
+                    {
+                        RenderPipeline.SceneCacheForceRebuild = arguments[1].Equals("off", StringComparison.OrdinalIgnoreCase);
+                        monitor.Log($"Scenery cache: {(RenderPipeline.SceneCacheForceRebuild ? "FORCED OFF (every map layer redrawn every frame)" : "held between frames")}", LogLevel.Info);
                         return;
                     }
                     monitor.Log(getPipeline()?.ReflectionDiag() ?? "pipeline not ready", LogLevel.Info);
@@ -662,6 +704,98 @@ namespace SDVRadiance
                         ? RenderPipeline.ReliefUnsorted ? "not sorted at all, depth tested" : "grouped by texture, depth tested"
                         : "front to back, blended"), LogLevel.Info);
                 });
+            helper.ConsoleCommands.Add("radiance_reliefpath",
+                "'radiance_reliefpath vertices' builds the relief sprites' corners here and hands the card one "
+                + "indexed draw per sheet, with no SpriteBatch in the way; 'batch' puts them back through the "
+                + "batch, as every release up to now did. The sorted sprites only: the map's front layers keep "
+                + "their batch either way. Not saved. radiance_report's relief row prints which road drew.",
+                (_, arguments) =>
+                {
+                    string mode = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
+                    if (mode == "vertices" || mode == "on") RenderPipeline.ReliefVertexRoad = true;
+                    else if (mode == "batch" || mode == "off") RenderPipeline.ReliefVertexRoad = false;
+                    monitor.Log("sprite relief replay road: " + (RenderPipeline.ReliefVertexRoad
+                        ? "our own vertices, one draw per sheet" : "the SpriteBatch"), LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_waterring",
+                "'radiance_waterring near' strikes one ring into the nearest water tile to the player, the way a float "
+                + "landing does; 'radiance_waterring x y' strikes it at a tile you name. Add 'sweep' for four at once, "
+                + "or 'walk' for the trail of five something crossing the water leaves behind it; "
+                + "aged 0.15 to 0.9 seconds, so one picture holds a ring's whole life; or give an age in seconds and "
+                + "then how hard (1 = a wading farmer, 1.6 = a cast landing). Author tool: the "
+                + "rings a player sees are made by what is actually in the water, and while the clock is frozen a ring "
+                + "struck here holds its age, which is what makes a picture of it possible.",
+                (_, arguments) =>
+                {
+                    RenderPipeline? pipeline = getPipeline();
+                    if (pipeline == null)
+                    {
+                        monitor.Log("no pipeline yet; walk a frame first", LogLevel.Warn);
+                        return;
+                    }
+                    Vector2 tile = Game1.player?.Tile ?? Vector2.Zero;
+                    // "near" is the argument worth typing: the nearest water tile to the player,
+                    // so a ring lands on water without anyone reading coordinates off the map.
+                    int firstShapeArgument = 2;
+                    if (arguments.Length >= 1 && arguments[0].Equals("near", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Vector2? found = pipeline.NearestWaterTile(tile);
+                        if (found == null)
+                        {
+                            monitor.Log("no water within a dozen tiles of the player", LogLevel.Warn);
+                            return;
+                        }
+                        tile = found.Value;
+                        firstShapeArgument = 1;
+                    }
+                    else if (arguments.Length >= 2 && float.TryParse(arguments[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float askedX)
+                        && float.TryParse(arguments[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float askedY))
+                    {
+                        tile = new Vector2(askedX, askedY);
+                    }
+                    bool sweep = arguments.Length > firstShapeArgument
+                        && arguments[firstShapeArgument].Equals("sweep", StringComparison.OrdinalIgnoreCase);
+                    bool walk = arguments.Length > firstShapeArgument
+                        && arguments[firstShapeArgument].Equals("walk", StringComparison.OrdinalIgnoreCase);
+                    float age = !sweep && !walk && arguments.Length > firstShapeArgument
+                        && float.TryParse(arguments[firstShapeArgument], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float askedAge) ? askedAge : 0.35f;
+                    float strength = arguments.Length > firstShapeArgument + 1
+                        && float.TryParse(arguments[firstShapeArgument + 1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float askedStrength) ? askedStrength : 1f;
+                    if (sweep)
+                    {
+                        foreach (float sweepAge in new[] { 0.15f, 0.4f, 0.65f, 0.9f })
+                            pipeline.SpawnWakeRingAt(tile, sweepAge, strength);
+                        monitor.Log($"four rings struck at tile {tile.X},{tile.Y} {DescribeOnScreen(tile)}, aged 0.15 to 0.9 s, strength {strength:F2}", LogLevel.Info);
+                        return;
+                    }
+                    if (walk)
+                    {
+                        // The trail something crossing the water leaves: a ring every quarter of a
+                        // second, each one older and further back, which is the thing a still
+                        // picture of a single strike cannot show.
+                        // Walk AWAY from the player, into the water: the nearest water tile is
+                        // by definition at the shore, and a walk that turned back would put half
+                        // its rings on the sand where the mask hides them.
+                        Vector2 playerTile = Game1.player?.Tile ?? tile;
+                        Vector2 heading = tile - playerTile;
+                        heading = heading.LengthSquared() > 0.01f ? Vector2.Normalize(heading) : Vector2.UnitX;
+                        Vector2 middle = tile;
+                        for (int step = 0; step < 5; step++)
+                        {
+                            float walkAge = 0.9f - step * 0.2f;
+                            Vector2 along = tile + heading * (step * 0.55f);
+                            if (step == 2)
+                                middle = along;
+                            if (pipeline.NearestWaterTile(along, 1) == null)
+                                continue;
+                            pipeline.SpawnWakeRingAt(along, walkAge, strength);
+                        }
+                        monitor.Log($"a walk of five rings from tile {tile.X},{tile.Y}, middle at {middle.X:F1},{middle.Y:F1} {DescribeOnScreen(middle)}, strength {strength:F2}", LogLevel.Info);
+                        return;
+                    }
+                    pipeline.SpawnWakeRingAt(tile, age, strength);
+                    monitor.Log($"ring struck at tile {tile.X},{tile.Y} {DescribeOnScreen(tile)}, aged {age:F2} s, strength {strength:F2}", LogLevel.Info);
+                });
             helper.ConsoleCommands.Add("radiance_marchcache",
                 "'radiance_marchcache off' walks every lamp's shadow ray on every frame, the way 1.7.5 did; 'on' keeps "
                 + "the answers in a window anchored to the world and walks a ray again only for a lamp that moved or "
@@ -867,6 +1001,64 @@ namespace SDVRadiance
                     SheetReadback.WholeSheetInOneCall = (arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "") != "strips";
                     monitor.Log($"tilesheet readback: {(SheetReadback.WholeSheetInOneCall ? "one call for the whole sheet" : "strips of 512 rows")}"
                         + " (already-cached sheets keep the pixels they have; this decides the next one read).", LogLevel.Info);
+                });
+
+            helper.ConsoleCommands.Add("radiance_sheetpixels",
+                "Whether the mod holds a whole art sheet in memory to answer questions about its pixels, "
+                + "or asks the card for one rectangle at a time. A rectangle read costs a full readback of the "
+                + "sheet on this build, so 'off' is the old road and is slower on entering a map. on|off.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length > 0)
+                        SheetPixels.Enabled = arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    monitor.Log(SheetPixels.Describe(), LogLevel.Info);
+                });
+
+            helper.ConsoleCommands.Add("radiance_contactdepth",
+                "How dark the ground goes where something stands on it, read from the sprite order "
+                + "buffer so the shade follows the thing's own outline instead of the ellipse "
+                + "ContactShadowStrength draws. Turns radiance_spriterank on for you. A number 0..1, "
+                + "and a second number sets how far up it looks in buffer texels.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length > 0 && float.TryParse(arguments[0], System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out float wanted))
+                    {
+                        RenderPipeline.ContactFromDepthStrength = Math.Clamp(wanted, 0f, 1f);
+                        if (wanted > 0f)
+                            RenderPipeline.SpriteRankWanted = true;
+                    }
+                    if (arguments.Length > 1 && float.TryParse(arguments[1], System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out float reach))
+                        RenderPipeline.ContactFromDepthReachTexels = Math.Clamp(reach, 1f, 16f);
+                    monitor.Log($"contact shade from the order buffer: {RenderPipeline.ContactFromDepthStrength:0.00}, "
+                        + $"looking {RenderPipeline.ContactFromDepthReachTexels:0.#} texels up "
+                        + $"(order buffer {(RenderPipeline.SpriteRankWanted ? "on" : "OFF")})", LogLevel.Info);
+                });
+
+            helper.ConsoleCommands.Add("radiance_spriterank",
+                "Whether the relief pass also writes which sprite won the depth test at each pixel. "
+                + "That buffer is what lets light know a lamp is BEHIND a tree rather than on top of it. "
+                + "off is the pass exactly as it was. on|off.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length > 0)
+                        RenderPipeline.SpriteRankWanted = arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    monitor.Log($"sprite rank buffer: {(RenderPipeline.SpriteRankWanted ? "written" : "OFF")}", LogLevel.Info);
+                });
+
+            helper.ConsoleCommands.Add("radiance_windowblock",
+                "How much a wall or a piece of furniture between a window and a pixel takes off that "
+                + "pixel's light shaft. 0 is what the beam did before, where it was a shape and crossed "
+                + "everything in the room. 1 is fully blocked. A number, or nothing to read it back.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length > 0 && float.TryParse(arguments[0], System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out float wanted))
+                        RenderPipeline.WindowShaftBlocking = Math.Clamp(wanted, 0f, 1f);
+                    monitor.Log($"window shaft blocking: {RenderPipeline.WindowShaftBlocking:0.00}"
+                        + (RenderPipeline.WindowShaftBlocking <= 0f ? " (the beam crosses everything, as it did before)" : ""),
+                        LogLevel.Info);
                 });
 
             helper.ConsoleCommands.Add("radiance_samplerslots",
@@ -1088,6 +1280,15 @@ namespace SDVRadiance
 
         /// <summary>Console command: dump every light the game currently tracks, so "why does my
         /// room have N shadows" is answerable — each listed light casts its own shadow.</summary>
+        /// <summary>Where a world tile sits on the screen right now, for a capture script that has to
+        /// crop onto it. The camera is clamped at a map's edge, so the player is not reliably in the
+        /// middle of the frame and a crop worked out from the player's tile lands somewhere else.</summary>
+        private static string DescribeOnScreen(Vector2 tile)
+        {
+            Vector2 screen = Game1.GlobalToLocal(Game1.viewport, tile * 64f);
+            return $"(screen {(int)screen.X},{(int)screen.Y} of {Game1.viewport.Width}x{Game1.viewport.Height})";
+        }
+
         private static void DumpLights(IMonitor monitor)
         {
             if (!StardewModdingAPI.Context.IsWorldReady || Game1.player == null)
@@ -1227,9 +1428,15 @@ namespace SDVRadiance
                 Write(PhaseCost.Describe("flood ").TrimEnd());
                 Write("");
                 Write("water entity mirror, main thread, per bake since the last report:");
+                Write($"  slot readbacks off the card last frame: {pipeline?.SelfDrawnReadbacksThisFrame ?? 0}"
+                    + $", of which came back EMPTY: {pipeline?.SelfDrawnEmptyReadbacksThisFrame ?? 0}"
+                    + " (an empty answer is not remembered, so an empty slot is paid for again every frame)");
                 Write(PhaseCost.Describe("mirror").TrimEnd());
+                Write(PhaseCost.Describe("scene").TrimEnd());
+                Write(PhaseCost.Describe("wet ground").TrimEnd());
                 Write(PhaseCost.Describe("relief").TrimEnd());
                 Write(PhaseCost.Describe("sheet").TrimEnd());
+                Write(SheetPixels.Describe());
                 Write("");
                 Write(FrameCost.DescribeLongestFrames().TrimEnd());
                 Write("");
@@ -1238,6 +1445,7 @@ namespace SDVRadiance
                 Write("");
                 Write("=== shadows: who could cast, and what the pass did with them ===");
                 Write(ShadowRenderer.Report(config, wholeMap: false));
+                Write(ShadowRenderer.DescribeInk(config));
                 Write("");
                 // The whole config, not the handful printed above. It is a file, it costs nothing,
                 // and a setting nobody thought to ask about is exactly the one that explains it.
@@ -1273,6 +1481,140 @@ namespace SDVRadiance
                 monitor.Log("Could not write the report file: " + exception.Message, LogLevel.Warn);
                 monitor.Log(text.ToString(), LogLevel.Info);
             }
+        }
+
+        /// <summary>
+        /// Which of the mods actually installed here have art our labels were painted on.
+        ///
+        /// <para>Answers the question a player asks before installing anything: does this know
+        /// about my expansion. Matched on unique id, because the pack folder names the tool also
+        /// records are this author's own filing and mean nothing on anybody else's machine.</para>
+        /// </summary>
+        private static string DescribeLabelCoverage()
+        {
+            LabelStore? labels = LabelStore.Instance;
+            if (labels == null || labels.SheetSources.Count == 0)
+                return "labels: no provenance file, so which mods they cover cannot be said";
+            var installed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (_registry != null)
+                foreach (IModInfo info in _registry.GetAll())
+                    if (info.Manifest?.UniqueID is { Length: > 0 } id)
+                        installed[id] = info.Manifest.Name ?? id;
+
+            var covered = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            int fromBaseGame = 0, unattributed = 0;
+            foreach (var pair in labels.SheetSources)
+            {
+                if (pair.Value.From == "the base game") { fromBaseGame++; continue; }
+                bool anyHere = false;
+                foreach (string id in pair.Value.ModIds)
+                    if (installed.TryGetValue(id, out string? name))
+                    {
+                        covered[name] = covered.TryGetValue(name, out int seen) ? seen + 1 : 1;
+                        anyHere = true;
+                    }
+                if (!anyHere)
+                    unattributed++;
+            }
+            var ranked = new List<KeyValuePair<string, int>>(covered);
+            ranked.Sort((a, b) => b.Value != a.Value ? b.Value.CompareTo(a.Value)
+                                                    : string.CompareOrdinal(a.Key, b.Key));
+            var named = new List<string>();
+            for (int i = 0; i < ranked.Count && i < 8; i++)
+                named.Add($"{ranked[i].Key} ({ranked[i].Value})");
+            return $"labels cover {labels.SheetSources.Count} sheet(s): {fromBaseGame} the base game's, "
+                   + $"{covered.Count} of the mods installed here"
+                   + (named.Count > 0 ? " - " + string.Join(", ", named) : "")
+                   + (ranked.Count > named.Count ? $" and {ranked.Count - named.Count} more" : "")
+                   + $"; {unattributed} from art no mod installed here supplies";
+        }
+
+        /// <summary>
+        /// Read the labels for every piece of furniture in this room through the sheet-cell path,
+        /// and say what came back. The point of it is that these labels exist and were, until the
+        /// reader landed, unreachable: this is how you can tell the reader is finding them rather
+        /// than believing it because the code compiles.
+        /// </summary>
+        private static string ReportSpriteLabels(bool listUnlabelled)
+        {
+            LabelStore? labels = LabelStore.Instance;
+            if (labels == null || !labels.Any)
+                return "no labels loaded";
+            GameLocation? location = Game1.currentLocation;
+            if (location == null)
+                return "no location";
+
+            var text = new System.Text.StringBuilder();
+            text.AppendLine($"sprite labels in {location.NameOrUniqueName}"
+                            + $"  (furniture: {location.furniture.Count})");
+            // Named from the one list every reader of a label file shares, so a class added
+            // there appears here without being typed out again. This table used to be its own
+            // copy and had already lost wall, roof and void.
+            int piecesWithLabels = 0, cellsAsked = 0, cellsAnswered = 0;
+            var found = new Dictionary<byte, int>();
+
+            foreach (StardewValley.Objects.Furniture piece in location.furniture)
+            {
+                if (piece == null)
+                    continue;
+                StardewValley.ItemTypeDefinitions.ParsedItemData data;
+                try { data = ItemRegistry.GetDataOrErrorItem(piece.QualifiedItemId); }
+                catch { continue; }
+                Texture2D? sheet = null;
+                try { sheet = data.GetTexture(); }
+                catch { }
+                Rectangle rect = piece.sourceRect.Value;
+                if (sheet == null || rect.Width <= 0 || rect.Height <= 0)
+                    continue;
+
+                // Walk the cells the piece actually covers. Art wider or taller than one cell was
+                // painted a cell at a time, so it is read back a cell at a time.
+                var here = new Dictionary<byte, int>();
+                int askedHere = 0, answeredHere = 0;
+                for (int cellY = rect.Y; cellY < rect.Bottom; cellY += 16)
+                    for (int cellX = rect.X; cellX < rect.Right; cellX += 16)
+                    {
+                        askedHere++;
+                        byte[]? cell = labels.GetSheetCell(data.TextureName, sheet,
+                            new Rectangle(cellX, cellY, 16, 16));
+                        if (cell == null)
+                            continue;
+                        answeredHere++;
+                        foreach (byte one in cell)
+                            if (one != 0)
+                                here[one] = here.TryGetValue(one, out int seen) ? seen + 1 : 1;
+                    }
+                cellsAsked += askedHere;
+                cellsAnswered += answeredHere;
+                if (answeredHere == 0 && !listUnlabelled)
+                    continue;
+                if (answeredHere > 0)
+                    piecesWithLabels++;
+                foreach (var pair in here)
+                    found[pair.Key] = found.TryGetValue(pair.Key, out int already) ? already + pair.Value : pair.Value;
+
+                var classes = new List<string>();
+                foreach (var pair in here)
+                    classes.Add($"{(LabelClass.Name(pair.Key))}={pair.Value}");
+                text.AppendLine($"  {piece.DisplayName} [{piece.QualifiedItemId}] at {piece.TileLocation}"
+                                + $"  sheet={data.TextureName} rect={rect.X},{rect.Y} {rect.Width}x{rect.Height}"
+                                + $"  cells {answeredHere}/{askedHere}"
+                                + (classes.Count > 0 ? "  " + string.Join(" ", classes) : "  (all ground)"));
+            }
+
+            text.AppendLine($"pieces with labels: {piecesWithLabels}/{location.furniture.Count}"
+                            + $"  cells answered {cellsAnswered}/{cellsAsked}");
+            if (found.Count == 0)
+                text.AppendLine("no marked pixels here. Try a room with a mirror, a lamp or a window in its furniture.");
+            else
+            {
+                var totals = new List<string>();
+                foreach (var pair in found)
+                    totals.Add($"{(LabelClass.Name(pair.Key))}={pair.Value}");
+                text.AppendLine("marked pixels: " + string.Join(" ", totals));
+            }
+            text.AppendLine($"labels refused for changed art (whole session): {labels.ArtBoundLabelsRefusedForChangedArt}");
+            return text.ToString().TrimEnd();
         }
 
         /// <summary>
@@ -1526,6 +1868,7 @@ namespace SDVRadiance
             write($"config: enabled={config.Enabled} water={config.WaterEnabled} reflection={config.WaterReflection} "
                       + $"lighting={config.FloodLightingEnabled} shadows={config.DirectionalShadowsEnabled} "
                       + $"renderScale={config.RenderScale:0.00} labels=v{LabelStore.Instance?.Version ?? 0}");
+            write(DescribeLabelCoverage());
             // The caustic term, spelled out as the number the shader received and every factor
             // that made it. "I toggled it and saw nothing" is answered here in one line: an
             // uploaded amount of zero with the toggle on names the factor that killed it.
@@ -1554,7 +1897,7 @@ namespace SDVRadiance
             // (panes=0) or a street whose windows are drawn over by the map's own front layer
             // (panes>0, onScreen>0, and radiance_debug window paints nothing).
             if (pipeline != null)
-                write($"windows: panes={pipeline.WindowPanesInLocation} onScreen={pipeline.WindowPanesOnScreen} "
+                write($"windows: panes={pipeline.WindowPanesInLocation} onScreen={pipeline.WindowPanesOnScreen} intoGameLightmap={pipeline.WindowGlowsIntoGameLightmap} lampHalos={pipeline.LampHalos} mineFogUp={RenderPipeline.MineAirIsThick} aquariums={pipeline.AquariumLights} "
                     + $"(toggle={config.WindowReflectionEnabled} reflect={pipeline.WindowReflectUploaded:0.000} "
                     + $"sheen={pipeline.WindowSheenUploaded:0.000} glare={pipeline.WindowGlareUploaded:0.000} "
                     + $"street={pipeline.WindowSceneUploaded:0.000} lamps={pipeline.WindowLampGlowUploaded:0.000} lampsDrawn={pipeline.WindowLampsDrawn}/{pipeline.WindowLampsConsidered} "

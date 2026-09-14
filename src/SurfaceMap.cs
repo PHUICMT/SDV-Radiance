@@ -7,8 +7,10 @@ using xTile.Layers;
 
 namespace SDVRadiance
 {
-    /// <summary>Coarse per-tile surface class. Values are stable: 0 Ground, 1 Water, 2 Wall,
-    /// 3 Roof, 4 Deck, 5 Void.</summary>
+    /// <summary>Coarse per-tile surface class. Values are stable, because they are written into
+    /// cached grids: 0 Ground, 1 Water, 2 Wall, 3 Roof, 4 Deck, 5 Void, 6 Glass. Not the same
+    /// numbers as a LABEL class (see <see cref="LabelClass"/>), which is what a painted tile
+    /// carries; several label classes fold into one surface here.</summary>
     internal enum SurfaceClass : byte
     {
         /// <summary>Flat, walkable ground at reference height 0.</summary>
@@ -50,6 +52,57 @@ namespace SDVRadiance
 
         private static readonly ConditionalWeakTable<GameLocation, SurfaceMap> _locationCache = new();
 
+        /// <summary>The map object this grid was built from, and how many map overrides its location
+        /// had applied at the time. The game changes a map under the SAME location without reloading
+        /// any asset: a house upgrade loads a new map onto the farmhouse, and ApplyMapOverride writes
+        /// a repaired bridge or a greenhouse straight into the map already there. No invalidation
+        /// fires for either, so a grid kept only by location went on describing the old layout for
+        /// the rest of the session: the new rooms' walls let lamp light through and the old walls
+        /// stopped it in the middle of a room.</summary>
+        private xTile.Map? _builtFromMap;
+        private int _mapOverridesAtBuild;
+
+        private static readonly HarmonyLib.AccessTools.FieldRef<GameLocation, HashSet<string>>? AppliedMapOverrides = FindAppliedMapOverrides();
+
+        private static HarmonyLib.AccessTools.FieldRef<GameLocation, HashSet<string>>? FindAppliedMapOverrides()
+        {
+            try { return HarmonyLib.AccessTools.FieldRefAccess<GameLocation, HashSet<string>>("_appliedMapOverrides"); }
+            catch { return null; }
+        }
+
+        private static int AppliedMapOverrideCount(GameLocation location)
+        {
+            if (AppliedMapOverrides == null)
+                return 0;
+            try { return AppliedMapOverrides(location)?.Count ?? 0; }
+            catch { return 0; }
+        }
+
+        /// <summary>How many times a location's own map asset has been reloaded under it. The
+        /// whole-map scans (window lights, emissive tiles, window panes) read the map's LAYERS, so
+        /// a map re-patched in place can move a window without a single label changing its mind,
+        /// and this is the number that tells them so. See <see cref="MapAnswerKey"/> for why they
+        /// need telling separately now.
+        ///
+        /// <para>A tile sheet the map draws from is deliberately NOT counted here. Repainting a
+        /// sheet cannot move a tile; what it can change is whether a label still applies to the
+        /// art on it, and that question is the label store's, which answers it per sheet.</para>
+        ///
+        /// <para>Weak, like the grids beside it: a location the game has let go takes its count
+        /// with it, and a location that is asked about before it is ever reloaded reads zero.</para></summary>
+        private static readonly ConditionalWeakTable<GameLocation, StrongBox<int>> _mapReloadCount = new();
+
+        public static int MapReloadCount(GameLocation? location)
+            => location != null && _mapReloadCount.TryGetValue(location, out StrongBox<int>? count) ? count.Value : 0;
+
+        private static void CountMapReload(GameLocation location)
+        {
+            if (_mapReloadCount.TryGetValue(location, out StrongBox<int>? count))
+                count.Value++;
+            else
+                _mapReloadCount.Add(location, new StrongBox<int>(1));
+        }
+
         private SurfaceMap(int width, int height)
         {
             Width = width;
@@ -85,24 +138,64 @@ namespace SDVRadiance
             if (location == null)
                 return null;
             if (_locationCache.TryGetValue(location, out SurfaceMap? grid))
-                return grid;
+            {
+                if (ReferenceEquals(grid._builtFromMap, location.map)
+                    && grid._mapOverridesAtBuild == AppliedMapOverrideCount(location))
+                    return grid;
+                // The map changed under the location with no asset reloaded (see _builtFromMap).
+                // Counted as a reload, so the whole-map scans keyed on that count look again, and the
+                // water mask is told when it is the map on screen.
+                DiagnosticMonitor?.Log($"[location] map changed in place: {location.NameOrUniqueName}, its surface grid is rebuilt", LogLevel.Trace);
+                _locationCache.Remove(location);
+                CountMapReload(location);
+                if (ReferenceEquals(location, Game1.currentLocation))
+                {
+                    RenderPipeline.MaskEpoch++;
+                    RenderPipeline.MaskEpochReason = "the map changed in place (" + location.NameOrUniqueName + ")";
+                    WaterDrawHook.Forget(location);
+                }
+            }
             // Breadcrumbs, not a perf counter: this is a whole-map walk that runs once when a
             // location is first drawn, and a freeze report can only be pinned to it if the log
             // shows the walk STARTED and never finished. Trace always lands in the SMAPI log
             // file, so a reporter needs no debug switch for it to be there after a hard stop.
             DiagnosticMonitor?.Log($"[location] surface build start: {location.NameOrUniqueName}", LogLevel.Trace);
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            try { grid = Build(location); }
+            SurfaceBuildCost cost = default;
+            try { grid = Build(location, out cost); }
             catch (Exception exception) { grid = null; DiagnosticMonitor?.Log($"[location] surface build threw: {exception.Message}", LogLevel.Warn); }
             stopwatch.Stop();
-            DiagnosticMonitor?.Log($"[location] surface build done: {location.NameOrUniqueName} {grid?.Width ?? 0}x{grid?.Height ?? 0} in {stopwatch.Elapsed.TotalMilliseconds:0.0}ms", LogLevel.Trace);
+            DiagnosticMonitor?.Log($"[location] surface build done: {location.NameOrUniqueName} {grid?.Width ?? 0}x{grid?.Height ?? 0} in {stopwatch.Elapsed.TotalMilliseconds:0.0}ms ({cost})", LogLevel.Trace);
             if (grid != null)
+            {
+                // Read after the build: building asks for location.Map, which can itself load the
+                // map the location was waiting to switch to.
+                grid._builtFromMap = location.map;
+                grid._mapOverridesAtBuild = AppliedMapOverrideCount(location);
                 _locationCache.Add(location, grid);
+            }
             return grid;
         }
 
         /// <summary>Optional diagnostics sink (set at startup) — see the breadcrumbs in <see cref="For"/>.</summary>
         internal static IMonitor? DiagnosticMonitor;
+
+        /// <summary>What one grid cost, pass by pass. The build is four walks over the map, not
+        /// one, and a reader who only has the total cannot tell a slow classifier from a slow
+        /// deck span. Free to collect: this runs once per location, not once per frame.</summary>
+        private readonly record struct SurfaceBuildCost(double Layers, double Classify,
+                                                        double SpanDecks, double ThinRoofs,
+                                                        double Footprints)
+        {
+            public override string ToString()
+                => $"layers {this.Layers:0.0}, classify {this.Classify:0.0}, decks {this.SpanDecks:0.0}, "
+                 + $"roofs {this.ThinRoofs:0.0}, footprints {this.Footprints:0.0}";
+        }
+
+        /// <summary>Milliseconds since a <see cref="System.Diagnostics.Stopwatch"/> timestamp.</summary>
+        private static double MillisecondsSince(long timestamp)
+            => (System.Diagnostics.Stopwatch.GetTimestamp() - timestamp) * 1000.0
+             / System.Diagnostics.Stopwatch.Frequency;
 
         public static void Invalidate(GameLocation? location)
         {
@@ -146,26 +239,40 @@ namespace SDVRadiance
                 return;
             Utility.ForEachLocation(location =>
             {
-                if (LocationDrawsFrom(location, reloaded))
-                    _locationCache.Remove(location);
+                DropWhatTheseReloaded(location, reloaded);
                 return true;
             });
             // A location the game holds outside its list (a temporary festival map, a mod's
             // instanced interior) is still the one on screen.
-            if (Game1.currentLocation is { } here && LocationDrawsFrom(here, reloaded))
-                _locationCache.Remove(here);
+            if (Game1.currentLocation is { } here)
+                DropWhatTheseReloaded(here, reloaded);
         }
 
-        private static bool LocationDrawsFrom(GameLocation location, List<string> reloaded)
+        /// <summary>Throw away this location's grid if one of these assets is its map or a sheet
+        /// its map draws from, and count the reload if the asset IS the map.</summary>
+        private static void DropWhatTheseReloaded(GameLocation location, List<string> reloaded)
+        {
+            bool mapItself = LocationMapIsOneOf(location, reloaded);
+            if (mapItself)
+                CountMapReload(location);
+            if (mapItself || LocationDrawsSheetFrom(location, reloaded))
+                _locationCache.Remove(location);
+        }
+
+        private static bool LocationMapIsOneOf(GameLocation location, List<string> reloaded)
         {
             string? mapPath = location.mapPath?.Value;
-            if (mapPath != null)
-            {
-                string mapAssetName = NormaliseAssetName(mapPath);
-                foreach (string name in reloaded)
-                    if (string.Equals(mapAssetName, name, StringComparison.OrdinalIgnoreCase))
-                        return true;
-            }
+            if (mapPath == null)
+                return false;
+            string mapAssetName = NormaliseAssetName(mapPath);
+            foreach (string name in reloaded)
+                if (string.Equals(mapAssetName, name, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            return false;
+        }
+
+        private static bool LocationDrawsSheetFrom(GameLocation location, List<string> reloaded)
+        {
             var sheets = location.map?.TileSheets;
             if (sheets == null)
                 return false;
@@ -181,7 +288,7 @@ namespace SDVRadiance
 
         /// <summary>Forward slashes, no locale suffix: anything after the LAST dot that is short
         /// and has no slash in it is a language tag, not part of a path.</summary>
-        private static string NormaliseAssetName(string name)
+        internal static string NormaliseAssetName(string name)
         {
             name = name.Replace('\\', '/');
             int dot = name.LastIndexOf('.');
@@ -206,41 +313,86 @@ namespace SDVRadiance
         /// <param name="deckPixels">How much of the tile the deck labels actually cover. The caller
         /// needs it because a Deck verdict is the one verdict that can be right about the art and
         /// wrong about the tile: see the plank rule in <see cref="Build"/>.</param>
+        /// <summary>What one label buffer says, both ways of reading it, counted once. The buffers
+        /// are the shipped label data and there are a few thousand of them; the map has fifteen
+        /// thousand tiles and asks about several layers of each, so the same 256 bytes were being
+        /// read through over and over for an answer that cannot change. Weakly keyed, because a
+        /// mirrored or turned tile is handed a fresh copy of its label and that copy must be free
+        /// to go.</summary>
+        private sealed class LabelVerdict
+        {
+            internal SurfaceClass? AsSurface;
+            internal SurfaceClass? AsOverlay;
+            internal int DeckPixels;
+        }
+
+        private static readonly ConditionalWeakTable<byte[], LabelVerdict> _verdictByLabel = new();
+
         private static SurfaceClass? ClassFromLabels(byte[] classes, bool overlay, out int deckPixels)
+        {
+            if (!_verdictByLabel.TryGetValue(classes, out LabelVerdict? verdict))
+            {
+                verdict = new LabelVerdict
+                {
+                    AsSurface = CountLabel(classes, overlay: false, out int deck),
+                    AsOverlay = CountLabel(classes, overlay: true, out _),
+                    DeckPixels = deck,
+                };
+                _verdictByLabel.Add(classes, verdict);
+            }
+            deckPixels = verdict.DeckPixels;
+            return overlay ? verdict.AsOverlay : verdict.AsSurface;
+        }
+
+        private static SurfaceClass? CountLabel(byte[] classes, bool overlay, out int deckPixels)
         {
             int water = 0, deck = 0, wall = 0, roof = 0, ground = 0, glass = 0;
             for (int pixelIndex = 0; pixelIndex < 256; pixelIndex++)
             {
                 switch (classes[pixelIndex])
                 {
-                    case 1: case 9: case 10: case 11: case 14: water++; break;  // water / ice / falling / lava / hot
-                    case 2: case 8: wall++; break;                      // wall / mirror (backed: blocks)
-                    case 3: roof++; break;
-                    case 4: deck++; break;
+                    case LabelClass.Water: case LabelClass.Ice: case LabelClass.Flowing:
+                    case LabelClass.Lava: case LabelClass.Hot: water++; break;
+                    case LabelClass.Wall: case LabelClass.Mirror: wall++; break;   // a mirror is backed: it blocks
+                    case LabelClass.Roof: roof++; break;
+                    case LabelClass.Deck: deck++; break;
                     // A WINDOW is a hole in a wall with glass in it, and a glass roof is a
                     // skylight: light goes through both. Folding 12 in with `wall` made a painted
                     // window BLOCK the lamp light it is supposed to let past — a display case in
                     // Pierre's shop threw a hard shadow across the goods behind it.
-                    case 12: case 13: glass++; break;
-                    case 5: break;                                      // void: never decisive on its own
-                    default: ground++; break;                           // 0 ground, 6 emissive, 7 reflect_floor
+                    case LabelClass.Window: case LabelClass.Glass: glass++; break;
+                    case LabelClass.Void: break;                        // never decisive on its own
+                    default: ground++; break;                           // ground, emissive, reflect_floor
                 }
             }
             deckPixels = deck;
             // Order matters: a deck plank drawn OVER water has to read Deck, not Water.
-            if (deck >= 64) return SurfaceClass.Deck;
-            if (wall >= 64) return SurfaceClass.Wall;
-            if (glass >= 64) return SurfaceClass.Glass;
-            if (water >= (overlay ? 48 : 128)) return SurfaceClass.Water;
-            if (roof >= 64) return SurfaceClass.Roof;
+            if (deck >= QuarterTilePixels) return SurfaceClass.Deck;
+            if (wall >= QuarterTilePixels) return SurfaceClass.Wall;
+            if (glass >= QuarterTilePixels) return SurfaceClass.Glass;
+            if (water >= (overlay ? OverlayWaterPixels : HalfTilePixels)) return SurfaceClass.Water;
+            if (roof >= QuarterTilePixels) return SurfaceClass.Roof;
             // A window PANE is a small part of its tile — the frame and the wall around it take
             // the rest — so it never reaches the 64-pixel bar above. 8 is the same bar the window
             // LIGHT scan uses (RenderPipeline.Lighting.EnsureWindowCache), so the two agree: a
             // tile bright enough to emit window light is a tile light can pass through.
-            if (glass >= 8) return SurfaceClass.Glass;
-            if (!overlay && ground >= 192) return SurfaceClass.Ground;
+            if (glass >= WindowPanePixels) return SurfaceClass.Glass;
+            if (!overlay && ground >= MostOfTilePixels) return SurfaceClass.Ground;
             return null;
         }
+
+        /// <summary>How much of a sixteen by sixteen tile a class has to cover to speak for it.
+        /// A quarter is the ordinary bar; water painted as an OVERLAY over something else gets a
+        /// lower one, because it is a fringe rather than a surface; deciding a tile is plain
+        /// ground takes most of it; and a window PANE is a small part of its tile, since the frame
+        /// and the wall around it take the rest, so it never reaches the quarter bar. Eight is the
+        /// same bar the window LIGHT scan uses, so the two agree: a tile bright enough to emit
+        /// window light is a tile light can pass through.</summary>
+        private const int QuarterTilePixels = 64;
+        private const int OverlayWaterPixels = 48;
+        private const int HalfTilePixels = 128;
+        private const int MostOfTilePixels = 192;
+        internal const int WindowPanePixels = 8;
 
         /// <summary>Deck coverage at which a plank owns its whole tile rather than clipping it.
         /// Half the tile: below that the water underneath keeps the tile and the plank is carved
@@ -266,6 +418,10 @@ namespace SDVRadiance
             /// <summary>EVERY Buildings-family layer, topmost first - a deck plank sits over the
             /// Back tile no matter which numbered layer carries it.</summary>
             public readonly List<Layer> BuildingsTopDown;
+            /// <summary>The layers a liquid can be painted ON TOP of a dry base in, in the order
+            /// they are consulted. Held, because the tile sweep used to write this list out as a
+            /// new array inside the loop: one allocation for every tile of the map.</summary>
+            public readonly Layer?[] LiquidOverlays;
             public readonly LabelStore? Labels;
 
             public MapLayerSet(Layer? back, Layer? buildings, Layer? front, Layer? back2,
@@ -276,12 +432,15 @@ namespace SDVRadiance
                 Back2 = back2; Front2 = front2;
                 AlwaysFront = alwaysFront; AlwaysFront2 = alwaysFront2;
                 BuildingsTopDown = buildingsTopDown; Labels = labels;
+                LiquidOverlays = new[] { front, front2, alwaysFront, alwaysFront2 };
             }
         }
 
 
-        private static SurfaceMap? Build(GameLocation location)
+        private static SurfaceMap? Build(GameLocation location, out SurfaceBuildCost cost)
         {
+            cost = default;
+            long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
             var tileMap = location.Map;
             if (tileMap == null || tileMap.Layers.Count == 0)
                 return null;
@@ -320,12 +479,26 @@ namespace SDVRadiance
             bool[] labelled = new bool[mapWidth * mapHeight];
             var layers = new MapLayerSet(back, buildings, front, back2, front2,
                 alwaysFront, alwaysFront2, buildingsTopDown, labels);
+            double layersMilliseconds = MillisecondsSince(startedAt);
+
+            long passStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
             ClassifyTiles(grid, labelled, mapWidth, mapHeight, location, layers);
+            double classifyMilliseconds = MillisecondsSince(passStartedAt);
 
+            passStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
             SpanDecks(grid, labelled, mapWidth, mapHeight);
-            ThinRoofs(grid, labelled, mapWidth, mapHeight);
-            StampBuildingFootprints(grid, location, mapWidth);
+            double spanDecksMilliseconds = MillisecondsSince(passStartedAt);
 
+            passStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            ThinRoofs(grid, labelled, mapWidth, mapHeight);
+            double thinRoofsMilliseconds = MillisecondsSince(passStartedAt);
+
+            passStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            StampBuildingFootprints(grid, location, mapWidth);
+            double footprintsMilliseconds = MillisecondsSince(passStartedAt);
+
+            cost = new SurfaceBuildCost(layersMilliseconds, classifyMilliseconds, spanDecksMilliseconds,
+                                        thinRoofsMilliseconds, footprintsMilliseconds);
             return grid;
         }
 
@@ -431,7 +604,7 @@ namespace SDVRadiance
             // keep their say, so a plank over water still reads as a deck.
             if (paintedClass is null or SurfaceClass.Ground)
             {
-                foreach (var overlayLayer in new[] { layers.Front, layers.Front2, layers.AlwaysFront, layers.AlwaysFront2 })
+                foreach (var overlayLayer in layers.LiquidOverlays)
                 {
                     if (overlayLayer == null || layers.Labels.Get(overlayLayer, x, y) is not { } overlayLabel)
                         continue;

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
@@ -55,6 +56,28 @@ namespace SDVRadiance
         // then drawn back (flattened + leaned) into the World_Sorted batch. FarmerRenderer only
         // supports a uniform scale, so the RT is the only way to squash the player vertically.
         private RenderTarget2D? _playerRenderTarget;
+        /// <summary>The player's silhouette LAID DOWN by the sun: the upright bake drawn through
+        /// the sun's projection about the feet, soft edge stamped in, so the daylight shadow is
+        /// one unrotated stamp carrying the skew a rotate-and-scale draw cannot (see
+        /// LayDownPlayerSun). The upright bake stays as it is for the water and the lamps.</summary>
+        private RenderTarget2D? _playerSunRenderTarget;
+        private Vector2 _playerSunFeet;
+        private float _playerSunUnbake = 1f;
+        private Rectangle _playerSunContent;
+        private ShadowProjection _playerSunProjection;
+        private float _playerSunBlur = -1f;
+        private bool _playerSunFresh;
+        private (int frame, int facing, Rectangle sourceRect) _playerSunSignature = (-1, -1, default);
+        private float _playerSunContactHardness = -1f, _playerSunPenumbraStretch = -1f;
+        /// <summary>The square every laid-down farmer silhouette is made in. A person is 64 by
+        /// 128 upright and at the longest the dials allow lies down to several times that; the
+        /// fit ladder in LayDownSilhouette scales down to make the extremes fit.</summary>
+        internal const int PlayerSunRtSize = 256;
+        private RenderTarget2D? _playerSunBlurScratch;
+        /// <summary>This frame's sun for the character passes, captured during the bakes so a
+        /// lay-down made then and a draw made later agree (see CaptureCharacterSun).</summary>
+        private bool _characterSunLive;
+        private float _characterSunRotation, _characterSunStretch, _characterSunBlur;
         private SpriteBatch? _renderTargetSpriteBatch;
         private Texture2D? _gradientTexture;
         /// <summary>Soft radial disc for indoor/ambient CONTACT shadows (a grounding pool under a caster).</summary>
@@ -79,6 +102,73 @@ namespace SDVRadiance
         /// Whatever appearance mods drew is what gets reflected.</summary>
         internal static Texture2D? PlayerColor;
         private RenderTarget2D? _playerColorRenderTarget;
+
+        /// <summary>
+        /// The colour every sky-cast shadow is drawn in this frame; the bake's own alpha
+        /// premultiplies it at draw time. Black is what every release before 1.7.7 drew and what
+        /// the dial gives at 0. A real shadow is not black: it is the ground lit by whatever the
+        /// sun is not, which outdoors is the sky (blue), under rain cloud is the cloud (grey), at
+        /// the day's edges is the opposite of the sun's gold (violet), and in a room is the bounce
+        /// off wood and lamps (warm). The dial scales that fill. The bakes never change, so nothing
+        /// is baked again when the hour turns; only the colour they are drawn in does.
+        /// </summary>
+        internal static Color ShadowInk { get; private set; } = Color.Black;
+        /// <summary>The same ink as a vector, for the cloud and building shadow shader.</summary>
+        internal static Vector3 ShadowInkVector { get; private set; }
+        private static readonly Dictionary<int, (Vector3 ink, int tick)> _inkPerScreen = new();
+
+        /// <summary>
+        /// Settle this frame's ink for the screen about to draw. Eased over a couple of seconds
+        /// so a doorway or a cloud bank does not switch every shadow's colour on one frame, and
+        /// pinned to its target while a capture is frozen so a dump is repeatable. Per screen,
+        /// because two screens can stand in two locations with two fills.
+        /// </summary>
+        internal static void UpdateShadowInk(ModConfig config, int screenId)
+        {
+            float dial = MathHelper.Clamp(config.ShadowTint, 0f, 1f);
+            Vector3 target = dial <= 0f ? Vector3.Zero : ShadowInkTarget() * dial;
+            if (!_inkPerScreen.TryGetValue(screenId, out (Vector3 ink, int tick) state) || Determinism.Frozen)
+                state = (target, Game1.ticks);
+            else if (Game1.ticks != state.tick)
+                state = (state.ink + (target - state.ink) * 0.04f, Game1.ticks);
+            _inkPerScreen[screenId] = state;
+            ShadowInkVector = state.ink;
+            ShadowInk = new Color(state.ink);
+        }
+
+        /// <summary>What fills a shadow here and now, at full dial. See <see cref="ShadowInk"/>.</summary>
+        private static Vector3 ShadowInkTarget()
+        {
+            GameLocation? location = Game1.currentLocation;
+            if (location == null || !location.IsOutdoors)
+                return new Vector3(0.22f, 0.14f, 0.09f);
+            bool raining = location.IsRainingHere();
+            Vector3 fill = location.IsSnowingHere() || LocalSky.Season == Season.Winter
+                ? new Vector3(0.18f, 0.25f, 0.45f)
+                : new Vector3(0.16f, 0.22f, 0.40f);
+            if (raining)
+                fill = new Vector3(0.16f, 0.16f, 0.19f);
+            float minutes = GameClock.MinutesNow();
+            // The same low-sun edge ComputeSun stretches the shadows by: a golden sun leaves its
+            // opposite in the shade. Rain has no gold to oppose.
+            float sunSkyOffset = SunSkyOffsetAt(minutes);
+            float lowSunEdge = sunSkyOffset * sunSkyOffset * sunSkyOffset * sunSkyOffset;
+            if (!raining)
+                fill = Vector3.Lerp(fill, new Vector3(0.30f, 0.15f, 0.36f), lowSunEdge);
+            int trulyDark = TrulyDark();
+            float trulyDarkMinutes = (trulyDark / 100) * 60 + trulyDark % 100;
+            float night = MathHelper.Clamp((minutes - (trulyDarkMinutes - 90f)) / 90f, 0f, 1f);
+            return Vector3.Lerp(fill, new Vector3(0.05f, 0.07f, 0.18f), night);
+        }
+
+        /// <summary>One report line: the dial, what is being drawn, and where it is heading.</summary>
+        internal static string DescribeInk(ModConfig config)
+        {
+            Color ink = ShadowInk;
+            Vector3 target = ShadowInkTarget() * MathHelper.Clamp(config.ShadowTint, 0f, 1f);
+            return $"shadow ink: ShadowTint {config.ShadowTint:0.00} drawing rgb({ink.R},{ink.G},{ink.B}) "
+                + $"toward rgb({(int)(target.X * 255f)},{(int)(target.Y * 255f)},{(int)(target.Z * 255f)})";
+        }
         /// <summary>Opacity at the far tip (head end) relative to the feet, for the gradient fade.</summary>
         private const float HeadFade = 0.05f;
 
@@ -233,9 +323,28 @@ namespace SDVRadiance
                 Vector2 along = Along(rotation, stretch);
                 // The ground's perpendicular to the sun's direction, measured ON the ground (screen
                 // y un-squashed by k to get there), then put back on screen (squashed again).
+                //
                 float groundX = (float)Math.Cos(rotation) / k, groundY = (float)Math.Sin(rotation);
                 float length = (float)Math.Sqrt(groundX * groundX + groundY * groundY);
-                return new ShadowProjection(groundX / length, groundY * k / length, along.X, along.Y);
+                float acrossX = groundX / length, acrossY = groundY * k / length;
+                // Past a quarter turn the cosine changes sign and the width swings round to the
+                // other side, so an asymmetric caster's shadow comes out MIRRORED whenever the sun
+                // is on the far side of the screen. Faithful for a real solid, whose far side
+                // really would be facing us by then, and wrong for what we have, which is a card
+                // cut from a front view: there is no back of a barrel in the sprite to project, so
+                // projecting one shows a side nobody drew.
+                //
+                // The WHOLE vector turns round, never just its x. Turning only the x leaves the
+                // width pointing the same way as the length at a hundred and twenty degrees, and a
+                // parallelogram whose two sides point the same way has no area: the shadow flattens
+                // to a line and disappears. Turning both keeps the area identical to what it always
+                // was at every angle, and only takes the mirror off.
+                if (acrossX < 0f)
+                {
+                    acrossX = -acrossX;
+                    acrossY = -acrossY;
+                }
+                return new ShadowProjection(acrossX, acrossY, along.X, along.Y);
             }
 
             /// <summary>Where a source offset from the feet lands. <paramref name="dy"/> is the
@@ -271,14 +380,37 @@ namespace SDVRadiance
                 return across * width * 0.5f + along * height;
             }
 
+            /// <summary>This projection of a sprite that is itself turned about its feet by
+            /// <paramref name="radians"/> first, in SpriteBatch's sense: what a tree's shadow does
+            /// while the tree is being shaken. Composed into the two vectors rather than added to
+            /// the sun's lean, because a lean turns the whole shadow while a turned caster only
+            /// moves its far end, by the sine of the turn across and the cosine along.</summary>
+            public ShadowProjection Rotated(float radians)
+            {
+                if (radians == 0f)
+                    return this;
+                float cos = (float)Math.Cos(radians), sin = (float)Math.Sin(radians);
+                return new ShadowProjection(
+                    cos * AcrossX - sin * AlongX, cos * AcrossY - sin * AlongY,
+                    sin * AcrossX + cos * AlongX, sin * AcrossY + cos * AlongY);
+            }
+
             public bool Same(ShadowProjection other)
                 => AcrossX == other.AcrossX && AcrossY == other.AcrossY && AlongX == other.AlongX && AlongY == other.AlongY;
 
             /// <summary>The sideways scale of the rotate-and-scale draw a SpriteBatch can do directly
             /// that comes closest to this projection: the along vector exactly, and the across
             /// vector's part at right angles to it. What is dropped is the skew between the two,
-            /// which on a caster narrower than it is tall is a fraction of a pixel. Characters draw
-            /// this way so their baked frames need not re-bake as the sun moves.</summary>
+            /// which is NOT small: at the tip of a person's shadow it measures twenty-one pixels
+            /// at the author's own foreshortening and a sixty-degree sun. Only the lamp path draws
+            /// this way now, because one upright bake has to serve every lamp in a room, each
+            /// leaning it its own way; the sun's cast of a person is laid down through the
+            /// projection itself, skew and all (see DrawNpcShadow and LayDownPlayerSun).</summary>
+            /// <remarks>The sign is REAL and has to be spent, not dropped: past a quarter turn the
+            /// width wants to point the other way round the shadow's own axis. A SpriteBatch
+            /// cannot take a negative scale (it winds the quad backwards and the game's batch
+            /// throws it away), so a caller hands the sign to
+            /// <see cref="LaidDownWidth"/> and gets a flip back.</remarks>
             public float AcrossScaleForRotation()
             {
                 float alongLength = (float)Math.Sqrt(AlongX * AlongX + AlongY * AlongY);
@@ -296,15 +428,18 @@ namespace SDVRadiance
         private sealed class ObjectBakeRequest
         {
             public Vector2 BaseOrigin;
-            /// <summary>The lean of a MAP-TILE column, which bakes as a plain shear. A sprite's
-            /// lean travels in <see cref="Projection"/> instead.</summary>
-            public float Shear;
             /// <summary>How a sprite is laid down, across and along.</summary>
             public ShadowProjection Projection;
             /// <summary>The soft edge this caster's kind asked for, in screen pixels. Carried
             /// with the request because a bake queued this frame may not run until a later one,
             /// by which time a single shared field would be describing some other kind.</summary>
             public float Blur;
+            /// <summary>This piece's share of the whole caster's height, from the feet up, for a
+            /// caster cast in more than one piece. Carried for the same reason the blur is: a
+            /// queued bake must lay down the same slice of the fade the draw pass asked for, or a
+            /// tree's trunk comes back at a twentieth of its strength where the canopy starts at
+            /// full. 1 for anything cast whole.</summary>
+            public float FadeShareFromFeet = 1f;
             /// <summary>Set only for a stacked MAP-TILE column, which is several tiles drawn one
             /// above another and so has no single source rect. Copied out of the scan's scratch
             /// arrays at request time, so the bake can be replayed a frame later without redoing
@@ -318,6 +453,28 @@ namespace SDVRadiance
         private bool _isBakingObjects;
         private GraphicsDevice? _objectGraphicsDevice;
         private GameLocation? _objectBakeLocation;
+
+        /// <summary>For radiance_screenwatch: how many whole-map object bake walks ran since the
+        /// last watched call, and what started the latest. The walk is meant to run once on arriving
+        /// in a location; a split-screen report measured it at 27 ms a frame on average, so something
+        /// is starting it again and again, and the reason is the thing to read.</summary>
+        // Counted per screen: one static counter was read by whichever screen logged next, so the
+        // farmhand arriving on the mountain was printed as the host walking in Town.
+        private static readonly int[] _arrivalWalksByScreen = new int[4];
+        private static readonly string[] _arrivalReasonByScreen = { "-", "-", "-", "-" };
+
+        internal static int ArrivalWalksFor(int screenId)
+            => screenId >= 0 && screenId < _arrivalWalksByScreen.Length ? _arrivalWalksByScreen[screenId] : 0;
+
+        internal static string ArrivalReasonFor(int screenId)
+            => screenId >= 0 && screenId < _arrivalReasonByScreen.Length ? _arrivalReasonByScreen[screenId] : "-";
+
+        internal static void ForgetArrivalWalks(int screenId)
+        {
+            if (screenId >= 0 && screenId < _arrivalWalksByScreen.Length)
+                _arrivalWalksByScreen[screenId] = 0;
+        }
+        private string? _arrivalWalkReason;
         /// <summary>Last location the over-cap bake warning was logged for: once per location, not per frame.</summary>
         private GameLocation? _objectCapLoggedLocation;
 
@@ -337,9 +494,6 @@ namespace SDVRadiance
             public RenderTarget2D Rt = null!;
             public Vector2 FeetInRt;
             public int LastUsedTick;
-            /// <summary>Horizontal lean baked into the pixels of a MAP-TILE column. Characters bake
-            /// upright (0); a sprite's lean is in <see cref="BakedProjection"/>.</summary>
-            public float BakedShear;
             /// <summary>The projection a sprite's pixels were laid down with, so the sun moving off
             /// it, or the geometry changing under it, re-bakes.</summary>
             public ShadowProjection BakedProjection;
@@ -351,6 +505,14 @@ namespace SDVRadiance
             /// entry so a moved blur slider re-bakes gradually through the existing stale queue
             /// instead of all at once.</summary>
             public float BakedBlur = -1f;
+            /// <summary>The contact-hardness the soft edge in these pixels was shaped by. Tracked
+            /// beside the radius for exactly the same reason: the dial changes how the blur varies
+            /// ALONG the shadow without changing the radius at all, so a cache that only watches
+            /// the radius keeps handing back the old shape and the dial looks dead.</summary>
+            public float BakedContactHardness = -1f;
+            /// <summary>The penumbra-shape dial these pixels were stamped with, tracked beside
+            /// the hardness and for the same reason.</summary>
+            public float BakedPenumbraStretch = -1f;
             /// <summary>The part of the slot that holds shadow (see ContentBounds). Drawing with
             /// this as the source rect instead of the whole slot is what stops the card blending
             /// hundreds of thousands of transparent pixels per shadow. Empty means an entry from
@@ -427,27 +589,54 @@ namespace SDVRadiance
             AlphaDestinationBlend = Blend.One,
         };
 
+        // Multiply EVERY channel of the bake by the source's alpha: dst = dst * src.a. The bake is
+        // a premultiplied white shape by the time this runs (see Whiten), so fading its opacity
+        // has to fade its colour by the same amount or the two come apart and the shape draws
+        // brighter than its own alpha allows. On the black bakes of every release before 1.7.7
+        // the colour channels were zero, and zero times anything is the same zero.
         private static readonly BlendState MultiplyAlpha = new()
         {
-            ColorWriteChannels = ColorWriteChannels.Alpha,
             AlphaSourceBlend = Blend.Zero,
             AlphaDestinationBlend = Blend.SourceAlpha,
             ColorSourceBlend = Blend.Zero,
-            ColorDestinationBlend = Blend.One,
+            ColorDestinationBlend = Blend.SourceAlpha,
         };
 
-        // Zero every RGB channel, leave alpha as-is: dst.rgb = 0. A silhouette is shape+opacity
-        // only — this scrubs any colour that slipped into the bake (Fashion Sense draws its
-        // clothing layers through its own patches and ignores the black tint we pass, so a
-        // white dress otherwise became a white "shadow").
-        private static readonly BlendState ZeroColor = new()
+        // Colour := alpha, drawn with a solid white source: dst.rgb = dst.a. A silhouette is a
+        // shape and an opacity and nothing else, so whatever was drawn into the bake, the black
+        // tint the game honours or the colours an appearance mod paints through its own patches
+        // (Fashion Sense ignored the tint, and a white dress cast a white shadow), only its shape
+        // survives. It survives WHITE and premultiplied rather than black, because a white shape
+        // takes whatever colour it is drawn in and a black one can only ever darken: this is what
+        // lets the ink change with the hour without a single bake being made again.
+        private static readonly BlendState Whiten = new()
         {
             ColorWriteChannels = ColorWriteChannels.Red | ColorWriteChannels.Green | ColorWriteChannels.Blue,
-            ColorSourceBlend = Blend.Zero,
+            ColorSourceBlend = Blend.DestinationAlpha,
             ColorDestinationBlend = Blend.Zero,
             AlphaSourceBlend = Blend.Zero,
             AlphaDestinationBlend = Blend.One,
         };
+
+        private static Texture2D? _solidWhiteTexture;
+
+        /// <summary>
+        /// Turn what was just drawn into the bound bake into a shape and nothing else: every
+        /// texel's colour becomes its own alpha (see <see cref="Whiten"/>). Runs once per bake,
+        /// between the sprite draw and the feet-to-head fade, so the fade scales a shape that is
+        /// already white.
+        /// </summary>
+        private void WhitenBake(GraphicsDevice graphicsDevice, Rectangle bounds)
+        {
+            if (_solidWhiteTexture == null || _solidWhiteTexture.IsDisposed)
+            {
+                _solidWhiteTexture = new Texture2D(graphicsDevice, 1, 1);
+                _solidWhiteTexture.SetData(new[] { Color.White });
+            }
+            _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, Whiten, SamplerState.PointClamp);
+            _renderTargetSpriteBatch.Draw(_solidWhiteTexture, bounds, Color.White);
+            _renderTargetSpriteBatch.End();
+        }
 
         /// <summary>Master gate: shadows enabled and a location is loaded. Cutscenes/festivals
         /// cast too — their actors come from CurrentEvent.actors (see CharactersIn).</summary>
@@ -617,7 +806,7 @@ namespace SDVRadiance
                 || location.IsRainingHere() || location.IsSnowingHere() || location.IsLightningHere())
                 return 0f;
             float phase = 1f - Math.Abs(Game1.dayOfMonth - 14.5f) / 13.5f;
-            float season = Game1.season switch
+            float season = LocalSky.Season switch
             {
                 Season.Winter => 1.15f,
                 Season.Fall => 1.0f,
@@ -707,25 +896,70 @@ namespace SDVRadiance
         /// their indoor path there.</param>
         /// <summary>An interior the sun shines straight into. The game files the greenhouse as an
         /// interior (no sky, no weather drawn), but its roof is glass: the sun that dapples the farm
-        /// stands over it too, and so does the overcast that takes the dapple away. A content pack's
-        /// own greenhouse says so through the same flag, or by carrying the name.</summary>
+        /// stands over it too, and so does the overcast that takes the dapple away.
+        ///
+        /// <para>
+        /// The NAME is what is asked, not <c>IsGreenhouse</c>. That flag reads as architecture and
+        /// is not: every one of the game's own uses of it is about farming, never about light. It
+        /// makes seeds ignore the season, keeps crops alive through a season change, stops hoed
+        /// dirt decaying, allows trees to be planted and holds their art at spring. And it is set
+        /// by a single map property, with no glass anywhere in the test, so a content pack that
+        /// wants year-round crops in a cave or a cellar sets it there and means nothing at all
+        /// about the roof. Reading it as a glass roof put daylight in those rooms; reported by
+        /// Elacro on Nexus, 2026-09-09.
+        /// </para>
+        ///
+        /// <para>
+        /// So a place is under glass when it says so in its name. The game's own greenhouse is
+        /// named "Greenhouse" exactly, and a content pack's greenhouse carries the word, which is
+        /// a claim about the building rather than about what grows in it. The cost of asking this
+        /// way is a glass building named something else entirely, which keeps the indoor light it
+        /// had before 1.7.6.
+        /// </para>
+        /// </summary>
         internal static bool UnderAGlassRoof(GameLocation? location)
             => location != null && !location.IsOutdoors
-               && (location.IsGreenhouse || string.Equals(location.Name, "Greenhouse", StringComparison.Ordinal));
+               && location.Name != null
+               && location.Name.IndexOf("Greenhouse", StringComparison.OrdinalIgnoreCase) >= 0;
 
-        internal static bool SunInSky(out float lean, out float height, bool glassRoofCounts = false)
+        /// <summary>
+        /// Where the sun stands for everything that is LIGHT rather than shadow: the direction its
+        /// light travels across the screen, and how high it is.
+        ///
+        /// <para>
+        /// This used to hand back a bare number that its callers used as a SLOPE, pairing it with a
+        /// hard-coded 1 to make a direction. The number is an angle in radians, and an angle is not
+        /// a slope: at the day's edges the two part company by nearly seventeen degrees, so the
+        /// light came in at a shallower angle than the sun it was supposed to be describing. A
+        /// direction is returned instead, and it is built the way the shadows build theirs.
+        /// </para>
+        ///
+        /// <para>
+        /// It also never saw the sun's bearing, so turning the sun moved the shadows and left every
+        /// beam of light standing where it was. It has its own bearing now, on the same scale as
+        /// the shadows': EQUAL NUMBERS MEAN ONE SUN. They ship a half-turn apart because that is
+        /// where both halves of this mod have stood since they were written, the light coming from
+        /// above the picture and the shadows running away from a sun below it. Setting the shadows'
+        /// dial to match this one is what makes the whole scene agree.
+        /// </para>
+        /// </summary>
+        /// <param name="lightTravel">Unit vector: the way the light moves across the screen, which
+        /// is also the way a shadow runs.</param>
+        /// <param name="height">1 with the sun overhead, 0 at the edges of the day.</param>
+        internal static bool SunInSky(out Vector2 lightTravel, out float height, bool glassRoofCounts = false)
         {
-            lean = 0f;
+            lightTravel = new Vector2(0f, 1f);
             height = 0f;
             GameLocation? location = Game1.currentLocation;
             if (location == null || !(location.IsOutdoors || (glassRoofCounts && UnderAGlassRoof(location)))
                 || location.IsRainingHere() || location.IsSnowingHere() || location.IsLightningHere())
                 return false;
             float mins = GameClock.MinutesNow();
-            if (mins < 360f || mins >= TrulyDarkMinutes())
+            if (mins < 720f - HalfDayMinutesNow() || mins >= TrulyDarkMinutes())
                 return false;
-            float sky = MathHelper.Clamp((mins - 720f) / 360f, -1f, 1f);
-            lean = 1.15f * sky;
+            float sky = SunSkyOffsetAt(mins);
+            float angle = SunSwingRadians * sky + SunlightBearingRadiansNow;
+            lightTravel = new Vector2((float)Math.Sin(angle), -(float)Math.Cos(angle));
             height = 1f - Math.Abs(sky);
             return true;
         }
@@ -757,6 +991,7 @@ namespace SDVRadiance
                 return;
             }
 
+            BeginCasterCensus();
             GameLocation location = Game1.currentLocation;
             float strength = MathHelper.Clamp(config.DirectionalShadowStrength, 0f, 1f);
             float blur = Math.Max(0f, config.DirectionalShadowBlur);

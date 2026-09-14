@@ -96,18 +96,21 @@ namespace SDVRadiance
         /// <summary>Whole-sheet pixel array for a tilesheet, read back once (main thread) and
         /// cached. Returns null for over-cap sheets (caller falls back to per-region GetData) or
         /// on failure. The single readback replaces one-per-tile readbacks (each a GPU stall).</summary>
+        /// <summary>Sheets whose refusal has already been logged, so a sheet the shared cache
+        /// keeps saying no to does not fill the log with the same line.</summary>
+        private readonly System.Collections.Generic.HashSet<Texture2D> _refusedSheetsLogged = new();
+
         private Color[]? EnsureSheetPixels(Texture2D texture)
         {
-            if (_tilesheetPixelCache.TryGetValue(texture, out Color[]? sheet))
-                return sheet;
-            // One readback for the sheet. This was a loop over strips of 512 rows, on the belief
-            // that strips bound the driver's staging cost; the decompile says the staging is the
-            // whole level on every call whatever rectangle is asked for, so the loop was paying
-            // that cost once per strip. See SheetReadback.
-            sheet = SheetReadback.Read(texture, SheetPixelCap, "sheet: water tile art");
-            if (sheet == null)
+            // The sheet is held by SheetPixels, which every part of the mod that reads art back
+            // shares: the shadow pass asks the same tilesheets this does, and used to read each of
+            // them a second time into a second copy. The label is what the report calls the read.
+            Color[]? sheet = SheetPixels.WholeSheet(texture, "sheet: water tile art");
+            // A refused sheet is the one case a player can feel, so it is still said out loud, and
+            // still only once: the shared cache answers null every time rather than once, so the
+            // "already said" set lives here now instead of being implied by the cache.
+            if (sheet == null && SheetPixels.Enabled && _refusedSheetsLogged.Add(texture))
                 _monitor.Log($"[water] tilesheet {texture.Width}x{texture.Height} not cached — tile art falls back to per-tile reads", LogLevel.Warn);
-            _tilesheetPixelCache[texture] = sheet; // null = absurd size or failed → per-tile fallback (deduped)
             return sheet;
         }
 
@@ -194,10 +197,30 @@ namespace SDVRadiance
             out ulong fingerprint)
         {
             fingerprint = 0;
-            if (!TryTileArt(layer, x, y, out Texture2D texture, out Rectangle src))
+            return TryTileArt(layer, x, y, out Texture2D texture, out Rectangle src)
+                && TryFingerprintSheetCell(texture, src, out fingerprint);
+        }
+
+        /// <summary>
+        /// The same fingerprint, asked of the art itself rather than of a map tile.
+        /// </summary>
+        /// <remarks>
+        /// A map tile and a furniture sprite are the same question with different directions to
+        /// the picture: a tile says "layer, x, y" and a sprite says "this sheet, this cell". Only
+        /// the directions differed, so the half that reads and hashes lives here and both callers
+        /// share it. Without this the label guard could not run for anything that is not on the
+        /// tile grid, which would leave every glass label on a furniture sheet unguarded - and an
+        /// unguarded glass label is the exact failure the guard exists to prevent.
+        /// </remarks>
+        /// <param name="cell">One 16x16 cell in sheet pixels. Larger art is several cells and is
+        /// asked for one cell at a time, the same way the sheet was painted.</param>
+        internal bool TryFingerprintSheetCell(Texture2D texture, Rectangle cell, out ulong fingerprint)
+        {
+            fingerprint = 0;
+            if (texture == null || texture.IsDisposed)
                 return false;
             _fingerprintPixels ??= new Color[256];
-            ReadTileArtInto(texture, src, _fingerprintPixels);
+            ReadTileArtInto(texture, cell, _fingerprintPixels);
             fingerprint = ArtFingerprint.OfTilePixels(_fingerprintPixels);
             return true;
         }

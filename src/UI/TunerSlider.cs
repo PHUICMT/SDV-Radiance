@@ -34,12 +34,19 @@ namespace SDVRadiance
         private float _shownValue = float.NaN;
         private string? _shownValueText;
 
+        /// <summary>The smallest move this slider makes. A hundredth suits a dial that runs 0 to 1
+        /// or wider, and every slider used it, so the narrow ones were coarse to the point of
+        /// being useless: cloud speed runs 0 to 0.06 and had seven positions, fog speed eleven.
+        /// A slider whose range is small enough to need a finer step says so when it is built,
+        /// the way the same setting already does in the other menu.</summary>
+        public float Step { get; init; } = 0.01f;
+
         public void SetFromX(int mx)
         {
             if (!IsEnabled)
                 return;
             float t = MathHelper.Clamp((mx - Track.X) / (float)Track.Width, 0f, 1f);
-            _setValue((float)Math.Round((_minimum + t * (_maximum - _minimum)) / 0.01f) * 0.01f);
+            _setValue((float)Math.Round((_minimum + t * (_maximum - _minimum)) / Step) * Step);
         }
 
         public void Draw(SpriteBatch spriteBatch, int dy)

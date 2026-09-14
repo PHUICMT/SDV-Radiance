@@ -42,7 +42,7 @@ PROFILE_DIR = Path(os.environ["LOCALAPPDATA"]) / "radiance-nexus-inbox" / "edge-
 # Real account credentials. docs/local/ is gitignored and .gitignore also carries a
 # *.local.json rule so a fresh clone cannot commit this by accident.
 SESSION_FILE = REPO / "docs" / "local" / "nexus-session.local.json"
-PROBE_DIR = REPO / "docs" / "local" / "nexus-inbox" / "probe"
+PROBE_DIR = REPO / "docs" / "local" / "nexus" / "inbox" / "probe"
 
 SIGNED_OUT_TEXT = r"Please log in again|session has expired|You need to \*\*log in\*\*"
 
@@ -271,7 +271,7 @@ def probe(ctx):
 
 MEDIA_URL = f"{BASE}/games/{GAME}/mods/{MOD_ID}/edit/media"
 GENERAL_URL = f"{BASE}/games/{GAME}/mods/{MOD_ID}/edit/general"
-IMAGE_DIR = REPO / "docs" / "local" / "description" / "images"
+IMAGE_DIR = REPO / "docs" / "local" / "nexus" / "description" / "images"
 INDEX_FILE = IMAGE_DIR / "INDEX.local.md"
 
 

@@ -75,7 +75,7 @@ namespace SDVRadiance
                 _byLocation.RemoveAt(oldest);
                 Version++;
             }
-            var made = new DrawnWaterTiles { Location = location, LastTouchedTick = Game1.ticks };
+            var made = new DrawnWaterTiles { Location = location, LastTouchedTick = SharedTicks.Now };
             _byLocation.Add(made);
             return made;
         }
@@ -149,7 +149,7 @@ namespace SDVRadiance
             if (!Enabled)
                 return;
             DrawnWaterTiles drawn = ForLocation(__instance);
-            drawn.LastTouchedTick = Game1.ticks;
+            drawn.LastTouchedTick = SharedTicks.Now;
             // Version only bumps for tiles the DATA doesn't know (they change the mask) —
             // ordinary isWaterTile tiles entering view must not add rebuilds on top of the
             // tile-crossing cadence, or walking near water would rebuild twice as often.

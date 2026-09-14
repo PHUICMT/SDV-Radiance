@@ -38,11 +38,23 @@ namespace SDVRadiance
             /// the OTHER one's place, every frame looked like an arrival to both, and both paid
             /// the full walk of their whole map every frame to bake nothing at all.</summary>
             public GameLocation? ObjectBakeLocation;
+            /// <summary>The player's silhouette laid down by this screen's sun, and what it was
+            /// laid down with (see LayDownPlayerSun). Per screen for the same reason the pose
+            /// is: two screens are two players under one sun, and one target cannot hold both.</summary>
+            public RenderTarget2D? SunMask;
+            public Vector2 SunFeet;
+            public float SunUnbake = 1f;
+            public Rectangle SunContent;
+            public ShadowProjection SunProjection;
+            public float SunBlur = -1f;
+            public bool SunFresh;
+            public (int frame, int facing, Rectangle sourceRect) SunSignature = (-1, -1, default);
 
             public void Release()
             {
                 Mask?.Dispose();
                 Color?.Dispose();
+                SunMask?.Dispose();
             }
         }
 
@@ -69,6 +81,14 @@ namespace SDVRadiance
                 outgoing.MaskFresh = _playerMaskFresh;
                 outgoing.ColorFresh = _playerColorFresh;
                 outgoing.ObjectBakeLocation = _objectBakeLocation;
+                outgoing.SunMask = _playerSunRenderTarget;
+                outgoing.SunFeet = _playerSunFeet;
+                outgoing.SunUnbake = _playerSunUnbake;
+                outgoing.SunContent = _playerSunContent;
+                outgoing.SunProjection = _playerSunProjection;
+                outgoing.SunBlur = _playerSunBlur;
+                outgoing.SunFresh = _playerSunFresh;
+                outgoing.SunSignature = _playerSunSignature;
             }
             _activeScreenId = screenId;
             if (!_screenBakes.TryGetValue(screenId, out ScreenBake? incoming))
@@ -82,6 +102,14 @@ namespace SDVRadiance
             _playerMaskFresh = incoming.MaskFresh;
             _playerColorFresh = incoming.ColorFresh;
             _objectBakeLocation = incoming.ObjectBakeLocation;
+            _playerSunRenderTarget = incoming.SunMask;
+            _playerSunFeet = incoming.SunFeet;
+            _playerSunUnbake = incoming.SunUnbake;
+            _playerSunContent = incoming.SunContent;
+            _playerSunProjection = incoming.SunProjection;
+            _playerSunBlur = incoming.SunBlur;
+            _playerSunFresh = incoming.SunFresh;
+            _playerSunSignature = incoming.SunSignature;
             // The published pair follows the screen too: their one reader is this screen's
             // reflection, which runs between now and the next screen's turn.
             PlayerMask = _playerMaskFresh ? _playerRenderTarget : null;
