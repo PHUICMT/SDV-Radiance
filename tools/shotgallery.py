@@ -253,6 +253,45 @@ SCENES = [
          hour=2200, season="summer", weather="sun", about="the spa's own light on an empty platform"),
     dict(expect_light=True, rings=True, name="beach-night", loc="Beach", x=30, y=30, alts=BEACH_ALTS, hour=2200,
          season="summer", weather="sun", about="the pier after dark, without an aurora to carry it"),
+
+    # --- new in 2.0.0 -------------------------------------------------------------------
+    # Pierre's counter case carries glass labels, and after dark the pane goes black and turns
+    # into a mirror of the room, which is when the indoor reflection reads best.
+    # Asked 5,18 first time, which is the case itself: the game slid the player to 4,19, beside
+    # the glass instead of in front of it. The case sits on 5-6,18, so stand on the row below.
+    dict(expect_light=True, name="2.0.0-seedshop-glass-night", loc="SeedShop", x=5, y=19,
+         alts=[(6, 19), (5, 20), (6, 20)], hour=2000, season="spring", weather="sun",
+         about="glass reflects indoors: Pierre's display case after dark"),
+    # The rainbow only stands in the spray while the sun is low (UpdateRainbowPresence: the
+    # sun's offset in its day past 0.30, full by 0.55, outside winter). 08:00 in summer was not
+    # low enough and came back without one, so one shot just after dawn and one before dusk.
+    dict(name="2.0.0-waterfall-rainbow", loc="Custom_AdventurerSummit", x=50, y=26,
+         alts=[(48, 34), (56, 28), (52, 30)], hour=630, season="summer", weather="sun",
+         about="a rainbow in the waterfall spray just after dawn"),
+    dict(name="2.0.0-waterfall-rainbow-evening", loc="Custom_AdventurerSummit", x=50, y=26,
+         alts=[(48, 34), (56, 28), (52, 30)], hour=1800, season="summer", weather="sun",
+         about="a rainbow in the waterfall spray before dusk"),
+    # Neither summit shot had an arch: the bow grows from the fall feet the mist scan finds, and the
+    # summit is an SVE custom map whose fall may never be found. These are the vanilla falls the
+    # code history names (the Town falls, the Mountain falls) and Forest, where the author's 2.0.0
+    # test of the rainbow passed. Seven in the morning: sun low enough, night already gone.
+    dict(name="2.0.0-rainbow-forest", loc="Forest", x=60, y=30, alts=[(58, 30), (62, 30), (60, 32)],
+         hour=700, season="summer", weather="sun", about="a rainbow in the spray, Forest falls"),
+    dict(name="2.0.0-rainbow-mountain", loc="Mountain", x=60, y=20, alts=[(66, 22), (68, 24), (57, 25)],
+         hour=700, season="summer", weather="sun", about="a rainbow in the spray, Mountain falls"),
+    dict(name="2.0.0-rainbow-town", loc="Town", x=95, y=13, alts=[(94, 13), (96, 13), (95, 14)],
+         hour=700, season="summer", weather="sun", about="a rainbow in the spray, Town falls"),
+    # Winter noon: the sun follows the season, so the shadows are long at midday, and the snow
+    # on the ground glitters in it.
+    dict(name="2.0.0-town-winter-noon", loc="Town", x=45, y=55, alts=TOWN_ALTS, hour=1200,
+         season="winter", weather="sun",
+         about="the winter sun stays low at noon, and the snow glitters in it"),
+    dict(expect_light=True, name="2.0.0-town-night-halo", loc="Town", x=43, y=60,
+         alts=[(34, 57), (30, 60), (50, 60)], hour=2030, season="fall", weather="sun",
+         about="lamp halos and lit windows pushing the night back"),
+    dict(expect_light=True, name="2.0.0-farm-chimney-night", loc="Farm", x=64, y=17, alts=FARM_ALTS,
+         hour=2100, season="fall", weather="sun",
+         about="heat and sparks over the farmhouse chimney after dark"),
 ]
 
 # Things a still frame cannot show, and why. Not shot: two identical-looking stills filed as an
@@ -762,7 +801,13 @@ def main():
     # noring/. Which scenes want the player carrying a lamp is a question about the look,
     # and it was going round in circles being argued instead of looked at.
     ap.add_argument("--pairs", action="store_true")
+    # Where the pictures go. The default is the 1.7.0 gallery folder the page was built from;
+    # a release shooting only its own new scenes points this at a folder of its own.
+    ap.add_argument("--out", default=None)
     args = ap.parse_args()
+    if args.out:
+        global OUT
+        OUT = os.path.expanduser(args.out)
     wanted = [s for s in SCENES if not args.scene or s["name"] in args.scene]
 
     if args.list:

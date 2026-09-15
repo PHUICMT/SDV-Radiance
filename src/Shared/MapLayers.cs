@@ -62,7 +62,8 @@ namespace SDVRadiance
             try
             {
                 if (tile.Properties.TryGetValue("@Rotation", out var rotationProperty)
-                    && int.TryParse(rotationProperty.ToString(), out int rotationSteps))
+                    && int.TryParse(rotationProperty.ToString(), System.Globalization.NumberStyles.Integer,
+                                    System.Globalization.CultureInfo.InvariantCulture, out int rotationSteps))
                 {
                     rotationSteps = ((rotationSteps % 360) + 360) % 360;      // TMXTile writes -90, never 270
                     if (rotationSteps is 90 or 180 or 270) turns = rotationSteps / 90;

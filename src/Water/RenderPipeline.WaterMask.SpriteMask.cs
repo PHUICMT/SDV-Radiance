@@ -114,16 +114,73 @@ namespace SDVRadiance
         /// This is the third time the same lesson has been paid for here: butterflies, then map
         /// props, now modded creatures. Anything that draws itself should be asked to.
         /// </para></summary>
-        private static bool StampCharacterSelf(SpriteBatch spriteBatch, NPC character)
+        private bool StampCharacterSelf(SpriteBatch spriteBatch, NPC character)
+        {
+            try
+            {
+                DrawCharacterItself(spriteBatch, character);
+                return true;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>A transparent stand-in for the game's round ground shadow, swapped in while a
+        /// flying monster draws itself into one of this mod's targets.</summary>
+        private Texture2D? _transparentShadowStandIn;
+        /// <summary>A throwaway random for the same call, so drawing a creature again here does not
+        /// move the game's own random sequence.</summary>
+        private readonly Random _drawOnlyRandom = new();
+
+        /// <summary>Ask a character to draw itself into a target of this mod's, the way the game
+        /// paints it.
+        ///
+        /// <para>
+        /// A flying monster paints nothing in its draw. Bats, ghosts, serpents, squid kids and flies
+        /// are gliders: Monster.draw skips a glider, and the game paints it in drawAboveAllLayers
+        /// instead, so it passes over the walls it flies across. Asked only for draw, the sprite mask
+        /// got no stamp for it and the water rippled and tinted straight over a bat in flight, which
+        /// reads as a bat under the water; and the mirror's slot came back empty, an empty answer is
+        /// not kept, so the slot was read back off the card again on every frame the bat stayed near
+        /// water. Reported by palmhacker13 with timings: a repeating 30 to 36 ms frame with bats over
+        /// a river, steady with the same number of slimes away from it.
+        /// </para>
+        ///
+        /// <para>
+        /// drawAboveAllLayers also paints the round shadow on the ground under the flier, which
+        /// belongs in neither the mask nor the mirror, so the shadow texture is swapped for a
+        /// transparent one for the call. A cursed bat jitters with the game's own random, so that is
+        /// swapped for a throwaway as well: drawing it again for this mod must not change what the
+        /// game rolls next.
+        /// </para></summary>
+        private void DrawCharacterItself(SpriteBatch batch, NPC character)
         {
             var gameBatch = Game1.spriteBatch;
             try
             {
-                Game1.spriteBatch = spriteBatch;
-                character.draw(spriteBatch);
-                return true;
+                Game1.spriteBatch = batch;
+                character.draw(batch);
+                if (character is StardewValley.Monsters.Monster monster && monster.isGlider.Value)
+                {
+                    if (_transparentShadowStandIn == null)
+                    {
+                        _transparentShadowStandIn = new Texture2D(_device, 1, 1, false, SurfaceFormat.Color);
+                        _transparentShadowStandIn.SetData(new[] { Color.Transparent });
+                    }
+                    Texture2D gameShadow = Game1.shadowTexture;
+                    Random gameRandom = Game1.random;
+                    try
+                    {
+                        Game1.shadowTexture = _transparentShadowStandIn;
+                        Game1.random = _drawOnlyRandom;
+                        monster.drawAboveAllLayers(batch);
+                    }
+                    finally
+                    {
+                        Game1.shadowTexture = gameShadow;
+                        Game1.random = gameRandom;
+                    }
+                }
             }
-            catch { return false; }
             finally { Game1.spriteBatch = gameBatch; }
         }
 

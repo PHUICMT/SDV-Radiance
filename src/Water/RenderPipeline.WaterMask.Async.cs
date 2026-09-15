@@ -766,9 +766,10 @@ namespace SDVRadiance
                 Location = location, StartTileX = startTileX, StartTileY = startTileY,
                 TileWidth = tilesWide, TileHeight = tilesHigh, WaterDrawHookVersion = WaterDrawHook.Version,
                 LabelVersion = CurrentLabelVersion(), Epoch = MaskEpoch,
-                // Snapshot the location-wide waterline anchor if it is still valid for
-                // exactly this identity — the worker reads it lock-free (immutable).
-                Anchor = AnchorFresh(location) ? _waterlineAnchorData : null,
+                // Snapshot the location-wide waterline anchor if it still describes this map,
+                // even when newly drawn water has made it stale (see AnchorUsable) — the worker
+                // reads it lock-free (immutable).
+                Anchor = AnchorUsable(location) ? _waterlineAnchorData : null,
             };
 
             // The surface grid classifies the actual water SURFACE: ponds and beach tide pools

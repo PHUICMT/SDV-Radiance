@@ -1430,7 +1430,7 @@ namespace SDVRadiance
                 Write("water entity mirror, main thread, per bake since the last report:");
                 Write($"  slot readbacks off the card last frame: {pipeline?.SelfDrawnReadbacksThisFrame ?? 0}"
                     + $", of which came back EMPTY: {pipeline?.SelfDrawnEmptyReadbacksThisFrame ?? 0}"
-                    + " (an empty answer is not remembered, so an empty slot is paid for again every frame)");
+                    + " (an empty answer is not remembered, so an empty slot is asked again half a second later)");
                 Write(PhaseCost.Describe("mirror").TrimEnd());
                 Write(PhaseCost.Describe("scene").TrimEnd());
                 Write(PhaseCost.Describe("wet ground").TrimEnd());

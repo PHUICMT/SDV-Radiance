@@ -113,6 +113,14 @@ namespace SDVRadiance
             /// <summary>Per screen because it follows the location, and two players can be on
             /// opposite sides of a door.</summary>
             public float TiltIndoorEase;
+            /// <summary>0..1 ease-in of the whole stack when it turns on. Per screen because each
+            /// screen's chain steps it once: shared, two screens stepped the one value twice a frame
+            /// and the stack faded in at twice the speed in split screen.</summary>
+            public float MasterFade;
+            /// <summary>The target size this screen's chain last ran at. Per screen because the two
+            /// halves of a split screen differ in size, and a shared pair counted every alternation
+            /// between them as a resize.</summary>
+            public int LastViewportWidth = -1, LastViewportHeight = -1;
 
             // ---- auto-exposure meter, and the eases that follow the room ----
             // Two screens in two rooms dragged one exposure between two targets, which scales the
@@ -417,6 +425,9 @@ namespace SDVRadiance
         private ref float _fadeFlood => ref _screen.FadeFlood;
         private ref float _fadeTilt => ref _screen.FadeTilt;
         private ref float _tiltIndoorEase => ref _screen.TiltIndoorEase;
+        private ref float _masterFade => ref _screen.MasterFade;
+        private ref int _lastViewportWidth => ref _screen.LastViewportWidth;
+        private ref int _lastViewportHeight => ref _screen.LastViewportHeight;
         private ref RenderTarget2D? _normalRenderTarget => ref _screen.NormalRenderTarget;
         private ref bool _normalPassReady => ref _screen.NormalPassReady;
         private ref Point _normalPassViewport => ref _screen.NormalPassViewport;

@@ -167,15 +167,18 @@ namespace SDVRadiance
             _watchWaterInMask = _hasWaterInMask;
             _watchWaterJob = job;
 
+            // "map-stale" is a shoreline newer drawn water has overtaken but that rebuilds still
+            // use (see AnchorUsable); only "window-local" is the guess from the window's top row.
+            string anchorState = anchor ? "map" : location != null && AnchorUsable(location) ? "map-stale" : "window-local";
             if (changes.Length > 0)
-                NoteWater($"origin=({_lastWaterTileX},{_lastWaterTileY}) anchor={(anchor ? "map" : "window-local")} "
+                NoteWater($"origin=({_lastWaterTileX},{_lastWaterTileY}) anchor={anchorState} "
                         + $"moving={(Game1.player?.isMoving() == true ? 1 : 0)}{changes}");
 
             if (WaterWatchFrames <= 0)
                 return;
             WaterWatchFrames--;
             _monitor.Log($"[waterwatch] epoch={MaskEpoch} origin=({_lastWaterTileX},{_lastWaterTileY}) "
-                       + $"anchor={(anchor ? "map" : "window-local")} ease={_waterInMaskEase:0.00} "
+                       + $"anchor={anchorState} ease={_waterInMaskEase:0.00} "
                        + $"moving={Game1.player?.isMoving() == true} restFrames={_waterlineFreshFrameCount}"
                        + (changes.Length > 0 ? changes.ToString() : "  steady"), LogLevel.Info);
         }
@@ -206,7 +209,10 @@ namespace SDVRadiance
             // reads as the fault the reporter came to report, and it is not one.
             sb.AppendLine("shoreline right now: " + (!_hasWaterInMask
                 ? "not decided — there is no water in view here, so nothing below is a problem"
-                : anchor ? "the map's own (stable)" : "GUESSED FROM THE SCREEN EDGE"));
+                : anchor ? "the map's own (stable)"
+                : location != null && AnchorUsable(location)
+                    ? "the map's own, from before some newly drawn water was seen; brought up to date the next time you stand still"
+                    : "GUESSED FROM THE SCREEN EDGE"));
             if (!anchor && _hasWaterInMask)
                 sb.AppendLine("    -> the map-wide shoreline is only ever built while standing still, so walking "
                             + "in without pausing means every rebuild re-decides where the water's edge is. If the "
@@ -231,10 +237,31 @@ namespace SDVRadiance
         }
 
         private bool AnchorFresh(GameLocation location) =>
+            AnchorUsable(location) && _waterlineAnchorData!.WaterDrawHookVersion == WaterDrawHook.Version;
+
+        /// <summary>
+        /// True when the map-wide shoreline may still be used for a window rebuild, even if the
+        /// game has since drawn water on tiles it had not drawn before.
+        ///
+        /// <para>
+        /// The draw hook counts every tile the game paints water on that the map's data does not
+        /// flag as water, the first time it sees it, and each one moves its version. A map whose
+        /// water is drawn that way puts a new such tile on screen with nearly every step, so a
+        /// shoreline keyed on the version was thrown away over and over while the player walked,
+        /// and every window rebuilt meanwhile took its shoreline from its own top row instead:
+        /// straight across open water, one line for every column, and moving with the window. It
+        /// was only built again at rest, which is the "border that grows while I walk and goes when
+        /// I stop" reported on a modded beach. A tile the shoreline has not seen yet is not a
+        /// reason to forget the ones it has: <see cref="OverrideEdgeFromAnchor"/> leaves any pixel
+        /// the anchor does not know on its window-local answer. So a newer version only makes the
+        /// shoreline stale (<see cref="AnchorFresh"/> still says so, and it is rebuilt at the next
+        /// rest), not unusable. A different map, label set or epoch still throws it away, because
+        /// then what it knows may no longer be true.
+        /// </para></summary>
+        private bool AnchorUsable(GameLocation location) =>
             _waterlineAnchorData is { } a && a.Location == location
             && a.LabelVersion == CurrentLabelVersion()
-            && a.Epoch == MaskEpoch
-            && a.WaterDrawHookVersion == WaterDrawHook.Version;
+            && a.Epoch == MaskEpoch;
 
         /// <summary>Consume a finished ANCHOR job on the main thread: publish the compact
         /// run list and give the map-sized scratch buffers back to the GC.</summary>

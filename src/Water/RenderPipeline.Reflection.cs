@@ -174,6 +174,19 @@ namespace SDVRadiance
         /// pixels out for half of its cycle, which is what the first attempt did.
         /// </para></summary>
         private readonly Dictionary<(Type, Texture2D, Rectangle), float> _selfDrawnContactLift = new();
+        /// <summary>Per creature and sheet frame that last came out of its slot EMPTY, the tick
+        /// before which it is not measured again.
+        ///
+        /// <para>
+        /// An empty answer cannot be kept as the answer (see ResolveSelfDrawnContactLifts), but
+        /// asking again on the very next frame turned every body that keeps coming out empty into a
+        /// readback per frame for as long as it stayed near water. A body the game is not drawing
+        /// right now, a flier at the edge of the view, a mod's creature that paints somewhere else:
+        /// each now waits this long before it is asked again, and the built stamp mirrors it in the
+        /// meantime, which is what an empty slot already gave it.
+        /// </para></summary>
+        private readonly Dictionary<(Type, Texture2D, Rectangle), int> _selfDrawnEmptyRetryTick = new();
+        private const int SelfDrawnEmptyRetryTicks = 30;
         private static Color[]? _selfDrawnSlotReadback;
         /// <summary>The bodies that got a slot, so the hand-built stamp skips exactly those and
         /// still covers any that did not fit. Characters rather than NPCs, because a farm animal
@@ -497,7 +510,12 @@ namespace SDVRadiance
                         batch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp,
                             null, ScissoredRasterizer, null, toSlot);
                         Game1.spriteBatch = batch;
-                        character.draw(batch);
+                        // A flying monster paints itself in drawAboveAllLayers, not in draw; see
+                        // DrawCharacterItself.
+                        if (character is NPC npc)
+                            DrawCharacterItself(batch, npc);
+                        else
+                            character.draw(batch);
                         batch.End();
                     }
                     catch
@@ -547,10 +565,10 @@ namespace SDVRadiance
         ///
         /// <para>A readback stalls the pipeline, and the budget for this pass is one per creature
         /// and sheet frame, ever. An empty answer is deliberately not remembered (see the note
-        /// where it is written), so an empty slot is read back again on the NEXT frame, and the
-        /// frame after that, for as long as the creature keeps coming out empty. These two numbers
-        /// are what says whether that is happening: a steady empties count above zero is a bill
-        /// being paid every frame for a body nobody can see.</para></summary>
+        /// where it is written), so an empty slot is read back again, once
+        /// SelfDrawnEmptyRetryTicks have passed, for as long as the creature keeps coming out
+        /// empty. These two numbers are what says whether that is happening: an empties count
+        /// above zero on most frames is a bill being paid for a body nobody can see.</para></summary>
         internal int SelfDrawnReadbacksThisFrame;
         internal int SelfDrawnEmptyReadbacksThisFrame;
 
@@ -638,10 +656,17 @@ namespace SDVRadiance
             long readStart = System.Diagnostics.Stopwatch.GetTimestamp();
             SelfDrawnReadbacksThisFrame++;
             float lift = MeasureSlotContactLift(_selfDrawnMeasureTarget, pending.ContactRow);
+            var key = (pending.Kind, pending.Sheet, pending.Frame);
             if (float.IsNaN(lift))
+            {
                 SelfDrawnEmptyReadbacksThisFrame++;
+                _selfDrawnEmptyRetryTick[key] = SharedTicks.Now + SelfDrawnEmptyRetryTicks;
+            }
             else
-                _selfDrawnContactLift[(pending.Kind, pending.Sheet, pending.Frame)] = lift;
+            {
+                _selfDrawnContactLift[key] = lift;
+                _selfDrawnEmptyRetryTick.Remove(key);
+            }
             PhaseCost.NoteSince("mirror: creature measure read (on the tick)", readStart);
         }
 
@@ -673,9 +698,12 @@ namespace SDVRadiance
                     // frame, that emptiness then hid every creature of its kind on that frame of
                     // the walk for the rest of the session, which reads as a reflection blinking
                     // with the animation. Measured again on a later frame instead, and the frame
-                    // it does draw is the one that is kept.
+                    // it does draw is the one that is kept. Not on the very next frame, though:
+                    // an empty answer waits out _selfDrawnEmptyRetryTick first.
                     lift = float.NaN;
-                    if (_selfDrawnMeasurePending == null)
+                    bool waitingAfterEmpty = _selfDrawnEmptyRetryTick.TryGetValue(key, out int retryTick)
+                        && SharedTicks.Now < retryTick;
+                    if (_selfDrawnMeasurePending == null && !waitingAfterEmpty)
                         QueueSelfDrawnMeasure(atlas, slot, key, contactRow);
                 }
                 // Nothing drawn means nothing to turn over, so the built stamp has this body back

@@ -714,13 +714,11 @@ namespace SDVRadiance
                 && !config.WaterDisabledLocations.Contains(location.NameOrUniqueName);
         }
 
-        private int _lastViewportWidth = -1, _lastViewportHeight = -1;
         /// <summary>What the window, emissive and window-pane walks may spend between them this
         /// frame. One object, so three rebuilds coming due together cost one slice.</summary>
         private readonly MapScanBudget _mapScanBudget = new();
 
-        private float _masterFade;              // 0..1 ease-in of the whole stack when it turns on
-        /// <summary>How much of the master fade-in one frame at sixty carries: about four
+        /// <summary>How much of the master fade-in (<c>_masterFade</c>, per screen) one frame at sixty carries: about four
         /// tenths of a second from switched on to fully there.</summary>
         private const float MasterFadeInPerFrame = 0.045f;
 

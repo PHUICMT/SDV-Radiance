@@ -300,7 +300,7 @@ namespace SDVRadiance
             var map = new Dictionary<int, byte[]>();
             foreach (JsonProperty tile in tiles.EnumerateObject())
             {
-                if (!int.TryParse(tile.Name, out int idx))
+                if (!int.TryParse(tile.Name, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int idx))
                     continue;
                 byte[] bytes;
                 // Anything malformed skips that tile and nothing else. FormatException alone was
@@ -382,7 +382,7 @@ namespace SDVRadiance
                 var byTile = new Dictionary<int, ulong[]>();
                 foreach (JsonProperty tile in sheet.Value.EnumerateObject())
                 {
-                    if (!int.TryParse(tile.Name, out int index))
+                    if (!int.TryParse(tile.Name, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int index))
                         continue;
                     var painted = new List<ulong>();
                     if (tile.Value.ValueKind == JsonValueKind.String)
@@ -412,7 +412,7 @@ namespace SDVRadiance
                 var byTile = new Dictionary<int, ulong[]>();
                 foreach (JsonProperty tile in sheet.Value.EnumerateObject())
                 {
-                    if (!int.TryParse(tile.Name, out int index))
+                    if (!int.TryParse(tile.Name, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int index))
                         continue;
                     var values = new List<ulong>();
                     if (tile.Value.ValueKind == JsonValueKind.String)
@@ -684,7 +684,7 @@ namespace SDVRadiance
                 var byTile = new Dictionary<int, List<LabelVariant>>();
                 foreach (JsonProperty tile in sheet.Value.EnumerateObject())
                 {
-                    if (!int.TryParse(tile.Name, out int index) || tile.Value.ValueKind != JsonValueKind.Array)
+                    if (!int.TryParse(tile.Name, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int index) || tile.Value.ValueKind != JsonValueKind.Array)
                         continue;
                     var list = new List<LabelVariant>();
                     foreach (JsonElement one in tile.Value.EnumerateArray())

@@ -608,17 +608,21 @@ namespace SDVRadiance
         /// </summary>
         private void OnRenderingStep(object? sender, RenderingStepEventArgs e)
         {
-            // ONCE A FRAME, not once a step. The game raises a dozen render steps per frame per
-            // screen and this pair is frame's work: fifteen texture-unit writes and a field read
-            // through reflection, repeated for every step, for a state that cannot change between
-            // them.
+            // On EVERY render step, not once a frame. This mod's own passes run in the middle of
+            // the frame and leave the high texture units holding their targets; the menus and the
+            // HUD are drawn in later steps of the same frame, and anything that reads a sheet with
+            // GetData then (a content pack loading art the first time a menu shows it, a costume
+            // mod composing a portrait) parks that sheet on one of those units. 1.7.5 released them
+            // on every step as part of the blur fix; 2.0.0 moved it to the first step only, so the
+            // units stayed ours for the rest of the frame, which is the window that fix closed. A
+            // player then reported item icons soft beside crisp ones on 2.0.0. Fifteen writes of
+            // null to slots that are usually empty already are not worth that risk.
+            TextureUnitGuard.ReleaseHighUnits(Game1.graphics.GraphicsDevice);
+            // The slot count, though, cannot change between the steps of one frame.
             if (_samplerGuardFrame != Game1.ticks)
             {
                 _samplerGuardFrame = Game1.ticks;
-                // Nothing this mod parked on a high texture unit last frame is still believed to
-                // be there while the game draws; a slot already empty costs nothing to set.
-                TextureUnitGuard.ReleaseHighUnits(Game1.graphics.GraphicsDevice);
-                // And MonoGame is not asked to walk sampler slots nothing can reach (see
+                // MonoGame is not asked to walk sampler slots nothing can reach (see
                 // TextureUnitGuard.CapSamplerSlots): a length check on every frame but the first.
                 TextureUnitGuard.WantedSamplerSlots = _config.LimitSamplerSlots ? TextureUnitGuard.DefaultSamplerSlots : 0;
                 TextureUnitGuard.HoldSamplerSlots(Game1.graphics.GraphicsDevice, this.Monitor);

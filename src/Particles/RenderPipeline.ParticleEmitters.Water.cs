@@ -350,8 +350,8 @@ namespace SDVRadiance
                 return false;
             string[] parts = published.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length < 2
-                || !int.TryParse(parts[0], out int offsetX)
-                || !int.TryParse(parts[1], out int offsetY))
+                || !int.TryParse(parts[0], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int offsetX)
+                || !int.TryParse(parts[1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int offsetY))
                 return false;
             offset = new Vector2(offsetX, offsetY);
             return true;

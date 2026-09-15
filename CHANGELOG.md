@@ -2,6 +2,53 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.0.1 - 2026-09-15
+
+### Fixed
+
+- **Bats, ghosts, serpents and other flying monsters over water stuttered the frame, and looked as
+  if they were under the water.** A flying monster is drawn by the game in a pass of its own above
+  every layer, and its ordinary draw paints nothing. This mod only asked for the ordinary draw, so
+  the water effect had no idea a bat was there and rippled and tinted straight over it, and the
+  reflection's slot for it came back empty and was read back off the graphics card again on every
+  frame the bat stayed near water. Flying monsters are now asked for the draw they really use, with
+  their round ground shadow left out, and a creature whose slot comes back empty waits half a second
+  before it is asked again. Measured on my machine at the Forest pond with ten bats, over the same
+  stretch of play: 837 readbacks, the worst of them 101.8 ms, went to none, and the worst frame from
+  20.7 to 19.2 ms. Reported by palmhacker13 on Nexus, with timings and the two places in the code to
+  look.
+
+- **A straight border could cross the water while walking, and vanish when you stopped.** The mod
+  works out where each stretch of water meets its shore once for the whole map, and hangs the
+  reflections from that. It also notices water the game draws on tiles the map does not mark as
+  water, and each new one it saw threw that whole-map shoreline away, to be rebuilt only once you
+  stood still. On a map whose water is drawn that way, nearly every step brought one on screen, so
+  while walking the shoreline was guessed from the top edge of the area being worked on: one straight
+  line across open water that moved with you. Newly seen water now leaves the shoreline in use until
+  it is brought up to date at the next pause. It cannot be reproduced on the game's own maps, so it
+  was checked by making that stream of new water on the beach: while walking, the old code guessed
+  the shoreline on 269 of 270 frames and the new code on none. `radiance_report` says which of the
+  two it is using. Reported by stereoscorpio on Nexus, with pictures.
+
+- **The guard behind the 1.7.5 blur fix runs on every draw step again, as it did up to 1.7.7.**
+  That fix hands the extra graphics slots this mod's lighting, fog and water passes use back to the
+  game before the game draws, so a picture another mod loads in the meantime cannot pick up this
+  mod's smooth filter and stay soft until a restart. 2.0.0 moved that hand-back to once a frame to
+  save work, which left the slots with this mod while the menus and the HUD were drawn later in the
+  same frame. A player then reported ring icons soft beside crisp ones in the inventory. It could
+  not be made to happen here, so this puts the 1.7.7 behaviour back rather than claiming that report
+  is solved; `radiance_resample` typed while an icon is soft says whether it was this. Reported by
+  stereoscorpio on Nexus.
+
+- **In split screen, switching the mod on faded the picture in twice as fast, and the report counted
+  resizes that never happened.** The fade-in and the last known screen size were one value shared by
+  both screens, so each screen stepped the fade once a frame and every switch between the two
+  differently sized halves read as a resize. Each screen keeps its own now.
+
+### For translators
+
+No new keys. Nothing in this release changes any text in a menu.
+
 ## 2.0.0 - 2026-09-14
 
 ### Fixed
