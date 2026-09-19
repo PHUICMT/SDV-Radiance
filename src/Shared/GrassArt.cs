@@ -45,7 +45,7 @@ namespace SDVRadiance
         internal static bool TryRead(Grass grass, out int blades, out int[] which, out int[] offsetX, out int[] offsetY)
         {
             blades = 0;
-            which = offsetX = offsetY = System.Array.Empty<int>();
+            which = offsetX = offsetY = [];
             int[]? w = Read(WhichWeed, grass), ox = Read(OffsetX, grass), oy = Read(OffsetY, grass);
             if (w == null || ox == null || oy == null)
                 return false;

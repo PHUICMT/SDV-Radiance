@@ -28,8 +28,8 @@ namespace SDVRadiance
         /// space (16 px per tile, origin 0,0). Immutable once published.</summary>
         private sealed class WaterlineAnchor
         {
-            public GameLocation Location = null!;
-            public int LabelVersion, Epoch, WaterDrawHookVersion;
+            public MaskIdentity Identity;
+            public GameLocation Location => Identity.Location!;
             public int PixelWidth, PixelHeight;
             public int[] ColumnRunStartIndices = null!;   // length PixelWidth+1; run indices for column x are [ColumnRunStartIndices[x], ColumnRunStartIndices[x+1])
             public short[] RunTopRows = null!;     // run top row (inclusive), sorted per column
@@ -84,7 +84,7 @@ namespace SDVRadiance
         /// frames something actually moved - and typing the command afterwards is enough to see
         /// what the last few seconds looked like.</para>
         /// </summary>
-        private readonly List<string> _waterLog = new();
+        private readonly List<string> _waterLog = [];
         /// <summary>Reused, never re-allocated: see the note in ReportWaterWatch.</summary>
         private readonly System.Text.StringBuilder _waterChangeText = new();
         private const int WaterLogMax = 48;
@@ -237,7 +237,7 @@ namespace SDVRadiance
         }
 
         private bool AnchorFresh(GameLocation location) =>
-            AnchorUsable(location) && _waterlineAnchorData!.WaterDrawHookVersion == WaterDrawHook.Version;
+            _waterlineAnchorData is { } anchor && anchor.Identity == CurrentMaskIdentity(location);
 
         /// <summary>
         /// True when the map-wide shoreline may still be used for a window rebuild, even if the
@@ -259,9 +259,11 @@ namespace SDVRadiance
         /// then what it knows may no longer be true.
         /// </para></summary>
         private bool AnchorUsable(GameLocation location) =>
-            _waterlineAnchorData is { } a && a.Location == location
-            && a.LabelVersion == CurrentLabelVersion()
-            && a.Epoch == MaskEpoch;
+            _waterlineAnchorData is { } anchor && anchor.Identity.SameIgnoringDrawnWater(CurrentMaskIdentity(location));
+
+        /// <summary>What a water answer built now, for this location, would be built from.</summary>
+        private MaskIdentity CurrentMaskIdentity(GameLocation? location) =>
+            new(location, CurrentLabelVersion(), MaskEpoch, WaterDrawHook.Version);
 
         /// <summary>Consume a finished ANCHOR job on the main thread: publish the compact
         /// run list and give the map-sized scratch buffers back to the GC.</summary>
@@ -272,17 +274,14 @@ namespace SDVRadiance
                 int pw = job.TileWidth * 16;
                 _waterlineAnchorData = new WaterlineAnchor
                 {
-                    Location = job.Location,
-                    LabelVersion = job.LabelVersion,
-                    Epoch = job.Epoch,
-                    WaterDrawHookVersion = job.WaterDrawHookVersion,
+                    Identity = job.Identity,
                     PixelWidth = pw,
                     PixelHeight = job.TileHeight * 16,
                     // A waterless map composes no runs — publish an empty anchor so the
                     // kick test stops re-gathering it every rest frame.
                     ColumnRunStartIndices = job.AnchorColumnRunStartIndices ?? new int[pw + 1],
-                    RunTopRows = job.AnchorRunTopRows ?? Array.Empty<short>(),
-                    RunBottomRows = job.AnchorRunBottomRows ?? Array.Empty<short>(),
+                    RunTopRows = job.AnchorRunTopRows ?? [],
+                    RunBottomRows = job.AnchorRunBottomRows ?? [],
                 };
             }
             else
@@ -307,7 +306,7 @@ namespace SDVRadiance
             _waterEffectBits = null; _waterMarchBits = null;
             _tileNearSolidFlags = null; _tileLandConnectedFlags = null;
             _waterlineTopRowByPixel = null; _waterlineRowPrefixSums = null; _waterlineRowSampleCounts = null;
-            _maskScratch.TileEffectBits = null; _maskScratch.TileWaterKeepBits = null; _maskScratch.TileBuildingCarveBits = null; _maskScratch.TileFrontCarveBits = null;
+            _maskScratch.TileEffectBits = null; _maskScratch.TileWaterKeepBits = null; _maskScratch.TileBuildingCarveBits = null; _maskScratch.TileBuildingStillBits = null; _maskScratch.TileFrontCarveBits = null;
             _maskScratch.TileLargeSolidFlags = null; _maskScratch.TileDeckFlags = null; _maskScratch.TileLabeledLiquidFlags = null; _maskScratch.TileHasBuildingArtFlags = null;
             _maskScratch.TileBuildingGroundOverlayFlags = null; _maskScratch.TileFrontGroundOverlayFlags = null;
             _maskScratch.TileIceBits = null; _maskScratch.TileLavaBits = null; _maskScratch.TileFlowBits = null;
@@ -358,9 +357,8 @@ namespace SDVRadiance
             GatherInProgress? gather = _anchorGatherInProgress;
             // A gather part way through is only worth continuing into the same answer: same map,
             // same identity, and nobody else has written the scratch since its last slice.
-            if (gather != null && (gather.Job.Location != location || gather.Generation != _gatherGeneration
-                || gather.Job.Epoch != MaskEpoch || gather.Job.LabelVersion != CurrentLabelVersion()
-                || gather.Job.WaterDrawHookVersion != WaterDrawHook.Version))
+            if (gather != null && (gather.Job.Identity != CurrentMaskIdentity(location)
+                || gather.Generation != _gatherGeneration))
             {
                 AbandonAnchorGather();
                 gather = null;
@@ -457,8 +455,8 @@ namespace SDVRadiance
             }
             colStart[pw] = tops.Count;
             job.AnchorColumnRunStartIndices = colStart;
-            job.AnchorRunTopRows = tops.ToArray();
-            job.AnchorRunBottomRows = bots.ToArray();
+            job.AnchorRunTopRows = [.. tops];
+            job.AnchorRunBottomRows = [.. bots];
         }
 
         /// <summary>Worker-side, normal window job: replace window-local run tops with the

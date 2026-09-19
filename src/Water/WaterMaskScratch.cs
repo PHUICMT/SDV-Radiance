@@ -31,6 +31,9 @@ namespace SDVRadiance
         public bool[]?[]? TileBuildingCarveBits;
         /// <summary>Front-layer opacity bits.</summary>
         public bool[]?[]? TileFrontCarveBits;
+        /// <summary>Buildings art over water that a label calls all ground: the holes its own
+        /// outline encloses, a plank seam or a railing slot. Still water, not carved (null = none).</summary>
+        public bool[]?[]? TileBuildingStillBits;
         /// <summary>Near-solid (&gt;=230/256 opaque) Buildings/Front art.</summary>
         public bool[]? TileLargeSolidFlags;
         /// <summary>Height Framework DECK tile.</summary>
@@ -71,6 +74,11 @@ namespace SDVRadiance
         /// pass may only act on water whose whole boundary sits in here, which is what tells a
         /// gap inside drawn art apart from a small pond with land around it.</summary>
         public bool[]? ArtCarvedFlags;
+        /// <summary>Water shut inside drawn art: the seam between two planks, the slot in a bench.
+        /// It keeps the water's colour and reflection, but a ripple there has no water to move in
+        /// from and can only drag the art beside it, so Pass E tags it STILL (alpha 232) and the
+        /// shader leaves it unrippled.</summary>
+        public bool[]? StillTexelFlags;
         /// <summary>Pocket pass: texels the component walk has already reached.</summary>
         public bool[]? PocketVisitedFlags;
         /// <summary>The water as it would be if the art standing in it were not there: the

@@ -32,6 +32,25 @@ namespace SDVRadiance
         public Func<bool>? Enabled;
         public bool IsEnabled => Enabled == null || Enabled();
 
+        /// <summary>What this dial reads under a fresh config, or null when it has none to compare
+        /// against (see the slider's). Compared as bearings, so 359 and 1 are two degrees apart.</summary>
+        public float? DefaultValue { get; init; }
+        public bool DiffersFromDefault
+        {
+            get
+            {
+                if (!DefaultValue.HasValue)
+                    return false;
+                float apart = Math.Abs(_getDegrees() - DefaultValue.Value) % 360f;
+                return Math.Min(apart, 360f - apart) > 0.5f;
+            }
+        }
+        public void ResetToDefault()
+        {
+            if (DefaultValue.HasValue && IsEnabled)
+                _setDegrees(DefaultValue.Value);
+        }
+
         public TunerCompass(string label, int x, int y, int width, int labelHeight, int dialSize,
                             Func<float> getDegrees, Action<float> setDegrees)
         {

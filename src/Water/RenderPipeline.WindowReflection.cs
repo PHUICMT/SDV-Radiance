@@ -70,8 +70,25 @@ namespace SDVRadiance
             /// under it. A shop front is one or two; a dormer in a roof is five, and what you can
             /// see in a dormer from the street is sky, not the road you are standing on.</summary>
             public readonly int TilesAboveGround;
-            public WindowPane(Rectangle worldRect, Rectangle[] glassRects, float strength, int tilesAboveGround = 0)
-            { WorldRect = worldRect; GlassRects = glassRects; Strength = strength; TilesAboveGround = tilesAboveGround; }
+            /// <summary>The bottom, in world pixels, of the part of the glass painted on a Front layer,
+            /// which the game draws in the sorted batch a tile further forward than the Buildings
+            /// layer (see <see cref="PaneDepth"/>). Zero when none of it is. Kept as the Front
+            /// part's own bottom, not a yes or no: a window can be Front at the top and Buildings
+            /// below, and the whole pane is not a Front tile.</summary>
+            public readonly int FrontGlassBottom;
+            /// <summary>For glass on art a location draws for itself (see SpritePanes): the depth it
+            /// sorts at, just in front of that art. Negative for a map pane, which sorts by its sill.</summary>
+            public readonly float SortDepth;
+            /// <summary>Labelled as a mirror: a wall mirror returns the body at the height it
+            /// hangs, so the image stands on the floor below it, not on its bottom edge (see
+            /// <see cref="ImageFloorY"/>).</summary>
+            public readonly bool IsMirror;
+            public WindowPane(Rectangle worldRect, Rectangle[] glassRects, float strength, int tilesAboveGround = 0, int frontGlassBottom = 0,
+                float sortDepth = -1f, bool isMirror = false)
+            {
+                WorldRect = worldRect; GlassRects = glassRects; Strength = strength; TilesAboveGround = tilesAboveGround;
+                FrontGlassBottom = frontGlassBottom; SortDepth = sortDepth; IsMirror = isMirror;
+            }
         }
 
         private const byte LabelClassMirror = LabelClass.Mirror;
@@ -224,10 +241,10 @@ namespace SDVRadiance
         internal int WindowLampsConsidered;
         internal bool GlassGlowTextureMissing => _glassGlowTextureMissing;
 
-        private readonly List<WindowPane> _windowPanes = new();
+        private readonly List<WindowPane> _windowPanes = [];
         private GameLocation? _windowPaneLocation;
         private MapAnswerKey _windowPaneCacheKey = new(-1, -1);
-        private readonly Dictionary<GameLocation, WholeMapAnswer<(Point Tile, WindowPane Pane)>> _windowPanesByLocation = new();
+        private readonly Dictionary<GameLocation, WholeMapAnswer<(Point Tile, WindowPane Pane)>> _windowPanesByLocation = [];
         private Action<GameLocation, int, List<(Point Tile, WindowPane Pane)>>? _paneRowScanner;
         // _windowReflectEase lives in ScreenState: it follows where this screen's player is.
 
@@ -291,13 +308,20 @@ namespace SDVRadiance
             if (!config.WindowReflectionEnabled || location == null || !(location.IsOutdoors || config.WindowReflectionIndoors))
                 return;
             EnsureWindowPaneCache(location);
-            if (_windowPanes.Count == 0)
+            // The panes on self-drawn art count too: the bus stop has no map glass at all, and
+            // asking only the map's panes skipped the bake there, so the bus windows returned the
+            // people walking by but never the player, and never the street. The sprite panes are
+            // last frame's, which is when the art was last drawn.
+            if (_windowPanes.Count == 0 && _spritePanes.Count == 0)
                 return;
             var viewport = Game1.viewport;
             var screen = new Rectangle(viewport.X - 64, viewport.Y - 64, viewport.Width + 128, viewport.Height + 128);
             bool anyPaneOnScreen = false;
             foreach (var pane in _windowPanes)
                 if (screen.Intersects(pane.WorldRect)) { anyPaneOnScreen = true; break; }
+            if (!anyPaneOnScreen)
+                foreach (var pane in _spritePanes)
+                    if (screen.Intersects(pane.WorldRect)) { anyPaneOnScreen = true; break; }
             if (!anyPaneOnScreen)
                 return;
             // Asked for BEFORE the player checks below: whether the glass returns the street does
@@ -322,8 +346,8 @@ namespace SDVRadiance
                 // which is what the glass would see of a pose it has no mirror for.
                 var current = who.FarmerSprite.CurrentAnimationFrame;
                 int currentFrame = who.FarmerSprite.CurrentFrame;
-                if (currentFrame >= 0 && currentFrame <= 2) frame = currentFrame + 12;
-                else if (currentFrame >= 12 && currentFrame <= 14) frame = currentFrame - 12;
+                if (currentFrame is >= 0 and <= 2) frame = currentFrame + 12;
+                else if (currentFrame is >= 12 and <= 14) frame = currentFrame - 12;
                 else frame = facingForGlass == 2 ? 0 : 12;
                 source = new Rectangle(frame % 6 * 16, frame / 6 * 32, 16, 32);
                 animation = new FarmerSprite.AnimationFrame(frame, 0, current.positionOffset, false, current.flip);
@@ -410,10 +434,37 @@ namespace SDVRadiance
                         var glassRect = new Rectangle(tileX * 64 + paneBox.X * 4, tileY * 64 + paneBox.Y * 4,
                             paneBox.Width * 4, paneBox.Height * 4);
                         into.Add((new Point(tileX, tileY), new WindowPane(glassRect,
-                            GlassRuns(classes, tileX, tileY).ToArray(), strength)));
+                            [.. GlassRuns(classes, tileX, tileY)], strength,
+                            frontGlassBottom: layer.Id.StartsWith("Front", StringComparison.Ordinal) ? glassRect.Bottom : 0)));
                         break;
                     }
                 }
+        }
+
+        /// <summary>The glass block of radiance_report: whether the reflection may run here at all, how
+        /// many panes the walk found, and where the first few are. "The mirror does not reflect" has
+        /// three answers (switched off here, no pane labelled on the map, or a pane that is there but
+        /// covered or off screen) and they look the same from the glass.</summary>
+        internal string DescribeGlass(ModConfig config)
+        {
+            var location = Game1.currentLocation;
+            if (location == null)
+                return "no location";
+            string gate = !config.WindowReflectionEnabled ? "switched off"
+                : !(location.IsOutdoors || config.WindowReflectionIndoors) ? "off indoors (the indoors switch)"
+                : "on";
+            MapAnswerKey key = MapAnswerKey.For(location);
+            string walk = key.NoLabels ? "no label set loaded"
+                : !ReferenceEquals(location, _windowPaneLocation) ? "not walked here yet"
+                : $"{_windowPanes.Count} pane(s) on the map, {_spritePanes.Count} on art the place draws itself";
+            var sample = new List<string>();
+            foreach (WindowPane pane in _windowPanes)
+            {
+                if (sample.Count >= 6)
+                    break;
+                sample.Add($"tile {pane.WorldRect.X / 64},{pane.WorldRect.Y / 64} {pane.WorldRect.Width / 64f:0.#}x{pane.WorldRect.Height / 64f:0.#}");
+            }
+            return $"reflection {gate}, {walk}{(sample.Count > 0 ? ": " + string.Join("; ", sample) : "")}, {DescribeSpriteGlass(location)}";
         }
 
         /// <summary>A shop front two tiles tall is ONE window, and a body standing in it is one
@@ -433,6 +484,7 @@ namespace SDVRadiance
                     continue;
                 Rectangle union = tilePanes[start].WorldRect;
                 float strength = tilePanes[start].Strength;
+                int frontGlassBottom = tilePanes[start].FrontGlassBottom;
                 var glassRects = new List<Rectangle>(tilePanes[start].GlassRects);
                 stack.Push(start);
                 merged.Add(start);
@@ -449,10 +501,12 @@ namespace SDVRadiance
                         union = Rectangle.Union(union, neighbour.WorldRect);
                         glassRects.AddRange(neighbour.GlassRects);
                         strength = Math.Max(strength, neighbour.Strength);
+                        frontGlassBottom = Math.Max(frontGlassBottom, neighbour.FrontGlassBottom);
                     }
                 }
-                _windowPanes.Add(new WindowPane(union, glassRects.ToArray(), strength,
-                    TilesAboveGround(location, union)));
+                // The ladder gives a mirror 1.0 and nothing else reaches it.
+                _windowPanes.Add(new WindowPane(union, [.. glassRects], strength,
+                    TilesAboveGround(location, union), frontGlassBottom, isMirror: strength >= 1f));
             }
         }
 
@@ -504,13 +558,13 @@ namespace SDVRadiance
                 while (x < 16)
                 {
                     byte c = classes[y * 16 + x];
-                    bool isGlass = c == LabelClassWindow || c == LabelClassGlass || c == LabelClassMirror;
+                    bool isGlass = c is LabelClassWindow or LabelClassGlass or LabelClassMirror;
                     if (!isGlass) { x++; continue; }
                     int runStart = x;
                     while (x < 16)
                     {
                         byte d = classes[y * 16 + x];
-                        if (d != LabelClassWindow && d != LabelClassGlass && d != LabelClassMirror)
+                        if (d is not LabelClassWindow and not LabelClassGlass and not LabelClassMirror)
                             break;
                         x++;
                     }
@@ -535,7 +589,7 @@ namespace SDVRadiance
             for (int p = 0; p < 256; p++)
             {
                 byte c = classes[p];
-                if (c != LabelClassWindow && c != LabelClassGlass && c != LabelClassMirror)
+                if (c is not LabelClassWindow and not LabelClassGlass and not LabelClassMirror)
                     continue;
                 int x = p & 15, y = p >> 4;
                 if (x < minX) minX = x;
@@ -585,8 +639,9 @@ namespace SDVRadiance
             if (location == null || (_windowReflectEase < 0.01f && !paintPanes))
                 return;
             EnsureWindowPaneCache(location);
-            WindowPanesInLocation = _windowPanes.Count;
-            if (_windowPanes.Count == 0)
+            CollectSpritePanes(location, config);
+            WindowPanesInLocation = _windowPanes.Count + _spritePanes.Count;
+            if (WindowPanesInLocation == 0)
                 return;
             // Day and night are two different pictures and get two dials; the ramp between them is
             // the one the window glow already rides, so the image thins as the pane lights up.
@@ -615,13 +670,17 @@ namespace SDVRadiance
             float streetInGlass = MathHelper.Clamp(config.WindowSceneReflectionStrength, 0f, 2f) * pictureShare * _windowReflectEase;
             // The glare is light returned by the near face of the pane, so it rides the same ramp.
             float glare = MathHelper.Clamp(config.WindowGlareStrength, 0f, 2f) * pictureShare * _windowReflectEase;
-            // The glass returns the lamps as brightly as the ground shows them, on the very ramp the
-            // lighting stage dims outdoor pools with: full while a lamp is worth something, a third
-            // of that at midday. It used to be the night ramp, which is zero until seven in the
-            // evening, so the dial did nothing at all for most of a day and was reported as broken
-            // twice before this. A lantern carried at noon now shows in the glass it passes.
+            // Outdoors, the glass returns a lamp as far as the lamp can be seen against the sky.
+            // The night ramp came first, zero until seven in the evening, and the dial read as dead
+            // for most of a day; this one follows the sky itself, so dusk, rain and a dark morning
+            // show the lamps while a white noon does not. After that it was the ground's
+            // daylight damping, which keeps a third of a lamp at noon, and a lamp's blot is ADDED
+            // light: a glow ring worn at midday laid a third-strength blot over a shop's glass
+            // and washed the whole pane out to white, reflection and all. Reported with two
+            // pictures of Pierre's door, ring on and off. The glass now takes the lamp up as the
+            // light fails, the same ramp the lamps' shadows ride, and shows its reflection by day.
             float lampGlow = MathHelper.Clamp(config.WindowLightGlowStrength, 0f, 2f)
-                * (indoors ? 1f : OutdoorLampDaylightDamping()) * _windowReflectEase;
+                * (indoors ? 1f : OutdoorLampAgainstDaylight()) * _windowReflectEase;
             // Interior glass has no sky on it: the wash and the glare are the sky and the sun
             // caught on a pane from outside, and from inside a room the pane shows the sky
             // THROUGH itself, which the art already paints. What interior glass returns is the
@@ -666,8 +725,10 @@ namespace SDVRadiance
                     _panePeople.Add(character);
                 }
             {
-                foreach (var pane in _windowPanes)
+                int paneCount = _windowPanes.Count + _spritePanes.Count;
+                for (int paneIndex = 0; paneIndex < paneCount; paneIndex++)
                 {
+                    WindowPane pane = paneIndex < _windowPanes.Count ? _windowPanes[paneIndex] : _spritePanes[paneIndex - _windowPanes.Count];
                     if (!screen.Intersects(pane.WorldRect))
                         continue;
                     WindowPanesOnScreen++;
@@ -738,7 +799,7 @@ namespace SDVRadiance
         }
 
         /// <summary>The bodies worth reflecting this frame, gathered once before the pane loop.</summary>
-        private readonly List<NPC> _panePeople = new();
+        private readonly List<NPC> _panePeople = [];
 
         /// <summary>The character's current frame turned to face the glass's way: a standard
         /// sheet keeps down in frames 0-3, right in 4-7, up in 8-11 and left in 12-15, so facing
@@ -750,8 +811,8 @@ namespace SDVRadiance
             Rectangle source = sprite.SourceRect;
             int frame = sprite.CurrentFrame;
             int turnedFrame = frame;
-            if (frame >= 0 && frame < 4) turnedFrame = frame + 8;
-            else if (frame >= 8 && frame < 12) turnedFrame = frame - 8;
+            if (frame is >= 0 and < 4) turnedFrame = frame + 8;
+            else if (frame is >= 8 and < 12) turnedFrame = frame - 8;
             if (turnedFrame == frame || sprite.Texture == null || sprite.SpriteWidth <= 0 || sprite.SpriteHeight <= 0)
                 return source;
             int framesPerRow = Math.Max(1, sprite.Texture.Width / sprite.SpriteWidth);
@@ -762,8 +823,24 @@ namespace SDVRadiance
         /// <summary>Where a pane's glass sits in the game's own front-to-back order: its sill's
         /// row. The wall behind it is map art and already down, and anyone standing below the sill
         /// sorts in front.</summary>
+        /// <remarks>A pane painted on a Front layer sits in front of the front tiles of its own sill
+        /// row. The game draws a Front tile of row r at ((r + 2) * 64 + a sub-layer tenth) / 10000,
+        /// a whole tile ahead of the sill's own depth, so the bath house mirrors, drawn on Front,
+        /// covered every row of their own reflection but the top one, and the glass showed nothing.
+        /// Reported on Nexus. Buildings-layer panes (the JojaMart fridges) were never covered.
+        /// The lift is taken from the lowest FRONT row, not the pane's own bottom: Pierre's counter
+        /// case is Front on its top row and Buildings on the row below, and lifted from the bottom
+        /// row the glass sorted a tile ahead of the real Front tile and in front of the player
+        /// standing at the counter, covering them.</remarks>
         private static float PaneDepth(WindowPane pane)
-            => MathHelper.Clamp(pane.WorldRect.Bottom / 10000f, 0f, 1f);
+        {
+            if (pane.SortDepth >= 0f)
+                return MathHelper.Clamp(pane.SortDepth, 0f, 1f);
+            float depth = pane.WorldRect.Bottom;
+            if (pane.FrontGlassBottom > 0)
+                depth = Math.Max(depth, ((pane.FrontGlassBottom - 1) / 64 + 2) * 64f + 1f);
+            return MathHelper.Clamp(depth / 10000f, 0f, 1f);
+        }
 
         /// <summary>
         /// A colour that ADDS to what is already on the screen rather than mixing with it.
@@ -1023,8 +1100,9 @@ namespace SDVRadiance
             Vector3 glassColour, Texture2D texture, Rectangle source, float bodyCenterX, float bodyFeetY,
             float scale, bool trueSize = false)
         {
-            float below = bodyFeetY - pane.WorldRect.Bottom;
-            if (below < -16f || below > WindowReflectReachPx)
+            float floorY = ImageFloorY(pane);
+            float below = bodyFeetY - floorY;
+            if (below is < -16f or > WindowReflectReachPx)
                 return;
             float distance = MathHelper.Clamp(below / WindowReflectReachPx, 0f, 1f);
             float distanceFade = 1f - distance;
@@ -1033,14 +1111,14 @@ namespace SDVRadiance
                 return;
             // Outdoors: smaller as they walk away, feet still on the sill, so the image recedes
             // into the glass instead of sliding over it. Indoors the image keeps the body's own
-            // size: a short pane then shows the legs and cuts the top off, which is what was asked
-            // for, and a tall one shows the whole person.
+            // size: a short pane on the floor shows the legs and cuts the top off, a tall one shows
+            // the whole person, and a mirror on the wall shows the top (see ImageFloorY).
             if (!trueSize)
                 scale *= MathHelper.Lerp(1f, WindowReflectFarScale, distance);
 
-            // The image in world pixels: feet on the sill, centred on the body.
+            // The image in world pixels: feet on the floor line, centred on the body.
             float drawnWidth = source.Width * scale, drawnHeight = source.Height * scale;
-            float imageFeetY = pane.WorldRect.Bottom + WindowStandingOffsetPx;
+            float imageFeetY = floorY;
             var image = new Rectangle((int)Math.Round(bodyCenterX - drawnWidth / 2f),
                 (int)Math.Round(imageFeetY - drawnHeight), (int)drawnWidth, (int)drawnHeight);
             // Dim, and the colour of the sky the window is under, the way glass returns a picture:
@@ -1049,6 +1127,37 @@ namespace SDVRadiance
             var glassTint = new Color(glassColour.X, glassColour.Y, glassColour.Z) * alpha;
             float depth = Math.Min(1f, PaneDepth(pane) + GlassBodyDepthNudge);
             DrawClippedToGlass(spriteBatch, pane, texture, source, image, scale, glassTint, depth);
+        }
+
+        /// <summary>How far below a mirror's bottom edge the floor is allowed to sit, in world pixels.
+        /// A mirror whose walk down found no floor would otherwise stand the image out of sight.</summary>
+        private const float MirrorFloorDropMaxPx = 64f * 2f;
+        /// <summary>How far the image in a mirror is lifted back up from the floor line, in world
+        /// pixels. Stood exactly on the floor, the bath house mirrors showed only the crown of the
+        /// head; this is about the height of a face, so the face is in the glass and the legs are not.</summary>
+        private const float MirrorImageLiftPx = 44f;
+
+        /// <summary>
+        /// Where the image in a pane stands: the sill for glass, the floor under it for a mirror.
+        /// </summary>
+        /// <remarks>
+        /// A window's glass starts at the ground in this game's art, so the image on its sill is
+        /// the body at the glass. A mirror hangs on the wall above a sink, and returns the body at
+        /// the height it hangs: the face, not the feet. Standing the image on its bottom edge put
+        /// the legs in the bath house mirrors and cut the head off above them, which is the wrong
+        /// half. The floor is the first tile below the mirror somebody can stand on, the same walk
+        /// that measures how high the pane hangs, so the legs fall below the glass and are clipped
+        /// away. Only mirrors: moving every pane down was tried once and took a tile off every
+        /// shop window (see <see cref="WindowStandingOffsetPx"/>).
+        /// </remarks>
+        private static float ImageFloorY(WindowPane pane)
+        {
+            float sill = pane.WorldRect.Bottom + WindowStandingOffsetPx;
+            if (!pane.IsMirror || pane.TilesAboveGround <= 0)
+                return sill;
+            int sillRow = (pane.WorldRect.Bottom - 1) / 64;
+            float floor = (sillRow + pane.TilesAboveGround) * 64f;
+            return sill + MathHelper.Clamp(floor - pane.WorldRect.Bottom - MirrorImageLiftPx, 0f, MirrorFloorDropMaxPx);
         }
 
         /// <summary>

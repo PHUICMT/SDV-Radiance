@@ -30,6 +30,16 @@ namespace SDVRadiance
         public Func<bool>? Enabled;
         public bool IsEnabled => Enabled == null || Enabled();
 
+        /// <summary>What this row reads under a fresh config, or null when it has none to compare
+        /// against (see the slider's).</summary>
+        public bool? DefaultValue { get; init; }
+        public bool DiffersFromDefault => DefaultValue.HasValue && Get() != DefaultValue.Value;
+        public void ResetToDefault()
+        {
+            if (DefaultValue.HasValue && IsEnabled)
+                Set(DefaultValue.Value);
+        }
+
         public bool Hit(int x, int y) => IsEnabled
             && new Rectangle(Row.X, Row.Y, Row.Width, (int)(36 * TextScale)).Contains(x, y);
 

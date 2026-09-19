@@ -93,7 +93,7 @@ namespace SDVRadiance
         /// a glass-free copy of it where it does not. Memoised because the mask gather asks about
         /// every tile of the map, and the art behind one tile index cannot change without an asset
         /// reload, which clears this.</summary>
-        private readonly Dictionary<(string sheet, int index), byte[]> _artVerdict = new();
+        private readonly Dictionary<(string sheet, int index), byte[]> _artVerdict = [];
 
         /// <summary>How many labelled tiles have had the art-bound part of their label taken back
         /// out - the glass, the water, the light - because the tile is drawn from a different
@@ -126,7 +126,7 @@ namespace SDVRadiance
         /// <summary>Reused by <see cref="ForgetArtVerdictsFor"/>. On a modded install an asset is
         /// invalidated every few seconds, so neither of these may allocate.</summary>
         private readonly HashSet<string> _reloadedSheetScratch = new(StringComparer.OrdinalIgnoreCase);
-        private readonly List<(string sheet, int index)> _forgottenVerdictScratch = new();
+        private readonly List<(string sheet, int index)> _forgottenVerdictScratch = [];
 
         /// <summary>Throw away the art verdicts for the sheets a mod has just reloaded, because the
         /// picture those labels were painted for may have changed. Moves <see cref="Version"/>,
@@ -142,11 +142,11 @@ namespace SDVRadiance
         /// name no label was ever painted on now costs a hash lookup and nothing else.</para></summary>
         public void ForgetArtVerdictsFor(IEnumerable<string> reloadedAssetNames)
         {
-            if (_artVerdict.Count == 0 && this.ArtBoundLabelsRefusedForChangedArt == 0)
+            if (_artVerdict.Count == 0 && ArtBoundLabelsRefusedForChangedArt == 0)
                 return;
             _reloadedSheetScratch.Clear();
             foreach (string name in reloadedAssetNames)
-                _reloadedSheetScratch.Add(NormalizeSheet(SurfaceMap.NormaliseAssetName(name)));
+                _reloadedSheetScratch.Add(NormalizeSheet(AssetNames.Normalise(name)));
             if (_reloadedSheetScratch.Count == 0)
                 return;
 
@@ -158,7 +158,7 @@ namespace SDVRadiance
             foreach (string sheet in _reloadedSheetScratch)
                 if (_refusedBySheet.TryGetValue(sheet, out int refusedOnThisSheet))
                 {
-                    this.ArtBoundLabelsRefusedForChangedArt -= refusedOnThisSheet;
+                    ArtBoundLabelsRefusedForChangedArt -= refusedOnThisSheet;
                     _refusedBySheet.Remove(sheet);
                     forgotARefusal = true;
                 }
@@ -170,7 +170,7 @@ namespace SDVRadiance
         }
 
         /// <summary>One line per pack that was loaded or refused, for radiance_report.</summary>
-        private readonly List<string> _packReport = new();
+        private readonly List<string> _packReport = [];
 
         /// <summary>Set once during Entry; null only if construction somehow failed.</summary>
         public static LabelStore? Instance;
@@ -196,7 +196,7 @@ namespace SDVRadiance
         private int _artVerdictGeneration;
 
         public LabelStore(string dir, IMonitor monitor)
-            : this(dir, Array.Empty<LabelPack>(), monitor)
+            : this(dir, [], monitor)
         {
         }
 
@@ -235,7 +235,7 @@ namespace SDVRadiance
 
             foreach (LabelPack pack in packs)
             {
-                int before = this.TileCount;
+                int before = TileCount;
                 _refusedInPack = 0;
                 try
                 {
@@ -254,8 +254,8 @@ namespace SDVRadiance
                 string refused = _refusedInPack == 0
                     ? ""
                     : $", {_refusedInPack} sheet(s) refused as not this mod's own art";
-                _packReport.Add($"{pack.Describe()}: {this.TileCount - before:+0;-0;0} tiles{refused}{producedFor}");
-                this.PackCount++;
+                _packReport.Add($"{pack.Describe()}: {TileCount - before:+0;-0;0} tiles{refused}{producedFor}");
+                PackCount++;
             }
         }
 
@@ -340,9 +340,9 @@ namespace SDVRadiance
         /// </summary>
         public string DescribeSources()
         {
-            if (this.PackCount == 0 && _packReport.Count == 0)
+            if (PackCount == 0 && _packReport.Count == 0)
                 return "bundled only";
-            var lines = new List<string> { $"bundled + {this.PackCount} pack(s) from other mods:" };
+            var lines = new List<string> { $"bundled + {PackCount} pack(s) from other mods:" };
             foreach (string line in _packReport)
                 lines.Add("  " + line);
             return string.Join(Environment.NewLine, lines);
@@ -392,7 +392,7 @@ namespace SDVRadiance
                             AddFingerprint(painted, one.ValueKind == JsonValueKind.String ? one.GetString() : null);
                     if (painted.Count > 0)
                     {
-                        byTile[index] = painted.ToArray();
+                        byTile[index] = [.. painted];
                         tiles++;
                     }
                 }
@@ -400,32 +400,6 @@ namespace SDVRadiance
                     _artBySheet[NormalizeSheet(sheet.Name)] = byTile;
             }
             monitor.Log($"Art fingerprints loaded for {tiles} tiles across {_artBySheet.Count} sheets.", LogLevel.Trace);
-        }
-
-        /// <summary>sheet -> tile -> hex values, the shape both the fingerprint and the outline
-        /// tables use. A tile whose list comes out empty is left out rather than stored empty: an
-        /// empty list would read as "painted on no art at all", which refuses everything.</summary>
-        private static void ReadHexTable(JsonElement table, Dictionary<string, Dictionary<int, ulong[]>> into)
-        {
-            foreach (JsonProperty sheet in table.EnumerateObject())
-            {
-                var byTile = new Dictionary<int, ulong[]>();
-                foreach (JsonProperty tile in sheet.Value.EnumerateObject())
-                {
-                    if (!int.TryParse(tile.Name, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int index))
-                        continue;
-                    var values = new List<ulong>();
-                    if (tile.Value.ValueKind == JsonValueKind.String)
-                        AddFingerprint(values, tile.Value.GetString());
-                    else if (tile.Value.ValueKind == JsonValueKind.Array)
-                        foreach (JsonElement one in tile.Value.EnumerateArray())
-                            AddFingerprint(values, one.ValueKind == JsonValueKind.String ? one.GetString() : null);
-                    if (values.Count > 0)
-                        byTile[index] = values.ToArray();
-                }
-                if (byTile.Count > 0)
-                    into[NormalizeSheet(sheet.Name)] = byTile;
-            }
         }
 
         private static void AddFingerprint(List<ulong> into, string? text)
@@ -594,7 +568,7 @@ namespace SDVRadiance
             _artVerdict[memo] = verdict;
             if (!ReferenceEquals(verdict, label))
             {
-                this.ArtBoundLabelsRefusedForChangedArt++;
+                ArtBoundLabelsRefusedForChangedArt++;
                 _refusedBySheet[key] = _refusedBySheet.TryGetValue(key, out int already) ? already + 1 : 1;
             }
             return verdict;
@@ -702,7 +676,7 @@ namespace SDVRadiance
                             continue;   // a variant with no art to match, or no label, is dead data
                         string source = one.TryGetProperty("source", out JsonElement src) && src.ValueKind == JsonValueKind.String
                             ? src.GetString() ?? "unnamed" : "unnamed";
-                        list.Add(new LabelVariant(art.ToArray(), bytes, source));
+                        list.Add(new LabelVariant([.. art], bytes, source));
                         entries++;
                     }
                     if (list.Count > 0)
@@ -789,12 +763,12 @@ namespace SDVRadiance
 
             internal SheetLabels(string sheet, Dictionary<int, byte[]>? tiles,
                                  Dictionary<int, List<LabelVariant>>? variants, HashSet<int>? artBoundTiles)
-            { this.Sheet = sheet; this.Tiles = tiles; this.Variants = variants; this.ArtBoundTiles = artBoundTiles; }
+            { Sheet = sheet; Tiles = tiles; Variants = variants; ArtBoundTiles = artBoundTiles; }
         }
 
         /// <summary>Weak, because a map reload builds new tile sheet objects and the old ones must
         /// be free to go with it.</summary>
-        private readonly System.Runtime.CompilerServices.ConditionalWeakTable<xTile.Tiles.TileSheet, SheetLabels> _labelsByTileSheet = new();
+        private readonly System.Runtime.CompilerServices.ConditionalWeakTable<xTile.Tiles.TileSheet, SheetLabels> _labelsByTileSheet = [];
 
         private SheetLabels LabelsFor(xTile.Tiles.TileSheet tileSheet)
         {
@@ -807,7 +781,7 @@ namespace SDVRadiance
             if (tiles != null)
                 foreach (var labelledTile in tiles)
                     if (CarriesArtBoundClass(labelledTile.Value))
-                        (artBoundTiles ??= new HashSet<int>()).Add(labelledTile.Key);
+                        (artBoundTiles ??= []).Add(labelledTile.Key);
             var found = new SheetLabels(sheet, tiles, variants, artBoundTiles);
             _labelsByTileSheet.Add(tileSheet, found);
             return found;

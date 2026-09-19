@@ -81,11 +81,11 @@ namespace SDVRadiance
         private const float MaxSlantedWindPixelsPerSecond = 1300f;
         /// <summary>Three planes of rain, back to front. The back layer is slow, short and faint;
         /// the front is fast, long and bright. That difference IS the depth.</summary>
-        private static readonly float[] RainLayerSpeed = { 0.55f, 0.80f, 1.10f };
-        private static readonly float[] RainLayerLengthPixels = { 17f, 27f, 38f };
-        private static readonly float[] RainLayerWidthPixels = { 2.4f, 3.0f, 4.2f };
-        private static readonly float[] RainLayerAlpha = { 0.30f, 0.46f, 0.66f };
-        private static readonly float[] RainLayerShare = { 0.40f, 0.35f, 0.25f };
+        private static readonly float[] RainLayerSpeed = [0.55f, 0.80f, 1.10f];
+        private static readonly float[] RainLayerLengthPixels = [17f, 27f, 38f];
+        private static readonly float[] RainLayerWidthPixels = [2.4f, 3.0f, 4.2f];
+        private static readonly float[] RainLayerAlpha = [0.30f, 0.46f, 0.66f];
+        private static readonly float[] RainLayerShare = [0.40f, 0.35f, 0.25f];
         /// <summary>One drop per this many viewport pixels at density 1 (~480 drops at 1080p).</summary>
         private const float PixelsPerRainDrop = 4300f;
         private const int MaximumRainDrops = 2400;
@@ -102,27 +102,27 @@ namespace SDVRadiance
 
         /// <summary>Blossom in spring, leaves the rest of the year, riding the same shared wind
         /// as the rain slant but much harder - debris IS the wind made visible.</summary>
-        private static readonly float[] WindLayerSpeed = { 0.50f, 0.75f, 1.05f };
-        private static readonly float[] WindLayerSizePixels = { 5f, 7.5f, 10.5f };
-        private static readonly float[] WindLayerAlpha = { 0.50f, 0.70f, 0.90f };
-        private static readonly float[] WindLayerShare = { 0.40f, 0.35f, 0.25f };
+        private static readonly float[] WindLayerSpeed = [0.50f, 0.75f, 1.05f];
+        private static readonly float[] WindLayerSizePixels = [5f, 7.5f, 10.5f];
+        private static readonly float[] WindLayerAlpha = [0.50f, 0.70f, 0.90f];
+        private static readonly float[] WindLayerShare = [0.40f, 0.35f, 0.25f];
         private const float PixelsPerWindPiece = 8000f;
         private const int MaximumWindPieces = 900;
         /// <summary>Debris rides the shared wind this much harder than the rain slant does.</summary>
         private const float WindDebrisRideMultiplier = 2.2f;
         private const float WindDebrisSinkPixelsPerSecond = 12f;
-        private static readonly Color[] SpringPieceColours = { new(255, 183, 197), new(255, 214, 224), new(250, 242, 246) };
-        private static readonly Color[] SummerPieceColours = { new(120, 185, 85), new(148, 205, 105), new(96, 155, 72) };
-        private static readonly Color[] FallPieceColours = { new(214, 142, 52), new(192, 104, 44), new(166, 84, 34), new(184, 64, 44) };
-        private static readonly Color[] WinterPieceColours = { new(240, 246, 255), new(222, 233, 246) };
+        private static readonly Color[] SpringPieceColours = [new(255, 183, 197), new(255, 214, 224), new(250, 242, 246)];
+        private static readonly Color[] SummerPieceColours = [new(120, 185, 85), new(148, 205, 105), new(96, 155, 72)];
+        private static readonly Color[] FallPieceColours = [new(214, 142, 52), new(192, 104, 44), new(166, 84, 34), new(184, 64, 44)];
+        private static readonly Color[] WinterPieceColours = [new(240, 246, 255), new(222, 233, 246)];
 
         // ---- snow look -----------------------------------------------------------------------
 
-        private static readonly float[] SnowLayerFallSpeed = { 30f, 52f, 84f };
-        private static readonly float[] SnowLayerSizePixels = { 7f, 10.5f, 15f };
-        private static readonly float[] SnowLayerAlpha = { 0.35f, 0.55f, 0.75f };
-        private static readonly float[] SnowLayerShare = { 0.42f, 0.34f, 0.24f };
-        private static readonly float[] SnowLayerSwayPixels = { 14f, 10f, 7f };
+        private static readonly float[] SnowLayerFallSpeed = [30f, 52f, 84f];
+        private static readonly float[] SnowLayerSizePixels = [7f, 10.5f, 15f];
+        private static readonly float[] SnowLayerAlpha = [0.35f, 0.55f, 0.75f];
+        private static readonly float[] SnowLayerShare = [0.42f, 0.34f, 0.24f];
+        private static readonly float[] SnowLayerSwayPixels = [14f, 10f, 7f];
         private const float PixelsPerSnowFlake = 3400f;
         private const int MaximumSnowFlakes = 1500;
 
@@ -232,7 +232,7 @@ namespace SDVRadiance
             }
         }
 
-        private static readonly Dictionary<int, ScreenPrecipitation> _screens = new();
+        private static readonly Dictionary<int, ScreenPrecipitation> _screens = [];
 
         // ---- the Harmony pair -----------------------------------------------------------------
 
@@ -623,7 +623,7 @@ namespace SDVRadiance
                         int tileX = (int)((Game1.viewport.X + drop.Position.X) / 64f);
                         int tileY = (int)((Game1.viewport.Y + drop.Position.Y) / 64f);
                         SurfaceClass under = surface.GetSurface(tileX, tileY);
-                        if (under != SurfaceClass.Water && under != SurfaceClass.Void)
+                        if (under is not SurfaceClass.Water and not SurfaceClass.Void)
                             SpawnSplash(screen, drop.Position);
                     }
                     // Reborn anywhere on screen, the way vanilla's own drops respawn: rebirth
@@ -928,9 +928,9 @@ namespace SDVRadiance
             // it, and a circle here reads as a sticker lying on top of the world.
             int splashAtlasWidth = SplashCellSize * SplashFrameCount;
             var splashPixels = new Color[splashAtlasWidth * SplashCellSize];
-            float[] ringRadius = { 0.20f, 0.52f, 0.84f };
-            float[] ringThickness = { 0.13f, 0.085f, 0.055f };
-            float[] ringStrength = { 1.00f, 0.72f, 0.40f };
+            float[] ringRadius = [0.20f, 0.52f, 0.84f];
+            float[] ringThickness = [0.13f, 0.085f, 0.055f];
+            float[] ringStrength = [1.00f, 0.72f, 0.40f];
             for (int frame = 0; frame < SplashFrameCount; frame++)
             {
                 for (int y = 0; y < SplashCellSize; y++)
@@ -1029,7 +1029,7 @@ namespace SDVRadiance
                 return "precipitation: vanilla (replacement not switched on)";
             if (AnotherModOwnsWeatherDraw)
                 return "precipitation: yielded for the session (another mod rewrites drawWeather, or our draw failed once)";
-            bool wanted = ReplacementWanted(out bool raining, out bool snowing, out bool windy);
+            bool wanted = ReplacementWanted(out bool raining, out bool snowing, out _);
             ScreenPrecipitation? screen = _screens.TryGetValue(CurrentScreenId(), out var s) ? s : null;
             string state = screen == null ? "idle (never drawn on this screen)"
                 : $"presence={screen.Presence:0.000} storm={screen.StormEase:0.00} "

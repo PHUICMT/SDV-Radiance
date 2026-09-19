@@ -38,7 +38,7 @@ namespace SDVRadiance
 
         private static readonly Regex TargetPattern =
             new("\"Target\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.Compiled);
-        private static readonly string[] Seasons = { "spring", "summer", "fall", "winter" };
+        private static readonly string[] Seasons = ["spring", "summer", "fall", "winter"];
 
         /// <summary>A pack's content.json can be large; anything past this is somebody's data file,
         /// not a patch list, and reading it would cost more than the answer is worth.</summary>
@@ -72,7 +72,7 @@ namespace SDVRadiance
             if (_byExactSheet != null)
                 return;
             _byExactSheet = new Dictionary<string, SortedSet<string>>(StringComparer.OrdinalIgnoreCase);
-            _bySuffix = new List<(string, string)>();
+            _bySuffix = [];
 
             string? mods = LabelPacks.FindModsRoot(modDirectory);
             if (mods == null)
@@ -83,7 +83,7 @@ namespace SDVRadiance
                 // Every json in a pack, not only content.json: a pack of any size splits its
                 // patches across files and pulls them in with an Include, and the targets then
                 // live in the file that was included rather than in the one that included it.
-                patchFiles = new List<string>(Directory.EnumerateFiles(mods, "*.json", SearchOption.AllDirectories));
+                patchFiles = [.. Directory.EnumerateFiles(mods, "*.json", SearchOption.AllDirectories)];
             }
             catch (Exception ex)
             {

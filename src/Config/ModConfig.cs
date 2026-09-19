@@ -116,7 +116,8 @@ namespace SDVRadiance
         Off,
         Subtle,
         Cinematic,
-        Vibrant
+        Vibrant,
+        Nocturne
     }
 
     /// <summary>Quality presets, kept deliberately separate from <see cref="LookPreset"/>:
@@ -284,9 +285,9 @@ namespace SDVRadiance
         /// be the player's own and offered after these - see <see cref="LutCatalog"/> - so this
         /// list is what SHIPPED, not the limit of what can be chosen.</summary>
         public static readonly string[] ShippedLuts =
-        {
+        [
             "", "warm-film", "verdant", "autumn-gold", "moonlit", "cool-night", "washed-linen", "identity",
-        };
+        ];
 
         /// <summary>
         /// A colour lookup table laid over the finished grade: the name of a PNG in
@@ -599,6 +600,54 @@ namespace SDVRadiance
         /// on top of it: a lean you catch on a gusty day and not at all on a calm one. The dial
         /// still reaches 2 for anyone who wants the gale.</para></summary>
         public float WaterWind { get; set; } = 0.3f;
+        /// <summary>Whether rivers flow at all. Off is the still water of every earlier release, and
+        /// nothing is traced or carried; the speed, rain and foam settings only apply while it is on.</summary>
+        public bool WaterRiverFlowEnabled { get; set; } = true;
+        /// <summary>The tuner's groups the player has folded away, by heading key. A place in a menu
+        /// rather than a look, so saved looks do not carry it (it is a list, which they skip).</summary>
+        public List<string> TunerFoldedSections { get; set; } = [];
+        /// <summary>Whether the tuner shows its fine-tuning groups. Off to start: most players want the
+        /// handful of dials that change the picture, and the rest waits behind the header switch.</summary>
+        public bool TunerShowFineTuning { get; set; } = false;
+        /// <summary>The tuner tab open last, by its key, and how far each tab was scrolled, so the menu
+        /// opens where it was left, even after the game was closed. Places in a menu, not looks:
+        /// neither is a type a saved look records.</summary>
+        public string TunerLastTab { get; set; } = "";
+        public Dictionary<string, int> TunerScrollByTab { get; set; } = [];
+        /// <summary>How fast a river runs. A map that paints a waterfall has a river, and its water is
+        /// traced from the falls along its own banks to where it leaves the map (RiverFlowTrace), so
+        /// it turns with every bend and passes under its bridges. At 1 the river's middle pace is 1.2
+        /// tiles a second; 0.6 to start. Maps with no falls, the sea among them, are untouched, and
+        /// 0 is the water of every earlier release, to the pixel.</summary>
+        public float WaterCurrent { get; set; } = 0.6f;
+        /// <summary>How strongly the sea moves, as a multiple of <see cref="WaterStrength"/>, on the
+        /// maps the water pass treats as a sea (the beach, Ginger Island, the docks, a beach farm).
+        /// One wave strength for every kind of water meant the sea could not be calmed without
+        /// flattening the rivers with it. 1 is every earlier release.</summary>
+        public float WaterSeaWaves { get; set; } = 1f;
+        /// <summary>How much a river swells in bad weather: at 1 it runs 1.4 times its pace while it
+        /// rains and 1.8 times in a thunderstorm, easing up and down over several seconds. 0 keeps
+        /// one pace whatever the sky does.</summary>
+        public float WaterRiverRainSwell { get; set; } = 1f;
+        /// <summary>How much foam rides a river: flecks carried with the current, thick under a fall
+        /// and where a narrows runs fast, a light scatter elsewhere. 0 draws none.</summary>
+        public float WaterRiverFoam { get; set; } = 1f;
+        /// <summary>How much faster the fine detail of a river runs than the river, while the big ripples hang back. 1 is the first flowing rivers, where everything moved as one sheet.</summary>
+        public float WaterRiverRippleSpeed { get; set; } = 1.8f;
+        /// <summary>How far each carry cycle moves the pattern, and how much shorter the cycles run. 0 is one pattern sliding along, the first flowing rivers.</summary>
+        public float WaterRiverRenew { get; set; } = 0.6f;
+        /// <summary>How much slower a river runs beside its banks than mid-stream, baked into the flow map. 0 is one pace bank to bank.</summary>
+        public float WaterRiverBankDrag { get; set; } = 0.5f;
+        /// <summary>How far the current wanders from its traced heading. 0 is the traced heading exactly.</summary>
+        public float WaterRiverSwirl { get; set; } = 0.35f;
+        /// <summary>How the carried glints on a river pulse: 0 the steady twinkle of still water, 1 brief fast flashes.</summary>
+        public float WaterRiverGlitter { get; set; } = 0.6f;
+        /// <summary>How far a fleck of foam is drawn out along the flow. 1.8 is how the foam first looked.</summary>
+        public float WaterRiverFoamStreak { get; set; } = 3.0f;
+        /// <summary>Crest trains riding the current, whitened at the tip. 0 draws none.</summary>
+        public float WaterRiverWaves { get; set; } = 0.6f;
+        /// <summary>Carry the river on the art's pixel grid, twelve steps a second, the way the game animates its water.</summary>
+        public bool WaterRiverPixelStep { get; set; } = false;
         /// <summary>Apply the water effect inside building interiors (farmhouse, cabins, custom
         /// home mods). Off = skip it there — some house mods have decorative rivers/ponds inside
         /// the user may not want rippling. Real level water ALWAYS keeps the effect regardless of
@@ -609,7 +658,7 @@ namespace SDVRadiance
         /// by NameOrUniqueName. Toggled per-room from the F6 tuner. Lets a player kill decorative
         /// water from one specific house/interior mod without turning it off everywhere. Only ever
         /// consulted for gate-able interiors (outdoors and level water ignore it).</summary>
-        public List<string> WaterDisabledLocations { get; set; } = new();
+        public List<string> WaterDisabledLocations { get; set; } = [];
 
         public bool VignetteEnabled { get; set; } = true;
         public float VignetteStrength { get; set; } = 0.08f;
@@ -816,6 +865,11 @@ namespace SDVRadiance
         /// colour but that it will not hold still. 0 is the steady pool of every earlier
         /// release.</summary>
         public float AquariumRipple { get; set; } = 0.5f;
+        /// <summary>How much a TV's light is a screen's, 0..1. The game lights a TV while a show
+        /// plays, and that light was read as a lamp: warm, and on and off in one frame, shadows
+        /// and all. Above 0 it is screen-coloured, flickers with the picture and fades in and out,
+        /// its shadows with it (see TvScreenGlow). 0 is the game's own light, as before.</summary>
+        public float TvScreenGlow { get; set; } = 0.8f;
         /// <summary>The VISIBLE half of indoor window daylight: the lit glass, the beam leaning out
         /// of it, and the patch of sun it lays on the floor. This is the half a dedicated window mod
         /// draws too (Dynamic Windows ships a shaft sprite and a fill sprite for exactly these), so
@@ -866,6 +920,11 @@ namespace SDVRadiance
         /// Its own dial rather than part of the wash above, because the wash is what the pane is
         /// holding and this is what it is catching: one is still and one moves.</summary>
         public float WindowGlareStrength { get; set; } = 0.57f;
+        /// <summary>How much of the picture glass on a vehicle returns, 0..1: the bus's windows and
+        /// windscreen, and any glass on art a place draws for itself. Its own dial because the map
+        /// glass's 0.35 is tuned for shop fronts and left the bus showing nothing, while 0.8 made
+        /// the player in the windscreen a second, solid player.</summary>
+        public float WindowVehicleGlassStrength { get; set; } = 0.45f;
         /// <summary>How brightly the street in front of a pane stands in its glass. Reads the same
         /// sprite-free map render the water mirror uses, so it costs a strip of an image that is
         /// already being made rather than a second one.</summary>
@@ -1211,6 +1270,14 @@ namespace SDVRadiance
         public bool DirectionalShadowCreatures { get; set; } = true;
         /// <summary>Opacity of the directional shadows. 0 = none, 1 = full.</summary>
         public float DirectionalShadowStrength { get; set; } = 0.7f;
+
+        /// <summary>The top of the shadow strength dial. Up to 1 the strength scales a shadow as it
+        /// always did; past 1 every pixel of it darkens as 1 - (1 - a)^strength, the soft edges with
+        /// the core instead of only the core going solid (see ShadowRenderer.ShadowDepthPower). It costs
+        /// nothing: a soft shadow is already several faint copies, and only how faint each one is
+        /// changes. Asked for by a player who wanted characters' shadows far darker than 1 could give
+        /// once 2.0.0 widened the soft edge.</summary>
+        public const float ShadowStrengthMax = 3f;
         /// <summary>Length multiplier for the cast shadow (1 = default sun-driven length).</summary>
         public float DirectionalShadowLength { get; set; } = 1.0f;
         /// <summary>Extra stretch at the day's edges only (quartic in the sun offset).</summary>
@@ -1283,8 +1350,16 @@ namespace SDVRadiance
         /// rain, violet at the day's edges, warm in a room. 0 is the black every release before
         /// 1.7.7 drew. See <see cref="ShadowRenderer.ShadowInk"/>.</summary>
         public float ShadowTint { get; set; } = 0.35f;
-        /// <summary>Edge softness of the shadow, in pixels (0 = crisp).</summary>
+        /// <summary>Edge softness of the shadow, in pixels (0 = crisp), up to <see cref="ShadowBlurMax"/>.</summary>
         public float DirectionalShadowBlur { get; set; } = 5.0f;
+
+        /// <summary>The top of the edge softness dial. It stopped at 5, and a wider edge was asked for.
+        /// Measured before it was opened up: at 20 the edge stays smooth with no copies showing,
+        /// under the sun in town and under the lamps in the saloon, because a wide blur is baked at a
+        /// coarser scale where the nine copies still overlap, and the shadows took the same number of
+        /// draws a frame at 20 as at 5 in both places. A wider edge spreads the same shadow thinner,
+        /// which is what the strength dial past 1 is for.</summary>
+        public const float ShadowBlurMax = 20f;
         /// <summary>Also cast directional shadows from trees and bushes (not just characters).</summary>
         public bool DirectionalShadowObjects { get; set; } = true;
         /// <summary>A soft dark pool under every object that casts a daylight shadow, at the row it
@@ -1495,12 +1570,12 @@ namespace SDVRadiance
             ColorGradeSaturation = ClampToRange(ColorGradeSaturation, 0f, 2f);
             ColorGradeTemperature = ClampToRange(ColorGradeTemperature, -1f, 1f);
             ColorGradeLutAmount = ClampToRange(ColorGradeLutAmount, 0f, 1f);
-            ColorGradeLut = ColorGradeLut ?? "";
+            ColorGradeLut ??= "";
             // A hand-edited config.json can say null for a list or a key binding, and the JSON
             // reader takes it at its word. Each of these is read every frame or on every key press,
             // so a null here was an exception per frame rather than a missing setting.
-            WaterDisabledLocations ??= new();
-            SavedProfiles ??= new();
+            WaterDisabledLocations ??= [];
+            SavedProfiles ??= [];
             ToggleKey ??= new(SButton.F7);
             TunerKey ??= new(SButton.F6);
             InspectDrawKey ??= new();
@@ -1564,16 +1639,33 @@ namespace SDVRadiance
             WaterWakeRings = ClampToRange(WaterWakeRings, 0f, 2f);
             WaterFishSpotRings = ClampToRange(WaterFishSpotRings, 0f, 2f);
             WaterWind = ClampToRange(WaterWind, 0f, 2f);
+            WaterCurrent = ClampToRange(WaterCurrent, 0f, 2f);
+            WaterSeaWaves = ClampToRange(WaterSeaWaves, 0f, 2f);
+            WaterRiverRainSwell = ClampToRange(WaterRiverRainSwell, 0f, 2f);
+            WaterRiverFoam = ClampToRange(WaterRiverFoam, 0f, 2f);
+            WaterRiverRippleSpeed = ClampToRange(WaterRiverRippleSpeed, 1.0f, 3.0f);
+            WaterRiverRenew = ClampToRange(WaterRiverRenew, 0.0f, 1.0f);
+            WaterRiverBankDrag = ClampToRange(WaterRiverBankDrag, 0.0f, 1.0f);
+            WaterRiverSwirl = ClampToRange(WaterRiverSwirl, 0.0f, 1.0f);
+            WaterRiverGlitter = ClampToRange(WaterRiverGlitter, 0.0f, 1.0f);
+            WaterRiverFoamStreak = ClampToRange(WaterRiverFoamStreak, 1.0f, 5.0f);
+            WaterRiverWaves = ClampToRange(WaterRiverWaves, 0.0f, 2.0f);
+            // A hand-edited config can write null into these; the tuner reads them on every open.
+            TunerFoldedSections ??= [];
+            TunerScrollByTab ??= [];
+            TunerLastTab ??= "";
             WindowReflectionStrength = ClampToRange(WindowReflectionStrength, 0f, 2f);
             WindowReflectionNightStrength = ClampToRange(WindowReflectionNightStrength, 0f, 2f);
             WindowSheenStrength = ClampToRange(WindowSheenStrength, 0f, 2f);
             WindowGlareStrength = ClampToRange(WindowGlareStrength, 0f, 2f);
+            WindowVehicleGlassStrength = ClampToRange(WindowVehicleGlassStrength, 0f, 1f);
             WindowSceneReflectionStrength = ClampToRange(WindowSceneReflectionStrength, 0f, 2f);
             WindowLightGlowStrength = ClampToRange(WindowLightGlowStrength, 0f, 2f);
             WindowDaylightStrength = ClampToRange(WindowDaylightStrength, 0f, 2f);
             WindowGlowOpensNight = ClampToRange(WindowGlowOpensNight, 0f, 1f);
             LampHalo = ClampToRange(LampHalo, 0f, 1f);
             AquariumRipple = ClampToRange(AquariumRipple, 0f, 1f);
+            TvScreenGlow = ClampToRange(TvScreenGlow, 0f, 1f);
             WateredSoilSparkle = ClampToRange(WateredSoilSparkle, 0f, 1f);
             WindowDaylightStrengthElsewhere = ClampToRange(WindowDaylightStrengthElsewhere, 0f, 2f);
             ParticleDensity = ClampToRange(ParticleDensity, 0.25f, 2f);
@@ -1656,7 +1748,7 @@ namespace SDVRadiance
             LightingBoost = ClampToRange(LightingBoost, 0f, 2f);
             LightingRadiusScale = ClampToRange(LightingRadiusScale, 0.2f, 3f);
             LightingShadowStrength = ClampToRange(LightingShadowStrength, 0f, 1f);
-            DirectionalShadowStrength = ClampToRange(DirectionalShadowStrength, 0f, 1f);
+            DirectionalShadowStrength = ClampToRange(DirectionalShadowStrength, 0f, ShadowStrengthMax);
             DirectionalShadowLength = ClampToRange(DirectionalShadowLength, 0.2f, 2f);
             GoldenHourStrength = ClampToRange(GoldenHourStrength, 0f, 1f);
             SunSeasonStrength = ClampToRange(SunSeasonStrength, 0f, 1f);
@@ -1667,7 +1759,7 @@ namespace SDVRadiance
             ShadowTint = ClampToRange(ShadowTint, 0f, 1f);
             AuroraStrength = ClampToRange(AuroraStrength, 0f, 2f);
             SnowGlintStrength = ClampToRange(SnowGlintStrength, 0f, 1f);
-            DirectionalShadowBlur = ClampToRange(DirectionalShadowBlur, 0f, 5f);
+            DirectionalShadowBlur = ClampToRange(DirectionalShadowBlur, 0f, ShadowBlurMax);
             ShadowGroundForeshortening = ClampToRange(ShadowGroundForeshortening, ShadowGroundForeshorteningMin, ShadowGroundForeshorteningMax);
             ShadowCharacterGroundForeshortening = ClampToRange(ShadowCharacterGroundForeshortening, ShadowGroundForeshorteningMin, ShadowGroundForeshorteningMax);
             ShadowLengthTrees = ClampToRange(ShadowLengthTrees, ShadowKindLengthMin, ShadowKindLengthMax);
@@ -1714,7 +1806,7 @@ namespace SDVRadiance
         public KeybindList InspectDrawKey { get; set; } = new();
 
         // --- Saved custom looks ---
-        public List<NamedProfile> SavedProfiles { get; set; } = new();
+        public List<NamedProfile> SavedProfiles { get; set; } = [];
 
         // --- Diagnostics ---
         /// <summary>Log per-frame pipeline info once, to help debug the render hook.</summary>
@@ -1730,7 +1822,7 @@ namespace SDVRadiance
             {
                 if (!p.CanRead || !p.CanWrite)
                     continue;
-                if (p.Name is nameof(Enabled) or nameof(ActivePreset) or nameof(DebugLogging))
+                if (p.Name is nameof(Enabled) or nameof(ActivePreset) or nameof(DebugLogging) or nameof(TunerShowFineTuning))
                     continue;
                 Type t = p.PropertyType;
                 if (t == typeof(bool) || t == typeof(int) || t == typeof(float) || t.IsEnum)
@@ -1742,7 +1834,7 @@ namespace SDVRadiance
         /// settings, which read as "loading my preset does nothing" for everything else).</summary>
         public NamedProfile CaptureProfile(string name)
         {
-            var prof = new NamedProfile { Name = name, Values = new Dictionary<string, string>() };
+            var prof = new NamedProfile { Name = name, Values = [] };
             foreach (PropertyInfo p in TunableProps())
                 prof.Values[p.Name] = Convert.ToString(p.GetValue(this), CultureInfo.InvariantCulture) ?? "";
             return prof;
@@ -2001,6 +2093,29 @@ namespace SDVRadiance
                     ColorGradeTemperature = 0f;
                     ColorGradeBrightness = 1.03f;
                     ColorGradeToneMap = false;
+                    break;
+
+                case LookPreset.Nocturne:
+                    // A night by the water: the lamps and the glints carry the picture, the
+                    // palette is cool, and the colours are pushed further than Vibrant pushes
+                    // them. The three water settings are part of the look rather than a detail
+                    // of it, so this preset says what they are; all three sit on the Water page
+                    // where whoever picked this can find them again.
+                    BloomEnabled = true;
+                    BloomThreshold = 0.62f;
+                    BloomIntensity = 0.55f;
+                    BloomEmissiveBoost = 0.55f;
+                    ColorGradeEnabled = true;
+                    ColorGradeAuto = true;
+                    ColorGradeStrength = 1f;
+                    ColorGradeContrast = 1.18f;
+                    ColorGradeSaturation = 1.45f;
+                    ColorGradeTemperature = -0.22f;
+                    ColorGradeBrightness = 1f;
+                    ColorGradeToneMap = false;
+                    WaterSparkle = 0.42f;
+                    WaterSparkleDensity = 0.75f;
+                    WaterGlitterPath = 0.55f;
                     break;
 
                 case LookPreset.Custom:

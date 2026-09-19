@@ -32,7 +32,7 @@ namespace SDVRadiance
                     return false;      // a bare trailing "-" is not a suffix
             }
             for (; i < layerId.Length; i++)
-                if (layerId[i] < '0' || layerId[i] > '9') return false;
+                if (layerId[i] is < '0' or > '9') return false;
             return true;
         }
 
@@ -139,28 +139,28 @@ namespace SDVRadiance
         /// </summary>
         internal static int CompositeRank(string layerId)
         {
-            string[] families = { "AlwaysFront", "Back", "Buildings", "Front" };
-            int[] ranks = { 3, 0, 1, 2 };
+            string[] families = ["AlwaysFront", "Back", "Buildings", "Front"];
+            int[] ranks = [3, 0, 1, 2];
             for (int f = 0; f < families.Length; f++)
             {
                 string fam = families[f];
                 if (!layerId.StartsWith(fam, StringComparison.Ordinal))
                     continue;
-                string rest = layerId.Substring(fam.Length);
+                string rest = layerId[fam.Length..];
                 int sign = 1;
                 if (rest.Length > 0 && rest[0] == '-')
                 {
                     if (rest.Length == 1)
                         return -1;          // a bare trailing "-" is not a suffix (matches BelongsToFamily)
                     sign = -1;
-                    rest = rest.Substring(1);
+                    rest = rest[1..];
                 }
                 int suffix = 0;
                 if (rest.Length > 0)
                 {
                     foreach (char ch in rest)
                     {
-                        if (ch < '0' || ch > '9')
+                        if (ch is < '0' or > '9')
                             return -1;          // "Backdrop": a drawn family, not a drawn suffix
                         suffix = suffix * 10 + (ch - '0');
                     }

@@ -124,7 +124,7 @@ namespace SDVRadiance
         /// was THE walking-near-water stutter. While a job is in flight the old mask keeps
         /// rendering (world-anchored content + padded window = no visible edge).
         /// </summary>
-        private bool BuildWaterMask(int w, int h)
+        private bool BuildWaterMask()
         {
             GameLocation? location = Game1.currentLocation;
             if (location == null)
@@ -284,10 +284,8 @@ namespace SDVRadiance
             // built, ice melting); everything routine invalidates via location/origin keys,
             // and world EVENTS (a fish pond placed, a map re-patched) bump MaskEpoch so the
             // change lands on the next frame instead of up to 10 s late.
-            if (_waterMask != null && location == _lastWaterLocation && startTileX == _lastWaterTileX && startTileY == _lastWaterTileY
-                && _lastWaterHookVersion == WaterDrawHook.Version
-                && _lastWaterLabelVersion == CurrentLabelVersion()
-                && _lastWaterEpoch == MaskEpoch
+            if (_waterMask != null && _lastWaterIdentity == CurrentMaskIdentity(location)
+                && startTileX == _lastWaterTileX && startTileY == _lastWaterTileY
                 // Height as well as width. Checking only the width let a window that changed
                 // height alone take this path and then report the NEW height to the shader as
                 // MaskSize, for a mask that had been built at the old one, so the water sat
@@ -472,9 +470,9 @@ namespace SDVRadiance
             internal long LastAskedFor;
         }
 
-        private readonly Dictionary<SurfaceMap, SurfaceClassTextureForMap> _surfaceClassTextures = new();
+        private readonly Dictionary<SurfaceMap, SurfaceClassTextureForMap> _surfaceClassTextures = [];
         private long _surfaceClassAsks;
-        private byte[] _surfaceClassTexels = System.Array.Empty<byte>();
+        private byte[] _surfaceClassTexels = [];
         /// <summary>Two screens each on its own copy of a map is two; the spare pair covers walking
         /// between two places without rebuilding on the way back.</summary>
         private const int SurfaceClassTexturesKept = 4;
@@ -510,11 +508,11 @@ namespace SDVRadiance
                 for (int x = 0; x < width; x++)
                     texels[y * width + x] = surf.GetSurface(x, y) switch
                     {
-                        SurfaceClass.Ground => (byte)0,
-                        SurfaceClass.Void => (byte)0,
-                        SurfaceClass.Deck => (byte)64,
-                        SurfaceClass.Water => (byte)128,
-                        _ => (byte)255,
+                        SurfaceClass.Ground => 0,
+                        SurfaceClass.Void => 0,
+                        SurfaceClass.Deck => 64,
+                        SurfaceClass.Water => 128,
+                        _ => 255,
                     };
             kept.Texture.SetData(texels, 0, width * height);
             return kept.Texture;

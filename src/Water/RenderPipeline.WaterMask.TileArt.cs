@@ -98,7 +98,7 @@ namespace SDVRadiance
         /// on failure. The single readback replaces one-per-tile readbacks (each a GPU stall).</summary>
         /// <summary>Sheets whose refusal has already been logged, so a sheet the shared cache
         /// keeps saying no to does not fill the log with the same line.</summary>
-        private readonly System.Collections.Generic.HashSet<Texture2D> _refusedSheetsLogged = new();
+        private readonly System.Collections.Generic.HashSet<Texture2D> _refusedSheetsLogged = [];
 
         private Color[]? EnsureSheetPixels(Texture2D texture)
         {
@@ -249,7 +249,7 @@ namespace SDVRadiance
         }
 
         /// <summary>Textures that came from a tilesheet whose name says "shadow".</summary>
-        private readonly HashSet<Texture2D> _shadowTilesheets = new();
+        private readonly HashSet<Texture2D> _shadowTilesheets = [];
         private static readonly bool[] _emptyTileBits = new bool[256];
 
         /// <summary>16×16 opacity bits + opaque-pixel count of one tile art, cached — used to

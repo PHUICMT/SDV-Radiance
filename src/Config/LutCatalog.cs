@@ -106,7 +106,7 @@ namespace SDVRadiance
                     // folder must not cost the other one.
                 }
             }
-            return found.ToArray();
+            return [.. found];
         }
 
         /// <summary>The folders a look can live in, searched in this order.</summary>

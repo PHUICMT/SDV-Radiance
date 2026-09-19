@@ -55,7 +55,7 @@ namespace SDVRadiance
         /// the sun's, whose lean is then in its pixels and its rotation zero; <c>lean</c> says
         /// which way the shadow runs either way, for the choice of wall rule.</remarks>
         private readonly List<(Texture2D source, Rectangle? sourceRect, Vector2 origin, float rotation, Vector2 scale,
-            float alpha, float blur, SpriteEffects facing, float lean)> _patchCasts = new();
+            float alpha, float blur, SpriteEffects facing, float lean)> _patchCasts = [];
 
         private bool _patchValid;
         private bool _patchDrawnThisFrame;
@@ -86,7 +86,7 @@ namespace SDVRadiance
             internal long LastAskedFor;
         }
 
-        private readonly Dictionary<string, SolidTilesForPlace> _solidTilesByPlace = new();
+        private readonly Dictionary<string, SolidTilesForPlace> _solidTilesByPlace = [];
         private long _solidTilesAsks;
         /// <summary>Two screens in two places is two; the spare pair covers walking between them.</summary>
         private const int SolidTilesPlacesKept = 4;
@@ -111,9 +111,9 @@ namespace SDVRadiance
             Farmer who = Game1.player;
             GameLocation? location = Game1.currentLocation;
             if (who == null || location == null || who.currentLocation != location || who.swimming.Value
-                || who.isRidingHorse() || IsSeated(who) || OnOpenWater(location, who.TilePoint))
+                || who.isRidingHorse() || IsSeated(who))
             {
-                PlayerPatchReport = "gated (seated, swimming, riding or on open water)";
+                PlayerPatchReport = "gated (seated, swimming or riding)";
                 return;
             }
             if (!ShouldCast(config))
@@ -123,9 +123,11 @@ namespace SDVRadiance
                 PlayerPatchReport = "switched off (Shadows for the player)";
                 return;
             }
-            float strength = MathHelper.Clamp(config.DirectionalShadowStrength, 0f, 1f);
+            float requestedStrength = MathHelper.Clamp(config.DirectionalShadowStrength, 0f, ModConfig.ShadowStrengthMax);
+            float strength = Math.Min(requestedStrength, 1f);
             if (strength <= 0.01f)
                 return;
+            _patchDepthPower = Math.Max(1f, requestedStrength);
             float blur = Math.Max(0f, config.DirectionalShadowBlur);
 
             // The same casts the two draw paths would have made, from the same numbers. The
@@ -231,8 +233,16 @@ namespace SDVRadiance
                     // screen: it stops at the counter. See the shader for why. Asked of the lean
                     // the shadow really has, which a laid-down cast carries in its pixels.
                     effect.Parameters["KeepOnSolid"]?.SetValue(Math.Cos(lean) > 0.0 ? 1f : 0f);
-                    DrawSoft(batch, Taps9, source, sourceRect, _patchFeetInPatch, Color.White, alpha, rotation,
-                        origin, scale, 0f, facing, castBlur, shadowLengthPerHeight: scale.Y);
+                    ShadowDepthPower = _patchDepthPower;
+                    try
+                    {
+                        DrawSoft(batch, Taps9, source, sourceRect, _patchFeetInPatch, Color.White, alpha, rotation,
+                            origin, scale, 0f, facing, castBlur, shadowLengthPerHeight: scale.Y);
+                    }
+                    finally
+                    {
+                        ShadowDepthPower = 1f;
+                    }
                     Rectangle castBounds = CastBounds(area.Width, area.Height, origin, rotation, scale, castBlur);
                     _patchContent = _patchContent.IsEmpty ? castBounds : Rectangle.Union(_patchContent, castBounds);
                 }
@@ -257,6 +267,10 @@ namespace SDVRadiance
         /// <summary>How many casts the last patch was composed from, for the diagnostic. The
         /// sentence that used to be built here is in <see cref="PlayerPatchLine"/>.</summary>
         private static int _patchCastsComposed;
+
+        /// <summary>The player's shadow deepened past a strength of 1, the same as every other (see
+        /// ShadowDepthPower), carried from where the casts are collected to where they are composed.</summary>
+        private float _patchDepthPower = 1f;
 
         /// <summary>The size of the last composed patch's content, for the diagnostic.</summary>
         private static Point _patchContentSize;

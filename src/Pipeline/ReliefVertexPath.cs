@@ -42,9 +42,9 @@ namespace SDVRadiance
         /// <summary>One bucket per sheet seen this frame, kept between frames so the lists are
         /// not made again; a bucket lists the record indices that draw with its sheet.</summary>
         private readonly Dictionary<Texture2D, int> _bucketOf = new(ReferenceEqualityComparer.Instance);
-        private readonly List<Texture2D> _bucketTexture = new();
-        private readonly List<List<int>> _bucketRecords = new();
-        private readonly List<Texture2D> _dropped = new();
+        private readonly List<Texture2D> _bucketTexture = [];
+        private readonly List<List<int>> _bucketRecords = [];
+        private readonly List<Texture2D> _dropped = [];
 
         internal int DrawsLastFrame { get; private set; }
         internal int SpritesLastFrame { get; private set; }

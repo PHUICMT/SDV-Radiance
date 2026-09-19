@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
@@ -109,7 +110,7 @@ namespace SDVRadiance
                 + "report: versions, scene, your settings, the tile you are standing on and the ones around it, "
                 + "the label check for the screen, and the installed mods that could be involved. No arguments, "
                 + "just stand where the problem is and run it.",
-                (_, _) => WriteReport(helper, monitor, getPipeline(), getConfig()));
+                (_, _) => WriteReport(monitor, getPipeline(), getConfig()));
             // A check that answers "all clear" when it is actually broken is worse than no check,
             // and the clock line above is exactly that shape of check. This makes a patch under a
             // foreign name, asks the line what it sees, removes the patch and asks again, so both
@@ -241,6 +242,17 @@ namespace SDVRadiance
             helper.ConsoleCommands.Add("radiance_march",
                 "List on-screen tiles whose water has effect but no march (ripple without reflection - the orange tiles in the radiance_debug water overlay), worst first.",
                 (_, _) => monitor.Log(getPipeline()?.DescribeEffectOnlyTiles() ?? "pipeline not ready", LogLevel.Info));
+            // WHY THIS EXISTS. Anything that asks "does the mod treat this tile differently from
+            // that one" founders on the same rock: in a natural scene every tile is different art
+            // to begin with, so a measured difference proves nothing. Three separate attempts at
+            // the smooth-art plates died there, including one on the town square, where the cobble
+            // turned out to be several cobbles. Twins are the way out: the same tilesheet index
+            // drawn in two places on one screen. Whatever differs between two of those is ours.
+            helper.ConsoleCommands.Add("radiance_twins",
+                "List tiles on screen that are drawn from the SAME tilesheet index, grouped, with the viewport "
+                + "so a screenshot can be cut up by them. For measuring whether this mod makes one tile look "
+                + "different from another tile of the very same art.",
+                (_, arguments) => monitor.Log(DescribeTwinTiles(arguments), LogLevel.Info));
             helper.ConsoleCommands.Add("radiance_maskdump",
                 "Save the water mask and the flood occluder mask to PNG in the temp folder (debug).",
                 (_, _) => monitor.Log(getPipeline()?.DumpMasks(System.IO.Path.GetTempPath()) ?? "pipeline not ready", LogLevel.Info));
@@ -712,8 +724,8 @@ namespace SDVRadiance
                 (_, arguments) =>
                 {
                     string mode = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
-                    if (mode == "vertices" || mode == "on") RenderPipeline.ReliefVertexRoad = true;
-                    else if (mode == "batch" || mode == "off") RenderPipeline.ReliefVertexRoad = false;
+                    if (mode is "vertices" or "on") RenderPipeline.ReliefVertexRoad = true;
+                    else if (mode is "batch" or "off") RenderPipeline.ReliefVertexRoad = false;
                     monitor.Log("sprite relief replay road: " + (RenderPipeline.ReliefVertexRoad
                         ? "our own vertices, one draw per sheet" : "the SpriteBatch"), LogLevel.Info);
                 });
@@ -832,7 +844,7 @@ namespace SDVRadiance
                         monitor.Log("object bakes will be forgotten on the next frame, which then enumerates the location again.", LogLevel.Info);
                         return;
                     }
-                    if (mode != "on" && mode != "off")
+                    if (mode is not "on" and not "off")
                     {
                         monitor.Log($"whole-map arrival bake is {(ShadowRenderer.WholeMapArrivalBake ? "on" : "OFF")}. "
                             + "Usage: radiance_mapbake on|off|clear", LogLevel.Info);
@@ -916,8 +928,7 @@ namespace SDVRadiance
                 + "next drawn frame.",
                 (_, arguments) =>
                 {
-                    int screenX, screenY;
-                    if (arguments.Length >= 2 && int.TryParse(arguments[0], out screenX) && int.TryParse(arguments[1], out screenY))
+                    if (arguments.Length >= 2 && int.TryParse(arguments[0], out int screenX) && int.TryParse(arguments[1], out int screenY))
                     {
                         // taken as given
                     }
@@ -1298,7 +1309,7 @@ namespace SDVRadiance
             }
             var lights = Game1.currentLightSources;
             var location = Game1.currentLocation;
-            monitor.Log($"=== Lights in {location?.NameOrUniqueName} ({(lights?.Count ?? 0)} total) ===", LogLevel.Info);
+            monitor.Log($"=== Lights in {location?.NameOrUniqueName} ({lights?.Count ?? 0} total) ===", LogLevel.Info);
             if (lights == null || lights.Count == 0)
                 return;
             Vector2 playerFeetPosition = Game1.player.Position;
@@ -1335,7 +1346,7 @@ namespace SDVRadiance
         /// The whole diagnosis in one file. Everything a report needs, gathered without asking the
         /// reporter a single question, written somewhere they can find it and attach it.
         /// </summary>
-        internal static void WriteReport(IModHelper helper, IMonitor monitor, RenderPipeline? pipeline, ModConfig config, bool alsoLog = false)
+        internal static void WriteReport(IMonitor monitor, RenderPipeline? pipeline, ModConfig config, bool alsoLog = false)
         {
             if (!StardewModdingAPI.Context.IsWorldReady || Game1.player == null)
             {
@@ -1370,6 +1381,7 @@ namespace SDVRadiance
                 Write(pipeline?.DescribeAutoScale() ?? "pipeline not ready");
                 Write("");
                 Write(VramTally.Describe());
+                Write(CameraSmoother.Describe(config));
                 Write("");
                 // The clock block. Two numbers here decide whether anything ELSE in this report
                 // about animation speed or flicker can be read at all, and both used to be
@@ -1385,6 +1397,11 @@ namespace SDVRadiance
                         : RenderPipeline.LastMarchHalfResolution
                             ? "   (rays fired at half resolution, read back by the pass)"
                             : "   (rays fired in the pass, full resolution)"));
+                if (pipeline != null)
+                    Write($"  soft pools       {pipeline.LastFloodSoftCount}"
+                        + (pipeline.LastFloodBandSoftCounts.Any(handed => handed > 0)
+                            ? $"   per band, top to bottom: {string.Join(" / ", pipeline.LastFloodBandSoftCounts)}"
+                            : "   (one draw: too few to split into bands)"));
                 Write("                   The cost of this mod's biggest GPU item is those two numbers");
                 Write("                   multiplied. Sharing is on when the second falls as the first");
                 Write("                   rises; 12 is the floor and is what every release up to 1.6.2 did.");
@@ -1595,7 +1612,7 @@ namespace SDVRadiance
 
                 var classes = new List<string>();
                 foreach (var pair in here)
-                    classes.Add($"{(LabelClass.Name(pair.Key))}={pair.Value}");
+                    classes.Add($"{LabelClass.Name(pair.Key)}={pair.Value}");
                 text.AppendLine($"  {piece.DisplayName} [{piece.QualifiedItemId}] at {piece.TileLocation}"
                                 + $"  sheet={data.TextureName} rect={rect.X},{rect.Y} {rect.Width}x{rect.Height}"
                                 + $"  cells {answeredHere}/{askedHere}"
@@ -1610,7 +1627,7 @@ namespace SDVRadiance
             {
                 var totals = new List<string>();
                 foreach (var pair in found)
-                    totals.Add($"{(LabelClass.Name(pair.Key))}={pair.Value}");
+                    totals.Add($"{LabelClass.Name(pair.Key)}={pair.Value}");
                 text.AppendLine("marked pixels: " + string.Join(" ", totals));
             }
             text.AppendLine($"labels refused for changed art (whole session): {labels.ArtBoundLabelsRefusedForChangedArt}");
@@ -1684,7 +1701,7 @@ namespace SDVRadiance
             // the manifest name because content packs are named far more consistently than they
             // are identified: there is no id convention for "this is a recolour".
             (string Pattern, string Why)[] flags =
-            {
+            [
                 // Two separate faults, both measured on this machine: the world rendering solid
                 // orange or black on load, and water losing its reflection in patches that shift
                 // as you walk. The second one was chased for hours as a water bug before anyone
@@ -1709,7 +1726,7 @@ namespace SDVRadiance
                 ("farm type",     "can replace the farm map"),
                 ("farm map",      "can replace the farm map"),
                 ("farm cave",     "can replace the farm map"),
-            };
+            ];
             var hits = new System.Collections.Generic.List<string>();
             int total = 0;
             foreach (IModInfo info in _registry.GetAll())
@@ -1903,7 +1920,7 @@ namespace SDVRadiance
                     + $"street={pipeline.WindowSceneUploaded:0.000} lamps={pipeline.WindowLampGlowUploaded:0.000} lampsDrawn={pipeline.WindowLampsDrawn}/{pipeline.WindowLampsConsidered} "
                     + $"day={config.WindowReflectionStrength:0.00} night={config.WindowReflectionNightStrength:0.00} "
                     + $"sky={config.WindowSheenStrength:0.00} glareDial={config.WindowGlareStrength:0.00} "
-                    + $"scene={config.WindowSceneReflectionStrength:0.00} lamp={config.WindowLightGlowStrength:0.00} "
+                    + $"scene={config.WindowSceneReflectionStrength:0.00} lamp={config.WindowLightGlowStrength:0.00} vehicle={config.WindowVehicleGlassStrength:0.00} "
                     + $"sceneSource={(pipeline.SceneRTReady ? "ready" : "not baked")} "
                     + $"glowTexture={(pipeline.GlassGlowTextureMissing ? "MISSING" : "loaded")})");
             // The particle pool, spelled out the same way. "I see no petals" has as many
@@ -1912,6 +1929,8 @@ namespace SDVRadiance
             if (pipeline != null)
                 write($"{pipeline.ParticleDiag()} (toggle={config.ParticlesEnabled} density={config.ParticleDensity:0.00})");
             write(PrecipitationSystem.Diag());
+            write(MistLayers.Diag());
+            write(TvScreenGlow.Describe());
             // Art drawn past the edge of its own sheet: names the pack, so an invisible tree or a
             // single blurred tile can be answered instead of argued about.
             write(ShadowSuppression.DescribeRepairedArt());
@@ -1926,6 +1945,62 @@ namespace SDVRadiance
                 + $" | size {location.Map?.Layers[0].LayerWidth}x{location.Map?.Layers[0].LayerHeight}"
                 + $" | tilesheets: {location.Map?.TileSheets.Count}");
             ReportRelevantMods(write);
+        }
+
+        /// <summary>Tiles on screen that share a tilesheet index, biggest group first.
+        ///
+        /// <para>The layer is the Back layer, which is the ground: it is where a repeated tile is
+        /// actually repeated, and it is what the smoothing question is about. The rectangles are
+        /// given in BUFFER pixels along with the viewport, because a screenshot is the buffer
+        /// scaled to the window and a caller with both numbers can convert exactly.</para></summary>
+        private static string DescribeTwinTiles(string[] arguments)
+        {
+            GameLocation? location = Game1.currentLocation;
+            var layer = location?.map?.GetLayer("Back");
+            if (location == null || layer == null)
+                return "no Back layer here";
+            int wanted = arguments.Length >= 1 && int.TryParse(arguments[0], out int asked) ? Math.Clamp(asked, 1, 40) : 6;
+
+            int firstTileX = Math.Max(0, Game1.viewport.X / 64);
+            int firstTileY = Math.Max(0, Game1.viewport.Y / 64);
+            int lastTileX = Math.Min(layer.LayerWidth - 1, (Game1.viewport.X + Game1.viewport.Width) / 64);
+            int lastTileY = Math.Min(layer.LayerHeight - 1, (Game1.viewport.Y + Game1.viewport.Height) / 64);
+
+            var byArt = new Dictionary<string, List<(int X, int Y)>>();
+            for (int tileY = firstTileY; tileY <= lastTileY; tileY++)
+            {
+                for (int tileX = firstTileX; tileX <= lastTileX; tileX++)
+                {
+                    var tile = layer.Tiles[tileX, tileY];
+                    if (tile == null)
+                        continue;
+                    // An animated tile shows a different frame from moment to moment, so two of
+                    // them are not twins in any useful sense.
+                    if (tile is xTile.Tiles.AnimatedTile)
+                        continue;
+                    string art = $"{tile.TileSheet?.Id ?? "?"}#{tile.TileIndex}";
+                    if (!byArt.TryGetValue(art, out var where))
+                        byArt[art] = where = [];
+                    where.Add((tileX, tileY));
+                }
+            }
+
+            var report = new System.Text.StringBuilder();
+            report.AppendLine($"[twins] viewport {Game1.viewport.X},{Game1.viewport.Y} "
+                            + $"{Game1.viewport.Width}x{Game1.viewport.Height} (a tile is 64 of these)");
+            int shown = 0;
+            foreach (var group in byArt.Where(pair => pair.Value.Count >= 2)
+                                       .OrderByDescending(pair => pair.Value.Count))
+            {
+                if (shown++ >= wanted)
+                    break;
+                report.AppendLine($"[twins] {group.Key} x{group.Value.Count}: " + string.Join(" ",
+                    group.Value.Take(12).Select(tile =>
+                        $"({tile.X},{tile.Y})@{tile.X * 64 - Game1.viewport.X},{tile.Y * 64 - Game1.viewport.Y}")));
+            }
+            if (shown == 0)
+                report.AppendLine("[twins] nothing on screen is drawn twice from the same art");
+            return report.ToString().TrimEnd();
         }
 
         /// <summary>What the game and this mod each believe about the one tile: its water
@@ -1955,7 +2030,7 @@ namespace SDVRadiance
             // Walk the map's OWN layer list rather than a fixed set of names: a map may carry
             // Back3, Buildings4 or a negative suffix, and naming them here by hand is how this
             // report ended up silent about layers the game draws.
-            foreach (var layer in location.map?.Layers ?? (System.Collections.Generic.IEnumerable<xTile.Layers.Layer>)System.Array.Empty<xTile.Layers.Layer>())
+            foreach (var layer in location.map?.Layers ?? (System.Collections.Generic.IEnumerable<xTile.Layers.Layer>)[])
             {
                 if (!MapLayers.TryGetFamily(layer.Id, out _))
                     continue;

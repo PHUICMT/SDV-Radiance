@@ -22,8 +22,8 @@ namespace SDVRadiance
             public double Sum, Worst;
         }
 
-        private static readonly Dictionary<string, Phase> _phases = new();
-        private static readonly List<string> _order = new();
+        private static readonly Dictionary<string, Phase> _phases = [];
+        private static readonly List<string> _order = [];
 
         /// <summary>Milliseconds since <paramref name="startTimestamp"/> (a Stopwatch timestamp).</summary>
         internal static double MillisecondsSince(long startTimestamp)

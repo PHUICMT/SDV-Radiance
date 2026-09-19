@@ -176,7 +176,7 @@ namespace SDVRadiance
         /// <summary>How dark a building's shadow gets, riding the same strength dial every other
         /// shadow rides and its own presence fade.</summary>
         private float BuildingShadowOpacity(ModConfig config)
-            => MathHelper.Clamp(config.DirectionalShadowStrength, 0f, 1f) * 0.7f * _fadeBuildingShadow;
+            => ShadowRenderer.OpacityAtStrength(0.7f, config.DirectionalShadowStrength) * _fadeBuildingShadow;
 
         /// <summary>How many times the current map fits inside the viewport (>=1), clamped.
         /// 1 = map at least as big as the screen; higher = smaller map, more cloud banks.</summary>
@@ -547,6 +547,28 @@ namespace SDVRadiance
         private int _floodDirectCount;
         private readonly Vector4[] _floodSoftPositions = new Vector4[FloodSoftLights];
         private readonly Vector4[] _floodSoftColors = new Vector4[FloodSoftLights];
+        /// <summary>How many soft pools this frame has, all of them, before the bands take their share.</summary>
+        private int _floodSoftCount;
+        /// <summary>One band's own soft pools: the lamps whose pool reaches that band.</summary>
+        private readonly Vector4[] _floodBandSoftPositions = new Vector4[FloodSoftLights];
+        private readonly Vector4[] _floodBandSoftColors = new Vector4[FloodSoftLights];
+        /// <summary>
+        /// How many bands the flood pass is drawn in, top to bottom.
+        /// </summary>
+        /// <remarks>Every pixel of the pass walked all forty soft pools to learn which reach it, and
+        /// most do not: a street lamp lights a few tiles of a screen twenty eight tiles tall. Drawn
+        /// in bands, each band is handed only the lamps whose pool can reach one of its rows, and
+        /// the shader stops at the count. Exact: a pool that cannot reach a pixel adds nothing to
+        /// it (the shader's own reach test says so), so leaving it out changes nothing but the
+        /// time. Each band is its own draw with its own upload of the two arrays.</remarks>
+        private const int FloodSoftBands = 4;
+        /// <summary>Below this many soft pools the whole list is cheap already and one draw is kept.</summary>
+        private const int FloodSoftBandsFromLights = 6;
+        /// <summary>The shader's floor on a soft pool's reach (max(colour.w, 0.02) in floodlight.fx).</summary>
+        private const float FloodSoftReachFloor = 0.02f;
+        /// <summary>For radiance_report: the pools each band was handed on the last frame drawn in bands.</summary>
+        internal readonly int[] LastFloodBandSoftCounts = new int[FloodSoftBands];
+        internal int LastFloodSoftCount;
         private readonly Vector2[] _classicLightPositions = new Vector2[ClassicLightSlots];
         private readonly Vector4[] _classicLightData = new Vector4[ClassicLightSlots];
 
@@ -600,7 +622,7 @@ namespace SDVRadiance
         private bool _reportedWindowsHere, _reportedWindowBeamOn;
         private bool _reportedInteriorWindowed;                 // layout truth, before the effects master switch
         private float _reportedWindowRoomScale = 1f;            // what the flood actually used for window room light
-        private readonly List<Vector2> _reportedWindowGlowPositions = new();   // where the room's glow sprites are
+        private readonly List<Vector2> _reportedWindowGlowPositions = [];   // where the room's glow sprites are
         private int _reportedWindowCount, _reportedWindowLightsSeen, _reportedWindowLightsDark;
         private int _reportedWindowGlows = -1;   // lightGlows count in this location (0 or more)
         private Vector3 _reportedWindowColour, _reportedExposure = Vector3.One;
@@ -706,10 +728,65 @@ namespace SDVRadiance
             LastMarchHalfResolution = marchHalf;
 
             effect.CurrentTechnique = effect.Techniques["FloodLight"];
-            DrawFull(spriteBatch, source, destination, effect);
+            DrawFloodInBands(spriteBatch, source, destination, effect);
             // After the multiply, in the target it just wrote: a spark is what makes light, so
             // being darkened by the lightmap is exactly backwards for it.
             DrawEmissiveParticlesOnLighting(spriteBatch, destination, EmissiveParticleHost.Flood);
+        }
+
+        /// <summary>The flood pass in <see cref="FloodSoftBands"/> bands across the screen, each with
+        /// only the soft pools that reach it. One draw of the whole list when there are few pools, or
+        /// when the source is not the destination's size (the bands cut both by the same rows).</summary>
+        private void DrawFloodInBands(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, Effect effect)
+        {
+            Array.Clear(LastFloodBandSoftCounts);
+            if (_floodSoftCount < FloodSoftBandsFromLights
+                || source.Width != destination.Width || source.Height != destination.Height)
+            {
+                DrawFull(spriteBatch, source, destination, effect);
+                return;
+            }
+            var positions = GetParam(effect, "SoftLightPositions");
+            var colours = GetParam(effect, "SoftLightColours");
+            var count = GetParam(effect, "SoftCount");
+            _device.SetRenderTarget(destination);
+            int height = destination.Height;
+            for (int band = 0; band < FloodSoftBands; band++)
+            {
+                int top = band * height / FloodSoftBands;
+                int bottom = (band + 1) * height / FloodSoftBands;
+                if (bottom <= top)
+                    continue;
+                // In the shader's own units: uv down the screen, and a pool's reach measured in
+                // the same uv (the aspect only stretches x, so a pool that cannot reach a row
+                // vertically cannot reach it at all).
+                float bandTop = top / (float)height;
+                float bandBottom = bottom / (float)height;
+                int handed = 0;
+                for (int i = 0; i < _floodSoftCount; i++)
+                {
+                    float reach = Math.Max(_floodSoftColors[i].W, FloodSoftReachFloor);
+                    float lampY = _floodSoftPositions[i].Y;
+                    if (lampY + reach < bandTop || lampY - reach > bandBottom)
+                        continue;
+                    _floodBandSoftPositions[handed] = _floodSoftPositions[i];
+                    _floodBandSoftColors[handed] = _floodSoftColors[i];
+                    handed++;
+                }
+                LastFloodBandSoftCounts[band] = handed;
+                positions?.SetValue(_floodBandSoftPositions);
+                colours?.SetValue(_floodBandSoftColors);
+                count?.SetValue((float)handed);
+                var rows = new Rectangle(0, top, destination.Width, bottom - top);
+                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone, effect);
+                spriteBatch.Draw(source, rows, rows, Color.White);
+                spriteBatch.End();
+            }
+            // Leave the whole list on the effect, as one draw would have, for anything that reads
+            // it after this pass.
+            positions?.SetValue(_floodSoftPositions);
+            colours?.SetValue(_floodSoftColors);
+            count?.SetValue((float)_floodSoftCount);
         }
 
         /// <summary>The sprite relief terms (see RenderNormalPass): the normal buffer, the lamps' lean and the
@@ -808,6 +885,14 @@ namespace SDVRadiance
             GetParam(effect, "NightLift")?.SetValue(nightLift * _fadeFlood);
         }
 
+        /// <summary>A map's size in tiles, read off its Back layer, the one every map has and the game sizes
+        /// its own viewport clamp by. Huge where there is no map, so nothing is cut.</summary>
+        internal static Vector2 MapTilesOf(GameLocation? location)
+        {
+            var back = location?.Map?.GetLayer("Back");
+            return back == null ? new Vector2(100000f, 100000f) : new Vector2(back.LayerWidth, back.LayerHeight);
+        }
+
         /// <summary>The occluder-marched sun shafts, and the eases that stop every gate on them from popping.</summary>
         private void SetSunShaftParams(Effect effect, ModConfig config)
         {
@@ -841,7 +926,25 @@ namespace SDVRadiance
                 // The sun's OWN intensity, not the lamp rays'. They shared one for a while and
                 // that meant turning the lamps down at night also thinned the morning through the
                 // trees, which is two different pictures behind one slider.
-                shaftTarget = 0.45f * sunStrength * MathHelper.Clamp(config.GodRaysSunIntensity, 0f, 1.5f) * _fadeFlood;
+                shaftTarget = 0.45f * sunStrength * MathHelper.Clamp(config.GodRaysSunIntensity, 0f, 1.5f);
+            }
+            // A new place starts its shafts from nothing and grows them in, once. The flood's fade
+            // was inside the target, and the flood fade restarts from zero on every warp, so the
+            // ease below chased a target that fell to nothing and climbed back: arriving on a sunny
+            // map from another one, the shafts sank to about three quarters and took over a second
+            // to recover, which is the sunlight flickering on entering that was reported. Set to
+            // the target on arrival instead, they were simply there the moment the game's fade
+            // lifted, and that was reported too: light that was not showing should come in. So the
+            // strength starts at zero and eases up over about a second, one way only, while the
+            // direction and colour are set to this place's sun at once (nothing is drawn with them
+            // at zero strength). The flood's fade is applied after the ease, as the lamp shafts do.
+            GameLocation? shaftPlace = Game1.currentLocation;
+            if (!LiveScreens.SamePlace(_shaftPlace, shaftPlace))
+            {
+                _shaftPlace = shaftPlace;
+                _shaftStrengthEase = 0f;
+                _shaftDirectionEase = shaftDirection;
+                _shaftColourEase = shaftColour;
             }
             // Every gate on the shafts is a hard flip - rain starting, the toggle, a warp - and a
             // hard flip on a whole-screen effect is a pop. Ease over about a second, both ways,
@@ -854,7 +957,7 @@ namespace SDVRadiance
             else _shaftDirectionEase = shaftDirection;
             _shaftDirectionEase = Determinism.Settle(_shaftDirectionEase, shaftDirection);
             Approach(ref _shaftColourEase, shaftColour, ShaftEaseRate);
-            float shaftStrength = _shaftStrengthEase;
+            float shaftStrength = _shaftStrengthEase * _fadeFlood;
             // (see ShaftEaseRate for why these three step by the clock rather than by the frame)
             shaftDirection = _shaftDirectionEase;
             shaftColour = _shaftColourEase;
@@ -863,6 +966,7 @@ namespace SDVRadiance
             GetParam(effect, "SunShaftDirection")?.SetValue(shaftDirection);
             GetParam(effect, "SunShaftColour")?.SetValue(shaftColour);
             GetParam(effect, "SunShaftStrength")?.SetValue(shaftStrength);
+            GetParam(effect, "MapTiles")?.SetValue(MapTilesOf(Game1.currentLocation));
             GetParam(effect, "SunShaftDrift")?.SetValue((float)(Determinism.Seconds * 0.35 % 6283.185) );
             // How far the dapple stretches from its canopy, on the sun's own dial. Normalised
             // so the DEFAULT (0.6) is exactly the tuned look - binding the raw slider would have
@@ -1027,6 +1131,8 @@ namespace SDVRadiance
                 softCount++;
             }
             for (int i = softCount; i < FloodSoftLights; i++) { _floodSoftPositions[i] = Vector4.Zero; _floodSoftColors[i] = Vector4.Zero; }
+            _floodSoftCount = softCount;
+            LastFloodSoftCount = softCount;
             GetParam(effect, "LightPositions")?.SetValue(_floodLightPositions);
             GetParam(effect, "LightColours")?.SetValue(_floodLightColors);
             // The contact shade reads the order buffer, so it only runs on a frame that has one.
@@ -1072,14 +1178,7 @@ namespace SDVRadiance
             // case the clock got wrong, since the sky is grey and the game already draws its lamps
             // against it, so their shadows should show a little too. Night is what the dial was
             // tuned at, so full darkness maps to 1 and a rainy day lands around a third.
-            float lampVisible = 1f;
-            if (Game1.currentLocation?.IsOutdoors == true)
-            {
-                Color paintedDaylight = Game1.outdoorLight;
-                float luminance = (0.2126f * paintedDaylight.R + 0.7152f * paintedDaylight.G + 0.0722f * paintedDaylight.B) / 255f;
-                float darkness = MathHelper.Clamp((1f - luminance) / 0.85f, 0f, 1f);
-                lampVisible = Math.Max(darkness, FloodLightmap.NightAmount());
-            }
+            float lampVisible = OutdoorLampAgainstDaylight();
             float shadowStrengthNow = MathHelper.Clamp(config.FloodShadowStrength, 0f, 1f) * lampVisible;
             // Below one colour step nothing the march finds can reach the picture: a shadow's
             // whole effect is at most ShadowStrength of a pool that is itself scaled by the same
@@ -1327,6 +1426,8 @@ namespace SDVRadiance
             // taken back out of this stage's CPU column, which double-counted it and read as the
             // water pass costing ten times more in rain.
             long precipitationStart = Stopwatch.GetTimestamp();
+            // Map mist first, then the rain, the order the game draws them in.
+            MistLayers.DrawOntoChain(spriteBatch, destination, _frameWidth, AmbientLightOnParticles());
             PrecipitationSystem.DrawSkyForChain(spriteBatch, destination, _frameWidth, AmbientLightOnParticles());
             ExcludeTicksFromOpenStage(Stopwatch.GetTimestamp() - precipitationStart);
         }
@@ -1365,7 +1466,14 @@ namespace SDVRadiance
             // term, so the pass held full strength down to a fade of 0.02 and then popped out.
             GetParam(effect, "Presence")?.SetValue(_fadeWater);
             GetParam(effect, "Time")?.SetValue(Time());
-            GetParam(effect, "Strength")?.SetValue(config.WaterStrength * strengthMultiplier * shimmer * displacementGate * indoorWave);
+            // The sea's own dial rides on top of the shared strength (see WaterSeaWaves). Only on an
+            // outdoor sea: the name test in WaterKind also answers for Ginger Island's caves. And it
+            // gives way to a river as the river comes in, since the dial is one number for the whole
+            // map and a map with both (the island's north) should not calm its river with the sea.
+            float seaWaves = WaterKind() > 0.5f && !indoors
+                ? MathHelper.Lerp(config.WaterSeaWaves, 1f, _riverHoldEased)
+                : 1f;
+            GetParam(effect, "Strength")?.SetValue(config.WaterStrength * seaWaves * strengthMultiplier * shimmer * displacementGate * indoorWave);
             GetParam(effect, "Speed")?.SetValue(config.WaterSpeed * speedMultiplier);
             GetParam(effect, "Sparkle")?.SetValue(config.WaterSparkle * sparkleMultiplier * shimmer * indoorSparkle);
             // A cloud over the water takes the sun's glitter with it: the same kept mask, the same
@@ -1383,7 +1491,7 @@ namespace SDVRadiance
             // stretches them most; a noon sun a third as much. No sun (night, rain, a room) is a
             // target of zero, eased, which is the round glitter of every earlier release.
             float glitterTarget = 0f;
-            Vector2 sunAxisTarget = new Vector2(0f, 1f);
+            Vector2 sunAxisTarget = new(0f, 1f);
             if (ShadowRenderer.SunInSky(out Vector2 sunTravel, out float sunHeight))
             {
                 sunAxisTarget = sunTravel;
@@ -1549,6 +1657,8 @@ namespace SDVRadiance
             // here for the same reason the rings are, and held to one pass per tick.
             UpdateWaterWind(config);
             SetWaterWindParams(effect, config);
+            UpdateWaterCurrent(config);
+            SetWaterCurrentParams(effect, config);
         }
 
         /// <summary>The player's own silhouette, so ring-tile effects skip exactly their pixels.</summary>
@@ -1610,7 +1720,11 @@ namespace SDVRadiance
             // totem (or a weather mod) flips the flag.
             // IsRainingHere, not the legacy static: that one mirrors the Default context only,
             // so rain on Ginger Island rang no rings at all while a dry valley rang them.
-            bool rainingHere = Game1.currentLocation?.IsRainingHere() ?? false;
+            // Outdoors as well: IsRainingHere answers for the location's weather CONTEXT, which
+            // an indoor room shares with the valley outside it, so the bath house pool rang with
+            // rain that is falling on the roof above it. Every other weather effect here already
+            // asks (the wet ground, the lens drops, the precipitation itself); this one did not.
+            bool rainingHere = (Game1.currentLocation?.IsOutdoors ?? false) && LocalSky.RainLandsHere;
             Approach(ref _rainRingsEase, rainingHere ? 1f : 0f, 0.04f);
             GetParam(effect, "RainAmount")?.SetValue(_rainRingsEase);
             GetParam(effect, "RainRingDensity")?.SetValue(config.WaterRainRingDensity);
@@ -2065,9 +2179,9 @@ namespace SDVRadiance
             Vector3 dusk = new(0.85f, 0.68f, 0.55f);
             Vector3 night = new(0.38f, 0.44f, 0.60f);
             const int Dusk = 17 * 60, Late = 19 * 60 + 30, Night = 21 * 60, Dawn = 6 * 60;
-            if (minutes >= Dusk && minutes < Late) return Vector3.Lerp(day, dusk, (minutes - Dusk) / (float)(Late - Dusk));
-            if (minutes >= Late && minutes < Night) return Vector3.Lerp(dusk, night, (minutes - Late) / (float)(Night - Late));
-            if (minutes >= Night || minutes < Dawn) return night;
+            if (minutes is >= Dusk and < Late) return Vector3.Lerp(day, dusk, (minutes - Dusk) / (Late - Dusk));
+            if (minutes is >= Late and < Night) return Vector3.Lerp(dusk, night, (minutes - Late) / (Night - Late));
+            if (minutes is >= Night or < Dawn) return night;
             return day;
         }
 
@@ -2091,9 +2205,9 @@ namespace SDVRadiance
 
             float minutes = ClockMinutes();
             const int Dusk = 17 * 60, Late = 19 * 60 + 30, Night = 21 * 60, Dawn = 6 * 60;
-            if (minutes >= Dusk && minutes < Late) temperature += 0.25f * ((minutes - Dusk) / (float)(Late - Dusk));
-            else if (minutes >= Late && minutes < Night) temperature += 0.25f - 0.55f * ((minutes - Late) / (float)(Night - Late));
-            else if (minutes >= Night || minutes < Dawn) temperature -= 0.30f;
+            if (minutes is >= Dusk and < Late) temperature += 0.25f * ((minutes - Dusk) / (Late - Dusk));
+            else if (minutes is >= Late and < Night) temperature += 0.25f - 0.55f * ((minutes - Late) / (Night - Late));
+            else if (minutes is >= Night or < Dawn) temperature -= 0.30f;
 
             if (LocalSky.IsRaining) { temperature -= 0.12f; saturationMultiplier *= 0.85f; }
             if (LocalSky.IsSnowing) { temperature -= 0.15f; saturationMultiplier *= 0.90f; }

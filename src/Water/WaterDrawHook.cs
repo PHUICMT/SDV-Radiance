@@ -37,7 +37,7 @@ namespace SDVRadiance
         private sealed class DrawnWaterTiles
         {
             public GameLocation Location = null!;
-            public readonly HashSet<int> Indices = new();
+            public readonly HashSet<int> Indices = [];
             public int LastTouchedTick;
         }
 
@@ -53,7 +53,7 @@ namespace SDVRadiance
         /// the map-wide waterline anchor, keyed on it too, was never fresh for a single frame and
         /// re-gathered the entire 156x65 farm each time a player stood still. Per location there
         /// is nothing to flip: each screen reads and extends its own location's set.</para></summary>
-        private static readonly List<DrawnWaterTiles> _byLocation = new();
+        private static readonly List<DrawnWaterTiles> _byLocation = [];
         private const int LocationsRemembered = 8;
 
         private static int Key(int x, int y) => (y << 16) | (x & 0xFFFF);
@@ -115,7 +115,7 @@ namespace SDVRadiance
             var sigs = new[]
             {
                 new[] { typeof(SpriteBatch), typeof(int), typeof(int) },
-                new[] { typeof(SpriteBatch), typeof(int), typeof(int), typeof(Color) },
+                [typeof(SpriteBatch), typeof(int), typeof(int), typeof(Color)],
             };
             int patched = 0;
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())

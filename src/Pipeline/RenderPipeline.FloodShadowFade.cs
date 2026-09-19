@@ -37,16 +37,18 @@ namespace SDVRadiance
     internal sealed partial class RenderPipeline
     {
         /// <summary>Per-light shadow weight, keyed by the light id the ranking uses.</summary>
-        private readonly Dictionary<int, float> _floodShadowWeight = new();
-        private readonly List<int> _floodShadowOrder = new();
-        private readonly List<int> _floodShadowDrop = new();
-        private readonly HashSet<int> _floodShadowWanted = new();
+        private readonly Dictionary<int, float> _floodShadowWeight = [];
+        private readonly List<int> _floodShadowOrder = [];
+        private readonly List<int> _floodShadowDrop = [];
+        private readonly HashSet<int> _floodShadowWanted = [];
+        /// <summary>The lights holding a shadowed slot after the last frame.</summary>
+        private readonly List<int> _floodShadowHolders = [];
         /// <summary>Light ids in rank order for this frame, reused so the per-frame
         /// tier decision does not allocate.</summary>
-        private readonly List<int> _floodLiveIds = new();
+        private readonly List<int> _floodLiveIds = [];
         /// <summary>The same lights by rank, best first: who the shadowed tier should want.</summary>
-        private readonly List<int> _floodRankedIds = new();
-        private readonly List<int> _floodRankedSlots = new();
+        private readonly List<int> _floodRankedIds = [];
+        private readonly List<int> _floodRankedSlots = [];
         private Comparison<int>? _floodByRankThenId;
         private Comparison<int>? _floodShadowByWeightThenId;
 
@@ -79,29 +81,53 @@ namespace SDVRadiance
             foreach (int id in _floodShadowDrop)
                 _floodShadowWeight.Remove(id);
 
-            foreach (int id in liveIds)
+            // Who holds a shadowed slot this frame. A holder keeps its slot for as long as it has
+            // any weight, wanted or not, and a newcomer takes only a slot that is free. The weight
+            // used to grow for every wanted light whether it held a slot or not, and the slots went
+            // to the heaviest: with a ninth lamp in play, the one arriving climbed while the one
+            // leaving fell, and they swapped slots where the two crossed near half, so one shadow
+            // vanished at half strength and the other appeared at half strength, each in a frame.
+            // Walking at night among more than eight lamps, found by a code audit. The class notes
+            // above always said a leaving light keeps its slot until its weight reaches zero.
+            _floodShadowOrder.Clear();
+            foreach (int id in _floodShadowHolders)
+                if (liveIds.Contains(id) && _floodShadowWeight.ContainsKey(id))
+                    _floodShadowOrder.Add(id);
+            foreach (int id in rankedIds)
             {
-                bool wanted = _floodShadowWanted.Contains(id);
-                _floodShadowWeight.TryGetValue(id, out float w);
-                if (wanted)
-                    w = Math.Min(1f, w + FloodShadowFadePerFrame);
-                else
-                    w -= FloodShadowFadePerFrame;
-                if (w <= 0f)
-                    _floodShadowWeight.Remove(id);
-                else
-                    _floodShadowWeight[id] = w;
+                if (_floodShadowOrder.Count >= FloodShadowedLights)
+                    break;
+                if (_floodShadowWanted.Contains(id) && !_floodShadowOrder.Contains(id))
+                    _floodShadowOrder.Add(id);
             }
 
-            // Fill the slots: anything still carrying weight first, brightest weight first, so a
-            // light on its way out cannot be evicted by one on its way in and leave a step behind.
+            // Only a holder carries weight: it grows while the light is wanted and falls while it
+            // is not, and a holder that reaches zero gives its slot up for the next frame.
+            _floodShadowDrop.Clear();
+            foreach (int id in _floodShadowWeight.Keys)
+                if (!_floodShadowOrder.Contains(id))
+                    _floodShadowDrop.Add(id);
+            foreach (int id in _floodShadowDrop)
+                _floodShadowWeight.Remove(id);
+            _floodShadowHolders.Clear();
+            foreach (int id in _floodShadowOrder)
+            {
+                _floodShadowWeight.TryGetValue(id, out float w);
+                w = _floodShadowWanted.Contains(id) ? Math.Min(1f, w + FloodShadowFadePerFrame) : w - FloodShadowFadePerFrame;
+                if (w <= 0f)
+                {
+                    _floodShadowWeight.Remove(id);
+                    continue;
+                }
+                _floodShadowWeight[id] = w;
+                _floodShadowHolders.Add(id);
+            }
             _floodShadowOrder.Clear();
-            foreach (int id in liveIds)
-                if (_floodShadowWeight.ContainsKey(id))
-                    _floodShadowOrder.Add(id);
+            _floodShadowOrder.AddRange(_floodShadowHolders);
             // The comparison is kept, not written inline: a lambda that reads a field captures
-            // this, and List.Sort with a fresh delegate allocated one per frame for the whole
-            // session. Same idiom as _floodByRankThenId beside it.
+            // this, and List.Sort with a fresh delegate allocated one per frame for as long
+            // as the game ran. Same idiom as _floodByRankThenId beside it. The order only fixes which
+            // uniform slot each holder is uploaded to; which lights hold a slot is decided above.
             _floodShadowByWeightThenId ??= (a, b) =>
             {
                 float wa = _floodShadowWeight[a], wb = _floodShadowWeight[b];
@@ -109,9 +135,6 @@ namespace SDVRadiance
                 return byWeight != 0 ? byWeight : a.CompareTo(b);
             };
             _floodShadowOrder.Sort(_floodShadowByWeightThenId);
-            if (_floodShadowOrder.Count > FloodShadowedLights)
-                _floodShadowOrder.RemoveRange(FloodShadowedLights,
-                    _floodShadowOrder.Count - FloodShadowedLights);
             return _floodShadowOrder;
         }
 

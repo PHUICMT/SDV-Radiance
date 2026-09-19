@@ -72,7 +72,7 @@ namespace SDVRadiance
         /// paints its own), while the shim below swallows the blob it paints. Filled by the draw
         /// itself rather than by class name, so a companion configured to have no shadow never
         /// draws one and never lands here.</summary>
-        internal static readonly System.Collections.Generic.HashSet<System.Type> SelfShadowedCharacterTypes = new();
+        internal static readonly System.Collections.Generic.HashSet<System.Type> SelfShadowedCharacterTypes = [];
 
         /// <summary>How many blob shadows painted by another mod's creature we swallowed, and how
         /// many reached the screen anyway, counted for the frame radiance_shadows is asked about.
@@ -102,14 +102,14 @@ namespace SDVRadiance
         private static System.Type? _characterDrawing;
 
         /// <summary>Every draw method the patch above took, for radiance_shadows.</summary>
-        internal static readonly System.Collections.Generic.List<string> PatchedCharacterDraws = new();
+        internal static readonly System.Collections.Generic.List<string> PatchedCharacterDraws = [];
 
         /// <summary>
         /// Art the game asked to read past the edge of, by texture name and how many times.
         /// See <see cref="RepairSourceRect"/>; reported by radiance_report so the pack can be
         /// named rather than guessed at.
         /// </summary>
-        private static readonly System.Collections.Generic.Dictionary<string, int> _artReadPastItsEdge = new();
+        private static readonly System.Collections.Generic.Dictionary<string, int> _artReadPastItsEdge = [];
 
         /// <summary>
         /// Keep a draw inside its own texture.
@@ -199,7 +199,7 @@ namespace SDVRadiance
         }
 
         /// <inheritdoc cref="BlobDrawsSwallowed"/>
-        internal static readonly System.Collections.Generic.Dictionary<string, int> VanillaShadowSuppressed = new();
+        internal static readonly System.Collections.Generic.Dictionary<string, int> VanillaShadowSuppressed = [];
 
         /// <summary>Skip the vanilla <c>Cloud</c> critter's drifting shadow draw.</summary>
         internal static bool Cloud_Draw_Prefix() => !SuppressVanillaClouds;
@@ -424,16 +424,16 @@ namespace SDVRadiance
             // used the other invisible to the shim — which is a hole, not a filter: a shadow drawn
             // through the Vector2 overload was never offered for suppression, so it survived
             // alongside ours as a second shadow.
-            var drawWithFloatScale = AccessTools.Method(typeof(SpriteBatch), nameof(SpriteBatch.Draw), new[]
-            {
+            var drawWithFloatScale = AccessTools.Method(typeof(SpriteBatch), nameof(SpriteBatch.Draw),
+            [
                 typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color),
                 typeof(float), typeof(Vector2), typeof(float), typeof(SpriteEffects), typeof(float)
-            });
-            var drawWithVectorScale = AccessTools.Method(typeof(SpriteBatch), nameof(SpriteBatch.Draw), new[]
-            {
+            ]);
+            var drawWithVectorScale = AccessTools.Method(typeof(SpriteBatch), nameof(SpriteBatch.Draw),
+            [
                 typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color),
                 typeof(float), typeof(Vector2), typeof(Vector2), typeof(SpriteEffects), typeof(float)
-            });
+            ]);
             var floatScaleShim = AccessTools.Method(typeof(ShadowSuppression), shimName);
             var vectorScaleShim = AccessTools.Method(typeof(ShadowSuppression), shimName + "V");
             foreach (var instruction in instructions)

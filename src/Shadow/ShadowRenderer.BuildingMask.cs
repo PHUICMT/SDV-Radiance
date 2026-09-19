@@ -58,6 +58,8 @@ namespace SDVRadiance
                 return;
 
             ComputeSun(out float rotation, out float stretch, out float alpha);
+            // The mask is drawn at the first pass's share; past 1 the composite deepens it (see
+            // BuildingShadowOpacity), since a mask cannot hold more than full.
             alpha *= MathHelper.Clamp(config.DirectionalShadowStrength, 0f, 1f)
                    * MathHelper.Lerp(1f, OvercastAlpha, _overcastBlend);
             if (alpha <= 0.01f)

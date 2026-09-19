@@ -45,10 +45,10 @@ namespace SDVRadiance
 
         /// <summary>Every class in order, so a listing never has to be typed out again.</summary>
         public static readonly string[] Names =
-        {
+        [
             "ground", "water", "wall", "roof", "deck", "void", "emissive", "reflect_floor",
             "mirror", "ice", "flowing", "lava", "window", "glass", "hot",
-        };
+        ];
 
         /// <summary>The name of a class, or the number itself if a label pack carries one this
         /// build has never heard of.</summary>
@@ -58,12 +58,11 @@ namespace SDVRadiance
         /// <summary>Whether a class is a liquid surface: something with a top that moves and
         /// returns an image. Ice is in it because the water machinery is what draws ice.</summary>
         public static bool IsLiquid(byte labelClass)
-            => labelClass == Water || labelClass == Ice || labelClass == Flowing
-               || labelClass == Lava || labelClass == Hot;
+            => labelClass is Water or Ice or Flowing or Lava or Hot;
 
         /// <summary>Whether light passes through this class and an image comes back off it:
         /// a window, a plain pane, or a backed mirror.</summary>
         public static bool IsGlassy(byte labelClass)
-            => labelClass == Window || labelClass == Glass || labelClass == Mirror;
+            => labelClass is Window or Glass or Mirror;
     }
 }

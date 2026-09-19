@@ -34,10 +34,10 @@ namespace SDVRadiance
     {
         public LabelPack(string filePath, string owningModFolder, HashSet<string> ownedSheets, string? producedFor)
         {
-            this.FilePath = filePath;
-            this.OwningModFolder = owningModFolder;
-            this.OwnedSheets = ownedSheets;
-            this.ProducedFor = producedFor;
+            FilePath = filePath;
+            OwningModFolder = owningModFolder;
+            OwnedSheets = ownedSheets;
+            ProducedFor = producedFor;
         }
 
         public string FilePath { get; }
@@ -52,7 +52,7 @@ namespace SDVRadiance
         public string? ProducedFor { get; }
 
         /// <summary>Short enough for a log line and specific enough to find the file by.</summary>
-        public string Describe() => $"Mods/{this.OwningModFolder}/{Path.GetFileName(this.FilePath)}";
+        public string Describe() => $"Mods/{OwningModFolder}/{Path.GetFileName(FilePath)}";
     }
 
     internal static class LabelPacks
@@ -94,7 +94,7 @@ namespace SDVRadiance
             List<string> packFiles;
             try
             {
-                packFiles = new List<string>(Directory.EnumerateFiles(mods, FileName, SearchOption.AllDirectories));
+                packFiles = [.. Directory.EnumerateFiles(mods, FileName, SearchOption.AllDirectories)];
             }
             catch (Exception ex)
             {

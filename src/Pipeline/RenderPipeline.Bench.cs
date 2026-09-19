@@ -52,7 +52,7 @@ namespace SDVRadiance
         /// effect at two amplifications and see whether the answer moves.</summary>
         private static int BenchAmplify = 6;
 
-        private static readonly float[] BenchScales = { 1f, 0.75f, 0.5f };
+        private static readonly float[] BenchScales = [1f, 0.75f, 0.5f];
         /// <summary>Sweep steps: one/many per effect resolution, then one/many for shadows.</summary>
         private static int BenchTotalSteps => BenchScales.Length * 2 + 2;
 
@@ -60,7 +60,7 @@ namespace SDVRadiance
 
         /// <summary>Last result, for the tuner to show. A console line is no use to a player
         /// who never opens the console, and this feature exists for exactly those players.</summary>
-        internal static readonly List<string> BenchSummary = new();
+        internal static readonly List<string> BenchSummary = [];
         internal static float BenchSuggestedScale;
         /// <summary>Bumped when a run finishes, so an open menu knows to rebuild itself.</summary>
         internal static int BenchStamp;
@@ -72,7 +72,7 @@ namespace SDVRadiance
         private int _benchSamples;
         private float _benchSavedScale;
         private bool _benchSavedProbe;
-        private readonly List<(float Scale, double One, double Many)> _benchResults = new();
+        private readonly List<(float Scale, double One, double Many)> _benchResults = [];
         private double _benchPendingOne;
         private double _benchShadowMilliseconds = -1;   // < 0 = not measured
 
@@ -180,7 +180,7 @@ namespace SDVRadiance
             double budget = 16.67 / 3.0;
 
             double smallest = double.MaxValue;
-            float recommend = BenchScales[BenchScales.Length - 1];
+            float recommend = BenchScales[^1];
             foreach (var (scale, one, many) in _benchResults)
             {
                 // Slope, not the raw reading: the extra chains are the only difference between

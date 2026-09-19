@@ -60,11 +60,11 @@ namespace SDVRadiance
             internal float SunBlur = -1f;
             internal bool SunFresh;
             internal (int Frame, int Facing, Rectangle Src) SunSignature;
-            internal float SunContactHardness = -1f, SunPenumbraStretch = -1f;
+            internal float SunContactHardness = -1f, SunPenumbraStretch = -1f, SunBakeDepth = -1f;
         }
 
-        private readonly Dictionary<long, FarmerBake> _otherFarmerBakes = new();
-        private readonly List<long> _farmerBakeEvictions = new();
+        private readonly Dictionary<long, FarmerBake> _otherFarmerBakes = [];
+        private readonly List<long> _farmerBakeEvictions = [];
 
         /// <summary>The renderer the game is using, for the diagnostic report, which is static
         /// because a console command has no instance to start from. Claimed on the first bake pass;
@@ -121,7 +121,7 @@ namespace SDVRadiance
 
         /// <summary>This frame's remote farmers, rebuilt by <see cref="PrepareOtherFarmers"/>. On a
         /// split screen that is once per screen, so it always describes the screen being drawn.</summary>
-        internal static readonly List<RemoteFarmerImage> OtherFarmerImages = new();
+        internal static readonly List<RemoteFarmerImage> OtherFarmerImages = [];
 
         /// <summary>A generous ceiling on remote farmers we will hold a target for. Vanilla co-op
         /// caps at four; the extra room is for servers that raise it, and past this the newcomers
@@ -216,7 +216,7 @@ namespace SDVRadiance
                     }
 
                     Rectangle sourceRect = who.FarmerSprite.SourceRect;
-                    var sig = (who.FarmerSprite.CurrentFrame, (int)who.FacingDirection, sourceRect);
+                    var sig = (who.FarmerSprite.CurrentFrame, who.FacingDirection, sourceRect);
                     // Accessory layers that animate on their own clock get the same periodic
                     // refresh the local player gets, and only when a mod that has them is loaded.
                     // Frozen stops it for the same reason it stops the player's own refresh: the
@@ -314,7 +314,7 @@ namespace SDVRadiance
             RenderTarget2D target, out Vector2 feetInRenderTarget)
         {
             float w = sourceRect.Width * 4f, h = sourceRect.Height * 4f;
-            Vector2 pos = new Vector2((PlayerRtW - w) / 2f, PlayerRtH - h - 8f);
+            Vector2 pos = new((PlayerRtW - w) / 2f, PlayerRtH - h - 8f);
             feetInRenderTarget = new Vector2(PlayerRtW / 2f, PlayerRtH - 8f);
 
             graphicsDevice.SetRenderTarget(target);
@@ -342,7 +342,7 @@ namespace SDVRadiance
         private void BakeFarmerColour(GraphicsDevice graphicsDevice, Farmer who, Rectangle sourceRect, RenderTarget2D target)
         {
             float w = sourceRect.Width * 4f, h = sourceRect.Height * 4f;
-            Vector2 pos = new Vector2((PlayerRtW - w) / 2f, PlayerRtH - h - 8f);
+            Vector2 pos = new((PlayerRtW - w) / 2f, PlayerRtH - h - 8f);
 
             graphicsDevice.SetRenderTarget(target);
             graphicsDevice.Clear(Color.Transparent);
@@ -444,11 +444,11 @@ namespace SDVRadiance
             {
                 if (!_otherFarmerBakes.TryGetValue(who.UniqueMultiplayerID, out FarmerBake? bake))
                     continue;
-                // The same three the local player and every NPC are asked, in the same order. The
-                // per-light sibling below already asked all three; this one asked only about water,
+                // The same questions the local player and every NPC are asked, in the same order. The
+                // per-light sibling below already asked them all; this one asked only about water,
                 // so a partner on a horse got a pool of their own laid over the horse's shadow, and
                 // a swimmer got one on the surface. House rule: a body is a body.
-                if (who.swimming.Value || who.isRidingHorse() || OnOpenWater(location, who.TilePoint))
+                if (who.swimming.Value || who.isRidingHorse())
                     continue;
                 if (IsSeated(who))
                 {
@@ -487,7 +487,7 @@ namespace SDVRadiance
             {
                 if (!_otherFarmerBakes.TryGetValue(who.UniqueMultiplayerID, out FarmerBake? bake))
                     continue;
-                if (who.swimming.Value || who.isRidingHorse() || OnOpenWater(location, who.TilePoint))
+                if (who.swimming.Value || who.isRidingHorse())
                     continue;
                 if (IsSeated(who))
                 {
@@ -499,7 +499,7 @@ namespace SDVRadiance
                 float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 GatherCasts(feet, castStrength, lenCfg);
                 DrawContactBlob(spriteBatch, feet, 22f, 11f,
-                    ambAlpha * (_lightShadowCasts.Count > 0 ? 0.45f : 1f), depth, blur);
+                    ambAlpha * GroundingPoolShare(), depth, blur);
                 if (!bake.Ready || bake.Mask == null)
                     continue;
                 foreach (var (rotation, st, a, _) in _lightShadowCasts)
@@ -527,6 +527,7 @@ namespace SDVRadiance
                 && bake.SunSignature == bake.Signature
                 && Math.Abs(_characterSunBlur - bake.SunBlur) <= 0.3f
                 && bake.SunContactHardness == ContactHardnessNow && bake.SunPenumbraStretch == PenumbraStretchNow
+                && bake.SunBakeDepth == BakeDepthNow
                 && projection.Drift(bake.SunProjection, sprite.Width, sprite.Height) <= ShearRefreshPixels)
                 return;
             bake.SunMask ??= VramTally.Track(new RenderTarget2D(graphicsDevice, PlayerSunRtSize, PlayerSunRtSize, false,
@@ -538,6 +539,7 @@ namespace SDVRadiance
             bake.SunSignature = bake.Signature;
             bake.SunContactHardness = ContactHardnessNow;
             bake.SunPenumbraStretch = PenumbraStretchNow;
+            bake.SunBakeDepth = BakeDepthNow;
         }
     }
 }

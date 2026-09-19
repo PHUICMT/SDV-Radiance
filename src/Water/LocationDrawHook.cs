@@ -95,14 +95,18 @@ namespace SDVRadiance
         internal readonly struct Stamp
         {
             internal Stamp(Texture2D texture, Rectangle source, Vector2 worldTopLeft, Vector2 scale,
-                           SpriteEffects effects, GameLocation? owner)
+                           SpriteEffects effects, GameLocation? owner, float layerDepth,
+                           Texture2D? artTexture = null, Rectangle? artSource = null)
             {
-                this.Texture = texture;
-                this.Source = source;
-                this.WorldTopLeft = worldTopLeft;
-                this.Scale = scale;
-                this.Effects = effects;
-                this.Owner = owner;
+                LayerDepth = layerDepth;
+                ArtTexture = artTexture ?? texture;
+                ArtSource = artSource ?? source;
+                Texture = texture;
+                Source = source;
+                WorldTopLeft = worldTopLeft;
+                Scale = scale;
+                Effects = effects;
+                Owner = owner;
             }
 
             internal Texture2D Texture { get; }
@@ -111,13 +115,26 @@ namespace SDVRadiance
             internal Vector2 Scale { get; }
             internal SpriteEffects Effects { get; }
             internal GameLocation? Owner { get; }
+            /// <summary>Where the location sorted the draw: glass painted on it has to sort just in
+            /// front of it (see RenderPipeline.SpritePanes).</summary>
+            internal float LayerDepth { get; }
+            /// <summary>The sheet and piece the location ASKED for. Smooth art swaps a draw's texture
+            /// for its own smoothed page before the draw lands, so <see cref="Texture"/> can be a page
+            /// with no name and a different piece; labels are keyed by the sheet the game named.</summary>
+            internal Texture2D ArtTexture { get; }
+            internal Rectangle ArtSource { get; }
         }
+
+        /// <summary>The texture and piece of the draw in progress as the caller passed them, caught by a
+        /// prefix that runs before any other (see <see cref="SpriteBatchDrawAsAsked_Prefix"/>).</summary>
+        private static Texture2D? _askedTexture;
+        private static Rectangle? _askedSource;
 
         /// <summary>What the location drew for itself on the last frame it was asked. Read by the
         /// sprite mask; never added to from anywhere else.</summary>
-        internal static readonly List<Stamp> Stamps = new();
+        internal static readonly List<Stamp> Stamps = [];
 
-        private static readonly List<Stamp> _collecting = new();
+        private static readonly List<Stamp> _collecting = [];
 
         /// <summary>A sprite smaller than this is a bubble, a sparkle or a shadow, not a hull.
         /// Stamping those would carve holes in the water for things that should ripple with it.
@@ -151,7 +168,7 @@ namespace SDVRadiance
                     MethodInfo? declared = type.GetMethod(
                         methodName,
                         BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly,
-                        binder: null, new[] { typeof(SpriteBatch) }, modifiers: null);
+                        binder: null, [typeof(SpriteBatch)], modifiers: null);
                     if (declared == null)
                         continue;
                     try
@@ -180,7 +197,7 @@ namespace SDVRadiance
             if (!InstallDrawRecorders(harmony, monitor))
                 return;
             // The one thing a location draws that IS water. Bracketed so its draws are skipped.
-            MethodInfo? pondDraw = AccessTools.Method(typeof(StardewValley.Buildings.FishPond), "draw", new[] { typeof(SpriteBatch) });
+            MethodInfo? pondDraw = AccessTools.Method(typeof(StardewValley.Buildings.FishPond), "draw", [typeof(SpriteBatch)]);
             if (pondDraw != null)
             {
                 try
@@ -216,14 +233,15 @@ namespace SDVRadiance
                          (typeof(Vector2), nameof(SpriteBatchDrawVectorScale_Prefix)),
                      })
             {
-                MethodInfo? draw = AccessTools.Method(typeof(SpriteBatch), nameof(SpriteBatch.Draw), new[]
-                {
+                MethodInfo? draw = AccessTools.Method(typeof(SpriteBatch), nameof(SpriteBatch.Draw),
+                [
                     typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color),
                     typeof(float), typeof(Vector2), scaleType, typeof(SpriteEffects), typeof(float),
-                });
+                ]);
                 if (draw == null)
                     continue;
                 harmony.Patch(draw, prefix: new HarmonyMethod(typeof(LocationDrawHook), handler));
+                harmony.Patch(draw, prefix: new HarmonyMethod(typeof(LocationDrawHook), nameof(SpriteBatchDrawAsAsked_Prefix)));
                 recorders++;
             }
             if (recorders == 0)
@@ -294,20 +312,31 @@ namespace SDVRadiance
                 _baseDrawDepth--;
         }
 
+        /// <summary>Note the texture and piece exactly as the location asked for them. Runs first, so no
+        /// other prefix (Smooth art's page swap) has changed them yet.</summary>
+        [HarmonyPriority(Priority.First)]
+        private static void SpriteBatchDrawAsAsked_Prefix(Texture2D texture, Rectangle? sourceRectangle)
+        {
+            if (_drawDepth == 0 || _baseDrawDepth > 0)
+                return;
+            _askedTexture = texture;
+            _askedSource = sourceRectangle;
+        }
+
         /// <summary>Record what one draw put on screen, art and all.</summary>
         private static void SpriteBatchDraw_Prefix(Texture2D texture, Vector2 position,
                                                    Rectangle? sourceRectangle, Vector2 origin,
-                                                   float scale, SpriteEffects effects)
-            => Record(texture, position, sourceRectangle, origin, new Vector2(scale, scale), effects);
+                                                   float scale, SpriteEffects effects, float layerDepth)
+            => Record(texture, position, sourceRectangle, origin, new Vector2(scale, scale), effects, layerDepth);
 
         /// <inheritdoc cref="SpriteBatchDraw_Prefix"/>
         private static void SpriteBatchDrawVectorScale_Prefix(Texture2D texture, Vector2 position,
                                                               Rectangle? sourceRectangle, Vector2 origin,
-                                                              Vector2 scale, SpriteEffects effects)
-            => Record(texture, position, sourceRectangle, origin, scale, effects);
+                                                              Vector2 scale, SpriteEffects effects, float layerDepth)
+            => Record(texture, position, sourceRectangle, origin, scale, effects, layerDepth);
 
         private static void Record(Texture2D texture, Vector2 position, Rectangle? sourceRectangle,
-                                   Vector2 origin, Vector2 scale, SpriteEffects effects)
+                                   Vector2 origin, Vector2 scale, SpriteEffects effects, float layerDepth)
         {
             if (_drawDepth == 0 || _baseDrawDepth > 0 || texture == null || texture.IsDisposed)
                 return;
@@ -318,10 +347,15 @@ namespace SDVRadiance
                 return;
             // The draw was made in screen pixels; adding the camera back stores it in world pixels,
             // so the viewport that reads it next frame can be a different one.
+            Texture2D? askedTexture = _askedTexture;
+            Rectangle? askedSource = _askedSource;
+            _askedTexture = null;
+            _askedSource = null;
             _collecting.Add(new Stamp(texture, source,
                 new Vector2(position.X - origin.X * scale.X + Game1.viewport.X,
                             position.Y - origin.Y * scale.Y + Game1.viewport.Y),
-                scale, effects, Game1.currentLocation));
+                scale, effects, Game1.currentLocation, layerDepth,
+                askedTexture, askedTexture == null ? null : askedSource ?? new Rectangle(0, 0, askedTexture.Width, askedTexture.Height)));
         }
 
         /// <summary>Hand the last frame's collection to the mask and start a new one.</summary>

@@ -110,6 +110,15 @@ sampler2D CausticSampler = sampler_state
     MinFilter = Linear; MagFilter = Linear; MipFilter = None;
     AddressU = Wrap; AddressV = Wrap;
 };
+// The caustic net at a place: two copies of the ridge texture scrolled against each other and
+// multiplied (the reasoning is at the caustic term in the pixel shader).
+float CausticNetAt(float2 causticWorldTile, float causticTime)
+{
+    float2 causticUv1 = causticWorldTile * 0.22 + float2( causticTime * 0.020, -causticTime * 0.012);
+    float2 causticUv2 = causticWorldTile * 0.31 + float2(-causticTime * 0.014,  causticTime * 0.017);
+    return tex2Dlod(CausticSampler, float4(causticUv1, 0.0, 0.0)).r
+         * tex2Dlod(CausticSampler, float4(causticUv2, 0.0, 0.0)).r;
+}
 float CausticAmount;        // 0 = the term vanishes; strength, weather, night and the toggle's
                          // ease all folded in on the CPU
 // The cloud shadow's kept mask from last frame (see _cloudMaskKeep and the same coupling in
@@ -200,6 +209,71 @@ float WakeRingStrength;  // the dial; 0 is the water of every earlier release, t
 #define WIND_PATCH_SCALE 0.15915494
 float2 WindDrift;
 float WindAmount;
+// A RIVER RUNS ALONG ITS OWN BED.
+//
+// Everything on this surface travels at a speed of its own, and on a river most of it ran UP the
+// screen: the ripple crests at about 0.9 tiles a second, the modern wobble's octaves at a third of
+// a tile, the game's own water texture underneath at a seventh. One heading for the whole map, the
+// first cut of this, carried the pattern down and lost to all of them, and even once it won it ran
+// straight down across a bend in the stream.
+//
+// So a river gets a flow map: FlowTexture holds, for every tile of the map, which way and how fast
+// the water there is going, traced on the CPU from the map's own banks (RiverFlowTrace.cs). Each
+// pixel reads it and is carried along it with the two-phase scheme flow-mapped water has used since
+// Portal 2: the surface is sampled twice, displaced along the flow by two offsets half a cycle apart
+// that each grow and then snap back, and crossfaded so each snap happens while its copy is weighted
+// to nothing. A per-pixel phase offset keeps the crossfade from pulsing across the whole river at
+// once. Inside that carry the waves stand rather than travel (sqrt(2)*sin(k*p)*cos(w*t) for each
+// sin(k*p + w*t)): the same wavelength, beat and energy with no direction of their own, so the only
+// way the eye can see the water go is the way the river goes.
+//
+// RiverHold is how much of that is in the picture, eased on the CPU: 0 on every map without a traced
+// river, and there every line of this shader reads as it did in every earlier release.
+texture FlowTexture;
+sampler2D FlowSampler = sampler_state
+{
+    Texture = <FlowTexture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+float2 FlowMapSize;     // the traced map in tiles: texel (i, j) is tile (i, j)
+float FlowPace;         // tiles per animation second where the flow map reads 1
+float RiverHold;        // 0 = no river here, 1 = a traced river fully carried
+// FLECKS OF FOAM RIDING THE RIVER. Waves say that water moves; only something the eye can follow
+// says which way and how fast, and on a real stream that is the foam. So small flecks sit on the
+// same two carried places as the waves and ride the river with them, stretched a little along the
+// flow and snapped to the art's pixel grid. How many there are is the flow map's blue channel,
+// traced on the CPU: thick under a fall and thinning over the next ten tiles, thicker again where
+// a narrows runs fast, and a light scatter everywhere else the river goes. RiverFoam is the dial;
+// 0 draws none and leaves the river exactly as it was without them.
+float RiverFoam;
+#define RIVER_FOAM_SCATTER 0.10     // the share of cells holding a fleck where nothing thickens the foam
+#define RIVER_FOAM_CELLS 2.5        // fleck cells per tile
+// WATER, NOT SYRUP. The first cut carried every ripple, glint and fleck down a river at one speed,
+// in one unchanging pattern, crossfading every 1.6 seconds: a sheet sliding on a belt, which the eye
+// reads as something thick. What reads as water, measured by eye on the Town river:
+// - the fine detail (ripples, glints, foam) runs faster than the big ripples, which hang back
+//   like the swells standing over a stream bed (RiverCoarseShare, and FlowPace carries the speed);
+// - the pattern is never the same twice: each carry cycle starts from a new place (RiverRenew),
+//   and cycles run shorter as it renews (RiverPeriod);
+// - the current wanders a little, turning a few degrees and back (RiverSwirl), and runs slower
+//   along the banks than mid-stream, which the flow map carries from the CPU;
+// - glints on moving water are short-lived flashes, not steady twinkles (RiverGlintLife);
+// - foam draws out into streaks (RiverFoamStretch);
+// - trains of small crests ride the current with white on their tips (RiverWaves);
+// - and, as a choice, the carry can step the way the game's own water animates, twelve times a
+//   second on the art's pixel grid (RiverPixelStep).
+// Every one of these at its first-cut value gives back the river as it was.
+float RiverPeriod;          // seconds per carry cycle (1.6 the first cut)
+float RiverCoarseShare;     // how far the big ripples are carried against the fine (1 = together)
+float RiverRenew;           // 0..1: how far each new cycle's pattern is moved away from the last
+float RiverSwirl;           // 0..1: how far the current wanders from its traced heading
+float RiverFoamStretch;     // how much longer a fleck is along the flow than across it (1.8 the first cut)
+float RiverGlintLife;       // 0..1: 0 steady twinkle, 1 short bright flashes
+float RiverPixelStep;       // 0 or 1: carry on the art's grid, twelve steps a second
+float RiverWaves;           // crest trains riding the current; 0 none
+#define FLOW_MAP_STILL (128.0 / 255.0)  // the byte still water is written as: 127.5 rounds up, so 0.5 read as a faint flow
+#define FLOW_MAP_RANGE 2.0  // the flow map stores flow / FLOW_MAP_RANGE, so the foot of a fall can run twice the pace
 float4 Lights[8];       // xy = screen UV, z = radius (unused), w = intensity
 float LightCount;       // how many entries of Lights are live
 float PlayerInWater;    // 0..1 eased: the player's feet are on water pixels (wading). C# fades
@@ -374,6 +448,93 @@ float ValueNoise(float2 p)
     return lerp(lerp(bottomLeft, bottomRight, inside.x), lerp(topLeft, topRight, inside.x), inside.y);
 }
 
+// The two carried places for this pixel and the weight of the first (see FlowTexture above). The
+// weights of the two copies are w and 1 - w; RiverBlend puts them back together without the dip in
+// contrast a plain crossfade of two unrelated patterns has halfway through.
+void RiverFlowPhases(float2 worldTile, float t, out float2 riverTileA, out float2 riverTileB, out float riverWeightA,
+                     out float2 flowDirection, out float foamHere)
+{
+    float4 flowTexel = tex2Dlod(FlowSampler, float4(worldTile / FlowMapSize, 0.0, 0.0));
+    float2 flowUnits = (flowTexel.rg - FLOW_MAP_STILL) * 2.0 * FLOW_MAP_RANGE;
+    // The current wanders: a slow turn of a few degrees one way and back, different across the
+    // river, so the water eddies instead of sliding in straight lines.
+    float swirlAngle = RiverSwirl * 1.2 * (ValueNoise(worldTile * 0.45 + t * 0.12) - 0.5);
+    flowUnits = float2(flowUnits.x * cos(swirlAngle) - flowUnits.y * sin(swirlAngle),
+                       flowUnits.x * sin(swirlAngle) + flowUnits.y * cos(swirlAngle));
+    flowDirection = flowUnits;   // not normalised: its length says how much river is here
+    foamHere = flowTexel.b;
+    float2 flow = flowUnits * FlowPace;
+    float period = max(RiverPeriod, 0.2);
+    float cycle = lerp(t, floor(t * 12.0) / 12.0, RiverPixelStep) / period + ValueNoise(worldTile * 0.35 + 91.7) * 0.6;
+    float phaseA = frac(cycle);
+    float phaseB = frac(cycle + 0.5);
+    // Each copy starts every cycle somewhere new, and moves only at its own zero weight, where
+    // the crossfade has it out of the picture: the other copy is fully in view at that moment.
+    riverTileA = worldTile - flow * (phaseA - 0.5) * period
+               + (float2(HashNoSin(float2(floor(cycle), 3.1)), HashNoSin(float2(floor(cycle), 8.7))) - 0.5) * (37.0 * RiverRenew);
+    riverTileB = worldTile - flow * (phaseB - 0.5) * period
+               + (float2(HashNoSin(float2(floor(cycle + 0.5), 5.3)), HashNoSin(float2(floor(cycle + 0.5), 1.9))) - 0.5) * (37.0 * RiverRenew);
+    riverTileA = lerp(riverTileA, floor(riverTileA * 16.0 + 0.5) / 16.0, RiverPixelStep);
+    riverTileB = lerp(riverTileB, floor(riverTileB * 16.0 + 0.5) / 16.0, RiverPixelStep);
+    riverWeightA = 1.0 - abs(2.0 * phaseA - 1.0);
+}
+
+// One copy of the foam at a carried place: a fleck in some of the cells, more of them where the foam
+// is thicker, each at its own place inside its cell and its own size, drawn out along the flow. One
+// hash per cell decides all of it, because this shader sits at the profile's limit of temporaries.
+float RiverFlecksAt(float2 riverTile, float2 flowDirection, float thickness)
+{
+    flowDirection /= max(length(flowDirection), 0.0001);
+    float2 grid = (floor(riverTile * 16.0) + 0.5) * (RIVER_FOAM_CELLS / 16.0);
+    float chance = HashNoSin(floor(grid) + float2(17.3, 5.1));
+    float2 fromFleck = frac(grid) - 0.5 - (float2(frac(chance * 13.7), frac(chance * 31.3)) - 0.5) * 0.6;
+    fromFleck -= flowDirection * dot(fromFleck, flowDirection) * (1.0 - 1.0 / max(RiverFoamStretch, 1.0));
+    float radius = 0.07 + 0.09 * frac(chance * 57.1);
+    return smoothstep(radius, radius * 0.5, length(fromFleck)) * step(1.0 - thickness, chance);
+}
+
+// One carried copy of the crest trains: crests across the flow about two and a half to a tile,
+// peaked like a wave's front rather than rounded, bent a little so they are not ruled lines, and
+// broken into lengths so they read as small waves rather than stripes.
+float RiverCrestAt(float2 tile, float2 flowNormal)
+{
+    float along = dot(tile, flowNormal) * 2.4;
+    float across = dot(tile, float2(-flowNormal.y, flowNormal.x));
+    float crest = pow(0.5 + 0.5 * sin(along * 6.2831853 + ValueNoise(float2(across * 1.3, along * 0.25)) * 3.0), 5.0);
+    return crest * smoothstep(0.35, 0.7, ValueNoise(float2(across * 0.9, along * 0.35) + 13.1));
+}
+
+float RiverBlend(float valueA, float valueB, float weightA)
+{
+    float weightB = 1.0 - weightA;
+    return (valueA * weightA + valueB * weightB) / sqrt(weightA * weightA + weightB * weightB);
+}
+
+float2 RiverBlend2(float2 valueA, float2 valueB, float weightA)
+{
+    float weightB = 1.0 - weightA;
+    return (valueA * weightA + valueB * weightB) / sqrt(weightA * weightA + weightB * weightB);
+}
+
+// The classic mirror's two shear rows, standing, at a carried place (see FlowTexture).
+float StandingShearWave(float2 tile, float t)
+{
+    float rowY = ShearSteps > 0.5 ? floor(tile.y * ShearSteps) / ShearSteps : tile.y;
+    return 1.41421356 * (sin(rowY * 34.0) * cos(t * 2.6) + 0.45 * sin(rowY * 20.0 + tile.x * 0.9) * cos(t * 3.9));
+}
+
+// The pond ripple and the ocean swell below, each wave standing instead of travelling.
+float2 StandingPondWaves(float2 tile, float t)
+{
+    return 1.41421356 * float2(sin(tile.y * 6.3) * cos(t * 6.0) + 0.5 * sin(tile.x * 4.1) * cos(t * 4.0),
+                               cos(tile.x * 5.7) * cos(t * 5.0) + 0.5 * cos(tile.y * 4.7) * cos(t * 3.5));
+}
+
+float StandingSwell(float2 tile, float t)
+{
+    return 1.41421356 * (sin(tile.y * 2.1) * cos(t * 1.6) + 0.35 * sin(tile.x * 1.4) * cos(t * 1.0));
+}
+
 // The displacement field the realistic look wobbles its reflection with. What makes a
 // deformation read as liquid is its amplitude spectrum, not its accuracy (Kawabe 2015: a
 // random phase costs nothing, a single sine reads as jelly): three octaves of value noise, the
@@ -522,15 +683,36 @@ float3 SkyNow(float2 uv)
     return SkyColour;
 }
 
-float2 ReflectionWobbleField(float2 worldTile, float t, float choppiness)
+// One octave of the wobble on a river: the noise does not travel, it is carried (see FlowTexture).
+float RiverWobbleOctave(float2 scale, float2 seed, float2 riverTileA, float2 riverTileB, float riverWeightA)
 {
-    float2 slow = float2(worldTile.x * 0.5, worldTile.y * 4.0)  + float2(0.03, 1.0) * t;
-    float2 mid  = float2(worldTile.x * 1.0, worldTile.y * 8.0)  + float2(-0.1, 2.5) * t;
-    float2 fine = float2(worldTile.x * 2.0, worldTile.y * 16.0) + float2(0.25, 4.9) * t;
-    float slowAcross = ValueNoise(slow + float2(31.7, 17.3)) * 2.0 - 1.0;
-    float slowDown   = ValueNoise(slow) * 2.0 - 1.0;
-    float midDown    = ValueNoise(mid) * 2.0 - 1.0;
-    float fineDown   = ValueNoise(fine) * 2.0 - 1.0;
+    return RiverBlend(ValueNoise(riverTileA * scale + seed) * 2.0 - 1.0,
+                      ValueNoise(riverTileB * scale + seed) * 2.0 - 1.0, riverWeightA);
+}
+
+float2 ReflectionWobbleField(float2 worldTile, float t, float choppiness,
+                             float riverHold, float2 riverTileA, float2 riverTileB, float riverWeightA)
+{
+    float slowAcross = 0.0, slowDown = 0.0, midDown = 0.0, fineDown = 0.0;
+    [branch]
+    if (riverHold < 0.9999)
+    {
+        float2 slow = float2(worldTile.x * 0.5, worldTile.y * 4.0)  + float2(0.03, 1.0) * t;
+        float2 mid  = float2(worldTile.x * 1.0, worldTile.y * 8.0)  + float2(-0.1, 2.5) * t;
+        float2 fine = float2(worldTile.x * 2.0, worldTile.y * 16.0) + float2(0.25, 4.9) * t;
+        slowAcross = ValueNoise(slow + float2(31.7, 17.3)) * 2.0 - 1.0;
+        slowDown   = ValueNoise(slow) * 2.0 - 1.0;
+        midDown    = ValueNoise(mid) * 2.0 - 1.0;
+        fineDown   = ValueNoise(fine) * 2.0 - 1.0;
+    }
+    [branch]
+    if (riverHold > 0.0001)
+    {
+        slowAcross = lerp(slowAcross, RiverWobbleOctave(float2(0.5, 4.0), float2(31.7, 17.3), riverTileA, riverTileB, riverWeightA), riverHold);
+        slowDown   = lerp(slowDown,   RiverWobbleOctave(float2(0.5, 4.0), float2(0.0, 0.0), riverTileA, riverTileB, riverWeightA), riverHold);
+        midDown    = lerp(midDown,    RiverWobbleOctave(float2(1.0, 8.0), float2(0.0, 0.0), riverTileA, riverTileB, riverWeightA), riverHold);
+        fineDown   = lerp(fineDown,   RiverWobbleOctave(float2(2.0, 16.0), float2(0.0, 0.0), riverTileA, riverTileB, riverWeightA), riverHold);
+    }
     float down = slowDown
                + midDown * lerp(0.25, 0.5, choppiness)
                + fineDown * lerp(0.0, 0.2, choppiness);
@@ -644,11 +826,20 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // pond's wall is often the lake, and a lake mirrored into a pond three rows deep was a band
     // of the wrong water across the pond's bottom row.
     float isVessel = step(0.92, maskAlpha) * (1.0 - step(0.97, maskAlpha));
-    float rippleGate = (1.0 - isIce) * (1.0 - isFlow);    // ice / falling: no surface wave
+    // STILL (alpha 232) is water shut inside drawn art: the seam between a bridge's planks, the
+    // slot in a bench. A ripple there has no water to move in from and drags the art beside it,
+    // so it keeps the water's look and reflection and loses the wave.
+    float isStill = step(0.90, maskAlpha) * (1.0 - step(0.92, maskAlpha));
+    float rippleGate = (1.0 - isIce) * (1.0 - isFlow) * (1.0 - isStill);    // ice / falling / still: no surface wave
 
     // Signed shore distance in TEXELS (+ = inside water). Sampled for every pixel because
     // the wet ground rim below lives just OUTSIDE the water mask.
     float shoreDistanceTexels = (tex2D(SdfSampler, maskUV).a - 0.501961) * 63.75;
+    // The distance to the REAL land, which is a different question from the one above: the
+    // painted field carves holes for piers and bridges, and a bridge is not a coast. The foam
+    // line at the bottom of this function is what reads it; it is taken here with the other
+    // mask reads so every question the mask answers is asked in one place.
+    float realShoreDistanceTexels = (tex2D(RealShoreSdfSampler, maskUV).a - 0.501961) * 63.75;
 
     float4 scene = tex2D(SourceSampler, uv);
     [branch] if (tileWater <= 0.001)
@@ -808,9 +999,45 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     float2 windedTile = worldTile - WindDrift * (1.0 - isLava);
     float pondWaveX = sin(windedTile.y * 6.3 + t * 6.0) + 0.5 * sin(windedTile.x * 4.1 - t * 4.0);
     float pondWaveY = cos(windedTile.x * 5.7 - t * 5.0) + 0.5 * cos(windedTile.y * 4.7 + t * 3.5);
-    float2 pondRipple = float2(pondWaveX, pondWaveY) * (Strength * 0.0025);
-
     float swell = sin(windedTile.y * 2.1 + t * 1.6) + 0.35 * sin(windedTile.x * 1.4 - t * 1.0);
+
+    // On a traced river the same waves stand, and the flow map carries them (see FlowTexture).
+    float riverHold = RiverHold * (1.0 - isLava);
+    float2 riverTileA = worldTile;
+    float2 riverTileB = worldTile;
+    float riverWeightA = 0.5;
+    float riverFlecks = 0.0;
+    [branch]
+    if (riverHold > 0.0001)
+    {
+        float2 riverDirection;
+        RiverFlowPhases(worldTile, t, riverTileA, riverTileB, riverWeightA, riverDirection, riverFlecks);
+        // Water the river does not move keeps the surface it always had: a still pool beside the
+        // stream, the far side of a cave pool a fall drops into, a pond the trace never reached. The
+        // hold fades with how much flow the map holds here, so standing waves only replace the old
+        // ripple where something carries them.
+        riverHold *= saturate(length(riverDirection) * 4.0);
+        // The foam is worked out here, where the flow direction is to hand, and only its result is
+        // carried down to where it is drawn (see RiverFoam).
+        riverFlecks = saturate((RIVER_FOAM_SCATTER + riverFlecks * 0.45) * RiverFoam);
+        riverFlecks = RiverFlecksAt(riverTileA, riverDirection, riverFlecks) * riverWeightA
+                    + RiverFlecksAt(riverTileB, riverDirection, riverFlecks) * (1.0 - riverWeightA);
+        float2 riverWaves = RiverBlend2(StandingPondWaves(riverTileA - WindDrift, t),
+                                        StandingPondWaves(riverTileB - WindDrift, t), riverWeightA);
+        // The big ripples hang back (see RiverCoarseShare): the same cycle and weight, carried less far.
+        float2 coarseA = lerp(worldTile, riverTileA, RiverCoarseShare);
+        float2 coarseB = lerp(worldTile, riverTileB, RiverCoarseShare);
+        // Crest trains ride with them, calmer where the river is slow, and whiten at the tip.
+        float2 flowNormal = riverDirection / max(length(riverDirection), 0.0001);
+        float crest = (RiverCrestAt(coarseA, flowNormal) * riverWeightA + RiverCrestAt(coarseB, flowNormal) * (1.0 - riverWeightA))
+                    * RiverWaves * saturate(length(riverDirection) * 1.5);
+        riverFlecks = saturate(riverFlecks + crest * 0.3);
+        pondWaveX = lerp(pondWaveX, riverWaves.x + flowNormal.x * crest * 1.6, riverHold);
+        pondWaveY = lerp(pondWaveY, riverWaves.y + flowNormal.y * crest * 1.6, riverHold);
+        swell = lerp(swell, RiverBlend(StandingSwell(coarseA - WindDrift, t),
+                                       StandingSwell(coarseB - WindDrift, t), riverWeightA), riverHold);
+    }
+    float2 pondRipple = float2(pondWaveX, pondWaveY) * (Strength * 0.0025);
     float2 oceanRipple = float2(swell * 0.25, swell) * (Strength * 0.006);
 
     // Cat's paws: the darker patches of ruffled water that run across a lake ahead of a gust.
@@ -907,12 +1134,16 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     {
         float causticTime = Time * Speed;
         float2 causticWorldTile = floor(worldTile * 64.0) / 64.0;
-        float2 causticUv1 = causticWorldTile * 0.22 + float2( causticTime * 0.020, -causticTime * 0.012);
-        float2 causticUv2 = causticWorldTile * 0.31 + float2(-causticTime * 0.014,  causticTime * 0.017);
         // tex2Dlod, not tex2D: an implicit-gradient fetch cannot live inside a real branch,
         // and the texture has no mips for the gradient to choose between anyway.
-        float causticNet = tex2Dlod(CausticSampler, float4(causticUv1, 0.0, 0.0)).r
-                         * tex2Dlod(CausticSampler, float4(causticUv2, 0.0, 0.0)).r;
+        float causticNet = CausticNetAt(causticWorldTile, causticTime);
+        [branch]
+        if (riverHold > 0.0001)
+        {
+            float riverNet = RiverBlend(CausticNetAt(floor(lerp(worldTile, riverTileA, RiverCoarseShare) * 64.0) / 64.0, causticTime),
+                                        CausticNetAt(floor(lerp(worldTile, riverTileB, RiverCoarseShare) * 64.0) / 64.0, causticTime), riverWeightA);
+            causticNet = lerp(causticNet, riverNet, riverHold);
+        }
         // The baked web is broad; the sharpening lives here, AFTER the product, so the
         // result is an evolving net and not dots at the crossings of two thin ones.
         causticNet = pow(saturate(causticNet * 1.9), 2.2);
@@ -976,6 +1207,9 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         float rowY = ShearSteps > 0.5 ? floor(worldTile.y * ShearSteps) / ShearSteps : worldTile.y;
         float wave = sin(rowY * 34.0 + t * 2.6)
                    + 0.45 * sin(rowY * 20.0 - t * 3.9 + worldTile.x * 0.9);
+        [branch]
+        if (riverHold > 0.0001)
+            wave = lerp(wave, RiverBlend(StandingShearWave(riverTileA, t), StandingShearWave(riverTileB, t), riverWeightA), riverHold);
         float waveAmp = Strength * 0.0035 + 0.0012;
         // Static per-16px-block dither on the march column: a diagonal shoreline otherwise
         // quantises the mirror into 64px staircase bands; this breaks the steps into ragged
@@ -1050,7 +1284,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
             // eye checks) and only its far end breaks.
             anchor = smoothstep(0.0, 1.5, depthTilesHere);
             float anchorDown = saturate(depthTilesHere);
-            float2 field = ReflectionWobbleField(worldTile, t, ReflectionChoppiness);
+            float2 field = ReflectionWobbleField(worldTile, t, ReflectionChoppiness, riverHold, riverTileA, riverTileB, riverWeightA);
             // About four world pixels of vertical movement per unit at the far end, a third
             // of that sideways; the vertical part is what breaks the image into bands, the
             // sideways part only keeps the bands from lining up.
@@ -1412,13 +1646,18 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // water plus ONE drifting lap line, posterised to read as pixels (never a smooth wash).
     // World-anchored phase jitter per texel so the line breaks up instead of tracing the
     // grid. Ice doesn't lap; lava's edge glows on its own; rain roughens the lap line away.
-    float realShoreDistanceTexels = (tex2D(RealShoreSdfSampler, maskUV).a - 0.501961) * 63.75;
     float foamBand = (1.0 - smoothstep(0.5, 5.0, realShoreDistanceTexels)) * step(0.0, realShoreDistanceTexels);
     float lapPhase = frac(realShoreDistanceTexels * 0.45 - Time * 0.30 + Hash(floor(worldTile * 16.0) / 16.0) * 0.25);
     float lap = step(0.62, lapPhase);
     float foam = foamBand * (0.30 + 0.70 * lap) * water * (1.0 - isIce) * (1.0 - isLava) * (1.0 - RainAmount * 0.5);
     foam = floor(foam * 3.0 + 0.5) / 3.0;
     colour.rgb = lerp(colour.rgb, float3(0.93, 0.97, 1.02), foam * 0.30);
+
+    // Foam riding the river (see RiverFoam; worked out beside the ripple). The two copies fade in and
+    // out as the carry cycles, which is also how a fleck of foam lives: it gathers, rides a tile or
+    // so, and breaks up.
+    colour.rgb = lerp(colour.rgb, float3(0.93, 0.97, 1.02),
+                      saturate(riverFlecks * 0.55 * riverHold * water * rippleGate * (1.0 - isIce) * (1.0 - isLava)));
 
     // Drifting specular glints — SCATTERED, not a grid. The old "one glint per cell,
     // all the same size" read as a regular dotted pattern. Now: TWO overlapping layers
@@ -1451,13 +1690,24 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     // part shrunk, so the same radius reaches further that way. At 0 it is the round distance.
     float glintStretch = 1.0 + 1.6 * GlitterPath;
     float glint = 0.0;
+    // Three passes: the glints as they always were, then on a river the two carried copies, which
+    // ride the river and nothing else (see FlowTexture). A pass weighted to nothing is skipped.
+    [unroll]
+    for (int glintPass = 0; glintPass < 3; glintPass++)
+    {
+    float passWeight = glintPass == 0 ? 1.0 - riverHold : (glintPass == 1 ? riverHold * riverWeightA : riverHold * (1.0 - riverWeightA));
+    float2 passTile = glintPass == 0 ? worldTile : (glintPass == 1 ? riverTileA : riverTileB);
+    float passClock = glintPass == 0 ? t : 0.0;
+    [branch]
+    if (passWeight > 0.0001)
+    {
     [unroll]
     for (int layer = 0; layer < 2; layer++)
     {
         float density = baseDensity * (layer == 0 ? 1.0 : 1.73);                 // two scales
         float2 layerOffset = (layer == 0) ? float2(0.0, 0.0) : float2(0.37, 0.63);
         float driftDirection = (layer == 0) ? 1.0 : -0.8;                        // layers drift apart
-        float2 sparkleGrid = (worldTile + layerOffset + float2(t * sparkleDrift, t * sparkleDrift * 0.6) * driftDirection) * density;
+        float2 sparkleGrid = (passTile + layerOffset + float2(passClock * sparkleDrift, passClock * sparkleDrift * 0.6) * driftDirection) * density;
         float2 cell = floor(sparkleGrid);
         float2 f = frac(sparkleGrid) - 0.5;                                      // cell-centred
         float glintChanceHash = Hash(cell + layerOffset);
@@ -1473,8 +1723,13 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         // Twinkle in BRIGHTNESS, never fully off: floor at 0.35 so a glint dims and
         // brightens instead of blinking out (the surface kept a steady base sparkle,
         // no more moments where it nearly all disappears).
-        float pulse = 0.675 + 0.325 * sin(t * sparklePulse + glintChanceHash * 6.2831853);
-        glint += smoothstep(glintRadius, 0.0, d) * pulse * holdsGlint * sunSideWeight;
+        // On a river the carried glints flash rather than twinkle: faster, and brief at the top.
+        float passLife = glintPass == 0 ? 0.0 : RiverGlintLife;
+        float pulse = 0.675 + 0.325 * sin(t * sparklePulse * (1.0 + 5.0 * passLife) + glintChanceHash * 6.2831853);
+        pulse = lerp(pulse, pulse * pulse * pulse * 1.6, passLife);
+        glint += smoothstep(glintRadius, 0.0, d) * pulse * holdsGlint * sunSideWeight * passWeight;
+    }
+    }
     }
     glint = saturate(glint);
     // A cloud over this water stands between the sun and it, and the glitter is the sun: the

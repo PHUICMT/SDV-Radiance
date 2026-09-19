@@ -61,7 +61,7 @@ namespace SDVRadiance
 
         private readonly WakeRing[] _wakeRings = new WakeRing[WakeRingSlots];
         private readonly Vector4[] _wakeRingUniform = new Vector4[WakeRingSlots];
-        private readonly List<WakeRingMaker> _wakeRingMakers = new();
+        private readonly List<WakeRingMaker> _wakeRingMakers = [];
         /// <summary>Row 28 of the game's animation sheet is its own "something touched the water"
         /// ring: it is added when a float lands, when a fish in a frenzy falls back, when an item
         /// is dropped in, when a farmer steps into the water. Watching for it is how the surface
@@ -73,8 +73,8 @@ namespace SDVRadiance
         private int _wakeRingsScannedTick = -1;
         private int _bobberRingTick = -1000;
         private int _fishSpotRingTick = -1000;
-        private readonly HashSet<TemporaryAnimatedSprite> _splashesSeen = new();
-        private HashSet<TemporaryAnimatedSprite> _splashesSeenNow = new();
+        private readonly HashSet<TemporaryAnimatedSprite> _splashesSeen = [];
+        private readonly HashSet<TemporaryAnimatedSprite> _splashesSeenNow = [];
 
         /// <summary>How many rings the last frame handed the shader, for the report.</summary>
         private int _wakeRingsLive;
@@ -280,7 +280,7 @@ namespace SDVRadiance
 
         /// <summary>Per NPC type: how to read whether the creature is drawn under the water. Null
         /// entries are types that carry no such flag.</summary>
-        private static readonly Dictionary<Type, (FieldInfo model, PropertyInfo appearUnderwater)?> _underwaterFlagByType = new();
+        private static readonly Dictionary<Type, (FieldInfo model, PropertyInfo appearUnderwater)?> _underwaterFlagByType = [];
 
         /// <summary>Whether a mod paints this NPC under the water rather than on it. Custom
         /// Companions (the framework behind most creature packs) keeps a CompanionModel in a

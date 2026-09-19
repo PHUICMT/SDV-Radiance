@@ -175,8 +175,8 @@ namespace SDVRadiance
         {
             public long labeledOpinionPixels, agreeLiquid, agreeDry, hiddenPixels;
             public long missingWater, falseWater, glassPixels, glassMirrored, deckSkipped;
-            public Dictionary<byte, long> missingByClass = new();
-            public List<(int tx, int ty, int miss, int falsePx)> perTile = new();
+            public Dictionary<byte, long> missingByClass = [];
+            public List<(int tx, int ty, int miss, int falsePx)> perTile = [];
         }
 
         /// <summary>Walk every tile of the mask window, resolve what the labels say each pixel is,

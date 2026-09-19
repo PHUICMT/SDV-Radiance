@@ -50,7 +50,7 @@ namespace SDVRadiance
         private int _dustWindowsLit;
         /// <summary>Pane centres of the lit windows on screen, refilled each tick and reused, so
         /// finding them costs no allocation at sixty ticks a second.</summary>
-        private readonly System.Collections.Generic.List<Vector2> _dustWindowPanes = new();
+        private readonly System.Collections.Generic.List<Vector2> _dustWindowPanes = [];
 
         internal int ParticleDustWindows => _dustWindowsLit;
 
@@ -255,7 +255,7 @@ namespace SDVRadiance
         private int _emberFiresLit;
         /// <summary>Where the fires on screen are, how far each one lights, and whether it is
         /// being carried. Refilled each tick and reused.</summary>
-        private readonly System.Collections.Generic.List<(Vector2 Position, float Radius, bool Carried)> _emberFires = new();
+        private readonly System.Collections.Generic.List<(Vector2 Position, float Radius, bool Carried)> _emberFires = [];
 
         /// <summary>
         /// How near a flame has to be to the player to be the one in their hand.
@@ -375,7 +375,7 @@ namespace SDVRadiance
             {
                 LightSource light = pair.Value;
                 int sheet = light.textureIndex.Value;
-                if (sheet != 4 && sheet != 5)
+                if (sheet is not 4 and not 5)
                     continue;
                 float radius = light.radius.Value;
                 if (radius < EmberMinimumRadius)
@@ -471,7 +471,7 @@ namespace SDVRadiance
         /// because it carries the glow ring's effect along with everything else it does.</summary>
         // 888 is the Glowstone Ring: the game gives it the same light as 527 (Ring.cs, one case for
         // both), so it sparkles like the rings it combines.
-        private static readonly string[] GlowRingIds = { "516", "517", "527", "888" };
+        private static readonly string[] GlowRingIds = ["516", "517", "527", "888"];
 
         private float _ringSparkleCarry;
         private bool _ringSparkling;
@@ -662,10 +662,10 @@ namespace SDVRadiance
         /// <summary>The colours a string of lights comes in. Picked per light by its own position,
         /// so the same bulb keeps its colour rather than flickering through the set.</summary>
         private static readonly Vector3[] FestiveColours =
-        {
+        [
             new(1.00f, 0.25f, 0.22f), new(0.25f, 0.85f, 0.35f),
             new(0.30f, 0.55f, 1.00f), new(1.00f, 0.82f, 0.28f),
-        };
+        ];
 
         /// <summary>
         /// The town's winter tree: a coloured twinkle at each bulb.
@@ -727,7 +727,7 @@ namespace SDVRadiance
         }
 
         /// <summary>The festive bulbs on screen this frame, and how many, for the report.</summary>
-        private readonly System.Collections.Generic.List<Vector2> _festiveLights = new();
+        private readonly System.Collections.Generic.List<Vector2> _festiveLights = [];
         private int _festiveLightsLit;
         private float _festiveSpawnCarry;
         internal int ParticleFestiveLightsLit => _festiveLightsLit;

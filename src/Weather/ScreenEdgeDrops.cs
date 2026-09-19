@@ -104,7 +104,7 @@ namespace SDVRadiance
             internal ScreenDrops(int screenId) { Random = new Random(20260820 + screenId * 71); }
         }
 
-        private static readonly Dictionary<int, ScreenDrops> _screens = new();
+        private static readonly Dictionary<int, ScreenDrops> _screens = [];
         private static Texture2D? _dropTexture;
         private static Texture2D? _frostTexture;
         /// <summary>The haze, built once in both orientations rather than rotated at draw time:
@@ -134,7 +134,7 @@ namespace SDVRadiance
             // They are a different thing seen from a different place, so they carry their own.
             bool featureOn = config.Enabled && config.WetWorldLensDrops
                 && location is { IsOutdoors: true } && !Game1.eventUp;
-            bool rainWanted = featureOn && location!.IsRainingHere();
+            bool rainWanted = featureOn && LocalSky.RainLandsOn(location);
             bool frostWanted = featureOn && location!.IsSnowingHere();
 
             int screenId = StardewModdingAPI.Context.ScreenId;
@@ -333,7 +333,7 @@ namespace SDVRadiance
             bool leftSide = drop.Position01.X < 0.5f;
             // Only the side bands run: a runner released from the top or bottom band would
             // leave the band on its way down, and the band is the law.
-            if (drop.Position01.X > EdgeBandShare && drop.Position01.X < 1f - EdgeBandShare)
+            if (drop.Position01.X is > EdgeBandShare and < 1f - EdgeBandShare)
                 return;
             ref Runner slot = ref (leftSide ? ref screen.LeftRunner : ref screen.RightRunner);
             if (slot.Active)
@@ -492,8 +492,8 @@ namespace SDVRadiance
             {
                 for (int x = 0; x < wide; x++)
                 {
-                    float depth = (alongIsHorizontal ? (y + 0.5f) / tall : (x + 0.5f) / wide);
-                    float along = (alongIsHorizontal ? (x + 0.5f) / wide : (y + 0.5f) / tall);
+                    float depth = alongIsHorizontal ? (y + 0.5f) / tall : (x + 0.5f) / wide;
+                    float along = alongIsHorizontal ? (x + 0.5f) / wide : (y + 0.5f) / tall;
                     // Thick at the very edge, gone well before the band ends, so nothing about
                     // this has a line where it stops.
                     float falloff = 1f - depth;
@@ -629,7 +629,7 @@ namespace SDVRadiance
                     float dx = (x + 0.5f) / frostSize - 0.5f;
                     float dy = (y + 0.5f) / frostSize - 0.5f;
                     float radius = MathF.Sqrt(dx * dx + dy * dy) * 2f;
-                    if (radius > 1f || radius < 0.02f)
+                    if (radius is > 1f or < 0.02f)
                         continue;
                     float angle = MathF.Atan2(dy, dx);
                     float arm = MathF.Abs(((angle / (MathF.PI / 3f)) % 1f + 1f) % 1f - 0.5f) * (MathF.PI / 3f);

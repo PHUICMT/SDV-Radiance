@@ -48,11 +48,11 @@ namespace SDVRadiance
         /// the switch below takes off exactly what was put on, and nothing that was not.
         /// </summary>
         private static readonly Type[][] DrawOverloadSignatures =
-        {
-            new[] { typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color), typeof(float), typeof(Vector2), typeof(Vector2), typeof(SpriteEffects), typeof(float) },
-            new[] { typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color), typeof(float), typeof(Vector2), typeof(float), typeof(SpriteEffects), typeof(float) },
-            new[] { typeof(Texture2D), typeof(Rectangle), typeof(Rectangle?), typeof(Color), typeof(float), typeof(Vector2), typeof(SpriteEffects), typeof(float) },
-        };
+        [
+            [typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color), typeof(float), typeof(Vector2), typeof(Vector2), typeof(SpriteEffects), typeof(float)],
+            [typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color), typeof(float), typeof(Vector2), typeof(float), typeof(SpriteEffects), typeof(float)],
+            [typeof(Texture2D), typeof(Rectangle), typeof(Rectangle?), typeof(Color), typeof(float), typeof(Vector2), typeof(SpriteEffects), typeof(float)],
+        ];
 
         /// <summary>
         /// Take this mod's patches off <c>SpriteBatch.Draw</c>, or put them back, while the game
@@ -163,6 +163,7 @@ namespace SDVRadiance
                 postfix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(ShouldDrawOnBuffer_Postfix)));
             TryPatch(harmony, monitor, AccessTools.Method(typeof(GameLocation), nameof(GameLocation.updateWater)),
                 "holding the game's water frames still under this mod's water",
+                prefix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(UpdateWater_Prefix)),
                 postfix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(UpdateWater_Postfix)));
             HoldCrittersWhileFrozen(harmony, monitor);
             HoldMapAnimationWhileFrozen(harmony, monitor);
@@ -184,6 +185,13 @@ namespace SDVRadiance
                 prefix: new HarmonyMethod(typeof(PrecipitationSystem), nameof(PrecipitationSystem.DrawWeather_Prefix)) { priority = Priority.Last },
                 postfix: new HarmonyMethod(typeof(PrecipitationSystem), nameof(PrecipitationSystem.DrawWeather_Postfix)));
             PrecipitationSystem.Monitor = monitor;
+            // Mist a map hangs on an always-front layer is air, like the rain: while the water
+            // stage runs it is drawn over the rippled water instead of being rippled with it.
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(xTile.Layers.Layer), nameof(xTile.Layers.Layer.Draw),
+                    [typeof(xTile.Display.IDisplayDevice), typeof(xTile.Dimensions.Rectangle), typeof(xTile.Dimensions.Location),
+                            typeof(bool), typeof(int), typeof(float)]),
+                "map mist held over the rippled water",
+                prefix: new HarmonyMethod(typeof(MistLayers), nameof(MistLayers.LayerDraw_Prefix)));
             // Suppress the vanilla blob shadow while our directional shadow is casting,
             // so casters don't show both. Farmer overrides DrawShadow, so patch both.
             TryPatch(harmony, monitor, AccessTools.Method(typeof(Character), nameof(Character.DrawShadow)),
@@ -198,7 +206,7 @@ namespace SDVRadiance
             TryPatch(harmony, monitor, AccessTools.Method(typeof(StardewValley.TerrainFeatures.Tree), nameof(StardewValley.TerrainFeatures.Tree.draw)),
                 "hiding the vanilla blob under a tree",
                 transpiler: new HarmonyMethod(typeof(ShadowSuppression), nameof(ShadowSuppression.DrawShadow_Transpiler)));
-            TryPatch(harmony, monitor, AccessTools.Method(typeof(StardewValley.TerrainFeatures.Bush), nameof(StardewValley.TerrainFeatures.Bush.draw), new[] { typeof(SpriteBatch) }),
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(StardewValley.TerrainFeatures.Bush), nameof(StardewValley.TerrainFeatures.Bush.draw), [typeof(SpriteBatch)]),
                 "hiding the vanilla blob under a bush",
                 transpiler: new HarmonyMethod(typeof(ShadowSuppression), nameof(ShadowSuppression.DrawShadow_Transpiler)));
             // A planted crop stands in the same wind the trees do and was the only tall thing in
@@ -222,12 +230,12 @@ namespace SDVRadiance
                 postfix: new HarmonyMethod(typeof(WateredSoilSparkle), nameof(WateredSoilSparkle.DrawOptimized_Postfix)));
             // Big craftables draw a vanilla Game1.shadowTexture blob in Object.draw(b,x,y,alpha);
             // drop it while our object shadows are active so it doesn't double up.
-            TryPatch(harmony, monitor, AccessTools.Method(typeof(StardewValley.Object), nameof(StardewValley.Object.draw), new[] { typeof(SpriteBatch), typeof(int), typeof(int), typeof(float) }),
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(StardewValley.Object), nameof(StardewValley.Object.draw), [typeof(SpriteBatch), typeof(int), typeof(int), typeof(float)]),
                 "hiding the vanilla blob under a big craftable",
                 transpiler: new HarmonyMethod(typeof(ShadowSuppression), nameof(ShadowSuppression.BlobShadow_Transpiler)));
             // The vanilla drifting cloud shadow is a Cloud critter drawn in drawAboveFrontLayer;
             // skip it (opt-out) so it doesn't compete with our own cloud-shadow effect.
-            TryPatch(harmony, monitor, AccessTools.Method(typeof(StardewValley.BellsAndWhistles.Cloud), nameof(StardewValley.BellsAndWhistles.Cloud.drawAboveFrontLayer), new[] { typeof(SpriteBatch) }),
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(StardewValley.BellsAndWhistles.Cloud), nameof(StardewValley.BellsAndWhistles.Cloud.drawAboveFrontLayer), [typeof(SpriteBatch)]),
                 "skipping the vanilla drifting cloud shadow",
                 prefix: new HarmonyMethod(typeof(ShadowSuppression), nameof(ShadowSuppression.Cloud_Draw_Prefix)));
             // Critters draw their own Game1.shadowTexture blob inside draw()/drawAboveFrontLayer()
@@ -242,7 +250,7 @@ namespace SDVRadiance
                 {
                     var declaredDraw = critterType.GetMethod(methodName,
                         System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly,
-                        null, new[] { typeof(SpriteBatch) }, null);
+                        null, [typeof(SpriteBatch)], null);
                     if (declaredDraw == null || declaredDraw.IsAbstract)
                         continue;
                     try
@@ -274,7 +282,7 @@ namespace SDVRadiance
                 harmony.Patch(
                     original: AccessTools.Method(typeof(StardewValley.Locations.MineShaft),
                                                  nameof(StardewValley.Locations.MineShaft.drawAboveAlwaysFrontLayer),
-                                                 new[] { typeof(SpriteBatch) }),
+                                                 [typeof(SpriteBatch)]),
                     prefix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(MineFloorNumber_Prefix)),
                     postfix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(MineFloorNumber_Postfix)));
             }
@@ -574,7 +582,7 @@ namespace SDVRadiance
         {
             Type critterBase = typeof(StardewValley.BellsAndWhistles.Critter);
             var prefix = new HarmonyMethod(typeof(HarmonyPatcher), nameof(CritterUpdate_Prefix));
-            Type[] signature = { typeof(Microsoft.Xna.Framework.GameTime), typeof(GameLocation) };
+            Type[] signature = [typeof(Microsoft.Xna.Framework.GameTime), typeof(GameLocation)];
             int patched = 0;
             foreach (Type type in critterBase.Assembly.GetTypes())
             {
@@ -619,7 +627,7 @@ namespace SDVRadiance
         internal static void HoldCharactersWhileFrozen(Harmony harmony, IMonitor monitor)
         {
             var prefix = new HarmonyMethod(typeof(HarmonyPatcher), nameof(CharacterUpdate_Prefix));
-            Type[] signature = { typeof(Microsoft.Xna.Framework.GameTime), typeof(GameLocation) };
+            Type[] signature = [typeof(Microsoft.Xna.Framework.GameTime), typeof(GameLocation)];
             int patched = 0;
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
@@ -666,7 +674,7 @@ namespace SDVRadiance
         /// line. Author-only.</summary>
         private static void HoldMapAnimationWhileFrozen(Harmony harmony, IMonitor monitor)
         {
-            var update = AccessTools.Method(typeof(xTile.Map), nameof(xTile.Map.Update), new[] { typeof(long) });
+            var update = AccessTools.Method(typeof(xTile.Map), nameof(xTile.Map.Update), [typeof(long)]);
             if (update == null)
             {
                 monitor.Log("xTile.Map.Update(long) not found; animated tiles will run through a frozen capture.", LogLevel.Trace);
@@ -688,7 +696,7 @@ namespace SDVRadiance
         private static void HoldTemporarySpritesWhileFrozen(Harmony harmony, IMonitor monitor)
         {
             var update = AccessTools.Method(typeof(TemporaryAnimatedSprite), nameof(TemporaryAnimatedSprite.update),
-                new[] { typeof(Microsoft.Xna.Framework.GameTime) });
+                [typeof(Microsoft.Xna.Framework.GameTime)]);
             if (update == null)
             {
                 monitor.Log("TemporaryAnimatedSprite.update(GameTime) not found; temporary sprites will run through a frozen capture.", LogLevel.Trace);
@@ -706,7 +714,29 @@ namespace SDVRadiance
             return false;
         }
 
-        internal static void UpdateWater_Postfix(GameLocation __instance)
+        /// <summary>How each location's water texture scrolls, as a multiple of the game's own
+        /// pace, by location name; see RenderPipeline.GameWaterScrollHere. A location not
+        /// named here scrolls the way the game drew it.</summary>
+        private static readonly Dictionary<string, float> GameWaterScrollByLocation = [];
+
+        internal static void SetGameWaterScroll(GameLocation location, float alongTheGame)
+        {
+            string name = location.NameOrUniqueName ?? "";
+            if (Math.Abs(alongTheGame - 1f) < 0.0001f)
+                GameWaterScrollByLocation.Remove(name);
+            else
+                GameWaterScrollByLocation[name] = alongTheGame;
+        }
+
+        internal static string DescribeGameWaterScroll()
+            => GameWaterScrollByLocation.Count == 0
+                ? "none (every location as the game draws it)"
+                : string.Join(", ", System.Linq.Enumerable.Select(GameWaterScrollByLocation, entry => $"{entry.Key} x{entry.Value:F2}"));
+
+        internal static void UpdateWater_Prefix(GameLocation __instance, out (float Position, bool TileFlip) __state)
+            => __state = (__instance.waterPosition, __instance.waterTileFlip);
+
+        internal static void UpdateWater_Postfix(GameLocation __instance, (float Position, bool TileFlip) __state)
         {
             // The scroll is the game's motion, not ours, so a frozen render clock does not stop
             // it: two dumps of one frozen frame at the beach differed across the whole sea, and
@@ -717,6 +747,26 @@ namespace SDVRadiance
                 __instance.waterPosition = 0f;
             if (!FreezeGameWater)
                 return;
+            // The step the game just took, run at this location's pace instead. The game adds a
+            // little each tick and folds at a whole tile, so the step is read back through that
+            // fold, and the result is folded the same way: the scroll only changes speed or
+            // direction, it never lands somewhere new.
+            if (!Determinism.Frozen
+                && GameWaterScrollByLocation.TryGetValue(__instance.NameOrUniqueName ?? "", out float alongTheGame))
+            {
+                float step = __instance.waterPosition - __state.Position;
+                if (step < -32f)
+                    step += 64f;
+                float scrolled = __state.Position + step * alongTheGame;
+                float folds = MathF.Floor(scrolled / 64f);
+                __instance.waterPosition = scrolled - 64f * folds;
+                // The game swaps the two water tiles of its checkerboard every time its own scroll
+                // folds, so the swap belongs to OUR fold, not the game's. Left to the game, a slow
+                // river near the fold swapped them on nearly every tick while the scroll was put
+                // back, and a river running the other way folded down with no swap at all: the
+                // whole of the game's water popped between its two patterns.
+                __instance.waterTileFlip = __state.TileFlip != (Math.Abs(folds) % 2f == 1f);
+            }
             __instance.waterAnimationIndex = 0;
             if (!_loggedFreeze) { _monitor?.Log("Water frame-cycle frozen (shader ripple active); vertical scroll left running.", LogLevel.Info); _loggedFreeze = true; }
         }

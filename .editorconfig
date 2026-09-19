@@ -1,0 +1,105 @@
+root = true
+
+# Code style hints the source was cleaned against on 2026-09-15. Every rule here is a suggestion:
+# the editor shows a hint under new code that drifts from it, and the build never fails on one.
+# Rules left out on purpose: braces (IDE0011), explicit types (IDE0008), expression bodies
+# (IDE0022), formatting (IDE0055, which would flatten hand-aligned tables) and auto properties
+# (IDE0032, fields are handed out by ref). The three below are turned off outright because the
+# code is built the other way on purpose.
+
+[*.cs]
+
+# Every type lives in the one SDVRadiance namespace whatever its folder (IDE0130): AgentBridge and
+# the dev menu find types by name through reflection ("SDVRadiance.MapDump"), and a namespace per
+# folder would break them.
+dotnet_style_namespace_match_folder = false
+dotnet_diagnostic.IDE0130.severity = none
+
+# Constructors stay written out (IDE0290): a primary constructor's parameters are captured, not
+# readonly fields, and most of these classes assign and check what they are given.
+csharp_style_prefer_primary_constructors = false:silent
+dotnet_diagnostic.IDE0290.severity = none
+
+# Private state is _camelCase, and that includes the ref properties that hand one screen's state
+# to code written against a field of the same name (RenderPipeline.Screens: _masterFade and the
+# rest), so the per-screen move did not have to rename every use (IDE1006).
+dotnet_naming_symbols.private_state_properties.applicable_kinds = property
+dotnet_naming_symbols.private_state_properties.applicable_accessibilities = private
+dotnet_naming_style.underscore_camel_case.required_prefix = _
+dotnet_naming_style.underscore_camel_case.capitalization = camel_case
+dotnet_naming_rule.private_state_properties_may_be_underscored.symbols = private_state_properties
+dotnet_naming_rule.private_state_properties_may_be_underscored.style = underscore_camel_case
+dotnet_naming_rule.private_state_properties_may_be_underscored.severity = none
+
+# this. only where a parameter or local hides the member (IDE0003)
+dotnet_style_qualification_for_field = false:suggestion
+dotnet_style_qualification_for_property = false:suggestion
+dotnet_style_qualification_for_method = false:suggestion
+dotnet_style_qualification_for_event = false:suggestion
+dotnet_diagnostic.IDE0003.severity = suggestion
+
+# Collection expressions: [a, b] and [] (IDE0028, IDE0300-IDE0306)
+dotnet_style_prefer_collection_expression = when_types_loosely_match:suggestion
+dotnet_style_collection_initializer = true:suggestion
+dotnet_diagnostic.IDE0028.severity = suggestion
+dotnet_diagnostic.IDE0300.severity = suggestion
+dotnet_diagnostic.IDE0301.severity = suggestion
+dotnet_diagnostic.IDE0302.severity = suggestion
+dotnet_diagnostic.IDE0303.severity = suggestion
+dotnet_diagnostic.IDE0304.severity = suggestion
+dotnet_diagnostic.IDE0305.severity = suggestion
+dotnet_diagnostic.IDE0306.severity = suggestion
+
+# new() when the type is already written on the left (IDE0090)
+csharp_style_implicit_object_creation_when_type_is_apparent = true:suggestion
+dotnet_diagnostic.IDE0090.severity = suggestion
+
+# Casts, members and values that do nothing (IDE0004, IDE0051, IDE0052, IDE0059)
+dotnet_diagnostic.IDE0004.severity = suggestion
+
+# Parentheses (IDE0047) stay silent. Its fix also strips grouping that carries the meaning:
+# (timeOfDay / 100) * 60 is hours to minutes, (y % 16) * 16 + (x % 16) is a texel index, and
+# ((known & IsWater) != 0) == isWater is a comparison of two answers. Remove only the clutter
+# by hand: a {(value)} hole in an interpolated string, or a whole ternary wrapped in parentheses.
+dotnet_style_parentheses_in_arithmetic_binary_operators = always_for_clarity:silent
+dotnet_style_parentheses_in_relational_binary_operators = always_for_clarity:silent
+dotnet_style_parentheses_in_other_binary_operators = always_for_clarity:silent
+dotnet_style_parentheses_in_other_operators = never_if_unnecessary:silent
+dotnet_diagnostic.IDE0047.severity = silent
+dotnet_diagnostic.IDE0051.severity = suggestion
+dotnet_diagnostic.IDE0052.severity = suggestion
+csharp_style_unused_value_assignment_preference = discard_variable:suggestion
+dotnet_diagnostic.IDE0059.severity = suggestion
+
+# Small modern forms that read better (IDE0017, IDE0018, IDE0054, IDE0056, IDE0057, IDE0078, IDE1005)
+dotnet_style_object_initializer = true:suggestion
+csharp_style_inlined_variable_declaration = true:suggestion
+dotnet_style_prefer_compound_assignment = true:suggestion
+csharp_style_prefer_index_operator = true:suggestion
+csharp_style_prefer_range_operator = true:suggestion
+csharp_style_prefer_pattern_matching = true:suggestion
+csharp_style_conditional_delegate_call = true:suggestion
+dotnet_diagnostic.IDE0017.severity = suggestion
+dotnet_diagnostic.IDE0018.severity = suggestion
+dotnet_diagnostic.IDE0054.severity = suggestion
+dotnet_diagnostic.IDE0056.severity = suggestion
+dotnet_diagnostic.IDE0057.severity = suggestion
+dotnet_diagnostic.IDE0078.severity = suggestion
+dotnet_diagnostic.IDE1005.severity = suggestion
+
+# A named tuple stays one value (IDE0042 off): cell.Weight and box.MaxRadius say whose field it
+# is, and the fix unpacked seven-element light boxes into PascalCase locals, most of them unused,
+# inside the per-light loop.
+csharp_style_deconstructed_variable_declaration = false:silent
+dotnet_diagnostic.IDE0042.severity = none
+
+# A lambda stays a lambda (IDE0039 silent): a local function handed on as a delegate builds a
+# new delegate at every place it is passed, where the lambda was built once.
+csharp_style_prefer_local_over_anonymous_function = false:silent
+dotnet_diagnostic.IDE0039.severity = silent
+
+# Fields never written after construction are readonly (IDE0044); tuple elements by name (IDE0033)
+dotnet_style_readonly_field = true:suggestion
+dotnet_style_explicit_tuple_names = true:suggestion
+dotnet_diagnostic.IDE0044.severity = suggestion
+dotnet_diagnostic.IDE0033.severity = suggestion

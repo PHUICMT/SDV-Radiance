@@ -157,7 +157,7 @@ namespace SDVRadiance
             // A load, a long pause or an alt-tab must not fast-forward the whole world when the
             // game comes back; a second is far longer than any real frame and far shorter than
             // any stall worth replaying.
-            if (elapsed > 0.0 && elapsed < 1.0)
+            if (elapsed is > 0.0 and < 1.0)
                 _ourTicks += elapsed * 60.0;
         }
 

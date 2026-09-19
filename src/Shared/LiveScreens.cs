@@ -63,7 +63,7 @@ namespace SDVRadiance
             foreach (int screenId in byScreen.Keys)
             {
                 if (screenId >= live)
-                    (departed ??= new List<int>()).Add(screenId);
+                    (departed ??= []).Add(screenId);
             }
             if (departed == null)
                 return;

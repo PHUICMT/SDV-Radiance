@@ -98,14 +98,14 @@ namespace SDVRadiance
         /// after them in the frame is read with.</summary>
         internal static bool InWorldStep { get; private set; }
         private static IMonitor? _monitor;
-        private static readonly HashSet<string> _restartsSeen = new();
+        private static readonly HashSet<string> _restartsSeen = [];
         /// <summary>Frames left in which the sampler each texture run is flushed with is noted,
         /// after a radiance_drawsat question. The runs flush after the answer prints (the batch
         /// is still open at RenderedWorld), so the table prints two frames after the question.</summary>
         private static int _flushWatchFrames;
         internal static bool FlushWatchOpen => _flushWatchFrames > 0;
-        private static readonly Dictionary<Texture2D, (SamplerState applied, SamplerState begun)> _flushedWith = new();
-        private static readonly List<Texture2D> _answered = new();
+        private static readonly Dictionary<Texture2D, (SamplerState applied, SamplerState begun)> _flushedWith = [];
+        private static readonly List<Texture2D> _answered = [];
 
         /// <summary>The game's own batch was begun again while the world was being drawn. Named once
         /// per caller and sampler, because the one that matters is the one that is not Point: a
@@ -137,7 +137,7 @@ namespace SDVRadiance
 
         /// <summary>Sort mode and sampler of every restart seen, which is the half of "is this
         /// restart new" that can be answered without walking the stack.</summary>
-        private static readonly HashSet<int> _restartShapesSeen = new();
+        private static readonly HashSet<int> _restartShapesSeen = [];
         private static int _restartsTraced;
         /// <summary>How many stacks are walked in a session once every shape has been seen. A mod
         /// that restarts the batch every frame is a steady cost otherwise, for nothing new.</summary>
@@ -296,14 +296,14 @@ namespace SDVRadiance
             PatchedOverloads = 0;
             _monitor = monitor;
             (Type[] signature, string handler)[] overloads =
-            {
+            [
                 (new[] { typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color), typeof(float), typeof(Vector2), typeof(Vector2), typeof(SpriteEffects), typeof(float) },
                     nameof(DrawVectorScale_Prefix)),
                 (new[] { typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color), typeof(float), typeof(Vector2), typeof(float), typeof(SpriteEffects), typeof(float) },
                     nameof(DrawFloatScale_Prefix)),
                 (new[] { typeof(Texture2D), typeof(Rectangle), typeof(Rectangle?), typeof(Color), typeof(float), typeof(Vector2), typeof(SpriteEffects), typeof(float) },
                     nameof(DrawDestination_Prefix)),
-            };
+            ];
             foreach ((Type[] signature, string handler) in overloads)
             {
                 var draw = AccessTools.Method(typeof(SpriteBatch), nameof(SpriteBatch.Draw), signature);

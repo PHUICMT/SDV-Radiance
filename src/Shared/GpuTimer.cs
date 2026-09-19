@@ -206,6 +206,7 @@ namespace SDVRadiance
                     {
                         if (id != 0)
                             continue;
+                        ReleaseGeneratedQueries(s, ids);
                         Fail("glGenQueries produced no ids");
                         return;
                     }
@@ -228,6 +229,23 @@ namespace SDVRadiance
             {
                 Fail($"{ex.GetType().Name}: {ex.Message}");
             }
+        }
+
+        /// <summary>Hand back every query the pool generated before it failed to fill. Without this
+        /// a driver that runs out part way kept the finished slots' query objects for the rest of
+        /// the session: the pool is marked broken and nothing reads or deletes them again.
+        /// glDeleteQueries skips zero ids, so the half-filled slot can go back whole.</summary>
+        private static void ReleaseGeneratedQueries(int filledSlots, uint[] halfFilledSlot)
+        {
+            if (_deleteQueries != null)
+            {
+                for (int s = 0; s < filledSlots; s++)
+                    _deleteQueries(_ids![s].Length, _ids[s]);
+                _deleteQueries(halfFilledSlot.Length, halfFilledSlot);
+            }
+            _ids = null;
+            _begun = null;
+            _ended = null;
         }
 
         private static bool HasTimerExtension()

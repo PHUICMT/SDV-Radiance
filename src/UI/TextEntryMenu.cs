@@ -21,8 +21,8 @@ namespace SDVRadiance
         private readonly Action<string> _onComplete;
         private readonly Action _onCancelled;
         private readonly TextBox _textBox;
-        private ClickableTextureComponent _okButton = null!;
-        private ClickableTextureComponent _cancelButton = null!;
+        private readonly ClickableTextureComponent _okButton = null!;
+        private readonly ClickableTextureComponent _cancelButton = null!;
         private bool _closing;
 
         public TextEntryMenu(string title, string initial, Action<string> onDone, Action onCancel)

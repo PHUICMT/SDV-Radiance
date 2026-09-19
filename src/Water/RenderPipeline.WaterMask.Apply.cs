@@ -45,7 +45,7 @@ namespace SDVRadiance
             int pcount = pw * ph;
 
             if (job.ApplyTexturesDone == 0 && !job.WaterAny)
-                FillEmptyWaterMask(job, pcount);
+                FillEmptyWaterMask(pcount);
 
             // The two ! carry the invariant the one-frame upload always relied on: a job does not
             // reach Apply without the compose pass having filled both buffers.
@@ -93,13 +93,10 @@ namespace SDVRadiance
             int tilesW = job.TileWidth, tilesH = job.TileHeight;
             int count = tilesW * tilesH;
 
-            _lastWaterLocation = job.Location;
+            _lastWaterIdentity = job.Identity;
             _lastWaterTileX = job.StartTileX;
             _lastWaterTileY = job.StartTileY;
             _lastWaterBuildTick = Game1.ticks;
-            _lastWaterHookVersion = job.WaterDrawHookVersion;
-            _lastWaterLabelVersion = job.LabelVersion;
-            _lastWaterEpoch = job.Epoch;
             _hasWaterInMask = job.WaterAny;
             // Published for the player colour bake, which runs before this pipeline gets a look
             // at the frame. One compose late is fine: its reader gates on the same flag.
@@ -158,7 +155,7 @@ namespace SDVRadiance
         /// the texture has to move with it: a mask must always agree with its own origin. All
         /// four fields are cleared together: R and G decide coverage, and the SDF's 128 is its
         /// zero, so leaving a stale distance field behind would still shade a phantom shore.</summary>
-        private void FillEmptyWaterMask(WaterMaskJob job, int pcount)
+        private void FillEmptyWaterMask(int pcount)
         {
             if (_waterMaskPixels == null || _waterMaskPixels.Length < pcount) _waterMaskPixels = new Color[pcount];
             if (_maskScratch.WaterSignedDistancePixels == null || _maskScratch.WaterSignedDistancePixels.Length < pcount) _maskScratch.WaterSignedDistancePixels = new byte[pcount];

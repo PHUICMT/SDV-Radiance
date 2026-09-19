@@ -86,7 +86,7 @@ namespace SDVRadiance
         /// variance the uncapped run has left over is the artifact.</summary>
         private static int _burstStride = 1;
         private static int _burstSkip;
-        private readonly List<RenderTarget2D> _burstFrames = new();
+        private readonly List<RenderTarget2D> _burstFrames = [];
 
         /// <summary>Ask for a run of finished frames, written after the last one.</summary>
         internal static void RequestBurst(string name, int frames, int stride = 1)

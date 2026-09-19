@@ -48,7 +48,7 @@ namespace SDVRadiance
         /// <summary>Mods that draw daylight through windows themselves. Ours and theirs read the
         /// same thing (the game's own window light) and draw over the same floor, so both running
         /// at full strength means two beams and two patches of sun.</summary>
-        private static readonly string[] WindowDrawingModIds = { "Esoterick.DynamicWindows" };
+        private static readonly string[] WindowDrawingModIds = ["Esoterick.DynamicWindows"];
 
         /// <summary>
         /// Hand the VISIBLE half of window daylight to a mod that specialises in it, once, on the
@@ -73,7 +73,7 @@ namespace SDVRadiance
                 if (_config.WindowBeamEnabled)
                 {
                     _config.WindowBeamEnabled = false;
-                    this.Monitor.Log($"{id} is installed and draws its own light through windows, so Radiance's "
+                    Monitor.Log($"{id} is installed and draws its own light through windows, so Radiance's "
                         + "window beam and lit glass are off to avoid drawing them twice. The room still lights up "
                         + "from the window. Turn 'Window beam and glass' back on in the config if you want ours instead.",
                         LogLevel.Info);
@@ -97,11 +97,12 @@ namespace SDVRadiance
             // heartbeat is pure cost, so it only runs when this is true.
             ShadowRenderer.PlayerAccessoriesAnimate = helper.ModRegistry.IsLoaded("PeacefulEnd.FashionSense");
 
-            SVersion = this.ModManifest.Version.ToString();
+            SVersion = ModManifest.Version.ToString();
             HarmonyPatcher.ForceBufferDraw = EffectsActive;
             HarmonyPatcher.FreezeGameWater = _config.Enabled && _config.WaterEnabled;
             WaterDrawHook.Enabled = _config.Enabled && (_config.WaterEnabled || _config.WaterReflection);
-            LocationDrawHook.Enabled = WaterDrawHook.Enabled;
+            // Also read by the window reflection, for glass on art a location draws for itself (the bus).
+            LocationDrawHook.Enabled = WaterDrawHook.Enabled || (_config.Enabled && _config.WindowReflectionEnabled);
 
             helper.Events.GameLoop.GameLaunched += OnGameLaunched;
             helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
@@ -195,17 +196,17 @@ namespace SDVRadiance
                 _pipeline?.ForgetTileSheetListsDrawnFrom(System.Linq.Enumerable.Select(e.Names, n => n.Name));
             };
 
-            SurfaceMap.DiagnosticMonitor = this.Monitor;
-            MapDump.BridgeMonitor = this.Monitor;
+            SurfaceMap.DiagnosticMonitor = Monitor;
+            MapDump.BridgeMonitor = Monitor;
             MapDump.BridgeHelper = helper;
-            ConsoleCommands.RegisterAll(helper, this.Monitor, () => _config, () => _pipeline, this.ToggleTuner);
+            ConsoleCommands.RegisterAll(helper, Monitor, () => _config, () => _pipeline, ToggleTuner);
 
-            _harmony = new Harmony(this.ModManifest.UniqueID);
+            _harmony = new Harmony(ModManifest.UniqueID);
             PrecipitationSystem.LiveConfig = () => _config;
-            HarmonyPatcher.InstallAll(_harmony, this.Monitor);
+            HarmonyPatcher.InstallAll(_harmony, Monitor);
 
-            this.Monitor.Log("SDV-Radiance loaded (world post-processing via RenderedWorld).", LogLevel.Info);
-            PlatformReport.WriteOnce(this.Monitor, Game1.graphics?.GraphicsDevice);
+            Monitor.Log("SDV-Radiance loaded (world post-processing via RenderedWorld).", LogLevel.Info);
+            PlatformReport.WriteOnce(Monitor, Game1.graphics?.GraphicsDevice);
 
             // Local dev harness: src/DevMenu.local.cs is git-excluded, so it only exists on the
             // author's machine; it additionally requires a dev.local.flag file in the mod folder.
@@ -213,7 +214,7 @@ namespace SDVRadiance
             if (System.IO.File.Exists(System.IO.Path.Combine(helper.DirectoryPath, "dev.local.flag")))
                 Type.GetType("SDVRadiance.DevMenuLoader")
                     ?.GetMethod("Init")
-                    ?.Invoke(null, new object[] { helper, this.Monitor, (Func<ModConfig>)(() => _config) });
+                    ?.Invoke(null, [helper, Monitor, (() => _config)]);
         }
 
         /// <summary>One-time config fixes for users upgrading from older versions.</summary>
@@ -229,7 +230,7 @@ namespace SDVRadiance
                 if (_config.GodRaysEnabled)
                 {
                     _config.GodRaysEnabled = false;
-                    this.Monitor.Log("God rays switched off: the effect treats bright surfaces as light sources, so pale sprites blow out. "
+                    Monitor.Log("God rays switched off: the effect treats bright surfaces as light sources, so pale sprites blow out. "
                                    + "It is being rebuilt for 1.4.0 — re-enable it in the config or with F6 if you want it back.", LogLevel.Info);
                 }
                 helper.WriteConfig(_config);
@@ -263,7 +264,7 @@ namespace SDVRadiance
                 {
                     _config.RenderScale = 1f;
                     _config.RenderScaleAuto = false;
-                    this.Monitor.Log("Effect resolution set back to full size: the performance presets no longer lower it, because the "
+                    Monitor.Log("Effect resolution set back to full size: the performance presets no longer lower it, because the "
                                    + "round trip softened every sprite. The slider on the Performance page still sets it if you want the trade.", LogLevel.Info);
                 }
                 helper.WriteConfig(_config);
@@ -289,7 +290,7 @@ namespace SDVRadiance
             {
                 if (_pipeline == null)
                 {
-                    _pipeline = new RenderPipeline(Game1_GraphicsDevice, this.Monitor, this.Helper.DirectoryPath);
+                    _pipeline = new RenderPipeline(Game1_GraphicsDevice, Monitor, Helper.DirectoryPath);
                     // The labels have to be able to ask what art is really on a tile before they
                     // hand out paint that was made for a different picture, and the pipeline is
                     // what already holds every tilesheet's pixels. Wired here rather than in the
@@ -316,7 +317,7 @@ namespace SDVRadiance
         {
             // Answered here because here is where the world has finished drawing and the recorder's
             // list is closed. Before every early return below it, so it works with the effects off.
-            SpriteDrawRecorder.AnswerPendingQuestion(this.Monitor);
+            SpriteDrawRecorder.AnswerPendingQuestion(Monitor);
             // Self-heal: keep the postfix in sync with live config. A pending capture holds the
             // buffer open too, because the vanilla half of a before/after pair is taken with the
             // whole stack off, and with no buffer bound there is nothing to read back.
@@ -327,7 +328,8 @@ namespace SDVRadiance
             bool waterHere = RenderPipeline.WaterAllowedIn(Game1.currentLocation, _config);
             HarmonyPatcher.FreezeGameWater = _config.Enabled && _config.WaterEnabled && waterHere;
             WaterDrawHook.Enabled = _config.Enabled && (_config.WaterEnabled || _config.WaterReflection);
-            LocationDrawHook.Enabled = WaterDrawHook.Enabled;
+            // Also read by the window reflection, for glass on art a location draws for itself (the bus).
+            LocationDrawHook.Enabled = WaterDrawHook.Enabled || (_config.Enabled && _config.WindowReflectionEnabled);
             // SPLIT SCREEN TRACE (radiance_screenwatch). This handler runs once per SCREEN per
             // frame, and every expensive cache below it reuses its work while the camera has not
             // moved. With two cameras taking turns, each pass moves the origin the next pass is
@@ -341,7 +343,7 @@ namespace SDVRadiance
             if (!EffectsActive && !RenderPipeline.DumpPending)
             {
                 if (watching)
-                    this.Monitor.Log($"[screenwatch] screen={Context.ScreenId} SKIPPED (effects not active)", LogLevel.Info);
+                    Monitor.Log($"[screenwatch] screen={Context.ScreenId} SKIPPED (effects not active)", LogLevel.Info);
                 return;
             }
             // Belt and braces: the pre-draw handler normally claims the screen, but it returns
@@ -351,7 +353,7 @@ namespace SDVRadiance
             HarmonyPatcher.DrawHoistedMineFloorNumber(e.SpriteBatch);
             // Logged AFTER the pass so the frame size is this screen's, not the previous screen's.
             if (watching)
-                this.Monitor.Log($"[screenwatch] screen={Context.ScreenId} location={Game1.currentLocation?.NameOrUniqueName} "
+                Monitor.Log($"[screenwatch] screen={Context.ScreenId} location={Game1.currentLocation?.NameOrUniqueName} "
                     // The clock every time-driven curve reads. Split screen runs one Game1 per screen,
                     // so two screens can disagree about the fraction of the current ten minutes, and
                     // anything shared between them that is keyed on the sun (the object shadow bakes)
@@ -429,6 +431,7 @@ namespace SDVRadiance
             // And how much sharper a shadow is at the contact than at its tip, read by the bake
             // paths, which are static for the same reason the two above are.
             ShadowRenderer.ContactHardnessNow = Math.Clamp(_config.ShadowContactHardness, 0f, 1f);
+            ShadowRenderer.BakeDepthNow = ShadowRenderer.BakeDepthFor(_config.DirectionalShadowStrength);
             // And how far the soft edge is stretched along the shadow rather than being the same
             // width all the way round, read by the same static bake paths.
             ShadowRenderer.PenumbraStretchNow = Math.Clamp(_config.ShadowPenumbraStretch, 0f, 1f);
@@ -458,8 +461,8 @@ namespace SDVRadiance
             if (prepPlayer)
             {
                 _shadows ??= new ShadowRenderer();
-                ShadowRenderer.DiagnosticMonitor = _config.DebugLogging ? this.Monitor : null;
-                ShadowRenderer.SharedMonitor = this.Monitor;
+                ShadowRenderer.DiagnosticMonitor = _config.DebugLogging ? Monitor : null;
+                ShadowRenderer.SharedMonitor = Monitor;
                 long t0 = FrameCost.Begin(FrameCost.Part.ShadowPrepare);
                 // The three parts are timed on their own into the report (ChainSteps): this row
                 // is the largest thing the mod does on a split screen and it did not say which.
@@ -491,6 +494,12 @@ namespace SDVRadiance
             // Same window: a render-target swap is only safe before the world batches open.
             if (_config.WindowReflectionEnabled && Context.IsWorldReady)
                 _pipeline?.BakeWindowReflectionPlayer(_config);
+
+            // What the location drew for itself last frame is closed off by the sprite mask bake. With
+            // the water off that bake never runs, and the window reflection still reads the list (the
+            // bus's glass), so it is closed here instead, or it would grow a frame's worth every frame.
+            if (!(_config.WaterEnabled || _config.WaterReflection) && LocationDrawHook.Enabled)
+                LocationDrawHook.BeginFrame();
 
             // Per-frame water sprite mask (ducks/NPCs/critters on water must not ripple).
             // Baked here because a render-target swap is only safe before the world batches open.
@@ -590,13 +599,12 @@ namespace SDVRadiance
             }
             catch (Exception ex)
             {
-                this.Monitor.Log($"[bench] shadow measurement skipped: {ex.Message}", LogLevel.Trace);
+                Monitor.Log($"[bench] shadow measurement skipped: {ex.Message}", LogLevel.Trace);
             }
         }
 
         // Perf probes (DebugLogging only): where the frame time actually goes, so stutter
         // reports can be pinned to a subsystem instead of guessed at.
-        private readonly System.Diagnostics.Stopwatch _performanceStopwatch = new();
         private double _prepareMilliseconds, _drawMilliseconds, _maxDrawMilliseconds;
         /// <summary>The frame the texture-unit guard was last run for; see OnRenderingStep.</summary>
         private int _samplerGuardFrame = -1;
@@ -625,8 +633,10 @@ namespace SDVRadiance
                 // MonoGame is not asked to walk sampler slots nothing can reach (see
                 // TextureUnitGuard.CapSamplerSlots): a length check on every frame but the first.
                 TextureUnitGuard.WantedSamplerSlots = _config.LimitSamplerSlots ? TextureUnitGuard.DefaultSamplerSlots : 0;
-                TextureUnitGuard.HoldSamplerSlots(Game1.graphics.GraphicsDevice, this.Monitor);
+                TextureUnitGuard.HoldSamplerSlots(Game1.graphics.GraphicsDevice, Monitor);
             }
+            if (e.Step == StardewValley.Mods.RenderSteps.World_AlwaysFront)
+                MistLayers.AlwaysFrontStepBegins();
             if (e.Step != StardewValley.Mods.RenderSteps.World_Sorted)
                 return;
             // The sorted world batch is what the sprite relief replays (see SpriteDrawRecorder);
@@ -646,7 +656,7 @@ namespace SDVRadiance
             if (!_config.DirectionalShadowsEnabled)
                 return;
             _shadows ??= new ShadowRenderer();
-            ShadowRenderer.DiagnosticMonitor = _config.DebugLogging ? this.Monitor : null;
+            ShadowRenderer.DiagnosticMonitor = _config.DebugLogging ? Monitor : null;
             long t0 = FrameCost.Begin(FrameCost.Part.ShadowDraw);
             _shadows.DrawInto(e.SpriteBatch, _config);
             double ms = FrameCost.End(FrameCost.Part.ShadowDraw, t0);
@@ -656,7 +666,7 @@ namespace SDVRadiance
                 if (ms > _maxDrawMilliseconds) _maxDrawMilliseconds = ms;
                 if (++_performanceFrameCount >= 300)
                 {
-                    this.Monitor.Log($"[perf] shadows over {_performanceFrameCount} frames: prepare avg={_prepareMilliseconds / _performanceFrameCount:0.00}ms, "
+                    Monitor.Log($"[perf] shadows over {_performanceFrameCount} frames: prepare avg={_prepareMilliseconds / _performanceFrameCount:0.00}ms, "
                         + $"draw avg={_drawMilliseconds / _performanceFrameCount:0.00}ms max={_maxDrawMilliseconds:0.00}ms.", LogLevel.Debug);
                     _prepareMilliseconds = _drawMilliseconds = _maxDrawMilliseconds = 0; _performanceFrameCount = 0;
                 }
@@ -673,7 +683,10 @@ namespace SDVRadiance
             if (e.Step == StardewValley.Mods.RenderSteps.World_Sorted)
                 SpriteDrawRecorder.EndWorldSorted();
             else if (e.Step == StardewValley.Mods.RenderSteps.World_AlwaysFront)
+            {
                 SpriteDrawRecorder.EndWorldFront();
+                MistLayers.AlwaysFrontStepEnds();
+            }
             // The game has just drawn its own lights into its lightmap and the batch is still
             // open on it: the one moment our lit windows can push the night back too.
             else if (e.Step == StardewValley.Mods.RenderSteps.World_RenderLightmap
@@ -762,7 +775,7 @@ namespace SDVRadiance
             {
                 _config.Enabled = !_config.Enabled;
                 HarmonyPatcher.ForceBufferDraw = EffectsActive;
-                this.Helper.WriteConfig(_config);
+                Helper.WriteConfig(_config);
                 Game1.addHUDMessage(HUDMessage.ForCornerTextbox($"SDV-Radiance: {(_config.Enabled ? "ON" : "OFF")}"));
             }
 
@@ -788,18 +801,18 @@ namespace SDVRadiance
         internal void ToggleTuner()
         {
             if (Game1.activeClickableMenu is RadianceTunerMenu tuner)
-                tuner.exitThisMenu();
+                tuner.SlideClosed();
             else if (Context.IsPlayerFree)
                 Game1.activeClickableMenu = new RadianceTunerMenu(
                     _config,
-                    translate: this.I18n,
+                    translate: I18n,
                     onChange: () => HarmonyPatcher.ForceBufferDraw = EffectsActive,
-                    onSave: () => this.Helper.WriteConfig(_config));
+                    onSave: () => Helper.WriteConfig(_config));
         }
 
         private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
         {
-            GmcmRegistration.Register(this.Helper, this.ModManifest, this.Monitor, this.I18n,
+            GmcmRegistration.Register(Helper, ModManifest, Monitor, I18n,
                 config: () => _config,
                 replaceConfig: fresh => _config = fresh,
                 refreshForceBufferDraw: () => HarmonyPatcher.ForceBufferDraw = EffectsActive,
@@ -812,53 +825,95 @@ namespace SDVRadiance
             // labelling tool worth publishing: an author can paint their sheets and ship the result
             // without this mod having to bundle it. A pack may only paint art its own mod supplies.
             LabelStore.Instance = new LabelStore(
-                System.IO.Path.Combine(this.Helper.DirectoryPath, "labels"),
-                LabelPacks.Discover(this.Helper.DirectoryPath, this.Monitor), this.Monitor);
+                System.IO.Path.Combine(Helper.DirectoryPath, "labels"),
+                LabelPacks.Discover(Helper.DirectoryPath, Monitor), Monitor);
             if (LabelStore.Instance.Any)
-                this.Monitor.Log($"Water labels loaded: {LabelStore.Instance.SheetCount} sheets, "
+                Monitor.Log($"Water labels loaded: {LabelStore.Instance.SheetCount} sheets, "
                     + $"{LabelStore.Instance.TileCount} tiles"
                     + (LabelStore.Instance.PackCount == 0
                         ? "."
                         : $", including {LabelStore.Instance.PackCount} pack(s) from other mods."),
                     LogLevel.Info);
             else
-                this.Monitor.Log("No water labels found in labels/ — falling back to colour classification.", LogLevel.Warn);
+                Monitor.Log("No water labels found in labels/ — falling back to colour classification.", LogLevel.Warn);
 
             // Draw-call-accurate water discovery: patch drawWaterTile on GameLocation AND every
             // loaded override (mod location classes included) — hence GameLaunched, not Entry.
-            WaterDrawHook.Install(_harmony!, this.Monitor);
+            WaterDrawHook.Install(_harmony!, Monitor);
 
             // A location that paints something of its own - Ginger Island's boat - draws it from
             // fields no layer, label or entity list can see. Bracket those draws so the water
             // knows where their art landed.
-            LocationDrawHook.Apply(_harmony!, this.Monitor);
+            LocationDrawHook.Apply(_harmony!, Monitor);
 
             // A character class from another mod that paints its own blob shadow (Custom
             // Companions) hides the vanilla one, which read to the shadow pass as "no shadow": its
             // creatures cast nothing and kept their blob. Its draws go through a shim that says so.
-            ShadowSuppression.PatchSelfDrawnCharacters(_harmony!, this.Monitor);
+            ShadowSuppression.PatchSelfDrawnCharacters(_harmony!, Monitor);
 
             // The verification harness freezes the render clock and dumps twice; villagers and the
             // creatures other mods derive from NPC keep walking through that, so their update is
             // held too. Every loaded assembly, hence GameLaunched.
-            HarmonyPatcher.HoldCharactersWhileFrozen(_harmony!, this.Monitor);
+            HarmonyPatcher.HoldCharactersWhileFrozen(_harmony!, Monitor);
 
             // If another mod also rewrites the weather draw, two replacements fight over one
             // slot and the player cannot tell whose rain is broken. Yield for the session and
             // say so once; the config value itself is left alone.
-            HarmonyPatcher.DetectForeignWeatherPatches(this.Monitor);
+            HarmonyPatcher.DetectForeignWeatherPatches(Monitor);
 
             // Say in the log who owns our animation clock. An uncapper has a real reason to patch
             // it and one of them does, but until this line existed a patched clock was invisible
             // from inside and from any log a player could send: a flicker hunt on 2026-09-01 ran
             // all night and ended there. Nothing is changed by this, it is only said out loud.
-            HarmonyPatcher.LogForeignClockPatches(this.Monitor);
+            HarmonyPatcher.LogForeignClockPatches(Monitor);
 
-            RenderPipeline.DynamicReflectionsPresent = this.Helper.ModRegistry.IsLoaded("PeacefulEnd.DynamicReflections");
+            RenderPipeline.DynamicReflectionsPresent = Helper.ModRegistry.IsLoaded("PeacefulEnd.DynamicReflections");
             if (RenderPipeline.DynamicReflectionsPresent)
-                this.Monitor.Log("Dynamic Reflections found: its puddles win, ours stay off. Wet-ground dampness and night streaks are unaffected.", LogLevel.Info);
+                Monitor.Log("Dynamic Reflections found: its puddles win, ours stay off. Wet-ground dampness and night streaks are unaffected.", LogLevel.Info);
+
+            StandAsideForAnotherUpscaler();
         }
 
-        private string I18n(string key) => this.Helper.Translation.Get(key);
+        /// <summary>Mods that resample the game's art for themselves, by id and by the name a
+        /// player would know them as.</summary>
+        private static readonly (string Id, string Name)[] OtherUpscalers =
+        [
+            ("aurpine.ClearGlasses", "Clear Glasses"),
+            ("ameisen.SpriteMaster", "SpriteMaster"),
+        ];
+
+        /// <summary>Turn our own Smooth art off when another mod is already doing that job.
+        ///
+        /// <para>Two upscalers on one sprite is not twice as smooth, it is a fight: they both
+        /// patch the same draw, each hands the other a texture it did not expect, and which of
+        /// them wins depends on the order SMAPI happened to load them in. The player did not ask
+        /// for that and cannot see it, so this mod stands aside, in memory only, and says in the
+        /// log which mod it stood aside for. config.json is not touched: uninstall theirs and ours
+        /// is back the way it was set.</para></summary>
+        private void StandAsideForAnotherUpscaler()
+        {
+            foreach ((string id, string name) in OtherUpscalers)
+            {
+                if (!Helper.ModRegistry.IsLoaded(id))
+                    continue;
+                if (_config.SheetUpscaleEnabled)
+                {
+                    _config.SheetUpscaleEnabled = false;
+                    Monitor.Log($"{name} is installed, and it smooths the game's art already. "
+                              + "This mod's own Smooth art is switched off while it is there, so the two are not "
+                              + "resampling the same sprites against each other. Everything else - the lighting, "
+                              + "the water, the shadows - is unaffected. Your config.json is untouched: remove "
+                              + $"{name} and Smooth art comes back on by itself.", LogLevel.Info);
+                }
+                else
+                {
+                    Monitor.Log($"{name} is installed and smooths the art; this mod's Smooth art is off anyway.",
+                        LogLevel.Trace);
+                }
+                return;
+            }
+        }
+
+        private string I18n(string key) => Helper.Translation.Get(key);
     }
 }

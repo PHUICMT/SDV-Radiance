@@ -131,7 +131,7 @@ namespace SDVRadiance
                                 out RenderTarget2D renderTarget, out Vector2 feetInRenderTarget))
                             // A tile column is 16 px wide and as many tiles tall as the prop: its lean already carries
                             // further than its width, so there is nothing for the narrowing to fix here.
-                            _bakedObjectCache[key] = new SpriteBake { Rt = renderTarget, FeetInRt = feetInRenderTarget, BakedProjection = projection, BakedBlur = blur, BakedContactHardness = ContactHardnessNow, BakedPenumbraStretch = PenumbraStretchNow, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = SharedTicks.Now };
+                            _bakedObjectCache[key] = NewObjectBake(_objectGraphicsDevice, renderTarget, feetInRenderTarget, projection, blur);
                         continue;
                     }
                     if (!_bakedObjectCache.TryGetValue(key, out SpriteBake? bakedEntry))
@@ -159,7 +159,7 @@ namespace SDVRadiance
                     // lay-down in the pixels and the one the sun asks for.
                     if (projection.Drift(bakedEntry.BakedProjection, 16f, cast.Height * 16f) * 4f > ShearRefreshPixels
                         || Math.Abs(blur - bakedEntry.BakedBlur) > 0.3f
-                        || bakedEntry.BakedContactHardness != ContactHardnessNow
+                        || bakedEntry.BakedContactHardness != ContactHardnessNow || bakedEntry.BakedDepth != BakeDepthNow
                         || bakedEntry.BakedPenumbraStretch != PenumbraStretchNow)
                         QueueTileColumnBake(key, cast, projection, blur);
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(x * 64f + 32f, (y + 1f) * 64f - 2f));
@@ -294,7 +294,7 @@ namespace SDVRadiance
             // Measured on the Buildings layer in both axes, because one axis is not
             // enough on its own: a cliff's bottom row is wide, but a one-tile-wide
             // vertical spur of that same cliff is not.
-            bool propByCoverage = coverage >= 0.04f && coverage <= 0.95f;
+            bool propByCoverage = coverage is >= 0.04f and <= 0.95f;
             int spanWidth = 1, spanHeight = 1;
             if (!propByCoverage && coverage > 0.04f)
             {
@@ -448,7 +448,7 @@ namespace SDVRadiance
 
         /// <summary>Fraction of a tile's art that is opaque (alpha > 48). Sampled once per
         /// (sheet, rect) and cached — this is the "look at the actual image" prop test.</summary>
-        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle sourceRect), float> _tileCoverageCache = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle sourceRect), float> _tileCoverageCache = [];
         private Color[] _tileCoveragePixels = new Color[1024];
         // The whole-tilesheet pixel cache lives in SheetPixels now, shared with the water mask,
         // which asks these same sheets. Reading each prop tile with its own texture.GetData is a
@@ -518,10 +518,10 @@ namespace SDVRadiance
             public Rectangle BaseSrc;
             /// <summary>Tiles the column occupies above its base row, for the lean-drift test.</summary>
             public int Height;
-            public Rectangle[] Sources = System.Array.Empty<Rectangle>();
-            public int[] Levels = System.Array.Empty<int>();
+            public Rectangle[] Sources = [];
+            public int[] Levels = [];
             /// <summary>How the map turns each source, one byte per entry (see MapLayers.Orientation).</summary>
-            public byte[] Orients = System.Array.Empty<byte>();
+            public byte[] Orients = [];
             /// <summary>How the map turns the BASE tile, for the redraw that puts it back on top.</summary>
             public byte BaseOrient;
             public (Texture2D texture, Rectangle sourceRect, SpriteEffects effect) Key;
@@ -532,12 +532,12 @@ namespace SDVRadiance
         }
 
         /// <summary>The classifications this call reads: the set kept for the place being drawn.</summary>
-        private System.Collections.Generic.Dictionary<int, TilePropCast> _propCache = new();
+        private System.Collections.Generic.Dictionary<int, TilePropCast> _propCache = [];
 
         /// <summary>One place's tile classifications, and what they were taken for.</summary>
         private sealed class PropCacheForPlace
         {
-            internal readonly System.Collections.Generic.Dictionary<int, TilePropCast> Casts = new();
+            internal readonly System.Collections.Generic.Dictionary<int, TilePropCast> Casts = [];
             internal xTile.Map? Map;
             /// <summary>Day the classification was taken on. Map art is edited by content packs at
             /// the day boundary (seasonal sheets, festival layouts) and buildings finish overnight,
@@ -553,7 +553,7 @@ namespace SDVRadiance
         /// every tile on screen again, for both screens, every frame: the work the cache exists to
         /// save, done twice as often as with no cache at all. Found 13/9 beside the solid-tile
         /// texture of the shadow patch, which had the same one slot.</para></summary>
-        private readonly System.Collections.Generic.Dictionary<string, PropCacheForPlace> _propCacheByPlace = new();
+        private readonly System.Collections.Generic.Dictionary<string, PropCacheForPlace> _propCacheByPlace = [];
         private long _propCacheAsks;
         private const int PropCachePlacesKept = 4;
 
@@ -633,7 +633,7 @@ namespace SDVRadiance
             float columnHeight = levels * tileTexels;
             _lastBakeClass = columnSlotClass;
             _lastBakeScale = scale;
-            renderTarget = into ?? RentObjectRT(graphicsDevice, columnSlotClass);
+            renderTarget = into ?? ObjectBakeScratch(graphicsDevice, columnSlotClass);
             feetInRenderTarget = new Vector2(
                 (float)Math.Round(renderTarget.Width * 0.5f - (left + right) * 0.5f),
                 (float)Math.Round(renderTarget.Height - bottom - rimTexels - 1f));

@@ -47,6 +47,10 @@ namespace SDVRadiance
             public Rectangle SunContent;
             public ShadowProjection SunProjection;
             public float SunBlur = -1f;
+            /// <summary>The rest of what the laid-down silhouette was baked with. Shared, one screen's
+            /// re-bake stamped the new values and the other screen's old silhouette then passed the
+            /// check, keeping its old edge after the strength, contact or penumbra dials moved.</summary>
+            public float SunContactHardness = -1f, SunPenumbraStretch = -1f, SunBakeDepth = -1f;
             public bool SunFresh;
             public (int frame, int facing, Rectangle sourceRect) SunSignature = (-1, -1, default);
 
@@ -58,9 +62,9 @@ namespace SDVRadiance
             }
         }
 
-        private readonly Dictionary<int, ScreenBake> _screenBakes = new();
+        private readonly Dictionary<int, ScreenBake> _screenBakes = [];
         private int _activeScreenId = -1;
-        private readonly List<int> _departedScreens = new();
+        private readonly List<int> _departedScreens = [];
 
         /// <summary>Hand the player bake over to one screen, at the top of that screen's turn.
         /// A no-op in single player, where the id never changes.</summary>
@@ -87,6 +91,9 @@ namespace SDVRadiance
                 outgoing.SunContent = _playerSunContent;
                 outgoing.SunProjection = _playerSunProjection;
                 outgoing.SunBlur = _playerSunBlur;
+                outgoing.SunContactHardness = _playerSunContactHardness;
+                outgoing.SunPenumbraStretch = _playerSunPenumbraStretch;
+                outgoing.SunBakeDepth = _playerSunBakeDepth;
                 outgoing.SunFresh = _playerSunFresh;
                 outgoing.SunSignature = _playerSunSignature;
             }
@@ -108,6 +115,9 @@ namespace SDVRadiance
             _playerSunContent = incoming.SunContent;
             _playerSunProjection = incoming.SunProjection;
             _playerSunBlur = incoming.SunBlur;
+            _playerSunContactHardness = incoming.SunContactHardness;
+            _playerSunPenumbraStretch = incoming.SunPenumbraStretch;
+            _playerSunBakeDepth = incoming.SunBakeDepth;
             _playerSunFresh = incoming.SunFresh;
             _playerSunSignature = incoming.SunSignature;
             // The published pair follows the screen too: their one reader is this screen's

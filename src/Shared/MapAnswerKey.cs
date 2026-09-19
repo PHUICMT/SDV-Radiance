@@ -25,6 +25,6 @@ namespace SDVRadiance
 
         /// <summary>No labels are loaded at all, so a scan driven by labels cannot find anything
         /// and does not need to run. Version zero means an empty store, never a loaded one.</summary>
-        internal bool NoLabels => this.LabelVersion == 0;
+        internal bool NoLabels => LabelVersion == 0;
     }
 }

@@ -94,7 +94,7 @@ namespace SDVRadiance
             public Entry(Texture2D rt, long bytes) { Target = new WeakReference<Texture2D>(rt); Bytes = bytes; }
         }
 
-        private static readonly Dictionary<string, List<Entry>> _buckets = new();
+        private static readonly Dictionary<string, List<Entry>> _buckets = [];
         private static readonly object _lock = new();
 
         /// <summary>Bytes a target occupies. Surface formats used here are all 4 bytes per pixel;
@@ -113,7 +113,7 @@ namespace SDVRadiance
             lock (_lock)
             {
                 if (!_buckets.TryGetValue(bucket, out var list))
-                    _buckets[bucket] = list = new List<Entry>();
+                    _buckets[bucket] = list = [];
                 list.Add(new Entry(rt, SizeOf(rt)));
             }
             return rt;

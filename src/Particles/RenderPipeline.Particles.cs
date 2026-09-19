@@ -177,11 +177,26 @@ namespace SDVRadiance
             GroundParticlesDrawn = _particles.DrawGround(spriteBatch, _fadeParticles, AmbientLightOnParticles());
         }
 
+        /// <summary>Particles are cut off at the map's edge. On an outdoor map smaller than the window
+        /// the game draws black around it, and dust, petals and motes spawned across the screen went on
+        /// drifting over that black. Reported with a picture of the bus stop zoomed out. Indoors this was
+        /// never seen only because no indoor emitter spawns across the whole screen.</summary>
+        private static readonly RasterizerState ParticlesClippedToMap = new() { CullMode = CullMode.None, ScissorTestEnable = true };
+
         private int DrawParticleGroup(SpriteBatch spriteBatch, bool emissive, Vector2 screenOffset, float pixelScale)
         {
+            GraphicsDevice device = spriteBatch.GraphicsDevice;
+            Rectangle previousScissor = device.ScissorRectangle;
+            Vector2 mapTiles = MapTilesOf(Game1.currentLocation);
+            var mapOnTarget = new Rectangle(
+                (int)MathF.Floor((screenOffset.X - Game1.viewport.X) * pixelScale),
+                (int)MathF.Floor((screenOffset.Y - Game1.viewport.Y) * pixelScale),
+                (int)MathF.Ceiling(mapTiles.X * Game1.tileSize * pixelScale),
+                (int)MathF.Ceiling(mapTiles.Y * Game1.tileSize * pixelScale));
+            device.ScissorRectangle = Rectangle.Intersect(mapOnTarget, device.Viewport.Bounds);
             spriteBatch.Begin(SpriteSortMode.Deferred,
                 emissive ? ParticleSystem.PremultipliedAdditive : BlendState.AlphaBlend,
-                SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone);
+                SamplerState.LinearClamp, DepthStencilState.None, ParticlesClippedToMap);
             int drawn = _particles!.Draw(spriteBatch, emissive, _fadeParticles, screenOffset, pixelScale,
                 emissive ? Vector3.One : AmbientLightOnParticles(), _particleSurfaceWave);
             // The rainbows ride with the emissive group: sunlight in spray adds to the frame the
@@ -189,6 +204,7 @@ namespace SDVRadiance
             if (emissive)
                 drawn += DrawWaterfallRainbows(spriteBatch, screenOffset, pixelScale);
             spriteBatch.End();
+            device.ScissorRectangle = previousScissor;
             return drawn;
         }
 
@@ -255,7 +271,7 @@ namespace SDVRadiance
                 EmissiveParticleHost.Classic => "classic lighting",
                 _ => "none (drawn with the ambient group)",
             };
-            return $"particles: live={_particles.LiveCount}/{ParticleSystem.Capacity} presence={_fadeParticles:0.000} rainbows={RainbowsDrawn} "
+            return $"particles: live={_particles.LiveCount}/{ParticleSystem.Capacity} presence={_fadeParticles:0.000} rainbows={RainbowsDrawn}{RainbowArchesDescribed()} rainbowPresence={_rainbowEase:0.00} "
                  + $"drawn ambient={_particleAmbientDrawn} emissive={_particleEmissiveDrawn} "
                  + $"refused={_particles.SpawnsRefused} atlas={(_particles.AtlasReady ? "built" : "MISSING")} "
                  + $"dustWindows={_dustWindowsLit} emberFires={_emberFiresLit} (biggest {ParticleEmberBiggestFire}) "

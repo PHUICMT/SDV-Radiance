@@ -64,7 +64,7 @@ namespace SDVRadiance
         }
 
         private static readonly string[] ChainStepNames =
-        {
+        [
             // In the enum's order, and nothing else: on 2026-09-06 the bake and light groups sat
             // the other way round here, so the split screen's object walk printed as "light:
             // candidates" and a whole evening went to a paradox that was two lists out of step.
@@ -78,7 +78,7 @@ namespace SDVRadiance
             "    light: gather", "    light: candidates", "    light: windows", "    light: emissive",
             "    light: select",
             "    relief: sheet list refresh", "    breath: heat map upload", "    shadow: wall clip walk",
-        };
+        ];
 
         private readonly double[] _chainStepAccumulated = new double[(int)ChainStep.Count];
         private readonly double[] _chainStepWorst = new double[(int)ChainStep.Count];

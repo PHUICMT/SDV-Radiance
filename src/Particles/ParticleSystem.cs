@@ -181,7 +181,7 @@ namespace SDVRadiance
                 float weight = particle.Tint.A / 255f * particle.SizePixels;
                 if (weight <= 0.01f)
                     continue;
-                long key = (long)(int)Math.Floor(particle.WorldPosition.X / cellSizePixels) * 100003L
+                long key = (int)Math.Floor(particle.WorldPosition.X / cellSizePixels) * 100003L
                          + (int)Math.Floor(particle.WorldPosition.Y / cellSizePixels);
                 _clusterCells.TryGetValue(key, out var cell);
                 cell.Position += particle.WorldPosition * weight;
@@ -202,7 +202,7 @@ namespace SDVRadiance
 
         /// <summary>Reused by <see cref="GatherEmissiveClusters"/> so a per-frame walk of the pool
         /// allocates nothing.</summary>
-        private readonly Dictionary<long, (Vector2 Position, Vector3 Colour, float Weight)> _clusterCells = new();
+        private readonly Dictionary<long, (Vector2 Position, Vector3 Colour, float Weight)> _clusterCells = [];
 
         internal ParticleSystem(GraphicsDevice device)
         {
@@ -479,7 +479,7 @@ namespace SDVRadiance
                 Vector2 screenPosition = (fromCamera + screenOffsetPixels) * pixelScale;
                 // Only the flat things bend. A spark is a point of light and a mote is dust:
                 // neither has a face for a wave to run along, and bending them reads as a fault.
-                bool flat = particle.Cell == AtlasCell.Petal || particle.Cell == AtlasCell.Leaf;
+                bool flat = particle.Cell is AtlasCell.Petal or AtlasCell.Leaf;
                 if (wave.Bends && flat)
                 {
                     DrawBentByTheSurface(spriteBatch, ref particle, screenPosition, scale, tint, wave, pixelScale);

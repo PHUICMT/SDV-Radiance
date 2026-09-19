@@ -53,9 +53,8 @@ namespace SDVRadiance
             /// summed-area cache can tell two screens' windows apart. Both are refilled in
             /// place, so without this a screen switch reads as no change at all.</summary>
             public int WaterTilesVersion;
-            public GameLocation? LastWaterLocation;
+            public MaskIdentity LastWaterIdentity = MaskIdentity.None;
             public int LastWaterTileX = int.MinValue, LastWaterTileY = int.MinValue, LastWaterBuildTick = int.MinValue;
-            public int LastWaterHookVersion = -1, LastWaterLabelVersion = -1, LastWaterEpoch = -1;
             public bool HasWaterInMask;
             public float WaterInMaskEase;
             public Vector2 WaterMaskTilesPerScreen, WaterMaskWorldTileOffset, WaterMaskPixelSize;
@@ -171,11 +170,13 @@ namespace SDVRadiance
             public float ShaftStrengthEase;
             public Vector2 ShaftDirectionEase = new(0f, 1f);
             public Vector3 ShaftColourEase;
+            /// <summary>Where the shaft eases were last set, so a new place starts at its own shafts.</summary>
+            public GameLocation? ShaftPlace;
             public float HeatHazeEase, WadingEase, DisplacementGateEase = 1f, WindowReflectEase;
 
             // ---- which lights this screen is showing, and how far each has faded ----
-            public Dictionary<int, LightFade> LightRamp = new();
-            public HashSet<int> LightChosen = new();
+            public Dictionary<int, LightFade> LightRamp = [];
+            public HashSet<int> LightChosen = [];
             public GameLocation? LightRampLocation;
 
             // ---- whether this screen's water mask holds water (ShadowRenderer.WaterOnScreen) ----
@@ -195,6 +196,12 @@ namespace SDVRadiance
             // ---- the water's glitter following the sun (see water.fx SunAxis) ----
             public float GlitterPathEase;
             public Vector2 GlitterSunAxis = new(0f, 1f);
+            // ---- the river under this screen's player (RenderPipeline.WaterCurrent.cs) ----
+            // Shared, the first screen stepped the eases and the second returned on the same tick:
+            // the second player's river followed the first player's map, weather and fade, and its
+            // game water scroll was never set, so it ran uphill again.
+            public int RiverEaseTick = -1;
+            public float RiverHoldEase, RiverPaceEase, RiverSwellEase = 1f;
 
             // ---- answers about this screen's map, compared by instance ----
             // A farmhand screen holds its own copy of every location, map and surface grid, so a
@@ -230,10 +237,10 @@ namespace SDVRadiance
             public GameLocation? BreathTileCacheLocation;
             public MapAnswerKey BreathTileCacheKey = new(-1, -1);
             public int BreathTileCacheWidth, BreathTileCacheHeight;
-            public byte[] BreathTileFlow = System.Array.Empty<byte>();
-            public byte[] BreathTileHot = System.Array.Empty<byte>();
-            public byte[] BreathTileLava = System.Array.Empty<byte>();
-            public bool[] BreathTileScanned = System.Array.Empty<bool>();
+            public byte[] BreathTileFlow = [];
+            public byte[] BreathTileHot = [];
+            public byte[] BreathTileLava = [];
+            public bool[] BreathTileScanned = [];
 
             // ---- the map-wide waterline anchor (RenderPipeline.Waterline.cs) ----
             // One anchor for the game held one location's shoreline. Two screens in two places
@@ -266,11 +273,11 @@ namespace SDVRadiance
             // ---- the tilesheets this screen's map paints from (DrawnFromMapTileSheet) ----
             // One slot keyed on the map instance, and a farmhand screen holds its own copy of
             // every map, so it was rebuilt at every screen switch.
-            public HashSet<Texture2D> MapTileSheetTextures = new();
+            public HashSet<Texture2D> MapTileSheetTextures = [];
             public HashSet<string> MapTileSheetNames = new(System.StringComparer.OrdinalIgnoreCase);
             public xTile.Map? MapTileSheetSource;
             public int MapTileSheetTick = -1000;
-            public List<string> MapTileSheetImageSources = new();
+            public List<string> MapTileSheetImageSources = [];
             public Texture2D? LastSheetAsked;
             public bool LastSheetWasMapTile;
 
@@ -314,7 +321,7 @@ namespace SDVRadiance
             }
         }
 
-        private readonly Dictionary<int, ScreenState> _screenStates = new();
+        private readonly Dictionary<int, ScreenState> _screenStates = [];
         /// <summary>Which screen's state is loaded into the fields right now. -1 before the first
         /// swap, which is also the single-screen case until a second screen ever appears.</summary>
         private int _activeScreenId = -1;
@@ -331,8 +338,8 @@ namespace SDVRadiance
                 return;
             if (_activeScreenId >= 0)
             {
-                if (!_screenStates.TryGetValue(_activeScreenId, out ScreenState? outgoing))
-                    _screenStates[_activeScreenId] = outgoing = new ScreenState();
+                if (!_screenStates.ContainsKey(_activeScreenId))
+                    _screenStates[_activeScreenId] = new ScreenState();
                 // The outgoing screen's state is already in its own object: nothing to copy.
             }
             _activeScreenId = screenId;
@@ -363,13 +370,11 @@ namespace SDVRadiance
         private ref Texture2D? _waterPlungeChurnSpare => ref _screen.WaterPlungeChurnSpare;
         private ref bool[]? _waterTilesInMask => ref _screen.WaterTilesInMask;
         private ref int _waterTilesVersion => ref _screen.WaterTilesVersion;
-        private ref GameLocation? _lastWaterLocation => ref _screen.LastWaterLocation;
+        private ref MaskIdentity _lastWaterIdentity => ref _screen.LastWaterIdentity;
+        private GameLocation? _lastWaterLocation => _screen.LastWaterIdentity.Location;
         private ref int _lastWaterTileX => ref _screen.LastWaterTileX;
         private ref int _lastWaterTileY => ref _screen.LastWaterTileY;
         private ref int _lastWaterBuildTick => ref _screen.LastWaterBuildTick;
-        private ref int _lastWaterHookVersion => ref _screen.LastWaterHookVersion;
-        private ref int _lastWaterLabelVersion => ref _screen.LastWaterLabelVersion;
-        private ref int _lastWaterEpoch => ref _screen.LastWaterEpoch;
         private ref bool _hasWaterInMask => ref _screen.HasWaterInMask;
         private ref float _waterInMaskEase => ref _screen.WaterInMaskEase;
         private ref Vector2 _waterMaskTilesPerScreen => ref _screen.WaterMaskTilesPerScreen;
@@ -442,6 +447,7 @@ namespace SDVRadiance
         private ref float _shaftStrengthEase => ref _screen.ShaftStrengthEase;
         private ref Vector2 _shaftDirectionEase => ref _screen.ShaftDirectionEase;
         private ref Vector3 _shaftColourEase => ref _screen.ShaftColourEase;
+        private ref GameLocation? _shaftPlace => ref _screen.ShaftPlace;
         private ref float _heatHazeEase => ref _screen.HeatHazeEase;
         private ref float _wadingEase => ref _screen.WadingEase;
         private ref float _displacementGateEase => ref _screen.DisplacementGateEase;
@@ -457,6 +463,10 @@ namespace SDVRadiance
         private ref float _sparkleCloudEase => ref _screen.SparkleCloudEase;
         private ref float _glitterPathEase => ref _screen.GlitterPathEase;
         private ref Vector2 _glitterSunAxis => ref _screen.GlitterSunAxis;
+        private ref int _currentTick => ref _screen.RiverEaseTick;
+        private ref float _riverHoldEased => ref _screen.RiverHoldEase;
+        private ref float _riverPaceEased => ref _screen.RiverPaceEase;
+        private ref float _riverSwellEased => ref _screen.RiverSwellEase;
         private ref float _snowGlintEase => ref _screen.SnowGlintEase;
         private ref float _rainbowEase => ref _screen.RainbowEase;
         private ref float _wateredSparkleEase => ref _screen.WateredSparkleEase;
@@ -522,7 +532,7 @@ namespace SDVRadiance
             }
         }
 
-        private readonly List<int> _departedScreens = new();
+        private readonly List<int> _departedScreens = [];
 
         /// <summary>Drop every screen's kept state. Used when the pipeline itself goes away.</summary>
         private void ReleaseScreenStates()

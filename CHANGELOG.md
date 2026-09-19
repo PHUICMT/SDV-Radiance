@@ -2,6 +2,269 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.1.0 - 2026-09-19
+
+### Added
+
+- **A TV lights the room while a show is on.** The game already gives a TV a little light while
+  you watch it, and it was lit like a lamp: warm, and switched on and off in one frame along with
+  the shadows of the people in front of it. It is a screen's light now, cool and a little blue,
+  flickering gently with the picture, and it fades in when the show starts and out when it ends,
+  shadows included. Asked for by Tngnamo on Nexus. TV screen light is on the Windows page; 0 is the
+  game's own light as before.
+- **A fifth look: Nocturne.** A night by the water, where the lamps and the glints on the surface
+  carry the picture: cooler than the others, with the colours pushed past Vibrant and more glow
+  around anything bright. It sets three water settings as well as the bloom and the colour grade,
+  because the lit water is the look rather than a detail of it; all three stay on the Water page
+  for anyone who wants them back the way they were. Pick it in the tuner's Looks page or from
+  Quick preset in the settings menu.
+
+- **Rivers flow now, along their own banks.** Until now nothing carried a river along but the
+  wind, and every ripple on it crept up the screen, so the stream below a waterfall looked like it
+  ran backwards. A map that paints a waterfall now has its river traced from the falls along its
+  banks to where the water leaves the map, and the surface is carried along that path: it turns
+  with every bend, passes under its bridges, rushes at the foot of the fall and settles to the
+  river's own pace downstream, a little quicker through a narrows. Pools the river passes by stay
+  still, a pool a fall drops into with no way out, as in a cave, churns only where the fall lands, the game's own water texture scrolls with the river instead of against it, and maps with no
+  waterfall, the sea among them, are exactly as they were. Asked for by Deovos on Nexus. Rivers
+  flow and River current speed are on the Water page; switched off, rivers are the still water of
+  earlier releases and nothing is traced.
+- **Rivers look like water rather than something thick.** A river's small ripples, glints and foam
+  now run faster than its big ripples, the pattern on its surface keeps breaking up and forming
+  again instead of sliding along unchanged, the current eddies a little and runs slower along the
+  banks, glints flash briefly on moving water, foam draws out into streaks, and small wavelets with
+  white crests ride the current. Each has its own dial in a new group on the Water page, How the
+  river looks, and each can be set back to the first flowing rivers. River moves in pixel steps,
+  off by default, carries the surface on the art's pixel grid like the game's own water.
+- **Foam on the river.** Small flecks of foam ride the current, thick under a waterfall and thinning
+  downstream, so you can see which way the water goes and how fast. Foam on the river is on the
+  Water page; 0 draws none.
+- **Rain swells the river.** Rivers run 1.4 times as fast while it rains and 1.8 times in a
+  thunderstorm, easing up and down as the weather changes. Snow does not count as rain. Rain swells
+  the river is on the Water page; 0 keeps one pace whatever the sky does.
+- **Sea wave strength has its own dial.** The sea on the beach, Ginger Island and the other coasts
+  can be calmed or roughened without touching rivers, ponds and lakes. 1 is the sea as it was.
+- `radiance_report` names the waterfalls it found, how much of the river the trace reached and
+  where the water leaves the map, and writes `radiance-river-map.txt` beside the report: the map in
+  letters and the river's pace per tile, so a river that stops short shows where and why.
+
+- **The bus at the bus stop has glass in its windows.** The bus is not part of the map: the bus
+  stop paints it itself, and it drives away, so window reflections never found it. Glass is now
+  also read from art a place draws for itself, wherever that art is this frame, so the windows
+  and the windscreen take the sky, the street, passers-by and you. How clearly is its own slider,
+  Bus glass, on the Windows page. It works with Smooth art on. Asked for by ghi3038 on Nexus.
+
+- **The tuner slides in from the side of the screen when it opens and back out when it closes**,
+  with F6, Escape or its close button, in about a fifth of a second. It takes no clicks while it
+  moves.
+
+- **The tuner is easier to find your way around.** Every tab is split into named groups you can
+  fold away, and it remembers which, with a button to fold or open them all at once. The dials most
+  players never need wait behind Show fine-tuning in the header, and a tab says how many it is
+  keeping back. A setting moved from its default carries a small mark: hover it to see the default,
+  right-click it to put it back. The tuner opens on the tab you left, scrolled where you left it,
+  and shades its top or bottom edge while there is more to scroll.
+
+### Changed
+
+- **Shadow strength goes up to 3.** Past 1 every shadow keeps deepening, its soft edge along with
+  its core, to near black, for anyone who found characters' shadows too faint at 1 once 2.0.0
+  widened the soft edge. It costs nothing extra: the shadows take the same number of draws at 3 as
+  at 1. Asked for by a player on Nexus.
+- **Edge softness goes up to 20.** A wide edge spreads a shadow thinner, so pair it with strength
+  past 1 to keep it dark. Checked at 20 under the sun and under lamps: the edge stays smooth and the
+  shadows take no more draws than at 5.
+- **Smooth camera is rebuilt, and no longer drifts after you stop.** It used to trail behind you
+  and glide to catch up after every stop, which read as the view swaying, and trailing a player
+  walking down let the toolbar jump between the top and the bottom of the screen while walking
+  diagonally (reported by potatothecat on Nexus). Now the view trails a little behind you while
+  you walk, in proportion to your speed, and eases back to the middle in about a third of a second
+  when you stop, without ever swinging past it. It never sits far enough off your feet to move the
+  toolbar, keeps its own camera per screen in split screen, and follows the same way at any frame
+  rate. Off by default, as before.
+- **Smooth art steps aside for Clear Glasses and SpriteMaster.** Both resample the game's art
+  themselves, and two upscalers on one sprite patch the same draw and hand each other textures
+  neither expected, with the result depending on the order SMAPI loaded them in. With either
+  installed, Smooth art switches itself off while it is there and the SMAPI log says which mod it
+  stood aside for. config.json is not touched, so removing the other mod brings Smooth art back.
+
+### Fixed
+
+- **Sitting on a bench by the water no longer puts the water over you.** A seated farmer was left
+  out of the mask that keeps the water off your own body, so on the beach pier bench, with the sea
+  behind the seat, the ripple and glitter ran over your head and shoulders. Seated, you now draw
+  yourself into that mask in the pose you are sitting in.
+- **A glow ring no longer washes shop glass out in daylight.** The glass returns a lamp standing
+  near it, and from the afternoon on it took a carried ring at full strength, so a shop door went
+  white and the reflection in it was lost. The glass now picks a lamp up only as far as the sky has
+  darkened: nothing under a white sky, a little on a rainy day, and all of it at night.
+- **A waterfall's rainbow no longer comes and goes as you walk beside it.** Only the first eight
+  waterfall feet across the screen were kept, so on a map with more falls than that, which ones got
+  a rainbow depended on where the camera stood. All of them are kept now (the mist they throw is
+  still held to the same amount), and each rainbow fades in and out on its own.
+- **Sun shafts no longer spring up as you walk across a map.** The lighting keeps a grid of trees
+  and cliffs around the screen and moves it as you walk, but it waited until you were two tiles from
+  its edge instead of eight, so the shafts near the side you were walking toward were worked out
+  from past the grid's edge and came in all at once when it finally moved. Walking back and forth
+  over the same ground showed nothing, which is why it only happened the first time.
+- **Lamp shadows no longer swap in half-grown among more than eight lamps.** Eight lamps get a
+  shadow; walking past a ninth, the one arriving grew while the one leaving faded, and they traded
+  places halfway, so one shadow vanished at half strength and the other appeared at half strength.
+  A lamp now keeps its place until its shadow has fully faded, and the next one grows in after it.
+- **The soft pool under a person no longer blinks at the edge of a fire's or a TV's light.** It
+  dropped to less than half the moment any light cast a shadow of them, and at the edge of a
+  flickering light that happened and unhappened with the flicker. It now gives way gradually as
+  the light's shadow grows in.
+- **Chopping or shaking one tree no longer moves the shadows of every tree like it.** Trees of
+  one kind share one shadow picture, and the shaken tree's sway was written into it, so the other
+  trees on screen swayed with it or flicked between the two leans. The shaken tree now sways on a
+  picture of its own.
+- **Stepping outside, the picture no longer keeps settling for seconds.** The sun's shadows grew in
+  over about four and a half seconds after every door or warp, the shadows' colour drifted from the
+  indoor fill to the outdoor one for two more, the sun shafts sank and climbed back as the lighting
+  restarted under them, and with Smooth art on the sprites turned soft eight a frame, one edge at a
+  time, which read as the map drawing itself in. The shadows and the sprites are now where they
+  belong while the game's own fade-to-black is still over the screen, and the sun shafts grow in
+  once, over about a second, after it lifts. Dusk and a cloud bank still ease in where you stand.
+- **A faint picture of your house showed through the night the plane drops mystery boxes.** That
+  night the game paints its own scene over the whole screen, sky, hills and plane, while the world
+  underneath is still the room you went to sleep in, and the effects went on reading the room: its
+  furniture's relief, its lamps and walls, laid over the plane's sky as a colourless outline of
+  the house. While a night event paints the whole screen (that one, and the sound in the night),
+  the effects step aside for it. Reported by Mokayogi on Nexus.
+- **Object shadows cost about half a millisecond less a frame.** Every object's shadow was kept
+  as a picture of its own, and the graphics card has to be told separately about every picture
+  it switches to; a farm's shadows sort in between the crops they belong to, so it was switching
+  on nearly every shadow, about 2,700 times a frame. The shadows now share one large picture
+  (plus a small one for trees, and a small overflow in a busy town), and the switching dropped to
+  about 560 a frame. Measured at a wide window: the farm 10.1 ms a frame before, 9.5 after, the
+  town 8.8 before, 8.2 after, the picture unchanged. It holds about 40 MB more video memory for
+  it, 84 MB on the farm where it was 44.
+- **Lamp light costs less on the graphics card at night.** Every pixel of the lighting pass
+  checked all forty lamps it had room for to learn which ones reached it, empty places included.
+  The pass is now drawn in four bands across the screen, each handed only the lamps whose light
+  reaches it, and it stops at the last one. The picture is the same. Measured at a wide window, on
+  the card: town at night 1.08 ms before, 0.96 after; the saloon 1.76 before, 1.64 after; a farm
+  at night with no lamps of that kind 0.68 before, 0.41 after.
+- **The dark pool under things costs a millisecond less on a busy farm.** Each contact pool was
+  its soft blob drawn five times, a little apart, so the stack had a soft edge; on a farm that was
+  four thousand draws a frame. The five copies are now stacked once into a texture and the pool is
+  drawn once, the same darkness and reach with the edge within a few shades. Measured on a farm at
+  a wide window: 12.6 ms a frame before, 11.5 after, where switching the pools off altogether
+  gives 11.3.
+- **Smooth art costs about half a millisecond less a frame.** It was writing down the size of
+  every sprite the game drew, thousands a frame, for one line of radiance_report that nobody reads
+  while playing. It now writes one frame a second, which says the same thing. Measured in Town on
+  a wide window: Smooth art on cost 1.4 ms over off, now 0.9.
+- **Smooth art could fill its whole memory with copies of one sprite.** When a sheet is rebuilt,
+  its smoothed sprites are thrown away, but the room they took was kept until everything else on
+  the same page was gone too. A mod that changes the farmer's look every moment (one that
+  recolours the pants as you walk, say) makes the game rebuild the farmer's body picture every
+  frame, and those dead copies piled up until they held all 192 MB Smooth art may use. The room
+  is now reused by the next copy: measured in Town with such a mod, the pages held stayed at 8
+  instead of climbing to 47, about 160 MB of video memory back.
+- **The gaps between a small bridge's planks showed the game's plain water.** Water shut inside
+  drawn art, the seam between two planks or the slot in a bench, used to be cut out of the water
+  altogether, because a ripple in a gap two pixels wide can only drag the wood beside it in and
+  the planks seemed to slosh. It now keeps the water's colour, reflection and light and gives up
+  only the ripple, so the river shows through the bridge the way it does around it. In
+  radiance_debug water this still water shows in violet.
+- **Your own farmer followed the World art smoothing instead of Characters and animals.** Smooth
+  art sorts art by the sheet it comes from, and the farmer's body is a picture the game paints for
+  itself at runtime with no character sheet's name on it, as are the pieces an outfit mod draws; so
+  the Characters dial reached only the hair and clothes, and the rest of the player went with the
+  world. Everything drawn while the game is drawing a farmer now counts as a character.
+- **SVE's rain mist cut a pale wedge out of the water.** Stardew Valley Expanded hangs mist over
+  the Forest, the Railroad, the Mountain and more on rainy days, on a map layer of its own above
+  everything else. The water took that mist for something standing in it, like a rock or a bench,
+  and switched its ripples, reflections and waterline off wherever the mist was thick, so the
+  water seemed to stop at a line that was really the edge of the mist. The mist is now left out of
+  the water's outline, and it is drawn over the finished water rather than rippling along with it,
+  the way the rain already was. SVE's mist option and the mist itself are unchanged.
+- **Raindrops rang on indoor water while it rained outside.** The rings ask the game whether it is
+  raining where you are, and indoors that question is answered by the weather of the valley the
+  room stands in, so the bath house pool was rained on through its roof. The rings now also ask
+  whether you are outdoors, the same way the wet ground and the drops on the glass already did.
+  Reported by beepig66 on Nexus. A place the game itself calls outdoors, such as the sewer, keeps
+  its rings.
+- **A snowstorm came with raindrops on the screen, puddles under the snow and raindrop rings on
+  the water.** A weather mod can say it is raining and snowing at once, and weather packs do:
+  Weather Wonders' blizzard says raining, snowing and windy together. The game never sets two at
+  once, so each of these effects had only ever been asked about rain. Anything that asks what the
+  weather leaves behind now treats snow as the answer when both are set, so a blizzard stays dry
+  and cold. What falls is unchanged: a weather that means rain and snow together still gets both.
+  Asked about by beepig66 on Nexus.
+- **The bath house mirrors showed no reflection.** Their glass is painted on the map's front layer,
+  which the game draws a tile further forward than the walls, so the mirror art covered all but the
+  top edge of the picture in it. A mirror on the front layer now keeps its reflection in front of
+  its own art, and shows your face rather than your legs: a mirror hangs above the sink, so the
+  picture in it stands on the floor below it. Reported by ghi3038 on Nexus. `radiance_report` also
+  has a glass line now: whether window reflections run in this place, how many panes were found
+  and where.
+- **Five sliders all called Smoothness stayed on the Smooth art tab with Smooth art off.** Each
+  family's smoothness now goes with the main switch, the same as the family switches above it.
+- **Sun rays and floating motes carried on past the edge of the map.** On a map smaller than the
+  window, as on a large screen or zoomed out, the game draws black around it, and the rays and the
+  dust, petals and motes went on over that black. Both now stop at the map's edge. Reported by
+  palmhacker13 on Nexus.
+- `radiance_report` now prints how much raindrop ring the water is carrying, and whether it is
+  snowing, next to the wet ground's own line, so a report about rain in the wrong weather can be
+  answered from the file.
+
+### For translators
+
+Twenty new keys, four per setting, all on the Water page:
+
+- Rivers flow: `config.water.riverflow.name`, `config.water.riverflow.tooltip`,
+  `tuner.waterriverflow`, `help.waterriverflow`
+- River current speed: `config.water.current.name`, `config.water.current.tooltip`,
+  `tuner.watercurrent`, `help.watercurrent`
+- Rain swells the river: `config.water.rainswell.name`, `config.water.rainswell.tooltip`,
+  `tuner.waterrainswell`, `help.waterrainswell`
+- Foam on the river: `config.water.riverfoam.name`, `config.water.riverfoam.tooltip`,
+  `tuner.waterriverfoam`, `help.waterriverfoam`
+- Sea wave strength: `config.water.seawaves.name`, `config.water.seawaves.tooltip`,
+  `tuner.waterseawaves`, `help.waterseawaves`
+
+How the river looks has a group heading, `tuner.section.riverlook`, and eight settings, each with
+the same four keys (`config.water.<id>.name`, `config.water.<id>.tooltip`, `tuner.water<id>`,
+`help.water<id>`) where `<id>` is `riverripplespeed`, `riverrenew`, `riverbankdrag`, `riverswirl`,
+`riverglitter`, `riverfoamstreak`, `riverwaves` and `riverpixelstep`.
+
+TV screen light, on the Windows page: `config.lighting.tvglow.name`,
+`config.lighting.tvglow.tooltip`, `tuner.tvglow`, `help.tvglow`.
+
+Bus glass, on the Windows page: `config.lighting.windowvehicleglass.name`,
+`config.lighting.windowvehicleglass.tooltip`, `tuner.windowvehicleglass`,
+`help.windowvehicleglass`.
+
+Plus `config.preset.nocturne`, the name of the fifth look. It is the name of a look, so a
+translation may keep it as a word for a night piece rather than translating it literally.
+
+The tuner has new text of its own. Group headings: `tuner.section.gradetone`,
+`tuner.section.eyecomfort`, `tuner.section.smoothingstyle`, `tuner.section.lightdark`,
+`tuner.section.lampshadowdetail`, `tuner.section.windowreflectiondetail`, `tuner.section.shadowsun`,
+`tuner.section.shadowedges`, `tuner.section.shadowcasters`, `tuner.section.shadowground`,
+`tuner.section.watersurface`, `tuner.section.waterreflection`, `tuner.section.watermodeldetail`,
+`tuner.section.watermotion`, `tuner.section.waterindoors` and `tuner.section.perfadvanced`. Folding:
+`tuner.section.foldhint`, `tuner.section.foldedcount`, `tuner.foldall`, `tuner.unfoldall`. Fine-tuning:
+`tuner.finetuning.show`, `tuner.finetuning.hide`, `tuner.finetuning.hidden`. Resetting a setting:
+`tuner.resethover` and `tuner.resethover.plain`. Keep `{{count}}` and `{{default}}` as they are; the
+number goes there.
+
+The camera page has one new line, `config.camera.disabled`, shown only while the smooth camera is
+switched off by the mod. `config.camera.mode.tooltip` and `config.smoothcam.speed.tooltip` changed
+meaning: the view now trails a little behind you while you walk and eases back to the middle when
+you stop, and the speed is how far it trails.
+
+Shadow strength has a description now: `config.shadows.strength.tooltip` and `help.shadowstrength`.
+
+`help.shadowblur` changed meaning: it now also says a wide edge makes the shadow fainter and that
+shadow strength past 1 keeps it dark.
+
+English, Thai and Chinese are done, the Chinese by Rime961: all 1,068 keys, the ninety new ones and
+the three changed ones.
+
 ## 2.0.1 - 2026-09-15
 
 ### Fixed

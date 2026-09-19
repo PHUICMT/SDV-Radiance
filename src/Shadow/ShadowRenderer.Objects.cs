@@ -46,7 +46,11 @@ namespace SDVRadiance
             Color? shadowColor = null, bool contactPool = true, float fadeShareFromFeet = 1f,
             float? groundForeshortening = null, float spriteRotation = 0f)
         {
-            var key = (texture, sourceRect, effects);
+            // A shaken caster bakes under a key of its own. Trees of one kind share one bake, and
+            // the shake is one tree's: baked into the shared entry, the shaken lean was asked back
+            // by every still twin on the next frame, so every tree of that kind on screen swayed
+            // with the one being chopped or flicked between the two leans frame by frame.
+            var key = (texture, sourceRect, spriteRotation != 0f ? effects | ShakenMarker : effects);
             // The lean is baked into the pixels as the projection that lays this caster down: a
             // card keeps its width level on the screen (the shear this always was, and what a
             // fence's shadow is), a solid lays its width across the sun's direction on the ground,
@@ -65,7 +69,7 @@ namespace SDVRadiance
                     return;
                 if (_objectGraphicsDevice != null && !_bakedObjectCache.ContainsKey(key)
                     && BakeObjectSprite(_objectGraphicsDevice, texture, sourceRect, baseOrigin, effects, projection, blur, out RenderTarget2D renderTarget, out Vector2 feetInRenderTarget, fadeShareFromFeet: fadeShareFromFeet))
-                    _bakedObjectCache[key] = new SpriteBake { Rt = renderTarget, FeetInRt = feetInRenderTarget, BakedProjection = projection, BakedBlur = blur, BakedContactHardness = ContactHardnessNow, BakedPenumbraStretch = PenumbraStretchNow, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = SharedTicks.Now };
+                    _bakedObjectCache[key] = NewObjectBake(_objectGraphicsDevice, renderTarget, feetInRenderTarget, projection, blur);
                 return;
             }
             if (_bakedObjectCache.TryGetValue(key, out SpriteBake? bakedEntry))
@@ -82,7 +86,7 @@ namespace SDVRadiance
                 // of magnitude less work than the old sweep.
                 if ((projection.Drift(bakedEntry.BakedProjection, sourceRect.Width, sourceRect.Height) * 4f > ShearRefreshPixels
                         || Math.Abs(blur - bakedEntry.BakedBlur) > 0.3f
-                        || bakedEntry.BakedContactHardness != ContactHardnessNow
+                        || bakedEntry.BakedContactHardness != ContactHardnessNow || bakedEntry.BakedDepth != BakeDepthNow
                         || bakedEntry.BakedPenumbraStretch != PenumbraStretchNow)
                     && _objectBakeQueue.Count < ObjectBakeQueueCap)
                     _objectBakeQueue[key] = new ObjectBakeRequest { BaseOrigin = baseOrigin, Projection = projection, Blur = blur, FadeShareFromFeet = fadeShareFromFeet };
@@ -240,7 +244,7 @@ namespace SDVRadiance
             float spriteWidth = sourceRect.Width * scale, spriteHeight = sourceRect.Height * scale;
             _lastBakeClass = slotClass;
             _lastBakeScale = scale;
-            renderTarget = into ?? RentObjectRT(graphicsDevice, slotClass);
+            renderTarget = into ?? ObjectBakeScratch(graphicsDevice, slotClass);
             // The feet go wherever the laid-down silhouette, blur and all, sits inside the slot. A
             // sideways shadow has as much to one side of its feet as the other, and a solid's near
             // edge dips below the feet row, so neither the slot's centre column nor its bottom row
@@ -293,14 +297,9 @@ namespace SDVRadiance
             catch
             {
                 try { _renderTargetSpriteBatch!.End(); } catch { }
-                // Only a lease taken here is given back. A refresh was handed a slot the cache
-                // entry still owns, and returning that to the free list would let two entries be
-                // drawn from one target.
+                // The target is the class's bake scratch, not a lease: nothing to hand back.
                 if (into == null)
-                {
-                    _objectFreeTargetsByClass[slotClass].Add(renderTarget);
                     renderTarget = null!;
-                }
                 return false;
             }
         }
@@ -320,7 +319,7 @@ namespace SDVRadiance
                 if (_bakedObjectCache.ContainsKey(key))
                     continue;
                 if (BakeRequest(graphicsDevice, key, request, null, out RenderTarget2D renderTarget, out Vector2 feetInRenderTarget))
-                    _bakedObjectCache[key] = new SpriteBake { Rt = renderTarget, FeetInRt = feetInRenderTarget, BakedProjection = request.Projection, BakedBlur = request.Blur, BakedContactHardness = ContactHardnessNow, BakedPenumbraStretch = PenumbraStretchNow, Content = _lastBakeContent, SlotClass = _lastBakeClass, BakedScale = _lastBakeScale, LastUsedTick = SharedTicks.Now };
+                    _bakedObjectCache[key] = NewObjectBake(graphicsDevice, renderTarget, feetInRenderTarget, request.Projection, request.Blur);
             }
 
             // Then the leans the sun has moved off, re-rendered into the slot each entry already
@@ -334,18 +333,25 @@ namespace SDVRadiance
                 var key = queued.Key;
                 ObjectBakeRequest request = queued.Value;
                 if (!_bakedObjectCache.TryGetValue(key, out SpriteBake? stale)
-                    || (stale.BakedBlur == request.Blur && stale.BakedContactHardness == ContactHardnessNow
+                    || (stale.BakedBlur == request.Blur && stale.BakedContactHardness == ContactHardnessNow && stale.BakedDepth == BakeDepthNow
                         && stale.BakedPenumbraStretch == PenumbraStretchNow
                         && stale.BakedProjection.Same(request.Projection)))
                     continue;
-                if (BakeRequest(graphicsDevice, key, request, stale.Rt, out _, out Vector2 refreshedFeet))
+                if (BakeRequest(graphicsDevice, key, request, ObjectBakeScratch(graphicsDevice, stale.SlotClass),
+                        out RenderTarget2D refreshedTarget, out Vector2 refreshedFeet))
                 {
-                    stale.FeetInRt = refreshedFeet;
+                    // Re-rendered into the class's scratch and copied over the cell the entry
+                    // already owns, so the refresh takes no second cell.
+                    ObjectSlot slot = PlaceObjectBake(graphicsDevice, refreshedTarget, stale.SlotClass, stale.Slot);
+                    stale.Rt = slot.Page;
+                    stale.Slot = slot;
+                    stale.FeetInRt = InPage(refreshedFeet, slot);
                     stale.BakedProjection = request.Projection;
                     stale.BakedBlur = request.Blur;
                     stale.BakedContactHardness = ContactHardnessNow;
+                    stale.BakedDepth = BakeDepthNow;
                     stale.BakedPenumbraStretch = PenumbraStretchNow;
-                    stale.Content = _lastBakeContent;
+                    stale.Content = InPage(_lastBakeContent, slot);
                     stale.SlotClass = _lastBakeClass;
                     stale.BakedScale = _lastBakeScale;
                     refreshBudget--;
@@ -356,7 +362,8 @@ namespace SDVRadiance
                     // old pixels would freeze that shadow at whatever angle it last fit at, so
                     // hand the slot back and let the draw path fall to bands, which has no such
                     // limit. Only reachable at a very low sun on a sprite near the slot width.
-                    _objectFreeTargetsByClass[stale.SlotClass].Add(stale.Rt);
+                    if (stale.Slot != null)
+                        _objectFreeCellsByClass[stale.SlotClass].Add(stale.Slot);
                     _bakedObjectCache.Remove(key);
                 }
             }
@@ -477,7 +484,10 @@ namespace SDVRadiance
             _renderTargetSpriteBatch.End();
             graphicsDevice.SetRenderTarget(renderTarget);
             graphicsDevice.Clear(Color.Transparent);
-            Color weight = Color.White * (1f / Taps9.Length);
+            // A ninth each sums to the silhouette; BakeDepthNow ninths each deepens the soft edge past a
+            // strength of 1, by the share the draw's own deepening leaves over, and the target clamps
+            // the core at full (see BakeDepthNow).
+            Color weight = Color.White * (BakeDepthNow / Taps9.Length);
             // One radius for the whole slot unless the contact-hardness dial asks for the real
             // shape, in which case the slot is blurred in bands that soften with distance from the
             // feet. The bands are cut ACROSS the shadow's own direction, which the caller knows and
@@ -592,13 +602,17 @@ namespace SDVRadiance
         private static readonly RasterizerState ScissorRaster = new() { ScissorTestEnable = true, CullMode = CullMode.None };
 
         /// <summary>Run one queued request, whichever of the two kinds of bake it is.</summary>
+        /// <summary>Marks a bake key as a shaken caster's own (see <see cref="EmitObject"/>). Not a
+        /// flip the game has; taken off before the sprite is drawn into the bake.</summary>
+        private const SpriteEffects ShakenMarker = (SpriteEffects)4;
+
         private bool BakeRequest(GraphicsDevice graphicsDevice, (Texture2D texture, Rectangle sourceRect, SpriteEffects effect) key,
             ObjectBakeRequest request, RenderTarget2D? into, out RenderTarget2D renderTarget, out Vector2 feetInRenderTarget)
         {
             if (request.ColumnSources != null && request.ColumnLevels != null)
                 return BakeTileColumn(graphicsDevice, key.texture, request.ColumnSources, request.ColumnLevels,
                     request.ColumnOrients, request.ColumnSources.Length, request.Projection, request.Blur, out renderTarget, out feetInRenderTarget, into);
-            return BakeObjectSprite(graphicsDevice, key.texture, key.sourceRect, request.BaseOrigin, key.effect,
+            return BakeObjectSprite(graphicsDevice, key.texture, key.sourceRect, request.BaseOrigin, key.effect & ~ShakenMarker,
                 request.Projection, request.Blur, out renderTarget, out feetInRenderTarget, into, request.FadeShareFromFeet);
         }
 
@@ -802,9 +816,9 @@ namespace SDVRadiance
         /// on screen, so a steady miss count is a picture problem before it is a speed one, and
         /// the report showing "7 misses a frame" with no way to ask WHICH seven is a diagnostic
         /// that only tells you to start guessing.</summary>
-        private readonly System.Collections.Generic.HashSet<Rectangle> _oversizeLogged = new();
+        private readonly System.Collections.Generic.HashSet<Rectangle> _oversizeLogged = [];
 
-        private readonly System.Collections.Generic.HashSet<string> _columnRefusalLogged = new();
+        private readonly System.Collections.Generic.HashSet<string> _columnRefusalLogged = [];
 
         private void NoteColumnRefusal(string why)
         {
@@ -842,7 +856,7 @@ namespace SDVRadiance
         /// <para>Only reached after the largest slot has refused, so nothing that fits today
         /// changes: 4× is tried first and produces exactly the pixels it always did.</para>
         /// </summary>
-        private static readonly float[] BakeScales = { 4f, 2f, 1f };
+        private static readonly float[] BakeScales = [4f, 2f, 1f];
 
         /// <summary>
         /// Pick the bake scale and slot for a silhouette: the finest scale that fits anything,
@@ -948,33 +962,176 @@ namespace SDVRadiance
             return -1;
         }
 
-        /// <summary>Lease a slot of the given class, reusing a returned one when there is one.</summary>
-        private RenderTarget2D RentObjectRT(GraphicsDevice graphicsDevice, int slotClass)
+        /// <summary>The target a bake of the given class is drawn into before it goes to its cell.</summary>
+        private RenderTarget2D ObjectBakeScratch(GraphicsDevice graphicsDevice, int slotClass)
         {
-            var free = _objectFreeTargetsByClass[slotClass];
-            if (free.Count > 0)
-            {
-                RenderTarget2D reused = free[^1];
-                free.RemoveAt(free.Count - 1);
-                return reused;
-            }
+            if (_objectBakeScratches[slotClass] is { IsDisposed: false } scratch)
+                return scratch;
             (int w, int h, _) = ObjectSlotClasses[slotClass];
-            // PreserveContents: these slots are CACHED across frames now (see PreparePlayer) —
-            // the default DiscardContents decays into garbage after later target swaps.
-            var renderTarget = VramTally.Track(new RenderTarget2D(graphicsDevice, w, h, false,
+            // PreserveContents: a refresh re-renders it and the copy reads it after later binds.
+            scratch = VramTally.Track(new RenderTarget2D(graphicsDevice, w, h, false,
                 SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents),
-                $"object bake slots {w}x{h}");
-            _objectRenderTargetPools[slotClass].Add(renderTarget);
-            return renderTarget;
+                $"object bake scratch {w}x{h}");
+            _objectBakeScratches[slotClass] = scratch;
+            return scratch;
         }
 
-        /// <summary>Total slots held across every class, for the over-cap diagnostic.</summary>
-        private int ObjectSlotsAllocated()
+        /// <summary>Side of the shared page: the two smaller classes and the pools (see ObjectSlot).</summary>
+        private const int ObjectSharedPageSide = 4096;
+        /// <summary>Side of a page of the tree class, and of an overflow page (see OpenOverflowPage).</summary>
+        private const int ObjectTreePageSide = 2048;
+        /// <summary>Clear texels round every cell, so a draw that reads a texel past its content
+        /// never reads a neighbour's shadow.</summary>
+        private const int ObjectAtlasGutter = 2;
+        /// <summary>The classes a shared page holds, top down. The tree class is the last.</summary>
+        private static readonly int[] SharedPageClasses = [0, 1];
+
+        private static (int StrideX, int StrideY) CellStride(int slotClass)
+            => (ObjectSlotClasses[slotClass].W + 2 * ObjectAtlasGutter, ObjectSlotClasses[slotClass].H + 2 * ObjectAtlasGutter);
+
+        /// <summary>Rows a class gets on its page: enough for its cap on one screen, so a single
+        /// screen fits on one shared page. A split screen doubles the caps and opens a second.</summary>
+        private static int RowsFor(int slotClass, int pageSide)
         {
-            int total = 0;
-            foreach (var pool in _objectRenderTargetPools) total += pool.Count;
-            return total;
+            (int strideX, int strideY) = CellStride(slotClass);
+            int perRow = pageSide / strideX;
+            int wanted = (ObjectSlotClasses[slotClass].Cap + perRow - 1) / perRow;
+            return Math.Min(wanted, pageSide / strideY);
         }
+
+        /// <summary>Lease a cell of the given class, opening a new page of its kind when none is free.</summary>
+        private ObjectSlot LeaseObjectCell(GraphicsDevice graphicsDevice, int slotClass)
+        {
+            var free = _objectFreeCellsByClass[slotClass];
+            if (free.Count == 0)
+            {
+                if (Array.IndexOf(SharedPageClasses, slotClass) < 0)
+                    OpenTreePage(graphicsDevice, slotClass);
+                else if (!_objectSharedPageOpen)
+                    OpenSharedPage(graphicsDevice);
+                else
+                    OpenOverflowPage(graphicsDevice, slotClass);
+            }
+            ObjectSlot leased = free[^1];
+            free.RemoveAt(free.Count - 1);
+            return leased;
+        }
+
+        private RenderTarget2D NewObjectPage(GraphicsDevice graphicsDevice, int side, string what)
+        {
+            // PreserveContents: the cells are CACHED across frames (see PreparePlayer), and a
+            // page is bound again for every bake that lands on it.
+            var page = VramTally.Track(new RenderTarget2D(graphicsDevice, side, side, false,
+                SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), what);
+            graphicsDevice.SetRenderTarget(page);
+            graphicsDevice.Clear(Color.Transparent);
+            _objectAtlasPages.Add(page);
+            return page;
+        }
+
+        /// <summary>Lay a class's cells into rows of a page from <paramref name="top"/> down, and
+        /// return the first row below them. Pushed so they are handed out from the top-left, which
+        /// keeps a page in light use in one corner.</summary>
+        private int AddCells(RenderTarget2D page, int pageSide, int slotClass, int top, int rows)
+        {
+            (int strideX, int strideY) = CellStride(slotClass);
+            (int w, int h, _) = ObjectSlotClasses[slotClass];
+            var free = _objectFreeCellsByClass[slotClass];
+            for (int row = rows - 1; row >= 0; row--)
+                for (int column = pageSide / strideX - 1; column >= 0; column--)
+                    free.Add(new ObjectSlot
+                    {
+                        Page = page,
+                        Cell = new Rectangle(column * strideX + ObjectAtlasGutter, top + row * strideY + ObjectAtlasGutter, w, h),
+                    });
+            return top + rows * strideY;
+        }
+
+        private void OpenSharedPage(GraphicsDevice graphicsDevice)
+        {
+            RenderTarget2D page = NewObjectPage(graphicsDevice, ObjectSharedPageSide, "object shadow pages (shared)");
+            _objectSharedPageOpen = true;
+            int top = 0;
+            foreach (int slotClass in SharedPageClasses)
+            {
+                int rows = RowsFor(slotClass, ObjectSharedPageSide);
+                top = AddCells(page, ObjectSharedPageSide, slotClass, top, rows);
+                _objectCellsOpen += rows * (ObjectSharedPageSide / CellStride(slotClass).StrideX);
+            }
+            // The rows left under the cells are where the contact pools' stacks go (see
+            // StackedPoolArea), on the first shared page only, so the pools share its texture.
+            if (_objectPoolStripPage == null && ObjectSharedPageSide - top > 0)
+            {
+                _objectPoolStripPage = page;
+                _objectPoolStrip = new Rectangle(0, top, ObjectSharedPageSide, ObjectSharedPageSide - top);
+            }
+        }
+
+        private void OpenTreePage(GraphicsDevice graphicsDevice, int slotClass)
+        {
+            RenderTarget2D page = NewObjectPage(graphicsDevice, ObjectTreePageSide, "object shadow pages (trees)");
+            int rows = ObjectTreePageSide / CellStride(slotClass).StrideY;
+            AddCells(page, ObjectTreePageSide, slotClass, 0, rows);
+            _objectCellsOpen += rows * (ObjectTreePageSide / CellStride(slotClass).StrideX);
+        }
+
+        /// <summary>
+        /// More cells of one class than the shared page holds. The shared page is sized for each
+        /// class's cap on one screen, but the arrival walk bakes the whole map up to the total cap
+        /// before eviction trims each class back, and a town at a wide window takes a hundred more
+        /// small cells than that for a while. A second shared page for them held 64 MB for a
+        /// handful of shadows (measured: 148 MB of pages in Town against 82 before the atlas), so
+        /// an overflow is a smaller page of the one class that ran out. The few shadows on it are
+        /// a second texture, which costs a few draw calls and nothing else.
+        /// </summary>
+        private void OpenOverflowPage(GraphicsDevice graphicsDevice, int slotClass)
+        {
+            (int w, int h, _) = ObjectSlotClasses[slotClass];
+            RenderTarget2D page = NewObjectPage(graphicsDevice, ObjectTreePageSide, $"object shadow pages (overflow {w}x{h})");
+            int rows = ObjectTreePageSide / CellStride(slotClass).StrideY;
+            AddCells(page, ObjectTreePageSide, slotClass, 0, rows);
+            _objectCellsOpen += rows * (ObjectTreePageSide / CellStride(slotClass).StrideX);
+        }
+
+        /// <summary>Copy a finished bake from its class's scratch into a cell: the one it names, or
+        /// a fresh lease. Opaque, so the cell ends up exactly the scratch, clear texels included,
+        /// whatever was there before.</summary>
+        private ObjectSlot PlaceObjectBake(GraphicsDevice graphicsDevice, RenderTarget2D scratch, int slotClass, ObjectSlot? into)
+        {
+            ObjectSlot slot = into ?? LeaseObjectCell(graphicsDevice, slotClass);
+            graphicsDevice.SetRenderTarget(slot.Page);
+            _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
+            _renderTargetSpriteBatch.Draw(scratch, new Vector2(slot.Cell.X, slot.Cell.Y), Color.White);
+            _renderTargetSpriteBatch.End();
+            return slot;
+        }
+
+        /// <summary>A point of a bake, moved from its scratch into the page its cell is on.</summary>
+        private static Vector2 InPage(Vector2 pointInScratch, ObjectSlot slot)
+            => pointInScratch + new Vector2(slot.Cell.X, slot.Cell.Y);
+
+        /// <summary>A bake's content, moved into the page; the whole cell for an empty one.</summary>
+        private static Rectangle InPage(Rectangle contentInScratch, ObjectSlot slot)
+            => contentInScratch.IsEmpty ? slot.Cell
+                : new Rectangle(contentInScratch.X + slot.Cell.X, contentInScratch.Y + slot.Cell.Y, contentInScratch.Width, contentInScratch.Height);
+
+        /// <summary>The cache entry for a bake just drawn into its class's scratch: copied into a
+        /// cell, and its feet and content carried into the page with it.</summary>
+        private SpriteBake NewObjectBake(GraphicsDevice graphicsDevice, RenderTarget2D scratch, Vector2 feetInScratch,
+            ShadowProjection projection, float blur)
+        {
+            ObjectSlot slot = PlaceObjectBake(graphicsDevice, scratch, _lastBakeClass, null);
+            return new SpriteBake
+            {
+                Rt = slot.Page, Slot = slot, FeetInRt = InPage(feetInScratch, slot), BakedProjection = projection, BakedBlur = blur,
+                BakedContactHardness = ContactHardnessNow, BakedDepth = BakeDepthNow, BakedPenumbraStretch = PenumbraStretchNow,
+                Content = InPage(_lastBakeContent, slot), SlotClass = _lastBakeClass, BakedScale = _lastBakeScale,
+                LastUsedTick = SharedTicks.Now,
+            };
+        }
+
+        /// <summary>Total cells the pages hold, for the over-cap diagnostic.</summary>
+        private int ObjectSlotsAllocated() => _objectCellsOpen;
 
         private void DrawObjectShadows(SpriteBatch spriteBatch, GameLocation location, float rotation, float stretch, float alpha, float blur)
         {
@@ -1085,7 +1242,7 @@ namespace SDVRadiance
                     // picture of a dead crop row. Nothing else here needed changing: the crop
                     // keeps its texture, its source rect, its draw position and its flip through
                     // dying, so the same call handles it.
-                    case HoeDirt { crop: { } crop } dirt when !crop.forageCrop.Value && !crop.IsErrorCrop() && KindCasts(ShadowKind.Crops):
+                    case HoeDirt { crop: { } crop } when !crop.forageCrop.Value && !crop.IsErrorCrop() && KindCasts(ShadowKind.Crops):
                         DrawCropShadow(spriteBatch, crop, tile, LeanOf(rotation, ShadowKind.Crops), LengthOf(stretch, ShadowKind.Crops), alpha,
                             SoftnessOf(blur, ShadowKind.Crops));
                         break;
@@ -1203,7 +1360,7 @@ namespace SDVRadiance
                     continue;
                 int type = furniture.furniture_type.Value;
                 // Skip rugs (12) and wall-mounted furniture (6 window, 13 wall, 17 painting).
-                if (type == 12 || type == 6 || type == 13 || type == 17)
+                if (type is 12 or 6 or 13 or 17)
                     continue;
                 Vector2 tile = furniture.TileLocation;
                 if (tile.X < tileX0 || tile.X > tileX1 || tile.Y < tileY0 || tile.Y > tileY1)
@@ -1237,8 +1394,8 @@ namespace SDVRadiance
                     if (critter is StardewValley.BellsAndWhistles.Squirrel)
                         worldPosition.Y += 60f;
                     int critterTileX = (int)(worldPosition.X / 64f), critterTileY = (int)(worldPosition.Y / 64f);
-                    if (critterTileX < tileX0 || critterTileX > tileX1 || critterTileY < tileY0 || critterTileY > tileY1 || OnOpenWater(location, new Point(critterTileX, critterTileY)))
-                        continue;   // seagulls on the surf line keep their shadow; open water doesn't
+                    if (critterTileX < tileX0 || critterTileX > tileX1 || critterTileY < tileY0 || critterTileY > tileY1)
+                        continue;
                     Rectangle sourceRect = critter.sprite.SourceRect;
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport, worldPosition + new Vector2(0f, -2f));
                     float depth = MathHelper.Clamp((worldPosition.Y - 1f) / 10000f, 0f, 1f);
@@ -1263,7 +1420,7 @@ namespace SDVRadiance
             // Read from the art, not lifted by a guess: the six pixels this used to sit above the
             // ground line were standing in for however many empty rows the item's own sprite has.
             GroundedAnchor(texture, sourceRect, tile, out Vector2 feet, out float pivotRow);
-            float depth = MathHelper.Clamp(((tile.Y + 1f) * 64f) / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
+            float depth = MathHelper.Clamp((tile.Y + 1f) * 64f / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
             EmitObject(spriteBatch, texture, sourceRect, feet, new Vector2(sourceRect.Width / 2f, pivotRow),
                 alpha, rotation, stretch, depth, blur, ObjectHeadFade, SpriteEffects.None, GeometryOf(placedObject));
         }
@@ -1294,7 +1451,7 @@ namespace SDVRadiance
         /// face standing on its edge, and everything else placed on a tile stands on a footprint.
         /// By the game's own class, so a mod's fence is a fence.</summary>
         private static ShadowGeometry GeometryOf(SObject placedObject)
-            => placedObject is Fence || placedObject is Sign ? ShadowGeometry.Card : ShadowGeometry.Solid;
+            => placedObject is Fence or Sign ? ShadowGeometry.Card : ShadowGeometry.Solid;
 
         /// <summary>
         /// A building gets the contact pool at its footprint base AND, since 1.7.2, the shape of
@@ -1385,7 +1542,7 @@ namespace SDVRadiance
             if (blades <= 0)
                 return;
             Texture2D texture = grass.texture.Value;
-            float depth = MathHelper.Clamp(((tile.Y + 1f) * 64f) / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
+            float depth = MathHelper.Clamp((tile.Y + 1f) * 64f / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
             // Anchor at the mean of the blade anchors, so the shadow sits where the tuft
             // actually leans rather than at the geometric tile center.
             Vector2 tuftCentre = Vector2.Zero;
@@ -1405,7 +1562,7 @@ namespace SDVRadiance
             // Forage rests near the tile's bottom edge. How near is a property of its art, which
             // is what the twelve-pixel lift here was guessing at.
             GroundedAnchor(texture, sourceRect, tile, out Vector2 feet, out float pivotRow);
-            float depth = MathHelper.Clamp(((tile.Y + 1f) * 64f) / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
+            float depth = MathHelper.Clamp((tile.Y + 1f) * 64f / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
             EmitObject(spriteBatch, texture, sourceRect, feet, new Vector2(sourceRect.Width / 2f, pivotRow),
                 alpha, rotation, stretch, depth, blur, ObjectHeadFade, SpriteEffects.None, GeometryOf(placedObject));
         }
@@ -1418,7 +1575,7 @@ namespace SDVRadiance
 
         /// <summary>Lift the character/animal feet anchor a touch so the shadow base sits at the
         /// visual feet rather than a few px below (the bounding-box bottom overshoots).</summary>
-        private const float FeetLift = 10f;
+        private const float FeetLift = BodyAnchor.FeetLift;
         /// <summary>
         /// Objects use the same strong feet→tip fade as characters: a DARK base grounds the
         /// shadow (the earlier gentle/uniform fade read as floaty — the fix was a darker base,
@@ -1541,7 +1698,7 @@ namespace SDVRadiance
         // doing it per on-screen object ×2 passes ×60fps is wasted work when the resolved sprite is
         // static. Cache (texture, sourceRect) per QualifiedItemId, cleared when the season rolls over
         // (a few items swap art by season).
-        private readonly System.Collections.Generic.Dictionary<string, (Texture2D? texture, Rectangle sourceRect)> _itemArtCache = new();
+        private readonly System.Collections.Generic.Dictionary<string, (Texture2D? texture, Rectangle sourceRect)> _itemArtCache = [];
         private string _itemArtSeason = "";
 
         /// <summary>The row a sprite cell's art actually ENDS on, counted from the cell's top, so a
@@ -1610,7 +1767,7 @@ namespace SDVRadiance
         /// the artist painted under it. Half of full.</summary>
         private const int SolidEnoughAlpha = 128;
 
-        private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), float> _artFootRow = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), float> _artFootRow = [];
 
         private bool TryItemArt(string qualifiedId, out Texture2D texture, out Rectangle sourceRect)
         {
@@ -1629,7 +1786,7 @@ namespace SDVRadiance
 
         // ContentManager.Load is cached but still does per-call path normalization + a
         // dictionary lookup — too much for every clump every frame. Cache per texture name.
-        private readonly System.Collections.Generic.Dictionary<string, Texture2D> _textureCache = new();
+        private readonly System.Collections.Generic.Dictionary<string, Texture2D> _textureCache = [];
 
         private Texture2D? LoadCached(string? name)
         {
@@ -1707,13 +1864,13 @@ namespace SDVRadiance
             return answer;
         }
 
-        private readonly Dictionary<(Texture2D, Rectangle), int> _canopyFootRows = new();
+        private readonly Dictionary<(Texture2D, Rectangle), int> _canopyFootRows = [];
 
         private void DrawTreeShadow(SpriteBatch spriteBatch, Tree tree, Vector2 tile, float rotation, float stretch, float alpha, float blur)
         {
             Rectangle sourceRect = TreeCanopySourceRect(tree);             // 48x96, in whichever column this tree is drawn from
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f));
-            float depth = MathHelper.Clamp((tree.getBoundingBox().Bottom + 2f) / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
+            float depth = MathHelper.Clamp((tree.getBoundingBox().Bottom + 2f) / 10000f - tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
             SpriteEffects effects = tree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
             // THE TRUNK, first, because the canopy is only half the tree.
             //
@@ -1762,7 +1919,7 @@ namespace SDVRadiance
             // ground, and deriving that from the tile is what keeps every stage consistent
             // (the same reasoning as the bush anchor above).
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, (tile.Y + 1) * 64f));
-            float depth = MathHelper.Clamp((tree.getBoundingBox().Bottom + 2f) / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
+            float depth = MathHelper.Clamp((tree.getBoundingBox().Bottom + 2f) / 10000f - tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
             SpriteEffects effect = tree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
             EmitObject(spriteBatch, tree.texture.Value, sourceRect, feet, new Vector2(sourceRect.Width / 2f, sourceRect.Height),
                 alpha, rotation, stretch, depth, blur, ObjectHeadFade, effect);
@@ -1783,7 +1940,7 @@ namespace SDVRadiance
             var sourceRect = new Rectangle(column, row * 5 * 16, 48, 80);
             float sway = (float)Math.Max(-8.0, Math.Min(64.0, Math.Sin((double)(tile.X * 200f) / (Math.PI * 2.0)) * -16.0)) / 2f;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f + sway, tile.Y * 64f + 48f + sway));
-            float depth = MathHelper.Clamp(sapling.getBoundingBox().Bottom / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
+            float depth = MathHelper.Clamp(sapling.getBoundingBox().Bottom / 10000f - tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
             SpriteEffects effects = sapling.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
             EmitObject(spriteBatch, sapling.texture, sourceRect, feet, new Vector2(24f, 80f),
                 alpha, rotation, stretch, depth, blur, ObjectHeadFade, effects);
@@ -1797,7 +1954,7 @@ namespace SDVRadiance
             int row = fruitTree.GetSpriteRowNumber();
             var sourceRect = new Rectangle((12 + season * 3) * 16, row * 5 * 16, 48, 64);
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f));
-            float depth = MathHelper.Clamp(fruitTree.getBoundingBox().Bottom / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
+            float depth = MathHelper.Clamp(fruitTree.getBoundingBox().Bottom / 10000f - tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
             SpriteEffects effects = fruitTree.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
             // Its trunk is a separate crop too (FruitTree.draw: 48x32 at x=384, origin (24,32)),
             // and it was missing for the same reason and with the same result.
@@ -1823,7 +1980,7 @@ namespace SDVRadiance
             var worldFeet = new Vector2(tile.X * 64f + (effectiveSize + 1) * 32f, (tile.Y + 1) * 64f - 8f);
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, worldFeet);
             var baseOrigin = new Vector2(sourceRect.Width / 2f, sourceRect.Height);
-            float depth = MathHelper.Clamp((bush.getBoundingBox().Center.Y + 48f) / 10000f - (float)tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
+            float depth = MathHelper.Clamp((bush.getBoundingBox().Center.Y + 48f) / 10000f - tile.X / 1000000f - ShadowDepthBias, 0f, 1f);
             SpriteEffects effect = bush.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
             EmitObject(spriteBatch, Bush.texture.Value, sourceRect, feet, baseOrigin,
                 alpha, rotation, stretch, depth, blur, ObjectHeadFade, effect);
@@ -1841,7 +1998,7 @@ namespace SDVRadiance
             Farmer player = Game1.player;
             if (player != null && player.currentLocation == location && IsSeated(player))
             {
-                if (!player.swimming.Value && !player.isRidingHorse() && !OnOpenWater(location, player.TilePoint))
+                if (!player.swimming.Value && !player.isRidingHorse())
                     DrawContactBlob(spriteBatch, SeatedAnchor(player), 20f, 10f, alpha * 0.8f, SeatedDepth(player), blur);
                 return;
             }
@@ -1849,8 +2006,6 @@ namespace SDVRadiance
                 return;
 
             Farmer who = Game1.player;
-            if (OnOpenWater(location, who.TilePoint))   // open water only — surf/shore keeps the shadow
-                return;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
             // The grounding pool, when the dial asks for one (see DrawPeoplePoolUnder): drawn

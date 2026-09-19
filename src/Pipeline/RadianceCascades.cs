@@ -60,7 +60,7 @@ namespace SDVRadiance
         /// 4 px of a walk. Same pixels either way - only the wait goes.</summary>
         private readonly Texture2D?[] _emitterTextures = new Texture2D?[2];
         private int _emitterTextureIndex;
-        private Color[] _emitterPixels = Array.Empty<Color>();
+        private Color[] _emitterPixels = [];
         private SpriteBatch? _spriteBatch;
 
         private GameLocation? _lastLocation;
@@ -178,9 +178,9 @@ namespace SDVRadiance
                 Set(effect, "ProbeGrid0", probeGrid);
                 Set(effect, "CascadeTexSize", cascadeSize);
                 Set(effect, "ProbeSpacingTiles0", ProbeSpacingTiles);
-                Set(effect, "CascadeCount", (float)CascadeCount);
+                Set(effect, "CascadeCount", CascadeCount);
                 Set(effect, "MissRadiance", miss);
-                Set(effect, "SkyCascade", (float)SkyCascade);
+                Set(effect, "SkyCascade", SkyCascade);
                 Set(effect, "EmitterGain", EmitterGain);
                 Set(effect, "EmitterTexScale", 1f / EmitterStorageScale);
                 Set(effect, "OutputScale", FloodLightmap.StorageScale);
@@ -197,7 +197,7 @@ namespace SDVRadiance
                     // the next softer copy at its own texel, so a step never straddles a fence.
                     Texture2D occluderLevel = cascade == 0 ? occluderMask : occluderSoft[cascade - 1]!;
                     float stepTiles = (1 << cascade) / 8f;
-                    Set(effect, "CascadeIndex", (float)cascade);
+                    Set(effect, "CascadeIndex", cascade);
                     Set(effect, "IntervalStartTiles", IntervalStart(cascade));
                     Set(effect, "IntervalEndTiles", IntervalStart(cascade + 1));
                     Set(effect, "StepTiles", stepTiles);

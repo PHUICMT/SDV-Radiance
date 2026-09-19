@@ -38,19 +38,28 @@ namespace SDVRadiance
     ///
     /// <para>The key is the sheet instance and the rectangle. A sheet reloaded by a content patch
     /// is a new instance; its sprites are forgotten when the old one is disposed, the same rule
-    /// the doubled sheets follow, and their room on the page is given back only when the page
-    /// goes. Pages are dropped whole, least recently drawn first, when the budget is reached, or
-    /// when nothing drawn is left on them; the sprites on a dropped page are baked again as they
-    /// are drawn.</para>
+    /// the doubled sheets follow, and their room on the page is kept as a free slot that the next
+    /// sprite of exactly that size takes. That room used to be given back only when the page went,
+    /// and a sheet that is rebuilt all the time filled the cache with copies of itself: a mod that
+    /// recolours the farmer's pants every tick makes the game throw the farmer's body texture away
+    /// and build a new one every frame, and measured in Town that was 150 sprites a second swept
+    /// and all 47 pages of the budget held, mostly by farmers nobody could draw any more. The new
+    /// copy is the same size as the one it replaces, so it now lands in the old one's slot. Pages
+    /// are dropped whole, least recently drawn first, when the budget is reached, or when nothing
+    /// drawn is left on them; the sprites on a dropped page are baked again as they are drawn.</para>
     /// </summary>
     internal sealed class SoftSpriteCache
     {
-        /// <summary>One page of sprites, filled shelf by shelf, never reused in place.</summary>
+        /// <summary>One page of sprites, filled shelf by shelf, and refilled slot by slot as
+        /// sprites whose sheet has gone are swept off it.</summary>
         private sealed class Page
         {
             public RenderTarget2D Target = null!;
-            public readonly List<Shelf> Shelves = new();
-            public readonly List<(Texture2D sheet, Rectangle rect, int variant)> Keys = new();
+            public readonly List<Shelf> Shelves = [];
+            /// <summary>Room a swept sprite left, gutter included. The bake writes its whole
+            /// rectangle opaque, so a slot needs no clearing before it is used again.</summary>
+            public readonly List<Rectangle> FreeSlots = [];
+            public readonly List<(Texture2D sheet, Rectangle rect, int variant)> Keys = [];
             public int NextShelfY;
             public int LastUsedTick;
             public long Bytes;
@@ -80,10 +89,10 @@ namespace SDVRadiance
         private const int PageSide = 1024;
         private const int LargePageSide = 2048;
 
-        private readonly Dictionary<(Texture2D sheet, Rectangle rect, int variant), Entry> _entries = new();
-        private readonly List<Page> _pages = new();
-        private readonly HashSet<Texture2D> _ownTargets = new();
-        private readonly List<Page> _sweepScratch = new();
+        private readonly Dictionary<(Texture2D sheet, Rectangle rect, int variant), Entry> _entries = [];
+        private readonly List<Page> _pages = [];
+        private readonly HashSet<Texture2D> _ownTargets = [];
+        private readonly List<Page> _sweepScratch = [];
         private readonly string _bucket;
         private readonly long _budgetBytes;
         private readonly int _largestSpriteSide;
@@ -93,6 +102,18 @@ namespace SDVRadiance
         private long _heldBytes;
         private int _generatedThisFrame, _frameTick = -1;
         private SpriteBatch? _spriteBatch;
+        private int _burstFramesLeft;
+        private bool _burstThisFrame;
+
+        /// <summary>
+        /// Let the next few frames bake every sprite they draw, cap or no cap.
+        /// </summary>
+        /// <remarks>The rule the doubled sheets follow (SheetDerivedCache.AllowBurstThisTick), which
+        /// this cache never had. At eight a frame a screen of a few hundred sprites turned soft one
+        /// sprite at a time after a warp, each switching from sharp to soft on its own frame, along
+        /// every edge: the map rendering in as you enter it. On a warp the game's fade-to-black is
+        /// over the picture, so the long frames go where nobody sees them.</remarks>
+        internal void AllowBurstThisTick() => _burstFramesLeft = SheetDerivedCache.BurstFramesOnArrival;
 
         internal SoftSpriteCache(string bucket, long budgetBytes, int largestSpriteSide, int scale, int generatePerFrameCap,
             Func<GraphicsDevice, SpriteBatch, Effect, Texture2D, Rectangle, RenderTarget2D, Rectangle, bool> bake)
@@ -111,6 +132,8 @@ namespace SDVRadiance
         internal int Refused { get; private set; }
         internal int Evicted { get; private set; }
         internal int Generated { get; private set; }
+        /// <summary>The most sprites baked in one frame so far: above the cap only on a burst.</summary>
+        internal int LargestFrame { get; private set; }
         /// <summary>A sprite bigger than this in either direction never gets a soft copy.</summary>
         internal int LargestSpriteSide => _largestSpriteSide;
         /// <summary>How many may be baked in one frame; the rest wait, drawn sharp meanwhile.</summary>
@@ -147,8 +170,11 @@ namespace SDVRadiance
             {
                 _frameTick = SharedTicks.Now;
                 _generatedThisFrame = 0;
+                _burstThisFrame = _burstFramesLeft > 0;
+                if (_burstThisFrame)
+                    _burstFramesLeft--;
             }
-            if (_generatedThisFrame >= _generatePerFrameCap)
+            if (_generatedThisFrame >= _generatePerFrameCap && !_burstThisFrame)
                 return false;
             if (rect.Width <= 0 || rect.Height <= 0 || rect.Width > _largestSpriteSide || rect.Height > _largestSpriteSide)
             {
@@ -208,6 +234,7 @@ namespace SDVRadiance
             home.LastUsedTick = SharedTicks.Now;
             _generatedThisFrame++;
             Generated++;
+            LargestFrame = Math.Max(LargestFrame, _generatedThisFrame);
             page = home.Target;
             placed = inner;
             return true;
@@ -221,6 +248,19 @@ namespace SDVRadiance
             int pageWidth = page.Target.Width, pageHeight = page.Target.Height;
             if (width > pageWidth || height > pageHeight)
                 return false;
+            // A slot a swept sprite left, when it is exactly this size: the sheet rebuilt every
+            // frame hands back the same size it takes, and only an exact fit keeps the slot's
+            // bounds the sprite's own bounds for the next sweep.
+            for (int i = 0; i < page.FreeSlots.Count; i++)
+            {
+                Rectangle slot = page.FreeSlots[i];
+                if (slot.Width != width || slot.Height != height)
+                    continue;
+                page.FreeSlots[i] = page.FreeSlots[^1];
+                page.FreeSlots.RemoveAt(page.FreeSlots.Count - 1);
+                rect = slot;
+                return true;
+            }
             foreach (Shelf shelf in page.Shelves)
             {
                 // A shelf takes sprites no taller than it and at least half its height, so the
@@ -291,6 +331,9 @@ namespace SDVRadiance
                 {
                     if (!page.Keys[i].sheet.IsDisposed)
                         continue;
+                    if (_entries.TryGetValue(page.Keys[i], out Entry gone))
+                        page.FreeSlots.Add(new Rectangle(gone.Rect.X - Gutter, gone.Rect.Y - Gutter,
+                            gone.Rect.Width + 2 * Gutter, gone.Rect.Height + 2 * Gutter));
                     _entries.Remove(page.Keys[i]);
                     page.Keys.RemoveAt(i);
                     Evicted++;

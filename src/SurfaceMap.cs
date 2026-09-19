@@ -50,7 +50,7 @@ namespace SDVRadiance
         private readonly sbyte[] _tileHeights;
         private readonly SurfaceClass[] _surfaceClasses;
 
-        private static readonly ConditionalWeakTable<GameLocation, SurfaceMap> _locationCache = new();
+        private static readonly ConditionalWeakTable<GameLocation, SurfaceMap> _locationCache = [];
 
         /// <summary>The map object this grid was built from, and how many map overrides its location
         /// had applied at the time. The game changes a map under the SAME location without reloading
@@ -90,7 +90,7 @@ namespace SDVRadiance
         ///
         /// <para>Weak, like the grids beside it: a location the game has let go takes its count
         /// with it, and a location that is asked about before it is ever reloaded reads zero.</para></summary>
-        private static readonly ConditionalWeakTable<GameLocation, StrongBox<int>> _mapReloadCount = new();
+        private static readonly ConditionalWeakTable<GameLocation, StrongBox<int>> _mapReloadCount = [];
 
         public static int MapReloadCount(GameLocation? location)
             => location != null && _mapReloadCount.TryGetValue(location, out StrongBox<int>? count) ? count.Value : 0;
@@ -126,7 +126,7 @@ namespace SDVRadiance
         public bool BlocksLight(int x, int y)
         {
             var surface = GetSurface(x, y);
-            return surface == SurfaceClass.Wall || surface == SurfaceClass.Roof;
+            return surface is SurfaceClass.Wall or SurfaceClass.Roof;
         }
 
         // ---- cache ---------------------------------------------------------------------------
@@ -188,8 +188,8 @@ namespace SDVRadiance
                                                         double Footprints)
         {
             public override string ToString()
-                => $"layers {this.Layers:0.0}, classify {this.Classify:0.0}, decks {this.SpanDecks:0.0}, "
-                 + $"roofs {this.ThinRoofs:0.0}, footprints {this.Footprints:0.0}";
+                => $"layers {Layers:0.0}, classify {Classify:0.0}, decks {SpanDecks:0.0}, "
+                 + $"roofs {ThinRoofs:0.0}, footprints {Footprints:0.0}";
         }
 
         /// <summary>Milliseconds since a <see cref="System.Diagnostics.Stopwatch"/> timestamp.</summary>
@@ -231,7 +231,7 @@ namespace SDVRadiance
             var reloaded = new List<string>();
             foreach (string name in reloadedAssetNames)
             {
-                string normalised = NormaliseAssetName(name);
+                string normalised = AssetNames.Normalise(name);
                 if (normalised.StartsWith("Maps/", StringComparison.OrdinalIgnoreCase))
                     reloaded.Add(normalised);
             }
@@ -264,7 +264,7 @@ namespace SDVRadiance
             string? mapPath = location.mapPath?.Value;
             if (mapPath == null)
                 return false;
-            string mapAssetName = NormaliseAssetName(mapPath);
+            string mapAssetName = AssetNames.Normalise(mapPath);
             foreach (string name in reloaded)
                 if (string.Equals(mapAssetName, name, StringComparison.OrdinalIgnoreCase))
                     return true;
@@ -278,23 +278,12 @@ namespace SDVRadiance
                 return false;
             foreach (var sheet in sheets)
             {
-                string source = NormaliseAssetName(sheet.ImageSource ?? "");
+                string source = AssetNames.Normalise(sheet.ImageSource ?? "");
                 foreach (string name in reloaded)
                     if (string.Equals(source, name, StringComparison.OrdinalIgnoreCase))
                         return true;
             }
             return false;
-        }
-
-        /// <summary>Forward slashes, no locale suffix: anything after the LAST dot that is short
-        /// and has no slash in it is a language tag, not part of a path.</summary>
-        internal static string NormaliseAssetName(string name)
-        {
-            name = name.Replace('\\', '/');
-            int dot = name.LastIndexOf('.');
-            if (dot <= 0 || dot < name.Length - 6 || name.IndexOf('/', dot) >= 0)
-                return name;
-            return name.Substring(0, dot);
         }
 
         // ---- inference -----------------------------------------------------------------------
@@ -326,7 +315,7 @@ namespace SDVRadiance
             internal int DeckPixels;
         }
 
-        private static readonly ConditionalWeakTable<byte[], LabelVerdict> _verdictByLabel = new();
+        private static readonly ConditionalWeakTable<byte[], LabelVerdict> _verdictByLabel = [];
 
         private static SurfaceClass? ClassFromLabels(byte[] classes, bool overlay, out int deckPixels)
         {
@@ -432,7 +421,7 @@ namespace SDVRadiance
                 Back2 = back2; Front2 = front2;
                 AlwaysFront = alwaysFront; AlwaysFront2 = alwaysFront2;
                 BuildingsTopDown = buildingsTopDown; Labels = labels;
-                LiquidOverlays = new[] { front, front2, alwaysFront, alwaysFront2 };
+                LiquidOverlays = [front, front2, alwaysFront, alwaysFront2];
             }
         }
 
@@ -525,10 +514,10 @@ namespace SDVRadiance
                     {
                             Set(grid, tileIndex, decided, decided switch
                             {
-                                SurfaceClass.Water => (sbyte)-1,
-                                SurfaceClass.Ground => (sbyte)0,
-                                SurfaceClass.Void => (sbyte)0,
-                                _ => (sbyte)1,
+                                SurfaceClass.Water => -1,
+                                SurfaceClass.Ground => 0,
+                                SurfaceClass.Void => 0,
+                                _ => 1,
                             });
                         labelled[tileIndex] = true;
                         continue;
@@ -713,9 +702,9 @@ namespace SDVRadiance
                                 continue;
                             bool rim = x == footprintLeft || x == footprintLeft + footprintWidth - 1 || y == footprintTop || y == footprintTop + footprintHeight - 1;
                             if (rim)
-                                Set(grid, y * mapWidth + x, SurfaceClass.Ground, (sbyte)0);
+                                Set(grid, y * mapWidth + x, SurfaceClass.Ground, 0);
                             else
-                                Set(grid, y * mapWidth + x, SurfaceClass.Water, (sbyte)-1);
+                                Set(grid, y * mapWidth + x, SurfaceClass.Water, -1);
                         }
                     continue;
                 }
@@ -745,7 +734,7 @@ namespace SDVRadiance
                         int tileIndex = y * mapWidth + x;
                         if (grid._surfaceClasses[tileIndex] == SurfaceClass.Water)
                             continue;
-                        Set(grid, tileIndex, y >= footprintTop ? SurfaceClass.Wall : SurfaceClass.Roof, (sbyte)2);
+                        Set(grid, tileIndex, y >= footprintTop ? SurfaceClass.Wall : SurfaceClass.Roof, 2);
                     }
             }
         }
@@ -777,7 +766,7 @@ namespace SDVRadiance
             void Promote(int tileIndex)
             {
                 if (!labelled[tileIndex] && grid._surfaceClasses[tileIndex] == SurfaceClass.Ground)
-                    Set(grid, tileIndex, SurfaceClass.Deck, (sbyte)1);
+                    Set(grid, tileIndex, SurfaceClass.Deck, 1);
             }
 
             // Vertical spans: a bridge crossing a river that runs east-west.
@@ -855,12 +844,12 @@ namespace SDVRadiance
                             int neighbourX = x + offsetX;
                             if ((offsetX == 0 && offsetY == 0) || neighbourX < 0 || neighbourX >= mapWidth) continue;
                             var neighbourSurface = before[neighbourY * mapWidth + neighbourX];
-                            if (neighbourSurface == SurfaceClass.Roof || neighbourSurface == SurfaceClass.Wall)
+                            if (neighbourSurface is SurfaceClass.Roof or SurfaceClass.Wall)
                                 mass++;
                         }
                     }
                     if (mass < RoofNeighbours)
-                        Set(grid, tileIndex, SurfaceClass.Ground, (sbyte)0);
+                        Set(grid, tileIndex, SurfaceClass.Ground, 0);
                 }
             }
         }

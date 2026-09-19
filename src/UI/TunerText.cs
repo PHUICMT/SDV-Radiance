@@ -13,7 +13,7 @@ namespace SDVRadiance
         /// instead of once per frame. Keyed on the font too: switching language swaps
         /// <c>Game1.smallFont</c> for one with different metrics, and stale widths would misplace
         /// every label until restart.</summary>
-        private static readonly Dictionary<string, Vector2> _measuredSizes = new();
+        private static readonly Dictionary<string, Vector2> _measuredSizes = [];
         private static SpriteFont? _measuredFont;
         /// <summary>Live diagnostic lines (bench timings and the like) mint new strings while they
         /// run; past this the cache starts over rather than remembering every one it ever saw.</summary>

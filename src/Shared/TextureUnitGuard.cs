@@ -146,7 +146,7 @@ namespace SDVRadiance
         {
             try
             {
-                var setTextures = AccessTools.Method(typeof(TextureCollection), "SetTextures", new[] { typeof(GraphicsDevice) });
+                var setTextures = AccessTools.Method(typeof(TextureCollection), "SetTextures", [typeof(GraphicsDevice)]);
                 if (setTextures == null)
                 {
                     monitor.Log("TextureCollection.SetTextures not found; the texture unit guard is off, and a sheet a GetData parks on a high unit can be read linearly for the session.", LogLevel.Warn);

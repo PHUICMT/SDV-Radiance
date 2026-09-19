@@ -57,7 +57,7 @@ namespace SDVRadiance
             RegisterCameraPage(configMenu, manifest, translate, config);
             RegisterSmoothingPage(configMenu, manifest, translate, config);
             RegisterPerformancePage(configMenu, manifest, translate, config);
-            RegisterMiscPage(configMenu, manifest, translate, config, helper, monitor, getPipeline);
+            RegisterMiscPage(configMenu, manifest, translate, config, monitor, getPipeline);
         }
 
         /// <summary>Master switch, the one-click look preset, and the links to every other page.</summary>
@@ -88,7 +88,8 @@ namespace SDVRadiance
                     }
                 },
                 () => translate("config.preset.name"), () => translate("config.preset.tooltip"),
-                new[] { nameof(LookPreset.Custom), nameof(LookPreset.Subtle), nameof(LookPreset.Cinematic), nameof(LookPreset.Vibrant), nameof(LookPreset.Off) },
+                [nameof(LookPreset.Custom), nameof(LookPreset.Subtle), nameof(LookPreset.Cinematic), nameof(LookPreset.Vibrant),
+                 nameof(LookPreset.Nocturne), nameof(LookPreset.Off)],
                 choice => translate($"config.preset.{choice.ToLowerInvariant()}"));
 
             configMenu.AddParagraph(manifest, () => translate("config.preset.hint"));
@@ -173,7 +174,7 @@ namespace SDVRadiance
                 () => config().ColorGradeLut,
                 value => config().ColorGradeLut = value ?? "",
                 () => translate("config.colorgrade.lut.name"), () => translate("config.colorgrade.lut.tooltip"),
-                choices.ToArray(),
+                [.. choices],
                 choice => choice.Length == 0 ? translate("config.colorgrade.lut.none")
                      : userLutNames.Contains(choice) ? $"{choice} ({translate("config.colorgrade.lut.yours")})"
                      : Array.IndexOf(ModConfig.ShippedLuts, choice) >= 0 ? translate($"config.colorgrade.lut.{choice}")
@@ -445,7 +446,7 @@ namespace SDVRadiance
                 () => config().TiltShiftMode.ToString(),
                 value => config().TiltShiftMode = Enum.TryParse<TiltShiftFocus>(value, out var mode) ? mode : TiltShiftFocus.Bands,
                 () => translate("config.tiltshift.mode.name"), () => translate("config.tiltshift.mode.tooltip"),
-                new[] { nameof(TiltShiftFocus.Bands), nameof(TiltShiftFocus.Radial) },
+                [nameof(TiltShiftFocus.Bands), nameof(TiltShiftFocus.Radial)],
                 choice => translate($"config.tiltshift.mode.{choice.ToLowerInvariant()}"));
             configMenu.AddNumberOption(manifest, () => config().TiltShiftStrength, value => config().TiltShiftStrength = value,
                 () => translate("config.tiltshift.strength.name"), null, 0f, 1f, 0.05f);
@@ -534,6 +535,43 @@ namespace SDVRadiance
             configMenu.AddNumberOption(manifest, () => config().WaterWind, value => config().WaterWind = value,
                 () => translate("config.water.wind.name"), () => translate("config.water.wind.tooltip"),
                 0f, 2f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().WaterRiverFlowEnabled, value => config().WaterRiverFlowEnabled = value,
+                () => translate("config.water.riverflow.name"), () => translate("config.water.riverflow.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().WaterCurrent, value => config().WaterCurrent = value,
+                () => translate("config.water.current.name"), () => translate("config.water.current.tooltip"),
+                0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WaterRiverRainSwell, value => config().WaterRiverRainSwell = value,
+                () => translate("config.water.rainswell.name"), () => translate("config.water.rainswell.tooltip"),
+                0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WaterRiverFoam, value => config().WaterRiverFoam = value,
+                () => translate("config.water.riverfoam.name"), () => translate("config.water.riverfoam.tooltip"),
+                0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WaterRiverRippleSpeed, value => config().WaterRiverRippleSpeed = value,
+                () => translate("config.water.riverripplespeed.name"), () => translate("config.water.riverripplespeed.tooltip"),
+                1.0f, 3.0f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WaterRiverRenew, value => config().WaterRiverRenew = value,
+                () => translate("config.water.riverrenew.name"), () => translate("config.water.riverrenew.tooltip"),
+                0.0f, 1.0f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WaterRiverBankDrag, value => config().WaterRiverBankDrag = value,
+                () => translate("config.water.riverbankdrag.name"), () => translate("config.water.riverbankdrag.tooltip"),
+                0.0f, 1.0f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WaterRiverSwirl, value => config().WaterRiverSwirl = value,
+                () => translate("config.water.riverswirl.name"), () => translate("config.water.riverswirl.tooltip"),
+                0.0f, 1.0f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WaterRiverGlitter, value => config().WaterRiverGlitter = value,
+                () => translate("config.water.riverglitter.name"), () => translate("config.water.riverglitter.tooltip"),
+                0.0f, 1.0f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WaterRiverFoamStreak, value => config().WaterRiverFoamStreak = value,
+                () => translate("config.water.riverfoamstreak.name"), () => translate("config.water.riverfoamstreak.tooltip"),
+                1.0f, 5.0f, 0.1f);
+            configMenu.AddNumberOption(manifest, () => config().WaterRiverWaves, value => config().WaterRiverWaves = value,
+                () => translate("config.water.riverwaves.name"), () => translate("config.water.riverwaves.tooltip"),
+                0.0f, 2.0f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().WaterRiverPixelStep, value => config().WaterRiverPixelStep = value,
+                () => translate("config.water.riverpixelstep.name"), () => translate("config.water.riverpixelstep.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().WaterSeaWaves, value => config().WaterSeaWaves = value,
+                () => translate("config.water.seawaves.name"), () => translate("config.water.seawaves.tooltip"),
+                0f, 2f, 0.05f);
             // Reflection REACH and FADE ROWS are not offered here. They buy frames, they do not
             // change how anything looks, and the performance preset already sets both: a player
             // who moves them sees nothing happen and concludes the mod is broken. The settings
@@ -545,14 +583,14 @@ namespace SDVRadiance
                 () => config().WaterReflectModel.ToString(),
                 value => config().WaterReflectModel = Enum.TryParse<WaterReflectionModel>(value, out var model) ? model : WaterReflectionModel.Modern,
                 () => translate("config.water.model.name"), () => translate("config.water.model.tooltip"),
-                new[] { nameof(WaterReflectionModel.Modern), nameof(WaterReflectionModel.Classic) },
+                [nameof(WaterReflectionModel.Modern), nameof(WaterReflectionModel.Classic)],
                 choice => translate($"config.water.model.{choice.ToLowerInvariant()}"));
             configMenu.AddSectionTitle(manifest, () => translate("config.water.classic.title"), () => translate("config.water.classic.tooltip"));
             configMenu.AddTextOption(manifest,
                 () => config().WaterReflectStyle.ToString(),
                 value => config().WaterReflectStyle = Enum.TryParse<WaterReflectionStyle>(value, out var style) ? style : WaterReflectionStyle.Natural,
                 () => translate("config.water.reflstyle.name"), () => translate("config.water.reflstyle.tooltip"),
-                new[] { "StillWater", "Natural", "Choppy" });
+                ["StillWater", "Natural", "Choppy"]);
             configMenu.AddSectionTitle(manifest, () => translate("config.water.modern.title"), () => translate("config.water.modern.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().WaterModernWobble, value => config().WaterModernWobble = value,
                 () => translate("config.water.modernwobble.name"), () => translate("config.water.modernwobble.tooltip"),
@@ -596,7 +634,7 @@ namespace SDVRadiance
                 () => config().FloodGiModel.ToString(),
                 value => config().FloodGiModel = Enum.TryParse<GiModel>(value, out var model) ? model : GiModel.Flood,
                 () => translate("config.lighting.gimodel.name"), () => translate("config.lighting.gimodel.tooltip"),
-                new[] { nameof(GiModel.Flood), nameof(GiModel.Cascades) },
+                [nameof(GiModel.Flood), nameof(GiModel.Cascades)],
                 choice => translate($"config.lighting.gimodel.{choice.ToLowerInvariant()}"));
             configMenu.AddBoolOption(manifest, () => config().SpriteReliefEnabled, value => config().SpriteReliefEnabled = value,
                 () => translate("config.lighting.relief.name"), () => translate("config.lighting.relief.tooltip"));
@@ -679,6 +717,8 @@ namespace SDVRadiance
                 () => translate("config.lighting.lamphalo.name"), () => translate("config.lighting.lamphalo.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().AquariumRipple, value => config().AquariumRipple = value,
                 () => translate("config.lighting.aquariumripple.name"), () => translate("config.lighting.aquariumripple.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().TvScreenGlow, value => config().TvScreenGlow = value,
+                () => translate("config.lighting.tvglow.name"), () => translate("config.lighting.tvglow.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddBoolOption(manifest, () => config().WindowBeamEnabled, value => config().WindowBeamEnabled = value,
                 () => translate("config.lighting.windowbeam.name"), () => translate("config.lighting.windowbeam.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().WindowDaylightStrength, value => config().WindowDaylightStrength = value,
@@ -698,6 +738,9 @@ namespace SDVRadiance
             configMenu.AddNumberOption(manifest, () => config().WindowReflectionNightStrength, value => config().WindowReflectionNightStrength = value,
                 () => translate("config.lighting.windowreflectionnight.name"),
                 () => translate("config.lighting.windowreflectionnight.tooltip"), 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WindowVehicleGlassStrength, value => config().WindowVehicleGlassStrength = value,
+                () => translate("config.lighting.windowvehicleglass.name"),
+                () => translate("config.lighting.windowvehicleglass.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().WindowSheenStrength, value => config().WindowSheenStrength = value,
                 () => translate("config.lighting.windowsheen.name"),
                 () => translate("config.lighting.windowsheen.tooltip"), 0f, 2f, 0.05f);
@@ -750,10 +793,10 @@ namespace SDVRadiance
                 () => config().DirectionalShadowModel.ToString(),
                 value => config().DirectionalShadowModel = Enum.TryParse<ShadowModel>(value, out var model) ? model : ShadowModel.Modern,
                 () => translate("config.shadows.model.name"), () => translate("config.shadows.model.tooltip"),
-                new[] { nameof(ShadowModel.Modern), nameof(ShadowModel.Classic) },
+                [nameof(ShadowModel.Modern), nameof(ShadowModel.Classic)],
                 choice => translate($"config.shadows.model.{choice.ToLowerInvariant()}"));
             configMenu.AddNumberOption(manifest, () => config().DirectionalShadowStrength, value => config().DirectionalShadowStrength = value,
-                () => translate("config.shadows.strength.name"), null, 0f, 1f, 0.05f);
+                () => translate("config.shadows.strength.name"), () => translate("config.shadows.strength.tooltip"), 0f, ModConfig.ShadowStrengthMax, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().DirectionalShadowLength, value => config().DirectionalShadowLength = value,
                 () => translate("config.shadows.length.name"), null, 0.2f, 2f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().GoldenHourStrength, value => config().GoldenHourStrength = value,
@@ -780,7 +823,7 @@ namespace SDVRadiance
                 () => translate("config.shadows.tint.name"),
                 () => translate("config.shadows.tint.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().DirectionalShadowBlur, value => config().DirectionalShadowBlur = value,
-                () => translate("config.shadows.blur.name"), null, 0f, 5f, 0.5f);
+                () => translate("config.shadows.blur.name"), () => translate("help.shadowblur"), 0f, ModConfig.ShadowBlurMax, 0.5f);
             configMenu.AddBoolOption(manifest, () => config().DirectionalShadowPlayer, value => config().DirectionalShadowPlayer = value,
                 () => translate("config.shadows.player.name"), () => translate("config.shadows.player.tooltip"));
             configMenu.AddBoolOption(manifest, () => config().DirectionalShadowVillagers, value => config().DirectionalShadowVillagers = value,
@@ -848,11 +891,18 @@ namespace SDVRadiance
         private static void RegisterCameraPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
             configMenu.AddPage(manifest, "camera", () => translate("config.section.camera"));
+            // GMCM has no greyed-out row, so while the camera is stood down the page says why and
+            // offers nothing to change.
+            if (!CameraSmoother.Available)
+            {
+                configMenu.AddParagraph(manifest, () => translate("config.camera.disabled"));
+                return;
+            }
             configMenu.AddTextOption(manifest,
                 () => config().CameraMode.ToString(),
                 value => config().CameraMode = Enum.TryParse<CameraMode>(value, out var mode) ? mode : CameraMode.Off,
                 () => translate("config.camera.mode.name"), () => translate("config.camera.mode.tooltip"),
-                new[] { nameof(CameraMode.Off), nameof(CameraMode.Smooth) },
+                [nameof(CameraMode.Off), nameof(CameraMode.Smooth)],
                 choice => translate($"config.camera.mode.{choice.ToLowerInvariant()}"));
             configMenu.AddNumberOption(manifest, () => config().CameraFollowSpeed, value => config().CameraFollowSpeed = value,
                 () => translate("config.smoothcam.speed.name"), () => translate("config.smoothcam.speed.tooltip"), 0.05f, 1f, 0.05f);
@@ -887,7 +937,7 @@ namespace SDVRadiance
                 () => config().SheetUpscaleStyle.ToString(),
                 value => config().SheetUpscaleStyle = Enum.TryParse<SheetSmoothingStyle>(value, out var style) ? style : SheetSmoothingStyle.Scale2x,
                 () => translate("config.sheetupscalestyle.name"), () => translate("config.sheetupscalestyle.tooltip"),
-                new[] { nameof(SheetSmoothingStyle.Scale2x), nameof(SheetSmoothingStyle.Soft4x) },
+                [nameof(SheetSmoothingStyle.Scale2x), nameof(SheetSmoothingStyle.Soft4x)],
                 choice => translate($"config.sheetupscalestyle.{choice.ToLowerInvariant()}"));
             configMenu.AddSectionTitle(manifest, () => translate("tuner.section.smoothingfamilies"));
             configMenu.AddBoolOption(manifest, () => config().SheetUpscaleWorld, value => config().SheetUpscaleWorld = value,
@@ -913,7 +963,7 @@ namespace SDVRadiance
         }
 
         /// <summary>Hotkeys, the debug switches, and the roadmap section.</summary>
-        private static void RegisterMiscPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config, IModHelper helper, IMonitor monitor, Func<RenderPipeline?> getPipeline)
+        private static void RegisterMiscPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config, IMonitor monitor, Func<RenderPipeline?> getPipeline)
         {
             configMenu.AddPage(manifest, "misc", () => translate("config.section.misc"));
             configMenu.AddSectionTitle(manifest, () => translate("config.section.hotkeys"));
@@ -942,7 +992,7 @@ namespace SDVRadiance
             // as unticked immediately, which is right: it is an action, not a state.
             configMenu.AddBoolOption(manifest,
                 () => false,
-                value => { if (value) ConsoleCommands.WriteReport(helper, monitor, getPipeline(), config(), alsoLog: true); },
+                value => { if (value) ConsoleCommands.WriteReport(monitor, getPipeline(), config(), alsoLog: true); },
                 () => translate("config.report.name"), () => translate("config.report.tooltip"));
 
             // --- Not yet implemented: shown as a roadmap so options don't imply working features ---

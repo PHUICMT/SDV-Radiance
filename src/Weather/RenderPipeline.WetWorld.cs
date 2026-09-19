@@ -35,7 +35,7 @@ namespace SDVRadiance
 
         /// <summary>Wetness per location context id. Shared world truth, deliberately NOT
         /// per-screen: both halves of a split screen stand in the same world.</summary>
-        private static readonly Dictionary<string, float> _wetnessByContext = new();
+        private static readonly Dictionary<string, float> _wetnessByContext = [];
         private static float _wetnessLastMinutes = -1f;
         private static int _wetnessSteppedTick = -1;
         private static int _wetnessSeededDay = -1;
@@ -68,7 +68,7 @@ namespace SDVRadiance
         /// weather is per-day (always, outside debug commands) and merely approximate for the
         /// frame a debug flip happens off-context.</para>
         /// </summary>
-        private static void AdvanceWetness(ModConfig config)
+        private static void AdvanceWetness()
         {
             if (SharedTicks.Now == _wetnessSteppedTick || Determinism.Frozen)
                 return;
@@ -97,7 +97,7 @@ namespace SDVRadiance
                 elapsed = 0f;   // clock wound backwards (debug time) - hold rather than guess
             elapsed = Math.Min(elapsed, 60f);
 
-            bool rainingHere = location.IsRainingHere();
+            bool rainingHere = LocalSky.RainLandsOn(location);
             wetness = rainingHere
                 ? Math.Min(1f, wetness + elapsed / WetRiseGameMinutes)
                 : Math.Max(0f, wetness - elapsed / WetDecayGameMinutes);
@@ -292,7 +292,7 @@ namespace SDVRadiance
             var upperLayers = new List<xTile.Layers.Layer>();
             if (location.map?.Layers != null)
                 foreach (xTile.Layers.Layer layer in location.map.Layers)
-                    if (layer.Id != "Back" && layer.Id != "Paths")
+                    if (layer.Id is not "Back" and not "Paths")
                         upperLayers.Add(layer);
             for (int y = 0; y < height; y++)
             {
@@ -331,9 +331,11 @@ namespace SDVRadiance
         {
             string contextId = Game1.currentLocation?.GetLocationContextId() ?? "?";
             bool raining = Game1.currentLocation?.IsRainingHere() ?? false;
+            bool snowing = Game1.currentLocation?.IsSnowingHere() ?? false;
             return $"wet world: toggle={config.WetWorldEnabled} wetness={WetnessNow:0.000} puddle={PuddleAmountNow:0.000} "
-                 + $"presence={_fadeWet:0.000} context={contextId} raining={raining} "
+                 + $"presence={_fadeWet:0.000} context={contextId} raining={raining} snowing={snowing} "
                  + $"outdoors={Game1.currentLocation?.IsOutdoors ?? false} "
+                 + $"waterRainRings={_rainRingsEase:0.000} "
                  + $"mirror[wanted={_wetPuddleMirrorWanted} baked={ReflectRTReady} waterInMask={_hasWaterInMask}] "
                  + $"(rises over {WetRiseGameMinutes:0} game-min of rain, dries over {WetDecayGameMinutes:0})";
         }

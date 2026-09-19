@@ -113,12 +113,12 @@ namespace SDVRadiance
             var report = new StringBuilder();
             Event? ev = Game1.CurrentEvent;
             report.AppendLine($"[shadows] location={location.NameOrUniqueName} outdoors={location.IsOutdoors} time={Game1.timeOfDay} season={Game1.season}");
-            report.AppendLine($"[shadows] path={(SunCasts() ? "SUN" : "PER-LIGHT")} shouldCast={ShouldCast(config)} strength={config.DirectionalShadowStrength:0.00} objectsEnabled={config.DirectionalShadowObjects} "
+            report.AppendLine($"[shadows] path={(SunCasts() ? "SUN" : "PER-LIGHT")} sunBlend={LastSunBlend:0.000} overcastBlend={LastOvercastBlend:0.000} shouldCast={ShouldCast(config)} strength={config.DirectionalShadowStrength:0.00} objectsEnabled={config.DirectionalShadowObjects} "
                 + $"player={config.DirectionalShadowPlayer} villagers={config.DirectionalShadowVillagers} farmAnimals={config.DirectionalShadowFarmAnimals} creatures={config.DirectionalShadowCreatures}");
             AppendSunGeometry(report, config);
             // The event flags decide who the game is drawing at all. Every one of them has caught
             // an assumption out at least once, so all of them are printed, not just the relevant one.
-            report.AppendLine($"[shadows] eventUp={Game1.eventUp} currentEvent={(ev != null)} isFestival={ev?.isFestival} "
+            report.AppendLine($"[shadows] eventUp={Game1.eventUp} currentEvent={ev != null} isFestival={ev?.isFestival} "
                         + $"showWorldCharacters={ev?.showWorldCharacters} showGroundObjects={location.currentEvent?.showGroundObjects} "
                         + $"actors={ev?.actors?.Count ?? 0} residents={location.characters.Count}");
 
@@ -226,7 +226,6 @@ namespace SDVRadiance
                     : ShadowHiddenFor(npc) ? "SKIP HideShadow"
                     : npc.swimming.Value ? "SKIP swimming"
                     : npc.Sprite?.Texture == null ? "SKIP no sprite"
-                    : OnOpenWater(location, t) ? "SKIP on open water"
                     : IsSeated(npc) ? "contact pool only (seated)"
                     : "CASTS";
                 // The numbers behind the anchor, so a shadow that sits away from its owner can be
@@ -255,7 +254,6 @@ namespace SDVRadiance
                             + $"eventActor={npc.EventActor} simpleNonVillager={npc.SimpleNonVillagerNPC} "
                             + $"hideShadow={npc.HideShadow} layingDown={npc.layingDown} drawOffset={npc.drawOffset.X},{npc.drawOffset.Y} "
                             + $"water={OnWater(location, t)} "
-                            + $"openWater={OnOpenWater(location, t)} "
                             // Whether this frame draws from a baked silhouette (one draw a strip,
                             // its softness in the pixels) or falls back to bands, and what blur
                             // the bake carries: the receipt for the 1.7.5 bake-time blur.
@@ -373,7 +371,6 @@ namespace SDVRadiance
                     : who.FarmerRenderer == null || who.FarmerSprite == null ? "SKIP nothing to draw them from"
                     : who.swimming.Value ? "SKIP swimming"
                     : who.isRidingHorse() ? "SKIP riding (the horse casts)"
-                    : OnOpenWater(location, t) ? "SKIP on open water"
                     : IsSeated(who) ? "contact pool only (seated)"
                     : !hasMask ? "SKIP bake has no mask target"
                     : !ready ? "SKIP bake not ready"
@@ -403,8 +400,8 @@ namespace SDVRadiance
             // not drawing, so the gate value matters as much as the item list.
             bool eventUp = Game1.eventUp;
             bool showGround = location.currentEvent != null && location.currentEvent.showGroundObjects;
-            report.AppendLine($"[shadows] object gates: objectsDrawn={(!eventUp || showGround)} "
-                        + $"furnitureDrawn={(!eventUp || location is Farm || location is StardewValley.Locations.FarmHouse)} "
+            report.AppendLine($"[shadows] object gates: objectsDrawn={!eventUp || showGround} "
+                        + $"furnitureDrawn={!eventUp || location is Farm || location is StardewValley.Locations.FarmHouse} "
                         + $"clumpsDrawn={!(location is StardewValley.Locations.Woods && eventUp && !showGround)}");
             report.AppendLine("[shadows] objects, furniture, clumps, plants, animals and critters:");
             int objs = 0;

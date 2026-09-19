@@ -98,12 +98,12 @@ namespace SDVRadiance
                 return hash;
             }
         }
-        private Vector3[] _lightCells = Array.Empty<Vector3>();
-        private Vector3[] _blurredLightCells = Array.Empty<Vector3>();
+        private Vector3[] _lightCells = [];
+        private Vector3[] _blurredLightCells = [];
         /// <summary>Row pass of the separable bounce blur; see where it is filled.</summary>
-        private Vector3[] _blurRowScratch = Array.Empty<Vector3>();
-        private float[] _lightDecay = Array.Empty<float>();
-        private Color[] _lightmapPixels = Array.Empty<Color>();
+        private Vector3[] _blurRowScratch = [];
+        private float[] _lightDecay = [];
+        private Color[] _lightmapPixels = [];
         private Texture2D? _lightmapTexture;
         private Texture2D? _lightmapTextureSpare;   // its pair - see TextureDoubleBuffer
 
@@ -168,7 +168,7 @@ namespace SDVRadiance
         }
 
 
-        internal bool Build(GraphicsDevice graphicsDevice, int width, int height, ModConfig config)
+        internal bool Build(GraphicsDevice graphicsDevice, ModConfig config)
         {
             GameLocation? location = Game1.currentLocation;
             if (location == null)
@@ -390,13 +390,13 @@ namespace SDVRadiance
         }
 
         // ---- The still-seed cache (see SeedEmitters) ----
-        private Vector3[] _staticSeedCells = Array.Empty<Vector3>();
+        private Vector3[] _staticSeedCells = [];
         private int _staticSeedSignature;
         private bool _staticSeedValid;
         private GameLocation? _staticSeedLocation;
-        private Dictionary<string, int> _lightSeedHashesPrevious = new();
-        private Dictionary<string, int> _lightSeedHashesCurrent = new();
-        private readonly HashSet<string> _movingLightIds = new();
+        private Dictionary<string, int> _lightSeedHashesPrevious = [];
+        private Dictionary<string, int> _lightSeedHashesCurrent = [];
+        private readonly HashSet<string> _movingLightIds = [];
 
         /// <summary>Raw-bit hash of everything one light contributes to the seed grid, including
         /// whether the glow gate lets it seed at all: a window going dark changes WHICH lights
@@ -609,7 +609,7 @@ namespace SDVRadiance
                         // ×1.25 so the pool can actually show through the room's exposure (a bare
                         // sunStrength at 0.85 stays under the multiply-only floor and reads as if
                         // nothing happened when the toggle is flicked).
-                        intensity *= (1.25f * sunStrength) * WindowRoomScale;
+                        intensity *= 1.25f * sunStrength * WindowRoomScale;
                     }
                     // One seed cell; the bilinear upsample + the 5×5 bounce spread it into a soft
                     // pool. (A wide radial seed disc was tried to force a bigger pool but never read
@@ -984,7 +984,7 @@ namespace SDVRadiance
         {
             if (location == null || location.IsOutdoors)
                 return false;
-            if (location is StardewValley.Locations.MineShaft || location is StardewValley.Locations.VolcanoDungeon)
+            if (location is StardewValley.Locations.MineShaft or StardewValley.Locations.VolcanoDungeon)
                 return false;
             // DayTiles/NightTiles is a MAP property - time independent, safe to cache per visit.
             if (!ReferenceEquals(location, _windowedCacheLocation))

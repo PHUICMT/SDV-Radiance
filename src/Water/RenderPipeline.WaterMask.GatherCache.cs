@@ -32,22 +32,24 @@ namespace SDVRadiance
         /// <summary>One location's gathered answers, one slot per map tile.</summary>
         private sealed class GatheredTileAnswers
         {
-            public GameLocation Location = null!;
+            /// <summary>Compared without the draw hook's version: whether the game calls a tile
+            /// water is gathered live on every rebuild, so newly drawn water stales nothing here.</summary>
+            public MaskIdentity BuiltFrom;
+            public GameLocation Location => BuiltFrom.Location!;
             public SurfaceMap? Surface;
-            public int LabelVersion;
-            public int Epoch;
             public int Width, Height;
             /// <summary>Per tile: <see cref="GatheredFilled"/> and the flag bits below.</summary>
-            public ushort[] Flags = Array.Empty<ushort>();
-            public bool[]?[] EffectBits = Array.Empty<bool[]?>();
-            public bool[]?[] WaterKeepBits = Array.Empty<bool[]?>();
-            public bool[]?[] BuildingCarveBits = Array.Empty<bool[]?>();
-            public bool[]?[] FrontCarveBits = Array.Empty<bool[]?>();
-            public bool[]?[] IceBits = Array.Empty<bool[]?>();
-            public bool[]?[] LavaBits = Array.Empty<bool[]?>();
-            public bool[]?[] FlowBits = Array.Empty<bool[]?>();
+            public ushort[] Flags = [];
+            public bool[]?[] EffectBits = [];
+            public bool[]?[] WaterKeepBits = [];
+            public bool[]?[] BuildingCarveBits = [];
+            public bool[]?[] BuildingStillBits = [];
+            public bool[]?[] FrontCarveBits = [];
+            public bool[]?[] IceBits = [];
+            public bool[]?[] LavaBits = [];
+            public bool[]?[] FlowBits = [];
             /// <summary>The <see cref="TileIdentity"/> each answer was gathered under.</summary>
-            public int[] Identity = Array.Empty<int>();
+            public int[] Identity = [];
             public int FilledCount;
         }
 
@@ -101,7 +103,7 @@ namespace SDVRadiance
         /// <summary>One per location, at most two: split screen with a player on each of two maps
         /// alternates between them every frame, and one slot would be thrown away and re-made on
         /// every rebuild. The older of the two goes when a third location arrives.</summary>
-        private readonly List<GatheredTileAnswers> _gatheredTilesByLocation = new();
+        private readonly List<GatheredTileAnswers> _gatheredTilesByLocation = [];
         private int _gatherCacheCopied, _gatherCacheGathered;
         /// <summary>Whole-map gathers by the anchor job since the last report, and their tiles: they
         /// are counted in "asked the game" too, and the line should say so.</summary>
@@ -116,15 +118,14 @@ namespace SDVRadiance
             int width = size.LayerWidth, height = size.LayerHeight;
             if (width <= 0 || height <= 0)
                 return null;
-            int labelVersion = CurrentLabelVersion();
-            GatheredTileAnswers? answers = null;
+            GatheredTileAnswers? answers;
             for (int k = 0; k < _gatheredTilesByLocation.Count; k++)
             {
                 if (!ReferenceEquals(_gatheredTilesByLocation[k].Location, location))
                     continue;
                 answers = _gatheredTilesByLocation[k];
-                if (ReferenceEquals(answers.Surface, surf) && answers.LabelVersion == labelVersion
-                    && answers.Epoch == MaskEpoch && answers.Width == width && answers.Height == height)
+                if (ReferenceEquals(answers.Surface, surf) && answers.BuiltFrom.SameIgnoringDrawnWater(CurrentMaskIdentity(location))
+                    && answers.Width == width && answers.Height == height)
                     return answers;
                 _gatheredTilesByLocation.RemoveAt(k);
                 break;
@@ -132,11 +133,11 @@ namespace SDVRadiance
             int count = width * height;
             answers = new GatheredTileAnswers
             {
-                Location = location, Surface = surf, LabelVersion = labelVersion, Epoch = MaskEpoch,
+                BuiltFrom = CurrentMaskIdentity(location), Surface = surf,
                 Width = width, Height = height,
                 Flags = new ushort[count],
                 EffectBits = new bool[]?[count], WaterKeepBits = new bool[]?[count],
-                BuildingCarveBits = new bool[]?[count], FrontCarveBits = new bool[]?[count],
+                BuildingCarveBits = new bool[]?[count], BuildingStillBits = new bool[]?[count], FrontCarveBits = new bool[]?[count],
                 IceBits = new bool[]?[count], LavaBits = new bool[]?[count], FlowBits = new bool[]?[count],
                 Identity = new int[count],
             };
@@ -155,6 +156,7 @@ namespace SDVRadiance
             scratch.TileEffectBits![idx] = answers.EffectBits[cell];
             scratch.TileWaterKeepBits![idx] = answers.WaterKeepBits[cell];
             scratch.TileBuildingCarveBits![idx] = answers.BuildingCarveBits[cell];
+            scratch.TileBuildingStillBits![idx] = answers.BuildingStillBits[cell];
             scratch.TileFrontCarveBits![idx] = answers.FrontCarveBits[cell];
             scratch.TileIceBits![idx] = answers.IceBits[cell];
             scratch.TileLavaBits![idx] = answers.LavaBits[cell];
@@ -198,6 +200,7 @@ namespace SDVRadiance
             answers.EffectBits[cell] = scratch.TileEffectBits![idx];
             answers.WaterKeepBits[cell] = scratch.TileWaterKeepBits![idx];
             answers.BuildingCarveBits[cell] = scratch.TileBuildingCarveBits![idx];
+            answers.BuildingStillBits[cell] = scratch.TileBuildingStillBits![idx];
             answers.FrontCarveBits[cell] = scratch.TileFrontCarveBits![idx];
             answers.IceBits[cell] = scratch.TileIceBits![idx];
             answers.LavaBits[cell] = scratch.TileLavaBits![idx];

@@ -56,7 +56,7 @@ namespace SDVRadiance
                 if (float.IsNaN(bake.Lift))
                     empty++;
             string key = $"{phase} water={_hasWaterInMask} ready={ReflectRTReady} spriteMask={SpriteMaskReady} "
-                + $"maskJob={(_pendingWaterMaskJob != null)} maskOrigin=({_lastWaterTileX},{_lastWaterTileY}) "
+                + $"maskJob={_pendingWaterMaskJob != null} maskOrigin=({_lastWaterTileX},{_lastWaterTileY}) "
                 + $"trees={_watchTreeStamps} stamps={_watchFlippedStamps} "
                 + $"selfDrawn={_selfDrawnMirrorBakes.Count}/{_selfDrawnMirrorWanted.Count} empty={empty} "
                 + $"overflow={_selfDrawnMirrorOverflow} hookStamps={LocationDrawHook.Stamps.Count}";
@@ -94,8 +94,8 @@ namespace SDVRadiance
         /// drawn this session, so a frame can say which textures it drew for the FIRST time. A
         /// submit that stalls only on the frame a texture is new is the driver moving that
         /// texture onto the card; one that stalls with nothing new is something else.</summary>
-        private readonly HashSet<Texture2D> _mirrorTexturesSeen = new();
-        private readonly List<string> _mirrorNewTexturesThisFrame = new();
+        private readonly HashSet<Texture2D> _mirrorTexturesSeen = [];
+        private readonly List<string> _mirrorNewTexturesThisFrame = [];
         private int _mirrorTreeDraws, _mirrorFruitTreeDraws, _mirrorBushDraws, _mirrorGrassDraws;
 
         private void NoteMirrorTexture(Texture2D texture)
@@ -160,7 +160,7 @@ namespace SDVRadiance
         /// <summary>Who was baked into which slot this frame, where their contact point is in the
         /// world, and how far above that point the body they drew actually ends, so the stamp can
         /// turn the image over on the line where it meets the water.</summary>
-        private readonly List<(int Slot, float ContactWorldX, float ContactWorldY, float Lift)> _selfDrawnMirrorBakes = new();
+        private readonly List<(int Slot, float ContactWorldX, float ContactWorldY, float Lift)> _selfDrawnMirrorBakes = [];
         /// <summary>Per creature and sheet, how far ABOVE the slot's contact row its drawn body
         /// ends, in target pixels.
         ///
@@ -173,7 +173,7 @@ namespace SDVRadiance
         /// and then remembered. Keying it any coarser than that leaves a bobbing creature a few
         /// pixels out for half of its cycle, which is what the first attempt did.
         /// </para></summary>
-        private readonly Dictionary<(Type, Texture2D, Rectangle), float> _selfDrawnContactLift = new();
+        private readonly Dictionary<(Type, Texture2D, Rectangle), float> _selfDrawnContactLift = [];
         /// <summary>Per creature and sheet frame that last came out of its slot EMPTY, the tick
         /// before which it is not measured again.
         ///
@@ -185,31 +185,31 @@ namespace SDVRadiance
         /// each now waits this long before it is asked again, and the built stamp mirrors it in the
         /// meantime, which is what an empty slot already gave it.
         /// </para></summary>
-        private readonly Dictionary<(Type, Texture2D, Rectangle), int> _selfDrawnEmptyRetryTick = new();
+        private readonly Dictionary<(Type, Texture2D, Rectangle), int> _selfDrawnEmptyRetryTick = [];
         private const int SelfDrawnEmptyRetryTicks = 30;
         private static Color[]? _selfDrawnSlotReadback;
         /// <summary>The bodies that got a slot, so the hand-built stamp skips exactly those and
         /// still covers any that did not fit. Characters rather than NPCs, because a farm animal
         /// is a Character and is baked here as well.</summary>
-        private readonly HashSet<Character> _selfDrawnMirrorTaken = new();
+        private readonly HashSet<Character> _selfDrawnMirrorTaken = [];
         private int _selfDrawnMirrorOverflow;
         private int _selfDrawnMirrorOverflowReported;
         /// <summary>Scratch for <see cref="BakeSelfDrawnCharacterMirrors"/>, cleared and refilled
         /// each frame a creature is near water. Fields rather than locals so the frames where the
         /// bake actually runs - the busy ones - stop allocating two lists each.</summary>
-        private readonly List<Character> _selfDrawnMirrorWanted = new();
-        private readonly List<(int Slot, Character Who, Type Kind, Texture2D Sheet, Rectangle Frame)> _selfDrawnMirrorMeasured = new();
+        private readonly List<Character> _selfDrawnMirrorWanted = [];
+        private readonly List<(int Slot, Character Who, Type Kind, Texture2D Sheet, Rectangle Frame)> _selfDrawnMirrorMeasured = [];
         /// <summary>Per type, whether its draw is its own. A type answers this the same way every
         /// time, and the answer costs a reflection lookup, so it is asked once.</summary>
-        private static readonly Dictionary<Type, bool> PositionsItselfByType = new();
+        private static readonly Dictionary<Type, bool> PositionsItselfByType = [];
         /// <summary>Every draw a character can override. Vanilla's own chain runs through all of
         /// them, so any one of them being the type's own means it places itself.</summary>
         private static readonly Type[][] DrawSignatures =
-        {
-            new[] { typeof(SpriteBatch) },
-            new[] { typeof(SpriteBatch), typeof(float) },
-            new[] { typeof(SpriteBatch), typeof(int), typeof(float) },
-        };
+        [
+            [typeof(SpriteBatch)],
+            [typeof(SpriteBatch), typeof(float)],
+            [typeof(SpriteBatch), typeof(int), typeof(float)],
+        ];
 
         /// <summary>Scratch target the held tool is drawn into before it is mirrored. Small: it
         /// only has to hold one swing around one body.</summary>
@@ -1008,7 +1008,7 @@ namespace SDVRadiance
 
         /// <summary>Per creature TYPE, how to ask it whether it belongs under the surface, or null
         /// when it has no answer to give. Built once per type and then a field read.</summary>
-        private static readonly Dictionary<Type, Func<object, bool>?> _underwaterAnswer = new();
+        private static readonly Dictionary<Type, Func<object, bool>?> _underwaterAnswer = [];
 
         /// <summary>
         /// True when a creature says of itself that it is drawn UNDER the water.
@@ -1052,7 +1052,7 @@ namespace SDVRadiance
             catch (Exception) { return false; }
         }
 
-        private static readonly HashSet<Type> _underwaterNamed = new();
+        private static readonly HashSet<Type> _underwaterNamed = [];
 
         private const string UnderwaterFlagName = "AppearUnderwater";
 
@@ -1487,7 +1487,7 @@ namespace SDVRadiance
 
         /// <summary>FishPond.draw draws its rim from this rect whatever the sheet's bounds are, so
         /// every stamp of a pond reads the same 80x80.</summary>
-        private static readonly Rectangle FishPondRimSourceRect = new Rectangle(0, 0, 80, 80);
+        private static readonly Rectangle FishPondRimSourceRect = new(0, 0, 80, 80);
 
         /// <summary>The pond's own far wall, in the pond's own water. The scenery source has no
         /// buildings in it, so the first row of a pond's mirror showed the ground under the rim; a
@@ -1541,7 +1541,7 @@ namespace SDVRadiance
             // little below the drawn shoes) and the sprite's own draw offset. Without them an NPC
             // mirrored 10 px lower than the player standing beside it, and a seated one mirrored
             // where it was not drawn. House rule: an NPC and the player get identical treatment.
-            StampFlippedAt(spriteBatch, texture, sourceRect, boundingBox.Center.X + drawOffset.X, boundingBox.Bottom - 10f + drawOffset.Y, 0,
+            StampFlippedAt(spriteBatch, texture, sourceRect, boundingBox.Center.X + drawOffset.X, boundingBox.Bottom - BodyAnchor.FeetLift + drawOffset.Y, 0,
                 flipHorizontal);
         }
 
@@ -1775,10 +1775,10 @@ namespace SDVRadiance
         /// times a second and not sixty.
         /// </para>
         /// </summary>
-        private List<Point> _sceneAnimatedTiles = new();
+        private List<Point> _sceneAnimatedTiles = [];
         /// <summary>The distinct frame intervals of the animated tiles on this map, in ms. Small:
         /// most maps have one, a few have two.</summary>
-        private List<long> _sceneAnimatedIntervals = new();
+        private List<long> _sceneAnimatedIntervals = [];
         // The animation clock reading the cache was last drawn at.
         // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
         /// <summary>Set when the map could not be read. Falls back to the old whole-map rebuild
@@ -1789,8 +1789,8 @@ namespace SDVRadiance
         /// were read at. The three fields above point at the entry for the place being drawn.</summary>
         private sealed class AnimatedTilesForPlace
         {
-            internal readonly List<Point> Tiles = new();
-            internal readonly List<long> Intervals = new();
+            internal readonly List<Point> Tiles = [];
+            internal readonly List<long> Intervals = [];
             internal bool Unknown;
             internal int Epoch = -1;
             internal long LastAskedFor;
@@ -1806,7 +1806,7 @@ namespace SDVRadiance
         /// animated tiles were redrawn into the cache every call as well. Measured 13/9 with one
         /// screen in Town and one on the mountain: "water scenery mirror" 1.17 ms a frame in split
         /// screen against 0.04 and 0.07 for the same two places on one screen each.</para></summary>
-        private readonly Dictionary<string, AnimatedTilesForPlace> _animatedTilesByPlace = new();
+        private readonly Dictionary<string, AnimatedTilesForPlace> _animatedTilesByPlace = [];
         private long _animatedTilesAsks;
         private const int AnimatedTilesPlacesKept = 4;
 

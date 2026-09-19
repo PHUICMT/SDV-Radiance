@@ -327,6 +327,11 @@ float PaneDaylight;      // 1 while there is sky light outside, 0 after dark (ea
 float2 SunShaftDirection;      // tile-space direction the light travels (normalised, leaning like the sun)
 float3 SunShaftColour;   // the sun's own colour x strength (premultiplied on CPU)
 float SunShaftStrength;
+// The map's size in tiles. A sun shaft is lit by the edge of what stands between it and the sun,
+// and past the map's edge the occluder read clamps to the last row of the map, so on an outdoor map
+// smaller than the window the shafts and their motes carried on across the black around it.
+// Reported with a picture of the bus stop zoomed out. Nothing off the map is lit.
+float2 MapTiles;
 float SunShaftDrift;     // slow time drift so the shafts shimmer instead of standing painted
 // How far a canopy's dapple stretches, as a scale on every march distance below. 1.0 is the
 // tuned look; the CPU maps the density slider so its DEFAULT lands exactly there, and caps the
@@ -879,6 +884,12 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     [unroll]
     for (int softIndex = 0; softIndex < SOFT_LIGHTS; softIndex++)
     {
+        // Past the count there is nothing, and the pass is drawn in bands across the screen
+        // with each band handed only the lamps that reach it (see DrawFloodInBands), so the
+        // count is usually well short of forty. A uniform branch: every pixel takes the same way.
+        [branch]
+        if ((float)softIndex + 0.5 > SoftCount)
+            continue;
         float softOn = step((float)softIndex + 0.5, SoftCount);
         float4 softColour = SoftLightColours[softIndex];
         float2 softDelta = uv - SoftLightPositions[softIndex].xy;
@@ -1424,6 +1435,8 @@ float4 FloodPS(PixelInput input) : SV_TARGET
                         * (1.0 + saturate(cloudSunward - cloudHere) * (1.8 * CloudCouple));
         // Mostly src-modulated with a whisper of flat "air", same reasoning as the window beam.
         // The 3.0 is the measured gain: at 1.0 the shafts were provably drawn and invisible.
+        float onMap = step(0.0, wt.x) * step(0.0, wt.y) * step(wt.x, MapTiles.x) * step(wt.y, MapTiles.y);
+        visibility *= onMap;
         litScene += (scene.rgb * 0.85 + shaftAir) * SunShaftColour * (visibility * edge * stripe * cloudGate * SunShaftStrength * 3.0);
         // DUST MOTES. A shaft with nothing floating in it reads as a projection on the ground;
         // what sells the air is the dust drifting through the beam, visible only while it is

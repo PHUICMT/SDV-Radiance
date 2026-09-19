@@ -23,6 +23,19 @@ namespace SDVRadiance
         public Func<bool>? Enabled;
         public bool IsEnabled => Enabled == null || Enabled();
 
+        /// <summary>What this row reads under a fresh config, or null when it has none to compare
+        /// against. The tuner marks a row that differs and puts it back on a right click.</summary>
+        public float? DefaultValue { get; init; }
+        public bool DiffersFromDefault => DefaultValue.HasValue && Math.Abs(_getValue() - DefaultValue.Value) > Step * 0.5f;
+        public void ResetToDefault()
+        {
+            if (DefaultValue.HasValue && IsEnabled)
+                _setValue(DefaultValue.Value);
+        }
+
+        /// <summary>The label and the track together, in content space.</summary>
+        public Rectangle RowBounds => new(Track.X, Track.Y - _labelHeight, Track.Width, _labelHeight + Track.Height);
+
         public TunerSlider(string label, int x, int y, int w, float min, float max, Func<float> get, Action<float> set, int labelHeight = 26, int trackHeight = 20)
         {
             _label = label; _minimum = min; _maximum = max; _getValue = get; _setValue = set;

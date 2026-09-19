@@ -44,7 +44,7 @@ namespace SDVRadiance
         /// whatever the player has (so an effect they run with OFF is measured by turning it ON);
         /// floats named here are measured against zero.</summary>
         private static readonly (string Key, string Label)[] EffectCostKeys =
-        {
+        [
             ("BloomEnabled",               "bloom"),
             ("ColorGradeEnabled",          "colour grade"),
             ("GodRaysEnabled",             "lamp shafts"),
@@ -87,10 +87,10 @@ namespace SDVRadiance
             ("ShootingStarsEnabled",       "shooting stars"),
             ("GoldenHourStrength",         "golden hour"),
             ("BloomEmissiveBoost",         "emissive glow"),
-        };
+        ];
 
         internal static bool EffectCostRunning;
-        internal static readonly List<string> EffectCostSummary = new();
+        internal static readonly List<string> EffectCostSummary = [];
 
         /// <summary>
         /// Settle time before a half is sampled, in SECONDS of wall clock rather than frames.
@@ -125,7 +125,7 @@ namespace SDVRadiance
         private object? _effectCostSavedValue;
         private bool _effectCostSavedProbe;
         private float _effectCostSavedScale;
-        private readonly List<(string Label, double Cost, bool MeasuredByTurningOn)> _effectCostResults = new();
+        private readonly List<(string Label, double Cost, bool MeasuredByTurningOn)> _effectCostResults = [];
 
         /// <summary>Arm the per-effect sweep.</summary>
         public void StartEffectCost(ModConfig config, int amplify = 6)

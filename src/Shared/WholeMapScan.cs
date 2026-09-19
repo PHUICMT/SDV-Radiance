@@ -38,10 +38,10 @@ namespace SDVRadiance
         /// <summary>What <see cref="Found"/> is the answer to. The sentinel matches no real key, so
         /// a fresh object always asks for a walk.</summary>
         internal MapAnswerKey Key = new(-1, -1);
-        internal readonly List<TFound> Found = new();
+        internal readonly List<TFound> Found = [];
 
         internal MapAnswerKey BuildingKey = new(-1, -1);
-        internal readonly List<TFound> Building = new();
+        internal readonly List<TFound> Building = [];
 
         /// <summary>The next map row the walk owes, or -1 when no walk is in flight.</summary>
         internal int NextRow = -1;

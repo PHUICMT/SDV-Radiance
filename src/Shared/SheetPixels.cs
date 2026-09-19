@@ -40,11 +40,11 @@ namespace SDVRadiance
         /// <summary>Null value = this sheet was refused, so callers fall back and do not ask
         /// again. Keyed by texture reference, which is what the game keeps alive while the art is
         /// loaded.</summary>
-        private static readonly Dictionary<Texture2D, Color[]?> _heldSheets = new();
+        private static readonly Dictionary<Texture2D, Color[]?> _heldSheets = [];
 
         /// <summary>Which label first read each sheet, so a hit from another label can be counted
         /// as a readback this merge avoided.</summary>
-        private static readonly Dictionary<Texture2D, string> _readUnder = new();
+        private static readonly Dictionary<Texture2D, string> _readUnder = [];
 
         private static long _pixelsHeld;
 

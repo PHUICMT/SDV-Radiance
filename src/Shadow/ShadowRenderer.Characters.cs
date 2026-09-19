@@ -68,8 +68,6 @@ namespace SDVRadiance
                 if (npc == null || npc.IsInvisible || ShadowHiddenFor(npc) || npc.swimming.Value || npc.Sprite?.Texture == null
                     || !CharacterCasts(npc))
                     continue;
-                if (OnOpenWater(location, npc.TilePoint))   // open water only — surf/shore keeps shadows
-                    continue;
                 if (IsSeated(npc))
                 {
                     // A seated sprite gets a grounding pool and no cast silhouette: the silhouette
@@ -87,7 +85,7 @@ namespace SDVRadiance
 
             foreach (FarmAnimal a in AnimalsIn(location))
             {
-                if (a?.Sprite?.Texture == null || !_castFarmAnimals || OnOpenWater(location, a.TilePoint))
+                if (a?.Sprite?.Texture == null || !_castFarmAnimals)
                     continue;
                 DrawAnimalShadow(spriteBatch, a, rotation, stretch, alpha, blur, sunlight: true);
             }
@@ -221,12 +219,16 @@ namespace SDVRadiance
             // even in a lightless room, and point lights ADD their directional shadow on top.
             _nearbyLightSources.Clear();
             var lights = Game1.currentLightSources;
+            bool tvScreensAreOurs = TvScreenGlow.Live;
             if (lights != null)
             {
                 _activeLightIds.Clear();
                 foreach (var kv in lights)
                 {
                     LightSource ls = kv.Value;
+                    // A TV's screen casts from TvScreenGlow below, where its fade is.
+                    if (tvScreensAreOurs && TvScreenGlow.IsScreenLight(kv.Key, ls))
+                        continue;
                     // Cast from real point lights AND window/map lights (a window still throws a
                     // believable shadow across the room). Player-attached lights sit on the player
                     // so they self-cancel in LightCast (dist≈0). Skip nothing by context — except
@@ -303,6 +305,23 @@ namespace SDVRadiance
                     _nearbyLightSources.Add((screen, reach, FireFlicker(ls.position.Value, ls.textureIndex.Value)));
                 }
             }
+            // A TV that is on casts like a lamp, with its fade on the shadow's strength: the game
+            // switches the screen's light on and off in one frame, and a shadow that followed it
+            // would pop. The flicker rides along, as a flame's does.
+            if (tvScreensAreOurs)
+            {
+                foreach (TvScreenGlow.Glow glow in TvScreenGlow.OnThisScreen)
+                {
+                    if (glow.Ease <= 0.01f)
+                        continue;
+                    Vector2 screen = Game1.GlobalToLocal(Game1.viewport, glow.World);
+                    float reach = Math.Max(640f, glow.Radius * 64f * 4f);
+                    if (screen.X < -reach || screen.X > Game1.viewport.Width + reach ||
+                        screen.Y < -reach || screen.Y > Game1.viewport.Height + reach)
+                        continue;
+                    _nearbyLightSources.Add((screen, reach, glow.Ease * TvScreenGlow.Flicker(glow)));
+                }
+            }
             // NOTE: label-driven lights (window class 12, emissive art class 6) deliberately do
             // NOT feed this list. They were added and reverted: being per-TILE, one painted lamp
             // post is four "lights", and four of them next to the player took the whole six-slot
@@ -359,8 +378,6 @@ namespace SDVRadiance
                 if (npc == null || npc.IsInvisible || ShadowHiddenFor(npc) || npc.swimming.Value || npc.Sprite?.Texture == null
                     || !CharacterCasts(npc))
                     continue;
-                if (OnOpenWater(location, npc.TilePoint))   // same guard as the sun path (bathhouse, night beach)
-                    continue;
                 if (IsSeated(npc))
                 {
                     float sw = npc.GetSpriteWidthForPositioning() * 4f;
@@ -379,7 +396,7 @@ namespace SDVRadiance
                 float depth = MathHelper.Clamp(npc.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 float halfW = npc.GetSpriteWidthForPositioning() * 4f * 0.36f;
                 GatherCasts(feet, castStrength, lenCfg);
-                DrawContactBlob(spriteBatch, feet, halfW, halfW * 0.5f, ambAlpha * (_lightShadowCasts.Count > 0 ? 0.45f : 1f), depth, blur);
+                DrawContactBlob(spriteBatch, feet, halfW, halfW * 0.5f, ambAlpha * GroundingPoolShare(), depth, blur);
                 foreach (var (rotation, st, a, _) in _lightShadowCasts)
                     DrawNpcShadow(spriteBatch, npc, rotation, st, a, blur);
             }
@@ -400,7 +417,7 @@ namespace SDVRadiance
                 float depth = MathHelper.Clamp(animal.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 float halfW = animal.Sprite.SpriteWidth * 4f * 0.36f;
                 GatherCasts(feet, castStrength, lenCfg);
-                DrawContactBlob(spriteBatch, feet, halfW, halfW * 0.5f, ambAlpha * (_lightShadowCasts.Count > 0 ? 0.45f : 1f), depth, blur);
+                DrawContactBlob(spriteBatch, feet, halfW, halfW * 0.5f, ambAlpha * GroundingPoolShare(), depth, blur);
                 foreach (var (rotation, st, a, _) in _lightShadowCasts)
                     DrawAnimalShadow(spriteBatch, animal, rotation, st, a, blur);
             }
@@ -415,20 +432,20 @@ namespace SDVRadiance
             {
                 Farmer sp = Game1.player;
                 if (sp != null && sp.currentLocation == location && IsSeated(sp)
-                    && !sp.swimming.Value && !sp.isRidingHorse() && !OnOpenWater(location, sp.TilePoint))
+                    && !sp.swimming.Value && !sp.isRidingHorse())
                     DrawContactBlob(spriteBatch, SeatedAnchor(sp), 20f, 10f, ambAlpha * 0.8f, SeatedDepth(sp), blur);
             }
             if (_playerReady && _playerRenderTarget != null)
             {
                 Farmer who = Game1.player;
                 if (who != null && who.currentLocation == location && !who.swimming.Value && !who.isRidingHorse()
-                    && !IsSeated(who) && !OnOpenWater(location, who.TilePoint))
+                    && !IsSeated(who))
                 {
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                         new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
                     float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                     GatherCasts(feet, castStrength, lenCfg);
-                    DrawContactBlob(spriteBatch, feet, 22f, 11f, ambAlpha * (_lightShadowCasts.Count > 0 ? 0.45f : 1f), depth, blur);
+                    DrawContactBlob(spriteBatch, feet, 22f, 11f, ambAlpha * GroundingPoolShare(), depth, blur);
                     // The patch, when it was composed this frame, already holds every cast cut by
                     // the map; the pool above is drawn either way.
                     if (DrawPlayerPatch(spriteBatch))
@@ -441,13 +458,32 @@ namespace SDVRadiance
             }
         }
 
-        /// <summary>Draw a soft dark contact pool (grounding shadow) centred at a screen point.</summary>
+        /// <summary>Draw a soft dark contact pool (grounding shadow) centred at a screen point.
+        ///
+        /// <para>A pool used to be the blob drawn five times, once at the feet and once a blur
+        /// radius to each side, each copy fainter so the stack reached the pool's darkness. On a
+        /// farm that is four thousand of the frame's six and a half thousand shadow draws, and
+        /// measured at 4587x1826 the pools alone cost 1.3 ms of the frame. The five copies are now
+        /// stacked once into a texture of their own (see StackedBlob) and the pool is one draw of
+        /// it: the same darkness at the core, the same reach, the rim within a few levels. Every
+        /// stack sits on one shared page, so consecutive pools draw from one texture the way the
+        /// five copies of the one blob did; a texture per stack broke the batch at every pool. A
+        /// size seen for the first time is drawn the old way for that one frame while its stack
+        /// is made before the next, outside the game's batch.</para></summary>
         private void DrawContactBlob(SpriteBatch spriteBatch, Vector2 feet, float halfW, float halfH, float alpha, float depth, float blur)
         {
             if (_contactBlobTexture == null || alpha <= 0.01f)
                 return;
             var origin = new Vector2(32f, 32f);
             var scale = new Vector2(Math.Max(0.01f, halfW * 2f / 64f), Math.Max(0.01f, halfH * 2f / 64f));
+            if (blur > 0f && StackedBlobFor(blur / scale.X, blur / scale.Y) is { } stacked)
+            {
+                FrameCost.Count(FrameCost.Counter.ShadowDrawCalls);
+                spriteBatch.Draw(stacked.Page, feet, stacked.Place,
+                    ShadowInk * (1f - (float)Math.Pow(1f - MathHelper.Clamp(alpha, 0f, 1f), ShadowDepthPower)),
+                    0f, stacked.Origin, scale, SpriteEffects.None, depth);
+                return;
+            }
             DrawSoft(spriteBatch, Taps5, _contactBlobTexture, null, feet, ShadowInk, alpha, 0f, origin, scale, depth, SpriteEffects.None, blur);
         }
 
@@ -463,7 +499,7 @@ namespace SDVRadiance
                 if (f == null || f.isTemporarilyInvisible)
                     continue;
                 int type = f.furniture_type.Value;
-                if (type == 12 || type == 6 || type == 13 || type == 17)   // rugs / wall-mounted
+                if (type is 12 or 6 or 13 or 17)   // rugs / wall-mounted
                     continue;
                 Vector2 tile = f.TileLocation;
                 if (tile.X < tx0 || tile.X > tx1 || tile.Y < ty0 || tile.Y > ty1)
@@ -482,7 +518,7 @@ namespace SDVRadiance
                 SObject o = kv.Value;
                 if (o == null || o.isTemporarilyInvisible)
                     continue;
-                float depth = MathHelper.Clamp(((tile.Y + 1f) * 64f) / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
+                float depth = MathHelper.Clamp((tile.Y + 1f) * 64f / 10000f + tile.X * 1e-5f - ShadowDepthBias, 0f, 1f);
                 if (o.bigCraftable.Value)
                 {
                     if (o.Fragility == 2)
@@ -498,8 +534,8 @@ namespace SDVRadiance
             }
         }
 
-        private readonly System.Collections.Generic.List<(Vector2 pos, float reach, float flick)> _nearbyLightSources = new();
-        private readonly System.Collections.Generic.List<(float rotation, float st, float a, float distSq)> _lightShadowCasts = new();
+        private readonly System.Collections.Generic.List<(Vector2 pos, float reach, float flick)> _nearbyLightSources = [];
+        private readonly System.Collections.Generic.List<(float rotation, float st, float a, float distSq)> _lightShadowCasts = [];
         /// <summary>Runaway guard on the candidate lights, matching the lighting pass's own
         /// budget (<see cref="RenderPipeline.MaxLights"/>) so the two agree on what "the lights in
         /// this scene" means. It was 24 after the lighting had already grown to 48, and the gap
@@ -526,23 +562,23 @@ namespace SDVRadiance
         // Why the light list ended up the size it did: total offered, then each filter's toll.
         /// <summary>Where each light was last frame, by its id — the drift test's memory. Pruned
         /// to the ids still present so a location full of transient lights cannot grow it.</summary>
-        private readonly System.Collections.Generic.Dictionary<string, Vector2> _lightPreviousPositions = new();
-        private readonly System.Collections.Generic.HashSet<string> _activeLightIds = new();
+        private readonly System.Collections.Generic.Dictionary<string, Vector2> _lightPreviousPositions = [];
+        private readonly System.Collections.Generic.HashSet<string> _activeLightIds = [];
         /// <summary>Every light seen to MOVE since it appeared. The drift test's real answer: a
         /// light either is the kind of thing that drifts or it is not, and asking one frame at a
         /// time gave a different answer at every turning point of a firefly's wobble. Pruned with
         /// the position memory, so an id that leaves the location is forgotten and a light that
         /// comes back is judged fresh.</summary>
-        private readonly System.Collections.Generic.HashSet<string> _driftingLightIds = new();
+        private readonly System.Collections.Generic.HashSet<string> _driftingLightIds = [];
         /// <summary>How many consecutive frames each light has held still, capped at the settle
         /// count. A light with no history is at zero, which is what keeps a firefly from casting
         /// on the frame it spawns, before its first movement can be measured.</summary>
-        private readonly System.Collections.Generic.Dictionary<string, int> _lightSteadyFrames = new();
+        private readonly System.Collections.Generic.Dictionary<string, int> _lightSteadyFrames = [];
 
         /// <summary>Scratch for <see cref="DropRetiredLightIds"/>: a dictionary cannot be written
         /// while it is being enumerated, so the doomed keys are collected first. Reused, because
         /// this happens every frame.</summary>
-        private readonly System.Collections.Generic.List<string> _retiredLightIdScratch = new();
+        private readonly System.Collections.Generic.List<string> _retiredLightIdScratch = [];
 
         /// <summary>Forget every id that is no longer among the lights on screen. Cheap when there
         /// is nothing to do, which is the common case: the count test skips it entirely.</summary>
@@ -585,6 +621,35 @@ namespace SDVRadiance
         /// test above — see the comment at its use site.</summary>
         private const float FireflyRadiusBound = 1.0f;
 
+        /// <summary>The strength the last <see cref="GatherCasts"/> was asked at.</summary>
+        private float _castStrengthGathered = 1f;
+
+        /// <summary>The weakest a cast is at full reach inside a light's pool: (0.3 + 0.7 x 0) x 0.6
+        /// in LightCast, before strength, flicker and the fade at the pool's edge.</summary>
+        private const float CastAlphaInsidePool = 0.18f;
+        /// <summary>What is left of the grounding pool under a caster with a real cast (see
+        /// <see cref="GatherCasts"/>).</summary>
+        private const float PoolUnderCast = 0.45f;
+
+        /// <summary>
+        /// How much of the grounding pool to draw under this caster, given its casts.
+        /// </summary>
+        /// <remarks>It was a switch: all of the pool with no cast, 0.45 of it with any cast at all,
+        /// and a cast counts once its alpha passes 0.02. Near the edge of a light's reach that
+        /// alpha carries the fire's flicker and the TV's, so standing there the count went 0, 1,
+        /// 0 at the flicker's rate and the pool under the feet blinked between full and less than
+        /// half. Walking into a light's reach was a one-frame step as well. Found by a code audit.
+        /// Now the pool gives way as the strongest cast grows in, and has fully given way once
+        /// that cast is as strong as it is anywhere inside the pool.</remarks>
+        private float GroundingPoolShare()
+        {
+            float strongest = 0f;
+            foreach (var (_, _, alpha, _) in _lightShadowCasts)
+                strongest = Math.Max(strongest, alpha);
+            float full = CastAlphaInsidePool * Math.Max(_castStrengthGathered, 0.01f);
+            return MathHelper.Lerp(1f, PoolUnderCast, MathHelper.Clamp(strongest / full, 0f, 1f));
+        }
+
         /// <summary>Collect this caster's directional casts from every on-screen light into
         /// <see cref="_lightShadowCasts"/>. Gathered BEFORE the grounding pool is drawn: when at least
         /// one light throws a real shadow, the pool drops to a hint (0.45×) — a full pool under
@@ -592,6 +657,7 @@ namespace SDVRadiance
         private void GatherCasts(Vector2 feet, float strength, float lenCfg)
         {
             _lightShadowCasts.Clear();
+            _castStrengthGathered = strength;
             foreach (var (lpos, reach, flick) in _nearbyLightSources)
                 if (LightCast(feet, lpos, reach, strength, lenCfg, flick, out float rotation, out float st, out float a))
                     _lightShadowCasts.Add((rotation, st, a, Vector2.DistanceSquared(feet, lpos)));
@@ -653,7 +719,7 @@ namespace SDVRadiance
         /// </summary>
         internal static float FireFlicker(Vector2 worldPos, int texIndex)
         {
-            if (texIndex != 4 && texIndex != 5)
+            if (texIndex is not 4 and not 5)
                 return 1f;
             double t = Determinism.Seconds;
             float phase = (worldPos.X * 0.013f + worldPos.Y * 0.007f) % 6.283f;
@@ -706,7 +772,7 @@ namespace SDVRadiance
         /// screens spent 4.2 ms a frame here, against 0.03 with one, because the two screens each
         /// paid the whole walk and a farm's furniture list is long. Keyed by the light's position
         /// and cleared when the frame or the room changes.</para></summary>
-        private static readonly Dictionary<(float x, float y), Vector2> _flameGlowOffsets = new();
+        private static readonly Dictionary<(float x, float y), Vector2> _flameGlowOffsets = [];
         private static GameLocation? _flameGlowLocation;
         private static int _flameGlowTick = int.MinValue;
         private static int _flameGlowFurnitureCount = -1;

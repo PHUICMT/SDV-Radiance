@@ -167,7 +167,7 @@ namespace SDVRadiance
         private static Texture2D CreatePixel(GraphicsDevice device)
         {
             var t = new Texture2D(device, 1, 1);
-            t.SetData(new[] { Color.White });
+            t.SetData([Color.White]);
             return t;
         }
     }

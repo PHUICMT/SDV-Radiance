@@ -118,7 +118,7 @@ namespace SDVRadiance
                         {
                             IntPtr p = getStringi(GL_EXTENSIONS, i);
                             string e = p == IntPtr.Zero ? "" : (Marshal.PtrToStringAnsi(p) ?? "");
-                            if (e == "GL_ARB_timer_query" || e == "GL_EXT_timer_query") { timerExt = true; break; }
+                            if (e is "GL_ARB_timer_query" or "GL_EXT_timer_query") { timerExt = true; break; }
                         }
                     }
                 }
@@ -145,8 +145,7 @@ namespace SDVRadiance
                     return;
                 }
 
-                uint id = 0;
-                gen!(1, out id);
+                gen!(1, out uint id);
                 if (id == 0)
                 {
                     report.AppendLine("[gldiag] FAIL: glGenQueries produced no id.");
@@ -172,7 +171,7 @@ namespace SDVRadiance
                         + "(a near-zero span is expected here - nothing was drawn between begin and end; "
                         + "what this proves is that the whole route works from inside this mod).");
                 }
-                if (del != null) del(1, ref id);
+                del?.Invoke(1, ref id);
             }
             catch (DllNotFoundException)
             {
@@ -245,13 +244,13 @@ namespace SDVRadiance
             }
             intervals.Sort();
             frameCounts.Sort();
-            long Pct(List<long> v, double p) => v[Math.Min(v.Count - 1, (int)(v.Count * p))];
-            long lo = intervals[0], mid = Pct(intervals, 0.5), hi = intervals[intervals.Count - 1];
+            static long Pct(List<long> v, double p) => v[Math.Min(v.Count - 1, (int)(v.Count * p))];
+            long lo = intervals[0], mid = Pct(intervals, 0.5), hi = intervals[^1];
             monitor.Log($"[anim] frame interval ms: min {lo}, median {mid}, max {hi}"
                 + $"   =>  ticks: min {lo / MsPerTick:0.0}, median {mid / MsPerTick:0.0}, max {hi / MsPerTick:0.0}",
                 LogLevel.Info);
             monitor.Log($"[anim] frames per tile: min {frameCounts[0]}, median {frameCounts[frameCounts.Count / 2]}, "
-                + $"max {frameCounts[frameCounts.Count - 1]}", LogLevel.Info);
+                + $"max {frameCounts[^1]}", LogLevel.Info);
 
             // The point of the whole command: a cache refreshed every N ticks can only be as fresh
             // as the fastest thing it is trying to follow. Say so in the units the caches use, and

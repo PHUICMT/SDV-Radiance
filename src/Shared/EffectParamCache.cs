@@ -12,7 +12,7 @@ namespace SDVRadiance
     /// </summary>
     internal sealed class EffectParamCache
     {
-        private readonly Dictionary<(Effect effect, string name), EffectParameter?> _byEffectAndName = new();
+        private readonly Dictionary<(Effect effect, string name), EffectParameter?> _byEffectAndName = [];
 
         public EffectParameter? Get(Effect effect, string name)
         {

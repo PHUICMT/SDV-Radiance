@@ -40,7 +40,15 @@ namespace SDVRadiance
         /// <summary>Sources one screen may run at once, each kind. The pool is shared with every
         /// other emitter, and a volcano floor is made of lava; uncapped it would spend the whole
         /// pool on itself.</summary>
-        private const int MistFootLimit = 8;
+        /// <remarks>Waterfall feet are not held to this any more, only their mist is (see
+        /// <see cref="MistFeetSpawning"/>). The scan walks the screen column by column from the
+        /// left and stopped at eight, so on a map with more fall than that (SVE's summit, two
+        /// tiers of three columns and more beside them) which falls made the list depended on
+        /// where the camera stood, and the rainbow over a fall came and went as the player walked
+        /// the stairs beside it. Reported with two pictures.</remarks>
+        private const int MistFootLimit = 64;
+        /// <summary>How many feet' worth of mist is thrown up at most, spread over all of them.</summary>
+        private const int MistFeetSpawning = 8;
         private const int SteamTileLimit = 12;
         private const int LavaTileLimit = 16;
 
@@ -74,7 +82,7 @@ namespace SDVRadiance
         private Microsoft.Xna.Framework.Graphics.Texture2D? _heatMapTexture;
         /// <summary>The heat map pair's resting half; see <see cref="UploadHeatMap"/>.</summary>
         private Microsoft.Xna.Framework.Graphics.Texture2D? _heatMapSpare;
-        private Color[] _heatGridCells = Array.Empty<Color>();
+        private Color[] _heatGridCells = [];
         private Vector2 _heatMapOriginTiles, _heatMapSizeTiles;
         private bool _heatOnScreen;
 
@@ -84,7 +92,7 @@ namespace SDVRadiance
         /// covers is the camera's, so this one is per screen on purpose: with a single slot the
         /// two screens' crossings undid each other and the scan ran twice a frame forever
         /// (0.34 ms a frame against 0.003 with one screen, measured on a farm).</summary>
-        private readonly Dictionary<int, (GameLocation? Location, int TileX, int TileY, MapAnswerKey Answer, bool ChimneyHeat)> _breathScanByScreen = new();
+        private readonly Dictionary<int, (GameLocation? Location, int TileX, int TileY, MapAnswerKey Answer, bool ChimneyHeat)> _breathScanByScreen = [];
 
         /// <summary>What the scan learned about each tile of the current map, kept for the
         /// location: how many pixels flow, run hot, are molten. A tile is asked of the labels
@@ -160,13 +168,59 @@ namespace SDVRadiance
             _breathTileLava[index] = (byte)Math.Min(255, lava);
             _breathTileScanned[index] = true;
         }
-        private readonly List<Vector2> _mistFeet = new();
-        private readonly List<Vector2> _steamTiles = new();
-        private readonly List<Vector2> _lavaTiles = new();
-        /// <summary>Flow pixel counts for the scan window (clamped to 255), reused across scans.
-        /// Indexed column-major so a column's run check walks it contiguously.</summary>
-        private byte[] _breathFlowColumnCounts = Array.Empty<byte>();
-        private readonly List<Layer> _breathScanLayers = new();
+        private readonly List<Vector2> _mistFeet = [];
+        /// <summary>Every fall's foot on this map, in world pixels, found once per map.</summary>
+        private readonly List<Vector2> _mapFallFeet = [];
+        private GameLocation? _mapFallFeetLocation;
+        private MapAnswerKey _mapFallFeetKey;
+
+        /// <summary>
+        /// Find where every fall on the map lands, once per map (and again when its labels change).
+        /// </summary>
+        /// <remarks>A fall is a vertical run of STRONGLY flowing tiles, and the mist belongs where
+        /// that run lands: the first tile below it, which on a two-tier fall is the upper plunge,
+        /// not the bottom of everything labelled flowing (the first version put the puff on the
+        /// lower shelf, and the report was "why is it down there"). One thin tile inside a fall
+        /// does not end it - the town fall's repaint labels a mid tile five pixels - but a thin
+        /// tile followed by another non-strong tile is the landing. Each tier tall enough earns its
+        /// own foot. The tiles come from the same per-map cache the screen scan reads.</remarks>
+        private void EnsureMapFallFeet(LabelStore? labels, GameLocation location, MapAnswerKey answerKey)
+        {
+            if (ReferenceEquals(location, _mapFallFeetLocation) && answerKey == _mapFallFeetKey)
+                return;
+            _mapFallFeetLocation = location;
+            _mapFallFeetKey = answerKey;
+            _mapFallFeet.Clear();
+            int width = _breathTileCacheWidth, height = _breathTileCacheHeight;
+            int FlowAt(int x, int y)
+            {
+                if (y >= height)
+                    return 0;
+                BreathClassesAt(labels, x, y, out int flowing, out _, out _);
+                return flowing;
+            }
+            for (int x = 0; x < width; x++)
+            {
+                int strongRun = 0;
+                for (int y = 0; y <= height; y++)
+                {
+                    int flowingPixels = FlowAt(x, y);
+                    if (flowingPixels >= BreathClassPixelFloor)
+                    {
+                        strongRun++;
+                        continue;
+                    }
+                    if (strongRun > 0 && flowingPixels >= MistRunContinuePixelFloor && FlowAt(x, y + 1) >= BreathClassPixelFloor)
+                        continue;   // a thin tile inside the fall, with the fall carrying on below
+                    if (strongRun >= MistShortestFall)
+                        _mapFallFeet.Add(new Vector2(x * 64f + 32f, y * 64f + 16f));
+                    strongRun = 0;
+                }
+            }
+        }
+        private readonly List<Vector2> _steamTiles = [];
+        private readonly List<Vector2> _lavaTiles = [];
+        private readonly List<Layer> _breathScanLayers = [];
         private float _mistSpawnCarry, _steamSpawnCarry, _lavaSpawnCarry;
 
         internal int ParticleMistFeet => _mistFeet.Count;
@@ -219,9 +273,6 @@ namespace SDVRadiance
             int rows = lastTileY - firstTileY + 1;
             if (columns <= 0 || rows <= 0)
                 return;
-            if (_breathFlowColumnCounts.Length < columns * rows)
-                _breathFlowColumnCounts = new byte[columns * rows];
-            Array.Clear(_breathFlowColumnCounts, 0, columns * rows);
             if (_heatGridCells.Length < columns * rows)
                 _heatGridCells = new Color[columns * rows];
             Array.Clear(_heatGridCells, 0, columns * rows);
@@ -238,9 +289,7 @@ namespace SDVRadiance
             {
                 for (int y = firstTileY; y <= lastTileY; y++)
                 {
-                    BreathClassesAt(labels, x, y, out int flowingPixels, out int hotPixels, out int lavaPixels);
-                    _breathFlowColumnCounts[(x - firstTileX) * rows + (y - firstTileY)]
-                        = (byte)Math.Min(255, flowingPixels);
+                    BreathClassesAt(labels, x, y, out _, out int hotPixels, out int lavaPixels);
                     if (hotPixels >= BreathClassPixelFloor && _steamTiles.Count < SteamTileLimit)
                         _steamTiles.Add(new Vector2(x * 64f + 32f, y * 64f + 32f));
                     bool moltenHere = lavaPixels >= BreathClassPixelFloor
@@ -263,32 +312,19 @@ namespace SDVRadiance
             }
 
             // A fall is a vertical run of STRONGLY flowing tiles, and the mist belongs where
-            // that run lands: the first tile below it, which on a two-tier fall is the upper
-            // plunge, not the bottom of everything labelled flowing (the first version put the
-            // puff on the lower shelf, and the report was "why is it down there"). One thin tile
-            // inside a fall does not end it - the town fall's repaint labels a mid tile five
-            // pixels - but a thin tile followed by another non-strong tile is the landing. Each
-            // tier tall enough earns its own foot.
-            for (int column = 0; column < columns && _mistFeet.Count < MistFootLimit; column++)
+            // that run lands (see FindFallFeet). The feet are the map's, found once per map, and
+            // the screen takes the ones inside its scan: worked out from the screen's own columns,
+            // a fall that ran past the top or the bottom of the scan landed wherever the scan
+            // ended, so a long fall's foot, and its rainbow, moved with the camera.
+            EnsureMapFallFeet(labels, location, answerKey);
+            foreach (Vector2 foot in _mapFallFeet)
             {
-                int strongRun = 0;
-                for (int row = 0; row <= rows; row++)
-                {
-                    int flowingPixels = row < rows ? _breathFlowColumnCounts[column * rows + row] : 0;
-                    if (flowingPixels >= BreathClassPixelFloor)
-                    {
-                        strongRun++;
-                        continue;
-                    }
-                    int flowingBelow = row + 1 < rows ? _breathFlowColumnCounts[column * rows + row + 1] : 0;
-                    if (strongRun > 0 && flowingPixels >= MistRunContinuePixelFloor
-                        && flowingBelow >= BreathClassPixelFloor)
-                        continue;   // a thin tile inside the fall, with the fall carrying on below
-                    if (strongRun >= MistShortestFall && _mistFeet.Count < MistFootLimit)
-                        _mistFeet.Add(new Vector2((firstTileX + column) * 64f + 32f,
-                                                  (firstTileY + row) * 64f + 16f));
-                    strongRun = 0;
-                }
+                int footTileX = (int)(foot.X / 64f), footTileY = (int)(foot.Y / 64f);
+                if (footTileX < firstTileX || footTileX > lastTileX || footTileY < firstTileY || footTileY > lastTileY)
+                    continue;
+                if (_mistFeet.Count >= MistFootLimit)
+                    break;
+                _mistFeet.Add(foot);
             }
 
             ScanChimneys(location, chimneyHeat, firstTileX, firstTileY, columns, rows);
@@ -297,7 +333,7 @@ namespace SDVRadiance
 
         /// <summary>Where the chimneys on this screen stand, in world pixels, found with the scan
         /// and kept until the camera leaves the tile. Buildings do not move.</summary>
-        private readonly List<Vector2> _chimneyTops = new();
+        private readonly List<Vector2> _chimneyTops = [];
         /// <summary>How many chimneys the scan found, for the report.</summary>
         internal int ChimneysFound => _chimneyTops.Count;
 
@@ -440,7 +476,7 @@ namespace SDVRadiance
         {
             if (_particles == null || !config.ParticleWaterfallMist || _mistFeet.Count == 0)
                 return;
-            float rate = MistPuffsPerFootPerSecond * _mistFeet.Count
+            float rate = MistPuffsPerFootPerSecond * Math.Min(_mistFeet.Count, MistFeetSpawning)
                        * Math.Max(0f, config.ParticleDensity) * Math.Max(0f, config.ParticleWaterfallMistAmount);
             _mistSpawnCarry += rate / 60f;
             int toSpawn = Math.Min((int)_mistSpawnCarry, 12);
@@ -476,7 +512,14 @@ namespace SDVRadiance
         // one per fall rather than one per foot. Not a particle: it does not move, it does not
         // die, and there is one of it, so it is drawn straight from the atlas in the emissive
         // group's batch. Asked for on Nexus (sfbs97, 30 Aug 2026).
-        private readonly List<(Vector2 Base, float SpanPixels)> _rainbowArches = new();
+        private readonly List<(Vector2 Base, float SpanPixels)> _rainbowArches = [];
+        /// <summary>Each arch's own presence, by where its base stands, so an arch that joins or
+        /// leaves the list (a fall scrolling in, a scan finding one more) fades rather than pops.</summary>
+        private readonly Dictionary<Point, (Vector2 Base, float SpanPixels, float Ease)> _rainbowByPlace = [];
+        private readonly List<Point> _rainbowGone = [];
+        private GameLocation? _rainbowPlaceLocation;
+        /// <summary>How far an arch's presence moves in a sixtieth of a second.</summary>
+        private const float RainbowArchFadePerFrame = 0.04f;
         /// <summary>How many arches were drawn this frame, for the report.</summary>
         internal int RainbowsDrawn { get; private set; }
 
@@ -528,25 +571,67 @@ namespace SDVRadiance
             }
         }
 
+        /// <summary>For the report: each arch's base tile and its own presence.</summary>
+        private string RainbowArchesDescribed()
+        {
+            if (_rainbowByPlace.Count == 0)
+                return "";
+            var parts = new List<string>();
+            foreach (var pair in _rainbowByPlace)
+                parts.Add($"{pair.Key.X},{pair.Key.Y}:{pair.Value.Ease:0.00}");
+            return " [" + string.Join(" ", parts) + "]";
+        }
+
         /// <summary>Draw this frame's arches into the emissive batch. Returns how many.</summary>
         private int DrawWaterfallRainbows(SpriteBatch spriteBatch, Vector2 screenOffset, float pixelScale)
         {
             RainbowsDrawn = 0;
-            if (_particles == null || _rainbowEase <= FadeGone || _mistFeet.Count == 0)
+            if (_particles == null || _rainbowEase <= FadeGone)
+            {
+                _rainbowByPlace.Clear();
                 return 0;
+            }
+            // Arches belong to a map: a warp forgets them rather than fading the last map's in the new one.
+            if (!LiveScreens.SamePlace(_rainbowPlaceLocation, Game1.currentLocation))
+            {
+                _rainbowByPlace.Clear();
+                _rainbowPlaceLocation = Game1.currentLocation;
+            }
             GatherRainbowArches();
+            // Every arch found now grows toward whole, every arch no longer found shrinks where it
+            // last stood, and one that has shrunk away is forgotten.
+            float step = RainbowArchFadePerFrame * Math.Min(6f, (float)(Game1.currentGameTime?.ElapsedGameTime.TotalSeconds ?? 1.0 / 60.0) * 60f);
+            _rainbowGone.Clear();
+            foreach (var pair in _rainbowByPlace)
+                _rainbowGone.Add(pair.Key);
+            foreach (var (arcBase, span) in _rainbowArches)
+            {
+                var place = new Point((int)MathF.Round(arcBase.X / 64f), (int)MathF.Round(arcBase.Y / 64f));
+                float ease = _rainbowByPlace.TryGetValue(place, out var kept) ? kept.Ease : 0f;
+                _rainbowByPlace[place] = (arcBase, span, Determinism.Frozen ? 1f : Math.Min(1f, ease + step));
+                _rainbowGone.Remove(place);
+            }
+            foreach (Point place in _rainbowGone)
+            {
+                var kept = _rainbowByPlace[place];
+                float ease = Determinism.Frozen ? 0f : kept.Ease - step;
+                if (ease <= 0f)
+                    _rainbowByPlace.Remove(place);
+                else
+                    _rainbowByPlace[place] = (kept.Base, kept.SpanPixels, ease);
+            }
             var viewportTopLeft = new Vector2(Game1.viewport.X, Game1.viewport.Y);
             // A rainbow in spray does not move, it BREATHES: the spray thickens and thins, so the
             // bow brightens and fades over a few seconds and drifts a few pixels with the mist.
             // On the mod's own clock, so a frozen capture holds one breath still. Each fall gets
             // its own phase from where it stands, so two falls on one screen never breathe in step.
             float clock = (float)(Determinism.Seconds % 6283.185);
-            foreach (var (arcBase, span) in _rainbowArches)
+            foreach (var (arcBase, span, archEase) in _rainbowByPlace.Values)
             {
                 float phase = arcBase.X * 0.013f + arcBase.Y * 0.007f;
                 float breath = 1f + 0.2f * (float)Math.Sin(clock * 1.5f + phase);
                 float sway = 3f * (float)Math.Sin(clock * 0.9f + phase * 1.7f);
-                Color tint = Color.White * MathHelper.Clamp(_rainbowEase * _fadeParticles * breath, 0f, 1f);
+                Color tint = Color.White * MathHelper.Clamp(_rainbowEase * _fadeParticles * breath * archEase, 0f, 1f);
                 // Wider than the fall by a tile and a half on each side, because the spray is;
                 // half as tall as it is wide, the proportion of a rainbow seen whole.
                 float width = span + 192f;

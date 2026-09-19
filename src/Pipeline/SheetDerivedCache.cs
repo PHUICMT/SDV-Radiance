@@ -35,8 +35,9 @@ namespace SDVRadiance
         private readonly long _largestInputBytes;
         private readonly int _scale;
         private readonly int _generatePerFrameCap;
-        /// <summary>The tick through which the per-frame cap is lifted. See <see cref="AllowBurstThisTick"/>.</summary>
-        private int _burstUntilTick = -1;
+        /// <summary>How many more frames the per-frame cap is lifted for. See <see cref="AllowBurstThisTick"/>.</summary>
+        private int _burstFramesLeft;
+        private bool _burstThisFrame;
 
         /// <summary>
         /// Let this frame generate every sheet it asks for, cap or no cap.
@@ -47,15 +48,23 @@ namespace SDVRadiance
         /// arrival at a new map means five frames of sheets switching from blocky to smooth in
         /// front of the player. On a warp the game is showing its fade-to-black, and a long frame
         /// under a black screen is a frame nobody sees, so that is where the whole set is made.
+        /// <para>Counted in frames that ask for something, not in ticks: it is armed after the
+        /// arrival frame's world has drawn, and that frame is long enough for the game to run two
+        /// updates before the next draw, so a window of one tick had closed before the next world
+        /// ever asked (see BurstFramesOnArrival).</para>
         /// </remarks>
-        internal void AllowBurstThisTick() => _burstUntilTick = SharedTicks.Now + 1;
+        internal void AllowBurstThisTick() => _burstFramesLeft = BurstFramesOnArrival;
+
+        /// <summary>The frames after a warp that make everything they ask for: all three under the
+        /// game's fade-to-black, the first of them the one that draws the new place.</summary>
+        internal const int BurstFramesOnArrival = 3;
         /// <summary>Sets the shader's parameters for one sheet: (effect, sheet, variant).</summary>
         private readonly Action<Effect, Texture2D, int> _setParameters;
         private readonly string _technique;
 
-        private readonly Dictionary<(Texture2D Sheet, int Variant), Entry> _entries = new();
-        private readonly HashSet<Texture2D> _ownTargets = new();
-        private readonly List<(Texture2D Sheet, int Variant)> _evictScratch = new();
+        private readonly Dictionary<(Texture2D Sheet, int Variant), Entry> _entries = [];
+        private readonly HashSet<Texture2D> _ownTargets = [];
+        private readonly List<(Texture2D Sheet, int Variant)> _evictScratch = [];
         private long _heldBytes;
         private int _generatedThisFrame, _frameTick = -1;
         private SpriteBatch? _spriteBatch;
@@ -123,8 +132,11 @@ namespace SDVRadiance
             {
                 _frameTick = SharedTicks.Now;
                 _generatedThisFrame = 0;
+                _burstThisFrame = _burstFramesLeft > 0;
+                if (_burstThisFrame)
+                    _burstFramesLeft--;
             }
-            if (_generatedThisFrame >= _generatePerFrameCap && SharedTicks.Now > _burstUntilTick)
+            if (_generatedThisFrame >= _generatePerFrameCap && !_burstThisFrame)
                 return null;
             long inputBytes = (long)sheet.Width * sheet.Height * 4;
             if (inputBytes > _largestInputBytes)

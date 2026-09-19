@@ -40,6 +40,29 @@ namespace SDVRadiance
         /// advances once per frame must not advance once per call while this is set.</summary>
         internal static bool BenchmarkAmplifying;
 
+        /// <summary>How far past a strength of 1 the shadows being drawn right now go: 1 is a shadow as
+        /// it always was, and at 3 a pixel a shadow covered at opacity a is covered at 1 - (1 - a)^3.
+        /// Set around the two places shadows are laid down and put back to 1 after, and read by
+        /// <see cref="DrawSoft"/>, the one call every shadow goes through.
+        ///
+        /// <para>The first cut drew every shadow again for each step past 1, which works because
+        /// alpha-blended copies add up the same way, and cost a whole shadow pass per step. A soft
+        /// shadow is ALREADY a stack of faint copies, each at 1 - (1 - a)^(1/copies) so the stack
+        /// adds up to a; raising that exponent to power/copies makes the same stack add up to
+        /// 1 - (1 - a)^power, over the core and along the soft edge alike, with not one more draw.</para></summary>
+        internal static float ShadowDepthPower = 1f;
+
+        /// <summary>A single opacity carried to the same strength the passes reach: linear up to 1,
+        /// and 1 - (1 - opacity)^strength past it, so a shadow the shader composites in one go
+        /// darkens exactly as the drawn ones do.</summary>
+        internal static float OpacityAtStrength(float opacityAtOne, float strength)
+        {
+            strength = MathHelper.Clamp(strength, 0f, ModConfig.ShadowStrengthMax);
+            if (strength <= 1f)
+                return opacityAtOne * strength;
+            return 1f - MathF.Pow(1f - MathHelper.Clamp(opacityAtOne, 0f, 1f), strength);
+        }
+
         /// <summary>Last compose's "any water on screen" answer, published by the pipeline. Gates
         /// the player COLOUR bake, whose only reader is the water reflection.</summary>
         internal static bool WaterOnScreen;
@@ -68,7 +91,7 @@ namespace SDVRadiance
         private float _playerSunBlur = -1f;
         private bool _playerSunFresh;
         private (int frame, int facing, Rectangle sourceRect) _playerSunSignature = (-1, -1, default);
-        private float _playerSunContactHardness = -1f, _playerSunPenumbraStretch = -1f;
+        private float _playerSunContactHardness = -1f, _playerSunPenumbraStretch = -1f, _playerSunBakeDepth = -1f;
         /// <summary>The square every laid-down farmer silhouette is made in. A person is 64 by
         /// 128 upright and at the longest the dials allow lies down to several times that; the
         /// fit ladder in LayDownSilhouette scales down to make the extremes fit.</summary>
@@ -115,7 +138,7 @@ namespace SDVRadiance
         internal static Color ShadowInk { get; private set; } = Color.Black;
         /// <summary>The same ink as a vector, for the cloud and building shadow shader.</summary>
         internal static Vector3 ShadowInkVector { get; private set; }
-        private static readonly Dictionary<int, (Vector3 ink, int tick)> _inkPerScreen = new();
+        private static readonly Dictionary<int, (Vector3 ink, int tick, GameLocation? place)> _inkPerScreen = [];
 
         /// <summary>
         /// Settle this frame's ink for the screen about to draw. Eased over a couple of seconds
@@ -127,10 +150,15 @@ namespace SDVRadiance
         {
             float dial = MathHelper.Clamp(config.ShadowTint, 0f, 1f);
             Vector3 target = dial <= 0f ? Vector3.Zero : ShadowInkTarget() * dial;
-            if (!_inkPerScreen.TryGetValue(screenId, out (Vector3 ink, int tick) state) || Determinism.Frozen)
-                state = (target, Game1.ticks);
+            // A new place starts at its own ink: the game's fade-to-black is over the step, and an
+            // ink eased across a doorway drifted from the warm indoor fill to the cool outdoor one
+            // for two seconds after the picture was back, on every shadow at once.
+            GameLocation? here = Game1.currentLocation;
+            if (!_inkPerScreen.TryGetValue(screenId, out (Vector3 ink, int tick, GameLocation? place) state) || Determinism.Frozen
+                || !SDVRadiance.LiveScreens.SamePlace(state.place, here))
+                state = (target, Game1.ticks, here);
             else if (Game1.ticks != state.tick)
-                state = (state.ink + (target - state.ink) * 0.04f, Game1.ticks);
+                state = (state.ink + (target - state.ink) * 0.04f, Game1.ticks, here);
             _inkPerScreen[screenId] = state;
             ShadowInkVector = state.ink;
             ShadowInk = new Color(state.ink);
@@ -180,14 +208,14 @@ namespace SDVRadiance
         private const int CasterRtH = 224;
         /// <summary>Every caster slot ever allocated. Nothing reads it back except the over-cap
         /// diagnostic (it is the honest VRAM number); leases come from the free list.</summary>
-        private readonly System.Collections.Generic.List<RenderTarget2D> _casterRenderTargetPool = new();
+        private readonly System.Collections.Generic.List<RenderTarget2D> _casterRenderTargetPool = [];
         /// <summary>Slots an evicted entry handed back, waiting to be leased again.</summary>
-        private readonly System.Collections.Generic.List<RenderTarget2D> _casterFreeTargets = new();
+        private readonly System.Collections.Generic.List<RenderTarget2D> _casterFreeTargets = [];
         // PERSISTENT cache — keyed by (texture, source rect), i.e. the sprite FRAME, so every
         // NPC/animal sharing a frame shares one bake and warm frames cost a dictionary hit
         // instead of a render-target switch. Upright silhouettes carry no sun angle, so entries
         // stay valid indefinitely; the cache is only capped (see PreparePlayer).
-        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle sourceRect), SpriteBake> _casterBakeCache = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle sourceRect), SpriteBake> _casterBakeCache = [];
 
         // Objects (trees/bushes/clumps/furniture/craftables/crops/…) bake to pooled RTs with a
         // continuous gradient too — same smooth path as characters, no stepped bands. Slots are large
@@ -215,11 +243,11 @@ namespace SDVRadiance
         /// purpose - three pools reuse well, a pool per exact size would fragment.</para>
         /// </summary>
         private static readonly (int W, int H, int Cap)[] ObjectSlotClasses =
-        {
+        [
             (128, 160, 320),     // crops, grass, forage, small craftables  -  0.08 MB each
             (256, 288, 96),      // bushes, furniture, medium props         -  0.29 MB each
             (ObjectRtW, ObjectRtH, 48) // trees, buildings, tall tile columns     -  0.74 MB each
-        };
+        ];
 
         /// <summary>
         /// The tallest silhouette the largest class must take, and why it is that number.
@@ -244,21 +272,32 @@ namespace SDVRadiance
         private readonly RenderTarget2D?[] _objectBlurScratches = new RenderTarget2D?[3];
         /// <summary>The same scratch for the character slots, which are one size of their own.</summary>
         private RenderTarget2D? _casterBlurScratch;
-        /// <summary>Every slot ever allocated, and the idle ones ready to lease again, PER SIZE
-        /// CLASS. A free small slot cannot serve a tree, so one shared free list would hand back
-        /// a target the caller cannot use.</summary>
-        private readonly System.Collections.Generic.List<RenderTarget2D>[] _objectRenderTargetPools =
-            { new(), new(), new() };
-        private readonly System.Collections.Generic.List<RenderTarget2D>[] _objectFreeTargetsByClass =
-            { new(), new(), new() };
-        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle sourceRect, SpriteEffects effect), SpriteBake> _bakedObjectCache = new();
+        /// <summary>The pages every object slot lives on (see ObjectSlot), and the idle cells
+        /// ready to lease again PER SIZE CLASS. A free small cell cannot serve a tree, so one shared
+        /// free list would hand back a slot the caller cannot use.</summary>
+        private readonly System.Collections.Generic.List<RenderTarget2D> _objectAtlasPages = [];
+        /// <summary>How many cells the open pages hold, for the allocation count, and whether the
+        /// shared page is open (there is only ever one; see OpenOverflowPage).</summary>
+        private int _objectCellsOpen;
+        private bool _objectSharedPageOpen;
+        /// <summary>The first shared page, whose last rows hold the contact pools' stacks, and
+        /// where on it they go. Null until an object shadow opens one.</summary>
+        private RenderTarget2D? _objectPoolStripPage;
+        private Rectangle _objectPoolStrip;
+        private readonly System.Collections.Generic.List<ObjectSlot>[] _objectFreeCellsByClass =
+            [[], [], []];
+        /// <summary>One target per size class that a bake is drawn into before it is copied to its
+        /// cell (see PlaceObjectBake). The bake passes clear, blur and whiten a whole target, which
+        /// on a shared page would reach every neighbour.</summary>
+        private readonly RenderTarget2D?[] _objectBakeScratches = new RenderTarget2D?[3];
+        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle sourceRect, SpriteEffects effect), SpriteBake> _bakedObjectCache = [];
         /// <summary>Sprites the DRAW pass wanted and found unbaked, to bake next frame. This is
         /// what lets the bake pass skip its full enumeration on a warm frame: instead of walking
         /// every on-screen tile a second time to discover nothing is missing, it bakes exactly
         /// what the draw pass reported missing, which on a still screen is nothing at all.
         /// Value carries the bake inputs recorded at draw time (the shear is per-CALLER, damped
         /// by sprite type, so it cannot be recomputed globally).</summary>
-        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle sourceRect, SpriteEffects effect), ObjectBakeRequest> _objectBakeQueue = new();
+        private readonly System.Collections.Generic.Dictionary<(Texture2D texture, Rectangle sourceRect, SpriteEffects effect), ObjectBakeRequest> _objectBakeQueue = [];
 
         /// <summary>
         /// What a caster IS, as far as its shadow is concerned: a flat card standing on its bottom
@@ -461,7 +500,7 @@ namespace SDVRadiance
         // Counted per screen: one static counter was read by whichever screen logged next, so the
         // farmhand arriving on the mountain was printed as the host walking in Town.
         private static readonly int[] _arrivalWalksByScreen = new int[4];
-        private static readonly string[] _arrivalReasonByScreen = { "-", "-", "-", "-" };
+        private static readonly string[] _arrivalReasonByScreen = ["-", "-", "-", "-"];
 
         internal static int ArrivalWalksFor(int screenId)
             => screenId >= 0 && screenId < _arrivalWalksByScreen.Length ? _arrivalWalksByScreen[screenId] : 0;
@@ -489,9 +528,36 @@ namespace SDVRadiance
         /// rather than a saving, precisely on the heavily modded installs it was there to protect.
         /// Knowing when each entry was last wanted turns that into dropping the coldest few.</para>
         /// </summary>
+        /// <summary>
+        /// Where one object's shadow lives: a cell of a shared page.
+        ///
+        /// <para>Every object shadow used to be a render target of its own, and a texture of its
+        /// own is a draw call of its own: MonoGame ends the batch whenever the texture changes
+        /// between two sprites, and a farm's shadows sort between the crops they belong to, so
+        /// nearly every shadow broke the batch. Measured on a farm at 3440x1369, drawing every
+        /// shadow from one texture took the world's draw calls from 3,091 to about 750 and the
+        /// frame from 11.9 ms to 10.5, and a texture of 2048 texels did the same as one of 64: it is
+        /// the number of textures that costs, not their size. A page per size class was tried first
+        /// and gave little (five textures still interleave: 3,019 draw calls to 1,891, 0.16 ms). So
+        /// one shared page of 4096 texels holds the two smaller classes, which are nearly every
+        /// shadow on a farm, and the contact pools' stacks in its last rows; the tree class, which
+        /// a farm holds a handful of, has pages of its own. A bake is still drawn into a target of
+        /// its class's own size, exactly as before, and copied into its cell whole.</para>
+        /// </summary>
+        private sealed class ObjectSlot
+        {
+            public RenderTarget2D Page = null!;
+            public Rectangle Cell;
+        }
+
         private sealed class SpriteBake
         {
+            /// <summary>What the shadow is drawn from: its own target for a character, the page
+            /// its cell is on for an object (see <see cref="Slot"/>).</summary>
             public RenderTarget2D Rt = null!;
+            /// <summary>The cell an object's shadow sits in; null for a character's. Its
+            /// <see cref="FeetInRt"/> and <see cref="Content"/> are in the page's coordinates.</summary>
+            public ObjectSlot? Slot;
             public Vector2 FeetInRt;
             public int LastUsedTick;
             /// <summary>The projection a sprite's pixels were laid down with, so the sun moving off
@@ -510,6 +576,8 @@ namespace SDVRadiance
             /// ALONG the shadow without changing the radius at all, so a cache that only watches
             /// the radius keeps handing back the old shape and the dial looks dead.</summary>
             public float BakedContactHardness = -1f;
+            /// <summary>The <see cref="BakeDepthNow"/> this bake's soft edge was deepened by.</summary>
+            public float BakedDepth = -1f;
             /// <summary>The penumbra-shape dial these pixels were stamped with, tracked beside
             /// the hardness and for the same reason.</summary>
             public float BakedPenumbraStretch = -1f;
@@ -557,8 +625,8 @@ namespace SDVRadiance
         /// banded stand-in and an immediate re-bake, which is the thrash being replaced. Only a
         /// cache that has run away to twice its cap stops respecting this.</summary>
         private const int HotBakeTicks = 8;
-        private readonly System.Collections.Generic.List<(Texture2D texture, Rectangle sourceRect)> _casterEvictScratch = new();
-        private readonly System.Collections.Generic.List<(Texture2D texture, Rectangle sourceRect, SpriteEffects effect)> _objectEvictScratch = new();
+        private readonly System.Collections.Generic.List<(Texture2D texture, Rectangle sourceRect)> _casterEvictScratch = [];
+        private readonly System.Collections.Generic.List<(Texture2D texture, Rectangle sourceRect, SpriteEffects effect)> _objectEvictScratch = [];
         /// <summary>Pose the player RT was last baked with — identical pose skips the re-bake.</summary>
         private (int frame, int facing, Rectangle sourceRect) _playerBakeSignature = (-1, -1, default);
         /// <summary>Whose silhouette the live player bake holds, so another screen can borrow it
@@ -631,7 +699,7 @@ namespace SDVRadiance
             if (_solidWhiteTexture == null || _solidWhiteTexture.IsDisposed)
             {
                 _solidWhiteTexture = new Texture2D(graphicsDevice, 1, 1);
-                _solidWhiteTexture.SetData(new[] { Color.White });
+                _solidWhiteTexture.SetData([Color.White]);
             }
             _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, Whiten, SamplerState.PointClamp);
             _renderTargetSpriteBatch.Draw(_solidWhiteTexture, bounds, Color.White);
@@ -655,8 +723,32 @@ namespace SDVRadiance
         private float _sunBlend = 1f;
 
         /// <summary>~1 s to cross over at 60 fps. Long enough to read as the light changing rather
-        /// than as the shadows being replaced.</summary>
+        /// than as the shadows being replaced. Per sixtieth of a second, scaled by the frame's own
+        /// length, so a 144 Hz screen crosses over in the same time as a 60 Hz one.</summary>
         private const float SunBlendRate = 0.02f;
+
+        /// <summary>The sun and overcast cross-fades of one screen, and the place they belong to.</summary>
+        private sealed class SunBlendState
+        {
+            public GameLocation? Place;
+            public float Sun = 1f;
+            public float Overcast;
+        }
+
+        /// <summary>
+        /// Per screen, and set to their targets on a change of place.
+        /// </summary>
+        /// <remarks>Both cross-fades are for a change that happens where you stand: dusk falling,
+        /// a cloud bank coming over. Stepping through a door is not that, and eased across it they
+        /// took about four and a half seconds to settle after every warp, the sun's shadows growing
+        /// in on a farm already fully lit and the lamp shadows fading out of a room at noon: the
+        /// "not steady when you arrive" that was reported. The game's fade-to-black covers the step,
+        /// the same reason the exposure and the shafts are set on arrival. Kept per screen because
+        /// two screens can stand indoors and out at once, and one shared blend pulled toward both
+        /// targets hovered at half and drew both sets of shadows at half on each.</remarks>
+        private readonly Dictionary<int, SunBlendState> _sunBlendByScreen = [];
+        /// <summary>For radiance_report: the blends the last screen drew with.</summary>
+        internal static float LastSunBlend, LastOvercastBlend;
 
         // Re-entrancy latch: if a patched draw call ever re-enters our render entry points
         // (an appearance mod calling back into the game's draw while we're baking), bail and
@@ -993,7 +1085,8 @@ namespace SDVRadiance
 
             BeginCasterCensus();
             GameLocation location = Game1.currentLocation;
-            float strength = MathHelper.Clamp(config.DirectionalShadowStrength, 0f, 1f);
+            float requestedStrength = MathHelper.Clamp(config.DirectionalShadowStrength, 0f, ModConfig.ShadowStrengthMax);
+            float strength = Math.Min(requestedStrength, 1f);
             float blur = Math.Max(0f, config.DirectionalShadowBlur);
             if (strength <= 0.01f)
                 return;
@@ -1004,24 +1097,44 @@ namespace SDVRadiance
             // from one direction to another in one frame. House rule: if it changes, it fades.
             // Both paths run while the blend is in transit, each at its share of the strength, so
             // the sun's long shadow thins out as the lamp's grows in.
-            _overcastBlend += (OvercastNow() - _overcastBlend) * SunBlendRate;
-            if (Math.Abs(OvercastNow() - _overcastBlend) < 0.004f)
-                _overcastBlend = OvercastNow();
+            float overcastTarget = OvercastNow();
+            float sunTarget = SunCasts() ? 1f : 0f;
+            int screenId = StardewModdingAPI.Context.ScreenId;
+            if (!_sunBlendByScreen.TryGetValue(screenId, out SunBlendState? blends))
+            {
+                blends = new SunBlendState { Place = location, Sun = sunTarget, Overcast = overcastTarget };
+                _sunBlendByScreen[screenId] = blends;
+                SDVRadiance.LiveScreens.ForgetDeparted(_sunBlendByScreen);
+            }
+            if (!SDVRadiance.LiveScreens.SamePlace(blends.Place, location))
+            {
+                blends.Place = location;
+                blends.Sun = sunTarget;
+                blends.Overcast = overcastTarget;
+            }
+            // The benchmark calls this several extra times per frame to measure it. Advancing the
+            // dusk cross-fade once per CALL rather than once per frame would run it at seven times
+            // speed for the length of the run, so the repeats read the blends without moving them.
+            if (!BenchmarkAmplifying)
+            {
+                float frames = Math.Min(6f, (float)(Game1.currentGameTime?.ElapsedGameTime.TotalSeconds ?? 0.0) * 60f);
+                float rate = 1f - MathF.Pow(1f - SunBlendRate, frames);
+                blends.Overcast += (overcastTarget - blends.Overcast) * rate;
+                if (Math.Abs(overcastTarget - blends.Overcast) < 0.004f)
+                    blends.Overcast = overcastTarget;
+                blends.Sun += (sunTarget - blends.Sun) * rate;
+                if (Math.Abs(sunTarget - blends.Sun) < 0.004f)
+                    blends.Sun = sunTarget;
+            }
             // A frozen capture pins both cross-fades at their target, as it pins every other fade:
             // two dumps of one frozen scene taken while a blend was still in transit differed by a
             // level or two along every shadow edge, which is drift of ours, not the game's.
-            _overcastBlend = Determinism.Settle(_overcastBlend, OvercastNow());
-            float sunTarget = SunCasts() ? 1f : 0f;
-            // The benchmark calls this several extra times per frame to measure it. Advancing the
-            // dusk cross-fade once per CALL rather than once per frame would run it at seven times
-            // speed for the length of the run, so the repeats read the blend without moving it.
-            if (!BenchmarkAmplifying)
-            {
-                _sunBlend += (sunTarget - _sunBlend) * SunBlendRate;
-                if (Math.Abs(sunTarget - _sunBlend) < 0.004f)
-                    _sunBlend = sunTarget;
-                _sunBlend = Determinism.Settle(_sunBlend, sunTarget);
-            }
+            blends.Overcast = Determinism.Settle(blends.Overcast, overcastTarget);
+            blends.Sun = Determinism.Settle(blends.Sun, sunTarget);
+            _overcastBlend = blends.Overcast;
+            _sunBlend = blends.Sun;
+            LastSunBlend = _sunBlend;
+            LastOvercastBlend = _overcastBlend;
 
             _renderDepth++;
             // Our shadows are lighting, not bodies: keep them out of the sprite-relief replay
@@ -1038,6 +1151,8 @@ namespace SDVRadiance
             SheetUpscaler.SuspendedForOwnDraw = true;
             try
             {
+                // Past a strength of 1, every shadow drawn below is deepened where it is drawn.
+                ShadowDepthPower = Math.Max(1f, requestedStrength);
                 if (_sunBlend > 0.004f)
                     DrawSunShadows(spriteBatch, location, config, strength * _sunBlend, blur);
                 if (_sunBlend < 0.996f)
@@ -1050,6 +1165,7 @@ namespace SDVRadiance
             finally
             {
                 _renderDepth--;
+                ShadowDepthPower = 1f;
                 SpriteDrawRecorder.SuppressRecording = false;
                 SheetUpscaler.SuspendedForOwnDraw = upscalerWasSuspended;
             }

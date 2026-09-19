@@ -164,7 +164,7 @@ namespace SDVRadiance
                     if (_transparentShadowStandIn == null)
                     {
                         _transparentShadowStandIn = new Texture2D(_device, 1, 1, false, SurfaceFormat.Color);
-                        _transparentShadowStandIn.SetData(new[] { Color.Transparent });
+                        _transparentShadowStandIn.SetData([Color.Transparent]);
                     }
                     Texture2D gameShadow = Game1.shadowTexture;
                     Random gameRandom = Game1.random;
@@ -413,12 +413,48 @@ namespace SDVRadiance
                         pbb.Offset((int)playerDrawOffset.X, (int)playerDrawOffset.Y);
                     StampUiBox(spriteBatch, pbb.Center.X, pbb.Top - 160, 80, 128);
                 }
+                // Seated, the body is not excluded by the silhouette (the shader's PlayerRect is
+                // closed while sitting: the standing bake is taller than a seated body and left a
+                // block of dead water over the head), so the farmer draws itself here instead, in
+                // the pose the game gives them on the seat. Without it nothing excluded a seated
+                // farmer at all, and on the beach pier bench, with the sea behind the seat, the
+                // water's ripple and glitter ran straight over the player. Reported with a picture.
+                if (pw.IsSitting())
+                    StampFarmerSelf(spriteBatch, pw);
                 // The report said "muttering FARMER speech bubbles", and a farmer is not an
                 // NPC: the self-stamp above covers the residents, and the box here only ever
                 // covered the emote icon, so the one balloon actually named was the one still
                 // rippling. A farmer draws their bubble through the same above-head layer, so
                 // the same stamp reaches it - for you and, below, for everyone else in co-op.
                 StampAboveHead(spriteBatch, pw);
+            }
+        }
+
+        /// <summary>A farmer drawn by the game's own draw into the mask, with the round ground
+        /// shadow under them swapped for a transparent one: the shadow is not the body.</summary>
+        private void StampFarmerSelf(SpriteBatch batch, Farmer farmer)
+        {
+            var gameBatch = Game1.spriteBatch;
+            Texture2D gameShadow = Game1.shadowTexture;
+            try
+            {
+                if (_transparentShadowStandIn == null)
+                {
+                    _transparentShadowStandIn = new Texture2D(_device, 1, 1, false, SurfaceFormat.Color);
+                    _transparentShadowStandIn.SetData([Color.Transparent]);
+                }
+                Game1.spriteBatch = batch;
+                Game1.shadowTexture = _transparentShadowStandIn;
+                farmer.draw(batch);
+            }
+            catch
+            {
+                // A farmer that cannot draw here keeps the old answer: no exclusion while seated.
+            }
+            finally
+            {
+                Game1.shadowTexture = gameShadow;
+                Game1.spriteBatch = gameBatch;
             }
         }
 
@@ -560,6 +596,14 @@ namespace SDVRadiance
             var vpO = Game1.viewport;
             int otx0 = (int)Math.Floor((vpO.X - 128) / 64f), otx1 = (int)Math.Floor((vpO.X + vpO.Width + 128) / 64f);
             int oty0 = (int)Math.Floor((vpO.Y - 128) / 64f), oty1 = (int)Math.Floor((vpO.Y + vpO.Height + 192) / 64f);
+            // The same narrowing the canopy pass below does: every tile here asks the water
+            // question with a reach of two, and outside the water's box plus two the answer is
+            // no, so those tiles need no object lookup either. On a farm that was every tile of
+            // the view looked up in the object dictionary, every frame, before the water test.
+            // Not while puddles mirror: then the water test answers yes everywhere, and so must
+            // the walk.
+            if (!_wetPuddleMirrorWanted && !ClampWalkToWater(0, 2, ref otx0, ref otx1, ref oty0, ref oty1))
+                return;
             for (int ovY = oty0; ovY <= oty1; ovY++)
             for (int ovX = otx0; ovX <= otx1; ovX++)
             {

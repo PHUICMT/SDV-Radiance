@@ -132,6 +132,7 @@ namespace SDVRadiance
             _gradientTexture ??= BuildGradient(graphicsDevice);
             _propGradientTexture ??= BuildGradient(graphicsDevice, 0f);
             _contactBlobTexture ??= BuildBlob(graphicsDevice);
+            MakeWantedStackedPools(graphicsDevice);
         }
 
         /// <summary>Drop the coldest bakes when a cache outgrows its cap, then report what
@@ -310,7 +311,7 @@ namespace SDVRadiance
             // colour inside an otherwise byte-identical silhouette, at the same place on every map,
             // which is what a fixed character with fixed hair cycling two phases looks like. It
             // failed the harness gate, so nothing could be verified through it at all.
-            var poseSignature = (who.FarmerSprite.CurrentFrame, (int)who.FacingDirection, sourceRect);
+            var poseSignature = (who.FarmerSprite.CurrentFrame, who.FacingDirection, sourceRect);
             // Staggered by who it is, so two screens' players do not fall due on the same frame
             // (see the same line in ShadowRenderer.Farmers).
             bool accessoryRefreshDue = PlayerAccessoriesAnimate && !Determinism.Frozen
@@ -329,7 +330,7 @@ namespace SDVRadiance
             _playerBakeSignature = poseSignature;
 
             float spriteWidth = sourceRect.Width * 4f, spriteHeight = sourceRect.Height * 4f;
-            Vector2 spriteTopLeft = new Vector2((PlayerRtW - spriteWidth) / 2f, PlayerRtH - spriteHeight - 8f);
+            Vector2 spriteTopLeft = new((PlayerRtW - spriteWidth) / 2f, PlayerRtH - spriteHeight - 8f);
             _playerFeetInRenderTarget = new Vector2(PlayerRtW / 2f, PlayerRtH - 8f);
 
             RenderTargetBinding[] previousTargets = graphicsDevice.GetRenderTargets();
@@ -444,6 +445,7 @@ namespace SDVRadiance
                 && _playerSunSignature == _playerBakeSignature
                 && Math.Abs(_characterSunBlur - _playerSunBlur) <= 0.3f
                 && _playerSunContactHardness == ContactHardnessNow && _playerSunPenumbraStretch == PenumbraStretchNow
+                && _playerSunBakeDepth == BakeDepthNow
                 && projection.Drift(_playerSunProjection, sprite.Width, sprite.Height) <= ShearRefreshPixels)
                 return;
             // PreserveContents, like every persistent bake target: it is read back frames later.
@@ -455,6 +457,7 @@ namespace SDVRadiance
             _playerSunBlur = _characterSunBlur;
             _playerSunSignature = _playerBakeSignature;
             _playerSunContactHardness = ContactHardnessNow;
+            _playerSunBakeDepth = BakeDepthNow;
             _playerSunPenumbraStretch = PenumbraStretchNow;
         }
 
@@ -546,7 +549,7 @@ namespace SDVRadiance
         /// <summary>The scales a laid-down farmer silhouette is tried at, finest first. A person
         /// at the longest shadow the dials allow lies down to several times their own height,
         /// and the coarsest step here is what still fits a target of <see cref="PlayerSunRtSize"/>.</summary>
-        private static readonly float[] LayDownScales = { 1f, 0.75f, 0.5f, 0.25f };
+        private static readonly float[] LayDownScales = [1f, 0.75f, 0.5f, 0.25f];
 
         /// <summary>
         /// Ensure every on-screen NPC/animal sprite FRAME has an UPRIGHT baked silhouette in the
@@ -582,12 +585,12 @@ namespace SDVRadiance
                     if (_casterBakeCache.TryGetValue(key, out SpriteBake? warm))
                     {
                         warm.LastUsedTick = SharedTicks.Now;
-                        RefreshCasterBlur(graphicsDevice, key.Item1, key.Item2, warm, blurPixels, ref previousTargets);
+                        RefreshCasterBlur(graphicsDevice, key.Texture, key.SourceRect, warm, blurPixels, ref previousTargets);
                         continue;
                     }
                     previousTargets ??= graphicsDevice.GetRenderTargets();
-                    if (BakeSprite(graphicsDevice, key.Item1, key.Item2, blurPixels, out RenderTarget2D renderTarget, out Vector2 feet))
-                        _casterBakeCache[key] = new SpriteBake { Rt = renderTarget, FeetInRt = feet, BakedBlur = blurPixels, BakedContactHardness = ContactHardnessNow, BakedPenumbraStretch = PenumbraStretchNow, LastUsedTick = SharedTicks.Now };
+                    if (BakeSprite(graphicsDevice, key.Texture, key.SourceRect, blurPixels, out RenderTarget2D renderTarget, out Vector2 feet))
+                        _casterBakeCache[key] = new SpriteBake { Rt = renderTarget, FeetInRt = feet, BakedBlur = blurPixels, BakedContactHardness = ContactHardnessNow, BakedDepth = BakeDepthNow, BakedPenumbraStretch = PenumbraStretchNow, LastUsedTick = SharedTicks.Now };
                 }
                 foreach (FarmAnimal animal in AnimalsIn(location))
                 {
@@ -600,12 +603,12 @@ namespace SDVRadiance
                     if (_casterBakeCache.TryGetValue(key, out SpriteBake? warm))
                     {
                         warm.LastUsedTick = SharedTicks.Now;
-                        RefreshCasterBlur(graphicsDevice, key.Item1, key.Item2, warm, blurPixels, ref previousTargets);
+                        RefreshCasterBlur(graphicsDevice, key.Texture, key.SourceRect, warm, blurPixels, ref previousTargets);
                         continue;
                     }
                     previousTargets ??= graphicsDevice.GetRenderTargets();
-                    if (BakeSprite(graphicsDevice, key.Item1, key.Item2, blurPixels, out RenderTarget2D renderTarget, out Vector2 feet))
-                        _casterBakeCache[key] = new SpriteBake { Rt = renderTarget, FeetInRt = feet, BakedBlur = blurPixels, BakedContactHardness = ContactHardnessNow, BakedPenumbraStretch = PenumbraStretchNow, LastUsedTick = SharedTicks.Now };
+                    if (BakeSprite(graphicsDevice, key.Texture, key.SourceRect, blurPixels, out RenderTarget2D renderTarget, out Vector2 feet))
+                        _casterBakeCache[key] = new SpriteBake { Rt = renderTarget, FeetInRt = feet, BakedBlur = blurPixels, BakedContactHardness = ContactHardnessNow, BakedDepth = BakeDepthNow, BakedPenumbraStretch = PenumbraStretchNow, LastUsedTick = SharedTicks.Now };
                 }
             }
             catch (Exception exception)
@@ -632,7 +635,7 @@ namespace SDVRadiance
         private void RefreshCasterBlur(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle sourceRect, SpriteBake warm,
             float blurPixels, ref RenderTargetBinding[]? previousTargets)
         {
-            if (Math.Abs(blurPixels - warm.BakedBlur) <= 0.3f && warm.BakedContactHardness == ContactHardnessNow
+            if (Math.Abs(blurPixels - warm.BakedBlur) <= 0.3f && warm.BakedContactHardness == ContactHardnessNow && warm.BakedDepth == BakeDepthNow
                 && warm.BakedPenumbraStretch == PenumbraStretchNow)
                 return;
             previousTargets ??= graphicsDevice.GetRenderTargets();
@@ -641,6 +644,7 @@ namespace SDVRadiance
                 warm.FeetInRt = feet;
                 warm.BakedBlur = blurPixels;
                 warm.BakedContactHardness = ContactHardnessNow;
+                warm.BakedDepth = BakeDepthNow;
                 warm.BakedPenumbraStretch = PenumbraStretchNow;
             }
         }
@@ -787,15 +791,22 @@ namespace SDVRadiance
             _bakedObjectCache.Clear();
             _casterBakeCache.Clear();
             _objectBakeQueue.Clear();
-            foreach (var free in _objectFreeTargetsByClass) free.Clear();
+            foreach (var free in _objectFreeCellsByClass) free.Clear();
             _casterFreeTargets.Clear();
             int freed = ObjectSlotsAllocated() + _casterRenderTargetPool.Count;
-            foreach (var pool in _objectRenderTargetPools)
+            for (int i = 0; i < _objectBakeScratches.Length; i++)
             {
-                foreach (RenderTarget2D renderTarget in pool)
-                    try { renderTarget.Dispose(); } catch { }
-                pool.Clear();
+                try { _objectBakeScratches[i]?.Dispose(); } catch { }
+                _objectBakeScratches[i] = null;
             }
+            foreach (RenderTarget2D page in _objectAtlasPages)
+                try { page.Dispose(); } catch { }
+            _objectAtlasPages.Clear();
+            _objectCellsOpen = 0;
+            _objectSharedPageOpen = false;
+            // The pools' stacks may sit on the first shared page, which is gone now.
+            _objectPoolStripPage = null;
+            ForgetStackedPools();
             foreach (RenderTarget2D renderTarget in _casterRenderTargetPool)
                 try { renderTarget.Dispose(); } catch { }
             _casterRenderTargetPool.Clear();
@@ -877,7 +888,8 @@ namespace SDVRadiance
         internal void ForgetObjectBakes()
         {
             foreach (var entry in _bakedObjectCache)
-                _objectFreeTargetsByClass[entry.Value.SlotClass].Add(entry.Value.Rt);
+                if (entry.Value.Slot != null)
+                    _objectFreeCellsByClass[entry.Value.SlotClass].Add(entry.Value.Slot);
             _bakedObjectCache.Clear();
             _objectBakeQueue.Clear();
             ForgetObjectBakeLocations();
@@ -914,7 +926,8 @@ namespace SDVRadiance
                 {
                     if (_bakedObjectCache.TryGetValue(_objectEvictScratch[i], out SpriteBake? bake))
                     {
-                        _objectFreeTargetsByClass[bake.SlotClass].Add(bake.Rt);
+                        if (bake.Slot != null)
+                            _objectFreeCellsByClass[bake.SlotClass].Add(bake.Slot);
                         _bakedObjectCache.Remove(_objectEvictScratch[i]);
                         FrameCost.Count(FrameCost.Counter.BakeEvictions);
                     }
@@ -951,6 +964,156 @@ namespace SDVRadiance
             return texture;
         }
 
+        /// <summary>The contact pool's five copies stacked, for one spread: where on the page.</summary>
+        private sealed class StackedPool
+        {
+            public Texture2D Page = null!;
+            public Rectangle Place;
+            public Vector2 Origin;
+        }
+
+        /// <summary>A page of the pools' own, for a frame with no shared object page to put them
+        /// on (a room with pools and no object shadows).</summary>
+        private Texture2D? _stackedPoolOwnPage;
+        private const int StackedPoolOwnPageSide = 1024;
+        /// <summary>Where the stacks are being written: the strip of the first shared object page,
+        /// or the pools' own page, and that area; the shelf cursors are inside it.</summary>
+        private Texture2D? _stackedPoolPage;
+        private Rectangle _stackedPoolArea;
+        private int _stackedPoolShelfX, _stackedPoolShelfY, _stackedPoolShelfHeight;
+        /// <summary>A texel of clear ground round every stack, so a pool's edge never reads its
+        /// neighbour's.</summary>
+        private const int StackedPoolGutter = 1;
+
+        /// <summary>Stacks by spread, in quarter texels of the 64-texel blob on each axis.</summary>
+        private readonly Dictionary<(int, int), StackedPool> _stackedPools = [];
+        /// <summary>Spreads asked for inside the game's batch, made before the next frame's draws.</summary>
+        private readonly HashSet<(int, int)> _stackedPoolsWanted = [];
+        /// <summary>A pool spread wider than this many blob texels is drawn the old way.</summary>
+        private const float StackedPoolMaxSpread = 32f;
+        /// <summary>Plenty for the handful of pool widths a scene holds; past it the stacks are
+        /// dropped and made again as they are next drawn.</summary>
+        private const int StackedPoolCap = 160;
+        /// <summary>The per-copy opacity the stack is shaped at: the copies' union is not linear in
+        /// their opacity, so one shape is exact at one strength. A contact pool is drawn near half
+        /// strength, and there the rim matches; at the core the stack matches at every strength.</summary>
+        private const float StackedPoolReferenceAlpha = 0.5f;
+
+        private StackedPool? StackedBlobFor(float spreadTexelsX, float spreadTexelsY)
+        {
+            if (spreadTexelsX > StackedPoolMaxSpread || spreadTexelsY > StackedPoolMaxSpread)
+                return null;
+            var key = ((int)Math.Round(spreadTexelsX * 4f), (int)Math.Round(spreadTexelsY * 4f));
+            if (_stackedPools.TryGetValue(key, out StackedPool? stacked))
+                return stacked;
+            _stackedPoolsWanted.Add(key);
+            return null;
+        }
+
+        /// <summary>Make the stacks the last frame asked for. Called where a texture upload is
+        /// safe, before the game's world batch opens (see PreparePlayer).</summary>
+        private void MakeWantedStackedPools(GraphicsDevice graphicsDevice)
+        {
+            if (_stackedPoolsWanted.Count == 0 && _stackedPools.Count == 0)
+                return;
+            // On the shared object page when there is one, so a pool and the shadows round it are
+            // one texture; the stacks already made elsewhere are made again there. Asked while any
+            // stack exists, not only when one is wanted: pools all made before the shared page
+            // opened would otherwise stay on a texture of their own for good.
+            Texture2D page;
+            Rectangle area;
+            if (_objectPoolStripPage is { IsDisposed: false } strip)
+            {
+                page = strip;
+                area = _objectPoolStrip;
+            }
+            else
+            {
+                _stackedPoolOwnPage ??= VramTally.Track(new Texture2D(graphicsDevice, StackedPoolOwnPageSide, StackedPoolOwnPageSide), "shadow contact pools");
+                page = _stackedPoolOwnPage;
+                area = new Rectangle(0, 0, StackedPoolOwnPageSide, StackedPoolOwnPageSide);
+            }
+            if (!ReferenceEquals(page, _stackedPoolPage))
+            {
+                ForgetStackedPools();
+                _stackedPoolPage = page;
+                _stackedPoolArea = area;
+                // Moved onto the shared page: the pools' own page holds nothing any more.
+                if (!ReferenceEquals(page, _stackedPoolOwnPage) && _stackedPoolOwnPage != null)
+                {
+                    _stackedPoolOwnPage.Dispose();
+                    _stackedPoolOwnPage = null;
+                }
+            }
+            if (_stackedPoolsWanted.Count == 0)
+                return;
+            if (_stackedPools.Count + _stackedPoolsWanted.Count > StackedPoolCap)
+                ForgetStackedPools();
+            foreach (var key in _stackedPoolsWanted)
+            {
+                // A full area keeps what it has: a spread that does not fit is drawn as its five
+                // copies, as before. Starting the area again would make the same stacks every
+                // frame in a scene with more pool sizes than it holds.
+                if (BuildStackedBlob(key.Item1 / 4f, key.Item2 / 4f) is { } made)
+                    _stackedPools[key] = made;
+            }
+            _stackedPoolsWanted.Clear();
+        }
+
+        private void ForgetStackedPools()
+        {
+            _stackedPools.Clear();
+            _stackedPoolShelfX = _stackedPoolShelfY = _stackedPoolShelfHeight = 0;
+        }
+
+        /// <summary>The blob of <see cref="BuildBlob"/> drawn five times, at its centre and a spread
+        /// to each side, the way <see cref="DrawSoft"/> stacks the Taps5 copies, as one premultiplied
+        /// texture padded by the spread, written into its place on the page. Normalised so the core,
+        /// where every copy covers, is 1. Null when the page has no room left.</summary>
+        private StackedPool? BuildStackedBlob(float spreadX, float spreadY)
+        {
+            const int BlobSize = 64;
+            const float Radius = BlobSize / 2f;
+            int padX = (int)Math.Ceiling(spreadX), padY = (int)Math.Ceiling(spreadY);
+            int width = BlobSize + 2 * padX, height = BlobSize + 2 * padY;
+            int placedWidth = width + 2 * StackedPoolGutter, placedHeight = height + 2 * StackedPoolGutter;
+            if (_stackedPoolShelfX + placedWidth > _stackedPoolArea.Width)
+            {
+                _stackedPoolShelfY += _stackedPoolShelfHeight;
+                _stackedPoolShelfX = 0;
+                _stackedPoolShelfHeight = 0;
+            }
+            if (_stackedPoolShelfY + placedHeight > _stackedPoolArea.Height || _stackedPoolPage == null)
+                return null;
+            var place = new Rectangle(_stackedPoolArea.X + _stackedPoolShelfX + StackedPoolGutter,
+                _stackedPoolArea.Y + _stackedPoolShelfY + StackedPoolGutter, width, height);
+            _stackedPoolShelfX += placedWidth;
+            _stackedPoolShelfHeight = Math.Max(_stackedPoolShelfHeight, placedHeight);
+            var data = new Color[placedWidth * placedHeight];
+            float copyAlpha = 1f - (float)Math.Pow(1f - StackedPoolReferenceAlpha, 1.0 / Taps5.Length);
+            float core = 1f - (float)Math.Pow(1f - copyAlpha, Taps5.Length);
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    float fromCentreX = x + 0.5f - width / 2f, fromCentreY = y + 0.5f - height / 2f;
+                    float clear = 1f;
+                    foreach (Vector2 tap in Taps5)
+                    {
+                        float offsetX = (fromCentreX - tap.X * spreadX) / Radius, offsetY = (fromCentreY - tap.Y * spreadY) / Radius;
+                        float rimAlpha = MathHelper.Clamp(1f - (float)Math.Sqrt(offsetX * offsetX + offsetY * offsetY), 0f, 1f);
+                        clear *= 1f - copyAlpha * rimAlpha * rimAlpha;
+                    }
+                    byte level = (byte)Math.Round(MathHelper.Clamp((1f - clear) / core, 0f, 1f) * 255f);
+                    data[(y + StackedPoolGutter) * placedWidth + x + StackedPoolGutter] = new Color(level, level, level, level);
+                }
+            }
+            // The gutter is written too, as clear ground, over whatever an earlier fill left there.
+            _stackedPoolPage.SetData(0, new Rectangle(place.X - StackedPoolGutter, place.Y - StackedPoolGutter, placedWidth, placedHeight),
+                data, 0, data.Length);
+            return new StackedPool { Page = _stackedPoolPage, Place = place, Origin = new Vector2(width / 2f, height / 2f) };
+        }
+
         /// <summary>1×H alpha ramp: 1.0 at the bottom (feet) fading to <paramref name="headFade"/> at the top (far tip).</summary>
         /// <summary>What the one feet-to-tip fade is worth a given share of the way up a caster.
         /// The same curve <see cref="BuildGradient"/> bakes, evaluated on the CPU, so a piece that
@@ -979,14 +1142,14 @@ namespace SDVRadiance
         // reach the target opacity at the core while feathering the rim. The player (one RT
         // draw) can afford 9 taps; NPC bands use the lighter 5 to keep the draw count sane.
         private static readonly Vector2[] Taps9 =
-        {
+        [
             new(0f, 0f), new(1f, 0f), new(-1f, 0f), new(0f, 1f), new(0f, -1f),
             new(1f, 1f), new(-1f, 1f), new(1f, -1f), new(-1f, -1f),
-        };
+        ];
         private static readonly Vector2[] Taps5 =
-        {
+        [
             new(0f, 0f), new(1f, 0f), new(-1f, 0f), new(0f, 1f), new(0f, -1f),
-        };
+        ];
         /// <summary>
         /// How soft the shadow is a given fraction of the way from the caster's feet to the tip,
         /// as a multiple of the full blur radius.
@@ -1093,6 +1256,37 @@ namespace SDVRadiance
         /// the sun's bearing, and for the same reason: the bake paths are static.</summary>
         internal static float ContactHardnessNow;
 
+        /// <summary>How far past a strength of 1 the baked soft edges are deepened, captured once per
+        /// frame for the same reason as <see cref="ContactHardnessNow"/>. 1 below a strength of 1.
+        ///
+        /// <para>A baked shadow's soft edge lives in the bake's pixels and the bake is drawn in one go,
+        /// where ShadowDepthPower takes the draw's opacity a to 1 - (1 - a)^power: the core deepens
+        /// and every edge pixel only in proportion. The bake's blur is a sum of nine copies carrying
+        /// a ninth each; carrying more makes every edge pixel min(1, depth x what it was), for not
+        /// one draw more, and at 1 exactly the old bake.</para>
+        ///
+        /// <para>The first cut carried the strength itself here AND let the draw raise the opacity,
+        /// so a baked shadow was deepened twice: the feet-to-head fade clipped to full over its
+        /// lower two thirds at 3, a banded shadow darkened visibly when its bake landed, and the
+        /// blur dial moving off 0 changed how dark shadows were. See <see cref="BakeDepthFor"/>.</para></summary>
+        internal static float BakeDepthNow = 1f;
+
+        /// <summary>The opacity a shadow is drawn at, at a strength of 1, that <see cref="BakeDepthFor"/>
+        /// matches: the building shadow's, and the sun's at full.</summary>
+        private const float NominalShadowOpacity = 0.7f;
+
+        /// <summary>The bake depth that, times the draw's own deepening, gives a faint edge pixel what
+        /// the strength asks of it. A pixel covered at c by a shadow of opacity a should end up at
+        /// 1 - (1 - a c)^power, which for a faint edge is power x a x c; the draw already gives it
+        /// (1 - (1 - a)^power) x c, so the bake carries the rest: power x a / (1 - (1 - a)^power).
+        /// 1 at a strength of 1, about 2.2 at 3. Deeper pixels saturate, as the exponent itself does.</summary>
+        internal static float BakeDepthFor(float strength)
+        {
+            float power = MathHelper.Clamp(strength, 1f, ModConfig.ShadowStrengthMax);
+            float drawn = 1f - MathF.Pow(1f - NominalShadowOpacity, power);
+            return power * NominalShadowOpacity / drawn;
+        }
+
         /// <summary>The penumbra-shape dial, captured once per frame for the same reason as
         /// <see cref="ContactHardnessNow"/>. 0 is the round soft edge of every earlier release.</summary>
         internal static float PenumbraStretchNow;
@@ -1140,12 +1334,15 @@ namespace SDVRadiance
             if (blur <= 0f)
             {
                 FrameCost.Count(FrameCost.Counter.ShadowDrawCalls);
-                spriteBatch.Draw(texture, feet, sourceRect, baseColor * MathHelper.Clamp(alpha, 0f, 1f), rotation, origin, scale, effects, depth);
+                spriteBatch.Draw(texture, feet, sourceRect,
+                    baseColor * (1f - (float)Math.Pow(1f - MathHelper.Clamp(alpha, 0f, 1f), ShadowDepthPower)),
+                    rotation, origin, scale, effects, depth);
                 return;
             }
 
-            // Per-tap alpha so 1-(1-a)^N ≈ target alpha at the fully-covered core.
-            float tapAlpha = 1f - (float)Math.Pow(1f - MathHelper.Clamp(alpha, 0f, 1f), 1f / taps.Length);
+            // Per-tap alpha so 1-(1-a)^N ≈ target alpha at the fully-covered core, deepened by
+            // ShadowDepthPower past a strength of 1 (see there): the same stack, fainter or darker copies.
+            float tapAlpha = 1f - (float)Math.Pow(1f - MathHelper.Clamp(alpha, 0f, 1f), ShadowDepthPower / taps.Length);
             Color tapColor = baseColor * tapAlpha;
             FrameCost.Count(FrameCost.Counter.ShadowDrawCalls, taps.Length);
             // These offsets are SCREEN pixels, so the rim's shape can be stamped straight into
@@ -1220,7 +1417,7 @@ namespace SDVRadiance
 
         /// <summary>The footprints, in world pixels, of every building the current location owns,
         /// refreshed once per shadow pass. Read by <see cref="GroundedPieceDepth"/>.</summary>
-        private static readonly List<Rectangle> BuildingFootprints = new();
+        private static readonly List<Rectangle> BuildingFootprints = [];
 
         /// <summary>Collect the buildings' footprints for this pass. Cheap: a location owns a
         /// handful, and the list is what lets every strip of every shadow answer "am I lying on a
@@ -1552,13 +1749,6 @@ namespace SDVRadiance
         /// </summary>
         private const float ShadowDepthBias = 1.2e-3f;
 
-        /// <summary>RETIRED 2026-08-05, kept as the single switch for the rule. Casters on
-        /// OPEN water (tile + 4 neighbours all water) used to lose their sun/lamp shadow so
-        /// nothing lay "on" the surface — but a body standing in shallow water casts a shadow
-        /// across the surface in reality, the skip made a wading player's shadow vanish
-        /// outright, and crossing the open-water boundary popped it. Swimming and riding
-        /// keep their own gates at the call sites.</summary>
-        private static bool OnOpenWater(GameLocation location, Point tile) => false;
 
         private static bool OnWater(GameLocation location, Point tile)
         {

@@ -24,6 +24,8 @@
     <!-- LabelStore reads tile orientation and render-layer identity through these shared helpers,
          so they compile in with the rest of the real sources. -->
     <Compile Include="$(ModPath)\src\Shared\MapLayers.cs" />
+    <Compile Include="$(ModPath)\src\Shared\LabelClass.cs" />
+    <Compile Include="$(ModPath)\src\Shared\AssetNames.cs" />
     <Compile Include="Program.cs" />
   </ItemGroup>
 

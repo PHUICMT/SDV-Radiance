@@ -220,7 +220,7 @@ namespace SDVRadiance
                                 if (!sheetArtFiles.ContainsKey(name))
                                 {
                                     sheetArtFiles[name] = "sheets/" + file;
-                                    sheetArtSizes[name] = new[] { texture.Width, texture.Height };
+                                    sheetArtSizes[name] = [texture.Width, texture.Height];
                                 }
                             }
                         }
@@ -323,7 +323,7 @@ namespace SDVRadiance
                         string heldStamp = held.Value.TryGetProperty("variant", out JsonElement variantElement) && variantElement.ValueKind == JsonValueKind.String
                             ? variantElement.GetString()! : "";
                         if (!alreadyHeld.TryGetValue(heldName, out var versions))
-                            alreadyHeld[heldName] = versions = new List<(string, string)>();
+                            alreadyHeld[heldName] = versions = [];
                         versions.Add((held.Name, heldStamp));
                     }
                 }
@@ -391,7 +391,7 @@ namespace SDVRadiance
 
             // artPng is additive: a labeller that only knows `art` still works against an
             // embedded dump, and one that knows both prefers the files.
-            var doc = new { format = "hf-mapdump-v3", season = Game1.currentSeason, profiles = profilesSeen, locations = index, art = art, artPng = sheetArtFiles, artPngBySrc = sheetArtFileBySource, artDim = sheetArtSizes,
+            var doc = new { format = "hf-mapdump-v3", season = Game1.currentSeason, profiles = profilesSeen, locations = index, art, artPng = sheetArtFiles, artPngBySrc = sheetArtFileBySource, artDim = sheetArtSizes,
                 artSrc = sheetArtSources, water = waterOut, animGroups = animationGroups };
             string json = JsonSerializer.Serialize(doc);
 
@@ -469,7 +469,7 @@ namespace SDVRadiance
                 return;   // a one-frame "animation" has nothing to fan out to
             string signature = string.Join("|", frames);
             if (signatures.Add(signature))
-                groups.Add(frames.ToArray());
+                groups.Add([.. frames]);
         }
 
         /// <summary>
@@ -511,7 +511,7 @@ namespace SDVRadiance
         private static void AddArtSource(Dictionary<string, List<string>> sources, string name, string src)
         {
             if (!sources.TryGetValue(name, out List<string>? list))
-                sources[name] = list = new List<string>();
+                sources[name] = list = [];
             foreach (string had in list)
                 if (string.Equals(had, src, StringComparison.OrdinalIgnoreCase))
                     return;
@@ -636,7 +636,7 @@ namespace SDVRadiance
                     if (n.TryGetInt32(out int v))
                         size.Add(v);
                 if (size.Count == 2)
-                    into[one.Name] = size.ToArray();
+                    into[one.Name] = [.. size];
             }
         }
 
@@ -650,7 +650,7 @@ namespace SDVRadiance
             {
                 if (one.Value.ValueKind != JsonValueKind.Array)
                     continue;
-                var union = new HashSet<int>(into.TryGetValue(one.Name, out int[]? had) ? had : Array.Empty<int>());
+                var union = new HashSet<int>(into.TryGetValue(one.Name, out int[]? had) ? had : []);
                 foreach (JsonElement n in one.Value.EnumerateArray())
                     if (n.TryGetInt32(out int v))
                         union.Add(v);
@@ -696,7 +696,7 @@ namespace SDVRadiance
             if (entry.TryGetValue("sheetArt", out object? artObj) && artObj is List<string?> files)
                 foreach (string? one in files)
                     Feed(one);
-            return hash.ToString("x16").Substring(0, 6);
+            return hash.ToString("x16")[..6];
         }
 
         private static string SafeFileName(string name, HashSet<string> used)
@@ -784,13 +784,13 @@ namespace SDVRadiance
                 monitor.Log("mapdump: could not find the Mods folder, so unplaced sheets were skipped.", LogLevel.Warn);
                 return;
             }
-            string[] roots = { modsFolder, Path.Combine(Path.GetDirectoryName(modsFolder)!, "Mods (disabled)") };
+            string[] roots = [modsFolder, Path.Combine(Path.GetDirectoryName(modsFolder)!, "Mods (disabled)")];
             // The shape test cannot tell a tilesheet from a 1080p screenshot: both are big and
             // 16-aligned. Screenshot folders were 82% of the first all-sheets dump (406MB of the
             // 495MB), all of it from our own dev capture folder, so name them out up front.
-            string[] notPlaces = { "portrait", "character", "animals", "fashion", "\\ui", "icon", "emoji",
+            string[] notPlaces = [ "portrait", "character", "animals", "fashion", "\\ui", "icon", "emoji",
                                    "hair", "shirt", "pants", "hats", "shoes", "tattoo", "bodies",
-                                   "\\shots\\", "screenshot", "\\shot_" };
+                                   "\\shots\\", "screenshot", "\\shot_" ];
             int added = 0;
             byte[] pngHeader = new byte[24];      // outside the loop: a stackalloc in there is a slow leak
             foreach (string root in roots)
@@ -851,7 +851,7 @@ namespace SDVRadiance
                 sheetIndex[tileSheet] = sheets.Count;
                 sheets.Add(LabelStore.NormalizeSheet(tileSheet.ImageSource ?? tileSheet.Id));
                 sheetSourcePaths.Add(tileSheet.ImageSource);
-                sheetSizes.Add(new[] { tileSheet.SheetWidth, tileSheet.SheetHeight });
+                sheetSizes.Add([tileSheet.SheetWidth, tileSheet.SheetHeight]);
                 sheetRefs.Add(tileSheet);
             }
             var used = new bool[sheets.Count];
@@ -904,7 +904,7 @@ namespace SDVRadiance
                 ["sheetSrc"] = sheetSourcePaths, ["sheetWH"] = sheetSizes, ["layers"] = layers,
                 ["cls"] = location.GetType().FullName,
                 ["locSeason"] = locationSeason,
-                ["waterColor"] = new[] { (int)waterColorValue.R, (int)waterColorValue.G, (int)waterColorValue.B, (int)waterColorValue.A },
+                ["waterColor"] = new int[] { waterColorValue.R, waterColorValue.G, waterColorValue.B, waterColorValue.A },
                 ["indoorWater"] = location.HasMapPropertyWithValue("indoorWater"),
                 ["mapProps"] = mapProperties.Count > 0 ? mapProperties : null,
                 ["layersAll"] = layersAll,
@@ -988,7 +988,7 @@ namespace SDVRadiance
                         {
                             string sheetName = sheets[sheetNumber];
                             if (!water.TryGetValue(sheetName, out HashSet<int>? set))
-                                water[sheetName] = set = new HashSet<int>();
+                                water[sheetName] = set = [];
                             set.Add(t.TileIndex);
                         }
                     }
@@ -1006,7 +1006,7 @@ namespace SDVRadiance
                 int ord = MapLayers.CompositeRank(layer.Id);
                 layers.Add(new
                 {
-                    id = layer.Id, fam = hasFam ? fam : null, ord = ord, w = w, h = h,
+                    id = layer.Id, fam = hasFam ? fam : null, ord, w, h,
                     cells = Convert.ToBase64String(bytes),
                     anim = animCells.Count > 0 ? animCells.ToArray() : null,
                     // Only when something on this layer is actually turned: most layers add nothing.
@@ -1098,7 +1098,7 @@ namespace SDVRadiance
                     {
                         x = fishPond.tileX.Value, y = fishPond.tileY.Value,
                         w = fishPond.tilesWide.Value, h = fishPond.tilesHigh.Value,
-                        color = new[] { (int)pondColor.R, (int)pondColor.G, (int)pondColor.B, (int)pondColor.A },
+                        color = new int[] { pondColor.R, pondColor.G, pondColor.B, pondColor.A },
                     });
                 }
             }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
@@ -40,11 +41,73 @@ namespace SDVRadiance
         /// <summary>0 keeps the game's own pixels, 1 is the full Scale2x rounding, one dial per art
         /// family (indexed by ArtFamily). Baked into the doubled sheets, whose cache variant is the
         /// family, so a change re-makes the sheets once instead of costing every frame.</summary>
-        internal static readonly float[] SmoothnessByFamily = { 1f, 1f, 1f, 1f, 1f };
-        private static readonly float[] _bakedSmoothnessByFamily = { 1f, 1f, 1f, 1f, 1f };
+        internal static readonly float[] SmoothnessByFamily = [1f, 1f, 1f, 1f, 1f];
+        private static readonly float[] _bakedSmoothnessByFamily = [1f, 1f, 1f, 1f, 1f];
         /// <summary>The family whose soft sprite is being baked at this moment; the bake, which
         /// runs inside SoftSprites.For, reads that family's dial through it.</summary>
         private static ArtFamily _softBakeFamily;
+
+        /// <summary>How many draws of each family took each of the three roads this frame: the
+        /// four-times page, the doubled sheet, and the game's own pixels untouched.
+        ///
+        /// <para>Here because a scene that takes two of those roads at once is what the author
+        /// called plates: art beside art, one of them softened and one of them not, and the eye
+        /// reads the join as a seam. The counters say whether that is what is happening rather
+        /// than leaving it to be argued from a screenshot.</para></summary>
+        private static readonly int[] _softDraws = new int[FamilyCount];
+        private static readonly int[] _doubledDraws = new int[FamilyCount];
+        private static readonly int[] _untouchedDraws = new int[FamilyCount];
+        private static readonly int[] _softDrawsLastFrame = new int[FamilyCount];
+        private static readonly int[] _doubledDrawsLastFrame = new int[FamilyCount];
+        private static readonly int[] _untouchedDrawsLastFrame = new int[FamilyCount];
+
+        /// <summary>The draw scales the WORLD's untouched draws came in at, in tenths, so the
+        /// counter can say WHY they were left alone rather than only that they were. The world is
+        /// the family the plates are on; the others would only make the line longer.</summary>
+        private static readonly Dictionary<int, int> _untouchedWorldScales = [];
+        private static readonly Dictionary<int, int> _untouchedWorldScalesLastFrame = [];
+        private static readonly Dictionary<int, int> _softWorldScales = [];
+        private static readonly Dictionary<int, int> _softWorldScalesLastFrame = [];
+
+        /// <summary>Which sheets the world's untouched draws came from, so the counter names the
+        /// art that is being left raw beside art that is not.</summary>
+        private static readonly Dictionary<string, int> _untouchedWorldSheets = [];
+        private static readonly Dictionary<string, int> _untouchedWorldSheetsLastFrame = [];
+
+        /// <summary>Whether this frame's draws are written into the scale and sheet tables. Those
+        /// tables exist for one line of radiance_report, and filling them was a dictionary write,
+        /// and for an unnamed sheet a new string, on every world draw the game made: measured at
+        /// 0.3 to 0.4 ms a frame on a 3440-wide window, for a line nobody reads while playing.
+        /// One frame in <see cref="NoteEveryFrames"/> says the same thing.</summary>
+        private static bool _notingThisFrame = true;
+        private static int _framesSinceNoted;
+        private const int NoteEveryFrames = 60;
+
+        private static void NoteSheet(Dictionary<string, int> into, Texture2D texture)
+        {
+            if (!_notingThisFrame)
+                return;
+            string name = string.IsNullOrEmpty(texture.Name) ? $"(unnamed {texture.Width}x{texture.Height})" : texture.Name;
+            into[name] = into.TryGetValue(name, out int seen) ? seen + 1 : 1;
+        }
+
+        private static void NoteScale(Dictionary<int, int> into, float drawScale)
+        {
+            if (!_notingThisFrame)
+                return;
+            int tenths = (int)Math.Round(drawScale * 10f);
+            into[tenths] = into.TryGetValue(tenths, out int seen) ? seen + 1 : 1;
+        }
+
+        private static string DescribeScales(Dictionary<int, int> scales)
+        {
+            if (scales.Count == 0)
+                return "none";
+            var parts = new List<string>();
+            foreach (var pair in scales.OrderByDescending(pair => pair.Value))
+                parts.Add($"x{pair.Key / 10f:0.0}:{pair.Value}");
+            return string.Join(" ", parts);
+        }
         /// <summary>Which look the smoothing has (see <see cref="SheetSmoothingStyle"/>), set per
         /// frame from the config; a change hands every held sheet back.</summary>
         internal static SheetSmoothingStyle Style = SheetSmoothingStyle.Scale2x;
@@ -81,7 +144,7 @@ namespace SDVRadiance
         /// the held one 0.9), which left every tool and item there exactly as the game drew it
         /// while the same items on the ground were smoothed. Cleared each frame; a draw at an even
         /// size takes its sheet back out, so the inventory's 4x items stay point-read and crisp.</summary>
-        private static readonly HashSet<Texture2D> _linearRuns = new();
+        private static readonly HashSet<Texture2D> _linearRuns = [];
         /// <summary>Two colours closer than this on the shader's luminance-plus-alpha scale (0 to
         /// 1.5) are the same colour to the edge rules: about a fifth of the way from black to white.</summary>
         private const float SoftEqualThreshold = 0.10f;
@@ -134,7 +197,7 @@ namespace SDVRadiance
             public SamplerState Sampler = SamplerState.PointClamp;
             public SamplerState? Applied;
         }
-        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, BatchSampling> _samplingByBatcher = new();
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, BatchSampling> _samplingByBatcher = [];
         private static AccessTools.FieldRef<SpriteBatch, object>? _batcherOf;
         private static System.Reflection.FieldInfo? _batcherDevice;
         /// <summary>The batcher behind Game1.spriteBatch, so a flush of the game's batch can be
@@ -236,14 +299,14 @@ namespace SDVRadiance
                 monitor.Log($"Could not patch the sprite batcher's flush ({ex.GetType().Name}: {ex.Message}); the soft look will be sampled as the batch is.", LogLevel.Warn);
             }
             (Type[] signature, string handler)[] overloads =
-            {
+            [
                 (new[] { typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color), typeof(float), typeof(Vector2), typeof(Vector2), typeof(SpriteEffects), typeof(float) },
                     nameof(DrawVectorScale_Prefix)),
                 (new[] { typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color), typeof(float), typeof(Vector2), typeof(float), typeof(SpriteEffects), typeof(float) },
                     nameof(DrawFloatScale_Prefix)),
                 (new[] { typeof(Texture2D), typeof(Rectangle), typeof(Rectangle?), typeof(Color), typeof(float), typeof(Vector2), typeof(SpriteEffects), typeof(float) },
                     nameof(DrawDestination_Prefix)),
-            };
+            ];
             foreach ((Type[] signature, string handler) in overloads)
             {
                 var draw = AccessTools.Method(typeof(SpriteBatch), nameof(SpriteBatch.Draw), signature);
@@ -255,6 +318,52 @@ namespace SDVRadiance
                 harmony.Patch(draw, prefix: new HarmonyMethod(typeof(SheetUpscaler), handler));
                 PatchedOverloads++;
             }
+            InstallFarmerDrawWatch(harmony, monitor);
+        }
+
+        /// <summary>How deep the game is inside one of FarmerRenderer's draws. The player is
+        /// composed at draw time out of a body the game builds itself (a runtime texture named
+        /// "@FarmerRenderer.baseTexture"), clothes, hair and whatever an outfit mod draws inside the
+        /// same call; only the hair and clothes sheets carry a Characters/ name, so the rest used
+        /// to be read as world art and followed the World dial. Anything the world family would
+        /// have taken while this is above zero is the player, and goes with the characters.</summary>
+        private static int _farmerDrawDepth;
+        private static bool _farmerDrawWatched;
+
+        private static void InstallFarmerDrawWatch(Harmony harmony, IMonitor monitor)
+        {
+            if (_farmerDrawWatched)
+                return;
+            int patched = 0;
+            foreach (var method in AccessTools.GetDeclaredMethods(typeof(FarmerRenderer)))
+            {
+                if (method.IsAbstract || method.IsStatic
+                    || method.Name is not ("draw" or "drawHairAndAccesories" or "drawMiniPortrat"))
+                    continue;
+                try
+                {
+                    // First, so an outfit mod's own prefix, which draws the outfit, already runs inside.
+                    harmony.Patch(method,
+                        prefix: new HarmonyMethod(typeof(SheetUpscaler), nameof(FarmerDraw_Prefix)) { priority = Priority.First },
+                        finalizer: new HarmonyMethod(typeof(SheetUpscaler), nameof(FarmerDraw_Finalizer)));
+                    patched++;
+                }
+                catch (Exception ex)
+                {
+                    monitor.Log($"Could not watch FarmerRenderer.{method.Name} ({ex.GetType().Name}: {ex.Message}); "
+                        + "the player's smoothing follows the World dial.", LogLevel.Warn);
+                }
+            }
+            _farmerDrawWatched = patched > 0;
+        }
+
+        private static void FarmerDraw_Prefix() => _farmerDrawDepth++;
+
+        private static Exception? FarmerDraw_Finalizer(Exception? __exception)
+        {
+            if (_farmerDrawDepth > 0)
+                _farmerDrawDepth--;
+            return __exception;
         }
 
         /// <summary>One sprite of the soft look, baked: the xBR kernel (see SheetXbr in sheetscale.fx)
@@ -290,6 +399,7 @@ namespace SDVRadiance
                 batch.End();
                 // Onto the page, gutter included: the source rectangle reaches past the scratch
                 // by the gutter on every side and the clamped read repeats the edge into it.
+                // Opaque, no clear: the page keeps every other sprite on it (PreserveContents).
                 // Opaque, no clear: the page keeps every other sprite on it (PreserveContents).
                 bool soften = SoftBlurTexels > 0.01f;
                 int gutter = SoftSpriteCache.Gutter;
@@ -352,7 +462,10 @@ namespace SDVRadiance
                 return null;
             ArtFamily family = FamilyOf(texture);
             if (!FamilyEnabled(family))
+            {
+                _untouchedDraws[(int)family]++;
                 return null;
+            }
             Rectangle source = sourceRectangle ?? texture.Bounds;
             if (Style == SheetSmoothingStyle.Soft4x && DrawnLargeEnough(drawScale / SoftScale, soft: true))
             {
@@ -365,6 +478,9 @@ namespace SDVRadiance
                     {
                         derivedSource = placed;
                         factor = SoftScale;
+                        _softDraws[(int)family]++;
+                        if (family == ArtFamily.World)
+                            NoteScale(_softWorldScales, drawScale);
                         return page;
                     }
                 }
@@ -381,10 +497,22 @@ namespace SDVRadiance
             // minified and is left to the game either way.
             bool linearRead = !evenRead && Game1.uiMode && pixelsPerDoubledTexel >= 1f - 0.001f;
             if (!evenRead && !linearRead)
+            {
+                _untouchedDraws[(int)family]++;
+                if (family == ArtFamily.World)
+                {
+                    NoteScale(_untouchedWorldScales, drawScale);
+                    NoteSheet(_untouchedWorldSheets, texture);
+                }
                 return null;
+            }
             Texture2D? doubled = Cache.For(Device!, Effect!, texture, (int)family);
             if (doubled == null)
+            {
+                _untouchedDraws[(int)family]++;
                 return null;
+            }
+            _doubledDraws[(int)family]++;
             if (linearRead)
                 _linearRuns.Add(doubled);
             else
@@ -413,6 +541,10 @@ namespace SDVRadiance
                 family = FamilyOfName(texture.Name ?? "");
                 _familyBySheet.AddOrUpdate(texture, family);
             }
+            // The player's own body and an outfit mod's pieces carry no Characters/ name; drawn
+            // inside FarmerRenderer they are the player all the same (see _farmerDrawDepth).
+            if (family == ArtFamily.World && _farmerDrawDepth > 0)
+                family = ArtFamily.Characters;
             // Everything drawn in UI mode is the interface, items included: a tool in the toolbar
             // or the inventory follows the Menus switch and dial, and the same tool lying on the
             // ground follows Items. The families are named for where the player sees them, and the
@@ -428,7 +560,7 @@ namespace SDVRadiance
         /// texture rather than by the name so a repainted sheet under the same content path is
         /// asked about once as well; the table holds no reference of its own, so a sheet the game
         /// unloads leaves it.</summary>
-        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Texture2D, object> _familyBySheet = new();
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Texture2D, object> _familyBySheet = [];
 
         private static ArtFamily FamilyOfName(string name)
         {
@@ -539,6 +671,29 @@ namespace SDVRadiance
         internal static void BeginFrame()
         {
             RedirectedThisFrame = 0;
+            Array.Copy(_softDraws, _softDrawsLastFrame, FamilyCount);
+            Array.Copy(_doubledDraws, _doubledDrawsLastFrame, FamilyCount);
+            Array.Copy(_untouchedDraws, _untouchedDrawsLastFrame, FamilyCount);
+            Array.Clear(_softDraws, 0, FamilyCount);
+            Array.Clear(_doubledDraws, 0, FamilyCount);
+            Array.Clear(_untouchedDraws, 0, FamilyCount);
+            if (_notingThisFrame)
+            {
+                _untouchedWorldScalesLastFrame.Clear();
+                foreach (var pair in _untouchedWorldScales)
+                    _untouchedWorldScalesLastFrame[pair.Key] = pair.Value;
+                _untouchedWorldScales.Clear();
+                _softWorldScalesLastFrame.Clear();
+                foreach (var pair in _softWorldScales)
+                    _softWorldScalesLastFrame[pair.Key] = pair.Value;
+                _softWorldScales.Clear();
+                _untouchedWorldSheetsLastFrame.Clear();
+                foreach (var pair in _untouchedWorldSheets)
+                    _untouchedWorldSheetsLastFrame[pair.Key] = pair.Value;
+                _untouchedWorldSheets.Clear();
+            }
+            _framesSinceNoted = _notingThisFrame ? 1 : _framesSinceNoted + 1;
+            _notingThisFrame = _framesSinceNoted >= NoteEveryFrames;
             _linearRuns.Clear();
             if (ResampleFramesLeft > 0)
                 ResampleFramesLeft--;
@@ -593,7 +748,37 @@ namespace SDVRadiance
             return $"    soft sprites: {SoftSprites.Count} held on {SoftSprites.PageCount} page(s), "
                  + $"{SoftSprites.Generated} baked since the last report, {SoftSprites.Refused} REFUSED "
                  + $"(too big for a page: over {SoftSprites.LargestSpriteSide} texels a side, so they stay sharp), "
-                 + $"{SoftSprites.Evicted} evicted (over budget), at most {SoftSprites.GeneratePerFrameCap} baked a frame.";
+                 + $"{SoftSprites.Evicted} evicted (over budget), at most {SoftSprites.GeneratePerFrameCap} baked a frame ({SoftSprites.LargestFrame} in the busiest frame, which only a warp's burst takes past the cap)."
+                 + Environment.NewLine + DescribeSmoothingRoads();
+        }
+
+        /// <summary>Which road each family's draws took last frame. A family with draws on two
+        /// roads at once is a family drawn at two different smoothnesses in one picture, which is
+        /// what a plate is.</summary>
+        internal static string DescribeSmoothingRoads()
+        {
+            var line = new System.Text.StringBuilder("    smoothing roads (last frame): ");
+            for (int family = 0; family < FamilyCount; family++)
+            {
+                int soft = _softDrawsLastFrame[family];
+                int doubled = _doubledDrawsLastFrame[family];
+                int untouched = _untouchedDrawsLastFrame[family];
+                if (soft + doubled + untouched == 0)
+                    continue;
+                line.Append($"{(ArtFamily)family} soft={soft} doubled={doubled} untouched={untouched}");
+                line.Append(soft > 0 && doubled > 0 ? " <- MIXED, this family is drawn two ways; " : "; ");
+            }
+            line.Append(Environment.NewLine);
+            line.Append($"    world draw scales (one frame, sampled once a second): softened {DescribeScales(_softWorldScalesLastFrame)}"
+                      + $" | left alone {DescribeScales(_untouchedWorldScalesLastFrame)}");
+            line.Append(Environment.NewLine);
+            line.Append("    world art left raw (one frame, sampled once a second): ");
+            if (_untouchedWorldSheetsLastFrame.Count == 0)
+                line.Append("none");
+            else
+                line.Append(string.Join(" · ", _untouchedWorldSheetsLastFrame
+                    .OrderByDescending(pair => pair.Value).Take(6).Select(pair => $"{pair.Key}:{pair.Value}")));
+            return line.ToString();
         }
 
         internal static void Dispose()

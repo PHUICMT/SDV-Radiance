@@ -117,7 +117,7 @@ namespace SDVRadiance
         private const int WindowFrames = 300;      // five seconds at 60 fps
 
         private static readonly string[] Names =
-        {
+        [
             "shadow bakes (player+objects)",
             "shadow draw (all sprites)",
             "grid: flood lightmap",
@@ -132,7 +132,7 @@ namespace SDVRadiance
             "precipitation (rain/snow)",
             "wet world (ground + screen drops)",
             "sprite relief normals",
-        };
+        ];
 
         private static readonly double[] _sum = new double[PartCount];
         private static readonly double[] _max = new double[PartCount];
@@ -198,7 +198,7 @@ namespace SDVRadiance
         private static bool _gcBaseTaken;
 
         private static readonly string[] CounterNames =
-        {
+        [
             "object sprite bakes",
             "character sprite bakes",
             "bake misses (wanted, absent)",
@@ -213,7 +213,7 @@ namespace SDVRadiance
             "sprite batch draw calls (world step)",
             "render target clears (ours + implicit)",
             "render target binds",
-        };
+        ];
 
         static FrameCost()
         {
@@ -353,7 +353,7 @@ namespace SDVRadiance
         /// somebody reads once; on screen they collided with their own numbers, which is worse than
         /// being vague because a number you cannot read is not a measurement.</summary>
         private static readonly string[] ShortNames =
-        {
+        [
             "shadow bakes",
             "shadow draw",
             "flood lightmap",
@@ -368,7 +368,7 @@ namespace SDVRadiance
             "precipitation",
             "wet world",
             "relief normals",
-        };
+        ];
 
         internal static int PartTotal => PartCount;
         internal static string PartName(int part) => Names[part];
