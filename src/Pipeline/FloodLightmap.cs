@@ -967,6 +967,24 @@ namespace SDVRadiance
         // WindowLight sources, so they are never touched.
         private static GameLocation? _windowedCacheLocation;
         private static bool _windowedCached;
+        /// <summary>Rooms that have been SEEN with windows, by name, for as long as the game runs.
+        /// A room with no DayTiles property publishes its windows as light sources or glow sprites,
+        /// and the game takes both away at truly-dark, so the live test below answers "no windows"
+        /// for the rest of the night. That answer used to end the room's darkening on the tick the
+        /// sky went dark: measured in the farmhouse, the room was dimmed 32% at 19:30 and 0% from
+        /// 20:00 to 2:00, which is brighter than the game's own night (reported on Nexus after
+        /// 2.1.0, for the farmhouse, the island farmhouse and cabins alike). A room's windows do
+        /// not leave when the sun does, so once seen they are remembered.</summary>
+        private static readonly HashSet<string> _windowedSeen = [];
+
+        /// <summary>Forget which rooms were seen with windows. Called on the way back to the title,
+        /// for the same reason the window scan is: another save's farmhouse carries the same name.</summary>
+        internal static void ForgetWindowedRooms()
+        {
+            _windowedSeen.Clear();
+            _windowedCacheLocation = null;
+            _windowedCached = false;
+        }
 
         /// <summary>How much of the sun PATCH under a window to seed, 0 to 1 - the visible half,
         /// which a window-art mod draws too. Owned by the flood stage, which eases it from the
@@ -1004,11 +1022,28 @@ namespace SDVRadiance
             // was entered, so they are checked LIVE, never cached: entering a farmhouse at
             // night must not freeze the answer as "no windows" for the whole visit (that
             // freeze is what left the floor beside a real window at bare sky in the morning).
+            string roomName = location.NameOrUniqueName ?? location.Name ?? "";
             if (Game1.currentLightSources != null)
                 foreach (var lightEntry in Game1.currentLightSources)
                     if (lightEntry.Value.lightContext.Value == LightSource.LightContext.WindowLight)
+                    {
+                        _windowedSeen.Add(roomName);
                         return true;
-            return location.lightGlows is { Count: > 0 };
+                    }
+            if (location.lightGlows is { Count: > 0 })
+            {
+                _windowedSeen.Add(roomName);
+                return true;
+            }
+            // A home always has windows, whatever the hour says: the farmhouse, a cabin and the
+            // island farmhouse all publish theirs as glow sprites alone, so the first visit of a
+            // save can be after dark and there would be nothing to remember yet.
+            if (location is StardewValley.Locations.FarmHouse or StardewValley.Locations.IslandFarmHouse)
+            {
+                _windowedSeen.Add(roomName);
+                return true;
+            }
+            return _windowedSeen.Contains(roomName);
         }
 
         /// <summary>

@@ -1362,6 +1362,7 @@ namespace SDVRadiance
             _emissiveCacheLocation = null;
             _emissiveCacheKey = new(-1, -1);
             _emissiveTiles.Clear();
+            FloodLightmap.ForgetWindowedRooms();
         }
         private float _daylightPoolDamping = 1f;   // outdoor midday sink shared by lamp pools and emissive
         private readonly List<(Vector2 Pos, Vector3 Col, float Amt)> _emissiveTiles = [];

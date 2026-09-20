@@ -2,6 +2,46 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.1.1 - 2026-09-20
+
+### Fixed
+
+- **A room went bright again the moment the sky went properly dark, and stayed bright until 2am.**
+  The mod works out which rooms are lit by daylight from the window lights and glow sprites the
+  game publishes, and the game takes those away at full dark. A room whose map does not carry the
+  day/night window tiles, which is the farmhouse, a cabin and the island farmhouse, was read from
+  that moment as a room with no windows at all, so the hour's dimming and its colour stopped dead:
+  measured in the farmhouse, dimmed by 32% at 19:30 and by nothing from 20:00 on, which is brighter
+  than the game's own night. The same fault is what made the hour before dark read as a step, since
+  the dimming is deepest just before full dark and vanished as it landed. A room's windows do not
+  leave when the sun does, so a room seen with windows is remembered for as long as the game runs,
+  and a home counts as windowed whatever the hour says. Reported by beepig66 on Nexus.
+- **A building Robin had not finished yet showed as a ghost of itself.** The mod keeps a map of
+  what each tile is, and it wrote every farm building into that map as walls and a roof the moment
+  the plan was laid, days before anything stood there. A building under construction is a frame of
+  scaffolding with the sky through it, so the plan stood in that map as a solid building nobody
+  could see: in rain it came out as a clean rectangle nothing was wetting, and near water it moved
+  what the surface returns, so it could show on a clear day as well. Nothing is written for a
+  building until it is built now, which is the question the fish ponds were already asking.
+  Reported with a picture by Mokayogi on Nexus. Water behind a building is untouched, as before: a
+  building is never written over water, and its own art is cut out of the effects by its sprite.
+- **A parked vehicle's headlights showed a little person in each lamp.** A headlight is glass, so
+  it carried a label, and it carried the one that returns a body at full strength. The lamps on the
+  town's parked vehicles are plain glass again; their windscreens and wing mirrors still reflect.
+- **The Joja truck's glass returned the street and the sky but never a person.** Glass on a
+  vehicle is several sheets at different heights on one piece of art, and the image of anybody in
+  front of it stood on the bottom edge of the box around all of them, which on the truck is the
+  bumper: below every sheet, so it was clipped away whole. Each sheet of glass is now its own
+  window, standing at its own height, so the truck returns you in its windscreen, its wing mirrors
+  and its headlights, and a body standing beside a pane rather than under it slides onto the glass
+  and fades with the distance instead of vanishing. That last part is why glass on anything solid
+  showed nobody: you cannot stand under a truck. Reported by ghi3038 on Nexus.
+- **A window pane glowed at night as if a lamp stood outside in the dark.** What is behind the
+  glass after dark is the moon, and the pane carried one flat brightness whatever the moon was
+  doing. It follows the phase now, and cloud takes most of it, so a moonless night leaves the
+  glass dark and a full moon lights it faintly. Only visible since the rooms beside it started
+  being darkened properly again, above.
+
 ## 2.1.0 - 2026-09-19
 
 ### Added

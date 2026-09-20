@@ -684,6 +684,15 @@ namespace SDVRadiance
             {
                 if (building == null)
                     continue;
+                // A building Robin has not finished is a frame of scaffolding with the sky through
+                // it, so it has no walls to block light and no roof to keep the rain off. Stamped
+                // anyway, its whole plan stood in this grid as Wall and Roof, and every pass that
+                // reads the grid drew the building that is not there yet: in rain the plan came out
+                // as a clean rectangle nobody was wetting, which reads as a ghost of the finished
+                // building (reported with a picture by Mokayogi on Nexus). The fish pond below
+                // already asked this question; now every building does.
+                if (building.daysOfConstructionLeft.Value > 0)
+                    continue;
                 int footprintLeft = building.tileX.Value, footprintTop = building.tileY.Value;
                 int footprintWidth = building.tilesWide.Value, footprintHeight = building.tilesHigh.Value;
                 // A fish pond is the one building whose footprint is mostly water: a knee-high

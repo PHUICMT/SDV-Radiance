@@ -1970,8 +1970,18 @@ namespace SDVRadiance
             {
                 // After dark the window is still there - it just shows a night sky. A faint
                 // cool pane reads as moonlight; leaving it at zero made rooms look sealed.
+                //
+                // What is behind the glass at night is the MOON, so the pane follows it: nearly
+                // nothing on a new moon or under cloud, a little more when the moon is full. At
+                // the flat 0.18 it used to carry, a farmhouse window on a moonless night read as
+                // a lamp standing outside in the dark (reported with a picture once the rooms
+                // beside it were darkened properly). MoonStrength itself answers zero indoors,
+                // which is right for the ground outside and wrong for a pane, so the phase is
+                // read here.
+                float moonPhase = 1f - Math.Abs(Game1.dayOfMonth - 14.5f) / 13.5f;
+                float clearSky = LocalSky.IsRaining || LocalSky.IsSnowing || LocalSky.IsLightning ? 0.3f : 1f;
                 colour = new Vector3(0.52f, 0.62f, 0.95f);
-                strength = 0.18f;
+                strength = (0.04f + 0.10f * MathHelper.Clamp(moonPhase, 0f, 1f)) * clearSky;
             }
         }
 

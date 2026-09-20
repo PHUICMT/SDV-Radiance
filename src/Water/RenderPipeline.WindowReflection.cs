@@ -83,11 +83,47 @@ namespace SDVRadiance
             /// hangs, so the image stands on the floor below it, not on its bottom edge (see
             /// <see cref="ImageFloorY"/>).</summary>
             public readonly bool IsMirror;
+            /// <summary>The bottoms, in world pixels, of the pane's separate SHEETS of glass: runs
+            /// that touch or nearly touch belong to one sheet, and each sheet stands at its own
+            /// height. A shop window is one sheet and this is its sill. A vehicle is several: the
+            /// Joja truck's windscreen is one and its headlights, labelled glass too, are another
+            /// a tile and a half lower, and a body reflecting in the windscreen has to stand on
+            /// the windscreen's own bottom edge rather than on the bumper (see
+            /// <see cref="ImageFloorY"/>).</summary>
+            public readonly Rectangle[] Sheets;
             public WindowPane(Rectangle worldRect, Rectangle[] glassRects, float strength, int tilesAboveGround = 0, int frontGlassBottom = 0,
                 float sortDepth = -1f, bool isMirror = false)
             {
                 WorldRect = worldRect; GlassRects = glassRects; Strength = strength; TilesAboveGround = tilesAboveGround;
                 FrontGlassBottom = frontGlassBottom; SortDepth = sortDepth; IsMirror = isMirror;
+                Sheets = SheetsOf(glassRects);
+            }
+
+            /// <summary>Walk the runs from the top down, starting a new sheet wherever the next run
+            /// begins more than a few world pixels below the lowest edge of the one being built.</summary>
+            private static Rectangle[] SheetsOf(Rectangle[] glassRects)
+            {
+                if (glassRects.Length == 0)
+                    return [];
+                var byTop = new Rectangle[glassRects.Length];
+                Array.Copy(glassRects, byTop, glassRects.Length);
+                Array.Sort(byTop, (left, right) => left.Top.CompareTo(right.Top));
+                var sheets = new List<Rectangle>();
+                Rectangle sheet = byTop[0];
+                for (int i = 1; i < byTop.Length; i++)
+                {
+                    if (byTop[i].Top > sheet.Bottom + GlassSheetGapPx)
+                    {
+                        sheets.Add(sheet);
+                        sheet = byTop[i];
+                    }
+                    else
+                    {
+                        sheet = Rectangle.Union(sheet, byTop[i]);
+                    }
+                }
+                sheets.Add(sheet);
+                return [.. sheets];
             }
         }
 
@@ -95,8 +131,22 @@ namespace SDVRadiance
         private const byte LabelClassWindow = LabelClass.Window;
         private const byte LabelClassGlass = LabelClass.Glass;
 
+        /// <summary>How far apart two runs of glass have to be, in world pixels, to be separate
+        /// sheets standing at their own heights rather than one window. Half a tile: a staircase
+        /// of runs down a slanted windscreen stays one sheet, and a headlight a tile below it does
+        /// not join the windscreen.</summary>
+        private const int GlassSheetGapPx = 32;
+
         /// <summary>How far below a pane's sill a body still reflects in it, in world pixels.</summary>
         private const float WindowReflectReachPx = 64f * 4f;
+        /// <summary>How far to either SIDE of a pane a body still reflects in it, in world pixels.
+        /// Two tiles: enough for the glass on something solid, which has to be walked past rather
+        /// than stood under, and short enough that a shop window does not carry somebody who is
+        /// simply walking along the street in front of the next shop.</summary>
+        private const float WindowReflectSidewaysReachPx = 64f * 2f;
+        /// <summary>What is left of the image at that full sideways reach: enough to read as a
+        /// shape going by, not enough to look like somebody standing at the glass.</summary>
+        private const float WindowReflectSidewaysFarShare = 0.3f;
         /// <summary>
         /// How far below the sill the image's feet sit.
         /// </summary>
@@ -1100,13 +1150,41 @@ namespace SDVRadiance
             Vector3 glassColour, Texture2D texture, Rectangle source, float bodyCenterX, float bodyFeetY,
             float scale, bool trueSize = false)
         {
-            float floorY = ImageFloorY(pane);
+            // ONE IMAGE PER SHEET OF GLASS, each standing on its own bottom edge. A shop front is
+            // one sheet and this runs once, exactly as it always did. A vehicle is several at
+            // different heights, and a body beside it belongs in each of them: the Joja truck
+            // shows you in its windscreen AND, smaller and lower, in its headlights.
+            foreach (Rectangle sheet in pane.Sheets)
+                DrawBodyOnSheet(spriteBatch, pane, sheet, reflect, glassColour, texture, source,
+                    bodyCenterX, bodyFeetY, scale, trueSize);
+        }
+
+        /// <summary>One body on one sheet of a pane's glass: the sheet's bottom edge is the sill
+        /// the image stands on, and the runs above it are what the image is clipped to.</summary>
+        private void DrawBodyOnSheet(SpriteBatch spriteBatch, WindowPane pane, Rectangle sheet, float reflect,
+            Vector3 glassColour, Texture2D texture, Rectangle source, float bodyCenterX, float bodyFeetY,
+            float scale, bool trueSize)
+        {
+            float floorY = ImageFloorY(pane, sheet.Bottom);
             float below = bodyFeetY - floorY;
             if (below is < -16f or > WindowReflectReachPx)
                 return;
             float distance = MathHelper.Clamp(below / WindowReflectReachPx, 0f, 1f);
             float distanceFade = 1f - distance;
-            float alpha = reflect * pane.Strength * distanceFade * GroundShareFor(pane);
+            // SIDEWAYS. The image is drawn at the body's own column and clipped to the pane, so a
+            // body standing beside the glass rather than under it used to be clipped away whole.
+            // A pane on something you cannot walk under never showed anybody at all: the Joja
+            // truck is three tiles of glass standing on three tiles nobody can stand on, so its
+            // windscreen was empty however close you got (reported by ghi3038, who had the bus,
+            // which you CAN stand under, working). The image now slides onto the glass, the way a
+            // lamp's does, and fades with how far outside the pane the body really is.
+            float sidewaysOut = Math.Max(Math.Max(sheet.Left - bodyCenterX, bodyCenterX - sheet.Right), 0f);
+            if (sidewaysOut > WindowReflectSidewaysReachPx)
+                return;
+            float sidewaysFade = MathHelper.Lerp(1f, WindowReflectSidewaysFarShare,
+                sidewaysOut / WindowReflectSidewaysReachPx);
+            bodyCenterX = MathHelper.Clamp(bodyCenterX, sheet.Left, sheet.Right);
+            float alpha = reflect * pane.Strength * distanceFade * sidewaysFade * GroundShareFor(pane);
             if (alpha < 0.01f)
                 return;
             // Outdoors: smaller as they walk away, feet still on the sill, so the image recedes
@@ -1150,9 +1228,17 @@ namespace SDVRadiance
         /// away. Only mirrors: moving every pane down was tried once and took a tile off every
         /// shop window (see <see cref="WindowStandingOffsetPx"/>).
         /// </remarks>
-        private static float ImageFloorY(WindowPane pane)
+        private static float ImageFloorY(WindowPane pane, float sheetBottom)
         {
-            float sill = pane.WorldRect.Bottom + WindowStandingOffsetPx;
+            // THE SILL IS THE BOTTOM OF THE SHEET OF GLASS, not the bottom of the box around every
+            // piece of glass on the thing. On a shop front the two are the same line. On a vehicle
+            // they are a tile and a half apart: the Joja truck is one box from its roof to its
+            // bumper, the windscreen is a sheet along the top and the headlights are glass too, so
+            // an image standing on the box's bottom stood at the bumper, below the windscreen, and
+            // was clipped away whole. That is why the truck returned the sky and the street and
+            // never a person, while the bus, whose glass runs down to the bottom of its own art,
+            // was fine (reported by ghi3038).
+            float sill = sheetBottom + WindowStandingOffsetPx;
             if (!pane.IsMirror || pane.TilesAboveGround <= 0)
                 return sill;
             int sillRow = (pane.WorldRect.Bottom - 1) / 64;
