@@ -1659,6 +1659,16 @@ namespace SDVRadiance
                 // carve; skipping the pond entirely is the whole fix.
                 if (building is StardewValley.Buildings.FishPond)
                     continue;
+                // Only a building that is actually on screen as itself. One Robin has not finished
+                // is drawn as scaffolding, and its finished silhouette carved the water behind
+                // where its roof will one day be: a roof-shaped hole in the pond weeks early. And
+                // one the player is standing behind is drawn at forty per cent, with the water
+                // showing through it, so carving it whole here left that water bare through a
+                // see-through roof (three photographs of a cabin at the farm pond, 22 Sep 2026).
+                // A faded building is left to the per-frame sprite mask, which carries the alpha
+                // the game drew it with and which the shader already reads as a share, not a switch.
+                if (building.isUnderConstruction() || building.alpha < 1f)
+                    continue;
                 // Carve the building's SILHOUETTE, not its bounding rectangle. The rect kills the
                 // water sharing every pixel of the sprite's box, and most of a building's box is
                 // transparent: the sky beside a pointed roof, the gaps around a well's frame. A

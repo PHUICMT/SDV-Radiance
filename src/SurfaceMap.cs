@@ -691,7 +691,10 @@ namespace SDVRadiance
                 // as a clean rectangle nobody was wetting, which reads as a ghost of the finished
                 // building (reported with a picture by Mokayogi on Nexus). The fish pond below
                 // already asked this question; now every building does.
-                if (building.daysOfConstructionLeft.Value > 0)
+                // The game's own answer to "is anything standing here yet". An UPGRADE is not
+                // asked about: a coop on its way to a big coop is still a coop, with walls and a
+                // roof, for every one of those days.
+                if (building.isUnderConstruction())
                     continue;
                 int footprintLeft = building.tileX.Value, footprintTop = building.tileY.Value;
                 int footprintWidth = building.tilesWide.Value, footprintHeight = building.tilesHigh.Value;

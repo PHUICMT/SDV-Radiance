@@ -137,6 +137,17 @@ namespace SDVRadiance
             {
                 WaterDrawHook.ForgetAll();
                 Determinism.RestartShaderClock();
+                // A building finishing is not a change to the building LIST: Robin hands back the
+                // same object with its days counted down, so nothing below fires and the grid
+                // would keep yesterday's answer about it. That matters now the grid leaves a
+                // building site alone: without this, the morning a building is finished it would
+                // have no walls in our map until something else happened to rebuild it.
+                StardewValley.Utility.ForEachLocation(place =>
+                {
+                    if (place.buildings.Count > 0)
+                        SurfaceMap.Invalidate(place);
+                    return true;
+                });
             };
             helper.Events.World.BuildingListChanged += (_, e) =>
             {

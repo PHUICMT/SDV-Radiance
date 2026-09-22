@@ -1178,12 +1178,23 @@ namespace SDVRadiance
             // windscreen was empty however close you got (reported by ghi3038, who had the bus,
             // which you CAN stand under, working). The image now slides onto the glass, the way a
             // lamp's does, and fades with how far outside the pane the body really is.
-            float sidewaysOut = Math.Max(Math.Max(sheet.Left - bodyCenterX, bodyCenterX - sheet.Right), 0f);
-            if (sidewaysOut > WindowReflectSidewaysReachPx)
-                return;
-            float sidewaysFade = MathHelper.Lerp(1f, WindowReflectSidewaysFarShare,
-                sidewaysOut / WindowReflectSidewaysReachPx);
-            bodyCenterX = MathHelper.Clamp(bodyCenterX, sheet.Left, sheet.Right);
+            //
+            // ONLY for glass on art a place draws for itself. A shop window is glass you can walk
+            // under, and walking past one should take your reflection off the end of it the way
+            // walking past a mirror does. Sliding the image onto the glass there pins it to the
+            // window frame and leaves it standing in the shop front after you have gone, for the
+            // two tiles this reach is wide: reported outside Pierre's the day it shipped. A pane
+            // nobody can stand under is the case this exists for, and it is the only one.
+            float sidewaysFade = 1f;
+            if (pane.SortDepth >= 0f)
+            {
+                float sidewaysOut = Math.Max(Math.Max(sheet.Left - bodyCenterX, bodyCenterX - sheet.Right), 0f);
+                if (sidewaysOut > WindowReflectSidewaysReachPx)
+                    return;
+                sidewaysFade = MathHelper.Lerp(1f, WindowReflectSidewaysFarShare,
+                    sidewaysOut / WindowReflectSidewaysReachPx);
+                bodyCenterX = MathHelper.Clamp(bodyCenterX, sheet.Left, sheet.Right);
+            }
             float alpha = reflect * pane.Strength * distanceFade * sidewaysFade * GroundShareFor(pane);
             if (alpha < 0.01f)
                 return;

@@ -357,6 +357,10 @@ namespace SDVRadiance
                 return;
             foreach (StardewValley.Buildings.Building building in location.buildings)
             {
+                // Nothing is burning in a house Robin has not finished, and smoke climbing out
+                // of a building site reads as a ghost of the house that is coming.
+                if (building.isUnderConstruction())
+                    continue;
                 if (!TryReadChimneyOffset(building, out Vector2 offset))
                     continue;
                 var top = new Vector2(building.tileX.Value * 64f + offset.X, building.tileY.Value * 64f + offset.Y);

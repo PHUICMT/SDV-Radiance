@@ -1429,7 +1429,7 @@ namespace SDVRadiance
                 return;
             foreach (Building building in location.buildings)
             {
-                if (building == null)
+                if (building == null || building.isUnderConstruction())
                     continue;
                 BuildingFootprints.Add(new Rectangle(building.tileX.Value * 64, building.tileY.Value * 64,
                     building.tilesWide.Value * 64, building.tilesHigh.Value * 64));

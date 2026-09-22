@@ -687,9 +687,11 @@ namespace SDVRadiance
                     case StardewValley.TerrainFeatures.FruitTree ft when ft.growthStage.Value >= 4 && (!ft.stump.Value || ft.falling.Value) && ft.texture != null:
                         int season = Game1.GetSeasonIndexForLocation(ft.Location);
                         var fsrc = new Rectangle((12 + season * 3) * 16, ft.GetSpriteRowNumber() * 5 * 16, 48, 64);
+                        // At the tree's own alpha, like the wild tree above: a fruit tree fades to
+                        // forty per cent while the player stands behind it and is drawn that way.
                         spriteBatch.Draw(ft.texture,
                             Game1.GlobalToLocal(Game1.viewport, new Vector2(tile.X * 64f + 32f, tile.Y * 64f + 64f)),
-                            fsrc, Color.White, ft.shakeRotation, new Vector2(24f, 80f), 4f,
+                            fsrc, Color.White * MathHelper.Clamp(ft.alpha, 0f, 1f), ft.shakeRotation, new Vector2(24f, 80f), 4f,
                             ft.flipped.Value ? SpriteEffects.FlipHorizontally : SpriteEffects.None, 0f);
                         break;
                     // Bush: bottom-centre = (tile.X*64 + (eff+1)*32, (tile.Y+1)*64) — the shadow baker's anchor.
@@ -744,8 +746,27 @@ namespace SDVRadiance
 
         }
 
+        /// <summary>How many buildings were drawn faded last frame. The tile mask leaves a faded
+        /// building alone and is rebuilt only on an epoch, a window move or a ten second refresh,
+        /// so without this the carve gathered while the building was solid stayed for up to ten
+        /// seconds after it went see-through, and the water behind a see-through roof stayed
+        /// bare. A change in this count is the event, and it bumps the epoch like any other.</summary>
+        private int _buildingsDrawnFadedLastFrame;
+
         private void StampBuildings(SpriteBatch spriteBatch, GameLocation location)
         {
+            int drawnFaded = 0;
+            foreach (var bld in location.buildings)
+            {
+                if (bld != null && bld.alpha < 1f && !bld.isUnderConstruction() && !bld.isMoving)
+                    drawnFaded++;
+            }
+            if (drawnFaded != _buildingsDrawnFadedLastFrame)
+            {
+                _buildingsDrawnFadedLastFrame = drawnFaded;
+                MaskEpoch++;
+                MaskEpochReason = drawnFaded > 0 ? "a building faded out while the player stands behind it" : "a faded building came back solid";
+            }
             // Buildings. A shed or a coop at the water's edge is an entity drawn from its own
             // texture, so nothing above could see it, and the ripple ran straight through the
             // building: reported as "notice the effect on the water behind" with a before and
@@ -756,6 +777,14 @@ namespace SDVRadiance
             // (tileX*64, (tileY + tilesHigh)*64) + DrawOffset*4 at scale 4, so the top-left the
             // stamp needs is that base line minus the source height. One under construction or
             // mid-move is not drawn, so it must not be masked either.
+            //
+            // AT THE BUILDING'S OWN ALPHA. The game fades a building to forty per cent while the
+            // player stands behind it, and draws it at that alpha, so the water behind its roof
+            // is on screen through it. Stamped solid, the roof took every last bit of the effect
+            // off that water, and what the player saw through a see-through roof was a roof-shaped
+            // patch of untouched vanilla water: three photographs of a stone cabin at the farm pond,
+            // 22 Sep 2026. Recorded sprites never had this, because the hook keeps the tint the
+            // game drew with; this is the one stamp that was inventing its own.
             foreach (var bld in location.buildings)
             {
                 if (bld?.texture?.Value == null || bld.isMoving || bld.daysOfConstructionLeft.Value > 0)
@@ -771,9 +800,10 @@ namespace SDVRadiance
                 // water a long way above the tile it is filed under.
                 if (!WaterWithinTiles((int)((bLeftX + bsrcRect.Width * 2f) / 64f), (int)(bBaseY / 64f) - 3, 9))
                     continue;
+                Color asDrawn = Color.White * bld.alpha;
                 spriteBatch.Draw(bld.texture.Value,
                     Game1.GlobalToLocal(Game1.viewport, new Vector2(bLeftX, bBaseY - bsrcRect.Height * 4f)),
-                    bsrcRect, Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
+                    bsrcRect, asDrawn, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
                 // FishPond.draw hangs a netting frame (80x48 of the sheet, one of three) from two
                 // tiles above the pond down to the foot of its top rim row, over whatever stands
                 // behind the pond: on a farm where that is the lake, the ripple ran through the net.
@@ -782,7 +812,7 @@ namespace SDVRadiance
                     var netting = new Rectangle(80, pond.nettingStyle.Value * 48, 80, 48);
                     spriteBatch.Draw(bld.texture.Value,
                         Game1.GlobalToLocal(Game1.viewport, new Vector2(bld.tileX.Value * 64f, bld.tileY.Value * 64f - 128f)),
-                        netting, Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
+                        netting, asDrawn, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
                 }
             }
 

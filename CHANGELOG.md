@@ -2,6 +2,48 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.1.3 - 2026-09-22
+
+### Fixed
+
+- **The water lost its effect behind anything standing in front of it.** A pond kept a clean
+  building-shaped hole in it: no ripple, no glint, no reflection, in the shape of a roof. Three
+  separate places were telling the water pass that a building is solid and present when it was
+  neither. A building Robin has not finished is drawn as scaffolding, and its finished silhouette
+  was carved out of the water weeks before anything stood there. A building you are standing
+  behind is drawn at forty per cent, with the water showing through it, and was carved out whole
+  anyway, so a see-through roof had bare water behind it. And a building fading in or out was not
+  an event the tile mask listened for, so even once it was right it could take ten seconds to
+  arrive. The rule everywhere now is the one the shader was always written for: what is in front
+  of the water hides as much of the effect as it actually hides of the water, and no more.
+  Reported with photographs by the author. The same fade fix applies to fruit trees, which fade
+  the same way and were stamped solid too.
+- **A building Robin had not finished still blocked lamplight, smoked from its chimney and owned
+  the rows under it.** 2.1.1 stopped the mod writing an unbuilt building into its map of what each
+  tile is, which was the ghost people photographed in the rain. It turns out that map was one of
+  six places that read the farm's building list, and three of the others never asked whether the
+  building existed yet: a lamp at night was cut into the shape of the finished house, smoke climbed
+  out of a chimney standing over a building site, and shadows near the plan sorted as though there
+  were walls to go behind. All of them now ask the game itself, which also answers for a building
+  being upgraded rather than newly built, so a coop on its way to a big coop stops being a ghost
+  too. Reported by Mokayogi on Nexus, who said 2.1.1 had not fixed it.
+
+- **Your reflection stayed in a shop window after you had walked past it.** 2.1.1 taught a
+  reflection to slide onto the glass when you stand beside a pane rather than under it, which is
+  the only way the Joja truck can show anybody at all: its glass stands on three tiles nobody can
+  walk on. On a shop front, where you CAN walk under the glass, the same rule pinned your image to
+  the window frame and left it standing there, at a third of its strength, for the two tiles the
+  slide reaches. A window now returns you at your own column and lets you leave the glass the way
+  a mirror does; the slide is left to the glass it was built for.
+
+### Changed
+
+- **Two Chinese lines described the camera as it used to be.** The camera was rebuilt in 2.1.0 and
+  the English was rewritten with it, but the Chinese that came with the same release still told
+  people the view snaps the instant they stop and may leave them off centre, which is what the old
+  camera did. It trails a little behind you while you walk and eases back to the middle without
+  going past it, and the Chinese now says so. Spotted and translated by passersby10086.
+
 ## 2.1.2 - 2026-09-22
 
 ### Added

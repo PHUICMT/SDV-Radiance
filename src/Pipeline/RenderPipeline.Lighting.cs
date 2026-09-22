@@ -2877,6 +2877,11 @@ namespace SDVRadiance
                 // A fish pond is water inside a knee-high kerb; nothing about it stops a lamp.
                 if (building is StardewValley.Buildings.FishPond)
                     continue;
+                // Neither does a building Robin has not finished. Left in, a lamp at night was cut
+                // into the shape of the finished house days before anything stood there, which is
+                // the same ghost the surface map used to draw and is just as visible.
+                if (building.isUnderConstruction())
+                    continue;
                 // Cheap reject on the footprint before the collision map is consulted.
                 if (x < building.tileX.Value || x >= building.tileX.Value + building.tilesWide.Value
                     || y < building.tileY.Value || y >= building.tileY.Value + building.tilesHigh.Value)

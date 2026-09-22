@@ -1464,7 +1464,7 @@ namespace SDVRadiance
             // of being moved is not drawn, so it must not be mirrored either.
             foreach (var building in location.buildings)
             {
-                if (building?.texture?.Value == null || building.isMoving || building.daysOfConstructionLeft.Value > 0)
+                if (building?.texture?.Value == null || building.isMoving || building.isUnderConstruction())
                     continue;
                 bool fishPond = building is StardewValley.Buildings.FishPond;
                 // FishPond.draw ignores the data's source rect and draws its 80x80 rim, so the
