@@ -2,6 +2,38 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.1.2 - 2026-09-22
+
+### Added
+
+- **Every snowflake its own size.** The snow had three depths of flake and exactly one size inside
+  each, which a heavy fall reads as a pattern laid over the scene rather than as weather. Each
+  flake now carries its own share of its layer's size, weighted towards the small ones the way most
+  of the air in a real fall is fine snow with a few big ones drifting through it. Measured at one
+  spot in one storm, the flakes on screen ran 7.6 to 16.2 pixels wide before and 4.5 to 26.2 after.
+  Asked for by PupsiMupsi on Nexus.
+
+### Changed
+
+- **The Chinese translation is complete.** The three settings that arrived in 1.7.6, the half size
+  relief, the remembered lamp shadows and the dark pool under objects, were still reading in
+  English in the Chinese file: twelve entries in all, counting their names, their descriptions and
+  their help lines. Translated by Rime961, who noticed the new keys and sent them in without being
+  asked, and reported independently by passersby10086.
+
+### Fixed
+
+- **Glass reflected nothing for anyone playing in a translated language.** The game ships a
+  translated sheet as its own file, so a game running in Chinese draws the town's bus from
+  "LooseSprites/Cursors.zh-CN" while the labels that say where its windows are, and the map that
+  names the same sheet, both call it "Cursors". The two never met, so the sheet read as carrying no
+  labels at all: measured at the bus stop with the game in Chinese, the bus came back "no glass"
+  and the place had zero panes on it, against thirty one runs of glass and one pane with the names
+  reconciled. It cost every language the game translates art for, not only Chinese, and it is the
+  same fault that beveled the fountain tiles in Thai a month ago, so the rule that strips the
+  language tag now lives with the sheet names instead of beside one of the two places that needed
+  it. Reported by ghi3038 on Nexus.
+
 ## 2.1.1 - 2026-09-20
 
 ### Fixed

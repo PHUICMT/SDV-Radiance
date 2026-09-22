@@ -348,7 +348,8 @@ namespace SDVRadiance
             return string.Join(Environment.NewLine, lines);
         }
 
-        /// <summary>"Maps\spring_beach" / "Maps/spring_beach.png" → "spring_beach".</summary>
+        /// <summary>"Maps\spring_beach" / "Maps/spring_beach.png" / "LooseSprites/Cursors.zh-CN"
+        /// → "spring_beach" / "Cursors".</summary>
         internal static string NormalizeSheet(string imageSource)
         {
             string name = imageSource.Replace('\\', '/');
@@ -357,7 +358,28 @@ namespace SDVRadiance
                 name = name[(slash + 1)..];
             if (name.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
                 name = name[..^4];
-            return name;
+            return WithoutLocaleSuffix(name);
+        }
+
+        /// <summary>A sheet name with the game's language tag taken off. A translated asset is its
+        /// own file, so a game running in Chinese draws the town bus from a texture called
+        /// "LooseSprites/Cursors.zh-CN", while the labels, and the map that names the same sheet,
+        /// both call it "Cursors". Without this the two never meet and the sheet reads as carrying
+        /// no labels at all, which is a player in one language seeing no glass anywhere: reported
+        /// for the town bus on 21 Sep 2026, and the same fault as the beveled fountain tiles of
+        /// 30 Aug 2026. Only a tail shaped like a language tag goes ("zh", "zh-CN"), because art
+        /// is allowed a dot in its name.</summary>
+        internal static string WithoutLocaleSuffix(string name)
+        {
+            int dot = name.LastIndexOf('.');
+            if (dot <= 0)
+                return name;
+            ReadOnlySpan<char> tail = name.AsSpan(dot + 1);
+            bool isLanguageTag = tail.Length is 2 or 5
+                && char.IsLetter(tail[0]) && char.IsLetter(tail[1])
+                && (tail.Length == 2
+                    || (tail[2] == '-' && char.IsLetter(tail[3]) && char.IsLetter(tail[4])));
+            return isLanguageTag ? name[..dot] : name;
         }
 
         /// <summary>

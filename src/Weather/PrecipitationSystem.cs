@@ -177,6 +177,13 @@ namespace SDVRadiance
             internal float SwayPerSecond;
             internal float Alpha;
             internal byte Layer;
+
+            /// <summary>This flake's own share of its layer's size. Without it a storm is three
+            /// sizes of flake repeated a thousand times, which the eye reads as a pattern rather
+            /// than as weather; the three depth layers give the DEPTH, and this gives each flake
+            /// inside a layer its own body. Rolled when the flake is placed and again when it
+            /// falls off the bottom, so the sky never reuses an arrangement.</summary>
+            internal float Sizing;
         }
 
         private struct WindPiece
@@ -225,6 +232,13 @@ namespace SDVRadiance
             internal Vector2 PreviousViewport;
             internal bool ViewportKnown;
             internal int LastDrawnRain, LastDrawnSnow, LastDrawnSplashes, LastDrawnWind;
+
+            /// <summary>The narrowest and widest flake actually drawn last frame, in screen pixels.
+            /// Here because the change that gave every flake its own size cannot be photographed:
+            /// a flake is four pixels of soft white on a busy scene, and four sizes of it look like
+            /// one. This is the same fact measured where it can be read, and it is worth keeping
+            /// afterwards, since it also answers "is the snow size dial doing anything".</summary>
+            internal float NarrowestFlake, WidestFlake;
 
             internal ScreenPrecipitation(int screenId)
             {
@@ -395,7 +409,9 @@ namespace SDVRadiance
             if (screen.Presence <= FadeGone)
             {
                 screen.LastDrawnRain = screen.LastDrawnSnow = screen.LastDrawnSplashes = 0;
-            screen.LastDrawnWind = 0;
+                screen.LastDrawnWind = 0;
+                screen.NarrowestFlake = float.MaxValue;
+                screen.WidestFlake = 0f;
                 FrameCost.End(FrameCost.Part.Precipitation, started);
                 return;
             }
@@ -513,6 +529,7 @@ namespace SDVRadiance
                 screen.Snow[i].Position = new Vector2(random.Next(-64, viewportWidth + 64), random.Next(-64, viewportHeight + 64));
                 screen.Snow[i].SwayPhase = (float)(random.NextDouble() * Math.PI * 2);
                 screen.Snow[i].SwayPerSecond = 1.6f + 1.5f * (float)random.NextDouble();
+                screen.Snow[i].Sizing = SnowSizing(random);
                 screen.Snow[i].Layer = PickLayer(random, SnowLayerShare);
                 screen.Snow[i].Alpha = 0f;
             }
@@ -659,6 +676,15 @@ namespace SDVRadiance
             }
         }
 
+        /// <summary>One flake's size against the others in its layer. Weighted towards the small
+        /// side, because a storm of evenly mixed sizes reads as confetti: most of the air is fine
+        /// snow and the big ones are the few that catch the eye.</summary>
+        private static float SnowSizing(Random random)
+        {
+            float roll = (float)random.NextDouble();
+            return 0.60f + 1.05f * roll * roll;
+        }
+
         private static void StepSnow(ScreenPrecipitation screen, float dt, int targetCount,
                                      int viewportWidth, int viewportHeight)
         {
@@ -677,7 +703,10 @@ namespace SDVRadiance
                 if (flake.Position.X < -64f) flake.Position.X += viewportWidth + 128;
                 else if (flake.Position.X > viewportWidth + 64f) flake.Position.X -= viewportWidth + 128;
                 if (flake.Position.Y > viewportHeight + 72f)
+                {
                     flake.Position = new Vector2(random.Next(-64, viewportWidth + 64), -random.Next(16, 48));
+                    flake.Sizing = SnowSizing(random);
+                }
             }
         }
 
@@ -730,6 +759,8 @@ namespace SDVRadiance
             float presence = screen.Presence;
             screen.LastDrawnRain = screen.LastDrawnSnow = screen.LastDrawnSplashes = 0;
             screen.LastDrawnWind = 0;
+            screen.NarrowestFlake = float.MaxValue;
+            screen.WidestFlake = 0f;
 
             // Streaks and flakes are our own soft-edged art: linear sampling. The splash frames
             // are vanilla pixel art at 4x: point sampling, or they arrive as mush. Two batches.
@@ -750,6 +781,8 @@ namespace SDVRadiance
             float presence = screen.Presence;
             screen.LastDrawnRain = screen.LastDrawnSnow = 0;
             screen.LastDrawnWind = 0;
+            screen.NarrowestFlake = float.MaxValue;
+            screen.WidestFlake = 0f;
             // Each weather carries its own size and visibility, the way each particle emitter
             // does: one dial for how big a piece is and one for how much of the picture it is
             // allowed to take, because "too small" and "too faint" are different complaints
@@ -799,7 +832,7 @@ namespace SDVRadiance
                 Vector2 flakeOrigin = new(_flakeTexture.Width / 2f, _flakeTexture.Height / 2f);
                 for (int layer = 0; layer < 3; layer++)
                 {
-                    float scale = SnowLayerSizePixels[layer] / _flakeTexture.Width * pixelScale * snowSize;
+                    float layerScale = SnowLayerSizePixels[layer] / _flakeTexture.Width * pixelScale * snowSize;
                     for (int i = 0; i < screen.Snow.Length; i++)
                     {
                         ref SnowFlake flake = ref screen.Snow[i];
@@ -810,7 +843,10 @@ namespace SDVRadiance
                             continue;
                         spriteBatch.Draw(_flakeTexture, flake.Position * pixelScale, null,
                             flakeTint * Math.Min(1f, flake.Alpha * presence * 0.8f * snowTransparency * snowOpacity),
-                            0f, flakeOrigin, scale, SpriteEffects.None, 1f);
+                            0f, flakeOrigin, layerScale * flake.Sizing, SpriteEffects.None, 1f);
+                        float drawnWidth = _flakeTexture.Width * layerScale * flake.Sizing;
+                        screen.NarrowestFlake = Math.Min(screen.NarrowestFlake, drawnWidth);
+                        screen.WidestFlake = Math.Max(screen.WidestFlake, drawnWidth);
                         screen.LastDrawnSnow++;
                     }
                 }
@@ -1033,7 +1069,10 @@ namespace SDVRadiance
             ScreenPrecipitation? screen = _screens.TryGetValue(CurrentScreenId(), out var s) ? s : null;
             string state = screen == null ? "idle (never drawn on this screen)"
                 : $"presence={screen.Presence:0.000} storm={screen.StormEase:0.00} "
-                + $"drawn rain={screen.LastDrawnRain} snow={screen.LastDrawnSnow} splashes={screen.LastDrawnSplashes} windPieces={screen.LastDrawnWind}";
+                + $"drawn rain={screen.LastDrawnRain} snow={screen.LastDrawnSnow}"
+                + (screen.LastDrawnSnow > 0 && screen.WidestFlake > 0f
+                    ? $" (flakes {screen.NarrowestFlake:F1} to {screen.WidestFlake:F1} px wide)" : "")
+                + $" splashes={screen.LastDrawnSplashes} windPieces={screen.LastDrawnWind}";
             bool greenNow = raining && (Game1.currentLocation?.IsGreenRainingHere() ?? false);
             return $"precipitation: weather draws taken by another mod={CallsAnotherModDrew} replacing={(_anotherModDrewLastCall ? "nothing (another mod is drawing the weather)" : wanted ? (greenNow ? "greenrain" : raining ? "rain" : snowing ? "snow" : "wind") : "nothing (gate closed)")} "
                 + $"wind={_windPixelsPerSecond:0} px/s {state} "

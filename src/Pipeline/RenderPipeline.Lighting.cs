@@ -2206,18 +2206,6 @@ namespace SDVRadiance
         /// which is why this came back as "summer was fine".</summary>
         // Also per screen: RenderPipeline.Screens.cs.
 
-        /// <summary>A drawn sheet's name with any locale suffix taken off: the game appends the
-        /// language to a translated asset ("Maps/fall_town.th"), and the map still calls it by the
-        /// base name. Anything after the LAST dot that is short and has no slash in it is a locale
-        /// tag, not part of a path.</summary>
-        private static string WithoutLocaleSuffix(string name)
-        {
-            int dot = name.LastIndexOf('.');
-            if (dot <= 0 || dot < name.Length - 6)
-                return name;
-            return name.IndexOf('/', dot) >= 0 || name.IndexOf('\\', dot) >= 0 ? name : name[..dot];
-        }
-
         /// <summary>
         /// Whether this sheet is one the current map paints its tiles from. Such a draw gets no
         /// relief: a normal map is baked for a WHOLE sheet, so at a tile cell's border the bevel's
@@ -2265,7 +2253,7 @@ namespace SDVRadiance
         {
             foreach (string name in reloadedAssetNames)
             {
-                string sheet = LabelStore.NormalizeSheet(WithoutLocaleSuffix(name));
+                string sheet = LabelStore.NormalizeSheet(name);
                 if (_screen.MapTileSheetNames.Contains(sheet))
                     _screen.MapTileSheetSource = null;
                 foreach (ScreenState state in _screenStates.Values)
@@ -2325,7 +2313,7 @@ namespace SDVRadiance
             }
             bool isMapTile = _mapTileSheetTextures.Contains(sheet);
             if (!isMapTile && !string.IsNullOrEmpty(sheet.Name))
-                isMapTile = _mapTileSheetNames.Contains(LabelStore.NormalizeSheet(WithoutLocaleSuffix(sheet.Name)));
+                isMapTile = _mapTileSheetNames.Contains(LabelStore.NormalizeSheet(sheet.Name));
             _lastSheetAsked = sheet;
             _lastSheetWasMapTile = isMapTile;
             return isMapTile;
