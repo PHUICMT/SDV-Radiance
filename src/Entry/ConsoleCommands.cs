@@ -622,6 +622,31 @@ namespace SDVRadiance
                     monitor.Log($"half-resolution lamp march {(half ? "on" : "off")}"
                         + $" (sharp lamp shadow edges {(half ? "off" : "ON")}).", LogLevel.Info);
                 });
+            helper.ConsoleCommands.Add("radiance_labelfollow",
+                "'radiance_labelfollow off' makes a label painted for a mod's art follow only the exact pictures it was "
+                + "painted on, as before; 'on' (the default) also lets it follow that mod into its other seasons, weathers "
+                + "and palettes, by asking Content Patcher which mod is painting the tile; 'only' is a test that lets "
+                + "Content Patcher's answer decide even where the picture is known. The water mask rebuilds at "
+                + "once. radiance_report's 'labels that followed a pack' row is the receipt. Not saved.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length < 1 || !(arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase)
+                                             || arguments[0].Equals("off", StringComparison.OrdinalIgnoreCase)
+                                             || arguments[0].Equals("only", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        monitor.Log($"labels following their mod: {(!ContentPatcherArtOwners.Enabled ? "off" : ContentPatcherArtOwners.FollowOnly ? "only" : "on")}"
+                            + $" (Content Patcher {(ContentPatcherArtOwners.Available ? "readable" : "not readable")}). "
+                            + "Usage: radiance_labelfollow on|off|only", LogLevel.Info);
+                        return;
+                    }
+                    ContentPatcherArtOwners.FollowOnly = arguments[0].Equals("only", StringComparison.OrdinalIgnoreCase);
+                    ContentPatcherArtOwners.Enabled = !arguments[0].Equals("off", StringComparison.OrdinalIgnoreCase);
+                    ContentPatcherArtOwners.ForgetAll();
+                    LabelStore.Instance?.ForgetAllArtVerdicts();
+                    SurfaceMap.Invalidate(Game1.currentLocation);
+                    monitor.Log($"labels following their mod: {arguments[0].ToLowerInvariant()}; "
+                        + "the water mask is rebuilding.", LogLevel.Info);
+                });
             helper.ConsoleCommands.Add("radiance_softedge",
                 "'radiance_softedge 0.25' sets how wide the Soft 4x look's anti-aliased edge is, in source pixels "
                 + "(0 = the hard-edged xBR of the emulator shaders, 0.25 = one texel of the four-times sheet); the "
@@ -636,6 +661,95 @@ namespace SDVRadiance
                     SheetUpscaler.SoftEdgeSourcePixels = Math.Clamp(width, 0f, 1f);
                     monitor.Log($"soft edge width {SheetUpscaler.SoftEdgeSourcePixels:0.###}; the soft sheets re-make on the next draws.", LogLevel.Info);
                 });
+            helper.ConsoleCommands.Add("radiance_softbudget",
+                "'radiance_softbudget 1.5' sets how many milliseconds a frame may spend making soft sprites for art "
+                + "that has just scrolled into view. This is what decides how fast a new view finishes turning soft, "
+                + "and it is spent in real time rather than counted in sprites, so a tiny floor tile and a whole tree "
+                + "cost what they actually cost. radiance_report's 'soft sprite bake time' row is the receipt. "
+                + "Not saved.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length < 1 || !double.TryParse(arguments[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double budget))
+                    {
+                        monitor.Log($"soft sprite bake budget is {SoftSpriteCache.BakeBudgetMillisecondsPerFrame:0.00} ms a frame "
+                            + $"(last frame spent {SheetUpscaler.SoftSprites.BakeMillisecondsLastFrame:0.000} ms, worst "
+                            + $"{SheetUpscaler.SoftSprites.WorstBakeMilliseconds:0.000} ms). Usage: radiance_softbudget <0.1..8>", LogLevel.Info);
+                        return;
+                    }
+                    SoftSpriteCache.BakeBudgetMillisecondsPerFrame = Math.Clamp(budget, 0.1, 8.0);
+                    monitor.Log($"soft sprite bake budget {SoftSpriteCache.BakeBudgetMillisecondsPerFrame:0.00} ms a frame.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_softbakes",
+                "'radiance_softbakes 32' sets how many soft sprites may be made in one frame; the rest draw as the "
+                + "game drew them and wait their turn, which is why a patch of art can be sharp in one frame and "
+                + "soft in the next while you walk. The default is 8. Higher fills a new view faster and costs "
+                + "longer frames while it does; watch radiance_bench for the worst frame. Not saved.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length < 1 || !int.TryParse(arguments[0], out int perFrame))
+                    {
+                        monitor.Log($"soft sprite bakes a frame: {SheetUpscaler.SoftSprites.GeneratePerFrameCap}. "
+                            + $"Last frame {SheetUpscaler.SoftSprites.CappedLastFrame} draw(s) went sharp waiting for a turn. "
+                            + "Usage: radiance_softbakes <1..512>", LogLevel.Info);
+                        return;
+                    }
+                    SheetUpscaler.SoftSprites.GeneratePerFrameCap = perFrame;
+                    monitor.Log($"soft sprite bakes a frame {SheetUpscaler.SoftSprites.GeneratePerFrameCap}.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_softneighbours",
+                "'radiance_softneighbours off' bakes every map tile of the soft look from its own 16 pixels alone, as "
+                + "before; 'on' (the default) bakes it with the edges of the eight tiles round it in the map, so a rock, "
+                + "a bush or a cliff built of several tiles is smoothed as one picture instead of stopping in a square "
+                + "seam at every tile edge. Every soft sprite is made again. radiance_report's 'map tiles baked with "
+                + "their neighbours' row is the receipt. Not saved.",
+                (_, arguments) =>
+                {
+                    string asked = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
+                    if (asked == "show" && arguments.Length > 1 && int.TryParse(arguments[1], out int shownId))
+                    {
+                        monitor.Log(MapTileNeighbours.DescribeNeighbourhood(shownId), LogLevel.Info);
+                        return;
+                    }
+                    if (asked is not "on" and not "off")
+                    {
+                        monitor.Log($"map tiles baked with their neighbours: {(MapTileNeighbours.Enabled ? "on" : "off")}. "
+                            + "Usage: radiance_softneighbours on|off", LogLevel.Info);
+                        return;
+                    }
+                    MapTileNeighbours.Enabled = asked == "on";
+                    SheetUpscaler.ClearSoftSprites();
+                    monitor.Log($"map tiles baked with their neighbours: {asked}; every soft sprite is being made again.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_smoothonly",
+                "'radiance_smoothonly tiles' smooths only the map's own tilesheets and leaves every sprite standing "
+                + "on them exactly as the game drew it; 'sprites' does the opposite; 'none' holds both back; 'both' "
+                + "(the default) is the normal picture. For finding which half of the world the plates are on: flip "
+                + "it while looking at them and see which way makes them go. Nothing is re-baked, so the switch shows "
+                + "in the same frame. radiance_report's 'the world's two halves' row is the receipt. Not saved.",
+                (_, arguments) =>
+                {
+                    string asked = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
+                    SheetUpscaler.WorldArtPart part;
+                    switch (asked)
+                    {
+                        case "both": case "all": part = SheetUpscaler.WorldArtPart.Both; break;
+                        case "tiles": case "map": part = SheetUpscaler.WorldArtPart.MapTilesOnly; break;
+                        case "sprites": part = SheetUpscaler.WorldArtPart.SpritesOnly; break;
+                        case "none": case "neither": part = SheetUpscaler.WorldArtPart.Neither; break;
+                        default:
+                            monitor.Log($"smoothing the world's art is set to {SheetUpscaler.SmoothedWorldPart}. "
+                                + "Usage: radiance_smoothonly both|tiles|sprites|none", LogLevel.Info);
+                            return;
+                    }
+                    SheetUpscaler.SmoothedWorldPart = part;
+                    monitor.Log(part switch
+                    {
+                        SheetUpscaler.WorldArtPart.MapTilesOnly => "smoothing the map's tilesheets only; trees, bushes, grass and every other sprite are the game's own pixels now.",
+                        SheetUpscaler.WorldArtPart.SpritesOnly => "smoothing the sprites only; the ground is the game's own pixels now.",
+                        SheetUpscaler.WorldArtPart.Neither => "the world's art is all the game's own pixels now; characters, items and portraits still follow their own switches.",
+                        _ => "smoothing all of the world's art again.",
+                    }, LogLevel.Info);
+                });
             helper.ConsoleCommands.Add("radiance_softblur",
                 "'radiance_softblur 1' sets the tent that follows the Soft 4x kernel, in texels of the four-times sheet "
                 + "(0 = the kernel alone, 1 = a quarter of a source pixel). Re-makes the soft sheets. For tuning by eye; not saved.",
@@ -648,6 +762,102 @@ namespace SDVRadiance
                     }
                     SheetUpscaler.SoftBlurTexels = Math.Clamp(texels, 0f, 3f);
                     monitor.Log($"soft blur {SheetUpscaler.SoftBlurTexels:0.###} texels; the soft sheets re-make on the next draws.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_softdither",
+                "'radiance_softdither 1.5' sets how much further the Soft 4x soften reaches where the art is busy at the "
+                + "scale of one source pixel (speckled leaves, dither, noise), in texels of the four-times sheet; 0 is the "
+                + "plain tent everywhere. One-pixel outlines keep their edge either way. Re-makes the soft sheets. For "
+                + "tuning by eye; not saved.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length < 1 || !float.TryParse(arguments[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float texels))
+                    {
+                        monitor.Log($"soft dither reach is {SheetUpscaler.SoftDitherTexels:0.###} texels. Usage: radiance_softdither <0..4>", LogLevel.Info);
+                        return;
+                    }
+                    SheetUpscaler.SoftDitherTexels = Math.Clamp(texels, 0f, 4f);
+                    monitor.Log($"soft dither reach {SheetUpscaler.SoftDitherTexels:0.###} texels; the soft sheets re-make on the next draws.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_softfeather",
+                "'radiance_softfeather 8' sets how far either side of a map tile's edge a straight cut painted into the "
+                + "map (a shadow or a patch of darker ground that stops dead at the tile line) is blended out, in texels of "
+                + "the four-times sheet: 8 is two source pixels, 0 turns it off. Texture that carries on across the line, and "
+                + "outlines against transparency, are left alone. Re-makes the soft sheets. For tuning by eye; not saved.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length < 1 || !float.TryParse(arguments[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float texels))
+                    {
+                        monitor.Log($"tile-line blend reaches {SheetUpscaler.SoftTileFeatherTexels:0.###} texels. Usage: radiance_softfeather <0..10>", LogLevel.Info);
+                        return;
+                    }
+                    SheetUpscaler.SoftTileFeatherTexels = Math.Clamp(texels, 0f, 10f);
+                    monitor.Log($"tile-line blend {SheetUpscaler.SoftTileFeatherTexels:0.###} texels; the soft sheets re-make on the next draws.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_softsteady",
+                "'radiance_softsteady <0..1>' how the soft sprites are read when drawn: four reads spread over this "
+                + "share of a screen pixel, which keeps thin lines from shimmering as the camera glides or the wind "
+                + "leans a tree. 0 is the plain single read. The same as the Steady while moving slider; not saved.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length > 0 && float.TryParse(arguments[0], System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out float spread))
+                        getConfig().SheetUpscaleSteadyRead = Math.Clamp(spread, 0f, 1f);
+                    float now = getConfig().SheetUpscaleSteadyRead;
+                    monitor.Log($"soft sprites read over {now:0.##} of a pixel"
+                        + (now <= 0.01f ? " (the plain single read)" : "")
+                        + ". Usage: radiance_softsteady <0..1>", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_softtint",
+                "'radiance_softtint on' writes every Soft 4x bake tinted magenta, so a screenshot shows which art on screen "
+                + "came from a bake and which the game drew itself; 'off' puts the colours back. Re-makes the soft sprites. "
+                + "A diagnostic; not saved.",
+                (_, arguments) =>
+                {
+                    bool on = arguments.Length > 0 && arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    SheetUpscaler.BakeTint = on ? new Color(255, 120, 255) : Color.White;
+                    SheetUpscaler.ClearSoftSprites();
+                    monitor.Log($"soft bakes {(on ? "tinted" : "in their own colours")}; every soft sprite is being made again.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_softcheck",
+                "'radiance_softcheck' checks that every Soft 4x sprite has a slot of its own on its page. A diagnostic.",
+                (_, _) => monitor.Log("soft sprite slots: " + SheetUpscaler.SoftSprites.CheckSlots(), LogLevel.Info));
+            helper.ConsoleCommands.Add("radiance_softpages",
+                "'radiance_softpages' writes every page of Soft 4x sprites to Documents/Radiance-Dumps/soft-pages as PNGs, "
+                + "so a sprite that looks wrong on screen can be looked at as it was baked. radiance_drawsat names the page "
+                + "and rectangle each draw at a pixel was given. A diagnostic.",
+                (_, _) =>
+                {
+                    string folder = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Radiance-Dumps", "soft-pages");
+                    int saved = SheetUpscaler.SoftSprites.SavePages(folder);
+                    int sheets = 0;
+                    object? textureTable = Game1.mapDisplayDevice is xTile.Display.XnaDisplayDevice device
+                        ? HarmonyLib.AccessTools.Field(typeof(xTile.Display.XnaDisplayDevice), "m_tileSheetTextures")?.GetValue(device)
+                        : null;
+                    if (textureTable is System.Collections.Generic.Dictionary<xTile.Tiles.TileSheet, Microsoft.Xna.Framework.Graphics.Texture2D> textures
+                        && Game1.currentLocation?.Map != null)
+                    {
+                        foreach (var sheet in Game1.currentLocation.Map.TileSheets)
+                        {
+                            if (!textures.TryGetValue(sheet, out var texture) || texture.IsDisposed)
+                                continue;
+                            using var file = System.IO.File.Create(System.IO.Path.Combine(folder, $"sheet-{sheet.Id}.png"));
+                            texture.SaveAsPng(file, texture.Width, texture.Height);
+                            sheets++;
+                        }
+                    }
+                    monitor.Log($"{saved} soft sprite page(s) and {sheets} map tilesheet(s) as the game holds them written to {folder}.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_poselibrary",
+                "'radiance_poselibrary off' draws the player again for every new pose of the shadow and reflection bake, "
+                + "the way it did before; 'on' (the default) keeps each pose drawn once and copies it back when the pose "
+                + "comes round again. Prints how many poses were copied and how many drawn. Not saved.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length > 0)
+                        ShadowRenderer.PoseLibraryEnabled = !arguments[0].Equals("off", StringComparison.OrdinalIgnoreCase);
+                    monitor.Log($"pose library {(ShadowRenderer.PoseLibraryEnabled ? "on" : "OFF")}: "
+                        + $"{ShadowRenderer.PoseLibraryCopies} poses copied, {ShadowRenderer.PoseLibraryBakes} drawn since the game started. "
+                        + "Usage: radiance_poselibrary on|off", LogLevel.Info);
                 });
             helper.ConsoleCommands.Add("radiance_casterblur",
                 "'radiance_casterblur off' softens every character shadow tap by tap at draw time, nine draws a "

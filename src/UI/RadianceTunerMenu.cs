@@ -1521,6 +1521,8 @@ namespace SDVRadiance
         /// it stopped being one switch - it is a look, and it is judged by eye like one.</summary>
         private void BuildSmoothing()
         {
+            // The zoom is drawn for the whole picture, smoothed or not, so it sits above the switch.
+            Toggle("config.zoomareafilter.name", () => _config.ZoomAreaFilter, value => _config.ZoomAreaFilter = value, "config.zoomareafilter.tooltip");
             Toggle("config.sheetupscale.name", () => _config.SheetUpscaleEnabled, value => _config.SheetUpscaleEnabled = value, "help.sheetupscale");
             DependsOn(() => _config.SheetUpscaleEnabled);
             Section("tuner.section.smoothingstyle");
@@ -1539,6 +1541,32 @@ namespace SDVRadiance
                 }
                 _contentCursorY += Scaled(50);
             }
+            // The rule the soft look is made with, shown only while the soft look is the one in use.
+            if (_config.SheetUpscaleEnabled && _config.SheetUpscaleStyle == SheetSmoothingStyle.Soft4x && !HiddenBySection())
+            {
+                _contentCursorY += Scaled(4);
+                (SoftSmoothingKernel kernel, string key)[] kernels =
+                [
+                    (SoftSmoothingKernel.Xbr, "xbr"), (SoftSmoothingKernel.Mmpx, "mmpx"),
+                    (SoftSmoothingKernel.MmpxEdgeGuarded, "mmpxedgeguarded"), (SoftSmoothingKernel.Epx, "epx"),
+                ];
+                int kernelButtonWidth = (_contentColumnWidth - 6 * (kernels.Length - 1)) / kernels.Length;
+                for (int kernelIndex = 0; kernelIndex < kernels.Length; kernelIndex++)
+                {
+                    var (kernel, key) = kernels[kernelIndex];
+                    var rect = new Rectangle(_contentCursorX + kernelIndex * (kernelButtonWidth + 6), _contentCursorY, kernelButtonWidth, Scaled(40));
+                    var button = Button(_translate($"config.sheetupscalekernel.{key}"), rect, () => { _config.SheetUpscaleSoftKernel = kernel; _onChange(); _onSave(); });
+                    button.IsChosen = () => _config.SheetUpscaleSoftKernel == kernel;
+                    Help(rect, $"help.sheetupscalekernel.{key}");
+                }
+                _contentCursorY += Scaled(50);
+            }
+            Slider("config.sheetupscalegradients.name", 0f, 1f, () => _config.SheetUpscaleGradientSmoothing,
+                value => _config.SheetUpscaleGradientSmoothing = value, "config.sheetupscalegradients.tooltip",
+                () => _config.SheetUpscaleEnabled && _config.SheetUpscaleStyle == SheetSmoothingStyle.Soft4x);
+            Slider("config.sheetupscalesteady.name", 0f, 1f, () => _config.SheetUpscaleSteadyRead,
+                value => _config.SheetUpscaleSteadyRead = value, "config.sheetupscalesteady.tooltip",
+                () => _config.SheetUpscaleEnabled && _config.SheetUpscaleStyle == SheetSmoothingStyle.Soft4x);
             Section("tuner.section.smoothingfamilies");
             // Each family's smoothness names the master switch as well as its own: a row's own
             // condition replaces the tab's DependsOn rather than adding to it, so with Smooth art
@@ -1547,23 +1575,56 @@ namespace SDVRadiance
                 value => _config.SheetUpscaleWorld = value, "config.sheetupscaleworld.tooltip");
             Slider("config.sheetupscalesmoothness.name", 0f, 1f, () => _config.SheetUpscaleSmoothnessWorld,
                 value => _config.SheetUpscaleSmoothnessWorld = value, "config.sheetupscalesmoothness.tooltip", () => _config.SheetUpscaleEnabled && _config.SheetUpscaleWorld);
+            FamilyKernelButton(() => _config.SheetUpscaleKernelWorld, value => _config.SheetUpscaleKernelWorld = value,
+                () => _config.SheetUpscaleWorld);
             Toggle("config.sheetupscalecharacters.name", () => _config.SheetUpscaleCharacters,
                 value => _config.SheetUpscaleCharacters = value, "config.sheetupscalecharacters.tooltip");
             Slider("config.sheetupscalesmoothness.name", 0f, 1f, () => _config.SheetUpscaleSmoothnessCharacters,
                 value => _config.SheetUpscaleSmoothnessCharacters = value, "config.sheetupscalesmoothness.tooltip", () => _config.SheetUpscaleEnabled && _config.SheetUpscaleCharacters);
+            FamilyKernelButton(() => _config.SheetUpscaleKernelCharacters, value => _config.SheetUpscaleKernelCharacters = value,
+                () => _config.SheetUpscaleCharacters);
             Toggle("config.sheetupscaleitems.name", () => _config.SheetUpscaleItems,
                 value => _config.SheetUpscaleItems = value, "config.sheetupscaleitems.tooltip");
             Slider("config.sheetupscalesmoothness.name", 0f, 1f, () => _config.SheetUpscaleSmoothnessItems,
                 value => _config.SheetUpscaleSmoothnessItems = value, "config.sheetupscalesmoothness.tooltip", () => _config.SheetUpscaleEnabled && _config.SheetUpscaleItems);
+            FamilyKernelButton(() => _config.SheetUpscaleKernelItems, value => _config.SheetUpscaleKernelItems = value,
+                () => _config.SheetUpscaleItems);
             Toggle("config.sheetupscaleportraits.name", () => _config.SheetUpscalePortraits,
                 value => _config.SheetUpscalePortraits = value, "config.sheetupscaleportraits.tooltip");
             Slider("config.sheetupscalesmoothness.name", 0f, 1f, () => _config.SheetUpscaleSmoothnessPortraits,
                 value => _config.SheetUpscaleSmoothnessPortraits = value, "config.sheetupscalesmoothness.tooltip", () => _config.SheetUpscaleEnabled && _config.SheetUpscalePortraits);
+            FamilyKernelButton(() => _config.SheetUpscaleKernelPortraits, value => _config.SheetUpscaleKernelPortraits = value,
+                () => _config.SheetUpscalePortraits);
             Toggle("config.sheetupscaleinterface.name", () => _config.SheetUpscaleInterface,
                 value => _config.SheetUpscaleInterface = value, "config.sheetupscaleinterface.tooltip");
             Slider("config.sheetupscalesmoothness.name", 0f, 1f, () => _config.SheetUpscaleSmoothnessInterface,
                 value => _config.SheetUpscaleSmoothnessInterface = value, "config.sheetupscalesmoothness.tooltip", () => _config.SheetUpscaleEnabled && _config.SheetUpscaleInterface);
+            FamilyKernelButton(() => _config.SheetUpscaleKernelInterface, value => _config.SheetUpscaleKernelInterface = value,
+                () => _config.SheetUpscaleInterface);
             EndDependsOn();
+        }
+
+        /// <summary>One art family's own rule for the soft look, a button that steps through the
+        /// choices: the rule chosen for all, then each rule. Shown only while Soft 4x is the look and
+        /// the family is smoothed at all.</summary>
+        private void FamilyKernelButton(Func<FamilyKernelChoice> getValue, Action<FamilyKernelChoice> setValue, Func<bool> familyOn)
+        {
+            if (!_config.SheetUpscaleEnabled || _config.SheetUpscaleStyle != SheetSmoothingStyle.Soft4x || !familyOn() || HiddenBySection())
+                return;
+            FamilyKernelChoice current = getValue();
+            string label = _translate("config.sheetupscalekernelfamily.name") + ": "
+                         + _translate($"config.sheetupscalekernelfamily.{current.ToString().ToLowerInvariant()}");
+            var rect = new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, Scaled(36));
+            Button(label, rect, () =>
+            {
+                int count = Enum.GetValues(typeof(FamilyKernelChoice)).Length;
+                setValue((FamilyKernelChoice)(((int)getValue() + 1) % count));
+                _onChange();
+                _onSave();
+                Reflow();
+            });
+            Help(rect, "config.sheetupscalekernelfamily.tooltip");
+            _contentCursorY += Scaled(44);
         }
 
         private void BuildPerformance()

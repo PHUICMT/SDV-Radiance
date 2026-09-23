@@ -99,6 +99,36 @@ namespace SDVRadiance
         Soft4x,
     }
 
+    /// <summary>Which rule makes the soft look's four-times sheets. Each is baked once per sprite
+    /// on the card, so the choice costs nothing while playing; the tent that follows is the same
+    /// for all of them.</summary>
+    public enum SoftSmoothingKernel
+    {
+        /// <summary>xBR level 2 with a quarter-pixel edge ramp: rounds diagonals and curves and
+        /// anti-aliases them. The soft look since 1.7.5.</summary>
+        Xbr,
+        /// <summary>MMPX (McGuire and Gagiu 2021) twice over: made for pixel art, keeps lines and
+        /// curves whole and invents no colour.</summary>
+        Mmpx,
+        /// <summary>MMPX with its corners kept off the art's edges: no rounding into the transparent
+        /// surround, and a 45 degree corner only where the staircase carries on.</summary>
+        MmpxEdgeGuarded,
+        /// <summary>EPX (Scale2x) twice over, the 1.7 rule: the crispest, closest to the art's own
+        /// pixels.</summary>
+        Epx,
+    }
+
+    /// <summary>The rule one art family's soft sheets are made with: the one chosen for all, or its own.</summary>
+    public enum FamilyKernelChoice
+    {
+        /// <summary>Whatever <see cref="ModConfig.SheetUpscaleSoftKernel"/> is.</summary>
+        SameAsAll,
+        Xbr,
+        Mmpx,
+        MmpxEdgeGuarded,
+        Epx,
+    }
+
     public enum GiModel
     {
         /// <summary>The CPU sweep of every release so far: light floods tile by tile with a per-cell
@@ -320,7 +350,7 @@ namespace SDVRadiance
         /// and the next launch runs every migration over the defaults it just wrote, putting back the
         /// god ray intensity and the smoothing dials the player had set after the reset. Raise it
         /// with each new migration.</summary>
-        internal const int CurrentConfigVersion = 4;
+        internal const int CurrentConfigVersion = 5;
 
         // --- God rays ---
         // Lamp shafts: beams a lamp throws through whatever stands beside its light, drawn inside
@@ -727,8 +757,31 @@ namespace SDVRadiance
         /// <summary>Sprites drawn from sheets doubled on the graphics card by the Scale2x rule (see
         /// SheetUpscaler): two texels where the game put one. Off until it has been looked at.</summary>
         public bool SheetUpscaleEnabled { get; set; } = false;
+        /// <summary>Draw the game's zoom with an area filter instead of its bilinear stretch (see
+        /// ScreenZoomFilter): at 75 per cent thin lines stop crawling as the camera moves, above 100
+        /// per cent the art's edges stay sharp. Only matters at a zoom other than 100 per cent.</summary>
+        public bool ZoomAreaFilter { get; set; } = true;
         /// <summary>Which look the smoothing has: the 1.7 doubling, or the soft four-times sheets.</summary>
         public SheetSmoothingStyle SheetUpscaleStyle { get; set; } = SheetSmoothingStyle.Scale2x;
+        /// <summary>Which rule the soft look is made with (Soft 4x only). MMPX by default: side by side
+        /// on 23/9 it kept the small details xBR melts, and the author chose it.</summary>
+        public SoftSmoothingKernel SheetUpscaleSoftKernel { get; set; } = SoftSmoothingKernel.Mmpx;
+        /// <summary>How the soft sprites are read when drawn (Soft 4x only): 0 is one read per pixel,
+        /// the sharpest; toward 1 the read spreads over the pixel, which keeps thin lines from
+        /// shimmering while the camera glides, at some cost in sharpness. Measured 23/9 walking in
+        /// the Forest: 1 took the frame-to-frame shimmer down 36% and the fine detail down 15-18%;
+        /// 0.5 took 3% and 7%. Off by default because the author judges sharpness first (0..1).</summary>
+        public float SheetUpscaleSteadyRead { get; set; } = 0f;
+        /// <summary>Gradient smoothing after the Soft 4x rule: a low step between two close shades is
+        /// spread into a ramp, a real edge is left alone (0..1).</summary>
+        public float SheetUpscaleGradientSmoothing { get; set; } = 0.5f;
+        /// <summary>A rule of its own for one art family (Soft 4x only), say xBR's softer rounding for
+        /// the characters while the world keeps MMPX. SameAsAll follows SheetUpscaleSoftKernel.</summary>
+        public FamilyKernelChoice SheetUpscaleKernelWorld { get; set; } = FamilyKernelChoice.SameAsAll;
+        public FamilyKernelChoice SheetUpscaleKernelCharacters { get; set; } = FamilyKernelChoice.SameAsAll;
+        public FamilyKernelChoice SheetUpscaleKernelPortraits { get; set; } = FamilyKernelChoice.SameAsAll;
+        public FamilyKernelChoice SheetUpscaleKernelItems { get; set; } = FamilyKernelChoice.SameAsAll;
+        public FamilyKernelChoice SheetUpscaleKernelInterface { get; set; } = FamilyKernelChoice.SameAsAll;
         /// <summary>The single smoothing dial of 1.7.0 to 1.7.4. Read once by the ConfigVersion 4
         /// migration, which copies it into the five dials below, and not used after that.</summary>
         public float SheetUpscaleSmoothness { get; set; } = 1f;
@@ -1555,6 +1608,8 @@ namespace SDVRadiance
         public void Clamp()
         {
             static float ClampToRange(float v, float lo, float hi) => float.IsNaN(v) ? lo : Math.Clamp(v, lo, hi);
+            SheetUpscaleSteadyRead = ClampToRange(SheetUpscaleSteadyRead, 0f, 1f);
+            SheetUpscaleGradientSmoothing = ClampToRange(SheetUpscaleGradientSmoothing, 0f, 1f);
             // A bearing is a circle, so it WRAPS rather than clamping: dragging a compass past
             // north has to come out the other side, and clamping would have parked it on the
             // seam instead.

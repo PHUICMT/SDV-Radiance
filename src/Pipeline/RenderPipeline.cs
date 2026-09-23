@@ -597,6 +597,24 @@ namespace SDVRadiance
                     report.AppendLine($"labels from a variant: {hit.Value} tile(s) here used labels painted for "
                                 + $"\"{hit.Key}\" rather than the shipped ones, because that is the art loaded.");
             }
+            if (LabelStore.Instance is { } following && following.FollowedByPack.Count > 0)
+            {
+                foreach (var followed in following.FollowedByPack)
+                    report.AppendLine($"labels that followed a pack: {followed.Value} tile(s) here are painted by "
+                                + $"{followed.Key} in a picture no painted label names (another season, weather or "
+                                + "palette), and took the label painted for that pack's art rather than the base game's.");
+            }
+            else if (LabelStore.Instance != null)
+                report.AppendLine($"labels that followed a pack: none here (Content Patcher "
+                                + $"{(ContentPatcherArtOwners.Available ? "readable" : "not readable")}, "
+                                + $"{ContentPatcherArtOwners.Lookups} tile(s) asked about, "
+                                + (ContentPatcherArtOwners.NamedPacks.Count == 0
+                                    ? "no pack named"
+                                    : "named " + string.Join(", ", ContentPatcherArtOwners.NamedPacks.Select(named => $"{named.Key} x{named.Value}"))
+                                      + " but no painted label lists it")
+                                + (ContentPatcherArtOwners.FirstUnclaimed is { } unclaimed ? $"; first unclaimed: {unclaimed}" : "")
+                                + (LabelStore.Instance.FirstNamedButUnlisted is { } unlisted ? $"; first unlisted: {unlisted}" : "")
+                                + ").");
             if (LabelStore.Instance is { ArtBoundLabelsRefusedForChangedArt: > 0 } guarded)
             {
                 report.AppendLine($"labels refused: {guarded.ArtBoundLabelsRefusedForChangedArt} tile(s) here are drawn "
@@ -867,6 +885,7 @@ namespace SDVRadiance
             _tail = LoadEffect("tail.mgfxo");
             _wetEffect = LoadEffect("wet.mgfxo");
             _upscale = LoadEffect("upscale.mgfxo");
+            ScreenZoomFilter.Effect = _upscale;
         }
 
         /// <summary>Load a PNG shipped in assets/. Used by the tuner for its tab icons; the
@@ -958,7 +977,7 @@ namespace SDVRadiance
                 case "finishing": old = _finishing; _finishing = loaded; break;
                 case "tail": old = _tail; _tail = loaded; break;
                 case "wet": old = _wetEffect; _wetEffect = loaded; break;
-                case "upscale": old = _upscale; _upscale = loaded; break;
+                case "upscale": old = _upscale; _upscale = loaded; ScreenZoomFilter.Effect = loaded; break;
                 case "cascades": old = _cascadesEffect; _cascadesEffect = loaded; break;
                 case "normals": old = _normalsEffect; _normalsEffect = loaded; break;
                 case "reliefreplay": old = _reliefReplayEffect; _reliefReplayEffect = loaded; break;

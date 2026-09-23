@@ -72,9 +72,16 @@ def art_by_fingerprint(index, name, tiles):
             key = labels.shading_key(block)
             if key is None:
                 continue
-            for fingerprint in prints.both_alpha_readings(block):
+            for fingerprint in prints.alpha_readings(block):
                 out[tile][fingerprint] = key
     return out
+
+
+def with_owners(entry, rebuilt):
+    """Carry the packs variantowners.py attributed an entry to, so widening does not undo it."""
+    if entry.get("mods"):
+        rebuilt["mods"] = sorted(set(entry["mods"]))
+    return rebuilt
 
 
 def main():
@@ -124,13 +131,13 @@ def main():
                         dropped_name += 1
                         continue
                     dropped_art += 1
-                    kept.append({"source": entry.get("source") or "HF Studio",
-                                 "art": sorted(set(art)), "label": label})
+                    kept.append(with_owners(entry, {"source": entry.get("source") or "HF Studio",
+                                                    "art": sorted(set(art)), "label": label}))
                     continue
                 grown = sorted({a for a, key in known.items() if key in wanted} | set(art))
                 widened += len(grown) - len(set(art))
-                kept.append({"source": entry.get("source") or "HF Studio",
-                             "art": grown, "label": label})
+                kept.append(with_owners(entry, {"source": entry.get("source") or "HF Studio",
+                                                "art": grown, "label": label}))
             if kept:
                 out_tiles[str(int(tile))] = kept
         if out_tiles:

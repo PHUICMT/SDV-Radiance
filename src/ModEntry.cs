@@ -202,12 +202,17 @@ namespace SDVRadiance
                 // therefore cost 30 ms every few seconds in town for nothing at all.
                 LabelStore.Instance?.ForgetArtVerdictsFor(
                     System.Linq.Enumerable.Select(e.Names, n => n.Name));
+                // Content Patcher reloads an asset exactly when one of its patches on it starts or
+                // stops applying, so the reload is also when "which pack paints this tile" can
+                // have changed its answer.
+                ContentPatcherArtOwners.Forget(System.Linq.Enumerable.Select(e.Names, n => n.Name));
                 // The relief pass's list of the map's sheets holds the textures themselves, so a
                 // reloaded sheet has to be fetched again. Only the sheets named.
                 _pipeline?.ForgetTileSheetListsDrawnFrom(System.Linq.Enumerable.Select(e.Names, n => n.Name));
             };
 
             SurfaceMap.DiagnosticMonitor = Monitor;
+            ContentPatcherArtOwners.Initialise(helper, Monitor);
             MapDump.BridgeMonitor = Monitor;
             MapDump.BridgeHelper = helper;
             ConsoleCommands.RegisterAll(helper, Monitor, () => _config, () => _pipeline, ToggleTuner);
@@ -291,6 +296,17 @@ namespace SDVRadiance
                 _config.SheetUpscaleSmoothnessPortraits = single;
                 _config.SheetUpscaleSmoothnessItems = single;
                 _config.SheetUpscaleSmoothnessInterface = single;
+                helper.WriteConfig(_config);
+            }
+            // 2.2.0: MMPX became the rule Soft 4x is made with by default. A player who already
+            // chose Soft 4x chose it with xBR, the only rule there was, and keeps it: the author's
+            // instruction, so an update never changes a look somebody picked. Anyone else gets MMPX
+            // the first time they choose Soft 4x.
+            if (_config.ConfigVersion < 5)
+            {
+                _config.ConfigVersion = 5;
+                if (_config.SheetUpscaleStyle == SheetSmoothingStyle.Soft4x)
+                    _config.SheetUpscaleSoftKernel = SoftSmoothingKernel.Xbr;
                 helper.WriteConfig(_config);
             }
         }
@@ -411,6 +427,15 @@ namespace SDVRadiance
             SheetUpscaler.SmoothnessByFamily[(int)SheetUpscaler.ArtFamily.Items] = _config.SheetUpscaleSmoothnessItems;
             SheetUpscaler.SmoothnessByFamily[(int)SheetUpscaler.ArtFamily.Interface] = _config.SheetUpscaleSmoothnessInterface;
             SheetUpscaler.Style = _config.SheetUpscaleStyle;
+            SheetUpscaler.SoftKernel = _config.SheetUpscaleSoftKernel;
+            SheetUpscaler.KernelByFamily[(int)SheetUpscaler.ArtFamily.World] = _config.SheetUpscaleKernelWorld;
+            SheetUpscaler.KernelByFamily[(int)SheetUpscaler.ArtFamily.Characters] = _config.SheetUpscaleKernelCharacters;
+            SheetUpscaler.KernelByFamily[(int)SheetUpscaler.ArtFamily.Portraits] = _config.SheetUpscaleKernelPortraits;
+            SheetUpscaler.KernelByFamily[(int)SheetUpscaler.ArtFamily.Items] = _config.SheetUpscaleKernelItems;
+            SheetUpscaler.KernelByFamily[(int)SheetUpscaler.ArtFamily.Interface] = _config.SheetUpscaleKernelInterface;
+            SheetUpscaler.SteadyReadSpread = _config.SheetUpscaleSteadyRead;
+            SheetUpscaler.SoftDeposterize = _config.SheetUpscaleGradientSmoothing;
+            ScreenZoomFilter.Enabled = _config.Enabled && _config.ZoomAreaFilter;
             SheetUpscaler.BeginFrame();
             // The mine's floor number leaves the world layer whenever the chain will run over it,
             // and OnRenderedWorld draws it back after the chain.
@@ -823,6 +848,9 @@ namespace SDVRadiance
 
         private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
         {
+            // The outfit mod tells the shadow bakes when its farmer's look changed (see Integrations.OutfitAppearance).
+            Integrations.OutfitAppearance.Connect(Helper.ModRegistry, Monitor);
+
             GmcmRegistration.Register(Helper, ModManifest, Monitor, I18n,
                 config: () => _config,
                 replaceConfig: fresh => _config = fresh,

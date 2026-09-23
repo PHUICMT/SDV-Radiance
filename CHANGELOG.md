@@ -2,6 +2,101 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.2.0 - 2026-09-23
+
+### Added
+
+- **Soft 4x can be made with other rules.** Under Smooth art, with Soft 4x chosen, four buttons
+  pick the rule the soft sheets are made with: xBR, which it has always been; MMPX, a rule made
+  for pixel art (McGuire and Gagiu, 2021) that keeps thin lines and small details whole and uses
+  only the art's own colours; MMPX with the edges kept, which does not round a sprite's outline
+  into the empty space around it; and EPX, the 1.7 rule twice over, the crispest. MMPX is the
+  default for anyone choosing Soft 4x from now on; if you already use Soft 4x you keep xBR, as
+  it was, and MMPX is one click away. Each is baked once per sprite, so none of them costs
+  anything while you play.
+- **Sharp zoom.** The game draws the world at its own size and then stretches the whole picture
+  to your zoom level with a plain blend, which smears every edge of the art at zooms above 100
+  percent. Each pixel of the window is now the exact average of the part of the picture it
+  covers: at 150 percent the picture keeps a quarter more of its fine detail, and at 75 percent
+  it is as it was. On by default, on the Smooth art tab, with Smooth art on or off.
+- **A rule for each kind of art.** Each row of the Smooth art tab (the world, characters, items,
+  portraits, menus) has its own rule button under Soft 4x: the rule chosen for all by default, or
+  any rule of its own, say xBR's softer rounding for the characters while the world keeps MMPX.
+- **Smooth gradients, for Soft 4x.** Pixel art paints a gradient, a sky or the light across a
+  wall, as bands of a few close shades. A slider spreads each small step between two close shades
+  into a ramp and leaves real edges where they are. It starts at 0.5, which keeps the art's small
+  highlights; at 1 it smooths flat surfaces completely.
+- **Steady while moving, for Soft 4x.** A slider that spreads how each screen pixel reads the
+  smoothed art over the whole pixel, so thin lines stop shimmering as the camera glides. It
+  softens the picture a little, so it starts at 0, which is the picture as it was.
+
+### Fixed
+
+- **Riding a horse across a bridge, the rider rippled with the water behind them.** The water
+  pass leaves you alone by laying a picture of your body over it, and that picture is not made
+  while you ride, because the horse casts the shadow instead. So a mounted player had nothing
+  keeping the water off them, and on a bridge the head and shoulders stand over the river
+  beyond the rail, where the ripple and its tint ran straight across them. A rider now draws
+  themselves into the water's mask the way a seated player already did, horse and all, and so
+  do the other players in co-op. Reported with a picture by Elacro.
+- **Water painted on the rocks around a mod's pond once the season or the weather changed.**
+  A water label painted for a mod's art was tied to the exact picture it was painted on, and a
+  mod can hand the game dozens of pictures of one pond: Way Back Pelican Town paints its hot
+  spring by the railroad in four seasons, two weathers and seven palettes. In any picture the
+  label had not seen, the tile fell back to the base game's label, which was painted for
+  different art, and the ripple landed on the rocks. The map under the paint does not change,
+  so the mod now asks Content Patcher which pack is painting the tile and uses the label painted
+  for that pack. If Content Patcher cannot be read, nothing changes from before.
+  `radiance_labelfollow off` turns it off for comparison. Reported with a picture by Elacro.
+- **Smooth art: square seams between map tiles, and bushes that looked like a grid of pieces.**
+  Each 16 pixel tile of a map was smoothed on its own, so the rounding stopped at every tile
+  line and a hedge or a rock face showed its grid. A map tile is now smoothed with the tiles
+  around it, including the ones on the layer above or below that carry the same picture on, and
+  the straight cuts a map paints at its tile lines are blended out. A bush made of map tiles also
+  casts one shadow instead of one per tile.
+- **Smooth art: patches that looked untouched, and square outlines at fence ends.** A prop's
+  base tile is drawn a second time over its own shadow, and that second draw skipped the
+  smoothing, which left raw squares at the foot of fences and posts.
+- **Smooth art: the picture filling in for a moment on arriving somewhere.** Making each smooth
+  sprite took up to half a millisecond, so a new view took many frames to finish and parts of it
+  stayed sharp meanwhile. It is about forty times quicker now, and a view arrives finished.
+- **The mouse cursor was smeared with Smooth art on.** With the interface scale set differently
+  from the zoom, the game draws the cursor outside its interface pass, so the cursor was smoothed
+  as if it were part of the world. It now follows the Menus switch, like the rest of the interface.
+
+### For translators
+
+New keys, all on the Smooth art tab: `config.sheetupscalekernel.name`,
+`config.sheetupscalekernel.tooltip`, `config.sheetupscalekernel.xbr`,
+`config.sheetupscalekernel.mmpx`, `config.sheetupscalekernel.mmpxedgeguarded`,
+`config.sheetupscalekernel.epx`, `help.sheetupscalekernel.xbr`, `help.sheetupscalekernel.mmpx`,
+`help.sheetupscalekernel.mmpxedgeguarded`, `help.sheetupscalekernel.epx`,
+`config.sheetupscalesteady.name`, `config.sheetupscalesteady.tooltip`,
+`config.zoomareafilter.name`, `config.zoomareafilter.tooltip`,
+`config.sheetupscalegradients.name`, `config.sheetupscalegradients.tooltip`,
+`config.sheetupscalekernelfamily.name`, `config.sheetupscalekernelfamily.tooltip`,
+`config.sheetupscalekernelfamily.sameasall`, `config.sheetupscalekernelfamily.xbr`,
+`config.sheetupscalekernelfamily.mmpx`, `config.sheetupscalekernelfamily.mmpxedgeguarded`,
+`config.sheetupscalekernelfamily.epx`. MMPX, xBR and EPX are
+names and stay as they are.
+
+### Changed
+
+- **Smooth art is crisper by default.** The softening that follows the rule was halved.
+- **Less work while walking.** The player's shadow and reflection were drawn again for every new
+  step of the walk, and with an outfit mod installed that is the most expensive draw in the game.
+  Each pose is now kept once drawn and reused when it comes round again. Outfits changed from a
+  menu, a new location, and every few seconds regardless, all start it over, so a changed outfit
+  is never shown for long; with Fashion Sense, whose pieces animate every frame, it stays off.
+- **Less garbage for the game to collect.** A few checks that ran for every sprite on screen
+  built a line of text each time; they no longer do, which takes a noticeable share of the
+  memory the mod asked for each frame away.
+- **The Chinese for "sprite" is now the word players use.** Twenty three lines called a sprite
+  精灵 or 精灵图, which is what a programmer calls it; they now say 贴图, which is what a player
+  calls it. Proposed by passersby10086 and decided by Rime961, who kept the file through 2.1.3. It is one word
+  in every place it appears rather than some of them, because a settings page that calls the same
+  thing two names is harder to read than either name on its own.
+
 ## 2.1.3 - 2026-09-22
 
 ### Fixed
@@ -39,10 +134,13 @@ All notable changes to SDV-Radiance. Older releases are documented on the Nexus 
 ### Changed
 
 - **Two Chinese lines described the camera as it used to be.** The camera was rebuilt in 2.1.0 and
-  the English was rewritten with it, but the Chinese that came with the same release still told
-  people the view snaps the instant they stop and may leave them off centre, which is what the old
-  camera did. It trails a little behind you while you walk and eases back to the middle without
-  going past it, and the Chinese now says so. Spotted and translated by passersby10086.
+  the English was rewritten with it, and nobody told the translators that the thing underneath had
+  changed. In a translation file a rewritten line looks exactly like a new one, so the Chinese was
+  translated faithfully against the camera as it had been: snapping to you the instant you stop and
+  possibly leaving you off centre. It trails a little behind you while you walk and eases back to
+  the middle without going past it, and the Chinese now says so. Spotted and rewritten by
+  passersby10086. Telling translators which keys CHANGED MEANING, rather than only which ones are
+  new, is the part of this that was ours to get right.
 
 ## 2.1.2 - 2026-09-22
 
@@ -57,11 +155,11 @@ All notable changes to SDV-Radiance. Older releases are documented on the Nexus 
 
 ### Changed
 
-- **The Chinese translation is complete.** The three settings that arrived in 1.7.6, the half size
-  relief, the remembered lamp shadows and the dark pool under objects, were still reading in
-  English in the Chinese file: twelve entries in all, counting their names, their descriptions and
-  their help lines. Translated by Rime961, who noticed the new keys and sent them in without being
-  asked, and reported independently by passersby10086.
+- **Chinese now covers the three settings that arrived in 1.7.6**, the half size relief, the
+  remembered lamp shadows and the dark pool under objects: twelve entries counting their names,
+  their descriptions and their help lines. Rime961, who keeps that file, noticed the new keys and
+  sent the translations in without being asked. passersby10086 wrote in about the same gap on the
+  same day.
 
 ### Fixed
 

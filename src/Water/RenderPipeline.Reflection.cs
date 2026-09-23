@@ -352,13 +352,14 @@ namespace SDVRadiance
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(anchor.X, feetY));
             float depth = StampDepth(feetY);
             const int bandHeight = 16;
-            int bands = ShadowRenderer.PlayerRtH / bandHeight;
+            // The bake's own size, which grows to hold what the outfit mod draws (ShadowRenderer.PlayerSize).
+            int bands = bake.Height / bandHeight;
             for (int i = 0; i < bands; i++)
             {
-                var sliceSourceRect = new Rectangle(0, ShadowRenderer.PlayerRtH - (i + 1) * bandHeight,
-                    ShadowRenderer.PlayerRtW, bandHeight);
+                var sliceSourceRect = new Rectangle(0, bake.Height - (i + 1) * bandHeight,
+                    bake.Width, bandHeight);
                 float sliceFade = MathHelper.Lerp(1f, ReflectionHeadFade, (i + 0.5f) / bands);
-                spriteBatch.Draw(bake, feet + new Vector2(-ShadowRenderer.PlayerRtW / 2f, (i * bandHeight - 8f) * MirrorSquash),
+                spriteBatch.Draw(bake, feet + new Vector2(-bake.Width / 2f, (i * bandHeight - 8f) * MirrorSquash),
                     sliceSourceRect, Color.White * sliceFade, 0f, Vector2.Zero, new Vector2(1f, MirrorSquash),
                     SpriteEffects.FlipVertically, depth);
             }

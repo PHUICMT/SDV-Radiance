@@ -288,11 +288,22 @@ namespace SDVRadiance
             // DiscardContents only guarantees the pixels until the next target swap/present,
             // which was fine when everything re-baked per frame — cached across frames, the
             // content decayed into garbage (grid-line artifacts all over the map).
-            _playerRenderTarget ??= VramTally.Track(new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
-                SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "player silhouette");
+            //
+            // Sized to hold what the outfit mod draws (see PlayerSize): a target made again at a new size holds
+            // no pose yet, so neither it nor its colour twin is fresh.
+            GrowPlayerTargetsToFit();
+            if (MakePlayerSized(graphicsDevice, ref _playerRenderTarget, "player silhouette"))
+            {
+                // The old targets are gone: nothing may go on reading them if this bake fails.
+                _playerMaskFresh = false;
+                _playerColorFresh = false;
+                PlayerMask = null;
+                PlayerColor = null;
+            }
 
             Rectangle sourceRect = who.FarmerSprite.SourceRect;
             _playerBakeFarmerId = who.UniqueMultiplayerID;
+            KeepPoseLibraryHonest();
 
             // Same pose as the last bake → the RT is still correct, skip the 3-batch redraw.
             // The every-8-frames refresh keeps accessory layers that animate independently of
@@ -311,7 +322,13 @@ namespace SDVRadiance
             // colour inside an otherwise byte-identical silhouette, at the same place on every map,
             // which is what a fixed character with fixed hair cycling two phases looks like. It
             // failed the harness gate, so nothing could be verified through it at all.
-            var poseSignature = (who.FarmerSprite.CurrentFrame, who.FacingDirection, sourceRect);
+            //
+            // With the outfit mod installed its look number joins the pose: it moves whenever anything about how
+            // the outfit mod draws the farmer changes, a frame of an animated piece included, so the bake follows
+            // exactly those changes and needs neither the refresh below nor the library's timer. Held
+            // while frozen, for the same reason the refresh is: the outfit mod's pieces keep animating then.
+            int look = Determinism.Frozen ? _playerBakeSignature.look : Integrations.OutfitAppearance.VersionOf(who);
+            var poseSignature = (who.FarmerSprite.CurrentFrame, who.FacingDirection, sourceRect, look);
             // Staggered by who it is, so two screens' players do not fall due on the same frame
             // (see the same line in ShadowRenderer.Farmers).
             bool accessoryRefreshDue = PlayerAccessoriesAnimate && !Determinism.Frozen
@@ -329,9 +346,22 @@ namespace SDVRadiance
             }
             _playerBakeSignature = poseSignature;
 
-            float spriteWidth = sourceRect.Width * 4f, spriteHeight = sourceRect.Height * 4f;
-            Vector2 spriteTopLeft = new((PlayerRtW - spriteWidth) / 2f, PlayerRtH - spriteHeight - 8f);
-            _playerFeetInRenderTarget = new Vector2(PlayerRtW / 2f, PlayerRtH - 8f);
+            int bakeWidth = _playerRenderTarget!.Width, bakeHeight = _playerRenderTarget.Height;
+            Vector2 spriteTopLeft = FrameTopLeftInBake(sourceRect, bakeWidth, bakeHeight);
+            _playerFeetInRenderTarget = FeetInBake(bakeWidth, bakeHeight);
+
+            // A pose already drawn once is copied back rather than drawn again (see PoseLibrary).
+            var libraryKey = new PoseLibraryKey(who.UniqueMultiplayerID, poseSignature.CurrentFrame, poseSignature.FacingDirection,
+                sourceRect, AppearanceOf(who));
+            if (!accessoryRefreshDue && TryCopyKeptPose(graphicsDevice, libraryKey, reflectionNeedsPlayer, who))
+            {
+                _playerColorFresh = reflectionNeedsPlayer;
+                _playerMaskFresh = true;
+                _playerReady = !swimming && !IsSeated(who);
+                PlayerMask = _playerRenderTarget;
+                PlayerColor = _playerColorFresh ? _playerColorRenderTarget : null;
+                return;
+            }
 
             RenderTargetBinding[] previousTargets = graphicsDevice.GetRenderTargets();
             try
@@ -348,12 +378,12 @@ namespace SDVRadiance
                 // white dress cast a white shadow. Works for ANY current or future appearance mod:
                 // whatever got drawn, only its shape survives, white, to take the ink at draw time.
                 _gradientTexture ??= BuildGradient(graphicsDevice);
-                WhitenBake(graphicsDevice, new Rectangle(0, 0, PlayerRtW, PlayerRtH));
+                WhitenBake(graphicsDevice, new Rectangle(0, 0, bakeWidth, bakeHeight));
 
                 // Fade the silhouette's opacity from the feet (full) to the head/far tip (faint),
                 // so the stretched far end reads as a soft penumbra rather than a hard clone.
                 _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
-                _renderTargetSpriteBatch.Draw(_gradientTexture, new Rectangle(0, 0, PlayerRtW, PlayerRtH), Color.White);
+                DrawFeetToHeadFade(bakeWidth, bakeHeight);
                 _renderTargetSpriteBatch.End();
 
                 // FULL-COLOUR twin of the bake (no scrub, no head fade) for the water
@@ -365,8 +395,7 @@ namespace SDVRadiance
                 // and this bake runs again, even though the mask half is still current.
                 if (reflectionNeedsPlayer)
                 {
-                    _playerColorRenderTarget ??= VramTally.Track(new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
-                        SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "player colour");
+                    MakePlayerSized(graphicsDevice, ref _playerColorRenderTarget, "player colour");
                     graphicsDevice.SetRenderTarget(_playerColorRenderTarget);
                     graphicsDevice.Clear(Color.Transparent);
                     _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
@@ -380,6 +409,7 @@ namespace SDVRadiance
                 _playerReady = !swimming && !IsSeated(who);
                 PlayerMask = _playerRenderTarget;
                 PlayerColor = _playerColorFresh ? _playerColorRenderTarget : null;
+                KeepBakedPose(graphicsDevice, libraryKey, reflectionNeedsPlayer, who);
             }
             catch (Exception exception)
             {
@@ -411,14 +441,6 @@ namespace SDVRadiance
             _characterGroundForeshortening = config.ShadowCharacterGroundForeshortening;
         }
 
-        /// <summary>Where the farmer's sprite sits inside an upright player bake: the layout
-        /// <see cref="BakePlayerPose"/> and <see cref="BakeFarmerSilhouette"/> both use.</summary>
-        private static Rectangle PlayerSpriteInBake(Rectangle sourceRect)
-        {
-            int width = sourceRect.Width * 4, height = sourceRect.Height * 4;
-            return new Rectangle((PlayerRtW - width) / 2, PlayerRtH - height - 8, width, height);
-        }
-
         /// <summary>
         /// Lay the player's upright silhouette down by the sun, into a target of its own, with the
         /// soft edge stamped in (see <see cref="LayDownSilhouette"/>). Made again when the pose
@@ -438,7 +460,7 @@ namespace SDVRadiance
                 return;
             }
             ShadowProjection projection = ShadowProjection.ForSolid(_characterSunRotation, _characterSunStretch, _characterGroundForeshortening);
-            Rectangle sprite = PlayerSpriteInBake(_playerBakeSignature.sourceRect);
+            Rectangle sprite = FarmerInBake(Game1.player, _playerBakeSignature.sourceRect, _playerRenderTarget.Width, _playerRenderTarget.Height);
             // Drift is in the slot's own texels, which for an upright player bake are screen
             // pixels already, so it meets the refresh threshold as it is.
             if (_playerSunFresh && _playerSunRenderTarget != null && GpuContent.Usable(_playerSunRenderTarget)
@@ -1125,11 +1147,13 @@ namespace SDVRadiance
 
         private static Texture2D BuildGradient(GraphicsDevice graphicsDevice, float headFade = HeadFade)
         {
-            var texture = new Texture2D(graphicsDevice, 1, PlayerRtH);
-            var data = new Color[PlayerRtH];
-            for (int y = 0; y < PlayerRtH; y++)
+            // As tall as the bake it was tuned on, whatever size the bakes have grown to since
+            // (see DrawFeetToHeadFade).
+            var texture = new Texture2D(graphicsDevice, 1, PlayerRtStartHeight);
+            var data = new Color[PlayerRtStartHeight];
+            for (int y = 0; y < PlayerRtStartHeight; y++)
             {
-                float bottomFraction = (float)y / (PlayerRtH - 1);      // 0 at top, 1 at bottom
+                float bottomFraction = (float)y / (PlayerRtStartHeight - 1);      // 0 at top, 1 at bottom
                 // Non-linear: stays dark near the feet, fades toward the far tip.
                 float rampAlpha = headFade + (1f - headFade) * (float)Math.Pow(bottomFraction, 1.8);
                 data[y] = new Color(255, 255, 255, (int)(rampAlpha * 255f));

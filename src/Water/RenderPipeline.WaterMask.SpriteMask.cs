@@ -419,7 +419,14 @@ namespace SDVRadiance
                 // the pose the game gives them on the seat. Without it nothing excluded a seated
                 // farmer at all, and on the beach pier bench, with the sea behind the seat, the
                 // water's ripple and glitter ran straight over the player. Reported with a picture.
-                if (pw.IsSitting())
+                // Mounted, the body is not excluded by the silhouette either, for a different
+                // reason: the player's bake is dropped entirely while riding (the horse casts the
+                // shadow), so the shader has no silhouette and its box stays shut. Nothing else
+                // excluded a rider, and on a bridge the rider's head and shoulders stand over the
+                // water beyond the rail, where the ripple ran straight across them. Reported with
+                // a picture by a player crossing a bridge on horseback. The game's own draw of a
+                // rider draws the horse first and then the rider, so one call covers both.
+                if (pw.IsSitting() || pw.isRidingHorse())
                     StampFarmerSelf(spriteBatch, pw);
                 // The report said "muttering FARMER speech bubbles", and a farmer is not an
                 // NPC: the self-stamp above covers the residents, and the box here only ever
@@ -472,7 +479,7 @@ namespace SDVRadiance
                 Rectangle obb = other.Who.GetBoundingBox();
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                     new Vector2(obb.Center.X, obb.Bottom - 10f + other.Who.yOffset));
-                spriteBatch.Draw(other.Colour, feet - new Vector2(ShadowRenderer.PlayerRtW / 2f, ShadowRenderer.PlayerRtH - 8f),
+                spriteBatch.Draw(other.Colour, feet - ShadowRenderer.FeetInBake(other.Colour.Width, other.Colour.Height),
                     Color.White);
                 if (other.Who.isEmoting)
                 {
@@ -482,6 +489,19 @@ namespace SDVRadiance
                     StampUiBox(spriteBatch, obb.Center.X, obb.Top - 160, 80, 128);
                 }
                 StampAboveHead(spriteBatch, other.Who);
+            }
+            // The other players who have no colour bake because they are riding: the same hole the
+            // local rider had, and the same answer. Their bake is dropped while mounted exactly as
+            // yours is, so without this a friend crossing a bridge on horseback rippled with the
+            // river behind them while you did not.
+            if (Game1.currentLocation?.farmers is { } farmersHere)
+            {
+                foreach (Farmer rider in farmersHere)
+                {
+                    if (rider == null || rider.IsLocalPlayer || !rider.isRidingHorse())
+                        continue;
+                    StampFarmerSelf(spriteBatch, rider);
+                }
             }
         }
 

@@ -90,7 +90,7 @@ namespace SDVRadiance
         private ShadowProjection _playerSunProjection;
         private float _playerSunBlur = -1f;
         private bool _playerSunFresh;
-        private (int frame, int facing, Rectangle sourceRect) _playerSunSignature = (-1, -1, default);
+        private (int frame, int facing, Rectangle sourceRect, int look) _playerSunSignature = (-1, -1, default, 0);
         private float _playerSunContactHardness = -1f, _playerSunPenumbraStretch = -1f, _playerSunBakeDepth = -1f;
         /// <summary>The square every laid-down farmer silhouette is made in. A person is 64 by
         /// 128 upright and at the longest the dials allow lies down to several times that; the
@@ -113,8 +113,6 @@ namespace SDVRadiance
         private bool _playerColorFresh;  // the COLOUR twin holds the current pose (it is skipped without water)
         private bool _playerMaskFresh;   // the RT holds the current pose (reuse gate); _playerReady
                                          // additionally means "cast a shadow" and drops while swimming
-        internal const int PlayerRtW = 96;
-        internal const int PlayerRtH = 176;
 
         /// <summary>The player's baked silhouette RT for THIS frame (null when not baked) —
         /// the water shader uses it to exclude exactly the player's own pixels (not a box)
@@ -488,6 +486,9 @@ namespace SDVRadiance
             /// <summary>How the map turns each of those sources; without it a queued re-bake
             /// would replay the column unturned and the shadow shape would not match the art.</summary>
             public byte[]? ColumnOrients;
+            /// <summary>Which tile column of a paired prop each source stands in (0 or 1); null
+            /// for a column one tile wide.</summary>
+            public int[]? ColumnOf;
         }
         private bool _isBakingObjects;
         private GraphicsDevice? _objectGraphicsDevice;
@@ -627,8 +628,9 @@ namespace SDVRadiance
         private const int HotBakeTicks = 8;
         private readonly System.Collections.Generic.List<(Texture2D texture, Rectangle sourceRect)> _casterEvictScratch = [];
         private readonly System.Collections.Generic.List<(Texture2D texture, Rectangle sourceRect, SpriteEffects effect)> _objectEvictScratch = [];
-        /// <summary>Pose the player RT was last baked with — identical pose skips the re-bake.</summary>
-        private (int frame, int facing, Rectangle sourceRect) _playerBakeSignature = (-1, -1, default);
+        /// <summary>Pose the player RT was last baked with: an identical pose skips the re-bake. The
+        /// look is the outfit mod's look number (<see cref="Integrations.OutfitAppearance"/>), zero without it.</summary>
+        private (int frame, int facing, Rectangle sourceRect, int look) _playerBakeSignature = (-1, -1, default, 0);
         /// <summary>Whose silhouette the live player bake holds, so another screen can borrow it
         /// rather than bake the same person again (ShadowRenderer.Farmers).</summary>
         private long _playerBakeFarmerId;

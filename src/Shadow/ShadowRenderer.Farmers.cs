@@ -41,7 +41,7 @@ namespace SDVRadiance
             /// rather than trusted: the screen that owns them can leave, and its targets go with it.</summary>
             internal bool Loaned;
             internal Vector2 FeetInRenderTarget;
-            internal (int Frame, int Facing, Rectangle Src) Signature;
+            internal (int Frame, int Facing, Rectangle Src, int Look) Signature;
             internal bool HasSignature;
             /// <summary>Baked and worth drawing: not swimming, not seated, not on a horse.</summary>
             internal bool Ready;
@@ -59,7 +59,7 @@ namespace SDVRadiance
             internal ShadowProjection SunProjection;
             internal float SunBlur = -1f;
             internal bool SunFresh;
-            internal (int Frame, int Facing, Rectangle Src) SunSignature;
+            internal (int Frame, int Facing, Rectangle Src, int Look) SunSignature;
             internal float SunContactHardness = -1f, SunPenumbraStretch = -1f, SunBakeDepth = -1f;
         }
 
@@ -216,7 +216,11 @@ namespace SDVRadiance
                     }
 
                     Rectangle sourceRect = who.FarmerSprite.SourceRect;
-                    var sig = (who.FarmerSprite.CurrentFrame, who.FacingDirection, sourceRect);
+                    // The outfit mod's look number rides along, so a co-op farmer who changes clothes in
+                    // the outfit mod, or whose hair from it moves on a frame, is baked again right then; held
+                    // while frozen, as the player's is.
+                    int look = Determinism.Frozen && bake.HasSignature ? bake.Signature.Look : Integrations.OutfitAppearance.VersionOf(who);
+                    var sig = (who.FarmerSprite.CurrentFrame, who.FacingDirection, sourceRect, look);
                     // Accessory layers that animate on their own clock get the same periodic
                     // refresh the local player gets, and only when a mod that has them is loaded.
                     // Frozen stops it for the same reason it stops the player's own refresh: the
@@ -235,7 +239,7 @@ namespace SDVRadiance
                     {
                         FrameCost.Count(FrameCost.Counter.FarmerBakesShared);
                         bake.Ready = !IsSeated(who);
-                        LayDownFarmerSun(graphicsDevice, bake, sourceRect);
+                        LayDownFarmerSun(graphicsDevice, who, bake, sourceRect);
                         PublishRemoteFarmer(who, bake);
                         continue;
                     }
@@ -243,7 +247,7 @@ namespace SDVRadiance
                         && (!reflectionNeedsFarmers || bake.ColorFresh))
                     {
                         bake.Ready = !IsSeated(who);
-                        LayDownFarmerSun(graphicsDevice, bake, sourceRect);
+                        LayDownFarmerSun(graphicsDevice, who, bake, sourceRect);
                         PublishRemoteFarmer(who, bake);
                         continue;
                     }
@@ -251,8 +255,7 @@ namespace SDVRadiance
                     // PreserveContents, for the same reason every persistent bake target here
                     // needs it: a cached target on DiscardContents decays into garbage between
                     // frames instead of holding the pose it was baked with.
-                    bake.OwnedMask ??= VramTally.Track(new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
-                        SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "farmer bakes (co-op)");
+                    MakePlayerSized(graphicsDevice, ref bake.OwnedMask, "farmer bakes (co-op)");
                     previous ??= graphicsDevice.GetRenderTargets();
                     FrameCost.Count(FrameCost.Counter.FarmerBakes);
                     BakeFarmerSilhouette(graphicsDevice, who, sourceRect, bake.OwnedMask, out Vector2 feetInRt);
@@ -260,8 +263,7 @@ namespace SDVRadiance
                     bake.Loaned = false;
                     if (reflectionNeedsFarmers)
                     {
-                        bake.OwnedColour ??= VramTally.Track(new RenderTarget2D(graphicsDevice, PlayerRtW, PlayerRtH, false,
-                            SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "farmer bakes (co-op)");
+                        MakePlayerSized(graphicsDevice, ref bake.OwnedColour, "farmer bakes (co-op)");
                         BakeFarmerColour(graphicsDevice, who, sourceRect, bake.OwnedColour);
                     }
                     bake.Color = bake.OwnedColour;
@@ -270,7 +272,7 @@ namespace SDVRadiance
                     bake.Signature = sig;
                     bake.HasSignature = true;
                     bake.Ready = !IsSeated(who);
-                    LayDownFarmerSun(graphicsDevice, bake, sourceRect);
+                    LayDownFarmerSun(graphicsDevice, who, bake, sourceRect);
                     PublishRemoteFarmer(who, bake);
                 }
             }
@@ -313,9 +315,8 @@ namespace SDVRadiance
         private void BakeFarmerSilhouette(GraphicsDevice graphicsDevice, Farmer who, Rectangle sourceRect,
             RenderTarget2D target, out Vector2 feetInRenderTarget)
         {
-            float w = sourceRect.Width * 4f, h = sourceRect.Height * 4f;
-            Vector2 pos = new((PlayerRtW - w) / 2f, PlayerRtH - h - 8f);
-            feetInRenderTarget = new Vector2(PlayerRtW / 2f, PlayerRtH - 8f);
+            Vector2 pos = FrameTopLeftInBake(sourceRect, target.Width, target.Height);
+            feetInRenderTarget = FeetInBake(target.Width, target.Height);
 
             graphicsDevice.SetRenderTarget(target);
             graphicsDevice.Clear(Color.Transparent);
@@ -326,10 +327,10 @@ namespace SDVRadiance
             _renderTargetSpriteBatch.End();
 
             _gradientTexture ??= BuildGradient(graphicsDevice);
-            WhitenBake(graphicsDevice, new Rectangle(0, 0, PlayerRtW, PlayerRtH));
+            WhitenBake(graphicsDevice, new Rectangle(0, 0, target.Width, target.Height));
 
             _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp);
-            _renderTargetSpriteBatch.Draw(_gradientTexture, new Rectangle(0, 0, PlayerRtW, PlayerRtH), Color.White);
+            DrawFeetToHeadFade(target.Width, target.Height);
             _renderTargetSpriteBatch.End();
         }
 
@@ -341,8 +342,7 @@ namespace SDVRadiance
         /// </summary>
         private void BakeFarmerColour(GraphicsDevice graphicsDevice, Farmer who, Rectangle sourceRect, RenderTarget2D target)
         {
-            float w = sourceRect.Width * 4f, h = sourceRect.Height * 4f;
-            Vector2 pos = new((PlayerRtW - w) / 2f, PlayerRtH - h - 8f);
+            Vector2 pos = FrameTopLeftInBake(sourceRect, target.Width, target.Height);
 
             graphicsDevice.SetRenderTarget(target);
             graphicsDevice.Clear(Color.Transparent);
@@ -369,7 +369,7 @@ namespace SDVRadiance
         /// has already baked them: one silhouette serves both. True when <paramref name="bake"/>
         /// now points at that screen's targets.
         /// </summary>
-        private bool TryBorrowPlayerBake(long farmerId, (int Frame, int Facing, Rectangle Src) sig,
+        private bool TryBorrowPlayerBake(long farmerId, (int Frame, int Facing, Rectangle Src, int Look) sig,
                                          bool needColour, FarmerBake bake)
         {
             foreach (var kv in _screenBakes)
@@ -514,7 +514,7 @@ namespace SDVRadiance
         /// (see <see cref="LayDownPlayerSun"/>): parity is the rule here, and the skew is part of
         /// it. Made again on a new pose, a moved sun or a moved softness dial, otherwise kept.
         /// </summary>
-        private void LayDownFarmerSun(GraphicsDevice graphicsDevice, FarmerBake bake, Rectangle sourceRect)
+        private void LayDownFarmerSun(GraphicsDevice graphicsDevice, Farmer who, FarmerBake bake, Rectangle sourceRect)
         {
             if (!_characterSunLive || !_castPlayer || !bake.Ready || bake.Mask == null)
             {
@@ -522,7 +522,7 @@ namespace SDVRadiance
                 return;
             }
             ShadowProjection projection = ShadowProjection.ForSolid(_characterSunRotation, _characterSunStretch, _characterGroundForeshortening);
-            Rectangle sprite = PlayerSpriteInBake(sourceRect);
+            Rectangle sprite = FarmerInBake(who, sourceRect, bake.Mask.Width, bake.Mask.Height);
             if (bake.SunFresh && bake.SunMask != null && GpuContent.Usable(bake.SunMask)
                 && bake.SunSignature == bake.Signature
                 && Math.Abs(_characterSunBlur - bake.SunBlur) <= 0.3f

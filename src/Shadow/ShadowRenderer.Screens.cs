@@ -25,7 +25,7 @@ namespace SDVRadiance
         {
             public RenderTarget2D? Mask;
             public RenderTarget2D? Color;
-            public (int frame, int facing, Rectangle sourceRect) Signature = (-1, -1, default);
+            public (int frame, int facing, Rectangle sourceRect, int look) Signature = (-1, -1, default, 0);
             /// <summary>Whose silhouette this is. Another screen's remote-farmer pass reads it to
             /// borrow this bake instead of making a second one of the same person (see
             /// TryBorrowPlayerBake).</summary>
@@ -52,7 +52,7 @@ namespace SDVRadiance
             /// check, keeping its old edge after the strength, contact or penumbra dials moved.</summary>
             public float SunContactHardness = -1f, SunPenumbraStretch = -1f, SunBakeDepth = -1f;
             public bool SunFresh;
-            public (int frame, int facing, Rectangle sourceRect) SunSignature = (-1, -1, default);
+            public (int frame, int facing, Rectangle sourceRect, int look) SunSignature = (-1, -1, default, 0);
 
             public void Release()
             {

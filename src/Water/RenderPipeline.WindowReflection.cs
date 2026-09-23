@@ -409,15 +409,13 @@ namespace SDVRadiance
                 animation = who.FarmerSprite.CurrentAnimationFrame;
             }
 
-            _windowPlayerBake ??= VramTally.Track(new RenderTarget2D(_device, ShadowRenderer.PlayerRtW, ShadowRenderer.PlayerRtH,
-                false, SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "window player");
+            ShadowRenderer.MakePlayerSized(_device, ref _windowPlayerBake, "window player");
             _windowBakeSpriteBatch ??= new SpriteBatch(_device);
             var previous = _device.GetRenderTargets();
             try
             {
-                float width = source.Width * 4f, height = source.Height * 4f;
                 // Same placement as the colour bake: centred, feet eight rows above the bottom.
-                var position = new Vector2((ShadowRenderer.PlayerRtW - width) / 2f, ShadowRenderer.PlayerRtH - height - 8f);
+                Vector2 position = ShadowRenderer.FrameTopLeftInBake(source, _windowPlayerBake!.Width, _windowPlayerBake.Height);
                 _device.SetRenderTarget(_windowPlayerBake);
                 _device.Clear(Color.Transparent);
                 _windowBakeSpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
@@ -813,7 +811,7 @@ namespace SDVRadiance
                         {
                             Rectangle box = who.GetBoundingBox();
                             DrawBodyInPane(spriteBatch, pane, reflect, glassColour, playerBake,
-                                new Rectangle(0, 0, ShadowRenderer.PlayerRtW, ShadowRenderer.PlayerRtH - 8),
+                                new Rectangle(0, 0, playerBake.Width, playerBake.Height - 8),
                                 box.Center.X, box.Bottom + who.yOffset, 1f, indoors);
                             if (_windowToolBakeFresh && _toolMirrorRenderTarget != null)
                                 DrawBodyInPane(spriteBatch, pane, reflect, glassColour, _toolMirrorRenderTarget,
@@ -826,7 +824,7 @@ namespace SDVRadiance
                                 continue;
                             Rectangle box = other.Who.GetBoundingBox();
                             DrawBodyInPane(spriteBatch, pane, reflect, glassColour, other.Colour,
-                                new Rectangle(0, 0, ShadowRenderer.PlayerRtW, ShadowRenderer.PlayerRtH - 8),
+                                new Rectangle(0, 0, other.Colour.Width, other.Colour.Height - 8),
                                 box.Center.X, box.Bottom + other.Who.yOffset, 1f, indoors);
                         }
                         foreach (NPC character in _panePeople)

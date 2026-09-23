@@ -139,6 +139,13 @@ namespace SDVRadiance
         private static readonly double[] _windowSum = new double[PartCount];
         private static readonly double[] _windowMax = new double[PartCount];
         private static readonly double[] _running = new double[PartCount];   // lifetime, for nesting adjustments
+        /// <summary>What each part asked the collector for, in bytes, over the window. The whole
+        /// frame's figure is every mod and the game together, and a stall with "GC gen2 +1" beside
+        /// it could not say whose garbage it was collecting. A part nested in another is counted
+        /// in both, as the chain's rows are.</summary>
+        private static readonly long[] _allocatedAtBegin = new long[PartCount];
+        private static readonly long[] _allocatedPartSum = new long[PartCount];
+        private static readonly long[] _allocatedPartWindowSum = new long[PartCount];
         private static int _frames, _windowFrameCount;
 
         // ---- the longest frames, one by one ----
@@ -396,6 +403,7 @@ namespace SDVRadiance
         internal static long Begin(Part part)
         {
             GpuTimer.MarkBegin((int)part);
+            _allocatedAtBegin[(int)part] = GC.GetAllocatedBytesForCurrentThread();
             return Stopwatch.GetTimestamp();
         }
 
@@ -445,6 +453,7 @@ namespace SDVRadiance
             double ms = (Stopwatch.GetTimestamp() - started) * 1000.0 / Stopwatch.Frequency - subtractMilliseconds;
             if (ms < 0) ms = 0;
             int i = (int)part;
+            _allocatedPartSum[i] += GC.GetAllocatedBytesForCurrentThread() - _allocatedAtBegin[i];
             _sum[i] += ms;
             _running[i] += ms;
             _thisFrame[i] += ms;
@@ -703,6 +712,8 @@ namespace SDVRadiance
             }
             Array.Copy(_sum, _windowSum, PartCount);
             Array.Copy(_max, _windowMax, PartCount);
+            Array.Copy(_allocatedPartSum, _allocatedPartWindowSum, PartCount);
+            Array.Clear(_allocatedPartSum, 0, PartCount);
             Array.Copy(_countSum, _countWindowSum, CounterCount);
             Array.Copy(_countMax, _countWindowMax, CounterCount);
             Array.Copy(_gpuSum, _gpuWindowSum, PartCount);
@@ -754,6 +765,8 @@ namespace SDVRadiance
             Array.Clear(_windowSum, 0, PartCount);
             Array.Clear(_windowMax, 0, PartCount);
             Array.Clear(_running, 0, PartCount);
+            Array.Clear(_allocatedPartSum, 0, PartCount);
+            Array.Clear(_allocatedPartWindowSum, 0, PartCount);
             Array.Clear(_countSum, 0, CounterCount);
             Array.Clear(_countWindowSum, 0, CounterCount);
             Array.Clear(_countMax, 0, CounterCount);
@@ -841,6 +854,16 @@ namespace SDVRadiance
             // so the lines add up to the total instead of counting that time twice.
             text.AppendLine($"  {"TOTAL",-26} avg {total,6:0.000} ms   = {total / 16.67 * 100:0.0}% of a 60 fps frame"
                           + (anyGpu ? $"   | GPU avg {gpuTotal,6:0.000} ms" : ""));
+            long[] allocatedByPart = complete ? _allocatedPartWindowSum : _allocatedPartSum;
+            var asked = new System.Text.StringBuilder();
+            for (int i = 0; i < PartCount; i++)
+            {
+                double kilobytes = allocatedByPart[i] / 1024.0 / frames;
+                if (kilobytes >= 0.05)
+                    asked.Append(asked.Length == 0 ? "" : " · ").Append($"{Names[i]} {kilobytes:0.0}");
+            }
+            text.AppendLine($"  memory asked of the collector per frame, KB (the effect chain's includes its grid rows): "
+                          + (asked.Length == 0 ? "none" : asked.ToString()));
 
             double frameAvg = (complete ? _frameWindowSum : _frameSum) / frames;
             double frameWorst = complete ? _frameWindowMax : _frameMax;

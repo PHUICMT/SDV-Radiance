@@ -611,7 +611,8 @@ namespace SDVRadiance
         {
             if (request.ColumnSources != null && request.ColumnLevels != null)
                 return BakeTileColumn(graphicsDevice, key.texture, request.ColumnSources, request.ColumnLevels,
-                    request.ColumnOrients, request.ColumnSources.Length, request.Projection, request.Blur, out renderTarget, out feetInRenderTarget, into);
+                    request.ColumnOrients, request.ColumnSources.Length, request.Projection, request.Blur, out renderTarget, out feetInRenderTarget, into,
+                    request.ColumnOf);
             return BakeObjectSprite(graphicsDevice, key.texture, key.sourceRect, request.BaseOrigin, key.effect & ~ShakenMarker,
                 request.Projection, request.Blur, out renderTarget, out feetInRenderTarget, into, request.FadeShareFromFeet);
         }

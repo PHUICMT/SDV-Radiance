@@ -87,6 +87,10 @@ namespace SDVRadiance
         internal static void AskWhatDrew(Point screenPoint)
         {
             _askedPoint = screenPoint;
+            MapTileNeighbours.ClearOutcomes();
+            MapTileNeighbours.Recording = true;
+            SheetUpscaler.WatchedHits.Clear();
+            SheetUpscaler.WatchedPixel = screenPoint;
             _flushWatchFrames = 2;
             _flushedWith.Clear();
             _answered.Clear();
@@ -206,6 +210,11 @@ namespace SDVRadiance
             if (_askedPoint is not Point point)
                 return;
             _askedPoint = null;
+            MapTileNeighbours.Recording = false;
+            // The pixel stays watched for a few more frames, for draws made after the world step
+            // (other mods' RenderedWorld, overlays); SheetUpscaler prints those when it closes.
+            SheetUpscaler.WatchFramesLeft = 3;
+            SheetUpscaler.WatchMonitor = monitor;
             if (!HarmonyPatcher.DrawHooksInstalled)
             {
                 monitor.Log("radiance_drawsat: the draw hooks are off (radiance_hooks on puts them back), "
@@ -240,9 +249,39 @@ namespace SDVRadiance
                           + alpha, LogLevel.Info);
             }
             if (hits == 0)
-                monitor.Log("  nothing the game drew into its sorted world batch covers that pixel. "
-                          + "The map's BACK layers are drawn before the batch and are not on this list, "
-                          + "so bare ground answers nothing here.", LogLevel.Info);
+                monitor.Log("  nothing the game drew into its sorted world batch covers that pixel.", LogLevel.Info);
+            DescribeMapTilesAt(monitor, point);
+            monitor.Log($"  every draw through the game's three full Draw overloads that covered it this frame, any batch ({SheetUpscaler.WatchedHits.Count}):", LogLevel.Info);
+            foreach (string hit in SheetUpscaler.WatchedHits)
+                monitor.Log("      " + hit, LogLevel.Info);
+            SheetUpscaler.WatchedHits.Clear();
+        }
+
+        /// <summary>Every map layer's tile under the point, the Back layers included, which the draw
+        /// list above cannot see: they are drawn before the sorted batch. A patch of ground or hedge
+        /// that stays sharp while the rest is soft is usually one of these.</summary>
+        private static void DescribeMapTilesAt(IMonitor monitor, Point point)
+        {
+            var map = Game1.currentLocation?.Map;
+            if (map == null)
+                return;
+            int worldX = Game1.viewport.X + point.X, worldY = Game1.viewport.Y + point.Y;
+            int tileX = worldX / Game1.tileSize, tileY = worldY / Game1.tileSize;
+            monitor.Log($"  map tiles at world {worldX},{worldY} (tile {tileX},{tileY}), in the map's layer order:", LogLevel.Info);
+            foreach (var layer in map.Layers)
+            {
+                if (tileX < 0 || tileY < 0 || tileX >= layer.LayerWidth || tileY >= layer.LayerHeight)
+                    continue;
+                var tile = layer.Tiles[tileX, tileY];
+                if (tile == null)
+                    continue;
+                string animated = tile is xTile.Tiles.AnimatedTile frames ? $", animated over {frames.TileFrames.Length} frames" : "";
+                string turned = tile.Properties.TryGetValue("@Rotation", out var rotation) || tile.Properties.TryGetValue("@Flip", out rotation)
+                    ? $", @Rotation/@Flip {rotation}" : "";
+                monitor.Log($"      {layer.Id}: {tile.TileSheet?.Id} ({tile.TileSheet?.ImageSource}) tile {tile.TileIndex}{animated}{turned}"
+                          + $" -> {MapTileNeighbours.OutcomeAt(layer.Id, tileX, tileY)}"
+                          , LogLevel.Info);
+            }
         }
 
         /// <summary>Where a recorded draw landed on screen. A destination draw carries its own box;

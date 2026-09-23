@@ -67,8 +67,8 @@ def fingerprint(block):
     return f"{hash_value:016x}"
 
 
-def both_alpha_readings(block):
-    """The tile's fingerprint under BOTH alpha conventions, because only one of them is ours.
+def alpha_readings(block):
+    """The tile's fingerprint under every alpha convention a label can have been keyed by.
 
     The game hashes what Texture2D.GetData hands back, which is premultiplied; this reads a PNG,
     which is not. For an opaque tile the two are the same number and this returns one value. For a
@@ -76,17 +76,31 @@ def both_alpha_readings(block):
     this side can know: measured against the fingerprints the game itself recorded, the straight
     reading was right 27 times and the premultiplied 4, and 13 tiles matched neither.
 
-    Listing both costs a few bytes on the tiles that have soft edges and closes the one way this
-    file can be actively wrong - telling the mod a label does not belong to art it does belong to,
-    which takes the glass out of a window that was correct all along.
+    The third reading is HF Studio's. A browser canvas holds pixels premultiplied and rounds both
+    ways, so getImageData hands the page round(round(c * a / 255) * 255 / a) for every soft pixel
+    and zero colour under zero alpha. A label painted there on a soft-edged tile is keyed by that
+    number, which is neither of the other two, so without it artvariants.py found no picture the
+    label belonged to and dropped it: the bush beside Way Back Pelican Town's hot spring, erased
+    of its water in the page, came back with the water on. Reproduced to the digit on that tile.
+
+    Listing all of them costs a few bytes on the tiles that have soft edges and closes the one way
+    this file can be actively wrong - telling the mod a label does not belong to art it does
+    belong to, which takes the glass out of a window that was correct all along.
     """
     straight = fingerprint(block)
     alpha = block[:, :, 3].astype(numpy.uint16)
     premultiplied = block.astype(numpy.uint16).copy()
     for channel in range(3):
         premultiplied[:, :, channel] = (premultiplied[:, :, channel] * alpha + 127) // 255
-    other = fingerprint(premultiplied.astype(numpy.uint8))
-    return {straight} if other == straight else {straight, other}
+    readings = {straight, fingerprint(premultiplied.astype(numpy.uint8))}
+    canvas = premultiplied.copy()
+    soft = (alpha > 0) & (alpha < 255)
+    for channel in range(3):
+        restored = (premultiplied[:, :, channel].astype(numpy.uint32) * 255 + alpha // 2) // numpy.maximum(alpha, 1)
+        canvas[:, :, channel] = numpy.where(alpha == 0, 0,
+                                            numpy.where(soft, numpy.minimum(restored, 255), block[:, :, channel]))
+    readings.add(fingerprint(canvas.astype(numpy.uint8)))
+    return readings
 
 
 def placed_tiles(index):
@@ -156,7 +170,7 @@ def group_for_sheet(name, arts, reference_art, wanted):
         if key is None:
             continue
         keys[tile] = key
-        prints[tile] |= both_alpha_readings(block)
+        prints[tile] |= alpha_readings(block)
     carried = 0
     for art in arts:
         if art == reference_art:
@@ -169,7 +183,7 @@ def group_for_sheet(name, arts, reference_art, wanted):
             if block is None or labels.shading_key(block) != key:
                 continue
             before = len(prints[tile])
-            prints[tile] |= both_alpha_readings(block)
+            prints[tile] |= alpha_readings(block)
             carried += len(prints[tile]) - before
     return {tile: sorted(values) for tile, values in prints.items() if values}, len(keys), carried
 

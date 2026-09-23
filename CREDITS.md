@@ -16,8 +16,10 @@ with no translation falls back to English rather than breaking anything, so a la
 is never held back waiting for the last few.
 
 Bundled with the mod:
-- **Simplified Chinese** by Rime961, included since 1.2.2 and resynced against a moving key set every
-  release since, most recently the fourteen keys 1.7.5 added, which arrived unasked.
+- **Simplified Chinese** by Rime961, who looked after it from 1.2.2 through 2.1.3 and resynced it
+  against a moving key set every release in between, more than once before being asked. The
+  choice of 贴图 for "sprite" across the whole file was theirs too, made after 2.1.3. The two
+  camera lines were corrected by passersby10086 in 2.1.3.
 - **Thai** by the author.
 
 Contributed, not bundled:
@@ -50,8 +52,36 @@ either was copied; the section is kept so the debt is on the record.
   - https://github.com/ameisen/SpriteMaster
 
 The rules themselves are published algorithms implemented from their descriptions: EPX/Scale2x,
-and an xBR-style edge rule for the softer look. If any third-party code is ever ported into this
-mod, it will be listed here with its copyright notice, as its license requires.
+and an xBR-style edge rule for the softer look. Third-party code ported into this mod is listed
+below with its copyright notice, as its license requires.
+
+### MMPX (ported)
+
+`SheetMmpxPS` in `shaders/sheetscale.fx` is a port of the MMPX reference implementation, one of
+the rules the soft look can be made with. The "edges kept" variant's extra conditions are this
+project's own.
+
+- Morgan McGuire and Mara Gagiu, "MMPX Style-Preserving Pixel Art Magnification", Journal of
+  Computer Graphics Techniques 10(2), 2021. https://casual-effects.com/research/McGuire2021PixelArt/
+
+```
+Copyright 2020 Morgan McGuire & Mara Gagiu.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or
+substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
 
 ---
 *If you believe your work is used here without proper attribution, please open an issue.*

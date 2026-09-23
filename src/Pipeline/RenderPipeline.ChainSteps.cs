@@ -83,6 +83,14 @@ namespace SDVRadiance
         private readonly double[] _chainStepAccumulated = new double[(int)ChainStep.Count];
         private readonly double[] _chainStepWorst = new double[(int)ChainStep.Count];
         private readonly int[] _chainStepFrames = new int[(int)ChainStep.Count];
+        private readonly long[] _chainStepAllocated = new long[(int)ChainStep.Count];
+        /// <summary>The collector's count at each recent step start, looked up by the start's own
+        /// timestamp at its end, so a step can say how much memory it asked for without its call
+        /// sites changing. A ring rather than a stack: a step that returns early without its end
+        /// only ages out, where a stack would pair every later end with the wrong start.</summary>
+        private static readonly long[] _stepStartStamps = new long[32];
+        private static readonly long[] _stepStartAllocated = new long[32];
+        private static int _stepStartNext;
         private int _chainStepReadbackStalls;
         private double _chainStepReadbackWorst;
 
@@ -90,7 +98,15 @@ namespace SDVRadiance
         /// from the pre-draw handler, outside this class) can put their own step times here.</summary>
         internal static RenderPipeline? DrawingScreen;
 
-        internal static long ChainStepBegin() => Stopwatch.GetTimestamp();
+        internal static long ChainStepBegin()
+        {
+            long stamp = Stopwatch.GetTimestamp();
+            int slot = _stepStartNext;
+            _stepStartNext = (slot + 1) & 31;
+            _stepStartStamps[slot] = stamp;
+            _stepStartAllocated[slot] = GC.GetAllocatedBytesForCurrentThread();
+            return stamp;
+        }
 
         internal void ChainStepEnd(ChainStep step, long startedAt)
         {
@@ -99,6 +115,14 @@ namespace SDVRadiance
             _chainStepAccumulated[i] += ms;
             _chainStepFrames[i]++;
             if (ms > _chainStepWorst[i]) _chainStepWorst[i] = ms;
+            for (int slot = 0; slot < _stepStartStamps.Length; slot++)
+            {
+                if (_stepStartStamps[slot] != startedAt)
+                    continue;
+                _chainStepAllocated[i] += GC.GetAllocatedBytesForCurrentThread() - _stepStartAllocated[slot];
+                _stepStartStamps[slot] = 0;
+                break;
+            }
         }
 
         /// <summary>A GetData that took longer than a millisecond waited for the card, whatever
@@ -120,7 +144,8 @@ namespace SDVRadiance
                 if (_chainStepFrames[i] == 0) continue;
                 double avg = _chainStepAccumulated[i] / _chainStepFrames[i];
                 if (i < (int)ChainStep.LightList) total += avg;
-                sb.AppendLine($"  {ChainStepNames[i],-24} avg {avg,7:0.000} ms   worst {_chainStepWorst[i],7:0.000} ms   {_chainStepFrames[i]} calls");
+                sb.AppendLine($"  {ChainStepNames[i],-24} avg {avg,7:0.000} ms   worst {_chainStepWorst[i],7:0.000} ms   {_chainStepFrames[i]} calls"
+                            + $"   {_chainStepAllocated[i] / 1024.0 / _chainStepFrames[i],6:0.0} KB a call");
             }
             sb.Append($"  {"all steps",-24} avg {total,7:0.000} ms");
             if (_chainStepReadbackStalls > 0)
@@ -128,6 +153,7 @@ namespace SDVRadiance
             Array.Clear(_chainStepAccumulated, 0, _chainStepAccumulated.Length);
             Array.Clear(_chainStepWorst, 0, _chainStepWorst.Length);
             Array.Clear(_chainStepFrames, 0, _chainStepFrames.Length);
+            Array.Clear(_chainStepAllocated, 0, _chainStepAllocated.Length);
             _chainStepReadbackStalls = 0;
             _chainStepReadbackWorst = 0;
             return sb.ToString();

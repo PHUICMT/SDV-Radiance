@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
@@ -64,12 +65,50 @@ namespace SDVRadiance
             public readonly ulong[] Art;
             public readonly byte[] Label;
             public readonly string Source;
-            public LabelVariant(ulong[] art, byte[] label, string source)
-            { Art = art; Label = label; Source = source; }
+            /// <summary>The unique ids of the content packs whose art this was painted on, from the
+            /// per-mod dump. Empty for a variant nobody has attributed; such a variant only ever
+            /// follows its fingerprints.</summary>
+            public readonly string[] Mods;
+            public LabelVariant(ulong[] art, byte[] label, string source, string[] mods)
+            { Art = art; Label = label; Source = source; Mods = mods; }
         }
 
         /// <summary>Sheet -> tile -> the labels painted for art other than the shipped one.</summary>
         private readonly Dictionary<string, Dictionary<int, List<LabelVariant>>> _variantsBySheet = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The same variants again, by the sheet's FAMILY - its name with the season taken
+        /// off - and kept only where they name the packs they were painted for.
+        ///
+        /// <para>A pack paints spring_outdoorsTileSheet and fall_outdoorsTileSheet from the same map,
+        /// so a pond is a pond in both and only the paint differs. A variant painted on the spring
+        /// picture is named by the spring fingerprint alone, and in fall no fingerprint matches; this
+        /// is what lets it be found anyway, by asking Content Patcher which pack is painting the
+        /// fall tile (see <see cref="ContentPatcherArtOwners"/>).</para></summary>
+        private readonly Dictionary<string, Dictionary<int, List<LabelVariant>>> _ownedVariantsByFamily = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>How many tiles took a pack's painted label because Content Patcher named that
+        /// pack as the painter, by pack. The report's receipt for the fallback above.</summary>
+        private readonly Dictionary<string, int> _followedByPack = new(StringComparer.OrdinalIgnoreCase);
+        public IReadOnlyDictionary<string, int> FollowedByPack => _followedByPack;
+
+        /// <summary>The first tile Content Patcher named a painter for that none of its labels list,
+        /// for radiance_report.</summary>
+        internal string? FirstNamedButUnlisted { get; private set; }
+
+        /// <summary>A sheet name without its season: <c>fall_town</c> and <c>spring_town</c> are one
+        /// family, <c>paths</c> is a family of one.</summary>
+        internal static string FamilyOf(string sheet)
+        {
+            int underscore = sheet.IndexOf('_');
+            if (underscore > 0)
+            {
+                string head = sheet[..underscore];
+                if (head.Equals("spring", StringComparison.OrdinalIgnoreCase) || head.Equals("summer", StringComparison.OrdinalIgnoreCase)
+                    || head.Equals("fall", StringComparison.OrdinalIgnoreCase) || head.Equals("winter", StringComparison.OrdinalIgnoreCase))
+                    return sheet[(underscore + 1)..];
+            }
+            return sheet;
+        }
 
         /// <summary>How many tiles were drawn from a variant rather than the base label, by the
         /// name of whoever painted it. Reported, because a variant that never matches anything is
@@ -166,6 +205,18 @@ namespace SDVRadiance
                 return;
             foreach ((string sheet, int index) memo in _forgottenVerdictScratch)
                 _artVerdict.Remove(memo);
+            _artVerdictGeneration++;
+        }
+
+        /// <summary>Forget every art verdict, so the next ask decides again. For a switch that changes
+        /// how verdicts are reached, which no single asset reload stands for.</summary>
+        public void ForgetAllArtVerdicts()
+        {
+            _artVerdict.Clear();
+            _refusedBySheet.Clear();
+            ArtBoundLabelsRefusedForChangedArt = 0;
+            _followedByPack.Clear();
+            FirstNamedButUnlisted = null;
             _artVerdictGeneration++;
         }
 
@@ -507,6 +558,21 @@ namespace SDVRadiance
             /// <summary>False means "cannot tell", which the guard treats as no disagreement
             /// rather than as a mismatch. A reader that is not wired up yet, a disposed sheet and
             /// a tile with no art all land here.</summary>
+            /// <summary>The sheet's width in tiles, to turn a tile index into the pixels a Content
+            /// Patcher edit rectangle is written in.</summary>
+            internal bool TryGetSheetWidthTiles(out int widthTiles)
+            {
+                widthTiles = 0;
+                if (_layer != null)
+                {
+                    xTile.Tiles.Tile? tile = _layer.Tiles[_tileX, _tileY];
+                    widthTiles = tile?.TileSheet?.SheetSize.Width ?? 0;
+                }
+                else if (_sheet != null && !_sheet.IsDisposed)
+                    widthTiles = _sheet.Width / 16;
+                return widthTiles > 0;
+            }
+
             internal bool TryFingerprint(out ulong fingerprint)
             {
                 fingerprint = 0;
@@ -525,6 +591,14 @@ namespace SDVRadiance
             return GuardAgainstChangedArt(key, variantsForSheet, index, art, label);
         }
 
+        private List<LabelVariant>? OwnedVariantsAt(string sheet, int index)
+        {
+            if (_ownedVariantsByFamily.Count == 0)
+                return null;
+            return _ownedVariantsByFamily.TryGetValue(FamilyOf(sheet), out var tiles)
+                && tiles.TryGetValue(index, out List<LabelVariant>? owned) ? owned : null;
+        }
+
         /// <summary>The same guard for a caller that has already found the sheet, which is the map
         /// tile path: it holds a <see cref="SheetLabels"/> and must not re-normalise the name or
         /// look the variants up again for every tile of the map.</summary>
@@ -534,7 +608,8 @@ namespace SDVRadiance
             // a set worked out once for the sheet rather than by reading the label through: that
             // read was 256 bytes per ask, and the surface build asks around eight times per tile.
             if ((sheetLabels.Variants == null || !sheetLabels.Variants.ContainsKey(index))
-                && (_artBySheet.Count == 0 || sheetLabels.ArtBoundTiles?.Contains(index) != true))
+                && (_artBySheet.Count == 0 || sheetLabels.ArtBoundTiles?.Contains(index) != true)
+                && sheetLabels.OwnedTiles?.Contains(index) != true)
                 return label;
             return GuardAgainstChangedArt(sheetLabels.Sheet, sheetLabels.Variants, index, art, label);
         }
@@ -544,9 +619,10 @@ namespace SDVRadiance
         {
             bool hasVariants = variantsForSheet != null && variantsForSheet.ContainsKey(index);
             Dictionary<int, List<LabelVariant>>? variantsHere = variantsForSheet;
+            List<LabelVariant>? owned = OwnedVariantsAt(key, index);
             // The fast path, and it is nearly every tile: nothing painted for other art, and a
             // label with no glass in it has nothing this guard can take away. No hashing at all.
-            if (!hasVariants && (_artBySheet.Count == 0 || !CarriesArtBoundClass(label)))
+            if (!hasVariants && owned == null && (_artBySheet.Count == 0 || !CarriesArtBoundClass(label)))
                 return label;
 
             (string, int) memo = (key, index);
@@ -556,11 +632,15 @@ namespace SDVRadiance
             _artBySheet.TryGetValue(key, out Dictionary<int, ulong[]>? painted);
             ulong[]? wasPaintedOn = null;
             painted?.TryGetValue(index, out wasPaintedOn);
-            if (!hasVariants && wasPaintedOn == null)
+            if (!hasVariants && wasPaintedOn == null && owned == null)
                 return label;      // never fingerprinted, so there is nothing to disagree with
 
             if (!art.TryFingerprint(out ulong live))
-                return label;      // no reading to disagree with; see the remarks above
+                return FollowThePainter(memo, key, index, art, owned) ?? label;   // see the remarks above
+
+            if (ContentPatcherArtOwners.FollowOnly && owned != null
+                && FollowThePainter(memo, key, index, art, owned) is { } forced)
+                return forced;
 
             // A variant painted FOR this exact art wins outright. It is not a fallback and it is
             // not guessed at: somebody looked at this picture and said where its glass is.
@@ -575,6 +655,13 @@ namespace SDVRadiance
                     return variant.Label;
                 }
             }
+
+            // No picture this pack was painted on, and no picture of this name at all: whose art IS
+            // it? A map does not change with the season, the weather or the palette, so a label
+            // painted for a pack's spring picture is right for its autumn one too; only the
+            // fingerprint cannot say so. Content Patcher can.
+            if (FollowThePainter(memo, key, index, art, owned) is { } followed)
+                return followed;
 
             // The fingerprint decides, on its own. A silhouette tier was tried here and removed:
             // it rescued NOTHING and it let real mismatches through. Every case a "same drawing,
@@ -594,6 +681,31 @@ namespace SDVRadiance
                 _refusedBySheet[key] = _refusedBySheet.TryGetValue(key, out int already) ? already + 1 : 1;
             }
             return verdict;
+        }
+
+        /// <summary>The label painted for the pack Content Patcher says is painting this tile, or
+        /// null. Remembered like every other verdict, and forgotten with them when the sheet
+        /// reloads, which is also when a patch starts or stops applying.</summary>
+        private byte[]? FollowThePainter((string, int) memo, string key, int index, ArtToCheck art,
+                                         List<LabelVariant>? owned)
+        {
+            if (owned == null || !art.TryGetSheetWidthTiles(out int widthTiles)
+                || !ContentPatcherArtOwners.TryGetPainter("Maps/" + key, index, widthTiles, out string painter))
+                return null;
+            foreach (LabelVariant variant in owned)
+            {
+                foreach (string mod in variant.Mods)
+                {
+                    if (!mod.Equals(painter, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    _artVerdict[memo] = variant.Label;
+                    _followedByPack[painter] = _followedByPack.TryGetValue(painter, out int seen) ? seen + 1 : 1;
+                    return variant.Label;
+                }
+            }
+            FirstNamedButUnlisted ??= $"{key} tile {index} painted by {painter}, its labels list "
+                + string.Join(" / ", owned.Select(variant => string.Join("+", variant.Mods)));
+            return null;
         }
 
         /// <summary>Where the art behind one labelled sheet name comes from. <paramref name="From"/>
@@ -698,7 +810,12 @@ namespace SDVRadiance
                             continue;   // a variant with no art to match, or no label, is dead data
                         string source = one.TryGetProperty("source", out JsonElement src) && src.ValueKind == JsonValueKind.String
                             ? src.GetString() ?? "unnamed" : "unnamed";
-                        list.Add(new LabelVariant([.. art], bytes, source));
+                        var mods = new List<string>();
+                        if (one.TryGetProperty("mods", out JsonElement modsEl) && modsEl.ValueKind == JsonValueKind.Array)
+                            foreach (JsonElement id in modsEl.EnumerateArray())
+                                if (id.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(id.GetString()))
+                                    mods.Add(id.GetString()!);
+                        list.Add(new LabelVariant([.. art], bytes, source, [.. mods]));
                         entries++;
                     }
                     if (list.Count > 0)
@@ -708,7 +825,22 @@ namespace SDVRadiance
                     }
                 }
                 if (byTile.Count > 0)
-                    _variantsBySheet[NormalizeSheet(sheet.Name)] = byTile;
+                {
+                    string normalised = NormalizeSheet(sheet.Name);
+                    _variantsBySheet[normalised] = byTile;
+                    string family = FamilyOf(normalised);
+                    foreach (var tileVariants in byTile)
+                        foreach (LabelVariant variant in tileVariants.Value)
+                        {
+                            if (variant.Mods.Length == 0)
+                                continue;
+                            if (!_ownedVariantsByFamily.TryGetValue(family, out var ownedTiles))
+                                _ownedVariantsByFamily[family] = ownedTiles = [];
+                            if (!ownedTiles.TryGetValue(tileVariants.Key, out var ownedHere))
+                                ownedTiles[tileVariants.Key] = ownedHere = [];
+                            ownedHere.Add(variant);
+                        }
+                }
             }
             if (tiles > 0)
                 monitor.Log($"Art variants loaded: {entries} label(s) for {tiles} tile(s) across "
@@ -783,14 +915,23 @@ namespace SDVRadiance
             /// instead of reading 256 bytes for every tile of the map that draws from it.</summary>
             internal readonly HashSet<int>? ArtBoundTiles;
 
+            /// <summary>Tile indices a pack has a painted label for in some season of this sheet's
+            /// family, so the fast path does not skip them before Content Patcher is asked.</summary>
+            internal readonly HashSet<int>? OwnedTiles;
+
             internal SheetLabels(string sheet, Dictionary<int, byte[]>? tiles,
-                                 Dictionary<int, List<LabelVariant>>? variants, HashSet<int>? artBoundTiles)
-            { Sheet = sheet; Tiles = tiles; Variants = variants; ArtBoundTiles = artBoundTiles; }
+                                 Dictionary<int, List<LabelVariant>>? variants, HashSet<int>? artBoundTiles,
+                                 HashSet<int>? ownedTiles)
+            { Sheet = sheet; Tiles = tiles; Variants = variants; ArtBoundTiles = artBoundTiles; OwnedTiles = ownedTiles; }
         }
 
         /// <summary>Weak, because a map reload builds new tile sheet objects and the old ones must
         /// be free to go with it.</summary>
         private readonly System.Runtime.CompilerServices.ConditionalWeakTable<xTile.Tiles.TileSheet, SheetLabels> _labelsByTileSheet = [];
+
+        /// <summary>The label of a tile nobody painted: every pixel ground. Only ever passed through
+        /// the guard and compared by reference, never handed out.</summary>
+        private static readonly byte[] UnpaintedTile = new byte[256];
 
         private SheetLabels LabelsFor(xTile.Tiles.TileSheet tileSheet)
         {
@@ -804,7 +945,9 @@ namespace SDVRadiance
                 foreach (var labelledTile in tiles)
                     if (CarriesArtBoundClass(labelledTile.Value))
                         (artBoundTiles ??= []).Add(labelledTile.Key);
-            var found = new SheetLabels(sheet, tiles, variants, artBoundTiles);
+            HashSet<int>? ownedTiles = _ownedVariantsByFamily.TryGetValue(FamilyOf(sheet), out var ownedByTile)
+                ? [.. ownedByTile.Keys] : null;
+            var found = new SheetLabels(sheet, tiles, variants, artBoundTiles, ownedTiles);
             _labelsByTileSheet.Add(tileSheet, found);
             return found;
         }
@@ -820,7 +963,13 @@ namespace SDVRadiance
                 return null;
             SheetLabels sheetLabels = LabelsFor(tileSheet!);
             if (sheetLabels.Tiles == null || !sheetLabels.Tiles.TryGetValue(index, out byte[]? bytes))
-                return null;
+            {
+                // Nothing painted for the base game's art, but a pack painted this tile in some
+                // season: its pond can stand where the base game had grass.
+                if (sheetLabels.OwnedTiles?.Contains(index) != true)
+                    return null;
+                bytes = UnpaintedTile;
+            }
             // Labels are painted on the sheet, upright. The map may place the tile mirrored or
             // turned, so the marks have to be turned the same way before they can be compared with
             // anything on screen - otherwise a mirrored waterfall's liquid pixels sit on the wrong
@@ -834,8 +983,10 @@ namespace SDVRadiance
             // A label describes a PICTURE, and the picture behind a sheet name can be replaced by
             // another mod without the name or the tile index moving an inch. Glass is the part
             // that cannot survive that; see GuardAgainstChangedArt for why only glass.
-            return MapLayers.Orient(
-                GuardAgainstChangedArt(sheetLabels, index, new ArtToCheck(layer, x, y), bytes), orient);
+            byte[] decided = GuardAgainstChangedArt(sheetLabels, index, new ArtToCheck(layer, x, y), bytes);
+            if (ReferenceEquals(decided, UnpaintedTile))
+                return null;
+            return MapLayers.Orient(decided, orient);
         }
 
         /// <summary>

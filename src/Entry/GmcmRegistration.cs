@@ -931,6 +931,8 @@ namespace SDVRadiance
         private static void RegisterSmoothingPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
             configMenu.AddPage(manifest, "smoothing", () => translate("tuner.tab.smoothing"));
+            configMenu.AddBoolOption(manifest, () => config().ZoomAreaFilter, value => config().ZoomAreaFilter = value,
+                () => translate("config.zoomareafilter.name"), () => translate("config.zoomareafilter.tooltip"));
             configMenu.AddBoolOption(manifest, () => config().SheetUpscaleEnabled, value => config().SheetUpscaleEnabled = value,
                 () => translate("config.sheetupscale.name"), () => translate("config.sheetupscale.tooltip"));
             configMenu.AddTextOption(manifest,
@@ -939,27 +941,67 @@ namespace SDVRadiance
                 () => translate("config.sheetupscalestyle.name"), () => translate("config.sheetupscalestyle.tooltip"),
                 [nameof(SheetSmoothingStyle.Scale2x), nameof(SheetSmoothingStyle.Soft4x)],
                 choice => translate($"config.sheetupscalestyle.{choice.ToLowerInvariant()}"));
+            configMenu.AddTextOption(manifest,
+                () => config().SheetUpscaleSoftKernel.ToString(),
+                value => config().SheetUpscaleSoftKernel = Enum.TryParse<SoftSmoothingKernel>(value, out var kernel) ? kernel : SoftSmoothingKernel.Xbr,
+                () => translate("config.sheetupscalekernel.name"), () => translate("config.sheetupscalekernel.tooltip"),
+                [nameof(SoftSmoothingKernel.Xbr), nameof(SoftSmoothingKernel.Mmpx), nameof(SoftSmoothingKernel.MmpxEdgeGuarded), nameof(SoftSmoothingKernel.Epx)],
+                choice => translate($"config.sheetupscalekernel.{choice.ToLowerInvariant()}"));
+            configMenu.AddNumberOption(manifest, () => config().SheetUpscaleSteadyRead, value => config().SheetUpscaleSteadyRead = value,
+                () => translate("config.sheetupscalesteady.name"), () => translate("config.sheetupscalesteady.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().SheetUpscaleGradientSmoothing, value => config().SheetUpscaleGradientSmoothing = value,
+                () => translate("config.sheetupscalegradients.name"), () => translate("config.sheetupscalegradients.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddSectionTitle(manifest, () => translate("tuner.section.smoothingfamilies"));
             configMenu.AddBoolOption(manifest, () => config().SheetUpscaleWorld, value => config().SheetUpscaleWorld = value,
                 () => translate("config.sheetupscaleworld.name"), () => translate("config.sheetupscaleworld.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessWorld, value => config().SheetUpscaleSmoothnessWorld = value,
                 () => translate("config.sheetupscaleworld.name") + ": " + translate("config.sheetupscalesmoothness.name"), () => translate("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddTextOption(manifest,
+                () => config().SheetUpscaleKernelWorld.ToString(),
+                value => config().SheetUpscaleKernelWorld = Enum.TryParse<FamilyKernelChoice>(value, out var chosenWorld) ? chosenWorld : FamilyKernelChoice.SameAsAll,
+                () => translate("config.sheetupscaleworld.name") + ": " + translate("config.sheetupscalekernelfamily.name"), () => translate("config.sheetupscalekernelfamily.tooltip"),
+                [nameof(FamilyKernelChoice.SameAsAll), nameof(FamilyKernelChoice.Xbr), nameof(FamilyKernelChoice.Mmpx), nameof(FamilyKernelChoice.MmpxEdgeGuarded), nameof(FamilyKernelChoice.Epx)],
+                choice => translate($"config.sheetupscalekernelfamily.{choice.ToLowerInvariant()}"));
             configMenu.AddBoolOption(manifest, () => config().SheetUpscaleCharacters, value => config().SheetUpscaleCharacters = value,
                 () => translate("config.sheetupscalecharacters.name"), () => translate("config.sheetupscalecharacters.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessCharacters, value => config().SheetUpscaleSmoothnessCharacters = value,
                 () => translate("config.sheetupscalecharacters.name") + ": " + translate("config.sheetupscalesmoothness.name"), () => translate("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddTextOption(manifest,
+                () => config().SheetUpscaleKernelCharacters.ToString(),
+                value => config().SheetUpscaleKernelCharacters = Enum.TryParse<FamilyKernelChoice>(value, out var chosenCharacters) ? chosenCharacters : FamilyKernelChoice.SameAsAll,
+                () => translate("config.sheetupscalecharacters.name") + ": " + translate("config.sheetupscalekernelfamily.name"), () => translate("config.sheetupscalekernelfamily.tooltip"),
+                [nameof(FamilyKernelChoice.SameAsAll), nameof(FamilyKernelChoice.Xbr), nameof(FamilyKernelChoice.Mmpx), nameof(FamilyKernelChoice.MmpxEdgeGuarded), nameof(FamilyKernelChoice.Epx)],
+                choice => translate($"config.sheetupscalekernelfamily.{choice.ToLowerInvariant()}"));
             configMenu.AddBoolOption(manifest, () => config().SheetUpscaleItems, value => config().SheetUpscaleItems = value,
                 () => translate("config.sheetupscaleitems.name"), () => translate("config.sheetupscaleitems.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessItems, value => config().SheetUpscaleSmoothnessItems = value,
                 () => translate("config.sheetupscaleitems.name") + ": " + translate("config.sheetupscalesmoothness.name"), () => translate("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddTextOption(manifest,
+                () => config().SheetUpscaleKernelItems.ToString(),
+                value => config().SheetUpscaleKernelItems = Enum.TryParse<FamilyKernelChoice>(value, out var chosenItems) ? chosenItems : FamilyKernelChoice.SameAsAll,
+                () => translate("config.sheetupscaleitems.name") + ": " + translate("config.sheetupscalekernelfamily.name"), () => translate("config.sheetupscalekernelfamily.tooltip"),
+                [nameof(FamilyKernelChoice.SameAsAll), nameof(FamilyKernelChoice.Xbr), nameof(FamilyKernelChoice.Mmpx), nameof(FamilyKernelChoice.MmpxEdgeGuarded), nameof(FamilyKernelChoice.Epx)],
+                choice => translate($"config.sheetupscalekernelfamily.{choice.ToLowerInvariant()}"));
             configMenu.AddBoolOption(manifest, () => config().SheetUpscalePortraits, value => config().SheetUpscalePortraits = value,
                 () => translate("config.sheetupscaleportraits.name"), () => translate("config.sheetupscaleportraits.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessPortraits, value => config().SheetUpscaleSmoothnessPortraits = value,
                 () => translate("config.sheetupscaleportraits.name") + ": " + translate("config.sheetupscalesmoothness.name"), () => translate("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddTextOption(manifest,
+                () => config().SheetUpscaleKernelPortraits.ToString(),
+                value => config().SheetUpscaleKernelPortraits = Enum.TryParse<FamilyKernelChoice>(value, out var chosenPortraits) ? chosenPortraits : FamilyKernelChoice.SameAsAll,
+                () => translate("config.sheetupscaleportraits.name") + ": " + translate("config.sheetupscalekernelfamily.name"), () => translate("config.sheetupscalekernelfamily.tooltip"),
+                [nameof(FamilyKernelChoice.SameAsAll), nameof(FamilyKernelChoice.Xbr), nameof(FamilyKernelChoice.Mmpx), nameof(FamilyKernelChoice.MmpxEdgeGuarded), nameof(FamilyKernelChoice.Epx)],
+                choice => translate($"config.sheetupscalekernelfamily.{choice.ToLowerInvariant()}"));
             configMenu.AddBoolOption(manifest, () => config().SheetUpscaleInterface, value => config().SheetUpscaleInterface = value,
                 () => translate("config.sheetupscaleinterface.name"), () => translate("config.sheetupscaleinterface.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().SheetUpscaleSmoothnessInterface, value => config().SheetUpscaleSmoothnessInterface = value,
                 () => translate("config.sheetupscaleinterface.name") + ": " + translate("config.sheetupscalesmoothness.name"), () => translate("config.sheetupscalesmoothness.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddTextOption(manifest,
+                () => config().SheetUpscaleKernelInterface.ToString(),
+                value => config().SheetUpscaleKernelInterface = Enum.TryParse<FamilyKernelChoice>(value, out var chosenInterface) ? chosenInterface : FamilyKernelChoice.SameAsAll,
+                () => translate("config.sheetupscaleinterface.name") + ": " + translate("config.sheetupscalekernelfamily.name"), () => translate("config.sheetupscalekernelfamily.tooltip"),
+                [nameof(FamilyKernelChoice.SameAsAll), nameof(FamilyKernelChoice.Xbr), nameof(FamilyKernelChoice.Mmpx), nameof(FamilyKernelChoice.MmpxEdgeGuarded), nameof(FamilyKernelChoice.Epx)],
+                choice => translate($"config.sheetupscalekernelfamily.{choice.ToLowerInvariant()}"));
         }
 
         /// <summary>Hotkeys, the debug switches, and the roadmap section.</summary>

@@ -109,11 +109,22 @@ namespace SDVRadiance
                             NoteNearPlayer(x, y, cast.Note);
                         continue;
                     }
+                    if (!cast.PairChecked)
+                        PairWithRight(location, buildingsLayer, frontLayer, alwaysFrontLayer, cast, x, y, mapWidth, mapHeight);
+                    if (cast.ShadowByLeft)
+                    {
+                        // The left half cast this tile's shadow with its own; this tile only goes
+                        // back on top of it.
+                        if (!_isBakingObjects)
+                            RedrawPropBase(spriteBatch, location, buildingsLayer, cast, x, y);
+                        continue;
+                    }
+                    TilePropCast shadowCast = cast.Pair ?? cast;
                     // The northern wall only stands in the way while the shadow actually runs
                     // north. With the sun past a quarter turn the cast goes the other way, and
                     // holding it back for a wall behind it would delete a shadow for no reason.
-                    if ((cast.BlockedNorth && !propPointsDownScreen)
-                        || (leanDirection < 0 ? cast.BlockedWest : leanDirection > 0 && cast.BlockedEast))
+                    if ((shadowCast.BlockedNorth && !propPointsDownScreen)
+                        || (leanDirection < 0 ? shadowCast.BlockedWest : leanDirection > 0 && shadowCast.BlockedEast))
                     {
                         NoteNearPlayer(x, y, "skip: wall in the way (the lean would paint onto it)");
                         continue;
@@ -121,14 +132,15 @@ namespace SDVRadiance
                     if (cast.Note != null)
                         NoteNearPlayer(x, y, cast.Note);
 
-                    var key = cast.Key;
-                    Texture2D texture = cast.Texture;
-                    int count = cast.Sources.Length;
+                    var key = shadowCast.Key;
+                    Texture2D texture = shadowCast.Texture;
+                    int count = shadowCast.Sources.Length;
+                    float columnsWide = shadowCast.Columns;
                     if (_isBakingObjects)
                     {
                         if (_objectGraphicsDevice != null && !_bakedObjectCache.ContainsKey(key)
-                            && BakeTileColumn(_objectGraphicsDevice, texture, cast.Sources, cast.Levels, cast.Orients, count, projection, blur,
-                                out RenderTarget2D renderTarget, out Vector2 feetInRenderTarget))
+                            && BakeTileColumn(_objectGraphicsDevice, texture, shadowCast.Sources, shadowCast.Levels, shadowCast.Orients, count, projection, blur,
+                                out RenderTarget2D renderTarget, out Vector2 feetInRenderTarget, null, shadowCast.ColumnOf))
                             // A tile column is 16 px wide and as many tiles tall as the prop: its lean already carries
                             // further than its width, so there is nothing for the narrowing to fix here.
                             _bakedObjectCache[key] = NewObjectBake(_objectGraphicsDevice, renderTarget, feetInRenderTarget, projection, blur);
@@ -143,13 +155,13 @@ namespace SDVRadiance
                         // Unless it can never be baked at all, which is a request that fails for
                         // the rest of the session and reads as ordinary cache churn while it does.
                         // The sprite path stopped making those; this one had gone on making them.
-                        if (!ObjectBakeCouldFit(new Rectangle(0, 0, 16, cast.Height * 16), new Vector2(8f, cast.Height * 16f), projection, blur))
+                        if (!ObjectBakeCouldFit(new Rectangle(0, 0, (int)(16 * columnsWide), shadowCast.Height * 16), new Vector2(8f * columnsWide, shadowCast.Height * 16f), projection, blur))
                         {
                             FrameCost.Count(FrameCost.Counter.BakeTooBig);
                             continue;
                         }
                         FrameCost.Count(FrameCost.Counter.BakeMisses);
-                        QueueTileColumnBake(key, cast, projection, blur);
+                        QueueTileColumnBake(key, shadowCast, projection, blur);
                         continue;
                     }
                     FrameCost.Count(FrameCost.Counter.ShadowSprites);
@@ -157,12 +169,13 @@ namespace SDVRadiance
                     // The same staleness rule every other caster uses, now that a column is laid
                     // down by the same projection: how far its farthest pixel has moved between the
                     // lay-down in the pixels and the one the sun asks for.
-                    if (projection.Drift(bakedEntry.BakedProjection, 16f, cast.Height * 16f) * 4f > ShearRefreshPixels
+                    if (projection.Drift(bakedEntry.BakedProjection, 16f * columnsWide, shadowCast.Height * 16f) * 4f > ShearRefreshPixels
                         || Math.Abs(blur - bakedEntry.BakedBlur) > 0.3f
                         || bakedEntry.BakedContactHardness != ContactHardnessNow || bakedEntry.BakedDepth != BakeDepthNow
                         || bakedEntry.BakedPenumbraStretch != PenumbraStretchNow)
-                        QueueTileColumnBake(key, cast, projection, blur);
-                    Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(x * 64f + 32f, (y + 1f) * 64f - 2f));
+                        QueueTileColumnBake(key, shadowCast, projection, blur);
+                    // A pair is pinned at the middle of its two tiles, as its column was baked.
+                    Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(x * 64f + 32f * columnsWide, (y + 1f) * 64f - 2f));
                     // A body ON this tile (someone sitting on a map bench, standing against a
                     // fence) sorts at roughly y*64/10000 - a full tile BELOW this prop's normal
                     // (y+1)*64 depth. Both the cast and the base redraw below therefore won over
@@ -199,9 +212,24 @@ namespace SDVRadiance
                     // batch, so without this the near end of the cast darkens the prop itself
                     // (the "shadow on the lamp post" complaint). Front-stack tiles need no redraw —
                     // the Front layer paints after us anyway.
-                    DrawOrientedTile(spriteBatch, texture, cast.BaseSrc,
-                        Game1.GlobalToLocal(Game1.viewport, new Vector2(x * 64f, y * 64f)), 4f,
-                        cast.BaseOrient, Color.White, Math.Min(1f, depth + 5e-4f));
+                    // It is the MAP's art, so it goes through the smoothing like the map's own draw
+                    // of it, with that draw's neighbours: the shadow pass holds the smoothing back
+                    // for its silhouettes, and this copy went on raw over the smoothed tile, a crisp
+                    // square at the foot of every fence end, tree and post.
+                    bool upscalerWasSuspended = SheetUpscaler.SuspendedForOwnDraw;
+                    SheetUpscaler.SuspendedForOwnDraw = false;
+                    var drawingTile = MapTileNeighbours.BeginOwnTileDraw(buildingsLayer, x, y);
+                    try
+                    {
+                        DrawOrientedTile(spriteBatch, texture, cast.BaseSrc,
+                            Game1.GlobalToLocal(Game1.viewport, new Vector2(x * 64f, y * 64f)), 4f,
+                            cast.BaseOrient, Color.White, Math.Min(1f, depth + 5e-4f));
+                    }
+                    finally
+                    {
+                        MapTileNeighbours.EndOwnTileDraw(drawingTile);
+                        SheetUpscaler.SuspendedForOwnDraw = upscalerWasSuspended;
+                    }
                 }
             }
         }
@@ -306,6 +334,23 @@ namespace SDVRadiance
             bool propBySpan = !propByCoverage && coverage > 0.04f && spanWidth <= MaxPropSpan && spanHeight <= MaxPropSpan;
             if (!propByCoverage && !propBySpan)
                 return NoCast($"skip: cov={coverage:0.00} span={spanWidth}x{spanHeight} → not a prop");
+            // A see-through tile is a prop by its coverage (a picket, a post), but only while it
+            // stands apart. One that is part of a mass of map art wider AND taller than a prop
+            // can be is that mass's ragged edge: the leaves round a big bush, the fringe of a
+            // cliff. Cast alone, each of them laid down a square shadow of its own, and the bush
+            // read as tiles with a shadow each - the author's pictures of 23 September, asking
+            // whether we could not tell it was one bush. A fence is one tile tall and keeps its
+            // posts' shadows.
+            if (propByCoverage)
+            {
+                int massWidth = 1, massHeight = 1;
+                for (int scanX = x - 1; scanX >= 0 && massWidth <= MaxPropSpan && buildingsLayer.Tiles[scanX, y] != null; scanX--) massWidth++;
+                for (int scanX = x + 1; scanX < mapWidth && massWidth <= MaxPropSpan && buildingsLayer.Tiles[scanX, y] != null; scanX++) massWidth++;
+                for (int scanY = y - 1; scanY >= 0 && massHeight <= MaxPropSpan && buildingsLayer.Tiles[x, scanY] != null; scanY--) massHeight++;
+                for (int scanY = y + 1; scanY < mapHeight && massHeight <= MaxPropSpan && buildingsLayer.Tiles[x, scanY] != null; scanY++) massHeight++;
+                if (massWidth > MaxPropSpan && massHeight > MaxPropSpan)
+                    return NoCast($"skip: cov={coverage:0.00} in a mass {massWidth}x{massHeight}+ → the edge of something bigger, not a prop");
+            }
             // A "prop" sitting ON opaque art below is wall decor — a window halfway up a
             // house wall must not cast.
             if (OpaqueMapTile(buildingsLayer, x, y + 1, mapHeight))
@@ -387,6 +432,8 @@ namespace SDVRadiance
                 Orients = new byte[count],
                 Key = (texture, new Rectangle(keyHash, count, -1, -1), SpriteEffects.None),   // width −1 can never collide with a real source rect
                 Note = DiagnosticMonitor != null ? $"cast: col={count} cov={coverage:0.00}" : null,
+                SolidIsland = propBySpan,
+                ColumnOf = new int[count],
             };
             Array.Copy(_tileColumnSourceRects, result.Sources, count);
             Array.Copy(_tileColumnLevels, result.Levels, count);
@@ -398,6 +445,106 @@ namespace SDVRadiance
                 result.BlockedEast |= OpaqueMapTile(buildingsLayer, x + 1, y - i, mapHeight);
             }
             return result;
+        }
+
+        /// <summary>
+        /// Two solid prop tiles side by side on one row are halves of one thing (a bush, a cactus
+        /// two tiles wide) and cast as one: the left tile's column takes the right tile's sources
+        /// as its second column, and the right tile only redraws its base.
+        /// </summary>
+        /// <remarks>Cast apart, each half laid down its own square shadow with its own soft rim,
+        /// and where the two rims met there was a line down the middle of the shadow: a bush that
+        /// read as tiles, each with a shadow of its own. Reported with a picture on 23 September.
+        /// Only solid islands pair; a fence is a row of see-through posts and each post keeps its
+        /// own shadow. The span rule already holds an island to two tiles wide.</remarks>
+        private void PairWithRight(GameLocation location, xTile.Layers.Layer buildingsLayer, xTile.Layers.Layer frontLayer,
+            xTile.Layers.Layer? alwaysFrontLayer, TilePropCast cast, int x, int y, int mapWidth, int mapHeight)
+        {
+            cast.PairChecked = true;
+            if (!cast.SolidIsland || cast.ShadowByLeft)
+                return;
+            // Whichever half the camera reaches first, the pair comes out the same: a tile whose
+            // left neighbour is a solid half of the same art is a right half, whatever order the
+            // two are drawn in.
+            if (x > 0)
+            {
+                TilePropCast left = ClassifiedAt(location, buildingsLayer, frontLayer, alwaysFrontLayer, x - 1, y, mapWidth, mapHeight);
+                if (left.Casts && left.SolidIsland && ReferenceEquals(left.Texture, cast.Texture) && !left.ShadowByLeft)
+                {
+                    if (!left.PairChecked)
+                        PairWithRight(location, buildingsLayer, frontLayer, alwaysFrontLayer, left, x - 1, y, mapWidth, mapHeight);
+                    return;
+                }
+            }
+            if (x + 1 >= mapWidth)
+                return;
+            TilePropCast right = ClassifiedAt(location, buildingsLayer, frontLayer, alwaysFrontLayer, x + 1, y, mapWidth, mapHeight);
+            if (!right.Casts || !right.SolidIsland || right.ShadowByLeft || !ReferenceEquals(right.Texture, cast.Texture))
+                return;
+            right.PairChecked = true;
+            right.ShadowByLeft = true;
+            int count = cast.Sources.Length + right.Sources.Length;
+            var pair = new TilePropCast
+            {
+                Casts = true,
+                Texture = cast.Texture,
+                BaseSrc = cast.BaseSrc,
+                BaseOrient = cast.BaseOrient,
+                Height = Math.Max(cast.Height, right.Height),
+                Columns = 2,
+                Sources = [.. cast.Sources, .. right.Sources],
+                Levels = [.. cast.Levels, .. right.Levels],
+                Orients = [.. cast.Orients, .. right.Orients],
+                ColumnOf = new int[count],
+                SolidIsland = true,
+                BlockedNorth = cast.BlockedNorth || right.BlockedNorth,
+                BlockedWest = cast.BlockedWest,
+                BlockedEast = right.BlockedEast,
+                // Height -2 marks a pair, so it can never share a baked shadow with a single column.
+                Key = (cast.Texture, new Rectangle(cast.Key.sourceRect.X * 31 + right.Key.sourceRect.X, count, -1, -2), SpriteEffects.None),
+            };
+            for (int i = cast.Sources.Length; i < count; i++)
+                pair.ColumnOf[i] = 1;
+            cast.Pair = pair;
+        }
+
+        private TilePropCast ClassifiedAt(GameLocation location, xTile.Layers.Layer buildingsLayer, xTile.Layers.Layer frontLayer,
+            xTile.Layers.Layer? alwaysFrontLayer, int x, int y, int mapWidth, int mapHeight)
+        {
+            int cell = y * mapWidth + x;
+            if (!_propCache.TryGetValue(cell, out TilePropCast? cast))
+                _propCache[cell] = cast = ClassifyTileProp(location, buildingsLayer, frontLayer, alwaysFrontLayer, x, y, mapWidth, mapHeight);
+            return cast;
+        }
+
+        /// <summary>The right half of a pair going back on top of the shadow its left half cast,
+        /// the same way the left half's own base goes back (see the draw loop).</summary>
+        private void RedrawPropBase(SpriteBatch spriteBatch, GameLocation location, xTile.Layers.Layer buildingsLayer, TilePropCast cast, int x, int y)
+        {
+            bool bodyHere = false;
+            try
+            {
+                bodyHere = location.isCharacterAtTile(new Vector2(x, y)) != null
+                    || (Game1.player != null && Game1.player.currentLocation == location
+                        && Game1.player.TilePoint.X == x && Game1.player.TilePoint.Y == y);
+            }
+            catch { }
+            float rowY = bodyHere ? y * 64f : (y + 1f) * 64f;
+            float depth = MathHelper.Clamp(rowY / 10000f + x * 1e-5f - ShadowDepthBias, 0f, 1f);
+            bool upscalerWasSuspended = SheetUpscaler.SuspendedForOwnDraw;
+            SheetUpscaler.SuspendedForOwnDraw = false;
+            var drawingTile = MapTileNeighbours.BeginOwnTileDraw(buildingsLayer, x, y);
+            try
+            {
+                DrawOrientedTile(spriteBatch, cast.Texture, cast.BaseSrc,
+                    Game1.GlobalToLocal(Game1.viewport, new Vector2(x * 64f, y * 64f)), 4f,
+                    cast.BaseOrient, Color.White, Math.Min(1f, depth + 5e-4f));
+            }
+            finally
+            {
+                MapTileNeighbours.EndOwnTileDraw(drawingTile);
+                SheetUpscaler.SuspendedForOwnDraw = upscalerWasSuspended;
+            }
         }
 
         /// <summary>
@@ -501,7 +648,8 @@ namespace SDVRadiance
             if (_objectBakeQueue.Count >= ObjectBakeQueueCap || cast.Sources.Length == 0)
                 return;
             _objectBakeQueue[key] = new ObjectBakeRequest { Projection = projection, Blur = blurPixels,
-                ColumnSources = cast.Sources, ColumnLevels = cast.Levels, ColumnOrients = cast.Orients };
+                ColumnSources = cast.Sources, ColumnLevels = cast.Levels, ColumnOrients = cast.Orients,
+                ColumnOf = cast.Columns > 1 ? cast.ColumnOf : null };
         }
 
         /// <summary>
@@ -529,6 +677,19 @@ namespace SDVRadiance
             /// ways the sun can take it? Answered here because the sun is the only part of this
             /// that changes, and it changes between three fixed choices.</summary>
             public bool BlockedNorth, BlockedWest, BlockedEast;
+            /// <summary>A solid island of map art (a bush, a cactus) rather than a see-through prop
+            /// such as a fence: only these pair with the tile beside them.</summary>
+            public bool SolidIsland;
+            /// <summary>How many tiles wide the column is, and which of them each source is in.</summary>
+            public int Columns = 1;
+            public int[] ColumnOf = [];
+            /// <summary>The column this tile casts as one piece with the tile to its right, when
+            /// the two are halves of one prop; see <see cref="PairWithRight"/>.</summary>
+            public TilePropCast? Pair;
+            /// <summary>This tile is the right half of a pair: its shadow is cast by the left half,
+            /// and it only redraws its own base.</summary>
+            public bool ShadowByLeft;
+            public bool PairChecked;
         }
 
         /// <summary>The classifications this call reads: the set kept for the place being drawn.</summary>
@@ -600,13 +761,17 @@ namespace SDVRadiance
         /// later replays the same column without redoing the scan that found it.</summary>
         private bool BakeTileColumn(GraphicsDevice graphicsDevice, Texture2D texture, Rectangle[] sources, int[] tileLevels,
             byte[]? orientations, int count, ShadowProjection projection, float blurPixels,
-            out RenderTarget2D renderTarget, out Vector2 feetInRenderTarget, RenderTarget2D? into = null)
+            out RenderTarget2D renderTarget, out Vector2 feetInRenderTarget, RenderTarget2D? into = null, int[]? columnOf = null)
         {
             renderTarget = null!;
             feetInRenderTarget = default;
-            int levels = 0;
+            int levels = 0, columns = 1;
             for (int i = 0; i < count; i++)
+            {
                 levels = Math.Max(levels, tileLevels[i] + 1);
+                if (columnOf != null && i < columnOf.Length)
+                    columns = Math.Max(columns, columnOf[i] + 1);
+            }
             // Map art is 16 px a tile, so the column's own size is levels of that; the bake scale
             // turns it into slot texels exactly as it does for a sprite. This path used to be the
             // one place a refusal still happened INSIDE the bake: a column too wide for its slot
@@ -620,8 +785,9 @@ namespace SDVRadiance
             // pinned at the middle of its bottom edge. Laid down by the same ShadowProjection every
             // other caster uses, so it answers to the same rules and there is one place left in the
             // mod that decides what the sun does to a silhouette.
-            var columnRect = new Rectangle(0, 0, (int)tileSource, (int)(levels * tileSource));
-            var columnOrigin = new Vector2(tileSource * 0.5f, levels * tileSource);
+            // A pair (see PairWithRight) is as many tiles wide as it has columns, pinned the same way.
+            var columnRect = new Rectangle(0, 0, (int)(columns * tileSource), (int)(levels * tileSource));
+            var columnOrigin = new Vector2(columns * tileSource * 0.5f, levels * tileSource);
             if (count <= 0 || !ChooseBakeFit(columnRect, columnOrigin, projection, blurPixels, into,
                                              out int columnSlotClass, out float scale, out float blurTexels, out float rimTexels,
                                              out float left, out float right, out float top, out float bottom))
@@ -644,17 +810,20 @@ namespace SDVRadiance
                 graphicsDevice.Clear(Color.Transparent);
                 _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, RasterizerState.CullNone, null, lean);
                 for (int i = 0; i < count; i++)
+                {
+                    int column = columnOf != null && i < columnOf.Length ? columnOf[i] : 0;
                     DrawOrientedTile(_renderTargetSpriteBatch, texture, sources[i],
-                        new Vector2(feetInRenderTarget.X - tileTexels * 0.5f, feetInRenderTarget.Y - tileTexels * (tileLevels[i] + 1)),
+                        new Vector2(feetInRenderTarget.X - tileTexels * columns * 0.5f + tileTexels * column, feetInRenderTarget.Y - tileTexels * (tileLevels[i] + 1)),
                         scale, orientations != null && i < orientations.Length ? orientations[i] : (byte)0, Color.Black, 0f);
+                }
                 _renderTargetSpriteBatch.End();
                 WhitenBake(graphicsDevice, renderTarget.Bounds);
                 // The fade rides the same matrix as the silhouette. Drawn upright over a slot the
                 // projection has already laid down, it would fade rows the column no longer has.
                 _renderTargetSpriteBatch.Begin(SpriteSortMode.Deferred, MultiplyAlpha, SamplerState.PointClamp, null, RasterizerState.CullNone, null, lean);
                 _renderTargetSpriteBatch.Draw(_propGradientTexture!,
-                    new Rectangle((int)(feetInRenderTarget.X - tileTexels * 0.5f), (int)(feetInRenderTarget.Y - columnHeight),
-                                  (int)tileTexels, (int)columnHeight), Color.White);
+                    new Rectangle((int)(feetInRenderTarget.X - tileTexels * columns * 0.5f), (int)(feetInRenderTarget.Y - columnHeight),
+                                  (int)(tileTexels * columns), (int)columnHeight), Color.White);
                 _renderTargetSpriteBatch.End();
                 // Screen pixels in the slot now, so the rim is stamped the way a sprite's is, held
                 // to a third of each of the column's own two extents.
@@ -662,7 +831,7 @@ namespace SDVRadiance
                 float acrossPerWidth = (float)Math.Sqrt(projection.AcrossX * projection.AcrossX + projection.AcrossY * projection.AcrossY);
                 float rimRoot = (float)Math.Sqrt(PenumbraElongation(alongPerHeight));
                 var columnRim = new Vector2(
-                    PenumbraHeldToShadow(blurTexels / rimRoot, tileTexels * acrossPerWidth),
+                    PenumbraHeldToShadow(blurTexels / rimRoot, tileTexels * columns * acrossPerWidth),
                     PenumbraHeldToShadow(blurTexels * rimRoot, columnHeight * alongPerHeight));
                 BlurSlotInPlace(graphicsDevice, renderTarget, blurTexels, feetInRenderTarget,
                     new Vector2(projection.AlongX, projection.AlongY), alongPerHeight, columnRim);

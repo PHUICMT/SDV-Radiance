@@ -1696,11 +1696,12 @@ namespace SDVRadiance
                 // (see FarmerDrawnAnchor). Anchoring at the shadow's feet line (bottom - 10) or a
                 // whole yOffset above the box both left a strip of dead water over the head.
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport, ShadowRenderer.FarmerDrawnAnchor(who));
-                Vector2 topLeft = feet - new Vector2(ShadowRenderer.PlayerRtW / 2f, ShadowRenderer.PlayerRtH - 8f);
+                // The mask's own size: it grows to hold what the outfit mod draws (ShadowRenderer.PlayerSize).
+                Vector2 topLeft = feet - ShadowRenderer.FeetInBake(playerMask.Width, playerMask.Height);
                 // Screen px -> UV against the FRAME the game drew, not this pass's target
                 // (see _frameWidth): with render scale on they are different sizes.
                 playerBox = new Vector4(topLeft.X / _frameWidth, topLeft.Y / _frameHeight,
-                    (topLeft.X + ShadowRenderer.PlayerRtW) / _frameWidth, (topLeft.Y + ShadowRenderer.PlayerRtH) / _frameHeight);
+                    (topLeft.X + playerMask.Width) / _frameWidth, (topLeft.Y + playerMask.Height) / _frameHeight);
             }
             GetParam(effect, "PlayerRect")?.SetValue(playerBox);
             GetParam(effect, "PlayerMaskTexture")?.SetValue(playerMask);

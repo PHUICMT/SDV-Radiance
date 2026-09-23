@@ -26,6 +26,7 @@
     <Compile Include="$(ModPath)\src\Shared\MapLayers.cs" />
     <Compile Include="$(ModPath)\src\Shared\LabelClass.cs" />
     <Compile Include="$(ModPath)\src\Shared\AssetNames.cs" />
+    <Compile Include="$(ModPath)\src\Shared\ContentPatcherArtOwners.cs" />
     <Compile Include="Program.cs" />
   </ItemGroup>
 
