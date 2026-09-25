@@ -135,7 +135,7 @@ namespace SDVRadiance
             // advance them to later this frame; a frozen capture settles both, so the harness
             // sees no difference, and in play a sixtieth of a fade is not a picture.
             _patchCasts.Clear();
-            _characterGroundForeshortening = config.ShadowCharacterGroundForeshortening;
+            _characterGroundForeshortening = PeopleGroundForeshortening(config);
             if (_sunBlend > 0.004f)
             {
                 ComputeSun(out float rotation, out float stretch, out float alpha);
@@ -216,9 +216,9 @@ namespace SDVRadiance
             {
                 device.SetRenderTarget(_playerPatch);
                 device.Clear(Color.Transparent);
-                // Immediate, so each cast's lean and direction reach the shader before its taps.
-                batch.Begin(SpriteSortMode.Immediate, BlendState.AlphaBlend, SamplerState.LinearClamp,
-                    DepthStencilState.None, RasterizerState.CullNone, effect);
+                // A batch of its own per cast, begun after the cast's lean and direction are set,
+                // so the shader has them for its taps; deferred, so a grounded cast's corners can be
+                // moved before it is sent (see ShadowRenderer.GroundedCasts).
                 foreach (var (source, sourceRect, origin, rotation, scale, alpha, castBlur, facing, lean) in _patchCasts)
                 {
                     Rectangle area = sourceRect ?? source.Bounds;
@@ -229,24 +229,35 @@ namespace SDVRadiance
                     effect.Parameters["SpriteSize"]?.SetValue(new Vector2(area.Width, area.Height));
                     effect.Parameters["Scale"]?.SetValue(scale);
                     effect.Parameters["Rotation"]?.SetValue(rotation);
+                    Vector2 acrossAxis = CastAcrossAxis(rotation);
+                    // Off the ground, the cast moves out along its own light (see LiftShift). The
+                    // laid-down sun cast carries no rotation of its own; its lean and length are
+                    // the sun's.
+                    float lift = BodyLift(who);
+                    Vector2 liftShift = LiftShift(lift, lean, sourceRect.HasValue ? _characterSunStretch : scale.Y);
+                    float liftedAlpha = alpha * LiftFade(lift);
+                    effect.Parameters["AcrossAxis"]?.SetValue(acrossAxis);
                     // Up the screen (cos > 0): the shadow climbs the wall it meets. Down the
                     // screen: it stops at the counter. See the shader for why. Asked of the lean
                     // the shadow really has, which a laid-down cast carries in its pixels.
                     effect.Parameters["KeepOnSolid"]?.SetValue(Math.Cos(lean) > 0.0 ? 1f : 0f);
                     ShadowDepthPower = _patchDepthPower;
+                    batch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp,
+                        DepthStencilState.None, RasterizerState.CullNone, effect);
                     try
                     {
-                        DrawSoft(batch, Taps9, source, sourceRect, _patchFeetInPatch, Color.White, alpha, rotation,
-                            origin, scale, 0f, facing, castBlur, shadowLengthPerHeight: scale.Y);
+                        WithGroundedCast(() => DrawSoft(batch, Taps9, source, sourceRect, _patchFeetInPatch + liftShift, Color.White, liftedAlpha, rotation,
+                            origin, scale, 0f, facing, castBlur, shadowLengthPerHeight: scale.Y));
                     }
                     finally
                     {
+                        batch.End();
                         ShadowDepthPower = 1f;
                     }
-                    Rectangle castBounds = CastBounds(area.Width, area.Height, origin, rotation, scale, castBlur);
+                    Rectangle castBounds = CastBounds(area.Width, area.Height, origin, rotation, acrossAxis, scale, castBlur);
+                    castBounds.Offset((int)Math.Round(liftShift.X), (int)Math.Round(liftShift.Y));
                     _patchContent = _patchContent.IsEmpty ? castBounds : Rectangle.Union(_patchContent, castBounds);
                 }
-                batch.End();
             }
             finally
             {
@@ -285,14 +296,14 @@ namespace SDVRadiance
 
         /// <summary>The patch pixels one cast can touch: the silhouette's quad under the draw's
         /// lean and scale, plus the blur's reach, so the strips cover no more than they must.</summary>
-        private Rectangle CastBounds(float w, float h, Vector2 origin, float rotation, Vector2 scale, float blur)
+        private Rectangle CastBounds(float w, float h, Vector2 origin, float rotation, Vector2 acrossAxis, Vector2 scale, float blur)
         {
             float cs = (float)Math.Cos(rotation), sn = (float)Math.Sin(rotation);
             float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
             foreach (Vector2 corner in new[] { new Vector2(0, 0), new Vector2(w, 0), new Vector2(0, h), new Vector2(w, h) })
             {
                 Vector2 scaled = (corner - origin) * scale;
-                var p = _patchFeetInPatch + new Vector2(scaled.X * cs - scaled.Y * sn, scaled.X * sn + scaled.Y * cs);
+                var p = _patchFeetInPatch + scaled.X * acrossAxis + scaled.Y * new Vector2(-sn, cs);
                 minX = Math.Min(minX, p.X); maxX = Math.Max(maxX, p.X);
                 minY = Math.Min(minY, p.Y); maxY = Math.Max(maxY, p.Y);
             }

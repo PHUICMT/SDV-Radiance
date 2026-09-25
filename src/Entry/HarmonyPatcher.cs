@@ -224,6 +224,26 @@ namespace SDVRadiance
                     postfix: new HarmonyMethod(typeof(FoliageSway), nameof(FoliageSway.Crop_Draw_Postfix)),
                     transpiler: new HarmonyMethod(typeof(ShadowSuppression), nameof(ShadowSuppression.CropSway_Transpiler)));
             }
+            // A flier's own blob (the fairy trinket's companion, a bat) fades out under the grounded
+            // shadow look, which casts one of ours off the ground by the flier's height instead.
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(StardewValley.Companions.FlyingCompanion), nameof(StardewValley.Companions.FlyingCompanion.Draw)),
+                "a flying companion's blob giving way to its shadow",
+                transpiler: new HarmonyMethod(typeof(ShadowSuppression), nameof(ShadowSuppression.FlierBlob_Transpiler)));
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(StardewValley.Monsters.Bat), nameof(StardewValley.Monsters.Bat.drawAboveAllLayers)),
+                "a bat's blob giving way to its shadow",
+                transpiler: new HarmonyMethod(typeof(ShadowSuppression), nameof(ShadowSuppression.FlierBlob_Transpiler)));
+            // Grass leans in the same wind, and a tuft that is walked through swings like a spring
+            // rather than in the game's zigzag. The shake is read where the game starts it, with
+            // the game's own numbers, and only the angle each blade is drawn at changes: the tuft's
+            // own state, which the game and other mods read, is left exactly as the game keeps it.
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(StardewValley.TerrainFeatures.Grass), "shake"),
+                "grass remembering how it was shaken",
+                postfix: new HarmonyMethod(typeof(FoliageSway), nameof(FoliageSway.Grass_Shake_Postfix)));
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(StardewValley.TerrainFeatures.Grass), nameof(StardewValley.TerrainFeatures.Grass.draw)),
+                "grass leaning in the wind",
+                prefix: new HarmonyMethod(typeof(FoliageSway), nameof(FoliageSway.Grass_Draw_Prefix)),
+                postfix: new HarmonyMethod(typeof(FoliageSway), nameof(FoliageSway.Grass_Draw_Postfix)),
+                transpiler: new HarmonyMethod(typeof(ShadowSuppression), nameof(ShadowSuppression.GrassSway_Transpiler)));
             // Watered dirt sparkles: one small additive sprite after each watered HoeDirt, in the
             // game's own batch at the dirt's depth, so a trunk, a stump or a crop on the tile
             // covers it the way it covers the dirt.

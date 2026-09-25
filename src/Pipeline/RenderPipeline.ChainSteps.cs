@@ -60,6 +60,12 @@ namespace SDVRadiance
             ReliefSheetRefresh, // DrawnFromMapTileSheet: the map's tilesheet list, rebuilt when the map or its sheets change
             HeatMapUpload,    // UploadHeatMap: the breath scan's heat cells handed to the card
             ShadowClip,       // ShadowRenderer.ShadowClipDistance: the wall walk under every lit character
+            // Inside the object shadows, which are most of a farm's shadow draw.
+            ShadowTerrain,    // CastTerrainFeatureShadows: trees, bushes, crops and grass
+            ShadowClumps,     // CastResourceClumpShadows and the map's large bushes
+            ShadowPlaced,     // CastPlacedObjectShadows: machines, fences, weeds, stones, twigs
+            ShadowFurnitureCritters, // CastFurnitureShadows and CastCritterShadows
+            ShadowTileProps,  // DrawTilePropShadows: lamp posts and signs painted into the map
             Count,
         }
 
@@ -78,6 +84,8 @@ namespace SDVRadiance
             "    light: gather", "    light: candidates", "    light: windows", "    light: emissive",
             "    light: select",
             "    relief: sheet list refresh", "    breath: heat map upload", "    shadow: wall clip walk",
+            "    objects: trees, crops, grass", "    objects: clumps, big bushes", "    objects: placed",
+            "    objects: furniture, critters", "    objects: map props",
         ];
 
         private readonly double[] _chainStepAccumulated = new double[(int)ChainStep.Count];

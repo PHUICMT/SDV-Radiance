@@ -754,6 +754,14 @@ namespace SDVRadiance
         /// Grown plants only: a seed or a shoot has nothing to lean. Off is the field of every
         /// release before this one, which stood still through a gale.</summary>
         public bool FoliageSwayCrops { get; set; } = true;
+        /// <summary>Whether grass leans in the same wind, each blade in turn, at four times the
+        /// angle a tree tips at because a blade is that much shorter. Off is the still meadow of
+        /// every release before this one.</summary>
+        public bool FoliageSwayGrass { get; set; } = true;
+        /// <summary>Grass walked through or cut swings like a spring and settles, instead of the
+        /// game's zigzag that turns round at full speed and can snap upright at the end. The same
+        /// reach and timing the game gives it; off is the game's own motion.</summary>
+        public bool GrassSmoothShake { get; set; } = true;
         /// <summary>Sprites drawn from sheets doubled on the graphics card by the Scale2x rule (see
         /// SheetUpscaler): two texels where the game put one. Off until it has been looked at.</summary>
         public bool SheetUpscaleEnabled { get; set; } = false;
@@ -1462,6 +1470,17 @@ namespace SDVRadiance
         /// own. Farm animals are bulky and stay on <see cref="ShadowGroundForeshortening"/>.
         /// </remarks>
         public float ShadowCharacterGroundForeshortening { get; set; } = 1f;
+        /// <summary>Shadows that start at the feet (see ShadowRenderer.GroundedCasts): a character's
+        /// shadow stays on the ground where the body touches it and runs away from the light, by day
+        /// and under lamps, instead of the whole silhouette turning about the feet; a body off the
+        /// ground casts off the ground. Off keeps the look every earlier release had.</summary>
+        public bool ShadowGroundedLook { get; set; } = false;
+        /// <summary>With shadows that start at the feet: how deep a body is against its width, as
+        /// the footprint its shadow starts from. It is what a lamp standing beside a body leaves
+        /// under it; with none, the shadow of a flat figure lit edge-on is a line (0.1..1).</summary>
+        public float ShadowGroundedDepth { get; set; } = 0.35f;
+        internal const float ShadowGroundedDepthMin = 0.1f;
+        internal const float ShadowGroundedDepthMax = 1f;
 
         // --- How long and how soft each kind of caster's shadow is ---
         //
@@ -1817,6 +1836,7 @@ namespace SDVRadiance
             DirectionalShadowBlur = ClampToRange(DirectionalShadowBlur, 0f, ShadowBlurMax);
             ShadowGroundForeshortening = ClampToRange(ShadowGroundForeshortening, ShadowGroundForeshorteningMin, ShadowGroundForeshorteningMax);
             ShadowCharacterGroundForeshortening = ClampToRange(ShadowCharacterGroundForeshortening, ShadowGroundForeshorteningMin, ShadowGroundForeshorteningMax);
+            ShadowGroundedDepth = ClampToRange(ShadowGroundedDepth, ShadowGroundedDepthMin, ShadowGroundedDepthMax);
             ShadowLengthTrees = ClampToRange(ShadowLengthTrees, ShadowKindLengthMin, ShadowKindLengthMax);
             ShadowLengthSmallTrees = ClampToRange(ShadowLengthSmallTrees, ShadowKindLengthMin, ShadowKindLengthMax);
             ShadowLengthBushes = ClampToRange(ShadowLengthBushes, ShadowKindLengthMin, ShadowKindLengthMax);

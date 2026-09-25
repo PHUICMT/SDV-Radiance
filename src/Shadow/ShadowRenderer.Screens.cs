@@ -53,12 +53,25 @@ namespace SDVRadiance
             public float SunContactHardness = -1f, SunPenumbraStretch = -1f, SunBakeDepth = -1f;
             public bool SunFresh;
             public (int frame, int facing, Rectangle sourceRect, int look) SunSignature = (-1, -1, default, 0);
+            /// <summary>This screen's pose library and what it watches to know when to empty itself
+            /// (see ShadowRenderer.PoseLibrary). Per screen because the place and the menu it
+            /// watches are each screen's own.</summary>
+            public Dictionary<PoseLibraryKey, PoseLibraryEntry> PoseLibrary = [];
+            public long PoseLibraryClearedTick;
+            public bool PoseLibrarySawMenu;
+            public GameLocation? PoseLibraryLocation;
 
             public void Release()
             {
                 Mask?.Dispose();
                 Color?.Dispose();
                 SunMask?.Dispose();
+                foreach (PoseLibraryEntry entry in PoseLibrary.Values)
+                {
+                    entry.Mask?.Dispose();
+                    entry.Colour?.Dispose();
+                }
+                PoseLibrary.Clear();
             }
         }
 
@@ -96,6 +109,10 @@ namespace SDVRadiance
                 outgoing.SunBakeDepth = _playerSunBakeDepth;
                 outgoing.SunFresh = _playerSunFresh;
                 outgoing.SunSignature = _playerSunSignature;
+                outgoing.PoseLibrary = _poseLibrary;
+                outgoing.PoseLibraryClearedTick = _poseLibraryClearedTick;
+                outgoing.PoseLibrarySawMenu = _poseLibrarySawMenu;
+                outgoing.PoseLibraryLocation = _poseLibraryLocation;
             }
             _activeScreenId = screenId;
             if (!_screenBakes.TryGetValue(screenId, out ScreenBake? incoming))
@@ -120,10 +137,16 @@ namespace SDVRadiance
             _playerSunBakeDepth = incoming.SunBakeDepth;
             _playerSunFresh = incoming.SunFresh;
             _playerSunSignature = incoming.SunSignature;
+            _poseLibrary = incoming.PoseLibrary;
+            _poseLibraryClearedTick = incoming.PoseLibraryClearedTick;
+            _poseLibrarySawMenu = incoming.PoseLibrarySawMenu;
+            _poseLibraryLocation = incoming.PoseLibraryLocation;
             // The published pair follows the screen too: their one reader is this screen's
             // reflection, which runs between now and the next screen's turn.
-            PlayerMask = _playerMaskFresh ? _playerRenderTarget : null;
-            PlayerColor = _playerColorFresh ? _playerColorRenderTarget : null;
+            // A rider's bake is for the shadow alone (see PreparePlayer).
+            bool riding = Game1.player?.isRidingHorse() ?? false;
+            PlayerMask = _playerMaskFresh && !riding ? _playerRenderTarget : null;
+            PlayerColor = _playerColorFresh && !riding ? _playerColorRenderTarget : null;
             ForgetDepartedScreens();
         }
 

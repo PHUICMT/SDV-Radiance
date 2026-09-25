@@ -44,7 +44,7 @@ namespace SDVRadiance
             float headFade = HeadFade, SpriteEffects effects = SpriteEffects.None,
             ShadowGeometry geometry = ShadowGeometry.Solid, float? groundAnchorWorldY = null,
             Color? shadowColor = null, bool contactPool = true, float fadeShareFromFeet = 1f,
-            float? groundForeshortening = null, float spriteRotation = 0f)
+            float? groundForeshortening = null, float spriteRotation = 0f, float groundedBodyWidth = 0f)
         {
             // A shaken caster bakes under a key of its own. Trees of one kind share one bake, and
             // the shake is one tree's: baked into the shared entry, the shaken lean was asked back
@@ -153,14 +153,32 @@ namespace SDVRadiance
                 FrameCost.Count(FrameCost.Counter.ShadowSprites);
                 // The bands are grounded here too, and by the same two routes: a world row when
                 // the caller knows one, otherwise the sort depth it computed, offset per band.
-                DrawBandedGradient(spriteBatch, texture, sourceRect, feet, baseOrigin, alpha, rotation + spriteRotation,
-                    new Vector2(4f, 4f * stretch), groundAnchorWorldY ?? depth, blur, headFade, effects,
-                    anchorIsSortDepth: !groundAnchorWorldY.HasValue, shadowColor: shadowColor,
-                    shadowLengthPerHeight: stretch);
+                // A character's bands take the grounded look (a horse at a low sun is too long for a
+                // slot and lands here all morning); an object's are turned as they always were.
+                if (groundedBodyWidth > 0f)
+                    DrawBandedGrounded(spriteBatch, texture, sourceRect, feet, baseOrigin, alpha, rotation + spriteRotation,
+                        stretch, groundAnchorWorldY, depth, blur, headFade, effects, shadowColor, groundedBodyWidth);
+                else
+                    DrawBandedGradient(spriteBatch, texture, sourceRect, feet, baseOrigin, alpha, rotation + spriteRotation,
+                        new Vector2(4f, 4f * stretch), groundAnchorWorldY ?? depth, blur, headFade, effects,
+                        anchorIsSortDepth: !groundAnchorWorldY.HasValue, shadowColor: shadowColor,
+                        shadowLengthPerHeight: stretch);
             }
             if (contactPool)
                 DrawContactPoolUnder(spriteBatch, sourceRect, feet, alpha, depth, blur);
         }
+
+        /// <summary>A character's bands, taking the grounded look. Kept out of EmitObject because the
+        /// lambda captures EmitObject's own parameters, and C# builds the object holding them when
+        /// the method is entered, whether the branch runs or not: 14 MB a second on a farm, one
+        /// for every shadow drawn, measured with dotnet-trace on 25/9.</summary>
+        private void DrawBandedGrounded(SpriteBatch spriteBatch, Texture2D texture, Rectangle sourceRect, Vector2 feet,
+            Vector2 baseOrigin, float alpha, float rotation, float stretch, float? groundAnchorWorldY, float depth, float blur,
+            float headFade, SpriteEffects effects, Color? shadowColor, float groundedBodyWidth)
+            => WithGroundedCast(() => DrawBandedGradient(spriteBatch, texture, sourceRect, feet, baseOrigin, alpha, rotation,
+                new Vector2(4f, 4f * stretch), groundAnchorWorldY ?? depth, blur, headFade, effects,
+                anchorIsSortDepth: !groundAnchorWorldY.HasValue, shadowColor: shadowColor,
+                shadowLengthPerHeight: stretch), groundedBodyWidth);
 
         /// <summary>The contact pool under a daylight caster (ModConfig.ContactShadowStrength): the
         /// (grass blades and crops are ground cover and ask for none, or a whole field reads as mud)
@@ -718,7 +736,7 @@ namespace SDVRadiance
                 _kindLean[(int)kind] = LeanFor(config, kind);
             }
             _groundForeshortening = config.ShadowGroundForeshortening;
-            _characterGroundForeshortening = config.ShadowCharacterGroundForeshortening;
+            _characterGroundForeshortening = PeopleGroundForeshortening(config);
             _shadowModel = config.DirectionalShadowModel;
         }
 
@@ -1149,7 +1167,11 @@ namespace SDVRadiance
                 tileY1 = location.map.Layers[0].LayerHeight - 1;
             }
 
+            RenderPipeline? steps = RenderPipeline.DrawingScreen;
+            long step = RenderPipeline.ChainStepBegin();
             CastTerrainFeatureShadows(spriteBatch, location, rotation, stretch, alpha, blur, tileX0, tileX1, tileY0, tileY1);
+            steps?.ChainStepEnd(RenderPipeline.ChainStep.ShadowTerrain, step);
+            step = RenderPipeline.ChainStepBegin();
             CastLargeTerrainShadows(spriteBatch, location, rotation, stretch, alpha, blur, tileX0, tileX1, tileY0, tileY1);
 
             // What an EVENT stops drawing. Trees, bushes, crops and large terrain features are drawn
@@ -1168,15 +1190,22 @@ namespace SDVRadiance
 
             if (clumpsDrawn)
                 CastResourceClumpShadows(spriteBatch, location, rotation, stretch, alpha, blur, tileX0, tileX1, tileY0, tileY1);
+            steps?.ChainStepEnd(RenderPipeline.ChainStep.ShadowClumps, step);
+            step = RenderPipeline.ChainStepBegin();
             if (objectsDrawn)
                 CastPlacedObjectShadows(spriteBatch, location, rotation, stretch, alpha, blur, tileX0, tileX1, tileY0, tileY1);
+            steps?.ChainStepEnd(RenderPipeline.ChainStep.ShadowPlaced, step);
+            step = RenderPipeline.ChainStepBegin();
             if (furnitureDrawn)
                 CastFurnitureShadows(spriteBatch, location, rotation, stretch, alpha, blur, tileX0, tileX1, tileY0, tileY1);
             CastCritterShadows(spriteBatch, location, rotation, stretch, alpha, blur, tileX0, tileX1, tileY0, tileY1);
+            steps?.ChainStepEnd(RenderPipeline.ChainStep.ShadowFurnitureCritters, step);
+            step = RenderPipeline.ChainStepBegin();
 
             // Map-drawn props (street lamps, signs, poles…) aren't entities at all — they're tile
             // columns painted on the map. Cast their shadow from the actual tile art.
             DrawTilePropShadows(spriteBatch, location, rotation, stretch, alpha, blur, tileX0, tileX1, tileY0, tileY1);
+            steps?.ChainStepEnd(RenderPipeline.ChainStep.ShadowTileProps, step);
 
             // Building shadows via the sprite-lean path stay DISABLED (leaning a whole-building
             // sprite projects it up over itself). Their real ground projection is done separately
@@ -1339,7 +1368,7 @@ namespace SDVRadiance
                     DrawSmallObjectShadow(spriteBatch, placedObject, tile, LeanOf(rotation, ShadowKind.Objects), LengthOf(stretch, ShadowKind.Objects), alpha,
                         SoftnessOf(blur, ShadowKind.Objects));
                 }
-                else if (!placedObject.isPassable() && placedObject.QualifiedItemId != "(O)590" && placedObject.QualifiedItemId != "(O)SeedSpot")
+                else if (!PassableByKind(placedObject) && placedObject.QualifiedItemId != "(O)590" && placedObject.QualifiedItemId != "(O)SeedSpot")
                 {
                     // Everything else that stands on its tile (fences, signs, torches, kegs-as-object,
                     // decor…) gets a real leaning silhouette too — drawn generically from the item's
@@ -1350,6 +1379,29 @@ namespace SDVRadiance
                 }
             }
         }
+
+        /// <summary>
+        /// Whether a placed object is one you walk over, asked once per kind and kept.
+        /// </summary>
+        /// <remarks>The game answers it from the item's id alone (a hidden object is handled
+        /// before this is asked), but other mods patch the question, and Passable Crops builds new
+        /// delegates every time it is asked: asked for every weed and stone on screen every frame,
+        /// that was 12 MB a second of garbage on a farm, measured with dotnet-trace on 25/9. Kept
+        /// with the item art, so it starts over with the season.</remarks>
+        private bool PassableByKind(SObject placedObject)
+        {
+            string id = placedObject.QualifiedItemId;
+            if (id == null)
+                return placedObject.isPassable();
+            if (!_passableByKind.TryGetValue(id, out bool passable))
+            {
+                passable = placedObject.isPassable();
+                _passableByKind[id] = passable;
+            }
+            return passable;
+        }
+
+        private readonly System.Collections.Generic.Dictionary<string, bool> _passableByKind = [];
 
         /// <summary>Furniture, minus the kinds that hang on a wall or lie flat on the floor.</summary>
         private void CastFurnitureShadows(SpriteBatch spriteBatch, GameLocation location, float rotation, float stretch, float alpha,
@@ -1399,6 +1451,8 @@ namespace SDVRadiance
                         continue;
                     Rectangle sourceRect = critter.sprite.SourceRect;
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport, worldPosition + new Vector2(0f, -2f));
+                    // A critter in the air: its shadow leaves it along the light (see LiftShift).
+                    feet += LiftShift(Math.Max(0f, -(critter.yJumpOffset + critter.yOffset)), rotation, LengthCap(stretch, 0.45f));
                     float depth = MathHelper.Clamp((worldPosition.Y - 1f) / 10000f, 0f, 1f);
                     EmitObject(spriteBatch, critter.sprite.Texture, sourceRect, feet, new Vector2(sourceRect.Width / 2f, sourceRect.Height),
                         critterAlpha, rotation, LengthCap(stretch, 0.45f), depth, blur, ObjectHeadFade,
@@ -1773,7 +1827,7 @@ namespace SDVRadiance
         private bool TryItemArt(string qualifiedId, out Texture2D texture, out Rectangle sourceRect)
         {
             string season = Game1.currentSeason ?? "";
-            if (season != _itemArtSeason) { _itemArtCache.Clear(); _itemArtSeason = season; }
+            if (season != _itemArtSeason) { _itemArtCache.Clear(); _passableByKind.Clear(); _itemArtSeason = season; }
             if (!_itemArtCache.TryGetValue(qualifiedId, out var itemArt))
             {
                 var data = ItemRegistry.GetDataOrErrorItem(qualifiedId);
@@ -2009,6 +2063,9 @@ namespace SDVRadiance
             Farmer who = Game1.player;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
+            float lift = BodyLift(who);
+            Vector2 castFeet = feet + LiftShift(lift, rotation, stretch);
+            alpha *= LiftFade(lift);
             // The grounding pool, when the dial asks for one (see DrawPeoplePoolUnder): drawn
             // whether the cast comes from the patch or from the strips below.
             DrawPeoplePoolUnder(spriteBatch, feet, 22f, alpha, MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f), blur);
@@ -2019,7 +2076,7 @@ namespace SDVRadiance
             // the soft edge with it, so this is one unrotated stamp per strip, as an object's is.
             if (_playerSunFresh && _playerSunRenderTarget != null)
             {
-                DrawSoftGrounded(spriteBatch, Taps9, _playerSunRenderTarget, _playerSunContent, feet, ShadowInk, alpha, 0f,
+                DrawSoftGrounded(spriteBatch, Taps9, _playerSunRenderTarget, _playerSunContent, castFeet, ShadowInk, alpha, 0f,
                     _playerSunFeet - new Vector2(_playerSunContent.X, _playerSunContent.Y),
                     new Vector2(_playerSunUnbake, _playerSunUnbake), who.StandingPixel.Y, SpriteEffects.None, 0f,
                     laidDownLean: rotation);
@@ -2031,7 +2088,7 @@ namespace SDVRadiance
             // the rule here: one shadow going behind a fence while the other crossed it would be
             // the player and the villagers standing in different worlds.
             float playerWidth = LaidDownWidth(CharacterAcrossScale(rotation, stretch), SpriteEffects.None, out SpriteEffects playerFacing);
-            DrawSoftGrounded(spriteBatch, Taps9, _playerRenderTarget, null, feet, ShadowInk, alpha, rotation,
+            DrawSoftGrounded(spriteBatch, Taps9, _playerRenderTarget, null, castFeet, ShadowInk, alpha, rotation,
                 _playerFeetInRenderTarget, new Vector2(playerWidth, stretch),
                 who.StandingPixel.Y, playerFacing, blur, shadowLengthPerHeight: stretch);
         }

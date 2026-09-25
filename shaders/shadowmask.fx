@@ -46,6 +46,8 @@ float2 SpriteOrigin;     // the feet within the bake, in texels
 float2 SpriteSize;       // the bake's size in texels
 float2 Scale;            // the draw's scale (across, stretch)
 float Rotation;          // the draw's lean, radians, SpriteBatch's sense (clockwise, y down)
+float2 AcrossAxis;       // where one pixel of width lands: (cos, sin) of the lean for a turned
+                         // cast, the footprint across the light for a grounded one
 float KeepOnSolid;       // 1 = the shadow climbs the solid run it meets; 0 = it stops at it
 
 struct PixelInput
@@ -69,7 +71,9 @@ float4 MaskPS(PixelInput input) : SV_TARGET
     float2 texel = input.UV * SpriteSize - SpriteOrigin;
     float2 scaled = texel * Scale;
     float cs = cos(Rotation), sn = sin(Rotation);
-    float2 world = FeetWorld + float2(scaled.x * cs - scaled.y * sn, scaled.x * sn + scaled.y * cs);
+    // Height runs along the lean either way; width runs along the across axis, which for a
+    // turned cast is the lean's own perpendicular and so gives the plain turn.
+    float2 world = FeetWorld + scaled.x * AcrossAxis + scaled.y * float2(-sn, cs);
 
     // The tile under the feet never cuts the caster's own shadow: they are standing on it.
     float2 feetTile = floor(FeetWorld / 64.0);

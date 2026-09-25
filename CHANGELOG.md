@@ -2,6 +2,90 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.2.1 - 2026-09-25
+
+### Added
+
+- **Grass sways with the wind.** Grass leans in the same wind the trees and crops do, each blade
+  turning from where it leaves the ground and each in its own turn, so a gust runs through a
+  meadow instead of tipping it as one sheet. On by default, under Weather with the trees.
+- **Grass settles smoothly.** Grass you walk through or cut swings like a spring and settles,
+  slowing at each end of the swing. The game's own motion turned round at full speed and could
+  snap upright in one frame when it stopped. The reach and timing are still the game's, so
+  running through a meadow throws it further than walking. On by default.
+- **Shadows can start at the feet.** A new switch under Shadows, off by default. A character's
+  shadow stays on the ground where the body touches it and runs away from the light, by day and
+  under every lamp, instead of the whole silhouette turning about the feet; under a lamp beside
+  someone the old shadow lay on the floor like a fallen figure and swung round the feet as they
+  walked past. A lamp level with a body leaves a footprint of the body's own depth rather than a
+  thin line (Footprint depth, beside the switch), and a body that jumps casts off the ground. A
+  rider casts their own shadow from the saddle, a flying companion (the fairy trinket) and a bat
+  cast a soft one off the ground in place of the game's round blob, and the shadow painted into
+  the horse's sheet is taken out while the look is on, so a horse has one shadow, from its
+  hooves. A horse or an animal is thin for its length, so its footprint is set against a
+  person's rather than its own width. The same draws as before, moved rather than added to.
+
+### Fixed
+
+- **Split screen keeps the player's poses again.** Since 2.2.0 each pose of the player is drawn
+  once for the shadow and reflection and copied back when it comes round again. On a split
+  screen the second player's screen has its own copy of every place, so the kept poses were
+  thrown away on every turn and each one was drawn afresh, every frame. Each screen now keeps
+  its own. Walking twenty seconds on two screens: 150 poses copied and 47 drawn, where it was
+  none copied and 196 drawn.
+- **The fairy trinket no longer lights the night mist into a blinding ball.** The mist takes the
+  light of a lamp it drifts past, and the fairy carries a full white light beside you, far
+  brighter than a street lamp, so a wisp passing through it went solid white. It came and went
+  with the mist, most often while standing still for a while, as when fishing. A wisp now takes
+  a lamp's light up to what a street lamp gives and eases off beyond it. Reported with pictures
+  by SCARISAFAIRY.
+- **The fairy trinket no longer gives you and your horse a second, swinging shadow.** Its light
+  flits round you a tile or two away, and at night everything near it cast a shadow from it that
+  swung from side to side with every flit. A light a companion carries now lights the scene
+  without casting shadows. Reported with pictures by SCARISAFAIRY.
+- **No more dark lines round grass painted over the ground.** Smooth art blends the straight cut a
+  map paints at a tile line, reading the ground tile beside. Where a map lays grass over the
+  ground on a higher layer, as beside the cliffs in Stardew Valley Expanded's town, the ground
+  under it is darker and never seen, and the blend drew it into the grass next to it as a thin
+  dark line round the tiles. The blend now stops at an edge that the layers over it cover, as it
+  already did at water: Buildings and Front, a second or third ground layer (grass painted on
+  Back2 above the Mountain's paths had the same line), and several of them laid together, as an
+  indoor wall often is.
+- **A shop window shows you riding.** Riding up to a window, the glass turned you round to face it
+  with a standing pose, since it only knew the walking and standing frames, so the reflection
+  showed you on foot. It now takes the seated frame.
+
+### Changed
+
+- **Smooth art is much lighter on the map.** Since 2.2.0 each map tile is smoothed together with
+  the tiles round it, and which tiles those are was worked out again for every tile on screen
+  on every frame, though it only changes when the map does. It is now kept per tile. On my
+  machine a frame in town went from 12.0 ms to 7.0 ms and on the farm from 12.5 ms to 10.1 ms,
+  with the picture unchanged.
+- **Fewer hitches on a busy farm.** The shadows of weeds, stones and twigs left about 350 KB of
+  garbage behind every frame, and the collector clearing it up showed as the shadows now and then
+  taking 7 ms for a frame instead of 1. They leave almost none now: on my machine the worst
+  shadow frame on the farm went from 6.9 ms to 1.5 ms, and a frame on average from 10.1 ms to
+  9.4 ms.
+- **Chinese covers the 2.2.0 settings.** The Smooth art rules, Smooth gradients, Steady while
+  moving and Sharp zoom are in Chinese now, and sixteen older lines read more naturally
+  (倒影 for the water's reflection, 水面效果 for the water section, and others), and the grass
+  settings are in Chinese from the start. Translated by passersby10086.
+
+### For translators
+
+New keys: `config.weather.foliageswaygrass.name`, `config.weather.foliageswaygrass.tooltip`,
+`config.weather.grasssmoothshake.name`, `config.weather.grasssmoothshake.tooltip`,
+`tuner.foliageswaygrass`, `tuner.grasssmoothshake`, `help.foliageswaygrass`,
+`help.grasssmoothshake`. Changed: `tuner.section.foliagesway` now reads "Trees, bushes and grass".
+New keys for grounded shadows: `config.shadows.grounded.name`, `config.shadows.grounded.tooltip`,
+`config.shadows.groundeddepth.name`, `config.shadows.groundeddepth.tooltip`, `tuner.shadowgrounded`,
+`tuner.shadowgroundeddepth`, `help.shadowgrounded`, `help.shadowgroundeddepth`.
+`radiance_softseams` and `radiance_softneighbours check` are console commands and add no keys.
+Removed: `config.section.wip` and `config.wip.text`, the "Coming soon" note at the foot of the
+config page. The one thing it listed, high-quality texture upscaling, has been Smooth art for a
+while.
+
 ## 2.2.0 - 2026-09-23
 
 ### Added

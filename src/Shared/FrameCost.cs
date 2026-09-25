@@ -108,6 +108,9 @@ namespace SDVRadiance
             // restores all three and dirties them for the next draw.
             RenderTargetClears,
             RenderTargetBinds,
+            // Lamp casts drawn with the grounded look (radiance_shadowlook): the corners moved in
+            // the batch. Zero means the look is off or the batch internals were not found.
+            GroundedCasts,
         }
 
         private const int PartCount = 14;
@@ -220,6 +223,7 @@ namespace SDVRadiance
             "sprite batch draw calls (world step)",
             "render target clears (ours + implicit)",
             "render target binds",
+            "grounded lamp casts",
         ];
 
         static FrameCost()

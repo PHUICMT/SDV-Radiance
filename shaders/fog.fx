@@ -77,6 +77,13 @@ struct PixelInput
 
 static const float2x2 M = float2x2(0.80, 0.60, -0.60, 0.80);
 
+// The light a wisp may take: unchanged up to a typical street lamp (0.3 over the sky; the
+// brightest measured, 0.4, keeps 0.37), then easing toward at most this much more. The ceiling
+// is what keeps a lit wisp a wisp: the mist is already about 0.43 bright, so anything much past
+// 0.3 on top of it reads as white.
+static const float LampExcessKnee = 0.3;
+static const float LampExcessRoom = 0.12;
+
 // Two drifting layers of the baked fbm, second rotated + differently scaled so the
 // pattern evolves organically instead of sliding as one rigid sheet.
 float fbm(float2 p)
@@ -141,6 +148,13 @@ float4 FogPS(PixelInput input) : SV_TARGET
         // dial's top land a wisp core at about 0.6 above the mist blue, and the default half of
         // that; without the gain the whole dial lived inside a few levels.
         float3 excess = max(light - SkyLevel * 1.05, 0.0);
+        // Past what a street lamp gives, the excess bends over and stops at a ceiling. A light
+        // the player carries (the fairy trinket's is a full white radius 2, far over a lamp)
+        // read as an excess of several, and a wisp drifting through it went solid white: a
+        // blinding ball that came and went with the mist. Everything up to the knee is the tuned
+        // lamp glow to the bit.
+        float3 overKnee = max(excess - LampExcessKnee, 0.0);
+        excess = min(excess, LampExcessKnee) + LampExcessRoom * (1.0 - exp(-overKnee / LampExcessRoom));
         mist += excess * (LampGlow * 1.5);
     }
     float3 fogged = lerp(c.rgb, mist, f);

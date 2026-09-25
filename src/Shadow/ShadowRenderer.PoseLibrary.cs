@@ -56,7 +56,11 @@ namespace SDVRadiance
         private const int MostLibraryPoses = 48;
         /// <summary>How long a kept pose may be copied before it is drawn again: eight seconds.</summary>
         private const long PoseLibraryLifetimeTicks = 480;
-        private readonly Dictionary<PoseLibraryKey, PoseLibraryEntry> _poseLibrary = [];
+        /// <summary>This screen's library. Swapped per screen with the player bake (see
+        /// ShadowRenderer.Screens): a split screen's farmhand has its own copies of every location,
+        /// so one shared library saw the place change on every turn and was emptied, and its
+        /// targets made again, every frame.</summary>
+        private Dictionary<PoseLibraryKey, PoseLibraryEntry> _poseLibrary = [];
         private long _poseLibraryClearedTick;
         private bool _poseLibrarySawMenu;
         private GameLocation? _poseLibraryLocation;

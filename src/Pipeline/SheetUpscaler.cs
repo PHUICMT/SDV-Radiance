@@ -239,6 +239,12 @@ namespace SDVRadiance
         /// while the same items on the ground were smoothed. Cleared each frame; a draw at an even
         /// size takes its sheet back out, so the inventory's 4x items stay point-read and crisp.</summary>
         private static readonly HashSet<Texture2D> _linearRuns = [];
+
+        /// <summary>Have this texture's runs read linearly for the rest of the frame, whatever the
+        /// batch asked for. The shadow pass uses it for a cast it has sheared (see
+        /// ShadowRenderer.GroundedCasts): read point by point, a sheared soft silhouette snaps to
+        /// a whole texel on every row, a row at a time, and the error lines up as horizontal steps.</summary>
+        internal static void ReadLinearlyThisFrame(Texture2D texture) => _linearRuns.Add(texture);
         /// <summary>Two colours closer than this on the shader's luminance-plus-alpha scale (0 to
         /// 1.5) are the same colour to the edge rules: about a fifth of the way from black to white.</summary>
         private const float SoftEqualThreshold = 0.10f;
@@ -354,10 +360,16 @@ namespace SDVRadiance
             object batcher = _batcherOf(__instance);
             if (batcher == null)
                 return;
-            BatchSampling sampling = _samplingByBatcher.GetValue(batcher, b => new BatchSampling
+            // Looked up before it is made: a lambda naming __instance is a new object on every call,
+            // and Begin runs hundreds of times a frame.
+            if (!_samplingByBatcher.TryGetValue(batcher, out BatchSampling? sampling))
             {
-                Device = (_batcherDevice?.GetValue(b) as GraphicsDevice) ?? __instance.GraphicsDevice,
-            });
+                sampling = new BatchSampling
+                {
+                    Device = (_batcherDevice?.GetValue(batcher) as GraphicsDevice) ?? __instance.GraphicsDevice,
+                };
+                _samplingByBatcher.AddOrUpdate(batcher, sampling);
+            }
             // MonoGame's own default when none is given is LinearClamp; the game always passes one.
             sampling.Sampler = samplerState ?? SamplerState.LinearClamp;
             sampling.Applied = null;

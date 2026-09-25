@@ -81,6 +81,7 @@ namespace SDVRadiance
                     continue;
                 }
                 DrawNpcShadow(spriteBatch, npc, rotation, stretch, alpha, blur, sunlight: true);
+                DrawRiderShadow(spriteBatch, npc, rotation, stretch, alpha, blur);
             }
 
             foreach (FarmAnimal a in AnimalsIn(location))
@@ -89,6 +90,8 @@ namespace SDVRadiance
                     continue;
                 DrawAnimalShadow(spriteBatch, a, rotation, stretch, alpha, blur, sunlight: true);
             }
+
+            DrawFlierShadowsInSun(spriteBatch, location, rotation, stretch, alpha, blur);
 
             if (_castPlayer)
             {
@@ -127,6 +130,9 @@ namespace SDVRadiance
         {
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                 new Vector2(a.Position.X + a.Sprite.SpriteWidth * 4 / 2f, a.GetBoundingBox().Bottom - FeetLift));
+            float lift = BodyLift(a);
+            Vector2 castFeet = feet + LiftShift(lift, rotation, stretch);
+            alpha *= LiftFade(lift);
             float anchorWorldY = a.StandingPixel.Y;
             Rectangle sourceRect = a.Sprite.SourceRect;
             if (ShadowCannotReachScreen(feet, CasterReachPixels(sourceRect.Height, sourceRect.Width, stretch, blur)))
@@ -136,27 +142,30 @@ namespace SDVRadiance
                 // Under the sun an animal is laid down through the object pool, exactly as a rock
                 // or a bush is: the lay-down is in the pixels, skew included, and the draw is one
                 // unrotated stamp per floor strip. See DrawNpcShadow for why.
-                DrawPeoplePoolUnder(spriteBatch, feet, a.Sprite.SpriteWidth * 4f * 0.36f, alpha,
+                DrawPeoplePoolUnder(spriteBatch, feet, a.Sprite.SpriteWidth * 4f * 0.36f, alpha * AnimalPoolKept,
                     MathHelper.Clamp(anchorWorldY / 10000f - ShadowDepthBias, 0f, 1f), blur);
-                EmitObject(spriteBatch, a.Sprite.Texture, sourceRect, feet, new Vector2(sourceRect.Width / 2f, sourceRect.Height),
+                EmitObject(spriteBatch, a.Sprite.Texture, sourceRect, castFeet, new Vector2(sourceRect.Width / 2f, sourceRect.Height),
                     alpha, rotation, stretch, MathHelper.Clamp(anchorWorldY / 10000f - ShadowDepthBias, 0f, 1f), blur, HeadFade,
                     SpriteEffects.None, groundAnchorWorldY: anchorWorldY, contactPool: false,
-                    groundForeshortening: _groundForeshortening);
+                    groundForeshortening: AnimalGroundForeshortening(_groundForeshortening, a.Sprite.SpriteWidth * 4f),
+                    groundedBodyWidth: a.Sprite.SpriteWidth * 4f);
                 return;
             }
             if (_casterBakeCache.TryGetValue((a.Sprite.Texture, sourceRect), out SpriteBake? baked))
             {
                 baked.LastUsedTick = SharedTicks.Now;
                 float animalWidth = LaidDownWidth(SolidAcrossScale(rotation, stretch), SpriteEffects.None, out SpriteEffects animalFacing);
-                DrawSoftGrounded(spriteBatch, Taps9, baked.Rt, null, feet, ShadowInk, alpha, rotation, baked.FeetInRt,
+                (animalWidth, animalFacing) = CastWidth(animalWidth, animalFacing, SpriteEffects.None);
+                WithGroundedCast(() => DrawSoftGrounded(spriteBatch, Taps9, baked.Rt, null, castFeet, ShadowInk, alpha, rotation, baked.FeetInRt,
                     new Vector2(animalWidth, stretch), anchorWorldY, animalFacing, baked.BakedBlur > 0f ? 0f : blur,
-                    shadowLengthPerHeight: stretch);
+                    shadowLengthPerHeight: stretch), a.Sprite.SpriteWidth * 4f);
                 return;
             }
             float bandWidth = LaidDownWidth(SolidAcrossScale(rotation, stretch), SpriteEffects.None, out SpriteEffects bandFacing);
-            DrawBandedGradient(spriteBatch, a.Sprite.Texture, sourceRect, feet, new Vector2(sourceRect.Width / 2f, sourceRect.Height),
+            (bandWidth, bandFacing) = CastWidth(bandWidth, bandFacing, SpriteEffects.None);
+            WithGroundedCast(() => DrawBandedGradient(spriteBatch, a.Sprite.Texture, sourceRect, castFeet, new Vector2(sourceRect.Width / 2f, sourceRect.Height),
                 alpha, rotation, new Vector2(4f * bandWidth, 4f * stretch), anchorWorldY, blur, HeadFade, bandFacing,
-                shadowLengthPerHeight: stretch);
+                shadowLengthPerHeight: stretch), a.Sprite.SpriteWidth * 4f);
         }
 
         /// <summary>
@@ -177,7 +186,7 @@ namespace SDVRadiance
 
             _castsPerCaster = Math.Clamp(config.ShadowCastsPerCharacter, ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax);
             _groundForeshortening = config.ShadowGroundForeshortening;
-            _characterGroundForeshortening = config.ShadowCharacterGroundForeshortening;
+            _characterGroundForeshortening = PeopleGroundForeshortening(config);
             // The lamp pass captures its own tuning rather than going through CaptureKindTuning, so
             // the shape choice has to be taken here as well or a lamp shadow keeps the sun's answer.
             _shadowModel = config.DirectionalShadowModel;
@@ -195,6 +204,7 @@ namespace SDVRadiance
 
             CastNpcShadows(spriteBatch, location, castStrength, lenCfg, ambAlpha, blur);
             CastAnimalShadows(spriteBatch, location, castStrength, lenCfg, ambAlpha, blur);
+            DrawFlierShadowsUnderLamps(spriteBatch, location, castStrength, lenCfg, blur);
             if (_castPlayer)
             {
                 CastPlayerShadows(spriteBatch, location, castStrength, lenCfg, ambAlpha, blur);
@@ -234,6 +244,12 @@ namespace SDVRadiance
                     // so they self-cancel in LightCast (dist≈0). Skip nothing by context — except
                     // stale window lights (window removed/dark: glow gone but source lingers).
                     if (!WindowGlowing(location, ls))
+                        continue;
+                    // A light a companion carries (the fairy trinket's) flits round its owner a
+                    // tile or two away, so every body near it threw a second shadow that swung
+                    // from side to side with each flit, the rider's horse most of all. Too big
+                    // for the firefly test below (radius 2), so it is known by what it is.
+                    if (kv.Key.StartsWith(CompanionLightPrefix, StringComparison.Ordinal))
                         continue;
                     // Skip DRIFTING decorative lights (fireflies from The Night Lights, sparkle
                     // mods): each one threw its own moving shadow on the player. Neither signal
@@ -389,16 +405,20 @@ namespace SDVRadiance
                     continue;   // pool only — the cast silhouette is what fought the seat
                 }
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
-                    new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom - FeetLift));
+                    new Vector2(npc.Position.X + npc.drawOffset.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Bottom - FeetLift));
                 // A lamp's cast is at most lenCfg long (LightCast), so that bounds the reach here.
                 if (ShadowCannotReachScreen(feet, CasterReachPixels(npc.Sprite.SpriteHeight, npc.Sprite.SpriteWidth, lenCfg, blur)))
                     continue;
                 float depth = MathHelper.Clamp(npc.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 float halfW = npc.GetSpriteWidthForPositioning() * 4f * 0.36f;
                 GatherCasts(feet, castStrength, lenCfg);
-                DrawContactBlob(spriteBatch, feet, halfW, halfW * 0.5f, ambAlpha * GroundingPoolShare(), depth, blur);
+                float poolKept = StandsLikeAPerson(npc, _shadowModel) ? 1f : AnimalPoolKept;
+                DrawContactBlob(spriteBatch, feet, halfW, halfW * 0.5f, ambAlpha * GroundingPoolShare() * poolKept, depth, blur);
                 foreach (var (rotation, st, a, _) in _lightShadowCasts)
+                {
                     DrawNpcShadow(spriteBatch, npc, rotation, st, a, blur);
+                    DrawRiderShadow(spriteBatch, npc, rotation, st, a, blur);
+                }
             }
         }
 
@@ -417,7 +437,7 @@ namespace SDVRadiance
                 float depth = MathHelper.Clamp(animal.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 float halfW = animal.Sprite.SpriteWidth * 4f * 0.36f;
                 GatherCasts(feet, castStrength, lenCfg);
-                DrawContactBlob(spriteBatch, feet, halfW, halfW * 0.5f, ambAlpha * GroundingPoolShare(), depth, blur);
+                DrawContactBlob(spriteBatch, feet, halfW, halfW * 0.5f, ambAlpha * GroundingPoolShare() * AnimalPoolKept, depth, blur);
                 foreach (var (rotation, st, a, _) in _lightShadowCasts)
                     DrawAnimalShadow(spriteBatch, animal, rotation, st, a, blur);
             }
@@ -450,10 +470,12 @@ namespace SDVRadiance
                     // the map; the pool above is drawn either way.
                     if (DrawPlayerPatch(spriteBatch))
                         return;
+                    float playerLift = BodyLift(who);
                     foreach (var (rotation, st, a, _) in _lightShadowCasts)
-                        DrawSoftGrounded(spriteBatch, Taps9, _playerRenderTarget, null, feet, ShadowInk, a, rotation,
+                        WithGroundedCast(() => DrawSoftGrounded(spriteBatch, Taps9, _playerRenderTarget, null,
+                            feet + LiftShift(playerLift, rotation, st), ShadowInk, a * LiftFade(playerLift), rotation,
                             _playerFeetInRenderTarget, new Vector2(1f, st), who.StandingPixel.Y, SpriteEffects.None, blur,
-                            shadowLengthPerHeight: st);
+                            shadowLengthPerHeight: st));
                 }
             }
         }
@@ -620,6 +642,10 @@ namespace SDVRadiance
         /// it would silence half the lamps in the game: it only means anything ANDed with the drift
         /// test above — see the comment at its use site.</summary>
         private const float FireflyRadiusBound = 1.0f;
+        /// <summary>How the game names the light a flying companion carries: FlyingCompanion
+        /// builds it as its class name, an underscore and a random number, and a mod's own
+        /// flying companion inherits the same constructor.</summary>
+        private const string CompanionLightPrefix = nameof(StardewValley.Companions.FlyingCompanion) + "_";
 
         /// <summary>The strength the last <see cref="GatherCasts"/> was asked at.</summary>
         private float _castStrengthGathered = 1f;
@@ -1086,9 +1112,14 @@ namespace SDVRadiance
             // GetBoundingBox().Bottom, which is where an ordinary character stands too. Adding the
             // offset here pushed those characters' shadows a tile and a half down the beach.
             Rectangle sourceRect = npc.Sprite.SourceRect;
+            // The sideways part of the draw offset is where the sprite really is (a horse is drawn
+            // sixteen pixels left of its box); the upright part is the stretched-sprite case above.
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
-                new Vector2(npc.Position.X + npc.GetSpriteWidthForPositioning() * 4 / 2f,
+                new Vector2(npc.Position.X + npc.drawOffset.X + npc.GetSpriteWidthForPositioning() * 4 / 2f,
                     npc.GetBoundingBox().Bottom - FeetLift));
+            float lift = BodyLift(npc);
+            Vector2 castFeet = feet + LiftShift(lift, rotation, stretch);
+            alpha *= LiftFade(lift);
             if (ShadowCannotReachScreen(feet, CasterReachPixels(sourceRect.Height, sourceRect.Width, stretch, blur)))
                 return;
             float anchorWorldY = npc.StandingPixel.Y;
@@ -1127,12 +1158,15 @@ namespace SDVRadiance
                 // own settings. The frame re-bakes as the sun moves, on the same drift test as
                 // every object, and the cache is keyed by frame and facing, so a mirrored horse is
                 // a second bake rather than a flip. People keep their own foreshortening.
-                DrawPeoplePoolUnder(spriteBatch, feet, npc.GetSpriteWidthForPositioning() * 4f * 0.36f, alpha,
+                DrawPeoplePoolUnder(spriteBatch, feet, npc.GetSpriteWidthForPositioning() * 4f * 0.36f,
+                    person ? alpha : alpha * AnimalPoolKept,
                     MathHelper.Clamp(anchorWorldY / 10000f - ShadowDepthBias, 0f, 1f), blur);
-                EmitObject(spriteBatch, npc.Sprite.Texture, sourceRect, feet, baseOrigin,
+                EmitObject(spriteBatch, npc.Sprite.Texture, sourceRect, castFeet, baseOrigin,
                     alpha, rotation, stretch, MathHelper.Clamp(anchorWorldY / 10000f - ShadowDepthBias, 0f, 1f), blur, HeadFade, facing,
                     groundAnchorWorldY: anchorWorldY, contactPool: false,
-                    groundForeshortening: person ? _characterGroundForeshortening : _groundForeshortening);
+                    groundForeshortening: person ? _characterGroundForeshortening
+                        : AnimalGroundForeshortening(_groundForeshortening, npc.Sprite.SpriteWidth * 4f),
+                    groundedBodyWidth: npc.Sprite.SpriteWidth * 4f);
                 return;
             }
             // UNDER A LAMP the upright slot serves: one bake, leant and squashed at draw time by
@@ -1149,15 +1183,17 @@ namespace SDVRadiance
                 // The softness is in the baked pixels (BakedBlur), so each strip is one draw; a
                 // bake made with no blur (the A/B switch off) is softened tap by tap as before.
                 float npcWidth = LaidDownWidth(across, facing, out SpriteEffects npcFacing);
-                DrawSoftGrounded(spriteBatch, Taps9, baked.Rt, null, feet, ShadowInk, alpha, rotation, baked.FeetInRt,
+                (npcWidth, npcFacing) = CastWidth(npcWidth, npcFacing, facing);
+                WithGroundedCast(() => DrawSoftGrounded(spriteBatch, Taps9, baked.Rt, null, castFeet, ShadowInk, alpha, rotation, baked.FeetInRt,
                     new Vector2(npcWidth, stretch), anchorWorldY, npcFacing, baked.BakedBlur > 0f ? 0f : blur,
-                    shadowLengthPerHeight: stretch);
+                    shadowLengthPerHeight: stretch), npc.Sprite.SpriteWidth * 4f);
                 return;
             }
             float npcBandWidth = LaidDownWidth(across, facing, out SpriteEffects npcBandFacing);
-            DrawBandedGradient(spriteBatch, npc.Sprite.Texture, sourceRect, feet, baseOrigin,
+            (npcBandWidth, npcBandFacing) = CastWidth(npcBandWidth, npcBandFacing, facing);
+            WithGroundedCast(() => DrawBandedGradient(spriteBatch, npc.Sprite.Texture, sourceRect, castFeet, baseOrigin,
                 alpha, rotation, new Vector2(4f * npcBandWidth, 4f * stretch), anchorWorldY, blur, HeadFade, npcBandFacing,
-                shadowLengthPerHeight: stretch);
+                shadowLengthPerHeight: stretch), npc.Sprite.SpriteWidth * 4f);
         }
     }
 }

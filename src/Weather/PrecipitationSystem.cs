@@ -1079,7 +1079,7 @@ namespace SDVRadiance
                 // The two things the wind moves through the draw itself rather than through
                 // a stage, so a picture that shows neither can be told from a patch that
                 // never applied.
-                + $"| sway strips={FoliageSway.StripDrawsThisFrame} crops drawn={FoliageSway.CropDrawsThisFrame} leaned={FoliageSway.CropSwaysThisFrame} lastRefusal={FoliageSway.LastCropRefusal}";
+                + $"| sway strips={FoliageSway.StripDrawsThisFrame} crops drawn={FoliageSway.CropDrawsThisFrame} leaned={FoliageSway.CropSwaysThisFrame} lastRefusal={FoliageSway.LastCropRefusal} grass={FoliageSway.GrassSwaysThisFrame}";
         }
     }
 }

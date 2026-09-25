@@ -41,7 +41,7 @@ namespace SDVRadiance
     /// alone as before, since its pixels are not where the sheet has them.
     /// </para>
     /// </remarks>
-    internal static class MapTileNeighbours
+    internal static partial class MapTileNeighbours
     {
         /// <summary>The eight tiles round one map tile, as the sheet texture and the rectangle each
         /// is drawn from, or no texture where the layer has no tile. Compared by value.</summary>
@@ -298,18 +298,108 @@ namespace SDVRadiance
                     _lastMismatch = $"drawn {texture.Name} {source}, tile {tile.TileSheet?.Id} {(own == null ? "not loaded" : own.Name)}";
                 return 0;
             }
-            if (Turned(tile))
-            {
-                Alone++;
-                _aloneTurned++;
-                return 0;
-            }
             if (source != Bounds(tile))
             {
                 Alone++;
                 _aloneOtherRectangle++;
                 if (Recording)
                     _lastMismatch = $"drawn {texture.Name} {source}, tile bounds {Bounds(tile)}";
+                return 0;
+            }
+            // Working the neighbourhood out is a walk of eight cells, their layers, their
+            // properties and their art, and it was done for every map tile on every frame: about
+            // 6 ms a frame in Town with 4,000 tiles drawn, measured on 25/9 by switching it off. The
+            // answer only changes when the map does, so each cell keeps its number and a signature
+            // of the tiles it was worked out from, and is worked out again only when they differ.
+            NeighbourGrid grid = _neighbourGrids.GetValue(layer, drawn => new NeighbourGrid(drawn.LayerWidth, drawn.LayerHeight));
+            if (grid.Generation != _mapAnswersGeneration)
+                grid.Reset(_mapAnswersGeneration);
+            int cell = _tileY * grid.Width + _tileX;
+            int signature = SignatureAround(layer, tile, _tileX, _tileY);
+            if ((uint)cell < (uint)grid.Numbers.Length && grid.Numbers[cell] != 0 && grid.Signatures[cell] == signature)
+            {
+                int known = grid.Numbers[cell];
+                if (known < 0)
+                {
+                    Alone++;
+                    return 0;
+                }
+                neighbourhood = _byId[known];
+                WithNeighbours++;
+                return known;
+            }
+            int number = WorkOutNeighbourhood(layer, tile, textures);
+            if ((uint)cell < (uint)grid.Numbers.Length)
+            {
+                grid.Numbers[cell] = number == 0 ? -1 : number;
+                grid.Signatures[cell] = signature;
+            }
+            if (number == 0)
+                return 0;
+            neighbourhood = _byId[number];
+            return number;
+        }
+
+        /// <summary>The tiles a cell's neighbourhood is worked out from, as one number: the tile
+        /// itself and the eight round it on its own layer, each by which tile object it is and which
+        /// art it shows (an animated tile by the object alone, so the water beside a bank does not
+        /// count as a change on every frame of the water).</summary>
+        private static int SignatureAround(Layer layer, Tile tile, int tileX, int tileY)
+        {
+            var hash = new HashCode();
+            hash.Add(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(tile));
+            for (int i = 0; i < 8; i++)
+            {
+                int x = tileX + Offsets[i].X, y = tileY + Offsets[i].Y;
+                Tile? beside = x >= 0 && y >= 0 && x < layer.LayerWidth && y < layer.LayerHeight ? layer.Tiles[x, y] : null;
+                if (beside == null)
+                {
+                    hash.Add(0);
+                    continue;
+                }
+                hash.Add(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(beside));
+                // An animated tile by the object alone: its frames do not change, and TileFrames
+                // hands back a new copy of them every time it is read.
+                if (beside is not AnimatedTile)
+                    hash.Add(beside.TileIndex);
+            }
+            return hash.ToHashCode();
+        }
+
+        /// <summary>Each cell's neighbourhood number for one layer, 0 not yet worked out and -1 for
+        /// a tile baked alone, with the signature of the tiles it was worked out from.</summary>
+        private sealed class NeighbourGrid
+        {
+            internal readonly int Width;
+            internal readonly int[] Numbers;
+            internal readonly int[] Signatures;
+            internal int Generation;
+
+            internal NeighbourGrid(int width, int height)
+            {
+                Width = width;
+                Numbers = new int[width * height];
+                Signatures = new int[width * height];
+                Generation = _mapAnswersGeneration;
+            }
+
+            internal void Reset(int generation)
+            {
+                Array.Clear(Numbers);
+                Generation = generation;
+            }
+        }
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Layer, NeighbourGrid> _neighbourGrids = [];
+
+        /// <summary>The neighbourhood of the tile being drawn, worked out from the map: its number,
+        /// or 0 when it has to be baked alone.</summary>
+        private static int WorkOutNeighbourhood(Layer layer, Tile tile, Dictionary<TileSheet, Texture2D> textures)
+        {
+            if (Turned(tile))
+            {
+                Alone++;
+                _aloneTurned++;
                 return 0;
             }
             bool ground = IsGround(layer.Id);
@@ -346,7 +436,10 @@ namespace SDVRadiance
                 // Found on 23/9 by the Forest river: a dirt tile's neighbour on Back was the water
                 // tile, grey-blue on the sheet, and the blend pulled that into the dirt as a line
                 // down the tile edge, while what shows there is the game's water under a bank.
-                _scratch.Hidden[i] = ground && IsWater(beside);
+                // And found on 25/9 beside the cliff in Town: the grass there is painted on Buildings
+                // over a darker Back tile, and the blend pulled that hidden Back tile into the plain
+                // grass beside it, a dark line along every tile edge of the overlay.
+                _scratch.Hidden[i] = ground && (IsWater(beside) || CoveredFromAbove(layer, x, y, Offsets[i], textures));
             }
             _scratch.OnGround = ground;
             _scratch.Seal();
@@ -363,7 +456,6 @@ namespace SDVRadiance
                 _byId.Add(kept);
                 _idOf[kept] = id;
             }
-            neighbourhood = _byId[id];
             WithNeighbours++;
             return id;
         }
@@ -437,6 +529,191 @@ namespace SDVRadiance
 
         private static bool IsGround(string? id) => id != null && id.StartsWith("Back", StringComparison.OrdinalIgnoreCase);
 
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Layer, Layer[]> _layersAboveGround = [];
+
+        /// <summary>Every layer the game draws over this one, in the game's own order
+        /// (MapLayers.CompositeRank): a numbered ground layer over Back, as well as Buildings,
+        /// Front and AlwaysFront and their numbered copies. Paths and any other layer the game
+        /// never draws are left out.</summary>
+        /// <remarks>The numbered ground layers were missed at first. Maps paint grass and paths on
+        /// Back2 over a Back tile of another colour just as they do on Buildings, and on the
+        /// Mountain's Back2 grass the blend drew the same dark line along the tile edge.</remarks>
+        private static Layer[] LayersAbove(Layer ground)
+        {
+            if (_layersAboveGround.TryGetValue(ground, out Layer[]? known))
+                return known;
+            var found = new List<Layer>();
+            int groundRank = MapLayers.CompositeRank(ground.Id);
+            if (ground.Map?.Layers is IList<Layer> all)
+                foreach (Layer other in all)
+                    if (other.Visible && MapLayers.CompositeRank(other.Id) > groundRank
+                        && other.TileWidth == ground.TileWidth && other.TileHeight == ground.TileHeight)
+                        found.Add(other);
+            Layer[] layers = [.. found];
+            _layersAboveGround.AddOrUpdate(ground, layers);
+            return layers;
+        }
+
+        /// <summary>How many source pixels in from the edge an overlay has to be solid to hide the
+        /// ground under it from the tile beside: as far as the tile-line blend reads across, two
+        /// source pixels at its widest.</summary>
+        private const int CoverDepth = 2;
+
+        /// <summary>
+        /// Whether the ground at this neighbouring cell is hidden, along the edge it shares with the
+        /// tile being baked, under solid tiles on the layers the game draws over it. What shows past
+        /// that edge is then the overlay, not the ground tile the bake would read.
+        /// </summary>
+        /// <remarks>
+        /// <para>Only a solid edge counts. A post or a bush base standing on the cell with ground
+        /// showing round it leaves that ground in view, and the blend across to it is still right:
+        /// that is the painted shadow under a bush the blend was made for.</para>
+        /// <para>The layers are laid over one another: an indoor wall is often a Back2, a Back3 and a
+        /// Buildings tile at one cell, none of them solid along the edge alone and solid together.</para>
+        /// </remarks>
+        private static bool CoveredFromAbove(Layer ground, int x, int y, Point offset, Dictionary<TileSheet, Texture2D> textures)
+        {
+            // Asked for every ground tile on screen and all eight of its neighbours on every frame,
+            // about map art that does not change while you stand there: 0.2 to 0.4 ms a frame
+            // worked out afresh, so it is worked out once per cell and side and kept.
+            CoverGrid grid = _coverGrids.GetValue(ground, layer => new CoverGrid(layer.LayerWidth, layer.LayerHeight));
+            if (grid.Generation != _mapAnswersGeneration)
+                grid.Reset(_mapAnswersGeneration);
+            int slot = (y * grid.Width + x) * 9 + (offset.Y + 1) * 3 + offset.X + 1;
+            if ((uint)slot >= (uint)grid.Answers.Length)
+                return WorkOutCoveredFromAbove(ground, x, y, offset, textures);
+            byte answer = grid.Answers[slot];
+            if (answer != 0)
+                return answer == 2;
+            bool covered = WorkOutCoveredFromAbove(ground, x, y, offset, textures);
+            grid.Answers[slot] = covered ? (byte)2 : (byte)1;
+            return covered;
+        }
+
+        /// <summary>The cover answers for one ground layer, per cell and per side it is seen from:
+        /// 0 not yet asked, 1 open, 2 covered.</summary>
+        private sealed class CoverGrid
+        {
+            internal readonly int Width;
+            internal readonly byte[] Answers;
+            internal int Generation;
+
+            internal CoverGrid(int width, int height)
+            {
+                Width = width;
+                Answers = new byte[width * height * 9];
+                Generation = _mapAnswersGeneration;
+            }
+
+            internal void Reset(int generation)
+            {
+                Array.Clear(Answers);
+                Generation = generation;
+            }
+        }
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Layer, CoverGrid> _coverGrids = [];
+        private static int _mapAnswersGeneration;
+
+        /// <summary>Forget every answer kept per cell, the neighbourhoods and the cover: the map may
+        /// have been edited in place (a day's map changes, a sheet reloaded), which leaves the layer
+        /// the same object with other tiles.</summary>
+        internal static void ForgetMapAnswers() => _mapAnswersGeneration++;
+
+        private static bool WorkOutCoveredFromAbove(Layer ground, int x, int y, Point offset, Dictionary<TileSheet, Texture2D> textures)
+        {
+            int count = 0;
+            var stack = new HashCode();
+            foreach (Layer above in LayersAbove(ground))
+            {
+                if (x >= above.LayerWidth || y >= above.LayerHeight)
+                    continue;
+                Tile? overlay = above.Tiles[x, y];
+                if (overlay == null || Turned(overlay))
+                    continue;
+                Tile still = overlay is AnimatedTile animated && animated.TileFrames.Length > 0 ? animated.TileFrames[0] : overlay;
+                if (!textures.TryGetValue(still.TileSheet, out Texture2D? sheet) || sheet.IsDisposed)
+                    continue;
+                Rectangle source = Bounds(still);
+                if (EdgeCover(sheet, source, offset, null))
+                    return true;
+                if (count < _coverStack.Length)
+                    _coverStack[count] = (sheet, source);
+                count++;
+                stack.Add(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(sheet));
+                stack.Add(source);
+            }
+            if (count < 2 || count > _coverStack.Length)
+                return false;
+            var key = (stack.ToHashCode(), count, offset);
+            if (_solidStacks.TryGetValue(key, out bool known))
+                return known;
+            // The edge strip a side neighbour turns toward the tile, or the corner a corner one does.
+            float[] through = new float[(offset.X == 0 ? 16 : CoverDepth) * (offset.Y == 0 ? 16 : CoverDepth)];
+            Array.Fill(through, 1f);
+            for (int i = 0; i < count; i++)
+                EdgeCover(_coverStack[i].sheet, _coverStack[i].source, offset, through);
+            int solidTexels = 0;
+            foreach (float share in through)
+                if (share <= 1f - SolidAlpha / 255f)
+                    solidTexels++;
+            bool solid = solidTexels * 10 >= through.Length * 9;
+            if (_solidStacks.Count > 20000)
+                _solidStacks.Clear();
+            _solidStacks[key] = solid;
+            return solid;
+        }
+
+        /// <summary>A texel this opaque, out of 255, counts as solid.</summary>
+        private const int SolidAlpha = 230;
+
+        private static readonly (Texture2D sheet, Rectangle source)[] _coverStack = new (Texture2D, Rectangle)[8];
+        private static readonly Dictionary<(int stack, int count, Point offset), bool> _solidStacks = [];
+        private static readonly Dictionary<(Texture2D sheet, Rectangle source, Point offset), bool> _solidEdges = [];
+
+        /// <summary>
+        /// Whether the overlay's texels along the edge that faces back toward
+        /// <paramref name="offset"/>'s origin are solid, nearly all of them, CoverDepth deep. With
+        /// <paramref name="through"/> it instead multiplies into each entry how much of what is
+        /// under that texel the overlay lets through, for a stack of overlays laid together.
+        /// </summary>
+        private static bool EdgeCover(Texture2D sheet, Rectangle source, Point offset, float[]? through)
+        {
+            var key = (sheet, source, offset);
+            if (through == null && _solidEdges.TryGetValue(key, out bool known))
+                return known;
+            bool solid = false;
+            Color[]? pixels = SheetPixels.WholeSheet(sheet, "sheet tile cover");
+            if (pixels != null && source.Right <= sheet.Width && source.Bottom <= sheet.Height)
+            {
+                // The neighbour lies at offset from the baked tile, so the edge it turns toward
+                // that tile is on its far side from the offset: its left columns for a neighbour
+                // to the right, its top rows for one below, both for a corner.
+                int fromColumn = offset.X < 0 ? source.Width - CoverDepth : 0;
+                int toColumn = offset.X > 0 ? CoverDepth : source.Width;
+                int fromRow = offset.Y < 0 ? source.Height - CoverDepth : 0;
+                int toRow = offset.Y > 0 ? CoverDepth : source.Height;
+                int total = 0, opaque = 0;
+                for (int row = fromRow; row < toRow; row++)
+                    for (int column = fromColumn; column < toColumn; column++)
+                    {
+                        byte alpha = pixels[(source.Y + row) * sheet.Width + source.X + column].A;
+                        if (through != null && total < through.Length)
+                            through[total] *= 1f - alpha / 255f;
+                        total++;
+                        if (alpha >= SolidAlpha)
+                            opaque++;
+                    }
+                solid = total > 0 && opaque * 10 >= total * 9;
+            }
+            if (through != null)
+                return solid;
+            if (_solidEdges.Count > 20000)
+                _solidEdges.Clear();
+            _solidEdges[key] = solid;
+            return solid;
+        }
+
         private static bool Turned(Tile tile)
         {
             var properties = tile.Properties;
@@ -464,6 +741,7 @@ namespace SDVRadiance
         /// <summary>Forget every neighbourhood, with the bakes that were keyed by them.</summary>
         internal static void Clear()
         {
+            ForgetMapAnswers();
             _idOf.Clear();
             _byId.RemoveRange(1, _byId.Count - 1);
         }

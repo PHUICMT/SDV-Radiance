@@ -83,7 +83,10 @@ namespace SDVRadiance
             long whoStep = RenderPipeline.ChainStepBegin();
             Farmer who = Game1.player;
             bool swimming = who != null && who.swimming.Value;
-            if (who == null || who.currentLocation != Game1.currentLocation || who.isRidingHorse())
+            // A rider is baked only for the grounded look, which gives the rider a shadow of their
+            // own (DrawRiderShadow); otherwise the horse's shadow stands for both, as it always has.
+            bool riding = who != null && who.isRidingHorse();
+            if (who == null || who.currentLocation != Game1.currentLocation || (riding && !GroundedLook))
             {
                 ForgetPlayerBake();
                 return;
@@ -92,6 +95,13 @@ namespace SDVRadiance
             RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakeWho, whoStep);
             long poseStep = RenderPipeline.ChainStepBegin();
             BakePlayerPose(graphicsDevice, who, swimming, reflectionNeedsPlayer);
+            // The water and the reflection read the published pair and have their own answer for a
+            // rider (StampFarmerSelf, the horse's mirror): they see what they saw before.
+            if (riding)
+            {
+                PlayerMask = null;
+                PlayerColor = null;
+            }
             RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakePose, poseStep);
             // The daylight shadow is laid down by the sun's projection, skew and all, from the
             // upright bake the water and the lamps go on reading (see LayDownPlayerSun).
@@ -438,7 +448,7 @@ namespace SDVRadiance
             _characterSunStretch *= Math.Max(0.1f, config.DirectionalShadowLength)
                                   * MathHelper.Lerp(1f, OvercastLength, _overcastBlend);
             _characterSunBlur = Math.Max(0f, config.DirectionalShadowBlur) + OvercastExtraBlur * _overcastBlend;
-            _characterGroundForeshortening = config.ShadowCharacterGroundForeshortening;
+            _characterGroundForeshortening = PeopleGroundForeshortening(config);
         }
 
         /// <summary>
@@ -1358,9 +1368,11 @@ namespace SDVRadiance
             if (blur <= 0f)
             {
                 FrameCost.Count(FrameCost.Counter.ShadowDrawCalls);
+                int countBefore = GroundedCountBefore(spriteBatch);
                 spriteBatch.Draw(texture, feet, sourceRect,
                     baseColor * (1f - (float)Math.Pow(1f - MathHelper.Clamp(alpha, 0f, 1f), ShadowDepthPower)),
                     rotation, origin, scale, effects, depth);
+                GroundLastDraw(spriteBatch, countBefore, texture, feet, rotation);
                 return;
             }
 
@@ -1376,7 +1388,11 @@ namespace SDVRadiance
             if (root <= 1f)
             {
                 foreach (Vector2 tap in taps)
+                {
+                    int countBefore = GroundedCountBefore(spriteBatch);
                     spriteBatch.Draw(texture, feet + tap * blur, sourceRect, tapColor, rotation, origin, scale, effects, depth);
+                    GroundLastDraw(spriteBatch, countBefore, texture, feet + tap * blur, rotation);
+                }
                 return;
             }
             float alongX = (float)Math.Sin(rotation), alongY = -(float)Math.Cos(rotation);
@@ -1386,7 +1402,9 @@ namespace SDVRadiance
                 float along = (tap.X * alongX + tap.Y * alongY) * alongRadius;
                 float across = (tap.Y * alongX - tap.X * alongY) * acrossRadius;
                 var offset = new Vector2(along * alongX - across * alongY, along * alongY + across * alongX);
+                int countBefore = GroundedCountBefore(spriteBatch);
                 spriteBatch.Draw(texture, feet + offset, sourceRect, tapColor, rotation, origin, scale, effects, depth);
+                GroundLastDraw(spriteBatch, countBefore, texture, feet + offset, rotation);
             }
         }
 
@@ -1696,7 +1714,12 @@ namespace SDVRadiance
                 DrawSoft(spriteBatch, taps, texture, strip, feet, baseColor, alpha, rotation, stripOrigin, scale,
                     anchorIsSortDepth ? ShadowPieceDepthUnder(anchorWorldY, upScreen)
                                       : GroundedPieceDepth(anchorWorldY, upScreen, feetWorldX, sideways), effects,
-                    PenumbraRadiusAt(blur, texelsAboveFeet / Math.Max(1f, origin.Y)), shadowLengthPerHeight);
+                    // A grounded cast keeps its rows level, so a strip's seam is a level line, and
+                    // a softness that steps from one strip to the next shows along it as an edge.
+                    // Every strip takes the middle's softness instead, as far as the look is in.
+                    MathHelper.Lerp(PenumbraRadiusAt(blur, texelsAboveFeet / Math.Max(1f, origin.Y)),
+                        PenumbraRadiusAt(blur, 0.5f), _groundingThisCast ? GroundedShare : 0f),
+                    shadowLengthPerHeight);
             }
         }
 

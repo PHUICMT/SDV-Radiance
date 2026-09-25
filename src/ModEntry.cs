@@ -136,6 +136,7 @@ namespace SDVRadiance
             helper.Events.GameLoop.DayStarted += (_, _) =>
             {
                 WaterDrawHook.ForgetAll();
+                MapTileNeighbours.ForgetMapAnswers();
                 Determinism.RestartShaderClock();
                 // A building finishing is not a change to the building LIST: Robin hands back the
                 // same object with its days counted down, so nothing below fires and the grid
@@ -172,6 +173,8 @@ namespace SDVRadiance
             // The mask only ever holds the CURRENT location, and changing location rebuilds it
             // regardless, so the only reload that can invalidate it is a reload of the map the
             // player is standing on.
+            // The horse's painted shadow, taken out of its sheet while shadows start at the feet.
+            HorseArtShadow.Install(helper);
             helper.Events.Content.AssetsInvalidated += (_, e) =>
             {
                 string? here = Game1.currentLocation?.mapPath?.Value?.Replace('\\', '/');
@@ -193,6 +196,9 @@ namespace SDVRadiance
                         break;
                     }
                 }
+                if (anyMap)
+                    // A map or a tilesheet reloaded may be other art at the same cells.
+                    MapTileNeighbours.ForgetMapAnswers();
                 if (anyMap)
                     SurfaceMap.InvalidateAffectedBy(System.Linq.Enumerable.Select(e.Names, n => n.Name));
                 // A label's verdict is an answer about ART, and this is the event that says the
@@ -407,10 +413,15 @@ namespace SDVRadiance
             // draws: the foliage sway (in the Tree/Bush shim) and the sheet upscaler (a prefix on
             // SpriteBatch.Draw). Both fall silent with the mod, so they are set before the gate.
             FoliageSway.Enabled = _config.Enabled && _config.FoliageSwayEnabled;
+            ShadowRenderer.UpdateGroundedLook(_config);
+            HorseArtShadow.Update(_config);
             FoliageSway.Strength = Math.Clamp(_config.FoliageSwayStrength, 0f, 2f);
             FoliageSway.Speed = Math.Clamp(_config.FoliageSwaySpeed, 0.25f, 2f);
             FoliageSway.GustSpanTiles = Math.Clamp(_config.FoliageSwayGustSpan, 4f, 40f);
             FoliageSway.CropsEnabled = _config.FoliageSwayCrops;
+            FoliageSway.GrassEnabled = _config.FoliageSwayGrass;
+            FoliageSway.GrassSmoothShake = _config.Enabled && _config.GrassSmoothShake;
+            FoliageSway.GrassSwaysThisFrame = 0;
             FoliageSway.WindPixelsPerSecond = PrecipitationSystem.WindPixelsPerSecond;
             FoliageSway.StripDrawsThisFrame = 0;
             FoliageSway.CropSwaysThisFrame = 0;

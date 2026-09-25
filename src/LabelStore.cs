@@ -403,6 +403,19 @@ namespace SDVRadiance
         /// → "spring_beach" / "Cursors".</summary>
         internal static string NormalizeSheet(string imageSource)
         {
+            // Asked with the same few dozen sheet names every frame, and each answer was new strings.
+            if (_normalizedSheets.TryGetValue(imageSource, out string? known))
+                return known;
+            if (_normalizedSheets.Count > 4096)
+                _normalizedSheets.Clear();
+            return _normalizedSheets.GetOrAdd(imageSource, NormalizeSheetAfresh);
+        }
+
+        // Concurrent: the water mask asks from its worker thread as well.
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _normalizedSheets = new();
+
+        private static string NormalizeSheetAfresh(string imageSource)
+        {
             string name = imageSource.Replace('\\', '/');
             int slash = name.LastIndexOf('/');
             if (slash >= 0)

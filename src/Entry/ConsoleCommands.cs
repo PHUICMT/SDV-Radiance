@@ -701,13 +701,19 @@ namespace SDVRadiance
                 + "before; 'on' (the default) bakes it with the edges of the eight tiles round it in the map, so a rock, "
                 + "a bush or a cliff built of several tiles is smoothed as one picture instead of stopping in a square "
                 + "seam at every tile edge. Every soft sprite is made again. radiance_report's 'map tiles baked with "
-                + "their neighbours' row is the receipt. Not saved.",
+                + "their neighbours' row is the receipt. 'check' works out every kept neighbourhood on screen again "
+                + "and says whether any kept answer has gone stale. Not saved.",
                 (_, arguments) =>
                 {
                     string asked = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
                     if (asked == "show" && arguments.Length > 1 && int.TryParse(arguments[1], out int shownId))
                     {
                         monitor.Log(MapTileNeighbours.DescribeNeighbourhood(shownId), LogLevel.Info);
+                        return;
+                    }
+                    if (asked == "check")
+                    {
+                        monitor.Log(MapTileNeighbours.CheckKeptNeighbourhoods(), LogLevel.Info);
                         return;
                     }
                     if (asked is not "on" and not "off")
@@ -793,6 +799,12 @@ namespace SDVRadiance
                     SheetUpscaler.SoftTileFeatherTexels = Math.Clamp(texels, 0f, 10f);
                     monitor.Log($"tile-line blend {SheetUpscaler.SoftTileFeatherTexels:0.###} texels; the soft sheets re-make on the next draws.", LogLevel.Info);
                 });
+            helper.ConsoleCommands.Add("radiance_softseams",
+                "'radiance_softseams' lists every ground tile edge in this place where the smooth art's tile-line blend "
+                + "reads a tile the player does not see there (the ground under an overlay, an animated tile's other frames), "
+                + "which is what draws a thin line along the tile grid. 'radiance_softseams all' reads every place.",
+                (_, arguments) => MapTileNeighbours.ReportSeams(monitor,
+                    arguments.Length > 0 && arguments[0].Equals("all", StringComparison.OrdinalIgnoreCase)));
             helper.ConsoleCommands.Add("radiance_softsteady",
                 "'radiance_softsteady <0..1>' how the soft sprites are read when drawn: four reads spread over this "
                 + "share of a screen pixel, which keeps thin lines from shimmering as the camera glides or the wind "
@@ -858,6 +870,22 @@ namespace SDVRadiance
                     monitor.Log($"pose library {(ShadowRenderer.PoseLibraryEnabled ? "on" : "OFF")}: "
                         + $"{ShadowRenderer.PoseLibraryCopies} poses copied, {ShadowRenderer.PoseLibraryBakes} drawn since the game started. "
                         + "Usage: radiance_poselibrary on|off", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_shadowlook",
+                "'radiance_shadowlook grounded [depth]' keeps characters' shadows on the ground at the feet, running away "
+                + "from the light; 'turned' turns the whole silhouette about the feet, as before. The same switch as "
+                + "'Shadows start at the feet' in the tuner, set live for an A/B and not saved.",
+                (_, arguments) =>
+                {
+                    ModConfig config = getConfig();
+                    if (arguments.Length > 0)
+                        config.ShadowGroundedLook = arguments[0].Equals("grounded", StringComparison.OrdinalIgnoreCase);
+                    if (arguments.Length > 1 && float.TryParse(arguments[1], System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out float depth))
+                        config.ShadowGroundedDepth = Math.Clamp(depth, ModConfig.ShadowGroundedDepthMin, ModConfig.ShadowGroundedDepthMax);
+                    monitor.Log($"character shadows: {(config.ShadowGroundedLook ? $"grounded, depth {config.ShadowGroundedDepth:0.00}" : "turned")}"
+                        + (ShadowRenderer.GroundedLookAvailable ? "" : " (batch internals not found, so every cast is drawn turned)")
+                        + ". Usage: radiance_shadowlook grounded [depth 0.05-1]|turned", LogLevel.Info);
                 });
             helper.ConsoleCommands.Add("radiance_casterblur",
                 "'radiance_casterblur off' softens every character shadow tap by tap at draw time, nine draws a "

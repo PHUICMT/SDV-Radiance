@@ -272,6 +272,10 @@ namespace SDVRadiance
                 () => translate("config.weather.foliageswaygustspan.name"), () => translate("config.weather.foliageswaygustspan.tooltip"), 4f, 40f, 1f);
             configMenu.AddBoolOption(manifest, () => config().FoliageSwayCrops, value => config().FoliageSwayCrops = value,
                 () => translate("config.weather.foliageswaycrops.name"), () => translate("config.weather.foliageswaycrops.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().FoliageSwayGrass, value => config().FoliageSwayGrass = value,
+                () => translate("config.weather.foliageswaygrass.name"), () => translate("config.weather.foliageswaygrass.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().GrassSmoothShake, value => config().GrassSmoothShake = value,
+                () => translate("config.weather.grasssmoothshake.name"), () => translate("config.weather.grasssmoothshake.tooltip"));
             configMenu.AddBoolOption(manifest, () => config().PrecipitationEnabled, value => config().PrecipitationEnabled = value,
                 () => translate("config.precipitation.enabled.name"), () => translate("config.precipitation.enabled.tooltip"));
             configMenu.AddSectionTitle(manifest, () => translate("config.precipitation.rain.name"));
@@ -843,6 +847,11 @@ namespace SDVRadiance
             configMenu.AddNumberOption(manifest, () => config().ShadowGroundForeshortening, value => config().ShadowGroundForeshortening = value,
                 () => translate("config.shadows.groundforeshortening.name"), () => translate("config.shadows.groundforeshortening.tooltip"),
                 ModConfig.ShadowGroundForeshorteningMin, ModConfig.ShadowGroundForeshorteningMax, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().ShadowGroundedLook, value => config().ShadowGroundedLook = value,
+                () => translate("config.shadows.grounded.name"), () => translate("config.shadows.grounded.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().ShadowGroundedDepth, value => config().ShadowGroundedDepth = value,
+                () => translate("config.shadows.groundeddepth.name"), () => translate("config.shadows.groundeddepth.tooltip"),
+                ModConfig.ShadowGroundedDepthMin, ModConfig.ShadowGroundedDepthMax, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().ShadowCharacterGroundForeshortening, value => config().ShadowCharacterGroundForeshortening = value,
                 () => translate("config.shadows.charactergroundforeshortening.name"), () => translate("config.shadows.charactergroundforeshortening.tooltip"),
                 ModConfig.ShadowGroundForeshorteningMin, ModConfig.ShadowGroundForeshorteningMax, 0.05f);
@@ -1036,10 +1045,6 @@ namespace SDVRadiance
                 () => false,
                 value => { if (value) ConsoleCommands.WriteReport(monitor, getPipeline(), config(), alsoLog: true); },
                 () => translate("config.report.name"), () => translate("config.report.tooltip"));
-
-            // --- Not yet implemented: shown as a roadmap so options don't imply working features ---
-            configMenu.AddSectionTitle(manifest, () => translate("config.section.wip"));
-            configMenu.AddParagraph(manifest, () => translate("config.wip.text"));
         }
     }
 }

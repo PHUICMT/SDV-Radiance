@@ -462,18 +462,21 @@ namespace SDVRadiance
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
                     new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
                 float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
-                DrawPeoplePoolUnder(spriteBatch, feet, 22f, alpha, depth, blur);
+                float lift = BodyLift(who);
+                float liftedAlpha = alpha * LiftFade(lift);
+                Vector2 castFeet = feet + LiftShift(lift, rotation, stretch);
+                DrawPeoplePoolUnder(spriteBatch, feet, 22f, liftedAlpha, depth, blur);
                 // Laid down by the sun already, the way the local player's is: skew and soft edge
                 // in the pixels, one unrotated stamp per strip.
                 if (bake.SunFresh && bake.SunMask != null)
                 {
-                    DrawSoftGrounded(spriteBatch, Taps9, bake.SunMask, bake.SunContent, feet, ShadowInk, alpha, 0f,
+                    DrawSoftGrounded(spriteBatch, Taps9, bake.SunMask, bake.SunContent, castFeet, ShadowInk, liftedAlpha, 0f,
                         bake.SunFeet - new Vector2(bake.SunContent.X, bake.SunContent.Y), new Vector2(bake.SunUnbake, bake.SunUnbake),
                         who.StandingPixel.Y, SpriteEffects.None, 0f, laidDownLean: rotation);
                     continue;
                 }
                 float farmerWidth = LaidDownWidth(CharacterAcrossScale(rotation, stretch), SpriteEffects.None, out SpriteEffects farmerFacing);
-                DrawSoftGrounded(spriteBatch, Taps9, bake.Mask, null, feet, ShadowInk, alpha, rotation,
+                DrawSoftGrounded(spriteBatch, Taps9, bake.Mask, null, castFeet, ShadowInk, liftedAlpha, rotation,
                     bake.FeetInRenderTarget, new Vector2(farmerWidth, stretch),
                     who.StandingPixel.Y, farmerFacing, blur, shadowLengthPerHeight: stretch);
             }
@@ -502,10 +505,12 @@ namespace SDVRadiance
                     ambAlpha * GroundingPoolShare(), depth, blur);
                 if (!bake.Ready || bake.Mask == null)
                     continue;
+                float farmerLift = BodyLift(who);
                 foreach (var (rotation, st, a, _) in _lightShadowCasts)
-                    DrawSoftGrounded(spriteBatch, Taps9, bake.Mask, null, feet, ShadowInk, a, rotation,
+                    WithGroundedCast(() => DrawSoftGrounded(spriteBatch, Taps9, bake.Mask, null,
+                        feet + LiftShift(farmerLift, rotation, st), ShadowInk, a * LiftFade(farmerLift), rotation,
                         bake.FeetInRenderTarget, new Vector2(1f, st), who.StandingPixel.Y, SpriteEffects.None, blur,
-                        shadowLengthPerHeight: st);
+                        shadowLengthPerHeight: st));
             }
         }
 

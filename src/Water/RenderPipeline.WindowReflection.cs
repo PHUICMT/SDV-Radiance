@@ -338,6 +338,10 @@ namespace SDVRadiance
 
         /// <summary>Opposite of up is down, of down is up; left and right stay, because a mirror on
         /// the wall in front of you flips front and back, not your left and your right.</summary>
+        /// <summary>The seated frames the game gives a rider (Farmer.showRiding).</summary>
+        private const int RiderFacingDownFrame = 107;
+        private const int RiderFacingUpFrame = 113;
+
         private static bool TryTurnedFacing(int facing, out int turned)
         {
             turned = facing;
@@ -396,7 +400,11 @@ namespace SDVRadiance
                 // which is what the glass would see of a pose it has no mirror for.
                 var current = who.FarmerSprite.CurrentAnimationFrame;
                 int currentFrame = who.FarmerSprite.CurrentFrame;
-                if (currentFrame is >= 0 and <= 2) frame = currentFrame + 12;
+                // A rider sits: the glass sees the seated frame of the other facing (Farmer.showRiding:
+                // 107 facing down, 113 facing up). Without it the rider was turned into the standing
+                // frame, and the glass showed somebody on foot where a rider was.
+                if (who.isRidingHorse()) frame = facingForGlass == 2 ? RiderFacingDownFrame : RiderFacingUpFrame;
+                else if (currentFrame is >= 0 and <= 2) frame = currentFrame + 12;
                 else if (currentFrame is >= 12 and <= 14) frame = currentFrame - 12;
                 else frame = facingForGlass == 2 ? 0 : 12;
                 source = new Rectangle(frame % 6 * 16, frame / 6 * 32, 16, 32);

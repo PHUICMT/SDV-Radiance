@@ -249,6 +249,57 @@ namespace SDVRadiance
             SpriteEffects effects, float layerDepth)
             => spriteBatch.Draw(texture, pos, src, color, rotation + FoliageSway.CropTilt, origin, scale, effects, layerDepth);
 
+        /// <summary>
+        /// Shim for Grass.draw: each blade turns by what <see cref="FoliageSway.GrassBladeRotation"/>
+        /// says instead of the game's own shake angle. The game already turns a blade about the
+        /// point where it leaves the ground, so both the wind's lean and the smooth shake ride
+        /// that pivot and the blade moves as one piece.
+        /// </summary>
+        public static void Draw_GrassSway(SpriteBatch spriteBatch, Texture2D texture, Vector2 pos,
+            Rectangle? src, Color color, float rotation, Vector2 origin, float scale,
+            SpriteEffects effects, float layerDepth)
+            => spriteBatch.Draw(texture, pos, src, color, FoliageSway.GrassBladeRotation(rotation, pos), origin, scale, effects, layerDepth);
+
+        /// <summary>Vector2-scale twin of <see cref="Draw_GrassSway"/>.</summary>
+        public static void Draw_GrassSwayV(SpriteBatch spriteBatch, Texture2D texture, Vector2 pos,
+            Rectangle? src, Color color, float rotation, Vector2 origin, Vector2 scale,
+            SpriteEffects effects, float layerDepth)
+            => spriteBatch.Draw(texture, pos, src, color, FoliageSway.GrassBladeRotation(rotation, pos), origin, scale, effects, layerDepth);
+
+        /// <summary>
+        /// Shim for the draws of a flier (a flying companion, a bat): the game's own blob under it
+        /// fades out as the grounded look's shadow of it fades in (see ShadowRenderer.GroundedBodies),
+        /// and everything else is drawn as the game asked.
+        /// </summary>
+        public static void Draw_FadeFlierBlob(SpriteBatch spriteBatch, Texture2D texture, Vector2 pos,
+            Rectangle? src, Color color, float rotation, Vector2 origin, float scale,
+            SpriteEffects effects, float layerDepth)
+        {
+            float kept = 1f - ShadowRenderer.FlierBlobTakenAway;
+            if (ReferenceEquals(texture, Game1.shadowTexture) && kept < 1f)
+            {
+                if (kept <= 0.01f)
+                    return;
+                color *= kept;
+            }
+            spriteBatch.Draw(texture, pos, src, color, rotation, origin, scale, effects, layerDepth);
+        }
+
+        /// <summary>Vector2-scale twin of <see cref="Draw_FadeFlierBlob"/>.</summary>
+        public static void Draw_FadeFlierBlobV(SpriteBatch spriteBatch, Texture2D texture, Vector2 pos,
+            Rectangle? src, Color color, float rotation, Vector2 origin, Vector2 scale,
+            SpriteEffects effects, float layerDepth)
+        {
+            float kept = 1f - ShadowRenderer.FlierBlobTakenAway;
+            if (ReferenceEquals(texture, Game1.shadowTexture) && kept < 1f)
+            {
+                if (kept <= 0.01f)
+                    return;
+                color *= kept;
+            }
+            spriteBatch.Draw(texture, pos, src, color, rotation, origin, scale, effects, layerDepth);
+        }
+
         /// <summary>Vector2-scale twin of <see cref="Draw_SkipVanillaShadow"/>.</summary>
         public static void Draw_SkipVanillaShadowV(SpriteBatch spriteBatch, Texture2D texture, Vector2 pos,
             Rectangle? src, Color color, float rotation, Vector2 origin, Vector2 scale,
@@ -451,6 +502,16 @@ namespace SDVRadiance
         internal static System.Collections.Generic.IEnumerable<CodeInstruction> CropSway_Transpiler(
             System.Collections.Generic.IEnumerable<CodeInstruction> instructions)
             => RedirectDraws(instructions, nameof(Draw_CropSway));
+
+        /// <summary>Fliers: fade the game's blob under them as the grounded look's shadow comes in.</summary>
+        internal static System.Collections.Generic.IEnumerable<CodeInstruction> FlierBlob_Transpiler(
+            System.Collections.Generic.IEnumerable<CodeInstruction> instructions)
+            => RedirectDraws(instructions, nameof(Draw_FadeFlierBlob));
+
+        /// <summary>Grass: turn every blade the tuft draws by the wind and the smooth shake.</summary>
+        internal static System.Collections.Generic.IEnumerable<CodeInstruction> GrassSway_Transpiler(
+            System.Collections.Generic.IEnumerable<CodeInstruction> instructions)
+            => RedirectDraws(instructions, nameof(Draw_GrassSway));
 
         /// <summary>Tree/Bush: drop the depth==1E-06 blob draws.</summary>
         internal static System.Collections.Generic.IEnumerable<CodeInstruction> DrawShadow_Transpiler(

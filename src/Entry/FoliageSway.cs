@@ -190,6 +190,138 @@ namespace SDVRadiance
         /// <summary>The crop's draw is over: nothing after it leans.</summary>
         internal static void EndCrop() => CropTilt = 0f;
 
+        /// <summary>Whether a tuft of grass leans in the same wind (set per frame by the mod).</summary>
+        internal static bool GrassEnabled;
+        /// <summary>Whether a tuft that is walked through or cut swings like a spring instead of
+        /// the game's own zigzag (set per frame by the mod, independent of the wind).</summary>
+        internal static bool GrassSmoothShake;
+        /// <summary>The recorded count of grass tufts this frame moved, for the debug caption.</summary>
+        internal static int GrassSwaysThisFrame;
+
+        /// <summary>How much further a blade of grass leans than a tree does for the same wind. A
+        /// blade reaches about 17 art pixels above the point it turns on, against a canopy's 96,
+        /// so four times the angle puts its tip through about the same share of its height as a
+        /// crop's head. At a calm peak that is under half an art pixel; a storm about one.</summary>
+        private const float GrassTiltMultiplier = 4f;
+
+        /// <summary>The game's own tick rate, which its shake numbers are written in.</summary>
+        private const float GameTicksPerSecond = 60f;
+        /// <summary>How fast the game lets a shake die, in radians of reach per tick (the literal
+        /// Grass.tickUpdate subtracts from maxShake).</summary>
+        private const float GameShakeDecayPerTick = MathF.PI / 350f;
+
+        /// <summary>One shake of one tuft, as the game started it: how far, which way first, how
+        /// long one swing takes and how long until the game would let it be shaken again.</summary>
+        private sealed class GrassShake
+        {
+            internal double StartSeconds;
+            internal float Reach;
+            internal float Direction;
+            internal float SwingSeconds;
+            internal float LifeSeconds;
+        }
+
+        /// <summary>The last shake each tuft was given. Weak, so a tuft that is cut or a location
+        /// that unloads takes its entry with it.</summary>
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Grass, GrassShake> GrassShakes = [];
+
+        /// <summary>The game's per-blade share of the shake: each blade turns by the tuft's angle
+        /// divided by (1 + this), so the blades of one tuft do not move as one.</summary>
+        private static readonly HarmonyLib.AccessTools.FieldRef<Grass, double[]>? GrassBladeShare =
+            TryFieldRef<Grass, double[]>("shakeRandom");
+
+        private static HarmonyLib.AccessTools.FieldRef<TOwner, TField>? TryFieldRef<TOwner, TField>(string name)
+        {
+            try
+            {
+                return HarmonyLib.AccessTools.FieldRefAccess<TOwner, TField>(name);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>The tuft being drawn right now, or null outside a grass draw.</summary>
+        private static Grass? _drawingGrass;
+        /// <summary>The tuft's shake angle for this frame when the smooth shake owns it.</summary>
+        private static float _drawingGrassShake;
+        /// <summary>Which blade of the tuft the next draw is.</summary>
+        private static int _drawingGrassBlade;
+
+        /// <summary>Harmony postfix on Grass.shake: remember when and how the game started it. The
+        /// game's own numbers are kept exactly (reach, which way first, the rate of the swing), so
+        /// a sprint through a meadow still throws the grass further than a stroll does, and a
+        /// tuft becomes shakeable again at the moment it always did.</summary>
+        internal static void Grass_Shake_Postfix(Grass __instance, float shake, float rate, bool left)
+        {
+            if (shake <= 0f || rate <= 0f)
+                return;
+            GrassShake record = GrassShakes.GetOrCreateValue(__instance);
+            record.StartSeconds = Determinism.Seconds;
+            record.Reach = shake;
+            record.Direction = left ? -1f : 1f;
+            // The game walks the angle by `rate` a tick out to the reach and back, four legs a
+            // swing, and lets the reach die by a fixed step a tick until nothing is left.
+            record.SwingSeconds = 4f * shake / rate / GameTicksPerSecond;
+            record.LifeSeconds = shake / GameShakeDecayPerTick / GameTicksPerSecond;
+        }
+
+        /// <summary>How far the tuft is turned by its shake right now: a sine at the game's own
+        /// swing length, under an envelope that reaches nothing with no slope left at the moment
+        /// the game would allow the next shake. The game's zigzag turned round at full speed at
+        /// each end, and a tuft left leaning left when it ran out snapped upright in one frame
+        /// (its settle test only looked at the right-hand side).</summary>
+        private static float SmoothShakeOf(Grass grass)
+        {
+            if (!GrassShakes.TryGetValue(grass, out GrassShake? record))
+                return 0f;
+            float elapsed = (float)(Determinism.Seconds - record.StartSeconds);
+            if (elapsed <= 0f || elapsed >= record.LifeSeconds)
+                return 0f;
+            float remaining = 1f - elapsed / record.LifeSeconds;
+            return record.Direction * record.Reach * remaining * remaining
+                * MathF.Sin(MathF.Tau * elapsed / Math.Max(0.05f, record.SwingSeconds));
+        }
+
+        /// <summary>Harmony prefix on Grass.draw: settle this tuft's shake once, for every blade.</summary>
+        internal static void Grass_Draw_Prefix(Grass __instance)
+        {
+            _drawingGrass = null;
+            if (!(GrassEnabled && Enabled && Strength > 0.001f) && !GrassSmoothShake)
+                return;
+            _drawingGrass = __instance;
+            _drawingGrassBlade = 0;
+            _drawingGrassShake = GrassSmoothShake ? SmoothShakeOf(__instance) : 0f;
+            GrassSwaysThisFrame++;
+        }
+
+        /// <summary>Harmony postfix on Grass.draw: nothing drawn after the tuft picks up its motion.</summary>
+        internal static void Grass_Draw_Postfix() => _drawingGrass = null;
+
+        /// <summary>The rotation one blade of the tuft being drawn should carry, given the one the
+        /// game asked for. Outside a grass draw it is the game's own.</summary>
+        internal static float GrassBladeRotation(float rotation, Vector2 screenPosition)
+        {
+            if (_drawingGrass is not Grass grass)
+                return rotation;
+            int blade = _drawingGrassBlade++;
+            if (GrassSmoothShake)
+            {
+                double[]? shares = GrassBladeShare?.Invoke(grass);
+                double share = shares != null && blade < shares.Length ? shares[blade] : 0.0;
+                rotation = _drawingGrassShake / (float)(share + 1.0);
+            }
+            if (GrassEnabled)
+            {
+                // Keyed to the blade's own place in the world, so the blades of one tuft, and the
+                // tufts along a gust front, lean one after another rather than as one sheet.
+                rotation += GrassTiltMultiplier * TiltAt((screenPosition.X + Game1.viewport.X) / 64f,
+                    (screenPosition.Y + Game1.viewport.Y) / 64f);
+            }
+            return rotation;
+        }
+
         /// <summary>Harmony prefix on the crop's draw: it is the only place the plant itself is in
         /// hand, and the lean depends on which plant this is (a shoot does not sway) and where it
         /// stands. Takes nothing but the instance, so it does not care what the game calls the

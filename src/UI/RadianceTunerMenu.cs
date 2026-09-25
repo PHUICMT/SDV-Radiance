@@ -876,6 +876,11 @@ namespace SDVRadiance
                 }
                 _contentCursorY += Scaled(50);
             }
+            Toggle("tuner.shadowgrounded", () => _config.ShadowGroundedLook, value => _config.ShadowGroundedLook = value, "help.shadowgrounded");
+            DependsOn(() => _config.DirectionalShadowsEnabled && _config.ShadowGroundedLook);
+            Slider("tuner.shadowgroundeddepth", ModConfig.ShadowGroundedDepthMin, ModConfig.ShadowGroundedDepthMax,
+                () => _config.ShadowGroundedDepth, value => _config.ShadowGroundedDepth = value, "help.shadowgroundeddepth");
+            DependsOn(() => _config.DirectionalShadowsEnabled);
             Section("tuner.section.shadowsun");
             Slider("tuner.shadowstrength", 0f, ModConfig.ShadowStrengthMax, () => _config.DirectionalShadowStrength,
                 value => _config.DirectionalShadowStrength = value, "help.shadowstrength");
@@ -1148,7 +1153,9 @@ namespace SDVRadiance
             Slider("config.weather.foliageswaygustspan.name", 4f, 40f, () => _config.FoliageSwayGustSpan,
                 value => _config.FoliageSwayGustSpan = value, "config.weather.foliageswaygustspan.tooltip");
             Toggle("tuner.foliageswaycrops", () => _config.FoliageSwayCrops, value => _config.FoliageSwayCrops = value, "help.foliageswaycrops");
+            Toggle("tuner.foliageswaygrass", () => _config.FoliageSwayGrass, value => _config.FoliageSwayGrass = value, "help.foliageswaygrass");
             EndDependsOn();
+            Toggle("tuner.grasssmoothshake", () => _config.GrassSmoothShake, value => _config.GrassSmoothShake = value, "help.grasssmoothshake");
             Section("tuner.section.sky");
             Toggle("tuner.precipitation", () => _config.PrecipitationEnabled, value => _config.PrecipitationEnabled = value, "help.precipitation");
             Slider("tuner.snowglint", 0f, 1f, () => _config.SnowGlintStrength, value => _config.SnowGlintStrength = value, "help.snowglint");
