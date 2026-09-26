@@ -82,8 +82,9 @@ namespace SDVRadiance
                     ArtFingerprintDump.Run(monitor, helper, label);
                 });
             helper.ConsoleCommands.Add("radiance_lights",
-                "List every active light source in the current location (id, kind, tile, radius, color, distance from player).",
-                (_, _) => DumpLights(monitor));
+                "List every active light source in the current location (id, kind, tile, radius, color, distance from player, "
+                + "and the weight of its shadow ray in the flood lighting).",
+                (_, _) => DumpLights(monitor, getPipeline()));
             // Flip any config value LIVE, without a restart and without touching config.json.
             //
             // This exists for one reason: measuring what each effect costs. A config edit needs a
@@ -1538,7 +1539,7 @@ namespace SDVRadiance
             return $"(screen {(int)screen.X},{(int)screen.Y} of {Game1.viewport.Width}x{Game1.viewport.Height})";
         }
 
-        private static void DumpLights(IMonitor monitor)
+        private static void DumpLights(IMonitor monitor, RenderPipeline? pipeline)
         {
             if (!StardewModdingAPI.Context.IsWorldReady || Game1.player == null)
             {
@@ -1565,7 +1566,8 @@ namespace SDVRadiance
                     $"[{i++}] id={kv.Key} ctx={ls.lightContext.Value} texture={ls.textureIndex.Value} " +
                     $"tile=({tile.X:0.0},{tile.Y:0.0}) radius={ls.radius.Value:0.00} " +
                     $"color(raw/subtractive)=({c.R},{c.G},{c.B},{c.A}) dist={distanceTiles:0.0} tiles " +
-                    $"onScreen={onScreen}", LogLevel.Info);
+                    $"onScreen={onScreen}" +
+                    (pipeline != null ? $" floodShadow={pipeline.FloodShadowWeightOf(kv.Key.ToString() ?? string.Empty):0.00}" : ""), LogLevel.Info);
             }
             if (location != null)
             {
@@ -1634,7 +1636,9 @@ namespace SDVRadiance
                         ? "   (march SKIPPED this frame: shadows at zero, shafts off, so nothing could show it)"
                         : RenderPipeline.LastMarchHalfResolution
                             ? "   (rays fired at half resolution, read back by the pass)"
-                            : "   (rays fired in the pass, full resolution)"));
+                            : RenderPipeline.LastMarchFullResolutionKept
+                                ? "   (rays fired at full resolution into the march window, read back by the pass)"
+                                : "   (rays fired in the pass, full resolution)"));
                 if (pipeline != null)
                     Write($"  soft pools       {pipeline.LastFloodSoftCount}"
                         + (pipeline.LastFloodBandSoftCounts.Any(handed => handed > 0)

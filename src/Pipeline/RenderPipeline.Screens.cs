@@ -227,6 +227,9 @@ namespace SDVRadiance
             public GameLocation? ExposureLocation;
             public GameLocation? LocationWaterLocation;
             public bool LocationHasWater;
+            /// <summary>Set on arriving at a location with water, cleared once the mirror has been
+            /// drawn (the water mask's _mirrorWarmupPending).</summary>
+            public bool MirrorWarmupPending;
             public GameLocation? PrewarmedLocation;
             /// <summary>Water body sizes, flood-filled over the whole map on every rebuild whose
             /// screen differed from the last one's.</summary>

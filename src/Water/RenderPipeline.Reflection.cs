@@ -822,7 +822,8 @@ namespace SDVRadiance
             _watchTreeStamps = 0;
             _watchFlippedStamps = 0;
             GameLocation? location = Game1.currentLocation;
-            if (location == null || (!_hasWaterInMask && !_wetPuddleMirrorWanted) || Game1.game1.takingMapScreenshot)
+            if (location == null || (!_hasWaterInMask && !_wetPuddleMirrorWanted && !_mirrorWarmupPending)
+                || Game1.game1.takingMapScreenshot)
             {
                 ReportReflectWatch("skipped");
                 return;
@@ -1672,6 +1673,28 @@ namespace SDVRadiance
         /// <para>They cost nothing to rebuild compared to a screen of shadow bakes (one frame of
         /// re-render), so the idle delay here can be short.</para>
         /// </summary>
+        /// <summary>
+        /// Whether any screen stands in a location that has water anywhere, on screen or not.
+        /// </summary>
+        /// <remarks>The water targets are kept for the whole visit to such a place. They used to
+        /// go five seconds after the water left the screen, and in Town, where the river is a
+        /// short walk from everywhere, every walk back to it made them again in one frame, drew
+        /// the whole scenery cache and read every creature's reflection off the card anew.</remarks>
+        internal bool AnyScreenLocationHasWater
+        {
+            get
+            {
+                if (_screen.LocationHasWater && ReferenceEquals(_screen.LocationWaterLocation, Game1.currentLocation))
+                    return true;
+                foreach (ScreenState state in _screenStates.Values)
+                {
+                    if (!ReferenceEquals(state, _screen) && state.LocationHasWater)
+                        return true;
+                }
+                return false;
+            }
+        }
+
         /// <summary>Whether any screen's water mask holds water. The water targets are shared by
         /// the screens, so they are wanted while any one of them has water to use them on.</summary>
         internal bool AnyScreenHasWaterOnScreen
@@ -2006,7 +2029,7 @@ namespace SDVRadiance
             GameLocation? location = Game1.currentLocation;
             // Water is not the only reader any more: a window returns the street from this same
             // source, and a street full of windows usually has no water on it at all.
-            if (location?.map == null || (!_hasWaterInMask && !WindowsWantSceneryMirror)
+            if (location?.map == null || (!_hasWaterInMask && !WindowsWantSceneryMirror && !_mirrorWarmupPending)
                 || Game1.game1.takingMapScreenshot)
                 return;
 
@@ -2127,6 +2150,8 @@ namespace SDVRadiance
                 spriteBatch.End();
                 PhaseCost.NoteSince("scene: blit cache to source", scenePhaseStart);
                 SceneRTReady = true;
+                // The scenery bake runs after the entity mirror, so both have now been drawn.
+                _mirrorWarmupPending = false;
             }
             catch (Exception exception)
             {

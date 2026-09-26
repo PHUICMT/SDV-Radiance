@@ -55,6 +55,15 @@ namespace SDVRadiance
         // Per screen: RenderPipeline.Screens.cs.
         private ref GameLocation? _locationWaterLocation => ref _screen.LocationWaterLocation;
         private ref bool _locationHasWater => ref _screen.LocationHasWater;
+        /// <summary>
+        /// The mirror draws once on arriving at a location with water, before any water is near.
+        /// </summary>
+        /// <remarks>Its render targets and the scenery cache were made the first time water came
+        /// into the mask window, and in Town that is mid-walk: a 52 ms frame measured on 26/9 as
+        /// the river came on screen, on top of re-reading every creature's reflection off the
+        /// card. Drawing it on the arrival frame puts that bill under the game's own fade from
+        /// black, and nothing drawn then shows: the water's presence is still at zero.</remarks>
+        private ref bool _mirrorWarmupPending => ref _screen.MirrorWarmupPending;
 
         /// <summary>
         /// Does THIS LOCATION have water anywhere, as opposed to "is water inside the mask window
@@ -83,6 +92,7 @@ namespace SDVRadiance
                         for (int x = 0; x < ww; x++)
                             if (wt[x, y].isWater) { _locationHasWater = true; break; }
                 }
+                _mirrorWarmupPending = _locationHasWater;
             }
             // Labelled or draw-hooked water need not appear in the game's own grid, so once a
             // compose has found any here, the location keeps the stage for the rest of the visit.

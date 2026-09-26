@@ -249,7 +249,7 @@ namespace SDVRadiance
                     // tile or two away, so every body near it threw a second shadow that swung
                     // from side to side with each flit, the rider's horse most of all. Too big
                     // for the firefly test below (radius 2), so it is known by what it is.
-                    if (kv.Key.StartsWith(CompanionLightPrefix, StringComparison.Ordinal))
+                    if (IsCompanionLight(kv.Key))
                         continue;
                     // Skip DRIFTING decorative lights (fireflies from The Night Lights, sparkle
                     // mods): each one threw its own moving shadow on the player. Neither signal
@@ -646,6 +646,11 @@ namespace SDVRadiance
         /// builds it as its class name, an underscore and a random number, and a mod's own
         /// flying companion inherits the same constructor.</summary>
         private const string CompanionLightPrefix = nameof(StardewValley.Companions.FlyingCompanion) + "_";
+
+        /// <summary>Whether a light in the game's list is one a flying companion carries. Such a
+        /// light lights the scene but casts no shadow, here and in the flood pass alike.</summary>
+        internal static bool IsCompanionLight(string lightKey)
+            => lightKey.StartsWith(CompanionLightPrefix, StringComparison.Ordinal);
 
         /// <summary>The strength the last <see cref="GatherCasts"/> was asked at.</summary>
         private float _castStrengthGathered = 1f;

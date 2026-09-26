@@ -783,7 +783,8 @@ namespace SDVRadiance
             // out, a street with windows and no water released the cache every five seconds and
             // rebuilt the whole of it on the next frame.
             Pipeline.ReleaseIdleWaterTargets(_config.Enabled
-                && (((_config.WaterEnabled || _config.WaterReflection) && Pipeline.AnyScreenHasWaterOnScreen)
+                && (((_config.WaterEnabled || _config.WaterReflection)
+                        && (Pipeline.AnyScreenHasWaterOnScreen || Pipeline.AnyScreenLocationHasWater))
                     || Pipeline.WetWorldWantsEntityMirror
                     || Pipeline.WindowsWantSceneryMirror));
             _camera.Update(_config);

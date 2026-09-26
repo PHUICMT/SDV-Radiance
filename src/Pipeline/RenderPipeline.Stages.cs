@@ -715,17 +715,23 @@ namespace SDVRadiance
             // The lamps' shadow rays at half resolution, four lamps to a target, read back by the
             // flood pass below (MarchFromTexture in the shader). Only when a ray could show:
             // the CPU's mirror of the shader's own test says when none can.
-            bool marchHalf = !config.LightShadowSharpEdges && !LastMarchSkipped && LastMarchingLamps > 0
+            // Sharp edges read the rays back too, from the world-anchored window at a texel a
+            // pixel, when that window is in use (one screen, the march cache on); otherwise they
+            // are walked in the pass as before.
+            bool marchable = !LastMarchSkipped && LastMarchingLamps > 0
                 && _isFloodOcclusionReady && _halfResolutionScratchA != null && _halfResolutionScratchB != null;
-            if (marchHalf)
+            bool marchWindowRoad = (MarchCacheOverride ?? config.LightShadowMarchCache) && LiveScreens.Count == 1;
+            bool marchFromTexture = marchable && (!config.LightShadowSharpEdges || marchWindowRoad);
+            if (marchFromTexture)
             {
                 // One technique, the base of the four lamps handed over as a uniform: see
                 // MarchBase in floodlight.fx for the constant-packing bug two techniques had.
                 // Which road, and which channels, is the march window's decision.
-                RunLampMarch(spriteBatch, source, effect, config);
+                RunLampMarch(spriteBatch, source, effect, config, fullDensity: config.LightShadowSharpEdges);
             }
-            GetParam(effect, "MarchFromTexture")?.SetValue(marchHalf ? 1f : 0f);
-            LastMarchHalfResolution = marchHalf;
+            GetParam(effect, "MarchFromTexture")?.SetValue(marchFromTexture ? 1f : 0f);
+            LastMarchHalfResolution = marchFromTexture && !config.LightShadowSharpEdges;
+            LastMarchFullResolutionKept = marchFromTexture && config.LightShadowSharpEdges;
 
             effect.CurrentTechnique = effect.Techniques["FloodLight"];
             DrawFloodInBands(spriteBatch, source, destination, effect);
@@ -1055,6 +1061,9 @@ namespace SDVRadiance
         /// the frame actually did, which is not the same question when the march is skipped
         /// entirely or the occluder grid is not ready yet.</summary>
         internal static bool LastMarchHalfResolution;
+        /// <summary>Whether the last flood pass read sharp-edged rays back from the march window,
+        /// kept at a texel a pixel, rather than walking them in the pass.</summary>
+        internal static bool LastMarchFullResolutionKept;
 
         private float SetLightArrays(Effect effect, ModConfig config, RenderTarget2D destination, float floodCarry)
         {

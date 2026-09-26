@@ -2,6 +2,31 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.2.2 - 2026-09-26
+
+### Fixed
+
+- **The fairy trinket's second shadow came back in heavy mist.** 2.2.1 took the fairy's light
+  out of the sprite shadows, but the dynamic lighting still gave it a shadow ray, so where heavy
+  mist lit up around the fairy a dark shape of you and your horse swung with every flit. A light
+  a flying companion carries now lights the scene in both places without casting a shadow.
+  Reported by munchkinbite on Nexus.
+- **A hitch when water came back on screen.** The water reflection let go of its buffers five
+  seconds after the water left the screen, and walking back to it made them all again in one
+  frame and redrew the whole scenery around it: in Town, where the river is a short walk from
+  everywhere, that was a 50 ms frame on the way back. The buffers now stay for the whole visit
+  to a place with water, and are made on arrival, under the game's own fade from black.
+- **Sharp lamp shadows cost half as much.** With "Sharp shadow edges" on (the Quality preset
+  turns it on), every lamp's shadow was traced again at every pixel on every frame, and the
+  saved shadows only worked for the softer setting. They now work for both, kept at a texel a
+  pixel so the edges stay exactly as sharp: the lighting pass in the mines went from 1.39 to
+  0.68 ms on my machine, and from 1.15 to 0.62 ms in the saloon at night.
+- `radiance_lights` shows each light's flood shadow weight (`floodShadow=`).
+
+### For translators
+
+No new or changed keys.
+
 ## 2.2.1 - 2026-09-25
 
 ### Added

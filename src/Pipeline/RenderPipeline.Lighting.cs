@@ -232,6 +232,12 @@ namespace SDVRadiance
         /// the index of the light it belongs to instead.</summary>
         private readonly Dictionary<long, int> _clusterSlotByCell = [];
         private readonly List<(int Light, float MinX, float MinY, float MaxX, float MaxY, float MaxRadius, int Count)> _clusterBoxes = [];
+        /// <summary>Ids of the lights a flying companion carries this frame. They light the scene
+        /// but never take a shadowed slot: the fairy trinket's light flits round its owner, and a
+        /// shadow ray toward it swung a second dark shape round the player and the horse, plain to
+        /// see where heavy mist lit up around it. Reported by munchkinbite after 2.2.1, which had
+        /// taken the same light out of the sprite shadows only.</summary>
+        private readonly HashSet<int> _shadowlessLightIds = [];
 
         /// <summary>
         /// Turn the location's light sources into the list this pass will rank, merging the map's
@@ -265,6 +271,7 @@ namespace SDVRadiance
             _gatheredLights.Clear();
             _clusterSlotByCell.Clear();
             _clusterBoxes.Clear();
+            _shadowlessLightIds.Clear();
             var lights = Game1.currentLightSources;
             if (lights == null)
                 return;
@@ -285,6 +292,10 @@ namespace SDVRadiance
 
                 if (lightSource.lightContext.Value != LightSource.LightContext.MapLight)
                 {
+                    string lightKey = lightEntry.Key.ToString() ?? string.Empty;
+                    int id = StableLightId(lightKey);
+                    if (ShadowRenderer.IsCompanionLight(lightKey))
+                        _shadowlessLightIds.Add(id);
                     _gatheredLights.Add(new GatheredLight
                     {
                         Position = pos,
@@ -292,7 +303,7 @@ namespace SDVRadiance
                         Radius = radius,
                         TextureIndex = lightSource.textureIndex.Value,
                         IsWindow = isWindow,
-                        Id = StableLightId(lightEntry.Key.ToString() ?? string.Empty),
+                        Id = id,
                     });
                     continue;
                 }

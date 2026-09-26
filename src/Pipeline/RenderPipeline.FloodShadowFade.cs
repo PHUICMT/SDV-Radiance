@@ -68,9 +68,12 @@ namespace SDVRadiance
             // easing at all. Not the top of the slot order: slots are stable for a light's stay,
             // so that was "whoever arrived first", and a glow ring re-equipped mid-session never
             // got a shadow ray again (see SetLightArrays).
+            // A light that casts no shadow (a flying companion's) is passed over, so its place goes
+            // to the next lamp; one that already held a slot fades out like any light leaving.
             _floodShadowWanted.Clear();
-            for (int i = 0; i < rankedIds.Count && i < FloodShadowedLights; i++)
-                _floodShadowWanted.Add(rankedIds[i]);
+            for (int i = 0; i < rankedIds.Count && _floodShadowWanted.Count < FloodShadowedLights; i++)
+                if (!_shadowlessLightIds.Contains(rankedIds[i]))
+                    _floodShadowWanted.Add(rankedIds[i]);
 
             // A light that left the array entirely takes its weight with it: it is not on screen,
             // so there is nothing left to fade.
@@ -137,6 +140,10 @@ namespace SDVRadiance
             _floodShadowOrder.Sort(_floodShadowByWeightThenId);
             return _floodShadowOrder;
         }
+
+        /// <summary>The shadow weight of a light the game names by this key, for radiance_lights. A
+        /// map lamp merged into its neighbourhood goes by the neighbourhood's id and reads 0 here.</summary>
+        internal float FloodShadowWeightOf(string lightKey) => FloodShadowWeight(StableLightId(lightKey));
 
         /// <summary>This light's shadow weight, 0 when it has none.</summary>
         private float FloodShadowWeight(int id)

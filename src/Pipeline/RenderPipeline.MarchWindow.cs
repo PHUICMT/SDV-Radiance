@@ -67,7 +67,7 @@ namespace SDVRadiance
 
         /// <summary>Fire the LampMarch passes for this frame, by whichever road applies, and hand
         /// the flood pass the two targets and the window they describe.</summary>
-        private void RunLampMarch(SpriteBatch spriteBatch, Texture2D source, Effect effect, ModConfig config)
+        private void RunLampMarch(SpriteBatch spriteBatch, Texture2D source, Effect effect, ModConfig config, bool fullDensity = false)
         {
             var viewport = Game1.viewport;
             var tilesPerScreen = new Vector2(viewport.Width / 64f, viewport.Height / 64f);
@@ -96,20 +96,28 @@ namespace SDVRadiance
             // that the screen's last partial tile and a margin are inside whatever the sub-tile
             // scroll is. Texels per tile match the half-resolution road, so the picture is the
             // same one, only anchored.
+            //
+            // With sharp edges they match the frame instead, a texel for every pixel of the pass,
+            // so the sharp look is kept as well as the half-resolution one. Sharp edges used to
+            // leave this window altogether and walk all eight rays at every pixel of every frame:
+            // 1.1 ms of a 1.57 ms flood pass in the mine at 2560x1440, against 0.45 for the whole
+            // pass on the default road (measured 26/9), which is what the Quality preset bought.
             int originTileX = (int)Math.Floor(viewport.X / 64f) - 1;
             int originTileY = (int)Math.Floor(viewport.Y / 64f) - 1;
             int tilesW = (int)Math.Ceiling(tilesPerScreen.X) + 3;
             int tilesH = (int)Math.Ceiling(tilesPerScreen.Y) + 3;
-            int texelsPerTile = Math.Max(1, (int)Math.Round(_halfResolutionScratchA!.Width / Math.Max(1f, tilesPerScreen.X)));
+            RenderTarget2D halfScratch = _halfResolutionScratchA!;
+            int densitySourceWidth = fullDensity ? source.Width : halfScratch.Width;
+            int texelsPerTile = Math.Max(1, (int)Math.Round(densitySourceWidth / Math.Max(1f, tilesPerScreen.X)));
             int targetW = tilesW * texelsPerTile, targetH = tilesH * texelsPerTile;
             bool whole = MarchCacheFireEveryFrame;
             if (_marchWindowA == null || _marchWindowB == null || _marchWindowA.Width != targetW || _marchWindowA.Height != targetH
-                || _marchWindowA.Format != _halfResolutionScratchA.Format)
+                || _marchWindowA.Format != halfScratch.Format)
             {
                 ReleaseMarchWindow();
-                _marchWindowA = VramTally.Track(new RenderTarget2D(_device, targetW, targetH, false, _halfResolutionScratchA.Format,
+                _marchWindowA = VramTally.Track(new RenderTarget2D(_device, targetW, targetH, false, halfScratch.Format,
                     DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "lamp shadow march window");
-                _marchWindowB = VramTally.Track(new RenderTarget2D(_device, targetW, targetH, false, _halfResolutionScratchA.Format,
+                _marchWindowB = VramTally.Track(new RenderTarget2D(_device, targetW, targetH, false, halfScratch.Format,
                     DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "lamp shadow march window");
                 whole = true;
             }
