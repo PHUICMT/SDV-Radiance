@@ -326,6 +326,10 @@ namespace SDVRadiance
             }
             if (TryAdopt(sheet, rect, variant, key, out page, out placed))
                 return true;
+            // Not inside another mod's picture: the switch back would wipe it (see BoundTargets).
+            // The sprite draws as it is this once, and is baked on a later draw to the screen.
+            if (BoundTargets.WouldBeWipedByRebinding(device))
+                return false;
             if (_frameTick != SharedTicks.Now)
             {
                 _frameTick = SharedTicks.Now;
@@ -657,6 +661,37 @@ namespace SDVRadiance
                 DropPage(page, page.Target.IsDisposed ? PageDropReason.DeadTarget : PageDropReason.Emptied);
         }
 
+        /// <summary>Forget every sprite of a sheet whose pixels were replaced in place (see
+        /// <see cref="ArtReloads"/>). Unlike a disposed sheet, nothing is waiting to adopt these
+        /// bakes: they are pictures of art that is no longer there.</summary>
+        internal int ForgetReloaded()
+        {
+            int forgotten = 0;
+            _sweepScratch.Clear();
+            foreach (Page page in _pages)
+            {
+                for (int i = page.Keys.Count - 1; i >= 0; i--)
+                {
+                    if (!ArtReloads.WasReloaded(page.Keys[i].sheet))
+                        continue;
+                    if (_entries.TryGetValue(page.Keys[i], out Entry gone))
+                        page.FreeSlots.Add(new Rectangle(gone.Rect.X - Gutter, gone.Rect.Y - Gutter,
+                            gone.Rect.Width + 2 * Gutter, gone.Rect.Height + 2 * Gutter));
+                    ForgetName(page.Keys[i]);
+                    _entries.Remove(page.Keys[i]);
+                    page.Keys.RemoveAt(i);
+                    Evicted++;
+                    EvictedBySweep++;
+                    forgotten++;
+                }
+                if (page.Keys.Count == 0)
+                    _sweepScratch.Add(page);
+            }
+            foreach (Page page in _sweepScratch)
+                DropPage(page, PageDropReason.Emptied);
+            return forgotten;
+        }
+
         /// <summary>Why a whole page is going, which is the same question <see cref="EvictedByBudget"/>
         /// answers for a sprite.</summary>
         private enum PageDropReason { Budget, DeadTarget, Emptied }
@@ -737,6 +772,6 @@ namespace SDVRadiance
         }
 
         internal string Describe()
-            => $"{_bucket}: {_entries.Count} sprites on {_pages.Count} pages, {_heldBytes / (1024.0 * 1024.0):F1} MB held, {Generated} made, {Evicted} evicted, {Refused} refused";
+            => $"{_bucket}: {_entries.Count} sprites on {_pages.Count} pages, {_heldBytes / (1024.0 * 1024.0):F1} MB held, {Generated} made, {Evicted} evicted, {Refused} refused, {BoundTargets.BakesPutOff} put off while another mod was drawing into a picture of its own";
     }
 }

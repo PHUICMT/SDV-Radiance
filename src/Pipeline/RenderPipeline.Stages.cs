@@ -621,7 +621,9 @@ namespace SDVRadiance
 
         private bool _reportedWindowsHere, _reportedWindowBeamOn;
         private bool _reportedInteriorWindowed;                 // layout truth, before the effects master switch
-        private float _reportedWindowRoomScale = 1f;            // what the flood actually used for window room light
+        private float _reportedWindowRoomScale = 1f;
+        /// <summary>The carried-light bounce switch, eased (see FloodLightmap.CarriedLightScale).</summary>
+        private float _carriedLightBounceEase = 1f;            // what the flood actually used for window room light
         private readonly List<Vector2> _reportedWindowGlowPositions = [];   // where the room's glow sprites are
         private int _reportedWindowCount, _reportedWindowLightsSeen, _reportedWindowLightsDark;
         private int _reportedWindowGlows = -1;   // lightGlows count in this location (0 or more)
@@ -991,6 +993,16 @@ namespace SDVRadiance
             float lampShafts = config.GodRaysEnabled
                 ? MathHelper.Clamp(config.GodRaysIntensity, 0f, 2f) * _godRayAmount * _fadeFlood
                 : 0f;
+            // AND ONLY AS FAR AS THE LAMP ITSELF CAN BE SEEN. A beam is a lamp's light against dark
+            // air, and against a white noon sky the game paints no lamp at all; the shadows already
+            // follow this same ramp. Without it every lamp on screen walked its ray at every pixel
+            // all day for the beams alone: Town at noon, 0.62 ms of flood pass against 0.30 with the
+            // rays off (measured 26/9). The ramp is the game's own dusk, so the beams come up with
+            // the lamps rather than switching on.
+            if (LampShaftsFollowDaylight)
+                lampShafts *= OutdoorLampAgainstDaylight();
+            if (lampShafts <= 0.004f)
+                lampShafts = 0f;
             _reportedLampShaftStrength = lampShafts;
             GetParam(effect, "LampShaftStrength")?.SetValue(lampShafts);
         }
@@ -1064,6 +1076,9 @@ namespace SDVRadiance
         /// <summary>Whether the last flood pass read sharp-edged rays back from the march window,
         /// kept at a texel a pixel, rather than walking them in the pass.</summary>
         internal static bool LastMarchFullResolutionKept;
+        /// <summary>radiance_lampshafts: off lets the lamp beams ignore daylight, as before, for an
+        /// A/B of cost and picture in one launch.</summary>
+        internal static bool LampShaftsFollowDaylight = true;
 
         private float SetLightArrays(Effect effect, ModConfig config, RenderTarget2D destination, float floodCarry)
         {
@@ -1313,6 +1328,10 @@ namespace SDVRadiance
             // its light away, not delete it between two frames.
             FloodLightmap.WindowPatchScale = _windowDaylightEase;
             FloodLightmap.WindowRoomScale = _windowRoomLightEase;
+            float carriedTarget = config.FloodCarriedLightsBounce ? 1f : 0f;
+            _carriedLightBounceEase = Determinism.Settle(
+                EasedToward(_carriedLightBounceEase, carriedTarget, RoomEaseRate), carriedTarget);
+            FloodLightmap.CarriedLightScale = _carriedLightBounceEase;
             // The stage's own fade still applies: while the flood is easing in/out the
             // exposure walks back to neutral with it, so toggling never steps the room.
             GetParam(effect, "Exposure")?.SetValue(Vector3.Lerp(Vector3.One, _exposureEase, _fadeFlood)

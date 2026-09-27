@@ -498,6 +498,46 @@ namespace SDVRadiance
             }
         }
 
+        /// <summary>
+        /// Lean DynamicShader's lit copy of a tree canopy with the canopy under it.
+        /// </summary>
+        /// <remarks>
+        /// With its Tree canopy light on, DynamicShader draws a second, lit picture of every grown
+        /// tree's crown over the game's, from a postfix on <c>Tree.draw</c>, turned by the game's
+        /// own shake only. Our wind leans the game's crown, so the two parted: reported as two
+        /// identical trees in one spot, the one on top standing still while the one under it
+        /// swayed. Its draw is sent through <see cref="Draw_CanopyOverlay"/>, which gives it the
+        /// lean of the crown just drawn at the same pivot. Nothing else about its draw changes,
+        /// and its cached picture does not depend on the angle, so this costs it nothing.
+        /// Run at GameLaunched, when its classes exist; without DynamicShader it does nothing.
+        /// </remarks>
+        internal static void LeanDynamicShaderCanopies(Harmony harmony, IMonitor monitor)
+        {
+            System.Reflection.MethodInfo? drawInline = AccessTools.Method(
+                AccessTools.TypeByName("DynamicShader.Core.Rendering.CanopyLight.TreeCanopyLightDrawer"), "DrawInline");
+            if (drawInline == null)
+                return;
+            try
+            {
+                harmony.Patch(drawInline, transpiler: new HarmonyMethod(typeof(ShadowSuppression), nameof(CanopyOverlay_Transpiler)));
+                monitor.Log("DynamicShader's lit tree canopies lean with Radiance's wind.", LogLevel.Trace);
+            }
+            catch (Exception ex)
+            {
+                monitor.Log($"Could not lean DynamicShader's tree canopies with the wind: {ex.Message}", LogLevel.Trace);
+            }
+        }
+
+        internal static System.Collections.Generic.IEnumerable<CodeInstruction> CanopyOverlay_Transpiler(
+            System.Collections.Generic.IEnumerable<CodeInstruction> instructions)
+            => RedirectDraws(instructions, nameof(Draw_CanopyOverlay));
+
+        /// <summary>A picture laid over a tree's crown: drawn with that crown's wind lean added.</summary>
+        public static void Draw_CanopyOverlay(SpriteBatch spriteBatch, Texture2D texture, Vector2 pos,
+            Rectangle? src, Color color, float rotation, Vector2 origin, float scale,
+            SpriteEffects effects, float layerDepth)
+            => spriteBatch.Draw(texture, pos, src, color, rotation + FoliageSway.LeanOfCanopyAt(pos), origin, scale, effects, layerDepth);
+
         /// <summary>Crop: lean every sprite the plant draws with the wind.</summary>
         internal static System.Collections.Generic.IEnumerable<CodeInstruction> CropSway_Transpiler(
             System.Collections.Generic.IEnumerable<CodeInstruction> instructions)

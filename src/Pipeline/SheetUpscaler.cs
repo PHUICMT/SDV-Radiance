@@ -620,6 +620,18 @@ namespace SDVRadiance
         /// Baked once per (sheet, rectangle) and kept.</summary>
         /// <summary>Every soft sprite forgotten, and the map neighbourhoods their keys were numbered
         /// by with them: a number reused for other surroundings must never find an old bake.</summary>
+        /// <summary>Let go of the smoothed copies of every sheet whose picture was replaced in
+        /// place (see <see cref="ArtReloads"/>), so the next draw smooths the new picture. A map
+        /// tile's smoothed copy also carries a rim of its neighbours, so when anything goes, the
+        /// neighbour answers go with it.</summary>
+        internal static int ForgetReloaded()
+        {
+            int forgotten = Cache.ForgetReloaded() + SoftSprites.ForgetReloaded() + MapTileNeighbours.ForgetReloaded();
+            if (forgotten > 0)
+                MapTileNeighbours.ForgetMapAnswers();
+            return forgotten;
+        }
+
         internal static void ClearSoftSprites()
         {
             SoftSprites.Clear();

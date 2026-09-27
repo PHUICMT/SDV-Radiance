@@ -2,6 +2,61 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.2.3 - 2026-09-27
+
+### Added
+
+- **Carried lights feed the bounce: a switch.** In F6 under Lighting, Bounced light (GI). On, a glow ring, a torch in
+  hand or a companion's light also lights the room by bouncing, as before; off, it still lights
+  the ground round you, but the room's bounce comes from the room's own lamps and stays put while
+  you walk. Asked for by a player who saw a room's light shift about with a glow ring on. On by
+  default.
+
+### Changed
+
+- **The SMAPI log says how Radiance is set up.** One line listing every setting changed from its
+  default, written when a save loads and again after the settings menu closes on a change, so a
+  log sent with a report shows the settings behind it.
+- **Smooth art checks the map a little less.** Each map tile's kept answer about its neighbours
+  was checked against the eight tiles round it every time it was drawn, to learn that nothing had
+  changed. It is now checked only after the game has changed a tile somewhere; on my machine that
+  took about 0.1 ms off a frame on the farm with Smooth art on.
+- **Lamp beams follow the daylight.** With god rays on, the beams from lamps were drawn at the
+  same strength all day, so every lamp traced its beam at every pixel even at noon, when a lamp
+  cannot be seen against the sky. They now fade with the lamps, the way lamp shadows already
+  did: on my machine the lighting in Town at noon went from 0.62 to 0.29 ms. Rain, indoors and
+  night are unchanged; at dusk the beams are a little fainter than before.
+
+### Fixed
+
+- **Art another mod changes while you play is picked up at once.** When a mod swapped a picture
+  that was already loaded (a Content Patcher patch starting or stopping to apply, an interior mod
+  over another), Smooth art kept drawing its smoothed copy of the old picture, and shadows, lamp
+  light and the water kept what they had read from it, until the mod was switched off and on.
+  They now let go of a picture the moment it changes and read the new one. Reported on Nexus.
+- **Trees sway as one with DynamicShader.** With its tree canopy light on, DynamicShader draws a
+  lit copy of every tree's crown over the game's, and that copy stood still while the wind leaned
+  the crown under it, so each tree showed twice. The copy now leans with its tree. Reported on
+  Nexus.
+- **A map mod's water stays right under a recolour or a language pack.** Water painted for a map
+  mod such as Way Back Pelican Town was only used when that mod was the last to paint the tile, so
+  a recolour over it, or a language pack that re-exports the sheet, put the base game's water back
+  on the mod's rocks. The water now follows the first mod down the stack it knows. Reported on
+  Nexus.
+- **Water no longer flashes dark with Dynamic Reflections.** With its water reflections on, the
+  first time a stretch of river came into view the water turned a flat dark blue for a frame, as
+  Smooth art made its first smooth copy of a tile in the middle of the reflection being drawn and
+  wiped it. Smooth art now waits for the next ordinary draw in that case. Reported on Nexus.
+- **The Muttering Farmer's speech bubbles stay still over water.** Its bubbles are drawn by its
+  library, SorryLab Core, over the whole map rather than as part of the farmer, so the water
+  effect never knew they were there and a line of speech above a river rippled with it. They are
+  now kept out of the water the way the game's own speech bubbles are. Reported on Nexus.
+
+### For translators
+
+New keys: `config.lighting.carriedbounce.name`, `config.lighting.carriedbounce.tooltip`,
+`tuner.carriedbounce`, `help.carriedbounce`.
+
 ## 2.2.2 - 2026-09-26
 
 ### Fixed

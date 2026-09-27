@@ -1003,6 +1003,7 @@ namespace SDVRadiance
             Slider("tuner.floodstrength", 0f, 1f, () => _config.FloodLightingStrength, value => _config.FloodLightingStrength = value, "help.floodstrength");
             Slider("tuner.floodshadow", 0f, 1f, () => _config.FloodShadowStrength, value => _config.FloodShadowStrength = value, "help.floodshadow");
             Slider("tuner.colourbleed", 0f, 1f, () => _config.FloodColourBleed, value => _config.FloodColourBleed = value, "help.colourbleed");
+            Toggle("tuner.carriedbounce", () => _config.FloodCarriedLightsBounce, value => _config.FloodCarriedLightsBounce = value, "help.carriedbounce");
             Toggle("tuner.relief", () => _config.SpriteReliefEnabled, value => _config.SpriteReliefEnabled = value, "help.relief");
             Toggle("tuner.reliefhalfres", () => _config.SpriteReliefHalfResolution, value => _config.SpriteReliefHalfResolution = value, "help.reliefhalfres",
                 () => _config.LightingEnabled && _config.FloodLightingEnabled && _config.SpriteReliefEnabled);

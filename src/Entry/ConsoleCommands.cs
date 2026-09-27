@@ -220,6 +220,15 @@ namespace SDVRadiance
                         };
                     monitor.Log($"Flood rebuild: {FloodLightmap.RebuildMode}", LogLevel.Info);
                 });
+            helper.ConsoleCommands.Add("radiance_lampshafts",
+                "A/B for the lamp beams. 'radiance_lampshafts daylight' (the default) dims them with the "
+                + "lamps against the day, as the lamp shadows are; 'always' lets them ignore daylight as before.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length >= 1)
+                        RenderPipeline.LampShaftsFollowDaylight = !arguments[0].Equals("always", StringComparison.OrdinalIgnoreCase);
+                    monitor.Log($"Lamp beams follow daylight: {(RenderPipeline.LampShaftsFollowDaylight ? "yes" : "no")}", LogLevel.Info);
+                });
             helper.ConsoleCommands.Add("radiance_shadowcasts",
                 "How many shadows one character may cast, nearest light first (default 3). "
                 + "'radiance_shadowcasts 1' for a single clean shadow, higher for a room lit from several "

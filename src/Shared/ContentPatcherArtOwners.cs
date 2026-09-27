@@ -111,6 +111,33 @@ namespace SDVRadiance
             return true;
         }
 
+        /// <summary>
+        /// Every pack whose applied edit covers this tile, the one painting last first, each named
+        /// once. For the label follow: the pack painting last is often only a recolour laid over
+        /// the whole sheet (or a language pack that re-exports it), and the layout underneath it,
+        /// which is what a water label describes, belongs to a pack further down.
+        /// </summary>
+        internal static bool TryGetPainters(string assetName, int tileIndex, int sheetWidthTiles, List<string> topFirst)
+        {
+            topFirst.Clear();
+            if (!TryGetPainter(assetName, tileIndex, sheetWidthTiles, out string top))
+                return false;
+            Claim[] claims = _claimsByAsset[assetName];
+            var tile = new Point(tileIndex % sheetWidthTiles * 16 + 8, tileIndex / sheetWidthTiles * 16 + 8);
+            _painterScratch.Clear();
+            foreach (Claim claim in claims)
+                if (claim.Area is not Rectangle area || area.Contains(tile))
+                    _painterScratch.Add(claim);
+            _painterScratch.Sort((first, second) => first.Priority != second.Priority
+                ? second.Priority.CompareTo(first.Priority) : second.Order.CompareTo(first.Order));
+            topFirst.Add(top);
+            foreach (Claim claim in _painterScratch)
+                if (!System.Linq.Enumerable.Contains(topFirst, claim.Pack, StringComparer.OrdinalIgnoreCase))
+                    topFirst.Add(claim.Pack);
+            return true;
+        }
+        private static readonly List<Claim> _painterScratch = [];
+
         /// <summary>Drop what is known about these assets. Content Patcher invalidates an asset when
         /// a patch on it starts or stops applying, so the reload event is the moment the answer can
         /// have changed.</summary>

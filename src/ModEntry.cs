@@ -107,6 +107,7 @@ namespace SDVRadiance
             helper.Events.GameLoop.GameLaunched += OnGameLaunched;
             helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
             helper.Events.Input.ButtonsChanged += OnButtonsChanged;
+            helper.Events.Display.Rendering += OnRendering;
             helper.Events.Display.RenderingWorld += OnRenderingWorld;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
             helper.Events.Display.RenderingStep += OnRenderingStep;
@@ -177,6 +178,7 @@ namespace SDVRadiance
             HorseArtShadow.Install(helper);
             helper.Events.Content.AssetsInvalidated += (_, e) =>
             {
+                ArtReloads.NoteInvalidated(e.Names);
                 string? here = Game1.currentLocation?.mapPath?.Value?.Replace('\\', '/');
                 bool anyMap = false;
                 foreach (var name in e.Names)
@@ -226,6 +228,8 @@ namespace SDVRadiance
             _harmony = new Harmony(ModManifest.UniqueID);
             PrecipitationSystem.LiveConfig = () => _config;
             HarmonyPatcher.InstallAll(_harmony, Monitor);
+            ArtReloads.Install(_harmony, Monitor);
+            SettingsLog.Install(helper, Monitor, () => _config);
 
             Monitor.Log("SDV-Radiance loaded (world post-processing via RenderedWorld).", LogLevel.Info);
             PlatformReport.WriteOnce(Monitor, Game1.graphics?.GraphicsDevice);
@@ -407,6 +411,22 @@ namespace SDVRadiance
         /// Bake the player's silhouette to an offscreen target before the world batches open
         /// (a render-target swap is only safe here, not mid-batch).
         /// </summary>
+        /// <summary>Before anything of the frame is drawn: let every cache forget what it read from
+        /// a sheet another mod replaced in place since the last frame (see <see cref="ArtReloads"/>).
+        /// Nothing to do on almost every frame.</summary>
+        private void OnRendering(object? sender, RenderingEventArgs e)
+        {
+            if (!ArtReloads.TakeReloaded())
+                return;
+            int forgotten = SheetUpscaler.ForgetReloaded() + SheetPixels.ForgetReloaded()
+                          + (_pipeline?.ForgetReloadedArt() ?? 0) + (_shadows?.ForgetReloadedArt() ?? 0);
+            if (forgotten > 0)
+            {
+                ArtReloads.SheetsForgotten += forgotten;
+                Monitor.Log($"[art] {forgotten} cached answer(s) about sheets another mod redrew in place were let go.", LogLevel.Trace);
+            }
+        }
+
         private void OnRenderingWorld(object? sender, RenderingWorldEventArgs e)
         {
             // The two draw-time looks read their switches here, once a frame, before the world
@@ -855,13 +875,15 @@ namespace SDVRadiance
                     _config,
                     translate: I18n,
                     onChange: () => HarmonyPatcher.ForceBufferDraw = EffectsActive,
-                    onSave: () => Helper.WriteConfig(_config));
+                    onSave: () => { Helper.WriteConfig(_config); SettingsLog.MarkChanged(); });
         }
 
         private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
         {
             // The outfit mod tells the shadow bakes when its farmer's look changed (see Integrations.OutfitAppearance).
             Integrations.OutfitAppearance.Connect(Helper.ModRegistry, Monitor);
+            if (_harmony != null)
+                ShadowSuppression.LeanDynamicShaderCanopies(_harmony, Monitor);
 
             GmcmRegistration.Register(Helper, ModManifest, Monitor, I18n,
                 config: () => _config,

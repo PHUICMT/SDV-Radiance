@@ -142,6 +142,34 @@ namespace SDVRadiance
         private readonly System.Collections.Generic.Dictionary<string, Texture2D?> _tilesheetTextureCache = [];
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), (bool[] bits, int count, int water)> _tileSolidBitsCache = [];
         private readonly System.Collections.Generic.Dictionary<(Texture2D, Rectangle), bool[]> _tileAnyAlphaBitsCache = [];
+
+        /// <summary>
+        /// Forget everything this pipeline read from the pixels of a sheet that was replaced in
+        /// place (see <see cref="ArtReloads"/>): its normal map, the tile art and coverage the water
+        /// mask was built from, the base spans lamps stand on, the sprite glass and the carve
+        /// shapes. Called at the start of a frame's drawing, only on a frame that follows a reload.
+        /// </summary>
+        /// <remarks>When the water mask's own tile art was among it, the mask is rebuilt: the
+        /// water was drawn from a picture that is no longer there.</remarks>
+        internal int ForgetReloadedArt()
+        {
+            int tileArt = ArtReloads.Forget(_tileArtCache, key => key.Item1)
+                        + ArtReloads.Forget(_tileSolidBitsCache, key => key.Item1)
+                        + ArtReloads.Forget(_tileAnyAlphaBitsCache, key => key.Item1);
+            int forgotten = tileArt
+                          + _sheetNormals.ForgetReloaded()
+                          + ArtReloads.Forget(_artBaseSpan, key => key.Item1)
+                          + ArtReloads.Forget(_selfDrawnContactLift, key => key.Item2)
+                          + ArtReloads.Forget(_selfDrawnEmptyRetryTick, key => key.Item2)
+                          + ArtReloads.Forget(_spriteGlassByPiece, key => key.Texture)
+                          + ArtReloads.Forget(_entityOpaqueCache, key => key.texture);
+            if (tileArt > 0)
+            {
+                MaskEpoch++;
+                MaskEpochReason = "a mod replaced the picture of a tilesheet the water was read from";
+            }
+            return forgotten;
+        }
         //
         // FLOOD's own occluder mask, kept fully separate from classic's above.
         //
@@ -603,6 +631,9 @@ namespace SDVRadiance
                     report.AppendLine($"labels that followed a pack: {followed.Value} tile(s) here are painted by "
                                 + $"{followed.Key} in a picture no painted label names (another season, weather or "
                                 + "palette), and took the label painted for that pack's art rather than the base game's.");
+                if (following.FollowedBeneathAnotherPack > 0)
+                    report.AppendLine($"    {following.FollowedBeneathAnotherPack} of them were painted over by another pack "
+                                    + "(a recolour or a language pack) and followed the pack underneath, whose layout it is.");
             }
             else if (LabelStore.Instance != null)
                 report.AppendLine($"labels that followed a pack: none here (Content Patcher "

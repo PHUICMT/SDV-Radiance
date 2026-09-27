@@ -161,6 +161,7 @@ namespace SDVRadiance
                 harmony.Patch(drawTile,
                     prefix: new HarmonyMethod(typeof(MapTileNeighbours), nameof(DrawTile_Prefix)),
                     finalizer: new HarmonyMethod(typeof(MapTileNeighbours), nameof(DrawTile_Finalizer)));
+                WatchTileWrites(harmony, monitor);
             }
             catch (Exception ex)
             {
@@ -168,6 +169,50 @@ namespace SDVRadiance
                 monitor.Log($"Could not watch xTile's map drawing ({ex.GetType().Name}: {ex.Message}); the soft look bakes each map tile alone.", LogLevel.Trace);
             }
         }
+
+        /// <summary>
+        /// Every change the game can make to a map tile, counted, so a cell whose answer was checked
+        /// since the last one need not be checked again.
+        /// </summary>
+        /// <remarks>
+        /// <para>A cell's kept answer is checked against a signature of its own tile and the eight
+        /// round it, and that signature was worked out on every draw of every map tile: 0.08 ms a
+        /// frame on the farm with everything on, measured with dotnet-trace on 26/9, to learn that
+        /// nothing had changed.</para>
+        /// <para>The game's xTile bakes each row of a layer for drawing, so a tile placed anywhere
+        /// must mark its row dirty or the game would go on drawing the old one: Layer.MarkRowDirty
+        /// is where every visible change passes, the TileArray setter included. A tile's index
+        /// written straight onto the tile is watched too. If either cannot be patched, every draw
+        /// checks the signature as before.</para>
+        /// </remarks>
+        private static void WatchTileWrites(Harmony harmony, IMonitor monitor)
+        {
+            try
+            {
+                var markRowDirty = AccessTools.Method(typeof(Layer), nameof(Layer.MarkRowDirty));
+                var setTileIndex = AccessTools.PropertySetter(typeof(StaticTile), nameof(StaticTile.TileIndex));
+                if (markRowDirty == null || setTileIndex == null)
+                {
+                    monitor.Log("xTile's MarkRowDirty or StaticTile.TileIndex was not found; each map tile's neighbourhood is checked on every draw.", LogLevel.Trace);
+                    return;
+                }
+                var counted = new HarmonyMethod(typeof(MapTileNeighbours), nameof(TileWritten));
+                harmony.Patch(markRowDirty, postfix: counted);
+                harmony.Patch(setTileIndex, postfix: counted);
+                _tileWritesWatched = true;
+            }
+            catch (Exception ex)
+            {
+                _tileWritesWatched = false;
+                monitor.Log($"Could not watch xTile's tile writes ({ex.GetType().Name}: {ex.Message}); each map tile's neighbourhood is checked on every draw.", LogLevel.Trace);
+            }
+        }
+
+        private static void TileWritten() => System.Threading.Interlocked.Increment(ref _tileWrites);
+
+        /// <summary>How many tile writes the game has made; see <see cref="WatchTileWrites"/>.</summary>
+        private static int _tileWrites;
+        private static bool _tileWritesWatched;
 
         private static void LayerDraw_Prefix(Layer __instance, xTile.Dimensions.Rectangle mapViewport,
             xTile.Dimensions.Location displayOffset, bool wrapAround, int pixelZoom, out Layer? __state)
@@ -315,9 +360,15 @@ namespace SDVRadiance
             if (grid.Generation != _mapAnswersGeneration)
                 grid.Reset(_mapAnswersGeneration);
             int cell = _tileY * grid.Width + _tileX;
-            int signature = SignatureAround(layer, tile, _tileX, _tileY);
-            if ((uint)cell < (uint)grid.Numbers.Length && grid.Numbers[cell] != 0 && grid.Signatures[cell] == signature)
+            bool inGrid = (uint)cell < (uint)grid.Numbers.Length;
+            int writes = _tileWrites;
+            // Checked since the last tile write anywhere: nothing it was worked out from can have
+            // changed, so the signature need not be worked out to say so.
+            bool unchanged = inGrid && grid.Numbers[cell] != 0 && _tileWritesWatched && grid.CheckedAt[cell] == writes;
+            int signature = unchanged ? grid.Signatures[cell] : SignatureAround(layer, tile, _tileX, _tileY);
+            if (inGrid && grid.Numbers[cell] != 0 && grid.Signatures[cell] == signature)
             {
+                grid.CheckedAt[cell] = writes;
                 int known = grid.Numbers[cell];
                 if (known < 0)
                 {
@@ -329,10 +380,11 @@ namespace SDVRadiance
                 return known;
             }
             int number = WorkOutNeighbourhood(layer, tile, textures);
-            if ((uint)cell < (uint)grid.Numbers.Length)
+            if (inGrid)
             {
                 grid.Numbers[cell] = number == 0 ? -1 : number;
                 grid.Signatures[cell] = signature;
+                grid.CheckedAt[cell] = writes;
             }
             if (number == 0)
                 return 0;
@@ -373,6 +425,8 @@ namespace SDVRadiance
             internal readonly int Width;
             internal readonly int[] Numbers;
             internal readonly int[] Signatures;
+            /// <summary>The tile write count when each cell's answer was last checked.</summary>
+            internal readonly int[] CheckedAt;
             internal int Generation;
 
             internal NeighbourGrid(int width, int height)
@@ -380,6 +434,7 @@ namespace SDVRadiance
                 Width = width;
                 Numbers = new int[width * height];
                 Signatures = new int[width * height];
+                CheckedAt = new int[width * height];
                 Generation = _mapAnswersGeneration;
             }
 
@@ -670,6 +725,16 @@ namespace SDVRadiance
         private static readonly (Texture2D sheet, Rectangle source)[] _coverStack = new (Texture2D, Rectangle)[8];
         private static readonly Dictionary<(int stack, int count, Point offset), bool> _solidStacks = [];
         private static readonly Dictionary<(Texture2D sheet, Rectangle source, Point offset), bool> _solidEdges = [];
+
+        /// <summary>Forget what was read from the pixels of a sheet replaced in place (see
+        /// <see cref="ArtReloads"/>). A stack's answer is not keyed by sheet, so any loss empties those.</summary>
+        internal static int ForgetReloaded()
+        {
+            int forgotten = ArtReloads.Forget(_solidEdges, key => key.sheet);
+            if (forgotten > 0)
+                _solidStacks.Clear();
+            return forgotten;
+        }
 
         /// <summary>
         /// Whether the overlay's texels along the edge that faces back toward

@@ -138,6 +138,10 @@ namespace SDVRadiance
             }
             if (_generatedThisFrame >= _generatePerFrameCap && !_burstThisFrame)
                 return null;
+            // Not inside another mod's picture: the switch back would wipe it (see BoundTargets).
+            // The sheet draws as it is this once, and is made on a later draw to the screen.
+            if (BoundTargets.WouldBeWipedByRebinding(device))
+                return null;
             long inputBytes = (long)sheet.Width * sheet.Height * 4;
             if (inputBytes > _largestInputBytes)
             {
@@ -224,6 +228,28 @@ namespace SDVRadiance
                 _entries.Remove(key);
                 Evicted++;
             }
+        }
+
+        /// <summary>Drop every derivative of a sheet whose pixels were replaced in place (see
+        /// <see cref="ArtReloads"/>). The sheet is the same instance, so nothing else here would
+        /// ever notice, and the old picture would be drawn over the new one for good.</summary>
+        internal int ForgetReloaded()
+        {
+            _evictScratch.Clear();
+            foreach (var pair in _entries)
+                if (ArtReloads.WasReloaded(pair.Key.Sheet))
+                    _evictScratch.Add(pair.Key);
+            foreach (var key in _evictScratch)
+            {
+                Entry entry = _entries[key];
+                if (!entry.Target.IsDisposed)
+                    entry.Target.Dispose();
+                _ownTargets.Remove(entry.Target);
+                _heldBytes -= entry.Bytes;
+                _entries.Remove(key);
+                Evicted++;
+            }
+            return _evictScratch.Count;
         }
 
         /// <summary>Drop the least recently used derivatives until <paramref name="incoming"/> fits.</summary>

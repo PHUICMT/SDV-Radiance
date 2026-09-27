@@ -32,6 +32,7 @@ namespace SDVRadiance
                 config().Clamp();
                 refreshForceBufferDraw();
                 helper.WriteConfig(config());
+                SettingsLog.MarkChanged();
             }
 
             configMenu.Register(manifest, () =>
@@ -656,6 +657,8 @@ namespace SDVRadiance
                 () => translate("config.lighting.floodstrength.name"), () => translate("config.lighting.floodstrength.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().FloodColourBleed, value => config().FloodColourBleed = value,
                 () => translate("config.lighting.colourbleed.name"), () => translate("config.lighting.colourbleed.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().FloodCarriedLightsBounce, value => config().FloodCarriedLightsBounce = value,
+                () => translate("config.lighting.carriedbounce.name"), () => translate("config.lighting.carriedbounce.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().FloodShadowStrength, value => config().FloodShadowStrength = value,
                 () => translate("config.lighting.floodshadow.name"), () => translate("config.lighting.floodshadow.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().LightShadowCarve, value => config().LightShadowCarve = value,

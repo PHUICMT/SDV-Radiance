@@ -282,6 +282,7 @@ namespace SDVRadiance
                 StampCharacters(spriteBatch, location);
                 StampPlayer(spriteBatch);
                 StampOtherFarmers(spriteBatch);
+                StampSorryLabBubbles(spriteBatch, location);
                 StampHeldTool(spriteBatch);
                 StampAnimals(spriteBatch, location);
                 StampCritters(spriteBatch, location);
@@ -464,6 +465,54 @@ namespace SDVRadiance
                 Game1.spriteBatch = gameBatch;
             }
         }
+
+        /// <summary>
+        /// The Muttering Farmer's speech bubbles, which its library SorryLab Core draws from a
+        /// postfix on <c>GameLocation.drawAboveAlwaysFrontLayer</c> rather than through the farmer.
+        ///
+        /// <para>
+        /// The above-head stamp asks the farmer to draw what sits over their head, and this bubble
+        /// is not part of that, so the mask never saw it and the line of speech rippled with the
+        /// pond behind it. Reported on Nexus a second time after the vanilla bubbles were fixed.
+        /// Their draw is asked to paint into the mask here, as the villagers' bubbles are: it only
+        /// draws, its timers live in a Farmer.Update postfix, so a second call per frame changes
+        /// nothing, and the stamp fades as the bubble does.
+        /// </para>
+        ///
+        /// <para>
+        /// Only this one postfix is called, not every mod's postfix on that method: a mod that
+        /// paints across the whole screen from there would switch the water off everywhere.
+        /// Looked up on the first bake rather than at load, when every mod's assembly is in.
+        /// </para>
+        /// </summary>
+        private static void StampSorryLabBubbles(SpriteBatch spriteBatch, GameLocation location)
+        {
+            if (!_sorryLabBubbleDrawLookedUp)
+            {
+                _sorryLabBubbleDrawLookedUp = true;
+                System.Reflection.MethodInfo? bubbleDraw = HarmonyLib.AccessTools.TypeByName("SorryLab.SmallTextBubble")
+                    ?.GetMethod("FarmerDrawAboveAlwaysFrontLayer", System.Reflection.BindingFlags.Static
+                        | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic,
+                        null, [typeof(GameLocation), typeof(SpriteBatch)], null);
+                if (bubbleDraw != null)
+                    _sorryLabBubbleDraw = (Action<GameLocation, SpriteBatch>?)Delegate.CreateDelegate(
+                        typeof(Action<GameLocation, SpriteBatch>), bubbleDraw, throwOnBindFailure: false);
+            }
+            if (_sorryLabBubbleDraw == null)
+                return;
+            try
+            {
+                _sorryLabBubbleDraw(location, spriteBatch);
+            }
+            catch
+            {
+                // A version of theirs that no longer draws this way is left alone for the launch
+                // rather than throwing every frame.
+                _sorryLabBubbleDraw = null;
+            }
+        }
+        private static bool _sorryLabBubbleDrawLookedUp;
+        private static Action<GameLocation, SpriteBatch>? _sorryLabBubbleDraw;
 
         private void StampOtherFarmers(SpriteBatch spriteBatch)
         {

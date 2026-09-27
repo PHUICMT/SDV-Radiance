@@ -927,6 +927,41 @@ namespace SDVRadiance
             ForgetObjectBakeLocations();
         }
 
+        /// <summary>
+        /// Forget every shadow baked from, and every measurement read off, a sheet whose picture
+        /// was replaced in place (see <see cref="ArtReloads"/>). A character's bake hands its
+        /// target back the way an eviction does. Object bakes are all dropped when any of them
+        /// was of such a sheet, the same as <see cref="ForgetObjectBakes"/>, because they are laid
+        /// down by a walk of the whole location that has to run again to make them.
+        /// </summary>
+        internal int ForgetReloadedArt()
+        {
+            int forgotten = 0;
+            _casterEvictScratch.Clear();
+            foreach (var entry in _casterBakeCache)
+                if (ArtReloads.WasReloaded(entry.Key.texture))
+                    _casterEvictScratch.Add(entry.Key);
+            foreach (var key in _casterEvictScratch)
+            {
+                _casterFreeTargets.Add(_casterBakeCache[key].Rt);
+                _casterBakeCache.Remove(key);
+                forgotten++;
+            }
+            bool anyObject = false;
+            foreach (var key in _bakedObjectCache.Keys)
+                if (ArtReloads.WasReloaded(key.texture)) { anyObject = true; break; }
+            if (anyObject)
+            {
+                forgotten += _bakedObjectCache.Count;
+                ForgetObjectBakes();
+            }
+            forgotten += ArtReloads.Forget(_objectBakeQueue, key => key.texture)
+                       + ArtReloads.Forget(_artFootRow, key => key.Item1)
+                       + ArtReloads.Forget(_canopyFootRows, key => key.Item1)
+                       + ArtReloads.Forget(_tileCoverageCache, key => key.texture);
+            return forgotten;
+        }
+
         private void EvictColdObjectBakes()
         {
             // One walk to count every class, not one walk per class: this runs every frame, and

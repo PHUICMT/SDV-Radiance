@@ -94,6 +94,10 @@ namespace SDVRadiance
         /// <summary>The first tile Content Patcher named a painter for that none of its labels list,
         /// for radiance_report.</summary>
         internal string? FirstNamedButUnlisted { get; private set; }
+        /// <summary>Tiles whose label came from a pack painting UNDER the one painting last (a
+        /// recolour or a language pack on top), for radiance_report.</summary>
+        internal int FollowedBeneathAnotherPack { get; private set; }
+        private readonly List<string> _paintersTopFirst = [];
 
         /// <summary>A sheet name without its season: <c>fall_town</c> and <c>spring_town</c> are one
         /// family, <c>paths</c> is a family of one.</summary>
@@ -703,20 +707,30 @@ namespace SDVRadiance
                                          List<LabelVariant>? owned)
         {
             if (owned == null || !art.TryGetSheetWidthTiles(out int widthTiles)
-                || !ContentPatcherArtOwners.TryGetPainter("Maps/" + key, index, widthTiles, out string painter))
+                || !ContentPatcherArtOwners.TryGetPainters("Maps/" + key, index, widthTiles, _paintersTopFirst))
                 return null;
-            foreach (LabelVariant variant in owned)
+            // The pack painting last may be a recolour over the whole sheet, or a language pack
+            // that re-exports it: neither moves a pond. The first painter down the stack that has
+            // labels is the one whose layout is on screen. Found when a player running Way Back
+            // Pelican Town under three recolours saw its hot spring water back on the rocks, and
+            // on a Thai game here, where the Thai language pack paints over every outdoor sheet.
+            foreach (string painter in _paintersTopFirst)
             {
-                foreach (string mod in variant.Mods)
+                foreach (LabelVariant variant in owned)
                 {
-                    if (!mod.Equals(painter, StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    _artVerdict[memo] = variant.Label;
-                    _followedByPack[painter] = _followedByPack.TryGetValue(painter, out int seen) ? seen + 1 : 1;
-                    return variant.Label;
+                    foreach (string mod in variant.Mods)
+                    {
+                        if (!mod.Equals(painter, StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        _artVerdict[memo] = variant.Label;
+                        _followedByPack[painter] = _followedByPack.TryGetValue(painter, out int seen) ? seen + 1 : 1;
+                        if (!ReferenceEquals(painter, _paintersTopFirst[0]))
+                            FollowedBeneathAnotherPack++;
+                        return variant.Label;
+                    }
                 }
             }
-            FirstNamedButUnlisted ??= $"{key} tile {index} painted by {painter}, its labels list "
+            FirstNamedButUnlisted ??= $"{key} tile {index} painted by {string.Join(" over ", _paintersTopFirst)}, its labels list "
                 + string.Join(" / ", owned.Select(variant => string.Join("+", variant.Mods)));
             return null;
         }

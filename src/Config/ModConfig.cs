@@ -840,6 +840,12 @@ namespace SDVRadiance
         /// does that is a taste the player turns on rather than one they have to discover and
         /// turn off.</summary>
         public float FloodColourBleed { get; set; } = 0f;
+        /// <summary>Whether a light the player carries (a glow ring, a torch in hand, a companion's
+        /// light) feeds the bounce as well as its own pool. On by default. Asked for by a player
+        /// who saw the room's bounce shift about as they walked with a glow ring on: off, a carried
+        /// light still lights the ground round the player, but the room's bounce stays as the
+        /// room's own lamps make it.</summary>
+        public bool FloodCarriedLightsBounce { get; set; } = true;
         /// <summary>How much of the GAME's own lamp glow is taken back where a light's ray is blocked.
         /// The game paints every lamp as a round glow before this mod runs; the per-light shadow
         /// above only shades what the mod adds, so without this a pool stayed round behind a trunk.

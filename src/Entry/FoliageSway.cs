@@ -332,6 +332,16 @@ namespace SDVRadiance
         /// made outside a crop can never pick one up.</summary>
         internal static void Crop_Draw_Postfix() => EndCrop();
 
+        /// <summary>The wind lean of the tree crown just drawn with its pivot at
+        /// <paramref name="screenPivot"/>, or nothing: for another mod's picture laid over that
+        /// crown, drawn right after it (see ShadowSuppression.LeanDynamicShaderCanopies).</summary>
+        internal static float LeanOfCanopyAt(Vector2 screenPivot)
+        {
+            if (!Enabled || Strength <= 0.001f || _lastCanopyTexture == null)
+                return 0f;
+            return Vector2.DistanceSquared(screenPivot, _lastCanopyPivot) < 2.25f ? _lastCanopyTilt : 0f;
+        }
+
         /// <summary>Draw this sprite swaying in the wind if it is foliage. False = not foliage, draw
         /// it the ordinary way.</summary>
         internal static bool TryDraw(SpriteBatch spriteBatch, Texture2D texture, Vector2 position, Rectangle? sourceRectangle,

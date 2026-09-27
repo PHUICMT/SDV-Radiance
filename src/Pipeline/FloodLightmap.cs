@@ -94,6 +94,7 @@ namespace SDVRadiance
                 }
                 hash = hash * 31 + (int)(WindowPatchScale * 255f);
                 hash = hash * 31 + (int)(WindowRoomScale * 255f);
+                hash = hash * 31 + (int)(CarriedLightScale * 255f);
                 hash = hash * 31 + Game1.ambientLight.PackedValue.GetHashCode();
                 return hash;
             }
@@ -436,6 +437,7 @@ namespace SDVRadiance
                 hash = hash * 31 + scene.Sky.Z.GetHashCode();
                 hash = hash * 31 + WindowPatchScale.GetHashCode();
                 hash = hash * 31 + WindowRoomScale.GetHashCode();
+                hash = hash * 31 + CarriedLightScale.GetHashCode();
                 hash = hash * 31 + Game1.ambientLight.PackedValue.GetHashCode();
                 hash = hash * 31 + GameClock.MinutesNow().GetHashCode();
                 hash = hash * 31 + ((LocalSky.IsRaining ? 1 : 0) | (LocalSky.IsSnowing ? 2 : 0) | (LocalSky.IsLightning ? 4 : 0));
@@ -568,6 +570,13 @@ namespace SDVRadiance
                     // breathes where it is visible, in the direct pool (RenderPipeline.Lighting)
                     // and in the shadows it casts, both of which are per-frame and free.
                     float intensity = MathHelper.Clamp(0.55f + 0.30f * lightSource.radius.Value, 0.6f, 1.7f) * (scene.Outdoors ? 1.25f : 0.5f);
+                    // A carried light's share of the bounce, per the setting (faded, never stepped).
+                    if (IsCarriedLight(pair.Key, lightSource))
+                    {
+                        if (CarriedLightScale <= 0.004f)
+                            continue;
+                        intensity *= CarriedLightScale;
+                    }
                     if (!subTileSeeds && !ClampSeed(ref seedColumn, ref seedRow, ref intensity, window))
                         continue;
                     // The same midday sink the DIRECT pools got ("a street lamp at noon reads as
@@ -997,6 +1006,15 @@ namespace SDVRadiance
         /// from the patch because the two are worth different things when another mod is drawing
         /// windows: it can paint a beam, but it cannot make the room's lighting know about it.</summary>
         internal static float WindowRoomScale = 1f;
+        /// <summary>How much of a CARRIED light (a glow ring, a torch in hand, a companion's light)
+        /// goes into the bounce, 0 to 1. Eased from the setting by the flood stage, so switching
+        /// it fades rather than steps.</summary>
+        internal static float CarriedLightScale = 1f;
+
+        /// <summary>A light that moves with someone: the game files it with the player it belongs
+        /// to (rings and held torches), or it is a flying companion's (see ShadowRenderer).</summary>
+        internal static bool IsCarriedLight(string key, LightSource lightSource)
+            => lightSource.PlayerID != 0L || ShadowRenderer.IsCompanionLight(key);
 
         internal static bool IsWindowedInterior(GameLocation? location)
         {

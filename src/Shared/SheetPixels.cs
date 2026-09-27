@@ -129,6 +129,27 @@ namespace SDVRadiance
             _pixelsHeld = 0;
         }
 
+        /// <summary>Drop the held pixels of every sheet whose picture was replaced in place (see
+        /// <see cref="ArtReloads"/>): they are a copy of art that is gone, and the sheet may not
+        /// even be the same size any more.</summary>
+        internal static int ForgetReloaded()
+        {
+            List<Texture2D>? gone = null;
+            foreach (Texture2D sheet in _heldSheets.Keys)
+                if (ArtReloads.WasReloaded(sheet))
+                    (gone ??= []).Add(sheet);
+            if (gone == null)
+                return 0;
+            foreach (Texture2D sheet in gone)
+            {
+                if (_heldSheets.TryGetValue(sheet, out Color[]? pixels) && pixels != null)
+                    _pixelsHeld -= pixels.Length;
+                _heldSheets.Remove(sheet);
+                _readUnder.Remove(sheet);
+            }
+            return gone.Count;
+        }
+
         /// <summary>One line for the report.</summary>
         internal static string Describe()
         {
