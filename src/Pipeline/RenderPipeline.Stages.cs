@@ -1000,7 +1000,7 @@ namespace SDVRadiance
             // rays off (measured 26/9). The ramp is the game's own dusk, so the beams come up with
             // the lamps rather than switching on.
             if (LampShaftsFollowDaylight)
-                lampShafts *= OutdoorLampAgainstDaylight();
+                lampShafts *= OutdoorLampAgainstDaylight() * IndoorLampBeamsAgainstDaylight();
             if (lampShafts <= 0.004f)
                 lampShafts = 0f;
             _reportedLampShaftStrength = lampShafts;

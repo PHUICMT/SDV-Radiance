@@ -789,9 +789,9 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             // little to each side of this pixel, marched like the shadow ray above with fewer
             // steps and the same fades (a lamp in a wall must not count its own wall). Blocked
             // beside and open here is the edge of a shadow, and that is where a beam is seen:
-            // the middle of an open pool has nothing next to it and shows nothing. Bands turn
-            // slowly round the lamp, seeded by where it stands so two lamps never breathe in
-            // step, and the ring keeps the beam off the sprite that IS the lamp.
+            // the middle of an open pool has nothing next to it and shows nothing. The rays
+            // stand still round the lamp, and the ring keeps the beam off the sprite that IS
+            // the lamp.
             [branch]
             if (LampShaftStrength > 0.004)
             {
@@ -832,11 +832,15 @@ float4 FloodPS(PixelInput input) : SV_TARGET
                     if (occlusionHere < 0.0)
                         occlusionHere = OcclusionAt(uv);
                     float beamEdge = saturate((gap - occlusion) * 1.6) * (1.0 - occlusionHere);
-                    float2 lampTile = lampUv * TilesPerScreen + WorldTileOffset;
                     float beamAngle = atan2(fromLamp.y, fromLamp.x);
                     // Narrow bright rays with dark air between, not a gentle swell: a soft band read as
                     // the pool getting warmer, and only the rays read as light with structure.
-                    float beamBand = pow(0.5 + 0.5 * sin(beamAngle * 9.0 + SunShaftDrift * 0.7 + dot(lampTile, float2(2.3, 4.1))), 2.5);
+                    // STILL rays. They used to turn slowly round the lamp, seeded by where it stood,
+                    // and a ray sweeping across a narrow gap (a strip of farmhouse wall beside a
+                    // picture) drew a line that came and went every few seconds, which read as the
+                    // lighting flickering (reported with a video). A carried light re-seeded as it
+                    // walked and swept its rays the same way.
+                    float beamBand = pow(0.5 + 0.5 * sin(beamAngle * 9.0), 2.5);
                     // A beam needs an OPEN path: through leaves at half occlusion the pool still
                     // glows a little, a beam must not, or a hedge sprays streaks out its far side.
                     float openPath = saturate(1.0 - 2.0 * occlusion);

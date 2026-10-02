@@ -925,6 +925,15 @@ namespace SDVRadiance
             }
         }
 
+        /// <summary>The smallest a soft sprite is drawn in the interface, in screen pixels a soft
+        /// texel. The toolbar draws every item at 3.2 pixels a texel (Toolbar.draw, scaleSize 0.8),
+        /// which is 0.8 of a soft texel, so under the world's one-pixel rule its items fell back to
+        /// the doubled sheet and stood out jagged beside the same items smoothed in the inventory
+        /// (reported by a player). A soft sprite read a little below one pixel a texel drops one
+        /// row in five of an already smooth picture, and the interface does not move, so nothing
+        /// crawls. The world keeps its one pixel, where a moving sprite would.</summary>
+        private const float SoftInterfaceMinimum = 0.75f;
+
         /// <summary>Whether a draw at this many screen pixels per DERIVED texel is worth redirecting.
         /// The doubled sheet wants two, or a whole number (see MinimumDoubledScale). A soft sprite
         /// is already soft, so a dropped row here and there is invisible: one pixel a texel is
@@ -932,7 +941,7 @@ namespace SDVRadiance
         private static bool DrawnLargeEnough(float pixelsPerTexel, bool soft)
         {
             if (soft)
-                return pixelsPerTexel >= 1f - 0.001f;
+                return pixelsPerTexel >= (Game1.uiMode ? SoftInterfaceMinimum : 1f) - 0.001f;
             if (pixelsPerTexel >= MinimumDoubledScale - 0.001f)
                 return true;
             return pixelsPerTexel >= 1f - 0.001f && Math.Abs(pixelsPerTexel - (float)Math.Round(pixelsPerTexel)) < 0.001f;

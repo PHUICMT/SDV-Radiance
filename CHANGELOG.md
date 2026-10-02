@@ -2,6 +2,113 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.2.4 - 2026-10-02
+
+### Added
+
+- **Your look as a short piece of text, so you can hand it to somebody or take theirs.** The Looks
+  tab has Copy look, Copy everything and Paste a code, and the console has `radiance_code` for the
+  same. Only the settings you have changed travel, so a look off the dropdown is fifteen to fifty
+  characters and a hand-tuned one is around sixty. Copy look carries what the game looks like; Copy everything
+  adds the performance settings, which change how fast it runs rather than how it looks, so they
+  travel only when you ask for them. A code is the sender's whole look: anything it does not carry
+  goes back to the default, so your own changes do not stay underneath it. A pasted code is tried
+  on first: the world behind the panel shows it and a list, in the panel's own words, says what it
+  changes from what to what, and nothing is kept until you press Keep it. Closing the panel puts
+  your look back, unless you have changed something else since. Keeping it saves the look you had
+  as a chip (the last three are kept, drawn paler than the ones you named), copies your config.json aside as config.before-code.json, and leaves
+  an Undo button at the top of the tab until the panel closes. A colour table that shipped with the
+  mod travels by name and always arrives; one you made yourself arrives only where its file is,
+  rather than pointing your grade at a picture that is not there. A code from a newer release than
+  yours still works, minus the settings your release has never heard of.
+
+### For translators
+
+Thirty five new keys: thirty one for the share panel in the tuner, and four for the carried-lights shadow switch:
+
+```
+tuner.share
+tuner.share.desc
+tuner.share.copy
+tuner.share.copyall
+tuner.share.copied
+tuner.share.copiedall
+tuner.share.nothing
+help.share.copy
+help.share.copyall
+tuner.share.paste
+help.share.paste
+tuner.share.pasteprompt
+tuner.share.trial
+tuner.share.more
+tuner.share.todefault
+tuner.share.speed
+tuner.share.newer
+tuner.share.lutmissing
+tuner.share.closeputsback
+tuner.share.keep
+tuner.share.putback
+tuner.share.kept
+tuner.share.undo
+tuner.share.backupname
+tuner.share.same
+tuner.share.bad.notours
+tuner.share.bad.scope
+tuner.share.bad.typo
+tuner.share.on
+tuner.share.off
+tuner.share.none
+config.shadows.carried.name
+config.shadows.carried.tooltip
+tuner.shadowcarried
+help.shadowcarried
+```
+
+Several carry `{{count}}`, `{{name}}` or `{{time}}`, which are replaced with a number, a colour
+table's name or a clock time, so keep each token where the sentence needs it.
+`tuner.share.backupname` becomes the name of a saved look chip, so keep it short.
+
+### Fixed
+
+- **A saved look brings its colour table back.** Loading a look chip restored every dial but left
+  whatever colour table was on at the time. A chip saved from now on remembers its table, including
+  no table; older chips leave the table alone as before.
+- **A glowing ring no longer throws a dark shadow of you.** A light you carry sits a third of a
+  tile off your feet, so a glowing ring threw a dark shadow of its own wearer down and to one side,
+  with every glowing ring. Carried lights now cast no character shadow; they still light the ground
+  and shadow the lamps and props round you. A new switch, **Carried lights cast shadows** in F6
+  under Shadows, brings the old shadow back. Reported by ghi3038 on Nexus, with a video.
+- **The toolbar is smoothed under Soft 4x like the inventory.** With Menus smoothing on, the
+  toolbar draws its items a little smaller than one pixel for each soft texel, so it fell back to
+  the doubled sheet and looked fuzzy and jagged beside the same items in the inventory. In the
+  menus the soft sprites are now used down to three quarters of a pixel a texel; the world keeps
+  its one pixel, where a moving sprite would crawl. Reported by Fiimzyngro on Nexus.
+- **Lamp beams no longer come and go.** With god rays on, each lamp's rays used to turn slowly round
+  it, and a ray sweeping across a narrow gap, such as the strip of farmhouse wall beside a picture,
+  drew a line of light that faded in and out every few seconds and read as the lighting flickering.
+  The rays now stand still, and a light you carry no longer spins them as you walk. In a room with
+  windows the beams also fade out as daylight comes in and come back after dark, the way they
+  already did outdoors. Reported with a video by a player.
+- **Elliott's boat floats in his ten heart event.** At the Beach pier the rowboat is a sprite the
+  scene puts up for itself, and nothing kept the water off sprites like that, so the ripple and the
+  water's colour ran over the hull and the boat looked sunk. The same goes for any other prop a
+  scene sets on the water. Out at sea the boat is map art that carried no labels, and the whole
+  block of tiles under it lost the water effect, which drew a square box of flat water round the
+  boat. A boat lying on the water also reflects as one now: a shorter reflection that fades out,
+  where it used to hang a whole stretched boat under the stern as if it stood on end. Reported by
+  golddang03 on Nexus.
+- **What a cutscene draws over the water stays still.** The emote over a character's head in a
+  cutscene, the sprites a scene flies over the map (the parrot Leo's story sends to Willy's boat),
+  a scene's props, and the fish that leap out of the sea at the fishing festivals were all drawn
+  on top of the water and rippled with it, because nothing kept the water off them.
+- **More things over the water stay still.** A trinket companion flying round you, an item held
+  over your head, another player's rod and line in co-op, slingshot shots and fireballs over water
+  or lava, wood chips and damage numbers, and the witch or the fairy flying over the farm at night
+  all rippled with the water under them.
+- **The ice fishing holes at the Festival of Ice have water in them.** The rim round each hole is
+  map art with nothing in the middle, and with no labels the whole hole read as solid, so all five
+  holes showed flat water with no effect.
+
 ## 2.2.3 - 2026-09-27
 
 ### Added

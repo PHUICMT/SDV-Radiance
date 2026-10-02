@@ -201,6 +201,30 @@ namespace SDVRadiance
             return Math.Max(darkness, FloodLightmap.NightAmount());
         }
 
+        /// <summary>
+        /// How much a lamp's beams show against the daylight a window lets into a room: 1 in a
+        /// room with no window and after dark, moonlit or not, falling to 0 as the day comes in.
+        /// </summary>
+        /// <remarks>The indoor half of <see cref="OutdoorLampAgainstDaylight"/>, for the beams
+        /// only. A beam is a lamp's light against dark air, and a farmhouse at 06:40 is not dark:
+        /// a ray drawn across its sunlit wall read as a fault, not as light (reported with a
+        /// video). The pools and the shadows stay, as the room's lamps are still lit.</remarks>
+        internal static float IndoorLampBeamsAgainstDaylight()
+        {
+            GameLocation? location = Game1.currentLocation;
+            if (location == null || location.IsOutdoors || !FloodLightmap.IsWindowedInterior(location))
+                return 1f;
+            ShadowRenderer.WindowDaylight(out _, out float daylight);
+            // Below the dusk line the pane swaps the day's strength for the moon's, up to 0.14 on
+            // a clear full moon, and the beams jumped by that much in one frame at dusk and dawn.
+            // Read from above the brightest moon, both sides of the swap are zero.
+            return 1f - MathHelper.Clamp((daylight - BrightestMoonThroughAPane) / (0.8f - BrightestMoonThroughAPane), 0f, 1f);
+        }
+
+        /// <summary>The strongest a window pane gets from the moon alone
+        /// (<see cref="ShadowRenderer.WindowDaylight"/>: 0.04 plus 0.10 at full moon).</summary>
+        private const float BrightestMoonThroughAPane = 0.14f;
+
         private static float OutdoorLampDaylightDamping()
         {
             if (!(Game1.currentLocation?.IsOutdoors ?? false))

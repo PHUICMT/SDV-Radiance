@@ -186,6 +186,10 @@ namespace SDVRadiance
         /// <summary>Full snapshot (1.0.1+): every tunable value by property name, culture-invariant.
         /// The explicit fields below are the 1.0.0 format, kept so old chips still load.</summary>
         public Dictionary<string, string>? Values { get; set; }
+        /// <summary>Saved by the mod, not by the player: the look in use just before a share code
+        /// was kept. Only these are thinned out to the last few; a chip somebody named is never
+        /// touched.</summary>
+        public bool MadeBeforeACode { get; set; }
         public bool BloomEnabled { get; set; }
         public float BloomThreshold { get; set; }
         public float BloomIntensity { get; set; }
@@ -1619,6 +1623,11 @@ namespace SDVRadiance
         /// the shadows stop reading as "lit from a few directions" and start reading as a smudge.
         /// The sun outdoors is one light and is not affected.</summary>
         public int ShadowCastsPerCharacter { get; set; } = 3;
+        /// <summary>Whether a light a player carries (a glowing ring, a torch in hand) throws a
+        /// shadow of the people round it, the one carrying it included. Off by default: the light
+        /// sits a third of a tile off the feet, so it threw a dark shadow of its own bearer down and
+        /// to one side (reported with a video). It lights and shadows the lamps and props either way.</summary>
+        public bool ShadowCarriedLightsCast { get; set; }
         /// <summary>One shadow: the cheapest setting that still grounds a body.</summary>
         public const int ShadowCastsMin = 1;
         /// <summary>Where it used to sit before it was a setting. Higher reads as a smudge.</summary>
@@ -1918,6 +1927,10 @@ namespace SDVRadiance
             var prof = new NamedProfile { Name = name, Values = [] };
             foreach (PropertyInfo p in TunableProps())
                 prof.Values[p.Name] = Convert.ToString(p.GetValue(this), CultureInfo.InvariantCulture) ?? "";
+            // The colour table is a name, not a number, so the loop above never saw it, and a chip
+            // loaded later brought back every dial but left whatever table was on at the time. It is
+            // kept even when empty: "no table" is a choice the chip has to be able to put back.
+            prof.Values[nameof(ColorGradeLut)] = ColorGradeLut;
             return prof;
         }
 
@@ -1936,6 +1949,9 @@ namespace SDVRadiance
                 if (!string.Equals(live, raw, StringComparison.OrdinalIgnoreCase))
                     return false;
             }
+            if (p.Values.TryGetValue(nameof(ColorGradeLut), out string? table)
+                && !string.Equals(table, ColorGradeLut, StringComparison.OrdinalIgnoreCase))
+                return false;
             return true;
         }
 
@@ -1963,6 +1979,9 @@ namespace SDVRadiance
                         // value written by a different mod version — skip just that key
                     }
                 }
+                // Only a chip that recorded its table puts one back; an older chip leaves it alone.
+                if (p.Values.TryGetValue(nameof(ColorGradeLut), out string? table))
+                    ColorGradeLut = table ?? "";
                 Clamp();
                 return;
             }

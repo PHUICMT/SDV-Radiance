@@ -25,8 +25,11 @@ namespace SDVRadiance
         private readonly ClickableTextureComponent _cancelButton = null!;
         private bool _closing;
 
-        public TextEntryMenu(string title, string initial, Action<string> onDone, Action onCancel)
-            : base(0, 0, 640, 210, showUpperRightCloseButton: false)
+        /// <param name="longText">True for text longer than the box, a share code: the game's box
+        /// otherwise drops every character past its width, and a code pasted into it arrived cut
+        /// short. The dialog is wider too, so an ordinary code fits whole.</param>
+        public TextEntryMenu(string title, string initial, Action<string> onDone, Action onCancel, bool longText = false)
+            : base(0, 0, longText ? Math.Min(1000, Game1.uiViewport.Width - 64) : 640, 210, showUpperRightCloseButton: false)
         {
             _titleText = title;
             _onComplete = onDone;
@@ -35,13 +38,14 @@ namespace SDVRadiance
             xPositionOnScreen = (Game1.uiViewport.Width - width) / 2;
             yPositionOnScreen = (Game1.uiViewport.Height - height) / 2;
 
-            _textBox = new TextBox(Game1.content.Load<Texture2D>("LooseSprites\\textBox"), null, Game1.smallFont, Game1.textColor)
-            {
-                X = xPositionOnScreen + 32,
-                Y = yPositionOnScreen + 96,
-                Width = width - 210,
-                Text = initial ?? ""
-            };
+            Texture2D frame = Game1.content.Load<Texture2D>("LooseSprites\\textBox");
+            _textBox = longText ? new LongTextBox(frame, Game1.smallFont, Game1.textColor)
+                                : new TextBox(frame, null, Game1.smallFont, Game1.textColor);
+            _textBox.X = xPositionOnScreen + 32;
+            _textBox.Y = yPositionOnScreen + 96;
+            _textBox.Width = width - 210;
+            _textBox.limitWidth = !longText;
+            _textBox.Text = initial ?? "";
             Game1.keyboardDispatcher.Subscriber = _textBox;
             _textBox.Selected = true;
 
@@ -122,6 +126,47 @@ namespace SDVRadiance
             _okButton.draw(spriteBatch);
             _cancelButton.draw(spriteBatch);
             drawMouse(spriteBatch);
+        }
+
+        /// <summary>
+        /// A box whose text stays inside its frame however long it grows.
+        /// </summary>
+        /// <remarks>The game's box shows the end of a long text, but it trims that end to the
+        /// box's whole width and then draws it from 16 pixels in, so the last characters and the
+        /// caret ran over the frame on the right (seen with a share code). This one trims to the
+        /// room inside the frame.</remarks>
+        private sealed class LongTextBox : TextBox
+        {
+            private readonly Texture2D _frame;
+            private readonly SpriteFont _textFont;
+            private readonly Color _textColour;
+
+            public LongTextBox(Texture2D frame, SpriteFont font, Color colour)
+                : base(frame, null, font, colour)
+            {
+                _frame = frame;
+                _textFont = font;
+                _textColour = colour;
+            }
+
+            public override void Draw(SpriteBatch spriteBatch, bool drawShadow = true)
+            {
+                spriteBatch.Draw(_frame, new Rectangle(X, Y, 16, Height), new Rectangle(0, 0, 16, Height), Color.White);
+                spriteBatch.Draw(_frame, new Rectangle(X + 16, Y, Width - 32, Height), new Rectangle(16, 0, 4, Height), Color.White);
+                spriteBatch.Draw(_frame, new Rectangle(X + Width - 16, Y, 16, Height),
+                    new Rectangle(_frame.Bounds.Width - 16, 0, 16, Height), Color.White);
+                string shown = Text;
+                int room = Width - 40;
+                while (shown.Length > 0 && _textFont.MeasureString(shown).X > room)
+                    shown = shown[1..];
+                Utility.drawTextWithShadow(spriteBatch, shown, _textFont, new Vector2(X + 16, Y + 12), _textColour);
+                bool caretShowing = Game1.currentGameTime.TotalGameTime.TotalMilliseconds % 1000.0 >= 500.0;
+                if (caretShowing && Selected)
+                {
+                    int caretX = X + 16 + (int)_textFont.MeasureString(shown).X + 2;
+                    spriteBatch.Draw(Game1.staminaRect, new Rectangle(caretX, Y + 8, 4, 32), _textColour);
+                }
+            }
         }
     }
 }

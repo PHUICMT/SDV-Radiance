@@ -100,6 +100,33 @@ namespace SDVRadiance
                 + "'radiance_config' lists all keys, 'radiance_config Key' prints one, "
                 + "'radiance_config Key value' sets it. Restart or GMCM-save to discard.",
                 (_, arguments) => LiveConfig(monitor, getConfig(), arguments));
+            // The same door the F6 tuner will open, reachable from the console so a look can be
+            // read out of a post or pasted into one without the menu. Live only, like the command
+            // above: keeping a look is the tuner's job, and it says so when a code lands.
+            helper.ConsoleCommands.Add("radiance_code",
+                "Share your look as a short piece of text, or take somebody else's. "
+                + "'radiance_code' prints the code for the look you are using, "
+                + "'radiance_code all' prints one that carries your performance settings as well, and "
+                + "'radiance_code <code>' reads a code, lists what it changes and applies it live. "
+                + "Spaces and line breaks in a pasted code do not matter. "
+                + "Applying is in memory only (config.json is not written): open the tuner and press Esc to keep it.",
+                (_, arguments) => ShareCodeCommand(monitor, getConfig(), arguments));
+            helper.ConsoleCommands.Add("radiance_sharelabels",
+                "Which settings a share code's list can name by the label their row wears in the tuner, and which "
+                + "fall back to the setting's own name. 'radiance_sharelabels all' lists every pair. A diagnostic.",
+                (_, arguments) =>
+                {
+                    var labels = RadianceTunerMenu.LabelsBySetting(getConfig(), key => helper.Translation.Get(key).ToString());
+                    var unnamed = new List<string>();
+                    foreach ((int _, string property, bool _) in ShareCode.KnownSettings)
+                        if (!labels.ContainsKey(property))
+                            unnamed.Add(property);
+                    monitor.Log($"{labels.Count} of {ShareCode.KnownSettings.Count} settings are named by their row's label. "
+                        + $"Split names for the rest: {string.Join(", ", unnamed)}", LogLevel.Info);
+                    if (arguments.Length > 0)
+                        foreach (var pair in labels)
+                            monitor.Log($"  {pair.Key} = {pair.Value}", LogLevel.Info);
+                });
             // ONE COMMAND, NO ARGUMENTS. Everything below this line is a tool for someone who
             // already knows what it does. A player who has just seen something wrong should not
             // have to pick a command, read coordinates off the screen and type them correctly
@@ -1493,6 +1520,83 @@ namespace SDVRadiance
         /// remembers this list exists. Clamp() runs after every set, so the console cannot put a
         /// value out of the range the sliders enforce.</summary>
         private static int _markCount;
+
+        /// <summary>Print a code for the current look, or take one apart and use it.</summary>
+        private static void ShareCodeCommand(IMonitor monitor, ModConfig config, string[] arguments)
+        {
+            if (arguments.Length == 0 || arguments[0].Equals("all", StringComparison.OrdinalIgnoreCase))
+            {
+                bool whole = arguments.Length > 0;
+                ShareCodeScope scope = whole ? ShareCodeScope.Everything : ShareCodeScope.Look;
+                string mine = ShareCode.Write(config, scope, out int settingsCarried);
+                monitor.Log(whole
+                    ? $"Your whole setup, {settingsCarried} setting(s) that differ from a fresh install:"
+                    : $"Your look, {settingsCarried} setting(s) that differ from a fresh install:", LogLevel.Info);
+                monitor.Log(mine, LogLevel.Info);
+                // Onto the clipboard as well, through the game's own, the one the co-op invite
+                // code is copied with. Printing a code somebody then has to retype off a console
+                // is most of the way to not sharing it at all.
+                try
+                {
+                    StardewValley.DesktopClipboard.SetText(mine);
+                    monitor.Log("It is on the clipboard too.", LogLevel.Info);
+                }
+                catch (Exception)
+                {
+                    monitor.Log("This machine has no clipboard I can reach, so copy it from the line above.", LogLevel.Info);
+                }
+                if (!whole)
+                    monitor.Log("radiance_code all puts your performance settings in it as well.", LogLevel.Info);
+                return;
+            }
+
+            // SMAPI hands the line over split on spaces, and a code copied out of a post arrives
+            // with them in it, so the words are put back together before anything is read.
+            string typed = string.Concat(arguments);
+            if (!ShareCode.TryRead(typed, config, out ShareCodeReading reading, out string problem))
+            {
+                monitor.Log(problem switch
+                {
+                    "notours" => "That is not an SDV-Radiance code. They begin with RAD.",
+                    "scope" => "That code is a kind this version cannot open yet. It was made by a newer release.",
+                    _ => "That code is missing a character or has one too many. Ask for it again and copy the whole thing.",
+                }, LogLevel.Warn);
+                return;
+            }
+
+            if (reading.Changes.Count == 0 && reading.ColourTableNotHere.Length == 0 && reading.SettingsThisReleaseCannotUse == 0)
+            {
+                monitor.Log("That code matches what you already have. Nothing to change.", LogLevel.Info);
+                return;
+            }
+
+            monitor.Log($"That code changes {reading.Changes.Count} setting(s):", LogLevel.Info);
+            foreach (ShareCodeChange change in reading.Changes)
+            {
+                if (!change.IsPerformance)
+                    monitor.Log($"  {change.PropertyName}: {change.OldValue} -> {change.NewValue}", LogLevel.Info);
+            }
+            var costsFrames = reading.Changes.FindAll(change => change.IsPerformance);
+            if (costsFrames.Count > 0)
+            {
+                monitor.Log("  and these, which change how fast the game runs rather than how it looks:", LogLevel.Info);
+                foreach (ShareCodeChange change in costsFrames)
+                    monitor.Log($"  {change.PropertyName}: {change.OldValue} -> {change.NewValue}", LogLevel.Info);
+            }
+            if (reading.ColourTableNotHere.Length > 0)
+            {
+                monitor.Log($"This look uses a colour table called \"{reading.ColourTableNotHere}\", which is not on this "
+                    + "machine. Everything else is applied; the colours stay as they are until you have that file.", LogLevel.Warn);
+            }
+            if (reading.SettingsThisReleaseCannotUse > 0)
+            {
+                monitor.Log($"{reading.SettingsThisReleaseCannotUse} setting(s) in that code are from a newer release "
+                    + "and were stepped over.", LogLevel.Info);
+            }
+
+            ShareCode.Apply(reading, config);
+            monitor.Log("Applied. This is live only: open the tuner and press Esc to keep it, or reload to drop it.", LogLevel.Info);
+        }
 
         private static void LiveConfig(IMonitor monitor, ModConfig config, string[] arguments)
         {

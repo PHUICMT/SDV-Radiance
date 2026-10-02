@@ -139,7 +139,7 @@ namespace SDVRadiance
         /// <summary>A sprite smaller than this is a bubble, a sparkle or a shadow, not a hull.
         /// Stamping those would carve holes in the water for things that should ripple with it.
         /// </summary>
-        private const int SmallestWorthCarving = 24;
+        internal const int SmallestWorthCarving = 24;
 
         /// <summary>
         /// Bracket the draw of every location type that paints something of its own, and record

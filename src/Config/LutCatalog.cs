@@ -51,6 +51,11 @@ namespace SDVRadiance
 
         internal static void Initialise(string modDir) => _modDir = modDir;
 
+        /// <summary>Whether this is the game rather than an author tool or a test. Off, the folders
+        /// below cannot be trusted to describe what a player has, so nothing should conclude from
+        /// them that a look is missing.</summary>
+        internal static bool CanSeeWhatIsInstalled => _modDir.Length > 0;
+
         /// <summary>The folder beside the save games, <c>%APPDATA%/StardewValley/radiance-luts</c>.
         /// A look kept here belongs to the player rather than to the mod, so updating the mod - by
         /// hand or through a mod manager that installs clean - cannot take it away. Never created

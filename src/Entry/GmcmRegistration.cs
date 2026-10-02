@@ -861,6 +861,8 @@ namespace SDVRadiance
             configMenu.AddNumberOption(manifest, () => config().ShadowCastsPerCharacter, value => config().ShadowCastsPerCharacter = value,
                 () => translate("config.shadows.casts.name"), () => translate("config.shadows.casts.tooltip"),
                 ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax, 1);
+            configMenu.AddBoolOption(manifest, () => config().ShadowCarriedLightsCast, value => config().ShadowCarriedLightsCast = value,
+                () => translate("config.shadows.carried.name"), () => translate("config.shadows.carried.tooltip"));
 
             // Per kind, grouped by the kind rather than by the dial. The overall length and
             // softness above still multiply these, so a player who only wants everything shorter

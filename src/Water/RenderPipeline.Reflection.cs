@@ -1290,12 +1290,19 @@ namespace SDVRadiance
                 // Vanilla places the sprite's top-left at Position and rotates it about its own
                 // centre; its feet are the bottom edge of the unrotated frame.
                 float drawnWidth = sourceRect.Width * scale, drawnHeight = sourceRect.Height * scale;
-                float centerX = sprite.Position.X + drawnWidth / 2f;
-                float feetY = sprite.Position.Y + drawnHeight;
+                // A sprite with a per-axis scale is the exception: the game centres it on its
+                // position instead of hanging it from there.
+                bool centredOnPosition = sprite.Texture != null && sprite.vectorScale != Vector2.Zero;
+                float centerX = centredOnPosition ? sprite.Position.X : sprite.Position.X + drawnWidth / 2f;
+                float feetY = centredOnPosition ? sprite.Position.Y + drawnHeight / 2f : sprite.Position.Y + drawnHeight;
                 if (!WaterWithinTiles((int)(centerX / 64f), (int)(feetY / 64f) + 1, 2))
                     continue;
-                StampFlippedSprite(spriteBatch, texture, sourceRect, centerX, feetY, scale,
-                    tint * alpha, sprite.rotation, sprite.flipped, sprite.verticalFlipped);
+                if (sprite.rotation == 0f && FloatsOnWater(location, centerX, feetY - drawnHeight, feetY))
+                    StampFloatingReflection(spriteBatch, texture, sourceRect, centerX, feetY, scale,
+                        tint * alpha, sprite.flipped, sprite.verticalFlipped);
+                else
+                    StampFlippedSprite(spriteBatch, texture, sourceRect, centerX, feetY, scale,
+                        tint * alpha, sprite.rotation, sprite.flipped, sprite.verticalFlipped);
             }
         }
 
@@ -1334,6 +1341,63 @@ namespace SDVRadiance
                 StampFlippedSprite(spriteBatch, Game1.bobbersTexture, bobberSourceRect,
                     bobber.X, floatWaterlineY, 4f, Color.White, 0f,
                     farmer.FacingDirection == 1, false);
+            }
+        }
+
+        /// <summary>Whether a sprite lies on the water from end to end rather than standing at its
+        /// edge: the game's own water tiles under its top, its middle and its bottom.</summary>
+        /// <remarks>Asked of the game rather than of the mask's near-water cull, which answers yes
+        /// everywhere while rain puddles mirror.</remarks>
+        private static bool FloatsOnWater(GameLocation location, float centerX, float topY, float feetY)
+        {
+            int tileX = (int)(centerX / 64f);
+            return location.isWaterTile(tileX, (int)(topY / 64f))
+                && location.isWaterTile(tileX, (int)((topY + feetY) / 128f))
+                && location.isWaterTile(tileX, (int)((feetY - 1f) / 64f));
+        }
+
+        /// <summary>How many bands a floating sprite's reflection is cut into to fade it.</summary>
+        private const int FloatingReflectionBands = 8;
+
+        /// <summary>How long a floating sprite's reflection is, as a share of the sprite's own
+        /// length. Full length still read a little long beside the boat; the author asked for it
+        /// a touch shorter.</summary>
+        private const float FloatingReflectionLength = 0.75f;
+
+        /// <summary>The reflection of something lying flat on the water, a boat at a pier.</summary>
+        /// <remarks>
+        /// The ordinary stamp flips the whole sprite down from its feet and stretches it by
+        /// MirrorSquash, which is right for a body standing at the water's edge and wrong for a
+        /// rowboat seen from above: its length is not its height, and the stretched copy hanging
+        /// a boat and a quarter under the stern read as a boat stood on end. Here the reflection
+        /// is shorter than the sprite and fades out along it, from full at the stern to nothing
+        /// at the far end, the way the map's own mirror already fades a boat drawn in tiles (the
+        /// sea in Elliott's ten heart event, which the author picked as the look to match). A
+        /// sprite draw has one colour, so the fade is cut into bands; only floating temporary
+        /// sprites come this way, a handful at most.
+        /// </remarks>
+        private void StampFloatingReflection(SpriteBatch spriteBatch, Texture2D texture, Rectangle sourceRect,
+            float centerX, float feetY, float scale, Color tint, bool flipHorizontal, bool flipVertical)
+        {
+            Vector2 feet = Game1.GlobalToLocal(Game1.viewport, new Vector2(centerX, feetY));
+            SpriteEffects effects = (flipVertical ? SpriteEffects.None : SpriteEffects.FlipVertically)
+                | (flipHorizontal ? SpriteEffects.FlipHorizontally : SpriteEffects.None);
+            float depth = StampDepth(feetY);
+            int height = sourceRect.Height;
+            for (int band = 0; band < FloatingReflectionBands; band++)
+            {
+                // Rows counted from the edge that touches the water, which is the bottom of the
+                // source unless the sprite was already drawn upside down.
+                int nearRow = height * band / FloatingReflectionBands;
+                int farRow = height * (band + 1) / FloatingReflectionBands;
+                if (farRow <= nearRow)
+                    continue;
+                int sourceTop = flipVertical ? sourceRect.Y + nearRow : sourceRect.Bottom - farRow;
+                Rectangle bandSource = new(sourceRect.X, sourceTop, sourceRect.Width, farRow - nearRow);
+                float fade = 1f - (band + 0.5f) / FloatingReflectionBands;
+                spriteBatch.Draw(texture, feet + new Vector2(0f, nearRow * scale * FloatingReflectionLength), bandSource,
+                    tint * fade, 0f, new Vector2(sourceRect.Width / 2f, 0f),
+                    new Vector2(scale, scale * FloatingReflectionLength), effects, depth);
             }
         }
 

@@ -175,7 +175,7 @@ namespace SDVRadiance
         /// </summary>
         private void DrawLightShadows(SpriteBatch spriteBatch, GameLocation location, ModConfig config, float strength, float blur)
         {
-            CollectCastingLights(location);
+            CollectCastingLights(location, config.ShadowCarriedLightsCast);
             TrimLightsToScreenBudget();
 
             if (DiagnosticMonitor != null && _diagnosticFrameCount < 3)
@@ -222,8 +222,33 @@ namespace SDVRadiance
 
         /// <summary>Fill <c>_nearbyLightSources</c> with the lights on screen that may cast:
         /// real point lights and window lights, minus the drifting decorative ones.</summary>
-        private void CollectCastingLights(GameLocation location)
+        /// <summary>How far the carried lights' character shadows are faded in, 0 to 1. The switch
+        /// is a yes or no and the shadows it governs must not pop when it is flipped, the way the
+        /// lighting side already eases its own carried-light scale.</summary>
+        private float _carriedLightsCastPresence;
+        private int _carriedLightsCastTick = -1;
+
+        /// <summary>A half second each way, stepped once per game tick however many callers ask.</summary>
+        private void StepCarriedLightsCastPresence(bool carriedLightsCast)
         {
+            float target = carriedLightsCast ? 1f : 0f;
+            if (Determinism.Frozen)
+            {
+                _carriedLightsCastPresence = target;
+                return;
+            }
+            if (_carriedLightsCastTick == Game1.ticks)
+                return;
+            _carriedLightsCastTick = Game1.ticks;
+            float step = (float)(Game1.currentGameTime?.ElapsedGameTime.TotalSeconds ?? 0.0) * 2f;
+            _carriedLightsCastPresence = _carriedLightsCastPresence < target
+                ? Math.Min(target, _carriedLightsCastPresence + step)
+                : Math.Max(target, _carriedLightsCastPresence - step);
+        }
+
+        private void CollectCastingLights(GameLocation location, bool carriedLightsCast)
+        {
+            StepCarriedLightsCastPresence(carriedLightsCast);
             // Build the on-screen light list — may be EMPTY (a room with no lamps/windows). We no
             // longer bail on empty: an always-present ambient CONTACT pool grounds every caster
             // even in a lightless room, and point lights ADD their directional shadow on top.
@@ -240,16 +265,23 @@ namespace SDVRadiance
                     if (tvScreensAreOurs && TvScreenGlow.IsScreenLight(kv.Key, ls))
                         continue;
                     // Cast from real point lights AND window/map lights (a window still throws a
-                    // believable shadow across the room). Player-attached lights sit on the player
-                    // so they self-cancel in LightCast (dist≈0). Skip nothing by context — except
-                    // stale window lights (window removed/dark: glow gone but source lingers).
+                    // believable shadow across the room). Skip nothing by context - except stale
+                    // window lights (window removed/dark: glow gone but source lingers).
                     if (!WindowGlowing(location, ls))
                         continue;
-                    // A light a companion carries (the fairy trinket's) flits round its owner a
-                    // tile or two away, so every body near it threw a second shadow that swung
-                    // from side to side with each flit, the rider's horse most of all. Too big
-                    // for the firefly test below (radius 2), so it is known by what it is.
-                    if (IsCompanionLight(kv.Key))
+                    // A light somebody CARRIES casts no character shadow. A companion's (the fairy
+                    // trinket's) flits round its owner a tile or two away, so every body near it
+                    // threw a second shadow that swung from side to side with each flit, the
+                    // rider's horse most of all. A ring's glow was meant to cancel itself by sitting
+                    // on the player, but it sits a third of a tile off the feet, so every glowing
+                    // ring threw a dark shadow down and to the side of the player who wears it
+                    // (reported with a video of a ring from another mod; every glowing ring does it,
+                    // measured in Town at night with the Glow Ring). The light still lights, and
+                    // still shadows the lamps and props round it in the lighting pass. A player who
+                    // liked that shadow can have it back (ShadowCarriedLightsCast); a companion's
+                    // light stays out either way, since its shadow swings.
+                    bool carried = ls.PlayerID != 0L;
+                    if (IsCompanionLight(kv.Key) || (carried && _carriedLightsCastPresence <= 0.004f))
                         continue;
                     // Skip DRIFTING decorative lights (fireflies from The Night Lights, sparkle
                     // mods): each one threw its own moving shadow on the player. Neither signal
@@ -318,7 +350,8 @@ namespace SDVRadiance
                     if (screen.X < -reach || screen.X > Game1.viewport.Width + reach ||
                         screen.Y < -reach || screen.Y > Game1.viewport.Height + reach)
                         continue;
-                    _nearbyLightSources.Add((screen, reach, FireFlicker(ls.position.Value, ls.textureIndex.Value)));
+                    _nearbyLightSources.Add((screen, reach, FireFlicker(ls.position.Value, ls.textureIndex.Value)
+                                                            * (carried ? _carriedLightsCastPresence : 1f)));
                 }
             }
             // A TV that is on casts like a lamp, with its fade on the shadow's strength: the game

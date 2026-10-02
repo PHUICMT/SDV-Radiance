@@ -23,6 +23,9 @@ namespace SDVRadiance
         /// exactly one is in effect. Asked every frame rather than stamped once: the value can be
         /// changed from GMCM or the console while this menu is open.</summary>
         public Func<bool>? IsChosen;
+        /// <summary>Drawn paler than its neighbours: a look chip the mod saved on its own (the look
+        /// before a share code was kept), so a glance tells it from the ones the player named.</summary>
+        public bool Faded;
 
         public TunerTextButton(string label, Rectangle bounds, Action onClick)
         {
@@ -37,6 +40,12 @@ namespace SDVRadiance
             // or which preset was in effect.
             IClickableMenu.drawTextureBox(spriteBatch, Game1.menuTexture, new Rectangle(0, 256, 60, 60),
                 Bounds.X, Bounds.Y + dy, Bounds.Width, Bounds.Height, active ? new Color(255, 206, 96) : Color.White, 1f, drawShadow: false);
+            bool pale = Faded && !active;
+            // A pale wash over the box, not a see-through box: the box made translucent showed the
+            // darker panel behind it and came out heavier than its neighbours, not lighter.
+            if (pale)
+                spriteBatch.Draw(Game1.staminaRect, new Rectangle(Bounds.X + 4, Bounds.Y + dy + 4, Bounds.Width - 8, Bounds.Height - 8),
+                    new Color(255, 240, 210) * 0.55f);
             if (active)
             {
                 var rim = new Color(176, 112, 24);
@@ -55,8 +64,11 @@ namespace SDVRadiance
             // strings measure taller (tone marks/upper vowels) which pushed text up off
             // centre. A fixed reference keeps EN and TH visually centred the same way.
             float refH = TunerText.Measure("A").Y * scale;
+            // A solid lighter ink rather than a see-through one, which the text drawing did not honour.
             Utility.drawTextWithShadow(spriteBatch, _label, Game1.smallFont,
-                new Vector2(textLeft + (textWidth - m.X * scale) / 2f, Bounds.Center.Y - refH / 2f + dy + 2f), Game1.textColor, scale);
+                new Vector2(textLeft + (textWidth - m.X * scale) / 2f, Bounds.Center.Y - refH / 2f + dy + 2f),
+                pale ? Color.Lerp(Game1.textColor, new Color(200, 150, 100), 0.55f) : Game1.textColor, scale,
+                shadowIntensity: pale ? 0.3f : 1f);
         }
     }
 }

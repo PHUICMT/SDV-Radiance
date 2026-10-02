@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewValley;
@@ -307,6 +308,8 @@ namespace SDVRadiance
         /// never need: it stays out of the way, heading and all, until the header switch shows it.</summary>
         private void Section(string key, bool fineTuning = false)
         {
+            if (_labelRecorder != null)
+                _probeSectionLabel = _translate(key);
             EndSection();
             // A heading over rows that are all hidden is a heading over nothing.
             if (_rowsEnabledWhen != null && !_rowsEnabledWhen())
@@ -414,6 +417,7 @@ namespace SDVRadiance
         private void Toggle(string key, Func<bool> getValue, Action<bool> setValue, string? help = null, Func<bool>? enabledWhen = null,
             bool savedSetting = true)
         {
+            _labelRecorder?.Add((ProbeLabel(key), () => getValue()));
             Func<bool>? rowEnabledWhen = enabledWhen ?? _rowsEnabledWhen;
             if (rowEnabledWhen != null && !rowEnabledWhen())
                 return;
@@ -431,6 +435,7 @@ namespace SDVRadiance
         private void Slider(string key, float min, float max, Func<float> getValue, Action<float> setValue,
             string? help = null, Func<bool>? enabledWhen = null, float step = 0.01f)
         {
+            _labelRecorder?.Add((ProbeLabel(key), () => getValue()));
             Func<bool>? rowEnabledWhen = enabledWhen ?? _rowsEnabledWhen;
             if (rowEnabledWhen != null && !rowEnabledWhen())
                 return;
@@ -447,6 +452,7 @@ namespace SDVRadiance
         /// answer rather than a number, which is what makes it worth the room.</summary>
         private void Compass(string key, Func<float> getDegrees, Action<float> setDegrees, string? help = null, Func<bool>? enabledWhen = null)
         {
+            _labelRecorder?.Add((ProbeLabel(key), () => getDegrees()));
             Func<bool>? rowEnabledWhen = enabledWhen ?? _rowsEnabledWhen;
             if (rowEnabledWhen != null && !rowEnabledWhen())
                 return;
@@ -651,6 +657,13 @@ namespace SDVRadiance
 
         private void BuildLooks()
         {
+            if (_lookBeforeCode != null)
+            {
+                Paragraph(_translate("tuner.share.kept").Replace("{{count}}", _settingsTheCodeChanged.ToString()));
+                Button(_translate("tuner.share.undo"), new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, ButtonHeight), UndoKeptCode);
+                _contentCursorY += RowPitch + Scaled(6);
+            }
+
             // Preset buttons, one row across.
             (LookPreset preset, string key)[] presets =
             [
@@ -692,7 +705,8 @@ namespace SDVRadiance
                     {
                         // Lit while the live settings are still exactly what this look holds, so the
                         // panel says which saved look is in effect; move any slider and it goes out.
-                        IsChosen = () => _config.MatchesProfile(captured)
+                        IsChosen = () => _config.MatchesProfile(captured),
+                        Faded = captured.MadeBeforeACode
                     };
                     _chips.Add(new TunerChip
                     {
@@ -707,7 +721,433 @@ namespace SDVRadiance
             }
             EndSection();
 
+            BuildShare();
+
             Toggle("tuner.master", () => _config.Enabled, value => _config.Enabled = value, "help.master");
+        }
+
+        /// <summary>
+        /// A look as a short piece of text, under the looks it is made of.
+        ///
+        /// <para>The code is SHOWN as well as copied, and stays on screen until the panel is
+        /// closed. A clipboard is not something a mod can promise: it is another program's to
+        /// take, it is gone the moment somebody copies anything else, and on some machines this
+        /// game never had one. A line that says "copied" and nothing else is a line that is wrong
+        /// on those machines and cannot be recovered from. The code itself can be read off the
+        /// screen, and somebody sharing a look on a forum will photograph it as often as they
+        /// paste it.</para>
+        /// </summary>
+        private void BuildShare()
+        {
+            Section("tuner.share");
+            if (!HiddenBySection())
+            {
+                Paragraph(_translate("tuner.share.desc"));
+                int gap = Scaled(10);
+                int half = (_contentColumnWidth - gap) / 2;
+                Button(_translate("tuner.share.copy"),
+                    new Rectangle(_contentCursorX, _contentCursorY, half, ButtonHeight),
+                    () => CopyShareCode(ShareCodeScope.Look));
+                Help(new Rectangle(_contentCursorX, _contentCursorY, half, ButtonHeight), "help.share.copy");
+                Button(_translate("tuner.share.copyall"),
+                    new Rectangle(_contentCursorX + half + gap, _contentCursorY, half, ButtonHeight),
+                    () => CopyShareCode(ShareCodeScope.Everything));
+                Help(new Rectangle(_contentCursorX + half + gap, _contentCursorY, half, ButtonHeight), "help.share.copyall");
+                _contentCursorY += RowPitch;
+                if (_sharedCode.Length > 0)
+                {
+                    Paragraph(_translate(_sharedCodeCarriedEverything ? "tuner.share.copiedall" : "tuner.share.copied")
+                        .Replace("{{count}}", _sharedCodeSettings.ToString()));
+                    // Shown with its groups apart, so the line can wrap: joined by dashes it was one
+                    // word the width of the code, and a long one ran off the panel. Reading skips
+                    // spaces as it skips dashes, so a code typed off the screen still reads.
+                    Paragraph(_sharedCode.Replace('-', ' '));
+                }
+                else if (_sharedCodeIsEmpty)
+                {
+                    Paragraph(_translate("tuner.share.nothing"));
+                }
+
+                if (_codeOnTrial == null)
+                {
+                    var pasteRow = new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, ButtonHeight);
+                    Button(_translate("tuner.share.paste"), pasteRow, PromptPasteCode);
+                    Help(pasteRow, "help.share.paste");
+                    _contentCursorY += RowPitch;
+                    if (_codeProblem.Length > 0)
+                        Paragraph(_translate(_codeProblem).Replace("{{name}}", _codeProblemDetail).Replace("{{count}}", _codeProblemDetail));
+                }
+                else
+                {
+                    BuildCodeOnTrial(_codeOnTrial);
+                }
+                _contentCursorY += Scaled(SectionGapBase);
+            }
+            EndSection();
+        }
+
+        /// <summary>
+        /// What a code on trial changes, and the two ways out of it.
+        ///
+        /// <para>The code is already in the live settings, so the world behind the panel is the
+        /// preview: the same thing a slider does while it is dragged. Nothing is kept until Keep
+        /// is pressed, and closing the panel puts the old look back.</para>
+        /// </summary>
+        private void BuildCodeOnTrial(ShareCodeReading reading)
+        {
+            Paragraph(_translate("tuner.share.trial").Replace("{{count}}", reading.Changes.Count.ToString()));
+            const int LinesShown = 12;
+            for (int i = 0; i < reading.Changes.Count && i < LinesShown; i++)
+            {
+                ShareCodeChange change = reading.Changes[i];
+                string line = $"{SettingLabel(change.PropertyName)}: {ShownValue(change.OldValue)} -> {ShownValue(change.NewValue)}"
+                    + (change.ReturnsToDefault ? " " + _translate("tuner.share.todefault") : "");
+                Paragraph(change.IsPerformance ? $"{_translate("tuner.share.speed")} {line}" : line);
+            }
+            if (reading.Changes.Count > LinesShown)
+                Paragraph(_translate("tuner.share.more").Replace("{{count}}", (reading.Changes.Count - LinesShown).ToString()));
+            if (reading.SettingsThisReleaseCannotUse > 0)
+                Paragraph(_translate("tuner.share.newer").Replace("{{count}}", reading.SettingsThisReleaseCannotUse.ToString()));
+            if (reading.ColourTableNotHere.Length > 0)
+                Paragraph(_translate("tuner.share.lutmissing").Replace("{{name}}", reading.ColourTableNotHere));
+            // The footer says Esc saves, which is true of every slider and not of this.
+            Paragraph(_translate("tuner.share.closeputsback"));
+
+            int gap = Scaled(10);
+            int half = (_contentColumnWidth - gap) / 2;
+            Button(_translate("tuner.share.keep"), new Rectangle(_contentCursorX, _contentCursorY, half, ButtonHeight), KeepCodeOnTrial);
+            Button(_translate("tuner.share.putback"), new Rectangle(_contentCursorX + half + gap, _contentCursorY, half, ButtonHeight),
+                () => { PutBackCodeOnTrial(); Game1.playSound("cancel"); Reflow(); });
+            _contentCursorY += RowPitch;
+        }
+
+        /// <summary>A setting's name as a reader says it: ColorGradeSaturation is "Color grade
+        /// saturation".</summary>
+        private string SettingLabel(string property)
+        {
+            if (LabelsBySetting(_config, _translate).TryGetValue(property, out string? label))
+                return label;
+            // The colour table is picked from a row of buttons, which have no reader for the probe
+            // to find, so it is named here by the heading those buttons sit under.
+            if (property == nameof(ModConfig.ColorGradeLut))
+                return _translate("tuner.lut");
+            string spaced = System.Text.RegularExpressions.Regex.Replace(property, "(?<=[a-z0-9])(?=[A-Z])", " ");
+            return spaced.Length > 1 ? spaced[0] + spaced[1..].ToLowerInvariant() : spaced;
+        }
+
+        /// <summary>Every row this panel builds, by its label and what it reads, while a probe is
+        /// listening (see <see cref="LabelsBySetting"/>). Null the rest of the time.</summary>
+        private List<(string Label, Func<object> Read)>? _labelRecorder;
+        /// <summary>The heading the probe is under, so a row called only "Size" says whose size.</summary>
+        private string _probeSectionLabel = "";
+
+        private string ProbeLabel(string key)
+        {
+            string row = _translate(key);
+            // A switch named after its own section ("Bloom" under "Bloom") says it once.
+            return _probeSectionLabel.Length == 0 || row.Contains(_probeSectionLabel, StringComparison.OrdinalIgnoreCase)
+                ? row
+                : $"{_probeSectionLabel}: {row}";
+        }
+
+        private static Dictionary<string, string>? _labelBySetting;
+        private static string _labelLanguage = "";
+        private static bool _probingLabels;
+
+        /// <summary>
+        /// The label each setting wears on its row in this panel, in the language being played in.
+        ///
+        /// <para>The list a code is tried on with used the setting's name from the code, split
+        /// into words: English whatever the game's language, and not the words on the slider the
+        /// player would go looking for. Nothing ties a row to a property except the reader it was
+        /// built with, so the panel is built once, every tab, on a copy of the config with every
+        /// switch on and every section open (so the rows a switch owns are built too), and each
+        /// setting is nudged in turn to see which row moves with it. A setting no row reads keeps
+        /// the split name. Done once per language, on the first code tried on.</para>
+        /// </summary>
+        internal static Dictionary<string, string> LabelsBySetting(ModConfig config, Func<string, string> translate)
+        {
+            string language = LocalizedContentManager.CurrentLanguageCode.ToString();
+            if (_labelBySetting != null && _labelLanguage == language)
+                return _labelBySetting;
+            var found = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (_probingLabels)
+                return found;
+            _probingLabels = true;
+            try
+            {
+                var copy = new ModConfig();
+                copy.ApplyProfile(config.CaptureProfile(""));
+                copy.TunerFoldedSections = [];
+                PropertyInfo[] properties = typeof(ModConfig).GetProperties(BindingFlags.Public | BindingFlags.Instance);
+                foreach (PropertyInfo property in properties)
+                    if (property.PropertyType == typeof(bool) && property.CanWrite && property.CanRead)
+                        property.SetValue(copy, true);
+                var probe = new RadianceTunerMenu(copy, translate, () => { }, () => { }, slideIn: false)
+                {
+                    _labelRecorder = [],
+                };
+                for (int tab = 0; tab < Tabs.Length; tab++)
+                {
+                    probe._activeTab = tab;
+                    probe._probeSectionLabel = translate(Tabs[tab].Key);
+                    probe.Reflow();
+                }
+                List<(string Label, Func<object> Read)> rows = probe._labelRecorder;
+                var before = new object[rows.Count];
+                for (int i = 0; i < rows.Count; i++)
+                    before[i] = rows[i].Read();
+                foreach ((int _, string name, bool _) in ShareCode.KnownSettings)
+                {
+                    PropertyInfo? property = Array.Find(properties, candidate => candidate.Name == name);
+                    if (property == null)
+                        continue;
+                    object? was = property.GetValue(copy);
+                    object? nudged = was switch
+                    {
+                        bool on => !on,
+                        float number => number + 0.37f,
+                        int whole => whole + 1,
+                        Enum choice => NextChoice(choice),
+                        _ => null,
+                    };
+                    if (nudged == null)
+                        continue;
+                    property.SetValue(copy, nudged);
+                    for (int i = 0; i < rows.Count; i++)
+                    {
+                        if (!Equals(rows[i].Read(), before[i]))
+                        {
+                            found[name] = rows[i].Label;
+                            break;
+                        }
+                    }
+                    property.SetValue(copy, was);
+                }
+            }
+            catch (Exception)
+            {
+                // A probe that trips leaves the names as they were split; nothing depends on it.
+            }
+            finally
+            {
+                _probingLabels = false;
+            }
+            _labelBySetting = found;
+            _labelLanguage = language;
+            return found;
+        }
+
+        private static object NextChoice(Enum choice)
+        {
+            Array values = Enum.GetValues(choice.GetType());
+            int at = Array.IndexOf(values, choice);
+            return values.GetValue((at + 1) % values.Length)!;
+        }
+
+        /// <summary>A value as the sliders show it: a dial that has been dragged holds 0.099999994
+        /// where the slider says 0.1, and the list printed the long one.</summary>
+        private string ShownValue(string value)
+            => value.Equals("True", StringComparison.OrdinalIgnoreCase) ? _translate("tuner.share.on")
+             : value.Equals("False", StringComparison.OrdinalIgnoreCase) ? _translate("tuner.share.off")
+             : value.Length == 0 ? _translate("tuner.share.none")
+             : value.Contains('.') && float.TryParse(value, System.Globalization.NumberStyles.Float,
+                   System.Globalization.CultureInfo.InvariantCulture, out float number)
+                 ? number.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)
+             : value;
+
+        // ---- a code tried on, then kept or put back ----
+        // Static, because the panel is built again around the text box (Reopen) and a trial has to
+        // outlive that. Cleared when the panel closes for real.
+
+        /// <summary>A code being tried on: already in the live settings and not kept yet.</summary>
+        private static ShareCodeReading? _codeOnTrial;
+        private static NamedProfile? _lookBeforeTrial;
+        private static LookPreset _presetBeforeTrial;
+        /// <summary>The look as the code left it, to tell a trial left alone from one worked on.</summary>
+        private static NamedProfile? _lookOnTrial;
+
+        /// <summary>The look a kept code replaced, for the Undo row at the top of the tab, until the
+        /// panel closes. Somebody who has just pressed the wrong button looks for the way back where
+        /// their hand was, not among the chips.</summary>
+        private static NamedProfile? _lookBeforeCode;
+        private static LookPreset _presetBeforeCode;
+        private static int _settingsTheCodeChanged;
+
+        /// <summary>Why the last code was not tried on, as a translation key, or empty.</summary>
+        private static string _codeProblem = "";
+        /// <summary>The name or number the problem's sentence carries, if it has one.</summary>
+        private static string _codeProblemDetail = "";
+
+        /// <summary>How many "before a code" chips are kept; the oldest goes when another is made.</summary>
+        private const int BackupChipsKept = 3;
+
+        private void PromptPasteCode()
+        {
+            // Most people press this having just copied a code, so the box opens with it already
+            // in. A wrong guess costs nothing: it can be deleted, and Ctrl+V pastes over it.
+            string offered = "";
+            try
+            {
+                string clipboard = "";
+                if (DesktopClipboard.GetText(ref clipboard) && clipboard.TrimStart().StartsWith("RAD", StringComparison.OrdinalIgnoreCase))
+                    offered = clipboard.Trim();
+            }
+            catch (Exception)
+            {
+                // No clipboard on this machine; the box opens empty.
+            }
+            Game1.activeClickableMenu = new TextEntryMenu(_translate("tuner.share.pasteprompt"), offered,
+                onDone: typed => { TryOnCode(typed); Reopen(); },
+                onCancel: Reopen,
+                longText: true);
+        }
+
+        private void TryOnCode(string typed)
+        {
+            _codeProblem = "";
+            _codeProblemDetail = "";
+            PutBackCodeOnTrial();
+            if (string.IsNullOrWhiteSpace(typed))
+                return;
+            if (!ShareCode.TryRead(typed, _config, out ShareCodeReading reading, out string problem))
+            {
+                _codeProblem = problem switch
+                {
+                    "notours" => "tuner.share.bad.notours",
+                    "scope" => "tuner.share.bad.scope",
+                    _ => "tuner.share.bad.typo",
+                };
+                Game1.playSound("cancel");
+                return;
+            }
+            if (reading.Changes.Count == 0)
+            {
+                // Nothing to try on is not the same as "you already have it": the one thing the
+                // code asked for may be a colour table this machine lacks, or settings from a newer
+                // release, and saying "matches" left the player with no idea what to ask for.
+                if (reading.ColourTableNotHere.Length > 0)
+                {
+                    _codeProblem = "tuner.share.lutmissing";
+                    _codeProblemDetail = reading.ColourTableNotHere;
+                }
+                else if (reading.SettingsThisReleaseCannotUse > 0)
+                {
+                    _codeProblem = "tuner.share.newer";
+                    _codeProblemDetail = reading.SettingsThisReleaseCannotUse.ToString();
+                }
+                else
+                {
+                    _codeProblem = "tuner.share.same";
+                }
+                return;
+            }
+            // The file aside NOW, while it still holds the look from before the code. Taken at Keep,
+            // it held whatever the panel had saved in between: flip one switch during the trial and
+            // the "last way back" was a copy of the trial itself.
+            ShareCode.KeepConfigCopy();
+            _lookBeforeTrial = _config.CaptureProfile("");
+            _presetBeforeTrial = _config.ActivePreset;
+            ShareCode.Apply(reading, _config);
+            _lookOnTrial = _config.CaptureProfile("");
+            _codeOnTrial = reading;
+            _onChange();
+            Game1.playSound("coin");
+        }
+
+        /// <summary>Put back the look a code on trial replaced. Nothing was saved, so nothing
+        /// else has to be undone.</summary>
+        private void PutBackCodeOnTrial()
+        {
+            if (_codeOnTrial != null && _lookBeforeTrial != null)
+            {
+                _config.ApplyProfile(_lookBeforeTrial);
+                _config.ActivePreset = _presetBeforeTrial;
+                _onChange();
+            }
+            _codeOnTrial = null;
+            _lookBeforeTrial = null;
+            _lookOnTrial = null;
+        }
+
+        /// <summary>The panel closes with a code still on trial. Untouched since it went on, it was
+        /// never kept, so the old look comes back. Worked on since, with a chip loaded, a preset
+        /// picked or a dial moved, it is the look the player is now making, and putting the old one
+        /// back would throw that work away with the footer promising Esc saves.</summary>
+        private void CloseTrialWithThePanel()
+        {
+            if (_codeOnTrial != null && _lookOnTrial != null && !_config.MatchesProfile(_lookOnTrial))
+                KeepCodeOnTrial(quietly: true);
+            else
+                PutBackCodeOnTrial();
+        }
+
+        private void KeepCodeOnTrial() => KeepCodeOnTrial(quietly: false);
+
+        private void KeepCodeOnTrial(bool quietly)
+        {
+            if (_codeOnTrial == null || _lookBeforeTrial == null)
+                return;
+            // The look it replaces becomes a chip first, so the way back survives the panel closing.
+            NamedProfile before = _lookBeforeTrial;
+            before.Name = _translate("tuner.share.backupname").Replace("{{time}}", DateTime.Now.ToString("HH:mm"));
+            before.MadeBeforeACode = true;
+            _config.SavedProfiles.Add(before);
+            List<NamedProfile> backups = _config.SavedProfiles.FindAll(profile => profile.MadeBeforeACode);
+            for (int i = 0; i < backups.Count - BackupChipsKept; i++)
+                _config.SavedProfiles.Remove(backups[i]);
+            _lookBeforeCode = before;
+            _settingsTheCodeChanged = _codeOnTrial.Changes.Count;
+            // The look is now the code's, not the preset button that was lit before it.
+            _presetBeforeCode = _presetBeforeTrial;
+            _config.ActivePreset = LookPreset.Custom;
+            _codeOnTrial = null;
+            _lookBeforeTrial = null;
+            _lookOnTrial = null;
+            _onSave();
+            if (quietly)
+                return;
+            Game1.playSound("newArtifact");
+            Reflow();
+        }
+
+        private void UndoKeptCode()
+        {
+            if (_lookBeforeCode == null)
+                return;
+            _config.ApplyProfile(_lookBeforeCode);
+            _config.ActivePreset = _presetBeforeCode;
+            _lookBeforeCode = null;
+            _onChange();
+            _onSave();
+            Game1.playSound("drumkit6");
+            Reflow();
+        }
+
+        /// <summary>The code last copied, kept so the panel can go on showing it. Cleared when the
+        /// panel closes: a code belongs to the settings it was taken from, and those move.</summary>
+        private string _sharedCode = "";
+        private int _sharedCodeSettings;
+        private bool _sharedCodeCarriedEverything;
+        private bool _sharedCodeIsEmpty;
+
+        private void CopyShareCode(ShareCodeScope scope)
+        {
+            string code = ShareCode.Write(_config, scope, out int settingsCarried);
+            _sharedCodeIsEmpty = settingsCarried == 0;
+            _sharedCode = _sharedCodeIsEmpty ? "" : code;
+            _sharedCodeSettings = settingsCarried;
+            _sharedCodeCarriedEverything = scope == ShareCodeScope.Everything;
+            if (!_sharedCodeIsEmpty)
+            {
+                // The game's own clipboard, the one the co-op invite code is copied with. It can
+                // fail quietly on a machine without one, which is the other reason the code is
+                // printed on screen rather than only promised to the clipboard.
+                try { DesktopClipboard.SetText(code); }
+                catch (Exception) { /* no clipboard here; the code is on screen instead */ }
+            }
+            Game1.playSound(_sharedCodeIsEmpty ? "cancel" : "coin");
+            Reflow();
         }
 
         /// <summary>The colour looks, as a row of buttons, with the strength of the chosen one.
@@ -899,6 +1339,7 @@ namespace SDVRadiance
                 value => _config.ShadowCastsPerCharacter = (int)MathF.Round(value), "help.shadowcasts");
             Section("tuner.section.shadowcasters");
             Toggle("tuner.shadowplayer", () => _config.DirectionalShadowPlayer, value => _config.DirectionalShadowPlayer = value, "help.shadowplayer");
+            Toggle("tuner.shadowcarried", () => _config.ShadowCarriedLightsCast, value => _config.ShadowCarriedLightsCast = value, "help.shadowcarried");
             Toggle("tuner.shadowvillagers", () => _config.DirectionalShadowVillagers, value => _config.DirectionalShadowVillagers = value, "help.shadowvillagers");
             Toggle("tuner.shadowfarmanimals", () => _config.DirectionalShadowFarmAnimals, value => _config.DirectionalShadowFarmAnimals = value, "help.shadowfarmanimals");
             Toggle("tuner.shadowcreatures", () => _config.DirectionalShadowCreatures, value => _config.DirectionalShadowCreatures = value, "help.shadowcreatures");
@@ -2014,10 +2455,35 @@ namespace SDVRadiance
 
         protected override void cleanupBeforeExit()
         {
+            CloseOnce();
+            base.cleanupBeforeExit();
+        }
+
+        /// <summary>The game took the panel away itself: a cutscene started, the player passed out,
+        /// something set the active menu without asking. Its setter does not call
+        /// <see cref="cleanupBeforeExit"/>, so a code on trial stayed in the live settings with no
+        /// chip of the look it replaced, and the next config write (the on and off key) made it
+        /// permanent. Called from the menu change event; does nothing if the panel closed itself.</summary>
+        internal void ClosedByTheGame() => CloseOnce();
+
+        private bool _closed;
+
+        private void CloseOnce()
+        {
+            if (_closed)
+                return;
+            _closed = true;
+            // A code describes the settings it was taken from, and those move the moment the panel
+            // is open again. Showing yesterday's code beside today's dials would be a lie in text.
+            _sharedCode = "";
+            _sharedCodeIsEmpty = false;
+            CloseTrialWithThePanel();
+            _lookBeforeCode = null;
+            _codeProblem = "";
+            _codeProblemDetail = "";
             RememberScroll();
             _config.TunerLastTab = Tabs[_activeTab].Key;
             _onSave();
-            base.cleanupBeforeExit();
         }
 
         /// <summary>A small solid triangle in steps of <paramref name="unit"/>: pointing down for an open

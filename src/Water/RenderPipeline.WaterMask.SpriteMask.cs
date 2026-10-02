@@ -286,6 +286,10 @@ namespace SDVRadiance
                 StampHeldTool(spriteBatch);
                 StampAnimals(spriteBatch, location);
                 StampCritters(spriteBatch, location);
+                StampTemporarySprites(spriteBatch, location.temporarySprites);
+                StampCurrentEvent(spriteBatch, location);
+                StampProjectilesAndDebris(spriteBatch, location);
+                StampFarmEvent(spriteBatch);
                 StampObjectsOnWater(spriteBatch, location);
                 StampTerrainFeatures(spriteBatch, location);
                 StampLargeTerrainFeatures(spriteBatch, location);
@@ -391,6 +395,17 @@ namespace SDVRadiance
                 // to draw is protected, and the method already draws nothing when there is
                 // not. A virtual call that early-outs is cheaper than reflecting for a field.
                 StampAboveHead(spriteBatch, c);
+                // In a cutscene the game leaves the emote out of the actor's own draw and paints
+                // every actor's emote afterwards, in a pass of its own (Game1.DrawCharacterEmotes),
+                // so the self-draw above never carries it: the heart over Elliott on the pier
+                // rippled with the sea behind it. Asked of every character rather than only in
+                // a cutscene; outside one the same icon is already in the self-draw and stamping
+                // it twice covers the same pixels.
+                if (c.IsEmoting)
+                {
+                    try { c.DrawEmote(spriteBatch); }
+                    catch { /* a mod's emote draw threw: the body is still stamped */ }
+                }
             }
         }
 
@@ -429,6 +444,8 @@ namespace SDVRadiance
                 // rider draws the horse first and then the rider, so one call covers both.
                 if (pw.IsSitting() || pw.isRidingHorse())
                     StampFarmerSelf(spriteBatch, pw);
+                else
+                    StampFarmerExtras(spriteBatch, pw, withTool: false);
                 // The report said "muttering FARMER speech bubbles", and a farmer is not an
                 // NPC: the self-stamp above covers the residents, and the box here only ever
                 // covered the emote icon, so the one balloon actually named was the one still
@@ -464,6 +481,69 @@ namespace SDVRadiance
                 Game1.shadowTexture = gameShadow;
                 Game1.spriteBatch = gameBatch;
             }
+        }
+
+        /// <summary>Paint a game draw into the mask: the game's batch pointed at ours for the
+        /// duration, and the round ground shadow swapped for a transparent one, since the shadow is
+        /// not the thing standing over the water. A draw that throws is skipped. The draw is a
+        /// static lambda handed its state, so asking every frame makes no garbage.</summary>
+        private void DrawIntoMask<TState>(SpriteBatch batch, TState state, Action<SpriteBatch, TState> draw)
+        {
+            var gameBatch = Game1.spriteBatch;
+            Texture2D gameShadow = Game1.shadowTexture;
+            try
+            {
+                if (_transparentShadowStandIn == null)
+                {
+                    _transparentShadowStandIn = new Texture2D(_device, 1, 1, false, SurfaceFormat.Color);
+                    _transparentShadowStandIn.SetData([Color.Transparent]);
+                }
+                Game1.spriteBatch = batch;
+                Game1.shadowTexture = _transparentShadowStandIn;
+                draw(batch, state);
+            }
+            catch
+            {
+                // A mod's draw that cannot paint here keeps no exclusion, as before.
+            }
+            finally
+            {
+                Game1.shadowTexture = gameShadow;
+                Game1.spriteBatch = gameBatch;
+            }
+        }
+
+        /// <summary>What a standing farmer draws besides the body: the item held over the head, the
+        /// trinket companions flying round them, and for another player the tool in their hands.</summary>
+        /// <remarks>
+        /// The body is excluded from its silhouette (yours) or its colour bake (everyone else's),
+        /// and neither holds these: the game paints them in Farmer.draw after the body. A fairy
+        /// circling a player who is fishing, a crate carried over a bridge with the river behind
+        /// it, a friend's rod and line over the pond in co-op: each rippled with the water. Your
+        /// own tool is stamped by <see cref="StampHeldTool"/>, so it is left out here. A seated
+        /// or mounted farmer draws all of this through the full self-draw instead.
+        /// </remarks>
+        private void StampFarmerExtras(SpriteBatch spriteBatch, Farmer farmer, bool withTool)
+        {
+            bool carrying = farmer.ActiveObject != null && farmer.IsCarrying();
+            bool usingTool = withTool && farmer.UsingTool && farmer.CurrentTool != null;
+            if (!carrying && !usingTool && farmer.companions.Count == 0)
+                return;
+            if (!WaterWithinTiles(farmer.TilePoint.X, farmer.TilePoint.Y, 4))
+                return;
+            DrawIntoMask(spriteBatch, (farmer, carrying, usingTool), static (batch, state) =>
+            {
+                if (state.carrying)
+                    Game1.drawPlayerHeldObject(state.farmer);
+                if (state.usingTool)
+                {
+                    if (state.farmer.CurrentTool is StardewValley.Tools.FishingRod rod)
+                        rod.draw(batch);
+                    Game1.drawTool(state.farmer);
+                }
+                foreach (var companion in state.farmer.companions)
+                    companion.Draw(batch);
+            });
         }
 
         /// <summary>
@@ -538,6 +618,7 @@ namespace SDVRadiance
                     StampUiBox(spriteBatch, obb.Center.X, obb.Top - 160, 80, 128);
                 }
                 StampAboveHead(spriteBatch, other.Who);
+                StampFarmerExtras(spriteBatch, other.Who, withTool: true);
             }
             // The other players who have no colour bake because they are riding: the same hole the
             // local rider had, and the same answer. Their bake is dropped while mounted exactly as
@@ -653,6 +734,171 @@ namespace SDVRadiance
                 }
             }
 
+        }
+
+        /// <summary>The location's temporary sprites: what an event props up for the length of a
+        /// scene, and the game's short-lived effects.</summary>
+        /// <remarks>
+        /// Elliott's ten heart event puts his rowboat at the Beach pier as a temporary sprite, and
+        /// nothing else stamped those, so the ripple and the water's tint ran straight over the
+        /// hull and the boat read as sunk (reported on Nexus). The location draw hook pauses inside
+        /// the game's own location draw, which is where these are painted, on the understanding
+        /// that the game's lists are stamped here; this was the list that was not.
+        /// The placement follows TemporaryAnimatedSprite.draw rather than calling it: that draw
+        /// shakes a sprite with Game1.random, and taking numbers from the game's generator here
+        /// would change what the game rolls next. The filter is the mirror's
+        /// (MirrorTemporarySprites), less its rule against sprites drawn above the always-front
+        /// layer, so what is reflected is also kept out of the ripple, and anything smaller than a
+        /// hull is left to ripple with the water around it. A cutscene's own sprite list goes
+        /// through here too (see <see cref="StampCurrentEvent"/>).
+        /// </remarks>
+        private void StampTemporarySprites(SpriteBatch spriteBatch, TemporaryAnimatedSpriteList? sprites)
+        {
+            if (sprites == null || sprites.Count == 0)
+                return;
+            foreach (var sprite in sprites)
+            {
+                // Unlike the mirror, a sprite flagged to draw above the always-front layer is
+                // kept: rain does not reflect, but a fish leaping out of the sea at Squid Fest or
+                // a firework over the lake is still drawn on top of the water and must not ripple.
+                if (sprite == null || sprite.local || sprite.text != null || sprite.swordswipe
+                    || sprite.attachedCharacter != null || (sprite.bigCraftable && sprite.Texture == null)
+                    || sprite.currentParentTileIndex < 0
+                    || sprite.delayBeforeAnimationStart > 0 || sprite.ticksBeforeAnimationStart > 0)
+                    continue;
+                float alpha = sprite.alpha;
+                if (alpha <= 0.02f)
+                    continue;
+
+                Texture2D texture;
+                Rectangle sourceRect;
+                Vector2 scale;
+                Vector2 topLeft = Game1.GlobalToLocal(Game1.viewport, new Vector2((int)sprite.Position.X, (int)sprite.Position.Y));
+                Vector2 position;
+                Vector2 origin;
+                if (sprite.Texture != null)
+                {
+                    texture = sprite.Texture;
+                    sourceRect = sprite.sourceRect;
+                    origin = new Vector2(sourceRect.Width / 2, sourceRect.Height / 2);
+                    if (sprite.vectorScale != Vector2.Zero)
+                    {
+                        // The game draws this branch at the position as given, centred on it.
+                        scale = sprite.vectorScale;
+                        position = topLeft;
+                    }
+                    else
+                    {
+                        scale = new Vector2(sprite.scale);
+                        position = topLeft + origin * sprite.scale;
+                    }
+                }
+                else
+                {
+                    // An item off the object sheet, drawn four times over.
+                    texture = Game1.objectSpriteSheet;
+                    sourceRect = GameLocation.getSourceRectForObject(sprite.currentParentTileIndex);
+                    origin = new Vector2(8f, 8f);
+                    scale = new Vector2(4f * sprite.scale);
+                    position = topLeft + new Vector2(32f, 32f);
+                }
+                if (texture == null || texture.IsDisposed)
+                    continue;
+                if (sourceRect.Width * scale.X < LocationDrawHook.SmallestWorthCarving
+                    || sourceRect.Height * scale.Y < LocationDrawHook.SmallestWorthCarving)
+                    continue;
+                float feetY = position.Y + Game1.viewport.Y + (sourceRect.Height - origin.Y) * scale.Y;
+                if (!WaterWithinTiles((int)((position.X + Game1.viewport.X) / 64f), (int)(feetY / 64f), 2))
+                    continue;
+                // Faded with the sprite, so a prop that fades out takes its carve with it.
+                // The item sheet's draw honours only the horizontal flip.
+                SpriteEffects effects = sprite.flipped ? SpriteEffects.FlipHorizontally
+                    : sprite.verticalFlipped && sprite.Texture != null ? SpriteEffects.FlipVertically : SpriteEffects.None;
+                spriteBatch.Draw(texture, position, sourceRect, Color.White * alpha, sprite.rotation, origin, scale, effects, 0f);
+            }
+        }
+
+        private static readonly System.Reflection.FieldInfo? _propBoundsField =
+            HarmonyLib.AccessTools.Field(typeof(Prop), "boundingRect");
+
+        /// <summary>What a cutscene or a festival draws for itself, outside the location's lists.</summary>
+        /// <remarks>
+        /// Event.draw paints its props and festival props, and Event.drawAfterMap paints its own
+        /// sprite list, all inside the world pass the water runs over, and none of them is in a
+        /// list the mask walks. Leo's parrot flying over the sea to Willy's boat on Ginger Island
+        /// is the vanilla case; a mod's event or festival can put any prop on the water. Each
+        /// draws itself, as the objects on the water already do: none of these draws touches the
+        /// game's random numbers.
+        /// </remarks>
+        private void StampCurrentEvent(SpriteBatch spriteBatch, GameLocation location)
+        {
+            Event? currentEvent = location.currentEvent;
+            if (currentEvent == null)
+                return;
+            StampTemporarySprites(spriteBatch, currentEvent.aboveMapSprites);
+            // The stand-in farmers an event draws for the other players: not in any farmer list.
+            foreach (Farmer actor in currentEvent.farmerActors)
+            {
+                if (actor != null && WaterWithinTiles(actor.TilePoint.X, actor.TilePoint.Y, 3))
+                    StampFarmerSelf(spriteBatch, actor);
+            }
+            foreach (var prop in currentEvent.props)
+            {
+                if (prop == null || !WaterWithinTiles((int)prop.TileLocation.X, (int)prop.TileLocation.Y, 2))
+                    continue;
+                try { prop.drawAsProp(spriteBatch); }
+                catch { /* a mod's prop draw threw: skip its exclusion */ }
+            }
+            foreach (var festivalProp in currentEvent.festivalProps)
+            {
+                if (festivalProp == null)
+                    continue;
+                if (_propBoundsField?.GetValue(festivalProp) is Rectangle bounds
+                    && !WaterWithinTiles(bounds.Center.X / 64, bounds.Bottom / 64, 2))
+                    continue;
+                try { festivalProp.draw(spriteBatch); }
+                catch { /* skip its exclusion */ }
+            }
+        }
+
+        private static readonly Action<GameLocation, SpriteBatch>? _drawDebris =
+            HarmonyLib.AccessTools.Method(typeof(GameLocation), "drawDebris", [typeof(SpriteBatch)]) is { } drawDebris
+                ? (Action<GameLocation, SpriteBatch>?)Delegate.CreateDelegate(typeof(Action<GameLocation, SpriteBatch>), drawDebris, throwOnBindFailure: false)
+                : null;
+
+        /// <summary>What flies across the location: projectiles and debris.</summary>
+        /// <remarks>
+        /// A slingshot shot across a river, a fireball over the volcano's lava, a wood chip from a
+        /// tree at the bank, a damage number over a pond: the location draws them in its own draw,
+        /// from lists nothing here walked, so they rippled with the surface under them. Both draw
+        /// themselves; the debris draw is the location's own, which is protected, so it is reached
+        /// through a delegate made once.
+        /// </remarks>
+        private void StampProjectilesAndDebris(SpriteBatch spriteBatch, GameLocation location)
+        {
+            if (location.projectiles.Count > 0)
+            {
+                foreach (var projectile in location.projectiles)
+                {
+                    if (projectile == null)
+                        continue;
+                    Vector2 at = projectile.position.Value;
+                    if (WaterWithinTiles((int)(at.X / 64f), (int)(at.Y / 64f), 2))
+                        DrawIntoMask(spriteBatch, projectile, static (batch, flying) => flying.draw(batch));
+                }
+            }
+            if (location.debris.Count > 0 && _drawDebris != null)
+                DrawIntoMask(spriteBatch, location, static (batch, here) => _drawDebris?.Invoke(here, batch));
+        }
+
+        /// <summary>The overnight farm events that fly over the farm: the witch and the crop fairy.</summary>
+        /// <remarks>Only these two. The others paint over the whole screen (the sound in the night
+        /// is a black screen), which drawn here would switch the water off everywhere, and a mod's
+        /// farm event could do the same.</remarks>
+        private void StampFarmEvent(SpriteBatch spriteBatch)
+        {
+            if (Game1.farmEvent is StardewValley.Events.WitchEvent or StardewValley.Events.FairyEvent)
+                DrawIntoMask(spriteBatch, Game1.farmEvent, static (batch, farmEvent) => farmEvent.draw(batch));
         }
 
         private void StampObjectsOnWater(SpriteBatch spriteBatch, GameLocation location)

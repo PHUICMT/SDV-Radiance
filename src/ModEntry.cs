@@ -86,6 +86,7 @@ namespace SDVRadiance
         public override void Entry(IModHelper helper)
         {
             LutCatalog.Initialise(helper.DirectoryPath);
+            ShareCode.ConfigFolder = helper.DirectoryPath;
             _config = helper.ReadConfig<ModConfig>();
             ApplyConfigMigrations(helper);
             _config.Clamp();
@@ -112,6 +113,11 @@ namespace SDVRadiance
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
             helper.Events.Display.RenderingStep += OnRenderingStep;
             helper.Events.Display.RenderedStep += OnRenderedStep;
+            helper.Events.Display.MenuChanged += (_, e) =>
+            {
+                if (e.OldMenu is RadianceTunerMenu tuner && e.NewMenu is not RadianceTunerMenu)
+                    tuner.ClosedByTheGame();
+            };
             // Over the UI, not under it: the readout has to stay visible while a menu is open,
             // because "it stutters when I open my inventory" is one of the things it is for.
             helper.Events.Display.RenderedHud += (_, e) =>

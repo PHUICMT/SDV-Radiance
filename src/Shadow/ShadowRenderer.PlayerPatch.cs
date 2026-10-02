@@ -163,7 +163,7 @@ namespace SDVRadiance
             if (_sunBlend < 0.996f)
             {
                 float lightStrength = strength * (1f - _sunBlend);
-                CollectCastingLights(location);
+                CollectCastingLights(location, config.ShadowCarriedLightsCast);
                 TrimLightsToScreenBudget();
                 _castsPerCaster = Math.Clamp(config.ShadowCastsPerCharacter, ModConfig.ShadowCastsMin, ModConfig.ShadowCastsMax);
                 float lenCfg = Math.Max(0.1f, config.DirectionalShadowLength);
