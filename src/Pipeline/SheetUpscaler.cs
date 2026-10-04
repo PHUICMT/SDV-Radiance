@@ -488,12 +488,17 @@ namespace SDVRadiance
                 _batcherOf = null;
                 monitor.Log($"Could not patch the sprite batcher's flush ({ex.GetType().Name}: {ex.Message}); the soft look will be sampled as the batch is.", LogLevel.Warn);
             }
+            // No prefix on the float-scale overload: in this MonoGame it is a one-line call into
+            // the Vector2 one, so every draw through it reaches DrawVectorScale_Prefix anyway. A
+            // redirect there instead swapped the sheet BEFORE the forwarded call, ahead of every
+            // other mod's prefix on the Vector2 overload: Passable Crops adds 8 source texels to a
+            // weed's origin and 32 pixels to its position there, which cancel on the game's sheet,
+            // and on ours, twice the size, the weed drew 16 pixels low once a farmer had walked
+            // through it, its shadow left where it stood.
             (Type[] signature, string handler)[] overloads =
             [
                 (new[] { typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color), typeof(float), typeof(Vector2), typeof(Vector2), typeof(SpriteEffects), typeof(float) },
                     nameof(DrawVectorScale_Prefix)),
-                (new[] { typeof(Texture2D), typeof(Vector2), typeof(Rectangle?), typeof(Color), typeof(float), typeof(Vector2), typeof(float), typeof(SpriteEffects), typeof(float) },
-                    nameof(DrawFloatScale_Prefix)),
                 (new[] { typeof(Texture2D), typeof(Rectangle), typeof(Rectangle?), typeof(Color), typeof(float), typeof(Vector2), typeof(SpriteEffects), typeof(float) },
                     nameof(DrawDestination_Prefix)),
             ];
@@ -505,7 +510,9 @@ namespace SDVRadiance
                     monitor.Log($"SpriteBatch.Draw overload for {handler} not found; sheet upscaling will miss those draws.", LogLevel.Warn);
                     continue;
                 }
-                harmony.Patch(draw, prefix: new HarmonyMethod(typeof(SheetUpscaler), handler));
+                // Last: the redirect rescales origin and scale to the derived sheet, so every other
+                // prefix on the same overload has to have had its say first (see above).
+                harmony.Patch(draw, prefix: new HarmonyMethod(typeof(SheetUpscaler), handler) { priority = Priority.Last });
                 PatchedOverloads++;
             }
             FailureMonitor = monitor;
@@ -1288,25 +1295,6 @@ namespace SDVRadiance
             texture = derived;
             // The origin is in source texels, so it scales with them, or every sprite hung from
             // its base (a tree from (24, 96)) slides by half its origin.
-            origin *= factor;
-            scale /= factor;
-            RedirectedThisFrame++;
-        }
-
-        private static void DrawFloatScale_Prefix(SpriteBatch __instance, ref Texture2D texture, Vector2 position, ref Rectangle? sourceRectangle, ref Vector2 origin, ref float scale)
-        {
-            Texture2D original = texture;
-            Rectangle? originalSource = sourceRectangle;
-            Texture2D? derived = Derived(__instance, texture, sourceRectangle, scale, out Rectangle derivedSource, out int factor);
-            if (WatchedPixel.HasValue && original != null && !SoftSprites.IsOwnOutput(original))
-            {
-                Rectangle bounds = originalSource ?? original.Bounds;
-                Watch(__instance, original, originalSource, position - origin * scale, new Vector2(bounds.Width, bounds.Height) * scale, derived != null);
-            }
-            if (derived == null)
-                return;
-            sourceRectangle = derivedSource;
-            texture = derived;
             origin *= factor;
             scale /= factor;
             RedirectedThisFrame++;

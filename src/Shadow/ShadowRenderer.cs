@@ -714,9 +714,9 @@ namespace SDVRadiance
         {
             if (!config.Enabled || !config.DirectionalShadowsEnabled)
                 return false;
-            // IsWorldReady (not the old !eventUp): cutscenes cast, but the half-initialized
+            // WorldReady (not the old !eventUp): cutscenes cast, but the half-initialized
             // frames during save load / return-to-title never enter the shadow paths.
-            return StardewModdingAPI.Context.IsWorldReady && Game1.currentLocation != null;
+            return WorldReady.Now && Game1.currentLocation != null;
         }
 
         /// <summary>1 = the sun path owns the frame, 0 = the per-light path does, in between = both

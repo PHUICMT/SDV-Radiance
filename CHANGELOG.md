@@ -2,6 +2,44 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.2.6 - 2026-10-04
+
+### Added
+
+- **Stars on the water has its own switch.** The twinkling dots of starlight on the water after
+  dusk came with the rest of the night glow and could not be turned off alone. A new switch under
+  Shooting stars in F6 (and in Generic Mod Config Menu) fades them out; the moon's sheen and the
+  lamp glimmer stay. Asked for by Qatweel on Nexus.
+- **Sparkle by day and Sparkle at night.** The glints on the water keep sparkling after dusk, as
+  they always have, and each half of the day now has its own switch under Sparkle, so the
+  glitter can stay in the sun and leave the night water plain, or the other way round. The
+  evening hands one over to the other gradually. Asked for by Qatweel on Nexus.
+
+### Fixed
+
+- **A new farm's welcome cutscene has the mod's shadows.** From the farm's creation until Robin
+  has walked you home, the game holds the date at day 0, and SMAPI does not count the world as
+  ready on day 0. The mod waited for that, so the whole first cutscene of every new farm drew with
+  the game's round shadows and none of ours, and without the water and window reflections. That
+  cutscene now counts as a world on screen.
+- **Weeds no longer drop when walked through with Passable Crops.** That mod swings a weed or a
+  forage item from its foot by moving where it is drawn and where it turns, two changes that
+  cancel out. Smooth art swapped in its sharper sheet first, which halved one of the two, so the
+  weed sank a quarter of a tile the first time the farmer passed and its shadow stayed behind.
+  Smooth art now waits until every other mod has moved a draw.
+- **Map art stacked on a fence or post keeps its top.** A map prop is drawn again over its own
+  shadow, and a map can stack more art on the same tile in a second Buildings layer, which that
+  redraw covered. With SVE, the pelican statue by the community center lost its beak to the fence
+  behind it. Whatever is stacked on a redrawn tile now goes back on top of it. Reported with a
+  picture by Azria1997 on Nexus.
+
+### For translators
+
+12 new keys: `config.weather.waternightstars.name`/`.tooltip`, `tuner.waternightstars`,
+`help.waternightstars`, `config.water.sparkleday.name`/`.tooltip`,
+`config.water.sparklenight.name`/`.tooltip`, `tuner.watersparkleday`, `tuner.watersparklenight`,
+`help.watersparkleday`, `help.watersparklenight`.
+
 ## 2.2.5 - 2026-10-04
 
 ### Fixed

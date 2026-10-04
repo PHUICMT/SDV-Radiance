@@ -169,6 +169,7 @@ float SunWarm;          // 0–1 golden-hour factor: sparkle + sheen turn warm a
 float2 SunAxis;
 float GlitterPath;      // dial x ease x how low the sun is (a noon sun stretches little)
 float NightGlow;        // 0–1 after dusk: star reflections + lamp glimmer fade in
+float NightStars;       // 0–1 the stars' own switch, eased: the dots alone, moon and lamps stay
 float MoonGlow;         // 0–1 lunar phase × season × clouds: moonlit swell shimmer
 float RainAmount;
 float RainRingDensity;  // how many strikes, against the amount the rain brings on its own
@@ -1747,7 +1748,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
     colour.rgb += glint * Sparkle * water * glintColour * rippleGate * (1.0 - isLava);   // ice/lava: no sun glints
 
     // ---- Night: starlight on the surface (clear nights only) ----
-    if (NightGlow > 0.001)
+    if (NightGlow * NightStars > 0.001)
     {
         float2 starGrid = worldTile * 7.0;
         float2 starCell = floor(starGrid);
@@ -1758,7 +1759,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         float toStar = length(frac(starGrid) - starCentre);
         float twinkle = 0.55 + 0.45 * sin(t * 0.9 + starTwinkleHash * 6.2831853);   // slow twinkle
         float star = smoothstep(0.12, 0.0, toStar) * holdsGlint * twinkle;
-        colour.rgb += star * NightGlow * (1.0 - RainAmount) * water * float3(0.75, 0.85, 1.0) * 0.9;
+        colour.rgb += star * NightGlow * NightStars * (1.0 - RainAmount) * water * float3(0.75, 0.85, 1.0) * 0.9;
     }
 
     // ---- Night: moonlight shimmering across the swell (phase/season/cloud scaled) ----

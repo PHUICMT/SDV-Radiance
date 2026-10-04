@@ -459,6 +459,10 @@ namespace SDVRadiance
         public float WaterSpeed { get; set; } = 0.81f;     // ripple animation speed
         public float WaterSparkle { get; set; } = 0.24f;   // specular glint intensity
         public float WaterSparkleDensity { get; set; } = 0.5f; // glint count/size (1 = old look)
+        /// <summary>The glints by day and after dusk, each its own switch, for a player who likes the
+        /// glitter in the sun but not the dots on night water (or the other way round).</summary>
+        public bool WaterSparkleByDay { get; set; } = true;
+        public bool WaterSparkleAtNight { get; set; } = true;
         /// <summary>A cloud shadow over the water takes the sun's glitter with it, read off the
         /// cloud stage's kept mask. Off is the glitter of every release before 1.7.7, which
         /// sparkled under a cloud bank as brightly as in the sun.</summary>
@@ -1162,6 +1166,9 @@ namespace SDVRadiance
         public float AuroraStrength { get; set; } = 1f;
         /// <summary>A shooting star now and then in the water's reflected sky on clear nights.</summary>
         public bool ShootingStarsEnabled { get; set; } = true;
+        /// <summary>The scatter of twinkling stars on the water after dusk. Asked for by a player who
+        /// wanted the night water without the dots; the moon's sheen and the lamp glimmer stay.</summary>
+        public bool WaterNightStars { get; set; } = true;
         /// <summary>Replace the rain, green rain included (same streaks, shifted lime and heavier).</summary>
         public bool PrecipitationRain { get; set; } = true;
         /// <summary>Replace the snow.</summary>

@@ -353,7 +353,10 @@ namespace SDVRadiance
                 }
                 // The finalizer, not a postfix, undoes the depth step: it runs on the exception
                 // path too, so a draw that throws cannot leave the counter raised for the frame.
-                harmony.Patch(draw, prefix: new HarmonyMethod(typeof(SpriteDrawRecorder), handler),
+                // Low: after other mods' prefixes have moved the draw (Passable Crops shifts a weed's
+                // position and origin to swing it from its foot), so the record is the draw as it
+                // lands; and before the sheet upscaler (Last), so it records the original sheet.
+                harmony.Patch(draw, prefix: new HarmonyMethod(typeof(SpriteDrawRecorder), handler) { priority = Priority.Low },
                     finalizer: new HarmonyMethod(typeof(SpriteDrawRecorder), nameof(Draw_Finalizer)));
                 PatchedOverloads++;
             }

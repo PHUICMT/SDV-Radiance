@@ -228,6 +228,7 @@ namespace SDVRadiance
                         MapTileNeighbours.EndOwnTileDraw(drawingTile);
                         SheetUpscaler.SuspendedForOwnDraw = upscalerWasSuspended;
                     }
+                    RedrawStackedTiles(spriteBatch, location, x, y, depth + 5e-4f);
                 }
             }
         }
@@ -592,6 +593,71 @@ namespace SDVRadiance
             {
                 MapTileNeighbours.EndOwnTileDraw(drawingTile);
                 SheetUpscaler.SuspendedForOwnDraw = upscalerWasSuspended;
+            }
+            RedrawStackedTiles(spriteBatch, location, x, y, depth + 5e-4f);
+        }
+
+        /// <summary>The layers a map stacks on its Buildings layer (Buildings2, Buildings3...), in
+        /// the order the game draws them, kept per map object.</summary>
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<xTile.Map, xTile.Layers.Layer[]> _stackedBuildingsLayers = [];
+
+        private static xTile.Layers.Layer[] StackedBuildingsLayers(xTile.Map map) =>
+            _stackedBuildingsLayers.GetValue(map, static map =>
+            {
+                int buildingsRank = MapLayers.CompositeRank("Buildings");
+                var stacked = new System.Collections.Generic.List<xTile.Layers.Layer>();
+                foreach (var layer in map.Layers)
+                {
+                    if (MapLayers.BelongsToFamily(layer.Id, "Buildings") && MapLayers.CompositeRank(layer.Id) > buildingsRank)
+                        stacked.Add(layer);
+                }
+                stacked.Sort(MapLayers.CompareLayerRank);
+                return [.. stacked];
+            });
+
+        /// <summary>Whatever the map stacks on a redrawn base tile goes back on top of it.</summary>
+        /// <remarks>
+        /// The base redraw puts the Buildings tile back over its own shadow, a little above where
+        /// the game drew it. A map can stack more art on that same cell in Buildings2 and up, which
+        /// the game draws over the Buildings tile, and the redraw painted the plain tile over that
+        /// too. SVE's pelican statue by the community center has its beak in Buildings2 over a
+        /// fence post that casts: with shadows on, the fence came back over the beak and cut it off
+        /// (reported with a picture). Each stacked tile is drawn again just above the redraw, in
+        /// the game's order, through the same smoothing as the map's own draw of it.
+        /// </remarks>
+        private void RedrawStackedTiles(SpriteBatch spriteBatch, GameLocation location, int x, int y, float baseDepth)
+        {
+            var map = location.Map;
+            if (map == null)
+                return;
+            var stackedLayers = StackedBuildingsLayers(map);
+            for (int index = 0; index < stackedLayers.Length; index++)
+            {
+                var layer = stackedLayers[index];
+                if (x < 0 || y < 0 || x >= layer.LayerWidth || y >= layer.LayerHeight)
+                    continue;
+                var tile = layer.Tiles[x, y];
+                if (tile?.TileSheet == null)
+                    continue;
+                Texture2D? texture = LoadCached(tile.TileSheet.ImageSource);
+                if (texture == null)
+                    continue;
+                var imageBounds = tile.TileSheet.GetTileImageBounds(tile.TileIndex);
+                bool upscalerWasSuspended = SheetUpscaler.SuspendedForOwnDraw;
+                SheetUpscaler.SuspendedForOwnDraw = false;
+                var drawingTile = MapTileNeighbours.BeginOwnTileDraw(layer, x, y);
+                try
+                {
+                    DrawOrientedTile(spriteBatch, texture,
+                        new Rectangle(imageBounds.X, imageBounds.Y, imageBounds.Width, imageBounds.Height),
+                        Game1.GlobalToLocal(Game1.viewport, new Vector2(x * 64f, y * 64f)), 4f,
+                        MapLayers.Orientation(tile), Color.White, Math.Min(1f, baseDepth + (index + 1) * 1e-6f));
+                }
+                finally
+                {
+                    MapTileNeighbours.EndOwnTileDraw(drawingTile);
+                    SheetUpscaler.SuspendedForOwnDraw = upscalerWasSuspended;
+                }
             }
         }
 

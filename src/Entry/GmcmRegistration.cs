@@ -263,6 +263,8 @@ namespace SDVRadiance
                 () => translate("config.weather.aurorastrength.name"), () => translate("config.weather.aurorastrength.tooltip"), 0f, 2f, 0.1f);
             configMenu.AddBoolOption(manifest, () => config().ShootingStarsEnabled, value => config().ShootingStarsEnabled = value,
                 () => translate("config.weather.shootingstars.name"), () => translate("config.weather.shootingstars.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().WaterNightStars, value => config().WaterNightStars = value,
+                () => translate("config.weather.waternightstars.name"), () => translate("config.weather.waternightstars.tooltip"));
             configMenu.AddBoolOption(manifest, () => config().FoliageSwayEnabled, value => config().FoliageSwayEnabled = value,
                 () => translate("config.weather.foliagesway.name"), () => translate("config.weather.foliagesway.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().FoliageSwayStrength, value => config().FoliageSwayStrength = value,
@@ -490,6 +492,10 @@ namespace SDVRadiance
                 () => translate("config.water.speed.name"), null, 0f, 3f, 0.1f);
             configMenu.AddNumberOption(manifest, () => config().WaterSparkle, value => config().WaterSparkle = value,
                 () => translate("config.water.sparkle.name"), null, 0f, 1f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().WaterSparkleByDay, value => config().WaterSparkleByDay = value,
+                () => translate("config.water.sparkleday.name"), () => translate("config.water.sparkleday.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().WaterSparkleAtNight, value => config().WaterSparkleAtNight = value,
+                () => translate("config.water.sparklenight.name"), () => translate("config.water.sparklenight.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().WaterSparkleDensity, value => config().WaterSparkleDensity = value,
                 () => translate("config.water.sparkledensity.name"), () => translate("config.water.sparkledensity.tooltip"), 0.2f, 2f, 0.05f);
             configMenu.AddBoolOption(manifest, () => config().WaterSparkleCloudShade, value => config().WaterSparkleCloudShade = value,

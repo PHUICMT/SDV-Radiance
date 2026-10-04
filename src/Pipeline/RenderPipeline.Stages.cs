@@ -1503,7 +1503,12 @@ namespace SDVRadiance
                 : 1f;
             GetParam(effect, "Strength")?.SetValue(config.WaterStrength * seaWaves * strengthMultiplier * shimmer * displacementGate * indoorWave);
             GetParam(effect, "Speed")?.SetValue(config.WaterSpeed * speedMultiplier);
-            GetParam(effect, "Sparkle")?.SetValue(config.WaterSparkle * sparkleMultiplier * shimmer * indoorSparkle);
+            // The glints by day and by night each have a switch: the dusk ramp hands the water from
+            // one to the other, and each switch eases, so neither the clock nor a click snaps them.
+            Approach(ref _sparkleDayEase, config.WaterSparkleByDay ? 1f : 0f, 0.08f);
+            Approach(ref _sparkleNightEase, config.WaterSparkleAtNight ? 1f : 0f, 0.08f);
+            float sparkleHours = MathHelper.Lerp(_sparkleDayEase, _sparkleNightEase, TimeOfDayAmounts().NightGlow);
+            GetParam(effect, "Sparkle")?.SetValue(config.WaterSparkle * sparkleHours * sparkleMultiplier * shimmer * indoorSparkle);
             // A cloud over the water takes the sun's glitter with it: the same kept mask, the same
             // refusal rules and the same offset the sun shafts use, with its own ease so the two
             // consumers cannot step each other. Off is a target of zero, eased, never a snap.
@@ -1744,6 +1749,9 @@ namespace SDVRadiance
             var (sunWarm, nightGlow) = TimeOfDayAmounts();
             GetParam(effect, "SunWarm")?.SetValue(sunWarm);
             GetParam(effect, "NightGlow")?.SetValue(nightGlow);
+            // The stars' own switch, eased so flipping it at night fades them rather than blinking.
+            Approach(ref _waterStarsEase, config.WaterNightStars ? 1f : 0f, 0.08f);
+            GetParam(effect, "NightStars")?.SetValue(_waterStarsEase);
             GetParam(effect, "MoonGlow")?.SetValue(ShadowRenderer.MoonStrength());
             // Raindrop rings ease in rather than covering the surface the frame a rain
             // totem (or a weather mod) flips the flag.

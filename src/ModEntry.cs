@@ -527,7 +527,7 @@ namespace SDVRadiance
             // when only the reflection needs it — see PreparePlayer, where the shadow-only
             // toggle used to freeze the mirrored player at whatever pose was baked last.
             bool prepPlayer = _config.DirectionalShadowsEnabled
-                || (_config.WaterReflection && Context.IsWorldReady);
+                || (_config.WaterReflection && WorldReady.Now);
             // Screen 0 owns the clock. This runs once per SCREEN, and in split screen the gap
             // between two of these calls is half of what the player sees.
             FrameCost.NextFrame(Context.ScreenId == 0);
@@ -565,7 +565,7 @@ namespace SDVRadiance
 
             // The player's frame for the glass, when it differs from the one the world draws.
             // Same window: a render-target swap is only safe before the world batches open.
-            if (_config.WindowReflectionEnabled && Context.IsWorldReady)
+            if (_config.WindowReflectionEnabled && WorldReady.Now)
                 _pipeline?.BakeWindowReflectionPlayer(_config);
 
             // What the location drew for itself last frame is closed off by the sprite mask bake. With
@@ -580,7 +580,7 @@ namespace SDVRadiance
             // Wet puddles borrow the flipped-entity mirror, so the bake must also run when the
             // water reflection itself is off, or a rainy lake-less farm shows empty pools.
             bool wetWantsMirror = _pipeline?.WetWorldWantsEntityMirror == true;
-            if ((_config.WaterEnabled || _config.WaterReflection) && Context.IsWorldReady)
+            if ((_config.WaterEnabled || _config.WaterReflection) && WorldReady.Now)
             {
                 _pipeline?.BakeWaterSpriteMask();
                 // P3b: flipped-entity reflection layer (player/NPCs/animals/trees), built
@@ -595,7 +595,7 @@ namespace SDVRadiance
                 }
             }
             // With water off entirely but puddles live, the entity mirror still has to exist.
-            if (!_config.WaterEnabled && !_config.WaterReflection && wetWantsMirror && Context.IsWorldReady)
+            if (!_config.WaterEnabled && !_config.WaterReflection && wetWantsMirror && WorldReady.Now)
                 _pipeline?.BakeWaterReflection(_config);
             // The windows read the same source to show the street in the glass, and they are
             // usually standing on a street with no water on it, so they ask for it themselves
@@ -719,7 +719,7 @@ namespace SDVRadiance
                 return;
             // The people in the glass go into the same sorted batch, at the sill's depth, so a
             // body in front of a window covers its own reflection.
-            if (Context.IsWorldReady)
+            if (WorldReady.Now)
             {
                 _pipeline?.DrawWindowReflections(e.SpriteBatch, _config);
                 // Dust lies ON the ground, beside the people standing on it, so it goes into the
@@ -763,7 +763,7 @@ namespace SDVRadiance
             // The game has just drawn its own lights into its lightmap and the batch is still
             // open on it: the one moment our lit windows can push the night back too.
             else if (e.Step == StardewValley.Mods.RenderSteps.World_RenderLightmap
-                     && _config.Enabled && Context.IsWorldReady && !HarmonyPatcher.GameIsTakingMapScreenshot)
+                     && _config.Enabled && WorldReady.Now && !HarmonyPatcher.GameIsTakingMapScreenshot)
             {
                 _pipeline?.DrawWindowGlowIntoGameLightmap(e.SpriteBatch, _config);
                 _pipeline?.DrawParticleGlowIntoGameLightmap(e.SpriteBatch, _config);
@@ -826,7 +826,7 @@ namespace SDVRadiance
             // cloud shadow. Remove the Cloud critters outright while we suppress them, so nothing
             // downstream reacts to a shadow that no longer renders. (Our own cloud shadows come
             // from the CloudShadow shader stage, not this critter, so nothing of ours is lost.)
-            if (ShadowSuppression.SuppressVanillaClouds && Context.IsWorldReady)
+            if (ShadowSuppression.SuppressVanillaClouds && WorldReady.Now)
                 Game1.currentLocation?.critters?.RemoveAll(c => c is StardewValley.BellsAndWhistles.Cloud);
             ShadowSuppression.SuppressVanillaObjectShadows = _config.DirectionalShadowObjects && ShadowRenderer.SunShadowActive(_config);
             // Big-craftable blobs are replaced in BOTH paths (sun directional + indoor/night contact),

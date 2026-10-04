@@ -827,9 +827,10 @@ def upload_images(ctx, files, version, confirm, stage=False):
             print(f"FAILED to hand the file over: {exc}")
             return 1
         time.sleep(2)
-        if not click_save(page):
-            print("FAILED: no enabled Save button appeared")
-            return 1
+        # Since October 2026 the media page keeps an image the moment it is chosen ("1 image
+        # uploaded successfully") and leaves Save disabled. Clicking Save is only needed on
+        # the older page, so a missing button is no longer a failure: the new URL decides.
+        click_save(page)
 
         # One file at a time, and the URL is whichever one is new. Uploading a batch
         # would be faster but nothing in the page ties a returned URL back to the file

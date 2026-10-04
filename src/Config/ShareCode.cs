@@ -425,6 +425,9 @@ namespace SDVRadiance
             (298, nameof(ModConfig.SheetUpscaleKernelPortraits), Look),
             (299, nameof(ModConfig.SheetUpscaleKernelItems), Look),
             (300, nameof(ModConfig.SheetUpscaleKernelInterface), Look),
+            (301, nameof(ModConfig.WaterNightStars), Look),
+            (302, nameof(ModConfig.WaterSparkleByDay), Look),
+            (303, nameof(ModConfig.WaterSparkleAtNight), Look),
         ];
 
         private static Dictionary<int, (string Property, bool IsPerformance)>? _settingById;

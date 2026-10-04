@@ -1606,6 +1606,7 @@ namespace SDVRadiance
                 value => _config.AuroraStrength = value, "help.aurorastrength",
                 () => _config.AuroraEnabled);
             Toggle("tuner.shootingstars", () => _config.ShootingStarsEnabled, value => _config.ShootingStarsEnabled = value, "help.shootingstars");
+            Toggle("tuner.waternightstars", () => _config.WaterNightStars, value => _config.WaterNightStars = value, "help.waternightstars");
             // Each kind of weather has its own switch under the precipitation master, and its
             // dials hang off BOTH (PrecipitationSystem asks the master and the kind together).
             DependsOn(() => _config.PrecipitationEnabled);
@@ -1749,6 +1750,8 @@ namespace SDVRadiance
             Slider("tuner.waterstrength", 0f, 2f, () => _config.WaterStrength, value => _config.WaterStrength = value, "help.waterstrength");
             Slider("tuner.waterspeed", 0f, 3f, () => _config.WaterSpeed, value => _config.WaterSpeed = value);
             Slider("tuner.watersparkle", 0f, 1f, () => _config.WaterSparkle, value => _config.WaterSparkle = value, "help.watersparkle");
+            Toggle("tuner.watersparkleday", () => _config.WaterSparkleByDay, value => _config.WaterSparkleByDay = value, "help.watersparkleday");
+            Toggle("tuner.watersparklenight", () => _config.WaterSparkleAtNight, value => _config.WaterSparkleAtNight = value, "help.watersparklenight");
             Slider("tuner.watersparkledensity", 0.2f, 2f, () => _config.WaterSparkleDensity, value => _config.WaterSparkleDensity = value);
             Toggle("tuner.watersparklecloud", () => _config.WaterSparkleCloudShade, value => _config.WaterSparkleCloudShade = value, "help.watersparklecloud");
             Slider("tuner.waterglitterpath", 0f, 1f, () => _config.WaterGlitterPath, value => _config.WaterGlitterPath = value, "help.waterglitterpath");

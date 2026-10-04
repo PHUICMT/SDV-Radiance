@@ -47,7 +47,7 @@ namespace SDVRadiance
                 && !RenderPipeline.DynamicReflectionsPresent && config.WetWorldPuddles > 0.01f
                 && RenderPipeline.PuddleAmountNow > 0.05f && (Game1.currentLocation?.IsOutdoors ?? false);
             bool reflectionNeedsPlayer = ((config.Enabled && config.WaterReflection && WaterOnScreen) || wetPuddlesNeedPlayer)
-                && StardewModdingAPI.Context.IsWorldReady && Game1.currentLocation != null;
+                && WorldReady.Now && Game1.currentLocation != null;
             RenderPipeline.DrawingScreen?.ChainStepEnd(RenderPipeline.ChainStep.BakeGates, gateStep);
             if (!shadowsOn && !reflectionNeedsPlayer)
             {
