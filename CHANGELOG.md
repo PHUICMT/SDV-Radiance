@@ -2,6 +2,29 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.2.5 - 2026-10-04
+
+### Fixed
+
+- **Linus's campfire burns again.** The campfire stands on the map's own campfire art, and the
+  shadows put that art back over its own shadow a little higher than the campfire, so the map's
+  logs were painted over the flames and the fire looked unlit. A map prop under a placed object now
+  sorts beneath it. Reported with a picture by golddang03 on Nexus.
+- **Map art changed during the day no longer leaves half of itself behind.** The shadows remember
+  which map tiles are props for the whole day, and a mod that edits the map in the middle of one
+  left them remembering art that was gone: with SVE, once Lewis clears the barrels from the
+  community garden, the bottom half of each barrel stayed painted on the path. A tile whose art
+  has changed is looked at again. Reported by Azria1997 on Nexus.
+- **Daylight comes through the coop and barn windows.** The game lights those windows, but without
+  the glow sprites a house window has, and the mod took a window light with no glow beside it for
+  one left over from the night. Every coop and barn window was ignored: no beams, no patch of
+  daylight on the floor. A room that never has glows now asks what the game asks before it lights
+  a window: not yet dark, and not raining. Reported by Qatweel on Nexus.
+
+### For translators
+
+No new keys, and no key changed its meaning.
+
 ## 2.2.4 - 2026-10-02
 
 ### Added

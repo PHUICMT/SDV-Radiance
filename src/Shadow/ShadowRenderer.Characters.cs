@@ -765,10 +765,20 @@ namespace SDVRadiance
         /// window with no glow isn't emitting. Outdoor window lights are left alone (town windows
         /// at night have no glow sprites).
         /// </summary>
+        /// <remarks>
+        /// A room that never has glows cannot be asked that question. The coop and the barn get
+        /// their window lights from the game (the windows on their own sheets add WindowLight map
+        /// properties) and no glow sprite at all, so every one of their windows read as stale and
+        /// nothing came through them: no beam, no patch of daylight on the floor (reported on Nexus).
+        /// Such a room is asked what the game asks before it lights a window at all: not yet dark,
+        /// and not raining here.
+        /// </remarks>
         internal static bool WindowGlowing(GameLocation location, LightSource ls)
         {
             if (location.IsOutdoors || ls.lightContext.Value != LightSource.LightContext.WindowLight)
                 return true;
+            if (location.lightGlows.Count == 0)
+                return !Game1.isTimeToTurnOffLighting(location) && !location.IsRainingHere();
             foreach (Vector2 g in location.lightGlows)
                 if (Vector2.DistanceSquared(g, ls.position.Value) < 160f * 160f)
                     return true;

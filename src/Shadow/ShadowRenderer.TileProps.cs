@@ -100,9 +100,7 @@ namespace SDVRadiance
             {
                 for (int x = tileX0; x <= tileX1; x++)
                 {
-                    int cell = y * mapWidth + x;
-                    if (!_propCache.TryGetValue(cell, out TilePropCast? cast))
-                        _propCache[cell] = cast = ClassifyTileProp(location, buildingsLayer, frontLayer, alwaysFrontLayer, x, y, mapWidth, mapHeight);
+                    TilePropCast cast = ClassifiedAt(location, buildingsLayer, frontLayer, alwaysFrontLayer, x, y, mapWidth, mapHeight);
                     if (!cast.Casts)
                     {
                         if (cast.Note != null)
@@ -193,7 +191,7 @@ namespace SDVRadiance
                                 && Game1.player.TilePoint.X == x && Game1.player.TilePoint.Y == y);
                     }
                     catch { }
-                    float rowY = bodyHere ? y * 64f : (y + 1f) * 64f;
+                    float rowY = PropSortRow(location, x, y, bodyHere);
                     float depth = MathHelper.Clamp(rowY / 10000f + x * 1e-5f - ShadowDepthBias, 0f, 1f);
                     Rectangle propContent = bakedEntry.Content.IsEmpty ? new Rectangle(0, 0, bakedEntry.Rt.Width, bakedEntry.Rt.Height) : bakedEntry.Content;
                     float unbake = 4f / bakedEntry.BakedScale;   // 1 unless the lean forced a coarser bake
@@ -512,9 +510,59 @@ namespace SDVRadiance
             xTile.Layers.Layer? alwaysFrontLayer, int x, int y, int mapWidth, int mapHeight)
         {
             int cell = y * mapWidth + x;
-            if (!_propCache.TryGetValue(cell, out TilePropCast? cast))
+            int signature = ArtSignature(buildingsLayer, frontLayer, x, y, mapWidth);
+            if (!_propCache.TryGetValue(cell, out TilePropCast? cast) || cast.ArtSignature != signature)
+            {
                 _propCache[cell] = cast = ClassifyTileProp(location, buildingsLayer, frontLayer, alwaysFrontLayer, x, y, mapWidth, mapHeight);
+                cast.ArtSignature = signature;
+            }
             return cast;
+        }
+
+        /// <summary>What art a classification was taken from: the Buildings tile on the cell and on
+        /// its right (a prop pairs with that one), and the Front tiles on the cell and above it.</summary>
+        /// <remarks>
+        /// The classifications are kept for the day, which is right for art that only changes
+        /// overnight and wrong for art changed in the middle of one. SVE has Lewis clear the
+        /// barrels from the community garden while you play; the map lost the barrels and the
+        /// classification kept them, so the shadow pass went on casting them and redrawing their
+        /// base over the ground, and half a barrel stood where they had been (reported on Nexus).
+        /// A cell whose art no longer matches is classified again. Compared by value rather than by
+        /// tile object, because the other screen in split screen holds its own copy of the map.
+        /// </remarks>
+        private static int ArtSignature(xTile.Layers.Layer buildingsLayer, xTile.Layers.Layer frontLayer, int x, int y, int mapWidth)
+        {
+            int signature = TileSignature(buildingsLayer, x, y);
+            signature = signature * 31 + (x + 1 < mapWidth ? TileSignature(buildingsLayer, x + 1, y) : 0);
+            signature = signature * 31 + TileSignature(frontLayer, x, y);
+            signature = signature * 31 + (y > 0 ? TileSignature(frontLayer, x, y - 1) : 0);
+            return signature;
+        }
+
+        private static int TileSignature(xTile.Layers.Layer layer, int x, int y)
+        {
+            xTile.Tiles.Tile? tile = layer.Tiles[x, y];
+            return tile == null ? 0 : (tile.TileIndex + 1) * 397 ^ tile.TileSheet.Id.GetHashCode();
+        }
+
+        /// <summary>The world row a map prop's shadow and its redrawn base sort from.</summary>
+        /// <remarks>
+        /// Normally the prop's bottom edge. A body standing on the tile sorts a tile higher, so the
+        /// prop sorts from its own top row and the body wins (the bench clipping through a sitter).
+        /// An object placed on the tile is the same case one step down: the game sorts it from 24
+        /// pixels above the bottom edge and draws more of itself just above that, so a prop redrawn
+        /// from the bottom edge landed over it. Linus's campfire is a lit campfire standing on the
+        /// map's own campfire art, and the art redrawn over its own shadow covered the flames: the
+        /// fire read as unlit logs (reported with a picture). With an object there the prop sorts
+        /// from where the object does, and the bias puts it underneath.
+        /// </remarks>
+        private static float PropSortRow(GameLocation location, int x, int y, bool bodyHere)
+        {
+            if (bodyHere)
+                return y * 64f;
+            if (location.objects.ContainsKey(new Vector2(x, y)))
+                return (y + 1f) * 64f - 24f;
+            return (y + 1f) * 64f;
         }
 
         /// <summary>The right half of a pair going back on top of the shadow its left half cast,
@@ -529,7 +577,7 @@ namespace SDVRadiance
                         && Game1.player.TilePoint.X == x && Game1.player.TilePoint.Y == y);
             }
             catch { }
-            float rowY = bodyHere ? y * 64f : (y + 1f) * 64f;
+            float rowY = PropSortRow(location, x, y, bodyHere);
             float depth = MathHelper.Clamp(rowY / 10000f + x * 1e-5f - ShadowDepthBias, 0f, 1f);
             bool upscalerWasSuspended = SheetUpscaler.SuspendedForOwnDraw;
             SheetUpscaler.SuspendedForOwnDraw = false;
@@ -690,6 +738,8 @@ namespace SDVRadiance
             /// and it only redraws its own base.</summary>
             public bool ShadowByLeft;
             public bool PairChecked;
+            /// <summary>The art this was classified from; see <see cref="ArtSignature"/>.</summary>
+            public int ArtSignature;
         }
 
         /// <summary>The classifications this call reads: the set kept for the place being drawn.</summary>
