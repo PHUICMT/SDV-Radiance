@@ -1343,6 +1343,10 @@ namespace SDVRadiance
             Toggle("tuner.shadowvillagers", () => _config.DirectionalShadowVillagers, value => _config.DirectionalShadowVillagers = value, "help.shadowvillagers");
             Toggle("tuner.shadowfarmanimals", () => _config.DirectionalShadowFarmAnimals, value => _config.DirectionalShadowFarmAnimals = value, "help.shadowfarmanimals");
             Toggle("tuner.shadowcreatures", () => _config.DirectionalShadowCreatures, value => _config.DirectionalShadowCreatures = value, "help.shadowcreatures");
+            Slider("tuner.shadowcreaturelength", 0.1f, 2f, () => _config.ShadowCreatureLength,
+                value => _config.ShadowCreatureLength = value, "help.shadowcreaturelength", () => _config.DirectionalShadowCreatures);
+            Slider("tuner.shadowcreaturesoftness", 0f, 3f, () => _config.ShadowCreatureSoftness,
+                value => _config.ShadowCreatureSoftness = value, "help.shadowcreaturesoftness", () => _config.DirectionalShadowCreatures);
             Toggle("tuner.shadowobjects", () => _config.DirectionalShadowObjects, value => _config.DirectionalShadowObjects = value, "help.shadowobjects");
             Slider("tuner.contactshadow", 0f, 1f, () => _config.ContactShadowStrength, value => _config.ContactShadowStrength = value, "help.contactshadow");
             Slider("tuner.contactshadowpeople", 0f, 1f, () => _config.ContactShadowPeopleStrength, value => _config.ContactShadowPeopleStrength = value, "help.contactshadowpeople");
@@ -1560,6 +1564,9 @@ namespace SDVRadiance
             Slider("tuner.fogdensity", 0f, 1f, () => _config.FogDensity, value => _config.FogDensity = value);
             Slider("tuner.fogspeed", 0f, 0.1f, () => _config.FogSpeed, value => _config.FogSpeed = value, step: 0.005f);
             Slider("tuner.fogscale", 1f, 8f, () => _config.FogScale, value => _config.FogScale = value, "help.fogscale");
+            Toggle("tuner.fogmorningonly", () => _config.FogMorningOnly, value => _config.FogMorningOnly = value, "help.fogmorningonly");
+            Slider("tuner.fogmorninglifthour", 7f, 12f, () => _config.FogMorningLiftHour, value => _config.FogMorningLiftHour = value,
+                "help.fogmorninglifthour", () => _config.FogMorningOnly, step: 0.5f);
             EndDependsOn();
             Section("tuner.section.fognight");
             Toggle("tuner.fognightmist", () => _config.FogNightMist, value => _config.FogNightMist = value, "help.fognightmist");
@@ -1607,6 +1614,10 @@ namespace SDVRadiance
                 () => _config.AuroraEnabled);
             Toggle("tuner.shootingstars", () => _config.ShootingStarsEnabled, value => _config.ShootingStarsEnabled = value, "help.shootingstars");
             Toggle("tuner.waternightstars", () => _config.WaterNightStars, value => _config.WaterNightStars = value, "help.waternightstars");
+            Toggle("tuner.gameweatherplaintint", () => _config.GameWeatherPlainTint, value => _config.GameWeatherPlainTint = value, "help.gameweatherplaintint");
+            Toggle("tuner.windyspells", () => _config.WindySpellsEnabled, value => _config.WindySpellsEnabled = value, "help.windyspells");
+            Slider("tuner.windyspellsstrength", 1.25f, 3f, () => _config.WindySpellsStrength,
+                value => _config.WindySpellsStrength = value, "help.windyspellsstrength", () => _config.WindySpellsEnabled);
             // Each kind of weather has its own switch under the precipitation master, and its
             // dials hang off BOTH (PrecipitationSystem asks the master and the kind together).
             DependsOn(() => _config.PrecipitationEnabled);
@@ -1664,6 +1675,12 @@ namespace SDVRadiance
                 value => _config.WetWorldLensDropSize = value, "help.wetworldlensdropsize");
             Slider("tuner.wetworldedgehaze", 0f, 2f, () => _config.WetWorldEdgeHaze,
                 value => _config.WetWorldEdgeHaze = value, "help.wetworldedgehaze");
+            Slider("tuner.wetworldlensdropliveliness", 0f, 1f, () => _config.WetWorldLensDropLiveliness,
+                value => _config.WetWorldLensDropLiveliness = value, "help.wetworldlensdropliveliness");
+            Toggle("tuner.wetworldlensdropsrefract", () => _config.WetWorldLensDropsRefract,
+                value => _config.WetWorldLensDropsRefract = value, "help.wetworldlensdropsrefract");
+            Slider("tuner.wetworldlensdropspread", 0f, 1f, () => _config.WetWorldLensDropSpread,
+                value => _config.WetWorldLensDropSpread = value, "help.wetworldlensdropspread");
             EndDependsOn();
         }
 
@@ -1885,6 +1902,8 @@ namespace SDVRadiance
                 () => _config.WaterEnabled && _config.WaterRiverFlowEnabled && _config.WaterCurrent > 0f);
             Slider("tuner.waterseawaves", 0f, 2f, () => _config.WaterSeaWaves,
                 value => _config.WaterSeaWaves = value, "help.waterseawaves");
+            Slider("tuner.watersearainswell", 0f, 2f, () => _config.WaterSeaRainSwell,
+                value => _config.WaterSeaRainSwell = value, "help.watersearainswell");
             // How the river reads as water: its own group, live only while a river flows.
             Section("tuner.section.riverlook");
             Slider("tuner.waterriverripplespeed", 1.0f, 3.0f, () => _config.WaterRiverRippleSpeed,

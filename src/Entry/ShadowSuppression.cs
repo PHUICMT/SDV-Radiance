@@ -414,15 +414,17 @@ namespace SDVRadiance
         /// Only classes outside the game's own assembly, and every method of theirs that is handed a
         /// SpriteBatch rather than only the ones called draw: Custom Companions' draw hands the batch
         /// to a DoDraw of its own and paints the blob there, so patching by name saw nothing.
-        /// Vanilla NPCs already go through the DrawShadow prefix.
+        /// Vanilla NPCs already go through the DrawShadow prefix, all but the game's own Junimos,
+        /// which paint the blob inline in their draw: the Community Center's Junimos and the hut's
+        /// harvesters kept a hard round blob on the floor under ours, left behind on the ground
+        /// every time one jumped (reported with a video).
         /// </summary>
         internal static void PatchSelfDrawnCharacters(Harmony harmony, IMonitor monitor)
         {
             int patched = 0;
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
-                if (assembly == typeof(NPC).Assembly)
-                    continue;
+                bool gameAssembly = assembly == typeof(NPC).Assembly;
                 System.Type[] types;
                 try { types = assembly.GetTypes(); }
                 catch (System.Reflection.ReflectionTypeLoadException ex) { types = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Where(ex.Types, t => t != null))!; }
@@ -430,6 +432,8 @@ namespace SDVRadiance
                 foreach (var type in types)
                 {
                     if (type == null || !typeof(NPC).IsAssignableFrom(type))
+                        continue;
+                    if (gameAssembly && !GameCharactersWithTheirOwnBlob.Contains(type))
                         continue;
                     System.Reflection.MethodInfo[] declared;
                     try
@@ -465,6 +469,14 @@ namespace SDVRadiance
             }
             monitor.Log($"Watching {patched} character draw(s) from other mods for a blob shadow of their own.", LogLevel.Trace);
         }
+
+        /// <summary>The game's own characters that draw Game1.shadowTexture in their draw instead of
+        /// through NPC.DrawShadow.</summary>
+        private static readonly System.Collections.Generic.HashSet<System.Type> GameCharactersWithTheirOwnBlob =
+        [
+            typeof(StardewValley.Characters.Junimo),
+            typeof(StardewValley.Characters.JunimoHarvester),
+        ];
 
         /// <summary>Redirect a method's 9-arg SpriteBatch.Draw calls through <paramref name="shimName"/>.</summary>
         private static System.Collections.Generic.IEnumerable<CodeInstruction> RedirectDraws(

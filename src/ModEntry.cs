@@ -85,6 +85,7 @@ namespace SDVRadiance
 
         public override void Entry(IModHelper helper)
         {
+            QuietFailures.Monitor = Monitor;
             LutCatalog.Initialise(helper.DirectoryPath);
             ShareCode.ConfigFolder = helper.DirectoryPath;
             _config = helper.ReadConfig<ModConfig>();
@@ -424,7 +425,7 @@ namespace SDVRadiance
         {
             if (!ArtReloads.TakeReloaded())
                 return;
-            int forgotten = SheetUpscaler.ForgetReloaded() + SheetPixels.ForgetReloaded()
+            int forgotten = SheetUpscaler.ForgetReloaded() + SheetPixels.ForgetReloaded() + GroundCarryingArt.ForgetReloaded()
                           + (_pipeline?.ForgetReloadedArt() ?? 0) + (_shadows?.ForgetReloadedArt() ?? 0);
             if (forgotten > 0)
             {
@@ -788,6 +789,13 @@ namespace SDVRadiance
             // presented and the card is between frames, so the same read is the copy alone.
             _pipeline?.CollectSelfDrawnMeasure();
             _pipeline?.CollectExposureMeter();
+            WindySpells.Enabled = _config.Enabled && _config.WindySpellsEnabled;
+            WindySpells.Strength = _config.WindySpellsStrength;
+            WindySpells.Update(1f / 60f);
+            // Art that carries its own ground, found from the sprites the last frame drew, so the
+            // relief can take back the box it bevelled round the landslide. A sheet read, on the tick.
+            if (_config.Enabled && _config.SpriteReliefEnabled && _config.FloodLightingEnabled)
+                GroundCarryingArt.Notice();
 
             // Resource maintenance lives HERE, on the game's own tick, and not on any render
             // path, because every render path in this mod is gated on the mod being switched on.

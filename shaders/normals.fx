@@ -31,6 +31,12 @@ float2 TexelSize;       // 1 / sheet size
 float BevelStrength;    // how steeply the silhouette edge leans (2.0 tuned)
 float ReliefStrength;   // how much painted shading leans the interior (0.6 tuned)
 float FlipX;            // 1 = mirror the x component
+// Where a neighbour may be read from: xy the first texel centre, zw the last, in UV. The whole
+// sheet (0,0,1,1) for an ordinary bake. A sprite whose art is opaque all the way round its source
+// rectangle (it carries its own ground, like the Mountain landslide) is baked again with this
+// pulled in to that rectangle, so the texels beyond it, which are other art or empty sheet and are
+// never drawn with it, stop reading as a silhouette and bevelling the rectangle into a box.
+float4 NeighbourBounds;
 
 struct PixelInput
 {
@@ -41,7 +47,7 @@ struct PixelInput
 
 float4 At(float2 uv, float dx, float dy)
 {
-    return tex2D(SheetSampler, uv + float2(dx, dy) * TexelSize);
+    return tex2D(SheetSampler, clamp(uv + float2(dx, dy) * TexelSize, NeighbourBounds.xy, NeighbourBounds.zw));
 }
 
 float Lum(float4 c)

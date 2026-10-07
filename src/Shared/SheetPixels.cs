@@ -59,6 +59,11 @@ namespace SDVRadiance
         /// <summary>Every held sheet, for the report that describes what the cache is holding.</summary>
         internal static IEnumerable<KeyValuePair<Texture2D, Color[]?>> Entries => _heldSheets;
 
+        /// <summary>The pixels of <paramref name="texture"/> if some caller already had them read,
+        /// without reading: for a question worth answering only when it is free.</summary>
+        internal static Color[]? IfHeld(Texture2D texture)
+            => Enabled && !texture.IsDisposed && _heldSheets.TryGetValue(texture, out Color[]? held) ? held : null;
+
         /// <summary>
         /// Every pixel of <paramref name="texture"/>, or null when it is over <see cref="PixelCap"/>
         /// or the read failed, in which case the caller falls back to reading rectangles.

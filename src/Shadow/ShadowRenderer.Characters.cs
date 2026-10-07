@@ -31,7 +31,12 @@ namespace SDVRadiance
             _castVillagers = config.DirectionalShadowVillagers;
             _castFarmAnimals = config.DirectionalShadowFarmAnimals;
             _castCreatures = config.DirectionalShadowCreatures;
+            _creatureLength = config.ShadowCreatureLength;
+            _creatureSoftness = config.ShadowCreatureSoftness;
         }
+
+        /// <summary>The creatures' own length and softness dials, read with the switches.</summary>
+        private float _creatureLength = 1f, _creatureSoftness = 1f;
 
         /// <summary>Whether this character's kind casts: a villager is everything that stands
         /// like a person, a creature everything that lies along the ground (the horse, a pet, a
@@ -1160,14 +1165,28 @@ namespace SDVRadiance
             // GetBoundingBox().Bottom, which is where an ordinary character stands too. Adding the
             // offset here pushed those characters' shadows a tile and a half down the beach.
             Rectangle sourceRect = npc.Sprite.SourceRect;
+            // Drawn at the character's own size: NPC.draw scales every sprite by Scale, and a Junimo
+            // is 0.75 of a villager. The shadow was cast at full size from a foot point worked out
+            // for a full-size sprite, so it stood a third bigger than the Junimo and well above its
+            // feet, and the head sat inside it (reported with a video).
+            float casterScale = Math.Max(0.2f, npc.Scale);
+            (float spriteTopWorld, float spriteBottomWorld) = SpriteSpanWorld(npc, casterScale);
+            bool creature = !StandsLikeAPerson(npc, ShadowModel.Modern);
+            if (creature)
+            {
+                stretch *= _creatureLength;
+                blur *= _creatureSoftness;
+            }
             // The sideways part of the draw offset is where the sprite really is (a horse is drawn
             // sixteen pixels left of its box); the upright part is the stretched-sprite case above.
+            float feetWorldY = casterScale == 1f && npc is not StardewValley.Characters.Junimo
+                ? npc.GetBoundingBox().Bottom - FeetLift
+                : spriteBottomWorld - FeetLift * casterScale;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
-                new Vector2(npc.Position.X + npc.drawOffset.X + npc.GetSpriteWidthForPositioning() * 4 / 2f,
-                    npc.GetBoundingBox().Bottom - FeetLift));
+                new Vector2(npc.Position.X + npc.drawOffset.X + npc.GetSpriteWidthForPositioning() * 4 / 2f, feetWorldY));
             float lift = BodyLift(npc);
             Vector2 castFeet = feet + LiftShift(lift, rotation, stretch);
-            alpha *= LiftFade(lift);
+            alpha *= creature ? Math.Min(LiftFade(lift), CreatureJumpFade(lift, npc.Sprite.SpriteHeight * 4f * casterScale)) : LiftFade(lift);
             if (ShadowCannotReachScreen(feet, CasterReachPixels(sourceRect.Height, sourceRect.Width, stretch, blur)))
                 return;
             float anchorWorldY = npc.StandingPixel.Y;
@@ -1183,10 +1202,7 @@ namespace SDVRadiance
             // (SpriteWidth/2, SpriteHeight*3/4), so the sprite's top edge is SpriteHeight*3 screen
             // px above that point, and the feet are however far the anchor is below the top. An
             // ordinary sprite comes out at exactly src.Height, the bottom edge, as before.
-            Vector2 gameAnchor = npc.getLocalPosition(Game1.viewport)
-                + new Vector2(npc.GetSpriteWidthForPositioning() * 4 / 2f, npc.GetBoundingBox().Height / 2f);
-            float spriteTop = gameAnchor.Y - npc.Sprite.SpriteHeight * 3f;
-            float originY = MathHelper.Clamp((feet.Y - spriteTop) / 4f, 0f, sourceRect.Height);
+            float originY = MathHelper.Clamp((feetWorldY - spriteTopWorld) / (4f * casterScale), 0f, sourceRect.Height);
             // Whatever the stretch added BELOW the feet is not part of the character: on the Squid
             // Fest fishermen it is the line and float sitting in the water. Casting it put tackle
             // shadows on the sand beside them. Cropping there leaves the person, and leaves every
@@ -1206,7 +1222,7 @@ namespace SDVRadiance
                 // own settings. The frame re-bakes as the sun moves, on the same drift test as
                 // every object, and the cache is keyed by frame and facing, so a mirrored horse is
                 // a second bake rather than a flip. People keep their own foreshortening.
-                DrawPeoplePoolUnder(spriteBatch, feet, npc.GetSpriteWidthForPositioning() * 4f * 0.36f,
+                DrawPeoplePoolUnder(spriteBatch, feet, npc.GetSpriteWidthForPositioning() * 4f * 0.36f * casterScale,
                     person ? alpha : alpha * AnimalPoolKept,
                     MathHelper.Clamp(anchorWorldY / 10000f - ShadowDepthBias, 0f, 1f), blur);
                 EmitObject(spriteBatch, npc.Sprite.Texture, sourceRect, castFeet, baseOrigin,
@@ -1214,7 +1230,7 @@ namespace SDVRadiance
                     groundAnchorWorldY: anchorWorldY, contactPool: false,
                     groundForeshortening: person ? _characterGroundForeshortening
                         : AnimalGroundForeshortening(_groundForeshortening, npc.Sprite.SpriteWidth * 4f),
-                    groundedBodyWidth: npc.Sprite.SpriteWidth * 4f);
+                    groundedBodyWidth: npc.Sprite.SpriteWidth * 4f * casterScale, casterScale: casterScale);
                 return;
             }
             // UNDER A LAMP the upright slot serves: one bake, leant and squashed at draw time by
@@ -1233,15 +1249,49 @@ namespace SDVRadiance
                 float npcWidth = LaidDownWidth(across, facing, out SpriteEffects npcFacing);
                 (npcWidth, npcFacing) = CastWidth(npcWidth, npcFacing, facing);
                 WithGroundedCast(() => DrawSoftGrounded(spriteBatch, Taps9, baked.Rt, null, castFeet, ShadowInk, alpha, rotation, baked.FeetInRt,
-                    new Vector2(npcWidth, stretch), anchorWorldY, npcFacing, baked.BakedBlur > 0f ? 0f : blur,
-                    shadowLengthPerHeight: stretch), npc.Sprite.SpriteWidth * 4f);
+                    new Vector2(npcWidth * casterScale, stretch * casterScale), anchorWorldY, npcFacing, baked.BakedBlur > 0f ? 0f : blur,
+                    shadowLengthPerHeight: stretch), npc.Sprite.SpriteWidth * 4f * casterScale);
                 return;
             }
             float npcBandWidth = LaidDownWidth(across, facing, out SpriteEffects npcBandFacing);
             (npcBandWidth, npcBandFacing) = CastWidth(npcBandWidth, npcBandFacing, facing);
             WithGroundedCast(() => DrawBandedGradient(spriteBatch, npc.Sprite.Texture, sourceRect, castFeet, baseOrigin,
-                alpha, rotation, new Vector2(4f * npcBandWidth, 4f * stretch), anchorWorldY, blur, HeadFade, npcBandFacing,
-                shadowLengthPerHeight: stretch), npc.Sprite.SpriteWidth * 4f);
+                alpha, rotation, new Vector2(4f * npcBandWidth * casterScale, 4f * stretch * casterScale), anchorWorldY, blur, HeadFade, npcBandFacing,
+                shadowLengthPerHeight: stretch), npc.Sprite.SpriteWidth * 4f * casterScale);
+        }
+
+        /// <summary>How much of a creature's shadow is left while it is in the air: most of it fades by
+        /// the time the body is its own height off the ground.</summary>
+        /// <remarks>
+        /// The shadow stays on the ground while the body jumps, which is right, but a creature that
+        /// bounces (the Junimos dancing, a frog, a wildlife mod's hopping animals) left a hard dark
+        /// patch behind on the floor that read as a stain more than a shadow. The game shrinks its
+        /// own blob under a jumping body; this fades ours by the jump against the body's size, on
+        /// every look, where the grounded look's own fade is only there with that look switched on.
+        /// </remarks>
+        private static float CreatureJumpFade(float lift, float bodyHeightPixels)
+        {
+            if (lift <= 0f || bodyHeightPixels <= 0f)
+                return 1f;
+            return 1f - 0.65f * MathHelper.SmoothStep(0f, 1f, Math.Min(1f, lift / bodyHeightPixels));
+        }
+
+        /// <summary>The top and bottom of a character's sprite in world pixels, as the game draws it.
+        /// The top is where the sprite is this frame, its jump included, as the crop below the feet
+        /// has always read it; the bottom leaves the jump out, because the shadow stays on the ground.</summary>
+        /// <remarks>
+        /// NPC.draw pins the sprite's point (SpriteWidth/2, SpriteHeight*3/4) half a collision box
+        /// below getLocalPosition (the position, its draw offset and its jump), at 4 times Scale.
+        /// Junimo.draw pins the same point lower, by its own formula, so a Junimo is answered from that.
+        /// </remarks>
+        private static (float Top, float Bottom) SpriteSpanWorld(NPC npc, float casterScale)
+        {
+            int spriteHeight = npc.Sprite.SpriteHeight;
+            float groundPivotY = npc.Position.Y + npc.drawOffset.Y + (npc is StardewValley.Characters.Junimo
+                ? spriteHeight * 3f / 4f * 4f / (float)Math.Pow(spriteHeight / 16, 2.0) - 8f
+                : npc.GetBoundingBox().Height / 2f);
+            float pixel = 4f * casterScale;
+            return (groundPivotY + npc.yJumpOffset - spriteHeight * 3f / 4f * pixel, groundPivotY + spriteHeight / 4f * pixel);
         }
     }
 }

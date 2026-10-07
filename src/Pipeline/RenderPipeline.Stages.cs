@@ -67,7 +67,8 @@ namespace SDVRadiance
             // short of the overcast itself, because the rain has not arrived and the sun is still
             // out; what the eye should read is a sky thickening, not a sky that has closed.
             float stormWarning = _stormWarningEased;
-            GetParam(effect, "Speed")?.SetValue(config.CloudShadowSpeed * MathHelper.Lerp(1f, 0.6f, overcast));
+            // A windy spell hurries the clouds along with everything else the wind moves.
+            GetParam(effect, "Speed")?.SetValue(config.CloudShadowSpeed * MathHelper.Lerp(1f, 0.6f, overcast) * WindySpells.Factor);
             GetParam(effect, "Scale")?.SetValue(config.CloudShadowScale * MathHelper.Lerp(1f, 0.65f, overcast));
             GetParam(effect, "Coverage")?.SetValue(MathHelper.Clamp(
                 MathHelper.Lerp(config.CloudShadowCoverage, config.CloudShadowCoverage + 0.32f, overcast)
@@ -1462,6 +1463,9 @@ namespace SDVRadiance
 
         /// <summary>How agitated the surface is this frame: weather, season, the shimmer toggle's ease, the
         /// cutscene displacement gate and the calmer indoor treatment.</summary>
+        /// <summary>The weather the sea is answering, eased: 0 dry, 1 rain, 1.6 a storm.</summary>
+        private float _seaRainSwellEased;
+
         private void SetWaterRippleParams(Effect effect, ModConfig config)
         {
             // Weather/season drive how agitated the water is: choppier & faster in
@@ -1501,8 +1505,17 @@ namespace SDVRadiance
             float seaWaves = WaterKind() > 0.5f && !indoors
                 ? MathHelper.Lerp(config.WaterSeaWaves, 1f, _riverHoldEased)
                 : 1f;
+            // The sea heaves harder in rain and harder again in a storm, by the rain swell dial,
+            // eased over several seconds so the weather turning never steps the waves. At 0 the
+            // factor is exactly 1 and the sea is what it always was. Asked for by Charost.
+            float seaWeather = LocalSky.IsLightning ? 1.6f : LocalSky.IsRaining ? 1f : 0f;
+            Approach(ref _seaRainSwellEased, seaWeather, 0.004f);
+            float seaRainSwell = config.WaterSeaRainSwell > 0f && WaterKind() > 0.5f && !indoors
+                ? 1f + 0.3f * config.WaterSeaRainSwell * _seaRainSwellEased * (1f - _riverHoldEased)
+                : 1f;
+            seaWaves *= seaRainSwell;
             GetParam(effect, "Strength")?.SetValue(config.WaterStrength * seaWaves * strengthMultiplier * shimmer * displacementGate * indoorWave);
-            GetParam(effect, "Speed")?.SetValue(config.WaterSpeed * speedMultiplier);
+            GetParam(effect, "Speed")?.SetValue(config.WaterSpeed * speedMultiplier * (1f + 0.5f * (seaRainSwell - 1f)));
             // The glints by day and by night each have a switch: the dusk ramp hands the water from
             // one to the other, and each switch eases, so neither the clock nor a click snaps them.
             Approach(ref _sparkleDayEase, config.WaterSparkleByDay ? 1f : 0f, 0.08f);

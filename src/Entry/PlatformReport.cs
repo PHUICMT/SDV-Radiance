@@ -54,11 +54,69 @@ namespace SDVRadiance
                     + "(the second one is what the radiance cascades need; without it the mod keeps "
                     + "the flood model and nothing is lost but the newer lighting).", LogLevel.Info);
                 monitor.Log(ReadbackVerdict(device), ReadbackWorks(device) ? LogLevel.Info : LogLevel.Warn);
+                LogLargestPicture(monitor, presentation);
             }
             catch (Exception ex)
             {
                 // A report about the machine must never be the thing that stops the mod loading on it.
                 monitor.Log($"could not describe this machine: {ex.Message}", LogLevel.Debug);
+            }
+        }
+
+        /// <summary>The object shadow page, the largest picture this mod keeps (ShadowRenderer.Objects).</summary>
+        private const int LargestOwnPictureSide = 4096;
+
+        /// <summary>
+        /// The largest texture and render target the card takes, asked of the driver.
+        /// </summary>
+        /// <remarks>
+        /// Two players on phones sent a screen striped black, every other row in one part of it and
+        /// every other column in another, clean only in one corner. A picture larger than the card
+        /// takes does not throw on every driver; it can come back wrong instead, and phones take
+        /// smaller pictures than desktop cards. Nothing in the log said how large that was, so the
+        /// question could not even be asked. MonoGame keeps the driver call internal
+        /// (MonoGame.OpenGL.GL.GetInteger), so it is reached by name and left out quietly on a build
+        /// that does not have it.
+        /// </remarks>
+        private static void LogLargestPicture(IMonitor monitor, PresentationParameters? presentation)
+        {
+            int? texture = AskTheDriver(0x0D33);        // GL_MAX_TEXTURE_SIZE
+            int? renderBuffer = AskTheDriver(0x84E8);   // GL_MAX_RENDERBUFFER_SIZE
+            if (texture == null && renderBuffer == null)
+            {
+                monitor.Log("largest picture: the driver could not be asked on this build.", LogLevel.Debug);
+                return;
+            }
+            int smallest = Math.Min(texture ?? int.MaxValue, renderBuffer ?? int.MaxValue);
+            int screenSide = Math.Max(presentation?.BackBufferWidth ?? 0, presentation?.BackBufferHeight ?? 0);
+            bool smallerThanNeeded = smallest < LargestOwnPictureSide || smallest < screenSide;
+            monitor.Log($"largest picture: textures {texture?.ToString() ?? "unknown"}, render targets {renderBuffer?.ToString() ?? "unknown"} "
+                + $"(this mod's largest is {LargestOwnPictureSide}, the screen's long side {screenSide})"
+                + (smallerThanNeeded ? ". SMALLER than what the mod makes: please report this line." : "."),
+                smallerThanNeeded ? LogLevel.Warn : LogLevel.Info);
+        }
+
+        /// <summary>One integer from glGetIntegerv, or null when it cannot be asked.</summary>
+        private static int? AskTheDriver(int name)
+        {
+            try
+            {
+                Type? gl = typeof(GraphicsDevice).Assembly.GetType("MonoGame.OpenGL.GL");
+                Type? names = typeof(GraphicsDevice).Assembly.GetType("MonoGame.OpenGL.GetPName");
+                if (gl == null || names == null)
+                    return null;
+                var getInteger = gl.GetMethod("GetInteger",
+                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,
+                    null, [names, typeof(int).MakeByRefType()], null);
+                if (getInteger == null)
+                    return null;
+                object?[] arguments = [Enum.ToObject(names, name), 0];
+                getInteger.Invoke(null, arguments);
+                return arguments[1] is int value && value > 0 ? value : null;
+            }
+            catch
+            {
+                return null;
             }
         }
 

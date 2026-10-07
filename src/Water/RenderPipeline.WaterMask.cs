@@ -122,6 +122,11 @@ namespace SDVRadiance
         private const int MaskTopSlackTiles = 5;
         private const int MaskPadTopTiles = MaskTopCoverTiles + MaskTopSlackTiles;
         private const int MaskPadBottomTiles = 4;
+        /// <summary>How much of the slack is left when a rebuild starts. Waiting until the view
+        /// reached the window's edge spent all of it first, so the frames a compose takes were
+        /// drawn from the clamped edge: on a slower machine a walk toward water showed rectangles
+        /// of surface over the land until the player stopped.</summary>
+        private const int MaskRebuildAheadTiles = 2;
 
         /// <summary>
         /// Build (or reuse) the per-tile water mask for the visible area, aligned to the
@@ -191,15 +196,11 @@ namespace SDVRadiance
             if (_waterMask != null && location == _lastWaterLocation
                 && _waterMask.Width == tilesW * 16 && _waterMask.Height == tilesH * 16)
             {
-                int viewLeft = (int)Math.Floor(vx / 64f), viewTop = (int)Math.Floor(vy / 64f);
-                int viewRight = (int)Math.Floor((vx + Game1.viewport.Width) / 64f);
-                int viewBottom = (int)Math.Floor((vy + Game1.viewport.Height) / 64f);
                 // Above the view the window must keep the mirror's whole reach, not merely the
                 // view itself: the rows the mirror reads are up there, and a window that let the
                 // view walk up to its own top edge answered "is that source water" from its
                 // clamped edge row for the last twelve tiles of every walk north.
-                if (viewLeft >= _lastWaterTileX && viewRight <= _lastWaterTileX + tilesW - 1
-                    && viewTop - MaskTopCoverTiles >= _lastWaterTileY && viewBottom <= _lastWaterTileY + tilesH - 1)
+                if (MaskWindowHoldsView(_lastWaterTileX, _lastWaterTileY, tilesW, tilesH, MaskRebuildAheadTiles))
                 {
                     startTileX = _lastWaterTileX;
                     startTileY = _lastWaterTileY;
@@ -211,6 +212,19 @@ namespace SDVRadiance
             _waterMaskTilesPerScreen = new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f);
             _waterMaskWorldTileOffset = new Vector2(vx / 64f, vy / 64f);
             return (startTileX, startTileY, tilesW, tilesH);
+        }
+
+        /// <summary>Whether a mask window starting at (<paramref name="startTileX"/>,
+        /// <paramref name="startTileY"/>) covers the view with <paramref name="spareTiles"/> to spare on
+        /// every side, the top counted past the mirror's reach (see MaskTopCoverTiles).</summary>
+        private static bool MaskWindowHoldsView(int startTileX, int startTileY, int tilesW, int tilesH, int spareTiles)
+        {
+            int vx = Game1.viewport.X, vy = Game1.viewport.Y;
+            int viewLeft = (int)Math.Floor(vx / 64f), viewTop = (int)Math.Floor(vy / 64f);
+            int viewRight = (int)Math.Floor((vx + Game1.viewport.Width) / 64f);
+            int viewBottom = (int)Math.Floor((vy + Game1.viewport.Height) / 64f);
+            return viewLeft - spareTiles >= startTileX && viewRight + spareTiles <= startTileX + tilesW - 1
+                && viewTop - MaskTopCoverTiles - spareTiles >= startTileY && viewBottom + spareTiles <= startTileY + tilesH - 1;
         }
 
         /// <summary>Deal with a compose that is already running. True means this frame is done:
@@ -260,8 +274,16 @@ namespace SDVRadiance
                     _pendingWaterMaskJob = null;
                     if (!_waterMaskJobFailureLogged) { _monitor.Log($"Water mask compose failed once ({job.FailureMessage ?? "no message"}); it is gathered again from the start.", LogLevel.Warn); _waterMaskJobFailureLogged = true; }
                 }
-                else if (job.Location == location && job.StartTileX == startTileX && job.StartTileY == startTileY
-                    && job.TileWidth == tilesW && job.TileHeight == tilesH)
+                // Taken whenever it still covers the view, not only when it is the exact window
+                // wanted this frame. Walking keeps moving the wanted window a tile at a time, and a
+                // compose slower than one tile of walking never matched on landing: every job was
+                // dropped until the player stopped, and all that time the screen drew from a mask
+                // the view had already left. Once its upload has begun it is finished, so a
+                // half-written spare is never abandoned for a newer window either.
+                else if (job.Location == location && job.TileWidth == tilesW && job.TileHeight == tilesH
+                    && (job.ApplyTexturesDone > 0
+                        || (job.StartTileX == startTileX && job.StartTileY == startTileY)
+                        || MaskWindowHoldsView(job.StartTileX, job.StartTileY, tilesW, tilesH, 0)))
                 {
                     // One texture per frame; the job stays pending, and the old mask stays up,
                     // until the last one swaps the pairs (RenderPipeline.WaterMask.Apply.cs).

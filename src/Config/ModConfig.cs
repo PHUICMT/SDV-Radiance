@@ -410,6 +410,12 @@ namespace SDVRadiance
         /// replacing it. 0 is the mine of every earlier release.</summary>
         public float MineFogMist { get; set; } = 0.4f;
         public float FogScale { get; set; } = 3.0f;
+        /// <summary>Day fog only in the morning: thickest at dawn, lifting over an hour and a half
+        /// to nothing by <see cref="FogMorningLiftHour"/>. Off is fog all day, as it always was.
+        /// Asked for by a player who wanted a morning that starts misty and clears.</summary>
+        public bool FogMorningOnly { get; set; } = false;
+        /// <summary>The hour the morning fog is gone by, 7 to 12.</summary>
+        public float FogMorningLiftHour { get; set; } = 9f;
         public float FogSpeed { get; set; } = 0.02f;
         public float FogTopBias { get; set; } = 0.5f;
 
@@ -663,6 +669,9 @@ namespace SDVRadiance
         /// One wave strength for every kind of water meant the sea could not be calmed without
         /// flattening the rivers with it. 1 is every earlier release.</summary>
         public float WaterSeaWaves { get; set; } = 1f;
+        /// <summary>How much harder the sea heaves in rain (and more in a storm), 0 to 2. At 1 the
+        /// waves rise by about a third in rain and a half in a storm. 0 is every earlier release.</summary>
+        public float WaterSeaRainSwell { get; set; } = 0f;
         /// <summary>How much a river swells in bad weather: at 1 it runs 1.4 times its pace while it
         /// rains and 1.8 times in a thunderstorm, easing up and down over several seconds. 0 keeps
         /// one pace whatever the sky does.</summary>
@@ -1169,6 +1178,15 @@ namespace SDVRadiance
         /// <summary>The scatter of twinkling stars on the water after dusk. Asked for by a player who
         /// wanted the night water without the dots; the moon's sheen and the lamp glimmer stay.</summary>
         public bool WaterNightStars { get; set; } = true;
+        /// <summary>The game's own rain, snow and leaves, where the mod redraws them over the water
+        /// effect, take a plain grey from the light around them instead of the blue the game's own
+        /// lighting gives them. Off keeps the game's colour, which is how they always looked.</summary>
+        public bool GameWeatherPlainTint { get; set; } = false;
+        /// <summary>Two or three spells of strong wind a day, rising and dying away: the trees, the
+        /// rain, the leaves, the water and the clouds all answer. Off is the wind as it always was.</summary>
+        public bool WindySpellsEnabled { get; set; } = false;
+        /// <summary>How many times the usual wind a spell blows at its height, 1.25 to 3.</summary>
+        public float WindySpellsStrength { get; set; } = 2f;
         /// <summary>Replace the rain, green rain included (same streaks, shifted lime and heavier).</summary>
         public bool PrecipitationRain { get; set; } = true;
         /// <summary>Replace the snow.</summary>
@@ -1242,6 +1260,17 @@ namespace SDVRadiance
         /// during a snowfall, against their own strength. Zero leaves the drops with clear glass
         /// around them.</summary>
         public float WetWorldEdgeHaze { get; set; } = 0.94f;
+        /// <summary>How busy the drops on the glass are, 0 to 1: shorter lives, trickles running down
+        /// the sides more often, and heavy drops creeping down the side bands. 0 is the drops as
+        /// they always were. Asked for by a player who wanted the screen rain livelier.</summary>
+        public float WetWorldLensDropLiveliness { get; set; } = 0f;
+        /// <summary>The drops as small lenses: each bends the picture behind it, flipped and
+        /// shrunk, with a dark rim and a glint, the way rain on a camera reads in a modern game.
+        /// Off is the drawn drops as they always were.</summary>
+        public bool WetWorldLensDropsRefract { get; set; } = false;
+        /// <summary>Small beads scattered over the whole screen as well as the edge band, 0 to 1
+        /// (none to about seventy). 0 keeps the drops to the edges, as they always were.</summary>
+        public float WetWorldLensDropSpread { get; set; } = 0f;
 
         /// <summary>Darken flat/unlit areas and pool light around real light sources.</summary>
         public bool LightingEnabled { get; set; } = true;
@@ -1346,6 +1375,13 @@ namespace SDVRadiance
         public bool DirectionalShadowVillagers { get; set; } = true;
         public bool DirectionalShadowFarmAnimals { get; set; } = true;
         public bool DirectionalShadowCreatures { get; set; } = true;
+        /// <summary>The creatures' own shadow length, times the shared one: the pets, the horse, a
+        /// wildlife mod's animals, Junimos and the critters (rats, birds, squirrels). 1 is every
+        /// earlier release. Asked for by a player whose small indoor creatures cast shadows too
+        /// long and too hard for their size.</summary>
+        public float ShadowCreatureLength { get; set; } = 1f;
+        /// <summary>The creatures' own shadow softness, times the shared one. 1 is every earlier release.</summary>
+        public float ShadowCreatureSoftness { get; set; } = 1f;
         /// <summary>Opacity of the directional shadows. 0 = none, 1 = full.</summary>
         public float DirectionalShadowStrength { get; set; } = 0.7f;
 
@@ -1687,6 +1723,7 @@ namespace SDVRadiance
             MineFogMist = ClampToRange(MineFogMist, 0f, 1f);
             FogNightMistSpeed = ClampToRange(FogNightMistSpeed, 0f, 0.1f);
             FogScale = ClampToRange(FogScale, 1f, 8f);
+            FogMorningLiftHour = ClampToRange(FogMorningLiftHour, 7f, 12f);
             FogSpeed = ClampToRange(FogSpeed, 0f, 0.1f);
             FogTopBias = ClampToRange(FogTopBias, 0f, 1f);
             CloudShadowOpacity = ClampToRange(CloudShadowOpacity, 0f, 0.7f);
@@ -1704,6 +1741,8 @@ namespace SDVRadiance
             WaterStrength = ClampToRange(WaterStrength, 0f, 2f);
             WaterSpeed = ClampToRange(WaterSpeed, 0f, 3f);
             WaterSparkle = ClampToRange(WaterSparkle, 0f, 1f);
+            ShadowCreatureLength = ClampToRange(ShadowCreatureLength, 0.1f, 2f);
+            ShadowCreatureSoftness = ClampToRange(ShadowCreatureSoftness, 0f, 3f);
             WaterSparkleDensity = ClampToRange(WaterSparkleDensity, 0.2f, 2f);
             WaterGlitterPath = ClampToRange(WaterGlitterPath, 0f, 1f);
             WaterCausticsStrength = ClampToRange(WaterCausticsStrength, 0f, 1f);
@@ -1737,6 +1776,7 @@ namespace SDVRadiance
             WaterWind = ClampToRange(WaterWind, 0f, 2f);
             WaterCurrent = ClampToRange(WaterCurrent, 0f, 2f);
             WaterSeaWaves = ClampToRange(WaterSeaWaves, 0f, 2f);
+            WaterSeaRainSwell = ClampToRange(WaterSeaRainSwell, 0f, 2f);
             WaterRiverRainSwell = ClampToRange(WaterRiverRainSwell, 0f, 2f);
             WaterRiverFoam = ClampToRange(WaterRiverFoam, 0f, 2f);
             WaterRiverRippleSpeed = ClampToRange(WaterRiverRippleSpeed, 1.0f, 3.0f);
@@ -1807,6 +1847,9 @@ namespace SDVRadiance
             WetWorldPuddles = ClampToRange(WetWorldPuddles, 0f, 1f);
             WetWorldLensDropSize = ClampToRange(WetWorldLensDropSize, 0.5f, 2f);
             WetWorldEdgeHaze = ClampToRange(WetWorldEdgeHaze, 0f, 2f);
+            WetWorldLensDropLiveliness = ClampToRange(WetWorldLensDropLiveliness, 0f, 1f);
+            WetWorldLensDropSpread = ClampToRange(WetWorldLensDropSpread, 0f, 1f);
+            WindySpellsStrength = ClampToRange(WindySpellsStrength, 1.25f, 3f);
             VignetteStrength = ClampToRange(VignetteStrength, 0f, 1f);
             ChromaticAberrationStrength = ClampToRange(ChromaticAberrationStrength, 0f, 1f);
             BlueLightFilter = ClampToRange(BlueLightFilter, 0f, 1f);

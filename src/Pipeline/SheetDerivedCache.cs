@@ -208,6 +208,48 @@ namespace SDVRadiance
             return target;
         }
 
+        /// <summary>
+        /// Derive one rectangle of an entry that already exists a second time, over itself, with
+        /// <paramref name="adjust"/> applied to the effect after the variant's own parameters. The
+        /// rest of the entry is left as it was (its target preserves its contents). False when the
+        /// entry is not there, this cache bakes through a delegate of its own, or rebinding now
+        /// would wipe another mod's picture; the caller asks again on a later draw.
+        /// </summary>
+        internal bool Rederive(GraphicsDevice device, Effect effect, Texture2D sheet, int variant, Rectangle region,
+            Action<Effect> adjust, Action<Effect> restore)
+        {
+            if (_bake != null || !_entries.TryGetValue((sheet, variant), out Entry? entry) || entry.Target.IsDisposed)
+                return false;
+            if (BoundTargets.WouldBeWipedByRebinding(device))
+                return false;
+            _spriteBatch ??= new SpriteBatch(device);
+            RenderTargetBinding[] previous = device.GetRenderTargets();
+            try
+            {
+                device.SetRenderTarget(entry.Target);
+                _setParameters(effect, sheet, variant);
+                adjust(effect);
+                effect.CurrentTechnique = effect.Techniques[_technique];
+                _spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp,
+                    DepthStencilState.None, RasterizerState.CullNone, effect);
+                _spriteBatch.Draw(sheet, new Rectangle(region.X * _scale, region.Y * _scale, region.Width * _scale, region.Height * _scale),
+                    region, Color.White);
+                _spriteBatch.End();
+                return true;
+            }
+            catch
+            {
+                try { _spriteBatch.End(); } catch { }
+                return false;
+            }
+            finally
+            {
+                restore(effect);
+                if (previous.Length > 0) device.SetRenderTargets(previous);
+                else device.SetRenderTarget(null);
+            }
+        }
+
         /// <summary>Drop every entry whose source sheet has been disposed (a content patch reloaded
         /// it, Fashion Sense rebuilt it): its key can never be asked for again, so nothing else
         /// would ever free it. Before this sweep those ghosts held their bytes until the budget was

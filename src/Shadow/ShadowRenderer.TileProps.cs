@@ -190,7 +190,7 @@ namespace SDVRadiance
                             || (Game1.player != null && Game1.player.currentLocation == location
                                 && Game1.player.TilePoint.X == x && Game1.player.TilePoint.Y == y);
                     }
-                    catch { }
+                    catch (Exception exception) { QuietFailures.Note("map prop shadow: who stands on the tile", exception); }
                     float rowY = PropSortRow(location, x, y, bodyHere);
                     float depth = MathHelper.Clamp(rowY / 10000f + x * 1e-5f - ShadowDepthBias, 0f, 1f);
                     Rectangle propContent = bakedEntry.Content.IsEmpty ? new Rectangle(0, 0, bakedEntry.Rt.Width, bakedEntry.Rt.Height) : bakedEntry.Content;
@@ -577,7 +577,7 @@ namespace SDVRadiance
                     || (Game1.player != null && Game1.player.currentLocation == location
                         && Game1.player.TilePoint.X == x && Game1.player.TilePoint.Y == y);
             }
-            catch { }
+            catch (Exception exception) { QuietFailures.Note("map prop base: who stands on the tile", exception); }
             float rowY = PropSortRow(location, x, y, bodyHere);
             float depth = MathHelper.Clamp(rowY / 10000f + x * 1e-5f - ShadowDepthBias, 0f, 1f);
             bool upscalerWasSuspended = SheetUpscaler.SuspendedForOwnDraw;

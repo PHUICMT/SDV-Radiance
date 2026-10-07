@@ -1300,6 +1300,20 @@ namespace SDVRadiance
                     monitor.Log(SheetPixels.Describe(), LogLevel.Info);
                 });
 
+            helper.ConsoleCommands.Add("radiance_groundart",
+                "Whether the relief takes back the edge it would bevel round art that carries its own ground "
+                + "(the Mountain landslide wore a raised box the size of its picture). on|off; both remake the "
+                + "sheets' normal maps so the switch shows at once.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length > 0)
+                    {
+                        GroundCarryingArt.Enabled = arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                        RenderPipeline.Current?.ForgetSheetNormals();
+                    }
+                    monitor.Log(GroundCarryingArt.Describe(), LogLevel.Info);
+                });
+
             helper.ConsoleCommands.Add("radiance_contactdepth",
                 "How dark the ground goes where something stands on it, read from the sprite order "
                 + "buffer so the shade follows the thing's own outline instead of the ellipse "
@@ -1809,6 +1823,8 @@ namespace SDVRadiance
                 Write(PhaseCost.Describe("relief").TrimEnd());
                 Write(PhaseCost.Describe("sheet").TrimEnd());
                 Write(SheetPixels.Describe());
+                Write(QuietFailures.Describe());
+                Write(WindySpells.Describe());
                 Write("");
                 Write(FrameCost.DescribeLongestFrames().TrimEnd());
                 Write("");

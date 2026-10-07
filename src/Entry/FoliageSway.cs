@@ -130,7 +130,12 @@ namespace SDVRadiance
             float front = (float)Math.Sin(2.0 * Math.PI * (worldColumn / Math.Max(1f, GustSpanTiles) - windSign * t / GustPeriodSeconds));
             float personal = (float)Math.Sin(t * 2.2 + treePhase);
             float sway = 0.35f * windSign * windShare + 0.65f * (0.7f * front + 0.3f * personal);
-            return MathHelper.ToRadians(Strength * (CalmTiltDegrees + WindTiltDegrees * windShare)) * sway;
+            // A windy spell bends everything further than the wind alone can: the share above
+            // saturates at a moderate breeze, and a gale has to look like one. Exactly 1 without a
+            // spell. The pace of the gusts is left alone, since t is not an integrated phase and
+            // speeding it would jump every tree.
+            float spell = 1f + 1.2f * (WindySpells.Factor - 1f);
+            return MathHelper.ToRadians(Strength * (CalmTiltDegrees + WindTiltDegrees * windShare)) * sway * spell;
         }
 
         /// <summary>The lean of the tree whose base stands on this tile, for a pass that knows the

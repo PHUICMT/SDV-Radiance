@@ -2,6 +2,95 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.2.7 - 2026-10-07
+
+### Fixed
+
+- **The water keeps up with a walk.** The water surface is worked out a little past the edges of
+  the screen and redone when the view reaches them, off the main thread. It waited until the view
+  had used all of that margin, and a result that came back after the next tile of walking was
+  thrown away, so on a slower machine every one was thrown away until the player stood still:
+  water coming into view lagged as rectangles over the land, or lost its effects, and snapped back
+  the moment the player stopped. The work now starts with two tiles of margin left, and a result is
+  used whenever it still covers the view. Reported by WindyWeirdo on Nexus.
+- **The game's own rain no longer bends over water.** With the mod's rain switched off (or for a
+  weather it does not replace), the game's rain, snow and blown leaves were drawn into the world
+  before the water effect, and the ripple warped every streak that crossed a lake, the sea or a
+  river. While the water effect runs they are now drawn on top of it, the way the mod's own rain
+  already was, in the colour the game's own lighting gives them. Reported by ghi3038 on Nexus.
+- **Junimos have one shadow, their own size, that stays on the floor.** Three things made a
+  Junimo's shadow look wrong. The shadow ignored a character's size, so a Junimo (drawn at three
+  quarters of a villager) cast one a third too big that rose past its head. The game draws a round
+  blob under Junimos inside their own drawing, which the mod did not take away, so they had two.
+  And a creature's shadow did not fade as it jumped, leaving a hard patch on the floor under every
+  hop. A character's shadow now follows its size, the Junimos' own blob gives way to the mod's
+  shadow, and a creature's shadow fades as it leaves the ground. Reported with a video by ghi3038
+  on Nexus.
+- **No raised box round the landslide.** Sprite relief reads a sprite's rounded edge from where
+  its art turns transparent. Some art the game lays over the map carries its own ground and is
+  opaque right to the edge of its picture (the landslide by the mines in the first days, the rocks
+  over the railroad, the Joja front over the Community Center), so the only edge the relief found
+  was the picture's rectangle, and it lit that as a raised box. Such pictures are now found once
+  and their edge is left flat; the shading inside them is kept.
+
+### Added
+
+- **The SMAPI log says how large a picture the graphics card takes.** One more line at startup,
+  `largest picture:`, gives the largest texture and render target the card accepts next to the
+  largest one the mod makes, and warns when the card's is smaller. Phones take smaller pictures
+  than desktop cards, and a screen striped black on two phones could not be looked into without it.
+- **The game's weather over water in plain grey: a switch.** In F6 under the sky (and in Generic
+  Mod Config Menu). On, the game's own rain, snow and leaves where they cross the water are drawn
+  in a plain grey from the light around them rather than the game's blue. Off by default, so
+  nothing changes unless you turn it on.
+- **Morning fog that lifts: a switch.** In F6 under Fog (and in Generic Mod Config Menu), with the
+  day fog on: the fog comes only in the morning, thickest at dawn, and thins over an hour and a half
+  until it is gone by the hour you choose (7 to 12, 9 to start). Off by default, so the day fog
+  stays all day unless you turn it on. Asked for by Charost on Nexus.
+- **Raindrops on the screen that bend the picture: a switch.** In F6 under Screen drops (and in
+  Generic Mod Config Menu). On, each drop on the glass works as a tiny lens: it shows the world behind
+  it flipped and shrunk, with a dark rim and a glint of sky, the way rain on a camera reads in a
+  modern game. New drops land and spread out instead of fading in, and a thin fringe of colour
+  shows round the rim, and a trickle running down the edge leaves a clear path through the mist
+  that closes over again behind it. Off by default, so the drops stay as they were unless you turn
+  it on.
+- **Drops across the screen: a dial.** Under Screen drops, from 0 to 1: small beads scattered over
+  the whole screen as well as the edges, and from 0.4 up a trickle now and then down the middle of
+  the glass. 0, the default, keeps the drops to the edges as before.
+- **Livelier drops on the screen: a dial.** Under Screen drops, from 0 to 1: drops come and go
+  faster, trickles run down the sides more often, and heavy drops creep down the edges. 0, the
+  default, is the drops as they always were. Asked for by Charost on Nexus.
+- **Windy spells: a switch.** In F6 under the sky (and in Generic Mod Config Menu): two or three
+  spells of strong wind a day, each rising and dying away over twenty minutes. The trees lean
+  harder, the rain, snow and leaves blow sideways, the water drifts and the cloud shadows hurry.
+  Every player in a co-op game gets the same spells, and a strength dial sets how hard they blow.
+  Off by default. Asked for by Charost on Nexus.
+- **The sea swells in rain: a dial.** Under the sea's wave strength: how much harder the sea heaves
+  while it rains, and harder again in a storm. Rivers, ponds and lakes are not touched. 0, the
+  default, keeps the sea as it was.
+- **Creature shadow length and softness.** Two dials under the creatures switch in F6 (and in
+  Generic Mod Config Menu) for the shadows of the horse, the pets, Junimos, critters such as rats,
+  and wildlife mods' creatures, against everyone else's. Both start at 1, as before. Asked for by
+  ghi3038 on Nexus.
+
+### For translators
+
+44 new keys: `config.shadows.creaturelength.name`/`.tooltip`,
+`config.shadows.creaturesoftness.name`/`.tooltip`, `tuner.shadowcreaturelength`,
+`tuner.shadowcreaturesoftness`, `help.shadowcreaturelength`, `help.shadowcreaturesoftness`,
+`config.weather.gameweatherplaintint.name`/`.tooltip`, `tuner.gameweatherplaintint`,
+`help.gameweatherplaintint`, `config.fog.morningonly.name`/`.tooltip`,
+`config.fog.morninglifthour.name`/`.tooltip`, `tuner.fogmorningonly`, `help.fogmorningonly`,
+`tuner.fogmorninglifthour`, `help.fogmorninglifthour`,
+`config.wetworld.lensdropliveliness.name`/`.tooltip`, `tuner.wetworldlensdropliveliness`,
+`help.wetworldlensdropliveliness`, `config.wetworld.lensdropsrefract.name`/`.tooltip`,
+`tuner.wetworldlensdropsrefract`, `help.wetworldlensdropsrefract`,
+`config.wetworld.lensdropspread.name`/`.tooltip`, `tuner.wetworldlensdropspread`,
+`help.wetworldlensdropspread`, `config.weather.windyspells.name`/`.tooltip`,
+`config.weather.windyspellsstrength.name`/`.tooltip`, `tuner.windyspells`, `help.windyspells`,
+`tuner.windyspellsstrength`, `help.windyspellsstrength`, `config.water.searainswell.name`/`.tooltip`,
+`tuner.watersearainswell`, `help.watersearainswell`.
+
 ## 2.2.6 - 2026-10-04
 
 ### Added

@@ -428,6 +428,17 @@ namespace SDVRadiance
             (301, nameof(ModConfig.WaterNightStars), Look),
             (302, nameof(ModConfig.WaterSparkleByDay), Look),
             (303, nameof(ModConfig.WaterSparkleAtNight), Look),
+            (304, nameof(ModConfig.ShadowCreatureLength), Look),
+            (305, nameof(ModConfig.ShadowCreatureSoftness), Look),
+            (306, nameof(ModConfig.GameWeatherPlainTint), Look),
+            (307, nameof(ModConfig.FogMorningOnly), Look),
+            (308, nameof(ModConfig.FogMorningLiftHour), Look),
+            (309, nameof(ModConfig.WetWorldLensDropLiveliness), Look),
+            (310, nameof(ModConfig.WetWorldLensDropsRefract), Look),
+            (311, nameof(ModConfig.WetWorldLensDropSpread), Look),
+            (312, nameof(ModConfig.WindySpellsEnabled), Look),
+            (313, nameof(ModConfig.WindySpellsStrength), Look),
+            (314, nameof(ModConfig.WaterSeaRainSwell), Look),
         ];
 
         private static Dictionary<int, (string Property, bool IsPerformance)>? _settingById;

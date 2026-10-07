@@ -76,7 +76,7 @@ namespace SDVRadiance
                 if (_treeAlphaField?.GetValue(tree) is float a)
                     return MathHelper.Clamp(a, 0f, 1f);
             }
-            catch { }
+            catch (Exception exception) { QuietFailures.Note("water mask: a tree's fade", exception); }
             return 1f;
         }
 
@@ -96,7 +96,7 @@ namespace SDVRadiance
                 critter.draw(spriteBatch);
                 critter.drawAboveFrontLayer(spriteBatch);
             }
-            catch { }
+            catch (Exception exception) { QuietFailures.Note("water mask: a critter's own draw", exception); }
             finally { Game1.spriteBatch = gameBatch; }
         }
 
@@ -206,7 +206,7 @@ namespace SDVRadiance
                 Game1.spriteBatch = spriteBatch;
                 c.drawAboveAlwaysFrontLayer(spriteBatch);
             }
-            catch { }
+            catch (Exception exception) { QuietFailures.Note("water mask: what a character draws over its head", exception); }
             finally { Game1.spriteBatch = gameBatch; }
         }
 
@@ -676,7 +676,7 @@ namespace SDVRadiance
                         heldRod.draw(spriteBatch);
                     Game1.drawTool(pw);
                 }
-                catch { }
+                catch (Exception exception) { QuietFailures.Note("water mask: a held tool", exception); }
                 finally { Game1.spriteBatch = gameBatch; }
             }
         }

@@ -2670,6 +2670,9 @@ namespace SDVRadiance
                         _bevelledSheetsThisFrame.Add(sheet.Name ?? "(unnamed sheet)");
                     Texture2D? map = _sheetNormals.For(_device, normals, sheet, variant);
                     _bakeSheetFlat = false;
+                    // A flat map has no edge to take back.
+                    if (map != null && variant != NormalBakeFlat)
+                        GroundCarryingArt.Rederive(_device, normals, _sheetNormals, sheet, variant, map);
                     return map;
                 };
                 bool vertexRoad = textureSorted && ReliefVertexRoad && _reliefReplayEffect != null;

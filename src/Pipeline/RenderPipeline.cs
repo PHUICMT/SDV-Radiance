@@ -151,6 +151,10 @@ namespace SDVRadiance
         /// </summary>
         /// <remarks>When the water mask's own tile art was among it, the mask is rebuilt: the
         /// water was drawn from a picture that is no longer there.</remarks>
+        /// <summary>Drop every sheet's derived normal map, so the next draw makes them again
+        /// (radiance_groundart, whose switch changes what a remade map holds).</summary>
+        internal void ForgetSheetNormals() => _sheetNormals.Clear();
+
         internal int ForgetReloadedArt()
         {
             int tileArt = ArtReloads.Forget(_tileArtCache, key => key.Item1)
@@ -490,7 +494,7 @@ namespace SDVRadiance
                 _gpuProbeFrames++;
             }
             catch { /* a probe must never cost the player their frame */ }
-            finally { try { _device.SetRenderTarget(target); } catch { } }
+            finally { try { _device.SetRenderTarget(target); } catch (Exception exception) { QuietFailures.Note("gpu probe: binding the target back", exception); } }
             return milliseconds;
         }
 
@@ -735,7 +739,7 @@ namespace SDVRadiance
                 return sum / _gainProbePixels.Length;
             }
             catch { return 0f; }
-            finally { try { _device.SetRenderTarget(restore); } catch { } }
+            finally { try { _device.SetRenderTarget(restore); } catch (Exception exception) { QuietFailures.Note("gain probe: binding the target back", exception); } }
         }
 
         /// <summary>Size of the frame the GAME drew, in screen pixels — the space
@@ -878,6 +882,22 @@ namespace SDVRadiance
         // captures record it (see RenderPipeline.Dump.cs) and freeze mode pins it at neutral.
         // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
 
+        /// <summary>How long the morning fog takes to lift, in game minutes, ending at the lift hour.</summary>
+        private const float MorningFogLiftMinutes = 90f;
+
+        /// <summary>How much of the day fog is left at this time of day: all of it unless the fog is
+        /// set to the morning only, and then all of it until an hour and a half before the lift
+        /// hour, eased to nothing by it. Read off the continuous clock, so it thins a little every
+        /// frame rather than stepping every ten game minutes.</summary>
+        private static float MorningFogLeft(ModConfig config)
+        {
+            if (!config.FogMorningOnly)
+                return 1f;
+            float liftedBy = config.FogMorningLiftHour * 60f;
+            float lifting = MathHelper.Clamp((GameClock.MinutesNow() - (liftedBy - MorningFogLiftMinutes)) / MorningFogLiftMinutes, 0f, 1f);
+            return 1f - MathHelper.SmoothStep(0f, 1f, lifting);
+        }
+
         public RenderPipeline(GraphicsDevice device, IMonitor monitor, string modDirectory)
         {
             Current = this;
@@ -896,6 +916,7 @@ namespace SDVRadiance
                     effect.Parameters["BevelStrength"]?.SetValue(flat ? 0f : 2.0f);
                     effect.Parameters["ReliefStrength"]?.SetValue(flat ? 0f : 0.6f);
                     effect.Parameters["FlipX"]?.SetValue(variant == NormalBakeMirrored ? 1f : 0f);
+                    effect.Parameters["NeighbourBounds"]?.SetValue(new Vector4(0f, 0f, 1f, 1f));
                 });
             _bloom = LoadEffect("bloom.mgfxo");
             // The player's shadow patch cuts itself against the map with this (ShadowRenderer.PlayerPatch).
@@ -915,6 +936,7 @@ namespace SDVRadiance
             _lighting = LoadEffect("lighting.mgfxo");
             _tail = LoadEffect("tail.mgfxo");
             _wetEffect = LoadEffect("wet.mgfxo");
+            ScreenEdgeDrops.LensEffect = LoadEffect("lensdrops.mgfxo");
             _upscale = LoadEffect("upscale.mgfxo");
             ScreenZoomFilter.Effect = _upscale;
         }
@@ -1008,6 +1030,7 @@ namespace SDVRadiance
                 case "finishing": old = _finishing; _finishing = loaded; break;
                 case "tail": old = _tail; _tail = loaded; break;
                 case "wet": old = _wetEffect; _wetEffect = loaded; break;
+                case "lensdrops": old = ScreenEdgeDrops.LensEffect; ScreenEdgeDrops.LensEffect = loaded; break;
                 case "upscale": old = _upscale; _upscale = loaded; ScreenZoomFilter.Effect = loaded; break;
                 case "cascades": old = _cascadesEffect; _cascadesEffect = loaded; break;
                 case "normals": old = _normalsEffect; _normalsEffect = loaded; break;
@@ -1414,7 +1437,7 @@ namespace SDVRadiance
             // fades out over dusk exactly as the night mist (sparse blue wisps, clear
             // weather only) fades in. Both amounts are EASED so toggling never pops.
             float night = NightFactorNow();
-            float dayTarget = (config.FogEnabled && outdoors) ? config.FogDensity * (1f - night) : 0f;
+            float dayTarget = (config.FogEnabled && outdoors) ? config.FogDensity * (1f - night) * MorningFogLeft(config) : 0f;
             // A mine level whose air is thick is the one INDOOR place with real fog in it, and the
             // game draws it as one tile stamped across the screen. Ours goes over the top of it,
             // which does two things the tiling cannot: it moves, and it takes the glow of the
@@ -1624,7 +1647,7 @@ namespace SDVRadiance
                 LightningEffects.DrawAfterglow(spriteBatch, width, height);
                 // Drops on the glass and frost in the corners, over the finished frame and
                 // under the UI - so a menu is never rained on and the world always is.
-                ScreenEdgeDrops.Draw(spriteBatch, config, width, height);
+                ScreenEdgeDrops.Draw(spriteBatch, config, width, height, current);
                 // After every stage has had its say, so the columns are the values the frame was
                 // actually built from rather than the ones it started with.
                 ReportBrightWatch(config);
@@ -1644,7 +1667,7 @@ namespace SDVRadiance
                     if (!ReferenceEquals(CurrentlyBoundTarget(), target))
                         _device.SetRenderTarget(target);
                 }
-                catch { }
+                catch (Exception exception) { QuietFailures.Note("effect chain: binding the game's target back", exception); }
             }
 
             try

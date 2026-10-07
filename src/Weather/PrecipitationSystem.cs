@@ -57,6 +57,12 @@ namespace SDVRadiance
         /// weather draw. What tells a skip of ours from a skip of somebody else's.</summary>
         private static bool _weSkippedTheGameThisCall;
 
+        /// <summary>Per screen: whether the water stage runs this frame (told by the pipeline with the
+        /// sky deferral), and whether the game's own weather was held back from the world for the
+        /// chain to draw. Kept apart from <see cref="ScreenPrecipitation"/>, which only exists once
+        /// our own rain is wanted, and the game's weather is held exactly when ours is not.</summary>
+        private static readonly Dictionary<int, (bool WaterStageRuns, bool VanillaOwed)> _vanillaWeather = [];
+
         /// <summary>How many weather draws another mod has taken since launch, for the report: a
         /// player asking where the rain went is answered by this number moving.</summary>
         internal static long CallsAnotherModDrew;
@@ -156,7 +162,9 @@ namespace SDVRadiance
         /// halves must lean the same way.</summary>
         private static float _windPixelsPerSecond = -120f;
         /// <summary>The wind the rain leans with, signed, for anything else that moves in it (the foliage sway).</summary>
-        internal static float WindPixelsPerSecond => _windPixelsPerSecond;
+        /// <summary>The shared wind as everything reads it: the low-passed game wind, made
+        /// stronger during a windy spell (see <see cref="WindySpells"/>; unchanged without one).</summary>
+        internal static float WindPixelsPerSecond => WindySpells.Amplify(_windPixelsPerSecond);
 
         private static Texture2D? _streakTexture;
         private static Texture2D? _flakeTexture;
@@ -259,7 +267,7 @@ namespace SDVRadiance
         internal static bool DrawWeather_Prefix(bool __runOriginal)
         {
             _anotherModDrawsThisCall = !__runOriginal;
-            _weSkippedTheGameThisCall = !_anotherModDrawsThisCall && SuppressVanillaThisCall();
+            _weSkippedTheGameThisCall = !_anotherModDrawsThisCall && (SuppressVanillaThisCall() || HoldVanillaForTheChain());
             return !_weSkippedTheGameThisCall;
         }
 
@@ -292,6 +300,25 @@ namespace SDVRadiance
                 _anotherModDrawsThisCall = false;
                 _weSkippedTheGameThisCall = false;
             }
+        }
+
+        /// <summary>The game's own rain, snow and blown leaves, held out of the world for the chain.</summary>
+        /// <remarks>
+        /// Our own rain already goes on after the water stage, so it hangs in the air over the water
+        /// instead of rippling with it. The game's weather, drawn whenever ours is not (the rain
+        /// switch off, or a kind of weather we do not replace), was still drawn into the world
+        /// first, and the ripple bent every streak that crossed a lake, the sea or a river (reported
+        /// by ghi3038). While the water stage runs on this screen, it is held here and drawn by
+        /// <see cref="DrawSkyForChain"/> on top, from the game's own drops, frames and colours.
+        /// </remarks>
+        private static bool HoldVanillaForTheChain()
+        {
+            int screenId = CurrentScreenId();
+            if (!_vanillaWeather.TryGetValue(screenId, out var state) || !state.WaterStageRuns
+                || HarmonyPatcher.GameIsTakingMapScreenshot || Game1.currentLocation is not { IsOutdoors: true })
+                return false;
+            _vanillaWeather[screenId] = (true, true);
+            return true;
         }
 
         /// <summary>Whether this exact call should skip the vanilla weather draw.</summary>
@@ -353,8 +380,13 @@ namespace SDVRadiance
         /// of lag on transitions, which the presence fades cover.</summary>
         internal static void DeferSkyDrawing(bool deferred)
         {
-            if (_screens.TryGetValue(CurrentScreenId(), out ScreenPrecipitation? screen))
+            int screenId = CurrentScreenId();
+            if (_screens.TryGetValue(screenId, out ScreenPrecipitation? screen))
                 screen.SkyDrawDeferred = deferred;
+            bool owed = _vanillaWeather.TryGetValue(screenId, out var state) && state.VanillaOwed;
+            if (!_vanillaWeather.ContainsKey(screenId))
+                LiveScreens.ForgetDeparted(_vanillaWeather);
+            _vanillaWeather[screenId] = (deferred, owed);
         }
 
         /// <summary>Draw the sky group onto the water stage's freshly written output. The scene
@@ -364,6 +396,7 @@ namespace SDVRadiance
         internal static void DrawSkyForChain(SpriteBatch spriteBatch, RenderTarget2D dest,
                                              int frameWidth, Vector3 ambient)
         {
+            DrawHeldVanillaWeather(spriteBatch, dest, frameWidth, ambient);
             if (!_screens.TryGetValue(CurrentScreenId(), out ScreenPrecipitation? screen)
                 || !screen.SkyDrawDeferred || screen.Presence <= FadeGone)
                 return;
@@ -376,6 +409,78 @@ namespace SDVRadiance
             spriteBatch.End();
             FrameCost.End(FrameCost.Part.Precipitation, started);
         }
+
+        /// <summary>The game's weather draw, as Game1.drawWeather makes it, onto the chain: the snow
+        /// sheet, the blown debris and the rain drops, from the game's own state. Scaled to the
+        /// chain's buffer and dimmed by the same ambient as our own sky group.</summary>
+        private static void DrawHeldVanillaWeather(SpriteBatch spriteBatch, RenderTarget2D dest, int frameWidth, Vector3 ambient)
+        {
+            int screenId = CurrentScreenId();
+            if (!_vanillaWeather.TryGetValue(screenId, out var state) || !state.VanillaOwed)
+                return;
+            _vanillaWeather[screenId] = (state.WaterStageRuns, false);
+            GameLocation? location = Game1.currentLocation;
+            if (location == null || !location.IsOutdoors)
+                return;
+            float pixelScale = frameWidth > 0 ? dest.Width / (float)frameWidth : 1f;
+            bool plain = LiveConfig?.Invoke().GameWeatherPlainTint ?? false;
+            Color tint = plain ? Shaded(Color.White, ambient) : LitAsTheGameLightsIt(Color.White, location);
+            spriteBatch.Begin(SpriteSortMode.Texture, BlendState.AlphaBlend, SamplerState.PointClamp,
+                DepthStencilState.None, RasterizerState.CullNone, null, Matrix.CreateScale(pixelScale));
+            if (location.IsSnowingHere())
+            {
+                Game1.snowPos.X %= 64f;
+                Rectangle snowFrame = new(368 + (int)(Game1.currentGameTime.TotalGameTime.TotalMilliseconds % 1200.0) / 75 * 16, 192, 16, 16);
+                for (float column = -64f + Game1.snowPos.X % 64f; column < Game1.viewport.Width; column += 64f)
+                {
+                    for (float row = -64f + Game1.snowPos.Y % 64f; row < Game1.viewport.Height; row += 64f)
+                        spriteBatch.Draw(Game1.mouseCursors, new Vector2((int)column, (int)row), snowFrame,
+                            tint * 0.8f * Game1.options.snowTransparency, 0f, Vector2.Zero, 4.001f, SpriteEffects.None, 1f);
+                }
+            }
+            if (!location.ignoreDebrisWeather.Value && location.IsDebrisWeatherHere() && Game1.viewport.X > -Game1.viewport.Width
+                && Game1.debrisWeather != null)
+            {
+                foreach (WeatherDebris piece in Game1.debrisWeather)
+                    piece.draw(spriteBatch);
+            }
+            if (location.IsRainingHere() && location is not StardewValley.Locations.Summit
+                && (!Game1.eventUp || location.isTileOnMap(new Vector2(Game1.viewport.X / 64, Game1.viewport.Y / 64)))
+                && Game1.rainDrops != null)
+            {
+                bool green = Game1.IsGreenRainingHere();
+                Color colour = plain ? Shaded(green ? Color.LimeGreen : Color.White, ambient)
+                    : LitAsTheGameLightsIt(green ? Color.LimeGreen : Color.White, location);
+                int passes = green ? 2 : 1;
+                for (int i = 0; i < Game1.rainDrops.Length; i++)
+                {
+                    for (int pass = 0; pass < passes; pass++)
+                        spriteBatch.Draw(Game1.rainTexture, Game1.rainDrops[i].position,
+                            Game1.getSourceRectForStandardTileSheet(Game1.rainTexture, Game1.rainDrops[i].frame + (green ? 4 : 0), 16, 16),
+                            colour, 0f, Vector2.Zero, 4f, SpriteEffects.None, 1f);
+                }
+            }
+            spriteBatch.End();
+        }
+
+        /// <summary>
+        /// What the game's own lighting leaves of <paramref name="colour"/>, for weather the mod draws
+        /// after it: the game takes its lightmap away from the whole picture (Game1's lightingBlend,
+        /// reverse subtract, the light times itself), and in rain the lightmap is the outdoor light,
+        /// strong in red and green, which is why the game's rain has always looked blue. Redrawn over
+        /// the water effect with the plain ambient instead, it came out grey. The subtraction is
+        /// linear, so taking it from the streak alone gives the same pixel as taking it from the
+        /// streak blended over the already lit world. The lamps' pools are left out: the rain was
+        /// never meant to be their colour.
+        /// </summary>
+        private static Color LitAsTheGameLightsIt(Color colour, GameLocation location)
+        {
+            Color light = Game1.ambientLight.Equals(Color.White) || (location.IsOutdoors && location.IsRainingHere())
+                ? Game1.outdoorLight : Game1.ambientLight;
+            return new Color(LightTakenAway(colour.R, light.R), LightTakenAway(colour.G, light.G), LightTakenAway(colour.B, light.B), colour.A);
+        }
+
+        private static byte LightTakenAway(byte value, byte light) => (byte)Math.Max(0, value - light * light / 255);
 
         private static Color Shaded(Color colour, Vector3 ambient) => new(
             (byte)(colour.R * ambient.X), (byte)(colour.G * ambient.Y), (byte)(colour.B * ambient.Z), colour.A);
@@ -494,10 +599,11 @@ namespace SDVRadiance
         /// </summary>
         private static float SlantedWind(float slant)
         {
-            float scaled = _windPixelsPerSecond * slant;
+            float wind = WindPixelsPerSecond;
+            float scaled = wind * slant;
             if (slant <= 1f)
                 return scaled;
-            float direction = _windPixelsPerSecond > 30f ? 1f : -1f;
+            float direction = wind > 30f ? 1f : -1f;
             float own = direction * SlantOwnWindPixelsPerSecond * (slant - 1f) / (MaxRainSlant - 1f);
             // Rain that crosses the screen three times faster than it falls has stopped reading as
             // rain, so the pair is capped at a hard driving slant rather than a horizontal streak.
@@ -699,7 +805,7 @@ namespace SDVRadiance
                 flake.SwayPhase += flake.SwayPerSecond * dt;
                 flake.Position.Y += SnowLayerFallSpeed[flake.Layer] * dt;
                 flake.Position.X += (MathF.Sin(flake.SwayPhase) * SnowLayerSwayPixels[flake.Layer] * flake.SwayPerSecond * 0.5f
-                    + _windPixelsPerSecond * 0.30f * (0.5f + 0.5f * SnowLayerFallSpeed[flake.Layer] / SnowLayerFallSpeed[2])) * dt;
+                    + WindPixelsPerSecond * 0.30f * (0.5f + 0.5f * SnowLayerFallSpeed[flake.Layer] / SnowLayerFallSpeed[2])) * dt;
                 if (flake.Position.X < -64f) flake.Position.X += viewportWidth + 128;
                 else if (flake.Position.X > viewportWidth + 64f) flake.Position.X -= viewportWidth + 128;
                 if (flake.Position.Y > viewportHeight + 72f)
@@ -738,7 +844,7 @@ namespace SDVRadiance
                 piece.FlutterPhase += piece.FlutterPerSecond * dt;
                 piece.TumblePhase += piece.TumblePerSecond * dt;
                 float ride = WindLayerSpeed[piece.Layer];
-                piece.Position.X += _windPixelsPerSecond * WindDebrisRideMultiplier * ride * dt;
+                piece.Position.X += WindPixelsPerSecond * WindDebrisRideMultiplier * ride * dt;
                 piece.Position.Y += (MathF.Sin(piece.FlutterPhase) * 26f
                     + WindDebrisSinkPixelsPerSecond * windSlant) * ride * dt;
                 bool wrapped = false;

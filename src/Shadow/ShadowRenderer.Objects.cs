@@ -44,7 +44,7 @@ namespace SDVRadiance
             float headFade = HeadFade, SpriteEffects effects = SpriteEffects.None,
             ShadowGeometry geometry = ShadowGeometry.Solid, float? groundAnchorWorldY = null,
             Color? shadowColor = null, bool contactPool = true, float fadeShareFromFeet = 1f,
-            float? groundForeshortening = null, float spriteRotation = 0f, float groundedBodyWidth = 0f)
+            float? groundForeshortening = null, float spriteRotation = 0f, float groundedBodyWidth = 0f, float casterScale = 1f)
         {
             // A shaken caster bakes under a key of its own. Trees of one kind share one bake, and
             // the shake is one tree's: baked into the shared entry, the shaken lean was asked back
@@ -99,7 +99,8 @@ namespace SDVRadiance
                 // One slot texel is BakedScale screen pixels of silhouette, so the draw undoes the
                 // bake's scale. Everything that fits a slot bakes at 4 and this is 1, exactly as
                 // before; only the sprites that used to draw as bands come back magnified.
-                float unbake = 4f / bakedEntry.BakedScale;
+                // A caster drawn smaller than the game's 4 (a Junimo) is the same bake drawn smaller.
+                float unbake = 4f / bakedEntry.BakedScale * casterScale;
                 Vector2 bakedOrigin = bakedEntry.FeetInRt - new Vector2(content.X, content.Y);
                 // The bake already holds a black, soft-edged silhouette, so it is tinted WHITE to
                 // come out as itself. A mask caller wants the same pixels read as coverage, which
@@ -157,10 +158,10 @@ namespace SDVRadiance
                 // slot and lands here all morning); an object's are turned as they always were.
                 if (groundedBodyWidth > 0f)
                     DrawBandedGrounded(spriteBatch, texture, sourceRect, feet, baseOrigin, alpha, rotation + spriteRotation,
-                        stretch, groundAnchorWorldY, depth, blur, headFade, effects, shadowColor, groundedBodyWidth);
+                        stretch, groundAnchorWorldY, depth, blur, headFade, effects, shadowColor, groundedBodyWidth, casterScale);
                 else
                     DrawBandedGradient(spriteBatch, texture, sourceRect, feet, baseOrigin, alpha, rotation + spriteRotation,
-                        new Vector2(4f, 4f * stretch), groundAnchorWorldY ?? depth, blur, headFade, effects,
+                        new Vector2(4f * casterScale, 4f * stretch * casterScale), groundAnchorWorldY ?? depth, blur, headFade, effects,
                         anchorIsSortDepth: !groundAnchorWorldY.HasValue, shadowColor: shadowColor,
                         shadowLengthPerHeight: stretch);
             }
@@ -174,9 +175,9 @@ namespace SDVRadiance
         /// for every shadow drawn, measured with dotnet-trace on 25/9.</summary>
         private void DrawBandedGrounded(SpriteBatch spriteBatch, Texture2D texture, Rectangle sourceRect, Vector2 feet,
             Vector2 baseOrigin, float alpha, float rotation, float stretch, float? groundAnchorWorldY, float depth, float blur,
-            float headFade, SpriteEffects effects, Color? shadowColor, float groundedBodyWidth)
+            float headFade, SpriteEffects effects, Color? shadowColor, float groundedBodyWidth, float casterScale)
             => WithGroundedCast(() => DrawBandedGradient(spriteBatch, texture, sourceRect, feet, baseOrigin, alpha, rotation,
-                new Vector2(4f, 4f * stretch), groundAnchorWorldY ?? depth, blur, headFade, effects,
+                new Vector2(4f * casterScale, 4f * stretch * casterScale), groundAnchorWorldY ?? depth, blur, headFade, effects,
                 anchorIsSortDepth: !groundAnchorWorldY.HasValue, shadowColor: shadowColor,
                 shadowLengthPerHeight: stretch), groundedBodyWidth);
 
@@ -1452,10 +1453,12 @@ namespace SDVRadiance
                     Rectangle sourceRect = critter.sprite.SourceRect;
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport, worldPosition + new Vector2(0f, -2f));
                     // A critter in the air: its shadow leaves it along the light (see LiftShift).
-                    feet += LiftShift(Math.Max(0f, -(critter.yJumpOffset + critter.yOffset)), rotation, LengthCap(stretch, 0.45f));
+                    // The creatures' own dials reach the critters too: a rat is a creature to the player.
+                    float critterStretch = LengthCap(stretch, 0.45f) * _creatureLength;
+                    feet += LiftShift(Math.Max(0f, -(critter.yJumpOffset + critter.yOffset)), rotation, critterStretch);
                     float depth = MathHelper.Clamp((worldPosition.Y - 1f) / 10000f, 0f, 1f);
                     EmitObject(spriteBatch, critter.sprite.Texture, sourceRect, feet, new Vector2(sourceRect.Width / 2f, sourceRect.Height),
-                        critterAlpha, rotation, LengthCap(stretch, 0.45f), depth, blur, ObjectHeadFade,
+                        critterAlpha, rotation, critterStretch, depth, blur * _creatureSoftness, ObjectHeadFade,
                         critter.flip ? SpriteEffects.FlipHorizontally : SpriteEffects.None);
                 }
             }

@@ -968,7 +968,13 @@ def publish_description(ctx, draft, version, confirm, stage=False):
     page.goto(GENERAL_URL, wait_until="domcontentloaded")
     settle(page, 8)
 
+    # The editor mounts after the page settles, and on a slow day (the API answering 504s)
+    # one look at it found nothing three times in a row. Keep looking for a minute.
     live = page.evaluate(FIND_EDITOR_JS)
+    deadline = time.time() + 60
+    while live is None and time.time() < deadline:
+        time.sleep(2)
+        live = page.evaluate(FIND_EDITOR_JS)
     if live is None:
         print("could not find the description editor on the page")
         return 1

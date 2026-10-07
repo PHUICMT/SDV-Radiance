@@ -34,6 +34,8 @@ namespace SDVRadiance
         private const int RainDropsPerScreen = 34;
         private const int FrostFeathersPerScreen = 22;
         private const int TrailDropletsPerScreen = 48;
+        /// <summary>The most small beads the spread dial scatters over the whole glass.</summary>
+        private const int SpreadDropsPerScreen = 72;
         private const float PresenceSecondsIn = 6f;
         /// <summary>Rain drops dry off the glass faster than the ground dries (~7 s real is the
         /// research's ten game-minutes); frost takes twice that to melt.</summary>
@@ -93,19 +95,41 @@ namespace SDVRadiance
         private sealed class ScreenDrops
         {
             internal readonly EdgeDrop[] Rain = new EdgeDrop[RainDropsPerScreen];
+            internal readonly EdgeDrop[] Spread = new EdgeDrop[SpreadDropsPerScreen];
+            /// <summary>Its own stream, so turning the spread dial never changes where the edge
+            /// drops land.</summary>
+            internal readonly Random SpreadRandom;
+            internal bool SpreadSeeded;
             internal readonly EdgeDrop[] Frost = new EdgeDrop[FrostFeathersPerScreen];
             internal readonly TrailDroplet[] Trail = new TrailDroplet[TrailDropletsPerScreen];
             internal Runner LeftRunner, RightRunner;
+            /// <summary>A trickle down the middle of the glass, only with the spread dial well up.</summary>
+            internal Runner CenterRunner;
+            internal float SecondsToNextCenterRunner = 6f;
             internal float SecondsToNextRunner = 4f;
             internal int NextTrailSlot;
             internal readonly Random Random;
             internal float RainPresence, FrostPresence;
             internal bool Seeded;
-            internal ScreenDrops(int screenId) { Random = new Random(20260820 + screenId * 71); }
+            internal ScreenDrops(int screenId)
+            {
+                Random = new Random(20260820 + screenId * 71);
+                SpreadRandom = new Random(20261007 + screenId * 53);
+            }
         }
 
         private static readonly Dictionary<int, ScreenDrops> _screens = [];
+        /// <summary>The liveliness dial for the frame being stepped (0 to 1). Read by the seeding and
+        /// stepping below instead of passed through every call; 0 leaves every number as it was.</summary>
+        private static float _liveliness;
         private static Texture2D? _dropTexture;
+        /// <summary>The same six silhouettes as domes of water, for the lens look: RG the surface
+        /// normal, B the thickness, A the coverage (see lensdrops.fx).</summary>
+        private static Texture2D? _lensTexture;
+        /// <summary>A soft vertical brush for the clear path a trickle leaves through the mist.</summary>
+        private static Texture2D? _wipeTexture;
+        /// <summary>lensdrops.fx, loaded with the rest of the shaders.</summary>
+        internal static Effect? LensEffect;
         private static Texture2D? _frostTexture;
         /// <summary>The haze, built once in both orientations rather than rotated at draw time:
         /// a square texture stretched to a wide screen would carry a band twice as deep along
@@ -127,7 +151,7 @@ namespace SDVRadiance
 
         /// <summary>Step and draw this screen's edge band. Called after the chain has finished
         /// its frame, in the same slot as the lightning afterglow.</summary>
-        internal static void Draw(SpriteBatch spriteBatch, ModConfig config, int width, int height)
+        internal static void Draw(SpriteBatch spriteBatch, ModConfig config, int width, int height, Texture2D? scene)
         {
             GameLocation? location = Game1.currentLocation;
             // The drops used to hang off the wet GROUND's switch, which is now hidden and off.
@@ -167,6 +191,7 @@ namespace SDVRadiance
                 return;
 
             long started = FrameCost.Begin(FrameCost.Part.WetWorld);
+            _liveliness = config.WetWorldLensDropLiveliness;
             EnsureTextures();
             if (!screen.Seeded)
             {
@@ -175,8 +200,28 @@ namespace SDVRadiance
                 for (int i = 0; i < screen.Frost.Length; i++) Reseed(ref screen.Frost[i], screen.Random);
             }
             StepBand(screen.Rain, screen.Random, dt);
+            int spreadCount = (int)MathF.Round(config.WetWorldLensDropSpread * SpreadDropsPerScreen);
+            if (spreadCount > 0)
+            {
+                if (!screen.SpreadSeeded)
+                {
+                    screen.SpreadSeeded = true;
+                    for (int i = 0; i < screen.Spread.Length; i++)
+                        ReseedSpread(ref screen.Spread[i], screen.SpreadRandom, firstTime: true);
+                }
+                for (int i = 0; i < spreadCount; i++)
+                {
+                    screen.Spread[i].AgeSeconds += dt;
+                    if (screen.Spread[i].AgeSeconds >= screen.Spread[i].LifeSeconds)
+                        ReseedSpread(ref screen.Spread[i], screen.SpreadRandom, firstTime: false);
+                }
+            }
             StepBand(screen.Frost, screen.Random, dt);
             StepRunners(screen, dt, rainWanted);
+            if (config.WetWorldLensDropSpread >= CenterRunnerSpread)
+                StepCenterRunner(screen, dt, rainWanted);
+            else if (screen.CenterRunner.Active)
+                StepRunner(ref screen.CenterRunner, screen, dt);
 
             float smallerSide = Math.Min(width, height) * config.WetWorldLensDropSize;
             MergeTouchingDrops(screen, width, height, smallerSide);
@@ -190,17 +235,56 @@ namespace SDVRadiance
             if (screen.FrostPresence > FadeGone)
                 DrawHaze(spriteBatch, _frostHazeAcross, _frostHazeDown, FrostHazeTint,
                     FrostHazeStrength * screen.FrostPresence * hazeDial, FrostHazeBandShare, width, height, smallerSide);
-            if (screen.RainPresence > FadeGone && _dropTexture != null)
+            bool lens = config.WetWorldLensDropsRefract && LensEffect != null && scene != null && !scene.IsDisposed
+                && _lensTexture != null;
+            if (screen.RainPresence > FadeGone && lens)
             {
-                DrawTrail(spriteBatch, screen, width, height, smallerSide);
+                // The drops as lenses: their own batch, with the frame they sit on to bend.
+                spriteBatch.End();
+                Effect effect = LensEffect!;
+                effect.Parameters["MatrixTransform"]?.SetValue(Matrix.CreateOrthographicOffCenter(0, width, height, 0, 0, -1));
+                effect.Parameters["ScreenSize"]?.SetValue(new Vector2(width, height));
+                effect.Parameters["Inversion"]?.SetValue(1.8f);
+                effect.Parameters["Highlight"]?.SetValue(0.9f);
+                effect.Parameters["SceneTexture"]?.SetValue(scene);
+                // First the clear paths the trickles have cut through the mist, then the water.
+                if (_wipeTexture != null)
+                {
+                    effect.CurrentTechnique = effect.Techniques["Wipe"];
+                    spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend,
+                        SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone, effect);
+                    DrawWipes(spriteBatch, screen, width, height, smallerSide);
+                    spriteBatch.End();
+                }
+                effect.CurrentTechnique = effect.Techniques["LensDrops"];
+                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend,
+                    SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone, effect);
+                DrawBand(spriteBatch, _lensTexture!, screen.Spread, screen.RainPresence,
+                    width, height, smallerSide, Color.White, lens: true, count: spreadCount);
+                DrawTrail(spriteBatch, screen, width, height, smallerSide, _lensTexture!, lens: true);
+                DrawBand(spriteBatch, _lensTexture!, screen.Rain, screen.RainPresence,
+                    width, height, smallerSide, Color.White, lens: true);
+                DrawRunner(spriteBatch, screen.LeftRunner, screen.RainPresence, width, height, smallerSide, _lensTexture!, lens: true);
+                DrawRunner(spriteBatch, screen.RightRunner, screen.RainPresence, width, height, smallerSide, _lensTexture!, lens: true);
+                DrawRunner(spriteBatch, screen.CenterRunner, screen.RainPresence, width, height, smallerSide, _lensTexture!, lens: true);
+                spriteBatch.End();
+                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend,
+                    SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone);
+            }
+            else if (screen.RainPresence > FadeGone && _dropTexture != null)
+            {
+                DrawBand(spriteBatch, _dropTexture, screen.Spread, screen.RainPresence,
+                    width, height, smallerSide, Color.White, lens: false, count: spreadCount);
+                DrawTrail(spriteBatch, screen, width, height, smallerSide, _dropTexture, lens: false);
                 DrawBand(spriteBatch, _dropTexture, screen.Rain, screen.RainPresence,
-                    width, height, smallerSide, Color.White);
-                DrawRunner(spriteBatch, screen.LeftRunner, screen.RainPresence, width, height, smallerSide);
-                DrawRunner(spriteBatch, screen.RightRunner, screen.RainPresence, width, height, smallerSide);
+                    width, height, smallerSide, Color.White, lens: false);
+                DrawRunner(spriteBatch, screen.LeftRunner, screen.RainPresence, width, height, smallerSide, _dropTexture, lens: false);
+                DrawRunner(spriteBatch, screen.RightRunner, screen.RainPresence, width, height, smallerSide, _dropTexture, lens: false);
+                DrawRunner(spriteBatch, screen.CenterRunner, screen.RainPresence, width, height, smallerSide, _dropTexture, lens: false);
             }
             if (screen.FrostPresence > FadeGone && _frostTexture != null)
                 DrawBand(spriteBatch, _frostTexture, screen.Frost, screen.FrostPresence,
-                    width, height, smallerSide, new Color(225, 240, 255));
+                    width, height, smallerSide, new Color(225, 240, 255), lens: false);
             spriteBatch.End();
             FrameCost.End(FrameCost.Part.WetWorld, started);
         }
@@ -232,7 +316,9 @@ namespace SDVRadiance
                 : 0.022f + 0.014f * (float)random.NextDouble();
             drop.Alpha = 0.55f + 0.30f * (float)random.NextDouble();
             drop.AgeSeconds = 0f;
-            drop.LifeSeconds = 22f + 26f * (float)random.NextDouble();
+            // Livelier glass turns over faster: at the top of the dial a drop lasts about a third
+            // as long, so the band is always gaining and losing beads.
+            drop.LifeSeconds = (22f + 26f * (float)random.NextDouble()) * (1f - 0.65f * _liveliness);
             drop.Shape = (byte)random.Next(DropShapeCount);
             // The big ones hang longest: weight is what pulls a bead out of round.
             float weight = Math.Clamp((drop.SizeShare - 0.007f) / 0.029f, 0f, 1f);
@@ -244,6 +330,16 @@ namespace SDVRadiance
             for (int i = 0; i < band.Length; i++)
             {
                 band[i].AgeSeconds += dt;
+                // A heavy bead on a side band creeps down the glass before it lets go. Only with the
+                // liveliness dial up; at 0 the drops hold still, as they always did.
+                bool onSideBand = band[i].Position01.X is <= EdgeBandShare or >= 1f - EdgeBandShare;
+                if (_liveliness > 0f && onSideBand)
+                {
+                    float weight = Math.Clamp((band[i].SizeShare - 0.013f) / 0.023f, 0f, 1f);
+                    band[i].Position01.Y += _liveliness * weight * 0.012f * dt;
+                    if (band[i].Position01.Y > 1f)
+                        band[i].AgeSeconds = band[i].LifeSeconds;
+                }
                 if (band[i].AgeSeconds >= band[i].LifeSeconds)
                     Reseed(ref band[i], random);
             }
@@ -357,7 +453,7 @@ namespace SDVRadiance
                 screen.SecondsToNextRunner -= dt;
                 if (screen.SecondsToNextRunner <= 0f)
                 {
-                    screen.SecondsToNextRunner = 3f + 6f * (float)screen.Random.NextDouble();
+                    screen.SecondsToNextRunner = (3f + 6f * (float)screen.Random.NextDouble()) * (1f - 0.65f * _liveliness);
                     bool leftSide = screen.Random.Next(2) == 0;
                     ref Runner slot = ref (leftSide ? ref screen.LeftRunner : ref screen.RightRunner);
                     if (!slot.Active)
@@ -377,6 +473,52 @@ namespace SDVRadiance
             for (int i = 0; i < screen.Trail.Length; i++)
                 if (screen.Trail[i].Alpha > 0f)
                     screen.Trail[i].Alpha = Math.Max(0f, screen.Trail[i].Alpha - dt / 5f);
+        }
+
+        /// <summary>How far up the spread dial has to be before a trickle may run down the middle.</summary>
+        private const float CenterRunnerSpread = 0.4f;
+
+        /// <summary>Now and then a trickle down the middle of the glass, the heavy drop of a
+        /// downpour giving way. One at a time, from somewhere along the top, never near the very
+        /// centre column for long since it wanders as it falls.</summary>
+        private static void StepCenterRunner(ScreenDrops screen, float dt, bool raining)
+        {
+            if (raining && !screen.CenterRunner.Active)
+            {
+                screen.SecondsToNextCenterRunner -= dt;
+                if (screen.SecondsToNextCenterRunner <= 0f)
+                {
+                    screen.SecondsToNextCenterRunner = (6f + 8f * (float)screen.SpreadRandom.NextDouble()) * (1f - 0.65f * _liveliness);
+                    ref Runner slot = ref screen.CenterRunner;
+                    slot.Active = true;
+                    slot.AnchorX01 = 0.15f + 0.70f * (float)screen.SpreadRandom.NextDouble();
+                    slot.Position01 = new Vector2(slot.AnchorX01, 0.05f + 0.35f * (float)screen.SpreadRandom.NextDouble());
+                    slot.FallPerSecond01 = 0.03f + 0.02f * (float)screen.SpreadRandom.NextDouble();
+                    slot.WobblePhase = (float)(screen.SpreadRandom.NextDouble() * Math.PI * 2);
+                    slot.SecondsToNextDroplet = 0f;
+                }
+            }
+            StepRunner(ref screen.CenterRunner, screen, dt);
+        }
+
+        /// <summary>The clear path behind each trickle: a brush at every trail droplet, as clear as
+        /// the droplet is fresh, so the mist closes back over the path as the droplets fade.</summary>
+        private static void DrawWipes(SpriteBatch spriteBatch, ScreenDrops screen, int width, int height, float smallerSide)
+        {
+            Texture2D brush = _wipeTexture!;
+            var origin = new Vector2(brush.Width / 2f, brush.Height / 2f);
+            float across = 0.012f * smallerSide / brush.Width;
+            float along = 0.035f * height / brush.Height;
+            for (int i = 0; i < screen.Trail.Length; i++)
+            {
+                ref TrailDroplet droplet = ref screen.Trail[i];
+                if (droplet.Alpha <= 0.01f)
+                    continue;
+                float clear = Math.Min(1f, droplet.Alpha / 0.45f) * screen.RainPresence;
+                spriteBatch.Draw(brush, new Vector2(droplet.Position01.X * width, droplet.Position01.Y * height),
+                    null, new Color((byte)0, (byte)0, (byte)0, (byte)(clear * 255f)), 0f, origin,
+                    new Vector2(across, along), SpriteEffects.None, 1f);
+            }
         }
 
         private static void StepRunner(ref Runner runner, ScreenDrops screen, float dt)
@@ -402,37 +544,37 @@ namespace SDVRadiance
         }
 
         private static void DrawTrail(SpriteBatch spriteBatch, ScreenDrops screen,
-                                      int width, int height, float smallerSide)
+                                      int width, int height, float smallerSide, Texture2D atlas, bool lens)
         {
-            if (_dropTexture == null)
-                return;
-            var origin = new Vector2(DropCellSize / 2f, _dropTexture.Height / 2f);
-            var cell = new Rectangle(0, 0, DropCellSize, _dropTexture.Height);
+            var origin = new Vector2(DropCellSize / 2f, atlas.Height / 2f);
+            var cell = new Rectangle(0, 0, DropCellSize, atlas.Height);
             for (int i = 0; i < screen.Trail.Length; i++)
             {
                 ref TrailDroplet droplet = ref screen.Trail[i];
                 if (droplet.Alpha <= 0.01f)
                     continue;
                 float scale = droplet.SizeShare * smallerSide / DropCellSize;
-                spriteBatch.Draw(_dropTexture,
+                float alpha = droplet.Alpha * screen.RainPresence;
+                spriteBatch.Draw(atlas,
                     new Vector2(droplet.Position01.X * width, droplet.Position01.Y * height),
-                    cell, Color.White * (droplet.Alpha * screen.RainPresence), 0f, origin,
+                    cell, lens ? LensTint(droplet.SizeShare * smallerSide * 0.5f, alpha) : Color.White * alpha, 0f, origin,
                     scale, SpriteEffects.None, 1f);
             }
         }
 
         private static void DrawRunner(SpriteBatch spriteBatch, in Runner runner, float presence,
-                                       int width, int height, float smallerSide)
+                                       int width, int height, float smallerSide, Texture2D atlas, bool lens)
         {
-            if (!runner.Active || _dropTexture == null)
+            if (!runner.Active)
                 return;
-            var origin = new Vector2(DropCellSize / 2f, _dropTexture.Height / 2f);
-            var cell = new Rectangle(DropCellSize, 0, DropCellSize, _dropTexture.Height);
+            var origin = new Vector2(DropCellSize / 2f, atlas.Height / 2f);
+            var cell = new Rectangle(DropCellSize, 0, DropCellSize, atlas.Height);
             float scale = 0.014f * smallerSide / DropCellSize;
+            float alpha = 0.85f * presence;
             // Stretched along its fall: a moving trickle-head, not a bead at rest.
-            spriteBatch.Draw(_dropTexture,
+            spriteBatch.Draw(atlas,
                 new Vector2(runner.Position01.X * width, runner.Position01.Y * height),
-                cell, Color.White * (0.85f * presence), 0f, origin,
+                cell, lens ? LensTint(0.014f * smallerSide * 0.5f, alpha) : Color.White * alpha, 0f, origin,
                 new Vector2(scale * 0.85f, scale * 1.55f), SpriteEffects.None, 1f);
         }
 
@@ -514,13 +656,15 @@ namespace SDVRadiance
         }
 
         private static void DrawBand(SpriteBatch spriteBatch, Texture2D texture, EdgeDrop[] band,
-                                     float presence, int width, int height, float smallerSide, Color tint)
+                                     float presence, int width, int height, float smallerSide, Color tint, bool lens,
+                                     int count = -1)
         {
+            int drawn = count < 0 ? band.Length : Math.Min(count, band.Length);
             // The drop atlas holds several silhouettes side by side; the frost sheet is one cell.
-            bool atlas = ReferenceEquals(texture, _dropTexture);
+            bool atlas = ReferenceEquals(texture, _dropTexture) || ReferenceEquals(texture, _lensTexture);
             int cellWidth = atlas ? DropCellSize : texture.Width;
             var origin = new Vector2(cellWidth / 2f, texture.Height / 2f);
-            for (int i = 0; i < band.Length; i++)
+            for (int i = 0; i < drawn; i++)
             {
                 ref EdgeDrop drop = ref band[i];
                 // Each drop breathes in over its first second and out over its last two, so the
@@ -531,16 +675,42 @@ namespace SDVRadiance
                 if (alpha <= 0.01f)
                     continue;
                 float scale = drop.SizeShare * smallerSide / cellWidth;
+                // A lens drop LANDS: it spreads from a smaller splash to its full size over its
+                // first fifth of a second, the way a bead hits glass and flattens out.
+                if (lens)
+                    scale *= 0.55f + 0.45f * MathHelper.SmoothStep(0f, 1f, Math.Min(1f, drop.AgeSeconds / 0.18f));
                 Rectangle? source = atlas
                     ? new Rectangle(drop.Shape * DropCellSize, 0, DropCellSize, texture.Height)
                     : null;
                 float stretch = atlas ? drop.Stretch : 1f;
                 spriteBatch.Draw(texture,
                     new Vector2(drop.Position01.X * width, drop.Position01.Y * height),
-                    source, tint * alpha, 0f, origin,
+                    source, lens ? LensTint(drop.SizeShare * smallerSide * 0.5f, alpha) : tint * alpha, 0f, origin,
                     new Vector2(scale, scale * stretch), SpriteEffects.None, 1f);
             }
         }
+
+        /// <summary>A small bead somewhere on the glass, for the spread dial: mostly fine mist-sized
+        /// beads with a few larger ones, a short life, and anywhere but the very edge, which the
+        /// edge band already holds. The first seeding starts them at random ages, so turning the
+        /// dial up does not land seventy drops in the same instant.</summary>
+        private static void ReseedSpread(ref EdgeDrop drop, Random random, bool firstTime)
+        {
+            drop.Position01 = new Vector2(0.03f + 0.94f * (float)random.NextDouble(), 0.03f + 0.94f * (float)random.NextDouble());
+            double sizeRoll = random.NextDouble();
+            drop.SizeShare = sizeRoll < 0.70 ? 0.008f + 0.007f * (float)random.NextDouble()
+                : 0.015f + 0.013f * (float)random.NextDouble();
+            drop.Alpha = 0.5f + 0.3f * (float)random.NextDouble();
+            drop.LifeSeconds = (6f + 10f * (float)random.NextDouble()) * (1f - 0.65f * _liveliness);
+            drop.AgeSeconds = firstTime ? drop.LifeSeconds * (float)random.NextDouble() : 0f;
+            drop.Shape = (byte)random.Next(DropShapeCount);
+            drop.Stretch = 1.02f + 0.12f * (float)random.NextDouble();
+        }
+
+        /// <summary>A lens drop's vertex colour: its radius on screen in R (pixels / 128) and its
+        /// fade in A, which is all lensdrops.fx needs to know about the drop it is drawing.</summary>
+        private static Color LensTint(float radiusPixels, float alpha)
+            => new((byte)Math.Clamp(radiusPixels / 128f * 255f, 0f, 255f), (byte)0, (byte)0, (byte)Math.Clamp(alpha * 255f, 0f, 255f));
 
         private const int DropShapeCount = 6;
         private const int DropCellSize = 48;
@@ -618,6 +788,53 @@ namespace SDVRadiance
             }
             _dropTexture = new Texture2D(device, atlasWidth, DropCellSize, false, SurfaceFormat.Color);
             _dropTexture.SetData(dropPixels);
+
+            // The same outlines as domes, for the lens look. A bead of water on glass is close to a
+            // spherical cap: thickness falls off as the square root of what is left of the radius,
+            // and the surface leans outward by as much as it has come across the drop.
+            var lensPixels = new Color[atlasWidth * DropCellSize];
+            for (int shape = 0; shape < DropShapeCount; shape++)
+            {
+                for (int y = 0; y < DropCellSize; y++)
+                {
+                    for (int x = 0; x < DropCellSize; x++)
+                    {
+                        float dx = (x + 0.5f) / DropCellSize - 0.5f;
+                        float dy = (y + 0.5f) / DropCellSize - 0.5f;
+                        float radius = MathF.Max(1e-4f, MathF.Sqrt(dx * dx + dy * dy) * 2f);
+                        float outline = DropOutlineRadius(shape, MathF.Atan2(dy, dx));
+                        float acrossShape = radius / outline;
+                        // A texel and a half of soft edge, so a drop is not a stair-stepped disc.
+                        float coverage = Math.Clamp((1f - acrossShape) * DropCellSize * outline * 0.33f, 0f, 1f);
+                        if (coverage <= 0f)
+                            continue;
+                        float across = Math.Min(acrossShape, 0.999f);
+                        float thickness = MathF.Sqrt(1f - across * across);
+                        float normalX = dx / radius * 2f * across, normalY = dy / radius * 2f * across;
+                        lensPixels[y * atlasWidth + shape * DropCellSize + x] = new Color(
+                            normalX * 0.5f + 0.5f, normalY * 0.5f + 0.5f, thickness, coverage);
+                    }
+                }
+            }
+            _lensTexture = new Texture2D(device, atlasWidth, DropCellSize, false, SurfaceFormat.Color);
+            _lensTexture.SetData(lensPixels);
+
+            // The wipe brush: soft across (a bell), soft at both ends, so a run of them overlapping
+            // down the glass reads as one clear streak with no seams.
+            const int brushWide = 16, brushTall = 32;
+            var brushPixels = new Color[brushWide * brushTall];
+            for (int y = 0; y < brushTall; y++)
+            {
+                for (int x = 0; x < brushWide; x++)
+                {
+                    float acrossBrush = ((x + 0.5f) / brushWide - 0.5f) * 2f;
+                    float alongBrush = ((y + 0.5f) / brushTall - 0.5f) * 2f;
+                    float alpha = MathF.Exp(-acrossBrush * acrossBrush * 3.5f) * (1f - alongBrush * alongBrush);
+                    brushPixels[y * brushWide + x] = new Color(1f, 1f, 1f, Math.Clamp(alpha, 0f, 1f));
+                }
+            }
+            _wipeTexture = new Texture2D(device, brushWide, brushTall, false, SurfaceFormat.Color);
+            _wipeTexture.SetData(brushPixels);
 
             // A frost feather: six thin arms with a soft fade toward the tips.
             const int frostSize = 40;
