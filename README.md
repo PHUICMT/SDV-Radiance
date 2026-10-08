@@ -11,8 +11,8 @@
 **License:** MIT
 **Download:** [Nexus Mods](https://www.nexusmods.com/stardewvalley/mods/49397)
 
-<p>
-<a href="https://ko-fi.com/phuicmt"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/kofi.png" alt="Buy me a coffee on Ko-fi" height="48"></a>
+<p align="center">
+<a href="https://ko-fi.com/phuicmt"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/kofi.png" alt="Buy me a coffee on Ko-fi" height="48"></a>&nbsp;&nbsp;
 <a href="https://github.com/sponsors/PHUICMT"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/sponsor.png" alt="Sponsor on GitHub" height="48"></a>
 </p>
 
@@ -20,33 +20,33 @@
 
 <h2><img src="https://phuicmt.github.io/SDV-Radiance-media/banners/see-it.png" alt="See it" width="100%"></h2>
 
-<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/panels/night.webp" alt="The aurora drawn into the sea, a rainbow in waterfall spray, rain on the sea" width="100%"></p>
+<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/night.webp" alt="The aurora drawn into the sea, a rainbow in waterfall spray, rain on the sea" width="100%"></p>
 
 *Water: the aurora drawn into the sea, a rainbow in the spray where the falls meet the river, and rain on the sea round the pier.*
 
-<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/clips/walk-by-the-water.webp" alt="Walking along the shore with a reflection" width="100%"></p>
+<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/walk-by-the-water.webp" alt="Walking along the shore with a reflection" width="100%"></p>
 
 *Walking along the shore, your reflection walks with you.*
 
-<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/panels/lamps.webp" alt="Street lamps, a room full of lamp shadows, lamplight on snow" width="100%"></p>
+<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/lamps.webp" alt="Street lamps, a room full of lamp shadows, lamplight on snow" width="100%"></p>
 
 *Lamps: a walk past the street lights, a room where every lamp throws its own shadow, and lamplight on snow.*
 
-<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/panels/day.webp" alt="Golden hour, a flowing river, cloud shadows" width="100%"></p>
+<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/day.webp" alt="Golden hour, a flowing river, cloud shadows" width="100%"></p>
 
 *Daylight: long golden-hour shadows on the square, a river that flows, and cloud shadows drifting over the mountain lake.*
 
-<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/panels/weather.webp" alt="A storm, snow, and trees in the wind" width="100%"></p>
+<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/weather.webp" alt="A storm, snow, and trees in the wind" width="100%"></p>
 
 *Weather: a storm over town, snow, and the trees leaning into a windy day.*
 
-<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/clips/mod-off-and-on.webp" alt="The mountain lake with the mod off and on" width="100%"></p>
+<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/mod-off-and-on.webp" alt="The mountain lake with the mod off and on" width="100%"></p>
 
 *The mountain lake on a summer afternoon, with the mod off (left of the line) and on (right).*
 
 <h2><img src="https://phuicmt.github.io/SDV-Radiance-media/banners/make-it-yours.png" alt="Make it yours" width="100%"></h2>
 
-<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/clips/tuner.webp" alt="The in-game tuner sliding open" width="100%"></p>
+<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/tuner.webp" alt="The in-game tuner sliding open" width="100%"></p>
 
 *F6 slides the tuner open over the game, and every change shows as you make it. On a phone it opens from Generic Mod Config Menu: SDV-Radiance, Hotkeys & diagnostics, Open the Radiance tuner.*
 
@@ -279,14 +279,15 @@ that ships at zero (1.7.6).
 
 <h2><img src="https://phuicmt.github.io/SDV-Radiance-media/banners/support.png" alt="Support" width="100%"></h2>
 
-Free and always will be. If it's useful to you, support is appreciated but never required.
+<p align="center">Free and always will be. If it's useful to you, support is appreciated but never required.</p>
 
-<p>
-<a href="https://ko-fi.com/phuicmt"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/kofi.png" alt="Buy me a coffee on Ko-fi" height="48"></a>
+<p align="center">
+<a href="https://ko-fi.com/phuicmt"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/kofi.png" alt="Buy me a coffee on Ko-fi" height="48"></a>&nbsp;&nbsp;
 <a href="https://github.com/sponsors/PHUICMT"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/sponsor.png" alt="Sponsor on GitHub" height="48"></a>
-<br>
+</p>
+
+<p align="center">Found something off? A report with <code>radiance_report</code> from the spot is the best help there is.<br><br>
 <a href="https://www.nexusmods.com/stardewvalley/mods/49397?tab=bugs"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/bugs.png" alt="Report a bug" height="36"></a>
-<a href="https://github.com/PHUICMT/SDV-Radiance"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/source.png" alt="Source code" height="36"></a>
 </p>
 
 ## License & credits
