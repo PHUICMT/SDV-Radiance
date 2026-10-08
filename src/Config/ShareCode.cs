@@ -439,6 +439,7 @@ namespace SDVRadiance
             (312, nameof(ModConfig.WindySpellsEnabled), Look),
             (313, nameof(ModConfig.WindySpellsStrength), Look),
             (314, nameof(ModConfig.WaterSeaRainSwell), Look),
+            (315, nameof(ModConfig.MapScreenshotEffects), Look),
         ];
 
         private static Dictionary<int, (string Property, bool IsPerformance)>? _settingById;

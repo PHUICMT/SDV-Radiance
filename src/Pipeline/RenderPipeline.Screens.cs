@@ -346,6 +346,25 @@ namespace SDVRadiance
         /// swap, which is also the single-screen case until a second screen ever appears.</summary>
         private int _activeScreenId = -1;
 
+        /// <summary>A fresh state for a map screenshot (MapScreenshotEffects), carrying the live
+        /// view's exposure and cloud drift so the picture is lit and clouded the way the screen was.</summary>
+        internal void BeginMapShot(int shotScreenId)
+        {
+            ScreenState live = _screen;
+            _screenStates[shotScreenId] = new ScreenState
+            {
+                MeteredExposure = live.MeteredExposure,
+                ExposureTarget = live.ExposureTarget,
+                CloudDrift = live.CloudDrift,
+                CloudDriftClock = live.CloudDriftClock,
+                CloudWeatherAmount = live.CloudWeatherAmount,
+            };
+            SetLiveShadowTierAside();
+        }
+
+        /// <summary>The end of a map screenshot: the live view's shared state back as it was.</summary>
+        internal void EndMapShot() => GiveLiveShadowTierBack();
+
         /// <summary>
         /// Hand the pipeline over to one screen. Called at the top of that screen's turn, from both
         /// the pre-draw and post-draw events, because either can be the first thing a frame does.

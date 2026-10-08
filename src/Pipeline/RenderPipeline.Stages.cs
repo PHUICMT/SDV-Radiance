@@ -94,6 +94,7 @@ namespace SDVRadiance
             // cluster frequency by how many times the map fits inside the viewport.
             GetParam(effect, "SmallMapBoost")?.SetValue(SmallMapCloudBoost());
             GetParam(effect, "WorldOffset")?.SetValue(WorldOffset());
+            GetParam(effect, "UVScale")?.SetValue(NoiseUvScale());
             GetParam(effect, "NoiseTexture")?.SetValue(NoiseTex());
             effect.CurrentTechnique = effect.Techniques["Mask"];
             Pass(spriteBatch, source, halfScratchA, effect);
@@ -202,7 +203,7 @@ namespace SDVRadiance
             if (layer == null)
                 return 1f;
             float mapTilesWide = Math.Max(1, layer.LayerWidth), mapTilesTall = Math.Max(1, layer.LayerHeight);
-            float viewportTilesWide = Game1.viewport.Width / 64f, viewportTilesTall = Game1.viewport.Height / 64f;
+            float viewportTilesWide = NoiseViewWidth / 64f, viewportTilesTall = NoiseViewHeight / 64f;
             return MathHelper.Clamp(Math.Max(viewportTilesWide / mapTilesWide, viewportTilesTall / mapTilesTall), 1f, 4f);
         }
 
@@ -313,6 +314,7 @@ namespace SDVRadiance
             GetParam(effect, "NoiseTexture")?.SetValue(NoiseTex());
             GetParam(effect, "FogColor")?.SetValue(FogColor());
             GetParam(effect, "WorldOffset")?.SetValue(WorldOffset());
+            GetParam(effect, "UVScale")?.SetValue(NoiseUvScale());
             GetParam(effect, "ScreenPixels")?.SetValue(new Vector2(Game1.viewport.Width, Game1.viewport.Height));
             // The wisps near a lamp take its light, read off the lightmap the lamps already
             // painted. Only the night mist does this (a day fog has the sun, not lamps), and only
@@ -2217,8 +2219,18 @@ namespace SDVRadiance
         // VISIBLE world span (viewport, world px) — dividing by the render target's screen px
         // made patterns slide against the world when zoom != 100%.
         private static Vector2 WorldOffset() =>
-            new(Game1.viewport.X / (float)Math.Max(1, Game1.viewport.Width),
-                Game1.viewport.Y / (float)Math.Max(1, Game1.viewport.Height));
+            new(Game1.viewport.X / (float)Math.Max(1, NoiseViewWidth),
+                Game1.viewport.Y / (float)Math.Max(1, NoiseViewHeight));
+
+        /// <summary>The view size the drifting noise is measured against: the live screen's, also
+        /// inside a map screenshot, whose chunks are larger and square. Measured against the chunk,
+        /// clouds and mist came out bigger and stretched compared with the game being played.</summary>
+        private static float NoiseViewWidth => MapScreenshotEffects.Active ? MapScreenshotEffects.LiveViewWidth : Game1.viewport.Width;
+        private static float NoiseViewHeight => MapScreenshotEffects.Active ? MapScreenshotEffects.LiveViewHeight : Game1.viewport.Height;
+
+        /// <summary>How many of those views the frame spans, per axis: (1,1) except in a map screenshot.</summary>
+        private static Vector2 NoiseUvScale() =>
+            new(Game1.viewport.Width / Math.Max(1f, NoiseViewWidth), Game1.viewport.Height / Math.Max(1f, NoiseViewHeight));
 
         /// <summary>The player's position in screen UV (0..1), for the radial tilt-shift focus.</summary>
         private static Vector2 PlayerScreenUV()
@@ -2302,6 +2314,10 @@ namespace SDVRadiance
         /// </summary>
         private void UpdateAutoExposure(SpriteBatch spriteBatch, Texture2D scene)
         {
+            // A map screenshot keeps the exposure the live view had (BeginMapShot copied it): one
+            // value for the whole picture, rather than each chunk metering itself.
+            if (MapScreenshotEffects.Active)
+                return;
             // Freeze mode PINS this rather than settling it like the other eased amounts. Every
             // other one eases toward a target computed from the scene; this one meters the frame
             // it is about to grade, so its target moves with its own output and there is no fixed

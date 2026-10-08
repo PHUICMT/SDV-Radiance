@@ -38,6 +38,8 @@ float TopBias;       // extra fog toward the top of the screen (0..1)
 float Patchiness;    // 0 = classic even blanket · 1 = sparse drifting wisps with clear gaps
 float Coverage;      // 0..1 how MUCH of the frame the wisps occupy (amount, not opacity)
 float2 WorldOffset;  // world-anchor
+float2 UVScale;      // the view's size in units of the screen the noise is sized for: (1,1) on the
+                     // screen, larger in a map screenshot chunk, so the mist keeps its size
 float2 ScreenPixels; // viewport size in pixels, for the dither's pixel grid
 
 // The lightmap the lamps already painted (see floodlight.fx, whose samplers and mapping these
@@ -111,7 +113,7 @@ float DitherLsb(float2 uv)
 
 float4 FogPS(PixelInput input) : SV_TARGET
 {
-    float2 p = (input.UV + WorldOffset) * Scale;
+    float2 p = (input.UV * UVScale + WorldOffset) * Scale;
     float n = fbm(p);
 
     // fbm covers the whole frame (mean ~0.5), which reads as an even film. Patchiness

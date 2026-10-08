@@ -160,6 +160,9 @@ namespace SDVRadiance
 
             (int startTileX, int startTileY, int tilesW, int tilesH) = ChooseMaskWindow(location);
 
+            if (MapScreenshotEffects.Active)
+                return BuildWaterMaskNow(location, startTileX, startTileY, tilesW, tilesH);
+
             if (PollPendingMaskJob(location, startTileX, startTileY, tilesW, tilesH))
                 return _hasWaterInMask;
             if (CurrentMaskStillFits(location, startTileX, startTileY, tilesW, tilesH))
@@ -167,6 +170,41 @@ namespace SDVRadiance
 
             StartWaterMaskRebuild(location, startTileX, startTileY, tilesW, tilesH);
             return _hasWaterInMask;   // old mask renders this frame; the swap lands when compose does
+        }
+
+        /// <summary>
+        /// The mask for this view, finished before returning: for a map screenshot, where every
+        /// chunk is drawn once (twice, counting the warm pass) and an old window shown while a new
+        /// one composes would be a chunk with the wrong water in it.
+        /// </summary>
+        /// <remarks>
+        /// The ordinary path gathers, composes on a worker and uploads one texture a frame, showing
+        /// the previous mask all the while; inside a screenshot there is no next frame. So this
+        /// waits for the worker and runs every upload step now. A rebuild the live view left
+        /// running is let finish and then dropped (only one job runs at a time): the live view
+        /// simply gathers again after the shot.
+        /// </remarks>
+        private bool BuildWaterMaskNow(GameLocation location, int startTileX, int startTileY, int tilesW, int tilesH)
+        {
+            for (int attempt = 0; attempt < 64; attempt++)
+            {
+                if (_pendingWaterMaskJob is { } job)
+                {
+                    if (!job.Done)
+                        job.Task?.Wait(5000);
+                    if (job.ScreenId != _activeScreenId)
+                    {
+                        _pendingWaterMaskJob = null;
+                        continue;
+                    }
+                }
+                if (PollPendingMaskJob(location, startTileX, startTileY, tilesW, tilesH))
+                    continue;
+                if (CurrentMaskStillFits(location, startTileX, startTileY, tilesW, tilesH))
+                    return _hasWaterInMask;
+                StartWaterMaskRebuild(location, startTileX, startTileY, tilesW, tilesH);
+            }
+            return _hasWaterInMask;
         }
 
         /// <summary>Where the mask window sits this frame, and the camera-follow params that go

@@ -933,6 +933,8 @@ namespace SDVRadiance
         private static void RegisterCameraPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config)
         {
             configMenu.AddPage(manifest, "camera", () => translate("config.section.camera"));
+            configMenu.AddBoolOption(manifest, () => config().MapScreenshotEffects, value => config().MapScreenshotEffects = value,
+                () => translate("config.mapshot.name"), () => translate("config.mapshot.tooltip"));
             // GMCM has no greyed-out row, so while the camera is stood down the page says why and
             // offers nothing to change.
             if (!CameraSmoother.Available)

@@ -19,7 +19,9 @@ namespace SDVRadiance
     internal sealed class FloodLightmap
     {
         /// <summary>Off-screen margin in tiles so lights just outside the view still spill in.</summary>
-        private const int PadTiles = 6;
+        // Wider in a map screenshot: light carried in from further outside a chunk is the same in
+        // the chunk on either side of a border, so the bounce meets itself there.
+        private static int PadTiles => MapScreenshotEffects.Active ? 20 : 6;
         /// <summary>Per-cell survival factor while sweeping through open ground.</summary>
         private const float AirDecay = 0.86f;
         /// <summary>Per-cell survival through solid/occluding tiles (light dies in ~2-3 tiles).</summary>

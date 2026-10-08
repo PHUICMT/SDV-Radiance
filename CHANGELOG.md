@@ -2,6 +2,25 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.3.0 - 2026-10-08
+
+### Added
+
+- **Effects in map screenshots (off by default).** The game's whole-map screenshot, from the camera
+  button in the options or a mod such as Daily Screenshot, can now be drawn with this mod's effects:
+  the lighting, shadows, water and reflections, clouds and mist, seamless across the whole map. The
+  game draws the map in squares; each one is now drawn with a wide margin of the map around it and
+  only its middle kept, so light, reflections and shadows crossing from one square into the next
+  meet without a seam. Looks that belong to the screen rather than the world (the vignette,
+  tilt-shift, drops on the glass) are left out, and the picture keeps the exposure the game was
+  showing. Waterfall rainbows are in it; the drifting particles (falls' mist puffs, leaves, fireflies,
+  dust) are not yet. A shot takes a few seconds longer. In the Camera tab. Asked for by ChangAn24
+  on Nexus.
+
+### For translators
+
+2 new keys: `config.mapshot.name`/`.tooltip`.
+
 ## 2.2.9 - 2026-10-08
 
 ### Fixed

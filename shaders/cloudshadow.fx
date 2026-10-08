@@ -40,6 +40,8 @@ float Scale;         // cloud size (bigger = smaller/denser clouds)
 float Opacity;       // how dark the shadows get (0..1)
 float Coverage;      // fraction of area shadowed (0..1)
 float2 WorldOffset;  // viewport origin (world-anchor), pre-scaled on the CPU
+float2 UVScale;      // the view's size in units of the screen the noise is sized for: (1,1) on the
+                     // screen, larger in a map screenshot chunk, so clouds keep the size they have in play
 float2 TexelSize;    // blur step (1/width, 0) or (0, 1/height)
 float LightProtect;  // 0 by day .. 1 at night: only then do near-white cores resist the shadow
 float3 ShadowInk;    // what fills the shade: black darkens as every release did, a sky blue or a
@@ -85,7 +87,7 @@ float fbm(float2 p)
 float4 MaskPS(PixelInput input) : SV_TARGET
 {
     float2 drift = float2(Time * Speed, Time * Speed * 0.35);
-    float2 p = (input.UV + WorldOffset) * Scale + drift;
+    float2 p = (input.UV * UVScale + WorldOffset) * Scale + drift;
 
     // Two-level domain warp for fluffy, swirly, non-repeating shapes.
     float2 warp1 = float2(fbm(p + float2(1.7, 9.2)), fbm(p + float2(8.3, 2.8)));

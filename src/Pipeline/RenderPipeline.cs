@@ -1745,6 +1745,10 @@ namespace SDVRadiance
                 // The player's setting is the CEILING; the controller may ask for less when the frame
                 // is not keeping up, and gives it back when it is (RenderPipeline.AutoScale.cs).
                 renderScale = AutoRenderScale(config, MathHelper.Clamp(config.RenderScale, 0.5f, 1f));
+                // A map screenshot is a picture to keep: every chunk at full size, whatever the
+                // live view runs at.
+                if (MapScreenshotEffects.Active)
+                    renderScale = 1f;
                 // ZOOMED OUT. The game does not shrink the world when you zoom out - it draws the same
                 // world pixels into a BIGGER buffer (window size / zoom) and then scales that whole
                 // buffer down onto the window. At 50% zoom on a 1280x720 window that is a 2560x1440

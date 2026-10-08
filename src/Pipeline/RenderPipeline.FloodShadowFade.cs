@@ -52,6 +52,31 @@ namespace SDVRadiance
         private Comparison<int>? _floodByRankThenId;
         private Comparison<int>? _floodShadowByWeightThenId;
 
+        private readonly Dictionary<int, float> _liveShadowWeightDuringShot = [];
+        private readonly List<int> _liveShadowHoldersDuringShot = [];
+
+        /// <summary>The shadowed tier is shared between screens; a map screenshot keeps the live
+        /// view's aside and gives it back afterwards, so its lamps do not fade out and in again.</summary>
+        private void SetLiveShadowTierAside()
+        {
+            _liveShadowWeightDuringShot.Clear();
+            foreach (var pair in _floodShadowWeight)
+                _liveShadowWeightDuringShot[pair.Key] = pair.Value;
+            _liveShadowHoldersDuringShot.Clear();
+            _liveShadowHoldersDuringShot.AddRange(_floodShadowHolders);
+            _floodShadowWeight.Clear();
+            _floodShadowHolders.Clear();
+        }
+
+        private void GiveLiveShadowTierBack()
+        {
+            _floodShadowWeight.Clear();
+            foreach (var pair in _liveShadowWeightDuringShot)
+                _floodShadowWeight[pair.Key] = pair.Value;
+            _floodShadowHolders.Clear();
+            _floodShadowHolders.AddRange(_liveShadowHoldersDuringShot);
+        }
+
         /// <summary>Matches the light array's own entry rate, so a lamp's shadow arrives with the
         /// rest of it rather than trailing behind or racing ahead.</summary>
         private const float FloodShadowFadePerFrame = 0.045f;
@@ -116,7 +141,8 @@ namespace SDVRadiance
             foreach (int id in _floodShadowOrder)
             {
                 _floodShadowWeight.TryGetValue(id, out float w);
-                w = _floodShadowWanted.Contains(id) ? Math.Min(1f, w + FloodShadowFadePerFrame) : w - FloodShadowFadePerFrame;
+                w = MapScreenshotEffects.Active ? (_floodShadowWanted.Contains(id) ? 1f : 0f)
+                    : _floodShadowWanted.Contains(id) ? Math.Min(1f, w + FloodShadowFadePerFrame) : w - FloodShadowFadePerFrame;
                 if (w <= 0f)
                 {
                     _floodShadowWeight.Remove(id);

@@ -786,6 +786,10 @@ namespace SDVRadiance
         /// ScreenZoomFilter): at 75 per cent thin lines stop crawling as the camera moves, above 100
         /// per cent the art's edges stay sharp. Only matters at a zoom other than 100 per cent.</summary>
         public bool ZoomAreaFilter { get; set; } = true;
+        /// <summary>The mod's effects in the game's whole-map screenshot (the camera button, and mods
+        /// such as Daily Screenshot), seamless across the chunks the game draws it in. Off: the
+        /// screenshot stays the game's own picture, as it always was.</summary>
+        public bool MapScreenshotEffects { get; set; }
         /// <summary>Which look the smoothing has: the 1.7 doubling, or the soft four-times sheets.</summary>
         public SheetSmoothingStyle SheetUpscaleStyle { get; set; } = SheetSmoothingStyle.Scale2x;
         /// <summary>Which rule the soft look is made with (Soft 4x only). MMPX by default: side by side

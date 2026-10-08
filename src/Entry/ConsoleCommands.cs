@@ -576,6 +576,17 @@ namespace SDVRadiance
                         + "check the sky: line of radiance_report if nothing shows.", LogLevel.Info);
                 });
 
+            helper.ConsoleCommands.Add("radiance_mapshotpad",
+                "How far past each chunk a map screenshot with effects draws, in world pixels: "
+                + "'radiance_mapshotpad 1536'. For checking that the default reaches far enough: two "
+                + "shots of one place at two pads should match. Rounded to whole tiles. Not saved.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length > 0 && int.TryParse(arguments[0], out int pad) && pad >= 0)
+                        MapScreenshotEffects.PadPixels = pad / 64 * 64;
+                    monitor.Log($"map screenshot pad: {MapScreenshotEffects.PadPixels} px", LogLevel.Info);
+                });
+
             helper.ConsoleCommands.Add("radiance_star",
                 "Bring shooting stars forward to this frame: 'radiance_star' for three, or 'radiance_star n' "
                 + "for one to three, spread across the view so at least one crosses open water. A streak only "

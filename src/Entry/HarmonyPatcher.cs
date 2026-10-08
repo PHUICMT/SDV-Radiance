@@ -324,7 +324,7 @@ namespace SDVRadiance
         /// built around one camera on one screen; a map screenshot walks the whole location in
         /// chunks, so the mod stands down for it and the picture is the game's own.</summary>
         internal static bool GameIsTakingMapScreenshot =>
-            Game1.game1?.takingMapScreenshot == true && !_mapScreenshotFlagHeld;
+            Game1.game1?.takingMapScreenshot == true && !_mapScreenshotFlagHeld && !MapScreenshotEffects.Active;
         /// <summary>Set once a frame by ModEntry: whether the effect chain will run on this frame,
         /// so the mine's floor number is kept out of the world layer and drawn after the chain
         /// instead. With this false the game draws it where it always did.</summary>

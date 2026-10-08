@@ -569,6 +569,8 @@
   "config.camera.mode.name": "Camera mode",
   "config.camera.mode.tooltip": "Off = the game's own camera, locked on you. Smooth = the view trails a little behind you as you walk and eases back to the middle when you stop, without ever swinging past it.",
   "config.camera.disabled": "Smooth camera is switched off for now. With it on, the toolbar could jump between the top and the bottom of the screen while walking diagonally, and it will stay off until that is fixed. Your choice here is kept for when it comes back.",
+  "config.mapshot.name": "Effects in map screenshots",
+  "config.mapshot.tooltip": "The game's whole-map screenshot (the camera button in the options, or a mod such as Daily Screenshot) is drawn with this mod's effects, seamless across the whole map. Looks that belong to the screen rather than the world (the vignette, tilt-shift, drops on the glass) are left out. A shot takes a few seconds longer. Off: the screenshot stays the game's own picture.",
   "config.camera.mode.off": "Off (vanilla)",
   "config.camera.mode.smooth": "Smooth follow",
   "config.smoothcam.speed.name": "Follow speed",

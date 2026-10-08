@@ -2182,6 +2182,7 @@ namespace SDVRadiance
 
         private void BuildCamera()
         {
+            Toggle("config.mapshot.name", () => _config.MapScreenshotEffects, value => _config.MapScreenshotEffects = value, "config.mapshot.tooltip");
             // Was reachable from GMCM only, which meant the two menus disagreed about what
             // this mod even contains. Stood down for now (see CameraSmoother.Available): the rows stay,
             // greyed, under a line that says why, so nobody looks for a switch that went missing.

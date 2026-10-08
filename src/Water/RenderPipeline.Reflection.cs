@@ -823,7 +823,7 @@ namespace SDVRadiance
             _watchFlippedStamps = 0;
             GameLocation? location = Game1.currentLocation;
             if (location == null || (!_hasWaterInMask && !_wetPuddleMirrorWanted && !_mirrorWarmupPending)
-                || Game1.game1.takingMapScreenshot)
+                || HarmonyPatcher.GameIsTakingMapScreenshot)
             {
                 ReportReflectWatch("skipped");
                 return;
@@ -2096,7 +2096,7 @@ namespace SDVRadiance
             // Water is not the only reader any more: a window returns the street from this same
             // source, and a street full of windows usually has no water on it at all.
             if (location?.map == null || (!_hasWaterInMask && !WindowsWantSceneryMirror && !_mirrorWarmupPending)
-                || Game1.game1.takingMapScreenshot)
+                || HarmonyPatcher.GameIsTakingMapScreenshot)
                 return;
 
             RenderTargetBinding[] previousTargets = _device.GetRenderTargets();

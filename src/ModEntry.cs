@@ -235,6 +235,7 @@ namespace SDVRadiance
             _harmony = new Harmony(ModManifest.UniqueID);
             PrecipitationSystem.LiveConfig = () => _config;
             HarmonyPatcher.InstallAll(_harmony, Monitor);
+            MapScreenshotEffects.Install(_harmony, Monitor, () => _pipeline, () => _config);
             ArtReloads.Install(_harmony, Monitor);
             SettingsLog.Install(helper, Monitor, () => _config);
 
@@ -392,8 +393,8 @@ namespace SDVRadiance
             }
             // Belt and braces: the pre-draw handler normally claims the screen, but it returns
             // early when the mod is switched off and a capture can still bring us here.
-            Pipeline.BeginScreen(Context.ScreenId);
-            Pipeline.Apply(e.SpriteBatch, _config);
+            Pipeline.BeginScreen(MapScreenshotEffects.ScreenId(Context.ScreenId));
+            Pipeline.Apply(e.SpriteBatch, MapScreenshotEffects.ShotConfig ?? _config);
             HarmonyPatcher.DrawHoistedMineFloorNumber(e.SpriteBatch);
             // Logged AFTER the pass so the frame size is this screen's, not the previous screen's.
             if (watching)
@@ -474,17 +475,21 @@ namespace SDVRadiance
             SheetUpscaler.SteadyReadSpread = _config.SheetUpscaleSteadyRead;
             SheetUpscaler.SoftDeposterize = _config.SheetUpscaleGradientSmoothing;
             ScreenZoomFilter.Enabled = _config.Enabled && _config.ZoomAreaFilter;
+            MapScreenshotEffects.Enabled = _config.Enabled && _config.MapScreenshotEffects;
             SheetUpscaler.BeginFrame();
             // The mine's floor number leaves the world layer whenever the chain will run over it,
             // and OnRenderedWorld draws it back after the chain.
-            HarmonyPatcher.HoistMineFloorNumber = EffectsActive && !HarmonyPatcher.GameIsTakingMapScreenshot;
+            HarmonyPatcher.HoistMineFloorNumber = EffectsActive && !(Game1.game1?.takingMapScreenshot ?? false);
             // A map screenshot is the game's own picture of the whole location, drawn in chunks:
             // no bakes, shadows, reflections or chain for it (see GameIsTakingMapScreenshot).
             if (!_config.Enabled || HarmonyPatcher.GameIsTakingMapScreenshot)
                 return;
             // Author freeze: the game's own draw-time clock is pinned along with ours, or a
             // campfire's flame keeps two captures of one frozen frame from ever matching.
-            Determinism.HoldGameTimeForDraw();
+            // Not in a map screenshot: the shot runs inside the game's update, and the pinned time
+            // would leak into the rest of that tick and into the next chunk's draw.
+            if (!MapScreenshotEffects.Active)
+                Determinism.HoldGameTimeForDraw();
             // Whether this frame's world draw is worth recording for the sprite relief: the
             // pipeline knows, because it also knows whether the relief is still fading out.
             SpriteDrawRecorder.Wanted = Pipeline.WantsSpriteRecording(_config) || SpriteDrawRecorder.WaitingForAnswer;
@@ -520,8 +525,8 @@ namespace SDVRadiance
             // screen this handler runs once per screen per frame, and everything remembered
             // between frames below is built around where one camera is looking.
             _shadows ??= new ShadowRenderer();
-            Pipeline.BeginScreen(Context.ScreenId);
-            _shadows.BeginScreen(Context.ScreenId);
+            Pipeline.BeginScreen(MapScreenshotEffects.ScreenId(Context.ScreenId));
+            _shadows.BeginScreen(MapScreenshotEffects.ScreenId(Context.ScreenId));
 
             // Player silhouette + colour bake FIRST: the reflection below stamps the player
             // from it, so baking afterwards mirrored last frame's pose. It also has to run

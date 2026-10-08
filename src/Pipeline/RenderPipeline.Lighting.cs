@@ -404,7 +404,12 @@ namespace SDVRadiance
         private const int ShaderLightSlots = 8;
         /// <summary>Longest pool any one light may lay, in screen heights. See the radius line
         /// in BuildLightList: past this the game's radius stops meaning "how far it lights".</summary>
-        private const float LampPoolReachCapUv = 1.2f;
+        private const float LampPoolReachCapScreens = 1.2f;
+        /// <summary>The cap above in this frame's UV: a share of the LIVE screen's height, so a map
+        /// screenshot chunk (taller than the screen) caps a big lamp's pool where play does.</summary>
+        private static float LampPoolReachCapUv => MapScreenshotEffects.Active
+            ? LampPoolReachCapScreens * MapScreenshotEffects.LiveViewHeight / Math.Max(1f, Game1.viewport.Height)
+            : LampPoolReachCapScreens;
 
         /// <param name="flick">Per-frame flame wobble, kept OUT of the ranking and multiplied in
         /// only once the array is settled. Steady lights pass 1.</param>
@@ -586,6 +591,11 @@ namespace SDVRadiance
             float fromCentre = (float)Math.Sqrt(centreX * centreX + centreY * centreY);
             float near = MathHelper.Lerp(1f, EdgeLightWeight,
                 MathHelper.Clamp(fromCentre / CentreFalloffScreens, 0f, 1f));
+            // A map screenshot ranks a light by itself alone: two chunks either side of a border
+            // see it at opposite edges of their views, and a nearness weight would rank it
+            // differently in each, so one would light it and the other would not.
+            if (MapScreenshotEffects.Active)
+                near = 1f;
             return luminance * reach * MathHelper.Clamp(1f - outside / reach, 0f, 1f) * near;
         }
 
@@ -751,14 +761,15 @@ namespace SDVRadiance
                 bool written = i < selectedLightCount;
                 if (_lightWanted.Contains(id))
                 {
+                    // A map screenshot has no frames to fade over: a light is in at full or not at all.
                     if (written)
-                        fade.Ramp = Math.Min(1f, fade.Ramp + LightEnterPerFrame);
+                        fade.Ramp = MapScreenshotEffects.Active ? 1f : Math.Min(1f, fade.Ramp + LightEnterPerFrame);
                     // Otherwise frozen. Waiting in the dark is not the same as getting brighter.
                     _lightRamp[id] = fade;
                 }
                 else
                 {
-                    fade.Ramp -= LightLeavePerFrame;
+                    fade.Ramp -= MapScreenshotEffects.Active ? 1f : LightLeavePerFrame;
                     if (fade.Ramp <= 0f)
                     {
                         fade.Ramp = 0f;
@@ -1712,7 +1723,9 @@ namespace SDVRadiance
         // up to eight tiles past the view (SunShaftReach is capped on that), the view may drift
         // FloodOccluderSlack tiles toward an edge before the window follows, and the test runs a
         // frame behind the camera, which measured as one tile more on a walk.
-        private const int FloodOccluderPad = 11;
+        // Wider in a map screenshot: the cascades' longest rays reach about 42 tiles, and a chunk
+        // has to see the same walls as its neighbour does near the border they share.
+        private static int FloodOccluderPad => MapScreenshotEffects.Active ? 32 : 11;
         /// <summary>How far inside the window the view may drift before the window follows.</summary>
         private const int FloodOccluderSlack = 2;
         private const int FloodOccluderClockTicks = 600;

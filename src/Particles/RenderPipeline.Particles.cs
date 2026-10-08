@@ -128,7 +128,7 @@ namespace SDVRadiance
                 && _particles.AdvanceTo(Game1.ticks, wanted ? config.ParticleDensity : 0f)
                 && wanted)
                 SpawnParticlesForTick(config);
-            if (_fadeParticles > FadeGone && _particles.LiveCount > 0)
+            if (_fadeParticles > FadeGone && SomethingInTheParticlePass())
             {
                 _particleAmbientDrawn = DrawParticleGroup(spriteBatch, emissive: false, Vector2.Zero, 1f);
                 // With neither lighting stage running there is no multiply to survive, so the
@@ -153,13 +153,26 @@ namespace SDVRadiance
                                                      EmissiveParticleHost host)
         {
             if (_particles == null || _emissiveParticleHost != host
-                || _fadeParticles <= FadeGone || _particles.LiveCount == 0)
+                || _fadeParticles <= FadeGone || !SomethingInTheParticlePass())
                 return;
             long started = FrameCost.Begin(FrameCost.Part.Particles);
             float pixelScale = dest.Width / (float)_particleWindowWidth;
             _particleEmissiveDrawn += DrawParticleGroup(spriteBatch, emissive: true, _particleScreenOffset, pixelScale);
             FrameCost.End(FrameCost.Part.Particles, started);
         }
+
+        /// <summary>
+        /// Whether the particle pass has anything to draw: a live particle, or a waterfall's
+        /// rainbow, which rides in the same batch but is not a particle in the pool.
+        /// </summary>
+        /// <remarks>
+        /// The pass used to ask only the pool. A map screenshot draws on a pool of its own that never
+        /// steps (its clock is frozen so every chunk shows one moment), so the pool was empty and the
+        /// rainbow, found by the scan as usual, was never drawn (reported with a picture of the
+        /// forest falls by the author).
+        /// </remarks>
+        private bool SomethingInTheParticlePass()
+            => _particles!.LiveCount > 0 || (_rainbowEase > FadeGone && _mistFeet.Count > 0);
 
         /// <summary>How many ground particles went into the game's own batch this frame.</summary>
         internal int GroundParticlesDrawn { get; private set; }
