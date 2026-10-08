@@ -446,22 +446,47 @@ namespace SDVRadiance
             }
             if (location.IsRainingHere() && location is not StardewValley.Locations.Summit
                 && (!Game1.eventUp || location.isTileOnMap(new Vector2(Game1.viewport.X / 64, Game1.viewport.Y / 64)))
-                && Game1.rainDrops != null)
+                && GameRainDrops() is object drops)
             {
                 bool green = Game1.IsGreenRainingHere();
                 Color colour = plain ? Shaded(green ? Color.LimeGreen : Color.White, ambient)
                     : LitAsTheGameLightsIt(green ? Color.LimeGreen : Color.White, location);
                 int passes = green ? 2 : 1;
-                for (int i = 0; i < Game1.rainDrops.Length; i++)
+                if (drops is StardewValley.RainDrop[] dropArray)
                 {
-                    for (int pass = 0; pass < passes; pass++)
-                        spriteBatch.Draw(Game1.rainTexture, Game1.rainDrops[i].position,
-                            Game1.getSourceRectForStandardTileSheet(Game1.rainTexture, Game1.rainDrops[i].frame + (green ? 4 : 0), 16, 16),
-                            colour, 0f, Vector2.Zero, 4f, SpriteEffects.None, 1f);
+                    for (int i = 0; i < dropArray.Length; i++)
+                        DrawGameRainDrop(spriteBatch, dropArray[i], green, passes, colour);
+                }
+                else if (drops is List<StardewValley.RainDrop> dropList)
+                {
+                    for (int i = 0; i < dropList.Count; i++)
+                        DrawGameRainDrop(spriteBatch, dropList[i], green, passes, colour);
                 }
             }
             spriteBatch.End();
         }
+
+        private static void DrawGameRainDrop(SpriteBatch spriteBatch, StardewValley.RainDrop drop, bool green, int passes, Color colour)
+        {
+            for (int pass = 0; pass < passes; pass++)
+                spriteBatch.Draw(Game1.rainTexture, drop.position,
+                    Game1.getSourceRectForStandardTileSheet(Game1.rainTexture, drop.frame + (green ? 4 : 0), 16, 16),
+                    colour, 0f, Vector2.Zero, 4f, SpriteEffects.None, 1f);
+        }
+
+        private static readonly System.Reflection.FieldInfo? _gameRainDropsField =
+            typeof(Game1).GetField("rainDrops", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+
+        /// <summary>
+        /// The game's rain drops, read by name: an array on PC, a list on Android.
+        /// </summary>
+        /// <remarks>
+        /// Read directly, the field compiled to a reference typed as an array, and SMAPI for Android,
+        /// where the game declares it as a List, rejected the whole mod at load as "no longer
+        /// compatible" (Deaw0057's log, 2.2.8). Asked by name it is just an object, and both shapes
+        /// are drawn the same way.
+        /// </remarks>
+        private static object? GameRainDrops() => _gameRainDropsField?.GetValue(null);
 
         /// <summary>
         /// What the game's own lighting leaves of <paramref name="colour"/>, for weather the mod draws

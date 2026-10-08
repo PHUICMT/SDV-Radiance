@@ -2,6 +2,18 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.2.9 - 2026-10-08
+
+### Fixed
+
+- **The mod loads on Android again.** 2.2.7 and 2.2.8 read one of the game's values in a way that
+  only matches the PC version of the game, and SMAPI for Android skipped the whole mod as "no longer
+  compatible". It now reads it in a way that works on both. Reported by Deaw0057 on Nexus with a log.
+- **A waterfall's rainbow stays behind the trees in front of it.** The rainbow in the spray was
+  painted over everything, so a tree standing before a fall had the bow across its leaves. It is
+  now cut out wherever something stands in front of the water, the same way the ripple leaves
+  those things alone.
+
 ## 2.2.8 - 2026-10-08
 
 ### Added

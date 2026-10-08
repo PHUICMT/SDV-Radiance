@@ -201,10 +201,68 @@ namespace SDVRadiance
                 emissive ? Vector3.One : AmbientLightOnParticles(), _particleSurfaceWave);
             // The rainbows ride with the emissive group: sunlight in spray adds to the frame the
             // way a spark does, and this batch already has the blend for it.
-            if (emissive)
+            bool rainbowsBehindSprites = emissive && RainbowsCanHideBehindSprites();
+            if (emissive && !rainbowsBehindSprites)
                 drawn += DrawWaterfallRainbows(spriteBatch, screenOffset, pixelScale);
             spriteBatch.End();
+            if (rainbowsBehindSprites)
+                drawn += DrawRainbowsBehindSprites(spriteBatch, screenOffset, pixelScale);
             device.ScissorRectangle = previousScissor;
+            return drawn;
+        }
+
+        private RenderTarget2D? _rainbowScratch;
+
+        /// <summary>Takes away what the sprite mask covers, in proportion to its coverage.</summary>
+        private static readonly BlendState EraseWhereMasked = new()
+        {
+            ColorSourceBlend = Blend.Zero, ColorDestinationBlend = Blend.InverseSourceAlpha,
+            AlphaSourceBlend = Blend.Zero, AlphaDestinationBlend = Blend.InverseSourceAlpha,
+        };
+
+        private bool RainbowsCanHideBehindSprites()
+            => _rainbowEase > FadeGone && SpriteMaskReady && _spriteMaskRenderTarget != null && !_spriteMaskRenderTarget.IsDisposed;
+
+        /// <summary>
+        /// The arches drawn on their own, with whatever stands in front of the water taken out of them,
+        /// then added to the frame.
+        /// </summary>
+        /// <remarks>
+        /// The emissive group goes on after the world is drawn, so a tree on the island between two
+        /// falls had the bow painted across its leaves (reported with a picture by the author). The
+        /// water already keeps a per-frame mask of everything standing on, in or over it, trees'
+        /// canopies included, so its ripple leaves them alone; the bow is cut by the same mask. Only
+        /// while a bow shows: on any other frame this is not reached.
+        /// </remarks>
+        private int DrawRainbowsBehindSprites(SpriteBatch spriteBatch, Vector2 screenOffset, float pixelScale)
+        {
+            GraphicsDevice device = spriteBatch.GraphicsDevice;
+            RenderTargetBinding[] bound = device.GetRenderTargets();
+            if (bound.Length == 0 || bound[0].RenderTarget is not RenderTarget2D dest)
+                return 0;
+            if (_rainbowScratch == null || _rainbowScratch.IsDisposed || _rainbowScratch.Width != dest.Width || _rainbowScratch.Height != dest.Height)
+            {
+                _rainbowScratch?.Dispose();
+                _rainbowScratch = VramTally.Track(new RenderTarget2D(device, dest.Width, dest.Height, false,
+                    SurfaceFormat.Color, DepthFormat.None), "rainbow scratch");
+            }
+            Rectangle scissor = device.ScissorRectangle;
+            device.SetRenderTarget(_rainbowScratch);
+            device.Clear(Color.Transparent);
+            device.ScissorRectangle = scissor;
+            spriteBatch.Begin(SpriteSortMode.Deferred, ParticleSystem.PremultipliedAdditive,
+                SamplerState.LinearClamp, DepthStencilState.None, ParticlesClippedToMap);
+            int drawn = DrawWaterfallRainbows(spriteBatch, screenOffset, pixelScale);
+            spriteBatch.End();
+            spriteBatch.Begin(SpriteSortMode.Deferred, EraseWhereMasked, SamplerState.LinearClamp,
+                DepthStencilState.None, RasterizerState.CullNone);
+            spriteBatch.Draw(_spriteMaskRenderTarget!, _rainbowScratch.Bounds, Color.White);
+            spriteBatch.End();
+            device.SetRenderTargets(bound);
+            spriteBatch.Begin(SpriteSortMode.Deferred, ParticleSystem.PremultipliedAdditive,
+                SamplerState.PointClamp, DepthStencilState.None, RasterizerState.CullNone);
+            spriteBatch.Draw(_rainbowScratch, dest.Bounds, Color.White);
+            spriteBatch.End();
             return drawn;
         }
 

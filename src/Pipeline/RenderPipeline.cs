@@ -2266,7 +2266,7 @@ namespace SDVRadiance
             _neutralSurfaceTexture?.Dispose(); _neutralSurfaceTexture = null;
             _fallDistanceFarTexture?.Dispose(); _fallDistanceFarTexture = null;
             _sceneRenderTarget?.Dispose(); _fullResolutionPingA?.Dispose(); _fullResolutionPingB?.Dispose(); _halfResolutionScratchA?.Dispose(); _halfResolutionScratchB?.Dispose(); _cloudMaskKeep?.Dispose(); _cloudMaskKeep = null; _waterMask?.Dispose(); _occluderMask?.Dispose(); _floodOccluderMask?.Dispose(); _luminanceRenderTarget?.Dispose(); _noiseTexture?.Dispose(); _noiseTexture = null;
-            _spriteMaskRenderTarget?.Dispose(); _spriteMaskSpriteBatch?.Dispose();
+            _spriteMaskRenderTarget?.Dispose(); _spriteMaskSpriteBatch?.Dispose(); _rainbowScratch?.Dispose(); _rainbowScratch = null;
             _floodOccluderBaseTexture?.Dispose(); _floodOccluderBaseSpare?.Dispose(); _floodOccluderBaseSpare = null; _floodOccluderSpriteBatch?.Dispose();
             for (int i = 0; i < _floodOccluderSoft.Length; i++) { _floodOccluderSoft[i]?.Dispose(); _floodOccluderSoft[i] = null; }
             _floodOccluderBaseTexture = null; _floodOccluderSpriteBatch = null;
