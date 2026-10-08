@@ -1,3 +1,5 @@
+<p align="center"><img src="https://staticdelivery.nexusmods.com/mods/1303/images/49397/49397-1791090240-1622644431.jpg" alt="SDV-Radiance: cinematic graphics for Stardew Valley" width="100%"></p>
+
 # SDV-Radiance
 
 > A single, configurable graphics suite for **Stardew Valley**: dynamic shadows,
@@ -7,8 +9,48 @@
 
 **Framework:** SMAPI 4.x · MonoGame · HLSL
 **License:** MIT
+**Download:** [Nexus Mods](https://www.nexusmods.com/stardewvalley/mods/49397)
 
-[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/phuicmt)
+<p>
+<a href="https://ko-fi.com/phuicmt"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/kofi.png" alt="Buy me a coffee on Ko-fi" height="48"></a>
+<a href="https://github.com/sponsors/PHUICMT"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/sponsor.png" alt="Sponsor on GitHub" height="48"></a>
+</p>
+
+---
+
+<h2><img src="https://phuicmt.github.io/SDV-Radiance-media/banners/see-it.png" alt="See it" width="100%"></h2>
+
+<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/panels/night.webp" alt="The aurora drawn into the sea, a rainbow in waterfall spray, rain on the sea" width="100%"></p>
+
+*Water: the aurora drawn into the sea, a rainbow in the spray where the falls meet the river, and rain on the sea round the pier.*
+
+<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/clips/walk-by-the-water.webp" alt="Walking along the shore with a reflection" width="100%"></p>
+
+*Walking along the shore, your reflection walks with you.*
+
+<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/panels/lamps.webp" alt="Street lamps, a room full of lamp shadows, lamplight on snow" width="100%"></p>
+
+*Lamps: a walk past the street lights, a room where every lamp throws its own shadow, and lamplight on snow.*
+
+<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/panels/day.webp" alt="Golden hour, a flowing river, cloud shadows" width="100%"></p>
+
+*Daylight: long golden-hour shadows on the square, a river that flows, and cloud shadows drifting over the mountain lake.*
+
+<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/panels/weather.webp" alt="A storm, snow, and trees in the wind" width="100%"></p>
+
+*Weather: a storm over town, snow, and the trees leaning into a windy day.*
+
+<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/clips/mod-off-and-on.webp" alt="The mountain lake with the mod off and on" width="100%"></p>
+
+*The mountain lake on a summer afternoon, with the mod off (left of the line) and on (right).*
+
+<h2><img src="https://phuicmt.github.io/SDV-Radiance-media/banners/make-it-yours.png" alt="Make it yours" width="100%"></h2>
+
+<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/clips/tuner.webp" alt="The in-game tuner sliding open" width="100%"></p>
+
+*F6 slides the tuner open over the game, and every change shows as you make it. On a phone it opens from Generic Mod Config Menu: SDV-Radiance, Hotkeys & diagnostics, Open the Radiance tuner.*
+
+<sub>Recorded in game at 1920x1080 with the author's own settings and mod list: DaisyNiko's Earthy Recolour and Tilesheets, Sharogg's Tilesheets and Stardew Valley Expanded. Pictures live in [PHUICMT/SDV-Radiance-media](https://github.com/PHUICMT/SDV-Radiance-media).</sub>
 
 ---
 
@@ -235,21 +277,30 @@ dial per art family (1.7.5), a lamp's shadow kept between frames instead of walk
 sunlight through a canopy reaching the greenhouse, and a dark pool under objects on a dial
 that ships at zero (1.7.6).
 
-## Support / donate
+<h2><img src="https://phuicmt.github.io/SDV-Radiance-media/banners/support.png" alt="Support" width="100%"></h2>
 
 Free and always will be. If it's useful to you, support is appreciated but never required.
 
-- ☕ Ko-fi: https://ko-fi.com/phuicmt
+<p>
+<a href="https://ko-fi.com/phuicmt"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/kofi.png" alt="Buy me a coffee on Ko-fi" height="48"></a>
+<a href="https://github.com/sponsors/PHUICMT"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/sponsor.png" alt="Sponsor on GitHub" height="48"></a>
+<br>
+<a href="https://www.nexusmods.com/stardewvalley/mods/49397?tab=bugs"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/bugs.png" alt="Report a bug" height="36"></a>
+<a href="https://github.com/PHUICMT/SDV-Radiance"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/source.png" alt="Source code" height="36"></a>
+</p>
 
 ## License & credits
 
 MIT, see [LICENSE](LICENSE). Third-party attribution (frameworks, tooling, and any reused code) is in [CREDITS.md](CREDITS.md).
 
-Translations: Simplified Chinese bundled since 1.2.2 by **Rime961**, resynced against a moving key
-set every release and at 840 of 843 keys in 1.7.6. Thai by the author, complete. Six more languages are published as separate mods on the Nexus by their own authors, none of
-them asked for: French by [Deovos](https://www.nexusmods.com/stardewvalley/mods/50089), German
-by [Neko41](https://www.nexusmods.com/stardewvalley/mods/51482), Japanese by
+Translations: Simplified Chinese bundled since 1.2.2, by **Rime961** (1.2.2 through 2.1.3) and
+**passersby10086** (the 2.2.0 settings); a few newer settings, the share codes among them, still show in English.
+Thai by the author, complete. More languages are published as separate mods on the Nexus by their own
+authors: French by [Deovos](https://www.nexusmods.com/stardewvalley/mods/50089), German by
+[Neko41](https://www.nexusmods.com/stardewvalley/mods/51482), Japanese by
 [tanakakaku3i](https://www.nexusmods.com/stardewvalley/mods/49750), Korean by
-[jjongleee](https://www.nexusmods.com/stardewvalley/mods/49448), Mandarin by
-[Rubbish404](https://www.nexusmods.com/stardewvalley/mods/49647) and Spanish by
-[Papaya2](https://www.nexusmods.com/stardewvalley/mods/51510).nexusmods.com/stardewvalley/mods/49647).
+[jjongleee](https://www.nexusmods.com/stardewvalley/mods/49448), Simplified Chinese by
+[Rubbish404](https://www.nexusmods.com/stardewvalley/mods/49647) and by
+[9843177](https://www.nexusmods.com/stardewvalley/mods/52007), Spanish by
+[Papaya2](https://www.nexusmods.com/stardewvalley/mods/51510) and Vietnamese by
+[VotriValley](https://www.nexusmods.com/stardewvalley/mods/52046).
