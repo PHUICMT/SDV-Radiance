@@ -127,6 +127,15 @@ namespace SDVRadiance
         /// drawn from the clamped edge: on a slower machine a walk toward water showed rectangles
         /// of surface over the land until the player stopped.</summary>
         private const int MaskRebuildAheadTiles = 2;
+        /// <summary>The camera speed, in tiles per second, above which the window leans ahead.
+        /// Walking is about five and riding about seven; the lean is for speed mods.</summary>
+        private const float MaskLeadFromTilesPerSecond = 7f;
+        /// <summary>The most the window may lean, in tiles. Past the paddings on purpose: at speed
+        /// the window is placed where the camera will be, not where it is (see MaskWindowLead).</summary>
+        private const int MaskLeadMostTiles = 12;
+        /// <summary>How much of the trailing padding the window still keeps when its rebuild lands,
+        /// in tiles: room for the rebuild landing a little sooner than the last ones did.</summary>
+        private const int MaskLeadTrailingTiles = 2;
 
         /// <summary>
         /// Build (or reuse) the per-tile water mask for the visible area, aligned to the
@@ -176,8 +185,10 @@ namespace SDVRadiance
             // out — parts of the screen simply had no water mask (no ripple/reflection).
             int tilesW = Math.Max(1, Game1.viewport.Width / 64 + 2 * MaskPadSideTiles);
             int tilesH = Math.Max(1, Game1.viewport.Height / 64 + MaskPadTopTiles + MaskPadBottomTiles);
-            int startTileX = (int)Math.Floor(vx / 64f) - MaskPadSideTiles;
-            int startTileY = (int)Math.Floor(vy / 64f) - MaskPadTopTiles;
+            int leadX = MaskWindowLead(ref _maskCameraVelocityX, ref _maskCameraLastX, vx, _maskBuildSeconds);
+            int leadY = MaskWindowLead(ref _maskCameraVelocityY, ref _maskCameraLastY, vy, _maskBuildSeconds);
+            int startTileX = (int)Math.Floor(vx / 64f) - MaskPadSideTiles + leadX;
+            int startTileY = (int)Math.Floor(vy / 64f) - MaskPadTopTiles + leadY;
 
             // KEEP THE WINDOW WE ALREADY BUILT while the view still fits inside it.
             //
@@ -200,7 +211,7 @@ namespace SDVRadiance
                 // view itself: the rows the mirror reads are up there, and a window that let the
                 // view walk up to its own top edge answered "is that source water" from its
                 // clamped edge row for the last twelve tiles of every walk north.
-                if (MaskWindowHoldsView(_lastWaterTileX, _lastWaterTileY, tilesW, tilesH, MaskRebuildAheadTiles))
+                if (MaskWindowHoldsView(_lastWaterTileX, _lastWaterTileY, tilesW, tilesH, MaskRebuildAheadTiles, leadX, leadY))
                 {
                     startTileX = _lastWaterTileX;
                     startTileY = _lastWaterTileY;
@@ -214,17 +225,83 @@ namespace SDVRadiance
             return (startTileX, startTileY, tilesW, tilesH);
         }
 
+        /// <summary>
+        /// How many tiles a freshly built window leans toward where the camera is going.
+        /// </summary>
+        /// <remarks>
+        /// The window is padded the same on every side, and a rebuild takes a few frames on a worker.
+        /// At a walk the padding ahead outlasts the build; with a mod that makes the player much
+        /// faster, the view crossed the padding before the new window landed and the water showed
+        /// its old window's edge for a moment (reported as only happening at speeds faster than
+        /// anyone plays at, and putting itself right quickly). The new window is placed where the
+        /// camera will be when it lands, from how long rebuilds take on this machine, with nearly
+        /// all of its spare room ahead. It costs nothing: the window is the same size, so the build
+        /// is the same work, and the mask is world-anchored, so where it sits never shows. Measured
+        /// with a compose slowed by 300 ms and a speed buff of 10 (about 15 tiles a second) on the
+        /// beach: frames drawn outside the mask per pass fell from 96/48/68 (a lean of a third of
+        /// a second) to 35/13/19, against about 195 with no lean. Below the threshold the lean is 0
+        /// and the window is placed exactly as before; a walk at normal pace drew none outside. A
+        /// jump (a warp, a cutscene cut) resets the speed instead of being read as one.
+        /// </remarks>
+        private static int MaskWindowLead(ref float velocity, ref int lastPixels, int nowPixels, float buildSeconds)
+        {
+            float seconds = (float)(Game1.currentGameTime?.ElapsedGameTime.TotalSeconds ?? 0.0);
+            int moved = nowPixels - lastPixels;
+            if (lastPixels == int.MinValue || seconds <= 0f || Math.Abs(moved) > 64 * 4)
+                velocity = 0f;
+            else
+                velocity += (moved / 64f / seconds - velocity) * 0.2f;
+            lastPixels = nowPixels;
+            if (Math.Abs(velocity) < MaskLeadFromTilesPerSecond)
+                return 0;
+            // Only one rebuild runs at a time, so the window that lands has to carry the camera
+            // until the NEXT one lands, a whole rebuild's travel later. It is placed for where the
+            // camera will be when it lands (the travel over one rebuild, as long as rebuilds take
+            // here) with only a little of the trailing padding left, which puts nearly all of the
+            // window's spare room ahead for the travel that follows.
+            int travel = (int)MathF.Round(velocity * (buildSeconds + 1f / 60f));
+            int lead = travel + Math.Sign(velocity) * (MaskPadSideTiles - MaskLeadTrailingTiles);
+            return Math.Clamp(lead, -MaskLeadMostTiles, MaskLeadMostTiles);
+        }
+
         /// <summary>Whether a mask window starting at (<paramref name="startTileX"/>,
         /// <paramref name="startTileY"/>) covers the view with <paramref name="spareTiles"/> to spare on
-        /// every side, the top counted past the mirror's reach (see MaskTopCoverTiles).</summary>
-        private static bool MaskWindowHoldsView(int startTileX, int startTileY, int tilesW, int tilesH, int spareTiles)
+        /// every side, the top counted past the mirror's reach (see MaskTopCoverTiles).
+        /// <para>While the camera is moving fast (<paramref name="leadX"/>, <paramref name="leadY"/>
+        /// not 0), the side it is moving away from needs no spare: the window leans ahead, so that
+        /// side was built thin on purpose, and asking it for the usual spare rebuilt the window on
+        /// every frame of a fast walk.</para></summary>
+        private static bool MaskWindowHoldsView(int startTileX, int startTileY, int tilesW, int tilesH, int spareTiles,
+                                                int leadX = 0, int leadY = 0)
         {
             int vx = Game1.viewport.X, vy = Game1.viewport.Y;
             int viewLeft = (int)Math.Floor(vx / 64f), viewTop = (int)Math.Floor(vy / 64f);
             int viewRight = (int)Math.Floor((vx + Game1.viewport.Width) / 64f);
             int viewBottom = (int)Math.Floor((vy + Game1.viewport.Height) / 64f);
-            return viewLeft - spareTiles >= startTileX && viewRight + spareTiles <= startTileX + tilesW - 1
-                && viewTop - MaskTopCoverTiles - spareTiles >= startTileY && viewBottom + spareTiles <= startTileY + tilesH - 1;
+            // The side ahead asks for the travel a rebuild takes on top of the usual spare, so the
+            // next rebuild starts while there is still room to cross before it lands.
+            int spareLeft = leadX > 0 ? 0 : spareTiles - Math.Min(0, leadX), spareRight = leadX < 0 ? 0 : spareTiles + Math.Max(0, leadX);
+            int spareTop = leadY > 0 ? 0 : spareTiles - Math.Min(0, leadY), spareBottom = leadY < 0 ? 0 : spareTiles + Math.Max(0, leadY);
+            return viewLeft - spareLeft >= startTileX && viewRight + spareRight <= startTileX + tilesW - 1
+                && viewTop - MaskTopCoverTiles - spareTop >= startTileY && viewBottom + spareBottom <= startTileY + tilesH - 1;
+        }
+
+        /// <summary>Whether a finished window that does not hold the view yet lies ahead of where a
+        /// fast camera is going, along each axis the camera is moving fast on, and not further
+        /// than a lean could have put it.</summary>
+        private bool CameraIsHeadingInto(WaterMaskJob job)
+        {
+            int restingX = (int)Math.Floor(Game1.viewport.X / 64f) - MaskPadSideTiles;
+            int restingY = (int)Math.Floor(Game1.viewport.Y / 64f) - MaskPadTopTiles;
+            bool fastX = Math.Abs(_maskCameraVelocityX) >= MaskLeadFromTilesPerSecond;
+            bool fastY = Math.Abs(_maskCameraVelocityY) >= MaskLeadFromTilesPerSecond;
+            if (!fastX && !fastY)
+                return false;
+            int aheadX = (job.StartTileX - restingX) * Math.Sign(_maskCameraVelocityX);
+            int aheadY = (job.StartTileY - restingY) * Math.Sign(_maskCameraVelocityY);
+            bool xFine = fastX ? aheadX is > 0 and <= MaskLeadMostTiles : job.StartTileX == restingX;
+            bool yFine = fastY ? aheadY is > 0 and <= MaskLeadMostTiles : Math.Abs(job.StartTileY - restingY) <= MaskRebuildAheadTiles;
+            return xFine && yFine;
         }
 
         /// <summary>Deal with a compose that is already running. True means this frame is done:
@@ -291,7 +368,21 @@ namespace SDVRadiance
                     bool applied = ApplyWaterMaskStep(job);
                     NoteWaterRebuildCost(apply: (System.Diagnostics.Stopwatch.GetTimestamp() - applyStartTimestamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
                     if (applied)
+                    {
                         _pendingWaterMaskJob = null;
+                        // How long that took end to end, eased: what the window leans ahead by.
+                        float tookSeconds = (float)((System.Diagnostics.Stopwatch.GetTimestamp() - job.LaunchedTimestamp)
+                            / (double)System.Diagnostics.Stopwatch.Frequency);
+                        _maskBuildSeconds += (Math.Clamp(tookSeconds, 0f, 1f) - _maskBuildSeconds) * 0.3f;
+                    }
+                    return true;
+                }
+                else if (job.Location == location && job.TileWidth == tilesW && job.TileHeight == tilesH
+                    && CameraIsHeadingInto(job))
+                {
+                    // Placed ahead of a fast camera and landed a little before the camera got
+                    // there: keep it and keep drawing the old window until the view is inside it,
+                    // rather than throwing away a finished window that is about to be right.
                     return true;
                 }
                 else

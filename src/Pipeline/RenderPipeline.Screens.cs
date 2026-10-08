@@ -55,6 +55,12 @@ namespace SDVRadiance
             public int WaterTilesVersion;
             public MaskIdentity LastWaterIdentity = MaskIdentity.None;
             public int LastWaterTileX = int.MinValue, LastWaterTileY = int.MinValue, LastWaterBuildTick = int.MinValue;
+            /// <summary>Where this screen's camera was last frame and how fast it is going, in tiles
+            /// per second, eased: what the water mask window leans ahead by (see MaskWindowLead).</summary>
+            public int MaskCameraLastX = int.MinValue, MaskCameraLastY = int.MinValue;
+            public float MaskCameraVelocityX, MaskCameraVelocityY;
+            /// <summary>How long a mask rebuild takes here from start to landing, eased, in seconds.</summary>
+            public float MaskBuildSeconds = 0.15f;
             public bool HasWaterInMask;
             public float WaterInMaskEase;
             public Vector2 WaterMaskTilesPerScreen, WaterMaskWorldTileOffset, WaterMaskPixelSize;
@@ -109,6 +115,17 @@ namespace SDVRadiance
             // ---- presence fades ----
             public GameLocation? FadeLocation;
             public float FadeWater, FadeCloud, FadeLighting, FadeFlood, FadeTilt;
+            /// <summary>The Cast shadows switch, eased, as the flood's lamp shadows see it.</summary>
+            public float FadeLampShadows = 1f;
+            /// <summary>How clear this screen's sky is, eased (1 clear, 0 overcast), and the weather
+            /// this screen's sea answers. Per screen because the weather is: one player in rain in
+            /// town and the other in the desert's sun pulled one shared value both ways every frame,
+            /// and the cloud field, whose drift is time times a speed that follows it, jumped back
+            /// and forth between the two (reported on split screen).</summary>
+            public float CloudWeatherAmount = 1f, SeaRainSwellEased;
+            /// <summary>How far this screen's cloud field has drifted, summed a frame at a time,
+            /// and the clock it was last summed at (see RenderCloudShadow).</summary>
+            public float CloudDrift, CloudDriftClock = -1f;
             /// <summary>Per screen because it follows the location, and two players can be on
             /// opposite sides of a door.</summary>
             public float TiltIndoorEase;
@@ -376,6 +393,11 @@ namespace SDVRadiance
         private ref MaskIdentity _lastWaterIdentity => ref _screen.LastWaterIdentity;
         private GameLocation? _lastWaterLocation => _screen.LastWaterIdentity.Location;
         private ref int _lastWaterTileX => ref _screen.LastWaterTileX;
+        private ref int _maskCameraLastX => ref _screen.MaskCameraLastX;
+        private ref int _maskCameraLastY => ref _screen.MaskCameraLastY;
+        private ref float _maskCameraVelocityX => ref _screen.MaskCameraVelocityX;
+        private ref float _maskCameraVelocityY => ref _screen.MaskCameraVelocityY;
+        private ref float _maskBuildSeconds => ref _screen.MaskBuildSeconds;
         private ref int _lastWaterTileY => ref _screen.LastWaterTileY;
         private ref int _lastWaterBuildTick => ref _screen.LastWaterBuildTick;
         private ref bool _hasWaterInMask => ref _screen.HasWaterInMask;
@@ -429,8 +451,13 @@ namespace SDVRadiance
         private ref GameLocation? _fadeLocation => ref _screen.FadeLocation;
         private ref float _fadeWater => ref _screen.FadeWater;
         private ref float _fadeCloud => ref _screen.FadeCloud;
+        private ref float _cloudWeatherAmount => ref _screen.CloudWeatherAmount;
+        private ref float _seaRainSwellEased => ref _screen.SeaRainSwellEased;
+        private ref float _cloudDrift => ref _screen.CloudDrift;
+        private ref float _cloudDriftClock => ref _screen.CloudDriftClock;
         private ref float _fadeLighting => ref _screen.FadeLighting;
         private ref float _fadeFlood => ref _screen.FadeFlood;
+        private ref float _fadeLampShadows => ref _screen.FadeLampShadows;
         private ref float _fadeTilt => ref _screen.FadeTilt;
         private ref float _tiltIndoorEase => ref _screen.TiltIndoorEase;
         private ref float _masterFade => ref _screen.MasterFade;

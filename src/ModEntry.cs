@@ -843,6 +843,12 @@ namespace SDVRadiance
             // Sun path only: our critter silhouettes draw only under the sun, so on rainy days the
             // vanilla critter blob stays (better a blob than no shadow at all).
             ShadowSuppression.SuppressVanillaCritterShadows = _config.DirectionalShadowObjects && ShadowRenderer.SunShadowActive(_config);
+            // Asked for from the config menu: opened once that menu has closed and the player is free.
+            if (GmcmRegistration.TunerAsked && Context.IsPlayerFree)
+            {
+                GmcmRegistration.TunerAsked = false;
+                ToggleTuner();
+            }
             if (Context.ScreenId == 0)
                 FrameCost.NoteUpdateTick((System.Diagnostics.Stopwatch.GetTimestamp() - tickStarted)
                                          * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
@@ -894,6 +900,7 @@ namespace SDVRadiance
 
         private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
         {
+            ScaleUpArt.Find(Monitor);
             // The outfit mod tells the shadow bakes when its farmer's look changed (see Integrations.OutfitAppearance).
             Integrations.OutfitAppearance.Connect(Helper.ModRegistry, Monitor);
             if (_harmony != null)

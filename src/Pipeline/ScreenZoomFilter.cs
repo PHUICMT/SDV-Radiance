@@ -26,6 +26,15 @@ namespace SDVRadiance
     /// <para>Only the one path is replaced: a single screen drawn on the buffer, no map
     /// screenshot, the zoom between a third and three. Anything else goes to the game as before,
     /// and so does every frame while the setting is off.</para>
+    /// <para>Never on Android. The filter works in buffer pixels, and a phone's graphics chip runs
+    /// it at half precision, which cannot hold a half pixel past about 1,024: there the overlap
+    /// weights collapse to nothing on every other column or row and the screen is striped with
+    /// black lines beyond that point (Kitty2272554, Deaw0057 and MUTGAMING on Nexus, all since
+    /// 2.2.0, gone at exactly 100 per cent where the filter already stood aside). Run at half
+    /// precision off the device, the same arithmetic blacks out about one column in 1.6 from
+    /// pixel 1,027 of a 2,400-pixel screen. Even the texture position handed to the shader is
+    /// too coarse there, so it cannot be rewritten to fit; and a phone's pixels are too small for
+    /// the crawl it fixes to show.</para>
     /// </remarks>
     internal static class ScreenZoomFilter
     {
@@ -42,6 +51,12 @@ namespace SDVRadiance
         internal static void Install(Harmony harmony, IMonitor monitor)
         {
             _monitor = monitor;
+            if (Constants.TargetPlatform == GamePlatform.Android)
+            {
+                monitor.Log("Sharp zoom stands aside on Android: a phone's graphics chip lacks the precision it needs, "
+                    + "and the zoom stays the game's own.", LogLevel.Trace);
+                return;
+            }
             try
             {
                 harmony.Patch(AccessTools.Method(typeof(Game1), "renderScreenBuffer", [typeof(RenderTarget2D)]),

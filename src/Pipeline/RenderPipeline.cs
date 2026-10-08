@@ -991,7 +991,7 @@ namespace SDVRadiance
                 string path = Path.Combine(_modDirectory, "assets", file);
                 if (File.Exists(path))
                 {
-                    var effect = new Effect(_device, File.ReadAllBytes(path));
+                    var effect = new Effect(_device, ShaderPrecision.Prepare(File.ReadAllBytes(path), _monitor));
                     _monitor.Log($"Loaded {file}.", LogLevel.Trace);
                     return effect;
                 }
@@ -2091,9 +2091,8 @@ namespace SDVRadiance
         // ---- stages --------------------------------------------------------
 
         private float _cloudDayFactor = 1f;
-        /// <summary>Eased 1 → 0 while the sky is overcast (rain / storm / snow): no direct sun means
-        /// no gaps for a cloud to cast through.</summary>
-        private float _cloudWeatherAmount = 1f;
+        // _cloudWeatherAmount (eased 1 clear to 0 overcast) lives in ScreenState: see
+        // RenderPipeline.Screens.cs.
         /// <summary>0 under a clear sky .. 1 fully overcast — the inverse of
         /// <see cref="_cloudWeatherAmount"/>, read by the stage to reshape the cloud field into
         /// slow heavy mass instead of crisp banks.</summary>

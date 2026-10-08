@@ -54,7 +54,7 @@ namespace SDVRadiance
 
             // Pass 1: generate the cloud-density mask at half-res (WorldOffset uses
             // the full-res dest so the anchor matches the composite step).
-            GetParam(effect, "Time")?.SetValue(wrappedTime);
+            // (Time and Speed are set below, once the speed is known.)
             // OVERCAST reshape (rain / storm / snow, eased in over ~1s). A clear day is crisp
             // banks with real sky between them; a rainy one is one slow heavy ceiling with soft
             // variation in it. Same field, different settings: drift slower, grow the cloud size
@@ -68,7 +68,21 @@ namespace SDVRadiance
             // out; what the eye should read is a sky thickening, not a sky that has closed.
             float stormWarning = _stormWarningEased;
             // A windy spell hurries the clouds along with everything else the wind moves.
-            GetParam(effect, "Speed")?.SetValue(config.CloudShadowSpeed * MathHelper.Lerp(1f, 0.6f, overcast) * WindySpells.Factor);
+            float cloudSpeed = config.CloudShadowSpeed * MathHelper.Lerp(1f, 0.6f, overcast) * WindySpells.Factor;
+            // The field's drift is SUMMED, a frame's clock step at the speed of that frame, not
+            // clock times speed: the speed follows the weather and the wind, and with the product
+            // every change of speed moved the whole field by the clock's full age times the
+            // change, so clouds raced across the screen while rain set in, and on split screen,
+            // where the speed differed per screen, they jumped every frame. At a steady speed the
+            // two agree. The sum restarts with the clock, which wraps each morning (precision).
+            float clockStep = wrappedTime - _cloudDriftClock;
+            if (_cloudDriftClock < 0f || clockStep < 0f)
+                _cloudDrift = wrappedTime * cloudSpeed;
+            else
+                _cloudDrift += clockStep * cloudSpeed;
+            _cloudDriftClock = wrappedTime;
+            GetParam(effect, "Time")?.SetValue(_cloudDrift);
+            GetParam(effect, "Speed")?.SetValue(1f);
             GetParam(effect, "Scale")?.SetValue(config.CloudShadowScale * MathHelper.Lerp(1f, 0.65f, overcast));
             GetParam(effect, "Coverage")?.SetValue(MathHelper.Clamp(
                 MathHelper.Lerp(config.CloudShadowCoverage, config.CloudShadowCoverage + 0.32f, overcast)
@@ -1204,7 +1218,14 @@ namespace SDVRadiance
             // against it, so their shadows should show a little too. Night is what the dial was
             // tuned at, so full darkness maps to 1 and a rainy day lands around a third.
             float lampVisible = OutdoorLampAgainstDaylight();
-            float shadowStrengthNow = MathHelper.Clamp(config.FloodShadowStrength, 0f, 1f) * lampVisible;
+            // Cast shadows is the switch the tuner puts over every lamp-shadow dial, yet it only
+            // ever reached the classic pass, so with the flood on (the default) turning it off
+            // neither removed these shadows nor saved the march they cost (AAAY12, a phone in the
+            // mines). Eased, so the shadows fade out and back instead of snapping; once it is out,
+            // the strength below is zero and the march is skipped.
+            _fadeLampShadows = config.LightingShadows ? Ease01(_fadeLampShadows) : Ease0(_fadeLampShadows);
+            float lampShadowsVisible = lampVisible * _fadeLampShadows;
+            float shadowStrengthNow = MathHelper.Clamp(config.FloodShadowStrength, 0f, 1f) * lampShadowsVisible;
             // Below one colour step nothing the march finds can reach the picture: a shadow's
             // whole effect is at most ShadowStrength of a pool that is itself scaled by the same
             // daylight. The game's daylight tint is rarely pure white even at noon, so a strength
@@ -1216,7 +1237,7 @@ namespace SDVRadiance
             LastLampVisible = lampVisible;
             LastShadowStrengthNow = shadowStrengthNow;
             GetParam(effect, "ShadowStrength")?.SetValue(shadowStrengthNow);
-            GetParam(effect, "ShadowCarve")?.SetValue(MathHelper.Clamp(config.LightShadowCarve, 0f, 1f) * lampVisible);
+            GetParam(effect, "ShadowCarve")?.SetValue(MathHelper.Clamp(config.LightShadowCarve, 0f, 1f) * lampShadowsVisible);
             // The shader's own test, mirrored here so the report can say the march was skipped
             // (see marchWanted in floodlight.fx). The shaft strength is the value the last shaft
             // update handed over, which is this frame's or the one before; a report flag, not a
@@ -1463,9 +1484,6 @@ namespace SDVRadiance
 
         /// <summary>How agitated the surface is this frame: weather, season, the shimmer toggle's ease, the
         /// cutscene displacement gate and the calmer indoor treatment.</summary>
-        /// <summary>The weather the sea is answering, eased: 0 dry, 1 rain, 1.6 a storm.</summary>
-        private float _seaRainSwellEased;
-
         private void SetWaterRippleParams(Effect effect, ModConfig config)
         {
             // Weather/season drive how agitated the water is: choppier & faster in
@@ -1515,7 +1533,9 @@ namespace SDVRadiance
                 : 1f;
             seaWaves *= seaRainSwell;
             GetParam(effect, "Strength")?.SetValue(config.WaterStrength * seaWaves * strengthMultiplier * shimmer * displacementGate * indoorWave);
-            GetParam(effect, "Speed")?.SetValue(config.WaterSpeed * speedMultiplier * (1f + 0.5f * (seaRainSwell - 1f)));
+            // The swell raises the waves, not their pace: the shader's phase is clock times speed,
+            // so a speed eased up over seconds would race every wave forward while it eased.
+            GetParam(effect, "Speed")?.SetValue(config.WaterSpeed * speedMultiplier);
             // The glints by day and by night each have a switch: the dusk ramp hands the water from
             // one to the other, and each switch eases, so neither the clock nor a click snaps them.
             Approach(ref _sparkleDayEase, config.WaterSparkleByDay ? 1f : 0f, 0.08f);

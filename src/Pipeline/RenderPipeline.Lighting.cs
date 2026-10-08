@@ -318,7 +318,7 @@ namespace SDVRadiance
                 {
                     string lightKey = lightEntry.Key.ToString() ?? string.Empty;
                     int id = StableLightId(lightKey);
-                    if (ShadowRenderer.IsCompanionLight(lightKey))
+                    if (ShadowRenderer.IsCompanionLight(lightKey) || IsPassingFlash(lightKey))
                         _shadowlessLightIds.Add(id);
                     _gatheredLights.Add(new GatheredLight
                     {
@@ -1921,10 +1921,43 @@ namespace SDVRadiance
                 return;
             foreach (var lightEntry in lights)
             {
-                if (lightEntry.Value.lightContext.Value == LightSource.LightContext.WindowLight)
+                if (lightEntry.Value.lightContext.Value == LightSource.LightContext.WindowLight
+                    || IsPassingFlash(lightEntry.Key.ToString() ?? string.Empty))
                     continue;
                 _occluderLightPositions.Add(lightEntry.Value.position.Value);
             }
+        }
+
+        /// <summary>
+        /// A light the game adds for a moment: a bomb's blast, a lightning strike, a firework.
+        /// </summary>
+        /// <remarks>
+        /// Each one used to cost the lamp shadows a full rebuild. The light count was part of the
+        /// occluder mask's change test, so a blast appearing and fading rebuilt the mask and
+        /// re-marched every shadowed lamp across the whole window, and the blast itself took a
+        /// shadowed slot for its half second, which reset the shared march budget twice more.
+        /// A phone player in the Skull Cavern saw the frame rate fall to about twenty after every
+        /// bomb (AAAY12). A flash this short shows its light and nothing that its shadow would
+        /// add, so it now lights the scene without a shadow and without touching the mask.
+        /// The ids are the game's own (GameLocation.explode, Utility.performLightningUpdate,
+        /// the firework sprites).
+        /// </remarks>
+        private static bool IsPassingFlash(string lightKey)
+            => lightKey.Contains("_explode_", StringComparison.Ordinal)
+               || lightKey.Contains("_LightningBolt_", StringComparison.Ordinal)
+               || lightKey.StartsWith("Firework_", StringComparison.Ordinal);
+
+        /// <summary>The game's lights less the passing flashes, for the occluder change test.</summary>
+        private static int LastingLightCount()
+        {
+            var lights = Game1.currentLightSources;
+            if (lights == null)
+                return 0;
+            int count = 0;
+            foreach (var lightEntry in lights)
+                if (!IsPassingFlash(lightEntry.Key.ToString() ?? string.Empty))
+                    count++;
+            return count;
         }
 
         private bool LightStandsIn(Rectangle worldBox)
@@ -2015,7 +2048,7 @@ namespace SDVRadiance
                 // Placing or picking up anything, and a torch lit or put out, both move the mask.
                 occluderInputsHash = occluderInputsHash * 31 + location.objects.Count();
                 occluderInputsHash = occluderInputsHash * 31 + location.furniture.Count;
-                occluderInputsHash = occluderInputsHash * 31 + (Game1.currentLightSources?.Count ?? 0);
+                occluderInputsHash = occluderInputsHash * 31 + LastingLightCount();
                 occluderInputsHash = occluderInputsHash * 31 + propsStep;
             }
             PhaseCost.NoteSince("flood occluders: the change test (counts, every frame)", hashStart);

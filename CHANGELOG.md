@@ -2,6 +2,78 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.2.8 - 2026-10-08
+
+### Added
+
+- **The tuner opens from the config menu.** A new tick box under the hotkeys opens the full Radiance
+  tuner (the F6 menu) once the config menu is closed, so phone players, who have no F6 key, can
+  reach every setting, including the ones the config menu does not list.
+
+### Changed
+
+- **Windy spells hurry the trees as well as bending them.** During a spell the gusts now sweep
+  through the trees faster too, rising and falling with the spell without a jump. Nothing changes
+  with spells off.
+
+### Fixed
+
+- **The game's own snow is white again near water.** Since 2.2.7 the game's weather is drawn over
+  the water effect so the ripple no longer bends it, and it is darkened the way the game's own
+  lighting would. On a bright day the game uses no lighting at all, and the mod darkened the flakes
+  by the full amount anyway, so with water on screen the snow fell as black dots. Reported by
+  ghi3038 on Nexus with a video.
+- **No more black lines across the screen on phones.** Sharp zoom, added in 2.2.0, needs more
+  precision than a phone's graphics chip gives it, and past a point on the screen every other line
+  came out black at most zoom levels. It now stays off on Android and the game draws its own zoom
+  there, as it did before 2.2.0. Nothing changes on PC. Reported by Kitty2272554, Deaw0057 and
+  MUTGAMING on Nexus.
+- **The effects work at full precision on phones.** Phone graphics chips ran every effect of this
+  mod with half the precision a PC uses, which on a big map or late in the day could turn water
+  black when a ripple ring appeared, black out the lower screen on sunny winter days, freeze the
+  water's movement, and break mist and cloud shadows into blocks. On phones with OpenGL ES 3 or
+  later they now run at full precision. Nothing changes on PC. Found while chasing the phone lines
+  above.
+- **Cast shadows turns lamp shadows off again.** The switch only reached the older lighting mode,
+  so with the default lighting it neither removed the shadows lamps throw nor saved the work they
+  cost. It now fades them out and skips that work. If you had it off, lamps stop casting shadows,
+  which is what the switch always said. Reported by AAAY12 on Nexus.
+- **Bombs no longer slow the game down.** A bomb's blast, a lightning strike and a firework each
+  made every lamp shadow on screen be worked out again from scratch, four times per blast. They
+  still light the scene, but no longer cast a shadow of their own for the half second they last.
+  Reported by AAAY12 on Nexus (Skull Cavern on a phone).
+- **Pictures stay within what the graphics card takes.** On a phone with a wide screen, the water's
+  scenery mirror and the doubled art sheets could need a picture larger than the phone allows,
+  which comes out as garbage rather than an error. Those now step aside on such a device (the log
+  says so once). Nothing changes on PC.
+- **No dark scenes on phones that cannot draw the newer lighting.** The newer lighting needs a kind
+  of picture some phones can make but not draw into, and the mod only checked that it could be made,
+  so on those phones the scene could be lit from an empty map. It now draws a test colour at start
+  and reads it back, and keeps the older lighting where that fails. Nothing changes on PC.
+- **Cloud shadows hold still on split screen when the two players have different weather.** How
+  overcast the sky is was one value for both screens, so with one player in the rain and the other
+  in the desert's sun it was pulled back and forth every frame, and the cloud field, which drifts
+  at a speed that follows it, jumped with it. Each screen now has its own sky, and the field's
+  drift is added up frame by frame, so it also no longer races across the screen for a moment as
+  rain sets in or a windy spell begins. Reported by trc666 on Nexus.
+- **The water keeps up with very fast walking too.** With a mod that makes the player much faster,
+  water coming into view could still lag behind for a moment. The water surface is now worked out
+  where the camera is heading, by how fast it moves and how long the work takes on your machine, so
+  it is ready when the view gets there. At a normal walk nothing changes. Reported by WindyWeirdo
+  on Nexus.
+- **Characters drawn bigger by Scale Up keep their shadow.** Scale Up Unofficial lets a pack give a
+  character four times the detail, and for those it places the sprite where the game's own draw
+  would put it, whatever the caller asked. The shadow is made by drawing the sprite into a small
+  picture of its own, so the sprite landed mostly outside it and the character was left with no
+  shadow at all (Mud's Bountiful Beauties, for one). The mod now draws those sprites into its shadow
+  pictures at their full detail itself. Reported by Glarthon on Nexus.
+- **The sea's rain swell follows each screen's own weather,** and raises the waves without
+  speeding them, which made them race forward while the swell came in.
+
+### For translators
+
+2 new keys: `config.opentuner.name`/`.tooltip`.
+
 ## 2.2.7 - 2026-10-07
 
 ### Fixed

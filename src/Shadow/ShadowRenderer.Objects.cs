@@ -279,7 +279,7 @@ namespace SDVRadiance
                 graphicsDevice.SetRenderTarget(renderTarget);
                 graphicsDevice.Clear(Color.Transparent);
                 _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, RasterizerState.CullNone, null, lean);
-                _renderTargetSpriteBatch.Draw(texture, pos, sourceRect, Color.Black, 0f, Vector2.Zero, bakeScale, effects, 0f);
+                ScaleUpArt.Draw(_renderTargetSpriteBatch, texture, pos, sourceRect, Color.Black, 0f, Vector2.Zero, bakeScale, effects, 0f);
                 _renderTargetSpriteBatch.End();
                 WhitenBake(graphicsDevice, renderTarget.Bounds);
                 // Continuous feet(full)→head(faint) gradient over the sprite's vertical extent,

@@ -719,7 +719,7 @@ namespace SDVRadiance
                 graphicsDevice.SetRenderTarget(renderTarget);
                 graphicsDevice.Clear(Color.Transparent);
                 _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
-                _renderTargetSpriteBatch.Draw(texture, spriteTopLeft, sourceRect, Color.Black, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
+                ScaleUpArt.Draw(_renderTargetSpriteBatch, texture, spriteTopLeft, sourceRect, Color.Black, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0f);
                 _renderTargetSpriteBatch.End();
                 WhitenBake(graphicsDevice, renderTarget.Bounds);
 
@@ -1404,7 +1404,7 @@ namespace SDVRadiance
             {
                 FrameCost.Count(FrameCost.Counter.ShadowDrawCalls);
                 int countBefore = GroundedCountBefore(spriteBatch);
-                spriteBatch.Draw(texture, feet, sourceRect,
+                ScaleUpArt.Draw(spriteBatch, texture, feet, sourceRect,
                     baseColor * (1f - (float)Math.Pow(1f - MathHelper.Clamp(alpha, 0f, 1f), ShadowDepthPower)),
                     rotation, origin, scale, effects, depth);
                 GroundLastDraw(spriteBatch, countBefore, texture, feet, rotation);
@@ -1425,7 +1425,7 @@ namespace SDVRadiance
                 foreach (Vector2 tap in taps)
                 {
                     int countBefore = GroundedCountBefore(spriteBatch);
-                    spriteBatch.Draw(texture, feet + tap * blur, sourceRect, tapColor, rotation, origin, scale, effects, depth);
+                    ScaleUpArt.Draw(spriteBatch, texture, feet + tap * blur, sourceRect, tapColor, rotation, origin, scale, effects, depth);
                     GroundLastDraw(spriteBatch, countBefore, texture, feet + tap * blur, rotation);
                 }
                 return;
@@ -1438,7 +1438,7 @@ namespace SDVRadiance
                 float across = (tap.Y * alongX - tap.X * alongY) * acrossRadius;
                 var offset = new Vector2(along * alongX - across * alongY, along * alongY + across * alongX);
                 int countBefore = GroundedCountBefore(spriteBatch);
-                spriteBatch.Draw(texture, feet + offset, sourceRect, tapColor, rotation, origin, scale, effects, depth);
+                ScaleUpArt.Draw(spriteBatch, texture, feet + offset, sourceRect, tapColor, rotation, origin, scale, effects, depth);
                 GroundLastDraw(spriteBatch, countBefore, texture, feet + offset, rotation);
             }
         }

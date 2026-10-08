@@ -1046,6 +1046,9 @@ namespace SDVRadiance
                 choice => translate($"config.sheetupscalekernelfamily.{choice.ToLowerInvariant()}"));
         }
 
+        /// <summary>Set by the "open the tuner" tick box; ModEntry opens the tuner once the player is free.</summary>
+        internal static bool TunerAsked;
+
         /// <summary>Hotkeys, the debug switches, and the roadmap section.</summary>
         private static void RegisterMiscPage(IGenericModConfigMenuApi configMenu, IManifest manifest, Func<string, string> translate, Func<ModConfig> config, IMonitor monitor, Func<RenderPipeline?> getPipeline)
         {
@@ -1055,6 +1058,13 @@ namespace SDVRadiance
                 () => translate("config.togglekey.name"), () => translate("config.togglekey.tooltip"));
             configMenu.AddKeybindList(manifest, () => config().TunerKey, value => config().TunerKey = value,
                 () => translate("config.tunerkey.name"), () => translate("config.tunerkey.tooltip"));
+            // A phone has no key to press, and the tuner holds the settings this menu does not
+            // (share codes, profiles, the fine-tuning dials). The same tick box as the report below:
+            // it reads back unticked, and the tuner opens once this menu is closed.
+            configMenu.AddBoolOption(manifest,
+                () => false,
+                value => { if (value) TunerAsked = true; },
+                () => translate("config.opentuner.name"), () => translate("config.opentuner.tooltip"));
             configMenu.AddKeybindList(manifest, () => config().InspectDrawKey, value => config().InspectDrawKey = value,
                 () => translate("config.inspectdrawkey.name"), () => translate("config.inspectdrawkey.tooltip"));
 

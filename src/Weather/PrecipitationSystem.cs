@@ -472,11 +472,22 @@ namespace SDVRadiance
         /// linear, so taking it from the streak alone gives the same pixel as taking it from the
         /// streak blended over the already lit world. The lamps' pools are left out: the rain was
         /// never meant to be their colour.
+        /// <para>On a day the game calls fully lit it draws no lightmap at all, and the light it
+        /// would have used is plain white: taken away, that turned the snow's flakes black over
+        /// any water by day (reported by ghi3038 with a video). With no lightmap there is nothing
+        /// to take away.</para>
         /// </summary>
         private static Color LitAsTheGameLightsIt(Color colour, GameLocation location)
         {
+            if (!Game1.drawLighting)
+                return colour;
             Color light = Game1.ambientLight.Equals(Color.White) || (location.IsOutdoors && location.IsRainingHere())
                 ? Game1.outdoorLight : Game1.ambientLight;
+            // Darkness (buff 26) forces the lightmap on and pulls its light halfway to white, or
+            // to three quarters grey when it was white already, as Game1.DrawLighting does.
+            if (Game1.player?.hasBuff("26") == true)
+                light = light == Color.White ? new Color(0.75f, 0.75f, 0.75f)
+                    : new Color((byte)MathHelper.Lerp(light.R, 255f, 0.5f), (byte)MathHelper.Lerp(light.G, 255f, 0.5f), (byte)MathHelper.Lerp(light.B, 255f, 0.5f));
             return new Color(LightTakenAway(colour.R, light.R), LightTakenAway(colour.G, light.G), LightTakenAway(colour.B, light.B), colour.A);
         }
 

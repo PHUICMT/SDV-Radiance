@@ -49,10 +49,12 @@ namespace SDVRadiance
                 monitor.Log($"texture units: {(samplerSlots > 0 ? samplerSlots.ToString() : "unknown")} sampler slots"
                     + (samplerSlots > 16 ? $" ({samplerSlots - 16} of them beyond what a pixel shader here can address)" : ""),
                     LogLevel.Info);
+                bool halfFloatDraws = DrawsIntoHalfFloat(device);
+                HalfFloatDraws = halfFloatDraws;
                 monitor.Log($"render targets: {DescribeFormat(device, SurfaceFormat.Color)}, "
-                    + $"{DescribeFormat(device, SurfaceFormat.HalfVector4)} "
+                    + $"{DescribeFormat(device, SurfaceFormat.HalfVector4)}, drawn into and read back: {(halfFloatDraws ? "yes" : "NO")} "
                     + "(the second one is what the radiance cascades need; without it the mod keeps "
-                    + "the flood model and nothing is lost but the newer lighting).", LogLevel.Info);
+                    + "the flood model and nothing is lost but the newer lighting).", halfFloatDraws ? LogLevel.Info : LogLevel.Warn);
                 monitor.Log(ReadbackVerdict(device), ReadbackWorks(device) ? LogLevel.Info : LogLevel.Warn);
                 LogLargestPicture(monitor, presentation);
             }
@@ -97,7 +99,7 @@ namespace SDVRadiance
         }
 
         /// <summary>One integer from glGetIntegerv, or null when it cannot be asked.</summary>
-        private static int? AskTheDriver(int name)
+        internal static int? AskTheDriver(int name)
         {
             try
             {
@@ -117,6 +119,55 @@ namespace SDVRadiance
             catch
             {
                 return null;
+            }
+        }
+
+        /// <summary>Whether a half-float render target can be drawn into and read from here.
+        /// Null until the startup report has asked.</summary>
+        internal static bool? HalfFloatDraws { get; private set; }
+
+        /// <summary>
+        /// Draw a known colour into a half-float target, copy it into an ordinary one, and read it back.
+        /// </summary>
+        /// <remarks>
+        /// Making the target is not the question. OpenGL ES 3 lets every device make and sample an
+        /// RGBA16F texture, but drawing into one needs an extension that not every phone has, and
+        /// without it the framebuffer is incomplete and every draw is silently dropped: MonoGame
+        /// checks nothing when it binds a target. The cascades would then light the scene from an
+        /// empty map, which reads as everything far too dark, with nothing in the log. So the
+        /// colour has to come back out before the cascades are trusted with the lighting.
+        /// </remarks>
+        private static bool DrawsIntoHalfFloat(GraphicsDevice device)
+        {
+            try
+            {
+                using var halfFloat = new RenderTarget2D(device, 4, 4, false, SurfaceFormat.HalfVector4, DepthFormat.None);
+                using var plain = new RenderTarget2D(device, 4, 4, false, SurfaceFormat.Color, DepthFormat.None);
+                using var white = new Texture2D(device, 1, 1);
+                white.SetData([Microsoft.Xna.Framework.Color.White]);
+                using var batch = new SpriteBatch(device);
+                var known = new Microsoft.Xna.Framework.Color(64, 128, 192, 255);
+                device.SetRenderTarget(halfFloat);
+                device.Clear(Microsoft.Xna.Framework.Color.Transparent);
+                batch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
+                batch.Draw(white, new Microsoft.Xna.Framework.Rectangle(0, 0, 4, 4), known);
+                batch.End();
+                device.SetRenderTarget(plain);
+                device.Clear(Microsoft.Xna.Framework.Color.Transparent);
+                batch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
+                batch.Draw(halfFloat, new Microsoft.Xna.Framework.Rectangle(0, 0, 4, 4), Microsoft.Xna.Framework.Color.White);
+                batch.End();
+                device.SetRenderTarget(null);
+                var read = new Microsoft.Xna.Framework.Color[16];
+                plain.GetData(read);
+                var middle = read[5];
+                return Math.Abs(middle.R - known.R) <= 2 && Math.Abs(middle.G - known.G) <= 2
+                    && Math.Abs(middle.B - known.B) <= 2 && middle.A >= 250;
+            }
+            catch
+            {
+                try { device.SetRenderTarget(null); } catch { }
+                return false;
             }
         }
 

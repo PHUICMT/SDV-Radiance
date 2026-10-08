@@ -143,7 +143,9 @@ namespace SDVRadiance
             if (BoundTargets.WouldBeWipedByRebinding(device))
                 return null;
             long inputBytes = (long)sheet.Width * sheet.Height * 4;
-            if (inputBytes > _largestInputBytes)
+            // Bytes are not the only limit: a tall sheet doubled can be a side longer than a
+            // phone's card takes (TextureLimit), and that picture would come back wrong, not fail.
+            if (inputBytes > _largestInputBytes || !TextureLimit.Fits(sheet.Width * _scale, sheet.Height * _scale))
             {
                 Refused++;
                 return null;

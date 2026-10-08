@@ -254,6 +254,9 @@ namespace SDVRadiance
         {
             try
             {
+                // Made is not drawn: see PlatformReport.DrawsIntoHalfFloat.
+                if (PlatformReport.HalfFloatDraws == false)
+                    throw new NotSupportedException("RGBA16F targets can be made here but not drawn into (checked at startup)");
                 for (int i = 0; i < 2; i++)
                 {
                     RenderTarget2D? target = _cascadeTargets[i];

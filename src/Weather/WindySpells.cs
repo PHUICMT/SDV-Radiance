@@ -40,6 +40,11 @@ namespace SDVRadiance
         private static readonly (float Start, float End)[] _spells = new (float, float)[3];
         private static int _spellCount;
 
+        /// <summary>How far ahead of the clock a spell has pushed the trees' gusts, in seconds: summed
+        /// a tick at a time at 0.6 of the spell's extra strength, so the gusts come faster while it
+        /// blows and the sway never jumps. Stays 0 for a player who never turns spells on.</summary>
+        internal static double GustExtraSeconds;
+
         /// <summary>The wind's multiplier right now: 1 when calm or switched off.</summary>
         internal static float Factor => _factor;
 
@@ -70,6 +75,7 @@ namespace SDVRadiance
             _factor += (target - _factor) * Math.Clamp(seconds / SwitchEaseSeconds, 0f, 1f);
             if (!Enabled && Math.Abs(_factor - 1f) < 0.001f)
                 _factor = 1f;
+            GustExtraSeconds += seconds * 0.6 * (_factor - 1f);
         }
 
         /// <summary>How far into a spell the day is right now, 0 to 1.</summary>

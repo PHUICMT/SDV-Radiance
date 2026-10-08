@@ -34,8 +34,8 @@ sampler2D ShadowSampler = sampler_state
     AddressU = Clamp; AddressV = Clamp;
 };
 
-float Time;          // seconds, WRAPPED into a bounded range by the CPU (precision safety)
-float Speed;         // drift speed
+float Time;          // the field's drift, summed on the CPU a frame at a time (restarts each morning)
+float Speed;         // 1: the speed is already inside the summed drift
 float Scale;         // cloud size (bigger = smaller/denser clouds)
 float Opacity;       // how dark the shadows get (0..1)
 float Coverage;      // fraction of area shadowed (0..1)

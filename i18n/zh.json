@@ -15,6 +15,8 @@
   "config.togglekey.tooltip": "即时开启或关闭整个后期处理堆栈（游戏过程中快速 A/B 对比）。",
   "config.tunerkey.name": "打开实时调节器",
   "config.tunerkey.tooltip": "打开屏幕调色器叠加层，在实时查看场景的同时调整外观。",
+  "config.opentuner.name": "打开 Radiance 调节器",
+  "config.opentuner.tooltip": "关闭此菜单后打开完整的 Radiance 调节器（F6 菜单），适用于手机以及没有该按键的玩家。它包含全部设置，包括此处未列出的设置。勾选后它会立即自动取消勾选，这属于正常现象。",
   "config.inspectdrawkey.name": "查询此像素由谁绘制",
   "config.inspectdrawkey.tooltip": "将光标指向看起来有问题的画面，按下此键：SMAPI控制台将列出绘制该像素的所有贴图，以及其每个原始像素在屏幕上放大为多少像素。游戏原始像素画始终为4倍。默认无按键，需自行设置。",
   "tuner.title": "SDV-Radiance 调色器",

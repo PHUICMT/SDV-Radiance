@@ -1872,6 +1872,8 @@ namespace SDVRadiance
         /// <summary>Set when the map could not be read. Falls back to the old whole-map rebuild
         /// rather than quietly showing frozen art.</summary>
         private bool _sceneAnimatedUnknown;
+        /// <summary>Set once the scenery mirror has said it is too large for this device.</summary>
+        private bool _mirrorTooLargeNoted;
 
         /// <summary>One place's animated mirror tiles and frame intervals, and the map epoch they
         /// were read at. The three fields above point at the entry for the place being drawn.</summary>
@@ -2105,6 +2107,20 @@ namespace SDVRadiance
             // The mirror source is TALLER than the screen: the extra rows sit above it, which is
             // the only direction a reflection ever reads. See MirrorTopReachPixels.
             int sourceWidth = targetWidth + 2 * MirrorSideReachPixels, sourceHeight = targetHeight + MirrorTopReachPixels;
+            // The scenery mirror reaches past the screen, and its cache reaches further: on a phone
+            // with a wide screen and a card that takes 4,096 a side, that can be past the limit,
+            // where the picture comes back wrong instead of failing. The water keeps its other
+            // reflections; only the scenery mirror stands aside.
+            if (!TextureLimit.Fits(sourceWidth + 2 * SceneCachePadPixels, sourceHeight + 2 * SceneCachePadPixels))
+            {
+                if (!_mirrorTooLargeNoted)
+                {
+                    _mirrorTooLargeNoted = true;
+                    _monitor.Log($"The scenery mirror needs a {sourceWidth + 2 * SceneCachePadPixels}x{sourceHeight + 2 * SceneCachePadPixels} picture, "
+                        + $"larger than this device takes ({TextureLimit.Largest}); it is left out at this zoom.", StardewModdingAPI.LogLevel.Info);
+                }
+                return;
+            }
             if (_mirrorSourceRenderTarget == null || _mirrorSourceRenderTarget.Width != sourceWidth || _mirrorSourceRenderTarget.Height != sourceHeight)
             {
                 _mirrorSourceRenderTarget?.Dispose();

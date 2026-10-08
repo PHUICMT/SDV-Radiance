@@ -16,6 +16,8 @@
   "config.togglekey.tooltip": "Instantly turn the whole post-processing stack on or off (quick A/B compare while playing).",
   "config.tunerkey.name": "Open live tuner",
   "config.tunerkey.tooltip": "Open the on-screen tuner overlay to adjust the look while seeing the scene live.",
+  "config.opentuner.name": "Open the Radiance tuner",
+  "config.opentuner.tooltip": "Opens the full Radiance tuner (the F6 menu) once you close this menu, for phones and anyone without the key. It holds every setting, including the ones not listed here. It unticks itself straight away, which is normal.",
   "config.inspectdrawkey.name": "Ask what drew this pixel",
   "config.inspectdrawkey.tooltip": "Point at something that looks wrong and press this: the SMAPI console lists every sheet that drew that pixel, and how many screen pixels one of its own pixels became. The game's pixel art is always 4. Unbound until you set it.",
   "tuner.title": "SDV-Radiance Tuner",

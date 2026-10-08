@@ -120,7 +120,10 @@ namespace SDVRadiance
             if (!Enabled || Strength <= 0.001f)
                 return 0f;
             float treePhase = worldColumn * 1.7f + worldRow * 2.3f;
-            double t = Determinism.Seconds * Speed;
+            // A windy spell hurries the gusts as well as deepening them: the extra time is summed
+            // by the spell a tick at a time (WindySpells.GustExtraSeconds), so the pace rises and
+            // falls without a jump. 0 without a spell, which leaves this exactly as it was.
+            double t = (Determinism.Seconds + WindySpells.GustExtraSeconds) * Speed;
             float windShare = Math.Min(1f, Math.Abs(WindPixelsPerSecond) / FullWindPixelsPerSecond);
             float windSign = WindPixelsPerSecond < 0f ? -1f : 1f;
 

@@ -590,6 +590,8 @@ namespace SDVRadiance
         {
             int side = atLeastWidth > PageSide || atLeastHeight > PageSide ? LargePageSide : PageSide;
             int width = side, height = side;
+            if (!TextureLimit.Fits(width, height))
+                return null;
             long bytes = (long)width * height * 4;
             EvictToFit(bytes);
             if (_heldBytes + bytes > _budgetBytes)

@@ -52,6 +52,9 @@ namespace SDVRadiance
             /// one - and every stamp near it was culled while the ripple ran over the palms.</summary>
             public bool[]? TileHasEffectWaterFlags;
             public double ComposeDurationMilliseconds;           // worker-side timing (diag)
+            /// <summary>When the rebuild was started, so its landing can say how long a rebuild
+            /// takes on this machine end to end (gather, compose and upload).</summary>
+            public long LaunchedTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
             /// <summary>Apply: how many of the upload steps have run, one texture (or the two small
             /// ones) per frame (RenderPipeline.WaterMask.Apply.cs). The job stays pending until all have.</summary>
             public int ApplyTexturesDone;
