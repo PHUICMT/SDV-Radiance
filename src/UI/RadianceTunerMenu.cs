@@ -697,11 +697,12 @@ namespace SDVRadiance
                 int chipX = _contentCursorX;
                 foreach (var profile in _config.SavedProfiles)
                 {
-                    int chipWidth = Math.Min(160, 44 + (int)(Game1.smallFont.MeasureString(profile.Name).X * 0.7f));
+                    string chipName = ShownLookName(profile);
+                    int chipWidth = Math.Min(160, 44 + (int)(Game1.smallFont.MeasureString(chipName).X * 0.7f));
                     if (chipX + chipWidth > _contentCursorX + _contentColumnWidth - 100) { chipX = _contentCursorX; _contentCursorY += Scaled(ChipPitchBase); }
                     var rect = new Rectangle(chipX, _contentCursorY, chipWidth, ButtonHeight);
                     var captured = profile;
-                    var load = new TunerTextButton(profile.Name, rect, () => { _config.ApplyProfile(captured); _onChange(); _onSave(); Reflow(); })
+                    var load = new TunerTextButton(chipName, rect, () => { _config.ApplyProfile(captured); _onChange(); _onSave(); Reflow(); })
                     {
                         // Lit while the live settings are still exactly what this look holds, so the
                         // panel says which saved look is in effect; move any slider and it goes out.
@@ -724,6 +725,54 @@ namespace SDVRadiance
             BuildShare();
 
             Toggle("tuner.master", () => _config.Enabled, value => _config.Enabled = value, "help.master");
+
+            BuildResetEverything();
+        }
+
+        /// <summary>Asked for once before anything is reset; cleared by the cancel button and when the panel closes.</summary>
+        private bool _resetAsked;
+
+        /// <summary>
+        /// Every setting back to the defaults, behind a second press.
+        /// </summary>
+        /// <remarks>
+        /// It cannot be undone, so the first press only asks: it says what goes and what stays, and
+        /// the reset happens on a separate confirm button, next to one that cancels. Saved looks are
+        /// kept, so a player who saved theirs first can load it back.
+        /// </remarks>
+        private void BuildResetEverything()
+        {
+            var row = new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, ButtonHeight);
+            if (!_resetAsked)
+            {
+                Button(_translate("tuner.reset.all"), row, () => { _resetAsked = true; Game1.playSound("smallSelect"); Reflow(); });
+                Help(row, "help.reset.all");
+                _contentCursorY += RowPitch;
+                return;
+            }
+            Paragraph(_translate("tuner.reset.ask"));
+            int gap = Scaled(10);
+            int half = (_contentColumnWidth - gap) / 2;
+            Button(_translate("tuner.reset.confirm"), new Rectangle(_contentCursorX, _contentCursorY, half, ButtonHeight), ResetEverything);
+            Button(_translate("tuner.reset.cancel"), new Rectangle(_contentCursorX + half + gap, _contentCursorY, half, ButtonHeight),
+                () => { _resetAsked = false; Game1.playSound("smallSelect"); Reflow(); });
+            _contentCursorY += RowPitch;
+        }
+
+        private void ResetEverything()
+        {
+            _resetAsked = false;
+            // A code on trial would otherwise put the look from before it back when the panel closes.
+            _codeOnTrial = null;
+            _lookBeforeTrial = null;
+            _lookOnTrial = null;
+            _lookBeforeCode = null;
+            _config.ResetToDefaults();
+            _config.Clamp();
+            _onChange();
+            _onSave();
+            Game1.playSound("drumkit6");
+            Reflow();
         }
 
         /// <summary>
@@ -1082,6 +1131,26 @@ namespace SDVRadiance
                 PutBackCodeOnTrial();
         }
 
+        /// <summary>
+        /// A saved look's name as the chip shows it.
+        /// </summary>
+        /// <remarks>
+        /// The look kept from before a code is named by the mod, not by the player, and that name was
+        /// written in the language the game ran in when it was made: switch the game to another
+        /// language and the chip read as empty boxes, because that language's font has none of those
+        /// letters. Its name is put together again in today's language, keeping the time it was made.
+        /// A name the player typed is theirs and is shown as typed.
+        /// </remarks>
+        private string ShownLookName(NamedProfile profile)
+        {
+            if (!profile.MadeBeforeACode)
+                return profile.Name;
+            System.Text.RegularExpressions.Match time = System.Text.RegularExpressions.Regex.Match(profile.Name, @"\d{1,2}:\d{2}\s*$");
+            return time.Success
+                ? _translate("tuner.share.backupname").Replace("{{time}}", time.Value.Trim())
+                : profile.Name;
+        }
+
         private void KeepCodeOnTrial() => KeepCodeOnTrial(quietly: false);
 
         private void KeepCodeOnTrial(bool quietly)
@@ -1347,7 +1416,10 @@ namespace SDVRadiance
                 value => _config.ShadowCreatureLength = value, "help.shadowcreaturelength", () => _config.DirectionalShadowCreatures);
             Slider("tuner.shadowcreaturesoftness", 0f, 3f, () => _config.ShadowCreatureSoftness,
                 value => _config.ShadowCreatureSoftness = value, "help.shadowcreaturesoftness", () => _config.DirectionalShadowCreatures);
+            Slider("tuner.shadowjunimolength", 0.1f, 2f, () => _config.ShadowJunimoLength,
+                value => _config.ShadowJunimoLength = value, "help.shadowjunimolength", () => _config.DirectionalShadowCreatures);
             Toggle("tuner.shadowobjects", () => _config.DirectionalShadowObjects, value => _config.DirectionalShadowObjects = value, "help.shadowobjects");
+            Toggle("tuner.shadowfences", () => _config.DirectionalShadowFences, value => _config.DirectionalShadowFences = value, "help.shadowfences");
             Slider("tuner.contactshadow", 0f, 1f, () => _config.ContactShadowStrength, value => _config.ContactShadowStrength = value, "help.contactshadow");
             Slider("tuner.contactshadowpeople", 0f, 1f, () => _config.ContactShadowPeopleStrength, value => _config.ContactShadowPeopleStrength = value, "help.contactshadowpeople");
             Toggle("tuner.shadowbuildings", () => _config.DirectionalShadowBuildings, value => _config.DirectionalShadowBuildings = value, "help.shadowbuildings");
@@ -1677,11 +1749,42 @@ namespace SDVRadiance
                 value => _config.WetWorldEdgeHaze = value, "help.wetworldedgehaze");
             Slider("tuner.wetworldlensdropliveliness", 0f, 1f, () => _config.WetWorldLensDropLiveliness,
                 value => _config.WetWorldLensDropLiveliness = value, "help.wetworldlensdropliveliness");
-            Toggle("tuner.wetworldlensdropsrefract", () => _config.WetWorldLensDropsRefract,
-                value => _config.WetWorldLensDropsRefract = value, "help.wetworldlensdropsrefract");
+            if (_config.WetWorldLensDrops && !HiddenBySection())
+                BuildLensDropLooks();
             Slider("tuner.wetworldlensdropspread", 0f, 1f, () => _config.WetWorldLensDropSpread,
                 value => _config.WetWorldLensDropSpread = value, "help.wetworldlensdropspread");
             EndDependsOn();
+        }
+
+        /// <summary>
+        /// How the drops on the glass are drawn: plain beads, or one of the two lenses, named by the
+        /// release each came in, with the one in use lit.
+        /// </summary>
+        private void BuildLensDropLooks()
+        {
+            (string key, bool refract, LensDropLook look)[] looks =
+            [
+                ("plain", false, LensDropLook.Lens227),
+                ("lens227", true, LensDropLook.Lens227),
+                ("lens231", true, LensDropLook.Lens231),
+            ];
+            int buttonWidth = (_contentColumnWidth - 6 * (looks.Length - 1)) / looks.Length;
+            for (int i = 0; i < looks.Length; i++)
+            {
+                var (key, refract, look) = looks[i];
+                var rect = new Rectangle(_contentCursorX + i * (buttonWidth + 6), _contentCursorY, buttonWidth, Scaled(40));
+                var button = Button(_translate($"tuner.lensdroplook.{key}"), rect, () =>
+                {
+                    _config.WetWorldLensDropsRefract = refract;
+                    if (refract)
+                        _config.WetWorldLensDropLook = look;
+                    _onChange(); _onSave(); Reflow();
+                });
+                button.IsChosen = () => _config.WetWorldLensDropsRefract == refract
+                    && (!refract || _config.WetWorldLensDropLook == look);
+                Help(rect, $"help.lensdroplook.{key}");
+            }
+            _contentCursorY += Scaled(50);
         }
 
         private void BuildParticles()

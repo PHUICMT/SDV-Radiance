@@ -153,6 +153,17 @@ namespace SDVRadiance
     /// <summary>Quality presets, kept deliberately separate from <see cref="LookPreset"/>:
     /// these change what the picture COSTS, never what it looks like. Someone running Cinematic
     /// on a weak machine should not have to give up their look to get frames back.</summary>
+    /// <summary>How a refracting raindrop on the glass is drawn. Named by the release each look
+    /// came in; the first is what the switch always drew.</summary>
+    public enum LensDropLook
+    {
+        /// <summary>2.2.7: a soft lens, gathered from just past the drop's edge.</summary>
+        Lens227,
+        /// <summary>2.3.1: a sharp, shrunk, upside-down picture of a wider patch, a darker rim and a
+        /// broader glint, so a drop reads as water even a dozen pixels across.</summary>
+        Lens231,
+    }
+
     public enum PerfPreset
     {
         /// <summary>Everything on at full resolution.</summary>
@@ -1272,6 +1283,9 @@ namespace SDVRadiance
         /// shrunk, with a dark rim and a glint, the way rain on a camera reads in a modern game.
         /// Off is the drawn drops as they always were.</summary>
         public bool WetWorldLensDropsRefract { get; set; } = false;
+        /// <summary>Which lens the refracting drops are drawn with. The 2.2.7 one by default, so an
+        /// update never changes the picture of somebody who already had refraction on.</summary>
+        public LensDropLook WetWorldLensDropLook { get; set; } = LensDropLook.Lens227;
         /// <summary>Small beads scattered over the whole screen as well as the edge band, 0 to 1
         /// (none to about seventy). 0 keeps the drops to the edges, as they always were.</summary>
         public float WetWorldLensDropSpread { get; set; } = 0f;
@@ -1386,6 +1400,11 @@ namespace SDVRadiance
         public float ShadowCreatureLength { get; set; } = 1f;
         /// <summary>The creatures' own shadow softness, times the shared one. 1 is every earlier release.</summary>
         public float ShadowCreatureSoftness { get; set; } = 1f;
+        /// <summary>Junimos' shadow length, times the creatures' one: the Community Center's Junimos
+        /// and a Junimo hut's harvesters. They hop, and a length that suits the other creatures
+        /// buries a Junimo's face in its own shadow mid-hop (asked for by ghi3038 on Nexus, who
+        /// found 1 right for the creatures and 0.55 for Junimos). 1 is every earlier release.</summary>
+        public float ShadowJunimoLength { get; set; } = 1f;
         /// <summary>Opacity of the directional shadows. 0 = none, 1 = full.</summary>
         public float DirectionalShadowStrength { get; set; } = 0.7f;
 
@@ -1480,6 +1499,10 @@ namespace SDVRadiance
         public const float ShadowBlurMax = 20f;
         /// <summary>Also cast directional shadows from trees and bushes (not just characters).</summary>
         public bool DirectionalShadowObjects { get; set; } = true;
+        /// <summary>Fences cast their shadows too, when object shadows are on. A row of posts lays a
+        /// row of shadows across a path, which some players want and some do not (asked for by
+        /// szyoda on Nexus).</summary>
+        public bool DirectionalShadowFences { get; set; } = true;
         /// <summary>A soft dark pool under every object that casts a daylight shadow, at the row it
         /// stands on, the way ambient occlusion grounds a thing whatever the sun is doing. 0 is
         /// none, which is what every release before 1.7.6 drew. Asked for on Nexus (cursedguy9997,
@@ -1746,6 +1769,7 @@ namespace SDVRadiance
             WaterSpeed = ClampToRange(WaterSpeed, 0f, 3f);
             WaterSparkle = ClampToRange(WaterSparkle, 0f, 1f);
             ShadowCreatureLength = ClampToRange(ShadowCreatureLength, 0.1f, 2f);
+            ShadowJunimoLength = ClampToRange(ShadowJunimoLength, 0.1f, 2f);
             ShadowCreatureSoftness = ClampToRange(ShadowCreatureSoftness, 0f, 3f);
             WaterSparkleDensity = ClampToRange(WaterSparkleDensity, 0.2f, 2f);
             WaterGlitterPath = ClampToRange(WaterGlitterPath, 0f, 1f);
@@ -2008,6 +2032,36 @@ namespace SDVRadiance
                 return false;
             return true;
         }
+
+        /// <summary>
+        /// Every setting back to how the mod ships, the way a fresh install starts.
+        /// </summary>
+        /// <remarks>
+        /// Deleting config.json used to be the way back to the defaults, and the kept copy of the
+        /// settings (SettingsBackup) now brings a deleted file back, so the tuner offers this instead.
+        /// The saved looks stay, along with what the file keeps that is not a setting: the tuner's
+        /// own place, the file's version (the migrations must not run again) and the one-time step
+        /// aside for a window mod, which a fresh install would take again at launch.
+        /// </remarks>
+        public void ResetToDefaults()
+        {
+            var defaults = new ModConfig();
+            foreach (PropertyInfo property in typeof(ModConfig).GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (!property.CanRead || !property.CanWrite || property.GetIndexParameters().Length > 0
+                    || KeptThroughReset.Contains(property.Name))
+                    continue;
+                property.SetValue(this, property.GetValue(defaults));
+            }
+            if (!string.IsNullOrEmpty(WindowCompatAppliedFor))
+                WindowBeamEnabled = false;
+        }
+
+        private static readonly HashSet<string> KeptThroughReset = new(StringComparer.Ordinal)
+        {
+            nameof(ConfigVersion), nameof(SavedProfiles), nameof(WindowCompatAppliedFor),
+            nameof(TunerFoldedSections), nameof(TunerShowFineTuning), nameof(TunerLastTab), nameof(TunerScrollByTab),
+        };
 
         /// <summary>Load a saved profile's settings into the live config.</summary>
         public void ApplyProfile(NamedProfile p)

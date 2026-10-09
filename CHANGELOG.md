@@ -2,6 +2,71 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.3.1 - 2026-10-09
+
+### Fixed
+
+- **Updating the mod no longer resets your settings.** The settings live in config.json inside the
+  mod's folder, and updating through a mod manager (Vortex, from the Nexus page) replaces that whole
+  folder, so every update put everything back to the defaults. The mod now keeps a copy of your
+  settings in SMAPI's own data folder, outside the mod's, and when config.json is missing at launch
+  it brings that copy back and says so in the SMAPI console. A config.json that is there always
+  wins. The copy is made from this version on, so the update that brings it still needs your
+  settings backed up once. Reported by dulcinee on Nexus.
+- **Snow mods such as Fluttery Flakes keep their snow near water.** A mod that rewrites the game's
+  weather draw (Fluttery Flakes takes the game's snow out and draws its own flakes) lost its look
+  whenever water was on screen: since 2.2.7 the game's weather is drawn again on top of the water
+  effect, and that copy brought the game's own snow back over the mod's. While another mod rewrites
+  the weather draw, the game's weather is now left exactly where that mod puts it. Reported by
+  ghi3038 on Nexus, with a video.
+- **A tree's shadow grows out of its roots with the sun turned round.** With Sun direction set so
+  shadows come forward (around 180), a tree's shadow showed a pale band at the roots joined to a
+  darker shadow further out. The trunk and the canopy cast separate shadows that overlapped, darkening
+  the ground twice. A grown tree now casts one shadow from its trunk and canopy drawn together, made
+  once per kind of tree, and a shadow falling toward you starts tucked under the base instead of just
+  in front of it. Reported with pictures by szyoda on Nexus.
+- **The look kept from before a code reads in any language.** Its name was written in the language
+  the game ran in when it was made, so switching the game to another language showed it as empty
+  boxes. It is now named in the language the game runs in today, with the time it was made.
+
+### Added
+
+- **A choice of look for the drops on the glass.** Where the refraction switch was, the Weather tab now
+  has three buttons: Plain drops, Lens 2.2.7 (the soft lens the switch has drawn since 2.2.7) and
+  Lens 2.3.1, where each drop holds a sharp, small, upside-down picture of a wider patch, with a darker
+  rim and a broader glint, so it reads as water even a dozen pixels across on a wide screen. Anyone who
+  had refraction on keeps the 2.2.7 lens until they pick another. Also in the config menu (Lens look).
+- **Junimo shadow length.** Under the creatures' shadow dials in the Shadows tab and the config
+  menu: Junimos' shadows times the creature length, for the Community Center's Junimos and a Junimo
+  hut's harvesters, so a hopping Junimo can have a shorter shadow than the other creatures. 1 is as
+  before. Asked for by ghi3038 on Nexus.
+- **Fence shadows switch.** In the Shadows tab (Fences too) and the config menu: off, fences cast no
+  shadow and everything else keeps its own. On by default. Asked for by szyoda on Nexus.
+- **Reset all settings, in the tuner.** Deleting config.json used to be the way back to the
+  defaults, and the kept copy now brings a deleted file back, so the Looks tab has a button for it
+  instead. It asks first and resets only on a second, separate confirm button, next to Cancel. Every
+  setting goes back to how the mod ships, as on a fresh install; your saved looks are kept.
+
+### Changed
+
+- **A first install on a phone starts on the Low spec performance preset.** The defaults are a
+  desktop's, and a phone player reported under one frame a second on the mod as it ships. Only a
+  first install on Android is touched (no config.json and no kept copy), so nobody's chosen settings
+  change, and the look presets stay as they ship. The SMAPI console says so, and the other presets
+  are on the tuner's Performance tab. Reported by SauRieng777 on Nexus.
+
+### For translators
+
+21 new keys: `tuner.reset.all`, `tuner.reset.ask`, `tuner.reset.confirm`, `tuner.reset.cancel`,
+`help.reset.all`, `config.shadows.fences.name`/`.tooltip`, `tuner.shadowfences`, `help.shadowfences`,
+`config.shadows.junimolength.name`/`.tooltip`, `tuner.shadowjunimolength`, `help.shadowjunimolength`,
+`tuner.lensdroplook.plain`/`.lens227`/`.lens231`, `help.lensdroplook.plain`/`.lens227`/`.lens231`,
+`config.wetworld.lensdroplook.name`/`.tooltip`. The restore message in the SMAPI console is not translated.
+
+Chinese: the 47 keys zh.json was missing (the Share this look section, carried lights feeding the
+bounce, shadows starting at the feet, carried lights casting shadows) are filled in by the author,
+so the panel no longer falls back to English there. A native speaker's check is welcome.
+
 ## 2.3.0 - 2026-10-08
 
 ### Added

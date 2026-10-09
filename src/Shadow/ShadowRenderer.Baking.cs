@@ -244,6 +244,7 @@ namespace SDVRadiance
                 RenderTargetBinding[] previousObjectTargets = graphicsDevice.GetRenderTargets();
                 try
                 {
+                    MakeWantedTreeSilhouettes(graphicsDevice);
                     if (objectsOn && (locationChanged || _bakedObjectCache.Count == 0))
                     {
                         int walkingScreen = StardewModdingAPI.Context.ScreenId;
@@ -849,6 +850,7 @@ namespace SDVRadiance
             }
             try { _casterBlurScratch?.Dispose(); } catch { }
             _casterBlurScratch = null;
+            ForgetTreeSilhouettes(onlyReloaded: false);
             try { _playerSunBlurScratch?.Dispose(); } catch { }
             _playerSunBlurScratch = null;
             // A full re-enumeration has to happen if the shadows come back, or the draw pass
@@ -958,6 +960,7 @@ namespace SDVRadiance
             forgotten += ArtReloads.Forget(_objectBakeQueue, key => key.texture)
                        + ArtReloads.Forget(_artFootRow, key => key.Item1)
                        + ArtReloads.Forget(_canopyFootRows, key => key.Item1)
+                       + ForgetTreeSilhouettes(onlyReloaded: true)
                        + ArtReloads.Forget(_tileCoverageCache, key => key.texture);
             return forgotten;
         }

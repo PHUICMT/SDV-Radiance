@@ -244,7 +244,9 @@ namespace SDVRadiance
                 Effect effect = LensEffect!;
                 effect.Parameters["MatrixTransform"]?.SetValue(Matrix.CreateOrthographicOffCenter(0, width, height, 0, 0, -1));
                 effect.Parameters["ScreenSize"]?.SetValue(new Vector2(width, height));
-                effect.Parameters["Inversion"]?.SetValue(1.8f);
+                bool sharpLens = config.WetWorldLensDropLook == LensDropLook.Lens231;
+                effect.Parameters["Inversion"]?.SetValue(sharpLens ? 4.5f : 1.8f);
+                effect.Parameters["LookMix"]?.SetValue(sharpLens ? 1f : 0f);
                 effect.Parameters["Highlight"]?.SetValue(0.9f);
                 effect.Parameters["SceneTexture"]?.SetValue(scene);
                 // First the clear paths the trickles have cut through the mist, then the water.

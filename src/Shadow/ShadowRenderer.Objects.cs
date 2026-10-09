@@ -20,6 +20,34 @@ namespace SDVRadiance
     /// </summary>
     internal sealed partial class ShadowRenderer
     {
+        /// <summary>A pixel of art at the root, in screen pixels: what is tucked under the base on top of the blur.</summary>
+        private const float RootTuckArtPixels = 4f;
+
+        /// <summary>
+        /// How far a shadow's root slides up under its caster when the shadow falls toward the viewer.
+        /// </summary>
+        /// <remarks>
+        /// The baked silhouette is blurred both ways from its edge, so at the feet it starts at half
+        /// strength and fades to nothing over the blur radius. With the sun beyond the bottom of the
+        /// screen (the default) the shadow runs up the screen and that fading root lies behind the
+        /// trunk, where the art covers it. Turn the sun round toward the top (Sun direction 180) and
+        /// the shadow comes forward: the faded root is in front of the base, and the shadow reads as a
+        /// separate patch a little way below a tree or a fence post instead of growing out of it
+        /// (reported with a picture by szyoda on Nexus). Sliding the root up by the blur, plus a pixel
+        /// of art, puts the faded part under the base, which is drawn over it, so what shows starts at
+        /// full strength where the wood meets the ground. Scaled by how much the shadow points toward
+        /// the viewer: nothing at all for a shadow running up the screen, so the default look is
+        /// untouched.
+        /// </remarks>
+        private static Vector2 RootTuckUnderBase(ShadowProjection projection, float blur)
+        {
+            float alongLength = (float)Math.Sqrt(projection.AlongX * projection.AlongX + projection.AlongY * projection.AlongY);
+            if (alongLength <= 0.0001f || projection.AlongY <= 0f)
+                return Vector2.Zero;
+            float towardViewer = projection.AlongY / alongLength;
+            return new Vector2(0f, -towardViewer * (Math.Max(0f, blur) + RootTuckArtPixels));
+        }
+
         /// <summary>
         /// One entry point for object shadows: during the BAKE pass (RenderingWorld) it renders the
         /// sprite+gradient to a pooled RT keyed by the SPRITE (texture+src+flip — every identical
@@ -72,6 +100,9 @@ namespace SDVRadiance
                     _bakedObjectCache[key] = NewObjectBake(_objectGraphicsDevice, renderTarget, feetInRenderTarget, projection, blur);
                 return;
             }
+            // The contact pool stays on the real feet; only the cast shadow tucks under the base.
+            Vector2 contactFeet = feet;
+            feet += RootTuckUnderBase(projection, blur);
             if (_bakedObjectCache.TryGetValue(key, out SpriteBake? bakedEntry))
             {
                 bakedEntry.LastUsedTick = SharedTicks.Now;
@@ -166,7 +197,7 @@ namespace SDVRadiance
                         shadowLengthPerHeight: stretch);
             }
             if (contactPool)
-                DrawContactPoolUnder(spriteBatch, sourceRect, feet, alpha, depth, blur);
+                DrawContactPoolUnder(spriteBatch, sourceRect, contactFeet, alpha, depth, blur);
         }
 
         /// <summary>A character's bands, taking the grounded look. Kept out of EmitObject because the
@@ -739,7 +770,21 @@ namespace SDVRadiance
             _groundForeshortening = config.ShadowGroundForeshortening;
             _characterGroundForeshortening = PeopleGroundForeshortening(config);
             _shadowModel = config.DirectionalShadowModel;
+            // Eased once per game tick, both ways, so the switch fades fences' shadows in and out
+            // rather than popping them (the object pass can run more than once a tick).
+            if (Game1.ticks != _fenceShadowTick)
+            {
+                _fenceShadowTick = Game1.ticks;
+                float target = config.DirectionalShadowFences ? 1f : 0f;
+                float stepped = _fenceShadowPresence + MathHelper.Clamp(target - _fenceShadowPresence, -FenceShadowFadePerTick, FenceShadowFadePerTick);
+                _fenceShadowPresence = Determinism.Settle(stepped, target);
+            }
         }
+
+        /// <summary>How present fences' shadows are, eased toward the Fence shadows switch.</summary>
+        private float _fenceShadowPresence = 1f;
+        private int _fenceShadowTick = -1;
+        private const float FenceShadowFadePerTick = 0.05f;
 
         /// <summary>Whether this kind casts at all this frame: its own length dial above zero.
         ///
@@ -1353,6 +1398,9 @@ namespace SDVRadiance
                 // floating should throw a hard leaning silhouette onto the surface anyway.
                 if (placedObject is StardewValley.Objects.CrabPot)
                     continue;
+                bool isFence = placedObject is Fence;
+                if (isFence && _fenceShadowPresence <= 0.004f)
+                    continue;
                 if (placedObject.bigCraftable.Value)
                 {
                     if (placedObject.Fragility == 2)
@@ -1375,8 +1423,8 @@ namespace SDVRadiance
                     // decor…) gets a real leaning silhouette too — drawn generically from the item's
                     // own sprite via ItemRegistry, so no per-type method is needed. Skip flat passable
                     // items and the ground-mark spots (artifact / seed) that shouldn't cast.
-                    DrawGenericObjectShadow(spriteBatch, placedObject, tile, LeanOf(rotation, ShadowKind.Objects), LengthOf(stretch, ShadowKind.Objects), alpha,
-                        SoftnessOf(blur, ShadowKind.Objects));
+                    DrawGenericObjectShadow(spriteBatch, placedObject, tile, LeanOf(rotation, ShadowKind.Objects), LengthOf(stretch, ShadowKind.Objects),
+                        isFence ? alpha * _fenceShadowPresence : alpha, SoftnessOf(blur, ShadowKind.Objects));
                 }
             }
         }
@@ -1942,15 +1990,97 @@ namespace SDVRadiance
             //
             // A shadow that starts where the wood meets the ground stays attached at any sun angle,
             // which is the honest fix rather than shortening the lean until the seam is covered.
-            Rectangle trunk = Tree.stumpSourceRect;                  // (32,96,16,32)
+            //
+            // ONE silhouette, trunk and canopy together. Cast as two pieces they were two shadows
+            // blended over each other: where the stump's ran up under the canopy's the ground was
+            // darkened twice, and cutting the stump short instead left a faint patch wherever the
+            // canopy art is open over the trunk. Either way the shadow read as two things joined,
+            // most of all with the sun turned so shadows come forward (reported with pictures by
+            // szyoda on Nexus). The two crops are drawn into one small picture of the whole tree,
+            // once per tree art, and that is what casts.
+            //
             // A shaken tree turns about its base, and its shadow turns with it: the game's own
             // shakeRotation, the same one the water reflection follows, composed into the
             // lay-down. Brief and damped, so the re-bakes it costs are a second's worth.
+            Texture2D? wholeTree = TreeSilhouette(tree.texture.Value, sourceRect);
+            if (wholeTree != null)
+            {
+                EmitObject(spriteBatch, wholeTree, wholeTree.Bounds, feet, new Vector2(sourceRect.Width / 2f, sourceRect.Height),
+                    alpha, rotation, stretch, depth, blur, ObjectHeadFade, effects, spriteRotation: tree.shakeRotation);
+                return;
+            }
+            // The first frame a tree art is seen, before the bake pass has drawn its picture.
+            Rectangle trunk = Tree.stumpSourceRect;                  // (32,96,16,32)
             EmitObject(spriteBatch, tree.texture.Value, trunk, feet, new Vector2(trunk.Width / 2f, trunk.Height),
-                alpha, rotation, stretch, depth, blur, ObjectHeadFade, effects, spriteRotation: tree.shakeRotation);
+                alpha, rotation, stretch, depth, blur, ObjectHeadFade, effects, spriteRotation: tree.shakeRotation,
+                fadeShareFromFeet: trunk.Height / (float)sourceRect.Height);
             // Tree canopy draws with origin (24, 96); fade about the trunk base.
             EmitObject(spriteBatch, tree.texture.Value, sourceRect, feet, new Vector2(24f, 96f),
                 alpha, rotation, stretch, depth, blur, ObjectHeadFade, effects, spriteRotation: tree.shakeRotation);
+        }
+
+        /// <summary>A grown tree's trunk and canopy drawn together into one picture the canopy's size,
+        /// by tree art. Made in the bake pass, where render targets may be switched; asked for from
+        /// the draw pass, which only notes the want.</summary>
+        private readonly Dictionary<(Texture2D Sheet, Rectangle Canopy), RenderTarget2D> _treeSilhouettes = [];
+        private readonly HashSet<(Texture2D Sheet, Rectangle Canopy)> _treeSilhouettesWanted = [];
+
+        private Texture2D? TreeSilhouette(Texture2D sheet, Rectangle canopy)
+        {
+            var key = (sheet, canopy);
+            if (_treeSilhouettes.TryGetValue(key, out RenderTarget2D? made) && !made.IsDisposed && !made.IsContentLost)
+                return made;
+            if (_isBakingObjects && _objectGraphicsDevice != null)
+                return MakeTreeSilhouette(_objectGraphicsDevice, key);
+            _treeSilhouettesWanted.Add(key);
+            return null;
+        }
+
+        /// <summary>Make the tree pictures the draw pass asked for. Called from the bake pass.</summary>
+        private void MakeWantedTreeSilhouettes(GraphicsDevice graphicsDevice)
+        {
+            if (_treeSilhouettesWanted.Count == 0)
+                return;
+            foreach (var key in _treeSilhouettesWanted)
+                MakeTreeSilhouette(graphicsDevice, key);
+            _treeSilhouettesWanted.Clear();
+        }
+
+        private RenderTarget2D? MakeTreeSilhouette(GraphicsDevice graphicsDevice, (Texture2D Sheet, Rectangle Canopy) key)
+        {
+            if (key.Sheet.IsDisposed || key.Canopy.IsEmpty)
+                return null;
+            if (_treeSilhouettes.TryGetValue(key, out RenderTarget2D? stale))
+                try { stale.Dispose(); } catch { }
+            Rectangle trunk = Tree.stumpSourceRect;
+            // Kept across frames, so PreserveContents (a discarded target is garbage on its next bind).
+            var picture = VramTally.Track(new RenderTarget2D(graphicsDevice, key.Canopy.Width, key.Canopy.Height, false,
+                SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents), "tree shadow silhouettes");
+            graphicsDevice.SetRenderTarget(picture);
+            graphicsDevice.Clear(Color.Transparent);
+            _renderTargetSpriteBatch!.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+            // Tree.draw hangs both crops from the same point, the canopy's bottom centre: the stump
+            // from its own bottom centre, so it sits centred on the canopy's bottom edge.
+            _renderTargetSpriteBatch.Draw(key.Sheet, new Vector2((key.Canopy.Width - trunk.Width) / 2f, key.Canopy.Height - trunk.Height), trunk, Color.White);
+            _renderTargetSpriteBatch.Draw(key.Sheet, Vector2.Zero, key.Canopy, Color.White);
+            _renderTargetSpriteBatch.End();
+            _treeSilhouettes[key] = picture;
+            return picture;
+        }
+
+        /// <summary>Drop the tree pictures (art reloaded, or the bake memory released while idle).</summary>
+        private int ForgetTreeSilhouettes(bool onlyReloaded)
+        {
+            var gone = new List<(Texture2D, Rectangle)>();
+            foreach (var entry in _treeSilhouettes)
+                if (!onlyReloaded || ArtReloads.WasReloaded(entry.Key.Sheet))
+                    gone.Add(entry.Key);
+            foreach (var key in gone)
+            {
+                try { _treeSilhouettes[key].Dispose(); } catch { }
+                _treeSilhouettes.Remove(key);
+            }
+            return gone.Count;
         }
 
         /// <summary>

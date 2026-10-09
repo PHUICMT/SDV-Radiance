@@ -31,7 +31,7 @@ namespace SDVRadiance
             {
                 config().Clamp();
                 refreshForceBufferDraw();
-                helper.WriteConfig(config());
+                SettingsBackup.WriteConfig(helper, config());
                 SettingsLog.MarkChanged();
             }
 
@@ -342,6 +342,12 @@ namespace SDVRadiance
                 () => translate("config.wetworld.lensdropliveliness.name"), () => translate("config.wetworld.lensdropliveliness.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddBoolOption(manifest, () => config().WetWorldLensDropsRefract, value => config().WetWorldLensDropsRefract = value,
                 () => translate("config.wetworld.lensdropsrefract.name"), () => translate("config.wetworld.lensdropsrefract.tooltip"));
+            configMenu.AddTextOption(manifest,
+                () => config().WetWorldLensDropLook.ToString(),
+                value => config().WetWorldLensDropLook = Enum.TryParse(value, out LensDropLook chosen) ? chosen : LensDropLook.Lens227,
+                () => translate("config.wetworld.lensdroplook.name"), () => translate("config.wetworld.lensdroplook.tooltip"),
+                [nameof(LensDropLook.Lens227), nameof(LensDropLook.Lens231)],
+                choice => translate(choice == nameof(LensDropLook.Lens231) ? "tuner.lensdroplook.lens231" : "tuner.lensdroplook.lens227"));
             configMenu.AddNumberOption(manifest, () => config().WetWorldLensDropSpread, value => config().WetWorldLensDropSpread = value,
                 () => translate("config.wetworld.lensdropspread.name"), () => translate("config.wetworld.lensdropspread.tooltip"), 0f, 1f, 0.05f);
         }
@@ -867,8 +873,12 @@ namespace SDVRadiance
                 () => translate("config.shadows.creaturelength.name"), () => translate("config.shadows.creaturelength.tooltip"), 0.1f, 2f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().ShadowCreatureSoftness, value => config().ShadowCreatureSoftness = value,
                 () => translate("config.shadows.creaturesoftness.name"), () => translate("config.shadows.creaturesoftness.tooltip"), 0f, 3f, 0.1f);
+            configMenu.AddNumberOption(manifest, () => config().ShadowJunimoLength, value => config().ShadowJunimoLength = value,
+                () => translate("config.shadows.junimolength.name"), () => translate("config.shadows.junimolength.tooltip"), 0.1f, 2f, 0.05f);
             configMenu.AddBoolOption(manifest, () => config().DirectionalShadowObjects, value => config().DirectionalShadowObjects = value,
                 () => translate("config.shadows.objects.name"), () => translate("config.shadows.objects.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().DirectionalShadowFences, value => config().DirectionalShadowFences = value,
+                () => translate("config.shadows.fences.name"), () => translate("config.shadows.fences.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().ContactShadowStrength, value => config().ContactShadowStrength = value,
                 () => translate("config.shadows.contact.name"), () => translate("config.shadows.contact.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().ContactShadowPeopleStrength, value => config().ContactShadowPeopleStrength = value,

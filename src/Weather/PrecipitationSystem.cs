@@ -310,11 +310,17 @@ namespace SDVRadiance
         /// first, and the ripple bent every streak that crossed a lake, the sea or a river (reported
         /// by ghi3038). While the water stage runs on this screen, it is held here and drawn by
         /// <see cref="DrawSkyForChain"/> on top, from the game's own drops, frames and colours.
+        /// <para>Never while another mod rewrites the weather draw (<see cref="AnotherModOwnsWeatherDraw"/>):
+        /// the copy drawn on the chain is the game's own weather, not what that mod made of it.
+        /// Fluttery Flakes takes the game's snow out of the draw and puts its own flakes in their
+        /// place, and near water the copy brought the game's snow back over them (reported by
+        /// ghi3038, with 2.2.6 as the last version that left it alone).</para>
         /// </remarks>
         private static bool HoldVanillaForTheChain()
         {
             int screenId = CurrentScreenId();
-            if (!_vanillaWeather.TryGetValue(screenId, out var state) || !state.WaterStageRuns
+            if (AnotherModOwnsWeatherDraw
+                || !_vanillaWeather.TryGetValue(screenId, out var state) || !state.WaterStageRuns
                 || HarmonyPatcher.GameIsTakingMapScreenshot || Game1.currentLocation is not { IsOutdoors: true })
                 return false;
             _vanillaWeather[screenId] = (true, true);

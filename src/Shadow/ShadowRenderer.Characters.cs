@@ -33,7 +33,11 @@ namespace SDVRadiance
             _castCreatures = config.DirectionalShadowCreatures;
             _creatureLength = config.ShadowCreatureLength;
             _creatureSoftness = config.ShadowCreatureSoftness;
+            _junimoLength = config.ShadowJunimoLength;
         }
+
+        /// <summary>Junimos' own length, times the creatures' (see ModConfig.ShadowJunimoLength).</summary>
+        private float _junimoLength = 1f;
 
         /// <summary>The creatures' own length and softness dials, read with the switches.</summary>
         private float _creatureLength = 1f, _creatureSoftness = 1f;
@@ -1177,6 +1181,8 @@ namespace SDVRadiance
                 stretch *= _creatureLength;
                 blur *= _creatureSoftness;
             }
+            if (npc is StardewValley.Characters.Junimo or StardewValley.Characters.JunimoHarvester)
+                stretch *= _junimoLength;
             // The sideways part of the draw offset is where the sprite really is (a horse is drawn
             // sixteen pixels left of its box); the upright part is the stretched-sprite case above.
             float feetWorldY = casterScale == 1f && npc is not StardewValley.Characters.Junimo

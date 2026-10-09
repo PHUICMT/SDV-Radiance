@@ -34,8 +34,9 @@ sampler2D SceneSampler = sampler_state
 
 float4x4 MatrixTransform;
 float2 ScreenSize;        // the frame the drops are laid on, in pixels
-float Inversion;          // how far across the drop the scene is gathered from (1.8 a bead of rain)
+float Inversion;          // how far across the drop the scene is gathered from (4.5 a bead of rain: a wide view, shrunk)
 float Highlight;          // the sky's glint on the dome
+float LookMix;            // 0 the 2.2.7 lens (soft), 1 the 2.3.1 lens (sharp, wide view, strong rim)
 
 struct VertexInput
 {
@@ -71,31 +72,43 @@ float4 LensDropsPS(PixelInput input) : SV_TARGET
     float thickness = dome.b;
     float radiusPixels = input.Color.r * 128.0;
 
-    // A ball of water flips what is behind it: the point a little left of centre sees the
-    // scene a little right of it, further out the further out it sits.
+    // A ball of water flips what is behind it and shrinks it: the point a little left of centre
+    // sees the scene well to the right, so the drop holds a small upside-down picture of a patch
+    // several times its own size. That difference from the glass around it is what makes a drop
+    // read as water at all; gathered from barely past its own edge it showed the same colours as
+    // its surroundings, and on a wide screen, where a bead is ten pixels across, it vanished.
     float2 gather = -normal * radiusPixels * Inversion / ScreenSize;
     float2 sceneUV = input.ScreenUV + gather;
-    // Out of focus: the glass is right at the eye, so what the drop holds is soft.
-    float2 spread = 1.5 / ScreenSize;
-    float3 scene = tex2D(SceneSampler, sceneUV).rgb * 0.4
-                 + tex2D(SceneSampler, sceneUV + float2(spread.x, 0)).rgb * 0.15
-                 + tex2D(SceneSampler, sceneUV - float2(spread.x, 0)).rgb * 0.15
-                 + tex2D(SceneSampler, sceneUV + float2(0, spread.y)).rgb * 0.15
-                 + tex2D(SceneSampler, sceneUV - float2(0, spread.y)).rgb * 0.15;
+    // A bead focuses what it holds, so the picture inside stays sharp: one tap, with a touch of
+    // its neighbours so the shrunk pixel art does not shimmer as the drop slides.
+    // The 2.2.7 lens instead holds it out of focus, as if the eye were on the scene.
+    float2 spread = lerp(1.5, 0.75, LookMix) / ScreenSize;
+    float centreWeight = lerp(0.4, 0.6, LookMix);
+    float sideWeight = (1.0 - centreWeight) * 0.25;
+    float3 scene = tex2D(SceneSampler, sceneUV).rgb * centreWeight
+                 + tex2D(SceneSampler, sceneUV + float2(spread.x, 0)).rgb * sideWeight
+                 + tex2D(SceneSampler, sceneUV - float2(spread.x, 0)).rgb * sideWeight
+                 + tex2D(SceneSampler, sceneUV + float2(0, spread.y)).rgb * sideWeight
+                 + tex2D(SceneSampler, sceneUV - float2(0, spread.y)).rgb * sideWeight;
     // Water bends red a little less than blue, which only shows where the surface is steep:
     // a thin fringe of colour round the rim, the tell of a real lens.
     float2 fringe = normal * (1.0 - thickness) * 2.5 / ScreenSize;
     scene.r = lerp(scene.r, tex2D(SceneSampler, sceneUV + fringe).r, 0.7);
     scene.b = lerp(scene.b, tex2D(SceneSampler, sceneUV - fringe).b, 0.7);
 
-    // The rim turns edge-on and sends the eye off sideways into the glass: dark.
-    float rim = 1.0 - pow(1.0 - thickness, 2.0) * 0.8;
+    // The rim turns edge-on and sends the eye off sideways into the glass: dark, and a band wide
+    // enough to outline even a small bead, which is the drop's silhouette on a busy picture.
+    float rim = 1.0 - pow(1.0 - thickness, lerp(2.0, 1.4, LookMix)) * lerp(0.8, 0.85, LookMix);
     // The dome's own highlight, the sky up and to the left.
     float3 surface = normalize(float3(normal, max(0.05, sqrt(saturate(1.0 - dot(normal, normal))))));
     float lit = saturate(dot(surface, normalize(float3(-0.45, -0.55, 0.70))));
-    float glint = (pow(lit, 40.0) + pow(lit, 6.0) * 0.12) * Highlight;
+    // Broad enough to survive a bead a few pixels across: a pin of light that lands between
+    // pixels is no highlight at all.
+    float glint = lerp(pow(lit, 40.0) + pow(lit, 6.0) * 0.12,
+                       pow(lit, 16.0) * 0.9 + pow(lit, 4.0) * 0.12, LookMix) * Highlight;
     // And the faint lower crescent where light leaves through the far side.
-    float crescent = pow(saturate(dot(surface, normalize(float3(0.25, 0.65, 0.70)))), 10.0) * 0.18 * Highlight;
+    float facing = saturate(dot(surface, normalize(float3(0.25, 0.65, 0.70))));
+    float crescent = lerp(pow(facing, 10.0) * 0.18, pow(facing, 8.0) * 0.28, LookMix) * Highlight;
 
     // The body of the drop gathers light from a wider patch of sky than the glass beside it,
     // so the middle reads a touch brighter than what surrounds it.

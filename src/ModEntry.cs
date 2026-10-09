@@ -78,9 +78,32 @@ namespace SDVRadiance
                         + "from the window. Turn 'Window beam and glass' back on in the config if you want ours instead.",
                         LogLevel.Info);
                 }
-                helper.WriteConfig(_config);
+                SettingsBackup.WriteConfig(helper, _config);
                 return;
             }
+        }
+
+        /// <summary>
+        /// A first install on a phone starts on the Low spec performance preset.
+        /// </summary>
+        /// <remarks>
+        /// The defaults are a desktop's: the bounce-light grid, lamp shadow marches, object shadow
+        /// bakes and god rays, at full size. A phone player reported under one frame a second on
+        /// 2.3.0, which is the mod as it ships, not a setting they chose. Only a first install is
+        /// touched (no config.json and no kept copy of one), so nobody's chosen settings change; the
+        /// look presets, and every slider, are left as they ship. The console says what was done and
+        /// where the other presets are.
+        /// </remarks>
+        private void StartPhonesLight(IModHelper helper)
+        {
+            if (!SettingsBackup.FreshInstall || Constants.TargetPlatform != GamePlatform.Android)
+                return;
+            _config.ApplyPerfPreset(PerfPreset.LowSpec);
+            SettingsBackup.WriteConfig(helper, _config);
+            Monitor.Log("First start on a phone: the performance preset is set to Low spec, the lightest one. "
+                + "Performance, Balanced and Quality are on the tuner's Performance tab if your phone can take more "
+                + "(config menu: SDV-Radiance, Hotkeys & diagnostics, Open the Radiance tuner).",
+                LogLevel.Info);
         }
 
         public override void Entry(IModHelper helper)
@@ -88,9 +111,10 @@ namespace SDVRadiance
             QuietFailures.Monitor = Monitor;
             LutCatalog.Initialise(helper.DirectoryPath);
             ShareCode.ConfigFolder = helper.DirectoryPath;
-            _config = helper.ReadConfig<ModConfig>();
+            _config = SettingsBackup.Load(helper, Monitor);
             ApplyConfigMigrations(helper);
             _config.Clamp();
+            StartPhonesLight(helper);
             StepAsideForWindowMods(helper);
 
             // Fashion Sense animates hair/accessory layers independently of the body frame, so
@@ -267,7 +291,7 @@ namespace SDVRadiance
                     Monitor.Log("God rays switched off: the effect treats bright surfaces as light sources, so pale sprites blow out. "
                                    + "It is being rebuilt for 1.4.0 — re-enable it in the config or with F6 if you want it back.", LogLevel.Info);
                 }
-                helper.WriteConfig(_config);
+                SettingsBackup.WriteConfig(helper, _config);
             }
             // 1.7.0: the lamp shafts were rebuilt from the occluder mask. Their strength dial meant
             // an additive gain before and a share of the tuned look now, so a kept 0.15 would draw
@@ -281,7 +305,7 @@ namespace SDVRadiance
                 _config.GodRaysIntensity = 1.0f;
                 if (Math.Abs(_config.FloodShadowStrength - 0.7f) < 0.001f)
                     _config.FloodShadowStrength = 1.0f;
-                helper.WriteConfig(_config);
+                SettingsBackup.WriteConfig(helper, _config);
             }
             // 1.7.5: presets stopped lowering the render scale. A player who picked Balanced or
             // Performance before has the old value written in their config, and it is the value
@@ -301,7 +325,7 @@ namespace SDVRadiance
                     Monitor.Log("Effect resolution set back to full size: the performance presets no longer lower it, because the "
                                    + "round trip softened every sprite. The slider on the Performance page still sets it if you want the trade.", LogLevel.Info);
                 }
-                helper.WriteConfig(_config);
+                SettingsBackup.WriteConfig(helper, _config);
             }
             // 1.7.5: the one smoothing dial became one per art family. The value the player had is
             // what every family starts from, so nothing looks different until a dial is moved.
@@ -314,7 +338,7 @@ namespace SDVRadiance
                 _config.SheetUpscaleSmoothnessPortraits = single;
                 _config.SheetUpscaleSmoothnessItems = single;
                 _config.SheetUpscaleSmoothnessInterface = single;
-                helper.WriteConfig(_config);
+                SettingsBackup.WriteConfig(helper, _config);
             }
             // 2.2.0: MMPX became the rule Soft 4x is made with by default. A player who already
             // chose Soft 4x chose it with xBR, the only rule there was, and keeps it: the author's
@@ -325,7 +349,7 @@ namespace SDVRadiance
                 _config.ConfigVersion = 5;
                 if (_config.SheetUpscaleStyle == SheetSmoothingStyle.Soft4x)
                     _config.SheetUpscaleSoftKernel = SoftSmoothingKernel.Xbr;
-                helper.WriteConfig(_config);
+                SettingsBackup.WriteConfig(helper, _config);
             }
         }
 
@@ -868,7 +892,7 @@ namespace SDVRadiance
             {
                 _config.Enabled = !_config.Enabled;
                 HarmonyPatcher.ForceBufferDraw = EffectsActive;
-                Helper.WriteConfig(_config);
+                SettingsBackup.WriteConfig(Helper, _config);
                 Game1.addHUDMessage(HUDMessage.ForCornerTextbox($"SDV-Radiance: {(_config.Enabled ? "ON" : "OFF")}"));
             }
 
@@ -900,7 +924,7 @@ namespace SDVRadiance
                     _config,
                     translate: I18n,
                     onChange: () => HarmonyPatcher.ForceBufferDraw = EffectsActive,
-                    onSave: () => { Helper.WriteConfig(_config); SettingsLog.MarkChanged(); });
+                    onSave: () => { SettingsBackup.WriteConfig(Helper, _config); SettingsLog.MarkChanged(); });
         }
 
         private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
