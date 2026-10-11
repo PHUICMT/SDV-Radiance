@@ -2,6 +2,34 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.3.2 - 2026-10-11
+
+Bug fixes only.
+
+### Fixed
+
+- **On phones, water switched every other effect off (since 2.2.7).** Near water the mod redraws the
+  game's own rain over it, and that code named a game type that is built differently on Android, so
+  the phone refused to run it and the water, the grade, the clouds and the tilt-shift all went with
+  it. It now reads the game's rain in a way both platforms accept, a failure there skips only that
+  weather, and any single effect that fails no longer takes the others with it. A shader a phone's
+  driver will not build at full precision also falls back by itself. Reported by AAAY12, van1911,
+  feiryuu and KRISaveth, whose logs found it.
+- **With Fluttery Flakes, the mod's rain is back.** Fluttery Flakes changes only the snow, but the mod
+  stepped aside for all weather when it saw it, so rain and green rain were the game's own. Now the
+  snow is left to Fluttery Flakes and the rain and wind are the mod's again. Reported by rosy7.
+- **Ice pieces on winter rivers wore an extra ring on top.** Some of the ice's own pixels were
+  marked as water in the mod's tile labels, so the water effect drew a rippled copy of the ice there.
+  Reported by golddang03 with a picture.
+- **Square patches in the lava on the lower mine floors.** Two of the lava tiles in the mine's lava
+  art were marked as ground in the mod's tile labels, so the glow and the slow flow stopped at them
+  and the lake showed lit and unlit squares. They now match the same art on the dangerous floors,
+  which was right.
+
+### For translators
+
+No new or changed keys.
+
 ## 2.3.1 - 2026-10-09
 
 ### Fixed

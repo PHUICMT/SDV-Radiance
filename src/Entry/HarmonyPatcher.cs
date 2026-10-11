@@ -571,11 +571,22 @@ namespace SDVRadiance
             foreach (var patch in patches.Transpilers)
                 if (patch.owner != null && !patch.owner.Contains("Radiance", StringComparison.OrdinalIgnoreCase))
                 {
+                    // A mod known to rewrite only the snow gets the snow; rain and wind stay ours.
+                    if (SnowOnlyWeatherMods.Contains(patch.owner))
+                    {
+                        PrecipitationSystem.AnotherModOwnsSnowDraw = true;
+                        monitor.Log($"'{patch.owner}' rewrites the snow in the weather draw; Radiance leaves the snow to it and keeps its rain and wind.", LogLevel.Info);
+                        continue;
+                    }
                     PrecipitationSystem.AnotherModOwnsWeatherDraw = true;
                     monitor.Log($"'{patch.owner}' rewrites the weather draw; Radiance precipitation is yielding to it for this session.", LogLevel.Info);
                     return;
                 }
         }
+
+        /// <summary>Mods whose rewrite of Game1.drawWeather changes the snow and nothing else, read
+        /// from their source: Fluttery Flakes replaces the game's snow with its own flakes.</summary>
+        private static readonly HashSet<string> SnowOnlyWeatherMods = new(StringComparer.OrdinalIgnoreCase) { "Spiderbuttons.FlutteryFlakes" };
 
         /// <summary>Force the game to draw the world into its buffer so a render target is bound during graphics events.</summary>
         internal static void ShouldDrawOnBuffer_Postfix(ref bool __result)

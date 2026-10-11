@@ -386,6 +386,38 @@ namespace SDVRadiance
         }
         /// <summary>Whether this session has already written one post-process failure out in full.</summary>
         private bool _loggedPostProcessFailure;
+        /// <summary>Frames in a row each stage has thrown, and the stages stood down for the
+        /// rest of the game because they kept on throwing.</summary>
+        private readonly int[] _stageFailuresInARow = new int[_stageNames.Length];
+        private readonly bool[] _stageStoodDown = new bool[_stageNames.Length];
+        private const int StageFailuresBeforeStandingDown = 30;
+
+        /// <summary>
+        /// One stage threw. Its input goes on to the next stage unchanged, so the rest of the chain
+        /// still reaches the screen: before, the whole chain fell over with it, and on a phone whose
+        /// driver refused the water shader the player lost the grade, the clouds and the tilt-shift
+        /// every time a pond came into view (AAAY12). After half a second of failing every frame the
+        /// stage is stood down until the game restarts, said once in the log with the full exception.
+        /// </summary>
+        private void PassOverFailedStage(SpriteBatch spriteBatch, Texture2D input, RenderTarget2D destination, int stageNameIndex, Exception exception)
+        {
+            string name = _stageNames[stageNameIndex];
+            if (_stageFailuresInARow[stageNameIndex] == 0)
+                _monitor.LogOnce($"The {name} pass failed and is passed over: {exception}", LogLevel.Error);
+            if (++_stageFailuresInARow[stageNameIndex] >= StageFailuresBeforeStandingDown && !_stageStoodDown[stageNameIndex])
+            {
+                _stageStoodDown[stageNameIndex] = true;
+                _monitor.Log($"The {name} pass failed {StageFailuresBeforeStandingDown} frames in a row and is switched off until the game "
+                    + $"restarts; everything else keeps working. Last error: {exception.Message}", LogLevel.Warn);
+            }
+            try { spriteBatch.End(); } catch { /* the stage threw before or after its own batch */ }
+            if (ReferenceEquals(input, destination))
+                return;
+            _device.SetRenderTarget(destination);
+            spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
+            spriteBatch.Draw(input, new Rectangle(0, 0, destination.Width, destination.Height), Color.White);
+            spriteBatch.End();
+        }
         // Eased twin of _hasWaterInMask: water scrolling into or out of
         // the mask window must not add or remove a whole pass in one frame.
         // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
@@ -752,6 +784,8 @@ namespace SDVRadiance
 
         private void AddStage(Action<SpriteBatch, Texture2D, RenderTarget2D, ModConfig> stage, int nameIndex)
         {
+            if (_stageStoodDown[nameIndex])
+                return;
             _stages.Add(stage);
             _stageNameIndices.Add(nameIndex);
         }
@@ -984,6 +1018,54 @@ namespace SDVRadiance
             }
         }
 
+        /// <summary>Make the driver build every pass of an effect now, with one tiny draw per
+        /// technique into a scratch target, and say whether it refused. The game's targets are put
+        /// back whatever happens.</summary>
+        private bool BuildsOnThisDevice(Effect effect, out string? refusal)
+        {
+            refusal = null;
+            RenderTargetBinding[] previous = _device.GetRenderTargets();
+            try
+            {
+                _shaderProbeTarget ??= new RenderTarget2D(_device, 1, 1, false, SurfaceFormat.Color, DepthFormat.None);
+                _shaderProbePixel ??= MakeProbePixel(_device);
+                _shaderProbeBatch ??= new SpriteBatch(_device);
+                _device.SetRenderTarget(_shaderProbeTarget);
+                EffectTechnique? before = effect.CurrentTechnique;
+                foreach (EffectTechnique technique in effect.Techniques)
+                {
+                    effect.CurrentTechnique = technique;
+                    _shaderProbeBatch.Begin(SpriteSortMode.Immediate, BlendState.Opaque, SamplerState.PointClamp,
+                        DepthStencilState.None, RasterizerState.CullNone, effect);
+                    _shaderProbeBatch.Draw(_shaderProbePixel, new Rectangle(0, 0, 1, 1), Color.White);
+                    _shaderProbeBatch.End();
+                }
+                effect.CurrentTechnique = before;
+                return true;
+            }
+            catch (Exception exception)
+            {
+                refusal = exception.Message;
+                try { _shaderProbeBatch?.End(); } catch { /* not begun */ }
+                return false;
+            }
+            finally
+            {
+                _device.SetRenderTargets(previous);
+            }
+        }
+
+        private RenderTarget2D? _shaderProbeTarget;
+        private Texture2D? _shaderProbePixel;
+        private SpriteBatch? _shaderProbeBatch;
+
+        private static Texture2D MakeProbePixel(GraphicsDevice device)
+        {
+            var pixel = new Texture2D(device, 1, 1);
+            pixel.SetData([Color.White]);
+            return pixel;
+        }
+
         private Effect? LoadEffect(string file)
         {
             try
@@ -991,7 +1073,22 @@ namespace SDVRadiance
                 string path = Path.Combine(_modDirectory, "assets", file);
                 if (File.Exists(path))
                 {
-                    var effect = new Effect(_device, ShaderPrecision.Prepare(File.ReadAllBytes(path), _monitor));
+                    byte[] compiled = File.ReadAllBytes(path);
+                    byte[] prepared = ShaderPrecision.Prepare(compiled, _monitor);
+                    var effect = new Effect(_device, prepared);
+                    // On a phone every pixel shader is raised to full precision, and a driver may
+                    // refuse to build the biggest ones at that precision. MonoGame only builds a
+                    // shader the first time it draws, so the refusal used to surface mid-frame, the
+                    // moment the effect was first needed (the water, the first time a pond came
+                    // into view), and every frame after. Built here instead, once, and kept at the
+                    // precision it was compiled with if full precision is refused.
+                    if (!ReferenceEquals(prepared, compiled) && !BuildsOnThisDevice(effect, out string? refusal))
+                    {
+                        effect.Dispose();
+                        effect = new Effect(_device, compiled);
+                        _monitor.Log($"{file}: this phone's driver would not build it at full precision ({refusal}); "
+                            + "it runs at the precision it was compiled with.", LogLevel.Warn);
+                    }
                     _monitor.Log($"Loaded {file}.", LogLevel.Trace);
                     return effect;
                 }
@@ -1880,7 +1977,15 @@ namespace SDVRadiance
                 // to be worth reading. Two Stopwatch reads per pass against a 16.67 ms budget.
                 int stageNameIndex = _stageNameIndices[i];
                 BeginStageCost(stageNameIndex);
-                stages[i](spriteBatch, current, destination, config);
+                try
+                {
+                    stages[i](spriteBatch, current, destination, config);
+                    _stageFailuresInARow[stageNameIndex] = 0;
+                }
+                catch (Exception exception)
+                {
+                    PassOverFailedStage(spriteBatch, current, destination, stageNameIndex, exception);
+                }
                 double milliseconds = EndStageCost();
                 if (_timingOn)
                 {

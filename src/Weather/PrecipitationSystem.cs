@@ -35,6 +35,8 @@ namespace SDVRadiance
 
         /// <summary>Log sink, set alongside <see cref="LiveConfig"/> at install time.</summary>
         internal static StardewModdingAPI.IMonitor? Monitor;
+        /// <summary>Set once the game's own weather has failed to redraw over the water on this device.</summary>
+        private static bool _heldWeatherFailed;
 
         /// <summary>Switched off for the whole session: another mod REWRITES drawWeather with a
         /// transpiler, which leaves no way to tell what it draws, or our own draw threw once.
@@ -47,6 +49,12 @@ namespace SDVRadiance
         /// straight back to the game, so the slot is free on exactly the days ours is for. A
         /// prefix is now read frame by frame instead; see <see cref="DrawWeather_Prefix"/>.</para></summary>
         internal static bool AnotherModOwnsWeatherDraw;
+
+        /// <summary>Another mod rewrites only the SNOW in the weather draw (a known snow-only mod
+        /// such as Fluttery Flakes): our snow yields to it, our rain and wind do not. Yielding
+        /// everything left a Fluttery Flakes player with the game's own rain on every rainy day,
+        /// green rain included, though that mod never touches rain (reported by rosy7).</summary>
+        internal static bool AnotherModOwnsSnowDraw;
 
         /// <summary>Set for the call in progress: another mod skipped the game's weather draw,
         /// whether its prefix ran before ours or ours was never asked. Cleared at the end of every
@@ -320,6 +328,7 @@ namespace SDVRadiance
         {
             int screenId = CurrentScreenId();
             if (AnotherModOwnsWeatherDraw
+                || (AnotherModOwnsSnowDraw && Game1.currentLocation?.IsSnowingHere() == true)
                 || !_vanillaWeather.TryGetValue(screenId, out var state) || !state.WaterStageRuns
                 || HarmonyPatcher.GameIsTakingMapScreenshot || Game1.currentLocation is not { IsOutdoors: true })
                 return false;
@@ -373,7 +382,7 @@ namespace SDVRadiance
             if (Game1.eventUp && !location.isTileOnMap(new Vector2(Game1.viewport.X / 64, Game1.viewport.Y / 64)))
                 return false;
             raining = location.IsRainingHere() && config.PrecipitationRain;
-            snowing = location.IsSnowingHere() && config.PrecipitationSnow;
+            snowing = location.IsSnowingHere() && config.PrecipitationSnow && !AnotherModOwnsSnowDraw;
             windy = location.IsDebrisWeatherHere() && !location.ignoreDebrisWeather.Value
                 && config.PrecipitationWind;
             return raining || snowing || windy;
@@ -402,7 +411,23 @@ namespace SDVRadiance
         internal static void DrawSkyForChain(SpriteBatch spriteBatch, RenderTarget2D dest,
                                              int frameWidth, Vector3 ambient)
         {
-            DrawHeldVanillaWeather(spriteBatch, dest, frameWidth, ambient);
+            // The game's own weather is the part of this that touches the game's types, which are not
+            // the same on every platform. If drawing it fails, that weather is skipped and said once;
+            // the water it was drawn onto, and every effect after the water, carry on.
+            if (!_heldWeatherFailed)
+            {
+                try
+                {
+                    DrawHeldVanillaWeather(spriteBatch, dest, frameWidth, ambient);
+                }
+                catch (Exception exception)
+                {
+                    _heldWeatherFailed = true;
+                    try { spriteBatch.End(); } catch { /* it failed before or after its own batch */ }
+                    Monitor?.Log("The game's own weather could not be redrawn over the water on this device, so it is left out "
+                        + $"there; everything else keeps working. {exception.GetType().Name}: {exception.Message}", StardewModdingAPI.LogLevel.Warn);
+                }
+            }
             if (!_screens.TryGetValue(CurrentScreenId(), out ScreenPrecipitation? screen)
                 || !screen.SkyDrawDeferred || screen.Presence <= FadeGone)
                 return;
@@ -458,26 +483,48 @@ namespace SDVRadiance
                 Color colour = plain ? Shaded(green ? Color.LimeGreen : Color.White, ambient)
                     : LitAsTheGameLightsIt(green ? Color.LimeGreen : Color.White, location);
                 int passes = green ? 2 : 1;
-                if (drops is StardewValley.RainDrop[] dropArray)
+                if (drops is System.Collections.IEnumerable dropList)
                 {
-                    for (int i = 0; i < dropArray.Length; i++)
-                        DrawGameRainDrop(spriteBatch, dropArray[i], green, passes, colour);
-                }
-                else if (drops is List<StardewValley.RainDrop> dropList)
-                {
-                    for (int i = 0; i < dropList.Count; i++)
-                        DrawGameRainDrop(spriteBatch, dropList[i], green, passes, colour);
+                    foreach (object? drop in dropList)
+                        if (drop != null && GameRainDropFields(drop.GetType()) is var (positionField, frameField)
+                            && positionField.GetValue(drop) is Vector2 position && frameField.GetValue(drop) is int frame)
+                            DrawGameRainDrop(spriteBatch, position, frame, green, passes, colour);
                 }
             }
             spriteBatch.End();
         }
 
-        private static void DrawGameRainDrop(SpriteBatch spriteBatch, StardewValley.RainDrop drop, bool green, int passes, Color colour)
+        /// <summary>
+        /// One of the game's drops, by its position and frame. The game's RainDrop type never
+        /// appears in this file's code: it is a struct on PC and not on Android, and a method that
+        /// named it was refused by the phone's runtime the first time it ran, which was the moment
+        /// water came on screen in the rain, every frame after (van1911's and feiryuu's logs,
+        /// "Invalid IL code in DrawHeldVanillaWeather"). The water and every effect after it went
+        /// with it. Read by name, the drop is just an object on both.
+        /// </summary>
+        private static void DrawGameRainDrop(SpriteBatch spriteBatch, Vector2 position, int frame, bool green, int passes, Color colour)
         {
             for (int pass = 0; pass < passes; pass++)
-                spriteBatch.Draw(Game1.rainTexture, drop.position,
-                    Game1.getSourceRectForStandardTileSheet(Game1.rainTexture, drop.frame + (green ? 4 : 0), 16, 16),
+                spriteBatch.Draw(Game1.rainTexture, position,
+                    Game1.getSourceRectForStandardTileSheet(Game1.rainTexture, frame + (green ? 4 : 0), 16, 16),
                     colour, 0f, Vector2.Zero, 4f, SpriteEffects.None, 1f);
+        }
+
+        private static Type? _gameRainDropType;
+        private static (System.Reflection.FieldInfo Position, System.Reflection.FieldInfo Frame)? _gameRainDropFields;
+
+        /// <summary>The position and frame fields of the game's drop type, looked up once.</summary>
+        private static (System.Reflection.FieldInfo Position, System.Reflection.FieldInfo Frame)? GameRainDropFields(Type dropType)
+        {
+            if (dropType != _gameRainDropType)
+            {
+                _gameRainDropType = dropType;
+                const System.Reflection.BindingFlags Fields = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                System.Reflection.FieldInfo? position = dropType.GetField("position", Fields);
+                System.Reflection.FieldInfo? frame = dropType.GetField("frame", Fields);
+                _gameRainDropFields = position != null && frame != null ? (position, frame) : null;
+            }
+            return _gameRainDropFields;
         }
 
         private static readonly System.Reflection.FieldInfo? _gameRainDropsField =
@@ -1213,6 +1260,8 @@ namespace SDVRadiance
                 return "precipitation: vanilla (replacement not switched on)";
             if (AnotherModOwnsWeatherDraw)
                 return "precipitation: yielded for the session (another mod rewrites drawWeather, or our draw failed once)";
+            if (AnotherModOwnsSnowDraw && Game1.currentLocation?.IsSnowingHere() == true)
+                return "precipitation: snow left to the mod that rewrites it; rain and wind still ours";
             bool wanted = ReplacementWanted(out bool raining, out bool snowing, out _);
             ScreenPrecipitation? screen = _screens.TryGetValue(CurrentScreenId(), out var s) ? s : null;
             string state = screen == null ? "idle (never drawn on this screen)"
