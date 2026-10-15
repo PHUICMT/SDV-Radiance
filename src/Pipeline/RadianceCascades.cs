@@ -146,7 +146,7 @@ namespace SDVRadiance
                 _emitterTextures[_emitterTextureIndex] = emitterTexture;
             }
             phaseStart = PhaseCost.NoteSince("flood cascades: seeds (game questions)", phaseStart);
-            emitterTexture.SetData(_emitterPixels, 0, count);
+            TextureUpload.SetData(emitterTexture, _emitterPixels, 0, count);
             phaseStart = PhaseCost.NoteSince("flood cascades: emitter upload", phaseStart);
 
             Vector3 miss, hit, lift;

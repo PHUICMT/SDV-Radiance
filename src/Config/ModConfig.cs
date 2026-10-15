@@ -7,6 +7,18 @@ using StardewModdingAPI.Utilities;
 
 namespace SDVRadiance
 {
+    /// <summary>When the soft parts of the effects are worked out at a lower resolution.</summary>
+    public enum LighterSoftEffects
+    {
+        /// <summary>Always at the full resolution, as every release before.</summary>
+        Never,
+        /// <summary>Only while the frame misses the game's target, as the first step the
+        /// frame-time controller takes.</summary>
+        WhenSlow,
+        /// <summary>Always at the lower resolution.</summary>
+        Always,
+    }
+
     /// <summary>Camera behaviour.</summary>
     public enum CameraMode
     {
@@ -168,23 +180,21 @@ namespace SDVRadiance
     {
         /// <summary>Everything on at full resolution.</summary>
         Quality,
-        /// <summary>Three quarter resolution and the two lens effects off. The measured sweet
-        /// spot: about 44% less fill work, and dropping chromatic aberration also lets the
-        /// grade and vignette merge into one pass.</summary>
+        /// <summary>Full resolution with the two lens effects off and coarser reflection fades.
+        /// Dropping chromatic aberration also lets the grade and vignette merge into one pass.</summary>
         Balanced,
-        /// <summary>Half resolution and the expensive extras off. Water reflections stay -
-        /// they are the point of the mod, and the scenery cache already made them cheap.</summary>
+        /// <summary>The expensive extras off, and the render scale allowed to drop by itself when
+        /// the frame is not keeping up. Water reflections stay: they are the point of the mod.</summary>
         Performance,
         /// <summary>
         /// For a machine that cannot hold its frame rate on Performance: a phone, an old laptop,
         /// an install already carrying two hundred other mods.
         ///
         /// <para>
-        /// Performance keeps reflections because they are the reason to run this mod at all. This
-        /// one gives them up, along with the ray marches, and keeps only what costs a full-screen
-        /// pass or less: bloom, colour grading and the surface shimmer. The result still does not
-        /// look like vanilla, which is the point of having it rather than telling somebody to
-        /// uninstall.
+        /// Everything Performance turns off, plus the ray marches and the cloud shadows. Reflections
+        /// stay at their shortest reach, and bloom and the surface shimmer stay, so the result
+        /// still does not look like vanilla, which is the point of having it rather than telling
+        /// somebody to uninstall.
         /// </para>
         /// </summary>
         LowSpec
@@ -262,11 +272,24 @@ namespace SDVRadiance
         /// and give it back when it is. <see cref="RenderScale"/> stays the ceiling: this only ever
         /// asks for less than was chosen.
         ///
-        /// <para>Off by default, and turned on by the Performance and Low spec presets. This is the
-        /// one setting with a quadratic effect and the one nobody in a performance report has
-        /// mentioned finding, so the presets aimed at slow machines now reach for it on their
-        /// behalf. See RenderPipeline.AutoScale.cs for what it will and will not do.</para></summary>
-        public bool RenderScaleAuto { get; set; }
+        /// <para>On by default since the 12 Oct 2026 measurements, which put almost all of this
+        /// mod's cost on a slow graphics chip in the number of pixels the chain works on. A machine
+        /// that holds its frame rate never sees it act, and one bound by its processor is caught by
+        /// the step judgement and left alone, so the only player who gets a softer picture is one
+        /// who was not getting a smooth one. Quality and Balanced switch it off. Only a new install
+        /// gets the default: an existing config.json keeps the value it already holds. See
+        /// RenderPipeline.AutoScale.cs for what it will and will not do.</para></summary>
+        public bool RenderScaleAuto { get; set; } = true;
+
+        /// <summary>The soft parts of the effects (the cloud shadow, the bloom, the tilt-shift blur
+        /// and the flood's light) worked out at a lower resolution: always, never, or only while
+        /// the frame is not keeping up. The difference measured 0.1 to 1.8 levels of 255 against
+        /// the full road, the same as two grabs of the full road, and saved a third to two thirds
+        /// of the chain's time on a slow card (RenderPipeline.LowerRes.cs). When slow is the first
+        /// step the frame-time controller takes, before it touches the render scale, and it runs
+        /// even with <see cref="RenderScaleAuto"/> off. A setting new on 15 Oct 2026, so every
+        /// install, old or new, starts on When slow.</summary>
+        public LighterSoftEffects LighterSoftEffects { get; set; } = LighterSoftEffects.WhenSlow;
 
         /// <summary>How much of the upscale sharpening to apply, as a multiple of the tuned
         /// amount: 0 turns it off (plain bilinear stretch), 1 is the measured default, and the
@@ -1190,9 +1213,16 @@ namespace SDVRadiance
         public float AuroraStrength { get; set; } = 1f;
         /// <summary>A shooting star now and then in the water's reflected sky on clear nights.</summary>
         public bool ShootingStarsEnabled { get; set; } = true;
+        /// <summary>How often a shooting star comes, against the built-in pace of about one a
+        /// minute: 2 is twice as often (0.25..4). Asked for by XLCCYSH000 on Nexus, who saw the
+        /// night water only through the odd shooting star and found that took luck.</summary>
+        public float ShootingStarFrequency { get; set; } = 1f;
         /// <summary>The scatter of twinkling stars on the water after dusk. Asked for by a player who
         /// wanted the night water without the dots; the moon's sheen and the lamp glimmer stay.</summary>
         public bool WaterNightStars { get; set; } = true;
+        /// <summary>How many stars the night water holds, against the built-in scatter: 2 is twice
+        /// as many, 0 none (0..3). Asked for with ShootingStarFrequency.</summary>
+        public float WaterNightStarsAmount { get; set; } = 1f;
         /// <summary>The game's own rain, snow and leaves, where the mod redraws them over the water
         /// effect, take a plain grey from the light around them instead of the blue the game's own
         /// lighting gives them. Off keeps the game's colour, which is how they always looked.</summary>
@@ -1925,6 +1955,8 @@ namespace SDVRadiance
             ShadowPenumbraStretch = ClampToRange(ShadowPenumbraStretch, 0f, 1f);
             ShadowTint = ClampToRange(ShadowTint, 0f, 1f);
             AuroraStrength = ClampToRange(AuroraStrength, 0f, 2f);
+            ShootingStarFrequency = ClampToRange(ShootingStarFrequency, 0.25f, 4f);
+            WaterNightStarsAmount = ClampToRange(WaterNightStarsAmount, 0f, 3f);
             SnowGlintStrength = ClampToRange(SnowGlintStrength, 0f, 1f);
             DirectionalShadowBlur = ClampToRange(DirectionalShadowBlur, 0f, ShadowBlurMax);
             ShadowGroundForeshortening = ClampToRange(ShadowGroundForeshortening, ShadowGroundForeshorteningMin, ShadowGroundForeshorteningMax);
@@ -2168,10 +2200,14 @@ namespace SDVRadiance
 
                 case PerfPreset.Performance:
                     LightShadowSharpEdges = false;
-                    // Full size here too (see Balanced): what this preset saves, it saves by
-                    // switching work off, not by drawing the world through a smaller buffer.
+                    // Full size as the ceiling (see Balanced), but allowed to drop when the frame
+                    // falls behind. On a slow graphics card the scale is the largest lever there
+                    // is: measured 12 Oct 2026 with the card held to a fifteenth of its clock, half
+                    // scale took 12-21 ms off a 27-36 ms frame, more than any feature switched off.
+                    // A machine that keeps up never sees it act, so nobody who can afford the full
+                    // picture is handed a softer one.
                     RenderScale = 1f;
-                    RenderScaleAuto = false;
+                    RenderScaleAuto = true;
                     TiltShiftEnabled = false;
                     ChromaticAberrationEnabled = false;
                     // Flood GI is the pricier of the two lighting models; classic lighting
@@ -2198,7 +2234,7 @@ namespace SDVRadiance
                 case PerfPreset.LowSpec:
                     LightShadowSharpEdges = false;
                     RenderScale = 1f;
-                    RenderScaleAuto = false;
+                    RenderScaleAuto = true;
                     TiltShiftEnabled = false;
                     ChromaticAberrationEnabled = false;
                     FloodLightingEnabled = false;
@@ -2211,6 +2247,9 @@ namespace SDVRadiance
                     GodRaysEnabled = false;
                     GodRaysSun = false;
                     GodRaysSunGlassRoof = false;
+                    // Four passes a frame (mask, two blurs, composite) for a soft drift of shade,
+                    // and they run at night too: 3 ms of a slow card's frame in Town at 21:00.
+                    CloudShadowEnabled = false;
                     // REFLECTIONS STAY ON HERE TOO, at the shortest reach and the coarser fade.
                     //
                     // They used to be switched off, and switching them off is what prompted this
@@ -2229,10 +2268,10 @@ namespace SDVRadiance
                     WaterReflectReach = 0.2f;
                     WaterReflectFadeRows = 8;
                     // What is left is a full-screen pass each, and between them they are most of
-                    // what makes the picture look different from vanilla: bright things glow, the
-                    // palette has a time of day, and water moves.
+                    // what makes the picture look different from vanilla: bright things glow and
+                    // water moves. The colour grade is left as the player has it: it ships off,
+                    // and switching it on here added a pass to the preset meant to remove them.
                     BloomEnabled = true;
-                    ColorGradeEnabled = true;
                     WaterEnabled = true;
                     break;
             }

@@ -170,6 +170,8 @@ float2 SunAxis;
 float GlitterPath;      // dial x ease x how low the sun is (a noon sun stretches little)
 float NightGlow;        // 0–1 after dusk: star reflections + lamp glimmer fade in
 float NightStars;       // 0–1 the stars' own switch, eased: the dots alone, moon and lamps stay
+float NightStarsFloor;  // a cell whose hash is above this holds a star: 0.81 at the default dial,
+                        // lower for more stars (the dial is eased and turned into this on the CPU)
 float MoonGlow;         // 0–1 lunar phase × season × clouds: moonlit swell shimmer
 float RainAmount;
 float RainRingDensity;  // how many strikes, against the amount the rain brings on its own
@@ -1754,7 +1756,11 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         float2 starCell = floor(starGrid);
         float starHash = Hash(starCell);
         float starTwinkleHash = Hash(starCell + 41.7);
-        float holdsGlint = step(0.82, starHash);                     // sparse cells hold a star
+        // Sparse cells hold a star: 18% of them at the default, more or fewer with the player's
+        // dial. A ramp a hundredth wide rather than a step, so a star fades in as the dial passes
+        // its cell instead of blinking on; the ramp sits below the old line, so every star the
+        // default always showed keeps its full strength.
+        float holdsGlint = saturate((starHash - NightStarsFloor) * 100.0);
         float2 starCentre = float2(frac(starHash * 13.7), frac(starTwinkleHash * 7.3)) * 0.6 + 0.2;
         float toStar = length(frac(starGrid) - starCentre);
         float twinkle = 0.55 + 0.45 * sin(t * 0.9 + starTwinkleHash * 6.2831853);   // slow twinkle

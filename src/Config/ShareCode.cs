@@ -443,6 +443,10 @@ namespace SDVRadiance
             (316, nameof(ModConfig.DirectionalShadowFences), Look),
             (317, nameof(ModConfig.ShadowJunimoLength), Look),
             (318, nameof(ModConfig.WetWorldLensDropLook), Look),
+            // 319 to 338 are promised to settings on the feature branch; these follow them.
+            (339, nameof(ModConfig.ShootingStarFrequency), Look),
+            (340, nameof(ModConfig.WaterNightStarsAmount), Look),
+            (341, nameof(ModConfig.LighterSoftEffects), Performance),
         ];
 
         private static Dictionary<int, (string Property, bool IsPerformance)>? _settingById;

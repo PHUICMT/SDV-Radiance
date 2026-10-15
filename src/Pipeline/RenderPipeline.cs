@@ -164,6 +164,7 @@ namespace SDVRadiance
                           + _sheetNormals.ForgetReloaded()
                           + ArtReloads.Forget(_artBaseSpan, key => key.Item1)
                           + ArtReloads.Forget(_selfDrawnContactLift, key => key.Item2)
+                          + ArtReloads.Forget(_selfDrawnSheetLift, key => key.Item2)
                           + ArtReloads.Forget(_selfDrawnEmptyRetryTick, key => key.Item2)
                           + ArtReloads.Forget(_spriteGlassByPiece, key => key.Texture)
                           + ArtReloads.Forget(_entityOpaqueCache, key => key.texture);
@@ -969,6 +970,11 @@ namespace SDVRadiance
             _finishing = LoadEffect("finishing.mgfxo");
             _lighting = LoadEffect("lighting.mgfxo");
             _tail = LoadEffect("tail.mgfxo");
+            // Loaded with the rest, not on the first frame the lighter soft effects are wanted:
+            // reading and building a shader mid-game is a hitch, exactly when the frame is already
+            // struggling (that is when When slow switches it on).
+            _floodApply = LoadEffect("floodapply.mgfxo");
+            _floodApplyTried = true;
             _wetEffect = LoadEffect("wet.mgfxo");
             ScreenEdgeDrops.LensEffect = LoadEffect("lensdrops.mgfxo");
             _upscale = LoadEffect("upscale.mgfxo");
@@ -1126,6 +1132,7 @@ namespace SDVRadiance
                 case "colorgrade": old = _colorGrade; _colorGrade = loaded; break;
                 case "finishing": old = _finishing; _finishing = loaded; break;
                 case "tail": old = _tail; _tail = loaded; break;
+                case "floodapply": old = _floodApply; _floodApply = loaded; break;
                 case "wet": old = _wetEffect; _wetEffect = loaded; break;
                 case "lensdrops": old = ScreenEdgeDrops.LensEffect; ScreenEdgeDrops.LensEffect = loaded; break;
                 case "upscale": old = _upscale; _upscale = loaded; ScreenZoomFilter.Effect = loaded; break;
@@ -1255,6 +1262,7 @@ namespace SDVRadiance
             try { _cloudMaskKeep?.Dispose(); } catch { }
             _sceneRenderTarget = _fullResolutionPingA = _fullResolutionPingB = null;
             _halfResolutionScratchA = _halfResolutionScratchB = _cloudMaskKeep = null;
+            ReleaseSoftEffectTargets();
             // EnsureTargets keys off the scene target being the right size; a null one rebuilds
             // the set, and the cloud mask must not be read as a sky it no longer holds.
             _cloudMaskTick = int.MinValue;
@@ -1885,6 +1893,10 @@ namespace SDVRadiance
                 _lastScaledWidth = scaledWidth; _lastScaledHeight = scaledHeight;
                 _frameWidth = width; _frameHeight = height;
                 EnsureTargets(scaledWidth, scaledHeight, target.Format);
+                // Made ready beside the chain's own targets whenever the lighter road may be taken,
+                // so switching to it never allocates in the frame it starts (see LowerRes).
+                if (config.LighterSoftEffects != LighterSoftEffects.Never || SoftEffectsForced == true)
+                    EnsureSoftEffectTargets(scaledWidth, scaledHeight, target.Format);
         }
 
         /// <summary>Copy the game's frame into the chain's own buffer, but only for the four reasons that still
@@ -2381,10 +2393,12 @@ namespace SDVRadiance
             _floodOccluderBaseTexture = null; _floodOccluderSpriteBatch = null;
             _maskDebugTexture?.Dispose(); _maskDebugTexture = null;
             _bloom?.Dispose(); _colorGrade?.Dispose(); _fogEffect?.Dispose(); _cloudShadow?.Dispose(); _tiltShift?.Dispose();
+            _floodApply?.Dispose(); _floodApply = null;
             _water?.Dispose(); _finishing?.Dispose(); _lighting?.Dispose(); _floodEffect?.Dispose(); _flood.Dispose(); _cascadesEffect?.Dispose(); _cascades.Dispose(); _normalsEffect?.Dispose(); _sheetNormals.Dispose(); _normalRenderTarget?.Dispose(); _normalRenderTarget = null; _flatNormalTexture?.Dispose(); _flatNormalTexture = null; _reliefReplayEffect?.Dispose(); _reliefReplayEffect = null; _reliefVertexPath?.Dispose(); _reliefVertexPath = null; SheetUpscaler.Dispose(); SpriteFlushPath.Dispose(); _normalSpriteBatch?.Dispose(); _normalSpriteBatch = null;
             _heatMapTexture?.Dispose();
             _heatMapSpare?.Dispose(); _heatMapSpare = null;
             _sceneRenderTarget = _fullResolutionPingA = _fullResolutionPingB = _halfResolutionScratchA = _halfResolutionScratchB = null;
+            ReleaseSoftEffectTargets();
             _waterMask = null; _occluderMask = null; _floodOccluderMask = null; _luminanceRenderTarget = null;
             _spriteMaskRenderTarget = null; _spriteMaskSpriteBatch = null;
             _bloom = _colorGrade = _fogEffect = _cloudShadow = _tiltShift = _water = _finishing = _lighting = _floodEffect = _cascadesEffect = _normalsEffect = null;

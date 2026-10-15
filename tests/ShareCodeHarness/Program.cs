@@ -74,7 +74,7 @@ namespace ShareCodeHarness
                 SheetUpscaleSoftKernel = SoftSmoothingKernel.Xbr,
                 SheetUpscaleKernelCharacters = FamilyKernelChoice.Epx,
                 RenderScale = 0.85f,
-                RenderScaleAuto = true,
+                RenderScaleAuto = false,
             };
             look.Clamp();
             return look;

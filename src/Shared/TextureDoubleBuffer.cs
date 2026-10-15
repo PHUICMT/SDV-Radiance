@@ -51,7 +51,7 @@ namespace SDVRadiance
                 var made = new Texture2D(device, width, height, false, format);
                 spare = tallyBucket != null ? VramTally.Track(made, tallyBucket) : made;
             }
-            spare.SetData(data, 0, count);
+            TextureUpload.SetData(spare, data, 0, count);
             Texture2D written = spare;
             // Yesterday's front is tomorrow's spare. A front of the wrong size is kept anyway and
             // dealt with by the size check above on the next upload; disposing it HERE would pull

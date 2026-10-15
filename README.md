@@ -1,11 +1,11 @@
-<p align="center"><img src="https://staticdelivery.nexusmods.com/mods/1303/images/49397/49397-1791090240-1622644431.jpg" alt="SDV-Radiance: cinematic graphics for Stardew Valley" width="100%"></p>
+<p align="center"><img src="https://staticdelivery.nexusmods.com/mods/1303/images/49397/49397-1791090240-1622644431.jpg" alt="SDV-Radiance: shadows, water, light and weather for Stardew Valley" width="100%"></p>
 
 # SDV-Radiance
 
-> A single, configurable graphics suite for **Stardew Valley**: dynamic shadows,
-> pixel-accurate water reflections, occlusion-aware lighting, weather drawn as
-> weather, particles, window reflections, bloom, sun shafts, cloud shadows and
-> cinematic colour grading, all on the GPU. One install, every effect tunable live.
+> Shadows, water, light and weather for **Stardew Valley**: sun and lamp shadows, water
+> reflections, lighting that walls block, rain and snow, particles, window reflections, bloom,
+> sun shafts, cloud shadows and colour grading, all drawn on the GPU. It's one mod, and every
+> effect can be tuned or turned off while you play.
 
 **Framework:** SMAPI 4.x · MonoGame · HLSL
 **License:** MIT
@@ -20,128 +20,127 @@
 
 <h2><img src="https://phuicmt.github.io/SDV-Radiance-media/banners/see-it.png" alt="See it" width="100%"></h2>
 
-<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/night.webp" alt="The aurora drawn into the sea, a rainbow in waterfall spray, rain on the sea" width="100%"></p>
+<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/night.webp" alt="The aurora in the sea, a rainbow in waterfall spray, rain on the sea" width="100%"></p>
 
-*Water: the aurora drawn into the sea, a rainbow in the spray where the falls meet the river, and rain on the sea round the pier.*
+*Night water: the aurora in the sea, a rainbow in the spray where the falls meet the river, and rain on the sea around the pier.*
 
 <p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/walk-by-the-water.webp" alt="Walking along the shore with a reflection" width="100%"></p>
 
-*Walking along the shore, your reflection walks with you.*
+*Your reflection follows you along the shore.*
 
 <p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/lamps.webp" alt="Street lamps, a room full of lamp shadows, lamplight on snow" width="100%"></p>
 
-*Lamps: a walk past the street lights, a room where every lamp throws its own shadow, and lamplight on snow.*
+*Lamps: walking past the street lights, a room where every lamp casts its own shadow, and lamplight on snow.*
 
-<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/day.webp" alt="Golden hour, a flowing river, cloud shadows" width="100%"></p>
+<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/day.webp" alt="Evening shadows, a flowing river, cloud shadows" width="100%"></p>
 
-*Daylight: long golden-hour shadows on the square, a river that flows, and cloud shadows drifting over the mountain lake.*
+*Daytime: long evening shadows on the square, a flowing river, and cloud shadows over the mountain lake.*
 
 <p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/weather.webp" alt="A storm, snow, and trees in the wind" width="100%"></p>
 
-*Weather: a storm over town, snow, and the trees leaning into a windy day.*
+*Weather: a storm over town, snow, and trees leaning on a windy day.*
 
 <p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/mod-off-and-on.webp" alt="The mountain lake with the mod off and on" width="100%"></p>
 
-*The mountain lake on a summer afternoon, with the mod off (left of the line) and on (right).*
+*The mountain lake on a summer afternoon. Mod off on the left of the line, on to the right.*
 
 <h2><img src="https://phuicmt.github.io/SDV-Radiance-media/banners/make-it-yours.png" alt="Make it yours" width="100%"></h2>
 
 <p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/tuner.webp" alt="The in-game tuner sliding open" width="100%"></p>
 
-*F6 slides the tuner open over the game, and every change shows as you make it. On a phone it opens from Generic Mod Config Menu: SDV-Radiance, Hotkeys & diagnostics, Open the Radiance tuner.*
+*F6 opens the tuner over the game, and you see every change right away. On a phone, open it from Generic Mod Config Menu: SDV-Radiance, Hotkeys & diagnostics, Open the Radiance tuner.*
 
-<sub>Recorded in game at 1920x1080 with the author's own settings and mod list: DaisyNiko's Earthy Recolour and Tilesheets, Sharogg's Tilesheets and Stardew Valley Expanded. Pictures live in [PHUICMT/SDV-Radiance-media](https://github.com/PHUICMT/SDV-Radiance-media).</sub>
+<sub>Recorded in game at 1920x1080 with my own settings and mod list: DaisyNiko's Earthy Recolour and Tilesheets, Sharogg's Tilesheets and Stardew Valley Expanded. The pictures are in [PHUICMT/SDV-Radiance-media](https://github.com/PHUICMT/SDV-Radiance-media).</sub>
 
 ---
 
 ## What it is
 
-SDV-Radiance is one well-behaved graphics layer for Stardew Valley. It captures
-the game's rendered frame and runs a multi-pass shader chain over it on the GPU,
-and it draws directional sprite shadows into the world, giving a richer, more
-cinematic look while staying fully configurable. Every effect has its own on/off
-switch and sliders, live-previewed through an in-game tuner.
+SDV-Radiance adds its graphics on top of the picture the game already draws. It takes each
+finished frame and runs a chain of shader passes over it on the GPU, and it draws sprite shadows
+into the world that lean with the sun. Every effect has its own switch and sliders, and the
+in-game tuner shows each change as you make it.
 
-Shadows and reflections are generated from what's actually rendered, so custom
-sprites, outfit mods, and recolors work automatically, with no per-mod patches.
+Shadows and reflections are made from what's actually on screen, so custom sprites, outfit mods
+and recolours work without any per-mod patches.
 
 ## Features
 
 **Lighting & shadows**
-- Directional shadows for characters, animals, trees, objects, crops, and map props: real sprite silhouettes that lean and stretch with the sun and fade at dusk
-- Moonlight shadows at night, scaled by lunar phase and season
-- A dark pool under every tree, rock, fence and placed thing, the way ambient occlusion grounds a thing whatever the sun is doing. Ships at zero
-- Per-light indoor shadows (lamps, torches, fireplaces)
-- Occlusion-aware dynamic lighting: darken flat/unlit interiors, pool warm light around real light sources, blocked by walls
-- Interiors that follow the clock: rooms dim at dawn, fill through the morning, sink before dusk and go genuinely dark at night, with the colour moving from cool sky light to neutral to warm to blue
-- Daylight through the windows: each pane lays a patch of sun across the floor that leans with the same sun the shadows use, coloured by hour, season and weather
-- The scene answers lightning: for a blink after a strike every shadow leans away from the bolt, the mod's own darkening lifts with the game's flash, and a warm afterglow follows it out
-- Up to 48 lights per scene; the nearest and brightest cast their own shadows, the rest pool light. The budget is deliberately larger than a room needs so walking never makes one light hand its slot to another
-- Radiance cascades: the bounce lighting is computed as rays over a probe grid rather than a spreading flood, so light reaches around a corner instead of leaking through the wall. The default model since 1.7.0, with the older flood still selectable
-- Bounced light takes the colour of what it bounced off, so a red barn throws warm light onto the ground beside it. Off by default, it is a look rather than a correction
-- Lamps throw shadows with a shape: fences, bushes, boulders and placed things block lamp light as their own silhouette, the shadow's edge softens with distance from the lamp, and the shadow cuts into the round glow the game itself paints
-- The edge of a sprite facing a lamp catches a bright fringe in the lamp's own colour
-- Golden hour: in the first and last hours of the sun every shadow stretches further still
+- Shadows for characters, animals, trees, objects, crops and map props, cut from each sprite's real outline. They lean and stretch with the sun and fade at dusk
+- Moon shadows at night, stronger or weaker with the moon phase and season
+- A dark spot under every tree, rock, fence and placed object, whatever the sun is doing (like ambient occlusion). It's set to zero by default
+- Indoor shadows from each light (lamps, torches, fireplaces)
+- Dynamic lighting that walls block: flat, unlit interiors get darker, and warm light pools around real light sources
+- Rooms follow the clock. They're dim at dawn, get brighter through the morning, dim again before dusk and get really dark at night, and the colour goes from cool sky light to neutral, then warm, then blue
+- Daylight through windows: each pane puts a patch of sun on the floor that leans with the same sun as the shadows, coloured by hour, season and weather
+- Lightning: for a moment after a strike every shadow leans away from the bolt, the mod's own darkening lifts with the game's flash, and a warm afterglow fades out after it
+- Up to 48 lights per scene. The nearest and brightest cast their own shadows, and the rest just give light. That's more than a room needs, so walking around never makes one light lose its slot to another
+- Radiance cascades: bounce light is traced as rays over a grid of probes instead of spreading like a flood, so light gets around a corner instead of leaking through the wall. It's been the default since 1.7.0, and the older flood can still be picked
+- Bounced light takes on the colour of what it hit, so a red barn throws warm light on the ground next to it. Off by default, because it's a style choice and not a fix
+- Lamp shadows have real shapes: fences, bushes, boulders and placed objects block lamp light with their own outline, the edge gets softer further from the lamp, and the shadow cuts into the round glow the game draws around the lamp
+- The side of a sprite that faces a lamp gets a bright edge in the lamp's colour
+- Golden hour: in the first and last hour of sunlight, shadows stretch even longer
 
 **Water**
-- Pixel-accurate reflections mirrored along the real painted shoreline (banks, trees, bridges, piers)
-- Wading self-reflection in shallow water; crab pots, splashes, tossed items and the fishing bobber reflect too
-- Ripple, sparkle, and surface shimmer: pond vs. ocean, weather and season aware
-- Caustics on shallow water, strongest along the shore, fading at night and in bad weather
-- Rain spreads rings across the surface, with separate dials for how many, how wide, and how plainly they show
-- Reflection softness is a slider: from a single crisp sample to twice the standard spread
-- Water sub-types: ice reflects without rippling, flowing water and waterfalls read differently from calm water, lava glows on its own
-- Anything solid jutting into the water keeps its colour out of it, and the ripple fades out as it approaches rather than deciding pixel by pixel whether to move
+- Reflections that follow the real shoreline in the art, down to the pixel (banks, trees, bridges, piers)
+- You reflect in shallow water while wading. Crab pots, splashes, thrown items and the fishing bobber reflect too
+- Ripples, sparkle and shimmer that differ between ponds and the sea and change with weather and season
+- Light patterns (caustics) on shallow water, strongest near the shore and fading at night and in bad weather
+- Rain leaves rings on the surface, with separate sliders for how many there are, how wide they get and how strongly they show
+- A slider for reflection softness, from one sharp sample up to twice the normal spread
+- Different kinds of water: ice reflects but doesn't ripple, flowing water and waterfalls look different from still water, and lava glows on its own
+- Solid things sticking into the water keep their colour out of it, and the ripple fades out as it gets close to them instead of switching on and off pixel by pixel
 
 **Weather & particles**
-- Rain, snow and windblown debris drawn as three planes at three depths, each leaning and travelling at its own rate, with splashes where drops land. Green rain gets its own fall, and a windy day carries what the season under your feet actually has on it
-- Visible lightning bolts on any map, using the game's own bolt art, and not on every rumble
-- Drops on the edge of the screen that merge, grow heavy and run, becoming frost in snow, with the edge of the picture misting over around them
-- Particles drawn into the world rather than over it, so they take the light, the weather and the grade: dust in a window beam, sparks off a real fire, fireflies on the game's own firefly nights, blossom and leaves on the days the game leaves the air empty, and sparks turning around a glow ring
-- A wet world after the rain, on its own clock, with lamplight smearing down the wet ground. Ships switched off, dials in both menus
-- Heat haze: hot air over lava bends the picture seen through it, the way air over a summer road does
+- Rain, snow and blowing debris drawn in three layers at three depths, each with its own angle and speed, and splashes where drops land. Green rain has its own look, and on windy days the wind picks up what the season has on the ground where you are
+- Lightning bolts you can see on any map, using the game's own bolt art, but not with every rumble
+- Raindrops on the edge of the screen that join up, get heavy and run down. In snow they turn to frost, and the edge of the picture mists over around them
+- Particles drawn into the world instead of on top of it, so light, weather and colour grading affect them too: dust in a window beam, sparks from a real fire, fireflies on the nights the game has fireflies, blossom and leaves on days when the game has nothing in the air, and sparks circling a glow ring
+- Wet ground after rain that dries on its own timer, with lamplight streaking down the wet ground. Off by default, with sliders in both menus
+- Heat haze: hot air over lava bends what you see through it, like air over a road in summer
 
 **Sprites & foliage**
-- Wind in the trees: tree tops and bushes lean with the same wind the rain leans with, and a gust front crosses the map so a row of trees leans one after another rather than all at once. The tilt is a fraction of a degree, because pixel art has no in-between pixels to bend into
-- Leaves catch the light: patches of canopy brighten and dim the way leaf faces flip in wind
-- Sprite relief: a lamp or the sun lights the side of a tree, a building or a fence that faces it, from a normal map synthesised out of the sprite itself. Off by default
-- Sprites at twice the texels: every sheet in use is doubled on the graphics card, per art family, so dialogue text can stay sharp while the world stays as pixelated as you like. Two looks, the Scale2x rule and a softer xBR-style one baked onto shared pages, with a smoothing dial each for the world, characters, portraits, items and menus, and a switch for the items lying in the world and in the toolbar. All of it ships off
+- Wind in the trees: tree tops and bushes lean with the same wind as the rain, and gusts cross the map so a row of trees leans one after another instead of all at once. The lean is less than a degree, because pixel art has no pixels in between to bend into
+- Leaves catch the light: patches of the canopy brighten and dim like leaves turning over in the wind
+- Sprite relief: a lamp or the sun lights the side of a tree, building or fence that faces it, using a normal map made from the sprite itself. Off by default
+- Sprites at double resolution: every sheet in use is upscaled 2x on the graphics card, per art family, so dialogue text can stay sharp while the world stays as pixelated as you like. There are two looks, the Scale2x rule and a softer xBR-style one baked onto shared pages. Each has a smoothing slider for the world, characters, portraits, items and menus, and there's a switch for items lying in the world and in the toolbar. All of it is off by default
 
 **Windows & glass**
-- Reflections in windows: you at the window's own height, with the tool in your hand, keeping your stride. Glass reflects when what is behind it is darker than what is in front, so the image is plain in daylight and thins after dusk as the room lights up behind the pane
-- A wash of the sky's colour, a soft glare travelling across the pane, the street standing in the lower half, and after dark the lamps outside as small blots of their own colour in the panes facing them
+- Windows reflect you at the window's own height, holding your tool and walking in step. Glass reflects when it's darker behind the pane than in front, so the reflection is clear in daylight and fades after dusk as the room behind it lights up
+- The glass also shows a tint of the sky's colour, a soft glare moving across the pane and the street in the lower half. After dark, the lamps outside show as small spots of their own colour in the panes facing them
 
 **Atmosphere & color**
-- Sun shafts: daylight cut by a canopy into slanting patches on the ground, with their own strength and reach. On by default
-- The dappled light under a canopy reaches the greenhouse floor too, cut by whatever grows there, since its roof is glass and the sun stands over it
-- Lamp shafts from in-world light sources, rebuilt in 1.7.0 from the same shapes the lamp shadows use, on a separate switch. Ships off
-- Aurora on clear winter nights: slow curtains of green and violet that the water carries too. On, and rare
-- Shooting stars on a clear night in any season, drawn into the sea as well as the sky
-- Cloud shadows drifting across the ground, with count, coverage, size, and speed controls
-- Day fog and night mist: two separate wispy drifting effects, each with its own amount, intensity, and drift speed
+- Sun shafts: daylight through the trees falls in slanted patches on the ground, with their own strength and reach settings. On by default
+- The dappled light under trees reaches the greenhouse floor too, broken up by whatever grows there, since the roof is glass and the sun is above it
+- Lamp shafts from light sources in the world, rebuilt in 1.7.0 from the same shapes the lamp shadows use, with their own switch. Off by default
+- Aurora on clear winter nights: slow green and violet curtains that show in the water too. On by default, and rare
+- Shooting stars on clear nights in any season, in the sea as well as the sky
+- Cloud shadows moving across the ground, with sliders for count, coverage, size and speed
+- Day fog and night mist: two separate drifting effects, each with its own amount, strength and drift speed
 - Bloom, tilt-shift depth blur, vignette, chromatic aberration
-- Cinematic color grading with automatic mood by time / weather / season and metered auto-exposure, plus seven ready-made looks and a slot for a LUT of your own. Ships off
-- Blue light eye comfort filter, layered on the grade or used on its own
+- Colour grading that sets the mood by time, weather and season, with auto-exposure, six ready-made looks and a slot for your own LUT. Off by default
+- A blue light filter for tired eyes, on top of the grading or on its own
 
 **Performance**
-- Effect resolution: compute the effects at a fraction of the window while the world stays full size, with FSR-style sharpening on the way back up
-- Three quality presets, and a benchmark that measures your machine and tells you what to set
-- `radiance_report` prints what the mod costs on this machine, per part, averaged over the last 300 frames, with no debug setting to turn on first
+- Effect resolution: draw the effects at a fraction of the window size while the world stays full size, with FSR-style sharpening when they're scaled back up
+- Four performance presets, and a benchmark that tests your machine and tells you what to set
+- `radiance_report` prints what each part of the mod costs on your machine, averaged over the last 300 frames. You don't need to turn on any debug setting first
 
 **Controls**
-- Live in-game tuner (default **F6**), organized into tabs by category: drag to preview, presets, save/load named looks
-- Generic Mod Config Menu integration; per-effect toggles and sliders
-- Toggle the whole stack with **F7** (rebindable)
+- Live in-game tuner (**F6** by default) with tabs by category: drag a slider to preview, pick a preset, save and load named looks
+- Generic Mod Config Menu support, with a switch and sliders for each effect
+- **F7** turns all of it on or off (you can change the key)
 
 ### Out of scope, engine limits
-- ❌ Real ray tracing / RTX: Stardew is 2D sprites; there is no 3D geometry, depth, or normals
-- ❌ Path-traced global illumination: no 3D scene to bounce light in
+- Real ray tracing / RTX: Stardew is 2D sprites, with no 3D geometry, depth or normals
+- Path-traced global illumination: there's no 3D scene for light to bounce around in
 
-Everything here is a **screen-space / draw-time approximation** built for a 2D pixel-art game.
+Everything here is a **screen-space or draw-time approximation** made for a 2D pixel-art game.
 
 ## Architecture
 
-Two independent systems joined at one point:
+Two separate systems that meet at one point:
 
 ```
 System A: post-processing (RenderPipeline.* + shaders/*.fx)
@@ -165,13 +164,12 @@ Link: System B bakes the player's silhouette to a shared mask; System A's water
 shader reads it to exclude the player's own pixels from water effects.
 ```
 
-The pipeline captures whatever target the game has bound during SMAPI's
-`RenderedWorld` event and writes the final result back into it. Nothing the game
-owns is rebound or cleared, which keeps the world from going black. A single
-Harmony postfix on `ShouldDrawOnBuffer` guarantees a target is bound while
-effects are active.
+During SMAPI's `RenderedWorld` event the pipeline takes whatever render target the game has
+bound, and writes the final result back into it. It never rebinds or clears anything the game
+owns, and that's what keeps the world from going black. One Harmony postfix on
+`ShouldDrawOnBuffer` makes sure a target is bound while effects are on.
 
-**Shaders:** HLSL `.fx` compiled to `.mgfxo` (MonoGame Effect), loaded at runtime, applied via `SpriteBatch.Begin(effect: …)`.
+**Shaders:** HLSL `.fx` compiled to `.mgfxo` (MonoGame Effect), loaded at runtime and applied with `SpriteBatch.Begin(effect: …)`.
 
 ## Tech stack
 
@@ -189,115 +187,114 @@ effects are active.
 1. Install [SMAPI](https://smapi.io) 4.0.0 or newer.
 2. (Recommended) Install [Generic Mod Config Menu](https://www.nexusmods.com/stardewvalley/mods/5098).
 3. Unzip this mod into your `Stardew Valley/Mods` folder.
-4. Launch through SMAPI. Press **F6** for the tuner, **F7** to toggle.
+4. Launch through SMAPI. Press **F6** for the tuner and **F7** to turn the effects on or off.
 
-The stock look is a strong one. If it reads as too contrasty for a long session, press **F6**
-and pick the **Subtle** preset on the first tab, or raise the blue light filter for tired eyes.
-Nothing needs editing by hand, and both are live.
+The default look is fairly strong. If it's too contrasty for long play, press **F6** and
+pick the **Subtle** preset on the first tab, or turn up the blue light filter if your eyes get
+tired. Both change live, and you don't need to edit any files.
 
-An existing `config.json` is never overwritten on update, so a tuned game does not change under
-you. To take a newer version's defaults, delete it and let the mod write a fresh one.
+Updates never overwrite an existing `config.json`, so your settings stay the same after an
+update. To get a newer version's defaults, delete it and the mod will write a new one.
 
-Bundled languages: English, Thai, Simplified Chinese. A Korean translation is available
+Included languages: English, Thai, Simplified Chinese. A Korean translation is available
 as a [separate mod](https://www.nexusmods.com/stardewvalley/mods/49448).
 
 ## Compatibility
 
 - Stardew Valley 1.6.x, SMAPI 4.0.0+.
-- Works automatically with sprite mods, Fashion Sense, and recolors (it reads the rendered frame).
+- Sprite mods, Fashion Sense and recolours work automatically, since the mod reads the picture the game draws.
 - Effects are client-side, so each player sees their own and nobody else needs it installed.
-  Split screen and online co-op are supported: other players cast shadows and appear in the
-  water, and each screen keeps its own working data. Split screen has been tested with two
-  players; the online case shares all of that code but has not been through a session on two
-  machines.
-- If another mod has already claimed the game's weather drawing, the replacement weather stands
-  down and leaves it alone rather than fighting for the same slot.
-- Android is not officially supported and is untested by the author, though players have reported it running (with some delay).
-- Run only one screen-space/lighting post-processing overlay at a time for a predictable look.
+  Split screen and online co-op are supported: other players cast shadows and show up in the
+  water, and each screen keeps its own data. Split screen has been tested with two players.
+  Online co-op uses the same code but hasn't been tested with two machines.
+- If another mod already draws the game's weather, the replacement weather steps aside and
+  leaves it alone instead of fighting it for the same slot. With Cloudy Skies and Weather Wonders,
+  it steps aside only on days they draw their own weather.
+- Global God Rays works alongside it. The two cover similar ground, so turn one of them down.
+  DynamicShader works alongside it too.
+- Android works through SMAPI for Android. A first install on a phone starts on the Low spec preset,
+  and one on built-in graphics (Intel, AMD Radeon built into the processor, Steam Deck, Apple M) on Performance.
+- For a predictable look, run only one screen-space lighting or post-processing overlay at a time.
 
 Per-mod test results are in [docs/compatibility.md](docs/compatibility.md).
 
 ### Known incompatibilities
-- **SpriteMaster**, also distributed as *"Clear Glasses"* and *"Clear Glasses HD"*
-  (`aurpine.ClearGlasses`): **not compatible.** SpriteMaster hooks the sprite batch and render
-  targets deeply for its texture upscaling and caching; SDV-Radiance captures and post-processes
-  the game's render target. Running both makes the world render as a solid colour (orange/black)
-  on load until a menu forces a redraw, and patches of the water surface lose their mirror while
-  you walk. One player on Clear Glasses HD also reported the view zooming in hard or blacking out
-  when walking near god rays; switching the God rays effect off avoided that without disabling
-  the rest. Use one or the other. This mod does its own sheet upscaling now, two looks with a dial per
-  art family, so it is no longer a reason to run both.
-- **Clear Monocle is NOT in this bracket.** It is a fork that keeps only the upscaling, and its
-  author shipped explicit support for this mod on 2026-07-28. Two users have confirmed it working
-  since. Keep it up to date.
+- **SpriteMaster**, also released as *"Clear Glasses"* and *"Clear Glasses HD"*
+  (`aurpine.ClearGlasses`): **pick one.** Both mods work on the same sprites and render targets.
+  Smooth art turns itself off when one of them is installed, but shadows and water can still
+  flicker next to Clear Glasses. This mod has its own Smooth art, with a choice of looks per kind
+  of art, so you don't need both for that.
+- **Clear Monocle is NOT in this group.** It's a fork that keeps only the upscaling, and its
+  author added support for this mod on 2026-07-28. Two users have confirmed it works since then.
+  Keep it up to date.
 
 ## Building
 
-1. Install the .NET SDK (6+; the repo builds against `net6.0`).
-2. The project references [`Pathoschild.Stardew.ModBuildConfig`](https://github.com/Pathoschild/SMAPI/blob/develop/docs/technical/mod-package.md), which auto-detects the game folder and deploys the build into `Mods/`.
+1. Install the .NET SDK (6 or newer, the repo builds against `net6.0`).
+2. The project references [`Pathoschild.Stardew.ModBuildConfig`](https://github.com/Pathoschild/SMAPI/blob/develop/docs/technical/mod-package.md), which finds the game folder by itself and deploys the build into `Mods/`.
 3. Compile shaders with `mgfxc`, then copy the result into `assets/`:
    ```
    mgfxc shaders/bloom.fx assets/bloom.mgfxo /Profile:OpenGL
    ```
-   **Version matters:** the `.mgfxo` format must match the game's MonoGame build.
+   **Version matters:** the `.mgfxo` format has to match the game's MonoGame build.
    Stardew 1.6.x uses **MonoGame 3.8.0 (build 1641)**, so compile with
    `dotnet tool install -g dotnet-mgfxc --version 3.8.0.1641`. That tool targets
-   .NET Core 3.1; if you only have a newer runtime, run it with
-   `DOTNET_ROLL_FORWARD=LatestMajor`. A newer `mgfxc` produces a binary the game
+   .NET Core 3.1. If you only have a newer runtime, run it with
+   `DOTNET_ROLL_FORWARD=LatestMajor`. A newer `mgfxc` makes a file the game
    rejects with *"This MGFX effect seems to be for a newer release of MonoGame."*
    Compiled `.mgfxo` files are committed under `assets/`.
-   **`dotnet build` does not compile shaders**, it only copies the `.mgfxo` files that are
-   already there. Editing a `.fx` and rebuilding tests the old shader.
-4. `dotnet build` copies to `Mods/SDV-Radiance/`, then launch via SMAPI to test.
+   **`dotnet build` does not compile shaders.** It only copies the `.mgfxo` files that are
+   already there, so if you edit a `.fx` and rebuild, you're still testing the old shader.
+4. `dotnet build` copies to `Mods/SDV-Radiance/`. Then launch through SMAPI to test.
 
-If the game folder isn't auto-detected, set `<GamePath>` in `SDV-Radiance.csproj` or a `stardewvalley.targets` file.
+If the game folder isn't found automatically, set `<GamePath>` in `SDV-Radiance.csproj` or a `stardewvalley.targets` file.
 
 ## Notes
 
-- Multi-pass graphics effects cost GPU. Every effect has an on/off switch, so you can dial it to
-  your machine, and switching one off gives its cost back rather than leaving it running quietly.
-- Render APIs can shift across SMAPI / SDV updates, so expect occasional maintenance.
+- Each effect is one or more GPU passes, so it costs GPU time. Every effect has an on/off switch
+  so you can fit the mod to your machine, and turning one off gives its cost back instead of
+  leaving it running in the background.
+- Rendering APIs can change between SMAPI and Stardew updates, so expect some maintenance now and then.
 
 ## Roadmap
 
-Planned directions (not yet shipped):
+Planned, not released yet:
 
-- Puddles decided from the map rather than guessed at, which is the reason the wet ground still ships off
-- A shadow clipped against what stands in front of it. Indoors a shadow crosses a table or the saloon counter, because it is drawn at one sort depth taken from the caster's feet
-- Reflections that shift with the camera the way a real mirror image does. Confirmed physically right and not yet built; it is the other half of the reports that a reflection at the beach sits away from the player
-- Water carrying under every bridge and pier, not only the ones whose map data makes it possible today
-- Lamp shafts on by default, once a night walk with them on stops finding gaps that are not there
+- Puddles placed from the map data instead of guessed. That's why wet ground is still off by default
+- Shadows that stop at whatever stands in front of them. Indoors a shadow can fall across a table or the saloon counter, because it's drawn at one sort depth taken from the caster's feet
+- Reflections that shift with the camera like a real mirror image does. I've checked that this is physically right, but it isn't built yet. It's the other half of the reports that a reflection at the beach sits away from the player
+- Water that continues under every bridge and pier, not only the ones whose map data allows it today
+- Lamp shafts on by default, once a night walk with them on stops showing gaps that aren't there
 
-Shipped since this list was last written: radiance-cascades global illumination and
-normal-mapped sprite lighting (1.7.0, the first on by default and the second off), built-in
-sprite sharpening (1.7.0, off by default), the lamp-shaft rebuild (1.7.0, still off), and
-per-light shadows for objects and map props (1.7.0, as their own shapes). Since then: split
-screen at the price of two cameras rather than four (1.7.5), the softer upscaling look with a
-dial per art family (1.7.5), a lamp's shadow kept between frames instead of walked again,
-sunlight through a canopy reaching the greenhouse, and a dark pool under objects on a dial
-that ships at zero (1.7.6).
+Done since this list was first written: radiance cascades lighting and normal-mapped sprite
+lighting (1.7.0, the first on by default and the second off), built-in sprite sharpening (1.7.0,
+off by default), the rebuilt lamp shafts (1.7.0, still off), and per-light shadows for objects
+and map props in their own shapes (1.7.0). After that: split screen costing two cameras instead
+of four (1.7.5), the softer upscaling look with a slider per art family (1.7.5), lamp shadows
+kept between frames instead of traced again, sunlight through trees reaching the greenhouse, and
+a dark spot under objects on a slider that starts at zero (1.7.6).
 
 <h2><img src="https://phuicmt.github.io/SDV-Radiance-media/banners/support.png" alt="Support" width="100%"></h2>
 
-<p align="center">Free and always will be. If it's useful to you, support is appreciated but never required.</p>
+<p align="center">Radiance is free and will stay free. If you'd like to support it, a coffee or a sponsorship helps a lot, but it's never expected.</p>
 
 <p align="center">
 <a href="https://ko-fi.com/phuicmt"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/kofi.png" alt="Buy me a coffee on Ko-fi" height="48"></a>&nbsp;&nbsp;
 <a href="https://github.com/sponsors/PHUICMT"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/sponsor.png" alt="Sponsor on GitHub" height="48"></a>
 </p>
 
-<p align="center">Found something off? A report with <code>radiance_report</code> from the spot is the best help there is.<br><br>
+<p align="center">Something look wrong? A bug report with <code>radiance_report</code> run from that spot helps the most.<br><br>
 <a href="https://www.nexusmods.com/stardewvalley/mods/49397?tab=bugs"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/bugs.png" alt="Report a bug" height="36"></a>
 </p>
 
 ## License & credits
 
-MIT, see [LICENSE](LICENSE). Third-party attribution (frameworks, tooling, and any reused code) is in [CREDITS.md](CREDITS.md).
+MIT, see [LICENSE](LICENSE). Credits for third-party frameworks, tools and any reused code are in [CREDITS.md](CREDITS.md).
 
-Translations: Simplified Chinese bundled since 1.2.2, by **Rime961** (1.2.2 through 2.1.3) and
-**passersby10086** (the 2.2.0 settings); a few newer settings, the share codes among them, still show in English.
-Thai by the author, complete. More languages are published as separate mods on the Nexus by their own
-authors: French by [Deovos](https://www.nexusmods.com/stardewvalley/mods/50089), German by
+Translations: Simplified Chinese has been included since 1.2.2, by **Rime961** (1.2.2 through
+2.1.3) and **passersby10086** (the 2.2.0 settings). A few newer settings, including the share
+codes, still show in English. Thai is by me and complete. Other languages are separate mods on
+the Nexus by their own translators: French by [Deovos](https://www.nexusmods.com/stardewvalley/mods/50089), German by
 [Neko41](https://www.nexusmods.com/stardewvalley/mods/51482), Japanese by
 [tanakakaku3i](https://www.nexusmods.com/stardewvalley/mods/49750), Korean by
 [jjongleee](https://www.nexusmods.com/stardewvalley/mods/49448), Simplified Chinese by

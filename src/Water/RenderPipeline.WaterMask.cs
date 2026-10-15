@@ -675,7 +675,7 @@ namespace SDVRadiance
                         SurfaceClass.Water => 128,
                         _ => 255,
                     };
-            kept.Texture.SetData(texels, 0, width * height);
+            TextureUpload.SetData(kept.Texture, texels, 0, width * height);
             return kept.Texture;
         }
 

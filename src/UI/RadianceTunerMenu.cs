@@ -689,7 +689,7 @@ namespace SDVRadiance
                 };
                 _buttons.Add(presetButton);
             }
-            _contentCursorY += 56;
+            _contentCursorY += RowPitch + Scaled(12);
 
             Section("tuner.mylooks");
             if (!HiddenBySection())
@@ -1685,7 +1685,11 @@ namespace SDVRadiance
                 value => _config.AuroraStrength = value, "help.aurorastrength",
                 () => _config.AuroraEnabled);
             Toggle("tuner.shootingstars", () => _config.ShootingStarsEnabled, value => _config.ShootingStarsEnabled = value, "help.shootingstars");
+            Slider("tuner.shootingstarfrequency", 0.25f, 4f, () => _config.ShootingStarFrequency,
+                value => _config.ShootingStarFrequency = value, "help.shootingstarfrequency", () => _config.ShootingStarsEnabled);
             Toggle("tuner.waternightstars", () => _config.WaterNightStars, value => _config.WaterNightStars = value, "help.waternightstars");
+            Slider("tuner.waternightstarsamount", 0f, 3f, () => _config.WaterNightStarsAmount,
+                value => _config.WaterNightStarsAmount = value, "help.waternightstarsamount", () => _config.WaterNightStars);
             Toggle("tuner.gameweatherplaintint", () => _config.GameWeatherPlainTint, value => _config.GameWeatherPlainTint = value, "help.gameweatherplaintint");
             Toggle("tuner.windyspells", () => _config.WindySpellsEnabled, value => _config.WindySpellsEnabled = value, "help.windyspells");
             Slider("tuner.windyspellsstrength", 1.25f, 3f, () => _config.WindySpellsStrength,
@@ -1760,6 +1764,36 @@ namespace SDVRadiance
         /// How the drops on the glass are drawn: plain beads, or one of the two lenses, named by the
         /// release each came in, with the one in use lit.
         /// </summary>
+        /// <summary>
+        /// When the soft parts of the effects are worked out at a lower resolution: three buttons,
+        /// the one in use lit.
+        /// </summary>
+        private void BuildLighterSoftEffects()
+        {
+            if (HiddenBySection())
+                return;
+            Paragraph(_translate("tuner.lightersofteffects"));
+            (LighterSoftEffects choice, string key)[] choices =
+            [
+                (LighterSoftEffects.Never, "never"),
+                (LighterSoftEffects.WhenSlow, "whenslow"),
+                (LighterSoftEffects.Always, "always"),
+            ];
+            int buttonWidth = (_contentColumnWidth - 6 * (choices.Length - 1)) / choices.Length;
+            for (int i = 0; i < choices.Length; i++)
+            {
+                var (choice, key) = choices[i];
+                var rect = new Rectangle(_contentCursorX + i * (buttonWidth + 6), _contentCursorY, buttonWidth, Scaled(40));
+                var button = Button(_translate($"tuner.lightersofteffects.{key}"), rect, () =>
+                {
+                    _config.LighterSoftEffects = choice; _onChange(); _onSave(); Reflow();
+                });
+                button.IsChosen = () => _config.LighterSoftEffects == choice;
+                Help(rect, $"help.lightersofteffects.{key}");
+            }
+            _contentCursorY += Scaled(50);
+        }
+
         private void BuildLensDropLooks()
         {
             (string key, bool refract, LensDropLook look)[] looks =
@@ -2227,7 +2261,7 @@ namespace SDVRadiance
                     };
                     _buttons.Add(perfButton);
             }
-            _contentCursorY += 56;
+            _contentCursorY += RowPitch + Scaled(12);
             }
 
             Slider("config.renderscale.name", 0.5f, 1f, () => _config.RenderScale, value => _config.RenderScale = value);
@@ -2235,6 +2269,7 @@ namespace SDVRadiance
             // rather than a separate feature, and because the slider is then read as the ceiling.
             Toggle("config.renderscaleauto.name", () => _config.RenderScaleAuto,
                 value => _config.RenderScaleAuto = value, "help.renderscaleauto");
+            BuildLighterSoftEffects();
             Slider("config.rendersharpness.name", 0f, 2f, () => _config.RenderSharpness, value => _config.RenderSharpness = value);
             Section("tuner.section.perfadvanced", fineTuning: true);
             Toggle("config.limitsamplerslots.name", () => _config.LimitSamplerSlots,
@@ -2260,7 +2295,7 @@ namespace SDVRadiance
                     RenderPipeline.Current?.StartBenchmark(_config);
                     Reflow();
                 }));
-            _contentCursorY += 54;
+            _contentCursorY += RowPitch + Scaled(10);
 
             if (RenderPipeline.BenchRunning)
                 Info(() => $"{_translate("config.bench.running")} {RenderPipeline.BenchProgress * 100f:0}%");
@@ -2279,7 +2314,7 @@ namespace SDVRadiance
                         _config.RenderScale = RenderPipeline.BenchSuggestedScale;
                         _config.Clamp(); _onChange(); _onSave(); Reflow();
                     }));
-                _contentCursorY += 54;
+                _contentCursorY += RowPitch + Scaled(10);
             }
         }
 

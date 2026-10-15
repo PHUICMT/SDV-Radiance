@@ -1135,6 +1135,32 @@ namespace SDVRadiance
                     }
                 }
             }
+            // Front-family overlay water, the same rule as Buildings. A tile is only called water
+            // when an overlay label holds 48 liquid pixels (SurfaceMap), so a Front tile with less,
+            // the tip of a cave mouth the stream pours out of in Hot Spring Farmcave, was dropped
+            // whole and drew as a flat patch over the water round it.
+            if (!isWater && context.Labels != null && context.Fronts != null)
+            {
+                foreach (var frontLayerLoop in context.Fronts)
+                {
+                    if (context.Labels.Get(frontLayerLoop, tileX, tileY) is not { } frontLabel)
+                        continue;
+                    var (frontWaterBits, nW, nI, nF, nL) = WaterBitsFromLabels(frontLabel);
+                    if (nW + nI + nF + nL < 8)
+                        continue;
+                    if (overlayBits == null)
+                        overlayBits = frontWaterBits;
+                    else
+                    {
+                        var merged = new bool[256];
+                        for (int texelIndex = 0; texelIndex < 256; texelIndex++) merged[texelIndex] = overlayBits[texelIndex] || frontWaterBits[texelIndex];
+                        overlayBits = merged;
+                    }
+                    iceCount += nI; flowCount += nF; lavaCount += nL;
+                    if (nI > 0 || nL > 0 || nF > 0) AddSubTypePixels(frontLabel, ref iceBits, ref lavaBits, ref flowBits);
+                    job.AnyLabeled = true;
+                }
+            }
             if (overlayBits != null)
             {
                 // Labelled overlay water is ground truth → full treatment (ripple +
@@ -1198,7 +1224,9 @@ namespace SDVRadiance
             ApplyBuildingLabelOverride(job, tileIndex, waterHere, hasBuildingsArt, cb, buildingsLabel,
                                        ref keep, ref iceBits, ref lavaBits, ref flowBits,
                                        ref iceCount, ref flowCount, ref lavaCount, ref bldLabeledLiquid);
-            ApplyFrontLabelOverride(job, context, tileIndex, tileX, tileY, isWater, frontCarveBits, frontAnyAlphaBits,
+            // waterHere, as for Buildings: on a tile only a label made water, the Front art's own
+            // opacity would otherwise carve back out the liquid that same label painted.
+            ApplyFrontLabelOverride(job, context, tileIndex, tileX, tileY, waterHere, frontCarveBits, frontAnyAlphaBits,
                                     ref iceBits, ref lavaBits, ref flowBits,
                                     ref iceCount, ref flowCount, ref lavaCount,
                                     ref frontSolidCount, ref frontLabeledLiquid);
@@ -2392,8 +2420,7 @@ namespace SDVRadiance
                         }
                         _waterEffectBits![row + x] = false;
                         _waterMarchBits![row + x] = false;
-                        if (_maskScratch.ArtCarvedFlags != null)
-                            _maskScratch.ArtCarvedFlags[row + x] = true;
+                        _maskScratch.ArtCarvedFlags?[row + x] = true;
                     }
                 }
             }

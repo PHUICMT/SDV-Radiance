@@ -38,7 +38,7 @@ namespace SDVRadiance
             RegisterOverlaysAndSwitches(helper, monitor);
             helper.ConsoleCommands.Add("radiance_reloadshaders",
                 "Reload one compiled shader from the mod's assets folder without restarting the game. "
-                + "Usage: radiance_reloadshaders <name>, one of floodlight, bloom, tiltshift, water, lighting, fog, cloudshadow, "
+                + "Usage: radiance_reloadshaders <name>, one of floodlight, floodapply, bloom, tiltshift, water, lighting, fog, cloudshadow, "
                 + "colorgrade, finishing, tail, wet, upscale, cascades, normals, reliefreplay, shadowmask, sheetscale. "
                 + "The author's tool for comparing two builds of a shader on one frozen frame.",
                 (_, arguments) => monitor.Log(arguments.Length == 0
@@ -1290,6 +1290,28 @@ namespace SDVRadiance
                     RenderPipeline.GpuProbe = arguments.Length == 0 || !arguments[0].Equals("off", StringComparison.OrdinalIgnoreCase);
                     monitor.Log($"GPU wall-clock probe: {(RenderPipeline.GpuProbe ? "ON - watch for [perf] gpu wall-clock lines" : "off")}", LogLevel.Info);
                 });
+            helper.ConsoleCommands.Add("radiance_lowres",
+                "Force the soft parts of the effects (clouds, bloom, tilt-shift blur, the flood's light) to the lower "
+                + "resolution or the full one, or 'auto' to follow the setting: radiance_lowres on|off|auto. For an A/B.",
+                (_, arguments) =>
+                {
+                    string choice = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
+                    if (choice is "on" or "off" or "auto")
+                        RenderPipeline.SoftEffectsForced = choice == "auto" ? null : choice == "on";
+                    monitor.Log($"lighter soft effects: {(RenderPipeline.SoftEffectsForced is bool forced ? (forced ? "forced on" : "forced off") : "following the setting")}", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_upload",
+                "How textures the mod rebuilds while you play reach the graphics card: 'direct' (the default) "
+                + "uploads without making the game wait for the card to finish everything queued, 'setdata' "
+                + "goes through MonoGame's own upload, which does wait. For an A/B on a slow card.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length > 0)
+                        TextureUpload.Enabled = !arguments[0].Equals("setdata", StringComparison.OrdinalIgnoreCase);
+                    monitor.Log($"texture uploads: {(TextureUpload.Enabled ? "direct" : "setdata")}"
+                        + $" ({TextureUpload.DirectUploads} direct, {TextureUpload.SetDataUploads} through SetData so far"
+                        + (TextureUpload.Unavailable.Length > 0 ? $"; direct path unavailable: {TextureUpload.Unavailable}" : "") + ")", LogLevel.Info);
+                });
             helper.ConsoleCommands.Add("radiance_sheetread",
                 "How a tilesheet is read back when the mod needs its pixels: one call for the whole sheet, or "
                 + "'strips' for the old loop of 512-row reads. The report's 'sheet:' rows are the comparison.",
@@ -1744,6 +1766,9 @@ namespace SDVRadiance
                     + $", zoom {Game1.options?.zoomLevel:0.00}, ui scale {Game1.options?.uiScale:0.00}"
                     + $", fullscreen={Game1.options?.fullscreen}");
                 Write($"gpu: {Game1.graphics?.GraphicsDevice?.Adapter?.Description}");
+                Write($"texture uploads: {(TextureUpload.Enabled ? "direct" : "setdata")}, {TextureUpload.DirectUploads} direct, "
+                    + $"{TextureUpload.SetDataUploads} through SetData"
+                    + (TextureUpload.Unavailable.Length > 0 ? $" (direct path unavailable: {TextureUpload.Unavailable})" : ""));
                 Write("");
                 DumpTile(Write, pipeline, config, arguments: null, includePalette: false);
                 Write("");

@@ -127,17 +127,19 @@ icon("lens", ((120, 132, 150), (70, 80, 96), (255, 255, 255)), [
 ])
 
 # 6. Smoothing - a pixel staircase with the smoothed diagonal skimming its corners,
-# which is literally what the Scale2x tab does to the art.
-icon("smoothing", ((152, 200, 132), (104, 152, 92), (86, 150, 200)), [
+# which is literally what the Scale2x tab does to the art. The diagonal is two pixels wide
+# and a deep blue: one pixel of a pale blue broke into dots on the cream menu and read as
+# nothing (15 Oct 2026).
+icon("smoothing", ((152, 200, 132), (104, 152, 92), (36, 96, 176)), [
     "................",
-    "..ooooooo.......",
-    "..o111113o......",
-    "..o11111o3......",
-    "..o11111o.3.....",
-    "..o11111oooo....",
-    "..o11111111o3...",
-    "..o11111111o.3..",
-    "..o11111111oooo.",
+    "..ooooooo3......",
+    "..o11111o33.....",
+    "..o11111o.33....",
+    "..o11111o..33...",
+    "..o11111oooo33..",
+    "..o11111111o.33.",
+    "..o11111111o..33",
+    "..o11111111oooo3",
     "..o11111111111o.",
     "..o11111111111o.",
     "..o11222222211o.",
@@ -177,7 +179,7 @@ icon("windows", ((150, 200, 236), (96, 150, 200), (228, 244, 255)), [
     "..o2o11311111o..",
     "..o2o13111111o..",
     "..o2o11111111o..",
-    "..o2ooooooooooo.",
+    "..o2oooooooooo..",
     "..o2o11111111o..",
     "..o2o11111111o..",
     "..o2o11111111o..",

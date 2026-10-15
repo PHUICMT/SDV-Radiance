@@ -26,6 +26,14 @@ fail() {
 step "no Thai in code"
 python tools/thaisweep.py src shaders tools || fail "Thai sweep"
 
+# The text lint is local-only (its word lists are the kind of text the public mirror refuses), so a
+# clone without it skips the step.
+if [ -f tools/lint-text.local.py ]; then
+    step "player-facing text reads like a person wrote it (English, Thai)"
+    python tools/lint-text.local.py i18n/default.json i18n/th.json --allow tools/lint-text-allow.local.txt --summary --fail \
+        || fail "text lint (python tools/lint-text.local.py i18n/default.json i18n/th.json for the lines)"
+fi
+
 step "one range per setting (Clamp, menu, tuner)"
 python tools/check-setting-ranges.py || fail "setting ranges"
 

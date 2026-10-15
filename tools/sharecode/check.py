@@ -53,7 +53,7 @@ CARRIED_BY_NO_CODE = {
 # The performance group. A look code leaves these behind; a whole-setup code carries them and the
 # person receiving one is shown them apart from the look, because this is the one group that can
 # make a game feel worse rather than look different.
-PERFORMANCE = {"LimitSamplerSlots", "RenderScale", "RenderScaleAuto", "RenderSharpness"}
+PERFORMANCE = {"LimitSamplerSlots", "RenderScale", "RenderScaleAuto", "RenderSharpness", "LighterSoftEffects"}
 
 # The colour tables a code names by their PLACE in this list rather than by their name, which is a
 # byte instead of a dozen. The list is therefore append-only forever: inserting a name in the middle

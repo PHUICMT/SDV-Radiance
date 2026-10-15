@@ -967,21 +967,25 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // where it was. The ratio is bounded because a saturated dark neighbour divided by its own
     // luma is a very large number - a pure blue pixel would multiply blue by nearly nine.
     //
-    // Not inside an [if]: a forced branch cannot hold a tex2D on this profile, because the
-    // sampler needs the screen gradients and those are only defined outside one. The switch
-    // is folded into the RADIUS instead - at zero all four taps land on the pixel already
-    // read into src, which is the cheapest read a texture unit can do, and the lerp below
-    // then returns exactly white. Off costs four cache hits and no branch at all.
-    float2 ring = (2.0 / TilesPerScreen) * step(0.001, ColourBleed);
-    float3 around = scene.rgb
-                  + tex2D(SourceSampler, clamp(uv + float2( ring.x, 0.0), 0.0, 1.0)).rgb
-                  + tex2D(SourceSampler, clamp(uv + float2(-ring.x, 0.0), 0.0, 1.0)).rgb
-                  + tex2D(SourceSampler, clamp(uv + float2(0.0,  ring.y), 0.0, 1.0)).rgb
-                  + tex2D(SourceSampler, clamp(uv + float2(0.0, -ring.y), 0.0, 1.0)).rgb;
-    around *= 0.2;
-    float aroundLuma = max(dot(around, float3(0.299, 0.587, 0.114)), 0.004);
-    float3 bleedHue = clamp(around / aroundLuma, 0.5, 1.8);
-    light *= lerp(float3(1.0, 1.0, 1.0), bleedHue, ColourBleed);
+    // Behind a branch on the dial, read with tex2Dlod: a forced branch cannot hold a plain tex2D
+    // on this profile (the sampler needs the screen gradients, which are only defined outside
+    // one), and tex2Dlod at level 0 needs none. Off is the shipped default, and at zero the
+    // lerp below returns exactly white whatever the ring holds, so skipping it changes nothing;
+    // it used to cost four reads a pixel on every frame anyway (15 Oct 2026).
+    [branch]
+    if (ColourBleed > 0.0)
+    {
+        float2 ring = (2.0 / TilesPerScreen) * step(0.001, ColourBleed);
+        float3 around = scene.rgb
+                      + tex2Dlod(SourceSampler, float4(clamp(uv + float2( ring.x, 0.0), 0.0, 1.0), 0.0, 0.0)).rgb
+                      + tex2Dlod(SourceSampler, float4(clamp(uv + float2(-ring.x, 0.0), 0.0, 1.0), 0.0, 0.0)).rgb
+                      + tex2Dlod(SourceSampler, float4(clamp(uv + float2(0.0,  ring.y), 0.0, 1.0), 0.0, 0.0)).rgb
+                      + tex2Dlod(SourceSampler, float4(clamp(uv + float2(0.0, -ring.y), 0.0, 1.0), 0.0, 0.0)).rgb;
+        around *= 0.2;
+        float aroundLuma = max(dot(around, float3(0.299, 0.587, 0.114)), 0.004);
+        float3 bleedHue = clamp(around / aroundLuma, 0.5, 1.8);
+        light *= lerp(float3(1.0, 1.0, 1.0), bleedHue, ColourBleed);
+    }
 
     // Added AFTER the field is neutralised, so a lamp's own colour survives at full strength.
     light += direct;
@@ -1393,19 +1397,15 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     [branch]
     if (SunShaftStrength > 0.004)
     {
-        float blocked = 0.0;
-        [unroll]
-        for (int shaftStep = 1; shaftStep <= 8; shaftStep++)
-        {
-            float2 sp = wt - SunShaftDirection * (shaftStep * 0.9 * SunShaftReach);
-            blocked = max(blocked, tex2Dlod(OccluderBaseSampler, float4((sp - OccluderOrigin) / OccluderMapSize, 0.0, 0.0)).a);
-        }
-        float visibility = 1.0 - blocked;
+        // The light added below is scaled by the edge and by the visibility, and the edge is
+        // read first because it is four reads against the march's eight: where nothing stands
+        // beside the ray (open field, open water) or the ray is wholly blocked (deep under a
+        // canopy), the shaft adds exactly zero, so the rest is skipped (15 Oct 2026).
         float2 sunPerpendicular = float2(-SunShaftDirection.y, SunShaftDirection.x);
         // Two pairs of side samples, near and far, so a shaft extends a few tiles out from the
         // canopy that makes it instead of hugging the trunk: the x4 shape probe showed correct
         // slant and placement but streaks a tile wide, pinned to the trees. All four ride the
-        // reach scale with the march above, so a short reach tightens the dapple to the canopy
+        // reach scale with the march below, so a short reach tightens the dapple to the canopy
         // and a long one lets it spill, instead of the two halves disagreeing about distance.
         float2 besideBase = wt - SunShaftDirection * (2.0 * SunShaftReach);
         float occlusionNear = max(
@@ -1415,45 +1415,65 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             tex2Dlod(OccluderBaseSampler, float4((besideBase + sunPerpendicular * (3.2 * SunShaftReach) - OccluderOrigin) / OccluderMapSize, 0.0, 0.0)).a,
             tex2Dlod(OccluderBaseSampler, float4((besideBase - sunPerpendicular * (3.2 * SunShaftReach) - OccluderOrigin) / OccluderMapSize, 0.0, 0.0)).a);
         float edge = saturate(max(occlusionNear, occlusionFar * 0.7) * 1.6);
-        float perpCoord = dot(wt, sunPerpendicular);
-        // One broad band with a whisper of a second: two deep frequencies multiplied together
-        // made patchy cells, and a ray that comes and goes along its own length reads as broken
-        // light, not as light through leaves. Reported as exactly that, with "is this on
-        // purpose". It was not.
-        float stripe = (0.55 + 0.45 * sin(perpCoord * 3.9 + SunShaftDrift))
-                     * (0.88 + 0.12 * sin(perpCoord * 9.1 - SunShaftDrift * 1.7));
-        // Haze (see the param note): mist scatters the light, so the crisp bands flatten toward
-        // an even glow and the flat air share grows. On a clear day (haze 0) this is the identity.
-        stripe = lerp(stripe, 0.85, SunShaftHaze * 0.6);
-        float shaftAir = 0.10 + 0.18 * SunShaftHaze;
-        // Cloud coupling (see the CloudMaskTexture note). Branchless on purpose: with the couple
-        // at zero both factors collapse to exactly 1 whatever the sampler holds, so a frame with
-        // no kept mask, or a stale one, costs two dead taps and changes nothing.
-        float2 cloudUv = uv + CloudMaskShift;
-        float cloudHere = tex2Dlod(CloudMaskSampler, float4(cloudUv, 0.0, 0.0)).r;
-        float2 cloudSunwardUv = cloudUv - (SunShaftDirection * 3.0) / TilesPerScreen;   // a few tiles toward the sun
-        float cloudSunward = tex2Dlod(CloudMaskSampler, float4(cloudSunwardUv, 0.0, 0.0)).r;
-        // Die under the cloud; blaze where clear ground sits just past a cloud's sunward edge -
-        // a gap in the clouds is the same shape as a gap in a canopy, and rays live at gaps.
-        float cloudGate = (1.0 - saturate(cloudHere * 1.2) * CloudCouple)
-                        * (1.0 + saturate(cloudSunward - cloudHere) * (1.8 * CloudCouple));
-        // Mostly src-modulated with a whisper of flat "air", same reasoning as the window beam.
-        // The 3.0 is the measured gain: at 1.0 the shafts were provably drawn and invisible.
         float onMap = step(0.0, wt.x) * step(0.0, wt.y) * step(wt.x, MapTiles.x) * step(wt.y, MapTiles.y);
-        visibility *= onMap;
-        litScene += (scene.rgb * 0.85 + shaftAir) * SunShaftColour * (visibility * edge * stripe * cloudGate * SunShaftStrength * 3.0);
-        // DUST MOTES. A shaft with nothing floating in it reads as a projection on the ground;
-        // what sells the air is the dust drifting through the beam, visible only while it is
-        // inside one. Two scales of the shared fbm multiplied and thresholded leave sparse
-        // specks - the product only clears the bar where both fields peak - drifting on the
-        // same slow clock as the stripes. Confined to the shaft (visibility AND edge, the same
-        // gates as the beam itself) so open ground and full shade stay clean, and weighted
-        // toward the bright bands, which is where lit dust would actually be.
-        float2 moteDrift = float2(SunShaftDrift * 0.06, SunShaftDrift * 0.11);
-        float moteFine   = tex2Dlod(NoiseSampler, float4(wt * 1.31 + moteDrift, 0.0, 0.0)).r;
-        float moteCoarse = tex2Dlod(NoiseSampler, float4(wt * 0.37 - moteDrift * 0.6, 0.0, 0.0)).r;
-        float motes = smoothstep(0.36, 0.47, moteFine * moteCoarse);
-        litScene += SunShaftColour * (motes * visibility * edge * (0.4 + 0.6 * stripe) * cloudGate * SunShaftStrength * 1.2);
+        float blocked = 1.0;
+        [branch]
+        if (edge * onMap > 0.0)
+        {
+            blocked = 0.0;
+            [unroll]
+            for (int shaftStep = 1; shaftStep <= 8; shaftStep++)
+            {
+                float2 sp = wt - SunShaftDirection * (shaftStep * 0.9 * SunShaftReach);
+                blocked = max(blocked, tex2Dlod(OccluderBaseSampler, float4((sp - OccluderOrigin) / OccluderMapSize, 0.0, 0.0)).a);
+            }
+        }
+        float visibility = (1.0 - blocked) * onMap;
+        [branch]
+        if (visibility * edge > 0.0)
+        {
+            float perpCoord = dot(wt, sunPerpendicular);
+            // One broad band with a whisper of a second: two deep frequencies multiplied together
+            // made patchy cells, and a ray that comes and goes along its own length reads as broken
+            // light, not as light through leaves. Reported as exactly that, with "is this on
+            // purpose". It was not.
+            float stripe = (0.55 + 0.45 * sin(perpCoord * 3.9 + SunShaftDrift))
+                         * (0.88 + 0.12 * sin(perpCoord * 9.1 - SunShaftDrift * 1.7));
+            // Haze (see the param note): mist scatters the light, so the crisp bands flatten toward
+            // an even glow and the flat air share grows. On a clear day (haze 0) this is the identity.
+            stripe = lerp(stripe, 0.85, SunShaftHaze * 0.6);
+            float shaftAir = 0.10 + 0.18 * SunShaftHaze;
+            // Cloud coupling (see the CloudMaskTexture note). With the couple at zero both factors
+            // collapse to exactly 1 whatever the sampler holds, so the two reads sit behind it.
+            float cloudGate = 1.0;
+            [branch]
+            if (CloudCouple > 0.0)
+            {
+                float2 cloudUv = uv + CloudMaskShift;
+                float cloudHere = tex2Dlod(CloudMaskSampler, float4(cloudUv, 0.0, 0.0)).r;
+                float2 cloudSunwardUv = cloudUv - (SunShaftDirection * 3.0) / TilesPerScreen;   // a few tiles toward the sun
+                float cloudSunward = tex2Dlod(CloudMaskSampler, float4(cloudSunwardUv, 0.0, 0.0)).r;
+                // Die under the cloud; blaze where clear ground sits just past a cloud's sunward edge -
+                // a gap in the clouds is the same shape as a gap in a canopy, and rays live at gaps.
+                cloudGate = (1.0 - saturate(cloudHere * 1.2) * CloudCouple)
+                          * (1.0 + saturate(cloudSunward - cloudHere) * (1.8 * CloudCouple));
+            }
+            // Mostly src-modulated with a whisper of flat "air", same reasoning as the window beam.
+            // The 3.0 is the measured gain: at 1.0 the shafts were provably drawn and invisible.
+            litScene += (scene.rgb * 0.85 + shaftAir) * SunShaftColour * (visibility * edge * stripe * cloudGate * SunShaftStrength * 3.0);
+            // DUST MOTES. A shaft with nothing floating in it reads as a projection on the ground;
+            // what sells the air is the dust drifting through the beam, visible only while it is
+            // inside one. Two scales of the shared fbm multiplied and thresholded leave sparse
+            // specks - the product only clears the bar where both fields peak - drifting on the
+            // same slow clock as the stripes. Confined to the shaft (visibility AND edge, the same
+            // gates as the beam itself) so open ground and full shade stay clean, and weighted
+            // toward the bright bands, which is where lit dust would actually be.
+            float2 moteDrift = float2(SunShaftDrift * 0.06, SunShaftDrift * 0.11);
+            float moteFine   = tex2Dlod(NoiseSampler, float4(wt * 1.31 + moteDrift, 0.0, 0.0)).r;
+            float moteCoarse = tex2Dlod(NoiseSampler, float4(wt * 0.37 - moteDrift * 0.6, 0.0, 0.0)).r;
+            float motes = smoothstep(0.36, 0.47, moteFine * moteCoarse);
+            litScene += SunShaftColour * (motes * visibility * edge * (0.4 + 0.6 * stripe) * cloudGate * SunShaftStrength * 1.2);
+        }
     }
 
     // Lamp shafts, gathered in the shadowed light loop. Mostly src-modulated with a whisper of

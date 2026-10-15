@@ -393,7 +393,7 @@ namespace SDVRadiance
                 kept.Texture?.Dispose();
                 kept.Texture = VramTally.Track(new Texture2D(device, width, height, false, SurfaceFormat.Color), "player shadow solid tiles");
             }
-            kept.Texture.SetData(_solidTilesPixels);
+            TextureUpload.SetData(kept.Texture, _solidTilesPixels, 0, _solidTilesPixels.Length);
             kept.Map = map;
             _solidTiles = kept.Texture;
         }

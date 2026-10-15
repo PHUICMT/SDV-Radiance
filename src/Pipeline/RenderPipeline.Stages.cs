@@ -44,6 +44,7 @@ namespace SDVRadiance
             var effect = _cloudShadow!;
             var halfScratchA = _halfResolutionScratchA!;
             var halfScratchB = _halfResolutionScratchB!;
+            var (cloudMaskA, cloudMaskB) = SoftEffectsLowered(config) ? QuarterScratch() : (halfScratchA, halfScratchB);
 
             // The hard straight seam reported after long sessions was a float-precision cliff:
             // Time (and so drift = Time*Speed) grows without bound as the session runs, and once
@@ -97,12 +98,12 @@ namespace SDVRadiance
             GetParam(effect, "UVScale")?.SetValue(NoiseUvScale());
             GetParam(effect, "NoiseTexture")?.SetValue(NoiseTex());
             effect.CurrentTechnique = effect.Techniques["Mask"];
-            Pass(spriteBatch, source, halfScratchA, effect);
+            Pass(spriteBatch, source, cloudMaskA, effect);
 
             // Pass 2/3: separable Gaussian blur -> soft, feathered penumbra edges.
             GetParam(effect, "TexelSize")?.SetValue(new Vector2(1f / halfScratchA.Width, 0f));
             effect.CurrentTechnique = effect.Techniques["BlurH"];
-            Pass(spriteBatch, halfScratchA, halfScratchB, effect);
+            Pass(spriteBatch, cloudMaskA, cloudMaskB, effect);
 
             // The last blur lands in the KEPT target, not the scratch one: god rays and bloom
             // rewrite the scratch buffers later this same frame, and the sun shafts need this
@@ -119,7 +120,7 @@ namespace SDVRadiance
             var keep = _cloudMaskKeep;
             GetParam(effect, "TexelSize")?.SetValue(new Vector2(0f, 1f / halfScratchB.Height));
             effect.CurrentTechnique = effect.Techniques["BlurV"];
-            Pass(spriteBatch, halfScratchB, keep, effect);
+            Pass(spriteBatch, cloudMaskB, keep, effect);
 
             // Pass 4: composite the blurred shadow onto the scene.
             float cloudOpacity = config.CloudShadowOpacity * _cloudDayFactor * _fadeCloud;
@@ -212,6 +213,7 @@ namespace SDVRadiance
             var bloom = _bloom!;
             var halfScratchA = _halfResolutionScratchA!;
             var halfScratchB = _halfResolutionScratchB!;
+            var (bloomA, bloomB) = SoftEffectsLowered(config) ? QuarterScratch() : (halfScratchA, halfScratchB);
             int width = destination.Width, height = destination.Height;
 
             // At night, bloom blooms more (lower threshold, a bit stronger) and turns warm so
@@ -221,20 +223,20 @@ namespace SDVRadiance
             GetParam(bloom, "Threshold")?.SetValue(MathHelper.Clamp(config.BloomThreshold - 0.08f * bloomNight, 0f, 1f));
             GetParam(bloom, "TexelSize")?.SetValue(new Vector2(1f / width, 1f / height));
             bloom.CurrentTechnique = bloom.Techniques["BrightPass"];
-            Pass(spriteBatch, source, halfScratchA, bloom);
+            Pass(spriteBatch, source, bloomA, bloom);
 
             GetParam(bloom, "TexelSize")?.SetValue(new Vector2(1f / halfScratchA.Width, 0f));
             bloom.CurrentTechnique = bloom.Techniques["BlurHorizontal"];
-            Pass(spriteBatch, halfScratchA, halfScratchB, bloom);
+            Pass(spriteBatch, bloomA, bloomB, bloom);
 
             GetParam(bloom, "TexelSize")?.SetValue(new Vector2(0f, 1f / halfScratchB.Height));
             bloom.CurrentTechnique = bloom.Techniques["BlurVertical"];
-            Pass(spriteBatch, halfScratchB, halfScratchA, bloom);
+            Pass(spriteBatch, bloomB, bloomA, bloom);
 
             GetParam(bloom, "Intensity")?.SetValue(config.BloomIntensity * (1f + 0.2f * bloomNight));
             GetParam(bloom, "EmissiveBoost")?.SetValue(MathHelper.Clamp(config.BloomEmissiveBoost, 0f, 1f));
             GetParam(bloom, "BloomWarm")?.SetValue(bloomNight);
-            GetParam(bloom, "BloomTexture")?.SetValue(halfScratchA);
+            GetParam(bloom, "BloomTexture")?.SetValue(bloomA);
             bloom.CurrentTechnique = bloom.Techniques["Composite"];
             DrawFull(spriteBatch, source, destination, bloom);
         }
@@ -337,15 +339,16 @@ namespace SDVRadiance
             var effect = _tiltShift!;
             var halfScratchA = _halfResolutionScratchA!;
             var halfScratchB = _halfResolutionScratchB!;
+            var (tiltA, tiltB) = SoftEffectsLowered(config) ? QuarterScratch() : (halfScratchA, halfScratchB);
 
             // blur at half-res: source(full) -> rtA (H) -> rtB (V)
             GetParam(effect, "TexelSize")?.SetValue(new Vector2(1f / halfScratchA.Width, 0f));
             effect.CurrentTechnique = effect.Techniques["BlurH"];
-            Pass(spriteBatch, source, halfScratchA, effect);
+            Pass(spriteBatch, source, tiltA, effect);
 
             GetParam(effect, "TexelSize")?.SetValue(new Vector2(0f, 1f / halfScratchB.Height));
             effect.CurrentTechnique = effect.Techniques["BlurV"];
-            Pass(spriteBatch, halfScratchA, halfScratchB, effect);
+            Pass(spriteBatch, tiltA, tiltB, effect);
 
             // composite sharp + blurred by vertical position.
             // Config stores intuitive "blur amount" (higher = more blur from that edge);
@@ -364,7 +367,7 @@ namespace SDVRadiance
             GetParam(effect, "Aspect")?.SetValue(destination.Height > 0 ? destination.Width / (float)destination.Height : 1f);
             GetParam(effect, "RadRadius")?.SetValue(MathHelper.Clamp(config.TiltShiftRadius, 0.05f, 0.9f));
             GetParam(effect, "Feather")?.SetValue(MathHelper.Clamp(config.TiltShiftFeather, 0f, 1f));
-            GetParam(effect, "BlurTexture")?.SetValue(halfScratchB);
+            GetParam(effect, "BlurTexture")?.SetValue(tiltB);
             effect.CurrentTechnique = effect.Techniques["Composite"];
             DrawFull(spriteBatch, source, destination, effect);
         }
@@ -753,7 +756,8 @@ namespace SDVRadiance
             LastMarchFullResolutionKept = marchFromTexture && config.LightShadowSharpEdges;
 
             effect.CurrentTechnique = effect.Techniques["FloodLight"];
-            DrawFloodInBands(spriteBatch, source, destination, effect);
+            if (!(SoftEffectsLowered(config) && DrawFloodAtHalf(spriteBatch, source, destination, effect)))
+                DrawFloodInBands(spriteBatch, source, destination, effect);
             // After the multiply, in the target it just wrote: a spark is what makes light, so
             // being darkened by the lightmap is exactly backwards for it.
             DrawEmissiveParticlesOnLighting(spriteBatch, destination, EmissiveParticleHost.Flood);
@@ -1787,6 +1791,14 @@ namespace SDVRadiance
             // The stars' own switch, eased so flipping it at night fades them rather than blinking.
             Approach(ref _waterStarsEase, config.WaterNightStars ? 1f : 0f, 0.08f);
             GetParam(effect, "NightStars")?.SetValue(_waterStarsEase);
+            // The slider eases too: each star fades in or out as its cell crosses the line, never
+            // blinks on as the dial moves.
+            Approach(ref _waterStarsAmountEase, MathHelper.Clamp(config.WaterNightStarsAmount, 0f, 3f), 0.08f);
+            // 18% of the cells hold a star at 1, at most 60%; the shader's ramp is a hundredth wide
+            // and ends on the line, so the floor sits a hundredth under it. Near 0 the ramp narrows
+            // with the share, so at 0 the floor is 1 and no cell holds a star at all.
+            float starShare = Math.Min(0.18f * _waterStarsAmountEase, 0.6f);
+            GetParam(effect, "NightStarsFloor")?.SetValue(1f - starShare - Math.Min(0.01f, starShare));
             GetParam(effect, "MoonGlow")?.SetValue(ShadowRenderer.MoonStrength());
             // Raindrop rings ease in rather than covering the surface the frame a rain
             // totem (or a weather mod) flips the flag.
@@ -1866,6 +1878,9 @@ namespace SDVRadiance
                 && (Game1.currentLocation?.IsOutdoors ?? false)
                 && !LocalSky.IsRaining && !LocalSky.IsSnowing && !LocalSky.IsLightning;
             double now = Determinism.Seconds;
+            // The player's pace: only the quiet gap between stars shrinks, so a burst still reads
+            // as a burst. A wait already counting down keeps its old length.
+            double frequency = MathHelper.Clamp(config.ShootingStarFrequency, 0.25f, 4f);
 
             for (int slot = 0; slot < MeteorSlots; slot++)
                 if (_meteors[slot].Active && now - _meteors[slot].StartedAt >= _meteors[slot].Seconds)
@@ -1884,7 +1899,7 @@ namespace SDVRadiance
                     MeteorRequests--;
                 }
                 if (_meteorNextAt < 0)
-                    _meteorNextAt = now + 8 + _meteorRandom.NextDouble() * 14;
+                    _meteorNextAt = now + (8 + _meteorRandom.NextDouble() * 14) / frequency;
                 if (now >= _meteorNextAt)
                 {
                     int slot = FreeMeteorSlot();
@@ -1900,7 +1915,7 @@ namespace SDVRadiance
                         _meteorBurstLeft = _meteorRandom.NextDouble() < 0.22 ? 1 + _meteorRandom.Next(2) : 0;
                         _meteorNextAt = now + (_meteorBurstLeft > 0
                             ? 0.2 + _meteorRandom.NextDouble() * 0.8
-                            : 22 + _meteorRandom.NextDouble() * 38);
+                            : (22 + _meteorRandom.NextDouble() * 38) / frequency);
                     }
                 }
             }

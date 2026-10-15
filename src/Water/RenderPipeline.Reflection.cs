@@ -174,6 +174,19 @@ namespace SDVRadiance
         /// pixels out for half of its cycle, which is what the first attempt did.
         /// </para></summary>
         private readonly Dictionary<(Type, Texture2D, Rectangle), float> _selfDrawnContactLift = [];
+        /// <summary>Per creature and sheet, the lift its last measured frame came out at, lent to a
+        /// frame of the same creature that has not been measured yet.
+        ///
+        /// <para>
+        /// Frames are measured one a tick and only once the animation reaches them, so a creature
+        /// that has just come into view has most of its frames unmeasured for its first seconds.
+        /// Each of those used to go back to the built stamp, which is predicted from the collision
+        /// box and sits somewhere else, so the reflection swapped between the two every time the
+        /// creature changed frame and settled only once every frame had been read: "it stutters at
+        /// first and then stops" (15 Oct 2026). Frames of one creature differ by the bob its art
+        /// has, one art row on SH's Wild Animals birds, so the borrowed answer is that close.
+        /// </para></summary>
+        private readonly Dictionary<(Type, Texture2D), float> _selfDrawnSheetLift = [];
         /// <summary>Per creature and sheet frame that last came out of its slot EMPTY, the tick
         /// before which it is not measured again.
         ///
@@ -666,6 +679,7 @@ namespace SDVRadiance
             else
             {
                 _selfDrawnContactLift[key] = lift;
+                _selfDrawnSheetLift[(pending.Kind, pending.Sheet)] = lift;
                 _selfDrawnEmptyRetryTick.Remove(key);
             }
             PhaseCost.NoteSince("mirror: creature measure read (on the tick)", readStart);
@@ -706,6 +720,11 @@ namespace SDVRadiance
                         && SharedTicks.Now < retryTick;
                     if (_selfDrawnMeasurePending == null && !waitingAfterEmpty)
                         QueueSelfDrawnMeasure(atlas, slot, key, contactRow);
+                    // Borrowed until its own answer is in, but not for a frame that has already
+                    // come out empty: that one may really be drawing nothing.
+                    if (!_selfDrawnEmptyRetryTick.ContainsKey(key)
+                        && _selfDrawnSheetLift.TryGetValue((kind, sheet), out float borrowed))
+                        lift = borrowed;
                 }
                 // Nothing drawn means nothing to turn over, so the built stamp has this body back
                 // for the frame: a reflection that is predicted is better than one that is missing.
@@ -723,18 +742,29 @@ namespace SDVRadiance
             }
         }
 
-        /// <summary>How solid a pixel has to be to count as the BODY rather than as the wake the
-        /// creature paints around itself.
+        /// <summary>How far under the most solid pixel in a slot a pixel may fall and still count
+        /// as the BODY rather than as the water the creature paints around itself, out of 32.
         ///
         /// <para>
-        /// A swimming duck draws its splash on the water under itself, and it draws it faint: the
-        /// body comes out at alpha 203 to 255 and the splash at 75. The splash also GROWS through
-        /// the animation, four rows at a time, and resets when the loop does - so a contact taken
-        /// from the lowest pixel of any kind sank a little further every frame and then jumped
-        /// back, which is exactly the reflection "drifting away and returning, over and over" that
-        /// was reported. The body is what meets the water; the splash already is the water.
+        /// A swimming creature draws its own wake on the water under it, and the wake changes
+        /// shape through the animation and resets when the loop does - so a contact taken from the
+        /// lowest pixel of any kind sank a little every frame and then jumped back, which is the
+        /// reflection "drifting away and returning, over and over" that was reported. The body is
+        /// what meets the water; the wake already is the water.
+        /// </para>
+        ///
+        /// <para>
+        /// The first rule was a fixed alpha of 128, which dropped the faint outer ripple (75) and
+        /// kept the waterline itself. SH's Wild Animals draws that line at 152, 203 and 235 under
+        /// every swimming duck, goose, pelican and seagull, in a different shape on each frame, so
+        /// the lowest "solid" row still wandered over three or four art rows and the reflection
+        /// jumped with it, worst when a bird dips its head to drink (reported 15 Oct 2026). The
+        /// body itself is drawn fully opaque. Counted over every frame of those five sheets, the
+        /// fixed rule put the bottom on rows 20 to 23 and this one on 19 or 20, the one-row bob the
+        /// art really has. Taken against the slot's own most solid pixel rather than against 255,
+        /// a creature drawn faint all over, a ghost or one fading in, still finds its body.
         /// </para></summary>
-        private const byte SelfDrawnBodyAlpha = 128;
+        private const int SelfDrawnBodyAlphaSlack = 1;
 
         /// <summary>The distance from a slot's contact row up to the lowest pixel of the BODY the
         /// creature drew there. NaN when the slot came out empty, which means nothing to mirror.</summary>
@@ -748,22 +778,22 @@ namespace SDVRadiance
                 // The slot alone, from the target it was copied into a frame ago: see
                 // _selfDrawnMeasureTarget for why the atlas itself must not be read, and why not now.
                 measureTarget.GetData(0, null, _selfDrawnSlotReadback, 0, count);
-                int faintest = -1;
+                int mostSolid = 0;
+                for (int i = 0; i < count; i++)
+                    mostSolid = Math.Max(mostSolid, _selfDrawnSlotReadback[i].A);
+                if (mostSolid <= 8)
+                    return float.NaN;
+                int bodyAlpha = mostSolid - mostSolid * SelfDrawnBodyAlphaSlack / 32;
                 for (int y = SelfDrawnSlotHeight - 1; y >= 0; y--)
                 {
                     int row = y * SelfDrawnSlotWidth;
                     for (int x = 0; x < SelfDrawnSlotWidth; x++)
                     {
-                        byte alpha = _selfDrawnSlotReadback[row + x].A;
-                        if (alpha >= SelfDrawnBodyAlpha)
+                        if (_selfDrawnSlotReadback[row + x].A >= bodyAlpha)
                             return contactRow - y;
-                        if (alpha > 8 && faintest < 0)
-                            faintest = y;
                     }
                 }
-                // A creature drawn faint all over - a ghost, a fading spirit - has no solid row to
-                // find, so its lowest pixel of any kind is its body after all.
-                return faintest >= 0 ? contactRow - faintest : float.NaN;
+                return float.NaN;
             }
             catch
             {

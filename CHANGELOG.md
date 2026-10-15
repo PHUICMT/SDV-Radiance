@@ -2,6 +2,91 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.3.3 - 2026-10-15
+
+### Added
+
+- **Two dials for the night water: how many stars, and how often a shooting star comes.** Stars on
+  the water goes from none to three times the usual scatter, and Shooting stars from a quarter of the
+  usual pace to four times it (about one a minute at 1). Both sit under their switches in F6 and
+  start at 1, which looks the same as before. Asked for by XLCCYSH000 on Nexus.
+
+- **Lighter soft effects, on by itself when the game slows down.** Clouds, bloom, the tilt-shift
+  blur and the lighting are soft by nature, so when the frame rate drops below the game's target they
+  are now worked out at a lower resolution first, before the effect resolution is touched. Side by
+  side in eight scenes the pictures could not be told apart. With the graphics card slowed to a weak
+  laptop's speed the effects took 30 to 60 percent less time. It works for every install, with or
+  without Automatic render scale. Choose Never, When slow or Always on the Performance tab of F6.
+
+### Fixed
+
+- **Bathhouse Hot Spring - Continued: the pools showed square patches.** Only the middle water tile
+  of that mod's art was marked as water, so the edges, the sparkle tiles and the fountain basin were
+  left flat and the pool came out as a grid. Every water pixel in its sheet is marked now, so all its
+  recolours get it too. Reported by MyLadySeven with screenshots.
+- **Hot Spring Farmcave: the pool showed square patches.** Only the tiles that are water from edge
+  to edge were marked as water, so every shore tile, the stepping stones and the cave mouth the
+  stream comes out of drew as square or flat patches. Their water pixels are marked now.
+- **Water drawn on a map's front layer could be left out in small pieces.** A front-layer tile with
+  only a little water on it (the tip of a cave mouth, say) was dropped as a whole and drew as a flat
+  patch. Its water pixels now count, the same way they already did on the buildings layer.
+
+- **Short freezes every few seconds on slower graphics cards.** Each time the mod sent fresh data to
+  the card (the water map, the lighting grids), the game stopped until the card had finished drawing
+  everything queued, which on a slow card took a tenth of a second or more, even standing still. The
+  data now goes up without that wait, and the picture is the same. With the card slowed to a weak
+  laptop's speed, frames over 50 ms went from 26-70 to 0-3 in the same 48 seconds. `radiance_upload setdata`
+  puts the old way back for comparison.
+
+- **F6: with a large interface scale, the line under the preset buttons ran into them.** The look
+  and performance presets and the benchmark buttons grow with the interface scale, but the row after
+  them moved down by a fixed amount, so its label sat on the buttons' lower edge. The gap now grows
+  with the buttons.
+
+- **Swimming birds from SH's Wild Animals: their reflection jumped down and back, worst while
+  drinking.** Those birds paint a waterline around themselves that changes shape every frame, and the
+  reflection was turned over on that line instead of on the bird, so it moved with every frame of
+  the animation. It now turns over on the bird's own body, which only bobs the one pixel the art does.
+
+### Changed
+
+- **Shorter, plainer setting descriptions in English and Thai.** About 380 tooltips and help lines
+  in the config menu and the F6 tuner were rewritten to say what the setting does and what 0 or off
+  means, without the long explanations. A player said the texts read as if a machine wrote them.
+  Setting names did not change.
+- **Performance and Low spec presets: the effects can now drop their resolution by themselves.**
+  Both presets now switch on automatic render scale, which only acts when the game cannot hold its
+  frame rate and gives the resolution back when it can. On a slow graphics card the render scale is
+  the largest saving there is, more than switching any single effect off.
+- **Low spec no longer switches the colour grade on, and switches cloud shadows off.** The grade
+  ships off and turning it on added a pass to the lightest preset; cloud shadows are four passes a
+  frame and ran at night too.
+- **Automatic render scale is on for new installs.** It only lowers the effect resolution when the
+  game cannot hold its frame rate, so a machine that keeps up sees no change. Existing settings keep
+  the value they already have. When lowering does not help (the slowdown comes from the processor or
+  another mod), it now waits longer before each new try, so the picture no longer goes soft for a
+  few seconds every minute on such a machine.
+- **A first install on built-in graphics starts on the Performance preset.** Intel graphics other
+  than the Arc cards, AMD's built-in Radeon chips, the Steam Deck and Apple M chips. Graphics cards
+  start on the full defaults as before, and settings that already exist are never touched.
+
+### For translators
+
+- About 380 `help.*`, `*.tooltip` and `tuner.desc.*` keys have new English wording with the same
+  meaning, so an existing translation is still correct. The rewording itself adds or removes no keys.
+- `config.renderscaleauto.tooltip`: the last sentence changed meaning. It used to say the setting
+  stops trying for a minute; it now waits a little longer before each new try.
+
+8 new keys for the night water dials: `tuner.`/`help.` for `shootingstarfrequency` and
+`waternightstarsamount`, and `config.weather.shootingstarfrequency`/`.waternightstarsamount`
+(`.name`/`.tooltip` each).
+
+9 new keys for Lighter soft effects: `config.lightersofteffects.name`/`.tooltip`,
+`tuner.lightersofteffects` and `.never`/`.whenslow`/`.always`, `help.lightersofteffects.never`/`.whenslow`/`.always`.
+
+`help.limitsamplerslots` and `config.lighting.shadowcache.tooltip`: reworded so the menu no longer
+speaks as the author ("on my PC", "tell me where"). The meaning is the same.
+
 ## 2.3.2 - 2026-10-11
 
 Bug fixes only.

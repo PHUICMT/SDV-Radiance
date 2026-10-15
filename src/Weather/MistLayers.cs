@@ -176,8 +176,7 @@ namespace SDVRadiance
             _drawingOurselves = true;
             try
             {
-                if (device != null)
-                    device.ModulationColour = new Color(ambient.X, ambient.Y, ambient.Z, 1f);
+                device?.ModulationColour = new Color(ambient.X, ambient.Y, ambient.Z, 1f);
                 foreach (Layer layer in screen.Waiting)
                 {
                     spriteBatch.Begin(SpriteSortMode.Texture, BlendState.AlphaBlend, SamplerState.PointClamp,
@@ -189,8 +188,7 @@ namespace SDVRadiance
             }
             finally
             {
-                if (device != null)
-                    device.ModulationColour = previousTint;
+                device?.ModulationColour = previousTint;
                 Game1.mapDisplayDevice.BeginScene(Game1.spriteBatch);
                 _drawingOurselves = false;
                 screen.Waiting.Clear();

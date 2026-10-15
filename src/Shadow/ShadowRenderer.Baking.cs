@@ -1179,7 +1179,7 @@ namespace SDVRadiance
                 }
             }
             // The gutter is written too, as clear ground, over whatever an earlier fill left there.
-            _stackedPoolPage.SetData(0, new Rectangle(place.X - StackedPoolGutter, place.Y - StackedPoolGutter, placedWidth, placedHeight),
+            TextureUpload.SetData(_stackedPoolPage, new Rectangle(place.X - StackedPoolGutter, place.Y - StackedPoolGutter, placedWidth, placedHeight),
                 data, 0, data.Length);
             return new StackedPool { Page = _stackedPoolPage, Place = place, Origin = new Vector2(width / 2f, height / 2f) };
         }

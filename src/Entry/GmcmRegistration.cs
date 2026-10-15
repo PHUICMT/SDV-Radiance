@@ -267,8 +267,12 @@ namespace SDVRadiance
                 () => translate("config.weather.aurorastrength.name"), () => translate("config.weather.aurorastrength.tooltip"), 0f, 2f, 0.1f);
             configMenu.AddBoolOption(manifest, () => config().ShootingStarsEnabled, value => config().ShootingStarsEnabled = value,
                 () => translate("config.weather.shootingstars.name"), () => translate("config.weather.shootingstars.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().ShootingStarFrequency, value => config().ShootingStarFrequency = value,
+                () => translate("config.weather.shootingstarfrequency.name"), () => translate("config.weather.shootingstarfrequency.tooltip"), 0.25f, 4f, 0.25f);
             configMenu.AddBoolOption(manifest, () => config().WaterNightStars, value => config().WaterNightStars = value,
                 () => translate("config.weather.waternightstars.name"), () => translate("config.weather.waternightstars.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().WaterNightStarsAmount, value => config().WaterNightStarsAmount = value,
+                () => translate("config.weather.waternightstarsamount.name"), () => translate("config.weather.waternightstarsamount.tooltip"), 0f, 3f, 0.25f);
             configMenu.AddBoolOption(manifest, () => config().GameWeatherPlainTint, value => config().GameWeatherPlainTint = value,
                 () => translate("config.weather.gameweatherplaintint.name"), () => translate("config.weather.gameweatherplaintint.tooltip"));
             configMenu.AddBoolOption(manifest, () => config().WindySpellsEnabled, value => config().WindySpellsEnabled = value,
@@ -972,6 +976,12 @@ namespace SDVRadiance
                 () => translate("config.renderscale.name"), () => translate("config.renderscale.tooltip"), 0.5f, 1f, 0.05f);
             configMenu.AddBoolOption(manifest, () => config().RenderScaleAuto, value => config().RenderScaleAuto = value,
                 () => translate("config.renderscaleauto.name"), () => translate("config.renderscaleauto.tooltip"));
+            configMenu.AddTextOption(manifest,
+                () => config().LighterSoftEffects.ToString(),
+                value => config().LighterSoftEffects = Enum.TryParse<LighterSoftEffects>(value, out var choice) ? choice : LighterSoftEffects.WhenSlow,
+                () => translate("config.lightersofteffects.name"), () => translate("config.lightersofteffects.tooltip"),
+                [nameof(LighterSoftEffects.Never), nameof(LighterSoftEffects.WhenSlow), nameof(LighterSoftEffects.Always)],
+                choice => translate($"tuner.lightersofteffects.{choice.ToLowerInvariant()}"));
             configMenu.AddNumberOption(manifest, () => config().RenderSharpness, value => config().RenderSharpness = value,
                 () => translate("config.rendersharpness.name"), () => translate("config.rendersharpness.tooltip"), 0f, 2f, 0.1f);
             configMenu.AddBoolOption(manifest, () => config().LimitSamplerSlots, value => config().LimitSamplerSlots = value,

@@ -84,7 +84,8 @@ namespace SDVRadiance
         }
 
         /// <summary>
-        /// A first install on a phone starts on the Low spec performance preset.
+        /// A first install on a phone starts on the Low spec performance preset, and one on built-in
+        /// graphics (see <see cref="GraphicsChip"/>) on Performance.
         /// </summary>
         /// <remarks>
         /// The defaults are a desktop's: the bounce-light grid, lamp shadow marches, object shadow
@@ -96,13 +97,26 @@ namespace SDVRadiance
         /// </remarks>
         private void StartPhonesLight(IModHelper helper)
         {
-            if (!SettingsBackup.FreshInstall || Constants.TargetPlatform != GamePlatform.Android)
+            if (!SettingsBackup.FreshInstall)
                 return;
-            _config.ApplyPerfPreset(PerfPreset.LowSpec);
+            if (Constants.TargetPlatform == GamePlatform.Android)
+            {
+                _config.ApplyPerfPreset(PerfPreset.LowSpec);
+                SettingsBackup.WriteConfig(helper, _config);
+                Monitor.Log("First start on a phone: the performance preset is set to Low spec, the lightest one. "
+                    + "Performance, Balanced and Quality are on the tuner's Performance tab if your phone can take more "
+                    + "(config menu: SDV-Radiance, Hotkeys & diagnostics, Open the Radiance tuner).",
+                    LogLevel.Info);
+                return;
+            }
+            string graphicsName = Game1.graphics?.GraphicsDevice?.Adapter?.Description ?? "";
+            if (!GraphicsChip.IsBuiltIn(graphicsName))
+                return;
+            _config.ApplyPerfPreset(PerfPreset.Performance);
             SettingsBackup.WriteConfig(helper, _config);
-            Monitor.Log("First start on a phone: the performance preset is set to Low spec, the lightest one. "
-                + "Performance, Balanced and Quality are on the tuner's Performance tab if your phone can take more "
-                + "(config menu: SDV-Radiance, Hotkeys & diagnostics, Open the Radiance tuner).",
+            Monitor.Log($"First start on built-in graphics ({graphicsName}): the performance preset is set to Performance, "
+                + "which also lets the effects drop their resolution by themselves when the game cannot keep up. "
+                + "Balanced and Quality are on the tuner's Performance tab (F6) if your machine can take more.",
                 LogLevel.Info);
         }
 

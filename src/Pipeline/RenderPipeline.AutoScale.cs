@@ -51,6 +51,7 @@ namespace SDVRadiance
         private const double AutoUnderSeconds = 10.0;   // comfortable this long before giving any of it back
         private const double AutoHoldSeconds = 3.0;     // after any change, before judging it
         private const double AutoBackoffSeconds = 60.0; // not trying again, after a step that did nothing
+        private const double AutoBackoffLongestSeconds = 600.0; // the stand-down doubles up to this
         private const double AutoOverBudget = 1.15;     // frame time above this multiple of the target is a miss
         private const double AutoUnderBudget = 1.02;    // at or under this, there is room to give quality back
 
@@ -75,10 +76,26 @@ namespace SDVRadiance
         /// </summary>
         private float _autoScale = 1f;
         private double _autoOverSeconds, _autoUnderSeconds, _autoHoldLeft, _autoBackoffLeft;
+        /// <summary>How long the next stand-down lasts. A machine bound by its CPU stays bound, and
+        /// a fixed minute meant it was handed a softer picture for a few seconds every minute, for
+        /// nothing: each useless step doubles the wait, and a step that helps resets it.</summary>
+        private double _autoBackoffNext = AutoBackoffSeconds;
         private long _autoLastStamp;
         private double _autoProbeBeforeMs;              // frame time before the step being judged
         private bool _autoProbePending;
         private int _autoStepsDown, _autoStepsUp, _autoStepsUndone;
+        /// <summary>The first step down, before any of the render scale: the soft effects at a lower
+        /// resolution (RenderPipeline.LowerRes.cs), which costs the picture nothing anybody has been
+        /// able to see. Given back last, after the render scale is home.</summary>
+        private bool _autoSoftEffectsLowered;
+        /// <summary>Whether the step being judged was that one, so a useless one is undone in kind.</summary>
+        private bool _autoLastStepSoft;
+        /// <summary>How many times longer the frame was before the soft step than after it, as last
+        /// measured. Giving the step back on comfort alone pumped: in the saloon on a slowed card
+        /// the frame went 20 ms to 13, ten comfortable seconds handed it back, the frame went to 20
+        /// again and the step was taken again, every twenty seconds or so (15 Oct 2026). It is
+        /// given back only when the frame it would cost still fits the budget. 1 until measured.</summary>
+        private double _autoSoftEffectsRatio = 1.0;
         private string _autoWhy = "not running";
 
         /// <summary>Seconds since this was last asked, with a load screen or an alt-tab clamped out.
@@ -101,9 +118,14 @@ namespace SDVRadiance
         /// <param name="ceiling">The player's own setting, already clamped. Never exceeded.</param>
         private float AutoRenderScale(ModConfig config, float ceiling)
         {
-            if (!config.RenderScaleAuto)
-            {
+            bool scaleSteers = config.RenderScaleAuto;
+            bool softSteers = config.LighterSoftEffects == LighterSoftEffects.WhenSlow;
+            if (!scaleSteers)
                 _autoScale = ceiling;
+            if (!softSteers)
+                _autoSoftEffectsLowered = false;
+            if (!scaleSteers && !softSteers)
+            {
                 _autoWhy = "off - the render scale is whatever you set it to";
                 return ceiling;
             }
@@ -163,11 +185,17 @@ namespace SDVRadiance
             {
                 _autoUnderSeconds = 0;
                 _autoOverSeconds += dt;
-                if (_autoOverSeconds >= AutoOverSeconds && _autoScale > AutoScaleFloor + 0.001f)
+                bool softStep = softSteers && !_autoSoftEffectsLowered;
+                bool scaleStep = scaleSteers && _autoScale > AutoScaleFloor + 0.001f;
+                if (_autoOverSeconds >= AutoOverSeconds && (softStep || scaleStep))
                 {
                     _autoProbeBeforeMs = ema;
                     _autoProbePending = true;
-                    _autoScale = Math.Max(AutoScaleFloor, _autoScale - AutoScaleStep);
+                    _autoLastStepSoft = softStep;
+                    if (softStep)
+                        _autoSoftEffectsLowered = true;
+                    else
+                        _autoScale = Math.Max(AutoScaleFloor, _autoScale - AutoScaleStep);
                     _autoOverSeconds = 0;
                     _autoHoldLeft = AutoHoldSeconds;
                     _autoStepsDown++;
@@ -177,9 +205,15 @@ namespace SDVRadiance
             {
                 _autoOverSeconds = 0;
                 _autoUnderSeconds += dt;
-                if (_autoUnderSeconds >= AutoUnderSeconds && _autoScale < ceiling - 0.001f)
+                bool scaleBack = scaleSteers && _autoScale < ceiling - 0.001f;
+                bool softBack = !scaleBack && _autoSoftEffectsLowered
+                    && ema * _autoSoftEffectsRatio <= budget * AutoUnderBudget;
+                if (_autoUnderSeconds >= AutoUnderSeconds && (scaleBack || softBack))
                 {
-                    _autoScale = Math.Min(ceiling, _autoScale + AutoScaleStep);
+                    if (scaleBack)
+                        _autoScale = Math.Min(ceiling, _autoScale + AutoScaleStep);
+                    else
+                        _autoSoftEffectsLowered = false;
                     _autoUnderSeconds = 0;
                     _autoHoldLeft = AutoHoldSeconds;
                     _autoProbePending = false;      // giving quality back is not an experiment
@@ -195,7 +229,8 @@ namespace SDVRadiance
                 _autoUnderSeconds = Math.Max(0, _autoUnderSeconds - dt);
             }
 
-            _autoWhy = $"at {_autoScale:0.00} of {ceiling:0.00} - frame {ema:0.0} ms against a {budget:0.0} ms budget";
+            _autoWhy = $"at {_autoScale:0.00} of {ceiling:0.00}, soft effects {(_autoSoftEffectsLowered ? "lighter" : "full")}"
+                     + $" - frame {ema:0.0} ms against a {budget:0.0} ms budget";
             return _autoScale;
         }
 
@@ -209,10 +244,20 @@ namespace SDVRadiance
             _autoProbePending = false;
             if (ema > _autoProbeBeforeMs * 0.98)
             {
-                _autoScale = Math.Min(ceiling, _autoScale + AutoScaleStep);
-                _autoBackoffLeft = AutoBackoffSeconds;
+                if (_autoLastStepSoft)
+                    _autoSoftEffectsLowered = false;
+                else
+                    _autoScale = Math.Min(ceiling, _autoScale + AutoScaleStep);
+                _autoBackoffLeft = _autoBackoffNext;
+                _autoBackoffNext = Math.Min(_autoBackoffNext * 2, AutoBackoffLongestSeconds);
                 _autoStepsUndone++;
                 _autoOverSeconds = _autoUnderSeconds = 0;
+            }
+            else
+            {
+                _autoBackoffNext = AutoBackoffSeconds;
+                if (_autoLastStepSoft && ema > 0)
+                    _autoSoftEffectsRatio = Math.Clamp(_autoProbeBeforeMs / ema, 1.0, 4.0);
             }
         }
 

@@ -155,7 +155,7 @@ namespace SDVRadiance
             public Vector3 ExposureEase = Vector3.One;
             public float RoomSaturationEase = 1f;
             public float PaneDaylightEase, WindowDaylightEase, WindowRoomLightEase;
-            public float ShimmerEase, RainRingsEase, WaterStarsEase, SparkleDayEase, SparkleNightEase;
+            public float ShimmerEase, RainRingsEase, WaterStarsEase, WaterStarsAmountEase, SparkleDayEase, SparkleNightEase;
             public float FadeWet;
 
             // ---- the sprite relief's normal buffer ----
@@ -534,6 +534,7 @@ namespace SDVRadiance
         private ref float _shimmerEase => ref _screen.ShimmerEase;
         private ref float _rainRingsEase => ref _screen.RainRingsEase;
         private ref float _waterStarsEase => ref _screen.WaterStarsEase;
+        private ref float _waterStarsAmountEase => ref _screen.WaterStarsAmountEase;
         private ref float _sparkleDayEase => ref _screen.SparkleDayEase;
         private ref float _sparkleNightEase => ref _screen.SparkleNightEase;
         private ref float _fadeWet => ref _screen.FadeWet;

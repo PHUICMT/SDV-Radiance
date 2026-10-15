@@ -56,22 +56,22 @@ namespace SDVRadiance
                 {
                     case 0:
                         TextureDoubleBuffer.EnsureSpare(_device, ref _waterMaskSpare, pw, ph, SurfaceFormat.Color, "water mask");
-                        _waterMaskSpare!.SetData(_waterMaskPixels!, 0, pcount);
+                        TextureUpload.SetData(_waterMaskSpare!, _waterMaskPixels!, 0, pcount);
                         break;
                     case 1:
                         if (_maskScratch.PlungeChurnPixels != null)
                         {
                             TextureDoubleBuffer.EnsureSpare(_device, ref _waterPlungeChurnSpare, pw, ph, SurfaceFormat.Color, null);
-                            _waterPlungeChurnSpare!.SetData(_maskScratch.PlungeChurnPixels, 0, pcount * FallDistanceBytesPerTexel);
+                            TextureUpload.SetData(_waterPlungeChurnSpare!, _maskScratch.PlungeChurnPixels, 0, pcount * FallDistanceBytesPerTexel);
                         }
                         break;
                     default:
                         TextureDoubleBuffer.EnsureSpare(_device, ref _waterSignedDistanceSpare, pw, ph, SurfaceFormat.Alpha8, null);
-                        _waterSignedDistanceSpare!.SetData(_maskScratch.WaterSignedDistancePixels!, 0, pcount);
+                        TextureUpload.SetData(_waterSignedDistanceSpare!, _maskScratch.WaterSignedDistancePixels!, 0, pcount);
                         if (_maskScratch.RealShoreDistancePixels != null)
                         {
                             TextureDoubleBuffer.EnsureSpare(_device, ref _waterRealShoreDistanceSpare, pw, ph, SurfaceFormat.Alpha8, null);
-                            _waterRealShoreDistanceSpare!.SetData(_maskScratch.RealShoreDistancePixels, 0, pcount);
+                            TextureUpload.SetData(_waterRealShoreDistanceSpare!, _maskScratch.RealShoreDistancePixels, 0, pcount);
                         }
                         break;
                 }
