@@ -372,6 +372,25 @@ namespace SDVRadiance
             // A whole sheet is replaced, never merged: two files describing one sheet would
             // otherwise blend a stale pass into the current one depending on directory order.
             string key = NormalizeSheet(name);
+            // ...except a language copy of a sheet from the SAME file. "bathhouse_tiles.es-ES" and
+            // "bathhouse_tiles" both come down to one key, and whichever came second replaced the
+            // other: the Spanish copy's 15 tiles took the place of the 32, the pool's own water
+            // tile among the lost, and the bath house pool showed water only on its few bubbling
+            // tiles, as squares (found 16 Oct 2026). Within one file they are merged, the
+            // untagged sheet winning any tile both describe.
+            if (_tilesBySheet.TryGetValue(key, out var same) && _sourceBySheet.TryGetValue(key, out string? sameSource)
+                && sameSource == sourceName)
+            {
+                bool incomingIsTheBase = string.Equals(NormalizeSheetKeepingLocale(name), key, StringComparison.OrdinalIgnoreCase);
+                foreach (var (index, bytes) in map)
+                    if (incomingIsTheBase || !same.ContainsKey(index))
+                    {
+                        if (!same.ContainsKey(index))
+                            TileCount++;
+                        same[index] = bytes;
+                    }
+                return;
+            }
             if (_tilesBySheet.TryGetValue(key, out var prev))
             {
                 TileCount -= prev.Count;
@@ -437,6 +456,16 @@ namespace SDVRadiance
         /// for the town bus on 21 Sep 2026, and the same fault as the beveled fountain tiles of
         /// 30 Aug 2026. Only a tail shaped like a language tag goes ("zh", "zh-CN"), because art
         /// is allowed a dot in its name.</summary>
+        /// <summary>The sheet name as <see cref="NormalizeSheet"/> gives it, with any language tag left on.</summary>
+        private static string NormalizeSheetKeepingLocale(string imageSource)
+        {
+            string name = imageSource.Replace('\\', '/');
+            int slash = name.LastIndexOf('/');
+            if (slash >= 0)
+                name = name[(slash + 1)..];
+            return name.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? name[..^4] : name;
+        }
+
         internal static string WithoutLocaleSuffix(string name)
         {
             int dot = name.LastIndexOf('.');
@@ -486,8 +515,19 @@ namespace SDVRadiance
                         tiles++;
                     }
                 }
-                if (byTile.Count > 0)
-                    _artBySheet[NormalizeSheet(sheet.Name)] = byTile;
+                if (byTile.Count == 0)
+                    continue;
+                // A language copy of a sheet ("bathhouse_tiles.es-ES") shares its key with the
+                // sheet itself; its fingerprints are added to the tile's list, not put in its place
+                // (see the same merge for the labels above).
+                string sheetKey = NormalizeSheet(sheet.Name);
+                if (_artBySheet.TryGetValue(sheetKey, out Dictionary<int, ulong[]>? already))
+                {
+                    foreach (var (index, prints) in byTile)
+                        already[index] = already.TryGetValue(index, out ulong[]? had) ? [.. had.Union(prints)] : prints;
+                }
+                else
+                    _artBySheet[sheetKey] = byTile;
             }
             monitor.Log($"Art fingerprints loaded for {tiles} tiles across {_artBySheet.Count} sheets.", LogLevel.Trace);
         }

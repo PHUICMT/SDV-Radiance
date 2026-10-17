@@ -816,6 +816,9 @@ namespace SDVRadiance
             }
         }
 
+        /// <summary>The season the per-cell map answers were worked out in (see OnUpdateTicked).</summary>
+        private static Season _seasonOfTheMapAnswers;
+
         private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
         {
             // Timed because an input complaint has to be answerable with a number: how many updates
@@ -826,6 +829,16 @@ namespace SDVRadiance
             SharedTicks.NoteHostTick();
             Determinism.HoldGameClock();
             Determinism.FollowTheGamesTimeStep();
+            // A season changed without a new day (a mod, or the debug season command) swaps every
+            // seasonal tilesheet while the maps stay the same objects, and DayStarted, which
+            // forgets the per-cell neighbourhoods, never fires: the smoothed ground kept reading
+            // its edges from the old season's art and drew a line round every tile (found 16 Oct
+            // 2026, summer grass edges round winter snow until the map was entered again).
+            if (Game1.season != _seasonOfTheMapAnswers)
+            {
+                _seasonOfTheMapAnswers = Game1.season;
+                MapTileNeighbours.ForgetMapAnswers();
+            }
             // The entity mirror's slot readback, on the tick and not in the draw. Read mid-draw it
             // waited for everything the card had queued, one frame late or two: an 8 to 14 ms
             // frame per new body on the pier with twelve ducks. Here the last frame has been

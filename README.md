@@ -10,6 +10,7 @@
 **Framework:** SMAPI 4.x · MonoGame · HLSL
 **License:** MIT
 **Download:** [Nexus Mods](https://www.nexusmods.com/stardewvalley/mods/49397)
+**Website:** [radiance.phu-space.com](https://radiance.phu-space.com), clips of every effect and what's coming next
 
 <p align="center">
 <a href="https://ko-fi.com/phuicmt"><img src="https://phuicmt.github.io/SDV-Radiance-media/buttons/kofi.png" alt="Buy me a coffee on Ko-fi" height="48"></a>&nbsp;&nbsp;

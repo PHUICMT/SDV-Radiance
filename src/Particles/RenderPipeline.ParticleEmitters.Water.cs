@@ -336,6 +336,9 @@ namespace SDVRadiance
         private readonly List<Vector2> _chimneyTops = [];
         /// <summary>How many chimneys the scan found, for the report.</summary>
         internal int ChimneysFound => _chimneyTops.Count;
+        /// <summary>Where each chimney's heat starts, in tiles, for the report: a shimmer on the
+        /// wrong part of a roof is answered by comparing this with the stack in a screenshot.</summary>
+        internal string ChimneyTilesText => string.Join(" ", _chimneyTops.ConvertAll(top => $"({top.X / 64f:0.0},{top.Y / 64f:0.0})"));
 
         /// <summary>
         /// The chimneys on screen: hot air over each one, and after dark a spark or two riding it.
@@ -345,10 +348,17 @@ namespace SDVRadiance
         /// paint, and the shimmer is what says the thing under it is burning.</para>
         ///
         /// <para>The position comes from the building's own data. Every building that has a
-        /// chimney publishes it as ChimneyPosition, an offset in world pixels from the building's
-        /// top left corner, and a building that does not publish one has no chimney; that is the
-        /// same answer the game gives itself, so a modded building with a stack gets this for
-        /// free and one without never does.</para>
+        /// chimney publishes it as ChimneyPosition, and a building that does not publish one has
+        /// no chimney; that is the same answer the game gives itself, so a modded building with a
+        /// stack gets this for free and one without never does. The offset is in pixels of the
+        /// building's ART, counted from the top of the picture as drawn (Building.Update, where
+        /// the game puts its smoke), and a farmhouse that has been upgraded reads a later
+        /// ChimneyPosition2 or 3 instead. Read as world pixels from the building's top left tile,
+        /// the shimmer sat a quarter of the way along on the roof of an upgraded farmhouse,
+        /// nowhere near the stack (reported with a picture, 15 Oct 2026).</para>
+        ///
+        /// <para>And only while the game's own smoke is coming out, which is while the fireplace
+        /// inside is lit: hot air over a cold chimney is a shimmer with nothing under it.</para>
         /// </summary>
         private void ScanChimneys(GameLocation? location, bool withHeat, int firstTileX, int firstTileY, int columns, int rows)
         {
@@ -361,9 +371,16 @@ namespace SDVRadiance
                 // of a building site reads as a ghost of the house that is coming.
                 if (building.isUnderConstruction())
                     continue;
-                if (!TryReadChimneyOffset(building, out Vector2 offset))
+                if (!TryReadChimneyOffset(building, out Vector2 chimney))
                     continue;
-                var top = new Vector2(building.tileX.Value * 64f + offset.X, building.tileY.Value * 64f + offset.Y);
+                GameLocation? indoors = building.GetIndoors();
+                if (indoors == null || !indoors.hasActiveFireplace())
+                    continue;
+                Rectangle art = building.getSourceRect();
+                Vector2 drawOffset = (building.GetData()?.DrawOffset ?? Vector2.Zero) * 4f;
+                var artTop = new Vector2(building.tileX.Value * 64f,
+                    building.tileY.Value * 64f + building.tilesHigh.Value * 64f - art.Height * 4f) + drawOffset;
+                Vector2 top = artTop + chimney * 4f + ChimneyMouthFromOffset;
                 _chimneyTops.Add(top);
                 // The air right over the mouth, and the cell above that: heat rises, and one cell
                 // alone reads as a smudge sitting on the roof rather than as a column leaving it.
@@ -379,13 +396,29 @@ namespace SDVRadiance
             }
         }
 
-        /// <summary>The building's chimney offset, in world pixels from its top left corner, or
-        /// false if it has no chimney. Parsed rather than read off the building, because the
-        /// building keeps its own copy where nothing outside the game can reach it.</summary>
+        /// <summary>From the published offset to the middle of the mouth, in world pixels: the
+        /// game puts its 20-pixel puff's corner at (-8, -12) from the offset, so this is the
+        /// middle of the puff as it leaves.</summary>
+        private static readonly Vector2 ChimneyMouthFromOffset = new(2f, -2f);
+
+        /// <summary>The building's chimney offset, in pixels of its art from the top left of the
+        /// picture, or false if it has no chimney. Parsed rather than read off the building,
+        /// because the building keeps its own copy where nothing outside the game can reach it,
+        /// and parsed the way the game parses it: an upgraded farmhouse takes the last of
+        /// ChimneyPosition2, 3 and so on up to its level.</summary>
         private static bool TryReadChimneyOffset(StardewValley.Buildings.Building building, out Vector2 offset)
         {
             offset = Vector2.Zero;
             string? published = building.GetMetadata("ChimneyPosition");
+            if (building.GetIndoors() is StardewValley.Locations.FarmHouse farmHouse)
+            {
+                for (int level = 1; level <= farmHouse.upgradeLevel; level++)
+                {
+                    string? upgraded = building.GetMetadata("ChimneyPosition" + (level + 1));
+                    if (!string.IsNullOrWhiteSpace(upgraded))
+                        published = upgraded;
+                }
+            }
             if (string.IsNullOrWhiteSpace(published))
                 return false;
             string[] parts = published.Split(' ', StringSplitOptions.RemoveEmptyEntries);

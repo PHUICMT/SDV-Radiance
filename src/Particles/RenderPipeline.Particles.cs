@@ -349,7 +349,7 @@ namespace SDVRadiance
                  + $"mistFeet={_mistFeet.Count}{MistFeetTiles()} steamTiles={_steamTiles.Count} lavaTiles={_lavaTiles.Count} "
                  + $"fireflies={(_firefliesFlying ? "flying" : "not tonight")} "
                  + $"blossom={(_blossomFalling ? "falling" : "not today")} "
-                 + $"ringSparkles={(_ringSparkling ? "on" : "no ring")} footDustLifted={_footDustPuffs} onGround={GroundParticlesDrawn} glowLights={ParticleGlowLights} (strongest weight {ParticleGlowStrongestWeight:0.0} opening {ParticleGlowStrongestAmount:0.000}) chimneys={ChimneysFound} festiveBulbs={ParticleFestiveLightsLit} carried[{ParticleCarriedFlame}] "
+                 + $"ringSparkles={(_ringSparkling ? "on" : "no ring")} footDustLifted={_footDustPuffs} onGround={GroundParticlesDrawn} glowLights={ParticleGlowLights} (strongest weight {ParticleGlowStrongestWeight:0.0} opening {ParticleGlowStrongestAmount:0.000}) chimneys={ChimneysFound} {ChimneyTilesText} festiveBulbs={ParticleFestiveLightsLit} carried[{ParticleCarriedFlame}] "
                  + $"emissiveHost={host} test={(_particles.TestFountainRunning ? "running" : "off")}";
         }
     }

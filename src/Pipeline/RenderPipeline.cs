@@ -104,7 +104,7 @@ namespace SDVRadiance
             if (_fallDistanceFarTexture == null || _fallDistanceFarTexture.IsDisposed)
             {
                 _fallDistanceFarTexture = new Texture2D(_device, 1, 1, false, SurfaceFormat.Color);
-                _fallDistanceFarTexture.SetData([new Color(255, 255, 0, 255)]);
+                _fallDistanceFarTexture.SetData([new Color(255, 255, 255, 255)]);
             }
             return _fallDistanceFarTexture;
         }

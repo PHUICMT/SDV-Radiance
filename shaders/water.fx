@@ -72,7 +72,8 @@ sampler2D SdfSampler = sampler_state
 // Where this water stands to a waterfall, measured by the mask build. Red: how far below a
 // falling face, 0 right under the foam at the foot and 1 six tiles away or nowhere near one.
 // Green: how far above the face in this pixel's own column, 0 on the lip and 1 two tiles up
-// or with no fall beneath. Linear, because both are distances.
+// or with no fall beneath. Blue: how far down its own face a falling pixel sits, 0 on the lip
+// and 1 two tiles down or off any face. Linear, because all three are distances.
 texture PlungeChurnTexture;
 sampler2D PlungeChurnSampler = sampler_state
 {
@@ -1518,11 +1519,15 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         float lipHold = 1.0;
         if (ReflectionModel > 0.5)
         {
-            float2 fallDistance = tex2D(PlungeChurnSampler, maskUV).rg;
+            float3 fallDistance = tex2D(PlungeChurnSampler, maskUV).rgb;
             float fallTiles = fallDistance.r * 6.0;
             churn = (1.0 - smoothstep(0.0, max(0.25, ReflectionPlungeReach), fallTiles)) * ReflectionPlungeChurn;
             float lipTiles = fallDistance.g * 2.0;
             lipHold = smoothstep(0.0, max(0.02, ReflectionLipFade), lipTiles);
+            // The face is churned too, but it comes in down the face over the same stretch the
+            // mirror goes out over above it, so the two meet softly at the lip.
+            float downFaceTiles = fallDistance.b * 2.0;
+            churn *= smoothstep(0.0, max(0.02, ReflectionLipFade), downFaceTiles);
         }
         float mirrorness = found * (1.0 - churn) * lipHold;
         float3 reflectionColour = lerp(sheenColour, mirrorColour, mirrorness);

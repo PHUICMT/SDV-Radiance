@@ -2,6 +2,44 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.3.4 - 2026-10-17
+
+### Fixed
+
+- **Chimney heat shimmer sat on the roof instead of over the chimney.** The chimney position a
+  building publishes is counted in pixels of its picture from the top of the drawing, and an
+  upgraded farmhouse has its own, but the mod read it as a distance from the corner of the
+  building's base. The shimmer and the night sparks now leave the stack, the same spot as the
+  game's own smoke, and only while that smoke is coming out. Reported with a screenshot.
+
+- **A rock crab hiding in the mines gave itself away with a shadow.** The rocks around it cast
+  none, so the one rock with a shadow was the crab. A crab keeps no shadow while it sits shut, and
+  its shadow fades in as it opens and walks. The same goes for the lava, iridium and truffle crabs
+  and the volcano's False Magma Cap. Reported by asmoranomar on Nexus.
+
+- **Switching the mod off while it rained by the water left no rain at all.** Near water the game's
+  rain is drawn after the water so it does not ripple, and switching the mod off left it waiting
+  for that step. The game's own rain now comes back the moment the mod is off.
+
+- **Smooth art: a line round every ground tile after the season changed mid-day.** A mod or the
+  debug command that changes the season without a new day swaps the ground art, and the smoothing
+  kept reading tile edges from the old season. It now starts over when the season changes.
+
+- **The bath house pool showed water only on its bubbling tiles, as squares.** The labels carry a
+  Spanish copy of the bath house sheet beside the sheet itself, and the copy, with half the tiles,
+  took the place of the full one, the pool's own water tile among the ones lost. The two are now
+  merged, and the whole pool is water again.
+
+- **The water above a waterfall turned pale on a straight line across the stream.** The white
+  glints painted on the water beside a fall were read as tiny waterfalls, and each put the pale
+  foam of a fall's foot under itself, a tile and a half wide. Glints no longer count as falling
+  water, and the foam on the falls themselves now comes in over the same stretch the reflection
+  fades out over above the edge (Fade before the lip in F6), so the two meet softly.
+
+### For translators
+
+- No keys added, removed or changed in meaning.
+
 ## 2.3.3 - 2026-10-15
 
 ### Added

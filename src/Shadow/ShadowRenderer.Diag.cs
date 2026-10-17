@@ -226,6 +226,7 @@ namespace SDVRadiance
                     : ShadowHiddenFor(npc) ? "SKIP HideShadow"
                     : npc.swimming.Value ? "SKIP swimming"
                     : npc.Sprite?.Texture == null ? "SKIP no sprite"
+                    : DisguiseShown(npc) <= 0f ? "SKIP disguised as a rock"
                     : IsSeated(npc) ? "contact pool only (seated)"
                     : "CASTS";
                 // The numbers behind the anchor, so a shadow that sits away from its owner can be

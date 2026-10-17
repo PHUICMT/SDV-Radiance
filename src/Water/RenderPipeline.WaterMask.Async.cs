@@ -1791,7 +1791,7 @@ namespace SDVRadiance
         private const int LipApproachRangeTexels = 2 * MaskTexelsPerTile;
         /// <summary>How far to either side of a texel the nearest falling face is looked for.</summary>
         private const int PlungeChurnSideTexels = 24;
-        /// <summary>Bytes per texel of the fall-distance texture (Color: red below, green above).</summary>
+        /// <summary>Bytes per texel of the fall-distance texture (Color: red below, green above, blue down the face).</summary>
         private const int FallDistanceBytesPerTexel = 4;
 
         /// <summary>Pass E2 - how far below, and how far above, a falling face each water texel sits.</summary>
@@ -1801,10 +1801,14 @@ namespace SDVRadiance
             // before the edge rather than on the one texel where the face begins. The shader
             // cannot find the fall from a pixel (the face is above or below it, out of any single
             // tap's reach), so both distances are measured here, once per rebuild, and handed
-            // over as two bytes per texel: red is the distance BELOW the nearest face, 0 right
+            // over as three bytes per texel: red is the distance BELOW the nearest face, 0 right
             // under the foam and 255 six tiles away or nowhere near a fall; green is the distance
             // ABOVE the face in this texel's own column, 0 on the lip and 255 two tiles up or
-            // with no fall beneath.
+            // with no fall beneath. Blue is the third side of the lip: how far down its own face
+            // a falling texel sits, 0 on the lip's first row and 255 two tiles down or off any
+            // face. The face is churned white from its first row, so without it the mirror
+            // faded out above the lip and the churn came in at full strength below it, and the
+            // two met on a straight line along the tile row where the face begins.
             //
             // Down each column, count the rows since the last falling texel above, so only water
             // BELOW a fall is reached for the red byte; up each column, the rows since the last
@@ -1834,16 +1838,30 @@ namespace SDVRadiance
                 _maskScratch.PlungeRowsSinceFall = new int[texelCount];
             int[] rowsSinceFall = _maskScratch.PlungeRowsSinceFall;
             const int Far = PlungeChurnRangeTexels + 1;
+            Span<bool> columnFalling = maskHeight <= 1024 ? stackalloc bool[maskHeight] : new bool[maskHeight];
             for (int x = 0; x < maskWidth; x++)
             {
-                int rows = Far;
                 for (int y = 0; y < maskHeight; y++)
                 {
                     int tileIdx = (y / Texels) * tilesWide + (x / Texels);
                     bool[]? flowBits2 = _maskScratch.TileFlowBits![tileIdx];
-                    bool falling = flowBits2 != null ? flowBits2[(y % Texels) * Texels + (x % Texels)] : _maskScratch.TileFlowFlags![tileIdx];
+                    columnFalling[y] = flowBits2 != null ? flowBits2[(y % Texels) * Texels + (x % Texels)] : _maskScratch.TileFlowFlags![tileIdx];
+                }
+                DropFallingSpecks(columnFalling);
+                int rows = Far;
+                // A face already falling at the window's top edge began above it, so it counts
+                // as well down its own face rather than starting a lip on the window edge.
+                int rowsDownFace = LipApproachRangeTexels;
+                for (int y = 0; y < maskHeight; y++)
+                {
+                    bool falling = columnFalling[y];
+                    int texelIndex = y * maskWidth + x;
+                    rowsDownFace = !falling ? 0 : rows == 0 || y == 0 ? Math.Min(LipApproachRangeTexels, rowsDownFace + 1) : 0;
                     rows = falling ? 0 : Math.Min(Far, rows + 1);
-                    rowsSinceFall[y * maskWidth + x] = rows;
+                    rowsSinceFall[texelIndex] = rows;
+                    fallDistancePixels[texelIndex * FallDistanceBytesPerTexel + 2] = falling
+                        ? (byte)(rowsDownFace * 255 / LipApproachRangeTexels)
+                        : (byte)255;
                 }
                 int rowsAbove = LipApproachRangeTexels;
                 for (int y = maskHeight - 1; y >= 0; y--)
@@ -1866,7 +1884,6 @@ namespace SDVRadiance
                 {
                     int texelIndex = rowBase + x;
                     int byteIndex = texelIndex * FallDistanceBytesPerTexel;
-                    fallDistancePixels[byteIndex + 2] = 0;
                     fallDistancePixels[byteIndex + 3] = 255;
                     if (!anyInRange || !_waterEffectBits![texelIndex])
                     {
@@ -1891,6 +1908,33 @@ namespace SDVRadiance
             }
         }
 
+        /// <summary>The shortest run of falling texels down one column that is a fall rather than a glint.</summary>
+        private const int FallingFaceMinimumTexels = 4;
+
+        /// <summary>Clear the runs of falling texels in one column too short to be a face.</summary>
+            // The waterfall sheets label the white glints painted on still water beside a fall as
+            // falling, one to three texels tall. Each one read as a tiny waterfall, and the churn
+            // under it spread a tile and a half to either side, so the basin above a fall went
+            // milky from the highest glint down, on a straight line across the stream.
+            // A run that touches the window's edge may carry on past it, so it is kept.
+        private static void DropFallingSpecks(Span<bool> columnFalling)
+        {
+            int runStart = -1;
+            for (int y = 0; y <= columnFalling.Length; y++)
+            {
+                bool falling = y < columnFalling.Length && columnFalling[y];
+                if (falling && runStart < 0)
+                    runStart = y;
+                else if (!falling && runStart >= 0)
+                {
+                    bool touchesEdge = runStart == 0 || y == columnFalling.Length;
+                    if (y - runStart < FallingFaceMinimumTexels && !touchesEdge)
+                        columnFalling[runStart..y].Clear();
+                    runStart = -1;
+                }
+            }
+        }
+
         /// <summary>Every texel in the range reads as far from any fall, above and below.</summary>
         private static void FillFallDistanceFar(byte[] fallDistancePixels, int firstTexel, int texelCount)
         {
@@ -1899,7 +1943,7 @@ namespace SDVRadiance
             {
                 fallDistancePixels[byteIndex] = 255;
                 fallDistancePixels[byteIndex + 1] = 255;
-                fallDistancePixels[byteIndex + 2] = 0;
+                fallDistancePixels[byteIndex + 2] = 255;
                 fallDistancePixels[byteIndex + 3] = 255;
             }
         }

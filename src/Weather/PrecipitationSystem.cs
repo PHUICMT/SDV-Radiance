@@ -68,8 +68,10 @@ namespace SDVRadiance
         /// <summary>Per screen: whether the water stage runs this frame (told by the pipeline with the
         /// sky deferral), and whether the game's own weather was held back from the world for the
         /// chain to draw. Kept apart from <see cref="ScreenPrecipitation"/>, which only exists once
-        /// our own rain is wanted, and the game's weather is held exactly when ours is not.</summary>
-        private static readonly Dictionary<int, (bool WaterStageRuns, bool VanillaOwed)> _vanillaWeather = [];
+        /// our own rain is wanted, and the game's weather is held exactly when ours is not. ToldOnTick
+        /// is when the pipeline last said so: a pipeline that stopped running (the mod switched off)
+        /// stops saying it, and its last word must not keep holding the game's rain back.</summary>
+        private static readonly Dictionary<int, (bool WaterStageRuns, bool VanillaOwed, int ToldOnTick)> _vanillaWeather = [];
 
         /// <summary>How many weather draws another mod has taken since launch, for the report: a
         /// player asking where the rain went is answered by this number moving.</summary>
@@ -332,7 +334,12 @@ namespace SDVRadiance
                 || !_vanillaWeather.TryGetValue(screenId, out var state) || !state.WaterStageRuns
                 || HarmonyPatcher.GameIsTakingMapScreenshot || Game1.currentLocation is not { IsOutdoors: true })
                 return false;
-            _vanillaWeather[screenId] = (true, true);
+            // Only while the pipeline is still running and still says the water stage runs. With
+            // the mod switched off it says nothing more, and the flag it last set held the game's
+            // rain back for a chain that no longer drew it: no rain at all (found 16 Oct 2026).
+            if (LiveConfig?.Invoke() is not { Enabled: true } || Math.Abs(Game1.ticks - state.ToldOnTick) > 2)
+                return false;
+            _vanillaWeather[screenId] = (true, true, state.ToldOnTick);
             return true;
         }
 
@@ -401,7 +408,7 @@ namespace SDVRadiance
             bool owed = _vanillaWeather.TryGetValue(screenId, out var state) && state.VanillaOwed;
             if (!_vanillaWeather.ContainsKey(screenId))
                 LiveScreens.ForgetDeparted(_vanillaWeather);
-            _vanillaWeather[screenId] = (deferred, owed);
+            _vanillaWeather[screenId] = (deferred, owed, Game1.ticks);
         }
 
         /// <summary>Draw the sky group onto the water stage's freshly written output. The scene
@@ -449,7 +456,7 @@ namespace SDVRadiance
             int screenId = CurrentScreenId();
             if (!_vanillaWeather.TryGetValue(screenId, out var state) || !state.VanillaOwed)
                 return;
-            _vanillaWeather[screenId] = (state.WaterStageRuns, false);
+            _vanillaWeather[screenId] = (state.WaterStageRuns, false, state.ToldOnTick);
             GameLocation? location = Game1.currentLocation;
             if (location == null || !location.IsOutdoors)
                 return;

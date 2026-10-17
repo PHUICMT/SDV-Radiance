@@ -50,6 +50,47 @@ namespace SDVRadiance
         private bool CharacterCasts(NPC npc)
             => StandsLikeAPerson(npc, ShadowModel.Modern) ? _castVillagers : _castCreatures;
 
+        /// <summary>How much of a disguised creature's shadow shows, 0 to 1.</summary>
+        /// <remarks>
+        /// A rock crab sits in the mines as one more rock until it is hit (RockCrab.cs: the shell is
+        /// on and the frame is the closed one, <c>currentFrame % 4 == 0</c>, the same test its own
+        /// takeDamage uses). The rocks around it cast nothing, so a shadow under one "rock" told the
+        /// player which one would bite (reported by asmoranomar on Nexus). The same class is the lava,
+        /// iridium and truffle crab and the volcano's False Magma Cap. It keeps no shadow while it
+        /// hides and grows one as it opens, so the reveal does not pop.
+        /// </remarks>
+        private static float DisguiseShown(NPC npc)
+        {
+            if (npc is not StardewValley.Monsters.RockCrab crab)
+                return 1f;
+            bool hiding = !crab.shellGone.Value && !crab.isStickBug.Value && crab.Sprite.currentFrame % 4 == 0;
+            if (!_disguiseFades.TryGetValue(crab, out DisguiseFade? fade))
+            {
+                fade = new DisguiseFade { Shown = hiding ? 0f : 1f, Tick = SharedTicks.Now };
+                _disguiseFades.Add(crab, fade);
+            }
+            int ticks = SharedTicks.Now - fade.Tick;
+            if (ticks != 0)
+            {
+                fade.Tick = SharedTicks.Now;
+                float step = Math.Clamp(ticks, 0, 60) / DisguiseFadeTicks;
+                fade.Shown = hiding ? Math.Max(0f, fade.Shown - step) : Math.Min(1f, fade.Shown + step);
+            }
+            return fade.Shown * fade.Shown * (3f - 2f * fade.Shown);
+        }
+
+        /// <summary>A quarter of a second, either way: about as long as the crab takes to open.</summary>
+        private const float DisguiseFadeTicks = 15f;
+
+        private sealed class DisguiseFade
+        {
+            internal float Shown;
+            internal int Tick;
+        }
+
+        /// <summary>Weak, so a crab that dies or a mine level that unloads takes its entry with it.</summary>
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<NPC, DisguiseFade> _disguiseFades = [];
+
         private void DrawSunShadows(SpriteBatch spriteBatch, GameLocation location, ModConfig config, float strength, float blur)
         {
             ComputeSun(out float rotation, out float stretch, out float alpha);
@@ -77,6 +118,9 @@ namespace SDVRadiance
                 if (npc == null || npc.IsInvisible || ShadowHiddenFor(npc) || npc.swimming.Value || npc.Sprite?.Texture == null
                     || !CharacterCasts(npc))
                     continue;
+                float casterAlpha = alpha * DisguiseShown(npc);
+                if (casterAlpha <= 0f)
+                    continue;
                 if (IsSeated(npc))
                 {
                     // A seated sprite gets a grounding pool and no cast silhouette: the silhouette
@@ -86,11 +130,11 @@ namespace SDVRadiance
                     if (ShadowCannotReachScreen(seat, OffScreenCasterMarginPixels))
                         continue;
                     DrawContactBlob(spriteBatch, seat, npc.GetSpriteWidthForPositioning() * 4f * 0.34f,
-                        npc.GetSpriteWidthForPositioning() * 4f * 0.17f, alpha * 0.8f, SeatedDepth(npc), blur);
+                        npc.GetSpriteWidthForPositioning() * 4f * 0.17f, casterAlpha * 0.8f, SeatedDepth(npc), blur);
                     continue;
                 }
-                DrawNpcShadow(spriteBatch, npc, rotation, stretch, alpha, blur, sunlight: true);
-                DrawRiderShadow(spriteBatch, npc, rotation, stretch, alpha, blur);
+                DrawNpcShadow(spriteBatch, npc, rotation, stretch, casterAlpha, blur, sunlight: true);
+                DrawRiderShadow(spriteBatch, npc, rotation, stretch, casterAlpha, blur);
             }
 
             foreach (FarmAnimal a in AnimalsIn(location))
@@ -436,6 +480,9 @@ namespace SDVRadiance
                 if (npc == null || npc.IsInvisible || ShadowHiddenFor(npc) || npc.swimming.Value || npc.Sprite?.Texture == null
                     || !CharacterCasts(npc))
                     continue;
+                float shown = DisguiseShown(npc);
+                if (shown <= 0f)
+                    continue;
                 if (IsSeated(npc))
                 {
                     float sw = npc.GetSpriteWidthForPositioning() * 4f;
@@ -443,7 +490,7 @@ namespace SDVRadiance
                     if (ShadowCannotReachScreen(seat, OffScreenCasterMarginPixels))
                         continue;
                     DrawContactBlob(spriteBatch, seat, sw * 0.34f, sw * 0.17f,
-                        ambAlpha * 0.8f, SeatedDepth(npc), blur);
+                        ambAlpha * shown * 0.8f, SeatedDepth(npc), blur);
                     continue;   // pool only — the cast silhouette is what fought the seat
                 }
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
@@ -455,11 +502,11 @@ namespace SDVRadiance
                 float halfW = npc.GetSpriteWidthForPositioning() * 4f * 0.36f;
                 GatherCasts(feet, castStrength, lenCfg);
                 float poolKept = StandsLikeAPerson(npc, _shadowModel) ? 1f : AnimalPoolKept;
-                DrawContactBlob(spriteBatch, feet, halfW, halfW * 0.5f, ambAlpha * GroundingPoolShare() * poolKept, depth, blur);
+                DrawContactBlob(spriteBatch, feet, halfW, halfW * 0.5f, ambAlpha * shown * GroundingPoolShare() * poolKept, depth, blur);
                 foreach (var (rotation, st, a, _) in _lightShadowCasts)
                 {
-                    DrawNpcShadow(spriteBatch, npc, rotation, st, a, blur);
-                    DrawRiderShadow(spriteBatch, npc, rotation, st, a, blur);
+                    DrawNpcShadow(spriteBatch, npc, rotation, st, a * shown, blur);
+                    DrawRiderShadow(spriteBatch, npc, rotation, st, a * shown, blur);
                 }
             }
         }
