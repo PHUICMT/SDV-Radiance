@@ -2,6 +2,41 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.4.1 - 2026-10-21
+
+### Fixed
+
+- **The menu no longer gets stuck when you switch to Classic.** Pressing Classic from a page in the
+  second half of the new menu (Fog, Nature & life, Picture & camera, Performance, Menu & help and
+  others) left the menu on screen with nothing working and no way to close it.
+
+- **The first line of a page keeps the marks above its letters.** On a large window the content
+  started a little above the top of the scrolling column, so the tone marks over a Thai first line
+  (the Water page's title, the search's first line) were cut off.
+
+- **Long Thai notes wrap inside the help bar.** A Thai phrase longer than the bar ran past its
+  right edge, and in the new menu the lines of a long note were drawn over each other.
+
+- **Search results no longer run into each other.** Starting a search from a page left that
+  page's title drawn on top of the results, and the line saying where a result lives sat inside
+  the card above it.
+
+### Changed
+
+- **Search types right in the box at the top of the new menu.** Click it and type: it stretches
+  while you type, and the results change with every letter. Enter keeps the results, Escape clears
+  them. Classic keeps its typing box.
+
+- **Pictures in the help bar only where they show the effect.** Pictures that reused one scene
+  for many groups (a night street for bloom, fireflies and lamp rays, one lake for sun rays and
+  waterfall mist) are gone; color grading, water, the aurora, heat haze, lava sparks and snow keep
+  theirs.
+
+- **Smaller fixes to the new menu's look.** Simple and All now change the counts beside each
+  group, a folded group of buttons no longer says "0 hidden", the light on a group's heading follows
+  its rounded corners, and Thai words fit in the key boxes at the bottom. The Thai name of the sun
+  rays group is plainer.
+
 ## 2.4.0 - 2026-10-21
 
 ### Added

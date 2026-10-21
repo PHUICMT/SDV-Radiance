@@ -67,7 +67,13 @@ namespace SDVRadiance
         /// wrap measures with its font, which is the wrong width for the glass panel's, and it cuts
         /// Thai at any letter, splitting a word down the middle; Thai is written with a space
         /// between phrases, so those are where it breaks here. Only a piece with no space in it that
-        /// is wider than the line (Chinese, which has none) is left to the game's wrap.</summary>
+        /// is wider than the line (a long Thai phrase, Chinese) is cut between letters.</summary>
+        /// <summary>A Thai vowel or tone mark drawn above or below the letter before it (U+0E31,
+        /// U+0E34 to U+0E3A, U+0E47 to U+0E4E), or the sara am that ends a syllable (U+0E33): a line
+        /// never starts with one.</summary>
+        private static bool SitsOnTheLetterBefore(char letter)
+            => letter is (char)0x0E31 or (char)0x0E33 or (>= (char)0x0E34 and <= (char)0x0E3A) or (>= (char)0x0E47 and <= (char)0x0E4E);
+
         internal static string Wrap(string text, float width, float scale)
         {
             bool ownFont = OwnFont(text);
@@ -82,15 +88,30 @@ namespace SDVRadiance
                 var line = new StringBuilder();
                 foreach (string word in paragraph.Split(' '))
                 {
-                    if (!ownFont && SizeOf(word).X * scale > width)
+                    if (SizeOf(word).X * scale > width)
                     {
+                        // A piece wider than the line on its own: a long Thai phrase, or Chinese,
+                        // which has no spaces. The game's wrap only breaks at spaces when the
+                        // language comes from a mod (Thai does), so it is cut here letter by letter,
+                        // never in front of a mark that sits on the letter before it.
                         if (line.Length > 0)
                             wrapped.Append(line).Append('\n');
                         line.Clear();
-                        string cut = Game1.parseText(word, Game1.smallFont, (int)(width / Math.Max(0.01f, scale)));
-                        int lastBreak = cut.LastIndexOf('\n');
-                        wrapped.Append(cut[..(lastBreak + 1)]);
-                        line.Append(cut[(lastBreak + 1)..]);
+                        int start = 0;
+                        for (int end = 1; end <= word.Length; end++)
+                        {
+                            if (end < word.Length && SitsOnTheLetterBefore(word[end]))
+                                continue;
+                            if (end - start > 1 && SizeOf(word[start..end]).X * scale > width)
+                            {
+                                int cut = end - 1;
+                                while (cut > start + 1 && SitsOnTheLetterBefore(word[cut]))
+                                    cut--;
+                                wrapped.Append(word, start, cut - start).Append('\n');
+                                start = cut;
+                            }
+                        }
+                        line.Append(word, start, word.Length - start);
                         continue;
                     }
                     string tried = line.Length == 0 ? word : line + " " + word;

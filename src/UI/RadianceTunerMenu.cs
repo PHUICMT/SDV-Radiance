@@ -315,6 +315,12 @@ namespace SDVRadiance
 
         private void AskForSearch()
         {
+            // The glass types into its own field; only the wooden box opens a box to type in.
+            if (GlassPanel && !_headerSearch.IsEmpty)
+            {
+                StartTypingSearch();
+                return;
+            }
             Game1.activeClickableMenu = new TextEntryMenu(_translate("tuner.search.box"), _searchQuery ?? "",
                 onDone: typed =>
                 {
@@ -332,10 +338,26 @@ namespace SDVRadiance
             _contentStartY = _contentCursorY;
             Paragraph(_translate("tuner.search.results").Replace("{{query}}", _searchQuery ?? ""));
             int gap = Scaled(8), half = (_contentColumnWidth - gap) / 2;
-            Button(_translate("tuner.search.again"), new Rectangle(_contentCursorX, _contentCursorY, half, Scaled(36)),
-                () => { Game1.playSound("smallSelect"); AskForSearch(); });
-            Button(_translate("tuner.search.clear"), new Rectangle(_contentCursorX + half + gap, _contentCursorY, half, Scaled(36)),
-                () => { _searchQuery = null; Game1.playSound("smallSelect"); Reflow(); });
+            void ClearSearch()
+            {
+                _searchQuery = null;
+                _searchTypedSeen = "";
+                _searchTyping?.Text = "";
+                StopTypingSearch();
+                Game1.playSound("smallSelect");
+                _scroll = SavedScroll(_activeTab);
+                Reflow();
+            }
+            // On the glass the field in the header is where the search is typed, so only the clear
+            // button is needed under the results.
+            if (GlassPanel && !_headerSearch.IsEmpty)
+                Button(_translate("tuner.search.clear"), new Rectangle(_contentCursorX, _contentCursorY, half, Scaled(36)), ClearSearch);
+            else
+            {
+                Button(_translate("tuner.search.again"), new Rectangle(_contentCursorX, _contentCursorY, half, Scaled(36)),
+                    () => { Game1.playSound("smallSelect"); AskForSearch(); });
+                Button(_translate("tuner.search.clear"), new Rectangle(_contentCursorX + half + gap, _contentCursorY, half, Scaled(36)), ClearSearch);
+            }
             _contentCursorY += Scaled(48);
             int found = 0;
             for (int page = 0; page < GroupedPages.Length; page++)
@@ -348,6 +370,11 @@ namespace SDVRadiance
                     string where = Grouped
                         ? _translate("tuner.cat." + GroupedPages[page].Category) + " > " + _translate("tuner.page." + GroupedPages[page].Page)
                         : _translate(tab);
+                    // On the glass the line saying where a result lives sits between the cards, with
+                    // room above it: drawn straight under the last row it landed inside that card.
+                    if (GlassPanel && found > 0)
+                        _contentCursorY += Scaled(12);
+                    _searchPathRows.Add(_contentCursorY);
                     Info(() => where);
                     if (section == "*")
                     {
@@ -375,12 +402,17 @@ namespace SDVRadiance
                     _sectionHeaders.RemoveRange(mark.Headers, _sectionHeaders.Count - mark.Headers);
                     _infoLines.RemoveRange(mark.Infos, _infoLines.Count - mark.Infos);
                     _help.RemoveRange(mark.Helps, _help.Count - mark.Helps);
+                    _searchPathRows.RemoveAll(row => row >= mark.Y);
                     _contentCursorY = mark.Y;
                 }
             }
             if (found == 0)
                 Paragraph(_translate("tuner.search.none"));
         }
+
+        /// <summary>Where each "Category > Page" line of the search results is, so a result's card
+        /// can end before the next one's line.</summary>
+        private readonly List<int> _searchPathRows = [];
 
         internal const string LayoutGrouped = "Grouped", LayoutClassic = "Classic";
         /// <summary>The grouped layout is on. An empty choice (a player who updated and has not
@@ -405,10 +437,11 @@ namespace SDVRadiance
         private bool RailActive(int page)
             => _searchQuery == null && (Grouped ? GroupedPages[page].Category == GroupedPages[_activeTab].Category : page == _activeTab);
 
-        private void OpenPage(int page)
+        private void OpenPage(int page, bool rememberTheOpenPage = true)
         {
             _searchQuery = null;
-            RememberScroll();
+            if (rememberTheOpenPage)
+                RememberScroll();
             _lookAskedToDelete = null;
             _activeTab = page; _lastTab = page; _config.TunerLastTab = PageKey(page);
             if (Grouped)
@@ -433,7 +466,11 @@ namespace SDVRadiance
             _railScroll = 0;
             _onSave();
             Game1.playSound("smallSelect");
-            OpenPage(page);
+            // The open page's scroll was kept above, under the old layout's name for it. Keeping it
+            // again here read the old page's number as a page of the new layout: a grouped page past
+            // the seventeenth has no classic tab, so Classic from there threw, and threw again on
+            // every try to close the menu, leaving it stuck on screen.
+            OpenPage(page, rememberTheOpenPage: false);
         }
 
         /// <summary>Build one grouped page: each piece in turn, a "*" piece being a whole tab.</summary>
@@ -622,6 +659,25 @@ namespace SDVRadiance
 
         public override void receiveKeyPress(Microsoft.Xna.Framework.Input.Keys key)
         {
+            // While the search field is typed in, the letters are the search, not the game's keys:
+            // E would close the menu halfway through "shadow". Enter puts the field down and keeps
+            // the results; Escape empties the search first and puts the field down.
+            if (TypingSearch)
+            {
+                if (key == Microsoft.Xna.Framework.Input.Keys.Enter)
+                    StopTypingSearch();
+                else if (key == Microsoft.Xna.Framework.Input.Keys.Escape)
+                {
+                    StopTypingSearch();
+                    if (_searchQuery != null)
+                    {
+                        _searchQuery = null;
+                        _scroll = SavedScroll(_activeTab);
+                        Reflow();
+                    }
+                }
+                return;
+            }
             if (key == Microsoft.Xna.Framework.Input.Keys.Escape
                 || (key != Microsoft.Xna.Framework.Input.Keys.None && Game1.options.doesInputListContain(Game1.options.menuButton, key)))
             {
@@ -636,8 +692,14 @@ namespace SDVRadiance
         private int SavedScroll(int tab)
             => _config.TunerScrollByTab.TryGetValue(PageKey(tab), out int scrolled) ? Math.Max(0, scrolled) : 0;
 
+        /// <summary>Keep where the open page is scrolled to. A page number the layout does not have
+        /// is skipped rather than thrown on: this runs on the way out of the menu, and an error there
+        /// leaves the menu on screen with no way to close it.</summary>
         private void RememberScroll()
-            => _config.TunerScrollByTab[PageKey(_activeTab)] = _scroll;
+        {
+            if (_activeTab >= 0 && _activeTab < PageCount)
+                _config.TunerScrollByTab[PageKey(_activeTab)] = _scroll;
+        }
 
         private void ShowFineTuning()
         {
@@ -879,27 +941,16 @@ namespace SDVRadiance
         /// was asked for on 18 Oct 2026 (the author could not tell which effect a section was
         /// about from its name). A section with no pair shows its words alone.
         /// </summary>
+        /// <remarks>Only pairs that show their own section's effect at the help bar's size are listed.
+        /// The first set reused a few scenes across many sections (one night street for bloom,
+        /// fireflies, lamp rays and the winter tree lights; one lake for sun rays and waterfall mist)
+        /// and the author found most of them had nothing to do with the section (21 Oct 2026).</remarks>
         private static readonly Dictionary<string, string> PictureOfSection = new(StringComparer.Ordinal)
         {
-            ["tuner.section.shadows"] = "sun", ["tuner.shadowmodel"] = "sun", ["tuner.section.shadowsun"] = "sun",
-            ["tuner.section.shadowedges"] = "sun", ["tuner.section.shadowcasters"] = "sun", ["tuner.section.shadowground"] = "sun",
-            ["tuner.shadowperkind"] = "sun", ["tuner.section.cloudshadow"] = "cloudshadow",
             ["tuner.section.colorgrade"] = "colorgrade", ["tuner.lut"] = "colorgrade", ["tuner.section.gradetone"] = "colorgrade",
-            ["tuner.section.eyecomfort"] = "colorgrade", ["tuner.section.tiltshift"] = "lens", ["tuner.section.finishing"] = "lens",
-            ["tuner.tab.smoothing"] = "smoothart", ["tuner.section.smoothingstyle"] = "smoothart", ["tuner.section.smoothingfamilies"] = "smoothart",
-            ["tuner.section.windowreflection"] = "windowreflection", ["tuner.section.windowreflectiondetail"] = "windowreflection",
-            ["tuner.section.fog"] = "fog", ["tuner.section.fogboth"] = "fog", ["tuner.section.fognight"] = "nightmist",
-            ["tuner.section.lighting"] = "lamps", ["tuner.section.lightdark"] = "lamps", ["tuner.section.lampshadows"] = "lamps",
-            ["tuner.section.lampshadowdetail"] = "lamps", ["tuner.section.godrayslamps"] = "lamprays", ["tuner.section.bloom"] = "bloom",
-            ["config.section.particles"] = "fireflies", ["tuner.section.particlefireflies"] = "fireflies",
-            ["tuner.section.particlefestivelights"] = "fireflies", ["tuner.section.precipitationrain"] = "rain",
-            ["tuner.section.screendrops"] = "screendrops", ["tuner.section.wetground"] = "wet",
             ["tuner.section.water"] = "water", ["tuner.section.watersurface"] = "water",
-            ["tuner.section.waterreflection"] = "waterreflection", ["tuner.section.watermodeldetail"] = "waterreflection",
-            ["tuner.reflstyle"] = "waterreflection", ["tuner.section.particlewaterfallmist"] = "waterfallmist",
-            ["tuner.section.godrayssun"] = "sunrays", ["tuner.section.sky"] = "aurora", ["tuner.section.heathaze"] = "heathaze",
-            ["tuner.section.particlelavasparks"] = "lava", ["tuner.section.particlepetals"] = "petals",
-            ["tuner.section.precipitationsnow"] = "snow",
+            ["tuner.section.sky"] = "aurora", ["tuner.section.heathaze"] = "heathaze",
+            ["tuner.section.particlelavasparks"] = "lava", ["tuner.section.precipitationsnow"] = "snow",
         };
 
         private static string? PictureFor(string? sectionKey)
@@ -988,9 +1039,11 @@ namespace SDVRadiance
                 _helpBarWrappedWidth = textWidth;
                 _helpBarWrapped = TunerText.Wrap(words, textWidth, textScale);
             }
-            int lineHeight = (int)(TunerText.Measure("Ag").Y * textScale);
-            int maxLines = Math.Max(1, (bar.Height - pad * 2) / Math.Max(1, lineHeight));
             string[] lines = _helpBarWrapped!.Split('\n');
+            // Spaced by the tallest line as drawn: Thai is in the game's font, taller than the glass
+            // typeface's "Ag", and the lines of a long Thai note were drawn over each other.
+            int lineHeight = (int)(lines.Append("Ag").Max(text => TunerText.Measure(text).Y) * textScale);
+            int maxLines = Math.Max(1, (bar.Height - pad * 2) / Math.Max(1, lineHeight));
             for (int line = 0; line < Math.Min(lines.Length, maxLines); line++)
             {
                 string text = line == maxLines - 1 && lines.Length > maxLines ? lines[line].TrimEnd() + "..." : lines[line];
@@ -1043,6 +1096,10 @@ namespace SDVRadiance
                 SectionHeader header = _sectionHeaders[i];
                 int top = header.Row.Y - Scaled(6);
                 int bottom = i + 1 < _sectionHeaders.Count ? _sectionHeaders[i + 1].Row.Y - Scaled(12) : _contentEndY;
+                // A search result's card ends before the line naming where the next result lives.
+                foreach (int pathRow in _searchPathRows)
+                    if (pathRow > header.Row.Y && pathRow - Scaled(4) < bottom)
+                        bottom = pathRow - Scaled(4);
                 var card = new Rectangle(header.Row.X - Scaled(6), top + scrollOffsetY, header.Row.Width + Scaled(12), Math.Max(header.Row.Height, bottom - top));
                 if (card.Bottom < _bodyTop || card.Y > _bodyBottom)
                     continue;
@@ -1194,8 +1251,8 @@ namespace SDVRadiance
                 : null;
 
         /// <summary>How many settings each category holds, shown beside it on the glass rail as on
-        /// the mock. Counted when the menu opens, by building every page in a probe with every
-        /// group open and the fine-tuning shown, the way <see cref="LabelsBySetting"/> reads labels.</summary>
+        /// the mock. Counted when the menu opens and when Simple or All is picked, by building every
+        /// page in a probe with every group open, the way <see cref="LabelsBySetting"/> reads labels.</summary>
         private static Dictionary<string, int>? _settingsByCategory;
         private static bool _countingSettings;
 
@@ -1212,7 +1269,8 @@ namespace SDVRadiance
                 var copy = new ModConfig();
                 copy.ApplyProfile(_config.CaptureProfile(""));
                 copy.TunerFoldedSections = [];
-                copy.TunerShowFineTuning = true;
+                // As the player has Simple or All, so switching between them moves the counts.
+                copy.TunerShowFineTuning = _config.TunerShowFineTuning;
                 copy.TunerLayout = LayoutGrouped;
                 // The same panel as the menu on screen: the probe's builds set the shared theme.
                 copy.TunerPanel = _config.TunerPanel;
@@ -1293,8 +1351,68 @@ namespace SDVRadiance
         private void SetFineTuning(bool shown)
         {
             _config.TunerShowFineTuning = shown;
+            _settingsByCategory = null;
             _onSave();
             Reflow();
+        }
+
+        /// <summary>
+        /// The glass header's search field takes the typing itself, as on the mock: a click puts the
+        /// caret in it, it stretches over the Simple and All switch while it is in use, and every
+        /// letter shows its results at once. The game's own text box does the typing (so a Thai
+        /// keyboard and pasting work as anywhere else in the game) and is never drawn; the field
+        /// draws its text. The wooden box keeps the typing box it always had.
+        /// </summary>
+        private TextBox? _searchTyping;
+        private string _searchTypedSeen = "";
+        /// <summary>0 at rest, 1 stretched: eased each frame so the field grows and shrinks.</summary>
+        private float _searchStretch;
+
+        private bool TypingSearch => _searchTyping != null && Game1.keyboardDispatcher.Subscriber == _searchTyping;
+
+        private void StartTypingSearch()
+        {
+            _searchTyping ??= new TextBox(null, null, Game1.smallFont, TunerTheme.Ink) { limitWidth = false };
+            _searchTyping.Text = _searchQuery ?? "";
+            _searchTypedSeen = _searchTyping.Text;
+            _searchTyping.Selected = true;
+            Game1.keyboardDispatcher.Subscriber = _searchTyping;
+        }
+
+        private void StopTypingSearch()
+        {
+            if (_searchTyping == null)
+                return;
+            _searchTyping.Selected = false;
+            if (Game1.keyboardDispatcher.Subscriber == _searchTyping)
+                Game1.keyboardDispatcher.Subscriber = null;
+        }
+
+        /// <summary>Run each frame: the typed words become the search the moment they change.</summary>
+        private void FollowTypedSearch(float seconds)
+        {
+            float target = TypingSearch ? 1f : 0f;
+            _searchStretch = target > _searchStretch
+                ? Math.Min(target, _searchStretch + seconds / 0.18f)
+                : Math.Max(target, _searchStretch - seconds / 0.18f);
+            if (_searchTyping == null || !TypingSearch || _searchTyping.Text == _searchTypedSeen)
+                return;
+            _searchTypedSeen = _searchTyping.Text;
+            string typed = _searchTypedSeen.Trim();
+            _searchQuery = typed.Length == 0 ? null : typed;
+            _scroll = 0;
+            Reflow();
+        }
+
+        /// <summary>The field as drawn and clicked: stretched over the Simple and All switch, eased.</summary>
+        private Rectangle SearchFieldNow()
+        {
+            if (_headerSearch.IsEmpty || _searchStretch <= 0f || _headerPills.Count == 0)
+                return _headerSearch;
+            int stretchTo = _headerPills[^1].Whole.Right;
+            float eased = _searchStretch * _searchStretch * (3f - 2f * _searchStretch);
+            return new Rectangle(_headerSearch.X, _headerSearch.Y,
+                _headerSearch.Width + (int)((stretchTo - _headerSearch.Right) * eased), _headerSearch.Height);
         }
 
         private void DrawGlassHeader(SpriteBatch spriteBatch)
@@ -1309,22 +1427,14 @@ namespace SDVRadiance
                 rowMiddle - TunerText.Measure("A").Y * smallScale / 2f + 2f), TunerTheme.InkFaint, smallScale);
 
             float capHeight = TunerText.Measure("A").Y * HeaderTextScale;
-            if (!_headerSearch.IsEmpty)
+            Rectangle field = SearchFieldNow();
+            for (int pill = 0; pill < _headerPills.Count; pill++)
             {
-                int radius = _headerSearch.Height / 2;
-                TunerTheme.Plate(spriteBatch, _headerSearch, radius, TunerTheme.Overlay * (_headerSearch.Contains(mouseX, mouseY) ? 0.12f : 0.07f));
-                TunerTheme.PlateRim(spriteBatch, _headerSearch, radius, TunerTheme.Rim);
-                int iconSize = Scaled(18);
-                if (GlassIcons() is { } icons && GlassIconNamed("search") is int search)
-                    spriteBatch.Draw(icons, new Rectangle(_headerSearch.X + Scaled(12), _headerSearch.Center.Y - iconSize / 2, iconSize, iconSize),
-                        GlassIconSource(search, iconSize), TunerTheme.InkFaint);
-                int textX = _headerSearch.X + Scaled(20) + iconSize;
-                TunerText.DrawFit(spriteBatch, _searchQuery ?? _translate("tuner.search.box"), new Vector2(textX, _headerSearch.Center.Y - capHeight / 2f + 2f),
-                    _headerSearch.Right - Scaled(12) - textX, _searchQuery != null ? TunerTheme.Ink : TunerTheme.InkFaint, HeaderTextScale);
-            }
-
-            foreach (var (whole, options) in _headerPills)
-            {
+                var (whole, options) = _headerPills[pill];
+                // The Simple and All switch fades under the field while it stretches over it.
+                float shown = pill == _headerPills.Count - 1 ? 1f - _searchStretch : 1f;
+                if (shown <= 0.02f)
+                    continue;
                 TunerTheme.Plate(spriteBatch, whole, whole.Height / 2, TunerTheme.Overlay * 0.07f);
                 TunerTheme.PlateRim(spriteBatch, whole, whole.Height / 2, TunerTheme.Rim);
                 foreach (PillOption option in options)
@@ -1336,7 +1446,43 @@ namespace SDVRadiance
                         TunerTheme.Plate(spriteBatch, option.Bounds, option.Bounds.Height / 2, TunerTheme.Overlay * 0.08f);
                     float labelWidth = TunerText.Measure(option.Label).X * HeaderTextScale;
                     TunerText.Draw(spriteBatch, option.Label, new Vector2(option.Bounds.Center.X - labelWidth / 2f, option.Bounds.Center.Y - capHeight / 2f + 2f),
-                        chosen ? TunerTheme.AccentInk : TunerTheme.InkDim, HeaderTextScale);
+                        (chosen ? TunerTheme.AccentInk : TunerTheme.InkDim) * shown, HeaderTextScale);
+                }
+            }
+
+            if (!field.IsEmpty)
+            {
+                // Over the pills it stretches across, so the field reads as one solid thing.
+                int radius = field.Height / 2;
+                bool typing = TypingSearch;
+                TunerTheme.Plate(spriteBatch, field, radius, TunerTheme.PanelGlass * (0.9f * _searchStretch));
+                TunerTheme.Plate(spriteBatch, field, radius, TunerTheme.Overlay * (typing ? 0.1f : field.Contains(mouseX, mouseY) ? 0.12f : 0.07f));
+                TunerTheme.PlateRim(spriteBatch, field, radius, Color.Lerp(TunerTheme.Rim, TunerTheme.Accent, _searchStretch));
+                int iconSize = Scaled(18);
+                if (GlassIcons() is { } icons && GlassIconNamed("search") is int search)
+                    spriteBatch.Draw(icons, new Rectangle(field.X + Scaled(12), field.Center.Y - iconSize / 2, iconSize, iconSize),
+                        GlassIconSource(search, iconSize), Color.Lerp(TunerTheme.InkFaint, TunerTheme.Accent, _searchStretch));
+                int textX = field.X + Scaled(20) + iconSize;
+                float room = field.Right - Scaled(16) - textX;
+                string typed = typing ? _searchTyping!.Text : _searchQuery ?? "";
+                if (typed.Length == 0)
+                    TunerText.DrawFit(spriteBatch, _translate("tuner.search.box"), new Vector2(textX, field.Center.Y - capHeight / 2f + 2f),
+                        room, TunerTheme.InkFaint, HeaderTextScale);
+                else
+                {
+                    // The end of a long search stays in view, the way any text field scrolls.
+                    string shownText = typed;
+                    while (shownText.Length > 1 && TunerText.Measure(shownText).X * HeaderTextScale > room)
+                        shownText = shownText[1..];
+                    float textHeight = TunerText.Measure(shownText).Y * HeaderTextScale;
+                    TunerText.Draw(spriteBatch, shownText, new Vector2(textX, field.Center.Y - Math.Max(capHeight, textHeight) / 2f + 2f), TunerTheme.Ink, HeaderTextScale);
+                    typed = shownText;
+                }
+                bool caretOn = (Game1.currentGameTime?.TotalGameTime.TotalMilliseconds ?? 0.0) % 1000.0 < 550.0;
+                if (typing && caretOn)
+                {
+                    float caretX = textX + (typed.Length == 0 ? 0f : TunerText.Measure(typed).X * HeaderTextScale) + Scaled(2);
+                    spriteBatch.Draw(Game1.staminaRect, new Rectangle((int)caretX, field.Y + Scaled(8), Math.Max(2, Scaled(2)), field.Height - Scaled(16)), TunerTheme.Accent);
                 }
             }
         }
@@ -1367,6 +1513,7 @@ namespace SDVRadiance
             yPositionOnScreen = Scaled(20);
 
             _sliders.Clear(); _compasses.Clear(); _toggles.Clear(); _buttons.Clear(); _chips.Clear(); _sectionHeaders.Clear(); _tabRailButtons.Clear(); _infoLines.Clear(); _help.Clear(); _pictureOfRow.Clear();
+            _searchPathRows.Clear();
             _rowsEnabledWhen = null;   // a tab's dependency must not survive into the next one
             EndSection();
             _fineTuningRowsHidden = 0;
@@ -1437,10 +1584,16 @@ namespace SDVRadiance
             _contentX = xPositionOnScreen + RailWidth;
             _contentCursorX = _contentX + Scaled(16);
             _contentColumnWidth = ContentWidth - Scaled(40);
-            _contentCursorY = contentTop + BodyPadding;
+            // The same padding the scrolling column's top edge is placed with (_bodyTop below): the
+            // unscaled one started the content above that edge on a large window, and the marks
+            // over a Thai first line (the tone mark on the Water page's title) were cut off.
+            _contentCursorY = contentTop + Scaled(BodyPadding) + Scaled(4);
             // One line saying what this tab is for, before anything else on it. A column of
             // sliders assumes the reader already knows which effect they belong to.
             PlaceLayoutPrompt();
+            // Cleared before a search jumps past it: the page's big title stayed from the page
+            // before and was drawn over the results.
+            _pageTitle = null;
             if (_searchQuery != null)
                 goto Search;
             // The search sits at the top of every page as a wide bar rather than in the header,
@@ -3894,12 +4047,17 @@ namespace SDVRadiance
                 _layoutButton.OnClick();
                 return;
             }
-            if (_headerSearch.Contains(x, y))
+            if (SearchFieldNow().Contains(x, y))
             {
-                Game1.playSound("smallSelect");
-                AskForSearch();
+                if (!TypingSearch)
+                {
+                    Game1.playSound("smallSelect");
+                    StartTypingSearch();
+                }
                 return;
             }
+            // A click anywhere else puts the field down; the results stay.
+            StopTypingSearch();
             // Picking a side builds the menu again, which empties this list: leave at once.
             foreach (var (_, options) in _headerPills)
                 foreach (PillOption option in options)
@@ -3968,6 +4126,7 @@ namespace SDVRadiance
                     Reflow();
             }
             float seconds = (float)time.ElapsedGameTime.TotalSeconds;
+            FollowTypedSearch(seconds);
             if (_closing)
             {
                 _slide -= seconds / CloseSlideSeconds;
@@ -4103,7 +4262,9 @@ namespace SDVRadiance
             RenderPipeline.TunerBackdropWanted = false;
             TunerTheme.Glass = false;
             RememberScroll();
-            _config.TunerLastTab = PageKey(_activeTab);
+            if (_activeTab >= 0 && _activeTab < PageCount)
+                _config.TunerLastTab = PageKey(_activeTab);
+            StopTypingSearch();
             _onSave();
         }
 
@@ -4175,21 +4336,25 @@ namespace SDVRadiance
                 scale *= room / total;
                 total = Total();
             }
-            float textHeight = TunerText.Measure("A").Y * scale;
             float x = xPositionOnScreen + (width - total) / 2f;
-            float y = yPositionOnScreen + height - Scaled(20) - textHeight / 2f;
+            float middle = yPositionOnScreen + height - Scaled(20);
+            // Each piece centred on the row by its own height: Thai is drawn in the game's font, which
+            // is taller than the glass typeface, and boxes sized to an English letter left it hanging
+            // out of them.
+            float Top(string piece) => middle - TunerText.Measure(piece).Y * scale / 2f;
             foreach (var (key, action) in _footerParts)
             {
                 if (key.Length > 0)
                 {
-                    int keyWidth = (int)(TunerText.Measure(key).X * scale) + padding * 2;
-                    var keyBox = new Rectangle((int)x, (int)(y - Scaled(3)), keyWidth, (int)textHeight + Scaled(5));
+                    Vector2 keySize = TunerText.Measure(key) * scale;
+                    int keyWidth = (int)keySize.X + padding * 2;
+                    var keyBox = new Rectangle((int)x, (int)(middle - keySize.Y / 2f - Scaled(3)), keyWidth, (int)keySize.Y + Scaled(6));
                     TunerTheme.Plate(spriteBatch, keyBox, Scaled(5), TunerTheme.Overlay * 0.08f);
                     TunerTheme.PlateRim(spriteBatch, keyBox, Scaled(5), TunerTheme.Rim);
-                    TunerText.Draw(spriteBatch, key, new Vector2(x + padding, y), TunerTheme.InkDim, scale);
+                    TunerText.Draw(spriteBatch, key, new Vector2(x + padding, Top(key) + 1f), TunerTheme.InkDim, scale);
                     x += keyWidth + keyGap;
                 }
-                TunerText.Draw(spriteBatch, action, new Vector2(x, y), TunerTheme.InkFaint, scale);
+                TunerText.Draw(spriteBatch, action, new Vector2(x, Top(action) + 1f), TunerTheme.InkFaint, scale);
                 x += TunerText.Measure(action).X * scale + partGap;
             }
         }
@@ -4396,11 +4561,24 @@ namespace SDVRadiance
                 // darker wash and a bar down its left edge, so it is plain which one a click folds.
                 bool hovered = ReferenceEquals(header, _hoveredSection);
                 if (TunerTheme.Glass)
-                    TunerTheme.Plate(spriteBatch, band, Scaled(10), TunerTheme.Overlay * (hovered ? 0.07f : 0f));
+                {
+                    // On the glass the heading is the top of its card, so the light takes the card's
+                    // own top corners, and the marker is a rounded bar inside it, not a square strip.
+                    if (hovered)
+                    {
+                        var lit = new Rectangle(band.X, band.Y - Scaled(6), band.Width, band.Height + Scaled(6));
+                        TunerTheme.Plate(spriteBatch, lit, Scaled(14), TunerTheme.Overlay * 0.07f);
+                        int barWidth = Scaled(4);
+                        TunerTheme.Plate(spriteBatch, new Rectangle(lit.X + Scaled(5), lit.Y + Scaled(9), barWidth, lit.Height - Scaled(18)),
+                            barWidth / 2, TunerTheme.Marker);
+                    }
+                }
                 else
+                {
                     spriteBatch.Draw(Game1.staminaRect, band, TunerTheme.Wash * (hovered ? 0.26f : 0.07f));
-                if (hovered)
-                    spriteBatch.Draw(Game1.staminaRect, new Rectangle(band.X, band.Y, Scaled(4), band.Height), TunerTheme.Marker);
+                    if (hovered)
+                        spriteBatch.Draw(Game1.staminaRect, new Rectangle(band.X, band.Y, Scaled(4), band.Height), TunerTheme.Marker);
+                }
                 float inkStrength = hovered ? 1f : 0.8f;
                 int unit = Math.Max(1, Scaled(2));
                 int arrowY = band.Center.Y - unit * 3 - unit / 2;
@@ -4414,7 +4592,9 @@ namespace SDVRadiance
                         GlassIconSource(sectionIcon, iconSize), TunerTheme.Heading * (hovered ? 1f : 0.9f));
                     titleX += iconSize + Scaled(7);
                 }
-                string? hiddenNote = header.Folded
+                // Buttons (the presets, the share buttons) are not counted, so a group of only those
+                // said "0 hidden"; it says nothing instead.
+                string? hiddenNote = header.Folded && header.HiddenRows > 0
                     ? _translate("tuner.section.foldedcount").Replace("{{count}}", header.HiddenRows.ToString())
                     : null;
                 float noteScale = 0.72f * _uiScale;
