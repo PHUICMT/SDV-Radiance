@@ -34,10 +34,22 @@ namespace SDVRadiance
             return Math.Max(moon, MathHelper.Clamp((trulyDarkMinutes - minutesNow) / 40f, 0f, 1f));
         }
 
-        /// <summary>Night ramp 0→1 over 19:00→21:00 (0 by day). Shared by the night-only
-        /// touches: warmer bloom, a touch more vignette, and the automatic blue night mist.</summary>
+        /// <summary>Night ramp 0→1 over the two hours that start an hour after the game's own dusk
+        /// (0 by day). Shared by the night-only touches: warmer bloom, a touch more vignette, the
+        /// automatic blue night mist, the windows and lamps that glow after dark.
+        ///
+        /// <para>It used to be 19:00→21:00 on every day of the year, which is the same thing in
+        /// spring and summer (dusk at 18:00) but two hours late in fall and three in winter, where
+        /// the game is dark by 17:00 and the town's windows stayed unlit until 19:00. A mod that
+        /// moves the sunset (Dynamic Dusk) moves this with it, as it already moved the shadows.</para></summary>
         private static float NightFactorNow()
-            => MathHelper.Clamp((GameClock.MinutesNow() - 1140) / 120f, 0f, 1f);
+        {
+            int duskStart;
+            try { duskStart = Game1.currentLocation != null ? Game1.getStartingToGetDarkTime(Game1.currentLocation) : 1800; }
+            catch { duskStart = 1800; }
+            int rampStartMinutes = (duskStart / 100) * 60 + duskStart % 100 + 60;
+            return MathHelper.Clamp((GameClock.MinutesNow() - rampStartMinutes) / 120f, 0f, 1f);
+        }
 
         private void RenderCloudShadow(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, ModConfig config)
         {
@@ -237,6 +249,7 @@ namespace SDVRadiance
             GetParam(bloom, "EmissiveBoost")?.SetValue(MathHelper.Clamp(config.BloomEmissiveBoost, 0f, 1f));
             GetParam(bloom, "BloomWarm")?.SetValue(bloomNight);
             GetParam(bloom, "BloomTexture")?.SetValue(bloomA);
+            SetWindowZoneParams(bloom, config);
             bloom.CurrentTechnique = bloom.Techniques["Composite"];
             DrawFull(spriteBatch, source, destination, bloom);
         }
@@ -439,8 +452,79 @@ namespace SDVRadiance
             GetParam(effect, "BlueLight")?.SetValue(MathHelper.Clamp(config.BlueLightFilter, 0f, 1f));
             GetParam(effect, "ScreenPixels")?.SetValue(new Vector2(Game1.viewport.Width, Game1.viewport.Height));
             GetParam(effect, "LutAmount")?.SetValue(BindLut(effect, config));
+            SetWindowZoneParams(effect, config);
             effect.CurrentTechnique = effect.Techniques["ColorGrade"];
             DrawFull(spriteBatch, source, destination, effect);
+        }
+
+        /// <summary>The window detail's boxes for whichever stage asks (the flood stage, the grade
+        /// stage, the fused tail), so the same windows are protected by every pass that lifts them.</summary>
+        private void SetWindowZoneParams(Effect effect, ModConfig config)
+        {
+            BuildWindowZones(config);
+            GetParam(effect, "WindowZones")?.SetValue(_windowZones);
+            GetParam(effect, "WindowZoneCount")?.SetValue((float)_windowZoneCount);
+            GetParam(effect, "WindowDetail")?.SetValue(_windowDetailNow);
+            GetParam(effect, "TilesPerScreen")?.SetValue(new Vector2(Game1.viewport.Width / 64f, Game1.viewport.Height / 64f));
+        }
+
+        /// <summary>
+        /// Finds every window on screen once per frame for the window detail: the windows the game
+        /// hangs a daylight on (the map's own) and the window furniture a player has placed, which
+        /// carries no light of its own and so is not in the beam list at all. The second kind is
+        /// the one reported: Alternative Textures windows washed to white by the grade and the
+        /// glow of the house window beside them (Ellis2467, 12 Oct 2026).
+        /// </summary>
+        private void BuildWindowZones(ModConfig config)
+        {
+            if (_windowZonesBuilt)
+                return;
+            _windowZonesBuilt = true;
+            // Eased like every other window term, so switching the mode fades rather than steps.
+            float detailTarget = config.WindowEffectsEnabled && config.WindowLightDetail == WindowLightDetail.KeepDetail ? 1f : 0f;
+            _windowDetailEase = Determinism.Settle(
+                EasedToward(_windowDetailEase, detailTarget, RoomEaseRate), detailTarget);
+            // By day only, following the clock. The wash is a daylight one, and after dark the
+            // boxes would only hold back a lamp beside a window and draw the box on the wall.
+            ShadowRenderer.WindowDaylight(out _, out float dayStrength);
+            _windowDetailNow = _windowDetailEase * MathHelper.Clamp(dayStrength * 1.6f, 0f, 1f);
+            _windowZoneCount = 0;
+            GameLocation? location = Game1.currentLocation;
+            if (_windowDetailNow <= 0f || location == null || location.IsOutdoors)
+                return;
+            int viewportWidth = Math.Max(1, Game1.viewport.Width);
+            int viewportHeight = Math.Max(1, Game1.viewport.Height);
+            void AddZone(Vector2 centreWorld, Vector2 halfTiles)
+            {
+                if (_windowZoneCount >= MaxWindowZones)
+                    return;
+                Vector2 centreScreen = Game1.GlobalToLocal(Game1.viewport, centreWorld);
+                float centreU = centreScreen.X / viewportWidth, centreV = centreScreen.Y / viewportHeight;
+                if (centreU < -0.2f || centreU > 1.2f || centreV < -0.2f || centreV > 1.2f)
+                    return;
+                _windowZones[_windowZoneCount++] = new Vector4(centreU, centreV, halfTiles.X, halfTiles.Y);
+            }
+            if (Game1.currentLightSources != null)
+            {
+                foreach (var lightEntry in Game1.currentLightSources)
+                {
+                    var light = lightEntry.Value;
+                    if (light.lightContext.Value == LightSource.LightContext.WindowLight)
+                        AddZone(light.position.Value, MapWindowZoneHalfTiles);
+                }
+            }
+            foreach (StardewValley.Objects.Furniture furniture in location.furniture)
+            {
+                if (furniture == null || furniture.isTemporarilyInvisible || furniture.furniture_type.Value != StardewValley.Objects.Furniture.window)
+                    continue;
+                // Where the game draws it: the sprite's bottom sits on the bounding box's bottom
+                // and it rises the full source height above, as Furniture.draw places it.
+                Rectangle box = furniture.boundingBox.Value;
+                Rectangle source = furniture.sourceRect.Value;
+                float drawnWidth = source.Width * 4f, drawnHeight = source.Height * 4f;
+                Vector2 centre = new(box.X + drawnWidth * 0.5f, box.Bottom - drawnHeight * 0.5f);
+                AddZone(centre, new Vector2(drawnWidth / 128f + 0.1f, drawnHeight / 128f + 0.1f));
+            }
         }
 
         /// <summary>Fused grade + vignette tail pass (see tail.fx): the ColorGrade and
@@ -475,6 +559,7 @@ namespace SDVRadiance
             GetParam(effect, "NightAmt")?.SetValue(NightFactorNow() * _vignetteEase);
             GetParam(effect, "ScreenPixels")?.SetValue(new Vector2(Game1.viewport.Width, Game1.viewport.Height));
             GetParam(effect, "LutAmount")?.SetValue(BindLut(effect, config));
+            SetWindowZoneParams(effect, config);
             effect.CurrentTechnique = effect.Techniques["Tail"];
             DrawFull(spriteBatch, source, destination, effect);
         }
@@ -596,6 +681,21 @@ namespace SDVRadiance
         // weather flip never steps the room in one frame; SNAPPED on location change (house
         // rule: indoor/outdoor multipliers hide behind the game's own warp fade).
         private Vector3 _windowColourEase = Vector3.Zero;
+        /// <summary>The window detail mode, eased: 0 the whole window, 1 keep the window's detail.</summary>
+        private float _windowDetailEase;
+        /// <summary>The boxes round every window on screen this frame: xy the centre in screen UV,
+        /// zw the half size in tiles. Built once per frame by <see cref="BuildWindowZones"/>.</summary>
+        private readonly Vector4[] _windowZones = new Vector4[MaxWindowZones];
+        private int _windowZoneCount;
+        /// <summary>Whether <see cref="_windowZones"/> is this frame's. Cleared at the top of Apply.</summary>
+        private bool _windowZonesBuilt;
+        /// <summary>The detail mode's ease times the daylight, what the shaders are handed.</summary>
+        private float _windowDetailNow;
+        private const int MaxWindowZones = 8;
+        /// <summary>The box round a window the game hangs a light on, either side of the pane's
+        /// centre in tiles: the game's windows and the packs measured are one tile wide and one
+        /// and a half tall at most.</summary>
+        private static readonly Vector2 MapWindowZoneHalfTiles = new(0.75f, 1f);
         // How much the glass is allowed to ignore the room's exposure. It is a hole with
         // the sky behind it only while there IS sky light: after dark it is a dark rectangle, and
         // exempting it then left a window still lit at midnight.
@@ -612,7 +712,126 @@ namespace SDVRadiance
         /// Once per room walked into is right; once per frame is what a shared location check
         /// did to a split screen, and nothing on the screen says which of the two is happening.</summary>
         private readonly int[] _exposureSnapsByScreen = new int[4];
-        private readonly Vector2[] _windowShaftPositions = new Vector2[6];
+        /// <summary>How much the room itself brightens at the peak of lightning through its windows,
+        /// on top of the light the windows let in: only a little, so the beam and what it falls on
+        /// carry the flash and the rest of the room stays dark. It was 0.15, which lit the room
+        /// evenly and flattened it.</summary>
+        private const float WindowFlashRoomLift = 0.08f;
+        /// <summary>How much darker than before the room looks just after a strike, the eye still
+        /// dazzled, at its deepest: a few percent, so the flash itself reads brighter.</summary>
+        private const float WindowFlashAfterDip = 0.04f;
+
+        /// <summary>Whether the game has this room's windows lit: any of its window lights still
+        /// glowing, or, with none published, the game's own rule for them (not yet time to turn the
+        /// lights off, and no rain here).</summary>
+        private static bool GameWindowsLit(GameLocation location)
+        {
+            bool anyWindowLight = false;
+            if (Game1.currentLightSources != null)
+                foreach (var lightEntry in Game1.currentLightSources)
+                {
+                    if (lightEntry.Value.lightContext.Value != LightSource.LightContext.WindowLight)
+                        continue;
+                    anyWindowLight = true;
+                    if (ShadowRenderer.WindowGlowing(location, lightEntry.Value))
+                        return true;
+                }
+            return !anyWindowLight && !Game1.isTimeToTurnOffLighting(location) && !location.IsRainingHere();
+        }
+        /// <summary>The light lightning lays through a window at its peak, against the daylight's
+        /// own at noon (about 0.8): the beam and the floor are the art lit by it, and at night the
+        /// art is dark, so the flash has to be well over the day's to read.</summary>
+        private const float WindowFlashStrength = 2.2f;
+
+        /// <summary>Per window light: xy where its beam starts on screen, z 1 when its glass is
+        /// labelled (see <see cref="WindowGlassLabelledAt"/>).</summary>
+        private readonly Vector4[] _windowShaftPositions = new Vector4[WindowBeamSlots];
+
+        /// <summary>How many window beams the flood shader can draw (its WindowPositions array,
+        /// which cannot grow: the shader is at ps_3_0's limit of constants).</summary>
+        private const int WindowBeamSlots = 6;
+
+        /// <summary>Every window light that could throw a beam this frame, in the shader's form,
+        /// before the six are chosen. W is 1 for a glow the game lays on the floor (light sheet 6)
+        /// while choosing, and 0 again by the time it reaches the shader.</summary>
+        private readonly List<Vector4> _windowBeamCandidates = [];
+        private readonly List<int> _windowBeamGroup = [];
+        private readonly List<Vector4> _windowBeamWindows = [];
+
+        /// <summary>The game's light sheet for the glow a window lays on the floor.</summary>
+        private const int FloorGlowLightSheet = 6;
+
+        /// <summary>
+        /// A room with more window lights than beams: the lights of one window become one beam,
+        /// from the top of the window, and the beams go to the windows nearest the middle of the
+        /// screen, glass before the glows on the floor.
+        ///
+        /// <para>The first six the game listed used to take the beams. A barn from Warm Stalls and
+        /// Cozy Boxes has nine windows of two panes each, a light per pane, so its first three
+        /// windows had beams and the other six had none (MyLadySeven, Nexus, 18 Oct 2026, with a
+        /// picture). The game itself lights a window it builds from tiles twice, the pane and the
+        /// tile under it, so a room of four such windows was already past six. Lights touching
+        /// across or down are one window. A beam is nearly two tiles wide at the sill, so one beam
+        /// fills a two pane window. Rooms with six window lights or fewer never come here, so
+        /// their beams are exactly what they were.</para>
+        /// </summary>
+        private void FitWindowBeamsIntoTheSlots(int viewportWidth, int viewportHeight)
+        {
+            float tileU = 64f / viewportWidth, tileV = 64f / viewportHeight;
+            int count = _windowBeamCandidates.Count;
+            _windowBeamGroup.Clear();
+            for (int i = 0; i < count; i++)
+                _windowBeamGroup.Add(i);
+            int GroupOf(int i)
+            {
+                while (_windowBeamGroup[i] != i)
+                    i = _windowBeamGroup[i] = _windowBeamGroup[_windowBeamGroup[i]];
+                return i;
+            }
+            for (int i = 0; i < count; i++)
+            {
+                for (int j = i + 1; j < count; j++)
+                {
+                    Vector4 first = _windowBeamCandidates[i], second = _windowBeamCandidates[j];
+                    if (first.W != second.W)
+                        continue;
+                    if (Math.Abs(first.X - second.X) <= tileU * 1.15f && Math.Abs(first.Y - second.Y) <= tileV * 1.15f)
+                        _windowBeamGroup[GroupOf(j)] = GroupOf(i);
+                }
+            }
+            List<Vector4> windows = _windowBeamWindows;
+            windows.Clear();
+            for (int root = 0; root < count; root++)
+            {
+                if (GroupOf(root) != root)
+                    continue;
+                float top = float.MaxValue, labelled = 1f;
+                for (int i = 0; i < count; i++)
+                {
+                    if (GroupOf(i) != root)
+                        continue;
+                    top = Math.Min(top, _windowBeamCandidates[i].Y);
+                    labelled = Math.Min(labelled, _windowBeamCandidates[i].Z);
+                }
+                float acrossSum = 0f;
+                int acrossCount = 0;
+                for (int i = 0; i < count; i++)
+                {
+                    if (GroupOf(i) != root || _windowBeamCandidates[i].Y > top + tileV * 0.5f)
+                        continue;
+                    acrossSum += _windowBeamCandidates[i].X;
+                    acrossCount++;
+                }
+                windows.Add(new Vector4(acrossSum / acrossCount, top, labelled, _windowBeamCandidates[root].W));
+            }
+            windows.Sort((first, second) => first.W != second.W ? first.W.CompareTo(second.W)
+                : FromScreenMiddle(first).CompareTo(FromScreenMiddle(second)));
+            _windowBeamCandidates.Clear();
+            _windowBeamCandidates.AddRange(windows);
+        }
+
+        private static float FromScreenMiddle(Vector4 beam)
+            => (beam.X - 0.5f) * (beam.X - 0.5f) + (beam.Y - 0.5f) * (beam.Y - 0.5f);
 
         // What the indoor pass last handed the shader. "The window beam is gone" has three
         // completely different causes that look identical on screen - the room is not classed as
@@ -1302,6 +1521,15 @@ namespace SDVRadiance
             // a job, so the room light in a windowed interior is simply always on.
             bool windowsHere = interiorWindowed && config.WindowEffectsEnabled;
             bool windowedRoom = windowsHere && config.WindowBeamEnabled;
+            if (windowedRoom && WindowGlassNeeded(config))
+                BuildWindowGlassMask(config);
+            else
+            {
+                WindowGlassMask = null;
+                // no glass painted: lightning has no windows to cast shadows from here
+                if (LightningEffects.WindowCentresOnThisScreen(location!).Count > 0)
+                    LightningEffects.SetWindowCentres(location, []);
+            }
             ShadowRenderer.WindowDaylight(out Vector3 dayColour, out float dayStrength);
             // The player's own dial on the visible daylight: the glow on the pane, the beam and the
             // floor patch move together, the room's lighting does not (that is lighting, not an
@@ -1315,8 +1543,14 @@ namespace SDVRadiance
             // A cabin is a FarmHouse to the game; the island house is its own class.
             bool playersOwnHome = location is StardewValley.Locations.FarmHouse or StardewValley.Locations.IslandFarmHouse;
             float daylightScale = MathHelper.Clamp(playersOwnHome ? config.WindowDaylightStrength : config.WindowDaylightStrengthElsewhere, 0f, 2f);
-            Vector3 windowColourTarget = windowedRoom ? dayColour * (dayStrength * 0.8f * daylightScale) : Vector3.Zero;
-            float paneDaylightTarget = windowedRoom ? MathHelper.Clamp(dayStrength * 1.6f, 0f, 1f) : 0f;
+            // Daylight through the windows only while the game has them lit. The old beams were
+            // drawn from the lit windows alone, so they were dark at night and in the rain; the
+            // light shaped by the glass is drawn from the labels, and it went on letting in the
+            // dusk's daylight at 20:00 with every window dark (a glow beside the window, author,
+            // 16 Oct 2026). Eased like the rest, so it fades out as the game puts them out.
+            bool daylightThroughWindows = windowedRoom && location != null && GameWindowsLit(location);
+            Vector3 windowColourTarget = daylightThroughWindows ? dayColour * (dayStrength * 0.8f * daylightScale) : Vector3.Zero;
+            float paneDaylightTarget = daylightThroughWindows ? MathHelper.Clamp(dayStrength * 1.6f, 0f, 1f) : 0f;
             if (!ReferenceEquals(location, _exposureLocation))
             {
                 _exposureLocation = location;
@@ -1363,7 +1597,10 @@ namespace SDVRadiance
             // The stage's own fade still applies: while the flood is easing in/out the
             // exposure walks back to neutral with it, so toggling never steps the room.
             GetParam(effect, "Exposure")?.SetValue(Vector3.Lerp(Vector3.One, _exposureEase, _fadeFlood)
-                * (1f + LightningEffects.FloodExposureLift * LightningEffects.Burst01));
+                * (1f + LightningEffects.FloodExposureLift * LightningEffects.Burst01
+                   + (interiorWindowed && config.WindowEffectsEnabled
+                       ? WindowFlashRoomLift * LightningEffects.WindowRoomFlash01 - WindowFlashAfterDip * LightningEffects.WindowAfterDip01
+                       : 0f)));
             GetParam(effect, "RoomSaturation")?.SetValue(MathHelper.Lerp(1f, _roomSaturationEase, _fadeFlood));
             // ...and the switch that says the saturation lift may run at all. See the shader's
             // RoomLookOn note: handing it a neutral 1.0 outdoors was supposed to make the block an
@@ -1383,10 +1620,9 @@ namespace SDVRadiance
             {
                 int viewportWidth = Math.Max(1, Game1.viewport.Width);
                 int viewportHeight = Math.Max(1, Game1.viewport.Height);
+                _windowBeamCandidates.Clear();
                 foreach (var lightEntry in Game1.currentLightSources)
                 {
-                    if (windowCount >= 6)
-                        break;
                     var light = lightEntry.Value;
                     if (light.lightContext.Value != LightSource.LightContext.WindowLight)
                         continue;
@@ -1403,18 +1639,34 @@ namespace SDVRadiance
                     float beamV = screenPosition.Y / viewportHeight;
                     if (beamU < -0.3f || beamU > 1.3f || beamV < -0.5f || beamV > 1.2f)
                         continue;   // beam could not land on screen
-                    _windowShaftPositions[windowCount++] = new Vector2(beamU, beamV);
+                    _windowBeamCandidates.Add(new Vector4(beamU, beamV, WindowGlassLabelledAt(light.position.Value) ? 1f : 0f,
+                        light.textureIndex.Value == FloorGlowLightSheet ? 1f : 0f));
                 }
+                if (_windowBeamCandidates.Count > WindowBeamSlots)
+                    FitWindowBeamsIntoTheSlots(viewportWidth, viewportHeight);
+                windowCount = Math.Min(_windowBeamCandidates.Count, WindowBeamSlots);
+                for (int i = 0; i < windowCount; i++)
+                    _windowShaftPositions[i] = new Vector4(_windowBeamCandidates[i].X, _windowBeamCandidates[i].Y, _windowBeamCandidates[i].Z, 0f);
             }
             for (int i = windowCount; i < 6; i++)
-                _windowShaftPositions[i] = Vector2.Zero;
+                _windowShaftPositions[i] = Vector4.Zero;
             // Beam geometry is handed over in TILES — the shader works in tile space, where
             // a sideways lean means the same thing on any aspect ratio.
             ShadowRenderer.WindowShaft(out float lean, out float reachTiles);
+            // The lightning rides in the first window's spare slot, whatever windows there are.
+            // Lightning in the cloud lights the glass less than a near bolt does.
+            _windowShaftPositions[0].W = windowedRoom ? LightningEffects.WindowFlash01 * (LightningEffects.WindowStrikeNear ? 1f : 0.6f) : 0f;
             GetParam(effect, "WindowPositions")?.SetValue(_windowShaftPositions);
             GetParam(effect, "WindowCount")?.SetValue((float)windowCount);
-            GetParam(effect, "WindowColour")?.SetValue(_windowColourEase * _fadeFlood);
-            GetParam(effect, "PaneDaylight")?.SetValue(_paneDaylightEase * _fadeFlood);
+            // Lightning through the windows rides the window's own light, by the same dial, so
+            // it comes in the shape of the glass and lays the same patch on the floor; the pane is
+            // exempt from the room's dimming while it flashes, as it is by day.
+            // Only a near bolt throws a beam; lightning in the cloud is a glow with no shape.
+            float windowFlash = windowedRoom ? LightningEffects.WindowFlash01 : 0f;
+            float beamFlash = LightningEffects.WindowStrikeNear ? windowFlash : 0f;
+            GetParam(effect, "WindowColour")?.SetValue((_windowColourEase + LightningEffects.WindowFlashColour * (beamFlash * WindowFlashStrength * daylightScale)) * _fadeFlood);
+            GetParam(effect, "PaneDaylight")?.SetValue(Math.Max(_paneDaylightEase, windowFlash) * _fadeFlood);
+            SetWindowZoneParams(effect, config);
             GetParam(effect, "WindowBeam")?.SetValue(new Vector4(lean, reachTiles, 0.9f, 1f));
             // How much a wall between the pane and a pixel takes off that pixel's beam. The
             // beam used to be a shape alone and passed through everything it crossed; this is
@@ -1424,6 +1676,7 @@ namespace SDVRadiance
             // tall. The z term is the 12px the beam origin sits below the pane's centre,
             // expressed in tiles, so the glass and the beam agree on where the window is.
             GetParam(effect, "WindowPane")?.SetValue(new Vector4(0.55f, 0.8f, 12f / 64f, 0.35f));
+            SetWindowGlassParams(effect, config);
             GetParam(effect, "DebugEmitter")?.SetValue(DebugChannel == DebugOverlayChannel.Emitter ? 1f : 0f);
             GetParam(effect, "DebugLampShadow")?.SetValue(DebugChannel == DebugOverlayChannel.LampShadow ? 1f : 0f);
 
@@ -1475,6 +1728,7 @@ namespace SDVRadiance
             // the shader, including its early returns, so folding the window fade in here is what
             // makes the pass leave gradually instead of being cut out from under the frame.
             BlendBackSource(spriteBatch, source, destination, _fadeWater * MathHelper.Clamp(_waterInMaskEase, 0f, 1f));
+            DrawEmissiveParticlesAfterWater(spriteBatch, destination);
             // The sky half of the precipitation lands here, on the rippled result, so streaks
             // hang straight over the river instead of waving with it. This side of the capture
             // never meets the vanilla lightmap, so the particles' own ambient dims it instead.
@@ -2220,8 +2474,12 @@ namespace SDVRadiance
                 GetParam(effect, "ShadowStrength")?.SetValue(0f);
                 GetParam(effect, "OccluderTexture")?.SetValue(source);
             }
-            effect.CurrentTechnique = effect.Techniques["Lighting"];
-            DrawFull(spriteBatch, source, destination, effect);
+            // The lighter road works the light out at half size and lays it over the sharp frame.
+            if (!(SoftEffectsLowered(config) && DrawClassicLightAtHalf(spriteBatch, source, destination, effect)))
+            {
+                effect.CurrentTechnique = effect.Techniques["Lighting"];
+                DrawFull(spriteBatch, source, destination, effect);
+            }
             // Same out-of-shader presence as the water pass: the light POOLS never rode the
             // fade, so this stage popped its full contribution in and out with the light list.
             BlendBackSource(spriteBatch, source, destination, _fadeLighting);

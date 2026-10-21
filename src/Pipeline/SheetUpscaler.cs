@@ -1007,6 +1007,12 @@ namespace SDVRadiance
                 return null;
             }
             Rectangle source = sourceRectangle ?? texture.Bounds;
+            if (family == ArtFamily.World && MapTileNeighbours.DrawingSeeThroughMapTile(texture, source))
+            {
+                _untouchedDraws[(int)family]++;
+                NoteWorldRoad(family, texture, RoadRaw);
+                return null;
+            }
             if (Style == SheetSmoothingStyle.Soft4x && DrawnLargeEnough(drawScale / SoftScale, soft: true))
             {
                 // A rectangle that reaches past the sheet is drawn by the game with the sheet

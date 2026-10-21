@@ -424,6 +424,23 @@ namespace SDVRadiance
                     _nearbyLightSources.Add((screen, reach, glow.Ease * TvScreenGlow.Flicker(glow)));
                 }
             }
+            // Lightning through the windows casts like a lamp at each labelled window, with the
+            // flash on the shadow's strength, so the shadows leap away from the glass and fade with
+            // it (asked for by the author on 16 Oct 2026). Kept apart from the lamps: a room's
+            // nearest three lights would often leave the window out, and the flash is the brightest
+            // light in the room while it lasts. The game publishes no window light at night or in
+            // the rain, so these come from the labelled glass, one per window.
+            _strikeLightSources.Clear();
+            float strikeShadow = LightningEffects.WindowShadowStrength;
+            if (strikeShadow > 0.01f)
+                foreach (Vector2 window in LightningEffects.WindowCentresOnThisScreen(location))
+                {
+                    Vector2 screen = Game1.GlobalToLocal(Game1.viewport, window);
+                    if (screen.X < -StrikeShadowReach || screen.X > Game1.viewport.Width + StrikeShadowReach
+                        || screen.Y < -StrikeShadowReach || screen.Y > Game1.viewport.Height + StrikeShadowReach)
+                        continue;
+                    _strikeLightSources.Add((screen, StrikeShadowReach, strikeShadow * StrikeShadowFlick));
+                }
             // NOTE: label-driven lights (window class 12, emissive art class 6) deliberately do
             // NOT feed this list. They were added and reverted: being per-TILE, one painted lamp
             // post is four "lights", and four of them next to the player took the whole six-slot
@@ -646,6 +663,13 @@ namespace SDVRadiance
         }
 
         private readonly System.Collections.Generic.List<(Vector2 pos, float reach, float flick)> _nearbyLightSources = [];
+        /// <summary>The windows lightning is coming through this frame, casting apart from the lamps.</summary>
+        private readonly System.Collections.Generic.List<(Vector2 pos, float reach, float flick)> _strikeLightSources = [];
+        /// <summary>How far a window's lightning throws shadows: across any room.</summary>
+        private const float StrikeShadowReach = 1400f;
+        /// <summary>The strike's shadow at its peak, against a lamp's: harder, the flash being the
+        /// brightest light in the room while it lasts.</summary>
+        private const float StrikeShadowFlick = 1.5f;
         private readonly System.Collections.Generic.List<(float rotation, float st, float a, float distSq)> _lightShadowCasts = [];
         /// <summary>Runaway guard on the candidate lights, matching the lighting pass's own
         /// budget (<see cref="RenderPipeline.MaxLights"/>) so the two agree on what "the lights in
@@ -785,8 +809,13 @@ namespace SDVRadiance
             // person at the far end of a room keeps the window above them no matter where the
             // camera is, and nobody's shadow depends on how many lights happen to be lit near
             // somebody else.
-            if (_lightShadowCasts.Count <= _castsPerCaster)
-                return;
+            if (_lightShadowCasts.Count > _castsPerCaster)
+                KeepNearestCasts();
+            GatherStrikeCasts(feet, strength, lenCfg);
+        }
+
+        private void KeepNearestCasts()
+        {
             _lightShadowCasts.Sort(ByLightDistance);
             // A SOFT edge on the count, because a hard one pops. Cutting the list at N drops the
             // light that lost its place at whatever strength it happened to have, and walking
@@ -812,6 +841,15 @@ namespace SDVRadiance
                 }
                 _lightShadowCasts[i] = (cast.rotation, cast.st, cast.a * fade, cast.distSq);
             }
+        }
+
+        /// <summary>The casts from lightning through the windows, after the lamps' ranking: they
+        /// never take a lamp's place nor lose theirs to one.</summary>
+        private void GatherStrikeCasts(Vector2 feet, float strength, float lenCfg)
+        {
+            foreach (var (lpos, reach, flick) in _strikeLightSources)
+                if (LightCast(feet, lpos, reach, strength, lenCfg, flick, out float rotation, out float st, out float a))
+                    _lightShadowCasts.Add((rotation, st, a, Vector2.DistanceSquared(feet, lpos)));
         }
 
         /// <summary>

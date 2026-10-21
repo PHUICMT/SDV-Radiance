@@ -24,6 +24,9 @@ namespace SDVRadiance
         private readonly GraphicsDevice _device;
         private readonly string _modDirectory;
 
+        /// <summary>The mod's folder, for the tuner's font numbers beside its atlas.</summary>
+        internal string ModDirectory => _modDirectory;
+
         private RenderTarget2D? _sceneRenderTarget;   // full-res capture
         private RenderTarget2D? _fullResolutionPingA;     // full-res ping-pong
         private RenderTarget2D? _fullResolutionPingB;     // full-res ping-pong
@@ -168,6 +171,7 @@ namespace SDVRadiance
                           + ArtReloads.Forget(_selfDrawnEmptyRetryTick, key => key.Item2)
                           + ArtReloads.Forget(_spriteGlassByPiece, key => key.Texture)
                           + ArtReloads.Forget(_entityOpaqueCache, key => key.texture);
+            ForgetWindowGlassVerdicts();
             if (tileArt > 0)
             {
                 MaskEpoch++;
@@ -651,6 +655,9 @@ namespace SDVRadiance
             // actionable if it names the pack that painted it.
             if (LabelStore.Instance != null)
                 report.AppendLine($"label sources: {LabelStore.Instance.DescribeSources()}");
+            report.AppendLine(LookPacks.Notes.Count == 0
+                ? $"looks from other mods: none ({LookPacks.FileName} found in no mod)"
+                : $"looks from other mods: {string.Join("; ", LookPacks.Notes)}");
             // "My reflections are missing" and "I am running an art mod this has no labels for"
             // are the same sentence, and nobody should be expected to work that out unaided.
             // Variants that actually matched. Worth a line of its own: a variant that never
@@ -1263,6 +1270,7 @@ namespace SDVRadiance
             _sceneRenderTarget = _fullResolutionPingA = _fullResolutionPingB = null;
             _halfResolutionScratchA = _halfResolutionScratchB = _cloudMaskKeep = null;
             ReleaseSoftEffectTargets();
+            ReleaseWindowGlass();
             // EnsureTargets keys off the scene target being the right size; a null one rebuilds
             // the set, and the cloud mask must not be read as a sky it no longer holds.
             _cloudMaskTick = int.MinValue;
@@ -1456,6 +1464,7 @@ namespace SDVRadiance
             // presence that is a plain copy once its fades are gone (see MistLayers).
             bool waterStageCarriesMist = !waterStageRuns && _water != null && _waterMask != null && MistLayers.WaitingOnThisScreen;
             if (waterStageRuns || waterStageCarriesMist) AddStage(_waterStageDelegate!, 2);
+            _emissiveAfterWater = waterStageRuns || waterStageCarriesMist;
             // Rain in the AIR must not ripple with the water under it: while the water stage
             // runs, it carries the sky half of the precipitation on its own output instead.
             // Mist on a map's always-front layer is air too, and goes the same way.
@@ -1467,10 +1476,11 @@ namespace SDVRadiance
             // is the slow world truth; this fade is the half-second screen-side ease that
             // covers toggles and doorways.
             bool wetOn = config.WetWorldEnabled && _wetEffect != null && outdoors
-                && (WetnessNow > 0.004f || LocalSky.RainLandsHere);
+                && (WetnessNow > 0.004f || LocalSky.RainLandsHere || DryLampLightWanted(config));
             _fadeWet = wetOn ? Ease01(_fadeWet) : Ease0(_fadeWet);
-            _wetPuddleMirrorWanted = wetOn && !DynamicReflectionsPresent
+            _wetPuddleMirrorWanted = wetOn && !DynamicReflectionsPresent && !WetPuddlesMirrorTheScene
                 && config.WetWorldPuddles > 0.01f && PuddleAmountNow > 0.05f;
+            _wetWantsSpriteMask = wetOn;
             if (_fadeWet > FadeGone && _wetEffect != null) AddStage(_wetStageDelegate ??= RenderWetWorld, 11);
             // Cloud shadows drift over the ground — outdoors only, and first so later
             // effects (bloom/grade) see the shadowed scene. They are SUNLIGHT (or moonlight)
@@ -1630,6 +1640,8 @@ namespace SDVRadiance
             StampEaseClock();
             // One slice of this frame for the whole-map walks, shared between all three of them.
             _mapScanBudget.BeginFrame();
+            // The window detail's boxes are found once per frame by whichever stage asks first.
+            _windowZonesBuilt = false;
             if (!AnyEffectActive(config))
             {
                 _masterFade = 0f; // reset so the stack fades back in next time it's enabled
@@ -1757,6 +1769,7 @@ namespace SDVRadiance
                 // actually built from rather than the ones it started with.
                 ReportBrightWatch(config);
                 ReportMark(config);
+                KeepTunerBackdrop(spriteBatch, target);
                 ChainStepEnd(ChainStep.Finish, stepStart);
             }
             catch (Exception exception)
@@ -2399,6 +2412,7 @@ namespace SDVRadiance
             _heatMapSpare?.Dispose(); _heatMapSpare = null;
             _sceneRenderTarget = _fullResolutionPingA = _fullResolutionPingB = _halfResolutionScratchA = _halfResolutionScratchB = null;
             ReleaseSoftEffectTargets();
+            ReleaseWindowGlass();
             _waterMask = null; _occluderMask = null; _floodOccluderMask = null; _luminanceRenderTarget = null;
             _spriteMaskRenderTarget = null; _spriteMaskSpriteBatch = null;
             _bloom = _colorGrade = _fogEffect = _cloudShadow = _tiltShift = _water = _finishing = _lighting = _floodEffect = _cascadesEffect = _normalsEffect = null;

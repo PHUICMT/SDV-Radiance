@@ -276,7 +276,11 @@ float HearthFloor;
 
 // Window light shafts: a sheared beam of daylight falling from each visible window,
 // leaning with the same sun the shadows use. Positions are the BOTTOM of the pane.
-float2 WindowPositions[6];  // per-window screen UV
+float4 WindowPositions[6];  // xy = per-window screen UV; z = 1 when its glass is labelled, so its
+                            // old pane and beam give way to the glass's own (WindowGlass.x), and 0
+                            // for a window nobody labelled, which keeps the old light beside them;
+                            // [0].w = lightning through the windows this frame, 0 to 1 (the only
+                            // free place for it: this shader is at ps_3_0's limit of constants)
 float WindowCount;       // how many entries are live
 float3 WindowColour;     // daylight colour x strength (premultiplied, eased on CPU)
 float4 WindowBeam;       // x = lean (tiles sideways per tile of drop), y = reach (tiles),
@@ -314,6 +318,58 @@ float WindowShaftBlock;  // 0 = the beam is a shape and passes through everythin
 float4 WindowPane;       // x,y = pane half-size (tiles), z = pane centre above the beam
                          // origin (tiles), w = how much the glass itself glows
 float PaneDaylight;      // 1 while there is sky light outside, 0 after dark (eased on CPU)
+// THE GLASS ITSELF, pixel by pixel: every labelled window on screen paints its panes white into
+// this target (RenderPipeline.WindowGlass, one texel per pixel of art). With it the pane glows
+// where the glass is instead of in an oval, and the beam is the panes carried down onto the
+// floor, bars and all. WindowGlass.x eases between the old shapes (0) and these (1), so the
+// switch fades and a room with no labelled window keeps the old light exactly.
+texture WindowGlassTexture;
+sampler2D WindowGlassSampler = sampler_state
+{
+    Texture = <WindowGlassTexture>;
+    // Linear: one texel is a pixel of art, and a hard edge stepping across four screen pixels
+    // reads as a mosaic once the beam carries it onto the floor.
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+// THE CURTAIN'S COLOUR, carried down the beam beside it: what a sheer curtain takes out of the
+// light, in rgb, weighted by the light at that copy, and the weight itself in alpha, so the
+// colour is 1 - rgb / a. Clear glass takes nothing out. With the dial off, or no curtain on
+// screen, the CPU binds a transparent texel, which reads as no colour at all.
+texture WindowGlassTintTexture;
+sampler2D WindowGlassTintSampler = sampler_state
+{
+    Texture = <WindowGlassTintTexture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+// x = how far to lean on the glass (0 = the old shapes, 1 = the glass), eased on the CPU;
+// y = the light in the air below the glass (the rays), z = the patch on the floor, w = the
+// glow of the pane itself, each the player's dial already scaled on the CPU.
+// WindowGlassRay: x = how much of the world the glass target covers against the view, zw = where
+// the view starts inside it (in view widths), so the target is read at (uv + zw) / x; y = how far
+// the rays go toward white. The target is snapped to the art's pixel grid and reaches past the
+// view, so a beam neither shimmers as the camera walks nor vanishes with its window off screen. Packed in fours: every float is a whole constant register, and this shader
+// sits at ps_3_0's limit of them.
+float4 WindowGlass;
+float4 WindowGlassRay;
+float WindowDetail;      // 0 = the window takes the room's light like anything else (every release
+                         // before), 1 = inside a window the light may close at most half of each
+                         // pixel's distance to white, so the bars and frame keep their shape
+                         // (eased on CPU, so switching fades)
+float4 WindowZones[8];   // the box round each window on screen, the map's and placed furniture:
+                         // xy = centre (screen UV), zw = half size (tiles). Also read by the grade.
+float WindowZoneCount;   // how many entries are live
+// How far toward white the light may take a window pixel's brightness, as a share of the way.
+// 0.5 still washed the reported pane to cream once the bloom had been over it (14 Oct 2026).
+static const float WindowLiftShare = 0.2;
+// How strongly a window's own edges are drawn back out, against the art's one-pixel neighbours.
+// Measured on screen at the reported window (14 Oct 2026): edges 13.6 against 8.8 with the mod
+// off and 7.0 before, colour 0.21 against 0.15; the author asked for it sharper and richer twice.
+static const float WindowSharpen = 1.0;
+// How much of the art's own colour a window keeps, against its brightness: above 1 to give back
+// what the bloom's haze and the grade take off it later.
+static const float WindowColourKeep = 1.45;
 
 // SUN SHAFTS, the god-ray pass that finally works the way the name promises. The bright-pass
 // approach (streak already-bright pixels toward the light) cannot work in a top-down game: there
@@ -575,6 +631,22 @@ float4 LampMarchFour(float2 windowUv)
 }
 
 float4 LampMarchPS(PixelInput input) : SV_TARGET { return LampMarchFour(input.UV); }
+
+// How far inside one of the window detail's boxes a pixel is: 1 inside, easing to 0 over the
+// outer quarter of the box so the edge never shows. Kept equal in colorgrade.fx and tail.fx.
+float WindowZone(float2 uv)
+{
+    float zone = 0.0;
+    [unroll]
+    for (int zoneIndex = 0; zoneIndex < 8; zoneIndex++)
+    {
+        float zoneOn = step((float)zoneIndex + 0.5, WindowZoneCount);
+        float2 zoneDelta = (uv - WindowZones[zoneIndex].xy) * TilesPerScreen / max(WindowZones[zoneIndex].zw, 0.01);
+        float zoneEdge = saturate(1.0 - max(abs(zoneDelta.x), abs(zoneDelta.y)));
+        zone = max(zone, zoneOn * smoothstep(0.0, 0.25, zoneEdge));
+    }
+    return zone;
+}
 
 float4 FloodPS(PixelInput input) : SV_TARGET
 {
@@ -1103,8 +1175,8 @@ float4 FloodPS(PixelInput input) : SV_TARGET
         [unroll]
         for (int paneIndex = 0; paneIndex < 6; paneIndex++)
         {
-            float paneOn = step((float)paneIndex + 0.5, WindowCount);
-            float2 paneDelta = (uv - WindowPositions[paneIndex]) * TilesPerScreen;
+            float paneOn = step((float)paneIndex + 0.5, WindowCount) * (1.0 - WindowGlass.x * WindowPositions[paneIndex].z);
+            float2 paneDelta = (uv - WindowPositions[paneIndex].xy) * TilesPerScreen;
             paneDelta.y += WindowPane.z;                    // the beam starts below the pane's centre
             float2 q = paneDelta / max(WindowPane.xy, 0.001);
             float r = saturate(1.0 - dot(q, q));
@@ -1115,6 +1187,16 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // dark rectangle in a dark room, and exempting it from the room's exposure left a window
     // still lit at midnight, brighter than the room it was supposed to be letting light into.
     // The exemption follows the sun; the glow term below already fades with WindowColour.
+    // The glass's own shape joins the old ovals rather than replacing them all: only the windows
+    // whose glass is labelled gave theirs up above, and one nobody labelled keeps its old light
+    // in the same room.
+    float paneGlass = 0.0;
+    [branch]
+    if (WindowGlass.x > 0.001)
+        paneGlass = tex2Dlod(WindowGlassSampler, float4((uv + WindowGlassRay.zw) / WindowGlassRay.x, 0.0, 0.0)).r * WindowGlass.x;
+    // the glow keeps each shape's own dial: the old oval's alone, the glass's times its own
+    float paneShine = max(pane, paneGlass * WindowGlass.w);
+    pane = max(pane, paneGlass);
     float paneLit = pane * PaneDaylight;
 
     // AND NEITHER IS THE FLAME. Exactly the same argument as the glass above, for the thing
@@ -1234,8 +1316,14 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // that mornings were still fine, which is the half of the day the sum stays under the
     // ceiling. Letting it climb to the ceiling and no further keeps every difference the art
     // has below that point, so the bars stay dark and the frame keeps its shape.
-    float3 paneGlow = scene.rgb * WindowColour * (pane * WindowPane.w);
+    // Shaped by the glass the pane glows twice as hard: the game's own white glow over the window,
+    // which used to carry most of its brightness, fades out in that mode.
+    float3 paneGlow = scene.rgb * WindowColour * (paneShine * WindowPane.w);
     litScene += min(paneGlow, max(1.0 - litScene, 0.0));
+    // LIGHTNING TURNS THE GLASS WHITE. Added, not laid on the art: the glow above is the pane's own
+    // colour lit, and a pane is dark navy at night, so a flash multiplied into it hardly showed.
+    // The flash is the sky itself behind the glass going white, the frame and bars staying dark.
+    litScene += paneGlass * WindowPositions[0].w;
 
     // A FIRE IN A ROOM WE DARKENED HAS TO LOOK LIKE IT IS DOING THE LIGHTING. Every
     // other path a light takes to the screen runs through Strength AND the brightness
@@ -1332,8 +1420,8 @@ float4 FloodPS(PixelInput input) : SV_TARGET
         [unroll]
         for (int windowIndex = 0; windowIndex < 6; windowIndex++)
         {
-            float windowOn = step((float)windowIndex + 0.5, WindowCount);
-            float2 windowDelta = (uv - WindowPositions[windowIndex]) * TilesPerScreen;
+            float windowOn = step((float)windowIndex + 0.5, WindowCount) * (1.0 - WindowGlass.x * WindowPositions[windowIndex].z);
+            float2 windowDelta = (uv - WindowPositions[windowIndex].xy) * TilesPerScreen;
             float along = windowDelta.y / max(WindowBeam.y, 0.001);
             float x = windowDelta.x - WindowBeam.x * windowDelta.y;
             // Spreads as it falls: a pane-wide band at the sill opening into a pool.
@@ -1356,7 +1444,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             [branch]
             if (here > 0.004 && WindowShaftBlock > 0.0)
             {
-                float2 windowTile = WindowPositions[windowIndex] * TilesPerScreen + WorldTileOffset;
+                float2 windowTile = WindowPositions[windowIndex].xy * TilesPerScreen + WorldTileOffset;
                 float blocked = 0.0;
                 [unroll]
                 for (int rayStep = 1; rayStep <= 6; rayStep++)
@@ -1377,7 +1465,32 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             shaft += here;
         }
     }
-    litScene += (scene.rgb * 1.2 + 0.03) * WindowColour * (shaft * WindowBeam.w);
+    // THE BEAM FROM THE GLASS. The window glass target carries it ready made: the glass is
+    // painted down the beam on the CPU side, two dozen times, each a little further and fainter
+    // (RenderPipeline.WindowGlass), so green is the light in the air and blue the patch on the
+    // floor, both continuous streaks with each bar's stripe of shade running down them. One
+    // read here instead of a march: eight reads per pixel left the rays broken into specks
+    // ("the light looks chipped", 15 Oct 2026). The walls do not stop this beam; the old one's
+    // blocking ships switched off.
+    float3 curtainTint = 1.0;
+    [branch]
+    if (WindowGlass.x > 0.001)
+    {
+        float4 glassUv = float4((uv + WindowGlassRay.zw) / WindowGlassRay.x, 0.0, 0.0);
+        float4 glassLight = tex2Dlod(WindowGlassSampler, glassUv);
+        float4 curtainLoss = tex2Dlod(WindowGlassTintSampler, glassUv);
+        curtainTint = lerp(1.0, 1.0 - curtainLoss.rgb / max(curtainLoss.a, 0.001), WindowGlass.x);
+        shaft += glassLight.b * WindowGlass.z * WindowGlass.x;
+        // Added, not laid on the art: it is the air that is lit, so it shows over a dark wall as
+        // much as over the boards. Toward white (the daylight's own brightness in every channel)
+        // by the player's dial: the author asked for the rays a little whiter than the room.
+        float3 rayColour = lerp(WindowColour, dot(WindowColour, float3(0.25, 0.5, 0.25)).xxx, WindowGlassRay.y) * curtainTint;
+        // Not over the black around a room: that is no air at all, and a wide ray spilling past
+        // the wall glowed in the void beyond it.
+        float inRoom = saturate(dot(scene.rgb, float3(0.25, 0.5, 0.25)) * 8.0);
+        litScene += rayColour * (glassLight.g * WindowGlass.y * WindowGlass.x * inRoom);
+    }
+    litScene += (scene.rgb * 1.2 + 0.03) * WindowColour * curtainTint * (shaft * WindowBeam.w);
 
     // A flame used to be lifted above its own art here, so it could come out brighter than the
     // room it was lighting. That term is gone, and nothing replaced it, because nothing needs to:
@@ -1544,10 +1657,45 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // red arrives at the ceiling first and stops, green follows, blue keeps climbing, and the hue
     // walks toward the nearest primary as the room gets brighter. Below the knee this is exactly
     // the identity, so a dim room and every outdoor scene are untouched.
+    float3 preShoulder = litScene;
     float peak = max(max(litScene.r, litScene.g), litScene.b);
     float over = max(peak - ShoulderKnee, 0.0);
     float rolled = min(peak, ShoulderKnee) + over / (1.0 + over / (1.0 - ShoulderKnee));
-    litScene *= rolled / max(peak, 1e-4);
+    float3 shouldered = litScene * (rolled / max(peak, 1e-4));
+    litScene = shouldered;
+
+    // KEEP THE WINDOW'S OWN DETAIL. A window is drawn near white by the game and by most packs
+    // (bars at 0.91, glass at 0.98 in the one reported), and the shoulder above squeezes that top
+    // tenth into a few levels while the glow pushes it to the ceiling, so the bars and frame
+    // vanished into the glass and a green-blue pane came out cream. Inside a window the light is
+    // laid over the ART instead: each pixel's brightness moves toward white by at most
+    // WindowLiftShare of the way, by as much of that as the light asked for, and its colour is
+    // the art's own, a little stronger. Mixing in the room's light colour instead turned a
+    // green-blue pane grey (warm on cool cancels), and lifting toward white took the colour
+    // out; either reads as a dull window rather than a sunlit one. The art's order survives. The
+    // window's own edges are then drawn back out by WindowSharpen (one art pixel each way), which
+    // returns what the lift and the bloom still take off the bars. Darkening passes through
+    // unchanged. Outside a window, nothing here runs.
+    [branch]
+    if (WindowDetail > 0.001 && WindowZoneCount > 0.5)
+    {
+        float zone = WindowZone(uv);
+        float scenePeak = max(max(scene.r, scene.g), scene.b);
+        float wantedPeak = max(max(preShoulder.r, preShoulder.g), preShoulder.b);
+        float liftAsked = saturate((wantedPeak - scenePeak) / max(1.0 - scenePeak, 1e-3));
+        float sceneLuma = dot(scene.rgb, float3(0.2126, 0.7152, 0.0722));
+        float liftedLuma = lerp(sceneLuma, 1.0, WindowLiftShare * liftAsked);
+        float3 lifted = liftedLuma + (scene.rgb - sceneLuma) * WindowColourKeep;
+        float3 kept = wantedPeak > scenePeak ? lifted : preShoulder;
+        // One art pixel is four buffer pixels: the buffer is the world at one texel per game pixel.
+        float2 artPixel = 1.0 / (TilesPerScreen * 16.0);
+        float3 around = (tex2Dlod(SourceSampler, float4(uv + float2(artPixel.x, 0.0), 0.0, 0.0)).rgb
+                       + tex2Dlod(SourceSampler, float4(uv - float2(artPixel.x, 0.0), 0.0, 0.0)).rgb
+                       + tex2Dlod(SourceSampler, float4(uv + float2(0.0, artPixel.y), 0.0, 0.0)).rgb
+                       + tex2Dlod(SourceSampler, float4(uv - float2(0.0, artPixel.y), 0.0, 0.0)).rgb) * 0.25;
+        kept = saturate(kept + (scene.rgb - around) * WindowSharpen);
+        litScene = lerp(shouldered, kept, zone * WindowDetail);
+    }
 
     // The snow's glitter goes on AFTER the shoulder: a glint is a specular highlight, the one
     // thing in the frame that is allowed to hit the ceiling, and rolled off with the rest it

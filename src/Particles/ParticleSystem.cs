@@ -55,6 +55,14 @@ namespace SDVRadiance
             /// inside, fading at its feet. The only cell that carries colour of its own: a rainbow
             /// is not a tint on a shape, it IS the colour. Drawn once per waterfall, not spawned.</summary>
             Rainbow,
+            /// <summary>A ball of dry twigs, drawn in white and tinted the colour of the desert.
+            /// Rolls along the ground, a tumbleweed.</summary>
+            Tumbleweed,
+            /// <summary>Not in the atlas: the game's own debris art (a petal or a leaf from
+            /// Cursors, with its ten frames of turning over), so the mod's leaves are the game's
+            /// leaves, in whatever art a recolour gives them. Drawn in a pass of its own, point
+            /// sampled like the game draws it.</summary>
+            GameLeaf,
         }
 
         /// <summary>
@@ -80,7 +88,7 @@ namespace SDVRadiance
         private const float FadeInShare = 0.15f;
         private const float FadeOutShare = 0.35f;
 
-        private const int AtlasCellCount = 6;
+        private const int AtlasCellCount = 7;
         private const int AtlasCellSizePixels = 32;
 
         /// <summary>
@@ -125,6 +133,23 @@ namespace SDVRadiance
             /// them. Anything that lies ON the ground, beside things that stand on it, belongs
             /// here; anything in the air does not.</summary>
             internal bool Ground;
+            /// <summary>For <see cref="AtlasCell.GameLeaf"/>: the row of the game's debris art in
+            /// Cursors (1184 spring petals, 1200 summer leaves, 1216 autumn leaves), and where in
+            /// its turning-over this one starts.</summary>
+            internal int ArtRow;
+            internal float ArtClockOffset;
+            /// <summary>A bounce along the ground: how high, and how many hops a second.</summary>
+            internal float HopHeight;
+            internal float HopPerSecond;
+            /// <summary>A turn about the particle's own position, which is the foot of a whirlwind:
+            /// how far out, how much further out each second, how fast round, and how far up it
+            /// has risen. The orbit is squashed into the ground's perspective.</summary>
+            internal float OrbitRadius;
+            internal float OrbitGrowPerSecond;
+            internal float OrbitAngle;
+            internal float OrbitPerSecond;
+            internal float Height;
+            internal float RisePerSecond;
         }
 
         private readonly Particle[] _pool = new Particle[Capacity];
@@ -218,7 +243,10 @@ namespace SDVRadiance
                             float fallPixelsPerSecondSquared = 0f, float dragPerSecond = 0f,
                             float rotationPerSecond = 0f,
                             float swayPixelsPerSecond = 0f, float swayPerSecond = 0f,
-                            bool ground = false)
+                            bool ground = false, int artRow = 0,
+                            float hopHeight = 0f, float hopPerSecond = 0f,
+                            float orbitRadius = 0f, float orbitGrowPerSecond = 0f, float orbitPerSecond = 0f,
+                            float risePerSecond = 0f)
         {
             if (_liveCount >= Capacity) { SpawnsRefused++; return false; }
             ref Particle particle = ref _pool[_liveCount++];
@@ -238,7 +266,30 @@ namespace SDVRadiance
             particle.Cell = cell;
             particle.Emissive = emissive;
             particle.Ground = ground;
+            particle.ArtRow = artRow;
+            particle.ArtClockOffset = (float)_random.NextDouble() * 1.8f;
+            particle.HopHeight = hopHeight;
+            particle.HopPerSecond = hopPerSecond;
+            particle.OrbitRadius = orbitRadius;
+            particle.OrbitGrowPerSecond = orbitGrowPerSecond;
+            particle.OrbitAngle = (float)(_random.NextDouble() * Math.PI * 2.0);
+            particle.OrbitPerSecond = orbitPerSecond;
+            particle.Height = 0f;
+            particle.RisePerSecond = risePerSecond;
             return true;
+        }
+
+        /// <summary>Where a particle is drawn against where it is: round its whirlwind, up off the
+        /// ground, or partway through a hop.</summary>
+        private static Vector2 DrawOffset(in Particle particle)
+        {
+            Vector2 offset = Vector2.Zero;
+            if (particle.OrbitPerSecond != 0f)
+                offset += new Vector2((float)Math.Cos(particle.OrbitAngle) * particle.OrbitRadius,
+                    (float)Math.Sin(particle.OrbitAngle) * particle.OrbitRadius * 0.35f - particle.Height);
+            if (particle.HopHeight > 0f)
+                offset.Y -= Math.Abs((float)Math.Sin(particle.AgeSeconds * particle.HopPerSecond * Math.PI)) * particle.HopHeight;
+            return offset;
         }
 
         internal void Clear()
@@ -302,6 +353,12 @@ namespace SDVRadiance
                                               * particle.SwayPixelsPerSecond * SecondsPerStep;
                 }
                 particle.Rotation += particle.RotationPerSecond * SecondsPerStep;
+                if (particle.OrbitPerSecond != 0f)
+                {
+                    particle.OrbitAngle += particle.OrbitPerSecond * SecondsPerStep;
+                    particle.OrbitRadius += particle.OrbitGrowPerSecond * SecondsPerStep;
+                    particle.Height += particle.RisePerSecond * SecondsPerStep;
+                }
                 i++;
             }
         }
@@ -438,8 +495,32 @@ namespace SDVRadiance
                 tint = new Color((byte)(tint.R * worldLight.X), (byte)(tint.G * worldLight.Y),
                                  (byte)(tint.B * worldLight.Z), tint.A);
                 float scale = particle.SizePixels / AtlasCellSizePixels;
-                float depth = Math.Clamp(particle.WorldPosition.Y / 10000f, 0f, 1f);
-                spriteBatch.Draw(_atlas, fromCamera, CellSource(particle.Cell), tint,
+                // Sorted by where it touches the ground, like everything the game draws: for a
+                // rolling ball that is the bottom of the ball, not its middle, or whatever stands
+                // on the ground just below its middle drew over its lower half.
+                float footY = particle.WorldPosition.Y + (particle.HopHeight > 0f ? particle.SizePixels * 0.45f : 0f);
+                float depth = Math.Clamp(footY / 10000f, 0f, 1f);
+                if (particle.Cell == AtlasCell.GameLeaf)
+                {
+                    if (Game1.mouseCursors != null)
+                    {
+                        int step = (int)((particle.AgeSeconds + particle.ArtClockOffset) * 10f) % 18;
+                        int frame = step < 10 ? step : 18 - step;
+                        spriteBatch.Draw(Game1.mouseCursors, fromCamera + DrawOffset(particle), new Rectangle(352 + frame * 16, particle.ArtRow, 16, 16),
+                            tint, 0f, new Vector2(8f, 8f), particle.SizePixels / 16f, SpriteEffects.None, depth);
+                        drawn++;
+                    }
+                    continue;
+                }
+                if (particle.HopHeight > 0f)
+                {
+                    // Its own shadow on the sand, flat under it and smaller while it is up.
+                    float lift = Math.Abs((float)Math.Sin(particle.AgeSeconds * particle.HopPerSecond * Math.PI));
+                    var shadowFoot = fromCamera + new Vector2(0f, particle.SizePixels * 0.42f);
+                    spriteBatch.Draw(_atlas, shadowFoot, CellSource(AtlasCell.SoftGlow), Color.Black * (0.32f * alpha * (1f - 0.4f * lift)),
+                        0f, origin, new Vector2(scale * (0.95f - 0.25f * lift), scale * 0.28f), SpriteEffects.None, Math.Max(0f, depth - 0.000002f));
+                }
+                spriteBatch.Draw(_atlas, fromCamera + DrawOffset(particle), CellSource(particle.Cell), tint,
                     particle.Rotation, origin, scale, SpriteEffects.None, depth);
                 drawn++;
             }
@@ -459,12 +540,12 @@ namespace SDVRadiance
             for (int i = 0; i < _liveCount; i++)
             {
                 ref Particle particle = ref _pool[i];
-                if (particle.Emissive != emissive || particle.Ground)
+                if (particle.Emissive != emissive || particle.Ground || particle.Cell == AtlasCell.GameLeaf)
                     continue;
                 float alpha = Presence(particle) * systemPresence;
                 if (alpha <= 0.004f)
                     continue;
-                Vector2 fromCamera = particle.WorldPosition - viewportTopLeft;
+                Vector2 fromCamera = particle.WorldPosition + DrawOffset(particle) - viewportTopLeft;
                 float margin = particle.SizePixels;
                 if (fromCamera.X < -margin || fromCamera.X > viewportWidth + margin
                     || fromCamera.Y < -margin || fromCamera.Y > viewportHeight + margin)
@@ -527,6 +608,46 @@ namespace SDVRadiance
                 spriteBatch.Draw(_atlas, screenPosition + push, source, tint,
                     particle.Rotation, origin, scale, SpriteEffects.None, 0f);
             }
+        }
+
+        /// <summary>
+        /// The leaves drawn from the game's own art, in a batch the caller opens with point
+        /// sampling (the game's art is pixel art, and the pool's own pass samples linearly).
+        /// </summary>
+        internal int DrawGameArt(SpriteBatch spriteBatch, float systemPresence, Vector2 screenOffsetPixels,
+                                 float pixelScale, Vector3 worldLight)
+        {
+            if (systemPresence <= 0f || _liveCount == 0 || Game1.mouseCursors == null)
+                return 0;
+            var viewportTopLeft = new Vector2(Game1.viewport.X, Game1.viewport.Y);
+            float viewportWidth = Game1.viewport.Width, viewportHeight = Game1.viewport.Height;
+            var origin = new Vector2(8f, 8f);
+            int drawn = 0;
+            for (int i = 0; i < _liveCount; i++)
+            {
+                ref Particle particle = ref _pool[i];
+                if (particle.Cell != AtlasCell.GameLeaf || particle.Ground)
+                    continue;
+                float alpha = Presence(particle) * systemPresence;
+                if (alpha <= 0.004f)
+                    continue;
+                Vector2 fromCamera = particle.WorldPosition + DrawOffset(particle) - viewportTopLeft;
+                float margin = particle.SizePixels;
+                if (fromCamera.X < -margin || fromCamera.X > viewportWidth + margin
+                    || fromCamera.Y < -margin || fromCamera.Y > viewportHeight + margin)
+                    continue;
+                Color tint = particle.Tint * alpha;
+                tint = new Color((byte)(tint.R * worldLight.X), (byte)(tint.G * worldLight.Y),
+                                 (byte)(tint.B * worldLight.Z), tint.A);
+                // The game's own turning-over: ten frames a tenth of a second each, there and back.
+                int step = (int)((particle.AgeSeconds + particle.ArtClockOffset) * 10f) % 18;
+                int frame = step < 10 ? step : 18 - step;
+                var source = new Rectangle(352 + frame * 16, particle.ArtRow, 16, 16);
+                spriteBatch.Draw(Game1.mouseCursors, (fromCamera + screenOffsetPixels) * pixelScale, source, tint,
+                    0f, origin, particle.SizePixels / 16f * pixelScale, SpriteEffects.None, 0f);
+                drawn++;
+            }
+            return drawn;
         }
 
         internal void ForgetRefusals() => SpawnsRefused = 0;
@@ -596,6 +717,7 @@ namespace SDVRadiance
                             AtlasCell.Spark => SparkAlpha(across, down),
                             AtlasCell.Mote => MoteAlpha(across, down),
                             AtlasCell.Petal => PetalAlpha(across, down),
+                            AtlasCell.Tumbleweed => TumbleweedAlpha(across, down),
                             _ => LeafAlpha(across, down),
                         };
                         byte level = (byte)MathHelper.Clamp(alpha * 255f, 0f, 255f);
@@ -615,6 +737,36 @@ namespace SDVRadiance
         /// no feet on the rock. Premultiplied, like every cell, so the pool's additive blend and a
         /// plain white tint draw it as it is.
         /// </summary>
+        private static float TumbleweedAlpha(float across, float down)
+        {
+            float radius = (float)Math.Sqrt(across * across + down * down);
+            if (radius > 0.94f)
+                return 0f;
+            float angle = (float)Math.Atan2(down, across);
+            float twigs = 0f;
+            // Curved stems at several depths in the ball, each broken in places, so it reads as a
+            // tangle rather than as rings.
+            for (int stem = 0; stem < 9; stem++)
+            {
+                float phase = stem * 1.7f;
+                float ring = 0.16f + 0.088f * stem + 0.06f * (float)Math.Sin(angle * 3f + phase);
+                float onStem = 1f - MathHelper.Clamp(Math.Abs(radius - ring) / 0.075f, 0f, 1f);
+                bool broken = Math.Sin(angle * 2f + phase * 2.3f) < -0.55f;
+                if (!broken)
+                    twigs = Math.Max(twigs, onStem);
+            }
+            // A few stalks across the middle, the way a dry bush grows from one root.
+            for (int stalk = 0; stalk < 5; stalk++)
+            {
+                float turn = stalk * 1.05f + 0.3f;
+                float distance = Math.Abs(across * (float)Math.Sin(turn) - down * (float)Math.Cos(turn));
+                float onStalk = 1f - MathHelper.Clamp(distance / 0.065f, 0f, 1f);
+                twigs = Math.Max(twigs, onStalk * (radius < 0.86f ? 1f : 0f));
+            }
+            float edge = 1f - MathHelper.Clamp((radius - 0.86f) / 0.08f, 0f, 1f);
+            return MathHelper.Clamp(twigs, 0f, 1f) * edge;
+        }
+
         private static Color RainbowPixel(float across, float down)
         {
             const float outer = 0.98f, inner = 0.60f;

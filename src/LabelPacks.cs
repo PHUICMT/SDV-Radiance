@@ -147,7 +147,7 @@ namespace SDVRadiance
         /// manifest.json. A pack shipped without one falls back to the top folder under Mods, which
         /// is the widest the answer can ever be and still be one installed thing.
         /// </summary>
-        private static string FindOwningModFolder(string packFile, string modsRoot)
+        internal static string FindOwningModFolder(string packFile, string modsRoot)
         {
             string root = Path.GetFullPath(modsRoot);
             string? at = Path.GetDirectoryName(Path.GetFullPath(packFile));

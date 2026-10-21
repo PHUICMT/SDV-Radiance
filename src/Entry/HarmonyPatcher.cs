@@ -202,6 +202,11 @@ namespace SDVRadiance
             TryPatch(harmony, monitor, AccessTools.Method(typeof(Farmer), nameof(Farmer.DrawShadow)),
                 "hiding the vanilla blob under a farmer",
                 prefix: new HarmonyMethod(typeof(ShadowSuppression), nameof(ShadowSuppression.DrawShadow_Prefix)));
+            // The game's tall white window glow, faded where the glass-shaped light replaces it
+            // (RenderPipeline.WindowGlass).
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(GameLocation), nameof(GameLocation.drawLightGlows)),
+                "fading the game's window glow where the glass makes the light",
+                transpiler: new HarmonyMethod(typeof(RenderPipeline), nameof(RenderPipeline.LightGlows_Transpiler)));
             // Trees and bushes bake their blob shadow inline in draw() at a FIXED direction that
             // fights our directional cast; route their Draw calls through a shim that drops just
             // the depth==1E-06 (shadow) draws while our object shadows are active.

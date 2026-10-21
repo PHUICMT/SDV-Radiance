@@ -99,6 +99,9 @@ namespace SDVRadiance
         {
             if (!SettingsBackup.FreshInstall)
                 return;
+            // A first install starts on the grouped tuner; someone updating is asked in the tuner.
+            _config.TunerLayout = RadianceTunerMenu.LayoutGrouped;
+            SettingsBackup.WriteConfig(helper, _config);
             if (Constants.TargetPlatform == GamePlatform.Android)
             {
                 _config.ApplyPerfPreset(PerfPreset.LowSpec);
@@ -624,6 +627,7 @@ namespace SDVRadiance
             // Wet puddles borrow the flipped-entity mirror, so the bake must also run when the
             // water reflection itself is off, or a rainy lake-less farm shows empty pools.
             bool wetWantsMirror = _pipeline?.WetWorldWantsEntityMirror == true;
+            bool wetWantsSpriteMask = _pipeline?.WetWorldWantsSpriteMask == true;
             if ((_config.WaterEnabled || _config.WaterReflection) && WorldReady.Now)
             {
                 _pipeline?.BakeWaterSpriteMask();
@@ -639,8 +643,14 @@ namespace SDVRadiance
                 }
             }
             // With water off entirely but puddles live, the entity mirror still has to exist.
-            if (!_config.WaterEnabled && !_config.WaterReflection && wetWantsMirror && WorldReady.Now)
-                _pipeline?.BakeWaterReflection(_config);
+            if (!_config.WaterEnabled && !_config.WaterReflection && WorldReady.Now)
+            {
+                // The wet ground stands sprites in front of its puddles by the same mask.
+                if (wetWantsSpriteMask)
+                    _pipeline?.BakeWaterSpriteMask();
+                if (wetWantsMirror)
+                    _pipeline?.BakeWaterReflection(_config);
+            }
             // The windows read the same source to show the street in the glass, and they are
             // usually standing on a street with no water on it, so they ask for it themselves
             // when the water pass had no reason to.
@@ -954,6 +964,30 @@ namespace SDVRadiance
                     onSave: () => { SettingsBackup.WriteConfig(Helper, _config); SettingsLog.MarkChanged(); });
         }
 
+        /// <summary>The Nexus id of every installed mod, from its manifest's update keys
+        /// ("Nexus:18487", sometimes with "@subkey" after it). Whatever a manifest holds, this never
+        /// throws: a mod in the author's own list had a null update key, and the exception took
+        /// the rest of the launch handler with it, the config menu included (16 Oct 2026).</summary>
+        private System.Collections.Generic.List<string> InstalledNexusIds()
+        {
+            var ids = new System.Collections.Generic.List<string>();
+            foreach (IModInfo mod in Helper.ModRegistry.GetAll())
+            {
+                string[]? keys = mod?.Manifest?.UpdateKeys;
+                if (keys == null)
+                    continue;
+                foreach (string? key in keys)
+                {
+                    if (string.IsNullOrEmpty(key) || !key.StartsWith("Nexus:", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    string id = key[6..];
+                    int extra = id.IndexOfAny(['@', '?']);
+                    ids.Add((extra >= 0 ? id[..extra] : id).Trim());
+                }
+            }
+            return ids;
+        }
+
         private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
         {
             ScaleUpArt.Find(Monitor);
@@ -962,6 +996,9 @@ namespace SDVRadiance
             if (_harmony != null)
                 ShadowSuppression.LeanDynamicShaderCanopies(_harmony, Monitor);
 
+            // Before the menus are made: they offer the curtain dials only with curtains installed.
+            try { LabelStore.FindCurtainWindows(Helper.DirectoryPath, InstalledNexusIds(), Monitor); }
+            catch (Exception error) { Monitor.Log($"[windows] curtain check skipped: {error.Message}", LogLevel.Trace); }
             GmcmRegistration.Register(Helper, ModManifest, Monitor, I18n,
                 config: () => _config,
                 replaceConfig: fresh => _config = fresh,
@@ -986,6 +1023,9 @@ namespace SDVRadiance
                     LogLevel.Info);
             else
                 Monitor.Log("No water labels found in labels/ — falling back to colour classification.", LogLevel.Warn);
+            // Looks other mods offer the player in F6 (radiance-looks.json): offered, never applied
+            // until picked, so a settings mod no longer has to write over this mod's config.json.
+            LookPacks.Load(Helper.DirectoryPath, _config, Monitor);
 
             // Draw-call-accurate water discovery: patch drawWaterTile on GameLocation AND every
             // loaded override (mod location classes included) — hence GameLaunched, not Entry.

@@ -41,6 +41,27 @@ float NightAmt;         // 0 by day .. 1 deep night — a touch more vignette at
 
 static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
 
+// KEEP THE WINDOW'S OWN DETAIL, the grade's half (the flood pass has the other; see floodlight.fx).
+// The same boxes round the same windows, built once per frame on the CPU for every pass.
+float4 WindowZones[8];      // xy = centre (screen UV), zw = half size (tiles)
+float WindowZoneCount;      // how many entries are live
+float WindowDetail;         // 0 = off, 1 = inside a window the grade stands aside (eased on CPU)
+float2 TilesPerScreen;      // buffer size in world tiles (w/64, h/64)
+
+float WindowZone(float2 uv)
+{
+    float zone = 0.0;
+    [unroll]
+    for (int zoneIndex = 0; zoneIndex < 8; zoneIndex++)
+    {
+        float zoneOn = step((float)zoneIndex + 0.5, WindowZoneCount);
+        float2 zoneDelta = (uv - WindowZones[zoneIndex].xy) * TilesPerScreen / max(WindowZones[zoneIndex].zw, 0.01);
+        float zoneEdge = saturate(1.0 - max(abs(zoneDelta.x), abs(zoneDelta.y)));
+        zone = max(zone, zoneOn * smoothstep(0.0, 0.25, zoneEdge));
+    }
+    return zone;
+}
+
 // ---- 3D LUT ---------------------------------------------------------------
 // A 32x32x32 cube unrolled into a 1024x32 strip: 32 slices side by side, one per blue level,
 // each slice 32x32 with red across and green down. That is what every LUT tool exports, so an
@@ -171,6 +192,13 @@ float4 TailPS(PixelInput input) : SV_TARGET
         // than art and has to survive whatever look is chosen.
         [branch] if (LutAmount > 0.0)
             outc = lerp(outc, SampleLut(outc), saturate(LutAmount));
+
+        // A window's detail survives only if nothing after the flood pass changes it again: the
+        // grade's exposure and contrast took bars at 0.91 and glass at 0.98 to the same white, and
+        // with the lift taken out its warm temperature still turned a green-blue pane grey. Inside
+        // a window the grade stands aside and the flood pass's window is what reaches the screen.
+        [branch] if (WindowDetail > 0.001 && WindowZoneCount > 0.5)
+            outc = lerp(outc, src.rgb, WindowZone(input.UV) * WindowDetail);
 
         outc *= float3(1.0 + BlueLight * 0.06, 1.0 - BlueLight * 0.06, 1.0 - BlueLight * 0.28);
         outc += DitherLsb(input.UV) * (1.0 / 255.0);   // mirrors colorgrade.fx exactly

@@ -51,6 +51,13 @@ if ($DryRun) { $mergeArgs += '--dry-run' }
 & $Python @mergeArgs
 if ($LASTEXITCODE -ne 0) { throw "mergelabels.py failed ($LASTEXITCODE): labels\water-labels.json untouched." }
 
+# Then the water labels tool's changes (tools\labelers\water), liquid only: every other label in a
+# tile stays what the merge above made it.
+$overlayArgs = @((Join-Path $PSScriptRoot 'labelops\wateroverlay.py'))
+if ($DryRun) { $overlayArgs += '--dry-run' }
+& $Python @overlayArgs
+if ($LASTEXITCODE -ne 0) { throw "wateroverlay.py failed ($LASTEXITCODE)." }
+
 if ($DryRun -or $NoBuild) { return }
 
 # The DLL is locked while the game runs, so a build would fail halfway through deploying.

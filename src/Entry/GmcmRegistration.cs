@@ -333,8 +333,43 @@ namespace SDVRadiance
                 () => translate("config.lightning.name"), () => translate("config.lightning.tooltip"));
             configMenu.AddBoolOption(manifest, () => config().LightningBoltsEnabled, value => config().LightningBoltsEnabled = value,
                 () => translate("config.lightningbolts.name"), () => translate("config.lightningbolts.tooltip"));
-            // See the note in the tuner: the wet GROUND is off and out of both menus until its
-            // puddles can be placed from the map rather than guessed at.
+            configMenu.AddBoolOption(manifest, () => config().LightningThroughWindows, value => config().LightningThroughWindows = value,
+                () => translate("config.lightningwindows.name"), () => translate("config.lightningwindows.tooltip"));
+            configMenu.AddSectionTitle(manifest, () => translate("tuner.section.wetground"));
+            configMenu.AddBoolOption(manifest, () => config().WetWorldEnabled, value => config().WetWorldEnabled = value,
+                () => translate("config.wetworld.enabled.name"), () => translate("config.wetworld.enabled.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().WetWorldStrength, value => config().WetWorldStrength = value,
+                () => translate("config.wetworld.strength.name"), () => translate("config.wetworld.strength.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WetWorldPuddles, value => config().WetWorldPuddles = value,
+                () => translate("config.wetworld.puddles.name"), () => translate("config.wetworld.puddles.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddTextOption(manifest,
+                () => config().WetWorldPuddleLook.ToString(),
+                value => config().WetWorldPuddleLook = Enum.TryParse(value, out WetPuddleLook chosen) ? chosen : WetPuddleLook.Realistic,
+                () => translate("config.wetworld.puddlelook.name"), () => translate("config.wetworld.puddlelook.tooltip"),
+                [nameof(WetPuddleLook.Realistic), nameof(WetPuddleLook.Pixel)],
+                choice => translate(choice == nameof(WetPuddleLook.Pixel) ? "tuner.wetpuddlelook.pixel" : "tuner.wetpuddlelook.realistic"));
+            configMenu.AddNumberOption(manifest, () => config().WetWorldPuddleReflection, value => config().WetWorldPuddleReflection = value,
+                () => translate("config.wetworld.puddlereflection.name"), () => translate("config.wetworld.puddlereflection.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WetWorldLightStreaks, value => config().WetWorldLightStreaks = value,
+                () => translate("config.wetworld.lightstreaks.name"), () => translate("config.wetworld.lightstreaks.tooltip"), 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WetWorldLightStreakLength, value => config().WetWorldLightStreakLength = value,
+                () => translate("config.wetworld.lightstreaklength.name"), () => translate("config.wetworld.lightstreaklength.tooltip"), 0.3f, 3f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WetWorldLightStreakAngle, value => config().WetWorldLightStreakAngle = value,
+                () => translate("config.wetworld.lightstreakangle.name"), () => translate("config.wetworld.lightstreakangle.tooltip"), -60f, 60f, 1f);
+            configMenu.AddNumberOption(manifest, () => config().WetWorldLightStreakGlow, value => config().WetWorldLightStreakGlow = value,
+                () => translate("config.wetworld.lightstreakglow.name"), () => translate("config.wetworld.lightstreakglow.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WetWorldLightStreakStone, value => config().WetWorldLightStreakStone = value,
+                () => translate("config.wetworld.lightstreakstone.name"), () => translate("config.wetworld.lightstreakstone.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WetWorldLightStreakRipples, value => config().WetWorldLightStreakRipples = value,
+                () => translate("config.wetworld.lightstreakripples.name"), () => translate("config.wetworld.lightstreakripples.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WetWorldLightStreakWarmth, value => config().WetWorldLightStreakWarmth = value,
+                () => translate("config.wetworld.lightstreakwarmth.name"), () => translate("config.wetworld.lightstreakwarmth.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WetWorldLightStreakTaper, value => config().WetWorldLightStreakTaper = value,
+                () => translate("config.wetworld.lightstreaktaper.name"), () => translate("config.wetworld.lightstreaktaper.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WetWorldLightPool, value => config().WetWorldLightPool = value,
+                () => translate("config.wetworld.lightpool.name"), () => translate("config.wetworld.lightpool.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WetWorldDryLampLight, value => config().WetWorldDryLampLight = value,
+                () => translate("config.wetworld.drylamplight.name"), () => translate("config.wetworld.drylamplight.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddSectionTitle(manifest, () => translate("config.wetworld.sectiondrops"));
             configMenu.AddBoolOption(manifest, () => config().WetWorldLensDrops, value => config().WetWorldLensDrops = value,
                 () => translate("config.wetworld.lensdrops.name"), () => translate("config.wetworld.lensdrops.tooltip"));
@@ -386,6 +421,21 @@ namespace SDVRadiance
             configMenu.AddNumberOption(manifest, () => config().ParticlePetalsFlutter, value => config().ParticlePetalsFlutter = value,
                 () => translate("config.particles.petalsflutter.name"), () => translate("config.particles.petalsflutter.tooltip"),
                 0f, 1f, 0.05f);
+            configMenu.AddTextOption(manifest, () => config().ParticleLeafLook.ToString(),
+                value => config().ParticleLeafLook = Enum.TryParse(value, out ParticleLeafLook chosen) ? chosen : ParticleLeafLook.Realistic,
+                () => translate("config.particles.leaflook.name"), () => translate("config.particles.leaflook.tooltip"),
+                [nameof(ParticleLeafLook.Realistic), nameof(ParticleLeafLook.Pixel)],
+                choice => translate(choice == nameof(ParticleLeafLook.Pixel) ? "tuner.particleleaflook.pixel" : "tuner.particleleaflook.realistic"));
+            AddParticleEmitter(configMenu, manifest, translate, "tumbleweeds",
+                () => config().ParticleTumbleweeds, value => config().ParticleTumbleweeds = value,
+                () => config().ParticleTumbleweedsAmount, value => config().ParticleTumbleweedsAmount = value,
+                () => config().ParticleTumbleweedsSize, value => config().ParticleTumbleweedsSize = value);
+            AddParticleEmitter(configMenu, manifest, translate, "whirlwinds",
+                () => config().ParticleWhirlwinds, value => config().ParticleWhirlwinds = value,
+                () => config().ParticleWhirlwindsAmount, value => config().ParticleWhirlwindsAmount = value,
+                () => config().ParticleWhirlwindsSize, value => config().ParticleWhirlwindsSize = value);
+            configMenu.AddNumberOption(manifest, () => config().ParticleWhirlwindLeaves, value => config().ParticleWhirlwindLeaves = value,
+                () => translate("config.particles.whirlwindleaves.name"), () => translate("config.particles.whirlwindleaves.tooltip"), 0f, 2f, 0.05f);
             AddParticleEmitter(configMenu, manifest, translate, "ringsparkles",
                 () => config().ParticleRingSparkles, value => config().ParticleRingSparkles = value,
                 () => config().ParticleRingSparklesAmount, value => config().ParticleRingSparklesAmount = value,
@@ -762,6 +812,39 @@ namespace SDVRadiance
                 () => translate("config.lighting.tvglow.name"), () => translate("config.lighting.tvglow.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddBoolOption(manifest, () => config().WindowBeamEnabled, value => config().WindowBeamEnabled = value,
                 () => translate("config.lighting.windowbeam.name"), () => translate("config.lighting.windowbeam.tooltip"));
+            configMenu.AddTextOption(manifest,
+                () => config().WindowLightDetail.ToString(),
+                value => config().WindowLightDetail = Enum.TryParse<WindowLightDetail>(value, out var mode) ? mode : WindowLightDetail.WholeWindow,
+                () => translate("config.lighting.windowdetail.name"), () => translate("config.lighting.windowdetail.tooltip"),
+                [nameof(WindowLightDetail.WholeWindow), nameof(WindowLightDetail.KeepDetail)],
+                choice => translate($"tuner.windowdetail.{choice.ToLowerInvariant()}"));
+            configMenu.AddTextOption(manifest,
+                () => config().WindowLightShape.ToString(),
+                value => config().WindowLightShape = Enum.TryParse<WindowLightShape>(value, out var shape) ? shape : WindowLightShape.Glow,
+                () => translate("config.lighting.windowlightshape.name"), () => translate("config.lighting.windowlightshape.tooltip"),
+                [nameof(WindowLightShape.Glow), nameof(WindowLightShape.Glass)],
+                choice => translate($"tuner.windowlightshape.{choice.ToLowerInvariant()}"));
+            configMenu.AddNumberOption(manifest, () => config().WindowGlassRays, value => config().WindowGlassRays = value,
+                () => translate("config.lighting.windowglassrays.name"), () => translate("config.lighting.windowglassrays.tooltip"), 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WindowGlassRayLength, value => config().WindowGlassRayLength = value,
+                () => translate("config.lighting.windowglassraylength.name"), () => translate("config.lighting.windowglassraylength.tooltip"), 0.5f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WindowGlassRayWhiteness, value => config().WindowGlassRayWhiteness = value,
+                () => translate("config.lighting.windowglassraywhiteness.name"), () => translate("config.lighting.windowglassraywhiteness.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WindowGlassRaySpread, value => config().WindowGlassRaySpread = value,
+                () => translate("config.lighting.windowglassrayspread.name"), () => translate("config.lighting.windowglassrayspread.tooltip"), 0f, 8f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WindowGlassFloor, value => config().WindowGlassFloor = value,
+                () => translate("config.lighting.windowglassfloor.name"), () => translate("config.lighting.windowglassfloor.tooltip"), 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WindowGlassPane, value => config().WindowGlassPane = value,
+                () => translate("config.lighting.windowglasspane.name"), () => translate("config.lighting.windowglasspane.tooltip"), 0f, 2f, 0.05f);
+            if (LabelStore.CurtainWindowsInstalled)
+            {
+                configMenu.AddBoolOption(manifest, () => config().WindowGlassCurtainColour, value => config().WindowGlassCurtainColour = value,
+                    () => translate("config.lighting.windowglasscurtaincolour.name"), () => translate("config.lighting.windowglasscurtaincolour.tooltip"));
+                configMenu.AddNumberOption(manifest, () => config().WindowGlassCurtainLight, value => config().WindowGlassCurtainLight = value,
+                    () => translate("config.lighting.windowglasscurtainlight.name"), () => translate("config.lighting.windowglasscurtainlight.tooltip"), 0f, 1f, 0.05f);
+                configMenu.AddNumberOption(manifest, () => config().WindowGlassCurtainColourStrength, value => config().WindowGlassCurtainColourStrength = value,
+                    () => translate("config.lighting.windowglasscurtaincolourstrength.name"), () => translate("config.lighting.windowglasscurtaincolourstrength.tooltip"), 0f, 2f, 0.05f);
+            }
             configMenu.AddNumberOption(manifest, () => config().WindowDaylightStrength, value => config().WindowDaylightStrength = value,
                 () => translate("config.lighting.windowdaylightstrength.name"),
                 () => translate("config.lighting.windowdaylightstrength.tooltip"), 0f, 2f, 0.05f);

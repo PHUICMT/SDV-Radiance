@@ -115,11 +115,10 @@ namespace SDVRadiance
             float degrees = _getDegrees();
 
             TunerText.DrawFit(spriteBatch, _label, new Vector2(Row.X, Row.Y + dy),
-                Row.Width - (int)(70 * TextScale), Game1.textColor * fade, textScale);
+                Row.Width - (int)(70 * TextScale), TunerTheme.Ink * fade, textScale);
             string reading = $"{degrees:0}°";
             Vector2 readingSize = TunerText.Measure(reading) * textScale;
-            Utility.drawTextWithShadow(spriteBatch, reading, Game1.smallFont,
-                new Vector2(Row.Right - readingSize.X, Row.Y + dy), Game1.textColor * 0.8f * fade, textScale);
+            TunerText.Draw(spriteBatch, reading, new Vector2(Row.Right - readingSize.X, Row.Y + dy), TunerTheme.InkDim * fade, textScale);
 
             var centre = new Vector2(Dial.X + Dial.Width * 0.5f, Dial.Y + Dial.Height * 0.5f + dy);
             float radius = Dial.Width * 0.5f - 4f;

@@ -101,11 +101,11 @@ float ShadowFactor(float2 uv, float2 lightUv)
     return 1.0 - occ * ShadowStrength;
 }
 
-float4 LightingPS(PixelInput input) : SV_TARGET
+// The light at one point of the screen: the ambient plus every lamp that reaches it, each
+// shadowed by the walls between. Read straight by the full pass, or worked out at half size
+// by the lighter road and laid over the sharp frame (LightApplyPS).
+float3 LightTerm(float2 uv)
 {
-    float2 uv = input.UV;
-    float4 src = tex2D(SourceSampler, uv);
-
     float3 accum = AmbientColor;
 
     // Unrolled, so every LightPos[i] / LightData[i] read is a constant register: as a real loop
@@ -140,13 +140,43 @@ float4 LightingPS(PixelInput input) : SV_TARGET
     // just reaches normal brightness instead of blowing out. (Overbright kept as a
     // small optional headroom for lamp cores feeding bloom.)
     accum = min(accum, max(1.0, Overbright));
-    float3 lit = src.rgb * saturate(accum);
-    // Whole-pass presence: AmbientColor and ShadowStrength already ride the fade, but the light
-    // POOLS (LightData) never did, so this stage kept painting them at full strength all the way
-    // down and then vanished in one frame when it left the stage list. Fade the finished result
-    // back to the untouched pixel so every term - pools included - reaches zero before that.
+    return saturate(accum);
+}
+
+float4 LightingPS(PixelInput input) : SV_TARGET
+{
+    float2 uv = input.UV;
+    float4 src = tex2D(SourceSampler, uv);
+    float3 lit = src.rgb * LightTerm(uv);
+    lit = lerp(src.rgb, lit, Presence);
+    return float4(lit, src.a);
+}
+
+// The lighter road (Lighter soft effects): the light alone, at half size. The pass cost is in
+// the walls marched between each pixel and every lamp reaching it (13 taps a lamp, 20-40
+// lamps in the saloon at night), and the light is soft, so it loses nothing at half size.
+float4 LightTermPS(PixelInput input) : SV_TARGET
+{
+    return float4(LightTerm(input.UV), 1.0);
+}
+
+texture LightTermTexture;
+sampler2D LightTermSampler = sampler_state
+{
+    Texture = <LightTermTexture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Clamp; AddressV = Clamp;
+};
+
+// ...and laid over the full frame: every edge of the art stays as sharp as the full pass.
+float4 LightApplyPS(PixelInput input) : SV_TARGET
+{
+    float4 src = tex2D(SourceSampler, input.UV);
+    float3 lit = src.rgb * tex2D(LightTermSampler, input.UV).rgb;
     lit = lerp(src.rgb, lit, Presence);
     return float4(lit, src.a);
 }
 
 technique Lighting { pass P0 { PixelShader = compile PS_SHADERMODEL LightingPS(); } }
+technique LightTerm { pass Light { PixelShader = compile PS_SHADERMODEL LightTermPS(); } }
+technique LightApply { pass Apply { PixelShader = compile PS_SHADERMODEL LightApplyPS(); } }

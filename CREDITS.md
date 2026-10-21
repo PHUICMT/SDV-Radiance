@@ -84,4 +84,12 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 ```
 
 ---
+
+## Nunito (the F6 menu's glass panel typeface)
+
+Copyright 2014 The Nunito Project Authors (https://github.com/googlefonts/nunito). Used as a glyph
+picture (`assets/tuner-font.png`) under the SIL Open Font License 1.1, whose full text ships beside
+it as `assets/tuner-font-OFL.txt`.
+
+---
 *If you believe your work is used here without proper attribution, please open an issue.*

@@ -66,6 +66,28 @@ namespace SDVRadiance
     /// pulled toward the water's own colour with depth, stretched a little, and answering the
     /// camera's place on the screen. Each has dials of its own; the menus show the chosen one's.
     /// </remarks>
+    /// <summary>How much of a window's own painted detail survives the light the room puts on it.</summary>
+    public enum WindowLightShape
+    {
+        /// <summary>A soft oval on the pane and a soft band on the floor, the same for every window,
+        /// with the game's own white glow over it. Every release before this one.</summary>
+        Glow,
+        /// <summary>Only the glass glows and the light on the floor carries the shape of the panes,
+        /// read from labels/window-glass.json; the game's white glow fades on those windows. A window
+        /// with no glass label keeps the old light.</summary>
+        Glass
+    }
+
+    public enum WindowLightDetail
+    {
+        /// <summary>The whole window: glass, bars and frame lift together. Every release before this one.</summary>
+        WholeWindow,
+        /// <summary>Inside a window the light closes at most half of each pixel's distance to white,
+        /// so a window with detail painted in it (an Alternative Textures pack, curtains, leaded
+        /// panes) keeps its bars and frame at midday. Nothing outside a window changes.</summary>
+        KeepDetail
+    }
+
     public enum WaterReflectionModel
     {
         /// <summary>The 1.6.2 water.</summary>
@@ -174,6 +196,25 @@ namespace SDVRadiance
         /// <summary>2.3.1: a sharp, shrunk, upside-down picture of a wider patch, a darker rim and a
         /// broader glint, so a drop reads as water even a dozen pixels across.</summary>
         Lens231,
+    }
+
+    /// <summary>How the petals and leaves on the breeze are drawn.</summary>
+    public enum ParticleLeafLook
+    {
+        /// <summary>The mod's own smooth petal and leaf shapes, buckling as they fall.</summary>
+        Realistic,
+        /// <summary>The game's own debris art, frames and all, so they match what the game blows
+        /// on a windy day and follow a recolour.</summary>
+        Pixel,
+    }
+
+    /// <summary>How puddles, their rain rings and the lamp streaks are drawn.</summary>
+    public enum WetPuddleLook
+    {
+        /// <summary>Smooth edges and the river's rain rings: an impact, then a ring that widens.</summary>
+        Realistic,
+        /// <summary>Edges, rings and streaks in whole art pixels, like the game's own art.</summary>
+        Pixel,
     }
 
     public enum PerfPreset
@@ -691,6 +732,19 @@ namespace SDVRadiance
         /// opens where it was left, even after the game was closed. Places in a menu, not looks:
         /// neither is a type a saved look records.</summary>
         public string TunerLastTab { get; set; } = "";
+        /// <summary>Which layout the tuner uses: "Grouped" (eight categories by what you see, the
+        /// default for a first install), "Classic" (the seventeen tabs), or empty for a player who
+        /// updated and has not been asked yet. A string, not a choice type, so saved looks and share
+        /// codes never carry it: it is a place in a menu, not a look.</summary>
+        public string TunerLayout { get; set; } = "";
+        /// <summary>Which glass the new tuner menu uses: "GlassLight" for the pale one, anything else
+        /// for the dark one (the classic menu is always the wooden box). A string for the same reason
+        /// as the layout: a place in a menu, which looks and share codes never carry.</summary>
+        public string TunerPanel { get; set; } = "";
+        /// <summary>How dark the glass panel's blue is over the blurred game, 0.4 (mostly the game)
+        /// to 0.95 (nearly solid). 0.78 is the mock's strong glass: lighter washed the menu's words
+        /// into a bright scene behind it.</summary>
+        public float TunerGlassShade { get; set; } = 0.78f;
         public Dictionary<string, int> TunerScrollByTab { get; set; } = [];
         /// <summary>How fast a river runs. A map that paints a waterfall has a river, and its water is
         /// traced from the falls along its own banks to where it leaves the map (RiverFlowTrace), so
@@ -997,6 +1051,45 @@ namespace SDVRadiance
         /// draws too (Dynamic Windows ships a shaft sprite and a fill sprite for exactly these), so
         /// it is the half to give away when running one.</summary>
         public bool WindowBeamEnabled { get; set; } = true;
+        /// <summary>Whether a window keeps its own detail under the room's light. Whole window lifts
+        /// the glass, the bars and the frame together, which at midday washed a window's painted
+        /// detail into white; reported by Ellis2467 with Alternative Textures windows (12 Oct 2026).
+        /// Keep detail caps the lift inside a window so the art's differences survive.</summary>
+        public WindowLightDetail WindowLightDetail { get; set; } = WindowLightDetail.WholeWindow;
+        /// <summary>What shape a window's light takes: the soft glow every release had, or the shape
+        /// of the window's own glass (asked for by the author on 15 Oct 2026: "can the light really
+        /// come from the window frame").</summary>
+        public WindowLightShape WindowLightShape { get; set; } = WindowLightShape.Glow;
+        /// <summary>With the light shaped by the glass: how much light hangs in the air below a
+        /// window, in streaks falling along the beam. 0 is none, the floor patch alone (asked for
+        /// by the author on 15 Oct 2026: "light rays streaking down along the direction").</summary>
+        public float WindowGlassRays { get; set; } = 0.35f;
+        /// <summary>With the light shaped by the glass: how far the beam reaches, the patch on the
+        /// floor and the rays together, against the length the sun's angle gives it. 1 is that length.</summary>
+        public float WindowGlassRayLength { get; set; } = 1.2f;
+        /// <summary>With the light shaped by the glass: how far the rays go from the daylight's colour
+        /// toward white. 0 is the daylight's colour.</summary>
+        public float WindowGlassRayWhiteness { get; set; } = 0.35f;
+        /// <summary>With the light shaped by the glass: how bright the patch of light on the floor is.</summary>
+        public float WindowGlassFloor { get; set; } = 0.75f;
+        /// <summary>With the light shaped by the glass: how bright the glass itself glows. 0 leaves
+        /// the pane as the game draws it.</summary>
+        public float WindowGlassPane { get; set; } = 1.0f;
+        /// <summary>With the light shaped by the glass: how much the beam widens and softens as it
+        /// falls. 0 keeps the window's shape sharp all the way down.</summary>
+        public float WindowGlassRaySpread { get; set; } = 3.5f;
+        /// <summary>With the light shaped by the glass: whether light through a sheer curtain takes
+        /// the curtain's colour. Off, the curtain only dims it (asked for by the author on 16 Oct 2026,
+        /// on or off).</summary>
+        public bool WindowGlassCurtainColour { get; set; } = true;
+        /// <summary>With the light shaped by the glass: how much light a sheer curtain lets through,
+        /// against clear glass, onto the floor and into the rays; the cloth itself glows with part of
+        /// it. 0 is none, 1 as much as clear glass (asked for by the author on 16 Oct 2026).</summary>
+        public float WindowGlassCurtainLight { get; set; } = 0.5f;
+        /// <summary>With the curtain colour on: how deep a colour the light through a sheer curtain
+        /// takes. 1 is the curtain's own hue, 2 twice as deep, 0 none (asked for by the author on
+        /// 16 Oct 2026, the colour of a pale curtain hardly showing).</summary>
+        public float WindowGlassCurtainColourStrength { get; set; } = 1f;
         /// <summary>How bright the daylight through an indoor window is drawn: the lit pane, the
         /// beam and the patch of sun on the floor together. 1 is the shipped look. Asked for by a
         /// player whose farmhouse window looked right while the two big windows of a villager's
@@ -1146,6 +1239,26 @@ namespace SDVRadiance
         public float ParticlePetalsAmount { get; set; } = 1.0f;
         /// <summary>How big one petal or leaf is, against its own size.</summary>
         public float ParticlePetalsSize { get; set; } = 1.0f;
+        /// <summary>Realistic: the mod's own petal and leaf shapes, as before. Pixel: the game's own
+        /// debris art with its frames of turning over, so they match what the game blows on a windy
+        /// day and follow a recolour. Asked for by a player.</summary>
+        public ParticleLeafLook ParticleLeafLook { get; set; } = ParticleLeafLook.Realistic;
+        /// <summary>Tumbleweeds rolling across the desert now and then. Asked for by a player.</summary>
+        public bool ParticleTumbleweeds { get; set; } = false;
+        /// <summary>A small whirlwind of leaves and dust in a storm or on a windy day. Asked for by a
+        /// player as a small tornado in heavy rain.</summary>
+        public bool ParticleWhirlwinds { get; set; } = false;
+        /// <summary>How often a tumbleweed comes, against its own rate. 0 is none.</summary>
+        public float ParticleTumbleweedsAmount { get; set; } = 1.0f;
+        /// <summary>How big a tumbleweed is, against its own size.</summary>
+        public float ParticleTumbleweedsSize { get; set; } = 1.6f;
+        /// <summary>How often a whirlwind starts, against its own rate. 0 is none.</summary>
+        public float ParticleWhirlwindsAmount { get; set; } = 1.0f;
+        /// <summary>How big a whirlwind is: how tall and how wide it grows, and the size of what it carries.</summary>
+        public float ParticleWhirlwindsSize { get; set; } = 1.0f;
+        /// <summary>How many leaves a whirlwind carries, against its own share. 0 is a whirlwind of
+        /// dust alone; 2 is twice the leaves.</summary>
+        public float ParticleWhirlwindLeaves { get; set; } = 1.0f;
         /// <summary>How much a falling leaf or petal buckles as it turns through the air. A thin
         /// thing does not fall flat, and one crossing our own water surface already bends because
         /// the surface bends it; this carries the same bend everywhere. 0 is the flat fall of every
@@ -1282,6 +1395,10 @@ namespace SDVRadiance
         /// Farm and only when a rod or crop was actually hit; everywhere else a storm is a white
         /// screen and a sound. Uses the game's own bolt art, so it cannot look out of place.</summary>
         public bool LightningBoltsEnabled { get; set; } = true;
+        /// <summary>Indoors in a storm, lightning through the windows: the window light flares cold
+        /// white for a moment, on the game's strikes and on distant ones between them. The game
+        /// itself flashes only outdoors (asked for by the author on 16 Oct 2026).</summary>
+        public bool LightningThroughWindows { get; set; } = false;
 
         // --- Wet world (ground that remembers the rain) ---
         /// <summary>Rain leaves the world wet: ground darkens and saturates while it rains and
@@ -1295,7 +1412,34 @@ namespace SDVRadiance
         /// ground) that tile properties alone cannot give on modded maps - pools kept landing on
         /// fences and roofs in the first hour of testing. The dampness, the night streaks and
         /// the lens drops are the wet look; the pools return when they can be placed honestly.</para></summary>
-        public float WetWorldPuddles { get; set; } = 0.0f;
+        public float WetWorldPuddles { get; set; } = 0.6f;
+        /// <summary>How plainly the people and things beside a puddle show upside down in it.</summary>
+        public float WetWorldPuddleReflection { get; set; } = 0.6f;
+        /// <summary>How bright the streaks lamps leave on wet ground at night.</summary>
+        public float WetWorldLightStreaks { get; set; } = 1.0f;
+        /// <summary>How long the lamp streaks run, times the natural length.</summary>
+        public float WetWorldLightStreakLength { get; set; } = 1.0f;
+        /// <summary>Which way the lamp streaks lean, in degrees off straight toward you (negative
+        /// left, positive right).</summary>
+        public float WetWorldLightStreakAngle { get; set; } = -20f;
+        /// <summary>How much soft glow spreads round each lamp streak, 0 a bare line.</summary>
+        public float WetWorldLightStreakGlow { get; set; } = 0.5f;
+        /// <summary>How much the lamp streaks catch on the tops of the stones and leave the gaps between dark, 0 a smooth even streak.</summary>
+        public float WetWorldLightStreakStone { get; set; } = 0.7f;
+        /// <summary>How much rain breaks the lamp streaks into short twinkling dashes, 0 a continuous streak.</summary>
+        public float WetWorldLightStreakRipples { get; set; } = 0.5f;
+        /// <summary>How warm a white street lamp shows on the wet ground, 0 the colour the game gives it.</summary>
+        public float WetWorldLightStreakWarmth { get; set; } = 0.6f;
+        /// <summary>How much a lamp streak opens out with distance from a bright spot at the lamp's foot, 0 the same width all the way.</summary>
+        public float WetWorldLightStreakTaper { get; set; } = 0.6f;
+        /// <summary>How bright the sheen of light on the wet ground round a lamp's foot is.</summary>
+        public float WetWorldLightPool { get; set; } = 0.5f;
+        /// <summary>On a dry night, how much of the wet look the lamps keep on hard ground (their
+        /// streak and pool, faint), as a share of a soaked street. 0 none, the default: a new look
+        /// is never switched on for a config written before it existed.</summary>
+        public float WetWorldDryLampLight { get; set; } = 0f;
+        /// <summary>Realistic (smooth, the river's rain rings) or pixel (whole art pixels).</summary>
+        public WetPuddleLook WetWorldPuddleLook { get; set; } = WetPuddleLook.Realistic;
         /// <summary>A few drops clinging to the edges of the screen while it rains (frost in a
         /// snowfall), never the middle. Gone shortly after the weather stops.</summary>
         public bool WetWorldLensDrops { get; set; } = true;
@@ -1772,6 +1916,7 @@ namespace SDVRadiance
             GodRaysIntensity = ClampToRange(GodRaysIntensity, 0f, 2f);
             GodRaysSunIntensity = ClampToRange(GodRaysSunIntensity, 0f, 1.5f);
             GodRaysSunReach = ClampToRange(GodRaysSunReach, 0.1f, 1f);
+            TunerGlassShade = ClampToRange(TunerGlassShade, 0.4f, 0.95f);
             FogDensity = ClampToRange(FogDensity, 0f, 1f);
             FogNightMistDensity = ClampToRange(FogNightMistDensity, 0f, 1f);
             FogNightMistLampGlow = ClampToRange(FogNightMistLampGlow, 0f, 1f);
@@ -1848,6 +1993,8 @@ namespace SDVRadiance
             TunerFoldedSections ??= [];
             TunerScrollByTab ??= [];
             TunerLastTab ??= "";
+            TunerLayout ??= "";
+            TunerPanel ??= "";
             WindowReflectionStrength = ClampToRange(WindowReflectionStrength, 0f, 2f);
             WindowReflectionNightStrength = ClampToRange(WindowReflectionNightStrength, 0f, 2f);
             WindowSheenStrength = ClampToRange(WindowSheenStrength, 0f, 2f);
@@ -1867,6 +2014,14 @@ namespace SDVRadiance
             ParticleDustSize = ClampToRange(ParticleDustSize, 0.5f, 2f);
             ParticleEmbersAmount = ClampToRange(ParticleEmbersAmount, 0f, 2f);
             ParticleEmbersSize = ClampToRange(ParticleEmbersSize, 0.5f, 2f);
+            WindowGlassRays = ClampToRange(WindowGlassRays, 0f, 2f);
+            WindowGlassRayLength = ClampToRange(WindowGlassRayLength, 0.5f, 2f);
+            WindowGlassRayWhiteness = ClampToRange(WindowGlassRayWhiteness, 0f, 1f);
+            WindowGlassFloor = ClampToRange(WindowGlassFloor, 0f, 2f);
+            WindowGlassPane = ClampToRange(WindowGlassPane, 0f, 2f);
+            WindowGlassRaySpread = ClampToRange(WindowGlassRaySpread, 0f, 8f);
+            WindowGlassCurtainLight = ClampToRange(WindowGlassCurtainLight, 0f, 1f);
+            WindowGlassCurtainColourStrength = ClampToRange(WindowGlassCurtainColourStrength, 0f, 2f);
             HeatHazeStrength = ClampToRange(HeatHazeStrength, 0f, 2f);
             ParticleWaterfallMistAmount = ClampToRange(ParticleWaterfallMistAmount, 0f, 2f);
             WaterfallRainbowStrength = ClampToRange(WaterfallRainbowStrength, 0f, 1f);
@@ -1879,6 +2034,11 @@ namespace SDVRadiance
             ParticleFirefliesSize = ClampToRange(ParticleFirefliesSize, 0.5f, 2f);
             ParticlePetalsAmount = ClampToRange(ParticlePetalsAmount, 0f, 2f);
             ParticlePetalsSize = ClampToRange(ParticlePetalsSize, 0.5f, 2f);
+            ParticleTumbleweedsAmount = ClampToRange(ParticleTumbleweedsAmount, 0f, 2f);
+            ParticleTumbleweedsSize = ClampToRange(ParticleTumbleweedsSize, 0.5f, 2f);
+            ParticleWhirlwindsAmount = ClampToRange(ParticleWhirlwindsAmount, 0f, 2f);
+            ParticleWhirlwindsSize = ClampToRange(ParticleWhirlwindsSize, 0.5f, 2f);
+            ParticleWhirlwindLeaves = ClampToRange(ParticleWhirlwindLeaves, 0f, 2f);
             ParticlePetalsFlutter = ClampToRange(ParticlePetalsFlutter, 0f, 1f);
             ParticleRingSparklesAmount = ClampToRange(ParticleRingSparklesAmount, 0f, 2f);
             ParticleRingSparklesSize = ClampToRange(ParticleRingSparklesSize, 0.5f, 2f);
@@ -1901,6 +2061,17 @@ namespace SDVRadiance
             PrecipitationStormDensity = ClampToRange(PrecipitationStormDensity, 1f, 3f);
             PrecipitationRainSlant = ClampToRange(PrecipitationRainSlant, 0f, 3f);
             PrecipitationWindSlant = ClampToRange(PrecipitationWindSlant, 0.25f, 3f);
+            WetWorldPuddleReflection = ClampToRange(WetWorldPuddleReflection, 0f, 1f);
+            WetWorldLightStreaks = ClampToRange(WetWorldLightStreaks, 0f, 2f);
+            WetWorldLightStreakLength = ClampToRange(WetWorldLightStreakLength, 0.3f, 3f);
+            WetWorldLightStreakAngle = ClampToRange(WetWorldLightStreakAngle, -60f, 60f);
+            WetWorldLightStreakGlow = ClampToRange(WetWorldLightStreakGlow, 0f, 1f);
+            WetWorldLightStreakStone = ClampToRange(WetWorldLightStreakStone, 0f, 1f);
+            WetWorldLightStreakRipples = ClampToRange(WetWorldLightStreakRipples, 0f, 1f);
+            WetWorldLightStreakWarmth = ClampToRange(WetWorldLightStreakWarmth, 0f, 1f);
+            WetWorldLightStreakTaper = ClampToRange(WetWorldLightStreakTaper, 0f, 1f);
+            WetWorldLightPool = ClampToRange(WetWorldLightPool, 0f, 1f);
+            WetWorldDryLampLight = ClampToRange(WetWorldDryLampLight, 0f, 1f);
             WetWorldStrength = ClampToRange(WetWorldStrength, 0f, 1f);
             WetWorldPuddles = ClampToRange(WetWorldPuddles, 0f, 1f);
             WetWorldLensDropSize = ClampToRange(WetWorldLensDropSize, 0.5f, 2f);
@@ -2022,7 +2193,7 @@ namespace SDVRadiance
             {
                 if (!p.CanRead || !p.CanWrite)
                     continue;
-                if (p.Name is nameof(Enabled) or nameof(ActivePreset) or nameof(DebugLogging) or nameof(TunerShowFineTuning))
+                if (p.Name is nameof(Enabled) or nameof(ActivePreset) or nameof(DebugLogging) or nameof(TunerShowFineTuning) or nameof(TunerGlassShade))
                     continue;
                 Type t = p.PropertyType;
                 if (t == typeof(bool) || t == typeof(int) || t == typeof(float) || t.IsEnum)
@@ -2092,7 +2263,7 @@ namespace SDVRadiance
         private static readonly HashSet<string> KeptThroughReset = new(StringComparer.Ordinal)
         {
             nameof(ConfigVersion), nameof(SavedProfiles), nameof(WindowCompatAppliedFor),
-            nameof(TunerFoldedSections), nameof(TunerShowFineTuning), nameof(TunerLastTab), nameof(TunerScrollByTab),
+            nameof(TunerFoldedSections), nameof(TunerShowFineTuning), nameof(TunerLastTab), nameof(TunerScrollByTab), nameof(TunerLayout), nameof(TunerPanel), nameof(TunerGlassShade),
         };
 
         /// <summary>Load a saved profile's settings into the live config.</summary>
@@ -2210,10 +2381,15 @@ namespace SDVRadiance
                     RenderScaleAuto = true;
                     TiltShiftEnabled = false;
                     ChromaticAberrationEnabled = false;
-                    // Flood GI is the pricier of the two lighting models; classic lighting
-                    // keeps rooms lit and lamps pooled for a fraction of the work.
-                    FloodLightingEnabled = false;
-                    LightingEnabled = true;
+                    // The flood light stays, worked out at the lower resolution. This preset used
+                    // to swap it for the classic lighting on the belief that classic was the
+                    // cheaper of the two. Measured 17 Oct 2026 with the card held to 180 MHz, the
+                    // real GPU time a frame: flood with Lighter soft effects 10.5 ms in the saloon
+                    // at night against 15.6 for classic, 10.7 against 14.3 in Pierre's, 9.5 against
+                    // 11.9 at Robin's, and level (within 0.3 ms) at home and on the farm. Classic
+                    // was never cheaper by more than that anywhere.
+                    FloodLightingEnabled = true;
+                    LighterSoftEffects = LighterSoftEffects.Always;
                     // Per-object shadow bakes scale with how much scenery is on screen, which
                     // is exactly what a weak machine cannot afford. Characters keep theirs.
                     DirectionalShadowObjects = false;
@@ -2237,8 +2413,10 @@ namespace SDVRadiance
                     RenderScaleAuto = true;
                     TiltShiftEnabled = false;
                     ChromaticAberrationEnabled = false;
-                    FloodLightingEnabled = false;
-                    LightingEnabled = true;
+                    // The flood at the lower resolution, as in Performance: cheaper than the
+                    // classic lighting in every room measured.
+                    FloodLightingEnabled = true;
+                    LighterSoftEffects = LighterSoftEffects.Always;
                     DirectionalShadowObjects = false;
                     ShadowCastsPerCharacter = 1;
                     // The three Performance keeps and this one cannot. Each is a per-light or

@@ -238,6 +238,9 @@ namespace SDVRadiance
             public SurfaceMap? WetGroundCellsSurface;
             public byte[]? WetSuitabilityCells;
             public byte[]? WetSuitabilityUploaded;
+            public Texture2D? WetRoomTexture;
+            public byte[]? WetRoomCells;
+            public int WetSuitabilityShelterCount = -1;
             /// <summary>Where this screen's exposure eases last snapped. Shared, it read as a warp
             /// at every screen switch, so in split screen the room's exposure, its window daylight
             /// and its saturation snapped every frame and never eased.</summary>
@@ -332,6 +335,7 @@ namespace SDVRadiance
                 Particles?.Dispose();
                 WetSuitabilityTexture?.Dispose();
                 WetSuitabilitySpare?.Dispose();
+                WetRoomTexture?.Dispose();
                 Flood.Dispose();
                 // The cascades hold two HalfVector4 targets, a lightmap and two emitter textures.
                 // Only the flood grid was released here, so a co-op player leaving a split screen

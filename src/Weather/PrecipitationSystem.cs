@@ -1053,6 +1053,16 @@ namespace SDVRadiance
                     }
                 }
             }
+            // The Pixel leaf look is one look everywhere: the wind day's pieces then come from the
+            // game's own debris art, the same frames the particle leaves use, or the screen showed
+            // smooth leaves on the wind and pixel ones from the particles side by side.
+            int gameArtRow = GameDebrisRow(Game1.currentLocation?.GetSeason() ?? Season.Spring);
+            if (dials?.ParticleLeafLook == ParticleLeafLook.Pixel && gameArtRow > 0 && Game1.mouseCursors != null)
+            {
+                DrawWindInGameArt(spriteBatch, screen, viewportWidth, viewportHeight, pixelScale, ambient,
+                    presence * windOpacity, windSize, gameArtRow);
+                return;
+            }
             Texture2D? pieceTexture = screen.WindPetals ? _petalTexture : _leafTexture;
             if (pieceTexture != null)
             {
@@ -1080,6 +1090,53 @@ namespace SDVRadiance
                     }
                 }
             }
+        }
+
+        /// <summary>The row of the game's debris art for a season (the same three the game blows),
+        /// or 0 for winter, whose debris is snow.</summary>
+        private static int GameDebrisRow(Season season) => season switch
+        {
+            Season.Spring => 1184,
+            Season.Summer => 1200,
+            Season.Fall => 1216,
+            _ => 0,
+        };
+
+        /// <summary>The wind day's pieces drawn from the game's debris art: its ten frames of
+        /// turning over, played forward and back on each piece's own tumble, point sampled so the
+        /// pixels stay pixels. The caller's batch is linear for the soft streaks and flakes, so it is
+        /// closed for these and opened again the way it was.</summary>
+        private static void DrawWindInGameArt(SpriteBatch spriteBatch, ScreenPrecipitation screen, int viewportWidth, int viewportHeight,
+                                              float pixelScale, Vector3 ambient, float visibility, float windSize, int artRow)
+        {
+            spriteBatch.End();
+            spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend,
+                SamplerState.PointClamp, DepthStencilState.None, RasterizerState.CullNone);
+            var origin = new Vector2(8f, 8f);
+            Color lit = Shaded(Color.White, ambient);
+            for (int layer = 0; layer < 3; layer++)
+            {
+                // The game draws its debris at four screen pixels to an art pixel; the far layers
+                // smaller, the near one at the game's own size.
+                float scale = (2f + layer) * pixelScale * windSize;
+                for (int i = 0; i < screen.Wind.Length; i++)
+                {
+                    ref WindPiece piece = ref screen.Wind[i];
+                    if (piece.Layer != layer || piece.Alpha <= 0.01f)
+                        continue;
+                    if (piece.Position.X < -32f || piece.Position.X > viewportWidth + 32f
+                        || piece.Position.Y < -32f || piece.Position.Y > viewportHeight + 32f)
+                        continue;
+                    int step = (int)(Math.Abs(piece.TumblePhase) * 1.6f) % 18;
+                    int frame = step < 10 ? step : 18 - step;
+                    spriteBatch.Draw(Game1.mouseCursors, piece.Position * pixelScale, new Rectangle(352 + frame * 16, artRow, 16, 16),
+                        lit * Math.Min(1f, piece.Alpha * visibility), 0f, origin, scale, SpriteEffects.None, 1f);
+                    screen.LastDrawnWind++;
+                }
+            }
+            spriteBatch.End();
+            spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend,
+                SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone);
         }
 
         /// <summary>The ground-bound half: splash frames from the vanilla sheet, always in the

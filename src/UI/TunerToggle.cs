@@ -43,17 +43,40 @@ namespace SDVRadiance
         public bool Hit(int x, int y) => IsEnabled
             && new Rectangle(Row.X, Row.Y, Row.Width, (int)(36 * TextScale)).Contains(x, y);
 
+        /// <summary>Where the glass label ended on the last draw, on screen, for the changed dot
+        /// that follows it.</summary>
+        public Vector2 LabelEnd { get; private set; }
+
         public void Draw(SpriteBatch spriteBatch, int dy)
         {
             float box = 4f * TextScale;
             // Dimmed rather than hidden, for the same reason the slider is: a list that re-flows
             // under the hand every time a switch is flipped is harder to use than a greyed row.
             float fade = IsEnabled ? 1f : 0.35f;
-            spriteBatch.Draw(Game1.mouseCursors, new Vector2(Row.X, Row.Y + dy), Get() ? Checked : Unchecked,
-                Color.White * fade, 0f, Vector2.Zero, box, SpriteEffects.None, 0.9f);
+            if (TunerTheme.Glass)
+            {
+                // The label left and a pill switch at the end of the row, as on the glass mock:
+                // blue with the knob right when on.
+                int switchWidth = (int)(40 * TextScale), switchHeight = (int)(22 * TextScale);
+                var track = new Rectangle(Row.Right - (int)(8 * TextScale) - switchWidth, Row.Y + dy + (Row.Height - switchHeight) / 2, switchWidth, switchHeight);
+                bool on = Get();
+                TunerTheme.Plate(spriteBatch, track, switchHeight / 2, (on ? TunerTheme.Accent : TunerTheme.Overlay * 0.18f) * fade);
+                int knob = switchHeight - (int)(4 * TextScale);
+                float knobX = on ? track.Right - switchHeight / 2f : track.X + switchHeight / 2f;
+                TunerTheme.Disc(spriteBatch, new Vector2(knobX, track.Center.Y), knob, Color.White * fade);
+                int labelX = Row.X + (int)(10 * TextScale);
+                float labelRoom = track.X - labelX - 12;
+                TunerText.DrawFit(spriteBatch, _label, new Vector2(labelX, Row.Y + dy + (Row.Height - 26 * TextScale) / 2f),
+                    labelRoom, TunerTheme.Ink * fade, 0.9f * TextScale);
+                LabelEnd = new Vector2(labelX + Math.Min(labelRoom, TunerText.Measure(_label).X * 0.9f * TextScale), track.Center.Y);
+                return;
+            }
+            else
+                spriteBatch.Draw(Game1.mouseCursors, new Vector2(Row.X, Row.Y + dy), Get() ? Checked : Unchecked,
+                    Color.White * fade, 0f, Vector2.Zero, box, SpriteEffects.None, 0.9f);
             int textX = Row.X + (int)(48 * TextScale);
             TunerText.DrawFit(spriteBatch, _label, new Vector2(textX, Row.Y + 6 * TextScale + dy),
-                Row.Right - textX - 8, Game1.textColor * fade, 0.9f * TextScale);
+                Row.Right - textX - 8, TunerTheme.Ink * fade, 0.9f * TextScale);
         }
     }
 }

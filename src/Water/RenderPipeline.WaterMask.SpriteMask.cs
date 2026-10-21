@@ -247,7 +247,7 @@ namespace SDVRadiance
             LocationDrawHook.BeginFrame();
             SpriteMaskReady = false;
             GameLocation? location = Game1.currentLocation;
-            if (location == null || !_hasWaterInMask)
+            if (location == null || (!_hasWaterInMask && !_wetWantsSpriteMask))
                 return;
 
             RenderTargetBinding[] prev = _device.GetRenderTargets();
@@ -287,6 +287,12 @@ namespace SDVRadiance
                 StampAnimals(spriteBatch, location);
                 StampCritters(spriteBatch, location);
                 StampTemporarySprites(spriteBatch, location.temporarySprites);
+                // The panning spot's sparkle is a field of its own, not in temporarySprites, and is
+                // painted inside the base location draw that LocationDrawHook does not record, so
+                // without this the water rippled, tinted and glinted straight over it. Reported by
+                // asmoranomar on Nexus (17 Oct 2026): the spots were hard to find with the water on.
+                if (location.orePanAnimation != null)
+                    StampPanSparkle(spriteBatch, location.orePanAnimation);
                 StampCurrentEvent(spriteBatch, location);
                 StampProjectilesAndDebris(spriteBatch, location);
                 StampFarmEvent(spriteBatch);
@@ -757,65 +763,89 @@ namespace SDVRadiance
             if (sprites == null || sprites.Count == 0)
                 return;
             foreach (var sprite in sprites)
-            {
-                // Unlike the mirror, a sprite flagged to draw above the always-front layer is
-                // kept: rain does not reflect, but a fish leaping out of the sea at Squid Fest or
-                // a firework over the lake is still drawn on top of the water and must not ripple.
-                if (sprite == null || sprite.local || sprite.text != null || sprite.swordswipe
-                    || sprite.attachedCharacter != null || (sprite.bigCraftable && sprite.Texture == null)
-                    || sprite.currentParentTileIndex < 0
-                    || sprite.delayBeforeAnimationStart > 0 || sprite.ticksBeforeAnimationStart > 0)
-                    continue;
-                float alpha = sprite.alpha;
-                if (alpha <= 0.02f)
-                    continue;
+                StampTemporarySprite(spriteBatch, sprite);
+        }
 
-                Texture2D texture;
-                Rectangle sourceRect;
-                Vector2 scale;
-                Vector2 topLeft = Game1.GlobalToLocal(Game1.viewport, new Vector2((int)sprite.Position.X, (int)sprite.Position.Y));
-                Vector2 position;
-                Vector2 origin;
-                if (sprite.Texture != null)
+        /// <summary>The panning spot's sparkle, kept clear of the water twice over: as itself, and
+        /// under a soft round patch two tiles across where the water effect stands back by half, so
+        /// our white glints and ripples do not crowd the gold specks. Protected at its own size
+        /// only, the specks survived but sat among a field of our glints and were no easier to
+        /// find. The patch reads as a calmer, brighter spot of water, which is what a player
+        /// scanning a lake for the spot is looking for anyway.</summary>
+        private void StampPanSparkle(SpriteBatch spriteBatch, TemporaryAnimatedSprite sparkle)
+        {
+            StampTemporarySprite(spriteBatch, sparkle);
+            Texture2D? glow = Game1.sconceLight;
+            if (glow == null || glow.IsDisposed)
+                return;
+            Vector2 centre = Game1.GlobalToLocal(Game1.viewport, sparkle.Position)
+                + new Vector2(sparkle.sourceRect.Width, sparkle.sourceRect.Height) * (sparkle.scale / 2f);
+            const int PatchPixels = 128;
+            spriteBatch.Draw(glow, new Rectangle((int)centre.X - PatchPixels / 2, (int)centre.Y - PatchPixels / 2, PatchPixels, PatchPixels),
+                Color.White * 0.5f);
+        }
+
+        /// <summary>One sprite of <see cref="StampTemporarySprites"/>, also used on its own for a
+        /// sprite the game keeps outside the list (the panning spot's sparkle).</summary>
+        private void StampTemporarySprite(SpriteBatch spriteBatch, TemporaryAnimatedSprite? sprite)
+        {
+            // Unlike the mirror, a sprite flagged to draw above the always-front layer is
+            // kept: rain does not reflect, but a fish leaping out of the sea at Squid Fest or
+            // a firework over the lake is still drawn on top of the water and must not ripple.
+            if (sprite == null || sprite.local || sprite.text != null || sprite.swordswipe
+                || sprite.attachedCharacter != null || (sprite.bigCraftable && sprite.Texture == null)
+                || sprite.currentParentTileIndex < 0
+                || sprite.delayBeforeAnimationStart > 0 || sprite.ticksBeforeAnimationStart > 0)
+                return;
+            float alpha = sprite.alpha;
+            if (alpha <= 0.02f)
+                return;
+
+            Texture2D texture;
+            Rectangle sourceRect;
+            Vector2 scale;
+            Vector2 topLeft = Game1.GlobalToLocal(Game1.viewport, new Vector2((int)sprite.Position.X, (int)sprite.Position.Y));
+            Vector2 position;
+            Vector2 origin;
+            if (sprite.Texture != null)
+            {
+                texture = sprite.Texture;
+                sourceRect = sprite.sourceRect;
+                origin = new Vector2(sourceRect.Width / 2, sourceRect.Height / 2);
+                if (sprite.vectorScale != Vector2.Zero)
                 {
-                    texture = sprite.Texture;
-                    sourceRect = sprite.sourceRect;
-                    origin = new Vector2(sourceRect.Width / 2, sourceRect.Height / 2);
-                    if (sprite.vectorScale != Vector2.Zero)
-                    {
-                        // The game draws this branch at the position as given, centred on it.
-                        scale = sprite.vectorScale;
-                        position = topLeft;
-                    }
-                    else
-                    {
-                        scale = new Vector2(sprite.scale);
-                        position = topLeft + origin * sprite.scale;
-                    }
+                    // The game draws this branch at the position as given, centred on it.
+                    scale = sprite.vectorScale;
+                    position = topLeft;
                 }
                 else
                 {
-                    // An item off the object sheet, drawn four times over.
-                    texture = Game1.objectSpriteSheet;
-                    sourceRect = GameLocation.getSourceRectForObject(sprite.currentParentTileIndex);
-                    origin = new Vector2(8f, 8f);
-                    scale = new Vector2(4f * sprite.scale);
-                    position = topLeft + new Vector2(32f, 32f);
+                    scale = new Vector2(sprite.scale);
+                    position = topLeft + origin * sprite.scale;
                 }
-                if (texture == null || texture.IsDisposed)
-                    continue;
-                if (sourceRect.Width * scale.X < LocationDrawHook.SmallestWorthCarving
-                    || sourceRect.Height * scale.Y < LocationDrawHook.SmallestWorthCarving)
-                    continue;
-                float feetY = position.Y + Game1.viewport.Y + (sourceRect.Height - origin.Y) * scale.Y;
-                if (!WaterWithinTiles((int)((position.X + Game1.viewport.X) / 64f), (int)(feetY / 64f), 2))
-                    continue;
-                // Faded with the sprite, so a prop that fades out takes its carve with it.
-                // The item sheet's draw honours only the horizontal flip.
-                SpriteEffects effects = sprite.flipped ? SpriteEffects.FlipHorizontally
-                    : sprite.verticalFlipped && sprite.Texture != null ? SpriteEffects.FlipVertically : SpriteEffects.None;
-                spriteBatch.Draw(texture, position, sourceRect, Color.White * alpha, sprite.rotation, origin, scale, effects, 0f);
             }
+            else
+            {
+                // An item off the object sheet, drawn four times over.
+                texture = Game1.objectSpriteSheet;
+                sourceRect = GameLocation.getSourceRectForObject(sprite.currentParentTileIndex);
+                origin = new Vector2(8f, 8f);
+                scale = new Vector2(4f * sprite.scale);
+                position = topLeft + new Vector2(32f, 32f);
+            }
+            if (texture == null || texture.IsDisposed)
+                return;
+            if (sourceRect.Width * scale.X < LocationDrawHook.SmallestWorthCarving
+                || sourceRect.Height * scale.Y < LocationDrawHook.SmallestWorthCarving)
+                return;
+            float feetY = position.Y + Game1.viewport.Y + (sourceRect.Height - origin.Y) * scale.Y;
+            if (!WaterWithinTiles((int)((position.X + Game1.viewport.X) / 64f), (int)(feetY / 64f), 2))
+                return;
+            // Faded with the sprite, so a prop that fades out takes its carve with it.
+            // The item sheet's draw honours only the horizontal flip.
+            SpriteEffects effects = sprite.flipped ? SpriteEffects.FlipHorizontally
+                : sprite.verticalFlipped && sprite.Texture != null ? SpriteEffects.FlipVertically : SpriteEffects.None;
+            spriteBatch.Draw(texture, position, sourceRect, Color.White * alpha, sprite.rotation, origin, scale, effects, 0f);
         }
 
         private static readonly System.Reflection.FieldInfo? _propBoundsField =
@@ -917,7 +947,7 @@ namespace SDVRadiance
             // the view looked up in the object dictionary, every frame, before the water test.
             // Not while puddles mirror: then the water test answers yes everywhere, and so must
             // the walk.
-            if (!_wetPuddleMirrorWanted && !ClampWalkToWater(0, 2, ref otx0, ref otx1, ref oty0, ref oty1))
+            if (!ClampWalkToWater(0, 2, ref otx0, ref otx1, ref oty0, ref oty1))
                 return;
             for (int ovY = oty0; ovY <= oty1; ovY++)
             for (int ovX = otx0; ovX <= otx1; ovX++)

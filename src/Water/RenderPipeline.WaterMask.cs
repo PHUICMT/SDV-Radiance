@@ -706,7 +706,7 @@ namespace SDVRadiance
             // Wet puddles mirror entities anywhere on the map, so while they are live the
             // near-water cull must answer yes everywhere - it was written when water was the
             // only thing a reflection could land on.
-            if (_wetPuddleMirrorWanted)
+            if (WetWantsEverySprite)
                 return true;
             bool[]? flags = _waterTilesInMask;
             if (flags == null || _waterMask == null)
@@ -771,6 +771,10 @@ namespace SDVRadiance
         private bool ClampWalkToWater(int downOffsetTiles, int radiusTiles,
             ref int x0, ref int x1, ref int y0, ref int y1)
         {
+            // While the wet ground is drawn the per-tile test answers yes everywhere, so the walk
+            // must not be narrowed to the water either: a tree in a dry plaza stands on a puddle.
+            if (WetWantsEverySprite)
+                return true;
             bool[]? flags = _waterTilesInMask;
             if (flags == null || _waterMask == null)
                 return true;    // unknown answers yes, exactly as the per-tile test does

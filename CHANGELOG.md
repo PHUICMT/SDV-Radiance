@@ -2,6 +2,229 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.4.0 - 2026-10-21
+
+### Added
+
+- **A new F6 menu.** A frosted glass panel with the game blurred behind it, and settings grouped by
+  what you see: Looks, Light & shadow, Water, Weather & sky, Nature & life, Picture & camera,
+  Performance, and Menu & help, each split into a few pages you pick from the chips at the top.
+  Search finds any setting by its name or its note. A bar under the list says what the setting
+  under the pointer does, and for most groups shows the game without the effect and with it, a
+  second and a half each. Under Menu & help, Light glass gives pale glass with dark words, and
+  Glass darkness sets how much of the game shows through. Thai and other languages the menu's
+  typeface does not cover keep the game's font.
+  The old menu is still there: Classic at the top switches back to the seventeen tabs in the
+  wooden box, exactly as before, and the menu remembers which you use. If you are updating, F6
+  asks once which one you want; a new install starts on the new one. The menu also lays itself out
+  again at once when the window, the zoom or the interface size changes. `radiance_preset <name>`
+  uses a preset from the console, in memory only.
+
+- **Leaf look: Realistic or Pixel.** The petals and leaves on the breeze can now be drawn in Pixel,
+  from the game's own debris art, turning over frame by frame the way the game's do on a windy day:
+  pink petals in spring, green leaves in summer, orange leaves in autumn, and a recolour's art if you
+  use one. Realistic, the default, is the mod's own smooth shapes, as before. The look is one choice
+  for every leaf on screen: the wind day's leaves (Replace windblown leaves) follow it too, and with
+  that switch off ours take the game's art, so the screen never shows two kinds of leaf. In the
+  Particles tab and under Wind in the Weather tab. Asked for by sfbs97 on Nexus.
+
+- **Tumbleweeds (off by default).** Now and then a tumbleweed rolls across the desert with the wind,
+  bouncing over the sand with its shadow under it, along a stretch of open sand (it fades in at one
+  end and out at the other rather than rolling through a palm or a cliff) and sorted with everything
+  else on the ground. In the Particles tab, with Amount and Size like the other particles. Asked
+  for by sfbs97.
+
+- **Whirlwinds (off by default).** In a storm or on a windy day, now and then a small whirlwind of
+  leaves and dust (sand in the desert) wanders across open ground, widening as it rises, and dies
+  away rather than climbing a wall or a roof. Things standing in front of it cover it. In the Particles tab, with Amount, Size
+  (how tall and wide it grows) and Leaves in it (0 is a whirlwind of dust alone). Asked for by sfbs97
+  as a small tornado in heavy rain. `radiance_particles whirlwind` and `radiance_particles tumbleweed`
+  start one at once to look at.
+
+- **Wet ground, rebuilt (off by default).** Rain now darkens and shines the ground by what it is:
+  stone and dirt darken most and hold puddles, grass darkens less, wood shines, sand darkens and
+  drinks the water, and ground under a roof stays dry. Puddles gather in open ground away from walls,
+  fill as the rain goes on and dry slowest of all. Each one mirrors what stands behind it (buildings,
+  trees, people), shows the stones under it wavering, takes rain rings, and stays under people and
+  trees rather than over them. Realistic or Pixel look. At night and on rainy days every lit lamp and
+  a glow ring you wear lays a streak of light on the wet ground from its foot, with its own dials for
+  brightness, length, angle (leaning a little left to start with), glow, how it catches on the
+  stones, ripples, warmth, shape and the pool of light round the lamp. In the Weather tab under Wet
+  ground. `radiance_wet <wetness> [puddles]` sets the ground at once to look at. No puddles or wet
+  shine on snow: in winter outdoors the ground stays dry, and what was wet before the snow fades
+  over a few seconds. Lamps on dry ground (off by default): on a dry night the lamps can still lay
+  a faint streak and pool of light on stone and paths, never on grass or soil, set by how strong
+  compared with a wet night.
+
+- **Window detail: Whole window or Keep detail.** At midday the room's light, the bloom and the
+  colour grade lifted a window to the same white as its glass, so a window with detail painted in
+  (bars, a frame, curtains, a pane tinted green) turned into a white block. Keep detail, under
+  Windows in F6, holds the brightening back on the windows only: the map's own windows and window
+  furniture, Alternative Textures ones included. The window still reads as the bright thing in the
+  room, and nothing outside it changes. It only works by day and fades in and out with the
+  daylight. Whole window, the default, is how it looked before. Asked for by Ellis2467 on Nexus.
+
+- **Heat haze in front of the blacksmith's forge.** The air over the mouth of Clint's forge now
+  shimmers, like the air over lava. It is found by the forge's own art, so a map that rebuilds the
+  shop (Stardew Valley Expanded's does) and the recolours of that art get it too. It follows the
+  Heat haze switch and strength.
+
+- **Window light: As before or From the glass.** From the glass makes only a window's glass glow, so
+  frames and bars stay visible, and the light on the floor keeps the shape of the panes, with the
+  stripe of a bar between them. The game's white glow over those windows fades out. It works on the
+  game's own windows and window furniture, on Stardew Valley Expanded's, and on the windows of 97
+  furniture and map mods, each checked by hand; a window without that data keeps the old light,
+  even in the same room as one that has it, and a window known to have no glass gives none.
+  Light rays hang in the air below the window, streaking down the way the sun comes in. Dials for
+  the rays, the beam's length, how white the rays are, how much the beam spreads, the light on the
+  floor and the glow of the glass show under it when it is chosen. A sheer curtain over a window
+  lets about half the light through, in the curtain's own colour; Light through curtains sets how
+  much, Curtain colour strength how deep the colour is, and Curtain colour turns the colour off and
+  leaves it only dimmer; these three show only when a mod with curtained windows is installed. As before is the default, so the light looks the same until you
+  choose From the glass. In the Windows section of F6. `radiance_windowglass
+  on|off|auto` forces it for a comparison, and `radiance_windowglass` alone saves the glass it found
+  as a picture.
+
+- **Lightning through the windows (off by default).** Indoors during a storm, the windows now flash with the
+  lightning, and at night most of all. The game itself only flashes the screen outdoors. A near
+  strike flickers a few times like real lightning, turns the glass white, throws a wide beam into
+  the room from a new direction each time, and casts shadows of the player and the villagers away
+  from the window. Lightning in the clouds is a fainter, warmer glow with no beam. The room dims a
+  little after each strike, the way your eyes do. It answers the game's own strikes and adds
+  distant ones between them, and turns into one soft pulse with the game's Screen flash option off.
+  Lightning through windows in the Weather section of F6 turns it on.
+
+- **Looks from your mods.** A mod can now offer Radiance looks without writing over your settings:
+  it ships a `radiance-looks.json` beside its manifest with a name, a line about the look, and a
+  share code for each. They are listed in F6, in the Looks tab under Looks from your mods. Nothing
+  is applied until you pick one, and picking one is the same try-on as pasting a code: you see what
+  changes, then Keep or Put mine back. `radiance_looks` lists what was found and why anything was
+  left out.
+
+- **F6 says what we suggest for settings that start off.** A new feature never turns itself on in
+  an update, so after updating there was no way to tell it was meant to be tried. Hovering wet
+  ground, lamps on dry ground, lightning through windows, From the glass, tumbleweeds, whirlwinds,
+  windy spells, grounded shadows, contact shadows and seasonal sun now ends with what we suggest.
+  Nothing changes unless you set it. Asked for by Charost on Nexus.
+
+### Changed
+
+- **Night comes with the game's own dusk in fall and winter.** The night touches (windows and lamps
+  glowing outside, the night mist, warmer bloom) started at 7 PM every day of the year. That matches
+  spring and summer, but fall gets dark an hour earlier and winter two, so the town sat dark with
+  its windows unlit. They now start with the game's dusk, and follow mods that move the sunset,
+  such as Dynamic Dusk. Spring and summer are unchanged. Found while looking into a report by
+  Charost on Nexus.
+
+- **The Performance and Low spec presets keep the flood light, at the lower resolution.** They used
+  to swap it for the classic lighting, thought to be the cheaper one. On a slow graphics card it is
+  not: in the saloon, the shops and Robin's house the frame was 2-5 ms longer with classic, and no
+  cheaper anywhere else. The presets now keep the flood and set Lighter soft effects to Always.
+  Picking a preset is the only thing that changes: settings you already have stay as they are.
+
+- **Lighter soft effects now also covers the classic lighting** (the one used with Flood lighting
+  off). Its light is worked out at half size and laid over the sharp picture, about three times
+  cheaper for the graphics card in the saloon and in town at night, with no change you can see.
+
+- **Thai setting names say what they do.** Names that left players guessing now name what changes
+  on screen, with the usual English term in brackets where there is one (Bloom, Chromatic
+  aberration, Global illumination, Golden hour). The notes under them read more like a person wrote
+  them, and the word for mod is spelled one way throughout.
+
+### Fixed
+
+- **Panning spots are easy to find again.** The water effect rippled, tinted and glinted straight
+  over the gold sparkle of a panning spot, so with the water on it was hard to see. The sparkle
+  now shows as the game draws it, on a small patch of calmer water. Reported by asmoranomar on
+  Nexus.
+
+- **Lava sparks can be seen.** The sparks over the volcano's lava were drawn before the lava itself,
+  which painted over them, and they only ever rose from the left edge of the screen. They now rise
+  from all the lava in view, yellow-white and flung out to the side, and fireflies and other glowing
+  things over water are no longer painted over either.
+
+- **Deleting a saved look asks first.** The red X on a look in the Looks tab deleted it at once, with
+  no way back, a few pixels from the chip that loads it. It now asks, the way Reset all does.
+
+- **Sun shafts and shadows hold still while time is paused.** With Pause in Multiplayer Revived
+  installed, opening the inventory or getting on a horse turned the sun back by up to ten game
+  minutes, so the sun shafts jumped backwards and came forward again on closing. Reported by
+  AlienFreek on Nexus, with a video.
+
+- **Window beams in rooms with many windows.** Light beams went to the first six window lights the
+  room listed, so a barn from Warm Stalls and Cozy Boxes, with a light for each pane of its nine
+  double windows, had beams on its first three windows only. Each double window now takes one beam,
+  and the six beams go to the windows nearest the middle of the screen. Rooms with six window lights
+  or fewer look as they did. Reported by MyLadySeven on Nexus.
+
+- **The Forest river runs down to its falls.** The river that comes in from the town and goes over
+  the falls by the hat shop ran the wrong way, back up toward the town. Water above a fall now runs
+  into it, and a stream between two falls, like the one in the Secret Woods, now flows instead of
+  standing still in the middle. `radiance_rivers` writes a map of which way every river with a
+  waterfall runs. Reported by pkmn418 on Nexus.
+
+- **The locker room windows of Bathhouse Hot Spring - Continued reflect.** Their glass is now
+  known, so you and the room show in it like any other window. Asked for after MyLadySeven's
+  pictures of the bathhouse on Nexus.
+
+- **See-through glass in a map is no longer a grid with Smooth art.** Half-clear window panes,
+  like the bathhouse locker windows, showed a square at every tile with Smooth art on. Map tiles
+  that are mostly see-through are now left as the game draws them.
+
+### For translators
+
+63 new keys for the wet ground: `tuner.section.wetground`; `tuner.`/`help.` for `wetworld`,
+`wetworldstrength`, `wetworldpuddles`, `wetworldpuddlereflection`, `wetworldlightstreaks`,
+`wetworldlightstreaklength`, `wetworldlightstreakangle`, `wetworldlightstreakglow`,
+`wetworldlightstreakstone`, `wetworldlightstreakripples`, `wetworldlightstreakwarmth`,
+`wetworldlightstreaktaper`, `wetworldlightpool`, `wetworlddrylamplight`; `tuner.wetpuddlelook.realistic`/`.pixel` and
+`help.wetpuddlelook.realistic`/`.pixel`; `config.wetworld.` + `enabled`, `strength`, `puddles`,
+`puddlelook`, `puddlereflection`, `lightstreaks`, `lightstreaklength`, `lightstreakangle`,
+`lightstreakglow`, `lightstreakstone`, `lightstreakripples`, `lightstreakwarmth`, `lightstreaktaper`,
+`lightpool`, `drylamplight` (`.name`/`.tooltip` each).
+
+20 new keys for the particles (and `help.precipitationwind` changed: it now names the leaf look):
+`tuner.section.particletumbleweeds`, `tuner.section.particlewhirlwinds`,
+`config.particles.leaflook`/`.tumbleweeds`/`.whirlwinds`/`.whirlwindleaves` (`.name`/`.tooltip` each),
+`tuner.particlewhirlwindleaves`, `help.particlewhirlwindleaves`,
+`tuner.particleleaflook.realistic`/`.pixel`, `tuner.particletumbleweeds`, `tuner.particlewhirlwinds`,
+`help.particleleaflook.realistic`/`.pixel`, `help.particletumbleweeds`, `help.particlewhirlwinds`.
+
+7 new keys for the window detail: `tuner.windowdetail`, `tuner.windowdetail.wholewindow`/`.keepdetail`,
+`help.windowdetail.wholewindow`/`.keepdetail`, `config.lighting.windowdetail.name`/`.tooltip`.
+
+`config.heathaze.tooltip` and `help.heathaze`: now also name chimneys and the blacksmith's forge as
+places the air shimmers.
+
+43 new keys for the window light: `tuner.windowlightshape` and `.glow`/`.glass`,
+`help.windowlightshape.glow`/`.glass`, `config.lighting.windowlightshape.name`/`.tooltip`; and
+`tuner.`, `help.` and `config.lighting.` (`.name`/`.tooltip`) for `windowglassrays`,
+`windowglassraylength`, `windowglassraywhiteness`, `windowglassrayspread`, `windowglassfloor`,
+`windowglasspane`, `windowglasscurtaincolour`, `windowglasscurtainlight` and
+`windowglasscurtaincolourstrength`.
+
+4 new keys for lightning through windows: `config.lightningwindows.name`/`.tooltip`,
+`tuner.lightningwindows`, `help.lightningwindows`.
+
+3 new keys for looks from other mods: `tuner.packlooks`, `tuner.packlooks.desc`,
+`tuner.packlooks.from`.
+
+3 new keys for deleting a saved look: `tuner.deletelook.ask`, `tuner.deletelook.confirm`,
+`tuner.deletelook.cancel`.
+
+3 new keys for the suggested values: `tuner.suggested.on`, `tuner.suggested.value`,
+`tuner.suggested.choice`.
+
+72 new keys for the new F6 menu: `tuner.cat.` + `looks`, `light`, `water`, `weather`, `nature`,
+`picture`, `perf`, `menu` (each with `.desc`); 29 `tuner.page.*` page names; `tuner.layout.ask`,
+`.asktitle`, `.grouped`, `.grouped.small`, `.classic`, `.classic.small`, `.switchtoclassic`,
+`.switchtogrouped`; `tuner.search`, `.again`, `.box`,
+`.results`, `.clear`, `.none`; `tuner.glassshade`,
+`help.glassshade`, `tuner.glasslight`, `help.glasslight`; `tuner.mode.simple`, `.all`;
+`tuner.layout.new`, `.old`; `tuner.packlooks.none`; `tuner.savelook`; `tuner.picture.game`,
+`.effect`; `tuner.helpbar.idle`. `tuner.hint` changed: "=" became ":", since the game's font draws
+"=" as a star.
+
 ## 2.3.4 - 2026-10-17
 
 ### Fixed

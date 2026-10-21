@@ -34,7 +34,20 @@ namespace SDVRadiance
         }
 
         /// <summary>The label and the track together, in content space.</summary>
-        public Rectangle RowBounds => new(Track.X, Track.Y - _labelHeight, Track.Width, _labelHeight + Track.Height);
+        public Rectangle RowBounds => Inline
+            ? new(InlineLabelX, Track.Y - 4, InlineRowRight - InlineLabelX, Track.Height + 8)
+            : new(Track.X, Track.Y - _labelHeight, Track.Width, _labelHeight + Track.Height);
+
+        /// <summary>On the glass panel the label sits at the left of the row and the track to its
+        /// right, with the value at the far end, as on the glass mock; the track rectangle is then
+        /// only the right part of the row.</summary>
+        public bool Inline { get; init; }
+        public int InlineLabelX { get; init; }
+        public int InlineRowRight { get; init; }
+
+        /// <summary>Where the inline label ended on the last draw, on screen, for the changed dot
+        /// that follows it.</summary>
+        public Vector2 LabelEnd { get; private set; }
 
         public TunerSlider(string label, int x, int y, int w, float min, float max, Func<float> get, Action<float> set, int labelHeight = 26, int trackHeight = 20)
         {
@@ -70,7 +83,27 @@ namespace SDVRadiance
             // on every toggle), so this dim is only the fallback for a condition that goes
             // false without a rebuild in between.
             float fade = IsEnabled ? 1f : 0.35f;
-            TunerText.DrawFit(spriteBatch, _label, new Vector2(Track.X, Track.Y - _labelHeight + dy), Track.Width - (int)(70 * TextScale), Game1.textColor * fade, ts);
+            if (Inline)
+            {
+                float labelRoom = Track.X - InlineLabelX - 12;
+                TunerText.DrawFit(spriteBatch, _label, new Vector2(InlineLabelX, Track.Y - 3 + dy), labelRoom,
+                    TunerTheme.Ink * fade, ts);
+                LabelEnd = new Vector2(InlineLabelX + Math.Min(labelRoom, TunerText.Measure(_label).X * ts), Track.Center.Y + dy);
+                if (v != _shownValue || _shownValueText == null)
+                {
+                    _shownValue = v;
+                    _shownValueText = v.ToString("0.00");
+                }
+                Vector2 valueSize = TunerText.Measure(_shownValueText) * ts * 0.85f;
+                TunerText.Draw(spriteBatch, _shownValueText, new Vector2(InlineRowRight - valueSize.X, Track.Y - 2 + dy), TunerTheme.InkDim * fade, ts * 0.85f, shadowIntensity: 0f);
+            }
+            else
+                TunerText.DrawFit(spriteBatch, _label, new Vector2(Track.X, Track.Y - _labelHeight + dy), Track.Width - (int)(70 * TextScale), TunerTheme.Ink * fade, ts);
+            if (Inline)
+            {
+                DrawTrack(spriteBatch, dy, v, fade);
+                return;
+            }
             // The text and its width only change when the value does, which is a drag, not a frame.
             if (v != _shownValue || _shownValueText == null)
             {
@@ -79,11 +112,27 @@ namespace SDVRadiance
             }
             string val = _shownValueText;
             Vector2 vs = TunerText.Measure(val) * ts;
-            Utility.drawTextWithShadow(spriteBatch, val, Game1.smallFont, new Vector2(Track.Right - vs.X, Track.Y - _labelHeight + dy), Game1.textColor * 0.8f * fade, ts);
+            TunerText.Draw(spriteBatch, val, new Vector2(Track.Right - vs.X, Track.Y - _labelHeight + dy), TunerTheme.InkDim * fade, ts);
+            DrawTrack(spriteBatch, dy, v, fade);
+        }
 
+        private void DrawTrack(SpriteBatch spriteBatch, int dy, float v, float fade)
+        {
             var track = new Rectangle(Track.X, Track.Y + dy, Track.Width, Track.Height);
-            spriteBatch.Draw(Game1.staminaRect, track, Color.Black * 0.35f * fade);
             float t = (v - _minimum) / (_maximum - _minimum);
+            if (TunerTheme.Glass)
+            {
+                // A thin rounded track with a white thumb ringed in blue, as on the glass mock.
+                int line = Math.Max(4, track.Height / 3);
+                var groove = new Rectangle(track.X, track.Center.Y - line / 2, track.Width, line);
+                TunerTheme.Plate(spriteBatch, groove, line / 2, TunerTheme.Overlay * 0.18f * fade);
+                TunerTheme.Plate(spriteBatch, new Rectangle(groove.X, groove.Y, (int)(t * groove.Width), groove.Height), line / 2, TunerTheme.Accent * fade);
+                var thumbCentre = new Vector2(track.X + t * track.Width, track.Center.Y);
+                TunerTheme.Disc(spriteBatch, thumbCentre, track.Height + 4, TunerTheme.Accent * 0.35f * fade);
+                TunerTheme.Disc(spriteBatch, thumbCentre, track.Height - 2, Color.White * fade);
+                return;
+            }
+            spriteBatch.Draw(Game1.staminaRect, track, Color.Black * 0.35f * fade);
             spriteBatch.Draw(Game1.staminaRect, new Rectangle(track.X, track.Y, (int)(t * track.Width), track.Height), new Color(196, 130, 66) * fade);
             spriteBatch.Draw(Game1.staminaRect, new Rectangle(track.X + (int)(t * track.Width) - 6, track.Y - 4, 12, track.Height + 8), Color.White * fade);
         }

@@ -63,6 +63,29 @@ static const float LO[2] = { 1.384615, 3.230769 };   // merged pair offsets, in 
 
 static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
 
+// KEEP THE WINDOW'S OWN DETAIL, the bloom's half (the flood pass and the grade have the others).
+// The glow of a bright pane is laid over the pane itself as much as round it, and that haze
+// alone took a green-blue glass to cream. Inside a window nearly all of it is held back; the halo
+// round the window, where the boxes have faded out, is left as it was.
+float4 WindowZones[8];      // xy = centre (screen UV), zw = half size (tiles)
+float WindowZoneCount;      // how many entries are live
+float WindowDetail;         // 0 = off, 1 = inside a window the bloom is mostly held back (eased on CPU)
+float2 TilesPerScreen;      // buffer size in world tiles (w/64, h/64)
+
+float WindowZone(float2 uv)
+{
+    float zone = 0.0;
+    [unroll]
+    for (int zoneIndex = 0; zoneIndex < 8; zoneIndex++)
+    {
+        float zoneOn = step((float)zoneIndex + 0.5, WindowZoneCount);
+        float2 zoneDelta = (uv - WindowZones[zoneIndex].xy) * TilesPerScreen / max(WindowZones[zoneIndex].zw, 0.01);
+        float zoneEdge = saturate(1.0 - max(abs(zoneDelta.x), abs(zoneDelta.y)));
+        zone = max(zone, zoneOn * smoothstep(0.0, 0.25, zoneEdge));
+    }
+    return zone;
+}
+
 //-----------------------------------------------------------------------------
 // Bright pass (also downsamples full-res -> half-res).
 //
@@ -139,6 +162,8 @@ float4 CompositePS(PixelInput input) : SV_TARGET
     // At night the bloom turns warm/amber so lamp and window glow reads as a cosy halo
     // rather than a neutral haze.
     bloom *= lerp(float3(1.0, 1.0, 1.0), float3(1.10, 1.02, 0.82), BloomWarm);
+    [branch] if (WindowDetail > 0.001 && WindowZoneCount > 0.5)
+        bloom *= 1.0 - 0.9 * WindowZone(input.UV) * WindowDetail;
     float3 result = 1.0 - (1.0 - scene.rgb) * (1.0 - bloom);
     return float4(result, scene.a);
 }

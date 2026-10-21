@@ -7,7 +7,7 @@ namespace SDVRadiance
     /// RenderPipeline - THE SOFT PARTS AT A LOWER RESOLUTION.
     ///
     /// <para>
-    /// Four pieces of the chain are soft by nature and were worked out at more pixels than they can
+    /// Five pieces of the chain are soft by nature and were worked out at more pixels than they can
     /// show: the cloud shadow's density mask, the bloom's bright pass and blur, the tilt-shift's
     /// blurred copy (all three at a half of the frame), and the flood's light, at the full frame.
     /// With <see cref="ModConfig.LighterSoftEffects"/> the first three run at a quarter, their blur
@@ -24,6 +24,12 @@ namespace SDVRadiance
     /// road a few seconds apart, and the author could not tell them apart on a side-by-side page.
     /// A camera-step crawl test and a walking flicker test found nothing either.
     /// </para>
+    ///
+    /// <para>
+    /// The fifth, from 17 Oct 2026: the classic lighting (the one that runs with the flood off) is
+    /// worked out at half size and multiplied into the full frame (lighting.fx LightTerm and
+    /// LightApply). It needs no ratio: the classic light is a plain multiply of the frame.
+    /// </para>
     /// </summary>
     internal sealed partial class RenderPipeline
     {
@@ -33,6 +39,7 @@ namespace SDVRadiance
 
         private RenderTarget2D? _quarterScratchA, _quarterScratchB;
         private RenderTarget2D? _floodHalfScene, _floodHalfLit;
+        private RenderTarget2D? _classicHalfLight;
         private Effect? _floodApply;
         private bool _floodApplyTried;
 
@@ -74,6 +81,34 @@ namespace SDVRadiance
             return true;
         }
 
+        /// <summary>The classic lighting at half size: the light alone into a half-size target, then
+        /// multiplied into the full frame. False when it cannot run (a lighting.mgfxo from before
+        /// these techniques), and the caller then draws the full pass.</summary>
+            // The classic pass's cost is the walls marched between each pixel and every lamp that
+            // reaches it, 13 taps a lamp and 20-40 lamps in the saloon at night: 0.40 ms of an RTX
+            // 5080 against the flood's 0.155, and about 5 ms more than the flood on a card held to
+            // a fifteenth of its clock. The light has no full-resolution input (no art, no normals),
+            // only the lamp list and a per-tile wall mask, so it loses nothing at half size.
+        private bool DrawClassicLightAtHalf(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, Effect effect)
+        {
+            EffectTechnique? lightTerm = effect.Techniques["LightTerm"], lightApply = effect.Techniques["LightApply"];
+            if (lightTerm == null || lightApply == null)
+                return false;
+            int width = Math.Max(1, destination.Width / 2), height = Math.Max(1, destination.Height / 2);
+            if (_classicHalfLight == null || _classicHalfLight.IsDisposed || _classicHalfLight.Width != width
+                || _classicHalfLight.Height != height || _classicHalfLight.Format != destination.Format)
+            {
+                _classicHalfLight?.Dispose();
+                _classicHalfLight = CreateRenderTarget(width, height, destination.Format);
+            }
+            effect.CurrentTechnique = lightTerm;
+            DrawFull(spriteBatch, source, _classicHalfLight, effect);
+            effect.Parameters["LightTermTexture"]?.SetValue(_classicHalfLight);
+            effect.CurrentTechnique = lightApply;
+            DrawFull(spriteBatch, source, destination, effect);
+            return true;
+        }
+
         /// <summary>The lighter road's own targets for a chain of this size: the flood's half-size pair
         /// and the quarter pair. Nothing is made when they already fit.</summary>
         private void EnsureSoftEffectTargets(int chainWidth, int chainHeight, SurfaceFormat format)
@@ -111,8 +146,8 @@ namespace SDVRadiance
         private void ReleaseSoftEffectTargets()
         {
             _quarterScratchA?.Dispose(); _quarterScratchB?.Dispose();
-            _floodHalfScene?.Dispose(); _floodHalfLit?.Dispose();
-            _quarterScratchA = _quarterScratchB = _floodHalfScene = _floodHalfLit = null;
+            _floodHalfScene?.Dispose(); _floodHalfLit?.Dispose(); _classicHalfLight?.Dispose();
+            _quarterScratchA = _quarterScratchB = _floodHalfScene = _floodHalfLit = _classicHalfLight = null;
         }
     }
 }

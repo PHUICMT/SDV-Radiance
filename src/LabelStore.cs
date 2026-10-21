@@ -55,6 +55,61 @@ namespace SDVRadiance
         /// reported at Trace. Any future file that lands in this folder and is not labels needs
         /// its own line here for the same reason.</para></summary>
         internal const string SheetSourceFileName = "sheet-sources.json";
+        /// <summary>The window glass labels: a shape of their own, read by the window light
+        /// (RenderPipeline.WindowGlass) and skipped here.</summary>
+        internal const string WindowGlassFileName = "window-glass.json";
+
+        /// <summary>
+        /// Whether any window with a sheer curtain is installed: the curtain dials are offered only
+        /// then (asked for by the author on 16 Oct 2026, "with no curtains in the game, why show
+        /// curtain options"). True when it cannot tell, so a dial is never hidden by mistake.
+        /// </summary>
+        internal static bool CurtainWindowsInstalled { get; private set; } = true;
+
+        /// <summary>
+        /// Find out at launch whether a mod with curtained windows is installed: the window glass
+        /// file names those mods by Nexus id near its top, and every mod's manifest carries its own
+        /// in its update keys. Only the head of the file is read, not the megabyte under it.
+        /// </summary>
+        internal static void FindCurtainWindows(string modDirectory, IReadOnlyCollection<string> installedNexusIds, IMonitor monitor)
+        {
+            try
+            {
+                string path = Path.Combine(modDirectory, "labels", WindowGlassFileName);
+                if (!File.Exists(path))
+                    return;
+                var withCurtains = new List<string>();
+                bool listed = false;
+                byte[] head = new byte[16384];
+                int length;
+                using (FileStream stream = File.OpenRead(path))
+                    length = stream.Read(head, 0, head.Length);
+                var reader = new Utf8JsonReader(head.AsSpan(0, length), isFinalBlock: false, state: default);
+                while (reader.Read())
+                {
+                    if (reader.TokenType == JsonTokenType.PropertyName && reader.CurrentDepth == 1 && reader.ValueTextEquals("curtainMods"))
+                    {
+                        reader.Read();
+                        while (reader.Read() && reader.TokenType == JsonTokenType.String)
+                            withCurtains.Add(reader.GetString() ?? "");
+                        listed = true;
+                        break;
+                    }
+                    if (reader.TokenType == JsonTokenType.PropertyName && reader.CurrentDepth == 1 && reader.ValueTextEquals("sheets"))
+                        break;
+                }
+                if (!listed)
+                    return;   // a file from before the list: keep the dials
+                var installed = new HashSet<string>(installedNexusIds, StringComparer.OrdinalIgnoreCase) { "vanilla" };
+                CurtainWindowsInstalled = withCurtains.Any(installed.Contains);
+                monitor.Log($"[windows] curtained windows installed: {CurtainWindowsInstalled} ({withCurtains.Count} mods have some)", LogLevel.Trace);
+            }
+            catch (Exception error)
+            {
+                CurtainWindowsInstalled = true;
+                monitor.Log($"[windows] could not tell whether curtained windows are installed: {error.Message}", LogLevel.Trace);
+            }
+        }
 
         /// <summary>One label painted for one specific set of art.</summary>
         private readonly struct LabelVariant
@@ -277,6 +332,10 @@ namespace SDVRadiance
                         catch (Exception ex) { monitor.Log($"Bad art variant file: {ex.Message}", LogLevel.Warn); }
                         continue;
                     }
+                    // The window glass labels have a shape of their own and are read by the window
+                    // light (RenderPipeline.WindowGlass), not as liquid labels.
+                    if (string.Equals(Path.GetFileName(file), WindowGlassFileName, StringComparison.OrdinalIgnoreCase))
+                        continue;
                     if (string.Equals(Path.GetFileName(file), SheetSourceFileName, StringComparison.OrdinalIgnoreCase))
                     {
                         try { LoadSheetSources(file, monitor); }

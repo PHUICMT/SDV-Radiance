@@ -28,6 +28,13 @@ namespace SDVRadiance
         // The pool itself and the location it belongs to are per screen: RenderPipeline.Screens.cs.
         private float _fadeParticles;
         private EmissiveParticleHost _emissiveParticleHost;
+        /// <summary>Set while the stage list is built: the water stage runs this frame, so the
+        /// emissive group waits for it instead of riding on the lighting stage. Drawn before the
+        /// water, a spark over lava or a firefly over a pond was painted over by the surface the
+        /// water pass laid on every water pixel; the volcano's sparks were never seen at all
+        /// (18 Oct 2026, "the lava has no sparks"). The water pass comes after both lighting
+        /// stages, so a group drawn on its result is still past the lighting multiply.</summary>
+        private bool _emissiveAfterWater;
         /// <summary>Window width the chain buffers are a scaled copy of, so a draw into one of
         /// them can work out its own scale from its target.</summary>
         private int _particleWindowWidth = 1;
@@ -60,6 +67,11 @@ namespace SDVRadiance
             ForgetEmitterCarry();
         }
 
+        /// <summary>radiance_particles whirlwind / tumbleweed: start one on the next tick,
+        /// whatever the weather or the place, so it can be looked at (the switch must be on).</summary>
+        internal void ForceWhirlwind() => _forceWhirlwind = true;
+        internal void ForceTumbleweed() => _forceTumbleweed = true;
+
         /// <summary>Throw away every emitter's fraction of a particle.
         ///
         /// <para>ONE LIST, because there were two and both were short. Each emitter keeps the
@@ -71,6 +83,8 @@ namespace SDVRadiance
             _dustSpawnCarry = _emberSpawnCarry = _fireflySpawnCarry = _blossomSpawnCarry = 0f;
             _ringSparkleCarry = _festiveSpawnCarry = _chimneySparkCarry = 0f;
             _mistSpawnCarry = _steamSpawnCarry = _lavaSpawnCarry = 0f;
+            _whirlwinds.Clear();
+            _whirlwindDebrisCarry = 0f;
             _previousPlayerPositionKnown = false;
         }
 
@@ -152,10 +166,25 @@ namespace SDVRadiance
         private void DrawEmissiveParticlesOnLighting(SpriteBatch spriteBatch, RenderTarget2D dest,
                                                      EmissiveParticleHost host)
         {
-            if (_particles == null || _emissiveParticleHost != host
+            if (_particles == null || _emissiveParticleHost != host || _emissiveAfterWater
                 || _fadeParticles <= FadeGone || !SomethingInTheParticlePass())
                 return;
             long started = FrameCost.Begin(FrameCost.Part.Particles);
+            float pixelScale = dest.Width / (float)_particleWindowWidth;
+            _particleEmissiveDrawn += DrawParticleGroup(spriteBatch, emissive: true, _particleScreenOffset, pixelScale);
+            FrameCost.End(FrameCost.Part.Particles, started);
+        }
+
+        /// <summary>The emissive group on the water stage's result, for the frames that defer it
+        /// there (see <see cref="_emissiveAfterWater"/>). The water stage's target is bound again
+        /// the way BlendBackSource binds it.</summary>
+        private void DrawEmissiveParticlesAfterWater(SpriteBatch spriteBatch, RenderTarget2D dest)
+        {
+            if (_particles == null || !_emissiveAfterWater || _emissiveParticleHost == EmissiveParticleHost.None
+                || _fadeParticles <= FadeGone || !SomethingInTheParticlePass())
+                return;
+            long started = FrameCost.Begin(FrameCost.Part.Particles);
+            _device.SetRenderTarget(dest);
             float pixelScale = dest.Width / (float)_particleWindowWidth;
             _particleEmissiveDrawn += DrawParticleGroup(spriteBatch, emissive: true, _particleScreenOffset, pixelScale);
             FrameCost.End(FrameCost.Part.Particles, started);
@@ -218,6 +247,14 @@ namespace SDVRadiance
             if (emissive && !rainbowsBehindSprites)
                 drawn += DrawWaterfallRainbows(spriteBatch, screenOffset, pixelScale);
             spriteBatch.End();
+            if (!emissive)
+            {
+                // The game's own leaf art, point sampled the way the game draws it.
+                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend,
+                    SamplerState.PointClamp, DepthStencilState.None, ParticlesClippedToMap);
+                drawn += _particles.DrawGameArt(spriteBatch, _fadeParticles, screenOffset, pixelScale, AmbientLightOnParticles());
+                spriteBatch.End();
+            }
             if (rainbowsBehindSprites)
                 drawn += DrawRainbowsBehindSprites(spriteBatch, screenOffset, pixelScale);
             device.ScissorRectangle = previousScissor;
@@ -342,7 +379,7 @@ namespace SDVRadiance
                 EmissiveParticleHost.Classic => "classic lighting",
                 _ => "none (drawn with the ambient group)",
             };
-            return $"particles: live={_particles.LiveCount}/{ParticleSystem.Capacity} presence={_fadeParticles:0.000} rainbows={RainbowsDrawn}{RainbowArchesDescribed()} rainbowPresence={_rainbowEase:0.00} "
+            return $"particles: whirlwinds={WhirlwindsDescribed()} tumbleweedRuns={_tumbleweedLastRuns} forced={_forceTumbleweed} live={_particles.LiveCount}/{ParticleSystem.Capacity} presence={_fadeParticles:0.000} rainbows={RainbowsDrawn}{RainbowArchesDescribed()} rainbowPresence={_rainbowEase:0.00} "
                  + $"drawn ambient={_particleAmbientDrawn} emissive={_particleEmissiveDrawn} "
                  + $"refused={_particles.SpawnsRefused} atlas={(_particles.AtlasReady ? "built" : "MISSING")} "
                  + $"dustWindows={_dustWindowsLit} emberFires={_emberFiresLit} (biggest {ParticleEmberBiggestFire}) "

@@ -1,7 +1,7 @@
 {
   "Name": "SDV-Radiance",
   "Author": "phuicmt",
-  "Version": "2.3.4",
+  "Version": "2.4.0",
   "Description": "Shadows, water, light and weather for Stardew Valley: sun and lamp shadows, water and window reflections, rain and snow, wind in the trees, bloom and more. Every effect can be turned off on its own. Press F6 to change settings.",
   "UniqueID": "phuicmt.SDVRadiance",
   "EntryDll": "SDV-Radiance.dll",

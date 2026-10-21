@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using StardewValley;
 
@@ -62,6 +63,8 @@ namespace SDVRadiance
             SpawnFireEmbers(config);
             SpawnFireflies(config);
             SpawnBlossom(config);
+            SpawnTumbleweeds(config);
+            SpawnWhirlwinds(config);
             SpawnRingSparkles(config);
             SpawnFootDust(config);
             SpawnFestiveLights(config);
@@ -960,8 +963,20 @@ namespace SDVRadiance
             if (LocalSky.IsRaining || LocalSky.IsSnowing)
                 return;
             _blossomFalling = true;
+            // The game's own petals and leaves, frames and all, instead of the mod's shapes.
+            int artRow = GameDebrisRow(LocalSky.Season);
+            // One look for every leaf on screen. On a wind day the leaves already blowing are either
+            // the game's (pixel) or, with Replace windblown leaves on, the weather's, which follow
+            // this same look; so ours follow it too, and only the game's own leaves force its art.
+            bool gameIsBlowingLeaves = location.IsDebrisWeatherHere();
+            bool gameDrawsItsOwnLeaves = gameIsBlowingLeaves && !(config.PrecipitationEnabled && config.PrecipitationWind);
+            if ((config.ParticleLeafLook == ParticleLeafLook.Pixel || gameDrawsItsOwnLeaves) && artRow > 0)
+            {
+                cell = ParticleSystem.AtlasCell.GameLeaf;
+                colour = Vector3.One;
+            }
 
-            float vanillaShare = location.IsDebrisWeatherHere() ? BlossomShareOnWindDays : 1f;
+            float vanillaShare = gameIsBlowingLeaves ? BlossomShareOnWindDays : 1f;
             float rate = BlossomPerSecond * vanillaShare
                        * Math.Max(0f, config.ParticleDensity) * Math.Max(0f, config.ParticlePetalsAmount);
             _blossomSpawnCarry += rate / 60f;
@@ -980,14 +995,39 @@ namespace SDVRadiance
             {
                 var position = new Vector2(left + _particles.RandomUnit() * width,
                                            top + _particles.RandomUnit() * height);
-                SpawnOneBlossom(position, cell, colour, windPerSecond, sizeScale);
+                SpawnOneBlossom(position, cell, colour, windPerSecond, sizeScale, artRow);
             }
         }
 
+        /// <summary>The row of the game's debris art for a season (Game1.populateDebrisWeatherArray
+        /// picks the same three), or 0 for winter, whose debris is snow.</summary>
+        private static int GameDebrisRow(Season season) => season switch
+        {
+            Season.Spring => 1184,
+            Season.Summer => 1200,
+            Season.Fall => 1216,
+            _ => 0,
+        };
+
         private void SpawnOneBlossom(Vector2 position, ParticleSystem.AtlasCell cell, Vector3 colour,
-                                     float windPerSecond, float sizeScale)
+                                     float windPerSecond, float sizeScale, int artRow = 0)
         {
             ParticleSystem pool = _particles!;
+            if (cell == ParticleSystem.AtlasCell.GameLeaf)
+            {
+                // The game draws its debris at three times the art: 48 world pixels a leaf. It does
+                // not spin a leaf; the frames turn it over, so the sway and the wind do the rest.
+                float lightness = pool.RandomBetween(0.85f, 1f);
+                pool.Spawn(cell, position, new Vector2(windPerSecond + pool.RandomBetween(-12f, 6f), pool.RandomBetween(14f, 34f)),
+                    lifetimeSeconds: pool.RandomBetween(5f, 9f),
+                    sizePixels: 48f * pool.RandomBetween(0.85f, 1.05f) * sizeScale,
+                    tint: new Color(lightness, lightness, lightness), emissive: false,
+                    fallPixelsPerSecondSquared: 6f,
+                    swayPixelsPerSecond: pool.RandomBetween(14f, 34f),
+                    swayPerSecond: pool.RandomBetween(0.6f, 1.6f),
+                    artRow: artRow);
+                return;
+            }
             var velocity = new Vector2(windPerSecond + pool.RandomBetween(-12f, 6f),
                                        pool.RandomBetween(14f, 34f));
             // Each one a little darker or lighter than its neighbours. A drift of identical
@@ -1039,5 +1079,273 @@ namespace SDVRadiance
         /// clips to white and reads as snow indoors. It is the dark half of the beam, where the
         /// air is, that a mote is supposed to be seen against.</summary>
         private const float DustMoteBrightness = 0.55f;
-    }
+    
+        // ---- open ground ----
+
+        /// <summary>Whether a world point is ground a thing can roll or stand on: on the map, not
+        /// water, and nothing on the Buildings, Front or AlwaysFront layers above it (walls, cliffs,
+        /// roofs, the tops of trees and awnings).</summary>
+        private static bool IsOpenGround(GameLocation location, Vector2 worldPoint)
+        {
+            int x = (int)Math.Floor(worldPoint.X / 64f), y = (int)Math.Floor(worldPoint.Y / 64f);
+            xTile.Map? map = location.map;
+            xTile.Layers.Layer? back = map?.GetLayer("Back");
+            if (map == null || back == null || x < 0 || y < 0 || x >= back.LayerWidth || y >= back.LayerHeight)
+                return false;
+            if (back.Tiles[x, y] == null || location.isWaterTile(x, y))
+                return false;
+            foreach (string above in AboveGroundLayers)
+            {
+                xTile.Layers.Layer? layer = map.GetLayer(above);
+                if (layer != null && x < layer.LayerWidth && y < layer.LayerHeight && layer.Tiles[x, y] != null)
+                    return false;
+            }
+            return true;
+        }
+
+        private static readonly string[] AboveGroundLayers = ["Buildings", "Front", "AlwaysFront"];
+
+        // ---- tumbleweeds ----
+
+        private float _tumbleweedTimer = 2f;
+        private bool _forceTumbleweed;
+        private readonly List<(int FirstTileX, int LastTileX, int TileY)> _tumbleweedRuns = [];
+        /// <summary>How many open stretches the last tumbleweed found to roll along, -1 before any.</summary>
+        private int _tumbleweedLastRuns = -1;
+
+        /// <summary>
+        /// A tumbleweed rolling across the desert now and then, bouncing along the sand with its
+        /// shadow under it, the way the wind takes it. Asked for by a player who wanted the desert
+        /// to feel like one. Opt-in (Tumbleweeds in the desert).
+        /// </summary>
+        private void SpawnTumbleweeds(ModConfig config)
+        {
+            GameLocation? location = Game1.currentLocation;
+            if (_particles == null || !config.ParticleTumbleweeds || location == null || !location.IsOutdoors
+                || (config.ParticleTumbleweedsAmount <= 0f && !_forceTumbleweed))
+                return;
+            bool desert = location is StardewValley.Locations.Desert
+                || (location.NameOrUniqueName ?? "").Contains("Desert", StringComparison.OrdinalIgnoreCase);
+            if (!_forceTumbleweed && (!desert || LocalSky.IsRaining))
+                return;
+            _tumbleweedTimer -= 1f / 60f;
+            if (!_forceTumbleweed && _tumbleweedTimer > 0f)
+                return;
+            bool asked = _forceTumbleweed;
+            _forceTumbleweed = false;
+            ParticleSystem pool = _particles;
+            _tumbleweedTimer = pool.RandomBetween(3.5f, 9f)
+                / Math.Max(0.05f, Math.Max(0.25f, config.ParticleDensity) * config.ParticleTumbleweedsAmount);
+            // With the game's wind when it blows one way, either way when it does not.
+            float wind = WeatherDebris.globalWind;
+            float direction = wind < -0.05f ? -1f : wind > 0.05f ? 1f : (pool.RandomUnit() < 0.5f ? -1f : 1f);
+            float speed = pool.RandomBetween(70f, 140f);
+            float tumbleweedScale = Math.Max(0.1f, config.ParticleTumbleweedsSize);
+            float size = pool.RandomBetween(48f, 76f) * tumbleweedScale;
+            // A stretch of open ground at least ten tiles long, on any tile row in the lower three
+            // quarters of the view: the tumbleweed rolls along it, appearing at one end and dying
+            // away at the other (the particle fades both ways), so it never rolls over a palm, a
+            // cliff or a roof. Asking for a row open the WHOLE way across the screen found none on a
+            // desert a map mod had filled with palms and cacti, so a tumbleweed never came at all.
+            _tumbleweedRuns.Clear();
+            int firstTileX = (int)Math.Floor((Game1.viewport.X - 64f) / 64f);
+            int lastTileX = (int)Math.Floor((Game1.viewport.X + Game1.viewport.Width + 64f) / 64f);
+            int firstTileY = (int)Math.Floor((Game1.viewport.Y + Game1.viewport.Height * 0.25f) / 64f);
+            int lastTileY = (int)Math.Floor((Game1.viewport.Y + Game1.viewport.Height * 0.95f) / 64f);
+            const int ShortestRunTiles = 10;
+            for (int tileY = firstTileY; tileY <= lastTileY; tileY++)
+            {
+                int runStart = -1;
+                for (int tileX = firstTileX; tileX <= lastTileX + 1; tileX++)
+                {
+                    bool open = tileX <= lastTileX && IsOpenGround(location, new Vector2(tileX * 64f + 32f, tileY * 64f + 32f));
+                    if (open && runStart < 0)
+                        runStart = tileX;
+                    else if (!open && runStart >= 0)
+                    {
+                        if (tileX - runStart >= ShortestRunTiles)
+                            _tumbleweedRuns.Add((runStart, tileX - 1, tileY));
+                        runStart = -1;
+                    }
+                }
+            }
+            _tumbleweedLastRuns = _tumbleweedRuns.Count;
+            if (_tumbleweedRuns.Count == 0)
+                return;
+            // One asked for from the console rolls along the stretch nearest the player, to be seen.
+            int chosen = (int)(pool.RandomUnit() * _tumbleweedRuns.Count) % _tumbleweedRuns.Count;
+            if (asked)
+            {
+                int playerRow = Game1.player.TilePoint.Y;
+                for (int run = 0; run < _tumbleweedRuns.Count; run++)
+                    if (Math.Abs(_tumbleweedRuns[run].TileY - playerRow) < Math.Abs(_tumbleweedRuns[chosen].TileY - playerRow))
+                        chosen = run;
+            }
+            var (runFirst, runLast, runRow) = _tumbleweedRuns[chosen];
+            float runLeft = runFirst * 64f + 32f, runRight = runLast * 64f + 32f;
+            float x = direction > 0f ? runLeft : runRight;
+            float y = runRow * 64f + 32f + pool.RandomBetween(-16f, 16f);
+            float runSeconds = (runRight - runLeft) / speed;
+            float shade = pool.RandomBetween(0.8f, 1f);
+            pool.Spawn(ParticleSystem.AtlasCell.Tumbleweed, new Vector2(x, y), new Vector2(direction * speed, pool.RandomBetween(-6f, 6f)),
+                lifetimeSeconds: runSeconds,
+                sizePixels: size,
+                tint: new Color(0.42f * shade, 0.30f * shade, 0.17f * shade), emissive: false,
+                rotationPerSecond: direction * speed / (size * 0.5f),
+                ground: true,
+                hopHeight: pool.RandomBetween(8f, 22f) * tumbleweedScale,
+                hopPerSecond: pool.RandomBetween(1.2f, 2.2f));
+        }
+
+        // ---- whirlwinds ----
+
+        private sealed class Whirlwind
+        {
+            internal Vector2 Foot;
+            internal Vector2 Velocity;
+            internal float AgeSeconds;
+            internal float LifeSeconds;
+        }
+
+        private readonly List<Whirlwind> _whirlwinds = [];
+        private float _whirlwindTimer = 6f;
+        private float _whirlwindDebrisCarry;
+        private bool _forceWhirlwind;
+        private const float WhirlwindFadeSeconds = 1.5f;
+
+        internal int WhirlwindsActive => _whirlwinds.Count;
+
+        /// <summary>For the report: each whirlwind's foot in world pixels and how far through its life it is.</summary>
+        internal string WhirlwindsDescribed()
+        {
+            var parts = new List<string>();
+            foreach (Whirlwind whirlwind in _whirlwinds)
+                parts.Add($"({whirlwind.Foot.X:0},{whirlwind.Foot.Y:0}) {whirlwind.AgeSeconds:0.0}/{whirlwind.LifeSeconds:0.0}s");
+            return parts.Count == 0 ? "none" : string.Join(" ", parts);
+        }
+
+        /// <summary>
+        /// A small whirlwind in a storm or on a windy day: a column of leaves and dust turning about
+        /// a foot that wanders across the ground with the wind, widening as it rises. Drawn in the
+        /// game's own sorted world at its foot's depth, so whatever stands in front of it covers it. It grows in
+        /// and dies away rather than appearing. Asked for by a player as a small tornado in heavy
+        /// rain. Opt-in (Whirlwinds).
+        /// </summary>
+        private void SpawnWhirlwinds(ModConfig config)
+        {
+            GameLocation? location = Game1.currentLocation;
+            if (_particles == null || location == null)
+                return;
+            ParticleSystem pool = _particles;
+            const float tick = 1f / 60f;
+            bool storm = LocalSky.IsRaining && Game1.isLightning;
+            bool windy = location.IsDebrisWeatherHere();
+            bool wanted = config.ParticleWhirlwinds && config.ParticleWhirlwindsAmount > 0f
+                && location.IsOutdoors && !LocalSky.IsSnowing && (storm || windy);
+            _whirlwindTimer -= tick;
+            if (config.ParticleWhirlwinds && location.IsOutdoors && _whirlwinds.Count == 0
+                && (_forceWhirlwind || (wanted && _whirlwindTimer <= 0f)))
+            {
+                // One asked for from the console is there to be looked at: it starts beside the
+                // player rather than anywhere on screen.
+                bool asked = _forceWhirlwind;
+                _forceWhirlwind = false;
+                float wind = WeatherDebris.globalWind;
+                float direction = wind < -0.05f ? -1f : wind > 0.05f ? 1f : (pool.RandomUnit() < 0.5f ? -1f : 1f);
+                // Its foot stands on open ground: never on a roof, a wall or the water.
+                for (int attempt = 0; attempt < 12; attempt++)
+                {
+                    var foot = asked && attempt < 8
+                        ? Game1.player.StandingPixel.ToVector2() + new Vector2(pool.RandomBetween(-3f, 3f) * 64f, pool.RandomBetween(0.5f, 2.5f) * 64f)
+                        : new Vector2(Game1.viewport.X + Game1.viewport.Width * pool.RandomBetween(0.2f, 0.8f),
+                                      Game1.viewport.Y + Game1.viewport.Height * pool.RandomBetween(0.4f, 0.9f));
+                    if (!IsOpenGround(location, foot))
+                        continue;
+                    _whirlwinds.Add(new Whirlwind
+                    {
+                        Foot = foot,
+                        Velocity = new Vector2(direction * pool.RandomBetween(25f, 50f), pool.RandomBetween(-8f, 8f)),
+                        LifeSeconds = pool.RandomBetween(7f, 11f),
+                    });
+                    break;
+                }
+                _whirlwindTimer = pool.RandomBetween(20f, 45f)
+                    / Math.Max(0.05f, Math.Max(0.25f, config.ParticleDensity) * config.ParticleWhirlwindsAmount);
+            }
+            int artRow = GameDebrisRow(LocalSky.Season);
+            // The look holds in a storm too: torn leaves in the smooth shapes under a Pixel look
+            // were the second kind of leaf on screen.
+            bool gameLeaves = (config.ParticleLeafLook == ParticleLeafLook.Pixel
+                || (location.IsDebrisWeatherHere() && !(config.PrecipitationEnabled && config.PrecipitationWind))) && artRow > 0;
+            // A desert has no leaves to lift: its whirlwinds are sand. Green leaves going round over
+            // the dunes read as a mistake.
+            bool sandy = location is StardewValley.Locations.Desert
+                || (location.NameOrUniqueName ?? "").Contains("Desert", StringComparison.OrdinalIgnoreCase);
+            // The size dial grows the whole column (how tall, how wide) and what it carries; the
+            // leaves dial adds or takes away leaves without touching the dust.
+            float whirlScale = Math.Max(0.1f, config.ParticleWhirlwindsSize);
+            float leafDial = Math.Max(0f, config.ParticleWhirlwindLeaves);
+            const float DustShare = 0.45f, LeafShare = 0.55f;
+            float leafChance = sandy ? 0f : LeafShare * leafDial / (DustShare + LeafShare * leafDial);
+            for (int w = _whirlwinds.Count - 1; w >= 0; w--)
+            {
+                Whirlwind whirlwind = _whirlwinds[w];
+                whirlwind.AgeSeconds += tick;
+                whirlwind.Foot += whirlwind.Velocity * tick;
+                // Wandering into a building or the water, it dies away there instead of climbing it.
+                if (!IsOpenGround(location, whirlwind.Foot + whirlwind.Velocity * 0.6f))
+                    whirlwind.LifeSeconds = Math.Min(whirlwind.LifeSeconds, whirlwind.AgeSeconds + WhirlwindFadeSeconds);
+                if (whirlwind.AgeSeconds >= whirlwind.LifeSeconds)
+                {
+                    _whirlwinds.RemoveAt(w);
+                    continue;
+                }
+                float envelope = MathHelper.Clamp(Math.Min(whirlwind.AgeSeconds, whirlwind.LifeSeconds - whirlwind.AgeSeconds) / WhirlwindFadeSeconds, 0f, 1f);
+                _whirlwindDebrisCarry += 64f * (DustShare + LeafShare * leafDial) * envelope * Math.Max(0.25f, config.ParticleDensity) * tick;
+                int toSpawn = Math.Min((int)_whirlwindDebrisCarry, 10);
+                _whirlwindDebrisCarry -= toSpawn;
+                for (int i = 0; i < toSpawn; i++)
+                {
+                    bool dust = pool.RandomUnit() >= leafChance;
+                    float spin = pool.RandomBetween(4.5f, 7f);
+                    if (dust)
+                    {
+                        // Puffs of dust and spray: the body of the column, what makes it read as a
+                        // twist of air rather than a few leaves going round.
+                        float grey = pool.RandomBetween(0.72f, 0.86f);
+                        // Sand in the desert, warm and a little thicker; grey dust anywhere else.
+                        Color puff = sandy ? new Color(grey * 1.08f, grey * 0.88f, grey * 0.62f) * 0.6f
+                                           : new Color(grey, grey * 0.97f, grey * 0.92f) * 0.5f;
+                        pool.Spawn(ParticleSystem.AtlasCell.SoftGlow, whirlwind.Foot, whirlwind.Velocity,
+                            lifetimeSeconds: pool.RandomBetween(1.8f, 3.0f), sizePixels: pool.RandomBetween(36f, 72f) * whirlScale,
+                            tint: puff, emissive: false,
+                            orbitRadius: pool.RandomBetween(4f, 10f), orbitGrowPerSecond: pool.RandomBetween(20f, 36f) * whirlScale,
+                            orbitPerSecond: spin, risePerSecond: pool.RandomBetween(80f, 140f) * whirlScale, ground: true);
+                    }
+                    else if (gameLeaves)
+                    {
+                        pool.Spawn(ParticleSystem.AtlasCell.GameLeaf, whirlwind.Foot, whirlwind.Velocity,
+                            lifetimeSeconds: pool.RandomBetween(2.0f, 3.2f), sizePixels: 48f * pool.RandomBetween(0.8f, 1f) * whirlScale,
+                            tint: Color.White, emissive: false, artRow: artRow,
+                            orbitRadius: pool.RandomBetween(4f, 10f), orbitGrowPerSecond: pool.RandomBetween(20f, 36f) * whirlScale,
+                            orbitPerSecond: spin, risePerSecond: pool.RandomBetween(80f, 140f) * whirlScale, ground: true);
+                    }
+                    else
+                    {
+                        // Torn green and brown leaves in a storm, the season's colour on a windy day.
+                        Vector3 leaf = storm
+                            ? (pool.RandomUnit() < 0.5f ? new Vector3(0.36f, 0.44f, 0.24f) : new Vector3(0.48f, 0.38f, 0.22f))
+                            : LocalSky.Season == Season.Fall ? new Vector3(0.72f, 0.40f, 0.17f) : new Vector3(0.40f, 0.60f, 0.28f);
+                        float shade = pool.RandomBetween(0.75f, 1f);
+                        pool.Spawn(ParticleSystem.AtlasCell.Leaf, whirlwind.Foot, whirlwind.Velocity,
+                            lifetimeSeconds: pool.RandomBetween(2.0f, 3.2f), sizePixels: pool.RandomBetween(14f, 22f) * whirlScale,
+                            tint: new Color(leaf.X * shade * 1.25f, leaf.Y * shade * 1.25f, leaf.Z * shade * 1.25f), emissive: false,
+                            rotationPerSecond: pool.RandomBetween(-6f, 6f),
+                            orbitRadius: pool.RandomBetween(4f, 10f), orbitGrowPerSecond: pool.RandomBetween(20f, 36f) * whirlScale,
+                            orbitPerSecond: spin, risePerSecond: pool.RandomBetween(80f, 140f) * whirlScale, ground: true);
+                    }
+                }
+            }
+        }
+}
 }

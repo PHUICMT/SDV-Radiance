@@ -722,6 +722,53 @@ namespace SDVRadiance
         /// <summary>A texel this opaque, out of 255, counts as solid.</summary>
         private const int SolidAlpha = 230;
 
+        /// <summary>
+        /// Whether the draw being made is the map's own tile and most of it is see-through glass:
+        /// texels neither clear nor solid. Smooth art leaves such a tile as the game draws it.
+        ///
+        /// <para>Baked with its neighbours, a pane of half-clear glass came out as a grid of
+        /// tile-sized squares over the view behind it, in the locker rooms of Bathhouse Hot Spring
+        /// - Continued (21 Oct 2026; gone with radiance_softneighbours off, gone with
+        /// radiance_smoothonly sprites). Glass is flat, so leaving it unsmoothed costs nothing a
+        /// player can see, and every smoothing step is a chance to draw its tile edges.</para>
+        /// </summary>
+        internal static bool DrawingSeeThroughMapTile(Texture2D texture, Rectangle source)
+        {
+            Tile? tile = _tile;
+            XnaDisplayDevice? device = _device;
+            if (tile == null || device == null || _texturesOf == null || source != Bounds(tile))
+                return false;
+            if (!_texturesOf(device).TryGetValue(tile.TileSheet, out Texture2D? own) || !ReferenceEquals(own, texture))
+                return false;
+            var key = (texture, source);
+            if (_seeThroughTiles.TryGetValue(key, out bool known))
+                return known;
+            bool seeThrough = false;
+            Color[]? pixels = SheetPixels.WholeSheet(texture, "sheet see-through tiles");
+            if (pixels != null && source.Right <= texture.Width && source.Bottom <= texture.Height)
+            {
+                int total = 0, partly = 0;
+                for (int row = source.Y; row < source.Bottom; row++)
+                    for (int column = source.X; column < source.Right; column++)
+                    {
+                        byte alpha = pixels[row * texture.Width + column].A;
+                        total++;
+                        if (alpha is > SeeThroughFrom and < SolidAlpha)
+                            partly++;
+                    }
+                seeThrough = total > 0 && partly * 2 >= total;
+            }
+            if (_seeThroughTiles.Count > 20000)
+                _seeThroughTiles.Clear();
+            _seeThroughTiles[key] = seeThrough;
+            return seeThrough;
+        }
+
+        /// <summary>A texel more opaque than this, out of 255, and less than solid, is glass.</summary>
+        private const int SeeThroughFrom = 8;
+
+        private static readonly Dictionary<(Texture2D sheet, Rectangle source), bool> _seeThroughTiles = [];
+
         private static readonly (Texture2D sheet, Rectangle source)[] _coverStack = new (Texture2D, Rectangle)[8];
         private static readonly Dictionary<(int stack, int count, Point offset), bool> _solidStacks = [];
         private static readonly Dictionary<(Texture2D sheet, Rectangle source, Point offset), bool> _solidEdges = [];
@@ -730,7 +777,7 @@ namespace SDVRadiance
         /// <see cref="ArtReloads"/>). A stack's answer is not keyed by sheet, so any loss empties those.</summary>
         internal static int ForgetReloaded()
         {
-            int forgotten = ArtReloads.Forget(_solidEdges, key => key.sheet);
+            int forgotten = ArtReloads.Forget(_solidEdges, key => key.sheet) + ArtReloads.Forget(_seeThroughTiles, key => key.sheet);
             if (forgotten > 0)
                 _solidStacks.Clear();
             return forgotten;

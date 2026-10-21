@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewValley;
@@ -59,6 +60,122 @@ namespace SDVRadiance
         /// decay curve.</summary>
         internal static float Burst01;
 
+        /// <summary>
+        /// Lightning seen through the windows of a room during a storm, 0 to 1, for the glass and
+        /// the beam: a strike's strokes, each a spike that falls away within a few frames.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The game flashes the screen and plays its thunder only outdoors, so inside a storm was
+        /// just a darker room (asked for by the author on 16 Oct 2026: "the room should be dark,
+        /// and the lightning come in through the windows"). This flashes on the game's own strikes,
+        /// which still fire while the player is indoors, and on distant ones of its own every few
+        /// seconds, since the game's come at most once every ten minutes of game time.
+        /// </para>
+        /// <para>
+        /// Shaped as real lightning is (research of 16 Oct 2026, in docs/local/lighting): a flash
+        /// is two to four return strokes 40 to 100 ms apart, the first the brightest, a quarter of
+        /// them a single one, and some hold lit for a moment after with a slow wobble. A near
+        /// strike is a bolt: hard, parallel light that throws the panes sharply onto the floor,
+        /// cold white. A far one is lightning in the cloud: no beam, the glass glows and the room
+        /// lifts, dimmer and warmer. Only the glass and the beam flicker stroke by stroke; the room
+        /// as a whole rises and falls once (<see cref="WindowRoomFlash01"/>), which keeps the flicker
+        /// out of the large area the photosensitivity guidelines are about.
+        /// </para>
+        /// </remarks>
+        internal static float WindowFlash01;
+        /// <summary>The room's share of the strike: one smooth rise and fall, no flicker.</summary>
+        internal static float WindowRoomFlash01;
+        /// <summary>After a strike the room looks darker than before for a moment, the eye still
+        /// dazzled; 1 at the end of a strike, easing back to 0.</summary>
+        internal static float WindowAfterDip01;
+        /// <summary>Whether the strike now is a near bolt (a sharp beam) or lightning in the cloud.</summary>
+        internal static bool WindowStrikeNear;
+        /// <summary>The colour of this strike's light: cold white near, warmer further off.</summary>
+        internal static Vector3 WindowFlashColour = new(0.85f, 0.9f, 1.05f);
+        /// <summary>Where this strike's light falls: its own slant and reach, a new one each time,
+        /// since the bolt is somewhere else in the sky.</summary>
+        internal static float WindowStrikeLean, WindowStrikeReachTiles = 3f;
+
+        private static readonly Vector3 NearStrikeColour = new(0.85f, 0.9f, 1.05f);
+        private static readonly Vector3 FarStrikeColour = new(1f, 0.93f, 0.84f);
+        /// <summary>How fast one stroke falls away, in ticks (e-folding): about 40 ms.</summary>
+        private const float StrokeFadeTicks = 2.5f;
+        private const float RoomFallSeconds = 0.6f;
+        private const float AfterDipSeconds = 1.5f;
+        private const float WindowFlashGapMinSeconds = 4f;
+        private const float WindowFlashGapMaxSeconds = 14f;
+        private const int MostStrokes = 4;
+        private static readonly int[] _strokeTicks = new int[MostStrokes];
+        private static readonly float[] _strokePeaks = new float[MostStrokes];
+        private static int _strokeCount;
+        private static int _holdFromTick = -1, _holdUntilTick = -1, _strikeEndTick = -1;
+        private static float _holdLevel, _strikePeak;
+        private static bool _strikeLive;
+        private static int _nextWindowFlashTick = -1;
+        private static bool _strikeHeard, _strikeHeardNear;
+        private static Farm? _strikeFarm;
+
+        /// <summary>How strongly the windows cast shadows from the strike now: a near bolt as hard
+        /// as a lamp beside the caster, lightning in the cloud only faintly, since its light comes
+        /// from the whole sky.</summary>
+        internal static float WindowShadowStrength => WindowFlash01 * (WindowStrikeNear ? 1f : 0.35f);
+
+        /// <summary>Per screen, the room and the middle of each labelled window's glass in it, in
+        /// world pixels: where lightning through the windows casts shadows from.</summary>
+        private static readonly Dictionary<int, (GameLocation? Location, List<Vector2> Centres)> _windowCentresByScreen = [];
+
+        /// <summary>The windows of this room the lightning casts from, or none when they belong to
+        /// another room.</summary>
+        internal static IReadOnlyList<Vector2> WindowCentresOnThisScreen(GameLocation location)
+            => _windowCentresByScreen.TryGetValue(StardewModdingAPI.Context.ScreenId, out var held) && ReferenceEquals(held.Location, location)
+                ? held.Centres : Array.Empty<Vector2>();
+
+        /// <summary>Note the windows of a room from its painted glass tiles: tiles that touch are one
+        /// window, cast from the middle of its glass.</summary>
+        internal static void SetWindowCentres(GameLocation? location, IReadOnlyCollection<Point> glassTiles)
+        {
+            int screenId = StardewModdingAPI.Context.ScreenId;
+            if (!_windowCentresByScreen.TryGetValue(screenId, out var held))
+            {
+                held = (null, []);
+                LiveScreens.ForgetDeparted(_windowCentresByScreen);
+            }
+            held.Centres.Clear();
+            var left = new HashSet<Point>(glassTiles);
+            var group = new Stack<Point>();
+            while (left.Count > 0)
+            {
+                Point first = default;
+                foreach (Point any in left) { first = any; break; }
+                left.Remove(first);
+                group.Push(first);
+                Vector2 sum = Vector2.Zero;
+                int count = 0;
+                while (group.Count > 0)
+                {
+                    Point tile = group.Pop();
+                    sum += new Vector2(tile.X, tile.Y);
+                    count++;
+                    for (int dy = -1; dy <= 1; dy++)
+                        for (int dx = -1; dx <= 1; dx++)
+                            if (left.Remove(new Point(tile.X + dx, tile.Y + dy)))
+                                group.Push(new Point(tile.X + dx, tile.Y + dy));
+                }
+                held.Centres.Add((sum / count + new Vector2(0.5f)) * 64f);
+            }
+            _windowCentresByScreen[screenId] = (location, held.Centres);
+        }
+
+        /// <summary>A near strike is lighting the room now: the window beam takes its slant and
+        /// reach instead of the sun's.</summary>
+        internal static bool WindowStrikeShapesBeam(out float lean, out float reachTiles)
+        {
+            lean = WindowStrikeLean;
+            reachTiles = WindowStrikeReachTiles;
+            return _strikeLive && WindowStrikeNear;
+        }
+
         /// <summary>Advance the envelopes; called once per tick from ModEntry. Frozen means
         /// frozen: while the harness is comparing captures nothing here may move.</summary>
         internal static void Update(ModConfig config)
@@ -78,6 +195,7 @@ namespace SDVRadiance
             _lastFlashAlpha = flash;
             if (Determinism.Frozen)
                 return;
+            UpdateWindowFlash(config);
 
             const float dt = 1f / 60f;
             bool wanted = config.Enabled && config.LightningEffectsEnabled;
@@ -112,6 +230,142 @@ namespace SDVRadiance
             Burst01 = wanted
                 ? Math.Min(1f, flash) * (visibleFlashesAllowed ? 1f : 0.4f)
                 : 0f;
+        }
+
+        /// <summary>Advance the window lightning: listen for the game's strikes, keep the distant
+        /// ones coming while there is a storm outside this room's windows, and run each strike's
+        /// strokes, the room's single rise and fall, and the dazzle after.</summary>
+        private static void UpdateWindowFlash(ModConfig config)
+        {
+            const float dt = 1f / 60f;
+            // Only with a world loaded: on the title screen there is no farm, and Game1.getFarm()
+            // throws for it, every tick, taking the rest of the tick's update with it (426 errors in
+            // fifteen seconds on the title screen, 16 Oct 2026).
+            bool wanted = config.Enabled && config.LightningEffectsEnabled && config.LightningThroughWindows
+                && StardewModdingAPI.Context.IsWorldReady;
+            // Switched off, nothing here runs but the fade of a strike already under way.
+            if (wanted)
+            {
+                // The farm carries the game's strike event, and polls it wherever the player is.
+                // Asked by name, which answers null rather than throwing when there is none.
+                Farm? farm = Game1.getLocationFromName("Farm") as Farm;
+                if (!ReferenceEquals(farm, _strikeFarm))
+                {
+                    _strikeFarm?.lightningStrikeEvent.onEvent -= HeardStrike;
+                    farm?.lightningStrikeEvent.onEvent += HeardStrike;
+                    _strikeFarm = farm;
+                }
+            }
+            else if (!_strikeLive && WindowRoomFlash01 <= 0f && WindowAfterDip01 <= 0f)
+            {
+                _nextWindowFlashTick = -1;
+                _strikeHeard = false;
+                WindowFlash01 = 0f;
+                return;
+            }
+
+            GameLocation? here = Game1.currentLocation;
+            bool stormOutside = wanted
+                && here is { IsOutdoors: false } && Game1.IsLightningHere(here) && FloodLightmap.IsWindowedInterior(here);
+            int now = SharedTicks.Now;
+            if (!stormOutside)
+            {
+                _nextWindowFlashTick = -1;
+                _strikeHeard = false;
+            }
+            else
+            {
+                // Seeded from the tick, like the strike's lean, so every screen sees the same storm.
+                var stormRandom = new Random(unchecked(now * 1103515245 + 12345));
+                if (_nextWindowFlashTick < 0)
+                    _nextWindowFlashTick = now + GapTicks(stormRandom);
+                if (!_strikeLive && (_strikeHeard || now >= _nextWindowFlashTick))
+                {
+                    // The game's own big strikes are near bolts; of the distant ones, about a third.
+                    bool near = _strikeHeard ? _strikeHeardNear : stormRandom.NextDouble() < 0.35;
+                    StartStrike(now, near, stormRandom);
+                    _nextWindowFlashTick = now + GapTicks(stormRandom);
+                    _strikeHeard = false;
+                }
+            }
+
+            float glass = 0f;
+            if (_strikeLive)
+            {
+                for (int stroke = 0; stroke < _strokeCount; stroke++)
+                    if (now >= _strokeTicks[stroke])
+                        glass = Math.Max(glass, _strokePeaks[stroke] * MathF.Exp(-(now - _strokeTicks[stroke]) / StrokeFadeTicks));
+                if (_holdFromTick >= 0 && now >= _holdFromTick)
+                {
+                    // The channel held lit: a slow wobble, then a quick fall when it lets go.
+                    float wobble = 0.85f + 0.15f * MathF.Sin(now * 0.9f);
+                    float held = now < _holdUntilTick ? _holdLevel * wobble : _holdLevel * MathF.Exp(-(now - _holdUntilTick) / StrokeFadeTicks);
+                    glass = Math.Max(glass, held);
+                }
+                if (now >= _strikeEndTick)
+                {
+                    _strikeLive = false;
+                    WindowAfterDip01 = Math.Max(WindowAfterDip01, _strikePeak);
+                }
+            }
+            WindowFlash01 = glass;
+
+            // The room: up within a few frames of the first stroke, held through the strike without
+            // following its flicker, then down over a little over half a second.
+            float roomTarget = _strikeLive ? _strikePeak * (WindowStrikeNear ? 1f : 0.6f) : 0f;
+            WindowRoomFlash01 = roomTarget > WindowRoomFlash01
+                ? Math.Min(roomTarget, WindowRoomFlash01 + 0.34f)
+                : Math.Max(roomTarget, WindowRoomFlash01 - dt / RoomFallSeconds);
+            if (!_strikeLive)
+                WindowAfterDip01 = Math.Max(0f, WindowAfterDip01 - dt / AfterDipSeconds);
+        }
+
+        private static void StartStrike(int now, bool near, Random stormRandom)
+        {
+            bool flashesAllowed = Game1.options?.screenFlash ?? true;
+            WindowStrikeNear = near;
+            WindowFlashColour = near ? NearStrikeColour : FarStrikeColour;
+            _strikePeak = near ? 0.85f + 0.15f * (float)stormRandom.NextDouble() : 0.35f + 0.3f * (float)stormRandom.NextDouble();
+            // With the game's screen flash option off: one soft pulse, no strokes, no hold.
+            if (!flashesAllowed)
+                _strikePeak *= 0.4f;
+            _strokeCount = !flashesAllowed || stormRandom.NextDouble() < 0.25 ? 1 : 2 + stormRandom.Next(MostStrokes - 1);
+            int strokeTick = now;
+            for (int stroke = 0; stroke < _strokeCount; stroke++)
+            {
+                _strokeTicks[stroke] = strokeTick;
+                _strokePeaks[stroke] = stroke == 0 ? _strikePeak : _strikePeak * (0.45f + 0.4f * (float)stormRandom.NextDouble());
+                strokeTick += 3 + stormRandom.Next(4);   // 50 to 100 ms to the next
+            }
+            int lastStroke = _strokeTicks[_strokeCount - 1];
+            if (flashesAllowed && stormRandom.NextDouble() < 0.4)
+            {
+                _holdFromTick = lastStroke + 1;
+                _holdUntilTick = _holdFromTick + 6 + stormRandom.Next(13);   // 0.1 to 0.3 s
+                _holdLevel = _strikePeak * (0.35f + 0.25f * (float)stormRandom.NextDouble());
+                _strikeEndTick = _holdUntilTick + 10;
+            }
+            else
+            {
+                _holdFromTick = _holdUntilTick = -1;
+                _strikeEndTick = lastStroke + (flashesAllowed ? 12 : 30);
+            }
+            // A new place in the sky: the panes fall somewhere else on the floor each time.
+            WindowStrikeLean = (float)(stormRandom.NextDouble() * 2.0 - 1.0) * 0.45f;
+            WindowStrikeReachTiles = 2.6f + 1.9f * (float)stormRandom.NextDouble();
+            _strikeLive = true;
+        }
+
+        private static int GapTicks(Random stormRandom)
+            => (int)(60f * (WindowFlashGapMinSeconds + (WindowFlashGapMaxSeconds - WindowFlashGapMinSeconds) * (float)stormRandom.NextDouble()));
+
+        private static void HeardStrike(Farm.LightningStrikeEvent strike)
+        {
+            if (strike.bigFlash || strike.smallFlash)
+            {
+                _strikeHeard = true;
+                _strikeHeardNear = strike.bigFlash;
+            }
         }
 
         /// <summary>

@@ -20,6 +20,11 @@ namespace SDVRadiance
     /// off the side of the stream gets almost none of it, because nothing flows through a pool with
     /// only one way in.</para>
     ///
+    /// <para>A river can also run INTO a fall: the one through the Forest comes in from the town and
+    /// goes over the falls by the hat shop. The water above a fall's lip is traced on its own, from
+    /// where it comes onto the map down to the lip, so it is not mistaken for water the fall has
+    /// just dropped and sent back up the river.</para>
+    ///
     /// <para>Its size is what a real river's speed would be, water squeezing through a narrow bed and
     /// idling across a wide one, and taken as it is that looked wrong: the town's river pours into a
     /// lake that leaves the map through five tiles, so nearly the whole drop gathered at that outlet
@@ -54,6 +59,10 @@ namespace SDVRadiance
             internal int ReachedTiles;
             internal int SourceTiles;
             internal int LeavingTiles;
+            /// <summary>Water above a fall's lip: the river on its way to the fall, which runs into it.</summary>
+            internal int UpstreamTiles;
+            /// <summary>Where that river comes onto the map, at its edge.</summary>
+            internal int ArrivingTiles;
             internal bool TracedToAnEdge;
             internal int RelaxationSweeps;
             internal double Milliseconds;
@@ -119,47 +128,140 @@ namespace SDVRadiance
                 Flow = new Vector2[tileCount], Reached = new bool[tileCount], Foam = new float[tileCount],
             };
 
+            // Where each fall's run of falling tiles starts, per column: the lip the water goes over.
+            var isFall = new bool[tileCount];
+            foreach (Point fall in falls)
+                if (fall.X >= 0 && fall.Y >= 0 && fall.X < width && fall.Y < height)
+                    isFall[fall.Y * width + fall.X] = true;
+            int LipRowOf(Point fall)
+            {
+                int y = fall.Y;
+                while (y > 0 && isFall[(y - 1) * width + fall.X])
+                    y--;
+                return y;
+            }
+
             var sources = new List<int>();
             var isSource = new bool[tileCount];
-            foreach (Point fall in falls)
+            // Only from the lip down, when the fall has a river above it. The water ABOVE the lip
+            // is that river on its way to the fall, not water the fall has just dropped; counted as
+            // arrived, the river that runs into the Forest's falls from the town ran back up toward
+            // the town (pkmn418, Nexus, October 2026). A fall with no river above it (one coming in
+            // at the map's edge, a fountain in its basin) keeps its whole reach as before.
+            void FindSources(bool[]? riverAbove)
             {
-                for (int y = fall.Y - FallReach; y <= fall.Y + FallReach; y++)
+                sources.Clear();
+                Array.Clear(isSource);
+                foreach (Point fall in falls)
                 {
-                    for (int x = fall.X - FallReach; x <= fall.X + FallReach; x++)
+                    int lipRow = LipRowOf(fall);
+                    bool cut = riverAbove == null
+                        || (lipRow > 0 && fall.X >= 0 && fall.X < width && riverAbove[(lipRow - 1) * width + fall.X]);
+                    for (int y = cut ? Math.Max(fall.Y - FallReach, lipRow) : fall.Y - FallReach; y <= fall.Y + FallReach; y++)
                     {
-                        if (x < 0 || y < 0 || x >= width || y >= height)
-                            continue;
-                        int index = y * width + x;
-                        if (water[index] && !isSource[index])
+                        for (int x = fall.X - FallReach; x <= fall.X + FallReach; x++)
                         {
-                            isSource[index] = true;
-                            sources.Add(index);
+                            if (x < 0 || y < 0 || x >= width || y >= height)
+                                continue;
+                            int index = y * width + x;
+                            if (water[index] && !isSource[index])
+                            {
+                                isSource[index] = true;
+                                sources.Add(index);
+                            }
                         }
                     }
                 }
             }
-            result.SourceTiles = sources.Count;
+            FindSources(null);
             if (sources.Count == 0)
                 return Finish(result, stopwatch);
 
-            float[] fromFalls = WaterDistances(width, height, water, sources);
+            // The lips: water standing just above where a fall begins, which is where the river
+            // above it goes over. Everything that reaches a lip without passing the water below a
+            // fall is that river: it runs INTO the fall, from wherever it comes onto the map.
+            var lips = new List<int>();
+            var isLip = new bool[tileCount];
+            foreach (Point fall in falls)
+            {
+                if (fall.Y < 1 || fall.X < 0 || fall.X >= width || fall.Y >= height || LipRowOf(fall) != fall.Y)
+                    continue;
+                int above = (fall.Y - 1) * width + fall.X;
+                if (water[above] && !isSource[above] && !isLip[above])
+                {
+                    isLip[above] = true;
+                    lips.Add(above);
+                }
+            }
+            var upstreamWater = new bool[tileCount];
+            var isUpstream = new bool[tileCount];
+            float[] toLip = [];
+            if (lips.Count > 0)
+            {
+                for (int index = 0; index < tileCount; index++)
+                    upstreamWater[index] = water[index] && !isSource[index];
+                toLip = WaterDistances(width, height, upstreamWater, lips);
+                for (int index = 0; index < tileCount; index++)
+                    isUpstream[index] = upstreamWater[index] && !float.IsPositiveInfinity(toLip[index]);
+                KeepOnlyWaterAboveItsFalls(width, height, isUpstream, lips, isLip, isFall);
+                // Falls whose lip turned out to have no river above it take their full reach back.
+                FindSources(isLip);
+                for (int index = 0; index < tileCount; index++)
+                {
+                    if (!isSource[index])
+                        continue;
+                    isUpstream[index] = false;
+                    isLip[index] = false;
+                }
+                lips.RemoveAll(lip => !isLip[lip]);
+                for (int index = 0; index < tileCount; index++)
+                    upstreamWater[index] = isUpstream[index];
+                toLip = WaterDistances(width, height, upstreamWater, lips);
+                for (int index = 0; index < tileCount; index++)
+                {
+                    isUpstream[index] &= !float.IsPositiveInfinity(toLip[index]);
+                    upstreamWater[index] = isUpstream[index];
+                }
+            }
+            result.SourceTiles = sources.Count;
+
+            var seeds = new List<int>(sources);
+            seeds.AddRange(lips);
+            float[] fromFalls = WaterDistances(width, height, water, seeds);
 
             var leaving = new List<int>();
             var isLeaving = new bool[tileCount];
+            var arriving = new List<int>();
+            var isArriving = new bool[tileCount];
             for (int index = 0; index < tileCount; index++)
             {
                 int x = index % width, y = index / width;
                 bool onEdge = x == 0 || y == 0 || x == width - 1 || y == height - 1;
-                if (onEdge && water[index] && !isSource[index] && fromFalls[index] >= LeavesAtLeastThisFarFromAFall
-                    && !float.IsPositiveInfinity(fromFalls[index]))
+                if (!onEdge || !water[index] || isSource[index] || float.IsPositiveInfinity(fromFalls[index]))
+                    continue;
+                if (isUpstream[index])
+                {
+                    if (!isLip[index])
+                    {
+                        isArriving[index] = true;
+                        arriving.Add(index);
+                    }
+                }
+                else if (fromFalls[index] >= LeavesAtLeastThisFarFromAFall)
                 {
                     isLeaving[index] = true;
                     leaving.Add(index);
                 }
             }
             result.LeavingTiles = leaving.Count;
+            result.ArrivingTiles = arriving.Count;
 
             bool Reached(int index) => water[index] && !float.IsPositiveInfinity(fromFalls[index]);
+            // Below the falls and above them are traced apart: the two only meet at a lip, where one
+            // goes over the other, and averaged together the river above would be pulled back by the
+            // pool below.
+            bool Below(int index) => Reached(index) && !isUpstream[index];
+            bool Above(int index) => isUpstream[index];
             for (int index = 0; index < tileCount; index++)
             {
                 if (water[index])
@@ -167,16 +269,22 @@ namespace SDVRadiance
                 result.Reached[index] = Reached(index);
                 if (result.Reached[index])
                     result.ReachedTiles++;
+                if (isUpstream[index])
+                    result.UpstreamTiles++;
             }
 
+            var closedPool = new bool[tileCount];
             if (leaving.Count > 0)
             {
-                float[] toLeaving = WaterDistances(width, height, water, leaving);
+                var belowWater = new bool[tileCount];
+                for (int index = 0; index < tileCount; index++)
+                    belowWater[index] = water[index] && !isUpstream[index];
+                float[] toLeaving = WaterDistances(width, height, belowWater, leaving);
                 var potential = new double[tileCount];
                 var free = new List<int>();
                 for (int index = 0; index < tileCount; index++)
                 {
-                    if (!Reached(index))
+                    if (!Below(index))
                         continue;
                     if (isSource[index])
                         potential[index] = 0.0;
@@ -192,49 +300,90 @@ namespace SDVRadiance
                     }
                 }
 
-                for (int sweep = 0; sweep < MostRelaxationSweeps; sweep++)
-                {
-                    double largestChange = 0.0;
-                    foreach (int index in free)
-                    {
-                        int x = index % width, y = index / width;
-                        double sum = 0.0;
-                        int count = 0;
-                        if (x > 0 && Reached(index - 1)) { sum += potential[index - 1]; count++; }
-                        if (x < width - 1 && Reached(index + 1)) { sum += potential[index + 1]; count++; }
-                        if (y > 0 && Reached(index - width)) { sum += potential[index - width]; count++; }
-                        if (y < height - 1 && Reached(index + width)) { sum += potential[index + width]; count++; }
-                        if (count == 0)
-                            continue;
-                        double change = sum / count - potential[index];
-                        potential[index] += OverRelaxation * change;
-                        largestChange = Math.Max(largestChange, Math.Abs(change));
-                    }
-                    result.RelaxationSweeps = sweep + 1;
-                    if (largestChange < SettledChangePerSweep)
-                        break;
-                }
+                result.RelaxationSweeps = Relax(potential, free, width, height, Below);
 
                 for (int index = 0; index < tileCount; index++)
                 {
-                    if (Reached(index))
-                        result.Flow[index] = Gradient(width, height, index, Reached, i => potential[i]);
+                    if (Below(index))
+                        result.Flow[index] = Gradient(width, height, index, Below, i => potential[i]);
                 }
                 result.TracedToAnEdge = true;
-                EvenThePace(result.Flow, tileCount, Reached, fromFalls, toLeaving);
-            }
-            else
-            {
+                EvenThePace(result.Flow, tileCount, Below, fromFalls, toLeaving);
+                // Water below a fall that cannot reach any way off the map (a pool, or a short
+                // stub leaving by an edge too near its fall to count) has no slope in the potential
+                // and stood still; it runs away from the fall and settles, as a pool does.
                 for (int index = 0; index < tileCount; index++)
                 {
-                    if (!Reached(index))
+                    if (!Below(index) || !float.IsPositiveInfinity(toLeaving[index]))
                         continue;
-                    Vector2 away = Gradient(width, height, index, Reached, i => fromFalls[i]);
+                    closedPool[index] = true;
+                    Vector2 away = Gradient(width, height, index, Below, i => fromFalls[i]);
                     if (away.LengthSquared() > 0.000001f)
                         away.Normalize();
                     result.Flow[index] = away;
                 }
             }
+            else
+            {
+                for (int index = 0; index < tileCount; index++)
+                {
+                    if (!Below(index))
+                        continue;
+                    Vector2 away = Gradient(width, height, index, Below, i => fromFalls[i]);
+                    if (away.LengthSquared() > 0.000001f)
+                        away.Normalize();
+                    result.Flow[index] = away;
+                }
+            }
+
+            // The river above a fall: 0 where it comes onto the map, 1 at the lips, relaxed the same
+            // way, so it runs from the edge it enters by down to the fall it goes over.
+            if (arriving.Count > 0)
+            {
+                float[] fromArriving = WaterDistances(width, height, upstreamWater, arriving);
+                var potential = new double[tileCount];
+                var free = new List<int>();
+                for (int index = 0; index < tileCount; index++)
+                {
+                    if (!Above(index))
+                        continue;
+                    if (isLip[index])
+                        potential[index] = 1.0;
+                    else if (isArriving[index])
+                        potential[index] = 0.0;
+                    else
+                    {
+                        double along = fromArriving[index], left = toLip[index];
+                        potential[index] = double.IsPositiveInfinity(along) ? 1.0 : along / (along + left);
+                        free.Add(index);
+                    }
+                }
+                result.RelaxationSweeps = Math.Max(result.RelaxationSweeps, Relax(potential, free, width, height, Above));
+                for (int index = 0; index < tileCount; index++)
+                {
+                    if (Above(index))
+                        result.Flow[index] = Gradient(width, height, index, Above, i => potential[i]);
+                }
+                EvenThePace(result.Flow, tileCount, Above, fromArriving, toLip);
+            }
+            {
+                // Water above a fall with no way onto the map (a spring, a stream between two falls,
+                // or a fall at the map's top edge with a row of water over it) simply heads for the
+                // lip. Relaxed with nowhere to start from, such a stretch settles flat and stands still.
+                float[] fromArriving = arriving.Count > 0 ? WaterDistances(width, height, upstreamWater, arriving) : [];
+                for (int index = 0; index < tileCount; index++)
+                {
+                    if (!Above(index) || (arriving.Count > 0 && !float.IsPositiveInfinity(fromArriving[index])))
+                        continue;
+                    Vector2 toward = -Gradient(width, height, index, Above, i => toLip[i]);
+                    if (toward.LengthSquared() > 0.000001f)
+                        toward.Normalize();
+                    result.Flow[index] = toward;
+                }
+            }
+            // At the lip the water is going over, and in this game's art a fall runs down the screen.
+            foreach (int lip in lips)
+                result.Flow[lip] = new Vector2(0f, 1f);
 
             // Where the water comes in, every tile of the potential is the same 0 and has no slope,
             // so the pool under a fall stood still. Water there is falling, and in this game's art it
@@ -252,7 +401,9 @@ namespace SDVRadiance
                 // A river carries its water on past the rush. A pool with no way out does not: the
                 // water churns where the fall lands and is still beyond it, so there the rush is all
                 // the flow there is. A cave pool ran like a river before this.
-                result.Flow[index] *= result.TracedToAnEdge
+                // Water above a fall always has a way out: over the lip. A stream between two falls
+                // with no edge to leave by stood still in its middle otherwise.
+                result.Flow[index] *= isUpstream[index] || (result.TracedToAnEdge && !closedPool[index])
                     ? 1f + (FallRushPace - 1f) * nearAFall
                     : FallRushPace * nearAFall;
             }
@@ -272,6 +423,105 @@ namespace SDVRadiance
                     result.Flow[index] *= FastestFlow / length;
             }
             return Finish(result, stopwatch);
+        }
+
+        /// <summary>
+        /// A stretch of water that reaches a lip is the river going over it only if all of it lies
+        /// above the bottom of the fall. A fountain is painted as a fall standing in its own basin,
+        /// and the basin's water north of the jet reaches round its sides to the south: that is one
+        /// pool the jet stands in, and it keeps running away from the jet as it always did.
+        /// </summary>
+        private static void KeepOnlyWaterAboveItsFalls(int width, int height, bool[] isUpstream, List<int> lips, bool[] isLip,
+            bool[] isFall)
+        {
+            int tileCount = width * height;
+            var stretchOf = new int[tileCount];
+            Array.Fill(stretchOf, -1);
+            var lowestFallRow = new List<int>();
+            var deepestRow = new List<int>();
+            var queue = new Queue<int>();
+            foreach (int lip in lips)
+            {
+                if (stretchOf[lip] >= 0)
+                    continue;
+                int stretch = lowestFallRow.Count;
+                lowestFallRow.Add(-1);
+                deepestRow.Add(-1);
+                stretchOf[lip] = stretch;
+                queue.Enqueue(lip);
+                while (queue.TryDequeue(out int index))
+                {
+                    int x = index % width, y = index / width;
+                    deepestRow[stretch] = Math.Max(deepestRow[stretch], y);
+                    if (isLip[index])
+                    {
+                        int fallRow = y + 1;
+                        while (fallRow + 1 < height && isFall[(fallRow + 1) * width + x])
+                            fallRow++;
+                        lowestFallRow[stretch] = Math.Max(lowestFallRow[stretch], fallRow);
+                    }
+                    if (x > 0) Visit(index - 1);
+                    if (x < width - 1) Visit(index + 1);
+                    if (y > 0) Visit(index - width);
+                    if (y < height - 1) Visit(index + width);
+                }
+
+                void Visit(int next)
+                {
+                    if (isUpstream[next] && stretchOf[next] < 0)
+                    {
+                        stretchOf[next] = stretch;
+                        queue.Enqueue(next);
+                    }
+                }
+            }
+            bool anyDropped = false;
+            for (int index = 0; index < tileCount; index++)
+            {
+                if (!isUpstream[index])
+                    continue;
+                int stretch = stretchOf[index];
+                if (stretch < 0 || deepestRow[stretch] > lowestFallRow[stretch])
+                {
+                    isUpstream[index] = false;
+                    anyDropped = true;
+                }
+            }
+            if (!anyDropped)
+                return;
+            for (int index = 0; index < tileCount; index++)
+                if (isLip[index] && !isUpstream[index])
+                    isLip[index] = false;
+        }
+
+        /// <summary>Settle a potential over one stretch of water until every free tile is the average
+        /// of its neighbours in the same stretch; returns the sweeps it took.</summary>
+        private static int Relax(double[] potential, List<int> free, int width, int height, Func<int, bool> inStretch)
+        {
+            int sweeps = 0;
+            for (int sweep = 0; sweep < MostRelaxationSweeps; sweep++)
+            {
+                double largestChange = 0.0;
+                foreach (int index in free)
+                {
+                    int x = index % width, y = index / width;
+                    double sum = 0.0;
+                    int count = 0;
+                    if (x > 0 && inStretch(index - 1)) { sum += potential[index - 1]; count++; }
+                    if (x < width - 1 && inStretch(index + 1)) { sum += potential[index + 1]; count++; }
+                    if (y > 0 && inStretch(index - width)) { sum += potential[index - width]; count++; }
+                    if (y < height - 1 && inStretch(index + width)) { sum += potential[index + width]; count++; }
+                    if (count == 0)
+                        continue;
+                    double change = sum / count - potential[index];
+                    potential[index] += OverRelaxation * change;
+                    largestChange = Math.Max(largestChange, Math.Abs(change));
+                }
+                sweeps = sweep + 1;
+                if (largestChange < SettledChangePerSweep)
+                    break;
+            }
+            return sweeps;
         }
 
         private static Result Finish(Result result, Stopwatch stopwatch)

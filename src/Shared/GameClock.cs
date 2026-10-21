@@ -30,7 +30,20 @@ namespace SDVRadiance
         private static int _hostTimeOfDay = -1;
         private static float _hostFraction;
 
-        /// <summary>Minutes since midnight as a continuous float (e.g. 1855 -> 1135.42).</summary>
+        /// <summary>This process's own last reading, for a farmhand over the network, which has no
+        /// host in its process to read from. Only used to hold the clock still through a pause.</summary>
+        private static int _ownTimeOfDay = -1;
+        private static float _ownFraction;
+
+        /// <summary>Minutes since midnight as a continuous float (e.g. 1855 -> 1135.42).
+        ///
+        /// <para>A NEGATIVE gameTimeInterval is a pause, not the start of the ten minutes. Pause in
+        /// Multiplayer Revived stops time, in single player too, by writing -100 there every tick
+        /// and putting the real value back when the pause ends. Clamped to zero, every menu opened
+        /// and every horse mounted put this clock back to the start of the ten minutes and the sun
+        /// with it, so the sun shafts jumped backwards and came forward again on closing (AlienFreek,
+        /// Nexus, 18 Oct 2026, with a video). Through a pause the last real reading of the same ten
+        /// minutes is held instead.</para></summary>
         public static float MinutesNow()
         {
             int t = Game1.timeOfDay;
@@ -38,15 +51,26 @@ namespace SDVRadiance
             float tickMs = Game1.realMilliSecondsPerGameTenMinutes
                 + (Game1.currentLocation?.ExtraMillisecondsPerInGameMinute ?? 0) * 10f;
             if (tickMs < 1f) tickMs = 1f;
-            float frac = MathHelper.Clamp(Game1.gameTimeInterval / tickMs, 0f, 1f);
+            int interval = Game1.gameTimeInterval;
+            bool paused = interval < 0;
+            float frac = MathHelper.Clamp(interval / tickMs, 0f, 1f);
             if (Game1.IsMasterGame)
             {
+                if (paused && _hostTimeOfDay == t)
+                    frac = _hostFraction;
                 _hostTimeOfDay = t;
                 _hostFraction = frac;
             }
             else if (_hostTimeOfDay == t)
             {
                 frac = _hostFraction;
+            }
+            else
+            {
+                if (paused && _ownTimeOfDay == t)
+                    frac = _ownFraction;
+                _ownTimeOfDay = t;
+                _ownFraction = frac;
             }
             return mins + frac * 10f;
         }

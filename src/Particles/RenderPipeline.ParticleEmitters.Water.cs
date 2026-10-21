@@ -50,7 +50,7 @@ namespace SDVRadiance
         /// <summary>How many feet' worth of mist is thrown up at most, spread over all of them.</summary>
         private const int MistFeetSpawning = 8;
         private const int SteamTileLimit = 12;
-        private const int LavaTileLimit = 16;
+        private const int LavaTileLimit = 40;
 
         /// <summary>Labelled pixels of the class in a tile before the tile is a source. A few
         /// stray pixels are an edge the label ran over, not a spring.</summary>
@@ -72,7 +72,10 @@ namespace SDVRadiance
         /// EMISSIVE for the same reason embers are: a spark is its own light.</summary>
         private static readonly Color MistTint = new(0.86f, 0.92f, 0.96f);
         private static readonly Color SteamTint = new(0.94f, 0.95f, 0.97f);
-        private static readonly Vector3 LavaSparkColour = new(1.0f, 0.58f, 0.20f);
+        /// <summary>Yellow-white, not orange: a spark is hotter than the lava it leaves, and an
+        /// orange spark over orange lava could not be seen at all (18 Oct 2026, a player asked
+        /// where the promised sparks were).</summary>
+        private static readonly Vector3 LavaSparkColour = new(1.0f, 0.92f, 0.66f);
 
         /// <summary>The heat grid the finishing pass bends the air with: one texel per world
         /// tile of the scan window, red = hot ground (labelled hot or lava, or the volcano's
@@ -115,6 +118,43 @@ namespace SDVRadiance
         private ref byte[] _breathTileHot => ref _screen.BreathTileHot;
         private ref byte[] _breathTileLava => ref _screen.BreathTileLava;
         private ref bool[] _breathTileScanned => ref _screen.BreathTileScanned;
+
+        /// <summary>
+        /// The blacksmith's forge fire, by its art: the glowing mouth on the game's interior sheet
+        /// and the frames of its flicker.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Asked for by the author on 15 Oct 2026: hot air in front of Clint's forge. The fire is
+        /// not labelled hot or molten (it is neither water nor lava), and a rule from the
+        /// emissive label alone does not work: counted over the label pack, the forge's tiles carry
+        /// 48 to 55 emissive pixels, and so do the night market's lanterns, a city's neon signs
+        /// and a dozen lamps that should not shimmer. The forge's own tiles say it exactly, and a
+        /// map that rebuilds the shop (Stardew Valley Expanded's does) still paints the forge from
+        /// the same sheet and the same tile numbers, as do the recolours of that sheet.
+        /// </para>
+        /// </remarks>
+        private bool IsForgeFire(int tileX, int tileY)
+        {
+            foreach (Layer layer in _breathScanLayers)
+            {
+                if (tileX < 0 || tileY < 0 || tileX >= layer.LayerWidth || tileY >= layer.LayerHeight)
+                    continue;
+                xTile.Tiles.Tile? tile = layer.Tiles[tileX, tileY];
+                if (tile?.TileSheet?.ImageSource == null || !ForgeFireTileIndexes.Contains(tile.TileIndex))
+                    continue;
+                string sheetName = System.IO.Path.GetFileName(tile.TileSheet.ImageSource.Replace('\\', '/'));
+                if (sheetName.Equals(ForgeSheetName, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
+        private const string ForgeSheetName = "townInterior";
+        private const int ForgeMouthTilesBelowFire = 2;
+        /// <summary>936 and 937 are the forge's mouth as the sheet draws it still; 1864 to 1869 are
+        /// the three frames of its fire, two tiles each, that the shop animates over it.</summary>
+        private static readonly HashSet<int> ForgeFireTileIndexes = [936, 937, 1864, 1865, 1866, 1867, 1868, 1869];
 
         private void EnsureBreathTileCache(GameLocation location, MapAnswerKey answerKey)
         {
@@ -220,6 +260,9 @@ namespace SDVRadiance
         }
         private readonly List<Vector2> _steamTiles = [];
         private readonly List<Vector2> _lavaTiles = [];
+        /// <summary>Every molten tile the scan saw, before <see cref="_lavaTiles"/> keeps an even
+        /// spread of them. Reused, so the scan makes no garbage.</summary>
+        private readonly List<Vector2> _lavaCandidates = [];
         private readonly List<Layer> _breathScanLayers = [];
         private float _mistSpawnCarry, _steamSpawnCarry, _lavaSpawnCarry;
 
@@ -250,6 +293,7 @@ namespace SDVRadiance
             _mistFeet.Clear();
             _steamTiles.Clear();
             _lavaTiles.Clear();
+            _lavaCandidates.Clear();
             _heatOnScreen = false;
             if (location?.map == null)
                 return;
@@ -297,8 +341,8 @@ namespace SDVRadiance
                             && x < location.waterTiles.waterTiles.GetLength(0)
                             && y < location.waterTiles.waterTiles.GetLength(1)
                             && location.waterTiles[x, y]);
-                    if (moltenHere && _lavaTiles.Count < LavaTileLimit)
-                        _lavaTiles.Add(new Vector2(x * 64f + 32f, y * 64f + 32f));
+                    if (moltenHere)
+                        _lavaCandidates.Add(new Vector2(x * 64f + 32f, y * 64f + 32f));
                     // The haze grid takes every molten tile, past the particle caps: the shimmer
                     // covering half a lava floor but not the other half would read as a fault.
                     // Hot springs are left out on purpose: their air is wet and the steam already
@@ -308,8 +352,29 @@ namespace SDVRadiance
                         _heatGridCells[(y - firstTileY) * columns + (x - firstTileX)] = Color.White;
                         _heatOnScreen = true;
                     }
+                    // The fire sits along the top of the forge's mouth and the glowing opening
+                    // runs two tiles down from it. The haze rises a tile from a hot cell
+                    // (finishing.fx), so the cells are the fire's row and the two under it: the
+                    // shimmer then covers the opening, in front of the forge, rather than the hood.
+                    else if (IsForgeFire(x, y))
+                    {
+                        for (int cellsDown = 0; cellsDown <= ForgeMouthTilesBelowFire && y + cellsDown <= lastTileY; cellsDown++)
+                            _heatGridCells[(y + cellsDown - firstTileY) * columns + (x - firstTileX)] = Color.White;
+                        _heatOnScreen = true;
+                    }
                 }
             }
+
+            // The sparks rise from an even spread of the molten tiles on screen. Kept in scan order
+            // up to the limit, as they were, they all came from the first sixteen tiles the scan
+            // met, which is the left edge of the screen: a lava lake showed no sparks at all
+            // anywhere a player looked (reported 18 Oct 2026). Every Nth tile instead, so a lake
+            // of any size sparks across all of it.
+            if (_lavaCandidates.Count <= LavaTileLimit)
+                _lavaTiles.AddRange(_lavaCandidates);
+            else
+                for (int pick = 0; pick < LavaTileLimit; pick++)
+                    _lavaTiles.Add(_lavaCandidates[(int)((long)pick * _lavaCandidates.Count / LavaTileLimit)]);
 
             // A fall is a vertical run of STRONGLY flowing tiles, and the mist belongs where
             // that run lands (see FindFallFeet). The feet are the map's, found once per map, and
@@ -733,15 +798,18 @@ namespace SDVRadiance
                 Vector2 tile = _lavaTiles[(int)(pool.RandomUnit() * _lavaTiles.Count) % _lavaTiles.Count];
                 var position = new Vector2(tile.X + pool.RandomBetween(-24f, 24f),
                                            tile.Y + pool.RandomBetween(-12f, 12f));
-                // A pop, not a drift: fast up, pulled straight back down, dead before it lands.
-                var velocity = new Vector2(pool.RandomBetween(-14f, 14f), pool.RandomBetween(-70f, -30f));
+                // A pop, not a drift: fast up and flung to one side, pulled back down in an arc,
+                // dead before it lands. The sideways throw is what reads as a spark rather than a
+                // bubble rising straight up (asked for on 18 Oct 2026).
+                float side = pool.RandomUnit() < 0.5f ? -1f : 1f;
+                var velocity = new Vector2(side * pool.RandomBetween(25f, 70f), pool.RandomBetween(-120f, -60f));
                 float shade = pool.RandomBetween(0.75f, 1f);
                 var tint = new Color(LavaSparkColour.X * shade, LavaSparkColour.Y * shade, LavaSparkColour.Z * shade);
                 pool.Spawn(ParticleSystem.AtlasCell.Spark, position, velocity,
-                    lifetimeSeconds: pool.RandomBetween(0.7f, 1.3f),
-                    sizePixels: pool.RandomBetween(3f, 6f) * sizeScale,
+                    lifetimeSeconds: pool.RandomBetween(0.9f, 1.6f),
+                    sizePixels: pool.RandomBetween(10f, 16f) * sizeScale,
                     tint: tint, emissive: true,
-                    fallPixelsPerSecondSquared: 90f,
+                    fallPixelsPerSecondSquared: 120f,
                     rotationPerSecond: pool.RandomBetween(-2f, 2f));
             }
         }

@@ -47,9 +47,9 @@
 
 <h2><img src="https://phuicmt.github.io/SDV-Radiance-media/banners/make-it-yours.png" alt="Make it yours" width="100%"></h2>
 
-<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/tuner.webp" alt="The in-game tuner sliding open" width="100%"></p>
+<p align="center"><img src="https://phuicmt.github.io/SDV-Radiance-media/readme/tuner-2.4.0.webp" alt="The F6 menu: settings grouped by what you see, a search box and a help bar with pictures" width="100%"></p>
 
-*F6 opens the tuner over the game, and you see every change right away. On a phone, open it from Generic Mod Config Menu: SDV-Radiance, Hotkeys & diagnostics, Open the Radiance tuner.*
+*F6 opens the tuner over the game, with the settings grouped by what you see and a search box, and you see every change right away. Classic at the top brings back the old tabs. On a phone, open it from Generic Mod Config Menu: SDV-Radiance, Hotkeys & diagnostics, Open the Radiance tuner.*
 
 <sub>Recorded in game at 1920x1080 with my own settings and mod list: DaisyNiko's Earthy Recolour and Tilesheets, Sharogg's Tilesheets and Stardew Valley Expanded. The pictures are in [PHUICMT/SDV-Radiance-media](https://github.com/PHUICMT/SDV-Radiance-media).</sub>
 
@@ -129,7 +129,7 @@ and recolours work without any per-mod patches.
 - `radiance_report` prints what each part of the mod costs on your machine, averaged over the last 300 frames. You don't need to turn on any debug setting first
 
 **Controls**
-- Live in-game tuner (**F6** by default) with tabs by category: drag a slider to preview, pick a preset, save and load named looks
+- Live in-game tuner (**F6** by default) on a frosted glass panel: settings grouped by what you see, a search box, and a help bar that shows the game without and with an effect. Drag a slider to preview, pick a preset, save and load named looks. Classic switches back to the old tabs
 - Generic Mod Config Menu support, with a switch and sliders for each effect
 - **F7** turns all of it on or off (you can change the key)
 
@@ -191,7 +191,7 @@ owns, and that's what keeps the world from going black. One Harmony postfix on
 4. Launch through SMAPI. Press **F6** for the tuner and **F7** to turn the effects on or off.
 
 The default look is fairly strong. If it's too contrasty for long play, press **F6** and
-pick the **Subtle** preset on the first tab, or turn up the blue light filter if your eyes get
+pick the **Subtle** preset under Looks, or turn up the blue light filter if your eyes get
 tired. Both change live, and you don't need to edit any files.
 
 Updates never overwrite an existing `config.json`, so your settings stay the same after an

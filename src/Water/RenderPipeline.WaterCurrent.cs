@@ -610,7 +610,7 @@ namespace SDVRadiance
         /// where a river stops short, the letter at the break says what the grid thinks is there.
         /// ~ water the river reaches, w water it does not, = a deck it crosses, d a deck it does
         /// not, . ground, # wall, ^ roof, o void, g glass, F a fall.</summary>
-        private static void WriteRiverMap(TracedRiver river, List<Vector2>? falls, string folder)
+        private static void WriteRiverMap(TracedRiver river, List<Vector2>? falls, string folder, string? placeName = null)
         {
             if (river.Result == null || river.Surfaces.Length == 0)
                 return;
@@ -620,7 +620,7 @@ namespace SDVRadiance
                 foreach (Vector2 fall in falls)
                     fallTiles.Add((int)fall.Y * trace.Width + (int)fall.X);
             var text = new System.Text.StringBuilder();
-            text.AppendLine($"{Game1.currentLocation?.NameOrUniqueName} {trace.Width}x{trace.Height}, "
+            text.AppendLine($"{placeName ?? Game1.currentLocation?.NameOrUniqueName} {trace.Width}x{trace.Height}, "
                           + $"reached {trace.ReachedTiles} of {trace.WaterTiles} water tiles; columns every 10 tiles below");
             for (int tileY = 0; tileY < trace.Height; tileY++)
             {
@@ -655,8 +655,84 @@ namespace SDVRadiance
                 }
                 text.AppendLine();
             }
+            AppendFlowDirections(text, trace);
             System.IO.Directory.CreateDirectory(folder);
             System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "radiance-river-map.txt"), text.ToString());
+        }
+
+        /// <summary>Which way the water runs per tile, as the keys of a number pad: 6 right, 4 left,
+        /// 8 up the screen, 2 down it, 9 3 1 7 the diagonals, 0 still. A river running backwards is
+        /// a run of the wrong digit, which the pace map above cannot show.</summary>
+        private static void AppendFlowDirections(System.Text.StringBuilder text, RiverFlowTrace.Result trace)
+        {
+            text.AppendLine();
+            text.AppendLine("direction per tile, as a number pad: 6 right, 4 left, 8 up, 2 down, 9 3 1 7 diagonal, 0 still");
+            for (int tileY = 0; tileY < trace.Height; tileY++)
+            {
+                text.Append($"{tileY,3} ");
+                for (int tileX = 0; tileX < trace.Width; tileX++)
+                {
+                    int index = tileY * trace.Width + tileX;
+                    bool reached = trace.Reached.Length > index && trace.Reached[index];
+                    text.Append(reached ? NumberPadDirection(trace.Flow[index]) : ' ');
+                }
+                text.AppendLine();
+            }
+        }
+
+        private static char NumberPadDirection(Vector2 flow)
+        {
+            if (flow.LengthSquared() < 0.01f)
+                return '0';
+            int octant = (int)MathF.Round(MathF.Atan2(-flow.Y, flow.X) / (MathF.PI / 4f));
+            return (((octant % 8) + 8) % 8) switch
+            {
+                0 => '6',
+                1 => '9',
+                2 => '8',
+                3 => '7',
+                4 => '4',
+                5 => '1',
+                6 => '2',
+                _ => '3',
+            };
+        }
+
+        /// <summary>Trace the river of every loaded location that has falls, here and now, and write
+        /// each one's map beside the report, so a river running the wrong way anywhere can be found
+        /// without walking to it (radiance_rivers).</summary>
+        internal string TraceEveryRiver()
+        {
+            string folder = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                "Radiance-Dumps", "rivers");
+            System.IO.Directory.CreateDirectory(folder);
+            var summary = new System.Text.StringBuilder();
+            foreach (GameLocation location in Game1.locations)
+            {
+                if (location?.map == null || location.map.Layers.Count == 0 || LabelStore.Instance == null)
+                    continue;
+                var falls = new List<Vector2>();
+                int height = location.map.Layers[0].LayerHeight;
+                for (int tileY = 0; tileY < height; tileY++)
+                    ScanFallingWaterRow(location, tileY, falls);
+                if (falls.Count == 0)
+                    continue;
+                TracedRiver? river = StartTrace(location, falls, SurfaceMap.MapReloadCount(location));
+                if (river?.Tracing == null)
+                {
+                    summary.AppendLine($"{location.NameOrUniqueName}: {falls.Count} falls, no surface grid");
+                    continue;
+                }
+                river.Result = river.Tracing.GetAwaiter().GetResult();
+                string name = location.NameOrUniqueName ?? "unnamed";
+                WriteRiverMap(river, falls, System.IO.Path.Combine(folder, name), name);
+                RiverFlowTrace.Result trace = river.Result;
+                summary.AppendLine($"{name}: {falls.Count} falls, {trace.ReachedTiles} of {trace.WaterTiles} water tiles, "
+                    + $"{trace.SourceTiles} below falls, {trace.UpstreamTiles} above them ({trace.ArrivingTiles} arriving at the edge), "
+                    + $"{trace.LeavingTiles} leaving");
+            }
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "summary.txt"), summary.ToString());
+            return summary.ToString() + $"written to {folder}";
         }
 
         /// <summary>The current block of radiance_report.</summary>

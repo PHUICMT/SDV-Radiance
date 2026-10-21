@@ -49,6 +49,17 @@ namespace SDVRadiance
         /// <summary>Ask the mod what it can see: the map dump, the light list, the live config and the report.</summary>
         private static void RegisterSceneReports(IModHelper helper, IMonitor monitor, Func<ModConfig> getConfig, Func<RenderPipeline?> getPipeline)
         {
+            helper.ConsoleCommands.Add("radiance_tuner_check",
+                "Check that the tuner's grouped layout holds every setting the classic tabs do, each once. "
+                + "Builds both off screen; prints the rows either side is missing.",
+                (_, _) =>
+                {
+                    List<string> report = RadianceTunerMenu.CheckGroupedCoverage(getConfig(), key => helper.Translation.Get(key).ToString());
+                    foreach (string line in report)
+                        monitor.Log(line, report.Count == 1 ? LogLevel.Info : LogLevel.Warn);
+                    if (report.Count == 1)
+                        monitor.Log("Every row is in the grouped layout exactly once.", LogLevel.Info);
+                });
             // Author tool: dumps every location's layers/tiles + sheet art for HF Studio, the
             // browser labeler that produces labels/water-labels.json. Harmless for players (it
             // only runs when typed) and it keeps the whole labeling loop inside this mod.
@@ -111,6 +122,38 @@ namespace SDVRadiance
                 + "Spaces and line breaks in a pasted code do not matter. "
                 + "Applying is in memory only (config.json is not written): open the tuner and press Esc to keep it.",
                 (_, arguments) => ShareCodeCommand(monitor, getConfig(), arguments));
+            // A preset the way the F6 button picks it, for pictures of each one taken by a script,
+            // which cannot press the button. Live only, like radiance_config.
+            helper.ConsoleCommands.Add("radiance_preset",
+                "Use one of the F6 presets, live, in memory only (config.json is not written): "
+                + "'radiance_preset Cinematic'. With no name, lists them.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length == 0 || !Enum.TryParse(arguments[0], ignoreCase: true, out LookPreset preset))
+                    {
+                        monitor.Log("Presets: " + string.Join(", ", Enum.GetNames<LookPreset>()), LogLevel.Info);
+                        return;
+                    }
+                    ModConfig config = getConfig();
+                    config.ActivePreset = preset;
+                    config.ApplyPreset(preset);
+                    monitor.Log($"Preset {preset} in use (live only; config.json untouched).", LogLevel.Info);
+                });
+            // For an author making a radiance-looks.json: read the files again and list what each
+            // one gives, without restarting the game.
+            helper.ConsoleCommands.Add("radiance_looks",
+                "Looks other mods offer in F6 (from each mod's " + LookPacks.FileName + "). Reads the files again "
+                + "and lists every look found and every one left out, with why.",
+                (_, _) =>
+                {
+                    LookPacks.Load(helper.DirectoryPath, getConfig(), monitor);
+                    if (LookPacks.Notes.Count == 0)
+                        monitor.Log($"No mod has a {LookPacks.FileName}.", LogLevel.Info);
+                    foreach (string note in LookPacks.Notes)
+                        monitor.Log(note, LogLevel.Info);
+                    foreach (PackLook look in LookPacks.Found)
+                        monitor.Log($"  {look.ModName}: \"{look.Name}\"{(look.Description.Length > 0 ? " - " + look.Description : "")}", LogLevel.Info);
+                });
             helper.ConsoleCommands.Add("radiance_sharelabels",
                 "Which settings a share code's list can name by the label their row wears in the tuner, and which "
                 + "fall back to the setting's own name. 'radiance_sharelabels all' lists every pair. A diagnostic.",
@@ -139,6 +182,18 @@ namespace SDVRadiance
                 + "the label check for the screen, and the installed mods that could be involved. No arguments, "
                 + "just stand where the problem is and run it.",
                 (_, _) => WriteReport(monitor, getPipeline(), getConfig()));
+            helper.ConsoleCommands.Add("radiance_rivers",
+                "Trace the river of every loaded location that has a waterfall and write each one's flow map "
+                + "to Documents/Radiance-Dumps/rivers, with a summary. Takes a few seconds.",
+                (_, _) =>
+                {
+                    if (!Context.IsWorldReady || getPipeline() is not { } pipeline)
+                    {
+                        monitor.Log("Load a save first.", LogLevel.Info);
+                        return;
+                    }
+                    monitor.Log(pipeline.TraceEveryRiver(), LogLevel.Info);
+                });
             // A check that answers "all clear" when it is actually broken is worse than no check,
             // and the clock line above is exactly that shape of check. This makes a patch under a
             // foreign name, asks the line what it sees, removes the patch and asks again, so both
@@ -483,6 +538,18 @@ namespace SDVRadiance
                         monitor.Log("Particle pool emptied.", LogLevel.Info);
                         return;
                     }
+                    if (arguments.Length >= 1 && arguments[0].Equals("whirlwind", StringComparison.OrdinalIgnoreCase))
+                    {
+                        pipeline.ForceWhirlwind();
+                        monitor.Log(getConfig().ParticleWhirlwinds ? "A whirlwind starts on the next tick." : "Whirlwinds are switched off (Particles tab).", LogLevel.Info);
+                        return;
+                    }
+                    if (arguments.Length >= 1 && arguments[0].Equals("tumbleweed", StringComparison.OrdinalIgnoreCase))
+                    {
+                        pipeline.ForceTumbleweed();
+                        monitor.Log(getConfig().ParticleTumbleweeds ? "A tumbleweed rolls in on the next tick." : "Tumbleweeds are switched off (Particles tab).", LogLevel.Info);
+                        return;
+                    }
                     if (arguments.Length >= 1 && arguments[0].Equals("test", StringComparison.OrdinalIgnoreCase))
                     {
                         int seconds = arguments.Length >= 2 && int.TryParse(arguments[1], out int typed)
@@ -576,6 +643,22 @@ namespace SDVRadiance
                         + "check the sky: line of radiance_report if nothing shows.", LogLevel.Info);
                 });
 
+            helper.ConsoleCommands.Add("radiance_wet",
+                "Set how wet the ground is where you stand, to look at it without waiting out the rain: "
+                + "'radiance_wet <wetness 0-1> [puddles 0-1]'. No arguments prints the wet-ground line. "
+                + "The clocks carry on from there (rain soaks, sun dries).",
+                (_, arguments) =>
+                {
+                    if (arguments.Length >= 1 && float.TryParse(arguments[0], System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out float wetness))
+                    {
+                        float puddles = arguments.Length >= 2 && float.TryParse(arguments[1], System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out float typed) ? typed : wetness;
+                        RenderPipeline.SetWetnessHere(wetness, puddles);
+                    }
+                    RenderPipeline? pipeline = getPipeline();
+                    monitor.Log(pipeline?.WetWorldDiag(getConfig()) ?? "pipeline not ready", LogLevel.Info);
+                });
             helper.ConsoleCommands.Add("radiance_mapshotpad",
                 "How far past each chunk a map screenshot with effects draws, in world pixels: "
                 + "'radiance_mapshotpad 1536'. For checking that the default reaches far enough: two "
@@ -1291,7 +1374,7 @@ namespace SDVRadiance
                     monitor.Log($"GPU wall-clock probe: {(RenderPipeline.GpuProbe ? "ON - watch for [perf] gpu wall-clock lines" : "off")}", LogLevel.Info);
                 });
             helper.ConsoleCommands.Add("radiance_lowres",
-                "Force the soft parts of the effects (clouds, bloom, tilt-shift blur, the flood's light) to the lower "
+                "Force the soft parts of the effects (clouds, bloom, tilt-shift blur, the flood's light, the classic lighting) to the lower "
                 + "resolution or the full one, or 'auto' to follow the setting: radiance_lowres on|off|auto. For an A/B.",
                 (_, arguments) =>
                 {
@@ -1299,6 +1382,22 @@ namespace SDVRadiance
                     if (choice is "on" or "off" or "auto")
                         RenderPipeline.SoftEffectsForced = choice == "auto" ? null : choice == "on";
                     monitor.Log($"lighter soft effects: {(RenderPipeline.SoftEffectsForced is bool forced ? (forced ? "forced on" : "forced off") : "following the setting")}", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_windowglass",
+                "The window light shaped by each window's glass: 'radiance_windowglass on|off' forces it on or off "
+                + "to compare with the old oval and band, 'auto' follows the Window light setting, no argument "
+                + "saves the glass as a picture (white is glass, Documents/Radiance-Dumps/window-glass.png).",
+                (_, arguments) =>
+                {
+                    string choice = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
+                    if (choice is "on" or "off" or "auto")
+                    {
+                        RenderPipeline.WindowGlassShapeForced = choice == "auto" ? null : choice == "on";
+                        monitor.Log($"window light shaped by the glass: {(RenderPipeline.WindowGlassShapeForced is bool forced ? (forced ? "forced on" : "forced off") : "following the setting")}", LogLevel.Info);
+                        return;
+                    }
+                    string folder = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Radiance-Dumps");
+                    monitor.Log(RenderPipeline.Current?.DumpWindowGlass(folder) ?? "the effect chain is not running", LogLevel.Info);
                 });
             helper.ConsoleCommands.Add("radiance_upload",
                 "How textures the mod rebuilds while you play reach the graphics card: 'direct' (the default) "

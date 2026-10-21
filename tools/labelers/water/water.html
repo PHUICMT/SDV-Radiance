@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Water Labels</title>
+<link rel="stylesheet" href="/kit/labelkit.css">
+<style>
+/* What is the water job's own: sheet tabs, the liquid colours, the tile cards. */
+#sheets { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px; border-bottom: 1px solid var(--line); max-height: 132px; overflow: auto; flex: none; }
+#sheets:empty { display: none; }
+#sheets button { font-size: 11px; padding: 3px 8px; display: inline-flex; gap: 6px; align-items: center; max-width: 100%; }
+#sheets button span.name { overflow: hidden; text-overflow: ellipsis; }
+#sheets button.on { background: #1b2a3c; border-color: var(--todo); }
+#sheets button .count { font-variant-numeric: tabular-nums; color: var(--muted); }
+#sheets button .count.todo { color: #ffd27a; }
+.paint-class button.on { border-color: var(--class-tone); background: color-mix(in srgb, var(--class-tone) 22%, var(--panel-2)); }
+.paint-class button svg.icon { color: var(--class-tone); }
+.card .tag b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+.st-missing { background: var(--todo); } .st-labelled { background: #5c6578; } .st-draft { background: #f2b43c; }
+.st-checked { background: var(--ok); } .st-edited { background: var(--edited); }
+.card.done { border-color: var(--ok); }
+.card.draft { border-color: #f2b43c; border-style: dashed; }
+.card.missing { border-color: color-mix(in srgb, var(--todo) 60%, transparent); }
+.mod .meta .todo { color: #ffd27a; }
+#info .row { display: flex; gap: 14px; flex-wrap: wrap; }
+#info .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
+/* the map view's own bar, over the picture's top left corner */
+#mapBar { position: absolute; left: 10px; top: 10px; z-index: 10; display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  max-width: calc(100% - 20px); padding: 6px 8px; border-radius: 9px; background: rgba(29, 32, 39, .92); border: 1px solid #3c4352;
+  box-shadow: 0 10px 26px -12px rgba(0, 0, 0, .9); animation: fade-up 200ms var(--ease) both; }
+#mapBar[hidden] { display: none; }
+#mapBar .search { width: 210px; }
+#mapBar select { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; font: inherit; font-size: 12px; max-width: 280px; }
+#mapBar .coverage { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+#mapBar .coverage b { color: var(--text); }
+#mapBar .coverage .gap { color: #ff8a8a; }
+body.map-mode .group[data-group="draw"], body.map-mode .group[data-group="liquid"] { opacity: .45; pointer-events: none; }
+</style>
+</head>
+<body>
+<aside>
+  <header>
+    <h1>Water</h1>
+    <div class="search"><span data-search-icon></span><input type="search" id="search" placeholder="Find a mod or sheet"><button class="clear" title="Clear"></button></div>
+    <div id="modFilter"><button data-mods="all">All</button><button data-mods="todo">To check</button><button data-mods="done">Done</button></div>
+    <div class="totals" id="totals"></div>
+  </header>
+  <div id="mods"></div>
+  <div class="splitter" data-panel="mods" title="Drag to resize"></div>
+</aside>
+<main>
+  <div id="toolbar" class="dock" data-dock="top">
+    <div class="group" style="--tone: #3fb6ff" data-group="draw"><span class="label" title="Drag to move this section">Draw</span>
+      <button data-tool="brush" data-icon="brush" title="Brush (B). Left paints the liquid chosen, right takes liquid away. Shift = straight line">Brush<kbd>B</kbd></button>
+      <button data-tool="rect" data-icon="box" title="Box (R). Drag to cover; left adds, right takes away">Box<kbd>R</kbd></button>
+      <button data-tool="lasso" data-icon="lasso" title="Lasso (L). Drag a loop; left fills, right takes away; Alt at release keeps that liquid only inside">Lasso<kbd>L</kbd></button>
+      <button data-tool="polygon" data-icon="polygon" title="Polygon (P). Click corners; Enter, double-click or the first dot closes it">Polygon<kbd>P</kbd></button>
+      <button data-tool="wand" data-icon="wand" title="Magic fill (W). Fills the same colour around the click; hold and drag to keep going">Magic fill<kbd>W</kbd></button>
+      <button data-tool="tile" data-icon="tile" title="Fill tile (T). The whole 16x16 tile under the cursor">Tile<kbd>T</kbd></button>
+      <button data-tool="stamp" data-icon="stamp" title="Stamp (S). Left drag a box to copy it, then every left click pastes it there. Right click or Esc drops the copy">Stamp<kbd>S</kbd></button>
+      <span class="divider"></span>
+      <span class="row"><button data-size="1" data-icon="size1" title="Brush 1 px ([ and ] change it)"></button><button data-size="2" data-icon="size2" title="Brush 2 px"></button><button data-size="4" data-icon="size4" title="Brush 4 px"></button></span>
+    </div>
+    <div class="group paint-class" style="--tone: #3f8cff" data-group="liquid"><span class="label" title="Drag to move this section">Liquid</span>
+      <button data-class="1" data-icon="water" style="--class-tone: #3f8cff" title="Water: still water, mirrors and ripples (1)">Water<kbd>1</kbd></button>
+      <button data-class="10" data-icon="flowing" style="--class-tone: #40e0d0" title="Flowing: a waterfall or a fast stream, no mirror (-)">Flowing<kbd>-</kbd></button>
+      <button data-class="9" data-icon="ice" style="--class-tone: #dcf0ff" title="Ice: frozen, mirrors without ripples (9)">Ice<kbd>9</kbd></button>
+      <button data-class="11" data-icon="lava" style="--class-tone: #ff7828" title="Lava (=)">Lava<kbd>=</kbd></button>
+      <button data-class="14" data-icon="hot" style="--class-tone: #ff5caa" title="Hot water: a hot spring, steams (')">Hot<kbd>'</kbd></button>
+    </div>
+    <div class="group" style="--tone: #b48cff" data-group="view"><span class="label" title="Drag to move this section">View</span>
+      <button data-view="overlay" data-icon="viewColours" title="The art with the liquid in its colours (V cycles the views)">Colours<kbd>V</kbd></button>
+      <button data-view="mask" data-icon="viewBlackWhite" title="Liquid white on black">B&amp;W</button>
+      <button data-view="art" data-icon="viewArt" title="The art alone">Art</button>
+      <button id="xray" data-icon="xray" title="X-ray (X): dim the art, labels solid">X-ray<kbd>X</kbd></button>
+      <button id="others" data-icon="others" title="Show the other labels (walls, roofs...) in grey (O)">Others<kbd>O</kbd></button>
+      <input type="range" id="alpha" min="10" max="100" value="80" title="Overlay strength">
+      <button id="fit" data-icon="fit" title="Fit the sheet to the view">Fit<kbd>F</kbd></button>
+      <span class="divider"></span>
+      <button id="mapView" data-icon="map" title="See the liquid on a real map that uses this sheet: red marks a cell the game calls water with no liquid on it (M). Click a cell to go to its tile">Map<kbd>M</kbd></button>
+    </div>
+    <div class="group" style="--tone: #9aa1b2" data-group="edit"><span class="label" title="Drag to move this section">Edit</span>
+      <button id="undo" data-icon="undo" title="Undo (Z)">Undo<kbd>Z</kbd></button>
+      <button id="redo" data-icon="redo" title="Redo (Ctrl+Y)">Redo<kbd>Ctrl+Y</kbd></button>
+    </div>
+    <div class="group" style="--tone: #4fc47a" data-group="verdict"><span class="label" title="Drag to move this section">Verdict</span>
+      <button class="ok" id="accept" data-icon="check" title="This tile's liquid is right as it is">Correct<kbd>A</kbd></button>
+      <button id="noLiquid" data-icon="noGlass" title="This tile has no liquid">No liquid<kbd>N</kbd></button>
+      <button id="reset" data-icon="reset" title="Back to the shipped label, forgets what was painted here">Back to label<kbd>Shift+R</kbd></button>
+    </div>
+    <div class="group" style="--tone: #f2b43c" data-group="go"><span class="label" title="Drag to move this section">Go</span>
+      <span class="row"><button id="prev" data-icon="previous" title="Previous tile (Left arrow)"></button><button id="next" data-icon="next" title="Next tile (Right arrow)"></button></span>
+      <button id="nextTodo" data-icon="nextTodo" title="Next tile still to check (Down arrow)">Next to check<kbd>↓</kbd></button>
+      <button id="helpButton" data-icon="keys" title="All keys (?)">Keys</button>
+    </div>
+    <button id="resetLayout" class="dock-tail" data-icon="layout" title="Put every section back where it started">Reset layout</button>
+  </div>
+  <div id="work">
+    <div id="dockLeft" class="dock" data-dock="left"></div>
+    <div id="editor">
+      <div class="splitter" data-panel="dock-left" title="Drag to resize the tool panel"></div>
+      <div id="viewport"><canvas id="big"></canvas><span id="saved"></span>
+        <div id="mapBar" hidden><div class="search"><span data-search-icon></span><input type="search" id="placeSearch" placeholder="Find a place"><button class="clear" title="Clear"></button></div>
+          <select id="placePick" title="A place that draws with this sheet"></select><span class="coverage" id="coverage"></span>
+          <button id="backToSheet" data-icon="sheet" title="Back to the sheet (M)">Sheet</button></div>
+        <div id="emptyNote">Pick a mod on the left.</div>
+        <div id="hint">Left adds · right takes liquid away · wheel zooms · Space or middle drag pans · H hides the colours · M the map · ? keys</div></div>
+      <div id="dockBottom" class="dock" data-dock="bottom"></div>
+      <div id="below"><div id="info"></div></div>
+    </div>
+    <div id="side">
+      <div class="splitter" data-panel="side" title="Drag to resize"></div>
+      <div id="sheets"></div>
+      <div id="filters"></div>
+      <div id="grid"></div>
+      <div id="legend">
+        <span><i class="dot st-missing"></i> game says water, no liquid</span>
+        <span><i class="dot st-labelled"></i> labelled, not looked at</span>
+        <span><i class="dot st-draft"></i> painted, not confirmed</span>
+        <span><i class="dot st-checked"></i> right as it was</span>
+        <span><i class="dot st-edited"></i> fixed here</span>
+      </div>
+    </div>
+  </div>
+</main>
+<div id="toast"></div>
+<div id="help" hidden><div>
+  <h1>Keys (as in HF Studio)</h1>
+  <table>
+    <tr><td>Left / right button</td><td>Paint the liquid chosen / take liquid away (walls, roofs and the rest are never touched by the right button)</td></tr>
+    <tr><td>B R L P W T S</td><td>Brush · box · lasso · polygon · magic fill · whole tile · stamp</td></tr>
+    <tr><td>1 - 9 = '</td><td>Water · flowing · ice · lava · hot water (HF Studio's keys)</td></tr>
+    <tr><td>[ ]</td><td>Brush size</td></tr>
+    <tr><td>Z, Ctrl+Z · Ctrl+Y</td><td>Undo · redo</td></tr>
+    <tr><td>Ctrl+C / Ctrl+V</td><td>Copy / paste the 16x16 tile under the cursor</td></tr>
+    <tr><td>V · X · O · H held</td><td>Next view · x-ray · other labels in grey · hide the colours while held</td></tr>
+    <tr><td>M</td><td>The map view and back: a real place drawn with this sheet, the liquid laid over it as the labels say, red where the game calls a cell water and no liquid covers it, amber where the tile in hand is used. Click a cell to go to its tile</td></tr>
+    <tr><td>Wheel · Space drag · F</td><td>Zoom on the cursor · pan · fit the sheet</td></tr>
+    <tr><td>A</td><td>The tile's liquid is right (press twice)</td></tr>
+    <tr><td>N</td><td>The tile has no liquid (press twice)</td></tr>
+    <tr><td>Shift+R</td><td>Back to the shipped label (press twice)</td></tr>
+    <tr><td>← → ↓</td><td>Previous · next tile · next tile still to check</td></tr>
+    <tr><td>Esc</td><td>Drop the stamp copy, cancel a polygon or lasso, call off a verdict waiting for its second press</td></tr>
+    <tr><td>Section name</td><td>Drag it to move the section to the top bar, the left side or under the picture. Drag a panel's edge to resize it</td></tr>
+  </table>
+  <p style="color:var(--muted)">Every change is saved at once, one file per sheet in the label store. Paint is a draft until Correct: a tile painted and not confirmed still counts as to check. Only liquid is written back: tools/labelops/wateroverlay.py lays it over labels/water-labels.json, and every other label stays HF Studio's.</p>
+</div></div>
+<script src="/kit/labelkit-ui.js"></script>
+<script src="/kit/labelkit-editor.js"></script>
+<script>
+"use strict";
+const { $, toast, api, armTwice, cancelAllArmed, anyArmed, replay } = LabelKit;
+const LIQUID = [
+  { value: 1, name: "water", colour: [63, 140, 255] },
+  { value: 10, name: "flowing", colour: [64, 224, 208] },
+  { value: 9, name: "ice", colour: [220, 240, 255] },
+  { value: 11, name: "lava", colour: [255, 120, 40] },
+  { value: 14, name: "hot water", colour: [255, 92, 170] },
+];
+const LIQUID_VALUES = new Set(LIQUID.map(entry => entry.value));
+const CLASS_NAMES = ["ground", "water", "wall", "roof", "deck", "void", "emissive", "reflect floor", "mirror", "ice", "flowing", "lava", "window", "glass", "hot water"];
+const CLASS_KEYS = { Digit1: 1, Minus: 10, Digit9: 9, Equal: 11, Quote: 14 };
+const STATUS_NAMES = { missing: "game says water, no liquid", labelled: "labelled", draft: "painted, not confirmed", checked: "right as it was", edited: "fixed here" };
+const TO_CHECK = new Set(["missing", "draft"]);
+const VIEWS = ["overlay", "mask", "art"];
+const PREFIX = "waterLabels";
+const HINT = "Left adds · right takes liquid away · wheel zooms · Space or middle drag pans · H hides the colours · M the map · ? keys";
+
+const state = {
+  mods: [], mod: null, sheets: [], sheet: null, tiles: new Map(), shipped: new Map(), gameWater: new Set(),
+  tile: -1, filter: "todo", modFilter: "todo", savedMask: null, pendingSaves: 0,
+};
+
+const editor = new LabelEditor({
+  canvas: $("#big"), viewport: $("#viewport"), palette: LIQUID,
+  // the right button takes liquid away; walls, roofs and the rest are HF Studio's to change
+  erase: value => LIQUID_VALUES.has(value) ? 0 : value,
+  others: () => [150, 150, 160],
+  cursorTone: () => { const c = (LIQUID.find(e => e.value === editor.value) || LIQUID[0]).colour; return `rgb(${c})`; },
+  decorate: drawTileMarks,
+  onChange: saveChangedTiles,
+  onHover: showHover,
+  onPick: point => pickOnMap(point),
+});
+
+// ---- small helpers ----
+const decode = text => Uint8Array.from(atob(text), ch => ch.charCodeAt(0));
+const encode = bytes => { let s = ""; for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]); return btoa(s); };
+const tileOrigin = tile => [(tile % state.sheet.columns) * 16, Math.floor(tile / state.sheet.columns) * 16];
+const tileAt = (x, y) => Math.floor(y / 16) * state.sheet.columns + Math.floor(x / 16);
+function tileCells(mask, tile) {
+  const [ox, oy] = tileOrigin(tile), out = new Uint8Array(256), w = state.sheet.width;
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) if (ox + x < w && oy + y < state.sheet.height) out[y * 16 + x] = mask[(oy + y) * w + ox + x];
+  return out;
+}
+function writeCells(mask, tile, cells) {
+  const [ox, oy] = tileOrigin(tile), w = state.sheet.width;
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) if (ox + x < w && oy + y < state.sheet.height) mask[(oy + y) * w + ox + x] = cells[y * 16 + x];
+}
+const sameCells = (a, b) => { if (!a || !b || a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; };
+const hasLiquid = cells => cells.some(value => LIQUID_VALUES.has(value));
+const shippedCells = tile => state.shipped.has(tile) ? decode(state.shipped.get(tile)) : new Uint8Array(256);
+const toCheck = counts => counts.missing + counts.draft;
+const doneCount = counts => counts.checked + counts.edited;
+
+// ---- the mod list ----
+async function loadMods() {
+  const answer = await api("/api/mods");
+  state.mods = answer.mods;
+  try { state.modFilter = localStorage.getItem(PREFIX + "ModFilter") || "todo"; } catch {}
+  renderMods();
+  const first = state.mods.find(mod => toCheck(mod.counts)) || state.mods[0];
+  if (first) openMod(first.id);
+}
+function renderMods() {
+  const query = $("#search").value.trim().toLowerCase();
+  const fits = mod => (!query || mod.name.toLowerCase().includes(query) || mod.id.toLowerCase().includes(query))
+    && (state.modFilter === "all" || (state.modFilter === "todo" ? toCheck(mod.counts) > 0 : toCheck(mod.counts) === 0));
+  const shown = state.mods.filter(fits);
+  $("#mods").innerHTML = "";
+  for (const mod of shown) {
+    const c = mod.counts, todo = toCheck(c), done = doneCount(c), all = todo + c.labelled + done || 1;
+    const row = document.createElement("div");
+    row.className = "mod" + (mod.id === state.mod ? " active" : "") + (!todo ? " complete" : "");
+    row.innerHTML = `<div class="name">${escapeHtml(mod.name)}</div>
+      <div class="meta">${mod.sheets} sheet${mod.sheets === 1 ? "" : "s"} · ${todo ? `<span class="todo">${todo} to check</span> · ` : ""}${done} done · ${c.labelled} labelled</div>
+      <div class="bar"><span style="width:${done / all * 100}%;background:var(--ok)"></span><span style="width:${todo / all * 100}%;background:var(--todo)"></span></div>`;
+    row.onclick = () => openMod(mod.id);
+    $("#mods").appendChild(row);
+  }
+  document.querySelectorAll("#modFilter button").forEach(b => b.classList.toggle("on", b.dataset.mods === state.modFilter));
+  const totals = state.mods.reduce((t, m) => { t.todo += toCheck(m.counts); t.done += doneCount(m.counts); return t; }, { todo: 0, done: 0 });
+  $("#totals").textContent = `${state.mods.length} packs · ${totals.todo} tiles to check · ${totals.done} done`;
+}
+const escapeHtml = text => String(text).replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]);
+
+async function openMod(mod) {
+  state.mod = mod;
+  renderMods();
+  const active = document.querySelector(".mod.active"); if (active) { active.scrollIntoView({ block: "nearest" }); replay(active, "focus-pulse"); }
+  state.sheets = await api("/api/sheets?mod=" + encodeURIComponent(mod));
+  const first = state.sheets.find(sheet => toCheck(sheet.counts)) || state.sheets[0];
+  if (first) await openSheet(first.name);
+}
+function renderSheets() {
+  $("#sheets").innerHTML = "";
+  if (state.sheets.length < 2) return;
+  // the sheets with work left come first, the finished ones after
+  const ordered = [...state.sheets].sort((a, b) => (toCheck(b.counts) > 0) - (toCheck(a.counts) > 0) || a.name.localeCompare(b.name));
+  for (const sheet of ordered) {
+    const todo = toCheck(sheet.counts);
+    const button = document.createElement("button");
+    button.className = sheet.name === state.sheet?.name ? "on" : "";
+    button.innerHTML = `${LabelKit.icon("sheet")}<span class="name">${escapeHtml(sheet.name)}</span><span class="count${todo ? " todo" : ""}">${todo || "✓"}</span>`;
+    button.title = `${sheet.name}: ${todo} to check, ${doneCount(sheet.counts)} done, ${sheet.counts.labelled} labelled`;
+    button.onclick = () => openSheet(sheet.name);
+    $("#sheets").appendChild(button);
+  }
+}
+
+// ---- one sheet ----
+function loadImage(src) {
+  return new Promise((resolve, reject) => { const image = new Image(); image.onload = () => resolve(image); image.onerror = reject; image.src = src; });
+}
+async function openSheet(name) {
+  flushSaves();
+  const sheet = await api("/api/sheet?name=" + encodeURIComponent(name));
+  const art = await loadImage("/api/image?name=" + encodeURIComponent(name));
+  state.sheet = sheet;
+  state.tiles = new Map(Object.entries(sheet.tiles).map(([tile, status]) => [+tile, status]));
+  state.shipped = new Map(Object.entries(sheet.shipped).map(([tile, cells]) => [+tile, cells]));
+  state.gameWater = new Set(sheet.gameWater);
+  const mask = decode(sheet.classes);
+  editor.load({ width: sheet.width, height: sheet.height, art, mask });
+  state.savedMask = mask.slice();
+  $("#emptyNote").hidden = true;
+  renderSheets();
+  renderFilters();
+  renderGrid();
+  const firstTodo = [...state.tiles].find(([, status]) => TO_CHECK.has(status));
+  selectTile(firstTodo ? firstTodo[0] : (state.tiles.size ? [...state.tiles.keys()][0] : -1), true);
+}
+function statusOf(tile) { return state.tiles.get(tile) || null; }
+function selectTile(tile, zoomIn) {
+  state.tile = tile;
+  if (tile >= 0) {
+    const [ox, oy] = tileOrigin(tile);
+    if (zoomIn) editor.centreOn(ox - 24, oy - 24, 64, 64, fitZoomFor(64));
+    else editor.centreOn(ox, oy, 16, 16);
+  } else editor.fit();
+  editor.render(); markCurrentCard(); showInfo();
+}
+function fitZoomFor(span) {
+  const box = $("#viewport").getBoundingClientRect();
+  return Math.max(1, Math.floor(Math.min(box.width, box.height) * 0.8 / span));
+}
+
+// the job's own marks over the sheet: tiles the game calls water with no liquid, drafts, the tile in hand
+function drawTileMarks(c, x0, y0, z) {
+  if (state.mode === "map") return drawMapMarks(c, x0, y0, z);
+  if (!state.sheet) return;
+  c.lineWidth = 1.5;
+  for (const [tile, status] of state.tiles) {
+    if (status !== "missing" && status !== "draft") continue;
+    const [ox, oy] = tileOrigin(tile);
+    c.setLineDash(status === "missing" ? [4, 3] : [2, 2]);
+    c.strokeStyle = status === "missing" ? "#3fb6ff" : "#f2b43c";
+    c.strokeRect(x0 + ox * z + 1, y0 + oy * z + 1, 16 * z - 2, 16 * z - 2);
+  }
+  c.setLineDash([]);
+  if (state.tile >= 0) {
+    const [ox, oy] = tileOrigin(state.tile);
+    c.lineWidth = 3; c.strokeStyle = "rgba(0,0,0,.8)"; c.strokeRect(x0 + ox * z - 1, y0 + oy * z - 1, 16 * z + 2, 16 * z + 2);
+    c.lineWidth = 2; c.strokeStyle = "#ff4646"; c.strokeRect(x0 + ox * z - 1, y0 + oy * z - 1, 16 * z + 2, 16 * z + 2);
+  }
+}
+
+// ---- the map view: a real place drawn from its tiles, the liquid laid over it as the labels say ----
+state.mode = "sheet";
+const sheetPictures = new Map();
+async function sheetPicture(path) {
+  if (!path) return null;
+  if (!sheetPictures.has(path)) sheetPictures.set(path, loadImage("/api/studio?path=" + encodeURIComponent(path)).then(image => {
+    const canvas = document.createElement("canvas"); canvas.width = image.width; canvas.height = image.height;
+    const context = canvas.getContext("2d"); context.drawImage(image, 0, 0);
+    return { image, alpha: context.getImageData(0, 0, image.width, image.height).data };
+  }).catch(() => null));
+  return sheetPictures.get(path);
+}
+async function openMap() {
+  if (!state.sheet) return;
+  flushSaves();
+  state.returnTile = state.tile;
+  state.places = await api("/api/places?sheet=" + encodeURIComponent(state.sheet.name));
+  if (!state.places.length) { toast("no place in the map dump draws with this sheet"); return; }
+  state.mode = "map"; document.body.classList.add("map-mode");
+  $("#hint").textContent = "Click a cell to go to its tile · wheel zooms · Space or middle drag pans · H hides the colours · M back to the sheet";
+  $("#mapBar").hidden = false; $("#placeSearch").value = "";
+  const common = ["Town", "Forest", "Beach", "Mountain", "Farm", "Desert", "Mine", "Railroad"];
+  const preferred = state.places.find(place => place.key === state.placeKey)
+    || state.places.find(place => common.includes(place.name)) || state.places[0];
+  state.placeKey = preferred.key;
+  renderPlaces();
+  await loadPlace(preferred.key);
+}
+function renderPlaces() {
+  const query = $("#placeSearch").value.trim().toLowerCase();
+  const pick = $("#placePick"); pick.innerHTML = "";
+  for (const place of state.places.filter(p => !query || p.name.toLowerCase().includes(query)).slice(0, 400)) {
+    const option = document.createElement("option"); option.value = place.key; option.textContent = place.name;
+    if (place.key === state.placeKey) option.selected = true;
+    pick.appendChild(option);
+  }
+}
+async function loadPlace(key) {
+  state.placeKey = key;
+  $("#coverage").textContent = "drawing...";
+  const place = await api("/api/place?key=" + encodeURIComponent(key));
+  const pictures = await Promise.all(place.sheetArt.map(sheetPicture));
+  const columns = place.sheetWH.map(size => size ? size[0] : 1);
+  const layers = [...place.layers].sort((a, b) => a.ord - b.ord);
+  const cellsWide = layers[0].w, cellsHigh = layers[0].h, W = cellsWide * 16, H = cellsHigh * 16;
+  const art = document.createElement("canvas"); art.width = W; art.height = H;
+  const context = art.getContext("2d"); context.imageSmoothingEnabled = false;
+  const mask = new Uint8Array(W * H);
+  const labels = place.sheets.map(name => new Map(Object.entries(place.liquid[name] || {}).map(([tile, cells]) => [+tile, decode(cells)])));
+  // cell -> [sheet name, tile] of the topmost tile drawn there, for a click to follow
+  const where = new Map();
+  for (const layer of layers) {
+    const bytes = decode(layer.cells), view = new DataView(bytes.buffer);
+    for (let cell = 0; cell < layer.w * layer.h; cell++) {
+      const value = view.getInt32(cell * 4, true); if (value < 0) continue;
+      const number = Math.floor(value / 0x100000), tile = value % 0x100000, picture = pictures[number];
+      if (!picture) continue;
+      const sx = (tile % columns[number]) * 16, sy = Math.floor(tile / columns[number]) * 16;
+      const cx = (cell % layer.w) * 16, cy = Math.floor(cell / layer.w) * 16;
+      context.drawImage(picture.image, sx, sy, 16, 16, cx, cy, 16, 16);
+      where.set(cell, [place.sheets[number], tile]);
+      const label = labels[number].get(tile), sheetWidth = picture.image.width;
+      for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+        const at = (cy + y) * W + cx + x, liquid = label && LIQUID_VALUES.has(label[y * 16 + x]) ? label[y * 16 + x] : 0;
+        if (liquid) mask[at] = liquid;
+        // drawn over by this layer: what was under it is covered
+        else if (picture.alpha[((sy + y) * sheetWidth + sx + x) * 4 + 3] >= 20) mask[at] = 0;
+      }
+    }
+  }
+  // the game's own water cells, and which of them no liquid covers
+  const grid = place.waterGrid ? decode(place.waterGrid) : null, gaps = [];
+  let waterCells = 0;
+  if (grid) for (let cell = 0; cell < cellsWide * cellsHigh; cell++) {
+    if (!(grid[cell >> 3] & (1 << (cell & 7)))) continue;
+    waterCells++;
+    const cx = (cell % cellsWide) * 16, cy = Math.floor(cell / cellsWide) * 16;
+    let covered = false;
+    for (let y = 0; y < 16 && !covered; y++) for (let x = 0; x < 16; x++) if (mask[(cy + y) * W + cx + x]) { covered = true; break; }
+    if (!covered) gaps.push(cell);
+  }
+  state.map = { place, cellsWide, cellsHigh, where, gaps: new Set(gaps) };
+  editor.load({ width: W, height: H, art, mask, readOnly: true });
+  editor.fit(); renderAll();
+  // rounded down, so a place with any gap never reads as 100%
+  const share = waterCells ? Math.floor((waterCells - gaps.length) / waterCells * 1000) / 10 : 100;
+  $("#coverage").innerHTML = grid
+    ? `<b>${escapeHtml(place.name)}</b> · ${waterCells} water cells · <b>${share}%</b> with liquid${gaps.length ? ` · <span class="gap">${gaps.length} without</span>` : ""}`
+    : `<b>${escapeHtml(place.name)}</b> · the game marks no water here`;
+  showInfo();
+}
+function drawMapMarks(c, x0, y0, z) {
+  const map = state.map; if (!map) return;
+  c.lineWidth = Math.max(1.5, z * 1.5);
+  c.strokeStyle = "#ff4646";
+  for (const cell of map.gaps) c.strokeRect(x0 + (cell % map.cellsWide) * 16 * z + 1, y0 + Math.floor(cell / map.cellsWide) * 16 * z + 1, 16 * z - 2, 16 * z - 2);
+  if (state.sheet && state.returnTile >= 0) {
+    c.strokeStyle = "#ffd23f"; c.lineWidth = Math.max(1, z);
+    for (const [cell, [sheet, tile]] of map.where) if (sheet === state.sheet.name && tile === state.returnTile)
+      c.strokeRect(x0 + (cell % map.cellsWide) * 16 * z, y0 + Math.floor(cell / map.cellsWide) * 16 * z, 16 * z, 16 * z);
+  }
+}
+// A click on the map goes to the tile drawn there, on its own sheet.
+async function pickOnMap([x, y]) {
+  const map = state.map; if (!map) return;
+  const cell = Math.floor(y / 16) * map.cellsWide + Math.floor(x / 16), found = map.where.get(cell);
+  if (!found) return toast("nothing drawn here");
+  await closeMap(found[0], found[1]);
+}
+async function closeMap(sheetName, tile) {
+  state.mode = "sheet"; document.body.classList.remove("map-mode"); $("#mapBar").hidden = true;
+  $("#hint").textContent = HINT;
+  const name = sheetName || state.sheet.name, keep = tile ?? state.returnTile;
+  try { await openSheet(name); }
+  catch { toast(`${name} is not one of the water tool's sheets`); return openSheet(state.sheet.name); }
+  if (keep >= 0) { if (!state.tiles.has(keep)) { state.filter = "all"; renderFilters(); renderGrid(); } selectTile(keep, true); }
+}
+function toggleMap() { state.mode === "map" ? closeMap() : openMap(); }
+
+// ---- the tile cards ----
+const FILTERS = [["todo", "To check", "var(--todo)"], ["labelled", "Labelled", "#8a93a8"], ["done", "Done", "var(--ok)"], ["all", "All", "#b48cff"]];
+function passes(tile) {
+  const status = statusOf(tile);
+  if (state.filter === "all") return true;
+  if (state.filter === "todo") return TO_CHECK.has(status);
+  if (state.filter === "done") return status === "checked" || status === "edited";
+  return status === state.filter;
+}
+function renderFilters() {
+  const counts = { todo: 0, labelled: 0, done: 0, all: state.tiles.size };
+  for (const status of state.tiles.values()) {
+    if (TO_CHECK.has(status)) counts.todo++; else if (status === "labelled") counts.labelled++; else if (status === "checked" || status === "edited") counts.done++;
+  }
+  $("#filters").innerHTML = "";
+  for (const [key, label, tone] of FILTERS) {
+    const chip = document.createElement("button");
+    chip.className = "chip" + (state.filter === key ? " on" : "") + (counts[key] ? "" : " empty");
+    chip.style.setProperty("--chip", tone);
+    chip.innerHTML = `${label}<span class="count">${counts[key]}</span>`;
+    chip.onclick = () => { state.filter = key; renderFilters(); renderGrid(); };
+    $("#filters").appendChild(chip);
+  }
+}
+// Cards draw their picture only when they come into view: a sheet can have thousands of tiles.
+const cardPainter = new IntersectionObserver(entries => {
+  for (const entry of entries) if (entry.isIntersecting) { paintCard(entry.target); cardPainter.unobserve(entry.target); }
+}, { root: null, rootMargin: "200px" });
+function renderGrid() {
+  const grid = $("#grid"); grid.innerHTML = "";
+  if (!state.sheet) return;
+  let shown = 0;
+  for (const tile of [...state.tiles.keys()].sort((a, b) => a - b)) {
+    if (!passes(tile)) continue;
+    const card = document.createElement("div");
+    card.dataset.tile = tile;
+    card.innerHTML = `<canvas width="48" height="48"></canvas><div class="tag"><span><i class="dot"></i> <b>${tile}</b></span><span class="where"></span></div>`;
+    card.onclick = () => state.mode === "map" ? closeMap(state.sheet.name, tile) : selectTile(tile, false);
+    const correct = document.createElement("button"); correct.className = "correct"; correct.innerHTML = LabelKit.icon("check");
+    correct.title = "Right as it is"; correct.onclick = event => { event.stopPropagation(); confirmTile(tile); };
+    card.appendChild(correct);
+    grid.appendChild(card);
+    updateCard(card);
+    cardPainter.observe(card);
+    if (++shown >= 3000) break;
+  }
+  markCurrentCard();
+}
+function updateCard(card) {
+  const tile = +card.dataset.tile, status = statusOf(tile);
+  card.className = "card" + (status === "checked" || status === "edited" ? " done" : status === "draft" ? " draft" : status === "missing" ? " missing" : "")
+    + (tile === state.tile ? " current" : "");
+  card.querySelector(".dot").className = "dot st-" + status;
+  const [ox, oy] = tileOrigin(tile);
+  card.querySelector(".where").textContent = `${ox / 16},${oy / 16}`;
+  card.title = STATUS_NAMES[status] || "";
+  if (card.dataset.painted) paintCard(card);
+}
+function paintCard(card) {
+  card.dataset.painted = "1";
+  const tile = +card.dataset.tile, canvas = card.querySelector("canvas"), c = canvas.getContext("2d");
+  const [ox, oy] = tileOrigin(tile);
+  c.imageSmoothingEnabled = false; c.clearRect(0, 0, 48, 48);
+  c.drawImage(editor.art, ox, oy, 16, 16, 0, 0, 48, 48);
+  const cells = tileCells(editor.mask, tile), image = c.createImageData(16, 16);
+  for (let i = 0; i < 256; i++) {
+    const entry = LIQUID.find(e => e.value === cells[i]); if (!entry) continue;
+    image.data[i * 4] = entry.colour[0]; image.data[i * 4 + 1] = entry.colour[1]; image.data[i * 4 + 2] = entry.colour[2]; image.data[i * 4 + 3] = 150;
+  }
+  const layer = document.createElement("canvas"); layer.width = layer.height = 16; layer.getContext("2d").putImageData(image, 0, 0);
+  c.drawImage(layer, 0, 0, 48, 48);
+}
+function cardFor(tile) { return document.querySelector(`#grid .card[data-tile="${tile}"]`); }
+function markCurrentCard() {
+  document.querySelectorAll("#grid .card.current").forEach(card => card.classList.remove("current"));
+  const card = cardFor(state.tile);
+  if (card) { card.classList.add("current"); card.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+}
+
+// ---- saving: every change goes to its sheet's file at once ----
+// Paint is a draft (still to check) until Correct confirms it, as in the glass labeler.
+let saveQueue = new Map(), saveTimer = null;
+function saveChangedTiles() {
+  if (!state.sheet) return;
+  const w = state.sheet.width, mask = editor.mask, saved = state.savedMask, touched = new Set();
+  for (let i = 0; i < mask.length; i++) if (mask[i] !== saved[i]) touched.add(tileAt(i % w, Math.floor(i / w)));
+  for (const tile of touched) {
+    const cells = tileCells(mask, tile);
+    writeCells(saved, tile, cells);
+    if (sameCells(cells, shippedCells(tile))) {
+      // painted back to exactly the shipped label: nothing of this tool's own is left on it
+      queueTile(tile, { remove: true });
+      if (hasLiquid(cells)) state.tiles.set(tile, "labelled");
+      else if (state.gameWater.has(tile)) state.tiles.set(tile, "missing");
+      else state.tiles.delete(tile);
+    } else {
+      queueTile(tile, { classes: encode(cells), status: "draft" });
+      state.tiles.set(tile, "draft");
+    }
+  }
+  if (touched.size) afterTileChange([...touched]);
+}
+function queueTile(tile, value) {
+  saveQueue.set(tile, value);
+  clearTimeout(saveTimer); saveTimer = setTimeout(flushSaves, 300);
+}
+async function flushSaves() {
+  clearTimeout(saveTimer);
+  if (!saveQueue.size || !state.sheet) return;
+  const tiles = Object.fromEntries(saveQueue); saveQueue = new Map();
+  try {
+    const answer = await api("/api/tiles", { sheet: state.sheet.name, tiles });
+    applySummary(state.sheet.name, answer.summary);
+    const note = $("#saved"); note.textContent = `saved ${new Date().toLocaleTimeString()}`; replay(note, "flash");
+  } catch (problem) { toast("not saved: " + problem.message); }
+}
+window.addEventListener("beforeunload", flushSaves);
+function afterTileChange(tiles) {
+  for (const tile of tiles) { const card = cardFor(tile); if (card) updateCard(card); }
+  if (tiles.some(tile => !cardFor(tile) && passes(tile))) renderGrid();
+  renderFilters(); editor.render(); showInfo();
+}
+function applySummary(name, summary) {
+  const sheet = state.sheets.find(s => s.name === name); if (!sheet || !summary) return;
+  const before = sheet.counts; sheet.counts = summary.counts;
+  const mod = state.mods.find(m => m.id === state.mod);
+  if (mod) for (const key of Object.keys(mod.counts)) mod.counts[key] += summary.counts[key] - before[key];
+  renderSheets(); renderMods();
+}
+
+// ---- verdicts ----
+function confirmTile(tile) {
+  if (tile < 0) return;
+  const cells = tileCells(editor.mask, tile);
+  const status = sameCells(cells, shippedCells(tile)) ? "checked" : "edited";
+  queueTile(tile, { classes: encode(cells), status });
+  state.tiles.set(tile, status);
+  afterTileChange([tile]); flushSaves();
+  const card = cardFor(tile); if (card) replay(card, "pop");
+  if (tile === state.tile) nextTodo(true);
+}
+function noLiquid() {
+  if (state.tile < 0) return;
+  editor.remember();
+  const cells = tileCells(editor.mask, state.tile).map(value => LIQUID_VALUES.has(value) ? 0 : value);
+  writeCells(editor.mask, state.tile, cells); editor.maskChanged();
+  writeCells(state.savedMask, state.tile, cells);
+  confirmTile(state.tile);
+}
+function backToLabel() {
+  if (state.tile < 0) return;
+  const tile = state.tile, cells = shippedCells(tile);
+  editor.remember();
+  writeCells(editor.mask, tile, cells); editor.maskChanged();
+  writeCells(state.savedMask, tile, cells);
+  queueTile(tile, { remove: true });
+  state.tiles.set(tile, hasLiquid(cells) ? "labelled" : "missing");
+  afterTileChange([tile]); flushSaves();
+}
+function visibleTiles() { return [...document.querySelectorAll("#grid .card")].map(card => +card.dataset.tile); }
+function step(delta) {
+  const order = visibleTiles(); if (!order.length) return;
+  const at = order.indexOf(state.tile);
+  selectTile(order[(at + delta + order.length) % order.length], false);
+}
+// The next tile to check here, then on the mod's next sheet that has one.
+async function nextTodo(quiet) {
+  const tiles = [...state.tiles.keys()].sort((a, b) => a - b);
+  const after = tiles.filter(tile => tile > state.tile && TO_CHECK.has(statusOf(tile)));
+  const before = tiles.filter(tile => tile <= state.tile && TO_CHECK.has(statusOf(tile)) && tile !== state.tile);
+  const next = after[0] ?? before[0];
+  if (next !== undefined) return selectTile(next, false);
+  await flushSaves();
+  const at = state.sheets.findIndex(sheet => sheet.name === state.sheet.name);
+  for (let k = 1; k < state.sheets.length; k++) {
+    const sheet = state.sheets[(at + k) % state.sheets.length];
+    if (toCheck(sheet.counts)) { toast(`on to ${sheet.name}`); return openSheet(sheet.name); }
+  }
+  if (!quiet) toast("every tile of this pack is checked");
+}
+
+// ---- what the cursor is on ----
+function showHover(point) { state.hoverPoint = point; showInfo(); }
+function showInfo() {
+  if (state.mode === "map" && state.map) {
+    const point = state.hoverPoint, map = state.map;
+    let text = `<b>${escapeHtml(map.place.name)}</b> · ${map.cellsWide}×${map.cellsHigh} cells · click a cell to go to its tile`;
+    if (point && editor.inside(...point)) {
+      const cellX = Math.floor(point[0] / 16), cellY = Math.floor(point[1] / 16), cell = cellY * map.cellsWide + cellX, found = map.where.get(cell);
+      text += ` · cell ${cellX},${cellY}${found ? ` · topmost tile: ${escapeHtml(found[0])} ${found[1]}` : ""}`
+        + (map.gaps.has(cell) ? ` · <span style="color:#ff8a8a">water with no liquid</span>` : "");
+    }
+    $("#info").innerHTML = `<div class="row"><span>${text}</span></div>`;
+    return;
+  }
+  const sheet = state.sheet; if (!sheet) { $("#info").innerHTML = ""; return; }
+  const parts = [`<b>${escapeHtml(sheet.name)}</b> · ${sheet.width}×${sheet.height}`];
+  if (state.tile >= 0) {
+    const [ox, oy] = tileOrigin(state.tile), status = statusOf(state.tile);
+    parts.push(`tile <b>${state.tile}</b> (${ox / 16},${oy / 16}) · <i class="dot st-${status}"></i> ${STATUS_NAMES[status] || "no liquid"}${state.gameWater.has(state.tile) ? " · the game calls it water" : ""}`);
+  }
+  if (state.hoverPoint && editor.inside(...state.hoverPoint)) {
+    const [x, y] = state.hoverPoint.map(Math.floor), value = editor.mask[y * sheet.width + x], entry = LIQUID.find(e => e.value === value);
+    parts.push(`under the cursor: tile ${tileAt(x, y)}, ${entry ? `<span class="swatch" style="background:rgb(${entry.colour})"></span>` : ""}${CLASS_NAMES[value] || value}`);
+  }
+  $("#info").innerHTML = `<div class="row">${parts.map(p => `<span>${p}</span>`).join("")}</div>`;
+}
+
+// ---- other open pages: their saves arrive here ----
+function onLive(event) {
+  if (event.kind !== "tiles") return;
+  const mod = state.mods.find(m => m.id === event.mod);
+  if (event.sheet === state.sheet?.name) {
+    const changed = [];
+    for (const [key, value] of Object.entries(event.tiles)) {
+      const tile = +key;
+      if (saveQueue.has(tile)) continue;
+      if (value.status) state.tiles.set(tile, value.status); else state.tiles.delete(tile);
+      if (value.classes) { const cells = decode(value.classes); writeCells(editor.mask, tile, cells); writeCells(state.savedMask, tile, cells); }
+      changed.push(tile);
+    }
+    editor.maskChanged();
+    if (changed.length) afterTileChange(changed);
+  }
+  const sheet = state.sheets.find(s => s.name === event.sheet);
+  if (sheet && event.summary) applySummary(event.sheet, event.summary);
+  else if (mod && event.summary) api("/api/mods").then(answer => { state.mods = answer.mods; renderMods(); });
+}
+
+// ---- the toolbar ----
+function renderToolbar() {
+  editor.updateCursor();
+  document.querySelectorAll("[data-view]").forEach(b => b.classList.toggle("on", b.dataset.view === editor.view));
+  document.querySelectorAll("[data-tool]").forEach(b => b.classList.toggle("on", b.dataset.tool === editor.tool));
+  document.querySelectorAll("[data-class]").forEach(b => b.classList.toggle("on", +b.dataset.class === editor.value));
+  document.querySelectorAll("[data-size]").forEach(b => b.classList.toggle("on", +b.dataset.size === editor.size));
+  $("#xray").classList.toggle("on", editor.xray);
+  $("#others").classList.toggle("on", editor.showOthers);
+  $("#mapView").classList.toggle("on", state.mode === "map");
+}
+function renderAll() { editor.render(); renderToolbar(); }
+LabelKit.start();
+LabelKit.setupLayout({
+  storagePrefix: PREFIX,
+  defaultLayout: { top: ["view", "liquid"], left: ["edit", "verdict", "go"], bottom: ["draw"] },
+  panelLimits: { mods: [150, 520], "dock-left": [64, 320], side: [180, 900] },
+  defaultPanels: { "dock-left": 136 },
+  panelElements: { mods: () => $("aside"), "dock-left": () => $("#dockLeft"), side: () => $("#side") },
+  growsLeft: ["side"],
+  onRoomChange: () => editor.render(),
+});
+document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { editor.view = b.dataset.view; renderAll(); });
+document.querySelectorAll("[data-tool]").forEach(b => b.onclick = () => { editor.tool = b.dataset.tool; editor.polygon = null; renderAll(); });
+document.querySelectorAll("[data-class]").forEach(b => b.onclick = () => { editor.value = +b.dataset.class; renderAll(); });
+document.querySelectorAll("[data-size]").forEach(b => b.onclick = () => { editor.size = +b.dataset.size; renderAll(); });
+$("#xray").onclick = () => { editor.xray = !editor.xray; renderAll(); };
+$("#others").onclick = () => { editor.showOthers = !editor.showOthers; editor.maskChanged(); renderAll(); };
+$("#alpha").oninput = event => { editor.overlayAlpha = event.target.value / 100; editor.render(); };
+editor.overlayAlpha = 0.8;
+$("#fit").onclick = () => { editor.fit(); editor.render(); };
+$("#undo").onclick = () => editor.undo(); $("#redo").onclick = () => editor.redo();
+const withTile = action => () => { if (state.tile >= 0) action(); };
+$("#accept").onclick = () => armTwice($("#accept"), "Press again", withTile(() => confirmTile(state.tile)));
+$("#noLiquid").onclick = () => armTwice($("#noLiquid"), "Press again", withTile(noLiquid));
+$("#reset").onclick = () => armTwice($("#reset"), "Press again", withTile(backToLabel));
+$("#prev").onclick = () => step(-1); $("#next").onclick = () => step(1); $("#nextTodo").onclick = () => nextTodo(false);
+$("#helpButton").onclick = LabelKit.openHelp;
+$("#mapView").onclick = toggleMap;
+$("#backToSheet").onclick = () => closeMap();
+$("#placePick").onchange = event => loadPlace(event.target.value);
+$("#placeSearch").addEventListener("input", renderPlaces);
+$("#search").addEventListener("input", renderMods);
+document.querySelectorAll("#modFilter button").forEach(button => button.onclick = () => {
+  state.modFilter = button.dataset.mods;
+  try { localStorage.setItem(PREFIX + "ModFilter", state.modFilter); } catch {}
+  renderMods();
+});
+window.addEventListener("keydown", event => {
+  if (event.target.tagName === "INPUT" || event.target.tagName === "TEXTAREA") return;
+  const code = event.code, ctrl = event.ctrlKey || event.metaKey;
+  if (code === "Escape") { if (LabelKit.helpOpen()) LabelKit.closeHelp(); else if (anyArmed()) cancelAllArmed(); else editor.escape(); return; }
+  if (code === "F1" || event.key === "?") { event.preventDefault(); LabelKit.helpOpen() ? LabelKit.closeHelp() : LabelKit.openHelp(); return; }
+  if (ctrl && code === "KeyS") { event.preventDefault(); flushSaves(); toast("saved"); return; }
+  if (editor.handleKey(event)) { renderToolbar(); return; }
+  if (ctrl || !state.sheet) return;
+  if (code === "KeyR" && event.shiftKey) return $("#reset").click();
+  if (event.shiftKey) return;
+  if (code === "KeyM") return toggleMap();
+  if (state.mode === "map") return;
+  if (CLASS_KEYS[code] !== undefined) editor.value = CLASS_KEYS[code];
+  else if (code === "KeyV") editor.view = VIEWS[(VIEWS.indexOf(editor.view) + 1) % VIEWS.length];
+  else if (code === "KeyO") { editor.showOthers = !editor.showOthers; editor.maskChanged(); }
+  else if (code === "KeyA") return $("#accept").click();
+  else if (code === "KeyN") return $("#noLiquid").click();
+  else if (code === "ArrowRight") { event.preventDefault(); return step(1); }
+  else if (code === "ArrowLeft") { event.preventDefault(); return step(-1); }
+  else if (code === "ArrowDown") { event.preventDefault(); return nextTodo(false); }
+  else return;
+  renderAll();
+});
+window.addEventListener("keyup", event => editor.handleKeyUp(event));
+window.addEventListener("resize", () => editor.render());
+LabelKit.connectLive(onLive);
+renderToolbar();
+loadMods();
+</script>
+</body>
+</html>

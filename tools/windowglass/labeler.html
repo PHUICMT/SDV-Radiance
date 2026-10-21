@@ -1,0 +1,2465 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Window Glass Labeler</title>
+<style>
+:root {
+  --ground: #14161b; --panel: #1d2027; --panel-2: #262a33; --line: #343946;
+  --text: #e6e8ee; --muted: #9aa1b2; --accent: #ff4646; --ok: #4fc47a; --edited: #f2b43c; --none: #7c8597;
+  --todo: #3fb6ff; --jump: #ffd23f; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+/* Scrollbars in the page's own look: thin, dark track, a thumb that lights up on hover. */
+* { scrollbar-width: thin; scrollbar-color: #3a404d transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #3a404d; border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: #586074; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:active { background: var(--todo); border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; height: 0; width: 0; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--ground); color: var(--text); font: 13px/1.4 system-ui, "Segoe UI", sans-serif;
+  display: grid; grid-template-columns: var(--mods-width, 280px) minmax(0, 1fr); overflow: hidden; }
+aside { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; position: relative; min-width: 0; }
+aside header { padding: 12px 12px 8px; }
+h1 { font-size: 14px; margin: 0 0 8px; }
+input[type=search] { width: 100%; padding: 6px 8px; background: var(--panel); border: 1px solid var(--line);
+  color: var(--text); border-radius: 6px; }
+/* Four even cells that fit any width of the panel: they wrap to two rows before they would spill. */
+#modFilter { display: grid; grid-template-columns: repeat(auto-fit, minmax(62px, 1fr)); gap: 1px; margin-top: 7px;
+  border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: var(--line); }
+#modFilter button { border: 0; border-radius: 0; background: var(--ground); color: var(--muted); font-size: 11px;
+  padding: 5px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; transform: none !important; }
+#modFilter button:hover { background: var(--panel); }
+#modFilter button[data-mods="recheck"].on { color: #f2b43c; }
+.mod.kept { opacity: .5; border-style: dashed; }
+.mod.kept:hover { opacity: .8; }
+.kept-note { font-size: 10px; color: var(--muted); margin-top: 3px; font-style: italic; }
+#modFilter button.on { background: var(--panel-2); color: var(--text); font-weight: 600; }
+#modFilter button .count { color: var(--muted); font-weight: 400; margin-left: 4px; font-variant-numeric: tabular-nums; }
+.totals { color: var(--muted); font-size: 11px; margin-top: 7px; font-variant-numeric: tabular-nums; }
+#mods { overflow: auto; flex: 1; padding: 0 6px 10px; }
+.mod { padding: 7px 8px; border-radius: 6px; cursor: pointer; }
+.mod:hover { background: var(--panel); }
+/* the open mod: a blue bar on its left, a blue tint, a bright edge */
+.mod.active { background: linear-gradient(90deg, rgba(63, 182, 255, .20), rgba(63, 182, 255, .06)); outline: 2px solid var(--todo);
+  outline-offset: -2px; box-shadow: inset 4px 0 0 var(--todo); }
+.mod.active .name { color: #fff; font-weight: 600; }
+@keyframes focus-pulse { 0% { box-shadow: 0 0 0 0 rgba(63, 182, 255, .75); } 100% { box-shadow: 0 0 0 12px rgba(63, 182, 255, 0); } }
+.mod.active.focus-pulse { animation: focus-pulse 900ms var(--ease, ease) 2; }
+.mod { border: 1px solid transparent; margin-bottom: 2px; }
+.mod.complete { border-color: var(--ok); background: rgba(79, 196, 122, .10); }
+.mod.complete.active { background: rgba(79, 196, 122, .18); }
+.mod.complete .name::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 5px; vertical-align: -1px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234fc47a' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 12.5 4.5 4.5L19 7'/%3E%3C/svg%3E") center / contain no-repeat; }
+.mod .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mod .meta { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.verdict { font-size: 10px; padding: 0 5px; border-radius: 3px; margin-left: 4px; }
+.verdict.nothing { background: #3a3326; color: #e2b75c; } .verdict.some { background: #263040; color: #8fb8ff; }
+.section { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 10px 8px 4px; }
+#modActions { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; align-items: center;
+  background: var(--panel); }
+#modActions:empty { display: none; }
+/* Actions sit in equal columns: side by side when the panel is wide, one under another when not,
+   always the same width and height so they line up. */
+#modActions { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 6px; }
+#modActions .panel-heading { grid-column: 1 / -1; }
+#modActions button { font-size: 12px; padding: 0 12px; height: 34px; display: flex; align-items: center; justify-content: center;
+  gap: 7px; border-radius: 7px; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#modActions button span { overflow: hidden; text-overflow: ellipsis; }
+#modActions button svg.icon { width: 14px; height: 14px; }
+#modActions .solid { background: #2f8f55; border-color: #3fb06a; color: #f2fff6; font-weight: 600; }
+#modActions .solid:hover { background: #37a463; }
+#modActions .outline { background: transparent; border-color: #4b5262; color: var(--text); }
+#modActions .ghost { background: transparent; border-color: transparent; color: var(--muted); }
+#modActions button.armed, #modActions .solid.armed, button.armed { background: #3a3020 !important; border-color: #f2b43c !important; color: #ffd27a !important; }
+button.cancel-armed { background: transparent; border: 1px solid #4b5262; color: var(--text); display: inline-flex; align-items: center;
+  justify-content: center; gap: 6px; animation: fade-up 180ms var(--ease, ease) both; }
+button.cancel-armed:hover { border-color: var(--accent); color: #ff9b9b; }
+button.cancel-armed svg.icon { width: 13px; height: 13px; }
+#dockLeft .group button.cancel-armed { justify-content: center; }
+.panel-heading { width: 100%; color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.bar { height: 4px; background: var(--panel-2); border-radius: 2px; margin-top: 5px; overflow: hidden; display: flex; }
+.bar span { height: 100%; }
+main { display: grid; grid-template-rows: auto 1fr; min-height: 0; }
+#toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; padding: 8px 10px;
+  border-bottom: 1px solid var(--line); background: var(--panel); }
+/* Each section has its own tone: a tinted panel, its name in that colour, the chosen button lit in it. */
+.group { --tone: #9aa1b2; display: flex; gap: 3px; align-items: center; flex-wrap: wrap; padding: 4px 6px 4px 8px;
+  border-radius: 8px; border: 1px solid color-mix(in srgb, var(--tone) 35%, transparent);
+  background: color-mix(in srgb, var(--tone) 7%, var(--panel)); }
+.group .label { color: var(--tone); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; margin-right: 4px; }
+.group button.on { background: color-mix(in srgb, var(--tone) 24%, var(--panel-2)); border-color: var(--tone); }
+.group .divider { width: 1px; align-self: stretch; margin: 2px 4px; background: color-mix(in srgb, var(--tone) 35%, transparent); }
+button svg.icon { width: 15px; height: 15px; flex: none; }
+button[data-icon] { display: inline-flex; align-items: center; gap: 5px; }
+#toolbar button[data-size] { padding: 5px 7px; }
+button { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+  padding: 5px 8px; cursor: pointer; font: inherit; font-size: 12px; white-space: nowrap; }
+button:hover { border-color: #4b5262; }
+button.on { background: #3a2124; border-color: var(--accent); }
+.card .correct svg { width: 13px; height: 13px; display: block; }
+/* the Reset layout corner stays reachable however empty the top bar is */
+#toolbar { min-height: 44px; }
+#resetLayout { z-index: 6; }
+button.ok { border-color: var(--ok); }
+kbd { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-left: 3px; }
+input[type=range] { width: 80px; }
+#work { display: grid; grid-template-columns: auto minmax(0, 1fr) var(--side-width, 340px); min-height: 0; }
+#editor { display: grid; grid-template-rows: 1fr auto auto; min-height: 0; position: relative; }
+#side { position: relative; min-width: 0; }
+/* Splitters: drag a panel's edge to make it wider or narrower. */
+.splitter { position: absolute; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 5; }
+.splitter::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent; transition: background .15s; }
+.splitter:hover::after, .splitter.dragging::after { background: var(--todo); }
+aside > .splitter { right: -4px; }
+#side > .splitter { left: -4px; }
+#editor > .splitter { left: -4px; }
+#dockLeft:empty + #editor > .splitter { display: none; }
+body.resizing, body.resizing * { cursor: col-resize !important; user-select: none !important; }
+#dockLeft { width: var(--dock-left-width, auto); }
+/* Sections fit their bar: they share the row and their buttons widen with them. Drag a section's
+   bottom-right corner to give it a size of its own (buttons wrap inside); double-click its name
+   to let it fit again. */
+#toolbar > .group, #dockBottom > .group { flex: 1 1 auto; }
+/* a tall section beside a short one does not stretch the short one */
+#toolbar, #dockBottom { align-items: flex-start; }
+#toolbar > .group button[data-icon], #dockBottom > .group button[data-icon] { flex: 1 1 auto; justify-content: center; }
+#toolbar > .group .row, #dockBottom > .group .row { flex: 1 1 auto; }
+#toolbar > .group .row button, #dockBottom > .group .row button { flex: 1 1 auto; }
+/* min-content: however a section is sized, by hand or by a size saved earlier, it is never
+   smaller than its widest button across or its wrapped buttons down, so nothing is cut off. */
+.group { resize: both; overflow: hidden; position: relative; min-width: min-content; min-height: min-content; }
+.group.sized { flex: none !important; align-content: flex-start; }
+
+.group::-webkit-resizer { background: linear-gradient(135deg, transparent 55%, color-mix(in srgb, var(--tone) 70%, transparent) 55%, color-mix(in srgb, var(--tone) 70%, transparent) 65%, transparent 65%, transparent 75%, color-mix(in srgb, var(--tone) 70%, transparent) 75%); }
+/* Icons only, when a dock is too small for words: hover a button for its name. */
+/* First step when room runs short: the key hints go. */
+.dock.no-keys .group button kbd { display: none; }
+.dock.compact .group button { font-size: 0; gap: 0; padding: 5px 6px; justify-content: center; }
+.dock.compact .group button kbd, .dock.compact .group button span:not(.row) { display: none; }
+.dock.compact .group .label { font-size: 0; margin: 0 2px 0 0; }
+.dock.compact .group .label svg { width: 13px; height: 13px; }
+.dock.compact .group input[type=range] { width: 56px; }
+#dockLeft.compact .group { padding: 6px 5px; min-width: 0; }
+#dockLeft.compact .group button { min-width: 34px; min-height: 30px; padding: 6px; justify-content: center; }
+#dockLeft.compact .group svg.icon { width: 16px; height: 16px; }
+#dockLeft.compact .group .label { justify-content: center; margin: 0 0 4px; }
+#dockLeft.compact .group .row { flex-direction: column; }
+/* Docks: the places a section can sit. Drag a section by its name to move it. */
+.dock { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; }
+/* Reset layout and the save note stay in the top right corner, whatever wraps beside them. */
+#toolbar { position: relative; padding-right: 128px; }
+#resetLayout { position: absolute; top: 8px; right: 10px; }
+#saved { position: absolute; right: 10px; bottom: 8px; margin: 0; pointer-events: none;
+  background: rgba(16,18,22,.8); padding: 2px 7px; border-radius: 4px; }
+.group button.armed { border-color: #f2b43c; background: #3a3020; color: #ffd27a; }
+#resetLayout { font-size: 11px; padding: 3px 7px; color: var(--muted); }
+#dockLeft { flex-direction: column; flex-wrap: nowrap; padding: 8px 6px; border-right: 1px solid var(--line);
+  background: var(--panel); overflow-y: auto; min-height: 0; }
+#dockBottom { padding: 8px 10px; border-top: 1px solid var(--line); background: var(--panel); }
+#dockLeft:empty, #dockBottom:empty { display: none; }
+body.moving-section .dock { display: flex; outline: 1px dashed #4b5262; outline-offset: -3px; min-height: 48px; min-width: 56px; }
+body.moving-section .dock.over { outline: 2px solid var(--todo); background: #172230; }
+/* An empty dock is hidden until a section is being moved; then it opens as a place to drop it. */
+body.moving-section #dockLeft, body.moving-section #dockBottom { display: flex; }
+body.moving-section #dockLeft:empty { min-width: 96px; }
+body.moving-section #dockBottom:empty { min-height: 56px; }
+body.moving-section .dock:empty::before { content: "Drop here"; margin: auto; color: var(--muted); font-size: 11px;
+  letter-spacing: .06em; text-transform: uppercase; pointer-events: none; }
+.group .label { cursor: grab; display: inline-flex; align-items: center; gap: 2px; user-select: none; }
+.group .label svg { width: 11px; height: 11px; opacity: .8; }
+/* where the moved section will land: a faint dashed outline of it */
+.group.moving { opacity: .35; outline: 2px dashed var(--tone); outline-offset: -2px; filter: saturate(.4); }
+.group .row { display: flex; gap: 3px; }
+.paint-class button[data-class="sheer"].on { border-color: #ffc440; background: #3a3020; color: #ffd27a; }
+#dockLeft .group { flex-direction: column; flex-wrap: nowrap; align-items: stretch; padding: 6px; }
+/* In the side panel a section is as wide as the panel, whatever width it was given in a bar. */
+#dockLeft > .group { width: auto !important; max-width: 100%; min-width: 0; }
+#dockLeft { overflow-x: hidden; }
+#dockLeft .group .label { margin: 0 0 4px; }
+#dockLeft .group button { justify-content: flex-start; overflow: hidden; min-width: 0; }
+#dockLeft .group kbd { margin-left: auto; }
+#dockLeft .group .divider { width: auto; height: 1px; margin: 4px 2px; align-self: auto; }
+#dockLeft .group input[type=range] { width: 100%; }
+#dockLeft .group .row button { flex: 1; justify-content: center; }
+#viewport { position: relative; min-height: 0; overflow: hidden; background: #101216; }
+canvas#big { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#emptyNote { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+#emptyNote[hidden] { display: none; }
+#hint { position: absolute; left: 10px; bottom: 8px; color: var(--muted); font-size: 11px; pointer-events: none;
+  background: rgba(16,18,22,.8); padding: 3px 7px; border-radius: 4px; }
+#below { border-top: 1px solid var(--line); padding: 8px 12px; display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
+#previews { display: flex; gap: 8px; }
+#previews figure { margin: 0; text-align: center; }
+#previews canvas { image-rendering: pixelated; border: 1px solid var(--line); display: block; max-height: 140px; }
+#previews figcaption { color: var(--muted); font-size: 10px; margin-top: 2px; }
+#info { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+#below { min-width: 0; }
+#twins button { white-space: normal; text-align: left; max-width: 100%; }
+#info b { color: var(--text); }
+#side { border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+#filters { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px; border-bottom: 1px solid var(--line); }
+#filters .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 9px; font-size: 11px;
+  border-radius: 999px; background: transparent; border: 1px solid var(--line); color: var(--muted); }
+#filters .chip:hover { color: var(--text); border-color: #4b5262; }
+#filters .chip .count { min-width: 20px; padding: 1px 6px; border-radius: 999px; background: var(--panel-2); color: var(--text);
+  font-variant-numeric: tabular-nums; text-align: center; }
+#filters .chip.on { color: #0d1117; background: var(--chip, var(--todo)); border-color: var(--chip, var(--todo)); font-weight: 600; }
+#filters .chip.on .count { background: rgba(13, 17, 23, .25); color: #0d1117; }
+#filters .chip.empty { opacity: .45; }
+#grid { overflow: auto; flex: 1; padding: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  gap: 6px; align-content: start; }
+.card { background: var(--panel); border: 2px solid transparent; border-radius: 6px; padding: 4px; cursor: pointer; }
+.card.done { border-color: var(--ok); }
+/* the card being edited: a thick red edge, a glow, and a tag saying so */
+.card.current { box-shadow: 0 0 0 3px var(--accent), 0 0 22px rgba(255, 70, 70, .45); z-index: 1; }
+.card.current::before { content: "EDITING"; position: absolute; left: 6px; bottom: 24px; padding: 1px 6px; border-radius: 4px;
+  background: var(--accent); color: #fff; font-size: 9px; font-weight: 700; letter-spacing: .08em; z-index: 2; }
+@keyframes card-focus { 0% { box-shadow: 0 0 0 3px var(--accent), 0 0 0 0 rgba(255, 70, 70, .8); } 100% { box-shadow: 0 0 0 3px var(--accent), 0 0 0 14px rgba(255, 70, 70, 0); } }
+.card.current.focus-pulse { animation: card-focus 800ms var(--ease, ease) 2; }
+.card canvas { width: 100%; image-rendering: pixelated; display: block; background: #2a2e37; }
+.card .tag { font-size: 10px; margin-top: 3px; display: flex; justify-content: space-between; align-items: center; color: var(--muted); }
+.card { position: relative; }
+.card .correct { position: absolute; top: 6px; right: 6px; padding: 2px 7px; font-size: 13px; line-height: 1.2;
+  background: rgba(20,22,26,.85); border-color: var(--ok); color: var(--ok); }
+.card .correct:hover { background: var(--ok); color: #10161a; }
+.card .undo-verdict { border-color: var(--muted); color: var(--muted); }
+.card .still-right { right: 40px; border-color: #f2b43c; color: #f2b43c; }
+.card .still-right:hover { background: #f2b43c; color: #10161a; }
+.still-right-inline { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; font-size: 12px; border-radius: 6px;
+  border: 1px solid #f2b43c; background: #3a3020; color: #ffd27a; vertical-align: middle; }
+.still-right-inline svg.icon { width: 13px; height: 13px; }
+.card { user-select: none; }
+.card.selected { outline: 2px solid var(--todo); outline-offset: 1px; }
+.card.selected::after { content: ""; position: absolute; left: 6px; top: 6px; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--todo) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230d1117' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 12.5 4.5 4.5L19 7'/%3E%3C/svg%3E") center / 12px no-repeat; }
+#modActions .primary { border-color: var(--ok); color: var(--ok); }
+.card .undo-verdict:hover { background: var(--muted); color: #10161a; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; vertical-align: middle; }
+.st-todo { background: var(--todo); } .st-auto-ok { background: var(--ok); } .st-edited { background: var(--edited); }
+.st-no-glass { background: var(--none); } .st-copied { background: #b07cff; }
+.card.suggested:not(.done) { border-color: #b07cff; border-style: dashed; }
+.card.recheck { box-shadow: 0 0 0 2px #f2b43c; }
+.recheck-tag { color: #f2b43c; }
+.from-label.votes-split { color: #ffb86b; }
+.inline-link { background: transparent; border: 0; padding: 0 2px; color: var(--todo); text-decoration: underline; font-size: 12px; }
+.from-label { color: #c9a6ff; }
+#twins { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+#twins button { font-size: 11px; padding: 3px 7px; }
+#twins button.armed { border-color: var(--accent); background: #3a2124; }
+#legend { color: var(--muted); font-size: 11px; padding: 7px 8px; border-top: 1px solid var(--line); display: flex; gap: 10px; flex-wrap: wrap; }
+#saved { font-size: 11px; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+#toast { position: fixed; left: 50%; top: 60px; background: #2b2f39; border: 1px solid var(--line); z-index: 900;
+  padding: 7px 14px; border-radius: 8px; font-size: 12px; pointer-events: none; }
+#help { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 800; }
+#help[hidden] { display: none; }
+#help > div { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px 20px; max-width: 660px;
+  max-height: 90vh; overflow: auto; }
+#help table { border-collapse: collapse; font-size: 12px; }
+#help td { padding: 3px 10px 3px 0; vertical-align: top; }
+#help td:first-child { font-family: var(--mono); color: var(--todo); white-space: nowrap; }
+
+/* ===== motion ===== */
+:root { --ease: cubic-bezier(.2, .8, .2, 1); --ease-back: cubic-bezier(.34, 1.56, .64, 1); --fast: 120ms; --mid: 220ms; --slow: 420ms; }
+button, .chip, .mod, .card, .group, .dock, input, #modFilter button {
+  transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease),
+              box-shadow var(--mid) var(--ease), transform var(--fast) var(--ease), opacity var(--mid) var(--ease); }
+button:hover { transform: translateY(-1px); }
+button:active { transform: translateY(0) scale(.95); transition-duration: 60ms; }
+button svg.icon { transition: transform var(--mid) var(--ease-back); }
+button:hover svg.icon { transform: scale(1.12); }
+button.on svg.icon { transform: scale(1.06); }
+.group button.on { box-shadow: 0 0 0 1px color-mix(in srgb, var(--tone) 40%, transparent), 0 4px 14px -6px var(--tone); }
+
+/* cards: fly in, lift on hover, bounce when their verdict changes */
+@keyframes card-in { from { opacity: 0; transform: translateY(10px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes card-pop { 0% { transform: scale(1); } 35% { transform: scale(1.06); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 55%, transparent); } 100% { transform: scale(1); } }
+.card.enter { animation: card-in var(--slow) var(--ease) both; animation-delay: var(--enter-delay, 0ms); }
+.card:hover { transform: translateY(-3px); box-shadow: 0 10px 24px -12px rgba(0, 0, 0, .8); }
+.card.pop { animation: card-pop 420ms var(--ease-back); }
+/* a jump lands: the rest of the list dims, the card rings in yellow and says it is the one */
+#grid .card { transition: opacity var(--mid) var(--ease), filter var(--mid) var(--ease), transform var(--mid) var(--ease), box-shadow var(--mid) var(--ease); }
+#grid.spotlight .card:not(.jumped) { opacity: .25; filter: saturate(.3); }
+@keyframes jump-ring { 0% { box-shadow: 0 0 0 4px var(--jump), 0 0 0 0 color-mix(in srgb, var(--jump) 90%, transparent); }
+  100% { box-shadow: 0 0 0 4px var(--jump), 0 0 0 22px color-mix(in srgb, var(--jump) 0%, transparent); } }
+.card.jumped { z-index: 3; animation: jump-ring 850ms var(--ease) 4; box-shadow: 0 0 0 4px var(--jump); }
+.jump-mark { position: absolute; left: 50%; top: 38%; transform: translate(-50%, -50%); z-index: 4; pointer-events: none;
+  padding: 3px 10px; border-radius: 999px; background: var(--jump); color: #1a1500; font-size: 11px; font-weight: 800;
+  letter-spacing: .08em; white-space: nowrap; box-shadow: 0 6px 16px rgba(0, 0, 0, .6);
+  animation: jump-mark-in 360ms var(--ease-back) both, jump-mark-bob 520ms var(--ease) 360ms infinite alternate; }
+.jump-mark.leaving { animation: jump-mark-out 260ms var(--ease) both; }
+@keyframes jump-mark-in { from { opacity: 0; transform: translate(-50%, -50%) scale(.4); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
+@keyframes jump-mark-bob { from { transform: translate(-50%, -50%); } to { transform: translate(-50%, calc(-50% - 4px)); } }
+@keyframes jump-mark-out { to { opacity: 0; transform: translate(-50%, -50%) scale(.6); } }
+.card .correct { transition: transform var(--mid) var(--ease-back), background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
+.card .correct:hover { transform: scale(1.15); }
+@keyframes tick-in { from { transform: scale(0) rotate(-90deg); } to { transform: scale(1) rotate(0); } }
+.card.selected::after { animation: tick-in 260ms var(--ease-back); }
+.card canvas { transition: filter var(--mid) var(--ease); }
+.card:hover canvas { filter: brightness(1.08); }
+
+/* mod list: rows slide in, the bar grows, a finished mod flashes green */
+@keyframes row-in { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+@keyframes just-done { 0% { box-shadow: 0 0 0 0 rgba(79, 196, 122, .7); } 100% { box-shadow: 0 0 0 10px rgba(79, 196, 122, 0); } }
+.mod.enter { animation: row-in var(--mid) var(--ease) both; animation-delay: var(--enter-delay, 0ms); }
+.mod.just-done { animation: just-done 900ms var(--ease); }
+.mod:hover { transform: translateX(2px); }
+.bar span { transition: width var(--slow) var(--ease); }
+
+/* chips: the count jumps when it changes */
+@keyframes bump { 0% { transform: scale(1); } 40% { transform: scale(1.35); } 100% { transform: scale(1); } }
+#filters .count.bump { animation: bump 320ms var(--ease-back); }
+
+/* a verdict waiting for its second press breathes */
+@keyframes armed { 0%, 100% { box-shadow: 0 0 0 0 rgba(242, 180, 60, .55); } 50% { box-shadow: 0 0 0 5px rgba(242, 180, 60, 0); } }
+button.armed { animation: armed 900ms ease-in-out infinite; }
+
+/* the picture changes softly when another window opens */
+@keyframes picture-in { from { opacity: .25; filter: blur(2px); } to { opacity: 1; filter: none; } }
+canvas#big.swap { animation: picture-in 200ms var(--ease); }
+@keyframes fade-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+#info > *, #previews figure, #twins { animation: fade-up var(--mid) var(--ease) both; }
+#previews figure:nth-child(2) { animation-delay: 30ms; } #previews figure:nth-child(3) { animation-delay: 60ms; } #previews figure:nth-child(4) { animation-delay: 90ms; }
+
+/* toast slides down, the save note blinks in */
+#toast { opacity: 0; transform: translate(-50%, -10px) scale(.96); transition: opacity var(--mid) var(--ease), transform var(--mid) var(--ease-back);
+  box-shadow: 0 12px 30px -10px rgba(0, 0, 0, .8); }
+#toast.show { opacity: 1; transform: translate(-50%, 0) scale(1); }
+@keyframes saved-in { from { opacity: 0; transform: translateY(6px); } 20% { opacity: 1; transform: none; } 80% { opacity: 1; } to { opacity: .55; } }
+#saved.flash { animation: saved-in 2400ms var(--ease) both; }
+
+/* the keys dialog opens and closes */
+#help { opacity: 0; transition: opacity var(--mid) var(--ease); backdrop-filter: blur(0px); }
+#help.open { opacity: 1; backdrop-filter: blur(3px); }
+#help > div { transform: translateY(12px) scale(.96); transition: transform var(--mid) var(--ease-back); box-shadow: 0 30px 60px -20px rgba(0, 0, 0, .9); }
+#help.open > div { transform: none; }
+
+/* moving a section: a ghost of its own, a dock that lights up, a section that settles */
+#dragGhost { position: fixed; top: -200px; left: -200px; padding: 6px 12px; border-radius: 8px; font-size: 11px; font-weight: 600;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--tone); border: 1px solid var(--tone); pointer-events: none;
+  background: color-mix(in srgb, var(--tone) 18%, var(--panel)); box-shadow: 0 10px 30px -8px rgba(0, 0, 0, .9); display: inline-flex; gap: 6px; align-items: center; }
+#dragGhost svg { width: 12px; height: 12px; }
+@keyframes settle { 0% { transform: scale(.94); opacity: .5; } 60% { transform: scale(1.02); opacity: 1; } 100% { transform: none; } }
+.group.settle { animation: settle 360ms var(--ease-back); }
+.dock { transition: background-color var(--mid) var(--ease), outline-color var(--mid) var(--ease); }
+
+/* ===== the page's own pieces, not the browser's ===== */
+#tip { position: fixed; z-index: 1000; max-width: 280px; padding: 6px 9px; border-radius: 7px; font-size: 12px; line-height: 1.35;
+  color: var(--text); background: #262b35; border: 1px solid #3c4352; box-shadow: 0 12px 28px -10px rgba(0, 0, 0, .85);
+  pointer-events: none; opacity: 0; transform: translateY(4px) scale(.97); transform-origin: top center;
+  transition: opacity 140ms var(--ease), transform 180ms var(--ease-back); }
+#tip.show { opacity: 1; transform: none; }
+#tip.above { transform-origin: bottom center; }
+#tip kbd { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px; border: 1px solid #4b5262; background: #1d2027; color: var(--text); }
+#tip::before { content: ""; position: absolute; left: var(--arrow, 50%); top: -5px; width: 8px; height: 8px; background: #262b35;
+  border-left: 1px solid #3c4352; border-top: 1px solid #3c4352; transform: translateX(-50%) rotate(45deg); }
+#tip.above::before { top: auto; bottom: -5px; transform: translateX(-50%) rotate(225deg); }
+
+input[type=range] { -webkit-appearance: none; appearance: none; height: 18px; background: transparent; cursor: pointer; --fill: 90%; }
+input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 4px;
+  background: linear-gradient(to right, var(--tone, var(--todo)) var(--fill), #343946 var(--fill)); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 50%;
+  background: #f2f4f8; border: 2px solid var(--tone, var(--todo)); box-shadow: 0 2px 6px rgba(0, 0, 0, .6);
+  transition: transform var(--fast) var(--ease-back); }
+input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.15); }
+input[type=range]:active::-webkit-slider-thumb { transform: scale(1.3); }
+input[type=range]::-moz-range-track { height: 4px; border-radius: 4px; background: #343946; }
+input[type=range]::-moz-range-progress { height: 4px; border-radius: 4px; background: var(--tone, var(--todo)); }
+input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: #f2f4f8; border: 2px solid var(--tone, var(--todo)); }
+
+.search { position: relative; }
+input[type=search] { -webkit-appearance: none; appearance: none; padding-left: 28px; padding-right: 26px; outline: none; }
+input[type=search]::-webkit-search-cancel-button, input[type=search]::-webkit-search-decoration { -webkit-appearance: none; display: none; }
+input[type=search]::placeholder { color: #6b7385; }
+input[type=search]:focus { border-color: var(--todo); box-shadow: 0 0 0 3px rgba(63, 182, 255, .18); }
+.search > svg.icon { position: absolute; left: 8px; top: 50%; width: 14px; height: 14px; transform: translateY(-50%); color: #6b7385; pointer-events: none; }
+.search .clear { position: absolute; right: 4px; top: 50%; transform: translateY(-50%) scale(.6); opacity: 0; pointer-events: none;
+  padding: 2px; border: 0; background: transparent; color: var(--muted); transition: opacity var(--fast) var(--ease), transform var(--mid) var(--ease-back); }
+.search .clear svg.icon { width: 14px; height: 14px; }
+.search.filled .clear { opacity: 1; transform: translateY(-50%) scale(1); pointer-events: auto; }
+
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--todo); outline-offset: 2px; border-radius: 6px; }
+::selection { background: rgba(63, 182, 255, .35); color: #fff; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+}
+
+#cardMenu { position: fixed; z-index: 950; min-width: 220px; padding: 5px; border-radius: 10px; background: #232832;
+  border: 1px solid #3c4352; box-shadow: 0 18px 40px -12px rgba(0, 0, 0, .9); opacity: 0; transform: scale(.92);
+  pointer-events: none; transition: opacity 140ms var(--ease), transform 200ms var(--ease-back); }
+#cardMenu.show { opacity: 1; transform: none; pointer-events: auto; }
+#cardMenu .menu-title { padding: 5px 9px 6px; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
+#cardMenu .menu-item { display: grid; grid-template-columns: 18px 1fr; column-gap: 9px; align-items: center; width: 100%; text-align: left;
+  padding: 7px 9px; border: 0; border-radius: 7px; background: transparent; color: var(--text); font-size: 13px; }
+#cardMenu .menu-item svg.icon { width: 16px; height: 16px; color: var(--item-tone); grid-row: span 2; }
+#cardMenu .menu-item small { grid-column: 2; color: var(--muted); font-size: 11px; }
+#cardMenu .menu-item:hover { background: color-mix(in srgb, var(--item-tone) 18%, transparent); transform: none; }
+#cardMenu .menu-separator { height: 1px; margin: 4px 6px; background: var(--line); }
+
+/* the "to look at" panel: slides in at the picture's corner, folds into a pill */
+#watch { position: absolute; right: 12px; bottom: 34px; width: 290px; max-height: 55%; display: flex; flex-direction: column;
+  background: #232832; border: 1px solid #3c4352; border-radius: 10px; box-shadow: 0 18px 40px -14px rgba(0, 0, 0, .9);
+  overflow: hidden; z-index: 20; transform: translateX(calc(100% + 24px)); opacity: 0;
+  transition: transform 320ms var(--ease-back), opacity 200ms var(--ease), width 260ms var(--ease); }
+#watch.open { transform: none; opacity: 1; }
+#watch.folded { width: 210px; }
+#watch.folded #watchList, #watch.folded #watchClear { display: none; }
+@keyframes nudge { 0%, 100% { transform: none; } 30% { transform: translateX(-8px); } 60% { transform: translateX(3px); } }
+#watch.open.nudge { animation: nudge 420ms var(--ease); }
+#watchHead { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 10px; border: 0; border-radius: 0;
+  background: transparent; color: var(--text); font-size: 12px; font-weight: 600; text-align: left; }
+#watchHead:hover { background: rgba(255, 255, 255, .04); transform: none; }
+#watchHead .watch-fold { margin-left: auto; display: inline-flex; color: var(--muted); }
+#watchHead .watch-fold svg.icon { width: 14px; height: 14px; }
+.watch-dot { width: 8px; height: 8px; border-radius: 50%; background: #f2b43c; box-shadow: 0 0 0 0 rgba(242, 180, 60, .6); animation: armed 1.6s ease-in-out infinite; }
+#watchList { overflow: auto; padding: 0 6px 4px; display: flex; flex-direction: column; gap: 3px; }
+.watch-item { display: flex; align-items: stretch; border-radius: 7px; animation: fade-up 240ms var(--ease) both; animation-delay: var(--enter-delay, 0ms); }
+.watch-item .watch-go { flex: 1; display: flex; align-items: center; gap: 8px; padding: 6px 7px; border: 0; background: transparent;
+  color: var(--text); text-align: left; min-width: 0; border-radius: 7px; }
+.watch-item .watch-go:hover { background: rgba(255, 255, 255, .06); transform: none; }
+.watch-item .watch-go svg.icon { width: 15px; height: 15px; flex: none; }
+.watch-item.recheck .watch-go svg.icon { color: #f2b43c; }
+.watch-item.copy .watch-go svg.icon { color: #c9a6ff; }
+.watch-item .watch-go span { display: flex; flex-direction: column; min-width: 0; }
+.watch-item b, .watch-item small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.watch-item b { font-size: 12px; font-weight: 500; }
+.watch-item small { color: var(--muted); font-size: 11px; }
+.watch-item .watch-drop { border: 0; background: transparent; color: var(--muted); padding: 0 6px; }
+.watch-item .watch-drop svg.icon { width: 12px; height: 12px; }
+.watch-item .watch-drop:hover { color: #ff9b9b; transform: none; }
+#watchClear { margin: 4px 10px 9px; align-self: flex-end; font-size: 11px; padding: 3px 9px; background: transparent; color: var(--muted); }
+
+/* the line to the server is down: say so, quietly */
+body.offline::after { content: "Reconnecting to the labeler..."; position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+  background: #3a2124; border: 1px solid var(--accent); color: #ffb3b3; padding: 5px 12px; border-radius: 8px; font-size: 12px; z-index: 999; }
+</style>
+</head>
+<body>
+<aside>
+  <header>
+    <h1>Window glass</h1>
+    <div class="search"><span data-search-icon></span><input type="search" id="search" placeholder="Find a mod"><button class="clear" id="searchClear" data-tip="Clear"></button></div>
+    <div id="modFilter"><button data-mods="all">All</button><button data-mods="todo">To do</button><button data-mods="recheck">Check again</button><button data-mods="done">Done</button></div>
+    <div class="totals" id="totals"></div>
+  </header>
+  <div id="mods"></div>
+  <div class="splitter" data-panel="mods" title="Drag to resize"></div>
+</aside>
+<main>
+  <div id="toolbar" class="dock" data-dock="top">
+    <div class="group" style="--tone: #3fb6ff" data-group="draw"><span class="label" title="Drag to move this section">Draw</span>
+      <button data-tool="brush" data-icon="brush" title="Brush (B). Left paints glass, right erases. Shift = straight line">Brush<kbd>B</kbd></button>
+      <button data-tool="rect" data-icon="box" title="Box (R). Drag to cover; left adds, right removes">Box<kbd>R</kbd></button>
+      <button data-tool="lasso" data-icon="lasso" title="Lasso (L). Drag a loop; left fills, right clears; Alt at release keeps only the inside">Lasso<kbd>L</kbd></button>
+      <button data-tool="polygon" data-icon="polygon" title="Polygon (P). Click corners; Enter, double-click or the first dot closes it">Polygon<kbd>P</kbd></button>
+      <button data-tool="wand" data-icon="wand" title="Magic fill (W). Fills the same colour around the click; hold and drag to keep going">Magic fill<kbd>W</kbd></button>
+      <button data-tool="tile" data-icon="tile" title="Fill tile (T). The whole 16x16 tile under the cursor">Tile<kbd>T</kbd></button>
+      <button data-tool="stamp" data-icon="stamp" title="Stamp (S). Left drag a box to copy it, then every left click pastes it there (the cursor is its centre). Right click or Esc drops the copy">Stamp<kbd>S</kbd></button>
+      <span class="divider"></span>
+      <span class="row paint-class"><button data-class="glass" data-icon="glassClass" title="Paint glass: light goes through (Q switches)">Glass<kbd>Q</kbd></button><button data-class="sheer" data-icon="sheer" title="Paint sheer curtain: light goes through in part (Q switches)">Sheer</button></span>
+      <button id="stampShape" data-icon="select" title="How the stamp picks what to copy: a box you drag, or a free shape you draw. Shift while dragging uses the other one."><span>Copy as: box</span></button>
+      <span class="divider"></span>
+      <span class="row"><button data-size="1" data-icon="size1" title="Brush 1 px ([ and ] change it)"></button><button data-size="2" data-icon="size2" title="Brush 2 px"></button><button data-size="4" data-icon="size4" title="Brush 4 px"></button></span>
+    </div>
+    <div class="group" style="--tone: #b48cff" data-group="view"><span class="label" title="Drag to move this section">View</span>
+      <button data-view="red" data-icon="viewRed" title="The art with the glass in red stripes">Red<kbd>1</kbd></button>
+      <button data-view="bw" data-icon="viewBlackWhite" title="Glass white on black">B&amp;W<kbd>2</kbd></button>
+      <button data-view="art" data-icon="viewArt" title="The art alone">Art<kbd>3</kbd></button>
+      <button data-view="pair" data-icon="viewPair" title="The pair picture (night or rain)">Pair<kbd>4</kbd></button>
+      <button id="xray" data-icon="xray" title="X-ray (X): dim the art, labels solid">X-ray<kbd>X</kbd></button>
+      <input type="range" id="alpha" min="10" max="100" value="90" title="Overlay strength">
+      <button id="fit" data-icon="fit" title="Fit the picture to the view">Fit<kbd>F</kbd></button>
+    </div>
+    <div class="group" style="--tone: #9aa1b2" data-group="edit"><span class="label" title="Drag to move this section">Edit</span>
+      <button id="undo" data-icon="undo" title="Undo (Z)">Undo<kbd>Z</kbd></button>
+      <button id="redo" data-icon="redo" title="Redo (Ctrl+Y)">Redo<kbd>Ctrl+Y</kbd></button>
+      <button id="copyAll" data-icon="copy" title="Copy this window's whole glass (Ctrl+Shift+C)">Copy all</button>
+      <button id="pasteAll" data-icon="paste" title="Paste a copied whole glass here (Ctrl+Shift+V)">Paste all</button>
+      <button id="skipClear" data-icon="skipClear" title="Paint never lands on the clear pixels outside the window. Clear panes inside the frame can be painted. Erase always works.">Skip clear</button>
+    </div>
+    <div class="group" style="--tone: #4fc47a" data-group="verdict"><span class="label" title="Drag to move this section">Verdict</span>
+      <button class="ok" id="accept" data-icon="check" title="The red is right as it is">Correct<kbd>A</kbd></button>
+      <button id="noGlass" data-icon="noGlass" title="This window has no glass">No glass<kbd>N</kbd></button>
+      <button id="reset" data-icon="reset" title="Back to the automatic answer, forgets the label">Back to auto<kbd>Shift+R</kbd></button>
+    </div>
+    <div class="group" style="--tone: #f2b43c" data-group="go"><span class="label" title="Drag to move this section">Go</span>
+      <span class="row"><button id="prev" data-icon="previous" title="Previous window (Left arrow)"></button><button id="next" data-icon="next" title="Next window (Right arrow)"></button></span>
+      <button id="nextTodo" data-icon="nextTodo" title="Next window still to check (Down arrow)">Next to check<kbd>↓</kbd></button>
+      <button id="helpButton" data-icon="keys" title="All keys (?)">Keys</button>
+    </div>
+    <button id="resetLayout" class="dock-tail" data-icon="layout" title="Put every section back where it started">Reset layout</button>
+  </div>
+  <div id="work">
+    <div id="dockLeft" class="dock" data-dock="left"></div>
+    <div id="editor">
+      <div class="splitter" data-panel="dock-left" title="Drag to resize the tool panel"></div>
+      <div id="viewport"><canvas id="big"></canvas><span id="saved"></span>
+        <div id="watch" hidden><button id="watchHead"><span class="watch-dot"></span><span id="watchTitle"></span><span class="watch-fold"></span></button>
+          <div id="watchList"></div><button id="watchClear">Clear all</button></div><div id="emptyNote">Pick a mod on the left.</div>
+        <div id="hint">Left adds · right removes · wheel zooms · Space or middle drag pans · H hides the red · ? keys</div></div>
+      <div id="dockBottom" class="dock" data-dock="bottom"></div>
+      <div id="below">
+        <div id="previews"></div>
+        <div id="info"></div>
+      </div>
+    </div>
+    <div id="side">
+      <div class="splitter" data-panel="side" title="Drag to resize"></div>
+      <div id="filters"></div>
+      <div id="modActions"></div>
+      <div id="grid"></div>
+      <div id="legend">
+        <span><i class="dot st-todo"></i> to check</span>
+        <span><i class="dot st-auto-ok"></i> auto right</span>
+        <span><i class="dot st-edited"></i> auto wrong, fixed</span>
+        <span><i class="dot st-no-glass"></i> no glass</span>
+        <span><i class="dot" style="background:#ffc440"></i> sheer curtain (amber)</span>
+        <span><i class="dot st-copied"></i> copied from a twin</span>
+      </div>
+    </div>
+  </div>
+</main>
+<div id="toast"></div>
+<div id="help" hidden><div>
+  <h1>Keys (as in HF Studio)</h1>
+  <table>
+    <tr><td>Left / right button</td><td>Add glass / remove glass, with every tool</td></tr>
+    <tr><td>B</td><td>Brush, a square of 1, 2 or 4 px from the cursor. Shift at the start locks a straight line</td></tr>
+    <tr><td>R</td><td>Box: drag to cover, applied when you let go</td></tr>
+    <tr><td>L</td><td>Lasso: drag a loop, filled when you let go. Alt at release keeps glass only inside it</td></tr>
+    <tr><td>P</td><td>Polygon: click corners; Enter, double-click or the first dot closes it</td></tr>
+    <tr><td>W</td><td>Magic fill: the same colour around the click (tolerance 60), stops at see-through pixels. Hold and drag to keep filling the same material</td></tr>
+    <tr><td>T</td><td>Fill the whole 16x16 tile under the cursor</td></tr>
+    <tr><td>S</td><td>Stamp: drag a box to copy (the "Copy as" button switches to a free shape; Shift while dragging uses the other), then every left click pastes the copy there with the cursor at its centre; right click or Esc drops it. Shift+drag while holding a copy picks a new one. The copy stays when you change window</td></tr>
+    <tr><td>Ctrl+C / Ctrl+V</td><td>Copy / paste the 16x16 tile under the cursor</td></tr>
+    <tr><td>Ctrl+Shift+C / V</td><td>Copy / paste the whole window's glass (into another window of the same size)</td></tr>
+    <tr><td>[ ]</td><td>Brush size</td></tr>
+    <tr><td>Q</td><td>Paint glass or sheer curtain (light through in part, shown amber). Every tool paints what is chosen</td></tr>
+    <tr><td>Z, Ctrl+Z</td><td>Undo · Ctrl+Y or Ctrl+Shift+Z redo</td></tr>
+    <tr><td>1 2 3 4</td><td>Red · black and white · art · the pair picture</td></tr>
+    <tr><td>X · H held</td><td>X-ray · hide the red while held</td></tr>
+    <tr><td>Wheel · Space drag · F</td><td>Zoom on the cursor · pan · fit</td></tr>
+    <tr><td>Section name</td><td>Drag it to move the section to the top bar, the left side or under the picture. Drag a section's bottom-right corner to size it; double-click its name to let it fit again. Drag a panel's edge to resize the panel</td></tr>
+    <tr><td>A</td><td>Auto is right</td></tr>
+    <tr><td>N</td><td>No glass</td></tr>
+    <tr><td>Shift+R</td><td>Back to the automatic answer, forgets the label</td></tr>
+    <tr><td>← → ↓</td><td>Previous · next · next to check</td></tr>
+    <tr><td>Esc</td><td>Drop the stamp copy, cancel polygon or lasso</td></tr>
+  </table>
+  <p style="color:var(--muted)">Every edit is saved at once to its own file under glass-labels. A window you painted counts as "auto wrong, fixed" unless the paint ends up exactly the automatic answer.</p>
+</div></div>
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+// ---- icons: drawn in SVG, coloured by the button's text ----
+const ICON_PATHS = {
+  brush: '<path d="M18.4 2.6a2 2 0 0 1 2.9 2.9L11 15.8 8.2 13z"/><path d="M8 13.5c-2 0-3.5 1.5-3.5 3.5 0 1.6-1 2.6-2.5 3 1 1 2.5 1.5 4 1.5 3 0 5-2 5-5"/>',
+  box: '<rect x="4" y="4" width="16" height="16" rx="1" stroke-dasharray="3 2.5"/>',
+  lasso: '<ellipse cx="12" cy="9" rx="8" ry="5.5"/><path d="M7.5 13.5c-1.5 2.5.5 4.5 2.5 4.5s2.5 2 1.5 3.5"/>',
+  polygon: '<path d="M12 3l8.5 6-3 11h-11l-3-11z"/><circle cx="12" cy="3" r="1.3" fill="currentColor"/>',
+  wand: '<path d="M4 20 14.5 9.5"/><path d="M15 3v3M15 13v-1M19 8h2M9 8h2M18 5l1.5-1.5M18 11l1.5 1.5M12 5l-1.5-1.5"/>',
+  tile: '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 12h16M12 4v16"/><rect x="4.5" y="4.5" width="7" height="7" fill="currentColor" stroke="none" opacity=".45"/>',
+  stamp: '<path d="M9 3h6v5l3 3v4H6v-4l3-3z"/><path d="M5 20h14"/>',
+  select: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/>',
+  size1: '<rect x="10.5" y="10.5" width="3" height="3" fill="currentColor"/>',
+  size2: '<rect x="9" y="9" width="6" height="6" fill="currentColor"/>',
+  size4: '<rect x="6" y="6" width="12" height="12" fill="currentColor"/>',
+  viewRed: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="7" y="7" width="10" height="10" fill="#ff4646" stroke="none"/>',
+  viewBlackWhite: '<rect x="4" y="4" width="16" height="16" rx="2" fill="#000"/><rect x="7" y="7" width="10" height="10" fill="#fff" stroke="none"/>',
+  viewArt: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/>',
+  viewPair: '<rect x="3" y="3" width="12" height="12" rx="2"/><rect x="9" y="9" width="12" height="12" rx="2" fill="currentColor" fill-opacity=".25"/>',
+  xray: '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/>',
+  fit: '<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/><rect x="8" y="8" width="8" height="8" rx="1"/>',
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
+  redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>',
+  copy: '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
+  paste: '<rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 2h6v4H9z"/><path d="M9 12h6M9 16h4"/>',
+  skipClear: '<rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="2.5 2.5"/><path d="M5 19 19 5"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7"/>',
+  noGlass: '<circle cx="12" cy="12" r="8.5"/><path d="M6 18 18 6"/>',
+  reset: '<path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/>',
+  previous: '<path d="m15 18-6-6 6-6"/>',
+  next: '<path d="m9 18 6-6-6-6"/>',
+  nextTodo: '<path d="M12 4v13"/><path d="m6 11 6 6 6-6"/><path d="M6 21h12"/>',
+  keys: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
+  grip: '<circle cx="9" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.4" fill="currentColor" stroke="none"/>',
+  layout: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 9v12"/>',
+  takeBack: '<path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/>',
+  glassClass: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 15l6-6M12 17l5-5" opacity=".7"/>',
+  sheer: '<path d="M5 4c2 3-2 6 0 9s-2 6 0 7M10 4c2 3-2 6 0 9s-2 6 0 7M15 4c2 3-2 6 0 9s-2 6 0 7M19 4v16" />',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
+  clear: '<path d="M6 6l12 12M18 6 6 18"/>',
+};
+function icon(name) {
+  return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ""}</svg>`;
+}
+document.querySelectorAll("[data-icon]").forEach(button => button.insertAdjacentHTML("afterbegin", icon(button.dataset.icon)));
+
+// ---- the search box's own pieces ----
+document.querySelector("[data-search-icon]").outerHTML = icon("search");
+document.querySelector("#searchClear").innerHTML = icon("clear");
+document.querySelector("#searchClear").onclick = () => { const box = document.querySelector("#search"); box.value = ""; box.dispatchEvent(new Event("input")); box.focus(); };
+document.querySelector("#search").addEventListener("input", event => event.target.parentElement.classList.toggle("filled", !!event.target.value));
+
+// ---- tooltips of the page's own, never the browser's ----
+const tip = document.createElement("div"); tip.id = "tip"; document.body.appendChild(tip);
+let tipTarget = null, tipTimer = null;
+function adoptTitles(root) {
+  if (root.nodeType !== 1) return;
+  const elements = root.hasAttribute && root.hasAttribute("title") ? [root, ...root.querySelectorAll("[title]")] : [...root.querySelectorAll("[title]")];
+  for (const element of elements) { element.dataset.tip = element.getAttribute("title"); element.removeAttribute("title"); }
+}
+adoptTitles(document.body);
+new MutationObserver(changes => {
+  for (const change of changes) {
+    if (change.type === "attributes" && change.target.hasAttribute("title")) adoptTitles(change.target);
+    for (const node of change.addedNodes || []) adoptTitles(node);
+  }
+}).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["title"] });
+function hideTip() { clearTimeout(tipTimer); tipTarget = null; tip.classList.remove("show"); }
+function showTip(element) {
+  const text = element.dataset.tip; if (!text) return;
+  const key = element.querySelector(":scope > kbd");
+  tip.textContent = text;
+  if (key && !text.includes(key.textContent)) tip.insertAdjacentHTML("beforeend", `<kbd>${key.textContent}</kbd>`);
+  tip.classList.remove("above");
+  const box = element.getBoundingClientRect();
+  tip.style.left = "0px"; tip.style.top = "0px";
+  const width = tip.offsetWidth, height = tip.offsetHeight;
+  let left = box.left + box.width / 2 - width / 2;
+  left = Math.max(8, Math.min(window.innerWidth - width - 8, left));
+  let top = box.bottom + 9;
+  if (top + height > window.innerHeight - 8) { top = box.top - height - 9; tip.classList.add("above"); }
+  tip.style.left = `${left}px`; tip.style.top = `${top}px`;
+  tip.style.setProperty("--arrow", `${Math.max(10, Math.min(width - 10, box.left + box.width / 2 - left))}px`);
+  requestAnimationFrame(() => tip.classList.add("show"));
+}
+document.addEventListener("pointerover", event => {
+  const element = event.target.closest && event.target.closest("[data-tip]");
+  if (element === tipTarget) return;
+  hideTip();
+  if (!element) return;
+  tipTarget = element;
+  tipTimer = setTimeout(() => { if (tipTarget === element) showTip(element); }, 380);
+});
+["pointerdown", "wheel", "keydown", "dragstart"].forEach(name => document.addEventListener(name, hideTip, true));
+window.addEventListener("blur", hideTip);
+
+// ---- the slider fills to where its thumb is ----
+function paintSlider(slider) { slider.style.setProperty("--fill", `${(slider.value - slider.min) / (slider.max - slider.min) * 100}%`); }
+document.querySelectorAll("input[type=range]").forEach(slider => { paintSlider(slider); slider.addEventListener("input", () => paintSlider(slider)); });
+
+
+// ---- press twice: the first press arms a button and puts a Cancel beside it; the second does it.
+// Cancel, Esc, another window, or six quiet seconds call it off.
+function armTwice(button, pendingText, action) {
+  if (button.classList.contains("armed")) { disarmButton(button); action(); return; }
+  cancelAllArmed();
+  button.dataset.original = button.innerHTML;
+  button.classList.add("armed", "verdict-armed");
+  const symbol = button.querySelector("svg"), key = button.querySelector("kbd");
+  button.innerHTML = (symbol ? symbol.outerHTML : "") + `<span>${pendingText}</span>` + (key ? key.outerHTML : "");
+  const cancel = document.createElement("button");
+  cancel.className = "cancel-armed";
+  cancel.dataset.tip = "Cancel (Esc)";
+  cancel.innerHTML = icon("clear") + "<span>Cancel</span>";
+  cancel.onclick = event => { event.stopPropagation(); disarmButton(button); };
+  button.after(cancel);
+  button.cancelButton = cancel;
+  clearTimeout(button.disarmTimer);
+  button.disarmTimer = setTimeout(() => disarmButton(button), 6000);
+}
+function disarmButton(button) {
+  if (!button.classList.contains("armed")) return;
+  clearTimeout(button.disarmTimer);
+  button.classList.remove("armed", "verdict-armed");
+  if (button.dataset.original) button.innerHTML = button.dataset.original;
+  if (button.cancelButton) { button.cancelButton.remove(); button.cancelButton = null; }
+}
+function cancelAllArmed() { document.querySelectorAll(".verdict-armed").forEach(disarmButton); }
+
+// ---- motion helpers ----
+function replay(element, className) { if (!element) return; element.classList.remove(className); void element.offsetWidth; element.classList.add(className); }
+
+// ---- sections: drag one by its name to the top bar, the left side or under the picture ----
+const LAYOUT_KEY = "windowGlassLabelerLayout";
+// The author's own arrangement (16 Oct 2026): views on top, edit, verdict and moving on down the
+// left side, the drawing tools under the picture.
+const DEFAULT_LAYOUT = { top: ["view"], left: ["edit", "verdict", "go"], bottom: ["draw"] };
+const docks = [...document.querySelectorAll(".dock")];
+const sections = [...document.querySelectorAll(".group[data-group]")];
+let movingSection = null;
+// Moves glide: every section's place is noted, the change is made, and each section is then slid
+// (and stretched) from where it was to where it now is.
+function glide(change) {
+  const before = new Map(sections.map(section => [section, section.getBoundingClientRect()]));
+  change();
+  for (const section of sections) {
+    const from = before.get(section), to = section.getBoundingClientRect();
+    if (!to.width || !from.width) continue;
+    const dx = from.left - to.left, dy = from.top - to.top, sx = from.width / to.width, sy = from.height / to.height;
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1 && Math.abs(sx - 1) < .01 && Math.abs(sy - 1) < .01) continue;
+    section.getAnimations().filter(animation => animation.id === "glide").forEach(animation => animation.cancel());
+    const animation = section.animate(
+      [{ transformOrigin: "top left", transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})` }, { transformOrigin: "top left", transform: "none" }],
+      { duration: 260, easing: "cubic-bezier(.2, .8, .2, 1)" });
+    animation.id = "glide";
+  }
+}
+function placeSection(dock, section, before) {
+  const tail = dock.querySelector(":scope > .dock-tail");
+  dock.insertBefore(section, before || tail || null);
+}
+function applyLayout(layout) {
+  const placed = new Set();
+  for (const dock of docks) {
+    for (const key of layout[dock.dataset.dock] || []) {
+      const section = sections.find(s => s.dataset.group === key);
+      if (section && !placed.has(key)) { placeSection(dock, section); placed.add(key); }
+    }
+  }
+  for (const section of sections) if (!placed.has(section.dataset.group)) placeSection(docks[0], section);
+  afterLayoutChange();
+}
+function currentLayout() {
+  const layout = {};
+  for (const dock of docks) layout[dock.dataset.dock] = [...dock.querySelectorAll(":scope > .group")].map(s => s.dataset.group);
+  return layout;
+}
+function saveLayout() { try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(currentLayout())); } catch {} }
+function savedLayout() { try { return JSON.parse(localStorage.getItem(LAYOUT_KEY)) || DEFAULT_LAYOUT; } catch { return DEFAULT_LAYOUT; } }
+function afterLayoutChange() {
+  // the picture's room changed: fit it again
+  requestAnimationFrame(() => {
+    if (typeof updateCompact === "function") updateCompact(); if (typeof state !== "undefined" && state.index >= 0) { fitView(); render(); } });
+}
+// The section after which the pointer sits, in reading order for a row, top to bottom for a column.
+function sectionAfterPointer(dock, x, y) {
+  const others = [...dock.querySelectorAll(":scope > .group")].filter(s => s !== movingSection);
+  const column = getComputedStyle(dock).flexDirection === "column";
+  for (const other of others) {
+    const r = other.getBoundingClientRect();
+    if (column ? y < r.top + r.height / 2 : (y < r.top || (y < r.bottom && x < r.left + r.width / 2))) return other;
+  }
+  return null;
+}
+for (const section of sections) {
+  const label = section.querySelector(".label");
+  label.insertAdjacentHTML("afterbegin", icon("grip"));
+  label.addEventListener("mousedown", () => { section.draggable = true; });
+  section.addEventListener("dragstart", event => {
+    if (!section.draggable) return;
+    movingSection = section;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", section.dataset.group);
+    const ghost = document.createElement("div"); ghost.id = "dragGhost";
+    ghost.style.setProperty("--tone", getComputedStyle(section).getPropertyValue("--tone"));
+    ghost.innerHTML = icon("grip") + section.querySelector(".label").textContent;
+    document.body.appendChild(ghost);
+    event.dataTransfer.setDragImage(ghost, 14, 14);
+    setTimeout(() => ghost.remove(), 0);
+    requestAnimationFrame(() => { section.classList.add("moving"); document.body.classList.add("moving-section"); });
+  });
+  section.addEventListener("dragend", () => {
+    replay(section, "settle");
+    section.draggable = false; section.classList.remove("moving");
+    document.body.classList.remove("moving-section");
+    docks.forEach(d => d.classList.remove("over"));
+    movingSection = null;
+    saveLayout(); afterLayoutChange();
+  });
+}
+window.addEventListener("mouseup", () => sections.forEach(s => { if (s !== movingSection) s.draggable = false; }));
+for (const dock of docks) {
+  dock.addEventListener("dragover", event => {
+    if (!movingSection) return;
+    event.preventDefault();
+    docks.forEach(d => d.classList.toggle("over", d === dock));
+    const before = sectionAfterPointer(dock, event.clientX, event.clientY);
+    if (movingSection.parentElement !== dock || movingSection.nextElementSibling !== before) glide(() => placeSection(dock, movingSection, before));
+  });
+  dock.addEventListener("drop", event => event.preventDefault());
+}
+document.querySelector("#resetLayout").onclick = () => {
+  glide(() => applyLayout(DEFAULT_LAYOUT)); saveLayout();
+  for (const name of Object.keys(PANEL_LIMITS)) document.documentElement.style.removeProperty(`--${name}-width`);
+  try { localStorage.removeItem(PANEL_KEY); localStorage.removeItem(SECTION_SIZE_KEY); } catch {}
+  applySectionSizes({});
+  applyPanels(DEFAULT_PANELS);
+  updateCompact(); afterLayoutChange();
+};
+applyLayout(savedLayout());
+
+// ---- section sizes: the corner handle sets one; double-click the name to fit again ----
+const SECTION_SIZE_KEY = "windowGlassLabelerSectionSizes";
+let applyingSectionSizes = false;
+function savedSectionSizes() { try { return JSON.parse(localStorage.getItem(SECTION_SIZE_KEY)) || {}; } catch { return {}; } }
+function saveSectionSizes() {
+  if (applyingSectionSizes) return;
+  const sizes = {};
+  for (const section of sections) if (section.style.width || section.style.height) sizes[section.dataset.group] = { width: section.style.width, height: section.style.height };
+  try { localStorage.setItem(SECTION_SIZE_KEY, JSON.stringify(sizes)); } catch {}
+}
+function applySectionSizes(sizes) {
+  applyingSectionSizes = true;
+  for (const section of sections) {
+    const size = sizes[section.dataset.group];
+    section.style.width = size ? size.width : ""; section.style.height = size ? size.height : "";
+    section.classList.toggle("sized", !!size);
+  }
+  applyingSectionSizes = false;
+}
+applySectionSizes(savedSectionSizes());
+// The browser's own corner handle writes the size inline; notice it and keep it.
+const sectionWatcher = new ResizeObserver(() => {
+  for (const section of sections) {
+    // never smaller than its buttons: a size that would cut one off gives way to the content
+    if (section.style.height && section.scrollHeight > section.clientHeight + 1) section.style.height = "";
+    if (section.style.width && section.scrollWidth > section.clientWidth + 1) section.style.width = "";
+    section.classList.toggle("sized", !!(section.style.width || section.style.height));
+  }
+  saveSectionSizes();
+});
+sections.forEach(section => sectionWatcher.observe(section));
+for (const section of sections) {
+  section.querySelector(".label").addEventListener("dblclick", () => {
+    section.style.width = ""; section.style.height = ""; section.classList.remove("sized");
+    saveSectionSizes(); afterLayoutChange();
+  });
+}
+
+// ---- panel sizes: drag a splitter; remembered in this browser ----
+const PANEL_KEY = "windowGlassLabelerPanels";
+// The tool panel never gets narrower than one icon button with its frame around it.
+const PANEL_LIMITS = { mods: [150, 520], "dock-left": [64, 320], side: [180, 900] };
+const DEFAULT_PANELS = { "dock-left": 136 };
+function setPanelWidth(name, width) {
+  const [low, high] = PANEL_LIMITS[name];
+  document.documentElement.style.setProperty(`--${name}-width`, `${Math.round(Math.max(low, Math.min(high, width)))}px`);
+}
+function applyPanels(widths) { for (const [name, width] of Object.entries(widths)) if (PANEL_LIMITS[name]) setPanelWidth(name, width); }
+let savedPanels = null;
+try { savedPanels = JSON.parse(localStorage.getItem(PANEL_KEY)); } catch {}
+applyPanels(savedPanels || DEFAULT_PANELS);
+function savePanels() {
+  const out = {};
+  for (const name of Object.keys(PANEL_LIMITS)) {
+    const value = document.documentElement.style.getPropertyValue(`--${name}-width`);
+    if (value) out[name] = parseFloat(value);
+  }
+  try { localStorage.setItem(PANEL_KEY, JSON.stringify(out)); } catch {}
+}
+const panelElement = { mods: () => document.querySelector("aside"), "dock-left": () => document.querySelector("#dockLeft"), side: () => document.querySelector("#side") };
+document.querySelectorAll(".splitter").forEach(splitter => {
+  splitter.addEventListener("mousedown", event => {
+    event.preventDefault();
+    const name = splitter.dataset.panel, start = event.clientX, startWidth = panelElement[name]().getBoundingClientRect().width;
+    // the side panel grows to the left; the others grow to the right
+    const direction = name === "side" ? -1 : 1;
+    splitter.classList.add("dragging"); document.body.classList.add("resizing");
+    const move = moveEvent => { setPanelWidth(name, startWidth + direction * (moveEvent.clientX - start)); updateCompact(); if (state.index >= 0) render(); };
+    const up = () => {
+      window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up);
+      splitter.classList.remove("dragging"); document.body.classList.remove("resizing");
+      savePanels(); afterLayoutChange();
+    };
+    window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+  });
+});
+// A dock shows icons only when its words do not fit: the left one when it is narrow, a bar when
+// its sections would wrap onto a second row.
+function updateCompact() {
+  for (const dock of docks) {
+    dock.classList.remove("compact", "no-keys");
+    const groups = [...dock.querySelectorAll(":scope > .group")];
+    if (!groups.length) continue;
+    // a section given its own size keeps its words; the dock decides only for fitted ones
+    if (dock.dataset.dock !== "left" && groups.every(group => group.classList.contains("sized"))) continue;
+    let tight;
+    if (dock.dataset.dock === "left") {
+      // the side panel: words with key hints if every button's words fit, words alone, else icons
+      const buttons = [...dock.querySelectorAll(".group button")];
+      const overflowing = () => buttons.some(button => button.scrollWidth > button.clientWidth + 1);
+      if (!overflowing()) continue;
+      dock.classList.add("no-keys");
+      tight = overflowing();
+      if (!tight) continue;
+      dock.classList.remove("no-keys");
+    } else {
+      // Words with key hints if they fit on one row, words alone if those fit, else icons.
+      const wraps = () => groups.some(group => Math.abs(group.offsetTop - groups[0].offsetTop) > 8);
+      if (!wraps()) continue;
+      dock.classList.add("no-keys");
+      tight = wraps();
+      if (!tight) continue;
+      dock.classList.remove("no-keys");
+    }
+    dock.classList.toggle("compact", tight);
+  }
+}
+// Checked again whenever a dock's room changes: the window, a panel dragged, a section moved.
+const roomWatcher = new ResizeObserver(() => requestAnimationFrame(updateCompact));
+[document.body, document.querySelector("#editor"), document.querySelector("main")].forEach(element => roomWatcher.observe(element));
+updateCompact();
+
+const STATUS_NAMES = { todo: "to check", "auto-ok": "auto right", edited: "fixed", "no-glass": "no glass", copied: "copied from twin" };
+const CLEAR_ALPHA = 20, WAND_TOLERANCE = 60, WAND_SAME_MATERIAL = 80, HISTORY_LIMIT = 60;
+const state = {
+  mods: [], mod: null, windows: [], index: -1, filter: "all",
+  mask: null, width: 0, height: 0, day: null, pair: null, dayPixels: null,
+  undoStack: [], redoStack: [], view: "red", tool: "brush", paintClass: "glass", size: 1, xray: false, hideOverlay: false,
+  overlayAlpha: 0.9, skipClear: true, zoom: 8, panX: 0, panY: 0,
+  hover: null, spaceHeld: false, panning: null, stroke: null,
+  lasso: null, polygon: null, rect: null, wand: null,
+  stampTrace: null, stampClip: null, stampAt: null, stampBox: true, tileClip: null, wholeClip: null,
+  saveTimer: null, pendingSave: null,
+  selected: new Set(), anchor: null, tickDrag: null, selectDrag: null,
+};
+
+// ---- masks: numpy packbits, most significant bit first, row by row, as hex ----
+function unpack(hex, w, h) {
+  const mask = new Uint8Array(w * h);
+  if (!hex) return mask;
+  for (let i = 0; i < w * h; i++) {
+    const byte = parseInt(hex.substr((i >> 3) * 2, 2), 16) || 0;
+    mask[i] = (byte >> (7 - (i & 7))) & 1;
+  }
+  return mask;
+}
+// The page keeps one mask with three values: 0 not glass, 1 glass, 2 sheer curtain, light partly
+// through (user, 16 Oct 2026). Files keep two bit masks, the glass and the sheer.
+const GLASS = 1, SHEER = 2;
+function pack(mask, value = GLASS) {
+  let hex = "";
+  for (let b = 0; b < Math.ceil(mask.length / 8); b++) {
+    let byte = 0;
+    for (let k = 0; k < 8; k++) byte = (byte << 1) | (mask[b * 8 + k] === value ? 1 : 0);
+    hex += byte.toString(16).padStart(2, "0");
+  }
+  return hex;
+}
+const packSheer = mask => pack(mask, SHEER);
+const hasBits = hex => /[1-9a-f]/.test(hex || "");
+function combined(glassHex, sheerHex, w, h) {
+  const mask = unpack(glassHex, w, h);
+  if (hasBits(sheerHex)) { const sheer = unpack(sheerHex, w, h); for (let i = 0; i < mask.length; i++) if (sheer[i] && !mask[i]) mask[i] = SHEER; }
+  return mask;
+}
+function same(a, b) { if (a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; }
+// A draft is paint kept with the verdict taken back: still to check.
+// Paint kept without a verdict, and a twin's glass not yet looked at, are both still to check.
+const statusOf = w => (w.label && w.label.status !== "draft" && w.label.status !== "copy-unchecked" && w.label.status) || "todo";
+const isUncheckedCopy = w => !!(w.label && w.label.status === "copy-unchecked");
+const isDraft = w => !!(w.label && w.label.status === "draft");
+// What a window shows before anyone judges it: its own label, else the glass of a labelled twin
+// (your answer for a matching window), else the automatic answer.
+const startingMask = w => w.label ? w.label.mask : w.suggest ? w.suggest.mask : w.auto;
+const startingSheer = w => (w.label ? w.label.sheer : w.suggest ? w.suggest.sheer : "") || "";
+const startingPicture = w => combined(startingMask(w), startingSheer(w), w.shape[1], w.shape[0]);
+const fromLabel = w => (!w.label && !!w.suggest) || isUncheckedCopy(w);
+// Confirming a picture: which verdict it is depends on whose glass it is.
+function verdictFor(w, maskHex, sheerHex = "") {
+  const sheer = hasBits(sheerHex) ? sheerHex : "";
+  const sameSheer = other => sheer === (hasBits(other) ? other : "");
+  if (maskHex === w.auto && !sheer) return "auto-ok";
+  if (isUncheckedCopy(w) && maskHex === w.label.mask && sameSheer(w.label.sheer)) return hasBits(maskHex) || sheer ? "copied" : "no-glass";
+  if (w.suggest && maskHex === w.suggest.mask && sameSheer(w.suggest.sheer)) return w.suggest.status === "no-glass" ? "no-glass" : "copied";
+  return "edited";
+}
+function toast(text) { const t = $("#toast"); t.textContent = text; t.classList.add("show"); clearTimeout(t.timer); t.timer = setTimeout(() => t.classList.remove("show"), 1700); }
+
+// ---- data ----
+async function api(path, body) {
+  const response = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  return response.json();
+}
+function loadImage(src) {
+  return new Promise(resolve => { const image = new Image(); image.onload = () => resolve(image); image.onerror = () => resolve(null); image.src = src; });
+}
+async function loadMods() { state.mods = await api("/api/mods"); renderMods(); }
+let modFilter = "all", animateModList = true;
+const finishedBefore = {};
+try { modFilter = localStorage.getItem("windowGlassLabelerModFilter") || "all"; } catch {}
+let openModFitted = null;
+function modFits(mod, filter) {
+  return filter === "all" || (filter === "todo" && mod.todo > 0) || (filter === "done" && mod.todo === 0) || (filter === "recheck" && mod.recheck > 0);
+}
+function renderMods() {
+  // The open mod moves to the tab it now belongs in, but only when its own state took it out of
+  // the tab it was in (its last check again cleared). A tab the user picks is left alone.
+  const open = state.mods.find(m => m.mod === state.mod);
+  if (open) {
+    const fitsNow = modFits(open, modFilter);
+    const leftItsTab = openModFitted && openModFitted.mod === open.mod && openModFitted.filter === modFilter && openModFitted.fits && !fitsNow;
+    if (leftItsTab && open.todo === 0 && (modFilter === "todo" || modFilter === "recheck")) {
+      // A mod just finished: no trip to Done, straight on to the next mod with work left
+      // (user, 16 Oct 2026). From Recheck, the next mod to check again, else the next to do.
+      const order = state.mods.map(m => m.mod), from = order.indexOf(open.mod);
+      const after = [...state.mods.slice(from + 1), ...state.mods.slice(0, from)];
+      let next = modFilter === "recheck" ? after.find(m => m.recheck > 0) : null;
+      if (!next) { next = after.find(m => m.todo > 0); if (next) modFilter = "todo"; }
+      try { localStorage.setItem("windowGlassLabelerModFilter", modFilter); } catch {}
+      if (next) {
+        animateModList = true;
+        setTimeout(() => { toast(`${open.name} is done, on to ${next.name}`); openMod(next.mod); }, 450);
+      }
+    } else if (leftItsTab) {
+      modFilter = open.recheck > 0 ? "recheck" : open.todo > 0 ? "todo" : "done";
+      try { localStorage.setItem("windowGlassLabelerModFilter", modFilter); } catch {}
+      animateModList = true;
+    }
+    openModFitted = { mod: open.mod, filter: modFilter, fits: modFits(open, modFilter) };
+  }
+  const done = state.mods.filter(m => m.todo === 0).length;
+  document.querySelectorAll("#modFilter button").forEach(button => {
+    const recheck = state.mods.filter(m => m.recheck > 0).length;
+    const key = button.dataset.mods, count = { all: state.mods.length, done, todo: state.mods.length - done, recheck }[key];
+    button.classList.toggle("on", key === modFilter);
+    button.innerHTML = `${{ all: "All", todo: "To do", recheck: "Recheck", done: "Done" }[key]}<span class="count">${count}</span>`;
+    button.dataset.tip = { all: "Every mod", todo: "Mods with windows still to check", recheck: "Mods with a window to look at again (a copy of it had to be fixed)", done: "Mods with every window checked" }[key];
+  });
+  const query = $("#search").value.trim().toLowerCase();
+  const list = $("#mods"); list.innerHTML = "";
+  const animateThisTime = animateModList; animateModList = false;
+  let total = 0, checked = 0, wrong = 0, lastVerdict = null;
+  const sections = { "glass found": "", "some found": "Glass found for some windows", "nothing found": "Nothing found automatically (the files say window, the art shows no glass)" };
+  for (const mod of state.mods) {
+    total += mod.total; checked += mod.total - mod.todo; wrong += mod.edited;
+    if (query && !(mod.name.toLowerCase().includes(query) || mod.mod.includes(query))) continue;
+    const fits = modFilter === "all" || (modFilter === "todo" && mod.todo > 0) || (modFilter === "done" && mod.todo === 0)
+      || (modFilter === "recheck" && mod.recheck > 0);
+    if (!fits && mod.mod !== state.mod) continue;
+    const special = mod.mod === "vanilla" || mod.mod === "sve";
+    if (!special && mod.verdict !== lastVerdict && sections[mod.verdict]) {
+      const heading = document.createElement("div"); heading.className = "section"; heading.textContent = sections[mod.verdict];
+      list.appendChild(heading);
+    }
+    if (!special) lastVerdict = mod.verdict;
+    const row = document.createElement("div");
+    row.className = "mod" + (state.mod === mod.mod ? " active" : "") + (mod.todo === 0 ? " complete" : "") + (fits ? "" : " kept");
+    if (animateThisTime) { row.classList.add("enter"); row.style.setProperty("--enter-delay", `${Math.min(list.childElementCount, 30) * 12}ms`); }
+    if (mod.todo === 0 && finishedBefore[mod.mod] === false) row.classList.add("just-done");
+    finishedBefore[mod.mod] = mod.todo === 0;
+    const percent = n => (100 * n / Math.max(1, mod.total)).toFixed(1) + "%";
+    row.innerHTML = `<div class="name"></div>
+      <div class="meta">${mod.mod} · ${mod.total} windows · glass found in ${mod.found} · ${mod.total - mod.todo} checked · ${mod.edited} auto wrong${mod.named ? ` · ${mod.named} only named "window"` : ""}${mod.recheck ? ` · <span class="recheck-tag">${mod.recheck} check again</span>` : ""}${mod.copiesToCheck ? ` · <span class="from-label">${mod.copiesToCheck} copies to check</span>` : mod.suggested ? ` · <span class="from-label">${mod.suggested} pre-filled from your labels</span>` : ""}</div>
+      <div class="bar"><span style="width:${percent(mod["auto-ok"])};background:var(--ok)"></span><span style="width:${percent(mod.edited)};background:var(--edited)"></span><span style="width:${percent(mod["no-glass"])};background:var(--none)"></span><span style="width:${percent(mod.copied || 0)};background:#b07cff"></span></div>`;
+    row.querySelector(".name").textContent = mod.name; row.querySelector(".name").title = mod.name;
+    if (!fits) row.insertAdjacentHTML("beforeend", `<div class="kept-note">open now, not in this filter</div>`);
+    row.onclick = () => openMod(mod.mod);
+    list.appendChild(row);
+  }
+  $("#totals").textContent = `${state.mods.length} mods · ${total} windows · ${checked} checked · ${wrong} where auto was wrong`;
+}
+async function openMod(mod) {
+  flushSave();
+  state.mod = mod;
+  state.windows = await api("/api/windows?mod=" + encodeURIComponent(mod));
+  state.filter = "all";
+  state.selected.clear(); state.anchor = null;
+  renderMods(); renderFilters(); renderGrid(); renderModActions();
+  focusOpenMod();
+  const first = state.windows.findIndex(w => statusOf(w) === "todo");
+  openWindow(first >= 0 ? first : 0);
+}
+// The open mod is brought into view in the list, and pulses once so the eye finds it.
+function focusOpenMod() {
+  requestAnimationFrame(() => {
+    const row = document.querySelector("#mods .mod.active");
+    if (!row) return;
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    replay(row, "focus-pulse");
+  });
+}
+function refreshModCounts() {
+  const mod = state.mods.find(m => m.mod === state.mod);
+  if (!mod) return;
+  for (const key of ["todo", "auto-ok", "edited", "no-glass", "copied"]) mod[key] = 0;
+  for (const w of state.windows) mod[statusOf(w)]++;
+  mod.suggested = state.windows.filter(w => !w.label && w.suggest).length;
+  mod.copiesToCheck = state.windows.filter(isUncheckedCopy).length;
+  mod.recheck = state.windows.filter(w => w.label && w.label.recheck).length;
+  renderMods();
+}
+
+// ---- twins: the same window shape elsewhere (a recolour, or another pack drawing it again) ----
+function renderTwins(w) {
+  const old = $("#twins"); if (old) old.remove();
+  if (!w.twins || !w.twins.length) return;
+  const box = document.createElement("div"); box.id = "twins";
+  const labelled = w.twins.filter(t => t.label && t.label.status !== "no-glass");
+  const waiting = w.twins.filter(t => !t.label).length;
+  const mods = new Set(w.twins.map(t => t.mod)).size;
+  const note = document.createElement("span");
+  note.textContent = `same shape as ${w.twins.length} other window${w.twins.length > 1 ? "s" : ""} in ${mods} mod${mods > 1 ? "s" : ""} (${labelled.length} labelled)`;
+  box.appendChild(note);
+  if (labelled.length) {
+    const source = labelled[0];
+    const use = document.createElement("button");
+    use.textContent = `Use glass from "${source.name}" (${source.modName.slice(0, 28)}, ${Math.round(source.alike * 100)}% alike)`;
+    use.onclick = () => { remember(); state.mask = combined(source.label.mask, source.label.sheer, state.width, state.height); queueSave("draft"); };
+    box.appendChild(use);
+  }
+  const mine = w.label && w.label.status !== "no-glass";
+  if (mine && waiting) {
+    const give = document.createElement("button");
+    give.textContent = `Give this glass to ${waiting} same-shape window${waiting > 1 ? "s" : ""} still to check`;
+    give.onclick = () => armTwice(give, `Press again: ${waiting} windows get this glass`, async () => {
+      flushSave();
+      await new Promise(resolve => setTimeout(resolve, 350));
+      const result = await api("/api/copy-to-twins", { id: w.id });
+      toast(result.ok ? `gave the glass to ${result.given} windows` : result.error);
+      const index = state.index;
+      await loadMods(); state.windows = await api("/api/windows?mod=" + encodeURIComponent(state.mod));
+      renderFilters(); renderGrid(); renderModActions(); openWindow(index);
+    });
+    box.appendChild(give);
+  }
+  $("#info").appendChild(box);
+}
+
+function renderModActions() {
+  const box = $("#modActions"); box.innerHTML = "";
+  const todo = state.windows.filter(w => statusOf(w) === "todo").length;
+  if (!todo) return;
+  box.insertAdjacentHTML("beforeend", `<div class="panel-heading">Do</div>`);
+  const make = (kind, iconName, text, title) => {
+    const button = document.createElement("button");
+    button.className = kind; button.title = title || "";
+    button.innerHTML = icon(iconName) + `<span>${text}</span>`;
+    return button;
+  };
+  const chosen = [...state.selected].filter(confirmable);
+  if (state.selected.size) {
+    if (chosen.length) {
+      const confirmChosen = make("solid", "check", `Confirm ${chosen.length} selected`, "Every selected card: its red is right");
+      confirmChosen.onclick = () => confirmMany(chosen);
+      box.append(confirmChosen);
+    }
+    // the selection is not glass at all: no glass for every card picked
+    const noGlassChosen = [...state.selected].filter(k => state.windows[k] && statusOf(state.windows[k]) !== "no-glass");
+    if (noGlassChosen.length) {
+      const none = make("outline", "noGlass", `No glass for ${noGlassChosen.length} selected`, "Every selected card has no glass. Press twice.");
+      none.onclick = () => armTwice(none, `Press again: ${noGlassChosen.length} windows have no glass`, async () => {
+        await Promise.all(noGlassChosen.map(markNoGlass));
+        afterManyChanged(noGlassChosen.length, "marked no glass");
+      });
+      box.append(none);
+    }
+    const clear = make("ghost", "clear", "Clear selection");
+    clear.onclick = () => { state.selected.clear(); markSelection(); renderModActions(); };
+    box.append(clear);
+  }
+  // Painted windows wait as drafts; when the painting is really finished, one press makes them all done.
+  const painted = state.windows.map((w, i) => i).filter(i => isDraft(state.windows[i]));
+  if (painted.length) {
+    const finish = make("solid", "check", `Finish ${painted.length} painted window${painted.length > 1 ? "s" : ""}`,
+                        "Every window you painted in this mod counts as done (fixed, or auto right where the paint matches it). Press twice.");
+    finish.onclick = () => armTwice(finish, `Press again: ${painted.length} painted windows done`, () => confirmMany(painted));
+    box.appendChild(finish);
+  }
+  const shown = visibleIndices().filter(confirmable);
+  if (shown.length) {
+    const all = make(state.selected.size ? "outline" : "solid", "check", `Confirm all ${shown.length} shown`,
+                     "Every card shown that is still to check: its red is right. Press twice.");
+    all.onclick = () => armTwice(all, `Press again: ${shown.length} windows confirmed`, () => confirmMany(shown));
+    box.appendChild(all);
+  }
+  const none = make("outline", "noGlass", `Whole mod: no glass (${todo} unchecked)`, "Marks every window of this mod that nobody has judged yet as no glass. Press twice.");
+  none.onclick = () => armTwice(none, `Press again: ${todo} windows become no glass`, async () => {
+    flushSave();
+    const result = await api("/api/mod-no-glass", { mod: state.mod });
+    toast(`${result.marked} windows marked no glass`);
+    await loadMods(); await openMod(state.mod);
+  });
+  box.appendChild(none);
+}
+// ---- grid ----
+const lastChipCounts = {};
+function renderFilters() {
+  const counts = { all: state.windows.length, todo: 0, painted: 0, fromlabel: 0, recheck: 0, "auto-ok": 0, edited: 0, "no-glass": 0, copied: 0, nopair: 0 };
+  for (const w of state.windows) {
+    counts[statusOf(w)]++;
+    if (fromLabel(w)) counts.fromlabel++;
+    if (isDraft(w)) counts.painted++;
+    if (w.label && w.label.recheck) counts.recheck++;
+    if (!w.hasPair && !w.seeThrough) counts.nopair++;
+  }
+  const names = { all: "All", todo: "To check", painted: "Painted", fromlabel: "From your labels", recheck: "Check again", "auto-ok": "Auto right", edited: "Auto wrong", "no-glass": "No glass", copied: "Copied", nopair: "No pair" };
+  // each chip in the colour its cards carry, so a chip and its cards read as one thing
+  const colours = { all: "#9aa1b2", todo: "var(--todo)", painted: "#ff8a5c", fromlabel: "#c9a6ff", recheck: "#f2b43c", "auto-ok": "var(--ok)", edited: "var(--edited)", "no-glass": "var(--none)", copied: "#b07cff", nopair: "#7c8597" };
+  const box = $("#filters"); box.innerHTML = `<div class="panel-heading">Show</div>`;
+  for (const key of Object.keys(names)) {
+    const chip = document.createElement("button");
+    chip.className = "chip" + (state.filter === key ? " on" : "") + (counts[key] ? "" : " empty");
+    chip.style.setProperty("--chip", colours[key]);
+    chip.innerHTML = `<i class="dot" style="background:${colours[key]}"></i>${names[key]}<span class="count">${counts[key]}</span>`;
+    if (lastChipCounts[key] !== undefined && lastChipCounts[key] !== counts[key]) requestAnimationFrame(() => replay(chip.querySelector(".count"), "bump"));
+    lastChipCounts[key] = counts[key];
+    chip.onclick = () => { state.filter = key; renderFilters(); renderGrid(); renderModActions(); };
+    box.appendChild(chip);
+  }
+}const visibleObserver = new IntersectionObserver(entries => {
+  for (const entry of entries) if (entry.isIntersecting) { drawThumb(entry.target); visibleObserver.unobserve(entry.target); }
+}, { rootMargin: "200px" });
+function passes(w) {
+  if (state.filter === "all") return true;
+  if (state.filter === "nopair") return !w.hasPair && !w.seeThrough;
+  if (state.filter === "fromlabel") return fromLabel(w);
+  if (state.filter === "painted") return isDraft(w);
+  if (state.filter === "recheck") return !!(w.label && w.label.recheck);
+  return statusOf(w) === state.filter;
+}
+function renderGrid() {
+  const grid = $("#grid"); grid.innerHTML = "";
+  state.windows.forEach((w, i) => {
+    if (!passes(w)) return;
+    const card = document.createElement("div");
+    card.className = "card enter" + (i === state.index ? " current" : "") + (statusOf(w) !== "todo" ? " done" : "");
+    card.style.setProperty("--enter-delay", `${Math.min(grid.childElementCount, 24) * 18}ms`);
+    card.dataset.status = statusOf(w);
+    card.dataset.index = i;
+    card.innerHTML = `<canvas></canvas><div class="tag"><span><i class="dot st-${statusOf(w)}"></i> ${STATUS_NAMES[statusOf(w)]}${isDraft(w) ? " (painted)" : ""}${isUncheckedCopy(w) ? (w.label.votes && w.label.votes.total > 1 && w.label.votes.agree < w.label.votes.total ? ' <span class="from-label votes-split">· copied, bases differ</span>' : ' <span class="from-label">· copied, check it</span>') : fromLabel(w) ? ' <span class="from-label">· from your label</span>' : ""}${w.label && w.label.recheck ? ' <span class="recheck-tag">· check again</span>' : ""}</span><span>${w.hasPair ? "" : w.seeThrough ? "see-through" : "no pair"}</span></div>`;
+    card.onclick = event => cardClicked(event, i);
+    card.onmousedown = event => startSelectDrag(event, i);
+    card.oncontextmenu = event => { event.preventDefault(); openCardMenu(event, i); };
+    card.onmouseenter = () => { tickWhileDragging(i); selectWhileDragging(i); };
+    if (state.selected.has(i)) card.classList.add("selected");
+    addCorrectButton(card, i);
+    grid.appendChild(card);
+    visibleObserver.observe(card);
+  });
+}
+async function drawThumb(card) {
+  const w = state.windows[+card.dataset.index];
+  const image = await loadImage(`/api/image?id=${w.id}&which=day`);
+  if (!image) return;
+  const [h, wd] = w.shape;
+  const canvas = card.querySelector("canvas");
+  canvas.width = wd * 3; canvas.height = h * 3;
+  const c = canvas.getContext("2d"); c.imageSmoothingEnabled = false;
+  c.drawImage(image, 0, 0, wd * 3, h * 3);
+  const mask = startingPicture(w);
+  for (let y = 0; y < h; y++) for (let x = 0; x < wd; x++) {
+    const v = mask[y * wd + x]; if (!v) continue;
+    c.fillStyle = v === SHEER ? "rgba(255,196,64,0.7)" : "rgba(255,40,40,0.7)";
+    c.fillRect(x * 3, y * 3, 3, 3);
+  }
+}
+// A check mark on every card still to check: the red is right, without opening the window.
+function addCorrectButton(card, i) {
+  card.querySelectorAll(".correct").forEach(old => old.remove());
+  const w = state.windows[i];
+  card.classList.toggle("done", statusOf(w) !== "todo");
+  card.classList.toggle("suggested", fromLabel(w));
+  card.classList.toggle("recheck", !!(w.label && w.label.recheck));
+  if (statusOf(w) !== "todo") {
+    // Done by mistake: back to "to check", forgetting the verdict and any paint.
+    const undo = document.createElement("button");
+    undo.className = "correct undo-verdict"; undo.innerHTML = icon("takeBack"); undo.title = "Back to to check (your paint is kept)";
+    undo.onclick = async event => { event.stopPropagation(); await takeBackVerdict(i); };
+    card.appendChild(undo);
+    if (w.label && w.label.recheck) {
+      const still = document.createElement("button");
+      still.className = "correct still-right"; still.innerHTML = icon("check");
+      still.dataset.tip = "Still right: looked at it again, nothing to change";
+      still.onclick = async event => { event.stopPropagation(); await stillRight(i); };
+      card.appendChild(still);
+    }
+    return;
+  }
+  if (!confirmable(i)) return;
+  const button = document.createElement("button");
+  button.className = "correct"; button.innerHTML = icon("check"); button.title = "The red is right as it is (auto right)";
+  // Press on a check mark and drag across other cards: each card passed is confirmed too.
+  button.onmousedown = event => {
+    event.stopPropagation(); event.preventDefault();
+    state.tickDrag = new Set([i]);
+    confirmWindow(i);
+  };
+  button.onclick = event => event.stopPropagation();
+  card.appendChild(button);
+}
+
+// ---- confirming many at once ----
+function confirmable(i) {
+  const w = state.windows[i];
+  return !!w && statusOf(w) === "todo" && (isDraft(w) || fromLabel(w) || (!!w.auto && /[1-9a-f]/.test(w.auto)));
+}
+function visibleIndices() { return [...document.querySelectorAll("#grid .card")].map(card => +card.dataset.index); }
+async function confirmWindow(i) {
+  if (!confirmable(i)) return false;
+  const w = state.windows[i];
+  if (i === state.index) { accept(); return true; }
+  const mask = startingMask(w), sheer = startingSheer(w);
+  const status = isDraft(w) ? verdictFor({ ...w, suggest: null }, mask, sheer) : verdictFor(w, mask, sheer);
+  w.label = { ...(w.label || {}), status, mask, sheer };
+  updateCard(i);
+  const result = await api("/api/label", { id: w.id, status, mask, sheer });
+  $("#saved").textContent = result.ok ? `saved ${new Date().toLocaleTimeString()}` : "SAVE FAILED";
+  applySpread(result);
+  return true;
+}
+async function confirmMany(indices) {
+  const list = indices.filter(confirmable);
+  await Promise.all(list.map(confirmWindow));
+  state.selected.clear(); markSelection();
+  refreshModCounts(); renderFilters(); renderModActions();
+  toast(`${list.length} windows confirmed`);
+}
+function tickWhileDragging(i) {
+  if (!state.tickDrag || state.tickDrag.has(i)) return;
+  state.tickDrag.add(i);
+  confirmWindow(i);
+}
+window.addEventListener("mouseup", () => {
+  if (!state.tickDrag) return;
+  const count = state.tickDrag.size;
+  state.tickDrag = null;
+  refreshModCounts(); renderFilters(); renderModActions();
+  if (count > 1) toast(`${count} windows confirmed`);
+});
+// Ctrl held: press on a card and drag, and every card the mouse passes is picked (or, starting on a
+// picked card, let go). A straight drag down a column picks that column only.
+function startSelectDrag(event, i) {
+  if (!(event.ctrlKey || event.metaKey) || event.button !== 0) return;
+  event.preventDefault();
+  state.selectDrag = { adding: !state.selected.has(i) };
+  selectWhileDragging(i, true);
+}
+function selectWhileDragging(i, first) {
+  if (!state.selectDrag || (!first && state.selectDrag.seen && state.selectDrag.seen.has(i))) return;
+  (state.selectDrag.seen ??= new Set()).add(i);
+  state.selectDrag.adding ? state.selected.add(i) : state.selected.delete(i);
+  state.anchor = i;
+  markSelection();
+}
+window.addEventListener("mouseup", () => { if (state.selectDrag) { state.selectDrag = null; renderModActions(); } edgeScroll.stop(); });
+
+// Ctrl held to pick cards, a turn of the wheel zoomed the whole page instead of scrolling the list
+// (16 Oct 2026). Over the page's lists Ctrl+wheel scrolls; over the picture it still zooms the picture.
+window.addEventListener("wheel", event => {
+  if (!event.ctrlKey || event.target === big) return;
+  event.preventDefault();
+  const list = event.target.closest && event.target.closest("#grid, #mods, #dockLeft, #watchList, #help > div");
+  if (list) list.scrollBy({ top: event.deltaY, left: event.deltaX });
+}, { passive: false });
+
+// Dragging a selection (or a row of check marks) near the top or bottom of the card list scrolls it.
+const edgeScroll = {
+  timer: null, speed: 0,
+  update(event) {
+    if (!state.selectDrag && !state.tickDrag) { this.stop(); return; }
+    const box = $("#grid").getBoundingClientRect(), band = 48;
+    const y = event.clientY;
+    this.speed = y < box.top + band ? -Math.ceil((box.top + band - y) / 4) : y > box.bottom - band ? Math.ceil((y - (box.bottom - band)) / 4) : 0;
+    if (this.speed && !this.timer) this.timer = setInterval(() => {
+      $("#grid").scrollBy({ top: this.speed });
+      // keep picking the card that slides under the still pointer
+      const under = document.elementFromPoint(this.x, this.y), card = under && under.closest(".card");
+      if (card) { const i = +card.dataset.index; tickWhileDragging(i); selectWhileDragging(i); }
+    }, 16);
+    if (!this.speed) this.stop();
+    this.x = event.clientX; this.y = event.clientY;
+  },
+  stop() { clearInterval(this.timer); this.timer = null; this.speed = 0; },
+};
+window.addEventListener("mousemove", event => edgeScroll.update(event));
+// The cards inside the rectangle two cards span on the grid, as a spreadsheet picks cells.
+function cardsBetween(first, second) {
+  const a = document.querySelector(`#grid .card[data-index="${first}"]`), b = document.querySelector(`#grid .card[data-index="${second}"]`);
+  if (!a || !b) return [];
+  const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+  const left = Math.min(ra.left, rb.left), right = Math.max(ra.right, rb.right);
+  const top = Math.min(ra.top, rb.top), bottom = Math.max(ra.bottom, rb.bottom);
+  return [...document.querySelectorAll("#grid .card")].filter(card => {
+    const r = card.getBoundingClientRect(), x = (r.left + r.right) / 2, y = (r.top + r.bottom) / 2;
+    return x >= left && x <= right && y >= top && y <= bottom;
+  }).map(card => +card.dataset.index);
+}
+// Plain click opens a window; Ctrl picks cards (see above); Shift+click picks the block between.
+function cardClicked(event, i) {
+  if (event.shiftKey && state.anchor !== null) {
+    for (const k of cardsBetween(state.anchor, i)) state.selected.add(k);
+  } else if (event.ctrlKey || event.metaKey) {
+    renderModActions();
+    return;
+  } else {
+    if (state.selected.size) { state.selected.clear(); markSelection(); renderModActions(); }
+    state.anchor = i;
+    return openWindow(i);
+  }
+  state.anchor = i;
+  markSelection(); renderModActions();
+}
+
+// ---- right click on a card: a menu of the page's own ----
+const cardMenu = document.createElement("div"); cardMenu.id = "cardMenu"; document.body.appendChild(cardMenu);
+// A window marked "check again" was looked at and stands as it is.
+async function stillRight(i) {
+  const w = state.windows[i];
+  if (!w || !w.label || !w.label.recheck) return;
+  await api("/api/still-right", { id: w.id });
+  w.label.recheck = null;
+  updateCard(i);
+  if (i === state.index) { $("#info").querySelectorAll(".recheck-tag").forEach(line => line.remove()); }
+  refreshModCounts(); renderFilters(); renderModActions();
+  toast("kept as it is");
+}
+function closeCardMenu() { cardMenu.classList.remove("show"); cardMenu.dataset.open = ""; }
+function emptyMaskHex(w) { const [h, wd] = w.shape; return "00".repeat(Math.ceil(h * wd / 8)); }
+async function markNoGlass(i) {
+  const w = state.windows[i];
+  if (i === state.index) { noGlass(); return; }
+  w.label = { status: "no-glass", mask: emptyMaskHex(w) };
+  updateCard(i);
+  const result = await api("/api/label", { id: w.id, status: "no-glass", mask: w.label.mask });
+  $("#saved").textContent = result.ok ? `saved ${new Date().toLocaleTimeString()}` : "SAVE FAILED";
+  applySpread(result);
+  replay($("#saved"), "flash");
+}
+function afterManyChanged(count, what) {
+  state.selected.clear(); markSelection();
+  refreshModCounts(); renderFilters(); renderModActions(); refreshSuggestionsSoon();
+  if (count > 1) toast(`${count} windows ${what}`);
+}
+function openCardMenu(event, i) {
+  const many = state.selected.has(i) && state.selected.size > 1;
+  const targets = many ? [...state.selected] : [i];
+  const w = state.windows[i];
+  const items = [];
+  const canConfirm = targets.filter(confirmable);
+  if (canConfirm.length) items.push({ icon: "check", tone: "var(--ok)", text: many ? `Correct ${canConfirm.length} selected` : "Correct", hint: "the red is right",
+    run: async () => { await Promise.all(canConfirm.map(confirmWindow)); afterManyChanged(canConfirm.length, "confirmed"); } });
+  const canNoGlass = targets.filter(k => statusOf(state.windows[k]) !== "no-glass");
+  if (canNoGlass.length) items.push({ icon: "noGlass", tone: "var(--none)", text: many ? `No glass for ${canNoGlass.length} selected` : "No glass", hint: "nothing lets light in",
+    run: async () => { await Promise.all(canNoGlass.map(markNoGlass)); afterManyChanged(canNoGlass.length, "marked no glass"); } });
+  const canStillRight = targets.filter(k => state.windows[k].label && state.windows[k].label.recheck);
+  if (canStillRight.length) items.push({ icon: "check", tone: "#f2b43c", text: many ? `Still right (${canStillRight.length})` : "Still right", hint: "clears check again, keeps the verdict",
+    run: async () => { for (const k of canStillRight) await stillRight(k); afterManyChanged(canStillRight.length, "kept as they are"); } });
+  const canTakeBack = targets.filter(k => statusOf(state.windows[k]) !== "todo");
+  if (canTakeBack.length) items.push({ icon: "takeBack", tone: "var(--todo)", text: many ? `Back to to check (${canTakeBack.length})` : "Back to to check", hint: "paint is kept",
+    run: async () => { for (const k of canTakeBack) await takeBackVerdict(k); afterManyChanged(canTakeBack.length, "back to check"); } });
+  if (!many) items.push({ separator: true }, { icon: "viewArt", tone: "var(--muted)", text: "Open this window", run: () => openWindow(i) });
+  if (!many && w.label && w.label.source) items.push({ icon: "next", tone: "#c9a6ff", text: "Go to the source", hint: `${w.label.source.name}, ${w.label.source.modName}`,
+    run: () => jumpTo({ id: w.label.source.id, mod: w.label.source.mod }) });
+  if (!many && w.label && w.label.recheckBy) items.push({ icon: "next", tone: "#f2b43c", text: "Go to the fixed copy", hint: `${w.label.recheckBy.name}, ${w.label.recheckBy.modName}`,
+    run: () => jumpTo({ id: w.label.recheckBy.id, mod: w.label.recheckBy.mod }) });
+  cardMenu.innerHTML = `<div class="menu-title">${many ? `${targets.length} windows selected` : (w.name || "window")}</div>`;
+  for (const item of items) {
+    if (item.separator) { cardMenu.insertAdjacentHTML("beforeend", `<div class="menu-separator"></div>`); continue; }
+    const row = document.createElement("button");
+    row.className = "menu-item";
+    row.style.setProperty("--item-tone", item.tone);
+    row.innerHTML = icon(item.icon) + `<span>${item.text}</span>` + (item.hint ? `<small>${item.hint}</small>` : "");
+    row.onclick = () => { closeCardMenu(); item.run(); };
+    cardMenu.appendChild(row);
+  }
+  cardMenu.style.left = "0px"; cardMenu.style.top = "0px";
+  cardMenu.classList.remove("show");
+  const width = cardMenu.offsetWidth, height = cardMenu.offsetHeight;
+  const left = Math.min(event.clientX, window.innerWidth - width - 8), top = Math.min(event.clientY, window.innerHeight - height - 8);
+  cardMenu.style.left = `${left}px`; cardMenu.style.top = `${top}px`;
+  cardMenu.style.transformOrigin = `${event.clientX - left}px ${event.clientY - top}px`;
+  cardMenu.dataset.open = "1";
+  requestAnimationFrame(() => cardMenu.classList.add("show"));
+}
+document.addEventListener("pointerdown", event => { if (cardMenu.dataset.open && !cardMenu.contains(event.target)) closeCardMenu(); }, true);
+document.addEventListener("keydown", event => { if (event.key === "Escape" && cardMenu.dataset.open) { closeCardMenu(); event.stopImmediatePropagation(); } }, true);
+window.addEventListener("blur", closeCardMenu);
+document.addEventListener("wheel", closeCardMenu, true);
+
+function markSelection() {
+  document.querySelectorAll("#grid .card").forEach(card => card.classList.toggle("selected", state.selected.has(+card.dataset.index)));
+}
+function updateCard(i) {
+  const card = document.querySelector(`.card[data-index="${i}"]`);
+  if (!card) return;
+  addCorrectButton(card, i);
+  const w = state.windows[i];
+  if (card.dataset.status !== statusOf(w)) { card.dataset.status = statusOf(w); card.classList.remove("enter"); replay(card, "pop"); }
+  card.querySelector(".tag span").innerHTML = `<i class="dot st-${statusOf(w)}"></i> ${STATUS_NAMES[statusOf(w)]}${isDraft(w) ? " (painted)" : ""}${isUncheckedCopy(w) ? (w.label.votes && w.label.votes.total > 1 && w.label.votes.agree < w.label.votes.total ? ' <span class="from-label votes-split">· copied, bases differ</span>' : ' <span class="from-label">· copied, check it</span>') : fromLabel(w) ? ' <span class="from-label">· from your label</span>' : ""}${w.label && w.label.recheck ? ' <span class="recheck-tag">· check again</span>' : ""}`;
+  drawThumb(card);
+}
+
+// ---- opening a window ----
+async function openWindow(i) {
+  if (i < 0 || i >= state.windows.length) return;
+  flushSave();
+  cancelAllArmed();
+  state.index = i;
+  const w = state.windows[i];
+  const [h, wd] = w.shape;
+  state.width = wd; state.height = h;
+  state.mask = startingPicture(w);
+  state.undoStack = []; state.redoStack = [];
+  state.openedLabel = w.label ? { ...w.label } : null;
+  state.lasso = state.polygon = state.rect = state.stampTrace = state.stampAt = state.wand = state.stroke = null;
+  [state.day, state.pair] = await Promise.all([loadImage(`/api/image?id=${w.id}&which=day`),
+    w.hasPair ? loadImage(`/api/image?id=${w.id}&which=pair`) : Promise.resolve(null)]);
+  const scratch = document.createElement("canvas"); scratch.width = wd; scratch.height = h;
+  const sc = scratch.getContext("2d"); if (state.day) sc.drawImage(state.day, 0, 0);
+  state.dayPixels = sc.getImageData(0, 0, wd, h).data;
+  state.outside = clearOutside(wd, h);
+  $("#emptyNote").hidden = true;
+  $("#previews").innerHTML = ["Art", "Pair", "Red", "Black & white"].map((n, k) =>
+    `<figure><canvas id="preview${k}" width="${wd * 3}" height="${h * 3}"></canvas><figcaption>${n}</figcaption></figure>`).join("");
+  $("#info").innerHTML = `<b></b><br>${w.kind} · ${wd}×${h} px · ${w.seeThrough ? "see-through panes: the clear pixels inside the frame were taken as glass" : w.hasPair ? "glass found from its pair" : "no pair: nothing was found automatically, paint it if it has glass"}${w.copies ? ` · the same picture ${w.copies + 1} times in the mod` : ""}<br>status: <span id="statusText"></span>`;
+  $("#info b").textContent = w.name || "window";
+  replay($("#big"), "swap");
+  renderTwins(w);
+  if (w.label && w.label.recheck) {
+    const line = document.createElement("div"); line.className = "recheck-tag";
+    line.textContent = "a copy of this window had to be fixed: look at this one again (its verdict is kept until you change it)";
+    const by = w.label.recheckBy;
+    if (by) {
+      const open = document.createElement("button"); open.className = "inline-link";
+      open.textContent = by.mod === String(state.mod) ? "Open the fixed copy" : `Open the fixed copy (${by.modName})`;
+      open.onclick = () => jumpTo({ id: by.id, mod: by.mod }); line.append(" ", open);
+    }
+    {
+      const still = document.createElement("button"); still.className = "still-right-inline";
+      still.innerHTML = icon("check") + "<span>Still right</span>";
+      still.onclick = () => stillRight(state.windows.indexOf(w));
+      line.append(" ", still);
+    }
+    $("#info").appendChild(line);
+  }
+  if (isUncheckedCopy(w)) {
+    const line = document.createElement("div"); line.className = "from-label";
+    const votes = w.label.votes;
+    const how = w.label.carriedFix
+      ? (w.label.carriedFix > 1 ? `the fix you made on ${w.label.carriedFix} windows, given to this one too (only the pixels you changed)`
+                                : "the fix you made on a window with the same picture, given to this one too (only the pixels you changed)")
+      : !votes || votes.total < 2 ? "copied from a matching window you judged"
+      : votes.agree === votes.total ? `decided by ${votes.total} matching windows you judged, all agreeing`
+      : `decided by ${votes.total} matching windows you judged: ${votes.agree} agree, the rest differ, look closely`;
+    line.textContent = `${how}: check it, ✓ to confirm or fix it`;
+    if (votes && votes.total > 1 && votes.agree < votes.total) line.classList.add("votes-split");
+    const source = w.label.source;
+    if (source) {
+      const open = document.createElement("button"); open.className = "inline-link";
+      open.textContent = source.mod === String(state.mod) ? `Open the source "${source.name}"` : `Open the source "${source.name}" (${source.modName})`;
+      open.onclick = () => jumpTo({ id: source.id, mod: source.mod }); line.append(" ", open);
+    }
+    $("#info").appendChild(line);
+  } else if (fromLabel(w)) {
+    const line = document.createElement("div"); line.className = "from-label";
+    const how = w.suggest.tiles
+      ? (w.suggest.tiles[0] === w.suggest.tiles[1] ? `the same tiles as your label on "${w.suggest.name}" (${w.suggest.modName})`
+                                                   : `${w.suggest.tiles[0]} of ${w.suggest.tiles[1]} tiles from your label on "${w.suggest.name}" (${w.suggest.modName}), the rest automatic`)
+      : `your label on "${w.suggest.name}" (${w.suggest.modName}, ${Math.round(w.suggest.alike * 100)}% alike)`;
+    line.textContent = `pre-filled from ${how}: ✓ to confirm, or fix it`;
+    $("#info").appendChild(line);
+  }
+  if (w.evidence) {
+    const line = document.createElement("div");
+    line.textContent = `why it is a window: ${w.evidence}${w.strength === "named" ? " (only the name says so)" : ""}`;
+    $("#info").appendChild(line);
+  }
+  fitView();
+  document.querySelectorAll(".card").forEach(card => card.classList.toggle("current", +card.dataset.index === i));
+  const current = document.querySelector(".card.current");
+  // A jump brings the card into view itself (spotlightCard); two scrolls at once fought.
+  if (current && !jumping) { current.scrollIntoView({ block: "center", behavior: "smooth" }); replay(current, "focus-pulse"); }
+  renderAll();
+}
+
+// ---- view ----
+const big = $("#big");
+function sizeCanvas() {
+  const box = $("#viewport").getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.round(box.width * ratio), height = Math.round(box.height * ratio);
+  if (big.width !== width || big.height !== height) { big.width = width; big.height = height; }
+  return { width: box.width, height: box.height, ratio };
+}
+function fitView() {
+  if (state.index < 0) return;
+  const box = $("#viewport").getBoundingClientRect();
+  state.zoom = Math.max(1, Math.floor(Math.min((box.width - 40) / state.width, (box.height - 40) / state.height)));
+  state.panX = Math.round((box.width - state.width * state.zoom) / 2);
+  state.panY = Math.round((box.height - state.height * state.zoom) / 2);
+}
+function toPixel(event) {
+  const box = big.getBoundingClientRect();
+  return [(event.clientX - box.left - state.panX) / state.zoom, (event.clientY - box.top - state.panY) / state.zoom];
+}
+const inside = (x, y) => x >= 0 && y >= 0 && x < state.width && y < state.height;
+let stripeTile = null;
+function stripePattern(context) {
+  if (!stripeTile) {
+    stripeTile = document.createElement("canvas"); stripeTile.width = stripeTile.height = 8;
+    const t = stripeTile.getContext("2d");
+    t.strokeStyle = "rgba(255,200,200,0.9)"; t.lineWidth = 2.6;
+    t.beginPath(); t.moveTo(-2, 10); t.lineTo(10, -2); t.moveTo(-2, 2); t.lineTo(2, -2); t.moveTo(6, 10); t.lineTo(10, 6); t.stroke();
+  }
+  return context.createPattern(stripeTile, "repeat");
+}
+const SHEER_COLOUR = [255, 196, 64], SHEER_GREY = [140, 140, 140];
+function maskCanvas(mask, colour, sheerColour = SHEER_COLOUR) {
+  const canvas = document.createElement("canvas"); canvas.width = state.width; canvas.height = state.height;
+  const c = canvas.getContext("2d"); const image = c.createImageData(state.width, state.height);
+  for (let i = 0; i < mask.length; i++) if (mask[i]) {
+    const o = i * 4, paint = mask[i] === SHEER ? sheerColour : colour;
+    image.data[o] = paint[0]; image.data[o + 1] = paint[1]; image.data[o + 2] = paint[2]; image.data[o + 3] = 255;
+  }
+  c.putImageData(image, 0, 0);
+  return canvas;
+}
+function render() {
+  if (state.index < 0) return;
+  const { width, height, ratio } = sizeCanvas();
+  const c = big.getContext("2d");
+  c.setTransform(ratio, 0, 0, ratio, 0, 0);
+  c.imageSmoothingEnabled = false;
+  c.fillStyle = "#101216"; c.fillRect(0, 0, width, height);
+  const z = state.zoom, W = state.width * z, H = state.height * z, x0 = state.panX, y0 = state.panY;
+  c.fillStyle = "#23262e"; c.fillRect(x0, y0, W, H);
+  if (state.view === "bw") {
+    c.fillStyle = "#000"; c.fillRect(x0, y0, W, H);
+    c.drawImage(maskCanvas(state.mask, [255, 255, 255], SHEER_GREY), x0, y0, W, H);
+  } else {
+    const image = state.view === "pair" ? state.pair : state.day;
+    if (image) c.drawImage(image, x0, y0, W, H);
+    else { c.fillStyle = "#888"; c.font = "13px sans-serif"; c.fillText("this window has no pair picture", x0 + 6, y0 + 18); }
+    if (state.xray) { c.fillStyle = "rgba(6,8,14,.75)"; c.fillRect(x0, y0, W, H); }
+    if (state.view !== "art" && !state.hideOverlay) drawOverlay(c, x0, y0, W, H);
+  }
+  // the tile under the cursor, outlined as HF Studio does
+  if (state.hover && inside(...state.hover)) {
+    const [hx, hy] = state.hover.map(Math.floor);
+    c.strokeStyle = "rgba(63,182,255,.85)"; c.lineWidth = 1;
+    c.strokeRect(x0 + ((hx >> 4) << 4) * z + .5, y0 + ((hy >> 4) << 4) * z + .5, 16 * z - 1, 16 * z - 1);
+    if (!state.panning && !state.spaceHeld) drawPaintPreview(c, x0, y0, z, hx, hy);
+  }
+  drawToolPreview(c, x0, y0, z);
+}
+// The pixels the tool in hand would paint if clicked here: a pale fill with a crisp outline.
+function outlinePixels(c, x0, y0, z, pixels) {
+  c.fillStyle = state.paintClass === "sheer" ? "rgba(255, 196, 64, .38)" : "rgba(255, 255, 255, .28)";
+  for (const [px, py] of pixels) c.fillRect(x0 + px * z, y0 + py * z, z, z);
+  const set = new Set(pixels.map(([px, py]) => py * state.width + px));
+  c.beginPath();
+  for (const [px, py] of pixels) {
+    const left = x0 + px * z, top = y0 + py * z;
+    if (!set.has(py * state.width + px - 1) || px === 0) { c.moveTo(left, top); c.lineTo(left, top + z); }
+    if (!set.has(py * state.width + px + 1) || px === state.width - 1) { c.moveTo(left + z, top); c.lineTo(left + z, top + z); }
+    if (!set.has((py - 1) * state.width + px)) { c.moveTo(left, top); c.lineTo(left + z, top); }
+    if (!set.has((py + 1) * state.width + px)) { c.moveTo(left, top + z); c.lineTo(left + z, top + z); }
+  }
+  c.strokeStyle = "rgba(0, 0, 0, .85)"; c.lineWidth = 3; c.stroke();
+  c.strokeStyle = "#ffffff"; c.lineWidth = 1.2; c.stroke();
+}
+let wandPreviewKey = "", wandPreviewPixels = [];
+function wandRegion(sx, sy) {
+  const W = state.width, H = state.height, p = state.dayPixels, out = [];
+  const o0 = (sy * W + sx) * 4;
+  if (p[o0 + 3] < CLEAR_ALPHA) return state.outside[sy * W + sx] ? [] : clearRegion(sx, sy);
+  const r0 = p[o0], g0 = p[o0 + 1], b0 = p[o0 + 2], seen = new Uint8Array(W * H), stack = [sy * W + sx];
+  seen[sy * W + sx] = 1;
+  while (stack.length) {
+    const i = stack.pop(), x = i % W, y = (i / W) | 0;
+    out.push([x, y]);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+      const ni = ny * W + nx; if (seen[ni]) continue; seen[ni] = 1;
+      const no = ni * 4;
+      if (p[no + 3] < CLEAR_ALPHA) continue;
+      if (Math.abs(p[no] - r0) + Math.abs(p[no + 1] - g0) + Math.abs(p[no + 2] - b0) <= WAND_TOLERANCE) stack.push(ni);
+    }
+  }
+  return out;
+}
+function clearRegion(sx, sy) {
+  const W = state.width, H = state.height, p = state.dayPixels, out = [], seen = new Uint8Array(W * H), stack = [sy * W + sx];
+  while (stack.length) {
+    const i = stack.pop();
+    if (seen[i] || p[i * 4 + 3] >= CLEAR_ALPHA || state.outside[i]) continue;
+    seen[i] = 1; out.push([i % W, (i / W) | 0]);
+    const x = i % W, y = (i / W) | 0;
+    if (x > 0) stack.push(i - 1); if (x < W - 1) stack.push(i + 1);
+    if (y > 0) stack.push(i - W); if (y < H - 1) stack.push(i + W);
+  }
+  return out;
+}
+function drawPaintPreview(c, x0, y0, z, hx, hy) {
+  if (state.stroke || state.rect || state.lasso || state.stampTrace || state.wand) return;
+  let pixels = [];
+  if (state.tool === "brush") {
+    for (let dy = 0; dy < state.size; dy++) for (let dx = 0; dx < state.size; dx++) if (inside(hx + dx, hy + dy)) pixels.push([hx + dx, hy + dy]);
+  } else if (state.tool === "tile") {
+    const ox = (hx >> 4) << 4, oy = (hy >> 4) << 4;
+    for (let y = oy; y < Math.min(oy + 16, state.height); y++) for (let x = ox; x < Math.min(ox + 16, state.width); x++) pixels.push([x, y]);
+  } else if (state.tool === "wand") {
+    const key = `${state.index}:${hx}:${hy}`;
+    if (key !== wandPreviewKey) { wandPreviewKey = key; wandPreviewPixels = wandRegion(hx, hy); }
+    pixels = wandPreviewPixels;
+  } else if (state.tool === "stamp" && state.stampClip) {
+    return;
+  } else {
+    pixels = [[hx, hy]];
+  }
+  if (pixels.length) outlinePixels(c, x0, y0, z, pixels);
+}
+
+// ---- the cursor: a crosshair on the exact point, with the tool in hand beside it ----
+function toolCursor(tool) {
+  const symbol = ICON_PATHS[{ brush: "brush", rect: "box", lasso: "lasso", polygon: "polygon", wand: "wand", tile: "tile", stamp: "stamp" }[tool]] || "";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="34" viewBox="0 0 34 34">
+    <g stroke-linecap="round"><path d="M9 1v5M9 12v5M1 9h5M12 9h5" stroke="#000" stroke-width="3.4"/><path d="M9 1v5M9 12v5M1 9h5M12 9h5" stroke="#fff" stroke-width="1.5"/></g>
+    <circle cx="9" cy="9" r="1.3" fill="#ff4646" stroke="#000" stroke-width=".6"/>
+    <g transform="translate(15 15) scale(.75)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="-2" y="-2" width="28" height="28" rx="7" fill="#1d2027" stroke="${state.paintClass === "sheer" ? "#ffc440" : "#3fb6ff"}" stroke-width="1.6"/>
+      <g stroke="#fff" stroke-width="2">${symbol}</g></g></svg>`;
+  return `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}") 9 9, crosshair`;
+}
+function updateCursor() {
+  big.style.cursor = state.spaceHeld ? "grab" : state.panning ? "grabbing" : toolCursor(state.tool);
+}
+
+function drawOverlay(c, x0, y0, W, H) {
+  const layer = document.createElement("canvas"); layer.width = Math.max(1, Math.round(W)); layer.height = Math.max(1, Math.round(H));
+  const l = layer.getContext("2d"); l.imageSmoothingEnabled = false;
+  l.drawImage(maskCanvas(state.mask, [255, 70, 70]), 0, 0, layer.width, layer.height);
+  if (!state.xray) { l.globalCompositeOperation = "source-atop"; l.fillStyle = stripePattern(l); l.fillRect(0, 0, layer.width, layer.height); }
+  c.globalAlpha = state.xray ? 0.95 : Math.min(1, 0.8 * state.overlayAlpha);
+  c.drawImage(layer, x0, y0, W, H);
+  c.globalAlpha = 1;
+}
+function tracePath(c, points, x0, y0, z, close) {
+  c.beginPath();
+  points.forEach(([px, py], k) => k ? c.lineTo(x0 + px * z, y0 + py * z) : c.moveTo(x0 + px * z, y0 + py * z));
+  if (close) c.closePath();
+}
+function drawToolPreview(c, x0, y0, z) {
+  c.setLineDash([5, 4]); c.lineWidth = 1.5;
+  if (state.lasso) { c.strokeStyle = "#3fb6ff"; tracePath(c, state.lasso.points, x0, y0, z, true); c.stroke(); }
+  if (state.rect) {
+    const r = normalisedRect(state.rect);
+    c.strokeStyle = state.rect.value ? "#3fb6ff" : "#ffd23f";
+    c.strokeRect(x0 + r.x * z, y0 + r.y * z, r.w * z, r.h * z);
+  }
+  if (state.polygon) {
+    c.strokeStyle = "#ffd23f"; tracePath(c, state.hover ? [...state.polygon.points, state.hover] : state.polygon.points, x0, y0, z, false); c.stroke();
+    const [fx, fy] = state.polygon.points[0];
+    c.setLineDash([]); c.fillStyle = "#fff"; c.beginPath(); c.arc(x0 + fx * z, y0 + fy * z, 4, 0, Math.PI * 2); c.fill(); c.setLineDash([5, 4]);
+  }
+  if (state.stampTrace) {
+    c.strokeStyle = "#7ee787";
+    if (state.stampTrace.box) { const r = normalisedRect(state.stampTrace.box); c.strokeRect(x0 + r.x * z, y0 + r.y * z, r.w * z, r.h * z); }
+    else { tracePath(c, state.stampTrace.points, x0, y0, z, true); c.stroke(); }
+  }
+  if (state.tool === "stamp" && state.stampClip && !state.stampTrace && (state.stampAt || state.hover)) {
+    const clip = state.stampClip, [ax, ay] = stampCorner(state.stampAt || state.hover);
+    c.setLineDash([]); c.globalAlpha = 0.75;
+    for (let y = 0; y < clip.h; y++) for (let x = 0; x < clip.w; x++) {
+      const k = y * clip.w + x;
+      if (!clip.shape[k]) continue;
+      c.fillStyle = clip.data[k] === SHEER ? "#ffc440" : clip.data[k] ? "#ff4646" : "rgba(0,0,0,.6)";
+      c.fillRect(x0 + (ax + x) * z, y0 + (ay + y) * z, z, z);
+    }
+    c.globalAlpha = 1; c.setLineDash([5, 4]); c.strokeStyle = "#7ee787";
+    c.strokeRect(x0 + ax * z, y0 + ay * z, clip.w * z, clip.h * z);
+  }
+  c.setLineDash([]);
+}
+function renderPreviews() {
+  ["art", "pair", "red", "bw"].forEach((mode, k) => {
+    const canvas = $("#preview" + k); if (!canvas) return;
+    const c = canvas.getContext("2d"), s = 3, W = state.width * s, H = state.height * s;
+    c.imageSmoothingEnabled = false; c.clearRect(0, 0, W, H);
+    if (mode === "bw") { c.fillStyle = "#000"; c.fillRect(0, 0, W, H); c.drawImage(maskCanvas(state.mask, [255, 255, 255], SHEER_GREY), 0, 0, W, H); return; }
+    const image = mode === "pair" ? state.pair : state.day;
+    if (image) c.drawImage(image, 0, 0, W, H);
+    else { c.fillStyle = "#666"; c.font = "10px sans-serif"; c.fillText("no pair", 4, 12); }
+    if (mode === "red") { c.globalAlpha = 0.75; c.drawImage(maskCanvas(state.mask, [255, 30, 30]), 0, 0, W, H); c.globalAlpha = 1; }
+  });
+}
+function renderToolbar() {
+  if (typeof updateCursor === "function") updateCursor();
+  document.querySelectorAll("[data-view]").forEach(b => b.classList.toggle("on", b.dataset.view === state.view));
+  document.querySelectorAll("[data-tool]").forEach(b => b.classList.toggle("on", b.dataset.tool === state.tool));
+  document.querySelectorAll("[data-class]").forEach(b => b.classList.toggle("on", b.dataset.class === state.paintClass));
+  document.querySelectorAll("[data-size]").forEach(b => b.classList.toggle("on", +b.dataset.size === state.size));
+  $("#xray").classList.toggle("on", state.xray);
+  $("#skipClear").classList.toggle("on", state.skipClear);
+  if (state.index >= 0 && $("#statusText")) {
+    const w = state.windows[state.index];
+    $("#statusText").innerHTML = `<i class="dot st-${statusOf(w)}"></i> ${STATUS_NAMES[statusOf(w)]}`;
+  }
+}
+function renderAll() { render(); renderPreviews(); renderToolbar(); }
+
+// ---- writing pixels: the one gate every tool goes through, like HF Studio's setPxI ----
+// The clear pixels joined to the picture's edge are outside the window. Clear pixels the frame
+// closes in on are see-through panes and may be painted.
+function clearOutside(w, h) {
+  const p = state.dayPixels, outside = new Uint8Array(w * h), stack = [];
+  const clear = i => p[i * 4 + 3] < CLEAR_ALPHA;
+  for (let x = 0; x < w; x++) stack.push(x, (h - 1) * w + x);
+  for (let y = 0; y < h; y++) stack.push(y * w, y * w + w - 1);
+  while (stack.length) {
+    const i = stack.pop();
+    if (outside[i] || !clear(i)) continue;
+    outside[i] = 1;
+    const x = i % w, y = (i / w) | 0;
+    if (x > 0) stack.push(i - 1); if (x < w - 1) stack.push(i + 1);
+    if (y > 0) stack.push(i - w); if (y < h - 1) stack.push(i + w);
+  }
+  return outside;
+}
+function setPixel(i, value) {
+  if (value && state.skipClear && state.outside[i]) return;
+  state.mask[i] = value;
+}
+function remember() {
+  state.undoStack.push(state.mask.slice());
+  if (state.undoStack.length > HISTORY_LIMIT) state.undoStack.shift();
+  state.redoStack = [];
+}
+function paintSquare(ix, iy, value) {
+  for (let dy = 0; dy < state.size; dy++) for (let dx = 0; dx < state.size; dx++) {
+    const x = ix + dx, y = iy + dy;
+    if (inside(x, y)) setPixel(y * state.width + x, value);
+  }
+}
+function paintLine(ax, ay, bx, by, value) {
+  const steps = Math.max(Math.abs(bx - ax), Math.abs(by - ay), 1);
+  for (let k = 0; k <= steps; k++) paintSquare(Math.round(ax + (bx - ax) * k / steps), Math.round(ay + (by - ay) * k / steps), value);
+}
+function fillTile(ix, iy, value) {
+  const ox = (ix >> 4) << 4, oy = (iy >> 4) << 4;
+  for (let y = oy; y < Math.min(oy + 16, state.height); y++) for (let x = ox; x < Math.min(ox + 16, state.width); x++) setPixel(y * state.width + x, value);
+}
+function wandFill(sx, sy, value) {
+  const W = state.width, H = state.height, p = state.dayPixels;
+  const o0 = (sy * W + sx) * 4, r0 = p[o0], g0 = p[o0 + 1], b0 = p[o0 + 2];
+  if (p[o0 + 3] < CLEAR_ALPHA) { if (!state.outside[sy * W + sx]) fillClearPane(sx, sy, value); return; }
+  const seen = new Uint8Array(W * H), stack = [sy * W + sx]; seen[sy * W + sx] = 1;
+  while (stack.length) {
+    const i = stack.pop();
+    setPixel(i, value);
+    const x = i % W, y = (i / W) | 0;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+      const ni = ny * W + nx; if (seen[ni]) continue; seen[ni] = 1;
+      const no = ni * 4;
+      if (p[no + 3] < CLEAR_ALPHA) continue;
+      if (Math.abs(p[no] - r0) + Math.abs(p[no + 1] - g0) + Math.abs(p[no + 2] - b0) <= WAND_TOLERANCE) stack.push(ni);
+    }
+  }
+}
+function fillClearPane(sx, sy, value) {
+  const W = state.width, H = state.height, p = state.dayPixels;
+  const seen = new Uint8Array(W * H), stack = [sy * W + sx];
+  while (stack.length) {
+    const i = stack.pop();
+    if (seen[i] || p[i * 4 + 3] >= CLEAR_ALPHA || state.outside[i]) continue;
+    seen[i] = 1; setPixel(i, value);
+    const x = i % W, y = (i / W) | 0;
+    if (x > 0) stack.push(i - 1); if (x < W - 1) stack.push(i + 1);
+    if (y > 0) stack.push(i - W); if (y < H - 1) stack.push(i + W);
+  }
+}
+function insideLoop(points, visit) {
+  let minY = 1e9, maxY = -1e9;
+  for (const [, y] of points) { minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+  minY = Math.max(0, Math.floor(minY)); maxY = Math.min(state.height - 1, Math.ceil(maxY));
+  for (let y = minY; y <= maxY; y++) {
+    const sy = y + 0.5, crossings = [];
+    for (let i = 0; i < points.length; i++) {
+      const [ax, ay] = points[i], [bx, by] = points[(i + 1) % points.length];
+      if ((ay <= sy) !== (by <= sy)) crossings.push(ax + (sy - ay) * (bx - ax) / (by - ay));
+    }
+    crossings.sort((a, b) => a - b);
+    for (let k = 0; k + 1 < crossings.length; k += 2) {
+      const a = Math.max(0, Math.ceil(crossings[k] - 0.5)), b = Math.min(state.width - 1, Math.floor(crossings[k + 1] - 0.5));
+      for (let x = a; x <= b; x++) visit(x, y);
+    }
+  }
+}
+function normalisedRect(r) {
+  const x = Math.max(0, Math.floor(Math.min(r.ax, r.bx))), y = Math.max(0, Math.floor(Math.min(r.ay, r.by)));
+  const x2 = Math.min(state.width, Math.floor(Math.max(r.ax, r.bx)) + 1), y2 = Math.min(state.height, Math.floor(Math.max(r.ay, r.by)) + 1);
+  return { x, y, w: Math.max(0, x2 - x), h: Math.max(0, y2 - y) };
+}
+function fillLoop(points, value, keepOnlyInside) {
+  if (points.length < 3) return;
+  if (keepOnlyInside) {
+    const inLoop = new Uint8Array(state.mask.length);
+    insideLoop(points, (x, y) => inLoop[y * state.width + x] = 1);
+    for (let i = 0; i < state.mask.length; i++) if (state.mask[i] && !inLoop[i]) state.mask[i] = 0;
+  } else insideLoop(points, (x, y) => setPixel(y * state.width + x, value));
+}
+
+// ---- stamp: copy a shape of the labels, place it, paste it ----
+function stampLift(shapeOf) {
+  let minX = 1e9, minY = 1e9, maxX = -1, maxY = -1;
+  const cells = [];
+  shapeOf((x, y) => { cells.push([x, y]); minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); });
+  if (!cells.length) return;
+  const w = maxX - minX + 1, h = maxY - minY + 1, shape = new Uint8Array(w * h), data = new Uint8Array(w * h);
+  for (const [x, y] of cells) { const k = (y - minY) * w + (x - minX); shape[k] = 1; data[k] = state.mask[y * state.width + x]; }
+  state.stampClip = { w, h, shape, data };
+  toast(`copied ${w}×${h}: left click pastes, right click drops`);
+}
+// The copy hangs from the cursor by its centre.
+function stampCorner(point) {
+  const clip = state.stampClip;
+  return [Math.round(point[0] - clip.w / 2), Math.round(point[1] - clip.h / 2)];
+}
+function stampPaste() {
+  const clip = state.stampClip; if (!clip || !state.stampAt) return;
+  const [ax, ay] = stampCorner(state.stampAt);
+  remember();
+  for (let y = 0; y < clip.h; y++) for (let x = 0; x < clip.w; x++) {
+    const k = y * clip.w + x, tx = ax + x, ty = ay + y;
+    if (clip.shape[k] && inside(tx, ty)) setPixel(ty * state.width + tx, clip.data[k]);
+  }
+  state.stampAt = null;
+  changed();
+}
+
+// ---- pointer ----
+big.addEventListener("contextmenu", e => e.preventDefault());
+big.addEventListener("mousedown", event => {
+  if (state.index < 0) return;
+  event.preventDefault();
+  if (event.button === 1 || state.spaceHeld) { state.panning = { x: event.clientX, y: event.clientY, panX: state.panX, panY: state.panY }; updateCursor(); return; }
+  const [px, py] = toPixel(event), ix = Math.floor(px), iy = Math.floor(py);
+  const value = event.button === 2 ? 0 : state.paintClass === "sheer" ? SHEER : GLASS;
+  switch (state.tool) {
+    case "brush":
+      if (!inside(ix, iy)) return;
+      remember();
+      state.stroke = { value, lastX: ix, lastY: iy, ruler: event.shiftKey ? { x: ix, y: iy, axis: null } : null };
+      paintSquare(ix, iy, value); render(); break;
+    case "tile":
+      if (!inside(ix, iy)) return;
+      remember(); state.stroke = { value, tile: true }; fillTile(ix, iy, value); render(); break;
+    case "rect":
+      state.rect = { ax: px, ay: py, bx: px, by: py, value }; render(); break;
+    case "lasso":
+      state.lasso = { points: [[px, py]], value }; break;
+    case "polygon": {
+      if (!state.polygon) { state.polygon = { points: [[px, py]], value }; render(); break; }
+      const [fx, fy] = state.polygon.points[0];
+      if (state.polygon.points.length >= 3 && Math.hypot((px - fx) * state.zoom, (py - fy) * state.zoom) <= 6) finishPolygon();
+      else { state.polygon.points.push([px, py]); render(); }
+      break;
+    }
+    case "wand": {
+      if (!inside(ix, iy)) return;
+      const o = (iy * state.width + ix) * 4, p = state.dayPixels;
+      remember(); state.wand = { value, seed: [p[o], p[o + 1], p[o + 2]], clear: p[o + 3] < CLEAR_ALPHA };
+      wandFill(ix, iy, value); render(); break;
+    }
+    case "stamp":
+      // Right button: cancel. It drops the copy held (or the shape being picked) and paints nothing.
+      if (event.button === 2) {
+        if (state.stampClip || state.stampTrace) { state.stampClip = null; state.stampTrace = null; state.stampAt = null; toast("stamp copy dropped"); render(); }
+        break;
+      }
+      // Holding a copy, a left click pastes it there at once; the copy stays held for the next click.
+      if (state.stampClip && !event.shiftKey) { state.stampAt = [px, py]; stampPaste(); break; }
+      // A held copy is placed by a plain click; Shift+drag picks a new one. Picking is a box
+      // unless "Copy as" says free shape; Shift on a first pick uses the other one.
+      const box = state.stampClip ? state.stampBox : state.stampBox !== event.shiftKey;
+      state.stampTrace = box ? { box: { ax: px, ay: py, bx: px, by: py } } : { points: [[px, py]] };
+      break;
+  }
+});
+big.addEventListener("dblclick", () => { if (state.polygon) finishPolygon(); });
+window.addEventListener("mousemove", event => {
+  if (state.index < 0) return;
+  if (state.panning) {
+    state.panX = state.panning.panX + event.clientX - state.panning.x;
+    state.panY = state.panning.panY + event.clientY - state.panning.y;
+    render(); return;
+  }
+  const [px, py] = toPixel(event), ix = Math.floor(px), iy = Math.floor(py);
+  const overCanvas = event.target === big;
+  state.hover = overCanvas ? [px, py] : null;
+  if (state.stroke && !state.stroke.tile) {
+    let [tx, ty] = [ix, iy];
+    const ruler = state.stroke.ruler;
+    if (ruler) {
+      if (!ruler.axis && Math.max(Math.abs(tx - ruler.x), Math.abs(ty - ruler.y)) > 2) ruler.axis = Math.abs(tx - ruler.x) >= Math.abs(ty - ruler.y) ? "x" : "y";
+      if (ruler.axis === "x") ty = ruler.y; else if (ruler.axis === "y") tx = ruler.x;
+    }
+    paintLine(state.stroke.lastX, state.stroke.lastY, tx, ty, state.stroke.value);
+    state.stroke.lastX = tx; state.stroke.lastY = ty;
+  } else if (state.stroke && state.stroke.tile && inside(ix, iy)) fillTile(ix, iy, state.stroke.value);
+  else if (state.rect) { state.rect.bx = px; state.rect.by = py; }
+  else if (state.lasso) { const last = state.lasso.points.at(-1); if (Math.abs(px - last[0]) >= 0.5 || Math.abs(py - last[1]) >= 0.5) state.lasso.points.push([px, py]); }
+  else if (state.stampTrace) {
+    if (state.stampTrace.box) { state.stampTrace.box.bx = px; state.stampTrace.box.by = py; }
+    else state.stampTrace.points.push([px, py]);
+  } else if (state.wand && state.wand.clear && inside(ix, iy)) {
+    if (state.dayPixels[(iy * state.width + ix) * 4 + 3] < CLEAR_ALPHA) wandFill(ix, iy, state.wand.value);
+  } else if (state.wand && inside(ix, iy)) {
+    // keep filling only while the cursor stays on the material the fill started on
+    const o = (iy * state.width + ix) * 4, p = state.dayPixels, seed = state.wand.seed;
+    if (p[o + 3] >= CLEAR_ALPHA && Math.abs(p[o] - seed[0]) + Math.abs(p[o + 1] - seed[1]) + Math.abs(p[o + 2] - seed[2]) <= WAND_SAME_MATERIAL)
+      wandFill(ix, iy, state.wand.value);
+  }
+  if (overCanvas || state.stroke || state.rect || state.lasso || state.stampTrace) render();
+});
+window.addEventListener("mouseup", event => {
+  if (state.panning) { state.panning = null; updateCursor(); return; }
+  if (state.stroke || state.wand) { state.stroke = null; state.wand = null; changed(); return; }
+  if (state.rect) {
+    const r = normalisedRect(state.rect), value = state.rect.value;
+    state.rect = null;
+    if (r.w && r.h) { remember(); for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) setPixel(y * state.width + x, value); changed(); }
+    else render();
+    return;
+  }
+  if (state.lasso) {
+    const { points, value } = state.lasso; state.lasso = null;
+    if (points.length >= 3) { remember(); fillLoop(points, value, event.altKey && value === 1); changed(); } else render();
+    return;
+  }
+  if (state.stampTrace) {
+    const trace = state.stampTrace; state.stampTrace = null;
+    if (trace.box) { const r = normalisedRect(trace.box); stampLift(visit => { for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) visit(x, y); }); }
+    else if (trace.points.length >= 3) stampLift(visit => insideLoop(trace.points, visit));
+    render();
+  }
+});
+function finishPolygon() {
+  const { points, value } = state.polygon; state.polygon = null;
+  if (points.length >= 3) { remember(); fillLoop(points, value, false); changed(); } else render();
+}
+big.addEventListener("mouseleave", () => { state.hover = null; render(); });
+big.addEventListener("wheel", event => {
+  if (state.index < 0) return;
+  event.preventDefault();
+  const box = big.getBoundingClientRect(), mx = event.clientX - box.left, my = event.clientY - box.top;
+  const before = state.zoom;
+  let zoom = before * (event.deltaY < 0 ? 1.25 : 0.8);
+  zoom = Math.max(1, Math.min(64, Math.round(zoom * 4) / 4));
+  state.panX = mx - (mx - state.panX) * zoom / before;
+  state.panY = my - (my - state.panY) * zoom / before;
+  state.zoom = zoom; render();
+}, { passive: false });
+
+// ---- saving: every change goes to its own file at once ----
+// Painting keeps a draft: saved at once, but still to check until ✓ Correct says it is finished
+// (user, 16 Oct 2026: a stroke let go too early made a window "done" and moved on).
+function changed() { queueSave("draft"); }
+function queueSave(status) {
+  const w = state.windows[state.index];
+  // Painting the automatic answer back exactly is the automatic answer being right.
+  if (status === "edited") status = verdictFor(w, pack(state.mask), packSheer(state.mask));
+  w.label = { ...(w.label || {}), status, mask: pack(state.mask), sheer: packSheer(state.mask) };
+  clearTimeout(state.saveTimer);
+  state.pendingSave = { id: w.id, status, mask: w.label.mask, sheer: w.label.sheer };
+  state.saveTimer = setTimeout(() => save(state.pendingSave), 300);
+  updateCard(state.index); refreshModCounts(); renderFilters(); renderAll(); renderTwins(w);
+}
+async function save(pending) {
+  if (!pending) return;
+  state.pendingSave = null;
+  try {
+    const result = await api("/api/label", pending);
+    $("#saved").textContent = result.ok ? `saved ${new Date().toLocaleTimeString()}` : "SAVE FAILED";
+    applySpread(result);
+    replay($("#saved"), "flash");
+    refreshSuggestionsSoon();
+  } catch { $("#saved").textContent = "SAVE FAILED: is labeler.py still running?"; }
+}
+// A judged window's answer was given to its close twins by the server: show it on their cards,
+// count it in the mod list, and say so once things settle.
+let spreadPending = 0, spreadTimer = null;
+function applySpread(result) {
+  if (!result || !result.spread || !result.spread.length) return;
+  // windows in other mods that now want a look go to the "to look at" panel
+  addToWatch(result.spread.filter(twin => String(twin.mod) !== String(state.mod) && (twin.recheck || twin.status === "copy-unchecked"))
+    .map(twin => ({ id: twin.id, mod: String(twin.mod), modName: twin.modName, name: twin.name, kind: twin.recheck ? "recheck" : "copy" })));
+  for (const twin of result.spread) {
+    const index = state.windows.findIndex(w => w.id === twin.id);
+    if (index < 0) continue;
+    state.windows[index].label = twin.status ? { status: twin.status, mask: twin.mask, sheer: twin.sheer || "", recheck: twin.recheck, copiedFrom: twin.copiedFrom } : null;
+    if (index === state.index) { state.mask = startingPicture(state.windows[index]); renderAll(); }
+    updateCard(index);
+  }
+  spreadPending += result.spread.length;
+  clearTimeout(spreadTimer);
+  spreadTimer = setTimeout(async () => {
+    toast(`${spreadPending} matching window${spreadPending > 1 ? "s" : ""} given this glass to check (purple), or marked to look at again (amber)`);
+    spreadPending = 0;
+    const counts = await api("/api/mods");
+    for (const fresh of counts) { const mod = state.mods.find(m => m.mod === fresh.mod); if (mod) Object.assign(mod, fresh); }
+    refreshModCounts(); renderFilters(); renderModActions();
+  }, 600);
+}
+// ---- "to look at": windows elsewhere that an action of yours wants checked; click to jump ----
+const WATCH_KEY = "windowGlassLabelerWatch";
+let watchItems = [], watchFolded = false;
+try { watchItems = JSON.parse(localStorage.getItem(WATCH_KEY)) || []; watchFolded = localStorage.getItem(WATCH_KEY + "Folded") === "1"; } catch {}
+function saveWatch() { try { localStorage.setItem(WATCH_KEY, JSON.stringify(watchItems)); localStorage.setItem(WATCH_KEY + "Folded", watchFolded ? "1" : "0"); } catch {} }
+function addToWatch(items) {
+  if (!items.length) return;
+  for (const item of items) {
+    const known = watchItems.find(other => other.id === item.id);
+    if (known) Object.assign(known, item); else watchItems.unshift(item);
+  }
+  watchFolded = false;
+  saveWatch(); renderWatch(true);
+}
+function renderWatch(arrived) {
+  const panel = $("#watch");
+  if (!watchItems.length) { panel.classList.remove("open"); setTimeout(() => { if (!watchItems.length) panel.hidden = true; }, 260); return; }
+  panel.hidden = false;
+  panel.classList.toggle("folded", watchFolded);
+  $("#watchTitle").textContent = `${watchItems.length} to look at in other mods`;
+  $("#watchHead").querySelector(".watch-fold").innerHTML = icon(watchFolded ? "previous" : "next");
+  $("#watchHead").dataset.tip = watchFolded ? "Open the list" : "Fold the list away";
+  const list = $("#watchList"); list.innerHTML = "";
+  watchItems.forEach((item, k) => {
+    const row = document.createElement("div");
+    row.className = `watch-item ${item.kind}`;
+    row.style.setProperty("--enter-delay", `${Math.min(k, 10) * 30}ms`);
+    row.innerHTML = `<button class="watch-go">${icon(item.kind === "recheck" ? "takeBack" : "copy")}<span><b></b><small></small></span></button><button class="watch-drop" data-tip="Remove from the list">${icon("clear")}</button>`;
+    // names saved before the server cleaned them still carry Content Patcher tokens
+    const name = String(item.name || "window").replace(/\{\{[^}]*\}\}[_.\-\s]*/g, "").trim() || "window";
+    row.querySelector("b").textContent = `${item.kind === "recheck" ? "Check again" : "Copy to check"}: ${name}`;
+    row.querySelector("small").textContent = item.modName || item.mod;
+    row.querySelector(".watch-go").onclick = () => jumpTo(item);
+    row.querySelector(".watch-drop").onclick = () => { watchItems = watchItems.filter(other => other.id !== item.id); saveWatch(); renderWatch(); };
+    list.appendChild(row);
+  });
+  requestAnimationFrame(() => { panel.classList.add("open"); if (arrived) replay(panel, "nudge"); });
+}
+async function jumpTo(item) {
+  watchItems = watchItems.filter(other => other.id !== item.id); saveWatch(); renderWatch();
+  if (String(state.mod) !== String(item.mod)) await openMod(item.mod);
+  const index = state.windows.findIndex(w => w.id === item.id);
+  if (index < 0) return toast("that window is not in the list any more");
+  if (!passes(state.windows[index])) { state.filter = "all"; renderFilters(); renderGrid(); renderModActions(); }
+  jumping = true;
+  try { await openWindow(index); } finally { jumping = false; }
+  spotlightCard(index);
+}
+
+// After the list has settled: bring the card to the middle of the list, dim the others and
+// mark it, until the next click or a few seconds pass.
+let spotlightTimer = 0, jumping = false;
+function spotlightCard(index) {
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const card = document.querySelector(`.card[data-index="${index}"]`), grid = $("#grid");
+    if (!card || !grid) return;
+    clearSpotlight(true);
+    const middleOf = () => {
+      const cardBox = card.getBoundingClientRect(), gridBox = grid.getBoundingClientRect();
+      return grid.scrollTop + (cardBox.top - gridBox.top) - (grid.clientHeight - cardBox.height) / 2;
+    };
+    // A long way off, most of it is crossed at once and only the last stretch glides, so the
+    // card is there while its mark is still showing.
+    const glide = grid.clientHeight * 0.6, target = middleOf();
+    if (Math.abs(target - grid.scrollTop) > glide) grid.scrollTop = target + (target > grid.scrollTop ? -glide : glide);
+    // Then it keeps gliding toward the card for a moment: the cards above it are still drawing
+    // their pictures and growing, which moved it out of view after a plain scroll. Any wheel or
+    // click hands the list back.
+    let followed = true;
+    const letGo = () => { followed = false; };
+    grid.addEventListener("wheel", letGo, { once: true, passive: true });
+    grid.addEventListener("pointerdown", letGo, { once: true });
+    const until = performance.now() + 1800;
+    const follow = () => {
+      if (!followed || !card.isConnected || performance.now() > until) return;
+      const gap = Math.max(0, middleOf()) - grid.scrollTop;
+      if (Math.abs(gap) > 1) grid.scrollTop += gap * 0.22;
+      requestAnimationFrame(follow);
+    };
+    requestAnimationFrame(follow);
+    const mark = document.createElement("div");
+    mark.className = "jump-mark"; mark.textContent = "THIS ONE";
+    card.appendChild(mark);
+    card.classList.add("jumped");
+    grid.classList.add("spotlight");
+    spotlightTimer = setTimeout(() => clearSpotlight(false), 3200);
+    setTimeout(() => document.addEventListener("pointerdown", () => clearSpotlight(false), { once: true, capture: true }), 400);
+  }));
+}
+function clearSpotlight(immediately) {
+  clearTimeout(spotlightTimer);
+  $("#grid")?.classList.remove("spotlight");
+  document.querySelectorAll(".card.jumped").forEach(card => card.classList.remove("jumped"));
+  document.querySelectorAll(".jump-mark").forEach(mark => {
+    if (immediately) { mark.remove(); return; }
+    mark.classList.add("leaving"); setTimeout(() => mark.remove(), 280);
+  });
+}
+$("#watchHead").onclick = () => { watchFolded = !watchFolded; saveWatch(); renderWatch(); };
+$("#watchClear").onclick = () => { watchItems = []; saveWatch(); renderWatch(); };
+renderWatch();
+
+// ---- live: the server pushes every change as it happens, from this page or any other ----
+function applyLiveChange(event) {
+  for (const fresh of event.mods || []) {
+    const mod = state.mods.find(m => m.mod === fresh.mod);
+    if (mod) Object.assign(mod, fresh);
+  }
+  let touchedHere = false;
+  for (const change of event.windows || []) {
+    if (String(change.mod) !== String(state.mod)) continue;
+    const index = state.windows.findIndex(w => w.id === change.id);
+    if (index < 0) continue;
+    const w = state.windows[index];
+    if (JSON.stringify(w.label || null) === JSON.stringify(change.label)) continue;
+    w.label = change.label;
+    touchedHere = true;
+    // the open window follows too, unless you are in the middle of painting it
+    if (index === state.index && !state.stroke && !state.pendingSave) { state.mask = startingPicture(w); renderAll(); }
+    updateCard(index);
+  }
+  renderMods(); renderFilters(); renderModActions(); renderToolbar();
+  if (touchedHere || (event.mods || []).some(m => m.mod === state.mod)) refreshSuggestionsSoon();
+}
+function connectLive() {
+  let first = true, offlineTimer = 0, retryDelay = 1000;
+  const open = () => {
+    const source = new EventSource("/api/events");
+    source.addEventListener("hello", async () => {
+      clearTimeout(offlineTimer); retryDelay = 1000;
+      // after a reconnect, catch up on whatever happened while the line was down
+      if (!first) { await loadMods(); if (state.mod) refreshSuggestionsSoon(); }
+      first = false;
+      document.body.classList.remove("offline");
+    });
+    source.onmessage = message => { try { applyLiveChange(JSON.parse(message.data)); } catch (error) { console.error(error); } };
+    source.onerror = () => {
+      // A blip (a burst of pictures loading, the computer waking, the server restarting)
+      // comes back by itself within a second or two; only a line still down after that is
+      // worth a banner. It used to show on every blip.
+      clearTimeout(offlineTimer);
+      offlineTimer = setTimeout(() => document.body.classList.add("offline"), 2500);
+      // The browser gives up for good on some failures; then the page tries again itself.
+      if (source.readyState === EventSource.CLOSED) {
+        source.close();
+        setTimeout(open, retryDelay);
+        retryDelay = Math.min(retryDelay * 2, 10000);
+      }
+    };
+  };
+  open();
+}
+connectLive();
+
+// A new label can pre-fill other windows of this mod: ask the server again once things settle.
+function refreshSuggestionsSoon() {
+  clearTimeout(state.suggestTimer);
+  state.suggestTimer = setTimeout(async () => {
+    if (!state.mod) return;
+    const fresh = await api("/api/windows?mod=" + encodeURIComponent(state.mod));
+    const byId = new Map(fresh.map(w => [w.id, w]));
+    state.windows.forEach((w, i) => {
+      const now = byId.get(w.id);
+      if (!now) return;
+      if (JSON.stringify(w.label || null) !== JSON.stringify(now.label || null) && !(i === state.index && state.pendingSave)) {
+        w.label = now.label; updateCard(i);
+        if (i === state.index && !state.stroke) { state.mask = startingPicture(w); renderAll(); }
+      }
+      if (w.label) return;
+      const before = w.suggest ? w.suggest.from + w.suggest.mask : "", after = now.suggest ? now.suggest.from + now.suggest.mask : "";
+      if (before === after) return;
+      w.suggest = now.suggest;
+      updateCard(i);
+      if (i === state.index && !state.undoStack.length) { state.mask = startingPicture(w); renderAll(); }
+    });
+    renderFilters(); renderModActions();
+  }, 900);
+}
+function flushSave() { if (state.pendingSave) { clearTimeout(state.saveTimer); save(state.pendingSave); } }
+window.addEventListener("beforeunload", flushSave);
+
+// ---- verdicts and history ----
+// "Correct" confirms what is on screen: the automatic answer if nobody painted, else the paint.
+function accept() { queueSave("edited"); }
+// Take a verdict back: painted glass stays as a draft, an untouched window forgets its label.
+async function takeBackVerdict(i) {
+  const w = state.windows[i];
+  const painted = w.label && w.label.status !== "no-glass" && (w.label.mask !== w.auto || hasBits(w.label.sheer));
+  if (painted) {
+    w.label = { status: "draft", mask: w.label.mask, sheer: w.label.sheer || "" };
+    await api("/api/label", { id: w.id, status: "draft", mask: w.label.mask, sheer: w.label.sheer || "" });
+  } else {
+    w.label = null;
+    applySpread(await api("/api/clear", { id: w.id }));
+    if (i === state.index) state.mask = unpack(w.auto, state.width, state.height);
+  }
+  updateCard(i); refreshModCounts(); renderFilters(); renderModActions();
+  if (i === state.index) renderAll();
+}
+function noGlass() { remember(); state.mask = new Uint8Array(state.mask.length); queueSave("no-glass"); }
+async function resetToAuto() {
+  const w = state.windows[state.index];
+  remember(); state.mask = unpack(w.auto, state.width, state.height);
+  clearTimeout(state.saveTimer); state.pendingSave = null;
+  w.label = null; applySpread(await api("/api/clear", { id: w.id }));
+  updateCard(state.index); refreshModCounts(); renderFilters(); renderAll();
+}
+function undo() {
+  if (!state.undoStack.length) return;
+  state.redoStack.push(state.mask); state.mask = state.undoStack.pop();
+  // Undone all the way: the window goes back to the verdict it had when it was opened,
+  // so an undone experiment does not count as a judgement of the automatic answer.
+  if (!state.undoStack.length) {
+    const w = state.windows[state.index], opened = state.openedLabel;
+    clearTimeout(state.saveTimer); state.pendingSave = null;
+    if (opened) queueSave(opened.status);
+    else { w.label = null; api("/api/clear", { id: w.id }).then(applySpread); updateCard(state.index); refreshModCounts(); renderFilters(); renderAll(); }
+    return;
+  }
+  changed();
+}
+function redo() { if (!state.redoStack.length) return; state.undoStack.push(state.mask); state.mask = state.redoStack.pop(); changed(); }
+function hoveredTileOrigin() {
+  if (!state.hover || !inside(...state.hover)) { toast("point at a tile first"); return null; }
+  const [ix, iy] = state.hover.map(Math.floor);
+  return [(ix >> 4) << 4, (iy >> 4) << 4];
+}
+function copyTile() {
+  const origin = hoveredTileOrigin(); if (!origin) return;
+  const [ox, oy] = origin, clip = new Uint8Array(256);
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) if (inside(ox + x, oy + y)) clip[y * 16 + x] = state.mask[(oy + y) * state.width + ox + x];
+  state.tileClip = clip; toast("tile copied");
+}
+function pasteTile() {
+  if (!state.tileClip) return toast("nothing copied");
+  const origin = hoveredTileOrigin(); if (!origin) return;
+  const [ox, oy] = origin;
+  remember();
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) if (inside(ox + x, oy + y)) state.mask[(oy + y) * state.width + ox + x] = state.tileClip[y * 16 + x];
+  changed();
+}
+function copyAll() { state.wholeClip = { w: state.width, h: state.height, data: state.mask.slice() }; toast(`whole glass copied (${state.width}×${state.height})`); }
+function pasteAll() {
+  const clip = state.wholeClip; if (!clip) return toast("nothing copied");
+  if (clip.w !== state.width || clip.h !== state.height) toast(`sizes differ (${clip.w}×${clip.h} into ${state.width}×${state.height}): pasted from the top left`);
+  remember();
+  for (let y = 0; y < state.height; y++) for (let x = 0; x < state.width; x++)
+    state.mask[y * state.width + x] = x < clip.w && y < clip.h ? clip.data[y * clip.w + x] : 0;
+  changed();
+}
+function step(delta) {
+  const order = state.windows.map((w, i) => i).filter(i => passes(state.windows[i]));
+  if (!order.length) return;
+  const at = order.indexOf(state.index);
+  openWindow(order[(at + delta + order.length) % order.length]);
+}
+function nextTodo() {
+  for (let k = 1; k <= state.windows.length; k++) {
+    const i = (state.index + k) % state.windows.length;
+    if (statusOf(state.windows[i]) === "todo") return openWindow(i);
+  }
+  toast("every window of this mod is checked");
+}
+function escape() {
+  if (!$("#help").hidden) { closeHelp(); return; }
+  if (document.querySelector(".verdict-armed")) { cancelAllArmed(); return; }
+  if (state.stampAt) state.stampAt = null;
+  else if (state.stampTrace) state.stampTrace = null;
+  else if (state.stampClip) { state.stampClip = null; toast("stamp copy dropped"); }
+  else if (state.polygon) state.polygon = null;
+  else if (state.lasso) state.lasso = null;
+  render();
+}
+
+// ---- wiring ----
+// Choosing the view already shown goes back to the one before it, so a quick look at the art
+// or the pair is one press there and one press back (button or key alike).
+function chooseView(view) {
+  if (view === state.view) { if (state.previousView) [state.view, state.previousView] = [state.previousView, state.view]; }
+  else { state.previousView = state.view; state.view = view; }
+}
+document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { chooseView(b.dataset.view); renderAll(); });
+document.querySelectorAll("[data-tool]").forEach(b => b.onclick = () => { state.tool = b.dataset.tool; state.polygon = null; renderAll(); });
+document.querySelectorAll("[data-class]").forEach(b => b.onclick = () => { state.paintClass = b.dataset.class; renderAll(); });
+document.querySelectorAll("[data-size]").forEach(b => b.onclick = () => { state.size = +b.dataset.size; renderAll(); });
+$("#xray").onclick = () => { state.xray = !state.xray; renderAll(); };
+$("#stampShape").onclick = () => {
+  state.stampBox = !state.stampBox; state.tool = "stamp";
+  $("#stampShape span").textContent = `Copy as: ${state.stampBox ? "box" : "free shape"}`; renderAll();
+};
+$("#skipClear").onclick = () => { state.skipClear = !state.skipClear; renderToolbar(); };
+$("#alpha").oninput = e => { state.overlayAlpha = e.target.value / 100; render(); };
+$("#fit").onclick = () => { fitView(); render(); };
+$("#undo").onclick = undo; $("#redo").onclick = redo;
+$("#copyAll").onclick = copyAll; $("#pasteAll").onclick = pasteAll;
+// A verdict button asks twice: the first press arms it, a second press within three seconds does it.
+function confirmTwice(button, action) {
+  if (state.index < 0) return;
+  armTwice(button, "Press again", action);
+}
+$("#accept").onclick = () => confirmTwice($("#accept"), accept);
+$("#noGlass").onclick = () => confirmTwice($("#noGlass"), noGlass);
+$("#reset").onclick = () => confirmTwice($("#reset"), resetToAuto);
+$("#prev").onclick = () => step(-1); $("#next").onclick = () => step(1); $("#nextTodo").onclick = nextTodo;
+function openHelp() { const help = $("#help"); help.hidden = false; requestAnimationFrame(() => help.classList.add("open")); }
+function closeHelp() { const help = $("#help"); help.classList.remove("open"); clearTimeout(help.closing); help.closing = setTimeout(() => { if (!help.classList.contains("open")) help.hidden = true; }, 230); }
+$("#helpButton").onclick = openHelp;
+$("#help").onclick = e => { if (e.target.id === "help") closeHelp(); };
+$("#search").oninput = () => { animateModList = true; renderMods(); };
+// The mod list: all, only the ones with windows left to check, or only the finished ones.
+document.querySelectorAll("#modFilter button").forEach(button => button.onclick = () => {
+  modFilter = button.dataset.mods; animateModList = true;
+  try { localStorage.setItem("windowGlassLabelerModFilter", modFilter); } catch {}
+  renderMods();
+});
+const TOOL_KEYS = { KeyB: "brush", KeyR: "rect", KeyL: "lasso", KeyP: "polygon", KeyW: "wand", KeyT: "tile", KeyS: "stamp" };
+const VIEW_KEYS = { Digit1: "red", Digit2: "bw", Digit3: "art", Digit4: "pair" };
+// Physical keys (event.code), so the shortcuts work with a Thai keyboard layout too.
+window.addEventListener("keydown", event => {
+  if (event.target.tagName === "INPUT" || event.target.tagName === "TEXTAREA") return;
+  const code = event.code, ctrl = event.ctrlKey || event.metaKey;
+  if (code === "Space") { event.preventDefault(); state.spaceHeld = true; updateCursor(); return; }
+  if (code === "KeyH" && !ctrl) { if (!state.hideOverlay) { state.hideOverlay = true; render(); } return; }
+  if (code === "Escape") return escape();
+  if (code === "F1" || event.key === "?") { event.preventDefault(); $("#help").hidden ? openHelp() : closeHelp(); return; }
+  if (state.index < 0) return;
+  if (ctrl && code === "KeyS") { event.preventDefault(); flushSave(); toast("saved"); return; }
+  if (ctrl && (code === "KeyY" || (code === "KeyZ" && event.shiftKey))) { event.preventDefault(); redo(); return; }
+  if (code === "KeyZ" && !event.shiftKey) { event.preventDefault(); undo(); return; }
+  if (ctrl && code === "KeyC") { event.preventDefault(); event.shiftKey ? copyAll() : copyTile(); return; }
+  if (ctrl && code === "KeyV") { event.preventDefault(); event.shiftKey ? pasteAll() : pasteTile(); return; }
+  if (ctrl) return;
+  if (code === "Enter") { if (state.polygon) finishPolygon(); else if (state.stampAt) stampPaste(); return; }
+  if (code === "KeyR" && event.shiftKey) return confirmTwice($("#reset"), resetToAuto);
+  if (TOOL_KEYS[code]) { state.tool = TOOL_KEYS[code]; state.polygon = null; }
+  else if (VIEW_KEYS[code]) chooseView(VIEW_KEYS[code]);
+  else if (code === "KeyQ") state.paintClass = state.paintClass === "sheer" ? "glass" : "sheer";
+  else if (code === "BracketLeft") state.size = state.size === 4 ? 2 : 1;
+  else if (code === "BracketRight") state.size = state.size === 1 ? 2 : 4;
+  else if (code === "KeyX") state.xray = !state.xray;
+  else if (code === "KeyF") fitView();
+  else if (code === "KeyA") return confirmTwice($("#accept"), accept);
+  else if (code === "KeyN") return confirmTwice($("#noGlass"), noGlass);
+  else if (code === "ArrowRight") { event.preventDefault(); return step(1); }
+  else if (code === "ArrowLeft") { event.preventDefault(); return step(-1); }
+  else if (code === "ArrowDown") { event.preventDefault(); return nextTodo(); }
+  else return;
+  renderAll();
+});
+window.addEventListener("keyup", event => {
+  if (event.code === "Space") { state.spaceHeld = false; updateCursor(); }
+  if (event.code === "KeyH" && state.hideOverlay) { state.hideOverlay = false; render(); }
+});
+window.addEventListener("resize", render);
+renderToolbar();
+loadMods();
+</script>
+</body>
+</html>
