@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using HarmonyLib;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
@@ -437,6 +439,7 @@ namespace SDVRadiance
             Pipeline.BeginScreen(MapScreenshotEffects.ScreenId(Context.ScreenId));
             Pipeline.Apply(e.SpriteBatch, MapScreenshotEffects.ShotConfig ?? _config);
             HarmonyPatcher.DrawHoistedMineFloorNumber(e.SpriteBatch);
+            HarmonyPatcher.DrawHoistedCastMeter(e.SpriteBatch);
             // Logged AFTER the pass so the frame size is this screen's, not the previous screen's.
             if (watching)
                 Monitor.Log($"[screenwatch] screen={Context.ScreenId} location={Game1.currentLocation?.NameOrUniqueName} "
@@ -521,6 +524,8 @@ namespace SDVRadiance
             // The mine's floor number leaves the world layer whenever the chain will run over it,
             // and OnRenderedWorld draws it back after the chain.
             HarmonyPatcher.HoistMineFloorNumber = EffectsActive && !(Game1.game1?.takingMapScreenshot ?? false);
+            // The fishing cast meter likewise, so the water does not mirror it.
+            HarmonyPatcher.HoistCastMeter = HarmonyPatcher.HoistMineFloorNumber;
             // A map screenshot is the game's own picture of the whole location, drawn in chunks:
             // no bakes, shadows, reflections or chain for it (see GameIsTakingMapScreenshot).
             if (!_config.Enabled || HarmonyPatcher.GameIsTakingMapScreenshot)
@@ -957,12 +962,21 @@ namespace SDVRadiance
             if (Game1.activeClickableMenu is RadianceTunerMenu tuner)
                 tuner.SlideClosed();
             else if (Context.IsPlayerFree)
+            {
+                // The search matches a setting's name in every language the mod has, so an English
+                // word finds the setting in a Thai menu and the other way round.
+                RadianceTunerMenu.TextsInEveryLanguage ??= TextsInEveryLanguage;
                 Game1.activeClickableMenu = new RadianceTunerMenu(
                     _config,
                     translate: I18n,
                     onChange: () => HarmonyPatcher.ForceBufferDraw = EffectsActive,
                     onSave: () => { SettingsBackup.WriteConfig(Helper, _config); SettingsLog.MarkChanged(); });
+            }
         }
+
+        /// <summary>A key's text in every language the mod carries, for the tuner's search.</summary>
+        private IEnumerable<string> TextsInEveryLanguage(string key)
+            => Helper.Translation.GetInAllLocales(key).Values.Select(text => text.ToString()).Where(text => !string.IsNullOrWhiteSpace(text));
 
         /// <summary>The Nexus id of every installed mod, from its manifest's update keys
         /// ("Nexus:18487", sometimes with "@subkey" after it). Whatever a manifest holds, this never

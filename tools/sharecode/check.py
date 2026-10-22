@@ -46,7 +46,7 @@ CARRIED_STRINGS = {"ColorGradeLut"}
 # are in the registry themselves, so the label would say nothing the values do not.
 CARRIED_BY_NO_CODE = {
     "ActivePerfPreset", "DebugLogging", "SavedProfiles", "TunerFoldedSections", "TunerLastTab",
-    "TunerShowFineTuning", "TunerGlassShade", "ConfigVersion", "ActivePreset", "Enabled", "WindowCompatAppliedFor",
+    "TunerShowFineTuning", "TunerGlassShade", "TunerHiddenListOpen", "ConfigVersion", "ActivePreset", "Enabled", "WindowCompatAppliedFor",
     "WaterDisabledLocations", "ToggleKey", "TunerKey", "InspectDrawKey",
 }
 

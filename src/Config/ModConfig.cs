@@ -725,6 +725,45 @@ namespace SDVRadiance
         /// <summary>The tuner's groups the player has folded away, by heading key. A place in a menu
         /// rather than a look, so saved looks do not carry it (it is a list, which they skip).</summary>
         public List<string> TunerFoldedSections { get; set; } = [];
+        /// <summary>The tuner's groups the player has hidden, by heading key. These keys, and the switch
+        /// keys below, are the i18n keys of headings and switches: renaming one in a later release has
+        /// to carry the player's hidden entries over to the new name, or what they hid comes back.
+        /// Unlike a folded group, a hidden one is held off as well: every switch in it stays off until
+        /// it is shown again from the foot of its page. A place in a menu, so looks do not carry it.</summary>
+        public List<string> TunerHiddenSections { get; set; } = [];
+        /// <summary>How much room the new tuner menu leaves between its rows and groups: "Compact",
+        /// "Roomy", or empty for the usual. A place in a menu, so looks do not carry it.</summary>
+        public string TunerDensity { get; set; } = "";
+        /// <summary>How big the new tuner menu's text is, the menu growing with it: "Small", "Large",
+        /// or empty for the usual. A place in a menu, so looks do not carry it.</summary>
+        public string TunerTextSize { get; set; } = "";
+        /// <summary>Whether the list of hidden things at the foot of a tuner page is open. Folded to
+        /// start; a place in a menu, so looks do not carry it.</summary>
+        public bool TunerHiddenListOpen { get; set; } = false;
+        /// <summary>Single switches the player has hidden, by label key, held off the same way.</summary>
+        public List<string> TunerHiddenSwitches { get; set; } = [];
+        /// <summary>The hidden switches that were on when hiding put them off, by label key, so showing
+        /// one again puts it back on. A switch that was already off has no entry.</summary>
+        public Dictionary<string, bool> TunerHiddenWasOn { get; set; } = [];
+        /// <summary>
+        /// Tuner heading and switch keys that were renamed, old to new. A player's hidden and folded
+        /// groups and hidden switches are kept under those keys, so a rename carries them over here
+        /// (tools/tunerkeys/check.py refuses a build that drops a key without an entry).
+        /// </summary>
+        internal static readonly Dictionary<string, string> RenamedTunerKeys = [];
+
+        private void CarryRenamedTunerKeys()
+        {
+            foreach ((string old, string renamed) in RenamedTunerKeys)
+            {
+                foreach (List<string> keys in new[] { TunerHiddenSections, TunerHiddenSwitches, TunerFoldedSections })
+                    if (keys.Remove(old) && !keys.Contains(renamed))
+                        keys.Add(renamed);
+                if (TunerHiddenWasOn.Remove(old, out bool wasOn))
+                    TunerHiddenWasOn[renamed] = wasOn;
+            }
+        }
+
         /// <summary>Whether the tuner shows its fine-tuning groups. Off to start: most players want the
         /// handful of dials that change the picture, and the rest waits behind the header switch.</summary>
         public bool TunerShowFineTuning { get; set; } = false;
@@ -1991,6 +2030,12 @@ namespace SDVRadiance
             WaterRiverWaves = ClampToRange(WaterRiverWaves, 0.0f, 2.0f);
             // A hand-edited config can write null into these; the tuner reads them on every open.
             TunerFoldedSections ??= [];
+            TunerHiddenSections ??= [];
+            TunerHiddenSwitches ??= [];
+            TunerHiddenWasOn ??= [];
+            CarryRenamedTunerKeys();
+            TunerDensity ??= "";
+            TunerTextSize ??= "";
             TunerScrollByTab ??= [];
             TunerLastTab ??= "";
             TunerLayout ??= "";
@@ -2193,7 +2238,7 @@ namespace SDVRadiance
             {
                 if (!p.CanRead || !p.CanWrite)
                     continue;
-                if (p.Name is nameof(Enabled) or nameof(ActivePreset) or nameof(DebugLogging) or nameof(TunerShowFineTuning) or nameof(TunerGlassShade))
+                if (p.Name is nameof(Enabled) or nameof(ActivePreset) or nameof(DebugLogging) or nameof(TunerShowFineTuning) or nameof(TunerGlassShade) or nameof(TunerHiddenListOpen))
                     continue;
                 Type t = p.PropertyType;
                 if (t == typeof(bool) || t == typeof(int) || t == typeof(float) || t.IsEnum)
@@ -2263,7 +2308,8 @@ namespace SDVRadiance
         private static readonly HashSet<string> KeptThroughReset = new(StringComparer.Ordinal)
         {
             nameof(ConfigVersion), nameof(SavedProfiles), nameof(WindowCompatAppliedFor),
-            nameof(TunerFoldedSections), nameof(TunerShowFineTuning), nameof(TunerLastTab), nameof(TunerScrollByTab), nameof(TunerLayout), nameof(TunerPanel), nameof(TunerGlassShade),
+            nameof(TunerFoldedSections), nameof(TunerHiddenSections), nameof(TunerHiddenSwitches), nameof(TunerHiddenWasOn), nameof(TunerHiddenListOpen), nameof(TunerDensity), nameof(TunerTextSize),
+            nameof(TunerShowFineTuning), nameof(TunerLastTab), nameof(TunerScrollByTab), nameof(TunerLayout), nameof(TunerPanel), nameof(TunerGlassShade),
         };
 
         /// <summary>Load a saved profile's settings into the live config.</summary>

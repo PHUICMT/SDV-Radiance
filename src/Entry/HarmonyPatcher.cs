@@ -317,6 +317,83 @@ namespace SDVRadiance
             {
                 monitor.Log($"Mine floor number will stay in captured frames: {ex.Message}", LogLevel.Trace);
             }
+
+            // The fishing rod's cast power meter is the same kind of thing: a gauge the game paints
+            // into the WORLD layer, after the weather, while the player holds the cast. The water
+            // reflection mirrors that frame, so a player reported the meter showing up upside down in
+            // the pond below them. The rod draws the meter only while isTimingCast or
+            // castingChosenCountdown says so; the prefix clears both for the length of the call and
+            // the postfix puts them back, then the meter is drawn after the chain (see
+            // DrawHoistedCastMeter).
+            try
+            {
+                harmony.Patch(
+                    original: AccessTools.Method(typeof(StardewValley.Tools.FishingRod),
+                                                 nameof(StardewValley.Tools.FishingRod.draw), [typeof(SpriteBatch)]),
+                    prefix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(CastMeter_Prefix)),
+                    postfix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(CastMeter_Postfix)));
+            }
+            catch (Exception ex)
+            {
+                monitor.Log($"Fishing cast meter will stay in the world layer: {ex.Message}", LogLevel.Trace);
+            }
+        }
+
+        /// <summary>Set once a frame by ModEntry, with the mine floor number: whether the cast meter is
+        /// kept out of the world layer and drawn after the chain instead.</summary>
+        internal static bool HoistCastMeter;
+
+        /// <summary>What a cast meter prefix took off the rod, for its postfix to give back.</summary>
+        private struct HeldCastMeter
+        {
+            public bool Held;
+            public bool TimingCast;
+            public float ChosenCountdown;
+        }
+
+        /// <inheritdoc cref="Apply"/>
+        private static void CastMeter_Prefix(StardewValley.Tools.FishingRod __instance, out HeldCastMeter __state)
+        {
+            __state = default;
+            if (!HoistCastMeter || !(__instance.isTimingCast || __instance.castingChosenCountdown > 0f))
+                return;
+            __state = new HeldCastMeter { Held = true, TimingCast = __instance.isTimingCast, ChosenCountdown = __instance.castingChosenCountdown };
+            __instance.isTimingCast = false;
+            __instance.castingChosenCountdown = 0f;
+        }
+
+        /// <inheritdoc cref="Apply"/>
+        private static void CastMeter_Postfix(StardewValley.Tools.FishingRod __instance, HeldCastMeter __state)
+        {
+            if (!__state.Held)
+                return;
+            __instance.isTimingCast = __state.TimingCast;
+            __instance.castingChosenCountdown = __state.ChosenCountdown;
+        }
+
+        /// <summary>
+        /// Draw the cast power meter the way FishingRod.draw would have, after the effect chain, so it
+        /// stays out of the reflection and as crisp as the HUD. Same batch state as
+        /// <see cref="DrawHoistedMineFloorNumber"/>. The box, the bob, the fade and the colour are the
+        /// game's own, copied line for line from 1.6.15 so nothing moves.
+        /// </summary>
+        internal static void DrawHoistedCastMeter(SpriteBatch spriteBatch)
+        {
+            if (!HoistCastMeter || Game1.player?.CurrentTool is not StardewValley.Tools.FishingRod rod)
+                return;
+            if (!(rod.isTimingCast || rod.castingChosenCountdown > 0f))
+                return;
+            Farmer caster = rod.getLastFarmerToUse();
+            if (caster == null || !caster.IsLocalPlayer)
+                return;
+            int bob = (int)((0f - Math.Abs(rod.castingChosenCountdown / 2f - rod.castingChosenCountdown)) / 50f);
+            float fade = rod.castingChosenCountdown is > 0f and < 100f ? rod.castingChosenCountdown / 100f : 1f;
+            spriteBatch.Draw(Game1.mouseCursors, Game1.GlobalToLocal(Game1.viewport, caster.Position + new Vector2(-48f, -160 + bob)),
+                new Rectangle(193, 1868, 47, 12), Color.White * fade, 0f, Vector2.Zero, 4f, SpriteEffects.None, 0.885f);
+            Vector2 feetOnScreen = Game1.GlobalToLocal(Game1.viewport, caster.Position);
+            spriteBatch.Draw(Game1.staminaRect,
+                new Rectangle((int)feetOnScreen.X - 32 - 4, (int)feetOnScreen.Y + bob - 128 - 32 + 12, (int)(164f * rod.castingPower), 25),
+                Game1.staminaRect.Bounds, Utility.getRedToGreenLerpColor(rod.castingPower) * fade, 0f, Vector2.Zero, SpriteEffects.None, 0.887f);
         }
 
         /// <summary>What takingMapScreenshot was before a capture borrowed it.</summary>

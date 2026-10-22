@@ -59,6 +59,24 @@ namespace SDVRadiance
                         monitor.Log(line, report.Count == 1 ? LogLevel.Info : LogLevel.Warn);
                     if (report.Count == 1)
                         monitor.Log("Every row is in the grouped layout exactly once.", LogLevel.Info);
+                    List<string> loose = RadianceTunerMenu.FindRowsOutsideCards(getConfig(), key => helper.Translation.Get(key).ToString());
+                    foreach (string line in loose)
+                        monitor.Log("outside every card: " + line, LogLevel.Warn);
+                    if (loose.Count == 0)
+                        monitor.Log("Every row on the glass sits in a group's card.", LogLevel.Info);
+                });
+            helper.ConsoleCommands.Add("radiance_tuner_deps",
+                "Write which switch each row of the tuner hangs off to tuner-deps.json in the mod's folder. "
+                + "Found by turning each switch off in turn off screen; takes a few seconds.",
+                (_, _) =>
+                {
+                    var rows = RadianceTunerMenu.MapDependencies(getConfig(), key => helper.Translation.Get(key).ToString());
+                    string path = System.IO.Path.Combine(helper.DirectoryPath, "tuner-deps.json");
+                    System.IO.File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(rows,
+                        new System.Text.Json.JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+                    monitor.Log($"{rows.Count} rows, {rows.Count(row => row.HiddenWhenOff.Count > 0)} hang off a switch: {path}", LogLevel.Info);
+                    monitor.Log($"switches that are all their group holds ({RadianceTunerMenu.GroupOwnersLearnedInMilliseconds:0} ms to learn): "
+                        + string.Join(", ", RadianceTunerMenu.GroupOwners), LogLevel.Info);
                 });
             // Author tool: dumps every location's layers/tiles + sheet art for HF Studio, the
             // browser labeler that produces labels/water-labels.json. Harmless for players (it

@@ -27,7 +27,7 @@ namespace SDVRadiance
         // obviously wrong on screen.
         private const int BaseRailWidth = 196;
         private const int BaseContentWidth = 430;
-        private const int BaseGlassContentWidth = 620;
+        private const int BaseGlassContentWidth = 680;
         private const int PanelWidth = BaseRailWidth + BaseContentWidth;
         private const int BaseHeaderHeight = 52;
         private const int BaseFooterHeight = 40;
@@ -82,8 +82,140 @@ namespace SDVRadiance
             public readonly Rectangle Row = row;
             public readonly bool Folded = folded;
             public int HiddenRows;
+            /// <summary>Switches in the group the player may hide. Hiding the group turns them off; a
+            /// group with none is only put out of sight, its settings working as they were.</summary>
+            public int HideableSwitches;
+            /// <summary>Whether the player may hide the group: any group outside the looks and the
+            /// menu's own page.</summary>
+            public bool CanHide;
+            /// <summary>Where the group's last row ended, in content coordinates, before the gap that
+            /// leads into the next heading.</summary>
+            public int RowsEnd = int.MinValue;
+            /// <summary>The group's switches the player hid one at a time.</summary>
+            public readonly List<string> HiddenSwitchKeys = [];
+            /// <summary>The switch the group opens with, when it is the first row.</summary>
+            public TunerToggle? LeadSwitch;
+            /// <summary>On the glass, the group this one sits inside: the tab's own group (its master
+            /// switch), with the tab's other groups on the page nested in its card.</summary>
+            public SectionHeader? Parent;
+            /// <summary>For a parent with children on screen, where its card's content ends: under its
+            /// last child's card.</summary>
+            public int? GroupEnd;
         }
+
+        /// <summary>
+        /// A group folding, opening, hiding or coming back, or a switch hiding or coming back: the
+        /// band of content between <see cref="FoldMotion.StartY"/> and <see cref="FoldMotion.EndY"/>
+        /// closes up or opens out over <see cref="FoldSeconds"/>, and everything after it slides with
+        /// it. Closing runs on the layout as it is and changes the setting at the end; opening changes
+        /// the setting first and runs on the new layout.
+        /// </summary>
+        private sealed class FoldMotion
+        {
+            /// <summary>The bands that close or open, top to bottom, never overlapping (Fold all moves
+            /// every open group at once).</summary>
+            public List<(int StartY, int EndY)> Bands = [];
+            public bool Opening;
+            public float Progress;
+            public Action? Finish;
+        }
+        private FoldMotion? _fold;
+        private const float FoldSeconds = 0.2f;
+
+        /// <summary>How much of a band is closed right now, in pixels.</summary>
+        private int FoldGapOf((int StartY, int EndY) band)
+        {
+            if (_fold == null)
+                return 0;
+            float t = Math.Clamp(_fold.Progress, 0f, 1f);
+            float eased = t * t * (3f - 2f * t);
+            return (int)((band.EndY - band.StartY) * (_fold.Opening ? 1f - eased : eased));
+        }
+
+        private void StartFold(int startY, int endY, bool opening, Action? finish = null)
+            => StartFold([(startY, endY)], opening, finish);
+
+        private void StartFold(List<(int StartY, int EndY)> bands, bool opening, Action? finish = null)
+        {
+            bands = [.. bands.Where(band => band.EndY > band.StartY).OrderBy(band => band.StartY)];
+            if (bands.Count == 0)
+            {
+                finish?.Invoke();
+                return;
+            }
+            _fold = new FoldMotion { Bands = bands, Opening = opening, Finish = finish };
+        }
+
+        private void AdvanceFold()
+        {
+            if (_fold == null)
+                return;
+            _fold.Progress += TunerMotion.FrameSeconds / FoldSeconds;
+            if (_fold.Progress < 1f)
+                return;
+            FoldMotion done = _fold;
+            _fold = null;
+            done.Finish?.Invoke();
+        }
+
+        /// <summary>The gap a heading leads in with: a little more on the glass, so each card has room
+        /// under its last row.</summary>
+        private int SectionLead => Scaled(SectionLeadBase + (GlassPanel ? 8 + 6 * DensityStep : 0));
+
+        /// <summary>How much room the glass leaves, as the player chose it: 0 compact, 1 the usual,
+        /// 2 roomy. The classic box keeps its own spacing.</summary>
+        private int DensityStep => _config.TunerDensity switch { DensityCompact => 0, DensityRoomy => 2, _ => 1 };
+        internal const string DensityCompact = "Compact", DensityRoomy = "Roomy";
+
+        /// <summary>The step from one setting row to the next on the glass: room to breathe between
+        /// them, where the classic box keeps its own.</summary>
+        private int GlassRowPitchBase => 34 + 6 * DensityStep;
+        private int SwitchPitch => Scaled(GlassPanel ? GlassRowPitchBase : 44);
+
+        /// <summary>How far a heading moves the rows on: its height and the gap under it (a wider gap on
+        /// the glass, so a heading stands clear of its rows), or on the glass, for a folded group, only
+        /// its height, so its card is the heading and no more.</summary>
+        private int HeaderAdvance(bool folded)
+            => Scaled(GlassPanel ? folded ? SectionHeaderBase : SectionPitchBase + 6 * DensityStep : SectionPitchBase);
+
+        /// <summary>The band a whole group takes, from the gap above its heading to its last row.</summary>
+        private (int Start, int End) BandOfGroup(SectionHeader header)
+            => (Math.Max(header.Row.Y - SectionLead, _contentStartY), ContentEndOf(header));
+
+        /// <summary>The band a group's rows take, under its heading.</summary>
+        private (int Start, int End) BandOfRows(SectionHeader header)
+            => (header.Row.Y + HeaderAdvance(folded: true), ContentEndOf(header));
+
+        private int RowsEndOf(SectionHeader header)
+            => header.RowsEnd != int.MinValue ? header.RowsEnd : header.Row.Y + HeaderAdvance(header.Folded);
+
+        /// <summary>The band one switch row takes.</summary>
+        private (int Start, int End) BandOfSwitch(TunerToggle toggle)
+            => (toggle.Row.Y, toggle.Row.Y + SwitchPitch);
         private readonly List<SectionHeader> _sectionHeaders = [];
+
+        // ---- hiding: a group or a switch the player never wants, held off until shown again ----
+
+        /// <summary>The group the rows being built belong to, for hiding: the heading's key, or the
+        /// classic tab's own key for the rows before its first heading (the grouped layout shows
+        /// those under a heading with that key).</summary>
+        private string? _sectionKeyForHiding;
+        private string? HidingSectionKey => _sectionKeyForHiding ?? _buildingTabKey;
+        /// <summary>What this page is holding hidden, in order, for the list at its foot.</summary>
+        private readonly List<(string Key, bool IsSection)> _hiddenOnPage = [];
+        /// <summary>Set while every tab is built off screen only to hold hidden switches off (see
+        /// <see cref="HoldHiddenSwitchesEverywhere"/>), so nothing is listed or counted.</summary>
+        private bool _holdingHiddenQuietly;
+        /// <summary>A build turned a hidden switch off or put a shown-again one back on, so the
+        /// config has to be applied and saved once the build is over.</summary>
+        private bool _hiddenChangedSettings;
+        /// <summary>Set while the page is built again after a group was left empty and hidden whole.</summary>
+        private bool _promotingEmptyGroups;
+        /// <summary>The switch row under the pointer, which is the one that offers to hide itself.</summary>
+        private TunerToggle? _hoveredToggle;
+
+        /// <summary>The tabs whose rows can never be hidden: the looks and the menu's own settings.</summary>
+        private static bool TabCanHide(string? tabKey) => tabKey is not ("tuner.tab.looks" or "config.section.debug");
 
         /// <summary>Whether the rows being built now belong to a group that is not showing: folded by
         /// the player, or fine-tuning while fine-tuning is hidden. Every row helper asks this.</summary>
@@ -110,7 +242,7 @@ namespace SDVRadiance
         private SectionHeader? _hoveredSection;
         /// <summary>Read-only lines. Supplied per draw rather than baked at layout time, so a
         /// running measurement can count up without rebuilding the menu underneath it.</summary>
-        private readonly List<(Func<string> text, int y, int height)> _infoLines = [];
+        private readonly List<(Func<string> text, int x, int y, int width, int height)> _infoLines = [];
         /// <summary>
         /// A plain-language note per control row, shown while the pointer rests on it.
         ///
@@ -262,7 +394,8 @@ namespace SDVRadiance
                 ("config.section.particles", "tuner.section.particleringsparkles"), ("config.section.particles", "tuner.section.particlefootdust"),
                 ("config.section.particles", "tuner.section.particlefestivelights")]),
             ("nature", 14, "fire", [("config.section.particles", "tuner.section.particleembers"),
-                ("config.section.particles", "tuner.section.particlechimney"), ("config.section.particles", "tuner.section.particlelavasparks")]),
+                ("config.section.particles", "tuner.section.particlechimney"), ("config.section.particles", "tuner.section.particlelavasparks"),
+                ("config.section.particles", "tuner.section.particleglow")]),
             ("picture", 2, "colour", [("tuner.section.colorgrade", null), ("tuner.section.colorgrade", "tuner.lut"),
                 ("tuner.section.colorgrade", "tuner.section.gradetone"), ("tuner.section.colorgrade", "tuner.section.eyecomfort")]),
             ("picture", 2, "lens", [("tuner.tab.lens", "tuner.section.tiltshift"), ("tuner.tab.lens", "tuner.section.finishing")]),
@@ -306,12 +439,56 @@ namespace SDVRadiance
         /// in the language being played in.</summary>
         private bool MatchesSearch(string key, string? help)
         {
-            if (string.IsNullOrWhiteSpace(_searchQuery))
+            if (string.IsNullOrWhiteSpace(_searchQuery) || _sectionMatchesSearch)
                 return true;
-            string query = _searchQuery.Trim();
-            return _translate(key).Contains(query, StringComparison.CurrentCultureIgnoreCase)
-                || (help != null && _translate(help).Contains(query, StringComparison.CurrentCultureIgnoreCase));
+            return SearchHits(key) || (help != null && SearchHits(help));
         }
+
+        /// <summary>A key's text in every language the mod has, for the search; set when the menu is
+        /// first opened. Null (a probe, a test) searches the language being played in only.</summary>
+        internal static Func<string, IEnumerable<string>>? TextsInEveryLanguage;
+        private static readonly Dictionary<string, string[]> _textsByKey = [];
+
+        /// <summary>Whether the search's words are in a key's text, in the language being played in or
+        /// any other the mod has: "lut" finds the colour tables in a Thai menu.</summary>
+        private bool SearchHits(string key)
+        {
+            string query = _searchQuery!.Trim();
+            if (TextHits(_translate(key), query))
+                return true;
+            if (TextsInEveryLanguage == null)
+                return false;
+            if (!_textsByKey.TryGetValue(key, out string[]? texts))
+                _textsByKey[key] = texts = [.. TextsInEveryLanguage(key)];
+            foreach (string text in texts)
+                if (TextHits(text, query))
+                    return true;
+            return false;
+        }
+
+        /// <summary>Words in Latin letters are matched from the start of a word, so "lut" finds the
+        /// colour tables and not "resolution" or "flutter". Thai has no spaces between words, so Thai
+        /// (and anything else) is matched anywhere.</summary>
+        private static bool TextHits(string text, string query)
+        {
+            bool latin = query.All(letter => letter < 128);
+            if (!latin)
+                return text.Contains(query, StringComparison.CurrentCultureIgnoreCase);
+            for (int at = text.IndexOf(query, StringComparison.OrdinalIgnoreCase); at >= 0;
+                 at = text.IndexOf(query, at + 1, StringComparison.OrdinalIgnoreCase))
+                if (at == 0 || !char.IsLetterOrDigit(text[at - 1]))
+                    return true;
+            return false;
+        }
+
+        /// <summary>The gap the next heading leads in with, once, instead of the usual one: the search
+        /// tucks a page's first card under the line naming the page.</summary>
+        private int? _nextSectionLead;
+
+        /// <summary>Set while a group whose own name matches the search is built: all of it shows.</summary>
+        private bool _sectionMatchesSearch;
+        /// <summary>Groups whose name matched, for the search to know a piece found something.</summary>
+        private int _searchHeadingHits;
 
         private void AskForSearch()
         {
@@ -341,6 +518,7 @@ namespace SDVRadiance
             void ClearSearch()
             {
                 _searchQuery = null;
+                _searchCategory = null;
                 _searchTypedSeen = "";
                 _searchTyping?.Text = "";
                 StopTypingSearch();
@@ -360,22 +538,31 @@ namespace SDVRadiance
             }
             _contentCursorY += Scaled(48);
             int found = 0;
+            _searchCountsByCategory.Clear();
+            int pathShownForPage = -1;
             for (int page = 0; page < GroupedPages.Length; page++)
             {
                 foreach ((string tab, string? section) in GroupedPages[page].Pieces)
                 {
                     int rowsBefore = _toggles.Count + _sliders.Count + _compasses.Count;
+                    int headingHitsBefore = _searchHeadingHits;
                     var mark = (Sliders: _sliders.Count, Toggles: _toggles.Count, Compasses: _compasses.Count, Buttons: _buttons.Count,
                         Chips: _chips.Count, Headers: _sectionHeaders.Count, Infos: _infoLines.Count, Helps: _help.Count, Y: _contentCursorY);
                     string where = Grouped
                         ? _translate("tuner.cat." + GroupedPages[page].Category) + " > " + _translate("tuner.page." + GroupedPages[page].Page)
                         : _translate(tab);
-                    // On the glass the line saying where a result lives sits between the cards, with
-                    // room above it: drawn straight under the last row it landed inside that card.
-                    if (GlassPanel && found > 0)
-                        _contentCursorY += Scaled(12);
-                    _searchPathRows.Add(_contentCursorY);
-                    Info(() => where);
+                    // The line saying where results live, once per page: room above it so it reads as
+                    // the heading of the cards under it, not as the foot of the card above, and the
+                    // first card tucked under it.
+                    bool newPage = page != pathShownForPage;
+                    if (newPage)
+                    {
+                        if (GlassPanel && found > 0)
+                            _contentCursorY += Scaled(28);
+                        _searchPathRows.Add(_contentCursorY);
+                        Info(() => where);
+                        _nextSectionLead = Scaled(10);
+                    }
                     if (section == "*")
                     {
                         _rowsEnabledWhen = null;
@@ -389,10 +576,22 @@ namespace SDVRadiance
                         BuildLooksPart(section!);
                     else
                         BuildPiece(tab, section);
-                    if (_toggles.Count + _sliders.Count + _compasses.Count > rowsBefore)
+                    if (_toggles.Count + _sliders.Count + _compasses.Count > rowsBefore || _searchHeadingHits > headingHitsBefore)
                     {
-                        found++;
-                        continue;
+                        // A whole tab came along with the rows that matched: keep only its groups
+                        // that found something, or the rest showed as empty cards.
+                        if (section == "*")
+                            KeepOnlyFoundGroups(mark.Headers, mark, tab, newPage);
+                        string category = GroupedPages[page].Category;
+                        _searchCountsByCategory[category] = _searchCountsByCategory.GetValueOrDefault(category)
+                            + Math.Max(1, _toggles.Count + _sliders.Count + _compasses.Count - rowsBefore);
+                        // Narrowed to another category: counted for the rail, not shown.
+                        if (_searchCategory == null || category == _searchCategory)
+                        {
+                            found++;
+                            pathShownForPage = page;
+                            continue;
+                        }
                     }
                     _sliders.RemoveRange(mark.Sliders, _sliders.Count - mark.Sliders);
                     _toggles.RemoveRange(mark.Toggles, _toggles.Count - mark.Toggles);
@@ -404,10 +603,96 @@ namespace SDVRadiance
                     _help.RemoveRange(mark.Helps, _help.Count - mark.Helps);
                     _searchPathRows.RemoveAll(row => row >= mark.Y);
                     _contentCursorY = mark.Y;
+                    _nextSectionLead = null;
                 }
             }
             if (found == 0)
                 Paragraph(_translate("tuner.search.none"));
+        }
+
+        /// <summary>Each rail entry's slide up and how present it is, worked out once a frame: under a
+        /// search a category with no results folds away and the ones below it close the gap.</summary>
+        private readonly List<(int Shift, float Shown)> _railPlaces = [];
+
+        private void MeasureRailPlaces()
+        {
+            _railPlaces.Clear();
+            bool searching = Grouped && !string.IsNullOrWhiteSpace(_searchQuery);
+            float goneAbove = 0f;
+            int pitch = _tabRailButtons.Count > 1 ? _tabRailButtons[1].button.Bounds.Y - _tabRailButtons[0].button.Bounds.Y : 0;
+            foreach (var (_, tabIndex, _) in _tabRailButtons)
+            {
+                bool wanted = !searching || _searchCountsByCategory.GetValueOrDefault(GroupedPages[tabIndex].Category) > 0;
+                float shown = GlassPanel ? TunerMotion.Follow("railshown:" + tabIndex, wanted ? 1f : 0f, 0.07f) : wanted ? 1f : 0f;
+                _railPlaces.Add((-(int)(goneAbove * pitch), shown));
+                goneAbove += 1f - shown;
+            }
+        }
+
+        private (int Shift, float Shown) RailPlace(int entry) => entry < _railPlaces.Count ? _railPlaces[entry] : (0, 1f);
+
+        /// <summary>How many results each category of the rail holds while a search is open.</summary>
+        private readonly Dictionary<string, int> _searchCountsByCategory = [];
+
+        /// <summary>
+        /// A whole tab built for the search: if some of its groups found nothing, build it again with
+        /// only the ones that did (a group found something when a row of it matched or its name did).
+        /// True when it was built again.
+        /// </summary>
+        private bool KeepOnlyFoundGroups(int firstHeader, (int Sliders, int Toggles, int Compasses, int Buttons, int Chips, int Headers,
+            int Infos, int Helps, int Y) mark, string tab, bool pathLineAdded)
+        {
+            var kept = new HashSet<string>(StringComparer.Ordinal);
+            bool anyEmpty = false;
+            for (int i = firstHeader; i < _sectionHeaders.Count; i++)
+            {
+                SectionHeader header = _sectionHeaders[i];
+                int end = RowsEndOf(header);
+                bool rows = _toggles.Skip(mark.Toggles).Any(row => row.Row.Y >= header.Row.Y && row.Row.Y < end)
+                    || _sliders.Skip(mark.Sliders).Any(row => row.RowBounds.Y >= header.Row.Y && row.RowBounds.Y < end)
+                    || _compasses.Skip(mark.Compasses).Any(row => row.Row.Y >= header.Row.Y && row.Row.Y < end)
+                    || SearchHits(header.Key);
+                if (rows)
+                    kept.Add(header.Key);
+                else
+                    anyEmpty = true;
+            }
+            if (!anyEmpty)
+                return false;
+            _sliders.RemoveRange(mark.Sliders, _sliders.Count - mark.Sliders);
+            _toggles.RemoveRange(mark.Toggles, _toggles.Count - mark.Toggles);
+            _compasses.RemoveRange(mark.Compasses, _compasses.Count - mark.Compasses);
+            _buttons.RemoveRange(mark.Buttons, _buttons.Count - mark.Buttons);
+            _chips.RemoveRange(mark.Chips, _chips.Count - mark.Chips);
+            _sectionHeaders.RemoveRange(mark.Headers, _sectionHeaders.Count - mark.Headers);
+            // The line naming the page, when this piece added it, stays, and the first card tucks under it.
+            int keepInfos = pathLineAdded ? 1 : 0;
+            _infoLines.RemoveRange(mark.Infos + keepInfos, Math.Max(0, _infoLines.Count - mark.Infos - keepInfos));
+            _help.RemoveRange(mark.Helps, _help.Count - mark.Helps);
+            if (pathLineAdded)
+            {
+                _contentCursorY = _infoLines[mark.Infos].y + _infoLines[mark.Infos].height + Scaled(4);
+                _nextSectionLead = Scaled(10);
+            }
+            else
+                _contentCursorY = mark.Y;
+            _rowsEnabledWhen = null;
+            EndSection();
+            _buildingTabKey = tab;
+            _sectionFilter = kept;
+            _filterRejects = false;
+            try
+            {
+                Tabs[Array.FindIndex(Tabs, candidate => candidate.Key == tab)].Build(this);
+            }
+            finally
+            {
+                EndSection();
+                _rowsEnabledWhen = null;
+                _sectionFilter = null;
+                _filterRejects = false;
+            }
+            return true;
         }
 
         /// <summary>Where each "Category > Page" line of the search results is, so a result's card
@@ -435,7 +720,13 @@ namespace SDVRadiance
         /// <summary>Whether a rail entry is the one in use: the tab itself, or in the grouped
         /// layout the category the open page belongs to.</summary>
         private bool RailActive(int page)
-            => _searchQuery == null && (Grouped ? GroupedPages[page].Category == GroupedPages[_activeTab].Category : page == _activeTab);
+            => _searchQuery == null
+                ? Grouped ? GroupedPages[page].Category == GroupedPages[_activeTab].Category : page == _activeTab
+                : Grouped && GroupedPages[page].Category == _searchCategory;
+
+        /// <summary>While a search is open on the glass, the category its results are narrowed to by a
+        /// click in the rail, or null for every category. Typing a new search widens it again.</summary>
+        private static string? _searchCategory;
 
         private void OpenPage(int page, bool rememberTheOpenPage = true)
         {
@@ -443,6 +734,8 @@ namespace SDVRadiance
             if (rememberTheOpenPage)
                 RememberScroll();
             _lookAskedToDelete = null;
+            if (page != _activeTab)
+                TunerMotion.Set("page:enter", 1f);
             _activeTab = page; _lastTab = page; _config.TunerLastTab = PageKey(page);
             if (Grouped)
                 _lastPageByCategory[GroupedPages[page].Category] = page;
@@ -476,8 +769,18 @@ namespace SDVRadiance
         /// <summary>Build one grouped page: each piece in turn, a "*" piece being a whole tab.</summary>
         private void BuildGroupedPage(int page)
         {
+            // A page that opens a tab with the tab's own group (its master switch) holds the tab's
+            // other groups inside that group's card, so it reads which switch they hang off. Asked
+            // for on 22 Oct 2026: "a big group, then the small ones under it".
+            string? parentTab = null;
             foreach ((string tab, string? section) in GroupedPages[page].Pieces)
             {
+                bool child = parentTab == tab && section is not null && section != "*" && !IsLooksPart(section);
+                if (!child)
+                {
+                    CloseParentGroup();
+                    parentTab = null;
+                }
                 if (section == "*")
                 {
                     _rowsEnabledWhen = null;
@@ -491,9 +794,173 @@ namespace SDVRadiance
                 }
                 else if (IsLooksPart(section))
                     BuildLooksPart(section!);
+                else if (child && _parentGroup != null)
+                {
+                    int columnX = _contentCursorX, columnWidth = _contentColumnWidth;
+                    _contentCursorX += ChildInset;
+                    _contentColumnWidth -= ChildInset * 2;
+                    try
+                    {
+                        BuildPiece(tab, section);
+                    }
+                    finally
+                    {
+                        _contentCursorX = columnX;
+                        _contentColumnWidth = columnWidth;
+                    }
+                }
                 else
+                {
                     BuildPiece(tab, section);
+                    if (section == null && GlassPanel && !child)
+                    {
+                        OpenParentGroup(tab);
+                        parentTab = tab;
+                    }
+                }
             }
+            CloseParentGroup();
+        }
+
+        /// <summary>How far a child group's rows sit in from the column, so its card, padded like any
+        /// other, sits inside its parent's with a rim of the parent showing round it.</summary>
+        private int ChildInset => Scaled(10);
+
+        /// <summary>The parent group the pieces being built nest in, while it is open on screen.</summary>
+        private SectionHeader? _parentGroup;
+        /// <summary>Set while the pieces after a folded or hidden parent are built: they show nothing,
+        /// and their rows count toward the folded parent's "N folded".</summary>
+        private bool _parentClosed;
+        private SectionHeader? _closedParent;
+
+        private void OpenParentGroup(string tabKey)
+        {
+            SectionHeader? parent = _sectionHeaders.LastOrDefault(header => header.Key == tabKey);
+            if (parent == null || parent.Folded)
+            {
+                _parentClosed = true;
+                _closedParent = parent;
+            }
+            else
+                _parentGroup = parent;
+        }
+
+        /// <summary>Close the parent group: its card runs on under its last child's card.</summary>
+        private void CloseParentGroup()
+        {
+            if (_parentGroup != null && _sectionHeaders.LastOrDefault(header => header.Parent == _parentGroup) is { } lastChild)
+            {
+                _parentGroup.GroupEnd = RowsEndOf(lastChild) + Scaled(8);
+                _contentCursorY = Math.Max(_contentCursorY, _parentGroup.GroupEnd.Value);
+            }
+            _parentGroup = null;
+            _parentClosed = false;
+            _closedParent = null;
+        }
+
+        /// <summary>One row of a grouped page, for <see cref="MapDependencies"/>.</summary>
+        internal sealed record DependencyRow(string Category, string Page, string Section, string Kind, string Key, string Label)
+        {
+            public List<string> HiddenWhenOff { get; } = [];
+        }
+
+        /// <summary>
+        /// radiance_tuner_deps: which switch each row of the grouped layout hangs off, found by trying
+        /// rather than by reading the code. Every switch on, every page built and its rows noted; then
+        /// each switch off in turn, and every row that is no longer built is a row that switch owns.
+        /// Built off screen on a copy of the config, like the coverage check.
+        /// </summary>
+        internal static List<DependencyRow> MapDependencies(ModConfig config, Func<string, string> translate)
+        {
+            var probe = new RadianceTunerMenu(EverySwitchOn(config), translate, () => { }, () => { }, slideIn: false);
+            string? query = _searchQuery;
+            _searchQuery = null;
+            try
+            {
+                List<DependencyRow> Snapshot(Dictionary<string, TunerToggle>? switches = null)
+                {
+                    var rows = new List<DependencyRow>();
+                    for (int page = 0; page < GroupedPages.Length; page++)
+                    {
+                        probe._activeTab = page;
+                        probe.Reflow();
+                        string category = translate("tuner.cat." + GroupedPages[page].Category);
+                        string pageName = translate("tuner.page." + GroupedPages[page].Page);
+                        string SectionAt(int y)
+                            => probe._sectionHeaders.LastOrDefault(header => header.Row.Y <= y) is { } header ? header.Title : "";
+                        foreach (TunerToggle toggle in probe._toggles)
+                        {
+                            rows.Add(new DependencyRow(category, pageName, SectionAt(toggle.Row.Y), "switch", toggle.Key, translate(toggle.Key)));
+                            switches?[toggle.Key] = toggle;
+                        }
+                        foreach (TunerSlider slider in probe._sliders)
+                            rows.Add(new DependencyRow(category, pageName, SectionAt(slider.RowBounds.Y), "slider", slider.Key, translate(slider.Key)));
+                        foreach (TunerCompass compass in probe._compasses)
+                            rows.Add(new DependencyRow(category, pageName, SectionAt(compass.Row.Y), "dial", "dial:" + compass.Label, compass.Label));
+                        foreach (TunerTextButton button in probe._buttons)
+                            rows.Add(new DependencyRow(category, pageName, SectionAt(button.Bounds.Y), "button", $"button:{pageName}:{button.Label}", button.Label));
+                    }
+                    return rows;
+                }
+                string IdOf(DependencyRow row) => $"{row.Page}|{row.Section}|{row.Kind}|{row.Key}";
+                var switches = new Dictionary<string, TunerToggle>(StringComparer.Ordinal);
+                List<DependencyRow> baseline = Snapshot(switches);
+                var byId = new Dictionary<string, DependencyRow>(StringComparer.Ordinal);
+                foreach (DependencyRow row in baseline)
+                    byId.TryAdd(IdOf(row), row);
+                foreach ((string key, TunerToggle toggle) in switches)
+                {
+                    toggle.Set(false);
+                    var still = Snapshot().Select(IdOf).ToHashSet(StringComparer.Ordinal);
+                    toggle.Set(true);
+                    foreach ((string id, DependencyRow row) in byId)
+                        if (row.Key != key && !still.Contains(id))
+                            row.HiddenWhenOff.Add(key);
+                }
+                return [.. byId.Values];
+            }
+            finally
+            {
+                _searchQuery = query;
+            }
+        }
+
+        /// <summary>The rows of the grouped pages that sit in no group's card: built after a group was
+        /// closed, so on the glass they float between cards. One line each, "page: row".</summary>
+        internal static List<string> FindRowsOutsideCards(ModConfig config, Func<string, string> translate)
+        {
+            var found = new List<string>();
+            var probe = new RadianceTunerMenu(EverySwitchOn(config), translate, () => { }, () => { }, slideIn: false);
+            string? query = _searchQuery;
+            _searchQuery = null;
+            try
+            {
+                for (int page = 0; page < GroupedPages.Length; page++)
+                {
+                    probe._activeTab = page;
+                    probe.Reflow();
+                    string pageName = translate("tuner.page." + GroupedPages[page].Page);
+                    bool InACard(int y) => probe._sectionHeaders.Any(header => y >= header.Row.Y && y < probe.RowsEndOf(header));
+                    // The page's own heading lines (title, description, chips) come before the first card.
+                    int firstCard = probe._sectionHeaders.Count > 0 ? probe._sectionHeaders[0].Row.Y : int.MaxValue;
+                    bool Loose(int y) => y >= firstCard && !InACard(y) && (probe._hiddenListTop is not int listTop || y < listTop);
+                    foreach (TunerToggle toggle in probe._toggles)
+                        if (Loose(toggle.Row.Y)) found.Add($"{pageName}: {translate(toggle.Key)}");
+                    foreach (TunerSlider slider in probe._sliders)
+                        if (Loose(slider.RowBounds.Y)) found.Add($"{pageName}: {translate(slider.Key)}");
+                    foreach (TunerCompass compass in probe._compasses)
+                        if (Loose(compass.Row.Y)) found.Add($"{pageName}: {compass.Label}");
+                    foreach (TunerTextButton button in probe._buttons)
+                        if (Loose(button.Bounds.Y)) found.Add($"{pageName}: [{button.Label}]");
+                    foreach (var (text, _, rowY, _, _) in probe._infoLines)
+                        if (Loose(rowY)) found.Add($"{pageName}: \"{text()}\"");
+                }
+            }
+            finally
+            {
+                _searchQuery = query;
+            }
+            return found;
         }
 
         /// <summary>radiance_tuner_check: every row of the classic tabs appears in the grouped pages
@@ -613,7 +1080,82 @@ namespace SDVRadiance
             }
             _activeTab = Math.Clamp(_lastTab, 0, PageCount - 1);
             _scroll = SavedScroll(_activeTab);
+            if (_groupOwners == null && !_learningGroupOwners)
+                _groupOwners = LearnGroupOwners(config, translate);
             Reflow();
+        }
+
+        /// <summary>The switches each of which is all its group holds: with it off nothing else of the
+        /// group is left on screen. Such a switch is hidden from the group's heading only. Learned
+        /// once a game run by trying each off screen, since which rows a switch takes with it is in
+        /// the code, not in anything a row can be asked.</summary>
+        private static HashSet<string>? _groupOwners;
+        private static bool _learningGroupOwners;
+        /// <summary>How long learning the group owners took, for radiance_tuner_deps to say.</summary>
+        internal static double GroupOwnersLearnedInMilliseconds;
+        internal static IReadOnlyCollection<string> GroupOwners => _groupOwners ?? [];
+
+        private static HashSet<string> LearnGroupOwners(ModConfig config, Func<string, string> translate)
+        {
+            var owners = new HashSet<string>(StringComparer.Ordinal);
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
+            _learningGroupOwners = true;
+            string? query = _searchQuery;
+            _searchQuery = null;
+            try
+            {
+                var probe = new RadianceTunerMenu(EverySwitchOn(config), translate, () => { }, () => { }, slideIn: false);
+                for (int page = 0; page < GroupedPages.Length; page++)
+                {
+                    probe._activeTab = page;
+                    probe.Reflow();
+                    var candidates = probe._sectionHeaders
+                        .Where(header => header.HideableSwitches == 1 && header.LeadSwitch != null)
+                        .Select(header => (header.Key, Lead: header.LeadSwitch!)).ToList();
+                    foreach ((string key, TunerToggle lead) in candidates)
+                    {
+                        lead.Set(false);
+                        probe.Reflow();
+                        // Off, the switch is still there; it owns the group when nothing else is.
+                        bool empty = probe._sectionHeaders.Find(header => header.Key == key) is not { } after
+                            || probe._toggles.Find(toggle => toggle.Key == lead.Key) is not { } leadAfter
+                            || probe.RowsEndOf(after) <= leadAfter.Row.Y + probe.SwitchPitch;
+                        lead.Set(true);
+                        if (empty)
+                            owners.Add(lead.Key);
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // A probe that fails leaves every switch its own Hide button, which is only less tidy.
+            }
+            finally
+            {
+                _searchQuery = query;
+                _learningGroupOwners = false;
+                GroupOwnersLearnedInMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            }
+            return owners;
+        }
+
+        /// <summary>A copy of the config with every switch on, every group open and nothing hidden, so
+        /// an off-screen build reaches every row.</summary>
+        private static ModConfig EverySwitchOn(ModConfig config)
+        {
+            var copy = new ModConfig();
+            copy.ApplyProfile(config.CaptureProfile(""));
+            copy.TunerFoldedSections = [];
+            copy.TunerHiddenSections = [];
+            copy.TunerHiddenSwitches = [];
+            copy.TunerHiddenWasOn = [];
+            copy.TunerShowFineTuning = true;
+            copy.TunerLayout = LayoutGrouped;
+            copy.TunerPanel = config.TunerPanel;
+            foreach (PropertyInfo property in typeof(ModConfig).GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                if (property.PropertyType == typeof(bool) && property.CanWrite && property.CanRead)
+                    property.SetValue(copy, true);
+            return copy;
         }
 
         // A rebuild of the menu already on screen, so it does not slide in again.
@@ -662,6 +1204,14 @@ namespace SDVRadiance
             // While the search field is typed in, the letters are the search, not the game's keys:
             // E would close the menu halfway through "shadow". Enter puts the field down and keeps
             // the results; Escape empties the search first and puts the field down.
+            if (NamingLook)
+            {
+                if (key == Microsoft.Xna.Framework.Input.Keys.Enter)
+                    SaveNamedLook();
+                else if (key == Microsoft.Xna.Framework.Input.Keys.Escape)
+                    StopNamingLook();
+                return;
+            }
             if (TypingSearch)
             {
                 if (key == Microsoft.Xna.Framework.Input.Keys.Enter)
@@ -726,6 +1276,27 @@ namespace SDVRadiance
             if (_labelRecorder != null)
                 _probeSectionLabel = _translate(key);
             EndSection();
+            _sectionKeyForHiding = key;
+            if (!string.IsNullOrWhiteSpace(_searchQuery) && SearchHits(key))
+            {
+                _sectionMatchesSearch = true;
+                _searchHeadingHits++;
+            }
+            // A group the player hid shows no heading and no rows; its switches are held off as
+            // they are built, and it is offered back at the foot of the page.
+            if (_config.TunerHiddenSections.Contains(key) && TabCanHide(_buildingTabKey))
+            {
+                ListHidden(key, isSection: true);
+                _sectionRowsHidden = true;
+                return;
+            }
+            // Under a folded or hidden parent the group is not shown at all; its rows count toward
+            // the parent's "N folded".
+            if (_parentClosed && _searchQuery == null)
+            {
+                _sectionRowsHidden = true;
+                return;
+            }
             // A heading over rows that are all hidden is a heading over nothing.
             if (_rowsEnabledWhen != null && !_rowsEnabledWhen())
                 return;
@@ -735,23 +1306,36 @@ namespace SDVRadiance
                 _sectionIsHiddenFineTuning = true;
                 return;
             }
-            if (_contentCursorY > _contentStartY)
-                _contentCursorY += Scaled(SectionLeadBase);
+            if (_nextSectionLead is int lead)
+            {
+                _contentCursorY += lead;
+                _nextSectionLead = null;
+            }
+            else if (_contentCursorY > _contentStartY)
+                _contentCursorY += SectionLead;
             var header = new SectionHeader(key, _translate(key),
                 new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, Scaled(SectionHeaderBase)),
-                _config.TunerFoldedSections.Contains(key) && _searchQuery == null);
+                _config.TunerFoldedSections.Contains(key) && _searchQuery == null)
+            { CanHide = TabCanHide(_buildingTabKey) && _labelRecorder == null, Parent = _parentGroup };
             _sectionHeaders.Add(header);
             _currentSection = header;
             _sectionRowsHidden = header.Folded && _searchQuery == null;
-            _contentCursorY += Scaled(SectionPitchBase);
+            _contentCursorY += HeaderAdvance(header.Folded && _searchQuery == null);
         }
 
         /// <summary>Close the current group, so the rows after it show whatever state it was in.</summary>
         private void EndSection()
         {
+            _currentSection?.RowsEnd = _contentCursorY;
+            // A group opened by its only switch is that switch: hiding one is hiding the other, so
+            // only the heading offers it.
+            if (_currentSection is { HideableSwitches: 1, LeadSwitch: { } lead } && _groupOwners?.Contains(lead.Key) == true)
+                lead.OwnsGroup = true;
             _sectionRowsHidden = false;
             _sectionIsHiddenFineTuning = false;
             _currentSection = null;
+            _sectionKeyForHiding = null;
+            _sectionMatchesSearch = false;
         }
 
         /// <summary>Whether the row about to be built is held back by its group, counting it there so
@@ -768,8 +1352,239 @@ namespace SDVRadiance
                     _fineTuningRowsHidden++;
                 else if (_currentSection != null)
                     _currentSection.HiddenRows++;
+                else if (_parentClosed && _closedParent != null)
+                    _closedParent.HiddenRows++;
             }
             return true;
+        }
+
+        /// <summary>
+        /// A switch the player hid, alone or with its group, is held off every time it is built, and
+        /// what it was is kept so showing it again can put it back. A look or a share code can turn a
+        /// hidden switch on behind the menu's back; it goes off again on the next build, and the look's
+        /// choice is what showing it again restores. A switch no longer hidden that still has a kept
+        /// value gets it back here. True when the switch is hidden and is not to be built.
+        /// </summary>
+        private bool HoldIfHidden(string key, Func<bool> getValue, Action<bool> setValue)
+        {
+            string? section = HidingSectionKey;
+            bool sectionHidden = section != null && _config.TunerHiddenSections.Contains(section);
+            if (sectionHidden || _config.TunerHiddenSwitches.Contains(key))
+            {
+                if (getValue())
+                {
+                    _config.TunerHiddenWasOn[key] = true;
+                    setValue(false);
+                    _hiddenChangedSettings = true;
+                }
+                // The classic layout has no heading for a tab's first rows, so a group hidden from
+                // the grouped one is listed by the first of its switches instead.
+                ListHidden(sectionHidden ? section! : key, isSection: sectionHidden);
+                if (!sectionHidden && !_holdingHiddenQuietly)
+                    _currentSection?.HiddenSwitchKeys.Add(key);
+                return true;
+            }
+            if (_config.TunerHiddenWasOn.Remove(key))
+            {
+                setValue(true);
+                _hiddenChangedSettings = true;
+            }
+            return false;
+        }
+
+        private void ListHidden(string key, bool isSection)
+        {
+            if (_holdingHiddenQuietly || _searchQuery != null || _hiddenOnPage.Contains((key, isSection)))
+                return;
+            _hiddenOnPage.Add((key, isSection));
+        }
+
+        /// <summary>
+        /// Build every tab off screen so each hidden switch is held off, not only the ones on the open
+        /// page: a look loaded from one page can turn on a switch hidden on another. Only for a player
+        /// who has hidden something, and everything the builds add is taken back after.
+        /// </summary>
+        private void HoldHiddenSwitchesEverywhere()
+        {
+            if (_labelRecorder != null || (_config.TunerHiddenSections.Count == 0 && _config.TunerHiddenSwitches.Count == 0
+                && _config.TunerHiddenWasOn.Count == 0))
+                return;
+            var mark = (Sliders: _sliders.Count, Toggles: _toggles.Count, Compasses: _compasses.Count, Buttons: _buttons.Count,
+                Chips: _chips.Count, Headers: _sectionHeaders.Count, Infos: _infoLines.Count, Helps: _help.Count, Y: _contentCursorY,
+                FineTuning: _fineTuningRowsHidden, TabKey: _buildingTabKey);
+            var picturesBefore = _pictureOfRow.Keys.ToHashSet();
+            _holdingHiddenQuietly = true;
+            try
+            {
+                foreach (var tab in Tabs)
+                {
+                    if (!TabCanHide(tab.Key))
+                        continue;
+                    _rowsEnabledWhen = null;
+                    EndSection();
+                    _buildingTabKey = tab.Key;
+                    tab.Build(this);
+                    EndSection();
+                }
+            }
+            finally
+            {
+                _holdingHiddenQuietly = false;
+                _rowsEnabledWhen = null;
+                _sliders.RemoveRange(mark.Sliders, _sliders.Count - mark.Sliders);
+                _toggles.RemoveRange(mark.Toggles, _toggles.Count - mark.Toggles);
+                _compasses.RemoveRange(mark.Compasses, _compasses.Count - mark.Compasses);
+                _buttons.RemoveRange(mark.Buttons, _buttons.Count - mark.Buttons);
+                _chips.RemoveRange(mark.Chips, _chips.Count - mark.Chips);
+                _sectionHeaders.RemoveRange(mark.Headers, _sectionHeaders.Count - mark.Headers);
+                _infoLines.RemoveRange(mark.Infos, _infoLines.Count - mark.Infos);
+                _help.RemoveRange(mark.Helps, _help.Count - mark.Helps);
+                foreach (Rectangle added in _pictureOfRow.Keys.Where(key => !picturesBefore.Contains(key)).ToList())
+                    _pictureOfRow.Remove(added);
+                _contentCursorY = mark.Y;
+                _fineTuningRowsHidden = mark.FineTuning;
+                _buildingTabKey = mark.TabKey;
+            }
+        }
+
+        private void HideSection(SectionHeader header)
+        {
+            string key = header.Key;
+            Game1.playSound("shwip");
+            (int start, int end) = BandOfGroup(header);
+            StartFold(start, end, opening: false, () =>
+            {
+                if (!_config.TunerHiddenSections.Contains(key))
+                    _config.TunerHiddenSections.Add(key);
+                _hiddenChangedSettings = true;
+                _settingsByCategory = null;
+                Reflow();
+            });
+        }
+
+        private void HideSwitch(TunerToggle toggle)
+        {
+            string key = toggle.Key;
+            Game1.playSound("shwip");
+            (int start, int end) = BandOfSwitch(toggle);
+            StartFold(start, end, opening: false, () =>
+            {
+                if (!_config.TunerHiddenSwitches.Contains(key))
+                    _config.TunerHiddenSwitches.Add(key);
+                _hiddenChangedSettings = true;
+                _settingsByCategory = null;
+                Reflow();
+            });
+        }
+
+        /// <summary>Show a group or a switch again; the next build puts back what hiding turned off.</summary>
+        private void ShowAgain(string key, bool isSection)
+        {
+            if (isSection)
+                _config.TunerHiddenSections.Remove(key);
+            else
+                _config.TunerHiddenSwitches.Remove(key);
+            Game1.playSound("smallSelect");
+            _hiddenChangedSettings = true;
+            _settingsByCategory = null;
+            Reflow();
+            // It opens out where it lives, if that is on this page (on the glass; the classic box has
+            // no motion).
+            if (!GlassPanel)
+                return;
+            if (isSection && _sectionHeaders.Find(built => built.Key == key) is { } shown)
+            {
+                (int start, int end) = BandOfGroup(shown);
+                StartFold(start, end, opening: true);
+            }
+            else if (!isSection && _toggles.Find(built => built.Key == key) is { } shownSwitch)
+            {
+                (int start, int end) = BandOfSwitch(shownSwitch);
+                StartFold(start, end, opening: true);
+            }
+        }
+
+        /// <summary>Where the list of hidden things starts, or none: on the glass it is a card of its
+        /// own, and the last group's card stops above it.</summary>
+        private int? _hiddenListTop;
+        /// <summary>The space between the last group and the list of hidden things.</summary>
+        private int HiddenListGap => Scaled(GlassPanel ? 30 : 16);
+
+        /// <summary>The foot of the page: what is hidden here, each with its way back.</summary>
+        private void BuildHiddenList()
+        {
+            _hiddenListTop = null;
+            if (_hiddenOnPage.Count == 0 || _searchQuery != null)
+                return;
+            _contentCursorY += HiddenListGap;
+            _hiddenListTop = _contentCursorY;
+            // A heading like any group's, folded to start: the list is the way back, not something
+            // to read every time the page opens.
+            EndSection();
+            bool open = _config.TunerHiddenListOpen;
+            var header = new SectionHeader(HiddenListKey,
+                _translate("tuner.hidden.title").Replace("{{count}}", _hiddenOnPage.Count.ToString()),
+                new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, Scaled(SectionHeaderBase)), folded: !open);
+            _sectionHeaders.Add(header);
+            _currentSection = header;
+            _contentCursorY += HeaderAdvance(!open);
+            if (open)
+            {
+                foreach ((string key, bool isSection) in _hiddenOnPage)
+                {
+                    string name = _translate(key);
+                    Button(_translate("tuner.hidden.showagain").Replace("{{name}}", name),
+                        new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, RowHeight), () => ShowAgain(key, isSection));
+                    _contentCursorY += RowPitch;
+                }
+            }
+            EndSection();
+        }
+
+        /// <summary>The heading of the list of hidden things, which folds like a group's but is kept
+        /// open or folded by its own setting (folded to start).</summary>
+        private const string HiddenListKey = "tuner.hidden.list";
+
+        /// <summary>The small Hide button a heading or a switch offers under the pointer, in content
+        /// coordinates, ending at <paramref name="right"/> and centred on <paramref name="centerY"/>.</summary>
+        private Rectangle HidePill(int right, int centerY)
+        {
+            string label = _translate("tuner.hide");
+            int pillWidth = (int)(TunerText.Measure(label).X * 0.7f * _uiScale) + Scaled(20);
+            int pillHeight = Scaled(24);
+            return new Rectangle(right - pillWidth, centerY - pillHeight / 2, pillWidth, pillHeight);
+        }
+
+        private Rectangle HidePillOf(TunerToggle toggle)
+            => GlassPanel
+                ? HidePill(toggle.GlassSwitch.X - Scaled(8), toggle.GlassSwitch.Center.Y)
+                : HidePill(toggle.Row.Right - Scaled(8), toggle.Row.Y + Scaled(18));
+
+        private Rectangle HidePillOf(SectionHeader header)
+        {
+            int pictureRoom = TunerTheme.Glass && PictureFor(header.Key) is string picture && PicturePair(picture).Effect != null
+                ? (header.Row.Height - Scaled(8)) * 16 / 9 + Scaled(16)
+                : 0;
+            return HidePill(header.Row.Right - pictureRoom - Scaled(4), header.Row.Center.Y);
+        }
+
+        private void DrawHidePill(SpriteBatch spriteBatch, Rectangle pill, int scrollOffsetY, float strength = 1f)
+        {
+            var onScreen = new Rectangle(pill.X, pill.Y + scrollOffsetY, pill.Width, pill.Height);
+            bool pointed = onScreen.Contains(Game1.getMouseX(), Game1.getMouseY());
+            float pointedLight = TunerMotion.Follow($"pillpointed:{pill.X}:{pill.Y}", pointed ? 1f : 0f, 0.05f);
+            if (TunerTheme.Glass)
+            {
+                TunerTheme.Plate(spriteBatch, onScreen, onScreen.Height / 2, TunerTheme.Overlay * (MathHelper.Lerp(0.16f, 0.3f, pointedLight) * strength));
+                TunerTheme.PlateRim(spriteBatch, onScreen, onScreen.Height / 2, TunerTheme.Overlay * (0.2f * strength));
+            }
+            else
+                spriteBatch.Draw(Game1.staminaRect, onScreen, TunerTheme.Wash * (MathHelper.Lerp(0.25f, 0.45f, pointedLight) * strength));
+            string label = _translate("tuner.hide");
+            float scale = 0.7f * _uiScale;
+            Vector2 size = TunerText.Measure(label) * scale;
+            TunerText.Draw(spriteBatch, label, new Vector2(onScreen.Center.X - size.X / 2f, onScreen.Center.Y - size.Y / 2f),
+                TunerTheme.Ink * (MathHelper.Lerp(0.8f, 1f, pointedLight) * strength), scale);
         }
 
         /// <summary>What a row reads under a fresh config: its default. Null where the getter will not
@@ -805,7 +1620,7 @@ namespace SDVRadiance
         {
             if (HiddenBySection(countsAsRow: false))
                 return;
-            _infoLines.Add((text, _contentCursorY, Scaled(22))); _contentCursorY += Scaled(26);
+            _infoLines.Add((text, _contentCursorX, _contentCursorY, _contentColumnWidth, Scaled(22))); _contentCursorY += Scaled(26);
         }
 
         /// <summary>A sentence or three, wrapped to the column at reading size. Info lines shrink
@@ -819,7 +1634,7 @@ namespace SDVRadiance
             float textScale = (GlassPanel ? 0.8f : 0.72f) * _uiScale;
             string wrapped = TunerText.Wrap(text, _contentColumnWidth, textScale);
             int height = (int)Math.Ceiling(TunerText.Measure(wrapped).Y * textScale);
-            _infoLines.Add((() => wrapped, _contentCursorY, height));
+            _infoLines.Add((() => wrapped, _contentCursorX, _contentCursorY, _contentColumnWidth, height));
             _contentCursorY += height + Scaled(4);
         }
         /// <summary>Rows whose condition is false are not built at all - the section collapses
@@ -836,6 +1651,12 @@ namespace SDVRadiance
         {
             if (!_filterRejects)
                 _labelRecorder?.Add((ProbeLabel(key), () => getValue()));
+            bool canHide = savedSetting && key != "tuner.master" && TabCanHide(_buildingTabKey) && _labelRecorder == null;
+            // A switch already hidden on its own still counts: the group can be hidden around it.
+            if (canHide && _currentSection != null)
+                _currentSection.HideableSwitches++;
+            if (canHide && !_filterRejects && HoldIfHidden(key, getValue, setValue))
+                return;
             Func<bool>? rowEnabledWhen = enabledWhen ?? _rowsEnabledWhen;
             if (rowEnabledWhen != null && !rowEnabledWhen())
                 return;
@@ -844,10 +1665,16 @@ namespace SDVRadiance
             if (!MatchesSearch(key, help))
                 return;
             var row = new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, Scaled(GlassPanel ? 32 : 38));
-            _toggles.Add(new TunerToggle(_translate(key), row, getValue, setValue)
-                { TextScale = _uiScale, Enabled = rowEnabledWhen, DefaultValue = savedSetting ? DefaultOf(getValue) : null });
+            var toggle = new TunerToggle(_translate(key), row, getValue, setValue)
+            {
+                TextScale = _uiScale, Enabled = rowEnabledWhen, DefaultValue = savedSetting ? DefaultOf(getValue) : null,
+                Key = key, CanHide = canHide,
+            };
+            if (canHide && _currentSection != null && _contentCursorY == _currentSection.Row.Y + HeaderAdvance(folded: false))
+                _currentSection.LeadSwitch = toggle;
+            _toggles.Add(toggle);
             Help(row, help);
-            _contentCursorY += Scaled(GlassPanel ? 34 : 44);
+            _contentCursorY += SwitchPitch;
         }
         /// <summary>A labelled slider row. <paramref name="step"/> is the smallest move it makes,
         /// and defaults to a hundredth, which suits a dial that runs 0 to 1 or wider; a dial whose
@@ -874,14 +1701,14 @@ namespace SDVRadiance
                 _sliders.Add(new TunerSlider(_translate(key), trackX, _contentCursorY + Scaled(6), trackWidth, min, max, getValue, setValue, 0, Scaled(18))
                 {
                     TextScale = _uiScale, Enabled = rowEnabledWhen, Step = step, DefaultValue = DefaultOf(getValue),
-                    Inline = true, InlineLabelX = _contentCursorX + Scaled(10), InlineRowRight = rowRight,
+                    Inline = true, InlineLabelX = _contentCursorX + Scaled(10), InlineRowRight = rowRight, Key = key,
                 });
                 Help(new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, Scaled(32)), help);
-                _contentCursorY += Scaled(34);
+                _contentCursorY += Scaled(GlassRowPitchBase);
                 return;
             }
             _sliders.Add(new TunerSlider(_translate(key), _contentCursorX, _contentCursorY, _contentColumnWidth, min, max, getValue, setValue, Scaled(26), Scaled(20))
-                { TextScale = _uiScale, Enabled = rowEnabledWhen, Step = step, DefaultValue = DefaultOf(getValue) });
+                { TextScale = _uiScale, Enabled = rowEnabledWhen, Step = step, DefaultValue = DefaultOf(getValue), Key = key });
             // The label sits above the track, so the hover area is the whole row, not the bar.
             Help(new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, Scaled(50)), help);
             _contentCursorY += Scaled(50);
@@ -997,7 +1824,7 @@ namespace SDVRadiance
             // On the glass the bar lines up with the cards above it and is a card itself, with no
             // brown rule along its top: that rule belongs to the wooden box.
             var bar = GlassPanel
-                ? new Rectangle(_contentCursorX - Scaled(6), _bodyBottom + HelpBarGap, _contentColumnWidth + Scaled(12), HelpBarHeight)
+                ? new Rectangle(_contentCursorX - CardPad, _bodyBottom + HelpBarGap, _contentColumnWidth + CardPad * 2, HelpBarHeight)
                 : new Rectangle(_contentX, _bodyBottom + HelpBarGap, ContentWidth - Scaled(12), HelpBarHeight);
             if (GlassPanel)
             {
@@ -1074,9 +1901,6 @@ namespace SDVRadiance
         private string? _helpBarWrappedFrom, _helpBarWrapped;
         private int _helpBarWrappedWidth;
 
-        /// <summary>Where the page's content ends, for the last card on the glass.</summary>
-        private int _contentEndY;
-
         /// <summary>The page's name in large type on the glass, and where it sits.</summary>
         private (string Text, int Y)? _pageTitle;
 
@@ -1086,25 +1910,58 @@ namespace SDVRadiance
         /// type: the layout of the glass mock. The cards are worked out from where the headings
         /// are, each running to just above the next one.
         /// </summary>
+        /// <summary>How far a glass card reaches out past its rows on each side.</summary>
+        private int CardPad => Scaled(GlassPanel ? 12 : 6);
+
+        /// <summary>The card of the group under heading <paramref name="index"/>, in content
+        /// coordinates: from just above its heading to just above the next card.</summary>
+        private Rectangle GlassCardOf(int index)
+        {
+            SectionHeader header = _sectionHeaders[index];
+            int top = header.Row.Y - Scaled(6);
+            // As far under the last row as the heading sits under the top, open or folded, so a
+            // folded group is a card the size of its heading and the cards keep one gap between them.
+            int bottom = ContentEndOf(header) + Scaled(6);
+            // A search result's card ends before the line naming where the next result lives.
+            foreach (int pathRow in _searchPathRows)
+                if (pathRow > header.Row.Y && pathRow - Scaled(4) < bottom)
+                    bottom = pathRow - Scaled(4);
+            return new Rectangle(header.Row.X - CardPad, top, header.Row.Width + CardPad * 2, Math.Max(header.Row.Height, bottom - top));
+        }
+
+
+        /// <summary>Where a group's content ends: its last row, or a parent's last child's card.</summary>
+        private int ContentEndOf(SectionHeader header) => header.GroupEnd ?? RowsEndOf(header);
+
         private void DrawGlassCards(SpriteBatch spriteBatch, int scrollOffsetY)
         {
+            if (_hiddenListTop is int hiddenTop)
+            {
+                // A thin rule halfway between the settings and the list of what is hidden, so the
+                // list reads as the foot of the page and not as one more group.
+                int ruleY = hiddenTop - HiddenListGap / 2 + scrollOffsetY;
+                spriteBatch.Draw(Game1.staminaRect, new Rectangle(_contentCursorX + Scaled(24), ruleY, _contentColumnWidth - Scaled(48), Math.Max(1, Scaled(1))),
+                    TunerTheme.Overlay * 0.12f);
+            }
             if (_pageTitle is { } title)
                 TunerText.DrawFit(spriteBatch, title.Text, new Vector2(_contentCursorX, title.Y + scrollOffsetY),
                     _contentColumnWidth, TunerTheme.Ink, 1.2f * _uiScale);
             for (int i = 0; i < _sectionHeaders.Count; i++)
             {
                 SectionHeader header = _sectionHeaders[i];
-                int top = header.Row.Y - Scaled(6);
-                int bottom = i + 1 < _sectionHeaders.Count ? _sectionHeaders[i + 1].Row.Y - Scaled(12) : _contentEndY;
-                // A search result's card ends before the line naming where the next result lives.
-                foreach (int pathRow in _searchPathRows)
-                    if (pathRow > header.Row.Y && pathRow - Scaled(4) < bottom)
-                        bottom = pathRow - Scaled(4);
-                var card = new Rectangle(header.Row.X - Scaled(6), top + scrollOffsetY, header.Row.Width + Scaled(12), Math.Max(header.Row.Height, bottom - top));
+                Rectangle card = GlassCardOf(i);
+                card.Y += scrollOffsetY;
                 if (card.Bottom < _bodyTop || card.Y > _bodyBottom)
                     continue;
-                TunerTheme.Plate(spriteBatch, card, Scaled(14), TunerTheme.Overlay * 0.045f);
-                TunerTheme.PlateRim(spriteBatch, card, Scaled(14), TunerTheme.Overlay * 0.07f);
+                // The list of hidden things is a frame with nothing in it, not one more group of
+                // settings: no fill, only a faint rim.
+                if (header.Key == HiddenListKey)
+                    TunerTheme.PlateRim(spriteBatch, card, Scaled(14), TunerTheme.Overlay * 0.1f);
+                else
+                {
+                    TunerTheme.Plate(spriteBatch, card, Scaled(14), TunerTheme.Overlay * 0.045f);
+                    TunerTheme.PlateRim(spriteBatch, card, Scaled(14), TunerTheme.Overlay * 0.07f);
+                }
                 string? picture = PictureFor(header.Key);
                 Texture2D? effect = picture != null ? PicturePair(picture).Effect : null;
                 if (effect != null)
@@ -1242,11 +2099,12 @@ namespace SDVRadiance
             ["tuner.section.particlefireflies"] = "firefly", ["tuner.section.particlepetals"] = "petal", ["tuner.section.particletumbleweeds"] = "tumble",
             ["tuner.section.particlewhirlwinds"] = "wind", ["tuner.section.particleringsparkles"] = "rays", ["tuner.section.particlefootdust"] = "dust",
             ["tuner.section.particlefestivelights"] = "lamp", ["tuner.section.particleembers"] = "flame", ["tuner.section.particlechimney"] = "house",
-            ["tuner.section.particlelavasparks"] = "flame",
+            ["tuner.section.particlelavasparks"] = "flame", ["tuner.section.particleglow"] = "sun",
         };
 
         private int? SectionIcon(string key)
-            => SectionIconNames.TryGetValue(key, out string? name) ? GlassIconNamed(name)
+            => key == HiddenListKey ? null
+                : SectionIconNames.TryGetValue(key, out string? name) ? GlassIconNamed(name)
                 : Grouped && _searchQuery == null && PageIconName(GroupedPages[_activeTab].Page) is string pageIcon ? GlassIconNamed(pageIcon)
                 : null;
 
@@ -1269,6 +2127,9 @@ namespace SDVRadiance
                 var copy = new ModConfig();
                 copy.ApplyProfile(_config.CaptureProfile(""));
                 copy.TunerFoldedSections = [];
+                // What the player hid is not there to count.
+                copy.TunerHiddenSections = [.. _config.TunerHiddenSections];
+                copy.TunerHiddenSwitches = [.. _config.TunerHiddenSwitches];
                 // As the player has Simple or All, so switching between them moves the counts.
                 copy.TunerShowFineTuning = _config.TunerShowFineTuning;
                 copy.TunerLayout = LayoutGrouped;
@@ -1391,6 +2252,10 @@ namespace SDVRadiance
         /// <summary>Run each frame: the typed words become the search the moment they change.</summary>
         private void FollowTypedSearch(float seconds)
         {
+            float namingTarget = NamingLook ? 1f : 0f;
+            _lookNameStretch = namingTarget > _lookNameStretch
+                ? Math.Min(namingTarget, _lookNameStretch + seconds / 0.18f)
+                : Math.Max(namingTarget, _lookNameStretch - seconds / 0.18f);
             float target = TypingSearch ? 1f : 0f;
             _searchStretch = target > _searchStretch
                 ? Math.Min(target, _searchStretch + seconds / 0.18f)
@@ -1400,6 +2265,7 @@ namespace SDVRadiance
             _searchTypedSeen = _searchTyping.Text;
             string typed = _searchTypedSeen.Trim();
             _searchQuery = typed.Length == 0 ? null : typed;
+            _searchCategory = null;
             _scroll = 0;
             Reflow();
         }
@@ -1437,12 +2303,18 @@ namespace SDVRadiance
                     continue;
                 TunerTheme.Plate(spriteBatch, whole, whole.Height / 2, TunerTheme.Overlay * 0.07f);
                 TunerTheme.PlateRim(spriteBatch, whole, whole.Height / 2, TunerTheme.Rim);
+                // The blue plate slides to the side just picked instead of jumping there.
+                if (Array.Find(options, option => option.IsChosen()) is { } picked)
+                {
+                    int plateX = (int)TunerMotion.Follow($"headerpill{pill}:x", picked.Bounds.X);
+                    int plateWidth = (int)TunerMotion.Follow($"headerpill{pill}:w", picked.Bounds.Width);
+                    TunerTheme.Plate(spriteBatch, new Rectangle(plateX, picked.Bounds.Y, plateWidth, picked.Bounds.Height),
+                        picked.Bounds.Height / 2, TunerTheme.Accent);
+                }
                 foreach (PillOption option in options)
                 {
                     bool chosen = option.IsChosen();
-                    if (chosen)
-                        TunerTheme.Plate(spriteBatch, option.Bounds, option.Bounds.Height / 2, TunerTheme.Accent);
-                    else if (option.Bounds.Contains(mouseX, mouseY))
+                    if (!chosen && option.Bounds.Contains(mouseX, mouseY))
                         TunerTheme.Plate(spriteBatch, option.Bounds, option.Bounds.Height / 2, TunerTheme.Overlay * 0.08f);
                     float labelWidth = TunerText.Measure(option.Label).X * HeaderTextScale;
                     TunerText.Draw(spriteBatch, option.Label, new Vector2(option.Bounds.Center.X - labelWidth / 2f, option.Bounds.Center.Y - capHeight / 2f + 2f),
@@ -1499,6 +2371,10 @@ namespace SDVRadiance
             // full-length Thai label. Height matters as much as width here, since the rail has
             // to fit twelve tabs.
             _uiScale = Math.Clamp(Math.Min(viewportWidth / 1600f, viewportHeight / 900f), 1f, 1.6f);
+            // The player's text size scales the glass whole, its rows and gaps with its words: text
+            // grown alone would outgrow the rows, and the Thai marks above a line were cut off before.
+            if (GlassPanel)
+                _uiScale *= _config.TunerTextSize switch { TextSizeSmall => 0.9f, TextSizeLarge => 1.15f, _ => 1f };
             RailWidth = Scaled(BaseRailWidth);
             // The glass carries the search and two switches in its header, as on the mock, and is
             // wider to make room for them, short of running off a small window.
@@ -1514,6 +2390,12 @@ namespace SDVRadiance
 
             _sliders.Clear(); _compasses.Clear(); _toggles.Clear(); _buttons.Clear(); _chips.Clear(); _sectionHeaders.Clear(); _tabRailButtons.Clear(); _infoLines.Clear(); _help.Clear(); _pictureOfRow.Clear();
             _searchPathRows.Clear();
+            _hiddenOnPage.Clear();
+            _saveLookButton = Rectangle.Empty;
+            _saveLookRow = Rectangle.Empty;
+            _parentGroup = null;
+            _parentClosed = false;
+            _closedParent = null;
             _rowsEnabledWhen = null;   // a tab's dependency must not survive into the next one
             EndSection();
             _fineTuningRowsHidden = 0;
@@ -1532,7 +2414,7 @@ namespace SDVRadiance
             // long for its window is what scrolling is for, so the pitch is fixed now and the
             // rail carries whatever it can, one whole tab at a time.
             int maxBody = viewportHeight - Scaled(40) - HeaderHeight - FooterHeight;
-            int tabPitch = Scaled(NaturalTabPitch);
+            int tabPitch = Scaled(NaturalTabPitch + (GlassPanel ? 6 * (DensityStep - 1) : 0));
             // The panel is the height of the classic rail in either layout, so switching layout
             // never resizes it; the grouped rail is eight entries and simply has room to spare.
             int railVisibleTabs = Math.Max(1, Math.Min(Tabs.Length, maxBody / tabPitch));
@@ -1582,8 +2464,9 @@ namespace SDVRadiance
 
             // ---- right content column: only the active tab ----
             _contentX = xPositionOnScreen + RailWidth;
-            _contentCursorX = _contentX + Scaled(16);
-            _contentColumnWidth = ContentWidth - Scaled(40);
+            // On the glass the rows sit further in, so a card has room round its words and switches.
+            _contentCursorX = _contentX + Scaled(GlassPanel ? 22 : 16);
+            _contentColumnWidth = ContentWidth - Scaled(GlassPanel ? 52 : 40);
             // The same padding the scrolling column's top edge is placed with (_bodyTop below): the
             // unscaled one started the content above that edge on a large window, and the marks
             // over a Thai first line (the tone mark on the Water page's title) were cut off.
@@ -1591,6 +2474,7 @@ namespace SDVRadiance
             // One line saying what this tab is for, before anything else on it. A column of
             // sliders assumes the reader already knows which effect they belong to.
             PlaceLayoutPrompt();
+            HoldHiddenSwitchesEverywhere();
             // Cleared before a search jumps past it: the page's big title stayed from the page
             // before and was drawn over the results.
             _pageTitle = null;
@@ -1622,24 +2506,69 @@ namespace SDVRadiance
             // the tab; a tab seen for the first time is built twice, once to learn them.
             // The glass, like its mock, offers no Fold all, only Open all on a page where a group
             // has been folded, so the way back is never lost.
-            if (SectionKeysByTab.TryGetValue(_activeTab, out List<string>? knownSections) && knownSections.Count > 1
-                && (!GlassPanel || knownSections.Any(_config.TunerFoldedSections.Contains)))
+            if (SectionKeysByTab.TryGetValue(_activeTab, out List<string>? knownSections) && knownSections.Count > 1)
             {
-                bool anyOpen = !GlassPanel && knownSections.Any(key => !_config.TunerFoldedSections.Contains(key));
-                string foldLabel = _translate(anyOpen ? "tuner.foldall" : "tuner.unfoldall");
-                int foldWidth = (int)(TunerText.Measure(foldLabel).X * 0.9f * _uiScale) + Scaled(32);
-                Button(foldLabel, new Rectangle(_contentCursorX + _contentColumnWidth - foldWidth, _contentCursorY, foldWidth, Scaled(34)), () =>
+                void FoldAll(bool fold)
                 {
-                    foreach (string key in knownSections)
+                    void Apply()
                     {
-                        _config.TunerFoldedSections.Remove(key);
-                        if (anyOpen)
-                            _config.TunerFoldedSections.Add(key);
+                        foreach (string key in knownSections)
+                        {
+                            _config.TunerFoldedSections.Remove(key);
+                            if (fold)
+                                _config.TunerFoldedSections.Add(key);
+                        }
+                        _onSave();
+                        Reflow();
                     }
-                    _onSave();
-                    Reflow();
-                });
-                _contentCursorY += Scaled(GlassPanel ? 48 : 40);
+                    if (!GlassPanel)
+                    {
+                        Apply();
+                        return;
+                    }
+                    if (fold)
+                    {
+                        // Every open card closes at once; a child closes inside its parent's band.
+                        var bands = _sectionHeaders
+                            .Where(header => knownSections.Contains(header.Key) && !header.Folded && header.Parent == null)
+                            .Select(header => BandOfRows(header)).ToList();
+                        StartFold(bands, opening: false, Apply);
+                        return;
+                    }
+                    var wasFolded = knownSections.Where(_config.TunerFoldedSections.Contains).ToHashSet();
+                    Apply();
+                    // Every card that was folded opens at once; a child opening inside a parent that
+                    // was folded too opens with the parent's band.
+                    var opened = _sectionHeaders
+                        .Where(header => wasFolded.Contains(header.Key) && (header.Parent == null || !wasFolded.Contains(header.Parent.Key)))
+                        .Select(header => BandOfRows(header)).ToList();
+                    StartFold(opened, opening: true);
+                }
+                bool anyOpen = knownSections.Any(key => !_config.TunerFoldedSections.Contains(key));
+                bool anyFolded = knownSections.Any(_config.TunerFoldedSections.Contains);
+                if (GlassPanel)
+                {
+                    // On the glass both, side by side: the one with nothing to do sits back.
+                    int right = _contentCursorX + _contentColumnWidth;
+                    foreach ((string label, bool fold, bool useful) in new[]
+                        { (_translate("tuner.unfoldall"), false, anyFolded), (_translate("tuner.foldall"), true, anyOpen) })
+                    {
+                        int width = (int)(TunerText.Measure(label).X * 0.9f * _uiScale) + Scaled(32);
+                        right -= width;
+                        var button = Button(label, new Rectangle(right, _contentCursorY, width, Scaled(34)), () => FoldAll(fold));
+                        button.Faded = !useful;
+                        right -= Scaled(8);
+                    }
+                    _contentCursorY += Scaled(48);
+                }
+                else
+                {
+                    string foldLabel = _translate(anyOpen ? "tuner.foldall" : "tuner.unfoldall");
+                    int foldWidth = (int)(TunerText.Measure(foldLabel).X * 0.9f * _uiScale) + Scaled(32);
+                    Button(foldLabel, new Rectangle(_contentCursorX + _contentColumnWidth - foldWidth, _contentCursorY, foldWidth, Scaled(34)),
+                        () => FoldAll(anyOpen));
+                    _contentCursorY += Scaled(40);
+                }
             }
             _contentStartY = _contentCursorY;
             if (Grouped)
@@ -1683,6 +2612,39 @@ namespace SDVRadiance
                     return;
                 }
             }
+            if (GlassPanel && _sectionHeaders.Count > 0)
+                _contentCursorY += Scaled(6);
+            // A group whose switches were hidden until nothing of it is left to show is hidden as a
+            // whole: a heading over no rows says nothing. Its switches are held by the group from
+            // then on, and showing the group again brings all of them back.
+            if (!_promotingEmptyGroups && _searchQuery == null)
+            {
+                bool promoted = false;
+                foreach (SectionHeader header in _sectionHeaders)
+                {
+                    if (header.Folded || header.HiddenSwitchKeys.Count == 0 || RowsEndOf(header) > header.Row.Y + HeaderAdvance(folded: false))
+                        continue;
+                    _config.TunerHiddenSections.Add(header.Key);
+                    foreach (string key in header.HiddenSwitchKeys)
+                        _config.TunerHiddenSwitches.Remove(key);
+                    promoted = true;
+                }
+                if (promoted)
+                {
+                    _hiddenChangedSettings = true;
+                    _settingsByCategory = null;
+                    _promotingEmptyGroups = true;
+                    try
+                    {
+                        Reflow();
+                    }
+                    finally
+                    {
+                        _promotingEmptyGroups = false;
+                    }
+                    return;
+                }
+            }
             // The dials this tab is keeping back, offered at the foot of it, so a player who never
             // looks at the header still finds out they exist.
             if (_fineTuningRowsHidden > 0)
@@ -1692,7 +2654,10 @@ namespace SDVRadiance
                     new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, RowHeight), ShowFineTuning);
                 _contentCursorY += RowPitch;
             }
-            _contentEndY = _contentCursorY;
+            BuildHiddenList();
+            // Room under the last card, so scrolled to the end it stops clear of the help bar.
+            if (GlassPanel)
+                _contentCursorY += Scaled(16);
             int contentHeight = _contentCursorY - (contentTop + BodyPadding);
 
             // Sized to its own words at reading size. The first cut was a fixed box with the text
@@ -1739,6 +2704,13 @@ namespace SDVRadiance
             upperRightCloseButton.bounds = GlassPanel
                 ? new Rectangle(xPositionOnScreen + width - Scaled(18) - closeSize, yPositionOnScreen + Scaled(14), closeSize, closeSize)
                 : new Rectangle(xPositionOnScreen + width - Scaled(40), yPositionOnScreen - Scaled(8), closeSize, closeSize);
+
+            if (_hiddenChangedSettings)
+            {
+                _hiddenChangedSettings = false;
+                _onChange();
+                _onSave();
+            }
         }
 
         /// <summary>The pages of the open category, as a row of chips that wraps onto a second line
@@ -1775,7 +2747,8 @@ namespace SDVRadiance
                 }
                 x += chipWidth + gap;
             }
-            _contentCursorY += rowHeight + Scaled(14);
+            // Clear of the first card under it, with the room the player chose for the rest of the glass.
+            _contentCursorY += rowHeight + Scaled(14 + 6 * DensityStep);
         }
 
         /// <summary>Asked once, of a player who updated to the release that brought the grouped
@@ -1957,12 +2930,22 @@ namespace SDVRadiance
                     });
                     chipX += chipWidth + 12;
             }
+            // On the glass the save button has a row of its own under the looks, so the field it grows
+            // into has the row to itself instead of running under the chips.
+            if (GlassPanel && _config.SavedProfiles.Count > 0)
+                _contentCursorY += Scaled(ChipPitchBase);
             string saveLabel = _translate(GlassPanel ? "tuner.savelook" : "tuner.save");
             Texture2D? saveIcons = GlassPanel ? GlassIcons() : null;
             int? plus = saveIcons != null ? GlassIconNamed("plus") : null;
             int plusInset = plus != null ? Scaled(14) + Scaled(16) : 0;
             int saveWidth = Math.Max(Scaled(96), (int)(TunerText.Measure(saveLabel).X * 0.9f * _uiScale) + Scaled(32) + plusInset);
-            _buttons.Add(new TunerTextButton(saveLabel, new Rectangle(_contentCursorX + _contentColumnWidth - saveWidth, _contentCursorY, saveWidth, ButtonHeight), PromptSaveProfile)
+            var saveRect = new Rectangle(_contentCursorX + _contentColumnWidth - saveWidth, _contentCursorY, saveWidth, ButtonHeight);
+            if (GlassPanel)
+            {
+                _saveLookButton = saveRect;
+                _saveLookRow = new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, ButtonHeight);
+            }
+            _buttons.Add(new TunerTextButton(saveLabel, saveRect, GlassPanel ? StartNamingLook : PromptSaveProfile)
             {
                 Dashed = true,
                 TextScale = _uiScale,
@@ -3111,7 +4094,7 @@ namespace SDVRadiance
             DependsOn(() => _config.PrecipitationEnabled && _config.PrecipitationWind);
             // The same leaf look as the Particles tab: one choice for every leaf on screen, reachable
             // from either place.
-            BuildLeafLooks();
+            BuildLeafLooks(() => _config.PrecipitationEnabled && _config.PrecipitationWind);
             Slider("tuner.precipitationdensity", 0.25f, 2f, () => _config.PrecipitationWindDensity,
                 value => _config.PrecipitationWindDensity = value, "help.precipitationdensity");
             Slider("tuner.precipitationsize", 0.5f, 2f, () => _config.PrecipitationWindSize,
@@ -3260,11 +4243,17 @@ namespace SDVRadiance
             _contentCursorY += Scaled(50);
         }
 
-        private void BuildLeafLooks()
+        /// <summary>The leaf look buttons, shown under whichever switch the group they sit in has:
+        /// the petals in Particles, the windblown leaves under Wind.</summary>
+        private void BuildLeafLooks(Func<bool> wanted)
         {
             // Under a folded heading, or a section the grouped layout is not showing, the buttons go
             // with the rest of the rows; they used to be drawn regardless.
             if (HiddenBySection(countsAsRow: false))
+                return;
+            // The look goes with the switch of the group it is shown in, as the dials beside it do:
+            // with that off, the buttons there change nothing anyone is looking at.
+            if (!wanted())
                 return;
             (ParticleLeafLook look, string key)[] looks = [(ParticleLeafLook.Realistic, "realistic"), (ParticleLeafLook.Pixel, "pixel")];
             int buttonWidth = (_contentColumnWidth - ChoiceGap * (looks.Length - 1)) / looks.Length;
@@ -3305,7 +4294,7 @@ namespace SDVRadiance
             Slider("tuner.particlepetalsflutter", 0f, 1f, () => _config.ParticlePetalsFlutter,
                 value => _config.ParticlePetalsFlutter = value, "help.particlepetalsflutter",
                 () => _config.ParticlesEnabled && _config.ParticlePetals);
-            BuildLeafLooks();
+            BuildLeafLooks(() => _config.ParticlesEnabled && _config.ParticlePetals);
             Emitter("tumbleweeds", () => _config.ParticleTumbleweeds, value => _config.ParticleTumbleweeds = value,
                 () => _config.ParticleTumbleweedsAmount, value => _config.ParticleTumbleweedsAmount = value,
                 () => _config.ParticleTumbleweedsSize, value => _config.ParticleTumbleweedsSize = value);
@@ -3327,9 +4316,9 @@ namespace SDVRadiance
             Emitter("chimney", () => _config.ParticleChimney, value => _config.ParticleChimney = value,
                 () => _config.ParticleChimneyAmount, value => _config.ParticleChimneyAmount = value,
                 () => _config.ParticleChimneySize, value => _config.ParticleChimneySize = value);
-            // Not one emitter's setting: it belongs to every glowing particle at once, so it sits
-            // on its own under them rather than inside any of their groups.
-            EndSection();
+            // Not one emitter's setting: it belongs to every glowing particle at once, so it has a
+            // group of its own under them. Left without a heading, it floated between the cards.
+            Section("tuner.section.particleglow");
             Slider("tuner.particleglowlight", 0f, 1f, () => _config.ParticleGlowLight,
                 value => _config.ParticleGlowLight = value, "help.particleglowlight",
                 () => _config.ParticlesEnabled);
@@ -3824,7 +4813,47 @@ namespace SDVRadiance
                     value => _config.TunerPanel = value ? PanelGlassLight : PanelGlass, "help.glasslight");
             if (GlassPanel)
                 Slider("tuner.glassshade", 0.4f, 0.95f, () => _config.TunerGlassShade, value => _config.TunerGlassShade = value, "help.glassshade");
+            if (GlassPanel)
+            {
+                BuildDensityChoice();
+                BuildTextSizeChoice();
+            }
             Toggle("config.debug.name", () => _config.DebugLogging, value => _config.DebugLogging = value);
+        }
+
+        /// <summary>How tightly the glass packs its rows: three buttons, the usual one in the middle.</summary>
+        private void BuildDensityChoice()
+            => BuildMenuChoice("tuner.density", [(DensityCompact, "compact"), ("", "comfortable"), (DensityRoomy, "roomy")],
+                () => _config.TunerDensity is DensityCompact or DensityRoomy ? _config.TunerDensity : "", value => _config.TunerDensity = value);
+
+        /// <summary>How big the glass's words are, and the glass with them.</summary>
+        private void BuildTextSizeChoice()
+            => BuildMenuChoice("tuner.textsize", [(TextSizeSmall, "small"), ("", "normal"), (TextSizeLarge, "large")],
+                () => _config.TunerTextSize is TextSizeSmall or TextSizeLarge ? _config.TunerTextSize : "", value => _config.TunerTextSize = value);
+
+        internal const string TextSizeSmall = "Small", TextSizeLarge = "Large";
+
+        /// <summary>A choice about the menu itself: its name, then one button per answer, the chosen one lit.</summary>
+        private void BuildMenuChoice(string key, (string Value, string Key)[] choices, Func<string> read, Action<string> write)
+        {
+            if (HiddenBySection(countsAsRow: false) || !MatchesSearch(key, "help." + key["tuner.".Length..]))
+                return;
+            Info(() => _translate(key));
+            int buttonWidth = (_contentColumnWidth - ChoiceGap * (choices.Length - 1)) / choices.Length;
+            for (int i = 0; i < choices.Length; i++)
+            {
+                var (value, choiceKey) = choices[i];
+                var rect = new Rectangle(_contentCursorX + i * (buttonWidth + ChoiceGap), _contentCursorY, buttonWidth, Scaled(40));
+                var button = Button(_translate($"{key}.{choiceKey}"), rect, () =>
+                {
+                    write(value);
+                    _onSave();
+                    Reflow();
+                });
+                button.IsChosen = () => read() == value;
+                Help(rect, "help." + key["tuner.".Length..]);
+            }
+            _contentCursorY += Scaled(50);
         }
 
         internal const string PanelGlass = "Glass";
@@ -3893,6 +4922,112 @@ namespace SDVRadiance
 
         // ================= interaction =================
 
+        // ---- naming a look on the glass: the save button grows into a field, as the search does ----
+
+        private TextBox? _lookNameTyping;
+        private float _lookNameStretch;
+        /// <summary>Where the save button and its row are, in content coordinates, on the glass.</summary>
+        private Rectangle _saveLookButton, _saveLookRow;
+
+        private bool NamingLook => _lookNameTyping != null && Game1.keyboardDispatcher.Subscriber == _lookNameTyping;
+
+        private void StartNamingLook()
+        {
+            StopTypingSearch();
+            _lookNameTyping ??= new TextBox(null, null, Game1.smallFont, TunerTheme.Ink) { limitWidth = false };
+            _lookNameTyping.Text = "";
+            _lookNameTyping.Selected = true;
+            Game1.keyboardDispatcher.Subscriber = _lookNameTyping;
+        }
+
+        private void StopNamingLook()
+        {
+            if (_lookNameTyping == null)
+                return;
+            _lookNameTyping.Selected = false;
+            if (Game1.keyboardDispatcher.Subscriber == _lookNameTyping)
+                Game1.keyboardDispatcher.Subscriber = null;
+        }
+
+        private void SaveNamedLook()
+        {
+            string name = _lookNameTyping?.Text.Trim() ?? "";
+            StopNamingLook();
+            if (name.Length == 0)
+                return;
+            _config.SavedProfiles.Add(_config.CaptureProfile(name));
+            _onSave();
+            Game1.playSound("newRecipe");
+            Reflow();
+        }
+
+        /// <summary>The field while it grows: from the button leftward to the whole row.</summary>
+        private Rectangle LookNameField()
+        {
+            int left = (int)MathHelper.Lerp(_saveLookButton.X, _saveLookRow.X, _lookNameStretch);
+            return new Rectangle(left, _saveLookRow.Y, _saveLookRow.Right - left, _saveLookRow.Height);
+        }
+
+        /// <summary>The Save and close buttons at the end of the field, in content coordinates.</summary>
+        private (Rectangle Save, Rectangle Cancel) LookNameButtons()
+        {
+            Rectangle field = LookNameField();
+            int size = field.Height - Scaled(12);
+            var cancel = new Rectangle(field.Right - Scaled(6) - size, field.Center.Y - size / 2, size, size);
+            string label = _translate("tuner.savelook.confirm");
+            int saveWidth = (int)(TunerText.Measure(label).X * 0.8f * _uiScale) + Scaled(24);
+            var save = new Rectangle(cancel.X - Scaled(6) - saveWidth, cancel.Y, saveWidth, size);
+            return (save, cancel);
+        }
+
+        private void DrawLookNameField(SpriteBatch spriteBatch, int scrollOffsetY)
+        {
+            if (_lookNameStretch <= 0.01f || _saveLookRow.IsEmpty || !Visible(_saveLookRow))
+                return;
+            Rectangle field = LookNameField();
+            field.Y += scrollOffsetY;
+            int radius = field.Height / 2;
+            TunerTheme.Plate(spriteBatch, field, radius, TunerTheme.PanelGlass * (0.95f * _lookNameStretch));
+            TunerTheme.Plate(spriteBatch, field, radius, TunerTheme.Overlay * (0.1f * _lookNameStretch));
+            TunerTheme.PlateRim(spriteBatch, field, radius, TunerTheme.Accent * _lookNameStretch);
+            if (_lookNameStretch < 0.6f)
+                return;
+            float shown = (_lookNameStretch - 0.6f) / 0.4f;
+            (Rectangle save, Rectangle cancel) = LookNameButtons();
+            save.Y += scrollOffsetY;
+            cancel.Y += scrollOffsetY;
+            float textScale = 0.9f * _uiScale;
+            int textX = field.X + Scaled(18);
+            float room = save.X - Scaled(10) - textX;
+            string typed = _lookNameTyping?.Text ?? "";
+            float capHeight = TunerText.Measure("A").Y * textScale;
+            var textAt = new Vector2(textX, field.Center.Y - capHeight / 2f + 2f);
+            if (typed.Length == 0)
+                TunerText.DrawFit(spriteBatch, _translate("tuner.naming"), textAt, room, TunerTheme.InkFaint * shown, textScale);
+            else
+            {
+                string visible = typed;
+                while (visible.Length > 1 && TunerText.Measure(visible).X * textScale > room)
+                    visible = visible[1..];
+                TunerText.Draw(spriteBatch, visible, textAt, TunerTheme.Ink * shown, textScale);
+                textAt.X += TunerText.Measure(visible).X * textScale;
+            }
+            // A caret that blinks where the next letter goes.
+            if (NamingLook && DateTime.Now.Millisecond < 500)
+                spriteBatch.Draw(Game1.staminaRect, new Rectangle((int)textAt.X + 2, field.Center.Y - (int)(capHeight / 2f), Math.Max(1, Scaled(2)), (int)capHeight),
+                    TunerTheme.Accent * shown);
+            int mouseX = Game1.getMouseX(), mouseY = Game1.getMouseY();
+            bool overSave = save.Contains(mouseX, mouseY);
+            TunerTheme.Plate(spriteBatch, save, save.Height / 2, TunerTheme.Accent * ((typed.Trim().Length > 0 ? (overSave ? 1f : 0.85f) : 0.35f) * shown));
+            string label = _translate("tuner.savelook.confirm");
+            Vector2 labelSize = TunerText.Measure(label) * (0.8f * _uiScale);
+            TunerText.Draw(spriteBatch, label, new Vector2(save.Center.X - labelSize.X / 2f, save.Center.Y - labelSize.Y / 2f + 2f),
+                TunerTheme.AccentInk * shown, 0.8f * _uiScale);
+            bool overCancel = cancel.Contains(mouseX, mouseY);
+            TunerTheme.Plate(spriteBatch, cancel, cancel.Height / 2, TunerTheme.Overlay * ((overCancel ? 0.22f : 0.12f) * shown));
+            DrawGlassCross(spriteBatch, cancel, TunerTheme.Ink * shown);
+        }
+
         private void PromptSaveProfile()
         {
             Game1.activeClickableMenu = new TextEntryMenu(_translate("tuner.naming"), "",
@@ -3927,6 +5062,7 @@ namespace SDVRadiance
             _hoverText = null;
             _hoverPicture = null;
             _hoveredSection = null;
+            _hoveredToggle = null;
             if (Sliding)
                 return;
             if (y < _bodyTop || y > _bodyBottom || x < _contentX)
@@ -3957,6 +5093,18 @@ namespace SDVRadiance
                     help = _translate("tuner.section.foldhint");
                     _hoveredSection = header;
                     _hoverPicture = PictureFor(header.Key);
+                    if (GlassPanel && header.CanHide && HidePillOf(header).Contains(x, y + _scroll))
+                        help = _translate(header.HideableSwitches > 0 ? "tuner.hide.sectionhint" : "tuner.hide.sectionhint.keep");
+                }
+            }
+            foreach (TunerToggle toggle in _toggles)
+            {
+                if (GlassPanel && toggle.OffersHide && Visible(toggle.Row) && toggle.Row.Contains(x, y + _scroll))
+                {
+                    _hoveredToggle = toggle;
+                    if (HidePillOf(toggle).Contains(x, y + _scroll))
+                        help = _translate("tuner.hide.switchhint");
+                    break;
                 }
             }
             _hoverText = CombinedHover(help, reset);
@@ -4020,7 +5168,7 @@ namespace SDVRadiance
 
         public override void receiveLeftClick(int x, int y, bool playSound = true)
         {
-            if (Sliding)
+            if (Sliding || _fold != null)
                 return;
             // The close button slides the panel out too, instead of the base class removing it at once.
             if (upperRightCloseButton != null && upperRightCloseButton.containsPoint(x, y))
@@ -4047,6 +5195,25 @@ namespace SDVRadiance
                 _layoutButton.OnClick();
                 return;
             }
+            if (NamingLook || _lookNameStretch > 0.01f)
+            {
+                (Rectangle save, Rectangle cancel) = LookNameButtons();
+                int contentY = y + _scroll;
+                if (save.Contains(x, contentY))
+                {
+                    SaveNamedLook();
+                    return;
+                }
+                if (cancel.Contains(x, contentY))
+                {
+                    Game1.playSound("smallSelect");
+                    StopNamingLook();
+                    return;
+                }
+                if (LookNameField().Contains(x, contentY))
+                    return;
+                StopNamingLook();
+            }
             if (SearchFieldNow().Contains(x, y))
             {
                 if (!TypingSearch)
@@ -4071,9 +5238,32 @@ namespace SDVRadiance
                         return;
                     }
 
-            // Rail buttons are fixed (no scroll offset) and always clickable.
-            foreach (var (button, tabIndex, _) in _tabRailButtons)
-                if (button.Bounds.Contains(x, y)) { if (!RailActive(tabIndex)) Game1.playSound("smallSelect"); button.OnClick(); return; }
+            // Rail buttons are fixed (no scroll offset) and always clickable, where they are drawn
+            // (a search slides the ones under a category with no results up).
+            for (int entry = 0; entry < _tabRailButtons.Count; entry++)
+            {
+                var (button, tabIndex, _) = _tabRailButtons[entry];
+                (int shift, float shown) = RailPlace(entry);
+                if (shown < 0.5f)
+                    continue;
+                var at = new Rectangle(button.Bounds.X, button.Bounds.Y + shift, button.Bounds.Width, button.Bounds.Height);
+                if (!at.Contains(x, y))
+                    continue;
+                if (Grouped && !string.IsNullOrWhiteSpace(_searchQuery))
+                {
+                    // A search stays open: the click narrows its results to that category, and a
+                    // second click on it widens them again.
+                    string category = GroupedPages[tabIndex].Category;
+                    _searchCategory = _searchCategory == category ? null : category;
+                    Game1.playSound("smallSelect");
+                    _scroll = 0;
+                    Reflow();
+                    return;
+                }
+                if (!RailActive(tabIndex)) Game1.playSound("smallSelect");
+                button.OnClick();
+                return;
+            }
 
             if (y >= _bodyTop && y <= _bodyBottom && x >= _contentX)
             {
@@ -4081,11 +5271,49 @@ namespace SDVRadiance
                 {
                     if (Visible(header.Row) && header.Row.Contains(x, y + _scroll))
                     {
-                        if (!_config.TunerFoldedSections.Remove(header.Key))
-                            _config.TunerFoldedSections.Add(header.Key);
+                        if (GlassPanel && header.CanHide && HidePillOf(header).Contains(x, y + _scroll))
+                        {
+                            HideSection(header);
+                            return;
+                        }
                         Game1.playSound("shwip");
-                        _onSave();
-                        Reflow();
+                        string foldKey = header.Key;
+                        void SetFolded(bool folded)
+                        {
+                            if (foldKey == HiddenListKey)
+                                _config.TunerHiddenListOpen = !folded;
+                            else if (folded)
+                                _config.TunerFoldedSections.Add(foldKey);
+                            else
+                                _config.TunerFoldedSections.Remove(foldKey);
+                        }
+                        if (!GlassPanel)
+                        {
+                            SetFolded(!header.Folded);
+                            _onSave();
+                            Reflow();
+                        }
+                        else if (header.Folded)
+                        {
+                            SetFolded(false);
+                            _onSave();
+                            Reflow();
+                            if (_sectionHeaders.Find(built => built.Key == foldKey) is { } opened)
+                            {
+                                (int openStart, int openEnd) = BandOfRows(opened);
+                                StartFold(openStart, openEnd, opening: true);
+                            }
+                        }
+                        else
+                        {
+                            (int closeStart, int closeEnd) = BandOfRows(header);
+                            StartFold(closeStart, closeEnd, opening: false, () =>
+                            {
+                                SetFolded(true);
+                                _onSave();
+                                Reflow();
+                            });
+                        }
                         return;
                     }
                 }
@@ -4096,6 +5324,12 @@ namespace SDVRadiance
                     if (Visible(chip.Load.Bounds) && chip.Delete.Contains(x, y + _scroll)) { DeleteChip(chip); return; }
                     if (Visible(chip.Load.Bounds) && chip.Load.Bounds.Contains(x, y + _scroll)) { Game1.playSound("smallSelect"); chip.Load.OnClick(); return; }
                 }
+                foreach (TunerToggle toggle in _toggles)
+                    if (GlassPanel && toggle.OffersHide && Visible(toggle.Row) && toggle.Row.Contains(x, y + _scroll) && HidePillOf(toggle).Contains(x, y + _scroll))
+                    {
+                        HideSwitch(toggle);
+                        return;
+                    }
                 foreach (var toggle in _toggles)
                     // Reflow after every toggle: the rows a switch owns are only built while it
                     // is on, so flipping it has to rebuild the tab. Safe inside the foreach
@@ -4368,7 +5602,8 @@ namespace SDVRadiance
         /// </summary>
         private void RoundTheScrollEdges(SpriteBatch spriteBatch, float slideOffsetX)
         {
-            int left = _contentCursorX - Scaled(6), right = _contentCursorX + _contentColumnWidth + Scaled(6);
+            // The cards' own edges, so the rounding lands on their corners and not inside them.
+            int left = _contentCursorX - CardPad, right = _contentCursorX + _contentColumnWidth + CardPad;
             int radius = Scaled(14);
             Texture2D? backdrop = RenderPipeline.TunerBackdropNow;
             int screenWidth = Math.Max(1, Game1.uiViewport.Width), screenHeight = Math.Max(1, Game1.uiViewport.Height);
@@ -4410,19 +5645,25 @@ namespace SDVRadiance
         private void DrawHoveredRow(SpriteBatch spriteBatch, int scrollOffsetY)
         {
             int mouseX = Game1.getMouseX(), mouseY = Game1.getMouseY();
-            if (mouseY < _bodyTop || mouseY > _bodyBottom || mouseX < _contentX)
-                return;
+            bool inBody = mouseY >= _bodyTop && mouseY <= _bodyBottom && mouseX >= _contentX;
             int contentY = mouseY + _scroll;
-            Rectangle? row = null;
+            // Each row's light comes up under the pointer and fades after it leaves.
+            void Light(string key, Rectangle row, Rectangle across, bool enabled)
+            {
+                // By place as well as name: every particle kind has rows called Amount and Size.
+                float lit = TunerMotion.Follow($"rowhover:{key}:{row.Y}", inBody && enabled && row.Contains(mouseX, contentY) ? 1f : 0f, 0.06f);
+                if (lit <= 0.01f || !Visible(row))
+                    return;
+                // As wide as the column the row was laid out in, so a child group's light stays in its card.
+                var band = new Rectangle(across.X + Scaled(2), row.Y + scrollOffsetY - Scaled(2), across.Width - Scaled(4), row.Height + Scaled(4));
+                TunerTheme.Plate(spriteBatch, band, Scaled(8), TunerTheme.Overlay * (0.1f * lit));
+            }
             foreach (var toggle in _toggles)
-                if (toggle.IsEnabled && toggle.Row.Contains(mouseX, contentY)) { row = toggle.Row; break; }
-            if (row == null)
-                foreach (var slider in _sliders)
-                    if (slider.IsEnabled && slider.RowBounds.Contains(mouseX, contentY)) { row = slider.RowBounds; break; }
-            if (row is not Rectangle hovered)
-                return;
-            var band = new Rectangle(_contentCursorX - Scaled(4), hovered.Y + scrollOffsetY - Scaled(2), _contentColumnWidth + Scaled(8), hovered.Height + Scaled(4));
-            TunerTheme.Plate(spriteBatch, band, Scaled(8), TunerTheme.Overlay * 0.1f);
+                Light(toggle.Key, toggle.Row, toggle.Row, toggle.IsEnabled);
+            foreach (var slider in _sliders)
+                Light(slider.Key, slider.RowBounds, slider.Inline
+                    ? new Rectangle(slider.InlineLabelX - Scaled(10), 0, slider.InlineRowRight + Scaled(8) - (slider.InlineLabelX - Scaled(10)), 0)
+                    : slider.RowBounds, slider.IsEnabled);
         }
 
         private void DrawChangedDot(SpriteBatch spriteBatch, Vector2 labelEnd)
@@ -4437,8 +5678,156 @@ namespace SDVRadiance
             spriteBatch.Draw(Game1.staminaRect, new Rectangle(rowX - Scaled(11), markY, size, size), TunerTheme.Changed);
         }
 
+        /// <summary>Everything in the scrolling column, at a vertical offset: drawn once, or twice
+        /// in two clips while a group folds or opens (see <see cref="_fold"/>).</summary>
+        private void DrawScrollingContent(SpriteBatch spriteBatch, int scrollOffsetY)
+        {
+            if (TunerTheme.Glass)
+                DrawGlassCards(spriteBatch, scrollOffsetY);
+            foreach (SectionHeader header in _sectionHeaders)
+            {
+                if (!Visible(header.Row))
+                    continue;
+                // A band the width of the column, an arrow before the title the way every folding
+                // list draws one (down while open, pointing at the title while folded), and, while
+                // folded, how many rows it is holding in words. The first cut put a minus or a plus
+                // and a bare number at the far right, and it did not read as something to click.
+                var band = new Rectangle(header.Row.X - CardPad, header.Row.Y + scrollOffsetY, header.Row.Width + CardPad * 2, header.Row.Height);
+                // The heading under the pointer is lit the way the chosen tab in the rail is: a
+                // darker wash and a bar down its left edge, so it is plain which one a click folds.
+                bool hovered = ReferenceEquals(header, _hoveredSection);
+                // The light comes up under the pointer and fades after it, rather than switching.
+                float headLight = GlassPanel ? TunerMotion.Follow("headhover:" + header.Key, hovered ? 1f : 0f, 0.06f) : hovered ? 1f : 0f;
+                if (TunerTheme.Glass)
+                {
+                    // On the glass the heading is the top of its card, so the light takes the card's
+                    // own top corners. No bar down its edge: it read as a stray blue line.
+                    if (headLight > 0.01f)
+                    {
+                        // A folded group is all heading, so the light fills its whole card; an open
+                        // one lights only the heading at the top of its card.
+                        Rectangle card = GlassCardOf(_sectionHeaders.IndexOf(header));
+                        // Open, the light is the heading's band only, as tall as a folded card, and
+                        // square at the bottom where it meets the rows.
+                        if (header.Folded)
+                            TunerTheme.Plate(spriteBatch, new Rectangle(card.X, card.Y + scrollOffsetY, card.Width, card.Height),
+                                Scaled(14), TunerTheme.Overlay * (0.07f * headLight));
+                        else
+                            TunerTheme.PlateTop(spriteBatch, new Rectangle(band.X, band.Y - Scaled(6), band.Width, band.Height + Scaled(12)),
+                                Scaled(14), TunerTheme.Overlay * (0.07f * headLight));
+                    }
+                }
+                else
+                {
+                    spriteBatch.Draw(Game1.staminaRect, band, TunerTheme.Wash * MathHelper.Lerp(0.07f, 0.26f, headLight));
+                    if (hovered)
+                        spriteBatch.Draw(Game1.staminaRect, new Rectangle(band.X, band.Y, Scaled(4), band.Height), TunerTheme.Marker);
+                }
+                float inkStrength = MathHelper.Lerp(0.8f, 1f, headLight);
+                int unit = Math.Max(1, Scaled(2));
+                int arrowY = band.Center.Y - unit * 3 - unit / 2;
+                DrawDisclosureArrow(spriteBatch, header.Row.X, arrowY, unit, header.Folded, inkStrength);
+                int titleX = header.Row.X + unit * 7 + Scaled(8);
+                int titleY = header.Row.Y + scrollOffsetY + Scaled(4);
+                if (TunerTheme.Glass && SectionIcon(header.Key) is int sectionIcon && GlassIcons() is { } sectionIcons)
+                {
+                    int iconSize = Scaled(15);
+                    spriteBatch.Draw(sectionIcons, new Rectangle(titleX, band.Center.Y - iconSize / 2, iconSize, iconSize),
+                        GlassIconSource(sectionIcon, iconSize), TunerTheme.Heading * (hovered ? 1f : 0.9f));
+                    titleX += iconSize + Scaled(7);
+                }
+                // Buttons (the presets, the share buttons) are not counted, so a group of only those
+                // said "0 hidden"; it says nothing instead.
+                string? hiddenNote = header.Folded && header.HiddenRows > 0
+                    ? _translate("tuner.section.foldedcount").Replace("{{count}}", header.HiddenRows.ToString())
+                    : null;
+                float noteScale = 0.72f * _uiScale;
+                int noteWidth = hiddenNote == null ? 0 : (int)(TunerText.Measure(hiddenNote).X * noteScale);
+                // The glass card's little picture sits at the right end of the heading (DrawGlassCards).
+                int pictureRoom = TunerTheme.Glass && PictureFor(header.Key) is string picture && PicturePair(picture).Effect != null
+                    ? (header.Row.Height - Scaled(8)) * 16 / 9 + Scaled(16)
+                    : 0;
+                int noteRight = header.Row.Right - pictureRoom;
+                int titleRight = hovered && GlassPanel && header.CanHide ? HidePillOf(header).X - Scaled(8) : noteRight - noteWidth - Scaled(12);
+                TunerText.DrawFit(spriteBatch, header.Title, new Vector2(titleX, titleY),
+                    titleRight - titleX, (header.Key == HiddenListKey ? TunerTheme.InkDim : TunerTheme.Glass ? TunerTheme.Heading : TunerTheme.Ink)
+                        * (hovered ? 1f : 0.9f), 0.9f * _uiScale);
+                float headPill = GlassPanel && header.CanHide ? TunerMotion.Follow("headpill:" + header.Key, hovered ? 1f : 0f, 0.06f) : 0f;
+                if (headPill > 0.01f)
+                    DrawHidePill(spriteBatch, HidePillOf(header), scrollOffsetY, headPill);
+                if (hiddenNote != null && headPill < 0.5f)
+                    TunerText.Draw(spriteBatch, hiddenNote, new Vector2(noteRight - noteWidth, titleY + Scaled(3)), TunerTheme.Ink * (0.6f * (1f - headPill * 2f)), noteScale);
+            }
+            foreach (var (text, lineX, rowY, lineWidth, lineHeight) in _infoLines)
+            {
+                var rowBounds = new Rectangle(lineX, rowY, lineWidth, lineHeight);
+                if (Visible(rowBounds)) TunerText.DrawFit(spriteBatch, text(), new Vector2(lineX, rowY + scrollOffsetY), lineWidth, TunerTheme.Ink * 0.7f, (TunerTheme.Glass ? 0.8f : 0.72f) * _uiScale);
+            }
+            foreach (var button in _buttons) if (Visible(button.Bounds)) button.Draw(spriteBatch, scrollOffsetY, button.IsChosen?.Invoke() == true);
+            DrawLookNameField(spriteBatch, scrollOffsetY);
+            foreach (var chip in _chips)
+                if (Visible(chip.Load.Bounds))
+                {
+                    chip.Load.Draw(spriteBatch, scrollOffsetY, chip.Load.IsChosen?.Invoke() == true);
+                    var deleteBounds = new Rectangle(chip.Delete.X, chip.Delete.Y + scrollOffsetY, chip.Delete.Width, chip.Delete.Height);
+                    if (TunerTheme.Glass)
+                    {
+                        // Red under the pointer, as on the mock: this one throws a look away.
+                        bool overCross = deleteBounds.Contains(Game1.getMouseX(), Game1.getMouseY());
+                        if (overCross)
+                            TunerTheme.Plate(spriteBatch, deleteBounds, deleteBounds.Height / 2, new Color(255, 90, 90) * 0.18f);
+                        Color crossInk = overCross ? new Color(255, 120, 120)
+                            : chip.Load.IsChosen?.Invoke() == true ? TunerTheme.AccentInk : TunerTheme.InkDim;
+                        DrawGlassCross(spriteBatch, deleteBounds, crossInk);
+                    }
+                    else
+                        spriteBatch.Draw(Game1.mouseCursors, deleteBounds, DeleteSource, Color.White);
+                }
+            if (TunerTheme.Glass)
+                DrawHoveredRow(spriteBatch, scrollOffsetY);
+            foreach (var toggle in _toggles)
+                if (Visible(toggle.Row))
+                {
+                    float pill = GlassPanel && toggle.OffersHide ? TunerMotion.Follow("switchpill:" + toggle.Key, ReferenceEquals(toggle, _hoveredToggle) ? 1f : 0f, 0.06f) : 0f;
+                    toggle.HideRoom = (int)((HidePillOf(toggle).Width + Scaled(8)) * pill);
+                    toggle.Draw(spriteBatch, scrollOffsetY);
+                    if (pill > 0.01f)
+                        DrawHidePill(spriteBatch, HidePillOf(toggle), scrollOffsetY, pill);
+                }
+            foreach (var slider in _sliders) if (Visible(slider.Track)) slider.Draw(spriteBatch, scrollOffsetY);
+            foreach (var compass in _compasses) if (Visible(compass.Row)) compass.Draw(spriteBatch, scrollOffsetY);
+
+            // A small mark beside every row that is not at its default, so what has been changed can
+            // be found at a glance (right click puts it back). Not on a greyed row: nothing on it can
+            // be changed, and the reset its mark offered did nothing. Dragging another dial can grey
+            // a row without a rebuild, so this is asked every frame, like the grey itself.
+            // On the glass it is a gold dot just after the label, as on the mock.
+            foreach (var slider in _sliders)
+                if (Visible(slider.RowBounds) && slider.DiffersFromDefault && slider.IsEnabled)
+                {
+                    if (TunerTheme.Glass && slider.Inline)
+                        DrawChangedDot(spriteBatch, slider.LabelEnd);
+                    else
+                        DrawChangedMark(spriteBatch, slider.RowBounds.X, slider.RowBounds.Y + Scaled(9) + scrollOffsetY);
+                }
+            foreach (var toggle in _toggles)
+                if (Visible(toggle.Row) && toggle.DiffersFromDefault && toggle.IsEnabled)
+                {
+                    if (TunerTheme.Glass)
+                        DrawChangedDot(spriteBatch, toggle.LabelEnd);
+                    else
+                        DrawChangedMark(spriteBatch, toggle.Row.X, toggle.Row.Y + Scaled(14) + scrollOffsetY);
+                }
+            foreach (var compass in _compasses)
+                if (Visible(compass.Row) && compass.DiffersFromDefault && compass.IsEnabled)
+                    DrawChangedMark(spriteBatch, compass.Row.X, compass.Row.Y + Scaled(9) + scrollOffsetY);
+
+        }
+
         public override void draw(SpriteBatch spriteBatch)
         {
+            TunerMotion.BeginFrame();
+            AdvanceFold();
             // While sliding, every batch this draw opens carries the same sideways move, and the one
             // scissor (the scrolling column) moves with it. In place, the batches are the ones this
             // menu always used.
@@ -4471,39 +5860,58 @@ namespace SDVRadiance
             int dividerX = xPositionOnScreen + RailWidth;
             spriteBatch.Draw(Game1.staminaRect, new Rectangle(dividerX, _bodyTop - 6, 2, _bodyBottom - _bodyTop + 12), Color.Black * 0.2f);
 
-            // Rail buttons (active highlighted)
-            foreach (var (button, tabIndex, icon) in _tabRailButtons)
+            // Rail buttons (active highlighted). The old highlight was a warm orange wash over a
+            // warm orange menu, which is to say it was invisible: on screen the chosen tab looked
+            // exactly like the fourteen that were not. A DARK wash reads against this panel, and
+            // the bar down the left edge says which one it is even at a glance. One plate for the
+            // chosen entry, which slides to a newly chosen one rather than jumping.
+            MeasureRailPlaces();
+            for (int entry = 0; entry < _tabRailButtons.Count; entry++)
             {
-                if (RailActive(tabIndex))
-                {
-                    // The old highlight was a warm orange wash over a warm orange menu, which
-                    // is to say it was invisible: on screen the chosen tab looked exactly like
-                    // the fourteen that were not. A DARK wash reads against this panel, and the
-                    // bar down the left edge says which one it is even at a glance.
-                    var lit = new Rectangle(button.Bounds.X - Scaled(4), button.Bounds.Y - Scaled(2), button.Bounds.Width + Scaled(8), button.Bounds.Height + Scaled(4));
-                    if (TunerTheme.Glass)
-                        TunerTheme.Plate(spriteBatch, lit, Scaled(12), TunerTheme.Accent * 0.2f);
-                    else
-                        spriteBatch.Draw(Game1.staminaRect, lit, TunerTheme.Wash * 0.34f);
-                    spriteBatch.Draw(Game1.staminaRect,
-                        new Rectangle(button.Bounds.X - Scaled(4), button.Bounds.Y - Scaled(2), Scaled(5), button.Bounds.Height + Scaled(4)),
-                        TunerTheme.Marker);
-                }
-                button.Draw(spriteBatch, 0, RailActive(tabIndex));
+                var (button, tabIndex, _) = _tabRailButtons[entry];
+                if (!RailActive(tabIndex))
+                    continue;
+                int placedY = button.Bounds.Y + RailPlace(entry).Shift;
+                int litY = GlassPanel ? (int)TunerMotion.Follow("rail:y", placedY - Scaled(2), 0.07f) : placedY - Scaled(2);
+                var lit = new Rectangle(button.Bounds.X - Scaled(4), litY, button.Bounds.Width + Scaled(8), button.Bounds.Height + Scaled(4));
+                // Square on the left, where the blue bar runs down it; rounded on the right.
+                if (TunerTheme.Glass)
+                    TunerTheme.PlateRight(spriteBatch, lit, Scaled(12), TunerTheme.Accent * 0.2f);
+                else
+                    spriteBatch.Draw(Game1.staminaRect, lit, TunerTheme.Wash * 0.34f);
+                spriteBatch.Draw(Game1.staminaRect, new Rectangle(lit.X, lit.Y, Scaled(5), lit.Height), TunerTheme.Marker);
+            }
+            for (int entry = 0; entry < _tabRailButtons.Count; entry++)
+            {
+                var (button, tabIndex, icon) = _tabRailButtons[entry];
+                (int shift, float shown) = RailPlace(entry);
+                // A category with no results folds out of the rail while a search is open.
+                if (shown < 0.4f)
+                    continue;
+                button.Draw(spriteBatch, shift, RailActive(tabIndex));
+                Rectangle placed = new(button.Bounds.X, button.Bounds.Y + shift, button.Bounds.Width, button.Bounds.Height);
                 if (TunerTheme.Glass && Grouped && GlassIconOf(GroupedPages[tabIndex].Category) is int glassIcon && GlassIcons() is { } glassIcons)
                 {
                     int iconSize = Scaled(22);
-                    spriteBatch.Draw(glassIcons, new Rectangle(button.Bounds.X + Scaled(10), button.Bounds.Center.Y - iconSize / 2, iconSize, iconSize),
+                    spriteBatch.Draw(glassIcons, new Rectangle(placed.X + Scaled(10), placed.Center.Y - iconSize / 2, iconSize, iconSize),
                         GlassIconSource(glassIcon, iconSize),
                         RailActive(tabIndex) ? TunerTheme.Accent : TunerTheme.InkDim);
-                    if (SettingsByCategory() is { } settingsByCategory
-                        && settingsByCategory.TryGetValue(GroupedPages[tabIndex].Category, out int settings) && settings > 0)
+                    // While searching, each category says how many results it holds, and one with none
+                    // sits back.
+                    bool searching = !string.IsNullOrWhiteSpace(_searchQuery);
+                    int settings = 0;
+                    if (searching)
+                        settings = _searchCountsByCategory.GetValueOrDefault(GroupedPages[tabIndex].Category);
+                    else if (SettingsByCategory() is { } settingsByCategory)
+                        settings = settingsByCategory.GetValueOrDefault(GroupedPages[tabIndex].Category);
+                    button.Faded = searching && settings == 0;
+                    if (settings > 0)
                     {
                         string count = settings.ToString();
                         float countScale = 0.74f * _uiScale;
                         Vector2 countSize = TunerText.Measure(count) * countScale;
-                        TunerText.Draw(spriteBatch, count, new Vector2(button.Bounds.Right - Scaled(8) - countSize.X,
-                            button.Bounds.Center.Y - TunerText.Measure("A").Y * countScale / 2f + 2f), TunerTheme.InkFaint, countScale);
+                        TunerText.Draw(spriteBatch, count, new Vector2(placed.Right - Scaled(8) - countSize.X,
+                            placed.Center.Y - TunerText.Measure("A").Y * countScale / 2f + 2f), TunerTheme.InkFaint, countScale);
                     }
                 }
                 else if (_icons != null && _iconScale > 0f && icon < _icons.Width / IconSize)
@@ -4545,124 +5953,44 @@ namespace SDVRadiance
             device.ScissorRectangle = Rectangle.Intersect(device.Viewport.Bounds,
                 new Rectangle(_contentX + (int)slideOffsetX, _bodyTop, ContentWidth, _bodyBottom - _bodyTop));
 
-            int scrollOffsetY = -_scroll;
-            if (TunerTheme.Glass)
-                DrawGlassCards(spriteBatch, scrollOffsetY);
-            foreach (SectionHeader header in _sectionHeaders)
+            Rectangle bodyScissor = device.ScissorRectangle;
+            // A page just opened rises the last few pixels into place.
+            int scrollOffsetY = -_scroll + (GlassPanel ? (int)(Scaled(16) * TunerMotion.Follow("page:enter", 0f, 0.07f)) : 0);
+            if (_fold == null)
+                DrawScrollingContent(spriteBatch, scrollOffsetY);
+            else
             {
-                if (!Visible(header.Row))
-                    continue;
-                // A band the width of the column, an arrow before the title the way every folding
-                // list draws one (down while open, pointing at the title while folded), and, while
-                // folded, how many rows it is holding in words. The first cut put a minus or a plus
-                // and a bare number at the far right, and it did not read as something to click.
-                var band = new Rectangle(header.Row.X - Scaled(6), header.Row.Y + scrollOffsetY, header.Row.Width + Scaled(12), header.Row.Height);
-                // The heading under the pointer is lit the way the chosen tab in the rail is: a
-                // darker wash and a bar down its left edge, so it is plain which one a click folds.
-                bool hovered = ReferenceEquals(header, _hoveredSection);
-                if (TunerTheme.Glass)
+                // A group folding or opening: everything down to the moving edge as it is, and
+                // everything after the group drawn up by the height still to come (or already gone),
+                // each in its own clip, so the card closes over its rows rather than jumping.
+                void DrawClipped(int top, int bottom, int offset)
                 {
-                    // On the glass the heading is the top of its card, so the light takes the card's
-                    // own top corners, and the marker is a rounded bar inside it, not a square strip.
-                    if (hovered)
-                    {
-                        var lit = new Rectangle(band.X, band.Y - Scaled(6), band.Width, band.Height + Scaled(6));
-                        TunerTheme.Plate(spriteBatch, lit, Scaled(14), TunerTheme.Overlay * 0.07f);
-                        int barWidth = Scaled(4);
-                        TunerTheme.Plate(spriteBatch, new Rectangle(lit.X + Scaled(5), lit.Y + Scaled(9), barWidth, lit.Height - Scaled(18)),
-                            barWidth / 2, TunerTheme.Marker);
-                    }
+                    var clip = Rectangle.Intersect(bodyScissor, new Rectangle(bodyScissor.X, top, bodyScissor.Width, Math.Max(0, bottom - top)));
+                    if (clip.Height <= 0)
+                        return;
+                    spriteBatch.End();
+                    spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, TextSampler, DepthStencilState.None, _scissorRaster,
+                        null, slideMatrix);
+                    device.ScissorRectangle = clip;
+                    DrawScrollingContent(spriteBatch, offset);
                 }
-                else
+                // Slice by slice: each one runs to the moving edge of a band, drawn up by every gap
+                // above it, and the last one runs to the bottom.
+                int sliceTop = bodyScissor.Y, gapsAbove = 0;
+                foreach (var band in _fold.Bands)
                 {
-                    spriteBatch.Draw(Game1.staminaRect, band, TunerTheme.Wash * (hovered ? 0.26f : 0.07f));
-                    if (hovered)
-                        spriteBatch.Draw(Game1.staminaRect, new Rectangle(band.X, band.Y, Scaled(4), band.Height), TunerTheme.Marker);
+                    int gap = FoldGapOf(band);
+                    int edge = band.EndY - gap + scrollOffsetY - gapsAbove;
+                    DrawClipped(sliceTop, edge, scrollOffsetY - gapsAbove);
+                    sliceTop = edge;
+                    gapsAbove += gap;
                 }
-                float inkStrength = hovered ? 1f : 0.8f;
-                int unit = Math.Max(1, Scaled(2));
-                int arrowY = band.Center.Y - unit * 3 - unit / 2;
-                DrawDisclosureArrow(spriteBatch, header.Row.X, arrowY, unit, header.Folded, inkStrength);
-                int titleX = header.Row.X + unit * 7 + Scaled(8);
-                int titleY = header.Row.Y + scrollOffsetY + Scaled(4);
-                if (TunerTheme.Glass && SectionIcon(header.Key) is int sectionIcon && GlassIcons() is { } sectionIcons)
-                {
-                    int iconSize = Scaled(15);
-                    spriteBatch.Draw(sectionIcons, new Rectangle(titleX, band.Center.Y - iconSize / 2, iconSize, iconSize),
-                        GlassIconSource(sectionIcon, iconSize), TunerTheme.Heading * (hovered ? 1f : 0.9f));
-                    titleX += iconSize + Scaled(7);
-                }
-                // Buttons (the presets, the share buttons) are not counted, so a group of only those
-                // said "0 hidden"; it says nothing instead.
-                string? hiddenNote = header.Folded && header.HiddenRows > 0
-                    ? _translate("tuner.section.foldedcount").Replace("{{count}}", header.HiddenRows.ToString())
-                    : null;
-                float noteScale = 0.72f * _uiScale;
-                int noteWidth = hiddenNote == null ? 0 : (int)(TunerText.Measure(hiddenNote).X * noteScale);
-                // The glass card's little picture sits at the right end of the heading (DrawGlassCards).
-                int pictureRoom = TunerTheme.Glass && PictureFor(header.Key) is string picture && PicturePair(picture).Effect != null
-                    ? (header.Row.Height - Scaled(8)) * 16 / 9 + Scaled(16)
-                    : 0;
-                int noteRight = header.Row.Right - pictureRoom;
-                TunerText.DrawFit(spriteBatch, header.Title, new Vector2(titleX, titleY),
-                    noteRight - titleX - noteWidth - Scaled(12), (TunerTheme.Glass ? TunerTheme.Heading : TunerTheme.Ink) * (hovered ? 1f : 0.9f), 0.9f * _uiScale);
-                if (hiddenNote != null)
-                    TunerText.Draw(spriteBatch, hiddenNote, new Vector2(noteRight - noteWidth, titleY + Scaled(3)), TunerTheme.Ink * 0.6f, noteScale);
+                DrawClipped(sliceTop, bodyScissor.Bottom, scrollOffsetY - gapsAbove);
+                spriteBatch.End();
+                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, TextSampler, DepthStencilState.None, _scissorRaster,
+                    null, slideMatrix);
+                device.ScissorRectangle = bodyScissor;
             }
-            foreach (var (text, rowY, lineHeight) in _infoLines)
-            {
-                var rowBounds = new Rectangle(_contentX + Scaled(16), rowY, _contentColumnWidth, lineHeight);
-                if (Visible(rowBounds)) TunerText.DrawFit(spriteBatch, text(), new Vector2(_contentX + Scaled(16), rowY + scrollOffsetY), _contentColumnWidth, TunerTheme.Ink * 0.7f, (TunerTheme.Glass ? 0.8f : 0.72f) * _uiScale);
-            }
-            foreach (var button in _buttons) if (Visible(button.Bounds)) button.Draw(spriteBatch, scrollOffsetY, button.IsChosen?.Invoke() == true);
-            foreach (var chip in _chips)
-                if (Visible(chip.Load.Bounds))
-                {
-                    chip.Load.Draw(spriteBatch, scrollOffsetY, chip.Load.IsChosen?.Invoke() == true);
-                    var deleteBounds = new Rectangle(chip.Delete.X, chip.Delete.Y + scrollOffsetY, chip.Delete.Width, chip.Delete.Height);
-                    if (TunerTheme.Glass)
-                    {
-                        // Red under the pointer, as on the mock: this one throws a look away.
-                        bool overCross = deleteBounds.Contains(Game1.getMouseX(), Game1.getMouseY());
-                        if (overCross)
-                            TunerTheme.Plate(spriteBatch, deleteBounds, deleteBounds.Height / 2, new Color(255, 90, 90) * 0.18f);
-                        Color crossInk = overCross ? new Color(255, 120, 120)
-                            : chip.Load.IsChosen?.Invoke() == true ? TunerTheme.AccentInk : TunerTheme.InkDim;
-                        DrawGlassCross(spriteBatch, deleteBounds, crossInk);
-                    }
-                    else
-                        spriteBatch.Draw(Game1.mouseCursors, deleteBounds, DeleteSource, Color.White);
-                }
-            if (TunerTheme.Glass)
-                DrawHoveredRow(spriteBatch, scrollOffsetY);
-            foreach (var toggle in _toggles) if (Visible(toggle.Row)) toggle.Draw(spriteBatch, scrollOffsetY);
-            foreach (var slider in _sliders) if (Visible(slider.Track)) slider.Draw(spriteBatch, scrollOffsetY);
-            foreach (var compass in _compasses) if (Visible(compass.Row)) compass.Draw(spriteBatch, scrollOffsetY);
-
-            // A small mark beside every row that is not at its default, so what has been changed can
-            // be found at a glance (right click puts it back). Not on a greyed row: nothing on it can
-            // be changed, and the reset its mark offered did nothing. Dragging another dial can grey
-            // a row without a rebuild, so this is asked every frame, like the grey itself.
-            // On the glass it is a gold dot just after the label, as on the mock.
-            foreach (var slider in _sliders)
-                if (Visible(slider.RowBounds) && slider.DiffersFromDefault && slider.IsEnabled)
-                {
-                    if (TunerTheme.Glass && slider.Inline)
-                        DrawChangedDot(spriteBatch, slider.LabelEnd);
-                    else
-                        DrawChangedMark(spriteBatch, slider.RowBounds.X, slider.RowBounds.Y + Scaled(9) + scrollOffsetY);
-                }
-            foreach (var toggle in _toggles)
-                if (Visible(toggle.Row) && toggle.DiffersFromDefault && toggle.IsEnabled)
-                {
-                    if (TunerTheme.Glass)
-                        DrawChangedDot(spriteBatch, toggle.LabelEnd);
-                    else
-                        DrawChangedMark(spriteBatch, toggle.Row.X, toggle.Row.Y + Scaled(14) + scrollOffsetY);
-                }
-            foreach (var compass in _compasses)
-                if (Visible(compass.Row) && compass.DiffersFromDefault && compass.IsEnabled)
-                    DrawChangedMark(spriteBatch, compass.Row.X, compass.Row.Y + Scaled(9) + scrollOffsetY);
 
             // A soft shade along an edge the content runs past, so a cut-off heading at the top reads
             // as scrolled rather than as a layout fault. It deepens over the first rows of travel
@@ -4721,11 +6049,13 @@ namespace SDVRadiance
                 upperRightCloseButton.visible = false;
             base.draw(spriteBatch);
             upperRightCloseButton?.visible = closeShown;
-            // The pointer and the hover note stay where the mouse is, not where the panel is going.
-            if (slideMatrix != null)
+            // The pointer and the hover note stay where the mouse is, not where the panel is going. And
+            // the pointer is pixel art from the game's cursor sheet: drawn with the glass's smooth
+            // sampler it picked up the edges of its neighbours on the sheet, thin lines round it.
+            if (slideMatrix != null || TunerTheme.Glass)
             {
                 spriteBatch.End();
-                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, TextSampler, DepthStencilState.None,
+                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, DepthStencilState.None,
                     RasterizerState.CullCounterClockwise);
             }
             drawMouse(spriteBatch);

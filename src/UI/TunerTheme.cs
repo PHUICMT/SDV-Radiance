@@ -97,6 +97,40 @@ namespace SDVRadiance
             spriteBatch.Draw(Game1.staminaRect, new Rectangle(bounds.Right - radius, bounds.Y + radius, radius, bounds.Height - radius * 2), fill);
         }
 
+        /// <summary>A plate rounded at its top corners only, for the top band of a card: rounded at the
+        /// bottom too, its lower corners showed as two bumps inside the card.</summary>
+        internal static void PlateTop(SpriteBatch spriteBatch, Rectangle bounds, int radius, Color fill)
+        {
+            radius = Math.Max(0, Math.Min(radius, Math.Min(bounds.Width / 2, bounds.Height)));
+            if (radius == 0)
+            {
+                spriteBatch.Draw(Game1.staminaRect, bounds, fill);
+                return;
+            }
+            Texture2D round = Round(spriteBatch.GraphicsDevice);
+            spriteBatch.Draw(round, new Rectangle(bounds.X, bounds.Y, radius, radius), new Rectangle(0, 0, RoundRadius, RoundRadius), fill);
+            spriteBatch.Draw(round, new Rectangle(bounds.Right - radius, bounds.Y, radius, radius), new Rectangle(RoundRadius, 0, RoundRadius, RoundRadius), fill);
+            spriteBatch.Draw(Game1.staminaRect, new Rectangle(bounds.X + radius, bounds.Y, bounds.Width - radius * 2, radius), fill);
+            spriteBatch.Draw(Game1.staminaRect, new Rectangle(bounds.X, bounds.Y + radius, bounds.Width, bounds.Height - radius), fill);
+        }
+
+        /// <summary>A plate rounded at its right corners only, square on the left where a marker bar
+        /// runs down it (the chosen rail entry).</summary>
+        internal static void PlateRight(SpriteBatch spriteBatch, Rectangle bounds, int radius, Color fill)
+        {
+            radius = Math.Max(0, Math.Min(radius, Math.Min(bounds.Width, bounds.Height) / 2));
+            if (radius == 0)
+            {
+                spriteBatch.Draw(Game1.staminaRect, bounds, fill);
+                return;
+            }
+            Texture2D round = Round(spriteBatch.GraphicsDevice);
+            spriteBatch.Draw(round, new Rectangle(bounds.Right - radius, bounds.Y, radius, radius), new Rectangle(RoundRadius, 0, RoundRadius, RoundRadius), fill);
+            spriteBatch.Draw(round, new Rectangle(bounds.Right - radius, bounds.Bottom - radius, radius, radius), new Rectangle(RoundRadius, RoundRadius, RoundRadius, RoundRadius), fill);
+            spriteBatch.Draw(Game1.staminaRect, new Rectangle(bounds.X, bounds.Y, bounds.Width - radius, bounds.Height), fill);
+            spriteBatch.Draw(Game1.staminaRect, new Rectangle(bounds.Right - radius, bounds.Y + radius, radius, bounds.Height - radius * 2), fill);
+        }
+
         /// <summary>A one-pixel rim all the way round a plate, its corners included.</summary>
         internal static void PlateRim(SpriteBatch spriteBatch, Rectangle bounds, int radius, Color rim)
         {

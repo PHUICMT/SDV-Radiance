@@ -11,6 +11,8 @@ namespace SDVRadiance
     internal sealed class TunerTextButton
     {
         private readonly string _label;
+        /// <summary>The words on the button, for tools that list what a page holds.</summary>
+        public string Label => _label;
         public readonly Rectangle Bounds;
         public readonly Action OnClick;
         /// <summary>Text grows with the panel on a large window (see the tuner's layout scale),
@@ -63,11 +65,14 @@ namespace SDVRadiance
                 var plate = new Rectangle(Bounds.X, Bounds.Y + dy, Bounds.Width, Bounds.Height);
                 int radius = Pill ? plate.Height / 2 : Math.Min(14, plate.Height / 3);
                 bool hovered = plate.Contains(Game1.getMouseX(), Game1.getMouseY());
+                // The lift under the pointer comes and goes over a moment rather than at once; kept by
+                // name, since the menu builds its buttons again on every click.
+                float lift = TunerMotion.Follow($"button:{_label}:{Bounds.X}:{Bounds.Y}", hovered ? 1f : 0f, 0.06f);
                 if (Picture != null)
                 {
                     // A preset card: its picture over its name, the chosen one ringed in the accent.
                     int cardRadius = Math.Min(12, plate.Height / 6);
-                    TunerTheme.Plate(spriteBatch, plate, cardRadius, active ? TunerTheme.Accent * 0.22f : TunerTheme.Overlay * (hovered ? 0.14f : 0.07f));
+                    TunerTheme.Plate(spriteBatch, plate, cardRadius, active ? TunerTheme.Accent * 0.22f : TunerTheme.Overlay * MathHelper.Lerp(0.07f, 0.14f, lift));
                     TunerTheme.PlateRim(spriteBatch, plate, cardRadius, active ? TunerTheme.Accent : hovered ? TunerTheme.InkFaint : TunerTheme.Rim);
                     int inset = (int)(5 * TextScale);
                     int pictureWidth = plate.Width - inset * 2;
@@ -78,25 +83,25 @@ namespace SDVRadiance
                 }
                 if (RailEntry)
                 {
-                    if (hovered && !active)
-                        TunerTheme.Plate(spriteBatch, plate, radius, TunerTheme.Overlay * 0.06f);
+                    if (!active && lift > 0.01f)
+                        TunerTheme.Plate(spriteBatch, plate, radius, TunerTheme.Overlay * (0.06f * lift));
                 }
                 else if (Dashed)
                 {
-                    if (hovered)
-                        TunerTheme.Plate(spriteBatch, plate, radius, TunerTheme.Accent * 0.14f);
+                    if (lift > 0.01f)
+                        TunerTheme.Plate(spriteBatch, plate, radius, TunerTheme.Accent * (0.14f * lift));
                     DrawDashes(spriteBatch, plate, radius, TunerTheme.Accent * 0.7f);
                 }
                 else
                 {
                     // Under the pointer it lifts: a brighter plate and a firmer rim, as on the mock.
-                    TunerTheme.Plate(spriteBatch, plate, radius, active ? TunerTheme.Accent : TunerTheme.Overlay * (hovered ? 0.15f : 0.07f));
+                    TunerTheme.Plate(spriteBatch, plate, radius, active ? TunerTheme.Accent : TunerTheme.Overlay * MathHelper.Lerp(0.07f, 0.15f, lift));
                     if (!active)
-                        TunerTheme.PlateRim(spriteBatch, plate, radius, hovered ? TunerTheme.InkFaint : TunerTheme.Rim);
+                        TunerTheme.PlateRim(spriteBatch, plate, radius, Color.Lerp(TunerTheme.Rim, TunerTheme.InkFaint, lift));
                 }
                 // The add button is in the accent, as on the mock: it is the one thing on the page that makes something new.
                 Color ink = Dashed ? TunerTheme.Accent
-                    : active && !RailEntry ? TunerTheme.AccentInk : active || hovered ? TunerTheme.Ink : TunerTheme.InkDim;
+                    : active && !RailEntry ? TunerTheme.AccentInk : active ? TunerTheme.Ink : Color.Lerp(TunerTheme.InkDim, TunerTheme.Ink, lift);
                 if (IconSheet != null)
                 {
                     int iconSize = (int)(16 * TextScale);

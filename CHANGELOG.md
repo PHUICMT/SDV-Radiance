@@ -2,6 +2,66 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.4.2 - 2026-10-22
+
+### Added
+
+- **Hide the settings you don't use.** In the new F6 menu, point at a group or a switch and press
+  Hide. A hidden switch turns off with it. A group that has no switch of its own only leaves the
+  page and keeps working as it was. Everything hidden is listed at the bottom of its page, where
+  Show again brings it back the way it was. Hidden settings are kept through updates, and a look or
+  a share code can't switch them back on. Classic has no Hide buttons, but it leaves out what you
+  hid as well.
+
+- **Menu density and Text size.** Two choices under Menu & help in the new menu: how much room the
+  menu leaves between rows and groups, and how big its text is. The whole menu grows or shrinks
+  with the text, so nothing gets cut off.
+
+- **Groups sit inside the group they belong to.** The smaller groups of a setting now sit inside
+  its card, so it's clear which switch they hang on.
+
+- **Fold all and Open all**, side by side above the groups.
+
+### Changed
+
+- **The new menu moves.** Switches slide, groups fold and open, hidden things leave and come back,
+  pages slide in, and the highlight follows the pointer instead of jumping.
+
+- **Search finds a setting in any language the mod has**, and by the name of its group: "lut"
+  finds the colour tables in a Thai menu. Only the groups that found something are shown, the
+  categories on the left show how many results each holds and fold away when they hold none, and
+  clicking a category narrows the results without clearing the search.
+
+- **A look is named right in the menu.** Save this look opens a name field in place, with its own
+  Save button, instead of a separate box.
+
+- **More room in the new menu.** Rows, groups and cards have more space between them, and the
+  content no longer runs into the tabs above it.
+
+- **A folded group says "3 folded"** instead of "3 hidden", now that hiding is its own thing.
+
+- **Thai: one word for one thing.** Ten Thai labels and notes that called the same setting by
+  different words now use the same word everywhere.
+
+### Fixed
+
+- **The fishing cast meter no longer shows in the water.** The game paints the power bar into the
+  world picture while you hold the cast, so the water mirrored it under the player. The bar is now
+  drawn after the effects, like the mine's floor number, and stays out of the reflection.
+  Reported by Azria1997 on Nexus.
+
+- **The mouse pointer in the new menu is sharp again**, without the faint lines around it.
+
+### For translators
+
+18 new keys: `tuner.hide`, `tuner.hide.sectionhint`, `tuner.hide.sectionhint.keep`,
+`tuner.hide.switchhint`, `tuner.hidden.title`, `tuner.hidden.showagain`, `tuner.density` (+
+`.compact`, `.comfortable`, `.roomy`), `help.density`, `tuner.textsize` (+ `.small`, `.normal`,
+`.large`), `help.textsize`, `tuner.savelook.confirm`, `tuner.section.particleglow`.
+
+Changed meaning: `tuner.section.foldedcount` now counts folded rows ("3 folded"), not hidden ones.
+Ten Thai strings were reworded in `th.json` only. Other languages are unaffected.
+
 ## 2.4.1 - 2026-10-21
 
 ### Fixed

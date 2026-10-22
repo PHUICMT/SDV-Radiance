@@ -40,6 +40,9 @@ python tools/check-setting-ranges.py || fail "setting ranges"
 step "share-code numbers are still promises"
 python tools/sharecode/check.py || fail "share-code registry"
 
+step "no tuner heading or switch key lost (players' hidden and folded settings live under them)"
+python tools/tunerkeys/check.py || fail "tuner keys"
+
 step "Debug build, warnings are errors"
 dotnet build ./SDV-Radiance.csproj -c Debug $build_flags || fail "Debug build"
 

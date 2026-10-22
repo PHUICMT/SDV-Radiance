@@ -21,6 +21,8 @@ namespace SDVRadiance
     internal sealed class TunerCompass
     {
         private readonly string _label;
+        /// <summary>The dial's name, for tools that list what a page holds.</summary>
+        public string Label => _label;
         private readonly Func<float> _getDegrees;
         private readonly Action<float> _setDegrees;
 

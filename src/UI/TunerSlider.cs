@@ -16,6 +16,9 @@ namespace SDVRadiance
         public Rectangle Track;
         /// <summary>Text grows with the panel on a large window (see the tuner's layout scale).</summary>
         public float TextScale = 1f;
+
+        /// <summary>The row's label key, the name its hover light is kept under.</summary>
+        public string Key { get; init; } = "";
         /// <summary>Whether this row can do anything right now. A control whose switch is off, or
         /// whose whole effect is turned off above it, still sat there at full strength and took
         /// the mouse: the value moved, nothing on screen did, and the only way to find that out
