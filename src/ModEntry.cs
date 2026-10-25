@@ -440,6 +440,7 @@ namespace SDVRadiance
             Pipeline.Apply(e.SpriteBatch, MapScreenshotEffects.ShotConfig ?? _config);
             HarmonyPatcher.DrawHoistedMineFloorNumber(e.SpriteBatch);
             HarmonyPatcher.DrawHoistedCastMeter(e.SpriteBatch);
+            HarmonyPatcher.DrawHoistedFishCaught(e.SpriteBatch);
             // Logged AFTER the pass so the frame size is this screen's, not the previous screen's.
             if (watching)
                 Monitor.Log($"[screenwatch] screen={Context.ScreenId} location={Game1.currentLocation?.NameOrUniqueName} "

@@ -827,11 +827,16 @@ float4 FloodPS(PixelInput input) : SV_TARGET
             float litFraction = attenuation * (1.0 - shadowHere);
             // Relief: the side of a sprite that faces this lamp leans toward its light, the far
             // side away, round the flat answer (see NormalTexture), as much as the pool reaches.
+            // Only the sideways part of the normal takes part. The whole dot product less the
+            // flat one is not round the flat answer: it adds (cos tilt - 1) * height for ANY tilt,
+            // so every painted bump came out darker, and a face, whose eyes and cheeks the bake
+            // reads as dips, went grey beside a lamp (asmoranomar, Nexus, 23 Oct 2026; the
+            // vanilla farmer in the Saloon lost 11 levels across the face at strength 1).
             [branch]
             if (reliefCoverage > 0.001)
             {
                 float3 toLamp = normalize(float3(-fromLamp.x, -fromLamp.y, ReliefLampHeight));
-                reliefLamps += (dot(normalHere, toLamp) - toLamp.z) * litFraction;
+                reliefLamps += dot(normalHere.xy, toLamp.xy) * litFraction;
             }
             // BLACKBODY WALK, flames only: real firelight is not one colour, it is a gradient -
             // near white at the source, gold a step out, deep warm at the tail. One flat orange
@@ -986,7 +991,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
         if (reliefCoverage > 0.001)
         {
             float3 toSoftLamp = normalize(float3(-softDelta.x, -softDelta.y, ReliefLampHeight));
-            reliefLamps += (dot(normalHere, toSoftLamp) - toSoftLamp.z) * softAttenuation;
+            reliefLamps += dot(normalHere.xy, toSoftLamp.xy) * softAttenuation;
         }
         direct += lerp(softColour.rgb, float3(1.06, 0.98, 0.82) * max(max(softColour.r, softColour.g), softColour.b), softCoreBlend) * softAttenuation;
         float softPoolAttenuation = saturate(1.0 - softDistance / max(softColour.w * 0.6, 0.02));
@@ -1071,7 +1076,7 @@ float4 FloodPS(PixelInput input) : SV_TARGET
     // add up past what one lamp could do) and the sun's, the same modulation with the sun as
     // the light. Zero wherever the buffer has no coverage, so bare ground is untouched.
     float lean = ReliefStrength * 0.8 * clamp(reliefLamps, -1.0, 1.0)
-               + ReliefSunStrength * (dot(normalHere, ReliefSunDirection) - ReliefSunDirection.z);
+               + ReliefSunStrength * dot(normalHere.xy, ReliefSunDirection.xy);
     litScene *= saturate(1.0 + reliefCoverage * lean);
     // WHERE A THING MEETS WHAT IT STANDS ON. The old contact shade is an ellipse drawn under
     // each object, sized from the art's width and capped at a tile, which is a guess about a

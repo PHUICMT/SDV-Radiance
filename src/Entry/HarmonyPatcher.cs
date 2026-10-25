@@ -337,6 +337,25 @@ namespace SDVRadiance
             {
                 monitor.Log($"Fishing cast meter will stay in the world layer: {ex.Message}", LogLevel.Trace);
             }
+
+            // And the box that shows the fish just caught, with its name and size, plus the
+            // "Perfect!" text above it: the same player reported both mirrored in the water once the
+            // meter was fixed. The rod draws them only while fishCaught is set, in the same branch as
+            // the fish held up in the farmer's hand, which does belong in the reflection. The prefix
+            // clears fishCaught and the sparkling text for the call, the postfix draws the held fish
+            // back into the world batch, and the box is drawn after the chain (DrawHoistedFishCaught).
+            try
+            {
+                harmony.Patch(
+                    original: AccessTools.Method(typeof(StardewValley.Tools.FishingRod),
+                                                 nameof(StardewValley.Tools.FishingRod.draw), [typeof(SpriteBatch)]),
+                    prefix: new HarmonyMethod(typeof(CaughtFishPatch), nameof(CaughtFishPatch.Prefix)),
+                    postfix: new HarmonyMethod(typeof(CaughtFishPatch), nameof(CaughtFishPatch.Postfix)));
+            }
+            catch (Exception ex)
+            {
+                monitor.Log($"Caught-fish box will stay in the world layer: {ex.Message}", LogLevel.Trace);
+            }
         }
 
         /// <summary>Set once a frame by ModEntry, with the mine floor number: whether the cast meter is
@@ -394,6 +413,130 @@ namespace SDVRadiance
             spriteBatch.Draw(Game1.staminaRect,
                 new Rectangle((int)feetOnScreen.X - 32 - 4, (int)feetOnScreen.Y + bob - 128 - 32 + 12, (int)(164f * rod.castingPower), 25),
                 Game1.staminaRect.Bounds, Utility.getRedToGreenLerpColor(rod.castingPower) * fade, 0f, Vector2.Zero, SpriteEffects.None, 0.887f);
+        }
+
+        /// <summary>What a caught-fish prefix took off the rod, for its postfix to give back.</summary>
+        private struct HeldFishCaught
+        {
+            public bool Held;
+            public bool BoxHeld;
+            public SparklingText? SparklingText;
+        }
+
+        /// <summary>The rod whose caught-fish box and text the world layer left out this frame, for
+        /// <see cref="DrawHoistedFishCaught"/>.</summary>
+        private static StardewValley.Tools.FishingRod? _hoistedFishCaughtRod;
+        private static SparklingText? _hoistedSparklingText;
+
+        /// <summary>The caught-fish prefix and postfix, in a class of their own: Harmony hands a
+        /// prefix's __state to the postfix by the class they live in, and the cast meter's pair on the
+        /// same method already lives in HarmonyPatcher. Sharing it, the postfix read the meter's state
+        /// as its own and threw on every frame.</summary>
+        private static class CaughtFishPatch
+        {
+            /// <inheritdoc cref="HarmonyPatcher.Apply"/>
+            internal static void Prefix(StardewValley.Tools.FishingRod __instance, out HeldFishCaught __state)
+            {
+                __state = default;
+                if (!HoistCastMeter)
+                    return;
+                Farmer caster = __instance.getLastFarmerToUse();
+                if (caster == null || !caster.IsLocalPlayer)
+                    return;
+                bool showsBox = __instance.fishCaught && __instance.whichFish != null;
+                if (!showsBox && __instance.sparklingText == null)
+                    return;
+                __state = new HeldFishCaught { Held = true, BoxHeld = showsBox, SparklingText = __instance.sparklingText };
+                _hoistedFishCaughtRod = __instance;
+                _hoistedSparklingText = __instance.sparklingText;
+                __instance.sparklingText = null;
+                if (showsBox)
+                    __instance.fishCaught = false;
+            }
+
+            /// <inheritdoc cref="HarmonyPatcher.Apply"/>
+            internal static void Postfix(StardewValley.Tools.FishingRod __instance, SpriteBatch b, HeldFishCaught __state)
+            {
+                if (!__state.Held)
+                    return;
+                __instance.sparklingText = __state.SparklingText;
+                if (!__state.BoxHeld)
+                    return;
+                __instance.fishCaught = true;
+                DrawHeldUpFish(__instance, b);
+            }
+        }
+
+        private static bool FishLiesFlat(StardewValley.Tools.FishingRod rod)
+            => rod.fishSize == -1 || rod.whichFish.QualifiedItemId is "(O)800" or "(O)798" or "(O)149" or "(O)151";
+
+        /// <summary>The fish held up in the farmer's hand: the world half of the rod's caught-fish
+        /// branch, copied line for line from 1.6.15 so it sits exactly where the game puts it.</summary>
+        private static void DrawHeldUpFish(StardewValley.Tools.FishingRod rod, SpriteBatch spriteBatch)
+        {
+            Farmer farmer = rod.getLastFarmerToUse();
+            float depth = farmer.StandingPixel.Y / 10000f;
+            Vector2 inHand = Game1.GlobalToLocal(Game1.viewport, farmer.Position + new Vector2(0f, -56f));
+            if (rod.whichFish.TypeIdentifier != "(O)")
+            {
+                spriteBatch.Draw(Game1.mouseCursors, inHand, new Rectangle(228, 408, 16, 16), Color.White, 0f, new Vector2(8f, 8f), 3f, SpriteEffects.None, depth + 0.002f + 0.06f);
+                return;
+            }
+            var data = rod.whichFish.GetParsedOrErrorData();
+            Texture2D texture = data.GetTexture();
+            Rectangle sourceRect = data.GetSourceRect();
+            bool flat = FishLiesFlat(rod);
+            spriteBatch.Draw(texture, inHand, sourceRect, Color.White, flat ? 0f : MathF.PI * 3f / 4f, new Vector2(8f, 8f), 3f, SpriteEffects.None, depth + 0.002f + 0.06f);
+            for (int i = 1; i < rod.numberOfFishCaught; i++)
+            {
+                float rotation = flat ? 0f : (i == 2 ? MathF.PI : MathF.PI * 4f / 5f);
+                spriteBatch.Draw(texture, Game1.GlobalToLocal(Game1.viewport, farmer.Position + new Vector2(-(12 * i), -56f)), sourceRect, Color.White, rotation, new Vector2(8f, 8f), 3f, SpriteEffects.None, depth + 0.002f + 0.058f);
+            }
+        }
+
+        /// <summary>
+        /// Draw the caught-fish box (frame, fish, count, name, size) and the "Perfect!" text after
+        /// the effect chain: the HUD half of the rod's caught-fish branch, copied line for line from
+        /// 1.6.15. Same batch state as <see cref="DrawHoistedCastMeter"/>.
+        /// </summary>
+        internal static void DrawHoistedFishCaught(SpriteBatch spriteBatch)
+        {
+            var rod = _hoistedFishCaughtRod;
+            var sparklingText = _hoistedSparklingText;
+            _hoistedFishCaughtRod = null;
+            _hoistedSparklingText = null;
+            if (!HoistCastMeter || rod == null || rod.getLastFarmerToUse() is not Farmer farmer)
+                return;
+            sparklingText?.draw(spriteBatch, Game1.GlobalToLocal(Game1.viewport, farmer.Position + (rod.fishCaught ? new Vector2(-64f, -352f) : new Vector2(-24f, -192f))));
+            if (!rod.fishCaught || rod.whichFish == null)
+                return;
+            bool isObject = rod.whichFish.TypeIdentifier == "(O)";
+            float bob = 4f * (float)Math.Round(Math.Sin(Game1.currentGameTime.TotalGameTime.TotalMilliseconds / 250.0), 2);
+            float depth = farmer.StandingPixel.Y / 10000f;
+            spriteBatch.Draw(Game1.mouseCursors, Game1.GlobalToLocal(Game1.viewport, farmer.Position + new Vector2(-120f, -288f + bob)), new Rectangle(31, 1870, 73, 49), Color.White * 0.8f, 0f, Vector2.Zero, 4f, SpriteEffects.None, depth + 0.06f);
+            Vector2 inBox = Game1.GlobalToLocal(Game1.viewport, farmer.Position + new Vector2(-124f, -284f + bob) + new Vector2(44f, 68f));
+            if (isObject)
+            {
+                var data = rod.whichFish.GetParsedOrErrorData();
+                spriteBatch.Draw(data.GetTexture(), inBox, data.GetSourceRect(), Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, depth + 0.0001f + 0.06f);
+                if (rod.numberOfFishCaught > 1)
+                    Utility.drawTinyDigits(rod.numberOfFishCaught, spriteBatch, Game1.GlobalToLocal(Game1.viewport, farmer.Position + new Vector2(-120f, -284f + bob) + new Vector2(23f, 29f) * 4f), 3f, depth + 0.0001f + 0.061f, Color.White);
+            }
+            else
+            {
+                spriteBatch.Draw(Game1.mouseCursors, inBox, new Rectangle(228, 408, 16, 16), Color.White, 0f, Vector2.Zero, 4f, SpriteEffects.None, depth + 0.0001f + 0.06f);
+            }
+            string name = isObject ? rod.whichFish.GetParsedOrErrorData().DisplayName : "???";
+            spriteBatch.DrawString(Game1.smallFont, name, Game1.GlobalToLocal(Game1.viewport, farmer.Position + new Vector2(26f - Game1.smallFont.MeasureString(name).X / 2f, -278f + bob)),
+                rod.bossFish ? new Color(126, 61, 237) : Game1.textColor, 0f, Vector2.Zero, 1f, SpriteEffects.None, depth + 0.002f + 0.06f);
+            if (rod.fishSize == -1)
+                return;
+            spriteBatch.DrawString(Game1.smallFont, Game1.content.LoadString("Strings\\StringsFromCSFiles:FishingRod.cs.14082"), Game1.GlobalToLocal(Game1.viewport, farmer.Position + new Vector2(20f, -214f + bob)),
+                Game1.textColor, 0f, Vector2.Zero, 1f, SpriteEffects.None, depth + 0.002f + 0.06f);
+            string size = Game1.content.LoadString("Strings\\StringsFromCSFiles:FishingRod.cs.14083",
+                LocalizedContentManager.CurrentLanguageCode != LocalizedContentManager.LanguageCode.en ? Math.Round(rod.fishSize * 2.54) : rod.fishSize);
+            spriteBatch.DrawString(Game1.smallFont, size, Game1.GlobalToLocal(Game1.viewport, farmer.Position + new Vector2(85f - Game1.smallFont.MeasureString(size).X / 2f, -179f + bob)),
+                rod.recordSize ? Color.Blue * Math.Min(1f, bob / 8f + 1.5f) : Game1.textColor, 0f, Vector2.Zero, 1f, SpriteEffects.None, depth + 0.002f + 0.06f);
         }
 
         /// <summary>What takingMapScreenshot was before a capture borrowed it.</summary>

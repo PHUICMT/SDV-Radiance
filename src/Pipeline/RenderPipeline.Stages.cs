@@ -751,34 +751,83 @@ namespace SDVRadiance
         /// which cannot grow: the shader is at ps_3_0's limit of constants).</summary>
         private const int WindowBeamSlots = 6;
 
-        /// <summary>Every window light that could throw a beam this frame, in the shader's form,
-        /// before the six are chosen. W is 1 for a glow the game lays on the floor (light sheet 6)
-        /// while choosing, and 0 again by the time it reaches the shader.</summary>
-        private readonly List<Vector4> _windowBeamCandidates = [];
+        /// <summary>Every glowing window light in the room this frame, in world pixels: xy where its
+        /// beam starts, z 1 when its glass is labelled, w 1 for a glow the game lays on the floor.</summary>
+        private readonly List<Vector4> _windowBeamLights = [];
         private readonly List<int> _windowBeamGroup = [];
         private readonly List<Vector4> _windowBeamWindows = [];
+        /// <summary>The windows that carry a beam, in world pixels, at most
+        /// <see cref="WindowBeamSlots"/>; kept until the room or its lit windows change.</summary>
+        private readonly List<Vector4> _windowBeamsChosen = [];
+        private GameLocation? _windowBeamsLocation;
+        private int _windowBeamsKey;
 
         /// <summary>The game's light sheet for the glow a window lays on the floor.</summary>
         private const int FloorGlowLightSheet = 6;
 
         /// <summary>
-        /// A room with more window lights than beams: the lights of one window become one beam,
-        /// from the top of the window, and the beams go to the windows nearest the middle of the
-        /// screen, glass before the glows on the floor.
+        /// The windows of this room that get a beam, and the dust in it, in world pixels.
         ///
-        /// <para>The first six the game listed used to take the beams. A barn from Warm Stalls and
-        /// Cozy Boxes has nine windows of two panes each, a light per pane, so its first three
-        /// windows had beams and the other six had none (MyLadySeven, Nexus, 18 Oct 2026, with a
-        /// picture). The game itself lights a window it builds from tiles twice, the pane and the
-        /// tile under it, so a room of four such windows was already past six. Lights touching
-        /// across or down are one window. A beam is nearly two tiles wide at the sill, so one beam
-        /// fills a two pane window. Rooms with six window lights or fewer never come here, so
-        /// their beams are exactly what they were.</para>
+        /// <para>A room with six window lights or fewer gives every light its beam, as it always
+        /// did. Past six, the lights of one window become one beam from the top of the window, and
+        /// six windows are picked spread across the room, glass before the glows on the floor.
+        /// The pick depends only on the room, so it holds still while the player walks: it used to
+        /// go to the six nearest the middle of the screen, which in a barn of nine two-pane windows
+        /// (Warm Stalls and Cozy Boxes) moved the beams onto each window as the player passed and
+        /// dropped them behind, a flash at every step (MyLadySeven, Nexus, 23 Oct 2026). The dust
+        /// took the first six LIGHTS in list order instead, three windows' panes, so it hung in the
+        /// top-left corner whatever the beams did; it reads this same list now.</para>
         /// </summary>
-        private void FitWindowBeamsIntoTheSlots(int viewportWidth, int viewportHeight)
+        private List<Vector4> WindowsWithBeams(GameLocation location, out int lightsSeen, out int lightsDark)
         {
-            float tileU = 64f / viewportWidth, tileV = 64f / viewportHeight;
-            int count = _windowBeamCandidates.Count;
+            lightsSeen = lightsDark = 0;
+            _windowBeamLights.Clear();
+            int key = 17;
+            if (Game1.currentLightSources != null)
+            {
+                foreach (var lightEntry in Game1.currentLightSources)
+                {
+                    var light = lightEntry.Value;
+                    if (light.lightContext.Value != LightSource.LightContext.WindowLight)
+                        continue;
+                    lightsSeen++;
+                    if (!ShadowRenderer.WindowGlowing(location, light))
+                    {
+                        lightsDark++;
+                        continue;
+                    }
+                    // Beam origin: just under the pane's centre, so the light visibly
+                    // CONNECTS to the glass instead of materialising half a tile below it.
+                    Vector2 origin = light.position.Value + new Vector2(0f, 12f);
+                    bool floorGlow = light.textureIndex.Value == FloorGlowLightSheet;
+                    _windowBeamLights.Add(new Vector4(origin.X, origin.Y, WindowGlassLabelledAt(light.position.Value) ? 1f : 0f, floorGlow ? 1f : 0f));
+                    // Summed, not chained: the game's light list is a dictionary whose order can
+                    // differ from one load to the next, and the same lights must give the same key.
+                    key = unchecked(key + (int)origin.X * 7919 + (int)origin.Y * 31 + (floorGlow ? 1 : 0));
+                }
+            }
+            if (ReferenceEquals(location, _windowBeamsLocation) && key == _windowBeamsKey)
+                return _windowBeamsChosen;
+            _windowBeamsLocation = location;
+            _windowBeamsKey = key;
+            _windowBeamsChosen.Clear();
+            if (_windowBeamLights.Count <= WindowBeamSlots)
+                _windowBeamsChosen.AddRange(_windowBeamLights);
+            else
+                ChooseBeamWindowsAcrossTheRoom();
+            return _windowBeamsChosen;
+        }
+
+        /// <summary>Group touching lights into windows, then pick <see cref="WindowBeamSlots"/> of
+        /// them as far apart as they go: the one nearest the middle of all the windows first, then
+        /// each time the one farthest from every window already picked. Glass is picked before the
+        /// glows on the floor.</summary>
+        private void ChooseBeamWindowsAcrossTheRoom()
+        {
+            const float Tile = 64f;
+            // In reading order, so the same room picks the same windows on every load.
+            _windowBeamLights.Sort((first, second) => first.Y != second.Y ? first.Y.CompareTo(second.Y) : first.X.CompareTo(second.X));
+            int count = _windowBeamLights.Count;
             _windowBeamGroup.Clear();
             for (int i = 0; i < count; i++)
                 _windowBeamGroup.Add(i);
@@ -792,10 +841,10 @@ namespace SDVRadiance
             {
                 for (int j = i + 1; j < count; j++)
                 {
-                    Vector4 first = _windowBeamCandidates[i], second = _windowBeamCandidates[j];
+                    Vector4 first = _windowBeamLights[i], second = _windowBeamLights[j];
                     if (first.W != second.W)
                         continue;
-                    if (Math.Abs(first.X - second.X) <= tileU * 1.15f && Math.Abs(first.Y - second.Y) <= tileV * 1.15f)
+                    if (Math.Abs(first.X - second.X) <= Tile * 1.15f && Math.Abs(first.Y - second.Y) <= Tile * 1.15f)
                         _windowBeamGroup[GroupOf(j)] = GroupOf(i);
                 }
             }
@@ -810,28 +859,67 @@ namespace SDVRadiance
                 {
                     if (GroupOf(i) != root)
                         continue;
-                    top = Math.Min(top, _windowBeamCandidates[i].Y);
-                    labelled = Math.Min(labelled, _windowBeamCandidates[i].Z);
+                    top = Math.Min(top, _windowBeamLights[i].Y);
+                    labelled = Math.Min(labelled, _windowBeamLights[i].Z);
                 }
                 float acrossSum = 0f;
                 int acrossCount = 0;
                 for (int i = 0; i < count; i++)
                 {
-                    if (GroupOf(i) != root || _windowBeamCandidates[i].Y > top + tileV * 0.5f)
+                    if (GroupOf(i) != root || _windowBeamLights[i].Y > top + Tile * 0.5f)
                         continue;
-                    acrossSum += _windowBeamCandidates[i].X;
+                    acrossSum += _windowBeamLights[i].X;
                     acrossCount++;
                 }
-                windows.Add(new Vector4(acrossSum / acrossCount, top, labelled, _windowBeamCandidates[root].W));
+                windows.Add(new Vector4(acrossSum / acrossCount, top, labelled, _windowBeamLights[root].W));
             }
-            windows.Sort((first, second) => first.W != second.W ? first.W.CompareTo(second.W)
-                : FromScreenMiddle(first).CompareTo(FromScreenMiddle(second)));
-            _windowBeamCandidates.Clear();
-            _windowBeamCandidates.AddRange(windows);
+            foreach (float floorGlow in new[] { 0f, 1f })
+                PickSpreadWindows(windows, floorGlow);
         }
 
-        private static float FromScreenMiddle(Vector4 beam)
-            => (beam.X - 0.5f) * (beam.X - 0.5f) + (beam.Y - 0.5f) * (beam.Y - 0.5f);
+        private void PickSpreadWindows(List<Vector4> windows, float floorGlow)
+        {
+            Vector2 middle = Vector2.Zero;
+            int kindCount = 0;
+            foreach (Vector4 window in windows)
+            {
+                if (window.W != floorGlow)
+                    continue;
+                middle += new Vector2(window.X, window.Y);
+                kindCount++;
+            }
+            if (kindCount == 0)
+                return;
+            middle /= kindCount;
+            while (_windowBeamsChosen.Count < WindowBeamSlots)
+            {
+                int best = -1;
+                float bestScore = float.MinValue;
+                for (int i = 0; i < windows.Count; i++)
+                {
+                    Vector4 window = windows[i];
+                    if (window.W != floorGlow || _windowBeamsChosen.Contains(window))
+                        continue;
+                    float score;
+                    if (_windowBeamsChosen.Count == 0)
+                        score = -Vector2.DistanceSquared(new Vector2(window.X, window.Y), middle);
+                    else
+                    {
+                        score = float.MaxValue;
+                        foreach (Vector4 picked in _windowBeamsChosen)
+                            score = Math.Min(score, Vector2.DistanceSquared(new Vector2(window.X, window.Y), new Vector2(picked.X, picked.Y)));
+                    }
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        best = i;
+                    }
+                }
+                if (best < 0)
+                    return;
+                _windowBeamsChosen.Add(windows[best]);
+            }
+        }
 
         // What the indoor pass last handed the shader. "The window beam is gone" has three
         // completely different causes that look identical on screen - the room is not classed as
@@ -908,6 +996,13 @@ namespace SDVRadiance
             }
             report.AppendLine($"    window lights: {_reportedWindowLightsSeen} published by the game, "
                         + $"{_reportedWindowLightsDark} not glowing, {_reportedWindowCount} used as beams (max 6)");
+            if (_windowBeamsChosen.Count > 0)
+            {
+                report.Append("    windows given a beam (tile):");
+                foreach (Vector4 window in _windowBeamsChosen)
+                    report.Append($" ({window.X / 64f:F1},{window.Y / 64f:F1})");
+                report.AppendLine();
+            }
             report.AppendLine($"    window glow sprites in this room: {_reportedWindowGlows}");
             if (_reportedWindowsHere && _reportedWindowBeamOn && _reportedWindowCount == 0)
                 report.AppendLine("    -> NO BEAM IS POSSIBLE: the room is windowed but nothing in it is emitting "
@@ -1620,33 +1715,16 @@ namespace SDVRadiance
             {
                 int viewportWidth = Math.Max(1, Game1.viewport.Width);
                 int viewportHeight = Math.Max(1, Game1.viewport.Height);
-                _windowBeamCandidates.Clear();
-                foreach (var lightEntry in Game1.currentLightSources)
+                List<Vector4> beamWindows = WindowsWithBeams(location, out _reportedWindowLightsSeen, out _reportedWindowLightsDark);
+                foreach (Vector4 window in beamWindows)
                 {
-                    var light = lightEntry.Value;
-                    if (light.lightContext.Value != LightSource.LightContext.WindowLight)
-                        continue;
-                    _reportedWindowLightsSeen++;
-                    if (!ShadowRenderer.WindowGlowing(location, light))
-                    {
-                        _reportedWindowLightsDark++;
-                        continue;
-                    }
-                    // Beam origin: just under the pane's centre, so the light visibly
-                    // CONNECTS to the glass instead of materialising half a tile below it.
-                    Vector2 screenPosition = Game1.GlobalToLocal(Game1.viewport, light.position.Value + new Vector2(0f, 12f));
+                    Vector2 screenPosition = Game1.GlobalToLocal(Game1.viewport, new Vector2(window.X, window.Y));
                     float beamU = screenPosition.X / viewportWidth;
                     float beamV = screenPosition.Y / viewportHeight;
                     if (beamU < -0.3f || beamU > 1.3f || beamV < -0.5f || beamV > 1.2f)
                         continue;   // beam could not land on screen
-                    _windowBeamCandidates.Add(new Vector4(beamU, beamV, WindowGlassLabelledAt(light.position.Value) ? 1f : 0f,
-                        light.textureIndex.Value == FloorGlowLightSheet ? 1f : 0f));
+                    _windowShaftPositions[windowCount++] = new Vector4(beamU, beamV, window.Z, 0f);
                 }
-                if (_windowBeamCandidates.Count > WindowBeamSlots)
-                    FitWindowBeamsIntoTheSlots(viewportWidth, viewportHeight);
-                windowCount = Math.Min(_windowBeamCandidates.Count, WindowBeamSlots);
-                for (int i = 0; i < windowCount; i++)
-                    _windowShaftPositions[i] = new Vector4(_windowBeamCandidates[i].X, _windowBeamCandidates[i].Y, _windowBeamCandidates[i].Z, 0f);
             }
             for (int i = windowCount; i < 6; i++)
                 _windowShaftPositions[i] = Vector4.Zero;

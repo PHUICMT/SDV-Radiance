@@ -137,16 +137,12 @@ namespace SDVRadiance
             // pool slot that a mote somebody can see needed.
             var viewportTopLeft = new Vector2(Game1.viewport.X, Game1.viewport.Y);
             float viewportWidth = Game1.viewport.Width, viewportHeight = Game1.viewport.Height;
-            foreach (var pair in Game1.currentLightSources)
+            // The windows the beams stand under, so the dust is always in a beam.
+            foreach (Vector4 window in WindowsWithBeams(location, out _, out _))
             {
                 if (_dustWindowPanes.Count >= DustWindowLimit)
                     break;
-                LightSource light = pair.Value;
-                if (light.lightContext.Value != LightSource.LightContext.WindowLight)
-                    continue;
-                if (!ShadowRenderer.WindowGlowing(location, light))
-                    continue;
-                Vector2 paneCentre = light.position.Value + new Vector2(0f, 12f);
+                Vector2 paneCentre = new(window.X, window.Y);
                 Vector2 fromCamera = paneCentre - viewportTopLeft;
                 if (fromCamera.X < -128f || fromCamera.X > viewportWidth + 128f
                     || fromCamera.Y < -128f || fromCamera.Y > viewportHeight + reachPixels)

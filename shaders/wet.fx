@@ -149,6 +149,11 @@ struct PixelInput
     float2 UV       : TEXCOORD0;
 };
 
+// Every read in this file names its level (0: none of these textures has mips, so the picture is
+// the same). With the usual gradient reads the compiler could not branch round them: it ran the
+// puddle block, its 48-step walk included, for every pixel on screen, puddle or not. Measured on a
+// fast card, the pass went from 0.33 to 0.07 ms a frame, with not one pixel of the picture changed.
+
 // Dave Hoskins' hash: no sin, so it holds on phones that compute at half precision.
 float Hash(float2 p)
 {
@@ -193,7 +198,7 @@ float RingAt(float2 artPixel, float cellSize, float rate, float seed)
 float PuddleScore(float2 artPixel)
 {
     float2 artTile = artPixel / 16.0;
-    float room = tex2D(RoomSampler, artTile / MapSizeTiles).r * 8.0;   // tiles from the nearest dry edge
+    float room = tex2Dlod(RoomSampler, float4(artTile / MapSizeTiles, 0.0, 0.0)).r * 8.0;   // tiles from the nearest dry edge
     float macro = ValueNoise(artPixel * float2(1.0 / 56.0, 1.0 / 28.0));
     float detail = ValueNoise(artPixel * float2(1.0 / 7.0, 1.0 / 5.0) + 17.0);
     // The pixel look leaves the fine noise out: at one art pixel a step it frays the edge into
@@ -257,10 +262,10 @@ float3 LampStreakLight(float2 uv, float3 srcRgb, float2 continuousArt, float2 ar
                             Hash(float2(artPixel.y, floor(Seconds * 5.0))), PixelLook) - 0.5;
     float shiverTiles = shiverRows * (0.04 + 0.1 * Rain) * (0.6 + 0.4 * puddle) * wetShare;
     streakUv.x += shiverTiles / TilesPerScreen.x;
-    float3 streaks = tex2D(StreakSampler, streakUv).rgb;
+    float3 streaks = tex2Dlod(StreakSampler, float4(streakUv, 0.0, 0.0)).rgb;
     // and its brightness breathes a little with the surface.
     streaks *= 0.85 + 0.3 * ValueNoise(float2(continuousArt.y * 0.15, Seconds * 0.9) + 31.0);
-    if (max(streaks.r, max(streaks.g, streaks.b)) > 0.002)
+    [branch] if (max(streaks.r, max(streaks.g, streaks.b)) > 0.002)
     {
         // On the stones: a reflection on rough wet stone lives on what stands up, the tops
         // of the cobbles, and the gaps between them stay dark. Read off the art itself: a
@@ -268,10 +273,10 @@ float3 LampStreakLight(float2 uv, float3 srcRgb, float2 continuousArt, float2 ar
         // so a puddle keeps the streak whole.
         float2 stoneStep = 1.5 / (TilesPerScreen * 16.0);
         float3 luma = float3(0.299, 0.587, 0.114);
-        float groundAround = dot(tex2D(SourceSampler, uv + float2(stoneStep.x, 0.0)).rgb
-                               + tex2D(SourceSampler, uv - float2(stoneStep.x, 0.0)).rgb
-                               + tex2D(SourceSampler, uv + float2(0.0, stoneStep.y)).rgb
-                               + tex2D(SourceSampler, uv - float2(0.0, stoneStep.y)).rgb, luma) * 0.25;
+        float groundAround = dot(tex2Dlod(SourceSampler, float4(uv + float2(stoneStep.x, 0.0), 0.0, 0.0)).rgb
+                               + tex2Dlod(SourceSampler, float4(uv - float2(stoneStep.x, 0.0), 0.0, 0.0)).rgb
+                               + tex2Dlod(SourceSampler, float4(uv + float2(0.0, stoneStep.y), 0.0, 0.0)).rgb
+                               + tex2Dlod(SourceSampler, float4(uv - float2(0.0, stoneStep.y), 0.0, 0.0)).rgb, luma) * 0.25;
         float standsUp = saturate((dot(srcRgb, luma) - groundAround) * 7.0 + 0.5);
         streaks *= lerp(1.0, 0.25 + 1.5 * standsUp, StreakStone * (1.0 - puddle));
         // Ripples: the rain breaks the water into small waves, and each wave catches the
@@ -291,7 +296,7 @@ float3 LampStreakLight(float2 uv, float3 srcRgb, float2 continuousArt, float2 ar
 
 float4 WetPS(PixelInput input) : COLOR0
 {
-    float4 src = tex2D(SourceSampler, input.UV);
+    float4 src = tex2Dlod(SourceSampler, float4(input.UV, 0.0, 0.0));
     float2 worldTile = input.UV * TilesPerScreen + WorldTileOffset;
     // Everything that has a shape is worked out at the centre of the art pixel (a game
     // pixel is 4x4 world pixels, 16 to a tile), so edges step in whole art pixels.
@@ -301,14 +306,14 @@ float4 WetPS(PixelInput input) : COLOR0
     float2 artPixel = floor(continuousArt);
     float2 shapeAt = lerp(continuousArt, artPixel + 0.5, PixelLook);
     float2 artTile = shapeAt / 16.0;
-    float onSprite = SpriteMaskOn * step(0.05, tex2D(SpriteMaskSampler, input.UV).a);
+    float onSprite = SpriteMaskOn * step(0.05, tex2Dlod(SpriteMaskSampler, float4(input.UV, 0.0, 0.0)).a);
     float2 playerSpan = max(PlayerRect.zw - PlayerRect.xy, float2(1e-4, 1e-4));
     float2 playerUv = (input.UV - PlayerRect.xy) / playerSpan;
     float insidePlayerBox = step(0.0, playerUv.x) * step(playerUv.x, 1.0) * step(0.0, playerUv.y) * step(playerUv.y, 1.0);
-    float onPlayer = step(0.15, tex2D(PlayerMaskSampler, saturate(playerUv)).a) * insidePlayerBox;
+    float onPlayer = step(0.15, tex2Dlod(PlayerMaskSampler, float4(saturate(playerUv), 0.0, 0.0)).a) * insidePlayerBox;
     float ground = 1.0 - max(onSprite, onPlayer);
 
-    float4 tile = tex2D(TileSampler, artTile / MapSizeTiles);
+    float4 tile = tex2Dlod(TileSampler, float4(artTile / MapSizeTiles, 0.0, 0.0));
     float porosity = tile.r;
     float glossy = tile.g;
     float rainReach = tile.a;
@@ -317,7 +322,7 @@ float4 WetPS(PixelInput input) : COLOR0
     // Shoreline damp: the last five texels of land before the water.
     float2 maskUV = (worldTile - MaskOrigin) / MaskSize;
     float inWindow = step(0.0, maskUV.x) * step(0.0, maskUV.y) * step(maskUV.x, 1.0) * step(maskUV.y, 1.0);
-    float sdfT = (tex2D(SdfSampler, maskUV).a - 0.501961) * 63.75;
+    float sdfT = (tex2Dlod(SdfSampler, float4(maskUV, 0.0, 0.0)).a - 0.501961) * 63.75;
     float shoreBand = saturate((sdfT + 5.0) / 5.0) * step(-30.5, sdfT) * inWindow * step(0.01, rainReach) * SdfValid;
     // Damp only while there is wet at all: the pass also runs on a dry night for the lamps alone.
     wet = max(wet, shoreBand * (0.35 + 0.65 * Wetness) * saturate(max(Wetness, Rain) * 50.0));
@@ -343,7 +348,7 @@ float4 WetPS(PixelInput input) : COLOR0
     colour = lerp(colour, SkyTint, 0.06 * glossy * Gloss * wetLook);
 
     // ---- in a puddle ----
-    if (puddle > 0.004)
+    [branch] if (puddle > 0.004)
     {
         float3 dry = colour;
         // A shallow puddle is clear: the stones under it still show, a little darker, a little
@@ -359,11 +364,11 @@ float4 WetPS(PixelInput input) : COLOR0
                               ValueNoise(shapeAt * float2(1.0 / 4.0, 1.0 / 6.0) + 11.0 - Seconds * 0.7) - 0.5)
                        * (1.0 - PixelLook) * (0.6 + 0.8 * Rain);
         float2 bedUv = input.UV + waver * artPixelUv;
-        float3 bedSharp = tex2D(SourceSampler, bedUv).rgb;
-        float3 around = (tex2D(SourceSampler, bedUv + float2(3.0, 0.0) * artPixelUv).rgb
-                       + tex2D(SourceSampler, bedUv - float2(3.0, 0.0) * artPixelUv).rgb
-                       + tex2D(SourceSampler, bedUv + float2(0.0, 3.0) * artPixelUv).rgb
-                       + tex2D(SourceSampler, bedUv - float2(0.0, 3.0) * artPixelUv).rgb) * 0.25;
+        float3 bedSharp = tex2Dlod(SourceSampler, float4(bedUv, 0.0, 0.0)).rgb;
+        float3 around = (tex2Dlod(SourceSampler, float4(bedUv + float2(3.0, 0.0) * artPixelUv, 0.0, 0.0)).rgb
+                       + tex2Dlod(SourceSampler, float4(bedUv - float2(3.0, 0.0) * artPixelUv, 0.0, 0.0)).rgb
+                       + tex2Dlod(SourceSampler, float4(bedUv + float2(0.0, 3.0) * artPixelUv, 0.0, 0.0)).rgb
+                       + tex2Dlod(SourceSampler, float4(bedUv - float2(0.0, 3.0) * artPixelUv, 0.0, 0.0)).rgb) * 0.25;
         // Under water the bed is darker and RICHER, not hazier: a red brick turns a deeper red.
         // Blurring it much and laying sky over it read as a fog floating above the ground.
         // The pixel look keeps the bed's art pixels crisp: a blur there is a smear between them.
@@ -391,7 +396,7 @@ float4 WetPS(PixelInput input) : COLOR0
             }
         }
         float sceneHit = 0.0;
-        if (SceneMirror > 0.5)
+        [branch] if (SceneMirror > 0.5)
         {
             // The pixel look mirrors from the art pixel's centre, so the image in the water is
             // whole art pixels like the ground round it.
@@ -411,15 +416,21 @@ float4 WetPS(PixelInput input) : COLOR0
                 float2 probeFrom = lerp(mirrorFrom, float2(((floor(worldTile.x) + 0.5) - WorldTileOffset.x) / TilesPerScreen.x, mirrorFrom.y), PixelLook);
                 float2 probeUv = probeFrom - float2(0.0, probeStep * 2.0) * artPixelUv;
                 float2 probeTile = probeUv * TilesPerScreen + WorldTileOffset;
-                float standsUp = step(tex2D(TileSampler, probeTile / MapSizeTiles).a, 0.3)
-                               + SpriteMaskOn * step(0.05, tex2D(SpriteMaskSampler, probeUv).a);
+                float standsUp = step(tex2Dlod(TileSampler, float4(probeTile / MapSizeTiles, 0.0, 0.0)).a, 0.3)
+                               + SpriteMaskOn * step(0.05, tex2Dlod(SpriteMaskSampler, float4(probeUv, 0.0, 0.0)).a);
                 float2 probePlayerUv = (probeUv - PlayerRect.xy) / playerSpan;
-                standsUp += step(0.15, tex2D(PlayerMaskSampler, saturate(probePlayerUv)).a)
+                standsUp += step(0.15, tex2Dlod(PlayerMaskSampler, float4(saturate(probePlayerUv), 0.0, 0.0)).a)
                           * step(0.0, probePlayerUv.x) * step(probePlayerUv.x, 1.0) * step(0.0, probePlayerUv.y) * step(probePlayerUv.y, 1.0);
-                // The first thing met is the base; no break, which the texture reads cannot sit in.
-                baseRows = (baseRows == 0.0 && standsUp > 0.5) ? probeStep * 2.0 : baseRows;
+                // The first thing met is the base. The reads are at an explicit level, so the loop
+                // may stop here: with gradient reads it could not, and ran all 48 steps for every
+                // pixel on screen, puddle or not.
+                if (standsUp > 0.5)
+                {
+                    baseRows = probeStep * 2.0;
+                    break;
+                }
             }
-            if (baseRows > 0.0)
+            [branch] if (baseRows > 0.0)
             {
                 // Realistic: a smooth sideways wobble. Pixel: the mirrored art holds still and only
                 // a passing ring nudges it a whole art pixel. Any row-by-row shift, even in bands
@@ -429,15 +440,15 @@ float4 WetPS(PixelInput input) : COLOR0
                 float rippleShift = lerp(smoothShift, step(0.5, rings), PixelLook);
                 float2 mirrorUv = mirrorFrom - float2(-rippleShift, baseRows * 2.0) * artPixelUv;
                 float onScreen = smoothstep(0.0, 0.03, mirrorUv.y);
-                float3 scene = tex2D(SourceSampler, mirrorUv).rgb;
+                float3 scene = tex2Dlod(SourceSampler, float4(mirrorUv, 0.0, 0.0)).rgb;
                 // Fresnel from above is low, and what it mirrors far from its base is fainter.
                 sceneHit = onScreen * (1.0 - 0.5 * saturate(baseRows / 96.0));
                 // Past the top of the thing standing there the mirror would show the ground behind
                 // it, and ground mirrored over ground in whole pixels is two cobble patterns crossed:
                 // grit. The pixel look mirrors only what stands up (a wall, a trunk, a person).
                 float2 mirrorTile = mirrorUv * TilesPerScreen + WorldTileOffset;
-                float mirroredStandsUp = saturate(step(tex2D(TileSampler, mirrorTile / MapSizeTiles).a, 0.3)
-                                       + SpriteMaskOn * step(0.05, tex2D(SpriteMaskSampler, mirrorUv).a));
+                float mirroredStandsUp = saturate(step(tex2Dlod(TileSampler, float4(mirrorTile / MapSizeTiles, 0.0, 0.0)).a, 0.3)
+                                       + SpriteMaskOn * step(0.05, tex2Dlod(SpriteMaskSampler, float4(mirrorUv, 0.0, 0.0)).a));
                 sceneHit *= lerp(1.0, mirroredStandsUp, PixelLook);
                 colour = lerp(colour, scene * MirrorTint, sceneHit * 0.55 * PuddleMirror);
             }
@@ -448,7 +459,7 @@ float4 WetPS(PixelInput input) : COLOR0
             // fraction of one.
             float2 mirrorTile = artTile + float2(rings / 16.0 * lerp(0.5, 1.0, PixelLook), 0.0);
             float2 mirrorUV = (mirrorTile - WorldTileOffset) / TilesPerScreen;
-            float4 mirrored = tex2D(ReflectSampler, mirrorUV);
+            float4 mirrored = tex2Dlod(ReflectSampler, float4(mirrorUV, 0.0, 0.0));
             colour = lerp(colour, mirrored.rgb * MirrorTint, saturate(mirrored.a) * 0.9 * PuddleMirror);
         }
         // A ring is the sky caught on the slope of the little wave: lighter.
@@ -457,7 +468,7 @@ float4 WetPS(PixelInput input) : COLOR0
     }
 
     // ---- lamps on wet ground ----
-    if (StreakLight > 0.01 && StreakAmount > 0.001)
+    [branch] if (StreakLight > 0.01 && StreakAmount > 0.001)
     {
         float wetForStreaks = max(wetLook * glossy * Gloss, puddle);
         // Dry stone and paths still catch a lamp, faintly: a share of what a soaked street shows,
@@ -482,19 +493,19 @@ float4 WetPS(PixelInput input) : COLOR0
 // every texture read above the branch.
 float4 DryLampPS(PixelInput input) : COLOR0
 {
-    float4 src = tex2D(SourceSampler, input.UV);
+    float4 src = tex2Dlod(SourceSampler, float4(input.UV, 0.0, 0.0));
     float2 worldTile = input.UV * TilesPerScreen + WorldTileOffset;
     float2 continuousArt = worldTile * 16.0;
     float2 artPixel = floor(continuousArt);
     float2 shapeAt = lerp(continuousArt, artPixel + 0.5, PixelLook);
     float2 artTile = shapeAt / 16.0;
-    float onSprite = SpriteMaskOn * step(0.05, tex2D(SpriteMaskSampler, input.UV).a);
+    float onSprite = SpriteMaskOn * step(0.05, tex2Dlod(SpriteMaskSampler, float4(input.UV, 0.0, 0.0)).a);
     float2 playerSpan = max(PlayerRect.zw - PlayerRect.xy, float2(1e-4, 1e-4));
     float2 playerUv = (input.UV - PlayerRect.xy) / playerSpan;
     float insidePlayerBox = step(0.0, playerUv.x) * step(playerUv.x, 1.0) * step(0.0, playerUv.y) * step(playerUv.y, 1.0);
-    float onPlayer = step(0.15, tex2D(PlayerMaskSampler, saturate(playerUv)).a) * insidePlayerBox;
+    float onPlayer = step(0.15, tex2Dlod(PlayerMaskSampler, float4(saturate(playerUv), 0.0, 0.0)).a) * insidePlayerBox;
     float ground = 1.0 - max(onSprite, onPlayer);
-    float glossy = tex2D(TileSampler, artTile / MapSizeTiles).g;
+    float glossy = tex2Dlod(TileSampler, float4(artTile / MapSizeTiles, 0.0, 0.0)).g;
     float wetForStreaks = DryLampLight * 0.5 * glossy * ground;
     float3 colour = src.rgb;
     if (StreakLight > 0.01 && StreakAmount > 0.001 && wetForStreaks > 0.01)

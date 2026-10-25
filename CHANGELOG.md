@@ -2,6 +2,46 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.4.3 - 2026-10-25
+
+### Changed
+
+- **Wet ground costs about a quarter of what it did.** The wet-ground pass worked out the puddles
+  for every pixel on screen, puddle or not, and that made it the heaviest pass while the ground
+  was wet, especially on a slow graphics card. It now skips that work where there is no puddle.
+  The picture is the same, pixel for pixel.
+
+- **Six more pictures in the help bar.** Smooth art, reflections in the water, night mist, sun rays
+  through the trees, window reflections and rain each show the game without and with the effect
+  again, retaken so each picture shows its own effect.
+
+### Fixed
+
+- **The box showing the fish you just caught was mirrored in the water.** The box with the fish,
+  its name and size, and the "Perfect!" text above it, showed up upside down in the water like the
+  cast meter did before 2.4.2. They are drawn on top now, and the fish held up in your hand still
+  reflects. Reported by a player on Nexus.
+
+- **Window light in a room with many windows jumped around as you walked.** Past six windows, the
+  beams went to the windows nearest the middle of the screen, so they moved onto each window as you
+  passed and dropped behind you. Six windows spread across the room are picked once now and keep
+  their beams, and the dust in the light floats in those same beams instead of the first few
+  windows in the top left. Rooms with six windows or fewer are unchanged. Reported by a player on
+  Nexus with Warm Stalls and Cozy Boxes.
+
+- **Sprite relief turned faces grey near lamps.** Relief made every painted bump a little darker,
+  whichever way it faced, so the eyes and cheeks of the farmer and the villagers went grey beside
+  a lamp. Now the side facing the light gets lighter and the other side darker, by the same
+  amount, and the face keeps its colour. Reported by a player on Nexus with Fashion Sense.
+
+- **Grey rings round the bubbles in Bathhouse Hot Spring.** The rising bubbles of that mod's hot
+  spring were cut out of the water, so a grey edge showed round each one. They are part of the
+  water now. Reported by a player on Nexus.
+
+### For translators
+
+No new or changed keys.
+
 ## 2.4.2 - 2026-10-22
 
 ### Added

@@ -1778,6 +1778,11 @@ namespace SDVRadiance
             ["tuner.section.water"] = "water", ["tuner.section.watersurface"] = "water",
             ["tuner.section.sky"] = "aurora", ["tuner.section.heathaze"] = "heathaze",
             ["tuner.section.particlelavasparks"] = "lava", ["tuner.section.precipitationsnow"] = "snow",
+            ["tuner.tab.smoothing"] = "smoothart", ["tuner.section.smoothingstyle"] = "smoothart", ["tuner.section.smoothingfamilies"] = "smoothart",
+            ["tuner.section.waterreflection"] = "waterreflection", ["tuner.section.watermodeldetail"] = "waterreflection",
+            ["tuner.reflstyle"] = "waterreflection", ["tuner.section.fognight"] = "nightmist", ["tuner.section.godrayssun"] = "sunrays",
+            ["tuner.section.windowreflection"] = "windowreflection", ["tuner.section.windowreflectiondetail"] = "windowreflection",
+            ["tuner.section.precipitationrain"] = "rain",
         };
 
         private static string? PictureFor(string? sectionKey)
