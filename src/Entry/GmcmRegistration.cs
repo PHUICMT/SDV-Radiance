@@ -399,6 +399,8 @@ namespace SDVRadiance
                 () => translate("config.particles.enabled.name"), () => translate("config.particles.enabled.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().ParticleDensity, value => config().ParticleDensity = value,
                 () => translate("config.particles.density.name"), () => translate("config.particles.density.tooltip"), 0.25f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().ParticleOldNightShade, value => config().ParticleOldNightShade = value,
+                () => translate("tuner.particleoldnightshade"), () => translate("help.particleoldnightshade"), 0f, 1f, 0.05f);
 
             AddParticleEmitter(configMenu, manifest, translate, "dust",
                 () => config().ParticleDust, value => config().ParticleDust = value,
@@ -956,6 +958,8 @@ namespace SDVRadiance
                 () => translate("config.shadows.farmanimals.name"), () => translate("config.shadows.farmanimals.tooltip"));
             configMenu.AddBoolOption(manifest, () => config().DirectionalShadowCreatures, value => config().DirectionalShadowCreatures = value,
                 () => translate("config.shadows.creatures.name"), () => translate("config.shadows.creatures.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().CharactersSwitchedOffUseGameShadow, value => config().CharactersSwitchedOffUseGameShadow = value,
+                () => translate("tuner.shadowgameshadowwhenoff"), () => translate("help.shadowgameshadowwhenoff"));
             configMenu.AddNumberOption(manifest, () => config().ShadowCreatureLength, value => config().ShadowCreatureLength = value,
                 () => translate("config.shadows.creaturelength.name"), () => translate("config.shadows.creaturelength.tooltip"), 0.1f, 2f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().ShadowCreatureSoftness, value => config().ShadowCreatureSoftness = value,

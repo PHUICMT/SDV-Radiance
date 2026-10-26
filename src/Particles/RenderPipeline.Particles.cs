@@ -144,6 +144,7 @@ namespace SDVRadiance
                 SpawnParticlesForTick(config);
             if (_fadeParticles > FadeGone && SomethingInTheParticlePass())
             {
+                _ambientParticleLight = NightOnParticles(config, drawnUnderTheGamesLight: false);
                 _particleAmbientDrawn = DrawParticleGroup(spriteBatch, emissive: false, Vector2.Zero, 1f);
                 // With neither lighting stage running there is no multiply to survive, so the
                 // emissive group rides along with the ambient one rather than not being drawn.
@@ -216,7 +217,7 @@ namespace SDVRadiance
             GroundParticlesDrawn = 0;
             if (_particles == null || !config.ParticlesEnabled || _fadeParticles <= FadeGone)
                 return;
-            GroundParticlesDrawn = _particles.DrawGround(spriteBatch, _fadeParticles, AmbientLightOnParticles());
+            GroundParticlesDrawn = _particles.DrawGround(spriteBatch, _fadeParticles, NightOnParticles(config, drawnUnderTheGamesLight: true));
         }
 
         /// <summary>Particles are cut off at the map's edge. On an outdoor map smaller than the window
@@ -240,7 +241,7 @@ namespace SDVRadiance
                 emissive ? ParticleSystem.PremultipliedAdditive : BlendState.AlphaBlend,
                 SamplerState.LinearClamp, DepthStencilState.None, ParticlesClippedToMap);
             int drawn = _particles!.Draw(spriteBatch, emissive, _fadeParticles, screenOffset, pixelScale,
-                emissive ? Vector3.One : AmbientLightOnParticles(), _particleSurfaceWave);
+                emissive ? ParticleSystem.WorldLight.Untouched : _ambientParticleLight, _particleSurfaceWave);
             // The rainbows ride with the emissive group: sunlight in spray adds to the frame the
             // way a spark does, and this batch already has the blend for it.
             bool rainbowsBehindSprites = emissive && RainbowsCanHideBehindSprites();
@@ -252,7 +253,7 @@ namespace SDVRadiance
                 // The game's own leaf art, point sampled the way the game draws it.
                 spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend,
                     SamplerState.PointClamp, DepthStencilState.None, ParticlesClippedToMap);
-                drawn += _particles.DrawGameArt(spriteBatch, _fadeParticles, screenOffset, pixelScale, AmbientLightOnParticles());
+                drawn += _particles.DrawGameArt(spriteBatch, _fadeParticles, screenOffset, pixelScale, _ambientParticleLight);
                 spriteBatch.End();
             }
             if (rainbowsBehindSprites)
@@ -317,7 +318,9 @@ namespace SDVRadiance
         }
 
         /// <summary>
-        /// How dark the world already is around a particle, as a multiplier on its colour.
+        /// How dark the world already is around a particle, as a multiplier on its colour. The
+        /// particles themselves now take the game's own darkening (<see cref="NightOnParticles"/>);
+        /// this curve stays for the mist, the sky and the old-look dial.
         ///
         /// <para>
         /// The game darkens the whole frame for the time of day BEFORE handing it to us: weather,
@@ -340,6 +343,34 @@ namespace SDVRadiance
         /// business taking it away.
         /// </para>
         /// </summary>
+        private ParticleSystem.WorldLight _ambientParticleLight = ParticleSystem.WorldLight.Untouched;
+
+        /// <summary>
+        /// The night on the ambient particles. Those drawn into the game's own sorted world are
+        /// darkened by the game's lightmap like the ground they lie on, so they need nothing more;
+        /// those drawn over the finished frame get the same taking away the game did to it (see
+        /// <see cref="ParticleSystem.WorldLight"/>).
+        /// <para><see cref="ModConfig.ParticleOldNightShade"/> brings back the clock curve every
+        /// release used before, on both, which is darker than the ground at night.</para>
+        /// <para>Outdoors only. The taking away leaves the lamps out, which outdoors is a few pools
+        /// at night; indoors the particles are the dust in a window's light and the motes by a
+        /// lamp, standing exactly where the lights the estimate leaves out are, so it dimmed the
+        /// dust in Pierre's sunbeams by day (0.15 to 0.22 taken off, against nothing before).
+        /// Indoors keeps the clock curve it always had.</para>
+        /// </summary>
+        private static ParticleSystem.WorldLight NightOnParticles(ModConfig config, bool drawnUnderTheGamesLight)
+        {
+            GameLocation? location = Game1.currentLocation;
+            if (location == null || !location.IsOutdoors)
+                return new ParticleSystem.WorldLight(Vector3.Zero, AmbientLightOnParticles());
+            float oldShade = Math.Clamp(config.ParticleOldNightShade, 0f, 1f);
+            Vector3 multiply = Vector3.Lerp(Vector3.One, AmbientLightOnParticles(), oldShade);
+            Vector3 takenAway = drawnUnderTheGamesLight
+                ? Vector3.Zero
+                : PrecipitationSystem.GameLightTakenAway(location) * (1f - oldShade);
+            return new ParticleSystem.WorldLight(takenAway, multiply);
+        }
+
         private static Vector3 AmbientLightOnParticles()
         {
             var (sunWarm, nightGlow) = TimeOfDayAmounts();
@@ -387,7 +418,10 @@ namespace SDVRadiance
                  + $"fireflies={(_firefliesFlying ? "flying" : "not tonight")} "
                  + $"blossom={(_blossomFalling ? "falling" : "not today")} "
                  + $"ringSparkles={(_ringSparkling ? "on" : "no ring")} footDustLifted={_footDustPuffs} onGround={GroundParticlesDrawn} glowLights={ParticleGlowLights} (strongest weight {ParticleGlowStrongestWeight:0.0} opening {ParticleGlowStrongestAmount:0.000}) chimneys={ChimneysFound} {ChimneyTilesText} festiveBulbs={ParticleFestiveLightsLit} carried[{ParticleCarriedFlame}] "
-                 + $"emissiveHost={host} test={(_particles.TestFountainRunning ? "running" : "off")}";
+                 + $"emissiveHost={host} test={(_particles.TestFountainRunning ? "running" : "off")} "
+                 + $"night: gameLighting={Game1.drawLighting} outdoorLight={Game1.outdoorLight} ambientLight={Game1.ambientLight} "
+                 + $"takenAway={_ambientParticleLight.TakenAway.X:0.000},{_ambientParticleLight.TakenAway.Y:0.000},{_ambientParticleLight.TakenAway.Z:0.000} "
+                 + $"multiply={_ambientParticleLight.Multiply.X:0.000},{_ambientParticleLight.Multiply.Y:0.000},{_ambientParticleLight.Multiply.Z:0.000}";
         }
     }
 }

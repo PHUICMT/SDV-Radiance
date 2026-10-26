@@ -766,6 +766,55 @@ namespace SDVRadiance
         private const int FloorGlowLightSheet = 6;
 
         /// <summary>
+        /// Whether a light the map lists under WindowLight stands at a window. A map can put any light
+        /// there to have it come on and go off with the windows, and Warm Stalls and Cozy Boxes lists a
+        /// warm glow in every barn stall that way, drawn with the sconce sheet. Those stood a beam of
+        /// window light up out of each stall (MyLadySeven, Nexus, 26 Oct 2026). The game's own coop
+        /// uses that same sheet for its windows and for the glow under them, so the sheet alone cannot
+        /// tell them apart. What a window has and a stall's lamp does not is a picture that changes
+        /// with the time of day: the map swaps its tiles between DayTiles and NightTiles, the pane
+        /// and the patch it lays on the floor alike. So a round lamp shape (lantern, sconce, cauldron,
+        /// pinpoint) counts when the map swaps the tile it stands on, or when labelled glass sits
+        /// behind it (a room with no DayTiles, like the farmhouse). The window and floor-glow shapes
+        /// always count. Lights that do not count still light the room as before.
+        /// </summary>
+        private bool StandsAtAWindow(GameLocation location, LightSource light)
+        {
+            if (!IsLampShaped(light))
+                return true;
+            Vector2 position = light.position.Value;
+            return WindowGlassLabelledAt(position)
+                || DayNightTilesOf(location).Contains(new Point((int)(position.X / 64f), (int)(position.Y / 64f)));
+        }
+
+        private static bool IsLampShaped(LightSource light)
+            => light.textureIndex.Value is LightSource.lantern or LightSource.sconceLight
+                or LightSource.cauldronLight or LightSource.pinpointLight;
+
+        /// <summary>The tiles a map swaps between its day and night look (DayTiles and NightTiles,
+        /// "layer x y index" each), read once per map.</summary>
+        private readonly HashSet<Point> _dayNightTiles = [];
+        private xTile.Map? _dayNightTilesMap;
+
+        private HashSet<Point> DayNightTilesOf(GameLocation location)
+        {
+            if (ReferenceEquals(location.Map, _dayNightTilesMap))
+                return _dayNightTiles;
+            _dayNightTilesMap = location.Map;
+            _dayNightTiles.Clear();
+            foreach (string property in new[] { "DayTiles", "NightTiles" })
+            {
+                if (location.Map?.Properties.TryGetValue(property, out var value) != true || value == null)
+                    continue;
+                string[] fields = value.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                for (int i = 0; i + 3 < fields.Length; i += 4)
+                    if (int.TryParse(fields[i + 1], out int x) && int.TryParse(fields[i + 2], out int y))
+                        _dayNightTiles.Add(new Point(x, y));
+            }
+            return _dayNightTiles;
+        }
+
+        /// <summary>
         /// The windows of this room that get a beam, and the dust in it, in world pixels.
         ///
         /// <para>A room with six window lights or fewer gives every light its beam, as it always
@@ -788,7 +837,7 @@ namespace SDVRadiance
                 foreach (var lightEntry in Game1.currentLightSources)
                 {
                     var light = lightEntry.Value;
-                    if (light.lightContext.Value != LightSource.LightContext.WindowLight)
+                    if (light.lightContext.Value != LightSource.LightContext.WindowLight || !StandsAtAWindow(location, light))
                         continue;
                     lightsSeen++;
                     if (!ShadowRenderer.WindowGlowing(location, light))

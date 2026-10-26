@@ -792,6 +792,7 @@ namespace SDVRadiance
             ShadowRenderer.DiagnosticMonitor = _config.DebugLogging ? Monitor : null;
             long t0 = FrameCost.Begin(FrameCost.Part.ShadowDraw);
             _shadows.DrawInto(e.SpriteBatch, _config);
+            _shadows.WatchPlayerShadow(Monitor);
             double ms = FrameCost.End(FrameCost.Part.ShadowDraw, t0);
             if (_config.DebugLogging)
             {
@@ -896,6 +897,10 @@ namespace SDVRadiance
             _camera.Update(_config);
             LightningEffects.Update(_config);
             ShadowSuppression.SuppressVanillaShadows = ShadowRenderer.ShadowsActiveNow(_config);
+            bool gameShadowWhenOff = _config.CharactersSwitchedOffUseGameShadow;
+            ShadowSuppression.GameShadowForPlayer = gameShadowWhenOff && !_config.DirectionalShadowPlayer;
+            ShadowSuppression.GameShadowForVillagers = gameShadowWhenOff && !_config.DirectionalShadowVillagers;
+            ShadowSuppression.GameShadowForCreatures = gameShadowWhenOff && !_config.DirectionalShadowCreatures;
             // Suppress the BUSH blob (fixed-direction, fights our cast); the TREE blob is kept
             // (not patched) as a base anchor under the canopy.
             // Only hide the vanilla drifting cloud when OUR cloud shadow is actually on —

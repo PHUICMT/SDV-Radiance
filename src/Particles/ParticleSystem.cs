@@ -408,8 +408,8 @@ namespace SDVRadiance
         /// blurred one.</param>
         /// <param name="worldLight">What the game's own lightmap already did to everything around
         /// this particle, which it cannot do to the particle itself: by the time we are handed the
-        /// frame that multiply has happened. One for the emissive group, which is supposed to be
-        /// its own light and not something the night can take away.</param>
+        /// frame that has happened. <see cref="WorldLight.Untouched"/> for the emissive group, which
+        /// is supposed to be its own light and not something the night can take away.</param>
         /// <summary>The water's own surface wave, handed to the particles so a leaf can be bent by
         /// the same field that bends it when it crosses a pond.
         ///
@@ -458,6 +458,87 @@ namespace SDVRadiance
         private const int SurfaceWaveBands = 8;
 
         /// <summary>
+        /// What the night does to a particle the game's own lighting never reached.
+        ///
+        /// <para>The game darkens its world by taking its lightmap away from the picture (reverse
+        /// subtract, the light times itself), not by multiplying it, so a dark leaf loses more of
+        /// itself than a pale one. <see cref="TakenAway"/> is that amount, and the share of the
+        /// colour it leaves is worked out against the colour the particle actually shows: its tint,
+        /// times the art's own average colour for the game's leaf art. A leaf in the air then ends
+        /// up as dark as the same leaf lying on the ground under it. Darkened by a clock curve
+        /// instead, it went black over ground the game had left bright (reported by Elacro with a
+        /// picture).</para>
+        ///
+        /// <para><see cref="Multiply"/> is that clock curve, kept as a dial for anyone who liked
+        /// the darker look.</para>
+        /// </summary>
+        internal readonly struct WorldLight
+        {
+            internal static readonly WorldLight Untouched = new(Vector3.Zero, Vector3.One);
+
+            internal readonly Vector3 TakenAway;
+            internal readonly Vector3 Multiply;
+
+            internal WorldLight(Vector3 takenAway, Vector3 multiply)
+            {
+                TakenAway = takenAway;
+                Multiply = multiply;
+            }
+
+            /// <summary>The premultiplied tint to draw with, from the particle's own tint and fade.</summary>
+            internal Color Apply(Color tint, float alpha, Vector3 artColour)
+            {
+                Vector3 shown = tint.ToVector3() * artColour;
+                Vector3 kept = Vector3.Max(shown - TakenAway, Vector3.Zero);
+                Vector3 scale = new Vector3(ShareKept(kept.X, shown.X), ShareKept(kept.Y, shown.Y),
+                                            ShareKept(kept.Z, shown.Z)) * Multiply;
+                Color faded = tint * alpha;
+                return new Color((byte)(faded.R * scale.X), (byte)(faded.G * scale.Y), (byte)(faded.B * scale.Z), faded.A);
+            }
+
+            private static float ShareKept(float kept, float shown) => shown > 1e-4f ? kept / shown : 0f;
+        }
+
+        private readonly Dictionary<int, Vector3> _gameLeafArtColours = [];
+        private Texture2D? _gameLeafArtSheet;
+
+        /// <summary>The average colour of one row of the game's leaf art, its first frame, read
+        /// once per row and again only when the sheet itself is replaced.</summary>
+        private Vector3 GameLeafArtColour(int artRow)
+        {
+            Texture2D sheet = Game1.mouseCursors;
+            if (!ReferenceEquals(sheet, _gameLeafArtSheet))
+            {
+                _gameLeafArtColours.Clear();
+                _gameLeafArtSheet = sheet;
+            }
+            if (_gameLeafArtColours.TryGetValue(artRow, out Vector3 colour))
+                return colour;
+            colour = Vector3.One;
+            try
+            {
+                var pixels = new Color[16 * 16];
+                sheet.GetData(0, new Rectangle(352, artRow, 16, 16), pixels, 0, pixels.Length);
+                Vector3 sum = Vector3.Zero;
+                float coverage = 0f;
+                foreach (Color pixel in pixels)
+                {
+                    // The sheet is premultiplied, so the colours sum straight and the coverage divides out.
+                    sum += pixel.ToVector3();
+                    coverage += pixel.A / 255f;
+                }
+                if (coverage > 0f)
+                    colour = Vector3.Clamp(sum / coverage, Vector3.Zero, Vector3.One);
+            }
+            catch (Exception)
+            {
+                // A sheet that cannot be read back is lit as if the art were white.
+            }
+            _gameLeafArtColours[artRow] = colour;
+            return colour;
+        }
+
+        /// <summary>
         /// Draw the GROUND particles into the batch the game has open on its sorted world, each at
         /// its own depth, so the things standing on the ground cover the things lying on it.
         ///
@@ -470,7 +551,7 @@ namespace SDVRadiance
         /// <para>No screen offset and no pixel scale here, unlike the pool's own pass: this batch
         /// is the world's, in the world's own coordinates.</para>
         /// </summary>
-        internal int DrawGround(SpriteBatch spriteBatch, float systemPresence, Vector3 worldLight)
+        internal int DrawGround(SpriteBatch spriteBatch, float systemPresence, WorldLight worldLight)
         {
             if (_atlas == null || systemPresence <= 0f || _liveCount == 0)
                 return 0;
@@ -491,9 +572,7 @@ namespace SDVRadiance
                 if (fromCamera.X < -margin || fromCamera.X > viewportWidth + margin
                     || fromCamera.Y < -margin || fromCamera.Y > viewportHeight + margin)
                     continue;
-                Color tint = particle.Tint * alpha;
-                tint = new Color((byte)(tint.R * worldLight.X), (byte)(tint.G * worldLight.Y),
-                                 (byte)(tint.B * worldLight.Z), tint.A);
+                Color tint = worldLight.Apply(particle.Tint, alpha, Vector3.One);
                 float scale = particle.SizePixels / AtlasCellSizePixels;
                 // Sorted by where it touches the ground, like everything the game draws: for a
                 // rolling ball that is the bottom of the ball, not its middle, or whatever stands
@@ -528,7 +607,7 @@ namespace SDVRadiance
         }
 
         internal int Draw(SpriteBatch spriteBatch, bool emissive, float systemPresence,
-                          Vector2 screenOffsetPixels, float pixelScale, Vector3 worldLight,
+                          Vector2 screenOffsetPixels, float pixelScale, WorldLight worldLight,
                           SurfaceWave wave = default)
         {
             if (_atlas == null || systemPresence <= 0f || _liveCount == 0)
@@ -553,9 +632,7 @@ namespace SDVRadiance
                 // The tint carries the alpha in all four channels because the atlas is
                 // premultiplied: fading a premultiplied sprite means fading its colour, not only
                 // the channel a straight-alpha sprite would use.
-                Color tint = particle.Tint * alpha;
-                tint = new Color((byte)(tint.R * worldLight.X), (byte)(tint.G * worldLight.Y),
-                                 (byte)(tint.B * worldLight.Z), tint.A);
+                Color tint = worldLight.Apply(particle.Tint, alpha, Vector3.One);
                 float scale = particle.SizePixels / AtlasCellSizePixels * pixelScale;
                 Vector2 screenPosition = (fromCamera + screenOffsetPixels) * pixelScale;
                 // Only the flat things bend. A spark is a point of light and a mote is dust:
@@ -615,7 +692,7 @@ namespace SDVRadiance
         /// sampling (the game's art is pixel art, and the pool's own pass samples linearly).
         /// </summary>
         internal int DrawGameArt(SpriteBatch spriteBatch, float systemPresence, Vector2 screenOffsetPixels,
-                                 float pixelScale, Vector3 worldLight)
+                                 float pixelScale, WorldLight worldLight)
         {
             if (systemPresence <= 0f || _liveCount == 0 || Game1.mouseCursors == null)
                 return 0;
@@ -636,9 +713,7 @@ namespace SDVRadiance
                 if (fromCamera.X < -margin || fromCamera.X > viewportWidth + margin
                     || fromCamera.Y < -margin || fromCamera.Y > viewportHeight + margin)
                     continue;
-                Color tint = particle.Tint * alpha;
-                tint = new Color((byte)(tint.R * worldLight.X), (byte)(tint.G * worldLight.Y),
-                                 (byte)(tint.B * worldLight.Z), tint.A);
+                Color tint = worldLight.Apply(particle.Tint, alpha, GameLeafArtColour(particle.ArtRow));
                 // The game's own turning-over: ten frames a tenth of a second each, there and back.
                 int step = (int)((particle.AgeSeconds + particle.ArtClockOffset) * 10f) % 18;
                 int frame = step < 10 ? step : 18 - step;

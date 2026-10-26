@@ -2,6 +2,42 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.4.4 - 2026-10-26
+
+### Added
+
+- **The game's own shadow for characters you switch off.** A new switch under the shadow casters in
+  F6, **Game's shadow when switched off**: the player, the villagers or the horse and pets whose
+  shadow switch is off get the game's round shadow under their feet back, instead of no shadow at
+  all. Everything else keeps its cast shadow. Off by default. Asked for by a player whose shorter
+  farmer body looked like it floated over its cast shadow.
+
+### Fixed
+
+- **Window light came out of the barn stalls in Warm Stalls and Cozy Boxes.** That mod lights each
+  stall with a lamp it lists alongside the windows, and every one of those lamps threw a beam of
+  window light and dust. Only lights at a real window do now: one whose tile the map swaps between
+  its day and night look, or one with window glass behind it. In the game's coop the light now
+  comes from the windows alone, without a second beam rising off the floor under each one.
+  Reported by a player on Nexus.
+- **Falling leaves turned black in the evening.** Leaves and petals in the air outdoors were
+  darkened by a fixed clock curve, which was fully dark by half past eight while the game was
+  still darkening the ground, so black leaves drifted over green grass; late at night the same
+  curve left them brighter than the ground. They now take the same darkening the game gives the
+  ground under them, and leaves lying on the ground are no longer darkened twice. Indoors nothing
+  changes. The old look is a dial: **Darker at night (old look)** under Particles in F6. Reported
+  by a player on Nexus with a picture.
+- **The player's shadow could stay gone after another mod's drawing failed.** If an outfit or
+  appearance mod threw while the player was drawn into their shadow, the empty result was kept
+  as if it were the shadow until the player's pose next changed. It is now drawn again on the next
+  frame, and radiance_report says how many times it happened and why. A new console command,
+  radiance_playerwatch, prints the player's shadow frame by frame for a drop that comes and goes.
+
+### For translators
+
+New keys: `tuner.particleoldnightshade`, `help.particleoldnightshade`, `tuner.shadowgameshadowwhenoff`,
+`help.shadowgameshadowwhenoff`.
+
 ## 2.4.3 - 2026-10-25
 
 ### Changed

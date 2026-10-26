@@ -3717,6 +3717,9 @@ namespace SDVRadiance
             Toggle("tuner.shadowvillagers", () => _config.DirectionalShadowVillagers, value => _config.DirectionalShadowVillagers = value, "help.shadowvillagers");
             Toggle("tuner.shadowfarmanimals", () => _config.DirectionalShadowFarmAnimals, value => _config.DirectionalShadowFarmAnimals = value, "help.shadowfarmanimals");
             Toggle("tuner.shadowcreatures", () => _config.DirectionalShadowCreatures, value => _config.DirectionalShadowCreatures = value, "help.shadowcreatures");
+            Toggle("tuner.shadowgameshadowwhenoff", () => _config.CharactersSwitchedOffUseGameShadow,
+                value => _config.CharactersSwitchedOffUseGameShadow = value, "help.shadowgameshadowwhenoff",
+                () => !_config.DirectionalShadowPlayer || !_config.DirectionalShadowVillagers || !_config.DirectionalShadowCreatures);
             Slider("tuner.shadowcreaturelength", 0.1f, 2f, () => _config.ShadowCreatureLength,
                 value => _config.ShadowCreatureLength = value, "help.shadowcreaturelength", () => _config.DirectionalShadowCreatures);
             Slider("tuner.shadowcreaturesoftness", 0f, 3f, () => _config.ShadowCreatureSoftness,
@@ -4283,6 +4286,8 @@ namespace SDVRadiance
             DependsOn(() => _config.ParticlesEnabled);
             Slider("tuner.particledensity", 0.25f, 2f, () => _config.ParticleDensity,
                 value => _config.ParticleDensity = value, "help.particledensity");
+            Slider("tuner.particleoldnightshade", 0f, 1f, () => _config.ParticleOldNightShade,
+                value => _config.ParticleOldNightShade = value, "help.particleoldnightshade");
             Emitter("dust", () => _config.ParticleDust, value => _config.ParticleDust = value,
                 () => _config.ParticleDustAmount, value => _config.ParticleDustAmount = value,
                 () => _config.ParticleDustSize, value => _config.ParticleDustSize = value);

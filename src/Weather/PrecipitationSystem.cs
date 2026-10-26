@@ -566,6 +566,29 @@ namespace SDVRadiance
         {
             if (!Game1.drawLighting)
                 return colour;
+            Color light = GameLightmapLight(location);
+            return new Color(LightTakenAway(colour.R, light.R), LightTakenAway(colour.G, light.G), LightTakenAway(colour.B, light.B), colour.A);
+        }
+
+        /// <summary>What the game's lighting takes away from each channel, as a share of full, for
+        /// the particles drawn over the finished frame. Zero on a day the game draws no lightmap.
+        /// <para>The game paints its light colour into a cleared lightmap with the non-premultiplied
+        /// blend, so the lightmap holds the colour times its own alpha, and the evening colour is
+        /// scaled in all four channels as it darkens. What comes off the picture is that lightmap
+        /// times itself: 0.08 at seven on a summer evening, where squaring the colour alone said
+        /// 0.28 (measured against the forest ground with the lighting stages off). Lamps are left
+        /// out, as for the rain.</para></summary>
+        internal static Vector3 GameLightTakenAway(GameLocation location)
+        {
+            if (!Game1.drawLighting)
+                return Vector3.Zero;
+            Color light = GameLightmapLight(location);
+            Vector3 lightmap = light.ToVector3() * (light.A / 255f);
+            return lightmap * lightmap;
+        }
+
+        private static Color GameLightmapLight(GameLocation location)
+        {
             Color light = Game1.ambientLight.Equals(Color.White) || (location.IsOutdoors && location.IsRainingHere())
                 ? Game1.outdoorLight : Game1.ambientLight;
             // Darkness (buff 26) forces the lightmap on and pulls its light halfway to white, or
@@ -573,7 +596,7 @@ namespace SDVRadiance
             if (Game1.player?.hasBuff("26") == true)
                 light = light == Color.White ? new Color(0.75f, 0.75f, 0.75f)
                     : new Color((byte)MathHelper.Lerp(light.R, 255f, 0.5f), (byte)MathHelper.Lerp(light.G, 255f, 0.5f), (byte)MathHelper.Lerp(light.B, 255f, 0.5f));
-            return new Color(LightTakenAway(colour.R, light.R), LightTakenAway(colour.G, light.G), LightTakenAway(colour.B, light.B), colour.A);
+            return light;
         }
 
         private static byte LightTakenAway(byte value, byte light) => (byte)Math.Max(0, value - light * light / 255);

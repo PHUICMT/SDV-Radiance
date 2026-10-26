@@ -1148,7 +1148,7 @@ namespace SDVRadiance
         /// a critter's is square or wider. A stretched sprite (16 by 64, the Squid Fest fishermen)
         /// stays a person, which it is.</para>
         /// </summary>
-        private static bool StandsLikeAPerson(NPC npc, ShadowModel model)
+        internal static bool StandsLikeAPerson(NPC npc, ShadowModel model)
         {
             // 1.6 had no such question: every character took the person's foreshortening, horses
             // and pets included. Answering it that way again is the whole of what the 1.6 shapes

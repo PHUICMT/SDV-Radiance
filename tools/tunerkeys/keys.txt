@@ -164,3 +164,4 @@ tuner.windowglasscurtaincolour
 tuner.windowreflection
 tuner.windowreflectionindoors
 tuner.windyspells
+tuner.shadowgameshadowwhenoff

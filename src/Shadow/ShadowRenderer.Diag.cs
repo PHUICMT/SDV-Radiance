@@ -2,6 +2,7 @@ using System;
 using System.Text;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using StardewModdingAPI;
 using StardewValley;
 using StardewValley.Buildings;
 using StardewValley.Objects;
@@ -321,6 +322,9 @@ namespace SDVRadiance
                         + $"standingY={who.StandingPixel.Y} bakeReady={ready} bakeTarget={hasTarget} sunLaidDown={renderer._playerSunFresh} "
                         + $"seated={seated} swimming={who.swimming.Value} riding={who.isRidingHorse()} "
                         + $"-> {verdict}");
+            if (PlayerBakeFailures > 0)
+                report.AppendLine($"  drawing the player into the silhouette FAILED {PlayerBakeFailures} time(s) since the game started, "
+                            + $"last: {PlayerBakeLastFailure} (another mod's draw threw inside ours)");
             report.AppendLine($"  the same verdict applies on both paths here, and the live one is "
                         + $"{(SunCasts() ? "SUN" : "PER-LIGHT")}. On the sun path there is no ambient pool to fall "
                         + "back on, so a SKIP there means no shadow of any kind: the vanilla blob has already "
@@ -691,6 +695,45 @@ namespace SDVRadiance
             float personAcrossOnGround = ShadowProjection.ForSolid(rotation, sunStretch, foreshortening).AcrossScaleForRotation();
             report.AppendLine($"[shadows]   a person     Solid rotate+scale, width x{personAcross:0.00} "
                         + $"(x{personAcrossOnGround:0.00} on the ground's own)");
+        }
+
+        /// <summary>Frames left on radiance_playerwatch.</summary>
+        internal static int PlayerWatchFrames;
+        private string? _playerWatchLast;
+        private int _playerWatchDrops;
+
+        /// <summary>
+        /// radiance_playerwatch: once a frame, after the shadows are drawn, print the player's shadow
+        /// state when it differs from the frame before. Written for a shadow reported to drop out for
+        /// a moment as the farmer blinks, mostly in cutscenes: a still capture never lands on that
+        /// frame and a line per frame would bury it. A frame where the shadow was not drawn between
+        /// two where it was is counted as a drop and named in the closing line.
+        /// </summary>
+        internal void WatchPlayerShadow(IMonitor monitor)
+        {
+            if (PlayerWatchFrames <= 0)
+                return;
+            PlayerWatchFrames--;
+            Farmer? who = Game1.player;
+            if (who == null)
+                return;
+            string state = $"drawn={_patchDrawnThisFrame} patchValid={_patchValid} content={_patchContent.Width}x{_patchContent.Height} "
+                + $"ready={_playerReady} maskFresh={_playerMaskFresh} sunFresh={_playerSunFresh} bakeFailures={PlayerBakeFailures} "
+                + $"bodyFrame={who.FarmerSprite.CurrentFrame} eyes={who.currentEyes} cutscene={Game1.eventUp} "
+                + $"patch: {PlayerPatchReport ?? "composed"}";
+            if (state != _playerWatchLast)
+            {
+                if (_playerWatchLast != null && _playerWatchLast.StartsWith("drawn=True") && state.StartsWith("drawn=False"))
+                    _playerWatchDrops++;
+                monitor.Log($"[playerwatch] tick {Game1.ticks}: {state}", LogLevel.Info);
+                _playerWatchLast = state;
+            }
+            if (PlayerWatchFrames == 0)
+            {
+                monitor.Log($"[playerwatch] done: the shadow went from drawn to not drawn {_playerWatchDrops} time(s)", LogLevel.Info);
+                _playerWatchLast = null;
+                _playerWatchDrops = 0;
+            }
         }
     }
 }

@@ -185,7 +185,7 @@ namespace SDVRadiance
         /// </remarks>
         internal static bool DrawShadow_Prefix(Character __instance)
         {
-            if (!SuppressVanillaShadows)
+            if (!SuppressVanillaShadows || KeepsGameShadow(__instance))
                 return true;
             // Which classes we actually took a blob away from this frame. A round patch that
             // survives with the whole mod switched off is the game's own, and the only way to know
@@ -200,6 +200,22 @@ namespace SDVRadiance
 
         /// <inheritdoc cref="BlobDrawsSwallowed"/>
         internal static readonly System.Collections.Generic.Dictionary<string, int> VanillaShadowSuppressed = [];
+
+        /// <summary>Which kinds keep the game's own round shadow: those whose cast is switched off
+        /// while <see cref="ModConfig.CharactersSwitchedOffUseGameShadow"/> is on. Set by the
+        /// update tick with the switches above.</summary>
+        internal static bool GameShadowForPlayer, GameShadowForVillagers, GameShadowForCreatures;
+
+        /// <summary>Sorted the way the shadow pass sorts them (ShadowRenderer.CharacterCasts), so a
+        /// character never loses both shadows or wears both: every farmer is the player's switch,
+        /// a character that stands like a person the villagers', anything lying along the ground
+        /// the creatures'. Farm animals never come here; the game gives them no round shadow.</summary>
+        private static bool KeepsGameShadow(Character? character) => character switch
+        {
+            Farmer => GameShadowForPlayer,
+            NPC npc => ShadowRenderer.StandsLikeAPerson(npc, ShadowModel.Modern) ? GameShadowForVillagers : GameShadowForCreatures,
+            _ => false,
+        };
 
         /// <summary>Skip the vanilla <c>Cloud</c> critter's drifting shadow draw.</summary>
         internal static bool Cloud_Draw_Prefix() => !SuppressVanillaClouds;

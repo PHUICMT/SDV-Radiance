@@ -290,6 +290,12 @@ namespace SDVRadiance
             _objectBakeQueue.Clear();
         }
 
+        /// <summary>How many times drawing the player into the silhouette threw since the game started, and
+        /// the last reason, for radiance_report: without debug logging a failure is otherwise
+        /// silent, and what the player sees is only their shadow dropping out.</summary>
+        internal static int PlayerBakeFailures;
+        internal static string? PlayerBakeLastFailure;
+
         /// <summary>Render the player's current pose to the persistent silhouette target (and
         /// its full-colour twin when the reflection wants it), reusing the last bake when the
         /// pose has not moved.</summary>
@@ -425,6 +431,16 @@ namespace SDVRadiance
             catch (Exception exception)
             {
                 try { _renderTargetSpriteBatch!.End(); } catch { }
+                // The target was cleared before the draw threw, but the signature already says
+                // this pose is baked, so the empty target was reused as fresh and the player had no
+                // shadow until the pose next changed. Forget the bake so the next frame tries again.
+                _playerMaskFresh = false;
+                _playerColorFresh = false;
+                _playerBakeSignature = (-1, -1, default, 0);
+                PlayerMask = null;
+                PlayerColor = null;
+                PlayerBakeFailures++;
+                PlayerBakeLastFailure = $"{exception.GetType().Name}: {exception.Message}";
                 if (DiagnosticMonitor != null && !_errorLogged) { _errorLogged = true; DiagnosticMonitor.Log($"[shadow] player RT prep threw: {exception}", LogLevel.Warn); }
             }
             finally

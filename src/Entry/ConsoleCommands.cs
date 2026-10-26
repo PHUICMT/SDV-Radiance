@@ -258,6 +258,17 @@ namespace SDVRadiance
                     RenderPipeline.ReflectWatchFrames = frames;
                     monitor.Log($"Watching the entity mirror for {frames} frames. Walk along the water now.", LogLevel.Info);
                 });
+            helper.ConsoleCommands.Add("radiance_playerwatch",
+                "Watch the player's own shadow for the next N frames (default 600) and print only the frames "
+                + "where something about it changed: whether it was drawn, whether its silhouette was ready, "
+                + "the body frame, the eyes and whether a cutscene is running. For a shadow that drops out for "
+                + "a moment, which no still capture lands on.",
+                (_, arguments) =>
+                {
+                    int frames = arguments.Length >= 1 && int.TryParse(arguments[0], out int parsedFrames) ? Math.Clamp(parsedFrames, 1, 7200) : 600;
+                    ShadowRenderer.PlayerWatchFrames = frames;
+                    monitor.Log($"Watching the player's shadow for {frames} frames.", LogLevel.Info);
+                });
             helper.ConsoleCommands.Add("radiance_lightwatch",
                 "Trace the light array for the next N frames (default 60) and print only what changes: "
                 + "how many lights were offered versus how many slots exist, which ones entered or left, "

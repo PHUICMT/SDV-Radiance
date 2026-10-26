@@ -1204,6 +1204,10 @@ namespace SDVRadiance
         /// there is, and how big each piece is. They multiply this master rather than replacing
         /// it, so one dial still turns everything down at once.</para></summary>
         public float ParticleDensity { get; set; } = 1.05f;
+        /// <summary>How much of the old night darkening the drifting particles get. 0 darkens them
+        /// exactly as the game darkens the ground under them; 1 is the darker clock-driven shade
+        /// every release before this setting used, which turned leaves near black at night.</summary>
+        public float ParticleOldNightShade { get; set; } = 0f;
 
         /// <summary>Dust hanging in the daylight that comes through a window. Indoors only:
         /// outdoors the sun shafts draw motes of their own.</summary>
@@ -1606,6 +1610,11 @@ namespace SDVRadiance
         public bool DirectionalShadowVillagers { get; set; } = true;
         public bool DirectionalShadowFarmAnimals { get; set; } = true;
         public bool DirectionalShadowCreatures { get; set; } = true;
+        /// <summary>The player, the villagers and the creatures whose switch above is off get the
+        /// game's own round shadow under their feet back, instead of no shadow at all. Off by
+        /// default, which is every earlier release. Asked for by a player whose shorter farmer
+        /// body looked like it floated over its cast shadow.</summary>
+        public bool CharactersSwitchedOffUseGameShadow { get; set; }
         /// <summary>The creatures' own shadow length, times the shared one: the pets, the horse, a
         /// wildlife mod's animals, Junimos and the critters (rats, birds, squirrels). 1 is every
         /// earlier release. Asked for by a player whose small indoor creatures cast shadows too
@@ -2055,6 +2064,7 @@ namespace SDVRadiance
             WateredSoilSparkle = ClampToRange(WateredSoilSparkle, 0f, 1f);
             WindowDaylightStrengthElsewhere = ClampToRange(WindowDaylightStrengthElsewhere, 0f, 2f);
             ParticleDensity = ClampToRange(ParticleDensity, 0.25f, 2f);
+            ParticleOldNightShade = ClampToRange(ParticleOldNightShade, 0f, 1f);
             ParticleDustAmount = ClampToRange(ParticleDustAmount, 0f, 2f);
             ParticleDustSize = ClampToRange(ParticleDustSize, 0.5f, 2f);
             ParticleEmbersAmount = ClampToRange(ParticleEmbersAmount, 0f, 2f);

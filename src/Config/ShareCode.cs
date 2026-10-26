@@ -478,6 +478,9 @@ namespace SDVRadiance
             (351, nameof(ModConfig.WindowGlassCurtainColourStrength), Look),
             (352, nameof(ModConfig.LightningThroughWindows), Look),
             (353, nameof(ModConfig.WetWorldDryLampLight), Look),
+            // 354 to 362 are taken by settings still on their way in the next release.
+            (363, nameof(ModConfig.ParticleOldNightShade), Look),
+            (364, nameof(ModConfig.CharactersSwitchedOffUseGameShadow), Look),
         ];
 
         private static Dictionary<int, (string Property, bool IsPerformance)>? _settingById;
