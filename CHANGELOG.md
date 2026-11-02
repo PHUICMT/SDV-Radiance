@@ -2,6 +2,35 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.4.5 - 2026-11-02
+
+### Fixed
+
+- **The F6 menu scrolls by finger on a phone.** It only answered a mouse wheel, so on a phone everything
+  below the first screen was out of reach. A drag now scrolls the page or the tab rail, a sideways drag
+  on a slider moves it, and a tap acts when the finger lifts. `radiance_fingermenu on` tries the same
+  gestures with a mouse or a touch screen. Reported on Nexus.
+- **The tab rail scrolls past the chosen tab.** The rail pulled the chosen tab back into view after each
+  step of the wheel, so on a short window the tabs past the fold could not be reached.
+- **Street lamps light from the bulb, not the middle of the post.** The pool of light and the game's own
+  glow sit round the lit tile at the top of the lamp, mod maps included. Shadows still fall from the foot
+  of the post.
+
+### Added
+
+- **Window light from the glass of Oriental Garden Furniture's windows.** The pack's twenty windows,
+  doors and moon windows, in every frame tone, season and sky the pack paints them in, now have their
+  glass marked, so "From the glass" lights the panes and the paper, and roll-down blinds let the light
+  through softly in their own colour. Asked for on Nexus.
+
+- **Window light from Three Floor-to-ceiling Windows.** Furniture Framework registers its wall pieces as
+  paintings, so the window light passed them by. A painting whose picture has glass labelled now counts
+  as a window for "From the glass", and this pack's twelve windows have theirs. Asked for on Nexus.
+
+### For translators
+
+No new keys. `radiance_fingermenu` is a console command and adds none.
+
 ## 2.4.4 - 2026-10-26
 
 ### Added

@@ -415,6 +415,7 @@ namespace SDVRadiance
             // sit frozen instead of playing its normal vanilla animation.
             bool waterHere = RenderPipeline.WaterAllowedIn(Game1.currentLocation, _config);
             HarmonyPatcher.FreezeGameWater = _config.Enabled && _config.WaterEnabled && waterHere;
+            HarmonyPatcher.LampGlowFromBulb = _config.Enabled;
             WaterDrawHook.Enabled = _config.Enabled && (_config.WaterEnabled || _config.WaterReflection);
             // Also read by the window reflection, for glass on art a location draws for itself (the bus).
             LocationDrawHook.Enabled = WaterDrawHook.Enabled || (_config.Enabled && _config.WindowReflectionEnabled);

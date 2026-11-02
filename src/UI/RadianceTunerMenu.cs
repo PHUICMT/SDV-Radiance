@@ -1058,6 +1058,8 @@ namespace SDVRadiance
         /// <summary>First tab shown in the rail, and how far it may be pushed. Counted in TABS
         /// rather than pixels so a button can never be left half off the bottom of the frame.</summary>
         private int _railScroll, _maxRailScroll;
+        private int _railPitch = 1, _railEntryFollowed = -1;
+        private bool _railMovedByHand;
         // content-column layout cursor (build helpers advance it)
         private int _contentCursorX, _contentCursorY, _contentColumnWidth;
 
@@ -2430,7 +2432,18 @@ namespace SDVRadiance
             // Never leave the chosen tab off the end of what is showing: opening the menu on a
             // tab near the bottom, or being sent to one by name, has to bring it into view.
             _railScroll = Math.Clamp(_railScroll, 0, _maxRailScroll);
-            if (activeRailEntry < _railScroll)
+            if (activeRailEntry != _railEntryFollowed)
+            {
+                _railEntryFollowed = activeRailEntry;
+                _railMovedByHand = false;
+            }
+            _railPitch = tabPitch;
+            if (_railMovedByHand)
+            {
+                // The player is looking further down the rail: pulling the chosen tab back into
+                // view here would undo every step, and the tabs past the fold stay out of reach.
+            }
+            else if (activeRailEntry < _railScroll)
                 _railScroll = activeRailEntry;
             else if (activeRailEntry >= _railScroll + railShown)
                 _railScroll = activeRailEntry - railShown + 1;
@@ -5166,6 +5179,7 @@ namespace SDVRadiance
             if (_maxRailScroll > 0 && (overRail || _maxScroll == 0))
             {
                 _railScroll = Math.Clamp(_railScroll - Math.Sign(direction), 0, _maxRailScroll);
+                _railMovedByHand = true;
                 Reflow();
                 return;
             }
@@ -5179,6 +5193,8 @@ namespace SDVRadiance
         public override void receiveLeftClick(int x, int y, bool playSound = true)
         {
             if (Sliding || _fold != null)
+                return;
+            if (WaitToSeeIfFingerScrolls(x, y))
                 return;
             // The close button slides the panel out too, instead of the base class removing it at once.
             if (upperRightCloseButton != null && upperRightCloseButton.containsPoint(x, y))
@@ -5369,6 +5385,9 @@ namespace SDVRadiance
                 if (!first)
                     Reflow();
             }
+            // A lift the menu never heard about must not leave the press waiting for ever.
+            if (_fingerDown && Game1.input.GetMouseState().LeftButton != Microsoft.Xna.Framework.Input.ButtonState.Pressed)
+                FinishFingerPress();
             float seconds = (float)time.ElapsedGameTime.TotalSeconds;
             FollowTypedSearch(seconds);
             if (_closing)
@@ -5458,16 +5477,109 @@ namespace SDVRadiance
                 () => { _lookAskedToDelete = null; Game1.playSound("smallSelect"); Reflow(); });
         }
 
+        /// <summary>Whether a press on the page waits to see what the finger does. A phone has no
+        /// mouse wheel, so a drag has to scroll, and a press that acted at once would flip every
+        /// switch a scroll happened to start on. With a mouse a press still acts at once.</summary>
+        internal static bool FingerGestures { get; set; } = StardewModdingAPI.Constants.TargetPlatform == StardewModdingAPI.GamePlatform.Android;
+
+        /// <summary>How far a finger moves before it counts as a drag and not a tap.</summary>
+        private const int FingerDragDistance = 16;
+
+        private bool _fingerDown, _fingerMoved, _fingerOnRail, _replayingPress;
+        private int _fingerStartX, _fingerStartY, _fingerStartScroll, _fingerStartRailScroll;
+
+        /// <summary>Holds a press that lands where a drag could scroll. The compass keeps its press:
+        /// it turns in every direction, so a drag there can only mean the compass.</summary>
+        private bool WaitToSeeIfFingerScrolls(int x, int y)
+        {
+            if (!FingerGestures || _replayingPress || NamingLook)
+                return false;
+            bool onRail = x < xPositionOnScreen + RailWidth && y >= _bodyTop && y <= _bodyBottom;
+            bool onPage = x >= _contentX && y >= _bodyTop && y <= _bodyBottom;
+            if (!(onRail && _maxRailScroll > 0) && !(onPage && _maxScroll > 0))
+                return false;
+            if (onPage && _compasses.Any(compass => Visible(compass.Row) && compass.Hit(x, y + _scroll)))
+                return false;
+            _fingerDown = true;
+            _fingerMoved = false;
+            _fingerOnRail = onRail;
+            _fingerStartX = x;
+            _fingerStartY = y;
+            _fingerStartScroll = _scroll;
+            _fingerStartRailScroll = _railScroll;
+            return true;
+        }
+
+        private void ReplayHeldPress()
+        {
+            _replayingPress = true;
+            receiveLeftClick(_fingerStartX, _fingerStartY, playSound: true);
+            _replayingPress = false;
+        }
+
+        /// <summary>A press that never moved was a tap, and acts now.</summary>
+        private void FinishFingerPress()
+        {
+            if (!_fingerDown)
+                return;
+            _fingerDown = false;
+            if (!_fingerMoved && !Sliding && _fold == null)
+            {
+                ReplayHeldPress();
+                // A tap lands on a slider as a jump to that spot, and there is no drag to end.
+                if (_dragging != null) { _dragging = null; _onSave(); }
+            }
+        }
+
+        /// <summary>A sideways drag that began on a slider is that slider; anything else that moved
+        /// the finger far enough scrolls whichever column it began in.</summary>
+        private void FollowFinger(int x, int y)
+        {
+            int across = x - _fingerStartX, down = y - _fingerStartY;
+            if (!_fingerMoved)
+            {
+                if (Math.Abs(across) < Scaled(FingerDragDistance) && Math.Abs(down) < Scaled(FingerDragDistance))
+                    return;
+                _fingerMoved = true;
+                bool onSlider = !_fingerOnRail && _sliders.Any(slider => Visible(slider.Track) && slider.IsEnabled
+                    && slider.Track.Contains(_fingerStartX, _fingerStartY + _scroll));
+                if (onSlider && Math.Abs(across) > Math.Abs(down))
+                {
+                    _fingerDown = false;
+                    ReplayHeldPress();
+                    return;
+                }
+            }
+            if (_fingerOnRail)
+            {
+                int railTarget = Math.Clamp(_fingerStartRailScroll - down / Math.Max(1, _railPitch), 0, _maxRailScroll);
+                if (railTarget != _railScroll)
+                {
+                    _railScroll = railTarget;
+                    _railMovedByHand = true;
+                    Reflow();
+                }
+            }
+            else if (_maxScroll > 0)
+            {
+                _scroll = Math.Clamp(_fingerStartScroll - down, 0, _maxScroll);
+                RememberScroll();
+            }
+        }
+
         public override void leftClickHeld(int x, int y)
         {
             if (Sliding)
                 return;
+            if (_fingerDown)
+                FollowFinger(x, y);
             if (_dragging != null) { _dragging.SetFromX(x); _onChange(); }
             if (_draggingCompass != null) { _draggingCompass.SetFromPoint(x, y + _scroll); _onChange(); }
         }
 
         public override void releaseLeftClick(int x, int y)
         {
+            FinishFingerPress();
             if (_dragging != null) { _dragging = null; _onSave(); }
             if (_draggingCompass != null) { _draggingCompass = null; _onSave(); }
             base.releaseLeftClick(x, y);

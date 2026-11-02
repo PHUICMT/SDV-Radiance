@@ -645,13 +645,37 @@ namespace SDVRadiance
         internal int WindowGlassBuilds { get; private set; }
         internal int WindowGlassBuildsSkipped { get; private set; }
 
+        /// <summary>Whether a piece of furniture is a window, for the glass. Furniture Framework
+        /// registers its wall pieces as paintings, whatever they show, so one of its paintings counts
+        /// when its picture has glass labelled. A real painting shares a sheet with real windows, and
+        /// a cell of solid art can match a pane by its shape, so no other painting is ever asked.</summary>
+        private bool IsGlassFurniture(Furniture furniture)
+        {
+            int kind = furniture.furniture_type.Value;
+            if (kind == Furniture.window)
+                return true;
+            if (kind != Furniture.painting)
+                return false;
+            string id = furniture.QualifiedItemId ?? "";
+            if (!_paintingsWithGlass.TryGetValue(id, out bool hasGlass))
+            {
+                string? textureName = ItemRegistry.GetDataOrErrorItem(id).TextureName;
+                hasGlass = textureName != null && textureName.StartsWith("FF\\", StringComparison.OrdinalIgnoreCase)
+                    && _windowGlassBySheet.ContainsKey(LabelStore.NormalizeSheet(textureName));
+                _paintingsWithGlass[id] = hasGlass;
+            }
+            return hasGlass;
+        }
+
+        private readonly Dictionary<string, bool> _paintingsWithGlass = [];
+
         /// <summary>A number that changes when a window furniture is placed, moved, turned or swapped.</summary>
-        private static int WindowFurnitureSignature(GameLocation location)
+        private int WindowFurnitureSignature(GameLocation location)
         {
             int signature = 17;
             foreach (Furniture furniture in location.furniture)
             {
-                if (furniture?.furniture_type.Value != Furniture.window)
+                if (furniture == null || !IsGlassFurniture(furniture))
                     continue;
                 signature = signature * 31 + furniture.TileLocation.GetHashCode();
                 signature = signature * 31 + (furniture.QualifiedItemId?.GetHashCode() ?? 0);
@@ -846,7 +870,7 @@ namespace SDVRadiance
         {
             foreach (Furniture furniture in location.furniture)
             {
-                if (furniture?.furniture_type.Value != Furniture.window)
+                if (furniture == null || !IsGlassFurniture(furniture))
                     continue;
                 Texture2D? texture;
                 try { texture = ItemRegistry.GetDataOrErrorItem(furniture.QualifiedItemId).GetTexture(); }

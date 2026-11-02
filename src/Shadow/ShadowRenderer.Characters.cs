@@ -999,7 +999,49 @@ namespace SDVRadiance
                         return glow - lightPosition;
                 }
             }
+            // A STREET LAMP the map hangs at the foot of its post, while the bulb burns at the top:
+            // the pool sat round the middle of the post and the bulb stayed dark ("the light should
+            // be round the lamp", the author with a picture, 27 Oct 2026). The map says where the
+            // bulb is: it is the tile it swaps for a lit one at night (NightTiles). So a light with
+            // such a tile in its own column a little above it lights from that tile's centre, in
+            // any map that lights its lamps the game's way, and a light with none stays where it is.
+            if (location.IsOutdoors)
+            {
+                int column = (int)MathF.Floor(lightPosition.X / 64f);
+                int row = (int)MathF.Floor(lightPosition.Y / 64f);
+                HashSet<Point> lit = NightTilesOf(location);
+                for (int above = 1; above <= LampBulbSearchTiles; above++)
+                {
+                    if (lit.Contains(new Point(column, row - above)))
+                        return new Vector2(column * 64f + 32f - lightPosition.X, (row - above) * 64f + 32f - lightPosition.Y);
+                }
+            }
             return Vector2.Zero;
+        }
+
+        /// <summary>How far above a map light its lit bulb may be, in tiles: a lamp post is two to
+        /// three tiles tall.</summary>
+        private const int LampBulbSearchTiles = 3;
+
+        private static readonly HashSet<Point> _nightTiles = [];
+        private static xTile.Map? _nightTilesMap;
+
+        /// <summary>The tiles a map swaps for their lit art at night, from its NightTiles property
+        /// ("layer x y index", repeated), read once per map.</summary>
+        private static HashSet<Point> NightTilesOf(GameLocation location)
+        {
+            if (ReferenceEquals(location.Map, _nightTilesMap))
+                return _nightTiles;
+            _nightTilesMap = location.Map;
+            _nightTiles.Clear();
+            if (location.Map?.Properties.TryGetValue("NightTiles", out var value) == true && value != null)
+            {
+                string[] fields = value.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                for (int i = 0; i + 3 < fields.Length; i += 4)
+                    if (int.TryParse(fields[i + 1], out int x) && int.TryParse(fields[i + 2], out int y))
+                        _nightTiles.Add(new Point(x, y));
+            }
+            return _nightTiles;
         }
 
         /// <summary>How far above its own footprint a fireplace's flames burn, in world pixels.

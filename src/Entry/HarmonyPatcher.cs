@@ -34,6 +34,10 @@ namespace SDVRadiance
         /// </summary>
         internal static bool FreezeGameWater;
 
+        /// <summary>When true, the game draws a street lamp's glow into its lightmap at the bulb
+        /// rather than at the foot of the post (see <see cref="LightSourceDraw_Prefix"/>).</summary>
+        internal static bool LampGlowFromBulb;
+
         private static IMonitor? _monitor;
         private static Harmony? _harmony;
         private static bool _loggedFreeze;
@@ -196,6 +200,10 @@ namespace SDVRadiance
                 prefix: new HarmonyMethod(typeof(MistLayers), nameof(MistLayers.LayerDraw_Prefix)));
             // Suppress the vanilla blob shadow while our directional shadow is casting,
             // so casters don't show both. Farmer overrides DrawShadow, so patch both.
+            // A street lamp's own glow in the game's lightmap, drawn from its bulb (see the prefix).
+            TryPatch(harmony, monitor, AccessTools.Method(typeof(LightSource), nameof(LightSource.Draw)),
+                "a street lamp's glow drawn from its bulb",
+                prefix: new HarmonyMethod(typeof(HarmonyPatcher), nameof(LightSourceDraw_Prefix)));
             TryPatch(harmony, monitor, AccessTools.Method(typeof(Character), nameof(Character.DrawShadow)),
                 "hiding the vanilla blob under a character",
                 prefix: new HarmonyMethod(typeof(ShadowSuppression), nameof(ShadowSuppression.DrawShadow_Prefix)));
@@ -1027,6 +1035,39 @@ namespace SDVRadiance
             }
             __instance.waterAnimationIndex = 0;
             if (!_loggedFreeze) { _monitor?.Log("Water frame-cycle frozen (shader ripple active); vertical scroll left running.", LogLevel.Info); _loggedFreeze = true; }
+        }
+
+        /// <summary>
+        /// The game's own glow for a street lamp, drawn into its lightmap at the bulb instead of at
+        /// the foot of the post where the map hangs the light.
+        /// </summary>
+        /// <remarks>
+        /// The pool the player sees at night is mostly this one: the game takes its lightmap away
+        /// from the dark, and where it drew the lamp the night is opened. Radiance's own pool already
+        /// came from the bulb (ShadowRenderer.FlameGlowOffset, the tile the map lights at night), and
+        /// the game's sat two tiles lower round the middle of the post, so the ring the author
+        /// circled round the lamp stayed dark (27 Oct 2026). The light itself is not moved: its
+        /// position is a networked field other mods and the shadows read. Only this one draw is
+        /// placed at the bulb, the game's own arithmetic otherwise, and with Radiance off, or for a
+        /// light with no lit tile above it, the game draws as it always has.
+        /// </remarks>
+        internal static bool LightSourceDraw_Prefix(LightSource __instance, SpriteBatch spriteBatch, GameLocation location, float lightMultiplier)
+        {
+            if (!LampGlowFromBulb || location == null || __instance.fadeOut.Value > 0
+                || __instance.lightContext.Value != LightSource.LightContext.MapLight)
+                return true;
+            Vector2 offset = ShadowRenderer.FlameGlowOffset(location, __instance.position.Value, __instance.textureIndex.Value);
+            if (offset == Vector2.Zero)
+                return true;
+            if (!__instance.IsOnScreen())
+                return false;
+            Texture2D texture = __instance.lightTexture;
+            int lightingQuality = Game1.options.lightingQuality;
+            spriteBatch.Draw(texture, Game1.GlobalToLocal(Game1.viewport, __instance.position.Value + offset) / (lightingQuality / 2),
+                texture.Bounds, __instance.color.Value * lightMultiplier, 0f,
+                new Vector2(texture.Bounds.Width / 2, texture.Bounds.Height / 2),
+                __instance.radius.Value / (lightingQuality / 2), SpriteEffects.None, 0.9f);
+            return false;
         }
     }
 }

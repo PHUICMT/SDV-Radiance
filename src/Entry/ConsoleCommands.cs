@@ -132,6 +132,16 @@ namespace SDVRadiance
             // The same door the F6 tuner will open, reachable from the console so a look can be
             // read out of a post or pasted into one without the menu. Live only, like the command
             // above: keeping a look is the tuner's job, and it says so when a code lands.
+            helper.ConsoleCommands.Add("radiance_fingermenu",
+                "Make the tuner answer a drag the way it does on a phone (radiance_fingermenu on|off): a drag "
+                + "scrolls the page or the tab rail, a sideways drag on a slider moves it, and a press acts when "
+                + "it lifts. For a touch screen, or to try it with a mouse. Lasts until the game closes.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length > 0)
+                        RadianceTunerMenu.FingerGestures = arguments[0].Equals("on", StringComparison.OrdinalIgnoreCase);
+                    monitor.Log($"Finger gestures in the tuner: {(RadianceTunerMenu.FingerGestures ? "on" : "off")}.", LogLevel.Info);
+                });
             helper.ConsoleCommands.Add("radiance_code",
                 "Share your look as a short piece of text, or take somebody else's. "
                 + "'radiance_code' prints the code for the look you are using, "
