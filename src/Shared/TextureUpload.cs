@@ -159,7 +159,12 @@ namespace SDVRadiance
                         ?? throw new InvalidOperationException("GL." + field + " is not loaded");
                     return Marshal.GetFunctionPointerForDelegate(bound);
                 }
-                _bindTexture = (delegate* unmanaged<int, int, void>)Pointer("BindTexture");
+                // The real bind and not the field's delegate: another mod may have replaced that with
+                // one that skips binds (see TextureBindRepair), and an upload would then land in
+                // whichever texture happened to be on the active unit.
+                FieldInfo? bindField = gl.GetField("BindTexture", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+                Delegate? realBind = bindField == null ? null : TextureBindRepair.RealBind(bindField);
+                _bindTexture = (delegate* unmanaged<int, int, void>)(realBind != null ? Marshal.GetFunctionPointerForDelegate(realBind) : Pointer("BindTexture"));
                 _pixelStore = (delegate* unmanaged<int, int, void>)Pointer("PixelStore");
                 _getIntegerv = (delegate* unmanaged<int, int*, void>)Pointer("GetIntegerv");
                 _texImage2D = (delegate* unmanaged<int, int, int, int, int, int, int, int, IntPtr, void>)Pointer("TexImage2D");

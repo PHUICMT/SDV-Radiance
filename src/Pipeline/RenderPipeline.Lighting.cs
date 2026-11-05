@@ -2236,7 +2236,10 @@ namespace SDVRadiance
             // Into the pair's spare, never into the texture the silhouette pass may still be
             // reading from the previous window (TextureDoubleBuffer).
             _floodOccluderBaseTexture = TextureDoubleBuffer.UploadIntoSpare(_device, ref _floodOccluderBaseSpare,
-                _floodOccluderBaseTexture, tilesWide, tilesHigh, SurfaceFormat.Color, "flood occluder mask", _floodOccluderMaskPixels, count);
+                _floodOccluderBaseTexture, tilesWide, tilesHigh, SurfaceFormat.Color, "flood occluder mask", _floodOccluderMaskPixels, count,
+                // DrawOccluderSilhouettes puts this through a sprite batch, where a resampling mod
+                // would swap it for a copy that trails the walk by a few frames.
+                asRenderTarget: TextureBindRepair.ReplacedBy.Length > 0);
             phaseStart = PhaseCost.NoteSince("flood occluders: base upload", phaseStart);
             int maskWidth = tilesWide * FloodOccluderSubdivision, maskHeight = tilesHigh * FloodOccluderSubdivision;
             if (_floodOccluderMask is not RenderTarget2D maskTarget || maskTarget.Width != maskWidth || maskTarget.Height != maskHeight)

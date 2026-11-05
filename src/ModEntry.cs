@@ -768,6 +768,7 @@ namespace SDVRadiance
                 // TextureUnitGuard.CapSamplerSlots): a length check on every frame but the first.
                 TextureUnitGuard.WantedSamplerSlots = _config.LimitSamplerSlots ? TextureUnitGuard.DefaultSamplerSlots : 0;
                 TextureUnitGuard.HoldSamplerSlots(Game1.graphics.GraphicsDevice, Monitor);
+                TextureBindRepair.Hold(Monitor);
             }
             if (e.Step == StardewValley.Mods.RenderSteps.World_AlwaysFront)
                 MistLayers.AlwaysFrontStepBegins();

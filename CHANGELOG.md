@@ -2,6 +2,22 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.4.6 - 2026-11-05
+
+### Fixed
+
+- **Blocks on the ground and reflections in the wrong place with Clear Glasses.** Clear Glasses replaces the game's
+  texture bind with one that skips a bind when the same texture was the
+  last one bound, on any texture unit. This mod binds one texture to two samplers, so the second kept
+  whatever an earlier pass left there: bright and dark blocks that slid with the player, darker water
+  and reflections out of place. The real bind now runs after theirs. The occluder grid also stays out of
+  their resampling, which left faint rectangles for a moment while walking. Reported by atiraxaugust,
+  b0b1234 and donalddts.
+
+### For translators
+
+No new keys.
+
 ## 2.4.5 - 2026-11-02
 
 ### Fixed

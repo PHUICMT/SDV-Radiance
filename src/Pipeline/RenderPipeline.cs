@@ -619,6 +619,8 @@ namespace SDVRadiance
             // Whether the guard that keeps a sheet from being handed this mod's linear sampler is
             // running: a report that says OFF or "not installed" next to a soft mailbox is the whole
             // diagnosis (see TextureUnitGuard).
+            if (TextureBindRepair.ReplacedBy.Length > 0)
+                report.AppendLine($"    texture bind: replaced by {TextureBindRepair.ReplacedBy}, the real bind runs after it");
             report.AppendLine($"    texture unit guard: {(TextureUnitGuard.Installed ? (TextureUnitGuard.Enabled ? "on" : "OFF (radiance_unitguard on)") : "NOT INSTALLED, see the startup log")}, {TextureUnitGuard.Rebinds} slot(s) rebound this session");
             report.AppendLine($"    sampler slots walked per draw call: {(TextureUnitGuard.SamplerSlotCap > 0 ? TextureUnitGuard.SamplerSlotCap.ToString() : "all")} of {TextureUnitGuard.SamplerSlots} the driver reports (radiance_samplerslots)");
             report.AppendLine("presence (0 = contributing nothing this frame):");

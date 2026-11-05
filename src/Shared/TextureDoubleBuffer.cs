@@ -40,15 +40,19 @@ namespace SDVRadiance
         /// counted before this existed - what is tracked stays exactly what was tracked.</param>
         /// <param name="count">Element count for SetData, which is not always width times height:
         /// a byte[] filling a four-byte format passes four elements per texel.</param>
+        /// <param name="asRenderTarget">Make the pair render targets, for a texture that goes through
+        /// a sprite batch while a mod that resamples sprites is loaded: it leaves targets alone.</param>
         internal static Texture2D UploadIntoSpare<T>(GraphicsDevice device, ref Texture2D? spare,
             Texture2D? front, int width, int height, SurfaceFormat format, string? tallyBucket,
-            T[] data, int count) where T : struct
+            T[] data, int count, bool asRenderTarget = false) where T : struct
         {
             if (spare == null || spare.IsDisposed || spare.Width != width || spare.Height != height
-                || spare.Format != format)
+                || spare.Format != format || (asRenderTarget && spare is not RenderTarget2D))
             {
                 spare?.Dispose();
-                var made = new Texture2D(device, width, height, false, format);
+                Texture2D made = asRenderTarget
+                    ? new RenderTarget2D(device, width, height, false, format, DepthFormat.None, 0, RenderTargetUsage.PreserveContents)
+                    : new Texture2D(device, width, height, false, format);
                 spare = tallyBucket != null ? VramTally.Track(made, tallyBucket) : made;
             }
             TextureUpload.SetData(spare, data, 0, count);
