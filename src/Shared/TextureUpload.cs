@@ -163,7 +163,8 @@ namespace SDVRadiance
                 // one that skips binds (see TextureBindRepair), and an upload would then land in
                 // whichever texture happened to be on the active unit.
                 FieldInfo? bindField = gl.GetField("BindTexture", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
-                Delegate? realBind = bindField == null ? null : TextureBindRepair.RealBind(bindField);
+                Delegate? realBind = bindField == null || StardewModdingAPI.Constants.TargetPlatform == StardewModdingAPI.GamePlatform.Android
+                    ? null : TextureBindRepair.RealBind(bindField);
                 _bindTexture = (delegate* unmanaged<int, int, void>)(realBind != null ? Marshal.GetFunctionPointerForDelegate(realBind) : Pointer("BindTexture"));
                 _pixelStore = (delegate* unmanaged<int, int, void>)Pointer("PixelStore");
                 _getIntegerv = (delegate* unmanaged<int, int*, void>)Pointer("GetIntegerv");

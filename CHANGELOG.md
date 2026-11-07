@@ -2,6 +2,20 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.4.7 - 2026-11-07
+
+### Fixed
+
+- **The game slowed to a crawl on Android with 2.4.6.** The check added in 2.4.6 for a mod that
+  replaces the texture bind took the phone's own bind for one, and chained the real bind on again every
+  frame. Each bind then ran once more for every frame played, so after a few minutes a single step took
+  seconds, with the mod switched off too. The check now skips phones and counts only a delegate from a
+  mod's own folder, and the chain is made once. Reported by rabbitlic.
+
+### For translators
+
+No new keys.
+
 ## 2.4.6 - 2026-11-05
 
 ### Fixed

@@ -1,4 +1,6 @@
 using System;
+using System.IO;
+using System.Linq;
 using System.Reflection;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
@@ -20,17 +22,27 @@ namespace SDVRadiance
     ///
     /// <para>The swap is a plain field write, not a Harmony patch, so taking that mod's patches away
     /// changes nothing. The real bind is chained after the other mod's delegate rather than in place
-    /// of it, so its record of the last texture stays right for its own code. A game with no such
-    /// mod never gets past the first check.</para>
+    /// of it, so its record of the last texture stays right for its own code.</para>
+    ///
+    /// <para>Only a delegate from a mod's assembly counts as a replacement, and the real
+    /// bind is chained once. 2.4.6 took any delegate whose method was not declared in MonoGame for a
+    /// replacement. On Android the game's own native bind is declared elsewhere, so the real bind
+    /// was chained on every frame, each texture bind ran once more per frame played, and the game
+    /// slowed until a step took seconds, with this mod switched off too.</para>
     /// </summary>
     internal static class TextureBindRepair
     {
         private static FieldInfo? _bindField;
         private static Delegate? _realBind;
+        private static Delegate? _chainWritten;
         private static bool _gaveUp;
 
         /// <summary>The mod whose bind was found replaced, for the report; empty when none was.</summary>
         internal static string ReplacedBy { get; private set; } = "";
+
+        /// <summary>How many calls one texture bind makes now, for the report: 2 after a repair.</summary>
+        internal static int BindCallsPerBind =>
+            _bindField?.GetValue(null) is Delegate current ? current.GetInvocationList().Length : 0;
 
         /// <summary>Once a frame. The other mod makes its swap whenever its GL code is first
         /// touched, which can be long after launch, so this cannot be a one-time check.</summary>
@@ -38,6 +50,13 @@ namespace SDVRadiance
         {
             if (_gaveUp)
                 return;
+            // Clear Glasses and SpriteMaster are desktop mods, and the phone's own bind is not
+            // MonoGame's type, so there is nothing here to repair and a wrong guess costs every frame.
+            if (Constants.TargetPlatform == GamePlatform.Android)
+            {
+                _gaveUp = true;
+                return;
+            }
             try
             {
                 Assembly monoGame = typeof(Texture2D).Assembly;
@@ -45,10 +64,12 @@ namespace SDVRadiance
                     BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
                 if (_bindField?.GetValue(null) is not Delegate current)
                     return;
-                // A native delegate reports its own delegate type, which lives in MonoGame, and so
-                // does a chain once the real bind is the last link of it.
+                if (ReferenceEquals(current, _chainWritten))
+                    return;
+                if (_realBind != null && current.GetInvocationList().Contains(_realBind))
+                    return;
                 Assembly? owner = current.Method.DeclaringType?.Assembly;
-                if (owner == monoGame || owner == null)
+                if (owner == null || owner == monoGame || !IsModAssembly(owner))
                     return;
                 _realBind ??= LoadRealBind(_bindField);
                 if (_realBind == null)
@@ -57,7 +78,8 @@ namespace SDVRadiance
                     monitor.Log($"{owner.GetName().Name} replaced the texture bind and the real one could not be loaded.", LogLevel.Warn);
                     return;
                 }
-                _bindField.SetValue(null, Delegate.Combine(current, _realBind));
+                _chainWritten = Delegate.Combine(current, _realBind);
+                _bindField.SetValue(null, _chainWritten);
                 ReplacedBy = owner.GetName().Name ?? "another mod";
                 monitor.Log($"{ReplacedBy} replaced the game's texture bind with one that skips binds this mod's "
                     + "shaders need. The real bind now runs after it.", LogLevel.Info);
@@ -67,6 +89,16 @@ namespace SDVRadiance
                 _gaveUp = true;
                 monitor.Log($"could not check the texture bind ({ex.GetType().Name}: {ex.Message}).", LogLevel.Debug);
             }
+        }
+
+        /// <summary>Whether the assembly is a SMAPI mod's: loaded from a folder that holds a
+        /// manifest.json. The game, MonoGame and the runtime never sit beside one.</summary>
+        private static bool IsModAssembly(Assembly assembly)
+        {
+            if (assembly.IsDynamic || string.IsNullOrEmpty(assembly.Location))
+                return false;
+            string? folder = Path.GetDirectoryName(assembly.Location);
+            return folder != null && File.Exists(Path.Combine(folder, "manifest.json"));
         }
 
         /// <summary>The real glBindTexture, for code that keeps a raw pointer to it: a pointer taken
