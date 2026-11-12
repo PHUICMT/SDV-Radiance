@@ -20,14 +20,14 @@ namespace SDVRadiance
         private const float VanillaCanopyShadowDepth = 1E-06f;
 
         // The five switches below read false while the game takes a map screenshot: this mod
-        // stands down for that picture (see HarmonyPatcher.GameIsTakingMapScreenshot), so the
+        // stands down for that picture (see HarmonyPatcher.StandingAside), so the
         // game's own shadows have to be in it. The update tick keeps setting them as before.
 
         private static bool _suppressVanillaShadows;
         /// <summary>When true, the vanilla blob shadow is skipped (we draw a directional one instead).</summary>
         internal static bool SuppressVanillaShadows
         {
-            get => _suppressVanillaShadows && !HarmonyPatcher.GameIsTakingMapScreenshot;
+            get => _suppressVanillaShadows && !HarmonyPatcher.StandingAside;
             set => _suppressVanillaShadows = value;
         }
 
@@ -35,7 +35,7 @@ namespace SDVRadiance
         /// <summary>When true, vanilla tree/bush baked blob shadows are skipped (our object shadows replace them).</summary>
         internal static bool SuppressVanillaObjectShadows
         {
-            get => _suppressVanillaObjectShadows && !HarmonyPatcher.GameIsTakingMapScreenshot;
+            get => _suppressVanillaObjectShadows && !HarmonyPatcher.StandingAside;
             set => _suppressVanillaObjectShadows = value;
         }
 
@@ -44,7 +44,7 @@ namespace SDVRadiance
         /// skipped. Gated on ShadowsActiveNow so it also covers the indoor/night ambient path.</summary>
         internal static bool SuppressVanillaBlobShadows
         {
-            get => _suppressVanillaBlobShadows && !HarmonyPatcher.GameIsTakingMapScreenshot;
+            get => _suppressVanillaBlobShadows && !HarmonyPatcher.StandingAside;
             set => _suppressVanillaBlobShadows = value;
         }
 
@@ -53,7 +53,7 @@ namespace SDVRadiance
         /// shadows replace them — sun path only, so rainy days keep the vanilla blob).</summary>
         internal static bool SuppressVanillaCritterShadows
         {
-            get => _suppressVanillaCritterShadows && !HarmonyPatcher.GameIsTakingMapScreenshot;
+            get => _suppressVanillaCritterShadows && !HarmonyPatcher.StandingAside;
             set => _suppressVanillaCritterShadows = value;
         }
 
@@ -61,7 +61,7 @@ namespace SDVRadiance
         /// <summary>When true, the vanilla drifting Cloud critter shadow is hidden.</summary>
         internal static bool SuppressVanillaClouds
         {
-            get => _suppressVanillaClouds && !HarmonyPatcher.GameIsTakingMapScreenshot;
+            get => _suppressVanillaClouds && !HarmonyPatcher.StandingAside;
             set => _suppressVanillaClouds = value;
         }
 

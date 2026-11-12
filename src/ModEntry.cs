@@ -37,7 +37,7 @@ namespace SDVRadiance
         internal static string SVersion = "?";
 
         /// <summary>True only when the mod is on AND at least one implemented effect is switched on.</summary>
-        private bool EffectsActive => _config.Enabled &&
+        private bool EffectsActive => _config.Enabled && !ZoomGuard.TooFarOut &&
             (_config.BloomEnabled || _config.ColorGradeEnabled || _config.GodRaysEnabled
              || _config.FogEnabled || _config.FogNightMist || _config.CloudShadowEnabled || _config.TiltShiftEnabled
              || _config.WaterEnabled || _config.WaterReflection || _config.WindowReflectionEnabled
@@ -414,11 +414,13 @@ namespace SDVRadiance
             // frame — otherwise decorative indoor water (with the effect turned off there) would
             // sit frozen instead of playing its normal vanilla animation.
             bool waterHere = RenderPipeline.WaterAllowedIn(Game1.currentLocation, _config);
-            HarmonyPatcher.FreezeGameWater = _config.Enabled && _config.WaterEnabled && waterHere;
-            HarmonyPatcher.LampGlowFromBulb = _config.Enabled;
-            WaterDrawHook.Enabled = _config.Enabled && (_config.WaterEnabled || _config.WaterReflection);
+            ZoomGuard.NoteChange(Monitor);
+            bool modOn = _config.Enabled && !ZoomGuard.TooFarOut;
+            HarmonyPatcher.FreezeGameWater = modOn && _config.WaterEnabled && waterHere;
+            HarmonyPatcher.LampGlowFromBulb = modOn;
+            WaterDrawHook.Enabled = modOn && (_config.WaterEnabled || _config.WaterReflection);
             // Also read by the window reflection, for glass on art a location draws for itself (the bus).
-            LocationDrawHook.Enabled = WaterDrawHook.Enabled || (_config.Enabled && _config.WindowReflectionEnabled);
+            LocationDrawHook.Enabled = WaterDrawHook.Enabled || (modOn && _config.WindowReflectionEnabled);
             // SPLIT SCREEN TRACE (radiance_screenwatch). This handler runs once per SCREEN per
             // frame, and every expensive cache below it reuses its work while the camera has not
             // moved. With two cameras taking turns, each pass moves the origin the next pass is
@@ -427,7 +429,7 @@ namespace SDVRadiance
             bool watching = ScreenWatchFrames > 0;
             if (watching)
                 ScreenWatchFrames--;
-            if (HarmonyPatcher.GameIsTakingMapScreenshot)
+            if (HarmonyPatcher.StandingAside)
                 return;
             if (!EffectsActive && !RenderPipeline.DumpPending)
             {
@@ -530,7 +532,7 @@ namespace SDVRadiance
             HarmonyPatcher.HoistCastMeter = HarmonyPatcher.HoistMineFloorNumber;
             // A map screenshot is the game's own picture of the whole location, drawn in chunks:
             // no bakes, shadows, reflections or chain for it (see GameIsTakingMapScreenshot).
-            if (!_config.Enabled || HarmonyPatcher.GameIsTakingMapScreenshot)
+            if (!_config.Enabled || HarmonyPatcher.StandingAside)
                 return;
             // Author freeze: the game's own draw-time clock is pinned along with ours, or a
             // campfire's flame keeps two captures of one frozen frame from ever matching.
@@ -777,7 +779,7 @@ namespace SDVRadiance
             // The sorted world batch is what the sprite relief replays (see SpriteDrawRecorder);
             // the recorder decides for itself whether anyone wants this frame.
             SpriteDrawRecorder.BeginWorldSorted();
-            if (!_config.Enabled || HarmonyPatcher.GameIsTakingMapScreenshot)
+            if (!_config.Enabled || HarmonyPatcher.StandingAside)
                 return;
             // The people in the glass go into the same sorted batch, at the sill's depth, so a
             // body in front of a window covers its own reflection.
@@ -826,7 +828,7 @@ namespace SDVRadiance
             // The game has just drawn its own lights into its lightmap and the batch is still
             // open on it: the one moment our lit windows can push the night back too.
             else if (e.Step == StardewValley.Mods.RenderSteps.World_RenderLightmap
-                     && _config.Enabled && WorldReady.Now && !HarmonyPatcher.GameIsTakingMapScreenshot)
+                     && _config.Enabled && WorldReady.Now && !HarmonyPatcher.StandingAside)
             {
                 _pipeline?.DrawWindowGlowIntoGameLightmap(e.SpriteBatch, _config);
                 _pipeline?.DrawParticleGlowIntoGameLightmap(e.SpriteBatch, _config);
@@ -884,14 +886,14 @@ namespace SDVRadiance
             // Each release decides for itself whether its resource is wanted RIGHT NOW, rather
             // than trusting some render path to have reset a counter. The render paths are the
             // ones that stop running when the mod is switched off, which is the whole problem.
-            bool shadowsWanted = _config.Enabled
+            bool shadowsWanted = _config.Enabled && !ZoomGuard.TooFarOut
                 && (_config.DirectionalShadowsEnabled || _config.WaterReflection);
             _shadows?.ReleaseIdleTargets(shadowsWanted);
             Pipeline.ReleaseIdleChainTargets(EffectsActive);
             // Glass that returns the street wants the mirror's scenery as much as water does. Left
             // out, a street with windows and no water released the cache every five seconds and
             // rebuilt the whole of it on the next frame.
-            Pipeline.ReleaseIdleWaterTargets(_config.Enabled
+            Pipeline.ReleaseIdleWaterTargets(_config.Enabled && !ZoomGuard.TooFarOut
                 && (((_config.WaterEnabled || _config.WaterReflection)
                         && (Pipeline.AnyScreenHasWaterOnScreen || Pipeline.AnyScreenLocationHasWater))
                     || Pipeline.WetWorldWantsEntityMirror

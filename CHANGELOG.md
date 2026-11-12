@@ -2,6 +2,21 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.4.8 - 2026-11-12
+
+### Fixed
+
+- **Zooming far out with a zoom mod could make the screen flash or shake.** The game draws the world
+  into a buffer the size of the window divided by the zoom, and this mod sized its own buffers from
+  it, so a 5 % zoom asked for 26 GB of graphics memory. Past four times a 4K screen (a 1080p window
+  at 25 % zoom) the mod now stands aside the way it does for the game's map screenshot and gives the
+  memory back; zooming back in brings the effects back with their usual fade. The most it holds on
+  the way out is about 720 MB. Reported by VerineYT.
+
+### For translators
+
+No new keys.
+
 ## 2.4.7 - 2026-11-07
 
 ### Fixed

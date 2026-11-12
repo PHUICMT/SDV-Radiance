@@ -332,7 +332,7 @@ namespace SDVRadiance
             if (AnotherModOwnsWeatherDraw
                 || (AnotherModOwnsSnowDraw && Game1.currentLocation?.IsSnowingHere() == true)
                 || !_vanillaWeather.TryGetValue(screenId, out var state) || !state.WaterStageRuns
-                || HarmonyPatcher.GameIsTakingMapScreenshot || Game1.currentLocation is not { IsOutdoors: true })
+                || HarmonyPatcher.StandingAside || Game1.currentLocation is not { IsOutdoors: true })
                 return false;
             // Only while the pipeline is still running and still says the water stage runs. With
             // the mod switched off it says nothing more, and the flag it last set held the game's

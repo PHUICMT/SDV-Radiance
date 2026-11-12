@@ -104,7 +104,7 @@ namespace SDVRadiance
         /// step while the water stage carries it.</summary>
         internal static bool LayerDraw_Prefix(Layer __instance)
         {
-            if (!_inAlwaysFrontStep || _drawingOurselves || HarmonyPatcher.GameIsTakingMapScreenshot)
+            if (!_inAlwaysFrontStep || _drawingOurselves || HarmonyPatcher.StandingAside)
                 return true;
             if (!_screens.TryGetValue(Context.ScreenId, out ScreenMist? screen)
                 || Game1.ticks - screen.HoldAskedTick > HoldLifetimeTicks

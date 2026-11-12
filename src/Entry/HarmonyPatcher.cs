@@ -556,6 +556,11 @@ namespace SDVRadiance
         /// this mod borrows the same flag for the mine floor number. Everything this mod draws is
         /// built around one camera on one screen; a map screenshot walks the whole location in
         /// chunks, so the mod stands down for it and the picture is the game's own.</summary>
+        /// <summary>The mod draws nothing of its own this frame and leaves the picture to the game:
+        /// for the game's map screenshot, and when the camera is zoomed out past what the mod can
+        /// hold (see <see cref="ZoomGuard"/>).</summary>
+        internal static bool StandingAside => GameIsTakingMapScreenshot || ZoomGuard.TooFarOut;
+
         internal static bool GameIsTakingMapScreenshot =>
             Game1.game1?.takingMapScreenshot == true && !_mapScreenshotFlagHeld && !MapScreenshotEffects.Active;
         /// <summary>Set once a frame by ModEntry: whether the effect chain will run on this frame,
@@ -827,7 +832,7 @@ namespace SDVRadiance
             // Not while the game takes a map screenshot: it draws the location in chunks into a
             // render target of its own, and forcing the buffer sent the world into the buffer
             // instead, so the saved picture was black with only this mod's overlays on it.
-            if (ForceBufferDraw && Game1.gameMode == Game1.playingGameMode && !GameIsTakingMapScreenshot)
+            if (ForceBufferDraw && Game1.gameMode == Game1.playingGameMode && !StandingAside)
                 __result = true;
         }
 
