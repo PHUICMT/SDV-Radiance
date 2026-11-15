@@ -69,12 +69,17 @@ def main():
     parser.add_argument("--labels", required=True, help="the export painted against that art")
     parser.add_argument("--passes", nargs="+", required=True, help="fingerprint pass names for that art")
     parser.add_argument("--sheets", help="only these sheets, comma separated")
+    parser.add_argument("--mods", default="",
+                        help="UniqueIDs of the pack that draws this art, comma separated. Needed for tiles the "
+                             "base game has no label on (windows the pack added): the mod only reads a variant "
+                             "there when it knows which installed pack owns the tile")
     args = parser.parse_args()
 
     base = painted_tiles(read_json(SHIPPED_LABELS))
     painted = painted_tiles(read_json(args.labels))
     art = fingerprints_from(args.passes)
     only = {s.strip() for s in args.sheets.split(",")} if args.sheets else None
+    mods = [m.strip() for m in args.mods.split(",") if m.strip()]
 
     sheets_out, written, skipped_same, skipped_unfingerprinted = {}, 0, 0, 0
     for sheet, tiles in painted.items():
@@ -94,7 +99,7 @@ def main():
             except Exception:
                 continue
             sheets_out.setdefault(sheet, {}).setdefault(index, []).append(
-                {"source": args.name, "art": prints, "label": label})
+                dict({"source": args.name, "art": prints, "label": label}, **({"mods": mods} if mods else {})))
             written += 1
 
     existing = read_json(VARIANTS) if os.path.exists(VARIANTS) else {"format": 1, "sources": {}, "sheets": {}}

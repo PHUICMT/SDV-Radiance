@@ -2757,10 +2757,16 @@ namespace SDVRadiance
         /// act on, and it is four kilobytes to bring back off the card.</summary>
         private const int LuminanceProbeSize = 32;
 
-        /// <summary>How long the probe is left alone before it is read. One tick: it was written
-        /// during the last frame's draw, so the read happens on the next update rather than in
-        /// the middle of the frame that wrote it.</summary>
-        private const int ExposureReadDelayTicks = 1;
+        /// <summary>How long the probe is left alone before it is read. It was one tick, the next
+        /// update after the draw that wrote it, and that is not long enough when the card is the
+        /// slow part: the driver lets the game queue two or three frames ahead of the card, and a
+        /// read of a probe the card has not drawn yet waits for it. A player's laptop report
+        /// counted 2092 such waits in one sitting, the worst 60.8 ms, a hitch twice a second on a
+        /// machine that was already short of frames. A slow frame also runs two updates, so ticks
+        /// pass faster than frames there. Eight ticks is two to four frames of queue at any frame
+        /// rate the game runs at, and the reading is only taken twice a second and eased over
+        /// seconds, so being a tenth of a second older changes nothing anyone can see.</summary>
+        private const int ExposureReadDelayTicks = 8;
 
         /// <summary>Frames between readings. Every reading costs a sync with the card whenever it
         /// is taken, however old the thing being read is and wherever it is taken from, so the

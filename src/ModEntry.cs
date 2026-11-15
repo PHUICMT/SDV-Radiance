@@ -526,8 +526,12 @@ namespace SDVRadiance
             MapScreenshotEffects.Enabled = _config.Enabled && _config.MapScreenshotEffects;
             SheetUpscaler.BeginFrame();
             // The mine's floor number leaves the world layer whenever the chain will run over it,
-            // and OnRenderedWorld draws it back after the chain.
-            HarmonyPatcher.HoistMineFloorNumber = EffectsActive && !(Game1.game1?.takingMapScreenshot ?? false);
+            // and OnRenderedWorld draws it back after the chain. Not on a phone: the redraw copies
+            // the PC layout, and the phone's HUD lays these out its own way, so a player on Android
+            // saw no floor number at all in the mines or Skull Cavern. There the game draws them
+            // itself, as it does with the mod switched off.
+            HarmonyPatcher.HoistMineFloorNumber = EffectsActive && !(Game1.game1?.takingMapScreenshot ?? false)
+                && StardewModdingAPI.Constants.TargetPlatform != StardewModdingAPI.GamePlatform.Android;
             // The fishing cast meter likewise, so the water does not mirror it.
             HarmonyPatcher.HoistCastMeter = HarmonyPatcher.HoistMineFloorNumber;
             // A map screenshot is the game's own picture of the whole location, drawn in chunks:

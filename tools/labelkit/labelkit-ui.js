@@ -51,6 +51,9 @@ const LabelKit = (() => {
     others: '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1" opacity=".5"/><rect x="4" y="13" width="7" height="7" rx="1" opacity=".5"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
     sheet: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>',
     map: '<path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/>',
+    window: '<rect x="4" y="3" width="16" height="18" rx="1"/><path d="M12 3v18M4 12h16"/>',
+    glass: '<rect x="4" y="3" width="16" height="18" rx="1"/><path d="M8 11l4-4M9 16l7-7"/>',
+    mirror: '<ellipse cx="12" cy="11" rx="6" ry="8"/><path d="M12 19v3M9 22h6"/>',
   };
   function icon(name) {
     return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ""}</svg>`;

@@ -2,6 +2,41 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.4.9 - 2026-11-15
+
+### Fixed
+
+- **No window reflections with Vibrant Pastoral Recolor.** Its town and outdoor sheets are drawn again,
+  so the glass labels did not recognise the art and were set aside, and shop windows such as Pierre's and
+  JojaMart's showed nothing. The art it draws is now known for those labels: all 23 panes in Town come
+  back in every season. Reported by ospreyboy.
+- **The movie theater's door reflection spilled onto the wall with Elle's Town Buildings.** Its door is
+  narrower than the base game's, and outside spring nothing told the mod the art had changed, so the
+  glass kept the old door's shape. The theater now has glass painted for Elle's door, in all four of
+  its palettes, and the town's glass knows the base game's art in every season, so a building that
+  another pack redraws loses its reflection instead of smearing it. Reported by Isalmonlikeit.
+- **The rest of Elle's Town Buildings had glass and water in the base game's places.** Every other
+  building the pack redraws now has its own labels, in all four palettes and seasons: windows the pack
+  added reflect too, the bathhouse's longer pool is water to its edges, and the signs on JojaMart's
+  glass are left out. Reported by Isalmonlikeit.
+- **Rain cost far more CPU with Wet ground on, most of all on a planted farm.** The water reflection
+  asked the wet ground's "is this near water" test, which says yes everywhere so that every sprite can
+  stand in front of a puddle, and so it drew every tree, bush and tuft of grass on screen into a picture
+  only the water reads. It now asks about real water. Measured on a planted farm in the rain: the
+  reflection 1.8 ms a frame before, 0.2 after, the same as with Wet ground off. Reported by Luca240.
+- **No floor number in the mines or Skull Cavern on Android.** The mod takes the number out of the
+  world layer so its effects do not blur or tint it, and draws it back afterwards in the PC's layout,
+  which the phone's screen does not use. On Android the game now draws it itself, as it does with the
+  mod switched off; the fishing cast meter and the caught-fish box go the same way. Reported by
+  rabbitlic.
+- **Hitches on machines where the graphics card is the slow part.** The brightness meter read its
+  probe back one tick after drawing it, and a card running a few frames behind made the game wait
+  for it, up to 60 ms twice a second in one player's report. It now waits eight ticks before reading.
+
+### For translators
+
+No new keys.
+
 ## 2.4.8 - 2026-11-12
 
 ### Fixed

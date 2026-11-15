@@ -563,8 +563,12 @@ class LabelEditor {
       event.preventDefault();
       const box = big.getBoundingClientRect(), mx = event.clientX - box.left, my = event.clientY - box.top;
       const before = this.zoom;
-      let zoom = before * (event.deltaY < 0 ? 1.25 : 0.8);
-      zoom = Math.max(0.25, Math.min(64, Math.round(zoom * 4) / 4));
+      // Quarter steps from 1 up; below 1 the steps are finer, or a fitted tall sheet (zoom near
+      // 0.3) rounds back to where it was and the wheel does nothing.
+      const raw = before * (event.deltaY < 0 ? 1.25 : 0.8);
+      let zoom = raw >= 1 ? Math.round(raw * 4) / 4 : Math.round(raw * 32) / 32;
+      if (zoom === before) zoom = before + (event.deltaY < 0 ? 1 / 32 : -1 / 32);
+      zoom = Math.max(1 / 16, Math.min(64, zoom));
       this.panX = mx - (mx - this.panX) * zoom / before;
       this.panY = my - (my - this.panY) * zoom / before;
       this.zoom = zoom; this.render();

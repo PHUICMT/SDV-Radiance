@@ -701,13 +701,21 @@ namespace SDVRadiance
             }
         }
 
-        private bool WaterWithinTiles(int tileX, int tileY, int radiusTiles)
+        /// <summary>The sprite mask's near-water test: while the wet ground is drawn every sprite
+        /// stands in front of a puddle, so the answer is yes everywhere.</summary>
+        private bool WaterWithinTiles(int tileX, int tileY, int radiusTiles) =>
+            WetWantsEverySprite || WaterReallyWithinTiles(tileX, tileY, radiusTiles);
+
+        /// <summary>The entity mirror's near-water test. Yes everywhere only while puddles are
+        /// made from the mirror, which is the phone's road. On a computer the puddles mirror the
+        /// frame itself, and the sprite mask's "everywhere" had the mirror stamp every tree and
+        /// tuft of grass on screen for nothing: a planted farm in the rain paid about six times
+        /// the mirror's usual cost for a picture no puddle read.</summary>
+        private bool MirrorWaterWithinTiles(int tileX, int tileY, int radiusTiles) =>
+            _wetPuddleMirrorWanted || WaterReallyWithinTiles(tileX, tileY, radiusTiles);
+
+        private bool WaterReallyWithinTiles(int tileX, int tileY, int radiusTiles)
         {
-            // Wet puddles mirror entities anywhere on the map, so while they are live the
-            // near-water cull must answer yes everywhere - it was written when water was the
-            // only thing a reflection could land on.
-            if (WetWantsEverySprite)
-                return true;
             bool[]? flags = _waterTilesInMask;
             if (flags == null || _waterMask == null)
                 return true;
@@ -769,12 +777,20 @@ namespace SDVRadiance
         /// </summary>
         /// <returns>False when nothing in the walk can qualify, so the caller can skip it whole.</returns>
         private bool ClampWalkToWater(int downOffsetTiles, int radiusTiles,
-            ref int x0, ref int x1, ref int y0, ref int y1)
-        {
+            ref int x0, ref int x1, ref int y0, ref int y1) =>
             // While the wet ground is drawn the per-tile test answers yes everywhere, so the walk
             // must not be narrowed to the water either: a tree in a dry plaza stands on a puddle.
-            if (WetWantsEverySprite)
-                return true;
+            WetWantsEverySprite || ClampWalkToRealWater(downOffsetTiles, radiusTiles, ref x0, ref x1, ref y0, ref y1);
+
+        /// <summary><see cref="ClampWalkToWater"/> for the entity mirror, by the same rule as
+        /// <see cref="MirrorWaterWithinTiles"/>.</summary>
+        private bool MirrorClampWalkToWater(int downOffsetTiles, int radiusTiles,
+            ref int x0, ref int x1, ref int y0, ref int y1) =>
+            _wetPuddleMirrorWanted || ClampWalkToRealWater(downOffsetTiles, radiusTiles, ref x0, ref x1, ref y0, ref y1);
+
+        private bool ClampWalkToRealWater(int downOffsetTiles, int radiusTiles,
+            ref int x0, ref int x1, ref int y0, ref int y1)
+        {
             bool[]? flags = _waterTilesInMask;
             if (flags == null || _waterMask == null)
                 return true;    // unknown answers yes, exactly as the per-tile test does

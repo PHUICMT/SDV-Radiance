@@ -442,7 +442,7 @@ namespace SDVRadiance
                 Rectangle characterBox = character.GetBoundingBox();
                 // The same reach gate the hand-built stamp uses: the mirror hangs downward, so only
                 // bodies whose mirror can land on water are worth a slot.
-                if (!WaterWithinTiles(characterBox.Center.X / 64, characterBox.Bottom / 64 + 2, 4))
+                if (!MirrorWaterWithinTiles(characterBox.Center.X / 64, characterBox.Bottom / 64 + 2, 4))
                     continue;
                 // And only bodies the game itself will draw. Its own draw paints nothing for a
                 // body more than two tiles off the screen, so a creature standing above the view
@@ -467,7 +467,7 @@ namespace SDVRadiance
                 if (animal?.Sprite?.Texture == null)
                     continue;
                 Rectangle animalBox = animal.GetBoundingBox();
-                if (!WaterWithinTiles(animalBox.Center.X / 64, animalBox.Bottom / 64 + 2, 4))
+                if (!MirrorWaterWithinTiles(animalBox.Center.X / 64, animalBox.Bottom / 64 + 2, 4))
                     continue;
                 if (!SelfDrawnBodyIsDrawn(animalBox))
                     continue;
@@ -1016,7 +1016,7 @@ namespace SDVRadiance
                 if (_selfDrawnMirrorTaken.Contains(character))
                     continue;
                 Rectangle characterBox = character.GetBoundingBox();
-                if (!WaterWithinTiles(characterBox.Center.X / 64, characterBox.Bottom / 64 + 2, 4))
+                if (!MirrorWaterWithinTiles(characterBox.Center.X / 64, characterBox.Bottom / 64 + 2, 4))
                     continue;
                 // Where the game REALLY draws this frame (NPC.draw: anchor at position +
                 // bbHeight/2 + drawOffset, origin at 3/4 of the frame height, scale 4):
@@ -1156,7 +1156,7 @@ namespace SDVRadiance
                 if (_selfDrawnMirrorTaken.Contains(animal))
                     continue;
                 Rectangle animalBox = animal.GetBoundingBox();
-                if (!WaterWithinTiles(animalBox.Center.X / 64, animalBox.Bottom / 64 + 2, 4))
+                if (!MirrorWaterWithinTiles(animalBox.Center.X / 64, animalBox.Bottom / 64 + 2, 4))
                     continue;
                 StampFlipped(spriteBatch, animal.Sprite.Texture, animal.Sprite.SourceRect, animalBox);
             }
@@ -1170,7 +1170,7 @@ namespace SDVRadiance
                     // Same stamp every body uses (one anchor rule, the same feet->head
                     // fade): a butterfly's reflection was drawn at full opacity by its own
                     // code path while every body faded, so it read as a sticker.
-                    if (!WaterWithinTiles((int)(critter.position.X / 64f), (int)(critter.position.Y / 64f) + 2, 4))
+                    if (!MirrorWaterWithinTiles((int)(critter.position.X / 64f), (int)(critter.position.Y / 64f) + 2, 4))
                         continue;
                     Rectangle critterSourceRect = critter.sprite.SourceRect;
                     var critterBox = new Rectangle((int)critter.position.X - critterSourceRect.Width * 2,
@@ -1211,7 +1211,7 @@ namespace SDVRadiance
             int objectTileY0 = (int)Math.Floor((viewport.Y - 128) / 64f), objectTileY1 = (int)Math.Floor((viewport.Y + viewport.Height + 192) / 64f);
             // An object is one tile tall and its mirror hangs a tile or two under it, so the walk
             // needs far less slack than a tree's.
-            if (!ClampWalkToWater(1, 2, ref objectTileX0, ref objectTileX1, ref objectTileY0, ref objectTileY1))
+            if (!MirrorClampWalkToWater(1, 2, ref objectTileX0, ref objectTileX1, ref objectTileY0, ref objectTileY1))
                 return;
             var surfaceMap = SurfaceMap.For(location);
             for (int tileY = objectTileY0; tileY <= objectTileY1; tileY++)
@@ -1220,7 +1220,7 @@ namespace SDVRadiance
                 if (!location.objects.TryGetValue(new Vector2(tileX, tileY), out var placedObject) || placedObject == null)
                     continue;
                 bool standsOnWater = surfaceMap != null ? surfaceMap.IsWater(tileX, tileY) : location.isWaterTile(tileX, tileY);
-                if (!standsOnWater || !WaterWithinTiles(tileX, tileY + 1, 2))
+                if (!standsOnWater || !MirrorWaterWithinTiles(tileX, tileY + 1, 2))
                     continue;
 
                 // A crab pot: its own sheet, its own frame while it holds a catch, and its own
@@ -1325,7 +1325,7 @@ namespace SDVRadiance
                 bool centredOnPosition = sprite.Texture != null && sprite.vectorScale != Vector2.Zero;
                 float centerX = centredOnPosition ? sprite.Position.X : sprite.Position.X + drawnWidth / 2f;
                 float feetY = centredOnPosition ? sprite.Position.Y + drawnHeight / 2f : sprite.Position.Y + drawnHeight;
-                if (!WaterWithinTiles((int)(centerX / 64f), (int)(feetY / 64f) + 1, 2))
+                if (!MirrorWaterWithinTiles((int)(centerX / 64f), (int)(feetY / 64f) + 1, 2))
                     continue;
                 if (sprite.rotation == 0f && FloatsOnWater(location, centerX, feetY - drawnHeight, feetY))
                     StampFloatingReflection(spriteBatch, texture, sourceRect, centerX, feetY, scale,
@@ -1357,7 +1357,7 @@ namespace SDVRadiance
                 Vector2 bobber = rod.bobber.Value;
                 if (bobber == Vector2.Zero)
                     continue;
-                if (!WaterWithinTiles((int)(bobber.X / 64f), (int)(bobber.Y / 64f) + 1, 2))
+                if (!MirrorWaterWithinTiles((int)(bobber.X / 64f), (int)(bobber.Y / 64f) + 1, 2))
                     continue;
                 // The floating frame is the lower half of a 16x32 bobber, drawn about an (8,8)
                 // origin at four times: a 64 px square centred on the point, the float itself in
@@ -1467,7 +1467,7 @@ namespace SDVRadiance
             // Same sweep, same gate, same narrowing as the sprite mask: outside the water's own
             // box grown by the reach below, WaterWithinTiles cannot answer yes, so those tiles
             // were only ever visited to be turned away.
-            if (ClampWalkToWater(4, plantReach, ref plantTileX0, ref plantTileX1, ref plantTileY0, ref plantTileY1))
+            if (MirrorClampWalkToWater(4, plantReach, ref plantTileX0, ref plantTileX1, ref plantTileY0, ref plantTileY1))
             for (int tileY = plantTileY0; tileY <= plantTileY1; tileY++)
             for (int tileX = plantTileX0; tileX <= plantTileX1; tileX++)
             {
@@ -1477,7 +1477,7 @@ namespace SDVRadiance
                 // A tree's mirror hangs BELOW its trunk and a crown is six tiles tall, then
                 // stretched by MirrorSquash — so the reach downward has to be the largest of
                 // any stamp here. Centred four tiles under the base with slack on both sides.
-                if (!WaterWithinTiles(tileX, tileY + 4, plantReach))
+                if (!MirrorWaterWithinTiles(tileX, tileY + 4, plantReach))
                     continue;
                 switch (feature)
                 {
@@ -1538,7 +1538,7 @@ namespace SDVRadiance
                 if (largeFeature is not StardewValley.TerrainFeatures.Bush largeBush || largeBush.sourceRect.Value.IsEmpty)
                     continue;
                 Vector2 largeBushTile = largeBush.Tile;
-                if (!WaterWithinTiles((int)largeBushTile.X, (int)largeBushTile.Y + 4, plantReach))
+                if (!MirrorWaterWithinTiles((int)largeBushTile.X, (int)largeBushTile.Y + 4, plantReach))
                     continue;
                 StampBushReflection(spriteBatch, largeBush, largeBushTile);
             }
@@ -1575,7 +1575,7 @@ namespace SDVRadiance
                 float buildingCentreX = building.tileX.Value * 64f + buildingDrawOffset.X + buildingSourceRect.Width * 2f;
                 // Reaches further than anything else here: a barn is six source tiles tall and
                 // the mirror stretches that again, so the water it can land on is a long way down.
-                if (!WaterWithinTiles((int)(buildingCentreX / 64f), (int)(buildingBaseY / 64f) + 5, buildingReach))
+                if (!MirrorWaterWithinTiles((int)(buildingCentreX / 64f), (int)(buildingBaseY / 64f) + 5, buildingReach))
                     continue;
                 StampFlippedAt(spriteBatch, building.texture.Value, buildingSourceRect, buildingCentreX, buildingBaseY, 0);
             }
@@ -1592,7 +1592,7 @@ namespace SDVRadiance
         /// beneath it.</summary>
         private void MirrorFishPondWall(SpriteBatch spriteBatch, StardewValley.Buildings.Building pond)
         {
-            if (!WaterWithinTiles(pond.tileX.Value + 2, pond.tileY.Value + 2, 1))
+            if (!MirrorWaterWithinTiles(pond.tileX.Value + 2, pond.tileY.Value + 2, 1))
                 return;
             var wallRow = new Rectangle(0, 0, 80, 16);
             // The painted water begins half a tile below the pond's top edge (FishPond.draw), and the
@@ -2368,7 +2368,7 @@ namespace SDVRadiance
                     if (character?.Sprite?.Texture == null || character.IsInvisible)
                         continue;
                     Rectangle characterBox = character.GetBoundingBox();
-                    if (!WaterWithinTiles(characterBox.Center.X / 64, characterBox.Bottom / 64 + 2, 4))
+                    if (!MirrorWaterWithinTiles(characterBox.Center.X / 64, characterBox.Bottom / 64 + 2, 4))
                         continue;
                     if (listed++ == 0)
                         report.AppendLine("[reflect] characters near water (drawsItself = its mirror is drawn by the character, not predicted):");
@@ -2392,7 +2392,7 @@ namespace SDVRadiance
                     if (animal?.Sprite?.Texture == null)
                         continue;
                     Rectangle animalBox = animal.GetBoundingBox();
-                    if (!WaterWithinTiles(animalBox.Center.X / 64, animalBox.Bottom / 64 + 2, 4))
+                    if (!MirrorWaterWithinTiles(animalBox.Center.X / 64, animalBox.Bottom / 64 + 2, 4))
                         continue;
                     if (animalsListed++ == 0)
                         report.AppendLine("[reflect] farm animals near water (baked=no means its mirror is predicted from the collision box):");

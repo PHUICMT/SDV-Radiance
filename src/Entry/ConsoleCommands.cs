@@ -169,6 +169,19 @@ namespace SDVRadiance
                 });
             // For an author making a radiance-looks.json: read the files again and list what each
             // one gives, without restarting the game.
+            helper.ConsoleCommands.Add("radiance_perfpreset",
+                "Use one of the F6 performance presets, live, in memory only (config.json is not written): "
+                + "'radiance_perfpreset LowSpec'. With no name, lists them.",
+                (_, arguments) =>
+                {
+                    if (arguments.Length == 0 || !Enum.TryParse(arguments[0], ignoreCase: true, out PerfPreset preset))
+                    {
+                        monitor.Log("Performance presets: " + string.Join(", ", Enum.GetNames<PerfPreset>()), LogLevel.Info);
+                        return;
+                    }
+                    getConfig().ApplyPerfPreset(preset);
+                    monitor.Log($"Performance preset {preset} in use (live only; config.json untouched).", LogLevel.Info);
+                });
             helper.ConsoleCommands.Add("radiance_looks",
                 "Looks other mods offer in F6 (from each mod's " + LookPacks.FileName + "). Reads the files again "
                 + "and lists every look found and every one left out, with why.",
