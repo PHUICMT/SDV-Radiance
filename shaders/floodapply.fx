@@ -34,6 +34,9 @@ sampler2D SceneHalfSampler = sampler_state
 // near-black pixel from turning a small lift into a huge ratio.
 static const float RatioFloor = 0.03;
 
+// The UV the half-size copy was read back by so its texels stay fixed on the world.
+float2 HalfGridShift;
+
 struct PixelInput
 {
     float4 Position : SV_POSITION;
@@ -44,8 +47,8 @@ struct PixelInput
 float4 ApplyPS(PixelInput input) : SV_TARGET
 {
     float4 sharp = tex2D(SourceSampler, input.UV);
-    float3 litHalf = tex2D(LitHalfSampler, input.UV).rgb;
-    float3 sceneHalf = tex2D(SceneHalfSampler, input.UV).rgb;
+    float3 litHalf = tex2D(LitHalfSampler, input.UV + HalfGridShift).rgb;
+    float3 sceneHalf = tex2D(SceneHalfSampler, input.UV + HalfGridShift).rgb;
     float3 ratio = (litHalf + RatioFloor) / (sceneHalf + RatioFloor);
     float3 lit = (sharp.rgb + RatioFloor) * ratio - RatioFloor;
     return float4(saturate(lit), sharp.a);

@@ -33,6 +33,9 @@ namespace SDVRadiance
 
         private RenderTarget2D? _reflectionRenderTarget;
         internal bool ReflectRTReady;
+        /// <summary>Farmers left out of the reflection (<see cref="ModConfig.WaterReflectPlayer"/> off).
+        /// The shader's wading fallback is retired too, or it would draw you anyway.</summary>
+        internal bool PlayerReflectionOff;
         internal bool ReflectRTHasPlayer;   // player stamped this frame → the shader retires
                                             // its wading-silhouette fallback
 
@@ -906,7 +909,9 @@ namespace SDVRadiance
                 // front of it.
                 spriteBatch.Begin(SpriteSortMode.BackToFront, BlendState.AlphaBlend, SamplerState.PointClamp);
 
-                MirrorFarmers(spriteBatch, toolBaked);
+                PlayerReflectionOff = !config.WaterReflectPlayer;
+                if (!PlayerReflectionOff)
+                    MirrorFarmers(spriteBatch, toolBaked);
                 phaseStart = PhaseCost.NoteSince("mirror: farmers", phaseStart);
                 phaseStart = FlushPhase(spriteBatch, "mirror: farmers SUBMIT", phaseStart);
                 StampSelfDrawnCharacterMirrors(spriteBatch);

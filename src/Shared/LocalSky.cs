@@ -40,5 +40,18 @@ namespace SDVRadiance
 
         /// <inheritdoc cref="RainLandsOn"/>
         internal static bool RainLandsHere => RainLandsOn(Game1.currentLocation);
+
+        /// <summary>ModConfig.SunYieldsToWeatherMods with the mod on, set by the update tick.</summary>
+        internal static bool YieldToWeatherMods;
+
+        /// <summary>Whether the sky here is not a clear one: rain, snow or a storm, or, with the
+        /// switch on, a weather another mod is drawing for itself (Cloudy Skies' own types, which
+        /// is how Weather Wonders' heavy fog and blizzards arrive). Every effect that needs the sun
+        /// or a clear night asks this rather than the three flags, so a heavy fog of somebody
+        /// else's does not come with long hard shadows, sun shafts and the Milky Way. A heavy fog
+        /// can set none of the game's flags at all, which is how it was reported: "a visual
+        /// disaster in heavy fog or snowstorms".</summary>
+        internal static bool IsClouded => IsRaining || IsSnowing || IsLightning
+            || (YieldToWeatherMods && PrecipitationSystem.AnotherModDrawsTheWeather);
     }
 }

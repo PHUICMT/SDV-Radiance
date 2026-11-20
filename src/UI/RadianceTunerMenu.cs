@@ -374,7 +374,8 @@ namespace SDVRadiance
             ("water", 10, "surface", [("tuner.section.water", null), ("tuner.section.water", "tuner.section.watersurface")]),
             ("water", 10, "reflection", [("tuner.section.water", "tuner.section.waterreflection"),
                 ("tuner.section.water", "tuner.section.watermodeldetail"), ("tuner.section.water", "tuner.reflstyle")]),
-            ("water", 10, "rivers", [("tuner.section.water", "tuner.section.watermotion"), ("tuner.section.water", "tuner.section.riverlook")]),
+            ("water", 10, "rivers", [("tuner.section.water", "tuner.section.watermotion"), ("tuner.section.water", "tuner.section.riverlook"),
+                ("tuner.section.water", "tuner.section.waterpaths")]),
             ("water", 10, "rain", [("tuner.section.water", "tuner.section.waterrain")]),
             ("water", 10, "falls", [("config.section.particles", "tuner.section.particlewaterfallmist"),
                 ("config.section.particles", "tuner.section.particlehotspringsteam")]),
@@ -392,6 +393,8 @@ namespace SDVRadiance
                 ("config.section.particles", "tuner.section.particlefireflies"), ("config.section.particles", "tuner.section.particlepetals"),
                 ("config.section.particles", "tuner.section.particletumbleweeds"), ("config.section.particles", "tuner.section.particlewhirlwinds"),
                 ("config.section.particles", "tuner.section.particleringsparkles"), ("config.section.particles", "tuner.section.particlefootdust"),
+                ("config.section.particles", "tuner.section.particlefootleaves"),
+                ("config.section.particles", "tuner.section.footprints"),
                 ("config.section.particles", "tuner.section.particlefestivelights")]),
             ("nature", 14, "fire", [("config.section.particles", "tuner.section.particleembers"),
                 ("config.section.particles", "tuner.section.particlechimney"), ("config.section.particles", "tuner.section.particlelavasparks"),
@@ -439,7 +442,7 @@ namespace SDVRadiance
         /// in the language being played in.</summary>
         private bool MatchesSearch(string key, string? help)
         {
-            if (string.IsNullOrWhiteSpace(_searchQuery) || _sectionMatchesSearch)
+            if (string.IsNullOrWhiteSpace(_searchQuery) || _sectionMatchesSearch || _tabMatchesSearch)
                 return true;
             return SearchHits(key) || (help != null && SearchHits(help));
         }
@@ -463,6 +466,27 @@ namespace SDVRadiance
             foreach (string text in texts)
                 if (TextHits(text, query))
                     return true;
+            return EverydayWordsHit(key, query);
+        }
+
+        /// <summary>
+        /// Players look for a setting by what they see, not by its name: "god rays", "motion blur",
+        /// "dots on the water", "dark house". Most "where is the switch" questions on the mod page
+        /// were about a setting that was there all along under a name they did not think of. A
+        /// group can carry such words in a "<c>.searchwords</c>" key, a comma list in each language,
+        /// and a search for one of them (or a sentence holding one) finds the group.
+        /// </summary>
+        private static bool EverydayWordsHit(string key, string query)
+        {
+            if (TextsInEveryLanguage == null)
+                return false;
+            string wordsKey = key + ".searchwords";
+            if (!_textsByKey.TryGetValue(wordsKey, out string[]? lists))
+                _textsByKey[wordsKey] = lists = [.. TextsInEveryLanguage(wordsKey)];
+            foreach (string list in lists)
+                foreach (string word in list.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    if (TextHits(word, query) || (word.Length >= 3 && TextHits(query, word)))
+                        return true;
             return false;
         }
 
@@ -487,8 +511,65 @@ namespace SDVRadiance
 
         /// <summary>Set while a group whose own name matches the search is built: all of it shows.</summary>
         private bool _sectionMatchesSearch;
+        /// <summary>Set while a whole tab whose own name matches the search is built: all of it shows.</summary>
+        private bool _tabMatchesSearch;
         /// <summary>Groups whose name matched, for the search to know a piece found something.</summary>
         private int _searchHeadingHits;
+
+        private LookPreset? _presetCheckedFor;
+        private bool _presetWasChanged;
+        private int _presetCheckedTick = -1000;
+
+        /// <summary>Whether the settings have moved since this preset was applied: the preset laid
+        /// over a copy of the live settings would change something. Asked by the card every frame,
+        /// so the answer is worked out a few times a second, not sixty.</summary>
+        private bool PresetChangedSince(LookPreset preset)
+        {
+            if (preset == LookPreset.Custom)
+                return false;
+            if (_presetCheckedFor == preset && Game1.ticks - _presetCheckedTick < 20)
+                return _presetWasChanged;
+            var copy = new ModConfig();
+            copy.ApplyProfile(_config.CaptureProfile(""));
+            copy.ApplyPreset(preset);
+            // The file's own version is not part of a look, and a fresh copy starts at 0.
+            copy.ConfigVersion = _config.ConfigVersion;
+            _presetWasChanged = !_config.MatchesProfile(copy.CaptureProfile(""));
+            _presetCheckedFor = preset;
+            _presetCheckedTick = Game1.ticks;
+            return _presetWasChanged;
+        }
+
+        /// <summary>The menu row of each setting the cost measurement prices, so the row can carry
+        /// what it cost on this machine.</summary>
+        private static readonly Dictionary<string, string> SettingOfCostRow = new(StringComparer.Ordinal)
+        {
+            ["tuner.bloom"] = "BloomEnabled", ["tuner.colorgrade"] = "ColorGradeEnabled", ["tuner.godrays"] = "GodRaysEnabled",
+            ["tuner.fog"] = "FogEnabled", ["tuner.cloudshadow"] = "CloudShadowEnabled", ["tuner.tiltshift"] = "TiltShiftEnabled",
+            ["tuner.vignette"] = "VignetteEnabled", ["tuner.ca"] = "ChromaticAberrationEnabled", ["tuner.water"] = "WaterEnabled",
+            ["tuner.watercaustics"] = "WaterCausticsEnabled", ["tuner.windowreflection"] = "WindowReflectionEnabled",
+            ["tuner.waterreflection"] = "WaterReflection", ["tuner.lighting"] = "LightingEnabled", ["tuner.floodgi"] = "FloodLightingEnabled",
+            ["tuner.lightshadows"] = "LightingShadows", ["tuner.shadows"] = "DirectionalShadowsEnabled",
+            ["tuner.shadowobjects"] = "DirectionalShadowObjects", ["tuner.shadowblur"] = "DirectionalShadowBlur",
+            ["tuner.windoweffects"] = "WindowEffectsEnabled", ["tuner.precipitation"] = "PrecipitationEnabled",
+            ["tuner.particles"] = "ParticlesEnabled", ["tuner.wetworld"] = "WetWorldEnabled", ["tuner.wetworldlensdrops"] = "WetWorldLensDrops",
+            ["tuner.waterrainringstrength"] = "WaterRainRingStrength", ["tuner.lightning"] = "LightningEffectsEnabled",
+            ["tuner.relief"] = "SpriteReliefEnabled", ["tuner.foliagesway"] = "FoliageSwayEnabled", ["config.sheetupscale.name"] = "SheetUpscaleEnabled",
+            ["tuner.aurora"] = "AuroraEnabled", ["tuner.shootingstars"] = "ShootingStarsEnabled", ["tuner.goldenhour"] = "GoldenHourStrength",
+            ["tuner.bloomemissiveboost"] = "BloomEmissiveBoost", ["tuner.bloomwideglow"] = "BloomWideGlow",
+        };
+
+        /// <summary>A row's name, with what it cost on this machine after the player measured: "Bloom
+        /// · 0.42 ms". Below a twentieth of a millisecond nothing is added; a number that small is
+        /// the measurement's own wobble.</summary>
+        private string LabelWithCost(string key)
+        {
+            string label = _translate(key);
+            if (SettingOfCostRow.TryGetValue(key, out string? setting)
+                && _config.MeasuredEffectCost.TryGetValue(setting, out float cost) && cost >= 0.05f)
+                label += "  ·  " + _translate("tuner.costmeasure.tag").Replace("{{ms}}", cost.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture));
+            return label;
+        }
 
         private void AskForSearch()
         {
@@ -563,12 +644,26 @@ namespace SDVRadiance
                         Info(() => where);
                         _nextSectionLead = Scaled(10);
                     }
+                    bool wholeTabFound = false;
                     if (section == "*")
                     {
                         _rowsEnabledWhen = null;
                         EndSection();
                         _buildingTabKey = tab;
-                        Tabs[Array.FindIndex(Tabs, candidate => candidate.Key == tab)].Build(this);
+                        // A whole tab whose own name or everyday words match ("lag" for Performance)
+                        // shows all of it, as a group whose name matches does.
+                        wholeTabFound = SearchHits(tab);
+                        if (wholeTabFound)
+                            _searchHeadingHits++;
+                        _tabMatchesSearch = wholeTabFound;
+                        try
+                        {
+                            Tabs[Array.FindIndex(Tabs, candidate => candidate.Key == tab)].Build(this);
+                        }
+                        finally
+                        {
+                            _tabMatchesSearch = false;
+                        }
                         EndSection();
                         _rowsEnabledWhen = null;
                     }
@@ -580,7 +675,7 @@ namespace SDVRadiance
                     {
                         // A whole tab came along with the rows that matched: keep only its groups
                         // that found something, or the rest showed as empty cards.
-                        if (section == "*")
+                        if (section == "*" && !wholeTabFound)
                             KeepOnlyFoundGroups(mark.Headers, mark, tab, newPage);
                         string category = GroupedPages[page].Category;
                         _searchCountsByCategory[category] = _searchCountsByCategory.GetValueOrDefault(category)
@@ -1667,7 +1762,7 @@ namespace SDVRadiance
             if (!MatchesSearch(key, help))
                 return;
             var row = new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, Scaled(GlassPanel ? 32 : 38));
-            var toggle = new TunerToggle(_translate(key), row, getValue, setValue)
+            var toggle = new TunerToggle(LabelWithCost(key), row, getValue, setValue)
             {
                 TextScale = _uiScale, Enabled = rowEnabledWhen, DefaultValue = savedSetting ? DefaultOf(getValue) : null,
                 Key = key, CanHide = canHide,
@@ -1700,7 +1795,7 @@ namespace SDVRadiance
                 int trackX = _contentCursorX + _contentColumnWidth * 52 / 100;
                 int rowRight = _contentCursorX + _contentColumnWidth - Scaled(8);
                 int trackWidth = rowRight - Scaled(48) - trackX;
-                _sliders.Add(new TunerSlider(_translate(key), trackX, _contentCursorY + Scaled(6), trackWidth, min, max, getValue, setValue, 0, Scaled(18))
+                _sliders.Add(new TunerSlider(LabelWithCost(key), trackX, _contentCursorY + Scaled(6), trackWidth, min, max, getValue, setValue, 0, Scaled(18))
                 {
                     TextScale = _uiScale, Enabled = rowEnabledWhen, Step = step, DefaultValue = DefaultOf(getValue),
                     Inline = true, InlineLabelX = _contentCursorX + Scaled(10), InlineRowRight = rowRight, Key = key,
@@ -1709,7 +1804,7 @@ namespace SDVRadiance
                 _contentCursorY += Scaled(GlassRowPitchBase);
                 return;
             }
-            _sliders.Add(new TunerSlider(_translate(key), _contentCursorX, _contentCursorY, _contentColumnWidth, min, max, getValue, setValue, Scaled(26), Scaled(20))
+            _sliders.Add(new TunerSlider(LabelWithCost(key), _contentCursorX, _contentCursorY, _contentColumnWidth, min, max, getValue, setValue, Scaled(26), Scaled(20))
                 { TextScale = _uiScale, Enabled = rowEnabledWhen, Step = step, DefaultValue = DefaultOf(getValue), Key = key });
             // The label sits above the track, so the hover area is the whole row, not the bar.
             Help(new Rectangle(_contentCursorX, _contentCursorY, _contentColumnWidth, Scaled(50)), help);
@@ -2001,6 +2096,9 @@ namespace SDVRadiance
             ["help.shadowgrounded"] = "on",
             ["help.contactshadow"] = "1.00",
             ["help.sunseason"] = "0.30",
+            ["help.milkyway"] = "on",
+            ["help.springmeteors"] = "on",
+            ["help.harvestmoon"] = "on",
         };
 
         private string SuggestionText(string suggested) => suggested switch
@@ -2100,11 +2198,11 @@ namespace SDVRadiance
             ["tuner.section.godrayssun"] = "rays", ["tuner.section.bloom"] = "sun",
             ["tuner.section.water"] = "wave", ["tuner.section.watersurface"] = "wave", ["tuner.section.waterreflection"] = "mirror",
             ["tuner.section.watermodeldetail"] = "tune", ["tuner.reflstyle"] = "mirror", ["tuner.section.watermotion"] = "river",
-            ["tuner.section.riverlook"] = "river", ["tuner.section.waterrain"] = "drops", ["tuner.section.particlewaterfallmist"] = "fall",
+            ["tuner.section.riverlook"] = "river", ["tuner.section.waterpaths"] = "river", ["tuner.section.waterrain"] = "drops", ["tuner.section.particlewaterfallmist"] = "fall",
             ["tuner.section.particlehotspringsteam"] = "fog", ["tuner.section.waterindoors"] = "house",
             ["tuner.section.foliagesway"] = "leaf", ["config.section.particles"] = "tune", ["tuner.section.particledust"] = "dust",
             ["tuner.section.particlefireflies"] = "firefly", ["tuner.section.particlepetals"] = "petal", ["tuner.section.particletumbleweeds"] = "tumble",
-            ["tuner.section.particlewhirlwinds"] = "wind", ["tuner.section.particleringsparkles"] = "rays", ["tuner.section.particlefootdust"] = "dust",
+            ["tuner.section.particlewhirlwinds"] = "wind", ["tuner.section.particleringsparkles"] = "rays", ["tuner.section.particlefootdust"] = "dust", ["tuner.section.particlefootleaves"] = "leaf", ["tuner.section.footprints"] = "dust",
             ["tuner.section.particlefestivelights"] = "lamp", ["tuner.section.particleembers"] = "flame", ["tuner.section.particlechimney"] = "house",
             ["tuner.section.particlelavasparks"] = "flame", ["tuner.section.particleglow"] = "sun",
         };
@@ -2491,7 +2589,7 @@ namespace SDVRadiance
             _contentCursorY = contentTop + Scaled(BodyPadding) + Scaled(4);
             // One line saying what this tab is for, before anything else on it. A column of
             // sliders assumes the reader already knows which effect they belong to.
-            PlaceLayoutPrompt();
+            PlaceOneTimePrompt();
             HoldHiddenSwitchesEverywhere();
             // Cleared before a search jumps past it: the page's big title stayed from the page
             // before and was drawn over the results.
@@ -2779,34 +2877,104 @@ namespace SDVRadiance
         /// and the classic one the wooden box, as on the mock.
         /// </remarks>
         private bool LayoutPromptShown => string.IsNullOrEmpty(_config.TunerLayout);
-        private Rectangle _promptBox, _promptNew, _promptOld;
-        private string _promptBody = "";
 
-        private void PlaceLayoutPrompt()
+        /// <summary>What FirstRunGoal holds on a first install until the player answers.</summary>
+        internal const string FirstRunGoalAsk = "Ask";
+
+        /// <summary>Asked once, of a first install only: what the player wants from the mod. Each
+        /// answer is a performance preset and the look stays as it ships. The answer that suits this
+        /// machine is marked: Light on a phone or on built-in graphics, where the first start already
+        /// chose it, Best looks anywhere else. Kept in config.json (FirstRunGoal), so it is never
+        /// asked again; closing F6 without an answer asks again next time.</summary>
+        private bool GoalPromptShown => !LayoutPromptShown && _config.FirstRunGoal == FirstRunGoalAsk;
+
+        private bool PromptShown => LayoutPromptShown || GoalPromptShown;
+
+        /// <summary>One answer in the box over the menu.</summary>
+        private sealed class PromptChoice
         {
-            if (!LayoutPromptShown)
-                return;
-            int boxWidth = Math.Min(Scaled(620), width - Scaled(40));
-            int pad = Scaled(26), gap = Scaled(12);
-            float bodyScale = 0.85f * _uiScale;
-            _promptBody = TunerText.Wrap(_translate("tuner.layout.ask"), boxWidth - pad * 2, bodyScale);
-            // The title's own height: Thai is drawn in the game's font, taller than the glass typeface.
-            int titleHeight = (int)(TunerText.Measure(_translate("tuner.layout.asktitle")).Y * 1.15f * _uiScale);
-            int bodyHeight = (int)(TunerText.Measure(_promptBody).Y * bodyScale);
-            int choiceHeight = Scaled(78);
-            int boxHeight = pad + titleHeight + Scaled(10) + bodyHeight + Scaled(18) + choiceHeight + pad;
-            _promptBox = new Rectangle(xPositionOnScreen + (width - boxWidth) / 2, yPositionOnScreen + Scaled(120), boxWidth, boxHeight);
-            int choiceWidth = (boxWidth - pad * 2 - gap) / 2;
-            int choiceTop = _promptBox.Bottom - pad - choiceHeight;
-            _promptNew = new Rectangle(_promptBox.X + pad, choiceTop, choiceWidth, choiceHeight);
-            _promptOld = new Rectangle(_promptNew.Right + gap, choiceTop, choiceWidth, choiceHeight);
+            public Rectangle Bounds;
+            public string Label = "";
+            public string Note = "";
+            public bool Suggested;
+            public Action Pick = () => { };
         }
 
-        private void PickFromLayoutPrompt(bool grouped) => ChooseLayout(grouped ? LayoutGrouped : LayoutClassic);
+        private readonly List<PromptChoice> _promptChoices = [];
+        private Rectangle _promptBox;
+        private string _promptTitle = "";
+        private string _promptBody = "";
 
-        private void DrawLayoutPrompt(SpriteBatch spriteBatch)
+        private void PlaceOneTimePrompt()
         {
-            if (!LayoutPromptShown)
+            _promptChoices.Clear();
+            string body;
+            if (LayoutPromptShown)
+            {
+                _promptTitle = _translate("tuner.layout.asktitle");
+                body = _translate("tuner.layout.ask");
+                _promptChoices.Add(new PromptChoice
+                {
+                    Label = _translate("tuner.layout.grouped"), Note = _translate("tuner.layout.grouped.small"),
+                    Pick = () => ChooseLayout(LayoutGrouped),
+                });
+                _promptChoices.Add(new PromptChoice
+                {
+                    Label = _translate("tuner.layout.classic"), Note = _translate("tuner.layout.classic.small"),
+                    Pick = () => ChooseLayout(LayoutClassic),
+                });
+            }
+            else if (GoalPromptShown)
+            {
+                _promptTitle = _translate("tuner.goal.asktitle");
+                body = _translate("tuner.goal.ask");
+                bool lightMachine = OnAPhone || GraphicsChip.IsBuiltIn(Game1.graphics?.GraphicsDevice?.Adapter?.Description ?? "");
+                AddGoalChoice("Quality", "quality", PerfPreset.Quality, suggested: !lightMachine);
+                AddGoalChoice("Balanced", "balanced", PerfPreset.Balanced, suggested: false);
+                AddGoalChoice("Light", "light", OnAPhone ? PerfPreset.LowSpec : PerfPreset.Performance, suggested: lightMachine);
+            }
+            else
+                return;
+            int boxWidth = Math.Min(Scaled(_promptChoices.Count > 2 ? 760 : 620), width - Scaled(40));
+            int pad = Scaled(26), gap = Scaled(12);
+            float bodyScale = 0.85f * _uiScale;
+            _promptBody = TunerText.Wrap(body, boxWidth - pad * 2, bodyScale);
+            // The title's own height: Thai is drawn in the game's font, taller than the glass typeface.
+            int titleHeight = (int)(TunerText.Measure(_promptTitle).Y * 1.15f * _uiScale);
+            int bodyHeight = (int)(TunerText.Measure(_promptBody).Y * bodyScale);
+            int choiceHeight = Scaled(78);
+            // Room above the answers for the tag on the suggested one, which sits across its top edge.
+            int tagRoom = _promptChoices.Any(choice => choice.Suggested) ? Scaled(12) : 0;
+            int boxHeight = pad + titleHeight + Scaled(10) + bodyHeight + Scaled(18) + tagRoom + choiceHeight + pad;
+            _promptBox = new Rectangle(xPositionOnScreen + (width - boxWidth) / 2, yPositionOnScreen + Scaled(120), boxWidth, boxHeight);
+            int choiceWidth = (boxWidth - pad * 2 - gap * (_promptChoices.Count - 1)) / _promptChoices.Count;
+            int choiceTop = _promptBox.Bottom - pad - choiceHeight;
+            for (int i = 0; i < _promptChoices.Count; i++)
+                _promptChoices[i].Bounds = new Rectangle(_promptBox.X + pad + i * (choiceWidth + gap), choiceTop, choiceWidth, choiceHeight);
+        }
+
+        private static bool OnAPhone => StardewModdingAPI.Constants.TargetPlatform == StardewModdingAPI.GamePlatform.Android;
+
+        private void AddGoalChoice(string goal, string key, PerfPreset preset, bool suggested)
+            => _promptChoices.Add(new PromptChoice
+            {
+                Label = _translate($"tuner.goal.{key}"), Note = _translate($"tuner.goal.{key}.small"), Suggested = suggested,
+                Pick = () => PickFirstRunGoal(goal, preset),
+            });
+
+        private void PickFirstRunGoal(string goal, PerfPreset preset)
+        {
+            _config.ApplyPerfPreset(preset);
+            _config.FirstRunGoal = goal;
+            _onChange();
+            _onSave();
+            Game1.playSound("smallSelect");
+            Reflow();
+        }
+
+        private void DrawOneTimePrompt(SpriteBatch spriteBatch)
+        {
+            if (!PromptShown)
                 return;
             var panel = new Rectangle(xPositionOnScreen, yPositionOnScreen, width, height);
             if (TunerTheme.Glass)
@@ -2824,23 +2992,24 @@ namespace SDVRadiance
                     _promptBox.X, _promptBox.Y, _promptBox.Width, _promptBox.Height, Color.White, 1f, drawShadow: true);
             int pad = Scaled(26);
             float titleScale = 1.15f * _uiScale, bodyScale = 0.85f * _uiScale;
-            TunerText.DrawFit(spriteBatch, _translate("tuner.layout.asktitle"), new Vector2(_promptBox.X + pad, _promptBox.Y + pad),
+            TunerText.DrawFit(spriteBatch, _promptTitle, new Vector2(_promptBox.X + pad, _promptBox.Y + pad),
                 _promptBox.Width - pad * 2, TunerTheme.Ink, titleScale);
-            int titleHeight = (int)(TunerText.Measure(_translate("tuner.layout.asktitle")).Y * titleScale);
+            int titleHeight = (int)(TunerText.Measure(_promptTitle).Y * titleScale);
             TunerText.Draw(spriteBatch, _promptBody, new Vector2(_promptBox.X + pad, _promptBox.Y + pad + titleHeight + Scaled(10)),
                 TunerTheme.Glass ? TunerTheme.InkDim : TunerTheme.Ink * 0.85f, bodyScale, shadowIntensity: 0f);
-            DrawPromptChoice(spriteBatch, _promptNew, _translate("tuner.layout.grouped"), _translate("tuner.layout.grouped.small"));
-            DrawPromptChoice(spriteBatch, _promptOld, _translate("tuner.layout.classic"), _translate("tuner.layout.classic.small"));
+            foreach (PromptChoice choice in _promptChoices)
+                DrawPromptChoice(spriteBatch, choice);
         }
 
-        private void DrawPromptChoice(SpriteBatch spriteBatch, Rectangle choice, string label, string note)
+        private void DrawPromptChoice(SpriteBatch spriteBatch, PromptChoice answer)
         {
+            Rectangle choice = answer.Bounds;
             bool hovered = choice.Contains(Game1.getMouseX(), Game1.getMouseY());
             int radius = Scaled(14);
             if (TunerTheme.Glass)
             {
                 TunerTheme.Plate(spriteBatch, choice, radius, hovered ? TunerTheme.Accent * 0.14f : TunerTheme.Overlay * 0.07f);
-                TunerTheme.PlateRim(spriteBatch, choice, radius, hovered ? TunerTheme.Accent : TunerTheme.Rim);
+                TunerTheme.PlateRim(spriteBatch, choice, radius, hovered || answer.Suggested ? TunerTheme.Accent : TunerTheme.Rim);
             }
             else
                 drawTextureBox(spriteBatch, Game1.menuTexture, new Rectangle(0, 256, 60, 60),
@@ -2848,11 +3017,29 @@ namespace SDVRadiance
             float labelScale = 0.95f * _uiScale, noteScale = 0.75f * _uiScale;
             float labelHeight = TunerText.Measure("A").Y * labelScale, noteHeight = TunerText.Measure("A").Y * noteScale;
             float top = choice.Center.Y - (labelHeight + Scaled(4) + noteHeight) / 2f;
-            float labelWidth = Math.Min(choice.Width - Scaled(16), TunerText.Measure(label).X * labelScale);
-            TunerText.DrawFit(spriteBatch, label, new Vector2(choice.Center.X - labelWidth / 2f, top), choice.Width - Scaled(16), TunerTheme.Ink, labelScale);
-            float noteWidth = Math.Min(choice.Width - Scaled(16), TunerText.Measure(note).X * noteScale);
-            TunerText.DrawFit(spriteBatch, note, new Vector2(choice.Center.X - noteWidth / 2f, top + labelHeight + Scaled(4)), choice.Width - Scaled(16),
+            float labelWidth = Math.Min(choice.Width - Scaled(16), TunerText.Measure(answer.Label).X * labelScale);
+            TunerText.DrawFit(spriteBatch, answer.Label, new Vector2(choice.Center.X - labelWidth / 2f, top), choice.Width - Scaled(16), TunerTheme.Ink, labelScale);
+            float noteWidth = Math.Min(choice.Width - Scaled(16), TunerText.Measure(answer.Note).X * noteScale);
+            TunerText.DrawFit(spriteBatch, answer.Note, new Vector2(choice.Center.X - noteWidth / 2f, top + labelHeight + Scaled(4)), choice.Width - Scaled(16),
                 TunerTheme.Glass ? TunerTheme.InkFaint : TunerTheme.Ink * 0.65f, noteScale);
+            if (answer.Suggested)
+                DrawSuggestedTag(spriteBatch, choice);
+        }
+
+        /// <summary>A small tag across the top edge of the answer that suits this machine.</summary>
+        private void DrawSuggestedTag(SpriteBatch spriteBatch, Rectangle choice)
+        {
+            string tag = _translate("tuner.goal.suggested");
+            float tagScale = 0.7f * _uiScale;
+            Vector2 size = TunerText.Measure(tag) * tagScale;
+            int tagWidth = (int)size.X + Scaled(20), tagHeight = (int)size.Y + Scaled(6);
+            var tagBox = new Rectangle(choice.Center.X - tagWidth / 2, choice.Y - tagHeight / 2, tagWidth, tagHeight);
+            if (TunerTheme.Glass)
+                TunerTheme.Plate(spriteBatch, tagBox, tagHeight / 2, TunerTheme.Accent);
+            else
+                spriteBatch.Draw(Game1.staminaRect, tagBox, new Color(255, 206, 96));
+            Color ink = TunerTheme.Glass && !TunerTheme.Light ? new Color(16, 28, 44) : TunerTheme.Glass ? Color.White : TunerTheme.Ink;
+            TunerText.DrawFit(spriteBatch, tag, new Vector2(tagBox.Center.X - size.X / 2f, tagBox.Y + Scaled(3)), tagWidth, ink, tagScale);
         }
 
         // ================= per-tab content =================
@@ -2882,6 +3069,9 @@ namespace SDVRadiance
                 (LookPreset.Cinematic, "cinematic"), (LookPreset.Vibrant, "vibrant"),
                 (LookPreset.Nocturne, "nocturne")
             ];
+            // The author's look only when its file shipped with the mod.
+            if (ModConfig.AuthorLook?.Values is { Count: > 0 })
+                presets = [.. presets, (LookPreset.Author, "author")];
             // The grouped page puts the presets in a card of their own, as on the mock.
             if (Grouped)
                 Section("tuner.page.looks");
@@ -2903,13 +3093,24 @@ namespace SDVRadiance
                 })
                 {
                     IsChosen = () => _config.ActivePreset == preset,
+                    // Picked, then moved: the look on screen is no longer the preset, so the card
+                    // says so, and a click puts the preset back as it was.
+                    LabelNow = () => _config.ActivePreset == preset && PresetChangedSince(preset)
+                        ? _translate("tuner.preset.changed").Replace("{{name}}", _translate($"config.preset.{key}"))
+                        : _translate($"config.preset.{key}"),
                     Picture = presetCards ? PresetPicture(key) : null,
                     TextScale = _uiScale,
                 };
                 _buttons.Add(presetButton);
+                // The author's card says, in the help bar under the pointer, what it is and the machine
+                // it was played on (the author asked for it there rather than as a line under the cards).
+                if (preset == LookPreset.Author && ModConfig.AuthorLook is { } author)
+                    _help.Add((rect, _translate("tuner.preset.author.machine").Replace("{{cpu}}", author.Cpu)
+                        .Replace("{{ram}}", author.Ram).Replace("{{gpu}}", author.Gpu)));
             }
             if (!_sectionRowsHidden)
                 _contentCursorY += presetHeight + Scaled(12);
+            BuildNightLook();
 
             Section("tuner.mylooks");
             if (!HiddenBySection())
@@ -3594,6 +3795,75 @@ namespace SDVRadiance
             }
             Slider("tuner.lutamount", 0f, 1f, () => _config.ColorGradeLutAmount,
                 value => _config.ColorGradeLutAmount = value, "help.lutamount");
+            Toggle("tuner.sunyieldstoweathermods", () => _config.SunYieldsToWeatherMods, value => _config.SunYieldsToWeatherMods = value,
+                "help.sunyieldstoweathermods");
+            Toggle("tuner.seasondrift", () => _config.SeasonDrift, value => _config.SeasonDrift = value, "help.seasondrift");
+            Slider("tuner.seasondriftstrength", 0f, 1f, () => _config.SeasonDriftStrength, value => _config.SeasonDriftStrength = value,
+                "help.seasondriftstrength", () => _config.SeasonDrift);
+            Slider("tuner.lutbyday", 0f, 1f, () => _config.ColorGradeLutByDay,
+                value => _config.ColorGradeLutByDay = value, "help.lutbyday");
+        }
+
+        /// <summary>A look by place and time: the switch for a different look at night with a row for
+        /// outdoors and one for indoors while it is on, and a row for the mines and caves.</summary>
+        private void BuildNightLook()
+        {
+            Toggle("tuner.nightlook", () => _config.NightLookSeparate, value =>
+            {
+                _config.NightLookSeparate = value;
+                if (value && string.IsNullOrEmpty(_config.NightLook))
+                    _config.NightLook = nameof(LookPreset.Nocturne);
+                Reflow();
+            }, "help.nightlook");
+            if (_config.NightLookSeparate)
+            {
+                LookChoiceRow("tuner.nightlook.outdoors", () => _config.NightLook, value => _config.NightLook = value, offerSameAsDay: false);
+                LookChoiceRow("tuner.nightlook.indoors", () => _config.NightLookIndoors, value => _config.NightLookIndoors = value, offerSameAsDay: true);
+            }
+            LookChoiceRow("tuner.cavelook", () => _config.CaveLook, value => _config.CaveLook = value, offerSameAsDay: true);
+        }
+
+        /// <summary>A titled row of buttons, one per preset and per saved look, to choose a look for
+        /// one place or time from, with "same as day" first where keeping the player's own settings
+        /// is a choice.</summary>
+        private void LookChoiceRow(string titleKey, Func<string> read, Action<string> write, bool offerSameAsDay)
+        {
+            if (HiddenBySection(countsAsRow: false))
+                return;
+            Paragraph(_translate(titleKey));
+            var choices = new List<(string Value, string Label)>();
+            if (offerSameAsDay)
+                choices.Add(("", _translate("tuner.look.sameasday")));
+            foreach (LookPreset preset in new[] { LookPreset.Subtle, LookPreset.Cinematic, LookPreset.Vibrant, LookPreset.Nocturne })
+                choices.Add((preset.ToString(), _translate($"config.preset.{preset.ToString().ToLowerInvariant()}")));
+            foreach (NamedProfile profile in _config.SavedProfiles)
+                choices.Add((ModConfig.NightLookSavedPrefix + profile.Name, ShownLookName(profile)));
+            const int perRow = 5;
+            int buttonWidth = (_contentColumnWidth - ChoiceGap * (perRow - 1)) / perRow;
+            // "Same as day" is not a look but the absence of one, so it stands apart: a pill of its
+            // own on the first row with a wider gap after it (the author asked for it to stand out).
+            int sameAsDayGap = offerSameAsDay ? Scaled(14) : 0;
+            for (int i = 0; i < choices.Count; i++)
+            {
+                if (i > 0 && i % perRow == 0)
+                    _contentCursorY += RowPitch + ChoiceGap;
+                (string value, string label) = choices[i];
+                // The rest of the first row gives up the gap between them, so the row still ends where it did.
+                bool besideSameAsDay = i is > 0 and < perRow;
+                int shrink = sameAsDayGap / (perRow - 1);
+                int x = _contentCursorX + i % perRow * (buttonWidth + ChoiceGap) + (besideSameAsDay ? sameAsDayGap - (i - 1) * shrink : 0);
+                var rect = new Rectangle(x, _contentCursorY, besideSameAsDay ? buttonWidth - shrink : buttonWidth, RowPitch);
+                _buttons.Add(new TunerTextButton(label, rect, () =>
+                {
+                    write(value); _onChange(); _onSave(); Reflow();
+                })
+                {
+                    IsChosen = () => (read() ?? "") == value,
+                    TextScale = _uiScale,
+                    Pill = value.Length == 0,
+                });
+            }
+            _contentCursorY += RowPitch + Scaled(12);
         }
 
         private void BuildColorGrade()
@@ -3626,6 +3896,7 @@ namespace SDVRadiance
             Slider("tuner.intensity", 0f, 2f, () => _config.BloomIntensity, value => _config.BloomIntensity = value);
             Slider("tuner.bloomthreshold", 0f, 1f, () => _config.BloomThreshold, value => _config.BloomThreshold = value, "help.bloomthreshold");
             Slider("tuner.bloomemissiveboost", 0f, 1f, () => _config.BloomEmissiveBoost, value => _config.BloomEmissiveBoost = value, "help.bloomemissiveboost");
+            Slider("tuner.bloomwideglow", 0f, 1f, () => _config.BloomWideGlow, value => _config.BloomWideGlow = value, "help.bloomwideglow");
             EndDependsOn();
         }
 
@@ -3715,6 +3986,7 @@ namespace SDVRadiance
             Slider("tuner.goldenhour", 0f, 1f, () => _config.GoldenHourStrength, value => _config.GoldenHourStrength = value, "help.goldenhour");
             Slider("tuner.sunseason", 0f, 1f, () => _config.SunSeasonStrength, value => _config.SunSeasonStrength = value, "help.sunseason");
             Compass("tuner.shadowsunbearing", () => _config.ShadowSunBearing, value => _config.ShadowSunBearing = value, "help.shadowsunbearing");
+            Toggle("tuner.shadowsunpathmirrored", () => _config.ShadowSunPathMirrored, value => _config.ShadowSunPathMirrored = value, "help.shadowsunpathmirrored");
             Compass("tuner.sunlightbearing", () => _config.SunlightBearing, value => _config.SunlightBearing = value, "help.sunlightbearing");
             Slider("tuner.shadowtint", 0f, 1f, () => _config.ShadowTint, value => _config.ShadowTint = value, "help.shadowtint");
             Section("tuner.section.shadowedges", fineTuning: true);
@@ -3726,13 +3998,19 @@ namespace SDVRadiance
                 value => _config.ShadowCastsPerCharacter = (int)MathF.Round(value), "help.shadowcasts");
             Section("tuner.section.shadowcasters");
             Toggle("tuner.shadowplayer", () => _config.DirectionalShadowPlayer, value => _config.DirectionalShadowPlayer = value, "help.shadowplayer");
+            Slider("tuner.shadowplayerfeetraise", 0f, 8f, () => _config.ShadowPlayerFeetRaise,
+                value => _config.ShadowPlayerFeetRaise = value, "help.shadowplayerfeetraise", step: 1f);
             Toggle("tuner.shadowcarried", () => _config.ShadowCarriedLightsCast, value => _config.ShadowCarriedLightsCast = value, "help.shadowcarried");
             Toggle("tuner.shadowvillagers", () => _config.DirectionalShadowVillagers, value => _config.DirectionalShadowVillagers = value, "help.shadowvillagers");
             Toggle("tuner.shadowfarmanimals", () => _config.DirectionalShadowFarmAnimals, value => _config.DirectionalShadowFarmAnimals = value, "help.shadowfarmanimals");
             Toggle("tuner.shadowcreatures", () => _config.DirectionalShadowCreatures, value => _config.DirectionalShadowCreatures = value, "help.shadowcreatures");
+            Toggle("tuner.shadowsclimb", () => _config.ShadowsClimbOntoThings, value => _config.ShadowsClimbOntoThings = value, "help.shadowsclimb");
+            Toggle("tuner.shadowkeepgameshadow", () => _config.CharactersKeepGameShadowToo,
+                value => _config.CharactersKeepGameShadowToo = value, "help.shadowkeepgameshadow");
             Toggle("tuner.shadowgameshadowwhenoff", () => _config.CharactersSwitchedOffUseGameShadow,
                 value => _config.CharactersSwitchedOffUseGameShadow = value, "help.shadowgameshadowwhenoff",
-                () => !_config.DirectionalShadowPlayer || !_config.DirectionalShadowVillagers || !_config.DirectionalShadowCreatures);
+                () => !_config.CharactersKeepGameShadowToo
+                    && (!_config.DirectionalShadowPlayer || !_config.DirectionalShadowVillagers || !_config.DirectionalShadowCreatures));
             Slider("tuner.shadowcreaturelength", 0.1f, 2f, () => _config.ShadowCreatureLength,
                 value => _config.ShadowCreatureLength = value, "help.shadowcreaturelength", () => _config.DirectionalShadowCreatures);
             Slider("tuner.shadowcreaturesoftness", 0f, 3f, () => _config.ShadowCreatureSoftness,
@@ -3740,6 +4018,14 @@ namespace SDVRadiance
             Slider("tuner.shadowjunimolength", 0.1f, 2f, () => _config.ShadowJunimoLength,
                 value => _config.ShadowJunimoLength = value, "help.shadowjunimolength", () => _config.DirectionalShadowCreatures);
             Toggle("tuner.shadowobjects", () => _config.DirectionalShadowObjects, value => _config.DirectionalShadowObjects = value, "help.shadowobjects");
+            Toggle("tuner.sundapples", () => _config.SunDapples, value => _config.SunDapples = value, "help.sundapples",
+                () => _config.DirectionalShadowObjects);
+            Slider("tuner.sundapplesstrength", 0f, 2f, () => _config.SunDapplesStrength,
+                value => _config.SunDapplesStrength = value, "help.sundapplesstrength",
+                () => _config.DirectionalShadowObjects && _config.SunDapples);
+            Slider("tuner.sundapplesamount", 0f, 2f, () => _config.SunDapplesAmount,
+                value => _config.SunDapplesAmount = value, "help.sundapplesamount",
+                () => _config.DirectionalShadowObjects && _config.SunDapples);
             Toggle("tuner.shadowfences", () => _config.DirectionalShadowFences, value => _config.DirectionalShadowFences = value, "help.shadowfences");
             Slider("tuner.contactshadow", 0f, 1f, () => _config.ContactShadowStrength, value => _config.ContactShadowStrength = value, "help.contactshadow");
             Slider("tuner.contactshadowpeople", 0f, 1f, () => _config.ContactShadowPeopleStrength, value => _config.ContactShadowPeopleStrength = value, "help.contactshadowpeople");
@@ -3796,6 +4082,10 @@ namespace SDVRadiance
             // the old order had the lamp-shadow softness dials sitting a whole GI block away
             // from the lamp-shadow switch that owns them.
             DependsOn(() => _config.LightingEnabled);
+            // The three darkness sliders below as one dial, under the switch rather than inside the
+            // darkness group, so it shows with that group folded: "the room is too dark" is the most
+            // asked thing about this mod's light, and the three sliders split it three ways.
+            Slider("tuner.darknessoverall", 0f, 1.5f, () => _config.OverallDarkness(), value => _config.SetOverallDarkness(value), "help.darknessoverall");
             Section("tuner.section.lightdark");
             Slider("tuner.lightindoor", 0f, 0.95f, () => _config.LightingIndoorDarkness, value => _config.LightingIndoorDarkness = value, "help.lightindoor");
             Slider("tuner.lightnight", 0f, 0.95f, () => _config.LightingNightDarkness, value => _config.LightingNightDarkness = value, "help.lightnight");
@@ -3805,6 +4095,7 @@ namespace SDVRadiance
             Slider("tuner.lightwarmth", 0f, 1f, () => _config.LightingWarmth, value => _config.LightingWarmth = value, "help.lightwarmth");
             Slider("tuner.lightboost", 0f, 2f, () => _config.LightingBoost, value => _config.LightingBoost = value, "help.lightboost");
             Slider("tuner.lightradius", 0.2f, 3f, () => _config.LightingRadiusScale, value => _config.LightingRadiusScale = value, "help.lightradius");
+            Toggle("tuner.lamplightfrombulb", () => _config.LampLightFromBulb, value => _config.LampLightFromBulb = value, "help.lamplightfrombulb");
             Section("tuner.section.lampshadows");
             Toggle("tuner.lightshadows", () => _config.LightingShadows, value => _config.LightingShadows = value, "help.lightshadows");
             DependsOn(() => _config.LightingEnabled && _config.LightingShadows);
@@ -3923,6 +4214,8 @@ namespace SDVRadiance
                         value => _config.WindowGlassRaySpread = value, "help.windowglassrayspread");
                     Slider("tuner.windowglassfloor", 0f, 2f, () => _config.WindowGlassFloor,
                         value => _config.WindowGlassFloor = value, "help.windowglassfloor");
+                    Slider("tuner.windowlightblockedbypeople", 0f, 1f, () => _config.WindowLightBlockedByPeople,
+                        value => _config.WindowLightBlockedByPeople = value, "help.windowlightblockedbypeople");
                     Slider("tuner.windowglasspane", 0f, 2f, () => _config.WindowGlassPane,
                         value => _config.WindowGlassPane = value, "help.windowglasspane");
                     // Only with a curtained window installed: dials for curtains a game cannot show
@@ -3958,6 +4251,8 @@ namespace SDVRadiance
                 value => _config.WindowSheenStrength = value, "help.windowsheen");
             Slider("tuner.windowscene", 0f, 2f, () => _config.WindowSceneReflectionStrength,
                 value => _config.WindowSceneReflectionStrength = value, "help.windowscene");
+            Slider("tuner.windowscenereach", 1f, 6f, () => _config.WindowSceneReachTiles,
+                value => _config.WindowSceneReachTiles = value, "help.windowscenereach", step: 1f);
             Slider("tuner.windowglare", 0f, 2f, () => _config.WindowGlareStrength,
                 value => _config.WindowGlareStrength = value, "help.windowglare");
             Slider("tuner.windowlightglow", 0f, 2f, () => _config.WindowLightGlowStrength,
@@ -4073,6 +4368,15 @@ namespace SDVRadiance
             Slider("tuner.aurorastrength", 0f, 2f, () => _config.AuroraStrength,
                 value => _config.AuroraStrength = value, "help.aurorastrength",
                 () => _config.AuroraEnabled);
+            Toggle("tuner.milkyway", () => _config.MilkyWayEnabled, value => _config.MilkyWayEnabled = value, "help.milkyway");
+            Slider("tuner.milkywaystrength", 0f, 2f, () => _config.MilkyWayStrength,
+                value => _config.MilkyWayStrength = value, "help.milkywaystrength",
+                () => _config.MilkyWayEnabled);
+            Slider("tuner.milkywaycolour", 0f, 1f, () => _config.MilkyWayColour,
+                value => _config.MilkyWayColour = value, "help.milkywaycolour",
+                () => _config.MilkyWayEnabled);
+            Toggle("tuner.springmeteors", () => _config.SpringMeteorShowers, value => _config.SpringMeteorShowers = value, "help.springmeteors");
+            Toggle("tuner.harvestmoon", () => _config.HarvestMoon, value => _config.HarvestMoon = value, "help.harvestmoon");
             Toggle("tuner.shootingstars", () => _config.ShootingStarsEnabled, value => _config.ShootingStarsEnabled = value, "help.shootingstars");
             Slider("tuner.shootingstarfrequency", 0.25f, 4f, () => _config.ShootingStarFrequency,
                 value => _config.ShootingStarFrequency = value, "help.shootingstarfrequency", () => _config.ShootingStarsEnabled);
@@ -4109,7 +4413,6 @@ namespace SDVRadiance
                 value => _config.PrecipitationSnowSize = value, "help.precipitationsize");
             Slider("tuner.precipitationopacity", 0.25f, 2f, () => _config.PrecipitationSnowOpacity,
                 value => _config.PrecipitationSnowOpacity = value, "help.precipitationopacity");
-            DependsOn(() => _config.PrecipitationEnabled);
             Section("tuner.section.precipitationwind");
             Toggle("tuner.precipitationwind", () => _config.PrecipitationWind, value => _config.PrecipitationWind = value, "help.precipitationwind");
             DependsOn(() => _config.PrecipitationEnabled && _config.PrecipitationWind);
@@ -4292,6 +4595,33 @@ namespace SDVRadiance
             _contentCursorY += Scaled(50);
         }
 
+        /// <summary>The look of the leaves underfoot: three buttons, the first following the leaf
+        /// look of the petals and leaves card. Same rules as <see cref="BuildLeafLooks"/>.</summary>
+        private void BuildFootLeafLooks(Func<bool> wanted)
+        {
+            if (HiddenBySection(countsAsRow: false) || !wanted())
+                return;
+            (FootLeafLook look, string label, string help)[] looks =
+            [
+                (FootLeafLook.LikeOtherLeaves, "tuner.particlefootleaveslook.likeother", "help.particlefootleaveslook.likeother"),
+                (FootLeafLook.Realistic, "tuner.particleleaflook.realistic", "help.particlefootleaveslook.realistic"),
+                (FootLeafLook.Pixel, "tuner.particleleaflook.pixel", "help.particlefootleaveslook.pixel"),
+            ];
+            int buttonWidth = (_contentColumnWidth - ChoiceGap * (looks.Length - 1)) / looks.Length;
+            for (int i = 0; i < looks.Length; i++)
+            {
+                var (look, label, help) = looks[i];
+                var rect = new Rectangle(_contentCursorX + i * (buttonWidth + ChoiceGap), _contentCursorY, buttonWidth, Scaled(40));
+                var button = Button(_translate(label), rect, () =>
+                {
+                    _config.ParticleFootLeavesLook = look; _onChange(); _onSave(); Reflow();
+                });
+                button.IsChosen = () => _config.ParticleFootLeavesLook == look;
+                Help(rect, help);
+            }
+            _contentCursorY += Scaled(50);
+        }
+
         private void BuildParticles()
         {
             Toggle("tuner.particles", () => _config.ParticlesEnabled, value => _config.ParticlesEnabled = value, "help.particles");
@@ -4333,6 +4663,24 @@ namespace SDVRadiance
             Emitter("footdust", () => _config.ParticleFootDust, value => _config.ParticleFootDust = value,
                 () => _config.ParticleFootDustAmount, value => _config.ParticleFootDustAmount = value,
                 () => _config.ParticleFootDustSize, value => _config.ParticleFootDustSize = value);
+            Emitter("footleaves", () => _config.ParticleFootLeaves, value => _config.ParticleFootLeaves = value,
+                () => _config.ParticleFootLeavesAmount, value => _config.ParticleFootLeavesAmount = value,
+                () => _config.ParticleFootLeavesSize, value => _config.ParticleFootLeavesSize = value);
+            BuildFootLeafLooks(() => _config.ParticlesEnabled && _config.ParticleFootLeaves);
+            Toggle("tuner.particlefootleaveseveryone", () => _config.ParticleFootLeavesEveryone,
+                value => _config.ParticleFootLeavesEveryone = value, "help.particlefootleaveseveryone",
+                () => _config.ParticlesEnabled && _config.ParticleFootLeaves);
+            Section("tuner.section.footprints");
+            Toggle("tuner.footprints", () => _config.Footprints, value => _config.Footprints = value, "help.footprints");
+            Slider("tuner.footprintsstrength", 0f, 2f, () => _config.FootprintsStrength,
+                value => _config.FootprintsStrength = value, "help.footprintsstrength",
+                () => _config.ParticlesEnabled && _config.Footprints);
+            Slider("tuner.footprintslasting", 0.25f, 3f, () => _config.FootprintsLasting,
+                value => _config.FootprintsLasting = value, "help.footprintslasting",
+                () => _config.ParticlesEnabled && _config.Footprints);
+            Toggle("tuner.footprintseveryone", () => _config.FootprintsEveryone,
+                value => _config.FootprintsEveryone = value, "help.footprintseveryone",
+                () => _config.ParticlesEnabled && _config.Footprints);
             Emitter("festivelights", () => _config.ParticleFestiveLights, value => _config.ParticleFestiveLights = value,
                 () => _config.ParticleFestiveLightsAmount, value => _config.ParticleFestiveLightsAmount = value,
                 () => _config.ParticleFestiveLightsSize, value => _config.ParticleFestiveLightsSize = value);
@@ -4402,6 +4750,9 @@ namespace SDVRadiance
             bool reflectionOn = _config.WaterEnabled && _config.WaterReflection;
             DependsOn(() => _config.WaterEnabled && _config.WaterReflection);
             Slider("tuner.waterreflectstrength", 0f, 1f, () => _config.WaterReflectStrength, value => _config.WaterReflectStrength = value);
+            Toggle("tuner.waterreflectplayer", () => _config.WaterReflectPlayer, value => _config.WaterReflectPlayer = value, "help.waterreflectplayer");
+            Slider("tuner.waterreflecttopease", 0f, 0.4f, () => _config.WaterReflectTopEase,
+                value => _config.WaterReflectTopEase = value, "help.waterreflecttopease");
             // Which water, two buttons, and only then that water's own dials. A dial that does
             // nothing under the water in use is a dial a player moves, sees nothing, and files
             // as broken, so the classic water's three looks and its distortion and banding only
@@ -4549,6 +4900,13 @@ namespace SDVRadiance
                 () => _config.WaterEnabled && _config.WaterRiverFlowEnabled && _config.WaterCurrent > 0f, step: 0.05f);
             Toggle("tuner.waterriverpixelstep", () => _config.WaterRiverPixelStep, value => _config.WaterRiverPixelStep = value,
                 "help.waterriverpixelstep", () => _config.WaterEnabled && _config.WaterRiverFlowEnabled && _config.WaterCurrent > 0f);
+            Section("tuner.section.waterpaths");
+            Toggle("tuner.waterpaths", () => _config.WaterPathsAreWater, value =>
+            {
+                _config.WaterPathsAreWater = value;
+                RenderPipeline.MaskEpoch++;
+                RenderPipeline.MaskEpochReason = "water paths were switched";
+            }, "help.waterpaths", () => _config.WaterEnabled);
             // Reach and fade rows used to sit here, and they were the wrong kind of control for a
             // panel you open to look at something. Both buy frames without changing how the water
             // looks, which is exactly the setting a player moves, sees nothing, and files as
@@ -4755,6 +5113,7 @@ namespace SDVRadiance
             Toggle("config.renderscaleauto.name", () => _config.RenderScaleAuto,
                 value => _config.RenderScaleAuto = value, "help.renderscaleauto");
             BuildLighterSoftEffects();
+            Toggle("config.powersaver.name", () => _config.PowerSaver, value => _config.PowerSaver = value, "help.powersaver");
             Slider("config.rendersharpness.name", 0f, 2f, () => _config.RenderSharpness, value => _config.RenderSharpness = value);
             Section("tuner.section.perfadvanced", fineTuning: true);
             Toggle("config.limitsamplerslots.name", () => _config.LimitSamplerSlots,
@@ -4789,6 +5148,31 @@ namespace SDVRadiance
             {
                 string captured = line;
                 Info(() => captured);
+            }
+            // What each effect costs here: the answer to "which setting is eating my frames", priced
+            // on this machine where the player stands, and kept beside the switches afterwards.
+            _buttons.Add(new TunerTextButton(_translate("tuner.costmeasure.run"),
+                new Rectangle(_contentCursorX, _contentCursorY, Math.Min(Scaled(420), _contentColumnWidth), RowPitch), () =>
+                {
+                    RenderPipeline.Current?.StartEffectCost(_config);
+                    Reflow();
+                })
+                { TextScale = _uiScale });
+            _contentCursorY += RowPitch + Scaled(10);
+            if (RenderPipeline.EffectCostRunning)
+                Info(() => _translate("tuner.costmeasure.running").Replace("{{percent}}", (RenderPipeline.EffectCostProgress * 100f).ToString("0")));
+            else if (_config.MeasuredEffectCost.Count > 0)
+            {
+                var heaviest = _config.MeasuredEffectCost.Where(pair => pair.Value >= 0.05f).OrderByDescending(pair => pair.Value).Take(5)
+                    .Select(pair => (Row: SettingOfCostRow.FirstOrDefault(row => row.Value == pair.Key).Key, Cost: pair.Value))
+                    .Where(entry => entry.Row != null)
+                    .Select(entry => _translate(entry.Row!) + " " + entry.Cost.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) + " ms");
+                string list = string.Join(", ", heaviest);
+                Info(() => _translate("tuner.costmeasure.where").Replace("{{place}}", _config.MeasuredEffectCostWhere));
+                if (list.Length > 0)
+                    Info(() => _translate("tuner.costmeasure.top").Replace("{{list}}", list));
+                else
+                    Info(() => _translate("tuner.costmeasure.allcheap"));
             }
             if (!RenderPipeline.BenchRunning && RenderPipeline.BenchSummary.Count > 0
                 && Math.Abs(RenderPipeline.BenchSuggestedScale - _config.RenderScale) > 0.001f)
@@ -5202,12 +5586,9 @@ namespace SDVRadiance
                 SlideClosed();
                 return;
             }
-            if (LayoutPromptShown)
+            if (PromptShown)
             {
-                if (_promptNew.Contains(x, y))
-                    PickFromLayoutPrompt(grouped: true);
-                else if (_promptOld.Contains(x, y))
-                    PickFromLayoutPrompt(grouped: false);
+                _promptChoices.FirstOrDefault(choice => choice.Bounds.Contains(x, y))?.Pick();
                 return;
             }
             if (_fineTuningButton != null && _fineTuningButton.Bounds.Contains(x, y))
@@ -5374,9 +5755,16 @@ namespace SDVRadiance
         /// has, so the panel checks every update and lays itself out again when it differs.</summary>
         private Point _laidOutForScreen;
 
+        /// <summary>Whether a cost measurement was running last tick, so the rows take their new
+        /// numbers the moment it ends rather than the next time the menu is opened.</summary>
+        private bool _costMeasureWasRunning;
+
         public override void update(GameTime time)
         {
             base.update(time);
+            if (_costMeasureWasRunning && !RenderPipeline.EffectCostRunning)
+                Reflow();
+            _costMeasureWasRunning = RenderPipeline.EffectCostRunning;
             var screen = new Point(Game1.uiViewport.Width, Game1.uiViewport.Height);
             if (screen != _laidOutForScreen)
             {
@@ -5480,7 +5868,7 @@ namespace SDVRadiance
         /// <summary>Whether a press on the page waits to see what the finger does. A phone has no
         /// mouse wheel, so a drag has to scroll, and a press that acted at once would flip every
         /// switch a scroll happened to start on. With a mouse a press still acts at once.</summary>
-        internal static bool FingerGestures { get; set; } = StardewModdingAPI.Constants.TargetPlatform == StardewModdingAPI.GamePlatform.Android;
+        internal static bool FingerGestures { get; set; } = OnAPhone;
 
         /// <summary>How far a finger moves before it counts as a drag and not a tap.</summary>
         private const int FingerDragDistance = 16;
@@ -5492,7 +5880,7 @@ namespace SDVRadiance
         /// it turns in every direction, so a drag there can only mean the compass.</summary>
         private bool WaitToSeeIfFingerScrolls(int x, int y)
         {
-            if (!FingerGestures || _replayingPress || NamingLook)
+            if (!FingerGestures || _replayingPress || PromptShown || NamingLook)
                 return false;
             bool onRail = x < xPositionOnScreen + RailWidth && y >= _bodyTop && y <= _bodyBottom;
             bool onPage = x >= _contentX && y >= _bodyTop && y <= _bodyBottom;
@@ -6147,7 +6535,7 @@ namespace SDVRadiance
             else
                 TunerText.DrawFit(spriteBatch, _translate("tuner.hint"), new Vector2(xPositionOnScreen + Scaled(28), _hintY), innerWidth, TunerTheme.Ink * 0.7f, 0.8f * _uiScale);
             DrawHelpBar(spriteBatch);
-            DrawLayoutPrompt(spriteBatch);
+            DrawOneTimePrompt(spriteBatch);
 
             // The game's red cross on the glass is a piece of the wooden box left behind; the glass
             // draws a round button of its own in the same place, as on the mock.

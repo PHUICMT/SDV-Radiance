@@ -157,6 +157,7 @@ namespace SDVRadiance
             public float PaneDaylightEase, WindowDaylightEase, WindowRoomLightEase;
             public float ShimmerEase, RainRingsEase, WaterStarsEase, WaterStarsAmountEase, SparkleDayEase, SparkleNightEase;
             public float FadeWet;
+            public float FadeSnowCaps;
 
             // ---- the sprite relief's normal buffer ----
             // This buffer is SCREEN SPACE, and it was one buffer for the whole game. The two
@@ -179,7 +180,7 @@ namespace SDVRadiance
             // it. Reported as the sunbeams flickering and moving about as soon as a second player
             // joined, before that player had even come outside.
             public float GodRayAmount, FogDayAmount, FogMistAmount, FadeBuildingShadow;
-            public float ToneMapEase, VignetteEase, ChromaticAberrationEase;
+            public float ToneMapEase, VignetteEase, ChromaticAberrationEase, SeasonDriftEase;
             // The sun shafts, the heat haze, the wading reflection, the displacement gate and the
             // window reflection follow this screen's scene too: whether it is under the sun, near a
             // heat source, standing in water, in an event, or somewhere the glass reflects. Shared,
@@ -495,6 +496,7 @@ namespace SDVRadiance
         private ref float _fogMistAmount => ref _screen.FogMistAmount;
         private ref float _fadeBuildingShadow => ref _screen.FadeBuildingShadow;
         private ref float _toneMapEase => ref _screen.ToneMapEase;
+        private ref float _seasonDriftEase => ref _screen.SeasonDriftEase;
         private ref float _vignetteEase => ref _screen.VignetteEase;
         private ref float _caEase => ref _screen.ChromaticAberrationEase;
         private ref float _shaftStrengthEase => ref _screen.ShaftStrengthEase;
@@ -542,6 +544,7 @@ namespace SDVRadiance
         private ref float _sparkleDayEase => ref _screen.SparkleDayEase;
         private ref float _sparkleNightEase => ref _screen.SparkleNightEase;
         private ref float _fadeWet => ref _screen.FadeWet;
+        private ref float _fadeSnowCaps => ref _screen.FadeSnowCaps;
         private ref FloodLightmap _flood => ref _screen.Flood;
         private ref RadianceCascades _cascades => ref _screen.Cascades;
         private ref float _cascadeBlend => ref _screen.CascadeBlend;

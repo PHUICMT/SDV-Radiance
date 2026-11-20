@@ -170,7 +170,7 @@ namespace SDVRadiance
                 float nightBoost = location.IsOutdoors ? GameClock.RampAt(TrulyDark()) : 0f;
                 float castStrength = lightStrength * MathHelper.Lerp(1.0f, 1.9f, nightBoost);
                 Vector2 feetScreen = Game1.GlobalToLocal(Game1.viewport,
-                    new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
+                    new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift - FarmerFeetRaise));
                 GatherCasts(feetScreen, castStrength, lenCfg);
                 foreach (var (rotation, st, a, _) in _lightShadowCasts)
                     _patchCasts.Add((_playerRenderTarget, null, _playerFeetInRenderTarget, rotation, new Vector2(1f, st), a, blur,
@@ -193,7 +193,7 @@ namespace SDVRadiance
                 return;
             }
 
-            var feetWorld = new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift);
+            var feetWorld = new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift - FarmerFeetRaise);
             var patchOriginWorld = feetWorld - new Vector2(PlayerPatchSize / 2f, PlayerPatchSize / 2f);
             _patchFeetInPatch = feetWorld - patchOriginWorld;
 

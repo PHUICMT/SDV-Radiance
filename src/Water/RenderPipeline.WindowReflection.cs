@@ -183,6 +183,9 @@ namespace SDVRadiance
         /// tiles: far enough to reach the building across a street, near enough that the strip is
         /// still on screen for a window in the upper half of it.</summary>
         private const int GlassSceneReachPx = 64 * 6;
+        /// <summary>The reach this frame, from <see cref="ModConfig.WindowSceneReachTiles"/>; at
+        /// most <see cref="GlassSceneReachPx"/>, which is the default.</summary>
+        private int _glassSceneReachPx = GlassSceneReachPx;
         /// <summary>How brightly the street shows in the glass. Faint by nature: a shop window
         /// returns a hint of the road, not a second copy of it. Faint is not invisible, though,
         /// and the first number here landed on invisible.</summary>
@@ -724,6 +727,7 @@ namespace SDVRadiance
             float pictureShare = indoors ? MathHelper.Lerp(GlassSheenNightShare, 1f, night)
                                          : MathHelper.Lerp(1f, GlassSheenNightShare, night);
             float streetInGlass = MathHelper.Clamp(config.WindowSceneReflectionStrength, 0f, 2f) * pictureShare * _windowReflectEase;
+            _glassSceneReachPx = (int)Math.Round(64f * MathHelper.Clamp(config.WindowSceneReachTiles, 1f, 6f));
             // The glare is light returned by the near face of the pane, so it rides the same ramp.
             float glare = MathHelper.Clamp(config.WindowGlareStrength, 0f, 2f) * pictureShare * _windowReflectEase;
             // Outdoors, the glass returns a lamp as far as the lamp can be seen against the sky.
@@ -1058,7 +1062,7 @@ namespace SDVRadiance
                 * (GlassSheenLadderFloor + (1f - GlassSheenLadderFloor) * pane.Strength);
             if (scene == null || !SceneRTReady || SceneSourceOff || share < 0.004f)
                 return;
-            int stripBottom = pane.WorldRect.Bottom + GlassSceneReachPx;
+            int stripBottom = pane.WorldRect.Bottom + _glassSceneReachPx;
             int sourceOriginX = Game1.viewport.X - MirrorSideReachPixels;
             int sourceOriginY = Game1.viewport.Y - MirrorTopReachPixels;
             // Premultiplied, with an alpha this time: colour times amount in the channels so the
@@ -1086,8 +1090,8 @@ namespace SDVRadiance
                         glassColour.Z * bandStrength, bandStrength);
                     float nearEdge = (bandTop - pane.WorldRect.Y) / (float)pane.WorldRect.Height;
                     float farEdge = (bandBottom - pane.WorldRect.Y) / (float)pane.WorldRect.Height;
-                    int worldTop = (int)Math.Round(stripBottom - farEdge * GlassSceneReachPx);
-                    int worldBottom = (int)Math.Round(stripBottom - nearEdge * GlassSceneReachPx);
+                    int worldTop = (int)Math.Round(stripBottom - farEdge * _glassSceneReachPx);
+                    int worldBottom = (int)Math.Round(stripBottom - nearEdge * _glassSceneReachPx);
                     var source = new Rectangle(glass.X - sourceOriginX, worldTop - sourceOriginY,
                         glass.Width, Math.Max(1, worldBottom - worldTop));
                     // The strip can run off the bottom of the source for a pane low on the screen.

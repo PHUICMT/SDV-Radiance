@@ -106,7 +106,13 @@ namespace SDVRadiance
         /// <summary>Where the farmer's own frame sits inside an upright bake of this size: centred,
         /// feet eight rows above the bottom. The layout every bake and every reader shares.</summary>
         internal static Vector2 FrameTopLeftInBake(Rectangle sourceRect, int bakeWidth, int bakeHeight) =>
-            new((bakeWidth - sourceRect.Width * 4f) / 2f, bakeHeight - sourceRect.Height * 4f - RowsUnderTheFeet);
+            new((bakeWidth - sourceRect.Width * 4f) / 2f, bakeHeight - sourceRect.Height * 4f - RowsUnderTheFeet + FarmerFeetRaise);
+
+        /// <summary>World pixels the farmer's drawn feet end above the frame's bottom, from
+        /// <see cref="ModConfig.ShadowPlayerFeetRaise"/>, set by the update tick. The frame sits that
+        /// much lower in the bake and the feet anchor that much higher on screen, so the shadow
+        /// starts at the feet a shorter body mod draws.</summary>
+        internal static float FarmerFeetRaise;
 
         /// <summary>The feet inside an upright bake of this size.</summary>
         internal static Vector2 FeetInBake(int bakeWidth, int bakeHeight) => new(bakeWidth / 2f, bakeHeight - RowsUnderTheFeet);

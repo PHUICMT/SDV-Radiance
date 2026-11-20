@@ -2,36 +2,263 @@
 
 All notable changes to SDV-Radiance. Older releases are documented on the Nexus page.
 
+## 2.5.0 - 2026-11-20
+
+### Fixed
+
+- **No window reflections with Seaside Valley.** Its recoloured town and outdoor art was not known to the
+  glass labels, so they were set aside. Its art is now listed beside the base game's in every season.
+  Asked about by LilietBorodina.
+- **Window reflections in the wrong places on Em's Town Bus.** Its windows sit elsewhere than the base
+  game's bus, so the glass landed on the body and missed the panes. The bus now has glass made for its
+  own windows and door, parked or broken down, in every season. Reported by Deovos.
+
+### Added
+
+- **The water reflection can ease in at the top of the screen (off by default).** What stands above the
+  screen cannot be reflected, so at a strong reflection the water near the top changed as you walked
+  or sat dark. "Ease in at the top" fades the reflection in over that band. From reports by mapleNinja
+  and CiaoLeo.
+- **Your reflection can be switched off.** "Your reflection" under the water reflection hides you, and
+  your co-op partners, from the water while the world and everyone else still reflect. Asked for by
+  kongbai616.
+- **Feet height for shorter-body mods.** "Your feet height" under the player's shadow moves the shadow
+  up to feet that a body mod such as Sweet Farmer draws higher, so you no longer look like you float.
+  0, the default, is the game's own body. Asked for by LilietBorodina.
+- **How far of the street a window shows.** A slider next to "The street in the glass" sets how many
+  tiles of the road in front of a window its glass shows, 1 to 6. Six looks as before; fewer show
+  less of the street but closer to its real size, so a doormat no longer turns into a tiny copy
+  on the glass. Asked about by xlydzh0902.
+- **Water paths from mods get the water effect (off by default).** Paths a mod draws as water, such
+  as Stream Paths, get the ripple, glints, stars and moonlight of water on their own water pixels, read
+  from the path's picture, so the rim the mod draws and the ground round it stay as they are. The
+  mod's colour stays too: they do not mirror. A path counts when its data gives it the game's wading
+  footstep, so other water path mods work the same way. Switch: Water paths from mods as water, under
+  Water. Asked for by ximing1021.
+- **A night sky for each season, in the water (off by default).** Winter already had the aurora.
+  Now summer has the Milky Way: a pale band of stars with a dark rift down it, brightest in the
+  darkest hours and on moonless nights, with dials for its strength and its colour (from what your
+  eyes see to what a camera sees). Spring has meteor showers: on some clear nights the shooting
+  stars come several times as often for a few hours, mostly from the same direction. Fall has the
+  harvest moon: on the nights round the full moon, the moonlight on the water is brighter and warmer
+  and the ground warms a little with it. Each has its own switch under Sky in the Weather tab.
+  Asked for by Charost on Nexus.
+
+- **Search finds a setting by what you see.** Type "god rays", "motion blur", "dots on the water",
+  "dark house" or "lag" and the search finds the group that does it, even when its name says
+  something else (Sun shafts, Tilt-shift, Surface, Darkness and colour, Performance). Most of the
+  "where is the switch for this" questions on the mod page were about a setting that was already
+  there under a name nobody thought to type. A whole sentence works too.
+
+- **The sun can cross the other way (off by default).** Sun crosses the other way, under Strength
+  and the sun, makes shadows lean right in the morning and left in the evening; sun rays, window
+  light and the moon follow. Turned on or off, the sun swings round through noon in about a
+  second. Asked for by FlopWaffle and HanzCagarion on Nexus.
+
+- **A preset says when you have changed it.** Pick Cinematic and move a dial, and its card reads
+  "Cinematic (changed)" instead of carrying on as if the look were still the preset. Click it to
+  put the preset back as it was.
+
+- **Find what costs the most here.** A button under Performance, "Measure this machine", prices
+  every effect on your own machine where you stand (about half a minute, the picture flickers while
+  it runs). Afterwards the heaviest are listed there, and each switch shows what it costs you in ms
+  a frame, so you can turn off the one that is actually slowing your game down. Eight players asked
+  which setting costs the most.
+
+- **Wide glow (off by default).** A second, much wider bloom round lamps, lit windows and the sun,
+  so the light seems to fill the air round it instead of stopping at a small halo. A slider under
+  Bloom; 0 is the bloom as before.
+- **People block the light from a window (off by default).** The farmer and the villagers standing
+  in a window's light take their shape out of the patch on the floor, cast away from the window
+  along the beam, and out of the light in the air behind them. A slider under the window light,
+  **People block the light**. It reuses the silhouettes the shadows are drawn from and costs
+  nothing while nobody stands near a beam.
+- **Author's pick.** A sixth preset card: the look the author plays with. Point at it and the help bar
+  names the machine it was tested on (Intel Core Ultra 7 270K Plus, 128 GB of RAM, RTX 5080), so you know it
+  may cost more on a slower one. Look settings only; how the game runs stays yours. It follows the
+  author's own settings from release to release. The preset cards have new pictures.
+- **A different look at night (off by default).** Under the presets in F6: keep your settings by
+  day and use a preset or one of your saved looks after dark. It changes slowly through the
+  evening, the way the light does, never in a step. Outdoors and indoors each get their own choice;
+  indoors keeps the day's look unless you pick one, so a shop lit by its lamps is not washed in the
+  night's glow. The mines and caves can have a look of their own too, day and night alike.
+- **A first install asks where to start.** The first time a new player is free in a save, F6 opens
+  with one question: best looks, balanced, or light on the machine. Each sets the performance
+  preset; the look stays as it ships. The answer that suits the machine is marked (light on a
+  phone or on built-in graphics). Anyone updating is never asked.
+- **Overall darkness.** One dial under the **Dynamic lighting** switch that moves indoor, night
+  and morning darkness together, keeping how they differ. 0 is as bright as the normal game. It
+  shows even with the darkness group folded, so "my room is too dark" has one place to go. The
+  three sliders are still there to fine-tune each one.
+- **Battery saver (off by default, on for a phone's first start).** On the Performance page: half the
+  frames are drawn while a menu is open or you stand still for 3 seconds, so a phone or laptop runs
+  cooler. The game keeps its speed, and moving or pressing anything brings 60 frames back at once.
+  Fishing, cutscenes, minigames and the F6 menu always run at full speed. Measured on my machine:
+  60 frames a second drops to 30 while standing still and comes back to 60 the moment you walk.
+- **Stutters are written to the SMAPI log.** A frame of 50 ms or more while you play leaves one line
+  in the log: how long it was, where, how much of it was Radiance and which part, and whether the
+  garbage collector ran. So a log you send with a stutter report already says whose stutter it
+  was. At most one line every 10 seconds; loading, warps, menus and cutscenes are left out.
+- **Shadows climb onto things (off by default).** A switch under the shadow casters: the shadow of a
+  person or an animal that runs up the screen now lies over a bush, a fence, a chest or a bin
+  standing in its way, under the sun and under lamps, instead of going under it and looking cut
+  off. Reported on Nexus as shadows cut off at the edges next to a bush or a building. Shadows
+  running down the screen are unchanged. Costs nothing: only the order the pieces are drawn in
+  changes.
+- **Seasons turn gradually (off by default).** A switch under the colour look: over the last week
+  of a season the plants drift toward the next one. Late spring's greens deepen, late summer's
+  grass turns golden, late autumn's colours dull before the snow, so day 1 of the new season is
+  less of a jump. Outdoors only, and not on the island or anywhere else with a season of its own.
+  A dial sets how far it goes. It runs inside the colour grade pass, so it costs a few
+  instructions a pixel.
+- **Other weather mods' skies count as overcast (off by default).** For players of Cloudy Skies and
+  Weather Wonders: when one of those draws a weather of its own, such as heavy fog or a blizzard,
+  the sun's shadows go soft and faint and the sun shafts, cloud shadows, aurora, Milky Way,
+  shooting stars and harvest moon step aside, as they do on a rainy day. Asked for on Nexus:
+  heavy fog came with sunny-day shadows and sun shafts. Turn it on under the colour look if you
+  use those mods.
+
+- **Keep the game's round shadow too (off by default).** A new switch under the shadow casters in
+  F6, **Keep the game's shadow too**: the player, the villagers and the animals keep the game's own
+  round shadow under their feet as well as the cast shadow. With the cast shadows turned down it
+  gives the plain game's look with a little more depth. Asked for on Nexus.
+
+- **Leaves under your feet (off by default).** In fall, walking over grass or dirt outdoors kicks
+  up a leaf now and then under your feet, which flutters up and settles behind you. Stone, wood, sand, tilled soil and wet ground lift nothing. It has its own card with the
+  other particles in F6: amount, size, the leaf look (like the other leaves, Realistic or Pixel),
+  and a switch to let villagers and animals kick them up too (off by default). Asked for by Charost on Nexus.
+
+- **Footprints (off by default).** Walking over snow, sand or wet dirt leaves footprints that fade
+  after a while: about a minute and a half on snow, a minute on sand and mud, sooner while snow or
+  rain is falling, and mud prints go as the ground dries. Snow prints are a blue grey hollow with
+  a lit rim. Villagers, pets, the horse and farm animals leave them too, each its own size. A card
+  with the particles in F6: how plain, how long they stay, and the villagers and animals switch.
+
+- **Sunlight through the leaves (off by default).** Small patches of sun inside a tree's shadow,
+  a pixel or two across, round at noon and drawn out along a low sun, that sway with the wind as the
+  canopy does and brighten and dim slowly. They add the sun's light and never get brighter than open
+  ground; none on a cloudy day or at night. A switch with brightness and how many, under the shadow
+  casters beside the objects' shadows.
+
+### Changed
+
+- **Thai in the new F6 menu uses Sarabun.** Thai text on the glass panel is drawn in Sarabun beside
+  the English, sized so a Thai letter stands as tall as an English capital, with every vowel and
+  tone mark placed the way the font intends: a tone mark over a vowel sits above it, marks over a
+  tall letter move aside, and letters with a tail lose it over a vowel below. It used to fall back
+  to the game's font, which was much larger than the English around it. The classic menu is
+  unchanged.
+- **Each preset has its own look.** Cinematic is a film look: warm, a little less colour, deep
+  shadows, highlights that roll off and darker corners. Vibrant is bright and green. Nocturne is a
+  cool moonlit night that stays out of the day. Subtle stays close to the game. They used to differ
+  by a little contrast and colour and looked alike. Nothing new is switched on, so they cost what
+  they did. Picking a preset card again after changing a setting puts the preset back.
+- **Lamp light from the bulb can be switched off.** 2.4.5 moved a street lamp's glow to the bulb at the
+  top of the post; a switch under the light, **Lamp light from the bulb**, now turns that off for anyone
+  who liked the old pool round the middle of the post. It stays on by default.
+- **Look strength by day.** A new dial under the colour look: how much of the chosen look shows by
+  day against its full strength at night. 1 is the same all day.
+
+### For translators
+
+6 new keys: `tuner.waterreflecttopease`, `help.waterreflecttopease`, `tuner.waterreflectplayer`, `help.waterreflectplayer`, `tuner.shadowplayerfeetraise`, `help.shadowplayerfeetraise`.
+
+2 new keys for the street in the glass: `tuner.windowscenereach` and `help.windowscenereach`.
+
+4 new keys for water paths: `tuner.section.waterpaths`, `tuner.waterpaths`, `help.waterpaths` and
+`tuner.section.waterpaths.searchwords`.
+
+20 new keys for the night skies: `config.weather.` + `milkyway`, `milkywaystrength`,
+`milkywaycolour`, `springmeteors`, `harvestmoon` (`.name`/`.tooltip` each); `tuner.` and `help.` for
+the same five.
+
+44 new keys ending in `.searchwords`, one for each group heading (for example
+`tuner.section.bloom.searchwords`). They are never shown: each is a comma list of everyday words a
+player might type when looking for that effect ("glow, halo, too bright"). Write the words people
+in your language would use, not a translation of the English list. A language without them still
+finds the groups through the English and Thai words.
+
+4 new keys for the sun's direction: `tuner.shadowsunpathmirrored`, `help.shadowsunpathmirrored`,
+`config.shadows.sunpathmirrored.name`, `config.shadows.sunpathmirrored.tooltip`.
+
+1 new key: `tuner.preset.changed` ("{{name}} (changed)"; keep `{{name}}`).
+
+6 new keys for the cost measurement: `tuner.costmeasure.` + `run`, `running` (keep `{{percent}}`),
+`where` (keep `{{place}}`), `top` (keep `{{list}}`), `tag` (keep `{{ms}}`), `allcheap`.
+
+4 new keys for the wide glow: `tuner.bloomwideglow`, `help.bloomwideglow`,
+`config.bloom.wideglow.name`, `config.bloom.wideglow.tooltip`.
+
+2 new keys for people blocking window light: `tuner.windowlightblockedbypeople`,
+`help.windowlightblockedbypeople`.
+
+2 new keys for the look by day: `tuner.lutbyday`, `help.lutbyday`.
+
+7 new keys for the look by place and time: `tuner.nightlook`, `tuner.nightlook.which`,
+`help.nightlook`, `tuner.nightlook.outdoors`, `tuner.nightlook.indoors`, `tuner.cavelook`,
+`tuner.look.sameasday`.
+
+2 new keys for the lamp light: `tuner.lamplightfrombulb`, `help.lamplightfrombulb`.
+
+2 new keys for the author's pick: `config.preset.author`, `tuner.preset.author.machine` (keep
+`{{cpu}}`, `{{ram}}` and `{{gpu}}`).
+
+9 new keys for the first-install question: `tuner.goal.asktitle`, `tuner.goal.ask`,
+`tuner.goal.suggested`, and `tuner.goal.` + `quality`, `balanced`, `light` (each with a `.small`
+line under it).
+
+2 new keys for the overall darkness: `tuner.darknessoverall`, `help.darknessoverall`.
+
+3 new keys for the battery saver: `config.powersaver.name`, `config.powersaver.tooltip`, `help.powersaver`.
+
+2 new keys for climbing shadows: `tuner.shadowsclimb`, `help.shadowsclimb`.
+
+4 new keys for the season's drift: `tuner.seasondrift`, `help.seasondrift`, `tuner.seasondriftstrength`,
+`help.seasondriftstrength`.
+
+2 new keys for weather mods: `tuner.sunyieldstoweathermods`, `help.sunyieldstoweathermods`.
+
+2 new keys for keeping the game's shadow: `tuner.shadowkeepgameshadow`, `help.shadowkeepgameshadow`.
+
+5 new keys for leaves under your feet: `config.particles.footleaves.name`, `config.particles.footleaves.tooltip`,
+`tuner.section.particlefootleaves`, `tuner.particlefootleaves`, `help.particlefootleaves`.
+8 more keys for its options: `config.particles.footleaveslook.name`, `config.particles.footleaveslook.tooltip`,
+`tuner.particlefootleaveslook.likeother`, `tuner.particlefootleaveseveryone`, `help.particlefootleaveseveryone`,
+`help.particlefootleaveslook.` + `likeother`, `realistic`, `pixel`.
+
+9 new keys for footprints: `tuner.section.footprints`, and `tuner.` and `help.` for `footprints`,
+`footprintsstrength`, `footprintslasting`, `footprintseveryone`.
+
+6 new keys for sunlight through the leaves: `tuner.` and `help.` for `sundapples`, `sundapplesstrength`,
+`sundapplesamount`.
+
 ## 2.4.9 - 2026-11-15
 
 ### Fixed
 
-- **No window reflections with Vibrant Pastoral Recolor.** Its town and outdoor sheets are drawn again,
-  so the glass labels did not recognise the art and were set aside, and shop windows such as Pierre's and
-  JojaMart's showed nothing. The art it draws is now known for those labels: all 23 panes in Town come
-  back in every season. Reported by ospreyboy.
-- **The movie theater's door reflection spilled onto the wall with Elle's Town Buildings.** Its door is
-  narrower than the base game's, and outside spring nothing told the mod the art had changed, so the
-  glass kept the old door's shape. The theater now has glass painted for Elle's door, in all four of
-  its palettes, and the town's glass knows the base game's art in every season, so a building that
-  another pack redraws loses its reflection instead of smearing it. Reported by Isalmonlikeit.
-- **The rest of Elle's Town Buildings had glass and water in the base game's places.** Every other
-  building the pack redraws now has its own labels, in all four palettes and seasons: windows the pack
-  added reflect too, the bathhouse's longer pool is water to its edges, and the signs on JojaMart's
-  glass are left out. Reported by Isalmonlikeit.
-- **Rain cost far more CPU with Wet ground on, most of all on a planted farm.** The water reflection
-  asked the wet ground's "is this near water" test, which says yes everywhere so that every sprite can
-  stand in front of a puddle, and so it drew every tree, bush and tuft of grass on screen into a picture
-  only the water reads. It now asks about real water. Measured on a planted farm in the rain: the
-  reflection 1.8 ms a frame before, 0.2 after, the same as with Wet ground off. Reported by Luca240.
-- **No floor number in the mines or Skull Cavern on Android.** The mod takes the number out of the
-  world layer so its effects do not blur or tint it, and draws it back afterwards in the PC's layout,
-  which the phone's screen does not use. On Android the game now draws it itself, as it does with the
-  mod switched off; the fishing cast meter and the caught-fish box go the same way. Reported by
-  rabbitlic.
-- **Hitches on machines where the graphics card is the slow part.** The brightness meter read its
-  probe back one tick after drawing it, and a card running a few frames behind made the game wait
-  for it, up to 60 ms twice a second in one player's report. It now waits eight ticks before reading.
+- **Window reflections were missing with Vibrant Pastoral Recolor.** VPR redraws the town and outdoor
+  sheets, so Radiance didn't recognise the windows and turned their glass off. It now knows VPR's art,
+  and all 23 windows in town reflect again in every season. Reported by ospreyboy.
+- **The movie theater's door reflection spilled onto the wall with Elle's Town Buildings.** Elle's door
+  is narrower than the base game's, and outside spring the mod couldn't tell the art had changed, so
+  the glass kept the old door's shape. The theater now has glass made for Elle's door, in all four
+  palettes. Town glass also knows the base game's art in every season, so a building another pack
+  redraws loses its reflection instead of smearing it. Reported by Isalmonlikeit.
+- **The other buildings in Elle's Town Buildings had glass and water where the base game has them.**
+  Each one now has its own, for all four palettes and seasons. The windows Elle added reflect too, the
+  longer bathhouse pool is water to its edges, and the signs on JojaMart's windows aren't treated as
+  glass. Reported by Isalmonlikeit.
+- **Rain used far too much CPU with Wet ground on, especially on a planted farm.** In the rain the
+  water reflection drew every tree, bush and patch of grass on screen, because the wet ground counts
+  everywhere as "near water". Now it only draws what is near real water. On a planted farm in the rain
+  the reflection went from 1.8 ms a frame to 0.2, the same as with Wet ground off. Reported by Luca240.
+- **The floor number was missing in the mines and Skull Cavern on Android.** Radiance takes the number
+  out of the world layer so its effects don't blur or tint it, then draws it back in the PC's layout,
+  which phones don't use. On Android the game now draws it itself, like with the mod off, and the
+  fishing cast bar and the catch popup work the same way. Reported by rabbitlic.
+- **Short stutters on PCs where the graphics card is the bottleneck.** The brightness check read its
+  result one tick after asking for it, and a card running a few frames behind made the game wait, up
+  to 60 ms twice a second in one player's log. It now waits eight ticks before reading.
 
 ### For translators
 
@@ -123,6 +350,30 @@ No new keys. `radiance_fingermenu` is a console command and adds none.
 
 ### Fixed
 
+- **No window reflections with Vibrant Pastoral Recolor.** Its redrawn town art did not match the glass
+  labels, so they were set aside. The labels now know its art. Reported by ospreyboy.
+- **The movie theater's door reflection spilled onto the wall with Elle's Town Buildings.** Its door is
+  narrower, and outside spring nothing told the mod the art had changed. The theater now has glass
+  painted for Elle's door in all four palettes. Reported by Isalmonlikeit.
+- **Zooming far out with a zoom mod could make the screen flash or shake.** Past four times a 4K
+  screen the mod stands aside like it does for the game's map screenshot, instead of asking for many
+  gigabytes of graphics memory. Reported by VerineYT.
+- **Hitches where the graphics card is the slow part.** The brightness meter no longer waits for the
+  card to catch up before reading its probe.
+- **Rain cost far more CPU with Wet ground on, most of all on a planted farm.** The water reflection
+  shared the wet ground's "near water everywhere" test and drew every plant on screen into a picture only
+  the water reads. It now asks about real water. Reported by Luca240.
+- **The game slowed to a crawl on Android with 2.4.6.** The texture bind check took the phone's own
+  bind for another mod's and chained the real one on again every frame. It now skips phones, counts only a
+  mod's own delegate and chains once. Reported by rabbitlic.
+- **Blocks on the ground and reflections in the wrong place with Clear Glasses.** The real texture bind now
+  runs after the one Clear Glasses and SpriteMaster put in its place. Reported by atiraxaugust, b0b1234 and
+  donalddts.
+- **The F6 menu scrolls by finger on a phone.** A drag scrolls the page or the tab rail, a sideways drag on
+  a slider moves it, and a tap acts when the finger lifts. `radiance_fingermenu on` tries the same gestures
+  with a mouse. Reported on Nexus. The tab rail also scrolls past the chosen tab now.
+- **Window light from Three Floor-to-ceiling Windows.** A Furniture Framework painting whose picture has
+  glass labelled counts as a window for "From the glass". Asked for on Nexus.
 - **Window light came out of the barn stalls in Warm Stalls and Cozy Boxes.** That mod lights each
   stall with a lamp it lists alongside the windows, and every one of those lamps threw a beam of
   window light and dust. Only lights at a real window do now: one whose tile the map swaps between

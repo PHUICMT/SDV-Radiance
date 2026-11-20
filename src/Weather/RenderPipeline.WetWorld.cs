@@ -185,9 +185,9 @@ namespace SDVRadiance
         /// ground, so every sprite on screen has to be in the sprite mask to stand in front of
         /// them, not only the ones near water the mask was written for.</summary>
         private bool _wetWantsSpriteMask;
-        internal bool WetWorldWantsSpriteMask => _wetWantsSpriteMask;
+        internal bool WetWorldWantsSpriteMask => _wetWantsSpriteMask || _snowCapsWantSpriteMask;
         /// <summary>Either wet reason to walk the whole screen instead of the water's box.</summary>
-        private bool WetWantsEverySprite => _wetPuddleMirrorWanted || _wetWantsSpriteMask;
+        private bool WetWantsEverySprite => _wetPuddleMirrorWanted || _wetWantsSpriteMask || _snowCapsWantSpriteMask;
 
         // Everything from here to the texture pair's resting half belongs to one screen:
         // RenderPipeline.Screens.cs says why.

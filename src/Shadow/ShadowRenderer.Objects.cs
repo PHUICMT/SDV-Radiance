@@ -2007,6 +2007,7 @@ namespace SDVRadiance
             {
                 EmitObject(spriteBatch, wholeTree, wholeTree.Bounds, feet, new Vector2(sourceRect.Width / 2f, sourceRect.Height),
                     alpha, rotation, stretch, depth, blur, ObjectHeadFade, effects, spriteRotation: tree.shakeRotation);
+                DrawTreeDapples(spriteBatch, tree, tile, sourceRect, rotation, stretch, alpha);
                 return;
             }
             // The first frame a tree art is seen, before the bake pass has drawn its picture.
@@ -2017,6 +2018,7 @@ namespace SDVRadiance
             // Tree canopy draws with origin (24, 96); fade about the trunk base.
             EmitObject(spriteBatch, tree.texture.Value, sourceRect, feet, new Vector2(24f, 96f),
                 alpha, rotation, stretch, depth, blur, ObjectHeadFade, effects, spriteRotation: tree.shakeRotation);
+            DrawTreeDapples(spriteBatch, tree, tile, sourceRect, rotation, stretch, alpha);
         }
 
         /// <summary>A grown tree's trunk and canopy drawn together into one picture the canopy's size,
@@ -2195,7 +2197,7 @@ namespace SDVRadiance
 
             Farmer who = Game1.player;
             Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
-                new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
+                new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift - FarmerFeetRaise));
             float lift = BodyLift(who);
             Vector2 castFeet = feet + LiftShift(lift, rotation, stretch);
             alpha *= LiftFade(lift);

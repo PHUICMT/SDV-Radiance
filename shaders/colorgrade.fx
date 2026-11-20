@@ -114,6 +114,28 @@ float3 ToLinear(float3 c) { return pow(saturate(c), 2.2); }
 float3 ToSRGB(float3 c)   { return pow(saturate(c), 1.0 / 2.2); }
 
 
+// The season drifting toward the next one over its last week (RenderPipeline.SeasonDriftNow).
+// Plants only, told apart by colour: a pixel whose green stands over its red and blue is a leaf
+// or a blade of grass, as far as one pixel can say; past autumn, the last week before winter
+// dulls every saturated colour a little instead. The plant's colour is pulled toward a tint at
+// its own luminance, keeping some of its own colour, so the light and shade in the art stay.
+float SeasonDriftAmount;   // 0 = off; 0..1 through the season's last week
+float3 SeasonDriftTint;    // the colour the plants drift toward, at luminance 1
+float SeasonDriftKeep;     // how much of the pixel's own colour rides along
+float SeasonDriftAnyHue;   // 0 = greens only, 1 = every saturated colour
+
+float3 SeasonDrift(float3 c)
+{
+    [branch] if (SeasonDriftAmount <= 0.0)
+        return c;
+    float lum = dot(c, LUMA);
+    float green = saturate((c.g - max(c.r, c.b)) * 8.0);
+    float chroma = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+    float plant = lerp(green, saturate(chroma * 4.0), SeasonDriftAnyHue) * smoothstep(0.03, 0.15, lum);
+    float3 target = lum * SeasonDriftTint + (c - lum) * SeasonDriftKeep;
+    return lerp(c, saturate(target), plant * SeasonDriftAmount);
+}
+
 // Sub-LSB triangular dither for this pass's 8-bit write: a slow gradient (a fog
 // bank, the tone curve, the vignette ramp) cannot survive eight bits without
 // stepping, and those steps are the colour banding players report. Interleaved
@@ -132,9 +154,11 @@ float DitherLsb(float2 uv)
 float4 GradePS(PixelInput input) : SV_TARGET
 {
     float4 src = tex2D(SourceSampler, input.UV);
+    // The season's drift comes first, so the grade treats the drifted plants as the art.
+    float3 base = SeasonDrift(src.rgb);
 
     // --- linear space: physically-meaningful ops (exposure, white balance) ---
-    float3 lin = ToLinear(src.rgb);
+    float3 lin = ToLinear(base);
 
     lin *= Brightness; // exposure
 
@@ -185,7 +209,7 @@ float4 GradePS(PixelInput input) : SV_TARGET
     col = saturate(col);
 
     // Blend back toward the original by (1 - Strength).
-    float3 outc = lerp(src.rgb, col, saturate(Strength));
+    float3 outc = lerp(base, col, saturate(Strength));
 
     // The LUT is the LAST artistic step and sits AFTER the parametric grade, so the sliders keep
     // meaning exactly what they meant and the LUT is a look laid over the result rather than a
@@ -199,7 +223,7 @@ float4 GradePS(PixelInput input) : SV_TARGET
     // with the lift taken out its warm temperature still turned a green-blue pane grey. Inside
     // a window the grade stands aside and the flood pass's window is what reaches the screen.
     [branch] if (WindowDetail > 0.001 && WindowZoneCount > 0.5)
-        outc = lerp(outc, src.rgb, WindowZone(input.UV) * WindowDetail);
+        outc = lerp(outc, base, WindowZone(input.UV) * WindowDetail);
 
     // Blue-light / eye-comfort filter: cut blue and lift red a touch. Applied AFTER the
     // grade blend so it is independent of the artistic controls (works with grading off).

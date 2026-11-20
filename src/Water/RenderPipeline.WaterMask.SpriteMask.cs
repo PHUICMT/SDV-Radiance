@@ -247,7 +247,7 @@ namespace SDVRadiance
             LocationDrawHook.BeginFrame();
             SpriteMaskReady = false;
             GameLocation? location = Game1.currentLocation;
-            if (location == null || (!_hasWaterInMask && !_wetWantsSpriteMask))
+            if (location == null || (!_hasWaterInMask && !_wetWantsSpriteMask && !_snowCapsWantSpriteMask))
                 return;
 
             RenderTargetBinding[] prev = _device.GetRenderTargets();
@@ -275,17 +275,23 @@ namespace SDVRadiance
                 // the duration, and the upscaler decides by exactly that global.
                 SheetUpscaler.SuspendedForOwnDraw = true;   // saved above, restored below
                 _device.SetRenderTarget(_spriteMaskRenderTarget);
-                _device.Clear(Color.Transparent);
+                // Transparent, with green and blue held at full: the shaders read only the alpha, and
+                // the two colour channels carry what KIND of thing covers a pixel (see the blends).
+                _device.Clear(new Color(0, 255, 255, 0));
                 var spriteBatch = _spriteMaskSpriteBatch;
-                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+                spriteBatch.Begin(SpriteSortMode.Deferred, StampBodiesCoverage, SamplerState.PointClamp);
 
                 StampCharacters(spriteBatch, location);
                 StampPlayer(spriteBatch);
                 StampOtherFarmers(spriteBatch);
-                StampSorryLabBubbles(spriteBatch, location);
                 StampHeldTool(spriteBatch);
                 StampAnimals(spriteBatch, location);
                 StampCritters(spriteBatch, location);
+                StampCurrentEvent(spriteBatch, location);
+                StampFarmEvent(spriteBatch);
+                spriteBatch.End();
+                spriteBatch.Begin(SpriteSortMode.Deferred, StampOtherCoverage, SamplerState.PointClamp);
+                StampSorryLabBubbles(spriteBatch, location);
                 StampTemporarySprites(spriteBatch, location.temporarySprites);
                 // The panning spot's sparkle is a field of its own, not in temporarySprites, and is
                 // painted inside the base location draw that LocationDrawHook does not record, so
@@ -293,12 +299,12 @@ namespace SDVRadiance
                 // asmoranomar on Nexus (17 Oct 2026): the spots were hard to find with the water on.
                 if (location.orePanAnimation != null)
                     StampPanSparkle(spriteBatch, location.orePanAnimation);
-                StampCurrentEvent(spriteBatch, location);
                 StampProjectilesAndDebris(spriteBatch, location);
-                StampFarmEvent(spriteBatch);
-                StampObjectsOnWater(spriteBatch, location);
                 StampTerrainFeatures(spriteBatch, location);
                 StampLargeTerrainFeatures(spriteBatch, location);
+                spriteBatch.End();
+                spriteBatch.Begin(SpriteSortMode.Deferred, StampThingsCoverage, SamplerState.PointClamp);
+                StampObjectsOnWater(spriteBatch, location);
                 StampBuildings(spriteBatch, location);
                 StampLocationsOwnArt(spriteBatch, location);
                 spriteBatch.End();
@@ -310,6 +316,22 @@ namespace SDVRadiance
                 _device.SetRenderTargets(prev);
             }
         }
+
+        // Coverage blends. The alpha builds exactly as AlphaBlend builds it, which is all the water
+        // and the wet ground read. The colour channels say what stands there instead of what colour
+        // it is: green falls to zero where a placed thing or a building stands, blue where a person
+        // or an animal does, each by multiplying the channel by one minus the stamp's alpha, so the
+        // order the stamps are drawn in does not matter. The snow caps read both.
+        private static readonly BlendState StampThingsCoverage = CoverageBlend(ColorWriteChannels.Green | ColorWriteChannels.Alpha);
+        private static readonly BlendState StampBodiesCoverage = CoverageBlend(ColorWriteChannels.Blue | ColorWriteChannels.Alpha);
+        private static readonly BlendState StampOtherCoverage = CoverageBlend(ColorWriteChannels.Alpha);
+
+        private static BlendState CoverageBlend(ColorWriteChannels channels) => new()
+        {
+            ColorSourceBlend = Blend.Zero, ColorDestinationBlend = Blend.InverseSourceAlpha,
+            AlphaSourceBlend = Blend.One, AlphaDestinationBlend = Blend.InverseSourceAlpha,
+            ColorWriteChannels = channels,
+        };
 
         /// <summary>Whatever the location painted for itself last frame, from the rectangles its
         /// own draw calls used.</summary>

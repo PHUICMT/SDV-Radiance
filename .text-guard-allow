@@ -1,0 +1,3 @@
+# Chromium profile names the Nexus tools touch, quoted as they appear in code
+word "Sessions"
+word "session"

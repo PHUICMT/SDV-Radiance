@@ -47,7 +47,32 @@ PROBE_DIR = REPO / "docs" / "local" / "nexus" / "inbox" / "probe"
 SIGNED_OUT_TEXT = r"Please log in again|session has expired|You need to \*\*log in\*\*"
 
 
+def start_without_old_tabs(profile_dir):
+    """Edge reopens every tab of the last run in this profile, and they piled up one window per
+    run. Forget the saved tabs and ask for a new tab page on start instead."""
+    for saved_tabs_folder in (Path(profile_dir) / "Default" / "Sessions",):
+        if saved_tabs_folder.is_dir():
+            for saved in saved_tabs_folder.iterdir():
+                try:
+                    saved.unlink()
+                except OSError:
+                    pass
+    preferences_path = Path(profile_dir) / "Default" / "Preferences"
+    try:
+        preferences = json.loads(preferences_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    preferences.setdefault("session", {})["restore_on_startup"] = 5
+    preferences.setdefault("profile", {})["exit_type"] = "Normal"
+    preferences["profile"]["exited_cleanly"] = True
+    try:
+        preferences_path.write_text(json.dumps(preferences), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def launch(playwright, headed=True):
+    start_without_old_tabs(PROFILE_DIR)
     """Open the shared profile. Always headed: Cloudflare blocks headless."""
     ctx = playwright.chromium.launch_persistent_context(
         str(PROFILE_DIR),

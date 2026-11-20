@@ -27,6 +27,9 @@ namespace SDVRadiance
         /// exactly one is in effect. Asked every frame rather than stamped once: the value can be
         /// changed from GMCM or the console while this menu is open.</summary>
         public Func<bool>? IsChosen;
+        /// <summary>Words that change while the menu is open, asked at draw time; null keeps the
+        /// label the button was made with.</summary>
+        public Func<string>? LabelNow;
         /// <summary>Drawn paler than its neighbours: a look chip the mod saved on its own (the look
         /// before a share code was kept), so a glance tells it from the ones the player named.</summary>
         public bool Faded;
@@ -155,7 +158,7 @@ namespace SDVRadiance
 
         private void DrawLabel(SpriteBatch spriteBatch, int dy, Color ink, float shadowIntensity, float? centreY = null)
         {
-            string label = _label;
+            string label = LabelNow?.Invoke() ?? _label;
             Vector2 m = TunerText.Measure(label);
             int textLeft = Bounds.X + LeftInset;
             int textWidth = Bounds.Width - LeftInset - RightInset;

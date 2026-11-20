@@ -67,6 +67,8 @@ namespace SDVRadiance
             SpawnWhirlwinds(config);
             SpawnRingSparkles(config);
             SpawnFootDust(config);
+            SpawnFootLeaves(config);
+            StampFootprints(config);
             SpawnFestiveLights(config);
             ScanWaterBreathSources(config);
             SpawnWaterfallMist(config);
@@ -882,6 +884,135 @@ namespace SDVRadiance
                 dragPerSecond: 3.2f,
                 ground: true);
             _footDustPuffs++;
+        }
+
+        /// <summary>Leaves a second under a runner, at density 1. Fewer than the dust: a leaf is
+        /// a thing the eye follows, and a run that throws up a cloud of them reads as a leaf blower.</summary>
+        private const float FootLeavesPerSecondRunning = 4f;
+        /// <summary>How hard a step throws a leaf up, in world pixels a second, and how fast it
+        /// comes back down. Together they lift it about a third of a tile and land it again a
+        /// little over a second later, which is a scuff, not a gust.</summary>
+        private const float FootLeafKick = 85f;
+        private const float FootLeafFall = 140f;
+        /// <summary>How far ahead of the feet a leaf starts, and how much of the walker's speed it
+        /// takes forward with it.</summary>
+        private const float FootLeafToePixels = 10f;
+        private const float FootLeafForwardShare = 0.3f;
+
+        /// <summary>Every leaf kicked up since the mod started, for the report.</summary>
+        private int _footLeavesKicked;
+
+        /// <summary>
+        /// Fallen leaves kicked up under the player's feet outdoors in fall, and under everyone
+        /// else's with the switch for that on.
+        ///
+        /// <para>The game sways the crops and the grass when somebody walks through them and lets
+        /// the leaves on a fall path lie still. This lifts a leaf now and then from grass and dirt,
+        /// the two kinds of ground a fall map paints leaves on, and never from stone, wood, sand or
+        /// a hoed field. A stroll lifts the odd leaf and a run a few more.</para>
+        ///
+        /// <para>The player's feet only unless asked, unlike the dust. A puff of dust is gone before
+        /// the eye finds it, but a leaf is followed all the way up and down, and with every villager
+        /// and every animal on a ranch lifting them they were flying up all over the screen.</para>
+        /// </summary>
+        private void SpawnFootLeaves(ModConfig config)
+        {
+            GameLocation? location = Game1.currentLocation;
+            if (_particles == null || !config.ParticleFootLeaves || location == null || !location.IsOutdoors
+                || LocalSky.Season != Season.Fall)
+                return;
+            // Wet leaves lie flat, the same reading the dust takes from the puddles.
+            float dryness = 1f - PuddleAmountNow;
+            if (LocalSky.IsRaining || LocalSky.IsSnowing || dryness <= 0.05f)
+                return;
+
+            float rate = FootLeavesPerSecondRunning * dryness
+                       * Math.Max(0f, config.ParticleDensity) * Math.Max(0f, config.ParticleFootLeavesAmount);
+            if (rate <= 0f)
+                return;
+            float sizeScale = Math.Max(0.1f, config.ParticleFootLeavesSize);
+            bool pixel = config.ParticleFootLeavesLook switch
+            {
+                FootLeafLook.Pixel => true,
+                FootLeafLook.Realistic => false,
+                _ => config.ParticleLeafLook == ParticleLeafLook.Pixel,
+            };
+            int artRow = pixel ? GameDebrisRow(Season.Fall) : 0;
+
+            Farmer? player = Game1.player;
+            if (player != null)
+            {
+                float speed = _playerVelocity.Length();
+                Vector2 travel = speed > 0.01f ? _playerVelocity / speed : Vector2.Zero;
+                KickFootLeaf(location, player.GetBoundingBox(), speed, travel, rate, sizeScale, artRow);
+            }
+            if (!config.ParticleFootLeavesEveryone)
+                return;
+            foreach (NPC villager in ShadowRenderer.CharactersIn(location))
+                if (villager.isMoving())
+                    KickFootLeaf(location, villager.GetBoundingBox(), VillagerWalkPixelsPerSecond,
+                        FacingDirection(villager.FacingDirection), rate, sizeScale, artRow);
+            foreach (FarmAnimal animal in location.animals.Values)
+                if (animal.isMoving())
+                    KickFootLeaf(location, animal.GetBoundingBox(), VillagerWalkPixelsPerSecond,
+                        FacingDirection(animal.FacingDirection), rate, sizeScale, artRow);
+        }
+
+        /// <summary>One walker's chance of a leaf this tick, by the same chance the dust uses.</summary>
+        private void KickFootLeaf(GameLocation location, Rectangle feet, float speed, Vector2 travel,
+            float rate, float sizeScale, int artRow)
+        {
+            if (speed < WalkingPixelsPerSecond)
+                return;
+            ParticleSystem pool = _particles!;
+            float share = Math.Min(1f, speed / RunningPixelsPerSecond);
+            if (pool.RandomUnit() > rate * share / 60f)
+                return;
+
+            int tileX = feet.Center.X / 64, tileY = (feet.Bottom - 1) / 64;
+            string? ground = location.doesTileHaveProperty(tileX, tileY, "Type", "Back");
+            if (ground is not "Grass" and not "Dirt")
+                return;
+            if (location.terrainFeatures.TryGetValue(new Vector2(tileX, tileY), out var feature)
+                && feature is StardewValley.TerrainFeatures.HoeDirt)
+                return;
+
+            // From the toe, kicked up and a little ahead, then down again. A foot walking through
+            // leaves pushes them forward, unlike the dust, which hangs where the heel left it; and
+            // kicked backward they were behind the walker before the eye found them.
+            var position = new Vector2(
+                feet.Center.X + travel.X * FootLeafToePixels + pool.RandomBetween(-8f, 8f),
+                feet.Bottom - 4f + travel.Y * FootLeafToePixels * 0.35f);
+            var velocity = new Vector2(pool.RandomBetween(-16f, 16f), -FootLeafKick * pool.RandomBetween(0.75f, 1.15f))
+                         + travel * speed * FootLeafForwardShare;
+            float lifetime = pool.RandomBetween(1.0f, 1.4f);
+            if (artRow > 0)
+            {
+                float lightness = pool.RandomBetween(0.85f, 1f);
+                pool.Spawn(ParticleSystem.AtlasCell.GameLeaf, position, velocity,
+                    lifetimeSeconds: lifetime, sizePixels: 44f * pool.RandomBetween(0.85f, 1.05f) * sizeScale,
+                    tint: new Color(lightness, lightness, lightness), emissive: false,
+                    fallPixelsPerSecondSquared: FootLeafFall, dragPerSecond: 0.8f,
+                    swayPixelsPerSecond: pool.RandomBetween(8f, 18f), swayPerSecond: pool.RandomBetween(1.4f, 2.4f),
+                    ground: true, artRow: artRow);
+            }
+            else
+            {
+                // Rust, brown and yellow, each a little darker or lighter than the last.
+                float pick = pool.RandomUnit();
+                Vector3 leaf = pick < 0.45f ? new Vector3(0.72f, 0.40f, 0.17f)
+                             : pick < 0.75f ? new Vector3(0.55f, 0.34f, 0.17f)
+                             : new Vector3(0.80f, 0.62f, 0.22f);
+                float shade = pool.RandomBetween(0.75f, 1f) * 1.2f;
+                pool.Spawn(ParticleSystem.AtlasCell.Leaf, position, velocity,
+                    lifetimeSeconds: lifetime, sizePixels: pool.RandomBetween(20f, 28f) * sizeScale,
+                    tint: new Color(leaf.X * shade, leaf.Y * shade, leaf.Z * shade), emissive: false,
+                    fallPixelsPerSecondSquared: FootLeafFall, dragPerSecond: 0.8f,
+                    rotationPerSecond: pool.RandomBetween(-5f, 5f),
+                    swayPixelsPerSecond: pool.RandomBetween(8f, 18f), swayPerSecond: pool.RandomBetween(1.4f, 2.4f),
+                    ground: true);
+            }
+            _footLeavesKicked++;
         }
 
         /// <summary>Petals or leaves lit a second over the whole screen, at density 1. A

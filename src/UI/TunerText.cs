@@ -79,7 +79,7 @@ namespace SDVRadiance
             bool ownFont = OwnFont(text);
             // Measured in the font the whole text is drawn in, and not remembered: every trial line
             // would otherwise fill the cache.
-            Vector2 SizeOf(string piece) => ownFont ? TunerFont.Measure(piece) : Game1.smallFont.MeasureString(piece);
+            Vector2 SizeOf(string piece) => ownFont ? TunerFont.Measure(piece, remember: false) : Game1.smallFont.MeasureString(piece);
             var wrapped = new StringBuilder();
             foreach (string paragraph in text.Replace("\r", "").Split('\n'))
             {

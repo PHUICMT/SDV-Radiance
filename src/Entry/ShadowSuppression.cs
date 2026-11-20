@@ -202,8 +202,9 @@ namespace SDVRadiance
         internal static readonly System.Collections.Generic.Dictionary<string, int> VanillaShadowSuppressed = [];
 
         /// <summary>Which kinds keep the game's own round shadow: those whose cast is switched off
-        /// while <see cref="ModConfig.CharactersSwitchedOffUseGameShadow"/> is on. Set by the
-        /// update tick with the switches above.</summary>
+        /// while <see cref="ModConfig.CharactersSwitchedOffUseGameShadow"/> is on, and all of them
+        /// while <see cref="ModConfig.CharactersKeepGameShadowToo"/> is. Set by the update tick
+        /// with the switches above.</summary>
         internal static bool GameShadowForPlayer, GameShadowForVillagers, GameShadowForCreatures;
 
         /// <summary>Sorted the way the shadow pass sorts them (ShadowRenderer.CharacterCasts), so a

@@ -234,8 +234,19 @@ namespace SDVRadiance
 
             GetParam(bloom, "Threshold")?.SetValue(MathHelper.Clamp(config.BloomThreshold - 0.08f * bloomNight, 0f, 1f));
             GetParam(bloom, "TexelSize")?.SetValue(new Vector2(1f / width, 1f / height));
+            // Fixed on the world for the same reason as the flood's half-size copy, and more so here: at a
+            // quarter of the frame a texel is one art pixel wide, and a walk's six pixels a frame put it on
+            // one art pixel, then across two. The threshold lets through far less of a blend than of the
+            // pure colour, so the glow pulsed at the frame rate, the wide layer most of all.
+            Vector2 brightGridRemainder = PixelsPastWorldGrid(source, bloomA);
+            GetParam(bloom, "BrightGridShift")?.SetValue(new Vector2(brightGridRemainder.X / source.Width, brightGridRemainder.Y / source.Height));
             bloom.CurrentTechnique = bloom.Techniques["BrightPass"];
             Pass(spriteBatch, source, bloomA, bloom);
+            // The wide layer is grown from the bright pass before the tight blur overwrites it.
+            float wideGlow = MathHelper.Clamp(config.BloomWideGlow, 0f, 1f);
+            RenderTarget2D? wideLayer = wideGlow > 0f
+                ? BuildWideGlow(spriteBatch, bloom, bloomA, brightGridRemainder, source.Width / (float)bloomA.Width)
+                : null;
 
             GetParam(bloom, "TexelSize")?.SetValue(new Vector2(1f / halfScratchA.Width, 0f));
             bloom.CurrentTechnique = bloom.Techniques["BlurHorizontal"];
@@ -249,6 +260,18 @@ namespace SDVRadiance
             GetParam(bloom, "EmissiveBoost")?.SetValue(MathHelper.Clamp(config.BloomEmissiveBoost, 0f, 1f));
             GetParam(bloom, "BloomWarm")?.SetValue(bloomNight);
             GetParam(bloom, "BloomTexture")?.SetValue(bloomA);
+            // The layer is three levels summed, and each level spreads a light's energy over four
+            // times the pixels of the one before, so a lamp's share of it is faint: the slider's top
+            // is three times the sum by day. At night it is three times that again, the same way the
+            // tight glow grows at night, because the lamps are small and the sunlit ground that feeds
+            // it by day is gone. Seen 22/10 at 1 (frozen A/B, YURU save): lamp-lit grass in Town at
+            // 21:00 and the warm sunlit paths at noon take a soft haze (1% of the frame brightened by
+            // 15 to 23 levels of 255), and a winter farm at noon moves by 3 levels at most, since the
+            // snow is grey and never feeds the layer.
+            float wideGain = 3f * (1f + 2f * bloomNight);
+            GetParam(bloom, "WideGlow")?.SetValue(wideLayer != null ? wideGlow * wideGain : 0f);
+            if (wideLayer != null)
+                GetParam(bloom, "WideTexture")?.SetValue(wideLayer);
             SetWindowZoneParams(bloom, config);
             bloom.CurrentTechnique = bloom.Techniques["Composite"];
             DrawFull(spriteBatch, source, destination, bloom);
@@ -405,7 +428,8 @@ namespace SDVRadiance
         private float BindLut(Effect effect, ModConfig config)
         {
             string wantedLut = (config.ColorGradeLut ?? "").Trim();
-            float amount = MathHelper.Clamp(config.ColorGradeLutAmount, 0f, 1f);
+            float amount = MathHelper.Clamp(config.ColorGradeLutAmount, 0f, 1f)
+                           * MathHelper.Lerp(MathHelper.Clamp(config.ColorGradeLutByDay, 0f, 1f), 1f, NightFactorNow());
             if (wantedLut.Length == 0 || amount <= 0f)
                 return 0f;
             if (!string.Equals(wantedLut, _lutLoaded, StringComparison.OrdinalIgnoreCase) || _lutTexture == null)
@@ -423,6 +447,55 @@ namespace SDVRadiance
             GetParam(effect, "LutTexture")?.SetValue(_lutTexture);
             return amount;
         }
+
+        /// <summary>Whether the place on screen keeps the calendar's season: outdoors, and not a
+        /// place with a season of its own (the island is always summer, the desert has none to turn).</summary>
+        private static bool SeasonDriftHere()
+        {
+            GameLocation? here = Game1.currentLocation;
+            return here is { IsOutdoors: true } && here.GetSeason() == Game1.season && here.GetSeason() != Season.Winter;
+        }
+
+        /// <summary>How far the season has drifted toward the next one now: nothing until the last
+        /// week, then a smooth rise to the full drift as the last day ends, scaled by the dial and by
+        /// the switch's own fade. Winter has nothing to drift: spring cannot be painted over snow.</summary>
+        private float SeasonDriftNow(ModConfig config)
+        {
+            if (_seasonDriftEase <= FadeGone)
+                return 0f;
+            float minutesIntoDay = MathHelper.Clamp(GameClock.MinutesNow() - 360f, 0f, 1200f);
+            float week = (Game1.dayOfMonth - 22 + minutesIntoDay / 1200f) / 7f;
+            float rise = MathHelper.SmoothStep(0f, 1f, MathHelper.Clamp(week, 0f, 1f));
+            return rise * MathHelper.Clamp(config.SeasonDriftStrength, 0f, 1f) * _seasonDriftEase;
+        }
+
+        /// <summary>The drift's colour for the season ending: deeper green into summer, gold into
+        /// autumn, a dulling of every colour into winter.</summary>
+        private void SetSeasonDriftParams(Effect effect, ModConfig config)
+        {
+            float amount = SeasonDriftNow(config);
+            GetParam(effect, "SeasonDriftAmount")?.SetValue(amount);
+            if (amount <= 0f)
+                return;
+            (Vector3 tint, float keep, float anyHue, float share) = Game1.season switch
+            {
+                Season.Spring => (new Vector3(0.55f, 1.15f, 0.45f), 0.6f, 0f, 0.45f),
+                Season.Summer => (new Vector3(1.55f, 1.05f, 0.35f), 0.25f, 0f, 0.55f),
+                _ => (new Vector3(1.1f, 1.0f, 0.9f), 0.15f, 1f, 0.35f),
+            };
+            // At luminance one, so the drift moves the colour and not the brightness.
+            tint /= Vector3.Dot(tint, new Vector3(0.2126f, 0.7152f, 0.0722f));
+            GetParam(effect, "SeasonDriftAmount")?.SetValue(amount * share);
+            GetParam(effect, "SeasonDriftTint")?.SetValue(tint);
+            GetParam(effect, "SeasonDriftKeep")?.SetValue(keep);
+            GetParam(effect, "SeasonDriftAnyHue")?.SetValue(anyHue);
+        }
+
+        /// <summary>The grade's blend: the dial when grading is on; full for the blue-light filter
+        /// alone, as it always was; nothing when the stage runs only for the season's drift, so
+        /// the drift arrives without the grade's highlight roll-off arriving with it.</summary>
+        private static float GradeStrength(ModConfig config, bool gradeOn)
+            => gradeOn ? MathHelper.Clamp(config.ColorGradeStrength, 0f, 1f) : config.BlueLightFilter > 0.001f ? 1f : 0f;
 
         private void ColorGrade(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, ModConfig config)
         {
@@ -442,7 +515,7 @@ namespace SDVRadiance
             // _meteredExposure is metered and eased in UpdateAutoExposure while auto is on, and
             // eased back to 1 by the frames that skip it, so bright scenes dim smoothly with no
             // pop and switching the meter off returns the picture to the dial alone.
-            GetParam(effect, "Strength")?.SetValue(gradeOn ? MathHelper.Clamp(config.ColorGradeStrength, 0f, 1f) : 1f);
+            GetParam(effect, "Strength")?.SetValue(GradeStrength(config, gradeOn));
             GetParam(effect, "Contrast")?.SetValue(gradeOn ? config.ColorGradeContrast : 1f);
             GetParam(effect, "Saturation")?.SetValue(gradeOn ? saturation : 1f);
             GetParam(effect, "Temperature")?.SetValue(gradeOn ? MathHelper.Clamp(temperature, -1f, 1f) : 0f);
@@ -452,6 +525,7 @@ namespace SDVRadiance
             GetParam(effect, "BlueLight")?.SetValue(MathHelper.Clamp(config.BlueLightFilter, 0f, 1f));
             GetParam(effect, "ScreenPixels")?.SetValue(new Vector2(Game1.viewport.Width, Game1.viewport.Height));
             GetParam(effect, "LutAmount")?.SetValue(BindLut(effect, config));
+            SetSeasonDriftParams(effect, config);
             SetWindowZoneParams(effect, config);
             effect.CurrentTechnique = effect.Techniques["ColorGrade"];
             DrawFull(spriteBatch, source, destination, effect);
@@ -548,7 +622,7 @@ namespace SDVRadiance
             // decides it can fuse.
             GetParam(effect, "SkyLightTint")?.SetValue(SkyLightTintNow(config));
             GetParam(effect, "GradeOn")?.SetValue(1f);
-            GetParam(effect, "Strength")?.SetValue(gradeOn ? MathHelper.Clamp(config.ColorGradeStrength, 0f, 1f) : 1f);
+            GetParam(effect, "Strength")?.SetValue(GradeStrength(config, gradeOn));
             GetParam(effect, "Contrast")?.SetValue(gradeOn ? config.ColorGradeContrast : 1f);
             GetParam(effect, "Saturation")?.SetValue(gradeOn ? saturation : 1f);
             GetParam(effect, "Temperature")?.SetValue(gradeOn ? MathHelper.Clamp(temperature, -1f, 1f) : 0f);
@@ -559,6 +633,7 @@ namespace SDVRadiance
             GetParam(effect, "NightAmt")?.SetValue(NightFactorNow() * _vignetteEase);
             GetParam(effect, "ScreenPixels")?.SetValue(new Vector2(Game1.viewport.Width, Game1.viewport.Height));
             GetParam(effect, "LutAmount")?.SetValue(BindLut(effect, config));
+            SetSeasonDriftParams(effect, config);
             SetWindowZoneParams(effect, config);
             effect.CurrentTechnique = effect.Techniques["Tail"];
             DrawFull(spriteBatch, source, destination, effect);
@@ -576,6 +651,17 @@ namespace SDVRadiance
         // screen one player can be inside while the other is not: it is saved per screen.
         // The field this describes lives in ScreenState now; see RenderPipeline.Screens.cs.
         private float _auroraAmount;
+        private float _milkyWayAmount;
+        private float _harvestMoonEase;
+        /// <summary>How bright the band is in the water at full strength. The shader adds the haze
+        /// texture and the star dust times MilkyWayAmount and has no constant registers left for a
+        /// scale of its own, so it lives here. Tuned in game on 18 Oct 2026: at a fifth of this the
+        /// band was there in the numbers and invisible on the screen, because the reflected sky is
+        /// scaled down by the reflection strength and then darkened with the rest of the night.</summary>
+        private const float MilkyWayBrightness = 4.5f;
+        /// <summary>The Milky Way's haze (assets/milkyway.png), loaded the first night it is wanted.</summary>
+        private Texture2D? _milkyWayTexture;
+        private bool _milkyWayTextureMissing;
         /// <summary>The aurora's strength for the glass, which is drawn into the world batch
         /// long before any of our passes and so cannot ask for it itself. Refreshed every
         /// frame by the finishing pass, which always runs.</summary>
@@ -616,6 +702,15 @@ namespace SDVRadiance
         private readonly Vector4[] _meteorPaths = new Vector4[MeteorSlots];
         private readonly Vector4[] _meteorShapes = new Vector4[MeteorSlots];
         private readonly Random _meteorRandom = new(0x5EED);
+        /// <summary>How much of tonight's spring meteor shower is up as the next streak is lit,
+        /// and the direction its streaks share. Set in UpdateShootingStar, read in SpawnShootingStar.</summary>
+        private float _showerNow;
+        private static int _showerDay = -1;
+        private static bool _showerTonight;
+        private static float _showerStart, _showerLength, _showerAngleDegrees, _showerSide;
+        /// <summary><c>radiance_shower</c>: 0 leaves the nightly roll in charge, 1 forces tonight's
+        /// shower on at its peak, -1 off. Not saved.</summary>
+        internal static int ShowerForce;
         /// <summary>Set by <c>radiance_star</c>: how many streaks to bring forward to this frame,
         /// if the night is clear enough for one at all. Requests are dropped when the gate is
         /// closed, so a request made through a closed gate is answered by the report rather than
@@ -627,6 +722,11 @@ namespace SDVRadiance
         internal float SkyAuroraUploaded;
         internal float SkyMeteorEnvelope;
         internal int SkyMeteorBurning;
+        /// <summary>Streaks lit since the game started, for radiance_report: the way to tell a
+        /// shower night from an ordinary one without staring at the water for a minute.</summary>
+        internal int SkyMeteorsLit;
+        internal float SkyShowerNow => _showerNow;
+        internal float SkyMilkyWayUploaded => _milkyWayAmount;
         internal double SkyMeteorSecondsToNext = -1;
         internal bool SkyClearNight;
 
@@ -1666,7 +1766,10 @@ namespace SDVRadiance
             bool windowsHere = interiorWindowed && config.WindowEffectsEnabled;
             bool windowedRoom = windowsHere && config.WindowBeamEnabled;
             if (windowedRoom && WindowGlassNeeded(config))
+            {
                 BuildWindowGlassMask(config);
+                BlockWindowLightWithPeople(config);
+            }
             else
             {
                 WindowGlassMask = null;
@@ -1957,6 +2060,7 @@ namespace SDVRadiance
             GetParam(effect, "GlitterPath")?.SetValue(_glitterPathEase * shimmer);
             GetParam(effect, "TintAmount")?.SetValue(0.35f * shimmer * indoorTint);
             GetParam(effect, "ReflectStrength")?.SetValue((config.WaterReflection ? config.WaterReflectStrength : 0f) * _fadeWater * indoorReflection);
+            GetParam(effect, "ReflectTopEase")?.SetValue(Math.Clamp(config.WaterReflectTopEase, 0f, 0.4f));
         }
 
         private float _causticWeatherMultiplier = 1f;
@@ -2026,7 +2130,7 @@ namespace SDVRadiance
             // this RT has content, it is the correct reflection by construction; the
             // screen-space flip only fills in scenery behind it (until P3c replaces that too).
             GetParam(effect, "ReflectedEntitiesOn")?.SetValue(ReflectRTReady && _reflectionRenderTarget != null ? 1f : 0f);
-            GetParam(effect, "ReflectedEntitiesHasPlayer")?.SetValue(ReflectRTReady && ReflectRTHasPlayer ? 1f : 0f);
+            GetParam(effect, "ReflectedEntitiesHasPlayer")?.SetValue(ReflectRTReady && (ReflectRTHasPlayer || PlayerReflectionOff) ? 1f : 0f);
             GetParam(effect, "ReflectedEntitiesTexture")?.SetValue(_reflectionRenderTarget);
             // P3c: sprite-free scenery source — the mirror reads the map's own pixels, so
             // an excluded sprite can't leave a body-shaped sky hole in the reflection.
@@ -2180,7 +2284,12 @@ namespace SDVRadiance
             // with the share, so at 0 the floor is 1 and no cell holds a star at all.
             float starShare = Math.Min(0.18f * _waterStarsAmountEase, 0.6f);
             GetParam(effect, "NightStarsFloor")?.SetValue(1f - starShare - Math.Min(0.01f, starShare));
-            GetParam(effect, "MoonGlow")?.SetValue(ShadowRenderer.MoonStrength());
+            // The harvest moon is the same moonlight, brighter and amber, eased so switching it or
+            // the night turning cloudy never steps the colour.
+            float harvestTarget = HarvestMoonNow(config);
+            _harvestMoonEase = Determinism.Settle(MathHelper.Lerp(_harvestMoonEase, harvestTarget, 0.02f), harvestTarget);
+            GetParam(effect, "MoonGlow")?.SetValue(ShadowRenderer.MoonStrength() * (1f + 2.2f * _harvestMoonEase));
+            GetParam(effect, "MoonColour")?.SetValue(Vector3.Lerp(new Vector3(0.55f, 0.68f, 0.95f), new Vector3(1.70f, 0.95f, 0.30f), _harvestMoonEase));
             // Raindrop rings ease in rather than covering the surface the frame a rain
             // totem (or a weather mod) flips the flag.
             // IsRainingHere, not the legacy static: that one mirrors the Default context only,
@@ -2237,7 +2346,7 @@ namespace SDVRadiance
             // dusk arriving or the weather flipping mid-evening never pops the curtains.
             float auroraTarget = config.AuroraEnabled && (LocalSky.Season == Season.Winter)
                 && (Game1.currentLocation?.IsOutdoors ?? false)
-                && !LocalSky.IsRaining && !LocalSky.IsSnowing && !LocalSky.IsLightning
+                && !LocalSky.IsClouded
                 ? nightGlow * AuroraShowStrength() : 0f;
             _auroraAmount = Determinism.Settle(
                 MathHelper.Lerp(_auroraAmount, auroraTarget, 0.02f), auroraTarget);
@@ -2246,6 +2355,29 @@ namespace SDVRadiance
             float auroraUploaded = _auroraAmount * config.AuroraStrength;
             GetParam(effect, "AuroraAmount")?.SetValue(auroraUploaded);
             SkyAuroraUploaded = auroraUploaded;
+            // The Milky Way rides the same kind of eased gate, for the same reason: a summer night
+            // going overcast, or the clock passing dusk, must never switch the band on in a step.
+            float milkyWayTarget = MilkyWaySceneAmount(config);
+            _milkyWayAmount = Determinism.Settle(
+                MathHelper.Lerp(_milkyWayAmount, milkyWayTarget, 0.02f), milkyWayTarget);
+            if (_milkyWayAmount > 0.001f && _milkyWayTexture == null && !_milkyWayTextureMissing)
+            {
+                _milkyWayTexture = LoadTexture("milkyway.png");
+                _milkyWayTextureMissing = _milkyWayTexture == null;
+            }
+            if (_milkyWayTexture != null)
+                GetParam(effect, "MilkyWayTexture")?.SetValue(_milkyWayTexture);
+            // The colour dial runs from what an eye sees (near white, a breath of blue at the edges
+            // and of cream in the core) to what a long exposure records (violet-blue arms, a warm
+            // gold core). Far above 1 at the photograph end on purpose: the night lighting multiplies
+            // the whole frame by a deep blue after this, and a core of (1.35, 1.08, 0.72) came out
+            // of it as blue as the rest of the lake (measured 18 Oct 2026). It takes this much
+            // red to arrive at a visible gold.
+            float milkyColour = MathHelper.Clamp(config.MilkyWayColour, 0f, 1f);
+            GetParam(effect, "MilkyWayEdgeTint")?.SetValue(Vector3.Lerp(new Vector3(0.80f, 0.85f, 0.97f), new Vector3(0.75f, 0.55f, 1.60f), milkyColour));
+            GetParam(effect, "MilkyWayCoreTint")?.SetValue(Vector3.Lerp(new Vector3(0.97f, 0.94f, 0.88f), new Vector3(2.60f, 1.60f, 0.45f), milkyColour));
+            GetParam(effect, "MilkyWayAmount")?.SetValue(_milkyWayTexture != null
+                ? _milkyWayAmount * MathHelper.Clamp(config.MilkyWayStrength, 0f, 2f) * MilkyWayBrightness : 0f);
             UpdateShootingStar(effect, config, nightGlow);
         }
 
@@ -2257,11 +2389,15 @@ namespace SDVRadiance
         {
             bool clearNight = config.ShootingStarsEnabled && nightGlow > 0.5f
                 && (Game1.currentLocation?.IsOutdoors ?? false)
-                && !LocalSky.IsRaining && !LocalSky.IsSnowing && !LocalSky.IsLightning;
+                && !LocalSky.IsClouded;
             double now = Determinism.Seconds;
             // The player's pace: only the quiet gap between stars shrinks, so a burst still reads
             // as a burst. A wait already counting down keeps its old length.
             double frequency = MathHelper.Clamp(config.ShootingStarFrequency, 0.25f, 4f);
+            // A spring meteor shower runs on top of the ordinary pace: up to five times as many
+            // streaks while it peaks. Only the gaps shrink, as with the player's own dial.
+            _showerNow = clearNight ? SpringShowerStrength(config) : 0f;
+            frequency *= 1.0 + 4.0 * _showerNow;
 
             for (int slot = 0; slot < MeteorSlots; slot++)
                 if (_meteors[slot].Active && now - _meteors[slot].StartedAt >= _meteors[slot].Seconds)
@@ -2329,6 +2465,44 @@ namespace SDVRadiance
                 ? Math.Max(0.0, _meteorNextAt - now) : -1;
         }
 
+        /// <summary>How much of tonight's spring meteor shower is up right now, 0 to 1.
+        ///
+        /// <para>Spring has the Lyrids in the real sky, a shower of a few hours on a night or two a
+        /// year. Here about one clear spring night in three carries one, so a player who looks for
+        /// it meets it within a week or two. Rolled once per night from the day number, like the
+        /// aurora, so split screen agrees and walking indoors does not re-roll it; it starts one to
+        /// four hours after the game's true dark and lasts two to four hours, ramping both ways
+        /// over half an hour.</para></summary>
+        private static float SpringShowerStrength(ModConfig config)
+        {
+            if (!config.SpringMeteorShowers || LocalSky.Season != Season.Spring)
+                return 0f;
+            int today = (int)(Game1.stats?.DaysPlayed ?? 0u);
+            if (today != _showerDay)
+            {
+                _showerDay = today;
+                var nightly = new Random(unchecked(today * 911 + 0x5C3));
+                _showerTonight = nightly.NextDouble() < 0.34;
+                _showerStart = 60f + (float)nightly.NextDouble() * 180f;      // after true dark
+                _showerLength = 120f + (float)nightly.NextDouble() * 120f;
+                _showerAngleDegrees = 25f + (float)nightly.NextDouble() * 30f;
+                _showerSide = nightly.NextDouble() < 0.5 ? -1f : 1f;
+            }
+            if (ShowerForce != 0)
+                return ShowerForce > 0 ? 1f : 0f;
+            if (!_showerTonight)
+                return 0f;
+            int trulyDark;
+            try { trulyDark = Game1.currentLocation != null ? Game1.getTrulyDarkTime(Game1.currentLocation) : 2000; }
+            catch { trulyDark = 2000; }
+            float start = (trulyDark / 100) * 60 + trulyDark % 100 + _showerStart;
+            const float RampMinutes = 30f;
+            float minutes = ClockMinutes();
+            return Math.Min(
+                MathHelper.Clamp((minutes - start) / RampMinutes, 0f, 1f),
+                MathHelper.Clamp((start + _showerLength - minutes) / RampMinutes, 0f, 1f));
+        }
+
         /// <summary>A slot with nothing burning in it, or -1 when the sky is already full.</summary>
         private int FreeMeteorSlot()
         {
@@ -2348,6 +2522,7 @@ namespace SDVRadiance
         /// view and given a longer run so at least one of them crosses open water.</para></summary>
         private void SpawnShootingStar(int slot, double now, bool acrossTheView)
         {
+            SkyMeteorsLit++;
             float tilesAcross = Game1.viewport.Width / 64f, tilesDown = Game1.viewport.Height / 64f;
             float originX = Game1.viewport.X / 64f, originY = Game1.viewport.Y / 64f;
             double weight = _meteorRandom.NextDouble();
@@ -2383,6 +2558,14 @@ namespace SDVRadiance
                 travelTiles = Math.Max(travelTiles, tilesDown * 0.8f);
             float angle = MathHelper.ToRadians(20f + 40f * (float)_meteorRandom.NextDouble());
             float side = _meteorRandom.NextDouble() < 0.5 ? -1f : 1f;
+            // A shower's meteors all come from one point in the sky, the radiant, so they cross the
+            // view nearly parallel; that, more than their number, is what tells a shower from an
+            // ordinary night. The ordinary background meteors still come from anywhere.
+            if (_showerNow > 0f && _meteorRandom.NextDouble() < 0.85 * _showerNow)
+            {
+                angle = MathHelper.ToRadians(_showerAngleDegrees + 8f * ((float)_meteorRandom.NextDouble() - 0.5f));
+                side = _showerSide;
+            }
             _meteors[slot] = new ShootingStar
             {
                 Active = true,
@@ -2441,29 +2624,92 @@ namespace SDVRadiance
         {
             if (!config.AuroraEnabled || !(LocalSky.Season == Season.Winter)
                 || !(Game1.currentLocation?.IsOutdoors ?? false)
-                || LocalSky.IsRaining || LocalSky.IsSnowing || LocalSky.IsLightning)
+                || LocalSky.IsClouded)
                 return 0f;
             float nightGlow = MathHelper.Clamp((ClockMinutes() - 1140) / 90f, 0f, 1f);
             return nightGlow * AuroraShowStrength() * MathHelper.Clamp(config.AuroraStrength, 0f, 2f);
         }
 
+        /// <summary>How much of the Milky Way is up, before the player's strength dial: a pure
+        /// function of the night, like <see cref="AuroraSceneAmount"/>, so the ground tint agrees
+        /// with the water on screens that have no water in them.
+        ///
+        /// <para>It starts half an hour before the game's true dark and takes two and a half hours
+        /// to come up fully: the real band shows from about two hours after sunset, once the sky
+        /// is properly dark, and is at its best in the darkest hours. A bright moon all but erases
+        /// it, as it does from any real field (observing guides call the full moon the one night
+        /// not to bother), so the nights near the full moon keep a tenth of it and the new-moon
+        /// nights show it all.</para></summary>
+        private static float MilkyWaySceneAmount(ModConfig config)
+        {
+            if (!config.MilkyWayEnabled || LocalSky.Season != Season.Summer
+                || !(Game1.currentLocation?.IsOutdoors ?? false)
+                || LocalSky.IsClouded)
+                return 0f;
+            int trulyDark;
+            try { trulyDark = Game1.getTrulyDarkTime(Game1.currentLocation); }
+            catch { trulyDark = 2000; }
+            float trulyDarkMinutes = (trulyDark / 100) * 60 + trulyDark % 100;
+            float deepening = MathHelper.Clamp((ClockMinutes() - (trulyDarkMinutes - 30f)) / 150f, 0f, 1f);
+            deepening = deepening * deepening * (3f - 2f * deepening);
+            return deepening * (1f - 0.9f * ShadowRenderer.MoonStrength());
+        }
+
+        /// <summary>How much of a harvest moon is up, 0 to 1: fall, the switch on, a clear night
+        /// outdoors, and the nights round the full moon (the 11th to the 18th, strongest on the 14th
+        /// and 15th). The real harvest moon is the full moon nearest the autumn equinox, which rises
+        /// at sunset several nights running and looks big and amber while it is low, so this is
+        /// strongest in the first hours after dusk and keeps two fifths of itself once the moon has
+        /// climbed. A pure function of the night, so the ground tint and the water agree.</summary>
+        private static float HarvestMoonNow(ModConfig config)
+        {
+            if (!config.HarvestMoon || LocalSky.Season != Season.Fall
+                || !(Game1.currentLocation?.IsOutdoors ?? false)
+                || LocalSky.IsClouded)
+                return 0f;
+            float nearFull = MathHelper.Clamp(1f - Math.Abs(Game1.dayOfMonth - 14.5f) / 3.5f, 0f, 1f);
+            if (nearFull <= 0f)
+                return 0f;
+            int trulyDark;
+            try { trulyDark = Game1.getTrulyDarkTime(Game1.currentLocation); }
+            catch { trulyDark = 1900; }
+            float duskStart = (trulyDark / 100) * 60 + trulyDark % 100 - 120f;
+            float risen = MathHelper.Clamp((ClockMinutes() - duskStart) / 60f, 0f, 1f);
+            float climbed = MathHelper.Clamp((ClockMinutes() - duskStart - 120f) / 240f, 0f, 1f);
+            return nearFull * risen * (1f - 0.6f * climbed);
+        }
+
         /// <summary>The colour the sky is lighting the world with, as a luminance-preserving
-        /// multiply. White unless an aurora is up.</summary>
+        /// multiply. White unless an aurora, the Milky Way or a harvest moon is up.</summary>
         internal static Vector3 SkyLightTintNow(ModConfig config)
         {
             float amount = Math.Min(1f, AuroraSceneAmount(config));
             SkyAuroraGlass = amount;
-            if (amount <= 0.001f)
+            float milkyWay = Math.Min(1f, MilkyWaySceneAmount(config) * MathHelper.Clamp(config.MilkyWayStrength, 0f, 2f));
+            float harvest = HarvestMoonNow(config);
+            if (amount <= 0.001f && milkyWay <= 0.001f && harvest <= 0.001f)
                 return Vector3.One;
             // A green-cyan push of a few percent, normalised so its luminance is exactly 1: the
             // world goes the colour of the sky without going one step brighter or darker. The
             // lesson the bounced-light colour was built on, and the reason the brightness family
             // of bug reports cannot be reopened by this.
-            Vector3 tint = new(0.88f, 1.06f, 0.99f);
-            float luminance = Vector3.Dot(tint, new Vector3(0.299f, 0.587f, 0.114f));
-            tint /= Math.Max(0.001f, luminance);
-            return Vector3.Lerp(Vector3.One, tint, amount * 0.85f);
+            Vector3 result = Vector3.One;
+            if (amount > 0.001f)
+                result = Vector3.Lerp(result, LuminanceOne(new Vector3(0.88f, 1.06f, 0.99f)), amount * 0.85f);
+            // The Milky Way lights nothing you could read by, so its push is a third of the
+            // aurora's: a cool pale cast on the ground beside the water, enough that the band in
+            // the water does not look pasted on.
+            if (milkyWay > 0.001f)
+                result *= Vector3.Lerp(Vector3.One, LuminanceOne(new Vector3(0.92f, 0.98f, 1.10f)), milkyWay * 0.3f);
+            // A harvest moon is real light, bright enough to work by (the name comes from that), so
+            // it warms the ground more than the Milky Way does: an amber cast, brightness unchanged.
+            if (harvest > 0.001f)
+                result *= Vector3.Lerp(Vector3.One, LuminanceOne(new Vector3(1.15f, 0.97f, 0.75f)), harvest * 0.8f);
+            return result;
         }
+
+        private static Vector3 LuminanceOne(Vector3 tint)
+            => tint / Math.Max(0.001f, Vector3.Dot(tint, new Vector3(0.299f, 0.587f, 0.114f)));
 
         /// <summary>The colour of the sky itself at this hour and in this weather, before the
         /// lighting stage's ambient is applied. Water takes it dimmed by that ambient; the glass

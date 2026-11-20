@@ -482,7 +482,7 @@ namespace SDVRadiance
         // registered under the cloud's name, so the report said the cloud pass ran twice a frame
         // when it ran once and the building shadow ran once. A pass nobody can name is a pass
         // nobody can measure.
-        private static readonly string[] _stageNames = ["flood", "lighting", "water", "cloud", "building", "bloom", "fog", "grade", "tilt", "finish", "tail", "wet"];
+        private static readonly string[] _stageNames = ["flood", "lighting", "water", "cloud", "building", "bloom", "fog", "grade", "tilt", "finish", "tail", "wet", "snow"];
         /// <summary>How many pass slots the GPU timer has to reserve. Read by GpuTimer rather
         /// than copied into it: the copy was wrong by one for long enough that the last pass
         /// never reported a GPU figure.</summary>
@@ -985,6 +985,7 @@ namespace SDVRadiance
             _floodApply = LoadEffect("floodapply.mgfxo");
             _floodApplyTried = true;
             _wetEffect = LoadEffect("wet.mgfxo");
+            _snowCapsEffect = LoadEffect("snowcaps.mgfxo");
             ScreenEdgeDrops.LensEffect = LoadEffect("lensdrops.mgfxo");
             _upscale = LoadEffect("upscale.mgfxo");
             ScreenZoomFilter.Effect = _upscale;
@@ -1143,6 +1144,7 @@ namespace SDVRadiance
                 case "tail": old = _tail; _tail = loaded; break;
                 case "floodapply": old = _floodApply; _floodApply = loaded; break;
                 case "wet": old = _wetEffect; _wetEffect = loaded; break;
+                case "snowcaps": old = _snowCapsEffect; _snowCapsEffect = loaded; break;
                 case "lensdrops": old = ScreenEdgeDrops.LensEffect; ScreenEdgeDrops.LensEffect = loaded; break;
                 case "upscale": old = _upscale; _upscale = loaded; ScreenZoomFilter.Effect = loaded; break;
                 case "cascades": old = _cascadesEffect; _cascadesEffect = loaded; break;
@@ -1165,7 +1167,7 @@ namespace SDVRadiance
             || (config.CloudShadowEnabled && _cloudShadow != null)
             || (config.BloomEnabled && _bloom != null && config.BloomIntensity > 0f)
             || ((config.FogEnabled || config.FogNightMist) && _fogEffect != null)
-            || ((config.ColorGradeEnabled || config.BlueLightFilter > 0.001f) && _colorGrade != null)
+            || ((config.ColorGradeEnabled || config.BlueLightFilter > 0.001f || config.SeasonDrift || _seasonDriftEase > FadeGone) && _colorGrade != null)
             || (config.TiltShiftEnabled && _tiltShift != null)
             || ((config.WaterEnabled || config.WaterReflection) && _water != null)
             || config.WindowReflectionEnabled || _windowReflectEase > FadeGone
@@ -1484,6 +1486,14 @@ namespace SDVRadiance
                 && config.WetWorldPuddles > 0.01f && PuddleAmountNow > 0.05f;
             _wetWantsSpriteMask = wetOn;
             if (_fadeWet > FadeGone && _wetEffect != null) AddStage(_wetStageDelegate ??= RenderWetWorld, 11);
+            // Snow on the tops of placed things, after the wet ground (which stands down under snow)
+            // and before the cloud shadows, bloom and grade, which all lie over it as over the snow
+            // the game paints itself.
+            bool snowCapsOn = config.SnowCapsEnabled && _snowCapsEffect != null && SnowLiesHere(Game1.currentLocation);
+            _fadeSnowCaps = snowCapsOn ? Ease01(_fadeSnowCaps) : Ease0(_fadeSnowCaps);
+            _snowCapsWantSpriteMask = _fadeSnowCaps > FadeGone;
+            if (_fadeSnowCaps > FadeGone && _snowCapsEffect != null && SpriteMaskReady && _spriteMaskRenderTarget != null)
+                AddStage(_snowCapsStageDelegate ??= RenderSnowCaps, 12);
             // Cloud shadows drift over the ground — outdoors only, and first so later
             // effects (bloom/grade) see the shadowed scene. They are SUNLIGHT (or moonlight)
             // being blocked, so they fade with dusk and at night exist only under a bright
@@ -1500,7 +1510,7 @@ namespace SDVRadiance
             //
             // Eased rather than switched: weather mods (Cloudy Skies) can flip this mid-day, and
             // the presence fade only ramps a stage back IN, so a hard cut here would pop.
-            bool cloudOvercast = LocalSky.IsRaining || LocalSky.IsSnowing || LocalSky.IsLightning;
+            bool cloudOvercast = LocalSky.IsClouded;
             Approach(ref _cloudWeatherAmount, cloudOvercast ? 0f : 1f, 0.05f);   // ~1s
             _cloudOvercastBlend = 1f - _cloudWeatherAmount;
             // Tomorrow's weather is already settled and already public: the television forecast
@@ -1531,7 +1541,7 @@ namespace SDVRadiance
                 // roof, which is the same sky.
                 bool underSky = outdoors
                     || (config.GodRaysSunGlassRoof && ShadowRenderer.UnderAGlassRoof(Game1.currentLocation));
-                bool overcast = underSky && (LocalSky.IsRaining || LocalSky.IsSnowing || LocalSky.IsLightning);
+                bool overcast = underSky && LocalSky.IsClouded;
                 // Shafts are a LOW-LIGHT phenomenon: they exist where a bright source beats a
                 // dim surround. At high noon outdoors nothing on screen is dim, so ride the
                 // presence down to 30% at midday and back to full by 08:00 / 17:00. Indoors
@@ -1585,6 +1595,7 @@ namespace SDVRadiance
             Approach(ref _toneMapEase, config.ColorGradeEnabled && config.ColorGradeToneMap ? 1f : 0f, 0.08f);
             Approach(ref _vignetteEase, config.VignetteEnabled ? 1f : 0f, 0.08f);
             Approach(ref _caEase, config.ChromaticAberrationEnabled && !eventNow ? 1f : 0f, 0.15f);
+            Approach(ref _seasonDriftEase, config.SeasonDrift && SeasonDriftHere() ? 1f : 0f, 0.05f);
             // The haze's sources come from the same scan the water-breath particles use; the
             // scan is called here too so the haze works with the particle switch off. It
             // early-outs unless the camera crossed a tile.
@@ -1593,7 +1604,7 @@ namespace SDVRadiance
             ChainStepEnd(ChainStep.BreathScan, breathScanStart);
             Approach(ref _heatHazeEase, config.HeatHazeEnabled && HeatOnScreen ? 1f : 0f, 0.05f);
             bool hazeLive = _heatHazeEase > FadeGone && _heatMapTexture != null;
-            bool gradeWanted = (config.ColorGradeEnabled || config.BlueLightFilter > 0.001f) && _colorGrade != null;
+            bool gradeWanted = (config.ColorGradeEnabled || config.BlueLightFilter > 0.001f || SeasonDriftNow(config) > 0f) && _colorGrade != null;
             bool finishWanted = (config.VignetteEnabled || config.ChromaticAberrationEnabled || hazeLive) && _finishing != null;
             // Tilt-shift presence first (its fade must be updated before the tail decision):
             // NOT during events - the game draws the event UI (SKIP button) as part of the

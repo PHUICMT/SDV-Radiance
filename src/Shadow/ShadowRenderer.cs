@@ -949,7 +949,10 @@ namespace SDVRadiance
                 return 0f;
             if (location.IsRainingHere() || location.IsLightningHere())
                 return 1f;
-            return location.IsSnowingHere() ? SnowOvercast : 0f;
+            if (location.IsSnowingHere())
+                return SnowOvercast;
+            // Another mod's weather (a heavy fog of Weather Wonders) is an overcast sky.
+            return location.IsOutdoors && LocalSky.IsClouded ? 1f : 0f;
         }
 
         /// <summary>How much of the full dimmer a SNOWFALL is worth.

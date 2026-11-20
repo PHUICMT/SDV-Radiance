@@ -493,12 +493,7 @@ namespace SDVRadiance
             for (int i = (int)Part.GridFlood; i <= (int)Part.GridWaterMask; i++) grids += _thisFrame[i];
             _thisFrame[(int)Part.Chain] = Math.Max(0, _thisFrame[(int)Part.Chain] - grids);
             for (int i = 0; i < PartCount; i++) ours += _thisFrame[i];
-            string location = Game1.currentLocation?.NameOrUniqueName ?? "";
-            if (location != _lastFrameLocation)
-                _framesSinceArrival = 0;
-            else if (_framesSinceArrival < int.MaxValue / 2)
-                _framesSinceArrival++;
-            _lastFrameLocation = location;
+            string location = _lastFrameLocation;
             int gen0 = GC.CollectionCount(0), gen1 = GC.CollectionCount(1), gen2 = GC.CollectionCount(2);
             int d0 = gen0 - _gcLastFrame[0], d1 = gen1 - _gcLastFrame[1], d2 = gen2 - _gcLastFrame[2];
             _gcLastFrame[0] = gen0; _gcLastFrame[1] = gen1; _gcLastFrame[2] = gen2;
@@ -525,6 +520,77 @@ namespace SDVRadiance
             f.TimeOfDay = Game1.timeOfDay;
             f.FramesSinceArrival = _framesSinceArrival;
             f.Doing = WhatTheGameWasDoing();
+        }
+
+        // ---- hitches written to the SMAPI log as they happen ----
+        // The ledger above answers "which frames, and why" only for somebody who types
+        // radiance_report at the right moment and pastes the result. What players send is the SMAPI
+        // log. A frame that stutters while somebody is playing now leaves one line in it, saying how
+        // long it was, where, how much of it was this mod and which of its parts, and whether the
+        // collector ran: the report a stutter complaint needed, written by the stutter itself.
+
+        /// <summary>A frame this long is a stutter anyone sees: three frames at 60.</summary>
+        private const double HitchMilliseconds = 50;
+        /// <summary>At most one line per this many seconds, so a bad patch cannot fill the log.</summary>
+        private const double HitchLogGapSeconds = 10;
+        private static long _lastHitchLoggedStamp;
+        private static int _hitchesNotLogged;
+        private static int _gcAtLastHitch0, _gcAtLastHitch1, _gcAtLastHitch2;
+
+        /// <summary>Write a stutter to the SMAPI log (trace level: in the file and in an uploaded log,
+        /// not on the console). Only while playing and past the arrival frames, where nothing long is
+        /// expected; loading, warping, menus and cutscenes are the ledger's business.</summary>
+        private static void WriteHitchToLog(double frameMs, long allocatedBytes, double stutterAbove)
+        {
+            int gen0 = GC.CollectionCount(0), gen1 = GC.CollectionCount(1), gen2 = GC.CollectionCount(2);
+            int newGen0 = gen0 - _gcAtLastHitch0, newGen1 = gen1 - _gcAtLastHitch1, newGen2 = gen2 - _gcAtLastHitch2;
+            _gcAtLastHitch0 = gen0; _gcAtLastHitch1 = gen1; _gcAtLastHitch2 = gen2;
+            if (frameMs < stutterAbove || _framesSinceArrival < ArrivalFrames || WhatTheGameWasDoing() != "playing")
+                return;
+            long now = Stopwatch.GetTimestamp();
+            if (_lastHitchLoggedStamp != 0 && (now - _lastHitchLoggedStamp) < HitchLogGapSeconds * Stopwatch.Frequency)
+            {
+                _hitchesNotLogged++;
+                return;
+            }
+            _lastHitchLoggedStamp = now;
+            IMonitor? monitor = QuietFailures.Monitor;
+            if (monitor == null)
+                return;
+
+            double ours = 0;
+            for (int i = 0; i < PartCount; i++) ours += _thisFrame[i];
+            var partOrder = new int[PartCount];
+            for (int i = 0; i < PartCount; i++) partOrder[i] = i;
+            Array.Sort(partOrder, (a, b) => _thisFrame[b].CompareTo(_thisFrame[a]));
+            var parts = new System.Text.StringBuilder();
+            for (int n = 0; n < 3; n++)
+            {
+                int i = partOrder[n];
+                if (_thisFrame[i] < 0.5) break;
+                parts.Append(parts.Length == 0 ? " (" : ", ").Append(Names[i]).Append(' ').Append(_thisFrame[i].ToString("0.0"));
+            }
+            if (parts.Length > 0) parts.Append(')');
+            // The collections since the last frame offered here, which a frame this long usually is.
+            string collector = newGen0 + newGen1 + newGen2 > 0 ? $", garbage collection gen0 +{newGen0} gen1 +{newGen1} gen2 +{newGen2}" : "";
+            string earlier = _hitchesNotLogged > 0 ? $" ({_hitchesNotLogged} more since the last line)" : "";
+            _hitchesNotLogged = 0;
+            string where = Game1.currentLocation?.NameOrUniqueName ?? "?";
+            monitor.Log($"Stutter: a {frameMs:0} ms frame in {where} at {Game1.timeOfDay / 100}:{Game1.timeOfDay % 100:00}. "
+                + $"Radiance {ours:0.0} ms{parts}, the game and other mods {Math.Max(0, frameMs - ours):0.0} ms{collector}, "
+                + $"{allocatedBytes / 1024} KB allocated{earlier}.", LogLevel.Trace);
+        }
+
+        /// <summary>Frames since the player entered the location they are in, on every frame the
+        /// player sees, focused or not, so the arrival work is recognised however the window is.</summary>
+        private static void CountFramesSinceArrival()
+        {
+            string location = Game1.currentLocation?.NameOrUniqueName ?? "";
+            if (location != _lastFrameLocation)
+                _framesSinceArrival = 0;
+            else if (_framesSinceArrival < int.MaxValue / 2)
+                _framesSinceArrival++;
+            _lastFrameLocation = location;
         }
 
         /// <summary>One word for the state the game was in when a frame ran long. The reason this
@@ -642,7 +708,18 @@ namespace SDVRadiance
 
             long now = Stopwatch.GetTimestamp();
             long allocatedNow = GC.GetAllocatedBytesForCurrentThread();
-            if (_lastFrameStamp != 0 && wallClockFrame)
+            // A frame after a draw the battery saver left out is twice as long by design. Neither its
+            // time nor its two updates say anything about this machine, and counting them would
+            // read as a slow game and lower the render scale for a player who is standing still.
+            bool pacedBySaver = wallClockFrame && PowerSaver.TakeSkippedDraw();
+            if (wallClockFrame)
+                CountFramesSinceArrival();
+            // A stall is a stall whether or not the saver left out the draw before it. That frame is
+            // one picture longer by design, so the bar is one picture higher.
+            if (_lastFrameStamp != 0 && wallClockFrame && pacedBySaver)
+                WriteHitchToLog((now - _lastFrameStamp) * 1000.0 / Stopwatch.Frequency, allocatedNow - _allocatedAtLastFrame,
+                    HitchMilliseconds + 1000.0 / 60.0);
+            if (_lastFrameStamp != 0 && wallClockFrame && !pacedBySaver)
             {
                 double frameMs = (now - _lastFrameStamp) * 1000.0 / Stopwatch.Frequency;
                 long allocatedThisFrame = allocatedNow - _allocatedAtLastFrame;
@@ -678,6 +755,9 @@ namespace SDVRadiance
                         _focusedFrameEmaMs = _focusedFrameEmaMs <= 0
                             ? frameMs : _focusedFrameEmaMs * 0.9 + frameMs * 0.1;
                 }
+                // Focused or not: a window in the background sleeps about 20 ms a frame, well short
+                // of a stutter, and a frame past it is a stall either way.
+                WriteHitchToLog(frameMs, allocatedThisFrame, HitchMilliseconds);
                 // Counted, never discarded. Throwing the frame away would leave an average that
                 // silently described a different set of frames than the one it claims to.
                 if (!focused)
@@ -690,11 +770,14 @@ namespace SDVRadiance
                 // Fold the updates that ran for the frame just drawn. A frame that drew without a
                 // single update in it is counted too: that is the accumulator not yet full, and
                 // dropping it would flatter the average.
-                _tickSum += _ticksThisFrame;
-                if (_ticksThisFrame > _tickMax) _tickMax = _ticksThisFrame;
-                _ourTickSum += _ourTickMs;
-                if (_ourTickMs > _ourTickMax) _ourTickMax = _ourTickMs;
-                _tickFrames++;
+                if (!pacedBySaver)
+                {
+                    _tickSum += _ticksThisFrame;
+                    if (_ticksThisFrame > _tickMax) _tickMax = _ticksThisFrame;
+                    _ourTickSum += _ourTickMs;
+                    if (_ourTickMs > _ourTickMax) _ourTickMax = _ourTickMs;
+                    _tickFrames++;
+                }
                 _ticksThisFrame = 0;
                 _ourTickMs = 0;
             }

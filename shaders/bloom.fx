@@ -33,6 +33,24 @@ float Intensity;      // how strongly bloom is added back (0..2)
 float2 TexelSize;     // (1/width, 1/height) of the blur source, for tap offsets
 float BloomWarm;      // 0 by day .. 1 at night: tint the bloom warm so lamps/windows glow amber
 float EmissiveBoost;  // 0..1: how far a saturated bright pixel may glow below Threshold
+float WideGlow;       // how much of the wide layer is added beside the tight glow (0 = not built), set on the CPU
+float WideFromLights; // 1 on the first shrink only: keep what reads as a light, drop bright grey
+float2 BrightGridShift; // the frame's UV past the bright pass's last world-fixed texel: read back by it, read on by the composite
+float4 WideShrinkMap; // xy scale, zw offset: a level's UV to its source's UV, for the first shrink's world-fixed grid
+float4 WideReadMap;   // xy scale, zw offset: the screen's UV to the finished layer's UV
+
+// The wide layer: the bright pass shrunk three more times and grown back, summed. Read only by
+// the composite, and only while WideGlow is above zero.
+texture WideTexture;
+sampler2D WideSampler = sampler_state
+{
+    Texture = <WideTexture>;
+    MinFilter = Linear;
+    MagFilter = Linear;
+    MipFilter = None;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
 
 struct PixelInput
 {
@@ -98,10 +116,11 @@ float WindowZone(float2 uv)
 float4 BrightPassPS(PixelInput input) : SV_TARGET
 {
     float2 t = TexelSize;
-    float3 s0 = tex2D(SourceSampler, input.UV + float2(-t.x, -t.y)).rgb;
-    float3 s1 = tex2D(SourceSampler, input.UV + float2( t.x, -t.y)).rgb;
-    float3 s2 = tex2D(SourceSampler, input.UV + float2(-t.x,  t.y)).rgb;
-    float3 s3 = tex2D(SourceSampler, input.UV + float2( t.x,  t.y)).rgb;
+    float2 uv = input.UV - BrightGridShift;
+    float3 s0 = tex2D(SourceSampler, uv + float2(-t.x, -t.y)).rgb;
+    float3 s1 = tex2D(SourceSampler, uv + float2( t.x, -t.y)).rgb;
+    float3 s2 = tex2D(SourceSampler, uv + float2(-t.x,  t.y)).rgb;
+    float3 s3 = tex2D(SourceSampler, uv + float2( t.x,  t.y)).rgb;
 
     float w0 = 1.0 / (1.0 + dot(s0, LUMA));
     float w1 = 1.0 / (1.0 + dot(s1, LUMA));
@@ -151,6 +170,73 @@ float4 BlurVerticalPS(PixelInput input) : SV_TARGET
 }
 
 //-----------------------------------------------------------------------------
+// Wide glow (the "multi-level" bloom of Call of Duty: Advanced Warfare, Jimenez 2014).
+//
+// The tight blur above reaches about eight screen pixels, which reads as a lamp's own halo and
+// nothing more. A light that lights the air round it spreads much further than that, and a blur
+// that wide at half size would cost a kernel a hundred taps long. Instead the bright pass is
+// shrunk by half three times with a 13-tap filter, and the small images are grown back one level
+// at a time with a 3x3 tent, each added onto the level above. Every level adds a glow twice as wide
+// as the one before, so the sum falls off slowly the way light through haze does.
+//
+// TexelSize is the SOURCE level's texel for both passes. Both read with linear filtering, so a
+// tap set between texels averages four; the offsets are in source texels.
+//-----------------------------------------------------------------------------
+float3 WideTap(float2 uv, float2 texel, float2 offset)
+{
+    return tex2Dlod(SourceSampler, float4(uv + texel * offset, 0.0, 0.0)).rgb;
+}
+
+float4 WideDownPS(PixelInput input) : SV_TARGET
+{
+    float2 texel = TexelSize;
+    float2 uv = input.UV * WideShrinkMap.xy + WideShrinkMap.zw;
+    // Thirteen taps as five overlapping 2x2 boxes: one in the middle (weight 0.5) and four at the
+    // corners (0.125 each). The overlap is what keeps a bright texel from flickering as the
+    // camera moves it across the grid of the smaller image.
+    float3 farTopLeft = WideTap(uv, texel, float2(-2.0, -2.0));
+    float3 farTop = WideTap(uv, texel, float2(0.0, -2.0));
+    float3 farTopRight = WideTap(uv, texel, float2(2.0, -2.0));
+    float3 farLeft = WideTap(uv, texel, float2(-2.0, 0.0));
+    float3 centre = WideTap(uv, texel, float2(0.0, 0.0));
+    float3 farRight = WideTap(uv, texel, float2(2.0, 0.0));
+    float3 farBottomLeft = WideTap(uv, texel, float2(-2.0, 2.0));
+    float3 farBottom = WideTap(uv, texel, float2(0.0, 2.0));
+    float3 farBottomRight = WideTap(uv, texel, float2(2.0, 2.0));
+    float3 nearTopLeft = WideTap(uv, texel, float2(-1.0, -1.0));
+    float3 nearTopRight = WideTap(uv, texel, float2(1.0, -1.0));
+    float3 nearBottomLeft = WideTap(uv, texel, float2(-1.0, 1.0));
+    float3 nearBottomRight = WideTap(uv, texel, float2(1.0, 1.0));
+    float3 sum = (nearTopLeft + nearTopRight + nearBottomLeft + nearBottomRight) * 0.125
+               + (farTopLeft + farTop + farLeft + centre) * 0.03125
+               + (farTop + farTopRight + centre + farRight) * 0.03125
+               + (farLeft + centre + farBottomLeft + farBottom) * 0.03125
+               + (centre + farRight + farBottom + farBottomRight) * 0.03125;
+    // Only light feeds the wide layer. A field of snow or a white wall passes the bright pass as
+    // readily as a lamp does, and grown to a quarter of the screen and lifted to be seen round a
+    // small lamp, it turned a winter farm at noon into white fog. Grey has no colour however bright
+    // it is, so the same test the coloured-light glow uses keeps it out: lamps, lit windows, flames
+    // and warm sunlit ground stay.
+    float brightest = max(sum.r, max(sum.g, sum.b));
+    float saturation = (brightest - min(sum.r, min(sum.g, sum.b))) / max(brightest, 1e-4);
+    sum *= lerp(1.0, smoothstep(0.15, 0.45, saturation), WideFromLights);
+    return float4(sum, 1.0);
+}
+
+// Drawn with additive blending onto the level above, which already holds its own shrunk image.
+float4 WideUpPS(PixelInput input) : SV_TARGET
+{
+    float2 texel = TexelSize;
+    float2 uv = input.UV;
+    float3 sum = WideTap(uv, texel, float2(0.0, 0.0)) * 4.0;
+    sum += (WideTap(uv, texel, float2(-1.0, 0.0)) + WideTap(uv, texel, float2(1.0, 0.0))
+          + WideTap(uv, texel, float2(0.0, -1.0)) + WideTap(uv, texel, float2(0.0, 1.0))) * 2.0;
+    sum += WideTap(uv, texel, float2(-1.0, -1.0)) + WideTap(uv, texel, float2(1.0, -1.0))
+         + WideTap(uv, texel, float2(-1.0, 1.0)) + WideTap(uv, texel, float2(1.0, 1.0));
+    return float4(sum / 16.0, 1.0);
+}
+
+//-----------------------------------------------------------------------------
 // Composite: screen-blend the blurred bloom over the scene. Screen (rather than
 // plain additive) asymptotes toward white instead of piling past it, so bright
 // areas glow without blowing out into a flat white blob (e.g. indoors).
@@ -158,7 +244,10 @@ float4 BlurVerticalPS(PixelInput input) : SV_TARGET
 float4 CompositePS(PixelInput input) : SV_TARGET
 {
     float4 scene = tex2D(SourceSampler, input.UV);
-    float3 bloom = saturate(tex2D(BloomSampler, input.UV).rgb * Intensity);
+    float3 glow = tex2D(BloomSampler, input.UV + BrightGridShift).rgb;
+    [branch] if (WideGlow > 0.001)
+        glow += min(tex2Dlod(WideSampler, float4(input.UV * WideReadMap.xy + WideReadMap.zw, 0.0, 0.0)).rgb * WideGlow, 0.6);
+    float3 bloom = saturate(glow * Intensity);
     // At night the bloom turns warm/amber so lamp and window glow reads as a cosy halo
     // rather than a neutral haze.
     bloom *= lerp(float3(1.0, 1.0, 1.0), float3(1.10, 1.02, 0.82), BloomWarm);
@@ -172,3 +261,5 @@ technique BrightPass    { pass P0 { PixelShader = compile PS_SHADERMODEL BrightP
 technique BlurHorizontal{ pass P0 { PixelShader = compile PS_SHADERMODEL BlurHorizontalPS(); } }
 technique BlurVertical  { pass P0 { PixelShader = compile PS_SHADERMODEL BlurVerticalPS(); } }
 technique Composite     { pass P0 { PixelShader = compile PS_SHADERMODEL CompositePS(); } }
+technique WideDown      { pass Down { PixelShader = compile PS_SHADERMODEL WideDownPS(); } }
+technique WideUp        { pass Up { PixelShader = compile PS_SHADERMODEL WideUpPS(); } }

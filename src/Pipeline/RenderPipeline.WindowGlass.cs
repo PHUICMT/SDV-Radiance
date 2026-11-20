@@ -207,7 +207,7 @@ namespace SDVRadiance
             _windowGlassMixEase = Determinism.Settle(EasedToward(_windowGlassMixEase, target, RoomEaseRate), target);
             if (_windowGlassMixEase > FadeGone && _windowGlassTarget != null && !_windowGlassTarget.IsDisposed)
             {
-                GetParam(effect, "WindowGlassTexture")?.SetValue(_windowGlassTarget);
+                GetParam(effect, "WindowGlassTexture")?.SetValue(_windowGlassLiveThisFrame ? _windowGlassLiveTarget : _windowGlassTarget);
                 Texture2D curtainColour;
                 if (_windowGlassTintPainted && _windowGlassTintTarget is { IsDisposed: false } tint)
                     curtainColour = tint;
@@ -1037,6 +1037,7 @@ namespace SDVRadiance
             return $"{WindowGlassTilesDrawn} glass tiles painted, {_windowGlassTilesKnownClear} known to have none, {WindowGlassRefusedForArt} refused for changed art, "
                  + $"painted {WindowGlassBuilds} times and reused {WindowGlassBuildsSkipped} times since launch, "
                  + $"{WindowGlassTilesLoaded} labelled in all ({_windowGlassInAtlas.Count} unpacked for this game), mix {_windowGlassMixEase:0.00}, "
+                 + $"people blocking the light this frame {WindowBeamBlockers}, "
                  + $"flood shader {(shaderTakesIt ? "takes the glass" : "HAS NO glass parameters")} -> {path}";
         }
 
@@ -1066,9 +1067,156 @@ namespace SDVRadiance
             return false;
         }
 
+        /// <summary>
+        /// The people standing in a window's light take their own shape out of the patch on the
+        /// floor, cast away from the window along the beam, and out of the light in the air behind
+        /// them.
+        /// </summary>
+        /// <remarks>
+        /// <para>The beam is painted once per room and reused (see BuildWindowGlassMask), so a body
+        /// cannot be painted into it. When one stands near a beam, the painted target is copied into
+        /// a second one and each body's silhouette is laid over the copy along the beam's direction,
+        /// taking light away where it lies; the flood shader reads the copy that frame. The
+        /// silhouettes are the ones the shadow pass baked this frame, so nothing is baked or drawn
+        /// twice, and the shader is untouched. A room where nobody stands near a beam reads the
+        /// painted target as before and costs nothing.</para>
+        /// <para>A body near a beam is laid over the copy whether or not its shadow reaches the
+        /// light: taking light away from a texel with none changes nothing, so the beam's own edge
+        /// is the shadow's edge and nothing pops in as somebody walks into the light.</para>
+        /// </remarks>
+        private void BlockWindowLightWithPeople(ModConfig config)
+        {
+            _windowGlassLiveThisFrame = false;
+            WindowBeamBlockers = 0;
+            float strength = MathHelper.Clamp(config.WindowLightBlockedByPeople, 0f, 1f);
+            GameLocation? location = Game1.currentLocation;
+            ShadowRenderer? shadows = ShadowRenderer.Current;
+            if (strength <= 0f || _windowGlassTarget == null || _windowGlassTarget.IsDisposed
+                || _windowGlassTilesWithGlass.Count == 0 || location == null || shadows == null)
+                return;
+            WindowBeamShape(config, out float lean, out float reachTiles, out float lengthDial, out float spreadDial);
+            float beamTiles = reachTiles * lengthDial;
+            Vector2 beamWorld = new Vector2(lean, 1f) * beamTiles * 64f;
+            Rectangle litWorld = WindowBeamsBounds(beamWorld, (0.35f * spreadDial * beamTiles + 1f) * 64f);
+            Vector2 alongBeam = Vector2.Normalize(beamWorld);
+            float rotation = MathF.Atan2(alongBeam.Y, alongBeam.X) + MathHelper.PiOver2;
+            float stretch = MathHelper.Clamp(beamTiles / WindowHeightAboveFloorTiles, 0.4f, 2.5f);
+
+            IReadOnlyList<ShadowRenderer.StandingSilhouette> silhouettes = shadows.StandingSilhouettesIn(location);
+            _windowBeamBlockersNear.Clear();
+            foreach (ShadowRenderer.StandingSilhouette body in silhouettes)
+            {
+                float length = body.FeetInMask.Y * stretch;
+                float halfWidth = body.FeetInMask.X;
+                Vector2 middle = body.WorldFeet + alongBeam * (length * 0.5f);
+                int reach = (int)MathF.Ceiling(length * 0.5f + halfWidth);
+                var shadowWorld = new Rectangle((int)middle.X - reach, (int)middle.Y - reach, reach * 2, reach * 2);
+                if (shadowWorld.Intersects(litWorld))
+                    _windowBeamBlockersNear.Add(body);
+            }
+            if (_windowBeamBlockersNear.Count == 0)
+                return;
+
+            int width = _windowGlassTarget.Width, height = _windowGlassTarget.Height;
+            if (_windowGlassLiveTarget == null || _windowGlassLiveTarget.IsDisposed
+                || _windowGlassLiveTarget.Width != width || _windowGlassLiveTarget.Height != height)
+            {
+                _windowGlassLiveTarget?.Dispose();
+                _windowGlassLiveTarget = CreateRenderTarget(width, height, SurfaceFormat.HalfVector4);
+            }
+            Matrix toTarget = Matrix.CreateTranslation(-_windowGlassOriginWorld.X, -_windowGlassOriginWorld.Y, 0f)
+                            * Matrix.CreateScale(0.25f, 0.25f, 1f);
+            RenderTargetBinding[] previous = _device.GetRenderTargets();
+            try
+            {
+                _device.SetRenderTarget(_windowGlassLiveTarget);
+                _windowGlassBatch ??= new SpriteBatch(_device);
+                _windowGlassBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp,
+                    DepthStencilState.None, RasterizerState.CullNone);
+                _windowGlassBatch.Draw(_windowGlassTarget, new Rectangle(0, 0, width, height), Color.White);
+                _windowGlassBatch.End();
+                // The floor patch loses the whole of the light the body stands in; the light in the air
+                // behind it most of it, since the air on either side of the body is still lit.
+                LayBodiesOverBeam(TakeFloorLightAway, Color.White * strength, toTarget, rotation, stretch);
+                LayBodiesOverBeam(TakeAirLightAway, Color.White * (strength * WindowAirBlockedShare), toTarget, rotation, stretch);
+            }
+            finally
+            {
+                _device.SetRenderTargets(previous);
+            }
+            _windowGlassLiveThisFrame = true;
+            WindowBeamBlockers = _windowBeamBlockersNear.Count;
+        }
+
+        /// <summary>Every body near a beam, its silhouette laid along the beam from its feet.</summary>
+        private void LayBodiesOverBeam(BlendState blend, Color amount, Matrix toTarget, float rotation, float stretch)
+        {
+            _windowGlassBatch!.Begin(SpriteSortMode.Deferred, blend, SamplerState.LinearClamp,
+                DepthStencilState.None, RasterizerState.CullNone, null, toTarget);
+            foreach (ShadowRenderer.StandingSilhouette body in _windowBeamBlockersNear)
+                _windowGlassBatch.Draw(body.Mask, body.WorldFeet, null, amount, rotation, body.FeetInMask,
+                    new Vector2(1f, stretch), body.Facing, 0f);
+            _windowGlassBatch.End();
+        }
+
+        /// <summary>The world rectangle every beam painted this build can light: each window's glass
+        /// tile, the same tile carried the beam's length into the room, and the beam's spread.</summary>
+        private Rectangle WindowBeamsBounds(Vector2 beamWorld, float spreadWorld)
+        {
+            float left = float.MaxValue, top = float.MaxValue, right = float.MinValue, bottom = float.MinValue;
+            foreach (Point tile in _windowGlassTilesWithGlass)
+            {
+                float x = tile.X * 64f, y = tile.Y * 64f;
+                left = Math.Min(left, Math.Min(x, x + beamWorld.X));
+                right = Math.Max(right, Math.Max(x + 64f, x + 64f + beamWorld.X));
+                top = Math.Min(top, y);
+                bottom = Math.Max(bottom, y + 64f + beamWorld.Y);
+            }
+            return new Rectangle((int)(left - spreadWorld), (int)(top - spreadWorld),
+                (int)(right - left + 2f * spreadWorld), (int)(bottom - top + 2f * spreadWorld));
+        }
+
+        /// <summary>How high above the floor the light comes in, in tiles, for the length of a body's
+        /// shadow in the patch: the beam reaches its length into the room from a window this high, so
+        /// a body as tall as the window throws a shadow as long as the beam. About the middle of a
+        /// window on the game's two to three tile walls.</summary>
+        private const float WindowHeightAboveFloorTiles = 2.5f;
+
+        /// <summary>How much of the light in the air behind a body it takes away, against all of the
+        /// patch on the floor.</summary>
+        private const float WindowAirBlockedShare = 0.7f;
+
+        /// <summary>Multiplies one channel of what is there by one minus the silhouette's coverage:
+        /// blue is the patch on the floor, green the light in the air. The silhouettes carry their
+        /// shape in alpha alone (their colour is white edge to edge), so coverage is the only thing
+        /// read, and the glass itself, in red, is never written.</summary>
+        private static readonly BlendState TakeFloorLightAway = new()
+        {
+            ColorSourceBlend = Blend.Zero, ColorDestinationBlend = Blend.InverseSourceAlpha,
+            AlphaSourceBlend = Blend.Zero, AlphaDestinationBlend = Blend.One,
+            ColorWriteChannels = ColorWriteChannels.Blue,
+        };
+
+        /// <inheritdoc cref="TakeFloorLightAway"/>
+        private static readonly BlendState TakeAirLightAway = new()
+        {
+            ColorSourceBlend = Blend.Zero, ColorDestinationBlend = Blend.InverseSourceAlpha,
+            AlphaSourceBlend = Blend.Zero, AlphaDestinationBlend = Blend.One,
+            ColorWriteChannels = ColorWriteChannels.Green,
+        };
+
+        private readonly List<ShadowRenderer.StandingSilhouette> _windowBeamBlockersNear = [];
+        private RenderTarget2D? _windowGlassLiveTarget;
+        private bool _windowGlassLiveThisFrame;
+
+        /// <summary>How many bodies took light out of a window beam this frame, for radiance_report.</summary>
+        internal int WindowBeamBlockers { get; private set; }
+
         private void ReleaseWindowGlass()
         {
             _windowGlassTarget?.Dispose(); _windowGlassTarget = null;
+            _windowGlassLiveTarget?.Dispose(); _windowGlassLiveTarget = null;
+            _windowGlassLiveThisFrame = false;
             _windowGlassPaintTarget?.Dispose(); _windowGlassPaintTarget = null;
             _windowGlassAtlas?.Dispose(); _windowGlassAtlas = null;
             _windowGlassTintAtlas?.Dispose(); _windowGlassTintAtlas = null;

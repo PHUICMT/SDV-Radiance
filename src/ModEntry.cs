@@ -103,12 +103,16 @@ namespace SDVRadiance
                 return;
             // A first install starts on the grouped tuner; someone updating is asked in the tuner.
             _config.TunerLayout = RadianceTunerMenu.LayoutGrouped;
+            // And is asked once what it wants from the mod (see OfferFirstRunGoal).
+            _config.FirstRunGoal = RadianceTunerMenu.FirstRunGoalAsk;
             SettingsBackup.WriteConfig(helper, _config);
             if (Constants.TargetPlatform == GamePlatform.Android)
             {
                 _config.ApplyPerfPreset(PerfPreset.LowSpec);
+                _config.PowerSaver = true;
                 SettingsBackup.WriteConfig(helper, _config);
-                Monitor.Log("First start on a phone: the performance preset is set to Low spec, the lightest one. "
+                Monitor.Log("First start on a phone: the performance preset is set to Low spec, the lightest one, "
+                    + "and the battery saver is on (half the frames while you stand still or have a menu open). "
                     + "Performance, Balanced and Quality are on the tuner's Performance tab if your phone can take more "
                     + "(config menu: SDV-Radiance, Hotkeys & diagnostics, Open the Radiance tuner).",
                     LogLevel.Info);
@@ -129,6 +133,7 @@ namespace SDVRadiance
         {
             QuietFailures.Monitor = Monitor;
             LutCatalog.Initialise(helper.DirectoryPath);
+            ModConfig.AuthorLook = helper.Data.ReadJsonFile<AuthorLookFile>("assets/author-look.json");
             ShareCode.ConfigFolder = helper.DirectoryPath;
             _config = SettingsBackup.Load(helper, Monitor);
             ApplyConfigMigrations(helper);
@@ -155,6 +160,8 @@ namespace SDVRadiance
             helper.Events.Display.Rendering += OnRendering;
             helper.Events.Display.RenderingWorld += OnRenderingWorld;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
+            helper.Events.Display.Rendered += (_, _) => PowerSaver.NoteDrawn();
+            helper.Events.Input.ButtonPressed += (_, _) => PowerSaver.NoteInput();
             helper.Events.Display.RenderingStep += OnRenderingStep;
             helper.Events.Display.RenderedStep += OnRenderedStep;
             helper.Events.Display.MenuChanged += (_, e) =>
@@ -184,6 +191,14 @@ namespace SDVRadiance
             };
             // The draw hook's sticky sets are per location now and outlive a warp (see
             // WaterDrawHook); a new day is where they start over, as one set used to on every warp.
+            // A cost measurement the player started from the menu is kept, so the tags beside the
+            // switches survive closing the game.
+            RenderPipeline.EffectCostFinished = (costs, where) =>
+            {
+                _config.MeasuredEffectCost = costs.ToDictionary(pair => pair.Key, pair => (float)Math.Round(pair.Value, 3));
+                _config.MeasuredEffectCostWhere = where;
+                SettingsBackup.WriteConfig(Helper, _config);
+            };
             helper.Events.GameLoop.DayStarted += (_, _) =>
             {
                 WaterDrawHook.ForgetAll();
@@ -200,6 +215,13 @@ namespace SDVRadiance
                         SurfaceMap.Invalidate(place);
                     return true;
                 });
+            };
+            helper.Events.World.TerrainFeatureListChanged += (_, e) =>
+            {
+                if (!WaterPaths.Changed(e))
+                    return;
+                RenderPipeline.MaskEpoch++;
+                RenderPipeline.MaskEpochReason = "a water path was laid or lifted";
             };
             helper.Events.World.BuildingListChanged += (_, e) =>
             {
@@ -417,7 +439,10 @@ namespace SDVRadiance
             ZoomGuard.NoteChange(Monitor);
             bool modOn = _config.Enabled && !ZoomGuard.TooFarOut;
             HarmonyPatcher.FreezeGameWater = modOn && _config.WaterEnabled && waterHere;
-            HarmonyPatcher.LampGlowFromBulb = modOn;
+            HarmonyPatcher.LampGlowFromBulb = modOn && _config.LampLightFromBulb;
+            LocalSky.YieldToWeatherMods = modOn && _config.SunYieldsToWeatherMods;
+            ShadowRenderer.LampLightFromBulb = modOn && _config.LampLightFromBulb;
+            ShadowRenderer.FarmerFeetRaise = 4f * _config.ShadowPlayerFeetRaise;
             WaterDrawHook.Enabled = modOn && (_config.WaterEnabled || _config.WaterReflection);
             // Also read by the window reflection, for glass on art a location draws for itself (the bus).
             LocationDrawHook.Enabled = WaterDrawHook.Enabled || (modOn && _config.WindowReflectionEnabled);
@@ -440,7 +465,7 @@ namespace SDVRadiance
             // Belt and braces: the pre-draw handler normally claims the screen, but it returns
             // early when the mod is switched off and a capture can still bring us here.
             Pipeline.BeginScreen(MapScreenshotEffects.ScreenId(Context.ScreenId));
-            Pipeline.Apply(e.SpriteBatch, MapScreenshotEffects.ShotConfig ?? _config);
+            Pipeline.Apply(e.SpriteBatch, MapScreenshotEffects.ShotConfig ?? Pipeline.LookForThisFrame(_config));
             HarmonyPatcher.DrawHoistedMineFloorNumber(e.SpriteBatch);
             HarmonyPatcher.DrawHoistedCastMeter(e.SpriteBatch);
             HarmonyPatcher.DrawHoistedFishCaught(e.SpriteBatch);
@@ -526,12 +551,8 @@ namespace SDVRadiance
             MapScreenshotEffects.Enabled = _config.Enabled && _config.MapScreenshotEffects;
             SheetUpscaler.BeginFrame();
             // The mine's floor number leaves the world layer whenever the chain will run over it,
-            // and OnRenderedWorld draws it back after the chain. Not on a phone: the redraw copies
-            // the PC layout, and the phone's HUD lays these out its own way, so a player on Android
-            // saw no floor number at all in the mines or Skull Cavern. There the game draws them
-            // itself, as it does with the mod switched off.
-            HarmonyPatcher.HoistMineFloorNumber = EffectsActive && !(Game1.game1?.takingMapScreenshot ?? false)
-                && StardewModdingAPI.Constants.TargetPlatform != StardewModdingAPI.GamePlatform.Android;
+            // and OnRenderedWorld draws it back after the chain.
+            HarmonyPatcher.HoistMineFloorNumber = EffectsActive && !(Game1.game1?.takingMapScreenshot ?? false);
             // The fishing cast meter likewise, so the water does not mirror it.
             HarmonyPatcher.HoistCastMeter = HarmonyPatcher.HoistMineFloorNumber;
             // A map screenshot is the game's own picture of the whole location, drawn in chunks:
@@ -557,6 +578,13 @@ namespace SDVRadiance
             // bake and every draw this frame has to be told the same answer, or half the scene
             // lights from one side and half from the other.
             ShadowRenderer.SunBearingRadiansNow = Microsoft.Xna.Framework.MathHelper.ToRadians(_config.ShadowSunBearing);
+            // Turned round, the sun swings across through noon over about a second rather than
+            // throwing every shadow to the other side in one frame. Frozen captures settle at once.
+            float sunDirectionTarget = _config.ShadowSunPathMirrored ? -1f : 1f;
+            float sunDirectionStep = (float)Game1.currentGameTime.ElapsedGameTime.TotalSeconds * 2f;
+            ShadowRenderer.SunPathDirectionNow = Determinism.Settle(
+                ShadowRenderer.SunPathDirectionNow + Math.Clamp(sunDirectionTarget - ShadowRenderer.SunPathDirectionNow, -sunDirectionStep, sunDirectionStep),
+                sunDirectionTarget);
             // And where the sun stands for the LIGHT, which is its own answer: the two halves of
             // this mod have never agreed about it, so each carries its own and equal numbers mean
             // they finally do.
@@ -793,6 +821,8 @@ namespace SDVRadiance
                 // Dust lies ON the ground, beside the people standing on it, so it goes into the
                 // sorted batch at its own depth rather than being stamped over the finished frame.
                 _pipeline?.DrawGroundParticles(e.SpriteBatch, _config);
+                if (_config.ParticlesEnabled)
+                    _pipeline?.DrawFootprints(e.SpriteBatch, _config);
             }
             if (!_config.DirectionalShadowsEnabled)
                 return;
@@ -854,6 +884,9 @@ namespace SDVRadiance
             SharedTicks.NoteHostTick();
             Determinism.HoldGameClock();
             Determinism.FollowTheGamesTimeStep();
+            OfferFirstRunGoal();
+            if (Context.ScreenId == 0)
+                PowerSaver.Update(_config);
             // A season changed without a new day (a mod, or the debug season command) swaps every
             // seasonal tilesheet while the maps stay the same objects, and DayStarted, which
             // forgets the per-cell neighbourhoods, never fires: the smoothed ground kept reading
@@ -906,9 +939,10 @@ namespace SDVRadiance
             LightningEffects.Update(_config);
             ShadowSuppression.SuppressVanillaShadows = ShadowRenderer.ShadowsActiveNow(_config);
             bool gameShadowWhenOff = _config.CharactersSwitchedOffUseGameShadow;
-            ShadowSuppression.GameShadowForPlayer = gameShadowWhenOff && !_config.DirectionalShadowPlayer;
-            ShadowSuppression.GameShadowForVillagers = gameShadowWhenOff && !_config.DirectionalShadowVillagers;
-            ShadowSuppression.GameShadowForCreatures = gameShadowWhenOff && !_config.DirectionalShadowCreatures;
+            bool gameShadowAlways = _config.CharactersKeepGameShadowToo;
+            ShadowSuppression.GameShadowForPlayer = gameShadowAlways || (gameShadowWhenOff && !_config.DirectionalShadowPlayer);
+            ShadowSuppression.GameShadowForVillagers = gameShadowAlways || (gameShadowWhenOff && !_config.DirectionalShadowVillagers);
+            ShadowSuppression.GameShadowForCreatures = gameShadowAlways || (gameShadowWhenOff && !_config.DirectionalShadowCreatures);
             // Suppress the BUSH blob (fixed-direction, fights our cast); the TREE blob is kept
             // (not patched) as a base anchor under the canopy.
             // Only hide the vanilla drifting cloud when OUR cloud shadow is actually on —
@@ -964,6 +998,32 @@ namespace SDVRadiance
                 SpriteDrawRecorder.AskWhatDrew(at);
                 Game1.addHUDMessage(HUDMessage.ForCornerTextbox($"Radiance: asking what drew {at.X},{at.Y} - see the SMAPI console"));
             }
+        }
+
+        /// <summary>Ticks left before the first-run question opens the tuner by itself, counted only
+        /// while the player is free; zero when there is nothing to ask.</summary>
+        private int _firstRunGoalOpensIn = FirstRunGoalWait;
+
+        /// <summary>Two seconds of the player standing free, so the day's fade-in is over first.</summary>
+        private const int FirstRunGoalWait = 120;
+
+        /// <summary>A first install opens the tuner by itself once, the first time the player is free
+        /// in a save, so the question of what they want from the mod is not left for someone who never
+        /// presses F6. Once a launch: closing it without an answer leaves the question for the next
+        /// time F6 opens.</summary>
+        private void OfferFirstRunGoal()
+        {
+            if (_firstRunGoalOpensIn <= 0 || Context.ScreenId != 0)
+                return;
+            if (_config.FirstRunGoal != RadianceTunerMenu.FirstRunGoalAsk)
+            {
+                _firstRunGoalOpensIn = 0;
+                return;
+            }
+            if (!Context.IsPlayerFree || Game1.activeClickableMenu != null)
+                return;
+            if (--_firstRunGoalOpensIn == 0)
+                ToggleTuner();
         }
 
         /// <summary>Open the tuner, or close it if it is already open. Behind a method because the

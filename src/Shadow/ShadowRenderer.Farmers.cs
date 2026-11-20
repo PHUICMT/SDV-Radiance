@@ -460,7 +460,7 @@ namespace SDVRadiance
                 if (!bake.Ready || bake.Mask == null)
                     continue;
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
-                    new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
+                    new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift - FarmerFeetRaise));
                 float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 float lift = BodyLift(who);
                 float liftedAlpha = alpha * LiftFade(lift);
@@ -498,7 +498,7 @@ namespace SDVRadiance
                     continue;
                 }
                 Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
-                    new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
+                    new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift - FarmerFeetRaise));
                 float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                 GatherCasts(feet, castStrength, lenCfg);
                 DrawContactBlob(spriteBatch, feet, 22f, 11f,

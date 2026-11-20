@@ -61,6 +61,8 @@ namespace SDVRadiance
         public bool[]? TileFlowFlags;
         /// <summary>The tile is the interior of a built fish pond: Pass E tags its alpha VESSEL (240).</summary>
         public bool[]? TilePondFlags;
+        /// <summary>Per window tile: a water path, whose water is the pack's own picture (WaterPaths).</summary>
+        public bool[]? TilePaintedFlags;
         /// <summary>HF label class 11: lava — slow molten flow, self-glow, no reflection.</summary>
         public bool[]? TileLavaFlags;
         /// <summary>Per-tile: has any effect-water pixel (for the body-size flood fill).</summary>

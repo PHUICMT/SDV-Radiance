@@ -82,6 +82,10 @@ namespace SDVRadiance
         /// which reads as a bug to anybody pasting the line.</summary>
         private static bool _anotherModDrewLastCall;
 
+        /// <summary>Whether another mod took the last weather draw: a weather of its own is up
+        /// (see LocalSky.IsClouded).</summary>
+        internal static bool AnotherModDrawsTheWeather => _anotherModDrewLastCall;
+
         // ---- rain look -----------------------------------------------------------------------
 
         /// <summary>Vertical speed of the front layer, in buffer pixels per second. Anchored on

@@ -47,7 +47,9 @@ for match in re.finditer(r"AddNumberOption\(manifest,\s*\(\)\s*=>\s*config\(\)\.
     menu.setdefault(match.group(1), (number(match.group(2)), number(match.group(3))))
 
 tuner = {}
-for match in re.finditer(r"Slider\(\"[^\"]+\",\s*([^,]+),\s*([^,]+),\s*\(\)\s*=>\s*_config\.(\w+)", tuner_text):
+# A slider read through a method call (the overall darkness dial) moves other settings and is
+# none itself, so only a property read counts.
+for match in re.finditer(r"Slider\(\"[^\"]+\",\s*([^,]+),\s*([^,]+),\s*\(\)\s*=>\s*_config\.(\w+)(?![\w(])", tuner_text):
     tuner.setdefault(match.group(3), (number(match.group(1)), number(match.group(2))))
 
 problems = []

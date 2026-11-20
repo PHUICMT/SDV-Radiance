@@ -738,6 +738,8 @@ namespace SDVRadiance
         {
             public WaterMaskJob Job = null!;
             public TileGatherContext Context, PondContext;
+            /// <summary>The tiles of this location holding a water path, when they count as water (WaterPaths).</summary>
+            public HashSet<Vector2>? WaterPathTiles;
             public GatheredTileAnswers? Remembered;
             public List<Rectangle>? PondRects;
             public List<StardewValley.Buildings.FishPond>? Ponds;
@@ -813,6 +815,8 @@ namespace SDVRadiance
 
             if (_waterTileFlags == null || _waterTileFlags.Length < count) _waterTileFlags = new bool[count];
             bool hasAnyWater = false;
+            HashSet<Vector2>? waterPaths = _lastConfig?.WaterPathsAreWater == true ? WaterPaths.For(location) : null;
+            if (waterPaths is { Count: 0 }) waterPaths = null;
             for (int j = 0; j < tilesHigh; j++)
             {
                 for (int i = 0; i < tilesWide; i++)
@@ -834,6 +838,11 @@ namespace SDVRadiance
                         foreach (var r in pondRects)
                             if (r.Contains(tileX, tileY)) { water = true; break; }
                     }
+                    // A water path is not a water tile: the whole tile would count as water, and the
+                    // ground round the path's own water would take the tint. Its picture says which
+                    // texels are water, in the per-tile gather below, as a pond's rim does.
+                    if (!water && waterPaths != null && waterPaths.Contains(new Vector2(tileX, tileY)))
+                        hasAnyWater = true;
                     if (water) hasAnyWater = true;
                     _waterTileFlags[j * tilesWide + i] = water;
                 }
@@ -901,6 +910,7 @@ namespace SDVRadiance
             // The tile is also remembered as a pond tile for Pass E, which tags its alpha VESSEL.
             var pondContext = new TileGatherContext(null, surfaceMap, null, null, null, null, null, locationIsLava);
             if (_maskScratch.TilePondFlags == null || _maskScratch.TilePondFlags.Length < count) _maskScratch.TilePondFlags = new bool[count];
+            if (_maskScratch.TilePaintedFlags == null || _maskScratch.TilePaintedFlags.Length < count) _maskScratch.TilePaintedFlags = new bool[count];
 
             // The map-wide memory of earlier gathers (RenderPipeline.WaterMask.GatherCache.cs). A
             // tile is copied from it when it was gathered under the same water verdict; anything
@@ -909,7 +919,7 @@ namespace SDVRadiance
             return new GatherInProgress
             {
                 Job = job, Context = context, PondContext = pondContext, Remembered = remembered,
-                PondRects = pondRects, Ponds = ponds, Generation = _gatherGeneration,
+                PondRects = pondRects, Ponds = ponds, Generation = _gatherGeneration, WaterPathTiles = waterPaths,
             };
         }
 
@@ -942,8 +952,14 @@ namespace SDVRadiance
                 // tiles are pond tiles too, with only the texels the game paints water on; the
                 // stones over them are carved by the building stamp in the sprite mask.
                 var rimOf = inPond ? null : FishPondRimOwning(ponds, tileX, tileY);
-                bool pondTile = inPond || rimOf != null;
+                // A water path is laid like a pond's rim: no map art read, and only the texels its
+                // own picture paints water on (WaterPaths).
+                bool[]? pathBits = !isWater && !inPond && rimOf == null && gather.WaterPathTiles != null
+                    && gather.WaterPathTiles.Contains(new Vector2(tileX, tileY))
+                    ? WaterPaths.WaterBits(job.Location, tileX, tileY) : null;
+                bool pondTile = inPond || rimOf != null || pathBits != null;
                 _maskScratch.TilePondFlags![tileIndex] = pondTile;
+                _maskScratch.TilePaintedFlags![tileIndex] = pathBits != null;
                 int cell = remembered != null && !pondTile && tileX >= 0 && tileY >= 0 && tileX < remembered.Width && tileY < remembered.Height
                     ? tileY * remembered.Width + tileX : -1;
                 if (cell >= 0)
@@ -971,6 +987,8 @@ namespace SDVRadiance
                 _gatherCacheGathered++;
                 if (rimOf != null)
                     _maskScratch.TileEffectBits![tileIndex] = FishPondWaterBits(rimOf, tileX, tileY);
+                else if (pathBits != null)
+                    _maskScratch.TileEffectBits![tileIndex] = pathBits;
             }
             gather.NextTileIndex = count;
             return true;
@@ -2780,9 +2798,18 @@ namespace SDVRadiance
                     // takes its ripple away and nothing else.
                     if (alpha == 255 && eff && _maskScratch.StillTexelFlags != null && _maskScratch.StillTexelFlags[texelIndex])
                         alpha = 232;
+                    // 248 = PAINTED: water a mod draws as its own picture, a water path. Above the
+                    // vessel band, so it is plain water to every gate, and the shader keeps the
+                    // pack's colour under the ripple, glints and night light (WaterPaths).
+                    if (alpha == 255 && _maskScratch.TilePaintedFlags != null && _maskScratch.TilePaintedFlags[tileIdx])
+                        alpha = 248;
                     if (alpha == 255 && _maskScratch.TilePondFlags != null && _maskScratch.TilePondFlags[tileIdx])
                         alpha = 240;
-                    _waterMaskPixels![texelIndex] = new Color(effectValue, march ? 255 : 0, shoreDepthByte, alpha);
+                    // A water path keeps the pack's own colour: the mirror there laid the sand round
+                    // it over the blue and turned it a muddy green, so it does not mirror. The ripple,
+                    // the glints and the night light stay (WaterPaths).
+                    bool mirrors = march && alpha != 248;
+                    _waterMaskPixels![texelIndex] = new Color(effectValue, mirrors ? 255 : 0, shoreDepthByte, alpha);
                 }
             }
         }

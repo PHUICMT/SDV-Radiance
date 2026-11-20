@@ -181,7 +181,22 @@ namespace SDVRadiance
         Subtle,
         Cinematic,
         Vibrant,
-        Nocturne
+        Nocturne,
+        /// <summary>The look the author plays with, shipped in assets/author-look.json.</summary>
+        Author
+    }
+
+    /// <summary>
+    /// The author's own look, as tools/make-author-look.py writes it before a release: the look
+    /// settings of the config the author plays with, and the machine they were played on.
+    /// </summary>
+    public sealed class AuthorLookFile
+    {
+        public string Cpu { get; set; } = "";
+        public string Ram { get; set; } = "";
+        public string Gpu { get; set; } = "";
+        public string Taken { get; set; } = "";
+        public Dictionary<string, string>? Values { get; set; }
     }
 
     /// <summary>Quality presets, kept deliberately separate from <see cref="LookPreset"/>:
@@ -205,6 +220,17 @@ namespace SDVRadiance
         Realistic,
         /// <summary>The game's own debris art, frames and all, so they match what the game blows
         /// on a windy day and follow a recolour.</summary>
+        Pixel,
+    }
+
+    /// <summary>How the leaves kicked up underfoot are drawn.</summary>
+    public enum FootLeafLook
+    {
+        /// <summary>Whatever the leaf look of the petals and leaves on the breeze is.</summary>
+        LikeOtherLeaves,
+        /// <summary>The mod's own smooth leaf shapes.</summary>
+        Realistic,
+        /// <summary>The game's own fall leaf art.</summary>
         Pixel,
     }
 
@@ -296,6 +322,22 @@ namespace SDVRadiance
         /// </para>
         /// </remarks>
         public LookPreset ActivePreset { get; set; } = LookPreset.Custom;
+
+        /// <summary>A look of its own after dark: the settings as they are by day, and the look named
+        /// by <see cref="NightLook"/> at night, eased between with the evening. Off is one look all
+        /// day, which is every earlier release.</summary>
+        public bool NightLookSeparate { get; set; }
+        /// <summary>The night's look: a preset by name (Subtle, Cinematic, Vibrant, Nocturne), or a
+        /// saved look as <see cref="NightLookSavedPrefix"/> and its name.</summary>
+        public string NightLook { get; set; } = "";
+        /// <summary>The night's look indoors, chosen the same way; empty keeps the day's look indoors,
+        /// which is the default: a shop lit by its own lamps does not need the night's glow.</summary>
+        public string NightLookIndoors { get; set; } = "";
+        /// <summary>A look for the mines and caves, day and night alike, chosen the same way; empty
+        /// keeps the player's own settings underground.</summary>
+        public string CaveLook { get; set; } = "";
+        /// <summary>What a saved look's name is marked with in <see cref="NightLook"/>.</summary>
+        public const string NightLookSavedPrefix = "look:";
         /// <summary>The quality preset picked last, or none. Only so the tuner can highlight it;
         /// nothing reads it to decide how anything runs.</summary>
         public PerfPreset? ActivePerfPreset { get; set; }
@@ -349,6 +391,9 @@ namespace SDVRadiance
         /// <remarks>Only saturated bright pixels qualify - a grey never does, however
         /// bright, which is the lesson the old god rays paid for.</remarks>
         public float BloomEmissiveBoost { get; set; } = 0.6f;
+        /// <summary>A second, much wider glow round bright things, 0 to 1. 0 is the bloom as it
+        /// always was and builds nothing.</summary>
+        public float BloomWideGlow { get; set; } = 0f;
 
         // --- Color grade ---
         /// <summary>OFF by default from 1.5.5: the mod ships with the game's own colours.</summary>
@@ -412,6 +457,11 @@ namespace SDVRadiance
         /// <summary>How much of the LUT to apply, 0..1. The sliders keep their meaning either
         /// way: the LUT is laid over the graded result, not swapped in for it.</summary>
         public float ColorGradeLutAmount { get; set; } = 1f;
+        /// <summary>How much of the look shows by day, against its whole amount at night, eased with
+        /// the evening the way the rest of the night look is. 1 is the same all day, which is every
+        /// earlier release; a night look such as moonlight can sit lower so the day is not washed
+        /// in it.</summary>
+        public float ColorGradeLutByDay { get; set; } = 1f;
         /// <summary>Auto-shift temperature/saturation by time of day, weather, and season.</summary>
         public bool ColorGradeAuto { get; set; } = true;
         /// <summary>Blue-light / eye-comfort filter: 0 = off .. 1 = strong warm shift (cuts blue,
@@ -423,6 +473,12 @@ namespace SDVRadiance
         /// holds. An old config has no such field and lands on 0, so the migration in ModEntry
         /// runs exactly once and then records that it did.</summary>
         public int ConfigVersion { get; set; }
+        /// <summary>What each effect cost on this machine the last time the player asked
+        /// (Performance, "Find what costs the most here"), in GPU milliseconds a frame, by setting
+        /// name. Not a look: never in a saved look or a share code, kept through a reset.</summary>
+        public Dictionary<string, float> MeasuredEffectCost { get; set; } = [];
+        /// <summary>Where and when <see cref="MeasuredEffectCost"/> was measured, as shown.</summary>
+        public string MeasuredEffectCostWhere { get; set; } = "";
 
         /// <summary>The version the newest migration in ModEntry records. A config built fresh in
         /// code, which is what GMCM's reset does, must carry it: otherwise it is saved as version 0
@@ -776,6 +832,11 @@ namespace SDVRadiance
         /// updated and has not been asked yet. A string, not a choice type, so saved looks and share
         /// codes never carry it: it is a place in a menu, not a look.</summary>
         public string TunerLayout { get; set; } = "";
+        /// <summary>The question a first install is asked once in the tuner: best looks, balanced, or
+        /// light on the machine. "Ask" until it is answered, then the answer; empty for a player who
+        /// updated, who is never asked. A string, like the layout, so looks and share codes never
+        /// carry it.</summary>
+        public string FirstRunGoal { get; set; } = "";
         /// <summary>Which glass the new tuner menu uses: "GlassLight" for the pale one, anything else
         /// for the dark one (the classic menu is always the wooden box). A string for the same reason
         /// as the layout: a place in a menu, which looks and share codes never carry.</summary>
@@ -828,6 +889,9 @@ namespace SDVRadiance
         /// this — caves, mines, the sewer, dungeons, and the bathhouse hot spring (see
         /// RenderPipeline.HasLevelWater) — since that water is part of the level, not decoration.</summary>
         public bool WaterEffectIndoors { get; set; } = true;
+        /// <summary>Paths a mod lays that look like water (Stream Paths and the like) get the water
+        /// effect on their own tiles. Off = they stay as the mod draws them. See WaterPaths.</summary>
+        public bool WaterPathsAreWater { get; set; } = false;
         /// <summary>Building interiors the player has individually opted OUT of the water effect,
         /// by NameOrUniqueName. Toggled per-room from the F6 tuner. Lets a player kill decorative
         /// water from one specific house/interior mod without turning it off everywhere. Only ever
@@ -872,6 +936,21 @@ namespace SDVRadiance
         /// require the game to start. See <see cref="TextureUnitGuard.CapSamplerSlots"/>.
         /// </remarks>
         public bool LimitSamplerSlots { get; set; } = true;
+        /// <summary>The last week of a season drifts toward the next: late spring's greens deepen,
+        /// late summer's turn golden, late autumn's colours dull before the snow. Outdoors, in places
+        /// that keep the calendar's season. Off is every earlier release.</summary>
+        public bool SeasonDrift { get; set; }
+        /// <summary>How far the season's last day has drifted, 0 to 1.</summary>
+        public float SeasonDriftStrength { get; set; } = 1f;
+        /// <summary>When another weather mod draws a weather of its own (Cloudy Skies' types, which
+        /// is how Weather Wonders' heavy fog and blizzards come), the sky counts as overcast: the
+        /// sun's shadows go soft and faint, and the sun shafts, cloud shadows and clear-night skies
+        /// step aside. Off is every earlier release.</summary>
+        public bool SunYieldsToWeatherMods { get; set; }
+        /// <summary>Battery saver: every other frame left undrawn while a menu is open or the player
+        /// has stood still for three seconds (see <see cref="PowerSaver"/>). The game keeps its speed.
+        /// Off by default; a phone's first start turns it on.</summary>
+        public bool PowerSaver { get; set; }
         /// <summary>The sun's share of the relief by day, outdoors (0..1).</summary>
         public float SpriteReliefSun { get; set; } = 0.35f;
         /// <summary>The bright fringe a lamp lays along the edge of a sprite facing it, in that
@@ -1074,6 +1153,10 @@ namespace SDVRadiance
         /// a bright patch of paint. Built from the game's own light list, so a white sign or a
         /// snowfield never wears one. 0 is the bare lamps of every release before this one.</summary>
         public float LampHalo { get; set; } = 0.35f;
+        /// <summary>A street lamp's light comes from its bulb at the top of the post, the tile the map
+        /// lights at night, instead of from the foot of the post where the map hangs it: the pool
+        /// sits round the lamp. On since 2.4.5; off is how earlier releases lit it. Shadows fall from the foot either way.</summary>
+        public bool LampLightFromBulb { get; set; } = true;
         /// <summary>How much a fish tank's light wanders, 0..1. A tank is the only light in the
         /// game whose source is water, and it was lit like a lantern: one steady circle. What comes
         /// off a tank is light that has been through moving water, and what says so is not its
@@ -1120,6 +1203,10 @@ namespace SDVRadiance
         /// <summary>With the light shaped by the glass: whether light through a sheer curtain takes
         /// the curtain's colour. Off, the curtain only dims it (asked for by the author on 16 Oct 2026,
         /// on or off).</summary>
+        /// <summary>How much of a window's light the people standing in it take away: their shape
+        /// cut out of the patch on the floor and the light in the air behind them, along the beam.
+        /// 0 is every earlier release, the light passing through them; 1 takes all of it.</summary>
+        public float WindowLightBlockedByPeople { get; set; }
         public bool WindowGlassCurtainColour { get; set; } = true;
         /// <summary>With the light shaped by the glass: how much light a sheer curtain lets through,
         /// against clear glass, onto the floor and into the rays; the cloth itself glows with part of
@@ -1183,6 +1270,11 @@ namespace SDVRadiance
         /// sprite-free map render the water mirror uses, so it costs a strip of an image that is
         /// already being made rather than a second one.</summary>
         public float WindowSceneReflectionStrength { get; set; } = 1.5f;
+        /// <summary>How many tiles of the street in front of a pane its glass shows, 1..6. Six fits
+        /// the whole strip into the lower half of the pane, which shrinks what stands close to it:
+        /// a doormat came out as a tiny copy pasted on Pierre's door (xlydzh0902). Fewer tiles show
+        /// less of the street, nearer its own size.</summary>
+        public float WindowSceneReachTiles { get; set; } = 6f;
         /// <summary>How brightly the lamps of the street stand in the glass after dark. A separate
         /// dial from the daytime picture because it is a separate picture: by day a pane returns
         /// the person in front of it, by night it returns the lights.</summary>
@@ -1324,6 +1416,37 @@ namespace SDVRadiance
         public float ParticleFootDustAmount { get; set; } = 1.0f;
         /// <summary>How big one puff is, against its own size.</summary>
         public float ParticleFootDustSize { get; set; } = 1.0f;
+        /// <summary>Fallen leaves kicked up underfoot in fall: the player walking over grass or dirt
+        /// outdoors lifts a leaf now and then, which flutters up and settles behind them, the way
+        /// the crops and the grass already answer a step. Off by default. Asked for on Nexus.</summary>
+        public bool ParticleFootLeaves { get; set; }
+        /// <summary>How many leaves a walk lifts, against what it lifts on its own.</summary>
+        public float ParticleFootLeavesAmount { get; set; } = 1.0f;
+        /// <summary>How big one leaf is, against its own size.</summary>
+        public float ParticleFootLeavesSize { get; set; } = 1.0f;
+        /// <summary>How the leaves underfoot are drawn; by default the same as the leaves on the breeze.</summary>
+        public FootLeafLook ParticleFootLeavesLook { get; set; } = FootLeafLook.LikeOtherLeaves;
+        /// <summary>Villagers, pets and farm animals kick leaves up too, not only the player. Off by
+        /// default: with a ranch full of animals walking, leaves fly up all over the screen.</summary>
+        public bool ParticleFootLeavesEveryone { get; set; }
+        /// <summary>Footprints left in snow, sand and wet dirt that fade after a while. The game's
+        /// own snow print is gone in under two seconds and it leaves none on sand or mud. Off by
+        /// default.</summary>
+        public bool Footprints { get; set; }
+        /// <summary>How plain the prints are, 1 being the mod's own choice (half seen on snow).</summary>
+        public float FootprintsStrength { get; set; } = 1.0f;
+        /// <summary>How long prints stay, against their own time (90 s on snow, 60 on sand and mud).</summary>
+        public float FootprintsLasting { get; set; } = 1.0f;
+        /// <summary>Villagers, pets, the horse and farm animals leave prints too. On by default with
+        /// the feature: a rule that held for the player alone would say only the player has weight.</summary>
+        public bool FootprintsEveryone { get; set; } = true;
+        /// <summary>Sunlight through the leaves: small patches of sun inside a tree's shadow that
+        /// sway with the wind and brighten and dim slowly. Off by default.</summary>
+        public bool SunDapples { get; set; }
+        /// <summary>How bright the patches are, 1 being the mod's own choice.</summary>
+        public float SunDapplesStrength { get; set; } = 1.0f;
+        /// <summary>How many patches a tree lets through, against its own number.</summary>
+        public float SunDapplesAmount { get; set; } = 1.0f;
 
         /// <summary>A coloured twinkle at each bulb of the town's winter tree. It is the one light
         /// kind in the game that is decoration rather than illumination, and every release before
@@ -1367,6 +1490,25 @@ namespace SDVRadiance
         /// reaches the screen is this dial times the curtain's own falloff times the quarter of
         /// itself the sky contributes to open water, so the honest range is wide.</para></summary>
         public float AuroraStrength { get; set; } = 1f;
+        /// <summary>The Milky Way in the water's reflected sky on clear summer nights: a faint pale
+        /// band thick with small stars and a dark lane down it, brightening as the night deepens and
+        /// washed out by a bright moon. Its colour reaches the ground beside the water very faintly,
+        /// as the aurora's does. Asked for by Charost on Nexus; off by default because it is new.</summary>
+        public bool MilkyWayEnabled { get; set; } = false;
+        /// <summary>How bright the Milky Way is, 0 to 2, 1 being the shipped look.</summary>
+        public float MilkyWayStrength { get; set; } = 1f;
+        /// <summary>The Milky Way's colour, 0 to 1: 0 is the pale grey an eye sees from a dark site,
+        /// 1 the warm core and violet arms of a long-exposure photograph. The middle is the shipped
+        /// look: the real thing reflected in water is fainter and greyer than people picture it.</summary>
+        public float MilkyWayColour { get; set; } = 0.5f;
+        /// <summary>Spring meteor showers: on some clear spring nights the shooting stars come several
+        /// times as often for a few hours. Rides the shooting stars, so it needs them on. Off by
+        /// default because it is new.</summary>
+        public bool SpringMeteorShowers { get; set; } = false;
+        /// <summary>The harvest moon: on fall nights near the full moon, the moonlight on the water
+        /// is wider and warmer and the ground takes a little of its colour. Off by default because
+        /// it is new.</summary>
+        public bool HarvestMoon { get; set; } = false;
         /// <summary>A shooting star now and then in the water's reflected sky on clear nights.</summary>
         public bool ShootingStarsEnabled { get; set; } = true;
         /// <summary>How often a shooting star comes, against the built-in pace of about one a
@@ -1543,6 +1685,36 @@ namespace SDVRadiance
         /// all. Rain and storms are unaffected at every value: they always get the full cast, which
         /// is the one this dial does not touch.</para></summary>
         public float LightingMorningClearSkyCool { get; set; } = 0.35f;
+        /// <summary>The three darkness sliders as one dial, for the tuner: 1 is where they ship,
+        /// 0 is none of the three. Read as their average against their defaults, so a player's own
+        /// balance between them is kept.</summary>
+        /// <remarks>Methods, not a property: a property would be saved to config.json and carried by
+        /// saved looks as a fourth setting, when it is only a way of moving the other three.</remarks>
+        public float OverallDarkness()
+            => (LightingIndoorDarkness / DefaultIndoorDarkness + LightingNightDarkness / DefaultNightDarkness
+                + LightingMorningDarkness / DefaultMorningDarkness) / 3f;
+
+        /// <summary>Move the three darkness sliders together to <paramref name="overall"/> (see
+        /// <see cref="OverallDarkness"/>), each in proportion to where it is now; from all three at
+        /// zero, they come back in the proportions they ship with.</summary>
+        public void SetOverallDarkness(float overall)
+        {
+            float now = OverallDarkness();
+            if (now < 0.001f)
+            {
+                LightingIndoorDarkness = Math.Min(DefaultIndoorDarkness * overall, 0.95f);
+                LightingNightDarkness = Math.Min(DefaultNightDarkness * overall, 0.95f);
+                LightingMorningDarkness = Math.Min(DefaultMorningDarkness * overall, 0.95f);
+                return;
+            }
+            float scale = overall / now;
+            LightingIndoorDarkness = Math.Min(LightingIndoorDarkness * scale, 0.95f);
+            LightingNightDarkness = Math.Min(LightingNightDarkness * scale, 0.95f);
+            LightingMorningDarkness = Math.Min(LightingMorningDarkness * scale, 0.95f);
+        }
+
+        private const float DefaultIndoorDarkness = 0.65f, DefaultNightDarkness = 0.25f, DefaultMorningDarkness = 0.25f;
+
         /// <summary>How much of the night darkening carries into the early morning (before 7:00).
         /// 0 wakes in a bright room; higher = darker mornings. The historical look used 0.25.</summary>
         public float LightingMorningDarkness { get; set; } = 0.25f;
@@ -1607,14 +1779,37 @@ namespace SDVRadiance
         /// the other creatures (the horse, the pets, and whatever a wildlife mod adds: every
         /// character that lies along the ground). Trees and buildings have their own switches.</summary>
         public bool DirectionalShadowPlayer { get; set; } = true;
+        /// <summary>How many art pixels above the frame's bottom the farmer's feet end, 0..8. Body
+        /// mods that make the farmer shorter (Sweet Farmer, FS shoes) end the feet higher, and the
+        /// shadow, cast from the frame's bottom, left a gap that read as floating (LilietBorodina).
+        /// Farmers only: NPC art keeps its feet on the frame's bottom.</summary>
+        public float ShadowPlayerFeetRaise { get; set; }
+        /// <summary>Your own reflection in water, and every other farmer's in co-op. Off for players
+        /// who would rather not see themselves in it (kongbai616).</summary>
+        public bool WaterReflectPlayer { get; set; } = true;
+        /// <summary>How much of the screen's top the water reflection eases in over, 0..0.4. What
+        /// stands above the screen cannot be reflected, so at a strong reflection the water near the
+        /// top changed as it came into view (mapleNinja) or sat dark (CiaoLeo); easing it in there
+        /// hides the edge. 0 is off, the old look.</summary>
+        public float WaterReflectTopEase { get; set; }
         public bool DirectionalShadowVillagers { get; set; } = true;
         public bool DirectionalShadowFarmAnimals { get; set; } = true;
         public bool DirectionalShadowCreatures { get; set; } = true;
+        /// <summary>A sun shadow of a person or an animal that runs up the screen climbs onto what
+        /// stands in its way (a bush, a fence, a chest, a crop) instead of going under it and
+        /// looking cut off. Off is every earlier release. Asked for on Nexus: shadows "cut off at
+        /// the edges" next to a bush or a building.</summary>
+        public bool ShadowsClimbOntoThings { get; set; }
         /// <summary>The player, the villagers and the creatures whose switch above is off get the
         /// game's own round shadow under their feet back, instead of no shadow at all. Off by
         /// default, which is every earlier release. Asked for by a player whose shorter farmer
         /// body looked like it floated over its cast shadow.</summary>
         public bool CharactersSwitchedOffUseGameShadow { get; set; }
+        /// <summary>The player, the villagers and the creatures keep the game's own round shadow
+        /// under their feet as well as the cast one. Off by default, which hides the round one
+        /// wherever a cast shadow is drawn, as every earlier release did. Asked for by a player who
+        /// runs the cast shadows faint and wanted the plain game's look with a little depth.</summary>
+        public bool CharactersKeepGameShadowToo { get; set; }
         /// <summary>The creatures' own shadow length, times the shared one: the pets, the horse, a
         /// wildlife mod's animals, Junimos and the critters (rats, birds, squirrels). 1 is every
         /// earlier release. Asked for by a player whose small indoor creatures cast shadows too
@@ -1658,6 +1853,20 @@ namespace SDVRadiance
         /// </para>
         /// </summary>
         public float ShadowSunBearing { get; set; } = 0f;
+        /// <summary>
+        /// The sun crosses the sky the other way: shadows lean right in the morning and left in the
+        /// evening. The day still runs from one side to the other, only the direction it runs in
+        /// changes, for everything that follows the sun (shadows, shafts, window light, the moon).
+        /// Asked for by two players who read the screen with the morning sun on the left.
+        /// </summary>
+        public bool ShadowSunPathMirrored { get; set; } = false;
+        /// <summary>Snow lying along the tops of placed things (fences, chests, machines, building
+        /// sprites) in winter. The game already paints snow into its own winter trees and roofs.
+        /// Shelved 22/10/2026 at the author's word: off, and out of F6 and GMCM until it comes back.
+        /// The stage, the shader and the key stay, so a config that names it still loads.</summary>
+        public bool SnowCapsEnabled { get; set; } = false;
+        /// <summary>How white the snow on those tops is, 0 to 1.</summary>
+        public float SnowCapsStrength { get; set; } = 0.85f;
         /// <summary>
         /// Which side the sun stands on for everything that is LIGHT rather than shadow: the shafts
         /// through the trees, the lean a sprite is lit from, the daylight through a window and the
@@ -1946,11 +2155,14 @@ namespace SDVRadiance
             BloomThreshold = ClampToRange(BloomThreshold, 0f, 1f);
             BloomIntensity = ClampToRange(BloomIntensity, 0f, 2f);
             BloomEmissiveBoost = ClampToRange(BloomEmissiveBoost, 0f, 1f);
+            BloomWideGlow = ClampToRange(BloomWideGlow, 0f, 1f);
             ColorGradeStrength = ClampToRange(ColorGradeStrength, 0f, 1f);
             ColorGradeContrast = ClampToRange(ColorGradeContrast, 0.5f, 1.5f);
             ColorGradeSaturation = ClampToRange(ColorGradeSaturation, 0f, 2f);
             ColorGradeTemperature = ClampToRange(ColorGradeTemperature, -1f, 1f);
             ColorGradeLutAmount = ClampToRange(ColorGradeLutAmount, 0f, 1f);
+            ColorGradeLutByDay = ClampToRange(ColorGradeLutByDay, 0f, 1f);
+            SeasonDriftStrength = ClampToRange(SeasonDriftStrength, 0f, 1f);
             ColorGradeLut ??= "";
             // A hand-edited config.json can say null for a list or a key binding, and the JSON
             // reader takes it at its word. Each of these is read every frame or on every key press,
@@ -2048,8 +2260,12 @@ namespace SDVRadiance
             TunerScrollByTab ??= [];
             TunerLastTab ??= "";
             TunerLayout ??= "";
+            FirstRunGoal ??= "";
             TunerPanel ??= "";
             WindowReflectionStrength = ClampToRange(WindowReflectionStrength, 0f, 2f);
+            WindowSceneReachTiles = ClampToRange(WindowSceneReachTiles, 1f, 6f);
+            ShadowPlayerFeetRaise = ClampToRange(ShadowPlayerFeetRaise, 0f, 8f);
+            WaterReflectTopEase = ClampToRange(WaterReflectTopEase, 0f, 0.4f);
             WindowReflectionNightStrength = ClampToRange(WindowReflectionNightStrength, 0f, 2f);
             WindowSheenStrength = ClampToRange(WindowSheenStrength, 0f, 2f);
             WindowGlareStrength = ClampToRange(WindowGlareStrength, 0f, 2f);
@@ -2073,6 +2289,7 @@ namespace SDVRadiance
             WindowGlassRayLength = ClampToRange(WindowGlassRayLength, 0.5f, 2f);
             WindowGlassRayWhiteness = ClampToRange(WindowGlassRayWhiteness, 0f, 1f);
             WindowGlassFloor = ClampToRange(WindowGlassFloor, 0f, 2f);
+            WindowLightBlockedByPeople = ClampToRange(WindowLightBlockedByPeople, 0f, 1f);
             WindowGlassPane = ClampToRange(WindowGlassPane, 0f, 2f);
             WindowGlassRaySpread = ClampToRange(WindowGlassRaySpread, 0f, 8f);
             WindowGlassCurtainLight = ClampToRange(WindowGlassCurtainLight, 0f, 1f);
@@ -2099,6 +2316,12 @@ namespace SDVRadiance
             ParticleRingSparklesSize = ClampToRange(ParticleRingSparklesSize, 0.5f, 2f);
             ParticleFootDustAmount = ClampToRange(ParticleFootDustAmount, 0f, 2f);
             ParticleFootDustSize = ClampToRange(ParticleFootDustSize, 0.5f, 2f);
+            ParticleFootLeavesAmount = ClampToRange(ParticleFootLeavesAmount, 0f, 2f);
+            ParticleFootLeavesSize = ClampToRange(ParticleFootLeavesSize, 0.5f, 2f);
+            FootprintsStrength = ClampToRange(FootprintsStrength, 0f, 2f);
+            FootprintsLasting = ClampToRange(FootprintsLasting, 0.25f, 3f);
+            SunDapplesStrength = ClampToRange(SunDapplesStrength, 0f, 2f);
+            SunDapplesAmount = ClampToRange(SunDapplesAmount, 0f, 2f);
             ParticleGlowLight = ClampToRange(ParticleGlowLight, 0f, 1f);
             ParticleChimneyAmount = ClampToRange(ParticleChimneyAmount, 0f, 2f);
             ParticleChimneySize = ClampToRange(ParticleChimneySize, 0.5f, 2f);
@@ -2181,11 +2404,14 @@ namespace SDVRadiance
             ShadowPenumbraStretch = ClampToRange(ShadowPenumbraStretch, 0f, 1f);
             ShadowTint = ClampToRange(ShadowTint, 0f, 1f);
             AuroraStrength = ClampToRange(AuroraStrength, 0f, 2f);
+            MilkyWayStrength = ClampToRange(MilkyWayStrength, 0f, 2f);
+            MilkyWayColour = ClampToRange(MilkyWayColour, 0f, 1f);
             ShootingStarFrequency = ClampToRange(ShootingStarFrequency, 0.25f, 4f);
             WaterNightStarsAmount = ClampToRange(WaterNightStarsAmount, 0f, 3f);
             SnowGlintStrength = ClampToRange(SnowGlintStrength, 0f, 1f);
             DirectionalShadowBlur = ClampToRange(DirectionalShadowBlur, 0f, ShadowBlurMax);
             ShadowGroundForeshortening = ClampToRange(ShadowGroundForeshortening, ShadowGroundForeshorteningMin, ShadowGroundForeshorteningMax);
+            SnowCapsStrength = ClampToRange(SnowCapsStrength, 0f, 1f);
             ShadowCharacterGroundForeshortening = ClampToRange(ShadowCharacterGroundForeshortening, ShadowGroundForeshorteningMin, ShadowGroundForeshorteningMax);
             ShadowGroundedDepth = ClampToRange(ShadowGroundedDepth, ShadowGroundedDepthMin, ShadowGroundedDepthMax);
             ShadowLengthTrees = ClampToRange(ShadowLengthTrees, ShadowKindLengthMin, ShadowKindLengthMax);
@@ -2319,7 +2545,9 @@ namespace SDVRadiance
         {
             nameof(ConfigVersion), nameof(SavedProfiles), nameof(WindowCompatAppliedFor),
             nameof(TunerFoldedSections), nameof(TunerHiddenSections), nameof(TunerHiddenSwitches), nameof(TunerHiddenWasOn), nameof(TunerHiddenListOpen), nameof(TunerDensity), nameof(TunerTextSize),
+            nameof(MeasuredEffectCost), nameof(MeasuredEffectCostWhere),
             nameof(TunerShowFineTuning), nameof(TunerLastTab), nameof(TunerScrollByTab), nameof(TunerLayout), nameof(TunerPanel), nameof(TunerGlassShade),
+            nameof(FirstRunGoal),
         };
 
         /// <summary>Load a saved profile's settings into the live config.</summary>
@@ -2512,6 +2740,10 @@ namespace SDVRadiance
             Clamp();
         }
 
+        /// <summary>The author's look, read from assets/author-look.json at launch; null when the
+        /// file is missing, and then the Author preset is not offered.</summary>
+        public static AuthorLookFile? AuthorLook;
+
         /// <summary>Apply a quick look preset by overwriting the effect fields.</summary>
         public void ApplyPreset(LookPreset preset)
         {
@@ -2532,6 +2764,9 @@ namespace SDVRadiance
                     ColorGradeTemperature = 0f;
                     ColorGradeBrightness = 1f;
                     ColorGradeToneMap = false;
+                    ColorGradeLut = "";
+                    ColorGradeLutByDay = 1f;
+                    VignetteStrength = 0.06f;
                     // The LIGHT too, from 1.5.5. Until now this preset only touched bloom and the
                     // colour grade, and measurement says those are the small half: in the saloon
                     // the grade accounts for about +5% on the red channel and the lighting for
@@ -2552,14 +2787,22 @@ namespace SDVRadiance
                     // until its puddles can be placed from the map rather than guessed at, and a
                     // preset that quietly switches on something a player cannot then find the
                     // switch for is worse than one that leaves it alone.
+                    // A film look: warm, a little less colour than life, deep shadows, highlights
+                    // that roll off instead of clipping, and the corners darkened. Everything here
+                    // rides passes the preset already has on (the grade carries the LUT, the tone
+                    // map and the vignette), so it costs what the old Cinematic cost.
                     ColorGradeEnabled = true;
                     ColorGradeAuto = true;
                     ColorGradeStrength = 1f;
-                    ColorGradeContrast = 1.15f;
-                    ColorGradeSaturation = 1.05f;
-                    ColorGradeTemperature = 0.05f;
-                    ColorGradeBrightness = 1f;
-                    ColorGradeToneMap = false;
+                    ColorGradeContrast = 1.2f;
+                    ColorGradeSaturation = 0.92f;
+                    ColorGradeTemperature = 0.08f;
+                    ColorGradeBrightness = 0.98f;
+                    ColorGradeToneMap = true;
+                    ColorGradeLut = "warm-film";
+                    ColorGradeLutAmount = 0.65f;
+                    ColorGradeLutByDay = 1f;
+                    VignetteStrength = 0.22f;
                     break;
 
                 case LookPreset.Vibrant:
@@ -2569,11 +2812,17 @@ namespace SDVRadiance
                     ColorGradeEnabled = true;
                     ColorGradeAuto = true;
                     ColorGradeStrength = 1f;
-                    ColorGradeContrast = 1.15f;
+                    // A storybook look: the greens and the flowers pushed, bright and open, the
+                    // corners left alone.
+                    ColorGradeContrast = 1.12f;
                     ColorGradeSaturation = 1.35f;
-                    ColorGradeTemperature = 0f;
-                    ColorGradeBrightness = 1.03f;
+                    ColorGradeTemperature = 0.02f;
+                    ColorGradeBrightness = 1.04f;
                     ColorGradeToneMap = false;
+                    ColorGradeLut = "verdant";
+                    ColorGradeLutAmount = 0.45f;
+                    ColorGradeLutByDay = 1f;
+                    VignetteStrength = 0.05f;
                     break;
 
                 case LookPreset.Nocturne:
@@ -2592,11 +2841,26 @@ namespace SDVRadiance
                     ColorGradeContrast = 1.18f;
                     ColorGradeSaturation = 1.45f;
                     ColorGradeTemperature = -0.22f;
-                    ColorGradeBrightness = 1f;
+                    ColorGradeBrightness = 0.96f;
                     ColorGradeToneMap = false;
+                    // The moonlight carries the night and stays out of the day: whole after dark, a
+                    // quarter of it by day, where at full it washed the fields in haze (the author
+                    // chose this from three on 27 Oct 2026, for the soft glow it gives the night).
+                    ColorGradeLut = "moonlit";
+                    ColorGradeLutAmount = 0.6f;
+                    ColorGradeLutByDay = 0.25f;
+                    VignetteStrength = 0.25f;
                     WaterSparkle = 0.42f;
                     WaterSparkleDensity = 0.75f;
                     WaterGlitterPath = 0.55f;
+                    break;
+
+                case LookPreset.Author:
+                    // The author's settings as shipped. Look settings only: how the game runs (render
+                    // scale and the rest) stays the player's own, so a slower machine is not handed a
+                    // fast one's costs along with its look.
+                    if (AuthorLook?.Values is { Count: > 0 } values)
+                        ApplyProfile(new NamedProfile { Name = "Author", Values = values });
                     break;
 
                 case LookPreset.Custom:

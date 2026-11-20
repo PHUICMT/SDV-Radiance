@@ -90,10 +90,36 @@ namespace SDVRadiance
                 },
                 () => translate("config.preset.name"), () => translate("config.preset.tooltip"),
                 [nameof(LookPreset.Custom), nameof(LookPreset.Subtle), nameof(LookPreset.Cinematic), nameof(LookPreset.Vibrant),
-                 nameof(LookPreset.Nocturne), nameof(LookPreset.Off)],
+                 nameof(LookPreset.Nocturne), .. ModConfig.AuthorLook?.Values is { Count: > 0 } ? new[] { nameof(LookPreset.Author) } : [],
+                 nameof(LookPreset.Off)],
                 choice => translate($"config.preset.{choice.ToLowerInvariant()}"));
 
             configMenu.AddParagraph(manifest, () => translate("config.preset.hint"));
+            configMenu.AddBoolOption(manifest, () => config().NightLookSeparate, value =>
+                {
+                    config().NightLookSeparate = value;
+                    if (value && string.IsNullOrEmpty(config().NightLook))
+                        config().NightLook = nameof(LookPreset.Nocturne);
+                },
+                () => translate("tuner.nightlook"), () => translate("help.nightlook"));
+            configMenu.AddTextOption(manifest,
+                () => string.IsNullOrEmpty(config().NightLook) ? nameof(LookPreset.Nocturne) : config().NightLook,
+                value => config().NightLook = value ?? "",
+                () => translate("tuner.nightlook.which"), () => translate("help.nightlook"),
+                [.. new[] { nameof(LookPreset.Subtle), nameof(LookPreset.Cinematic), nameof(LookPreset.Vibrant), nameof(LookPreset.Nocturne) }
+                    .Concat(config().SavedProfiles.Select(profile => ModConfig.NightLookSavedPrefix + profile.Name))],
+                choice => choice.StartsWith(ModConfig.NightLookSavedPrefix, StringComparison.Ordinal)
+                    ? choice[ModConfig.NightLookSavedPrefix.Length..]
+                    : translate($"config.preset.{choice.ToLowerInvariant()}"));
+            string[] lookOrSameAsDay = [.. new[] { "", nameof(LookPreset.Subtle), nameof(LookPreset.Cinematic), nameof(LookPreset.Vibrant), nameof(LookPreset.Nocturne) }
+                .Concat(config().SavedProfiles.Select(profile => ModConfig.NightLookSavedPrefix + profile.Name))];
+            string LookName(string choice) => choice.Length == 0 ? translate("tuner.look.sameasday")
+                : choice.StartsWith(ModConfig.NightLookSavedPrefix, StringComparison.Ordinal) ? choice[ModConfig.NightLookSavedPrefix.Length..]
+                : translate($"config.preset.{choice.ToLowerInvariant()}");
+            configMenu.AddTextOption(manifest, () => config().NightLookIndoors ?? "", value => config().NightLookIndoors = value ?? "",
+                () => translate("tuner.nightlook.indoors"), () => translate("help.nightlook"), lookOrSameAsDay, LookName);
+            configMenu.AddTextOption(manifest, () => config().CaveLook ?? "", value => config().CaveLook = value ?? "",
+                () => translate("tuner.cavelook"), () => translate("tuner.cavelook"), lookOrSameAsDay, LookName);
 
             // Same order as the F6 tuner: how it runs first (the one setting every player has
             // an opinion about), then camera/film, then light, then the world, then the
@@ -131,6 +157,9 @@ namespace SDVRadiance
             configMenu.AddNumberOption(manifest, () => config().BloomEmissiveBoost, value => config().BloomEmissiveBoost = value,
                 () => translate("config.bloom.emissiveboost.name"),
                 () => translate("config.bloom.emissiveboost.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().BloomWideGlow, value => config().BloomWideGlow = value,
+                () => translate("config.bloom.wideglow.name"),
+                () => translate("config.bloom.wideglow.tooltip"), 0f, 1f, 0.05f);
 
             // --- Color grading (implemented) ---
         }
@@ -182,6 +211,8 @@ namespace SDVRadiance
                      : $"{choice} ({translate("config.colorgrade.lut.missing")})");
             configMenu.AddNumberOption(manifest, () => config().ColorGradeLutAmount, value => config().ColorGradeLutAmount = value,
                 () => translate("config.colorgrade.lutamount.name"), () => translate("config.colorgrade.lutamount.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().ColorGradeLutByDay, value => config().ColorGradeLutByDay = value,
+                () => translate("tuner.lutbyday"), () => translate("help.lutbyday"), 0f, 1f, 0.05f);
 
             configMenu.AddNumberOption(manifest, () => config().BlueLightFilter, value => config().BlueLightFilter = value,
                 () => translate("config.colorgrade.bluelight.name"), () => translate("config.colorgrade.bluelight.tooltip"), 0f, 1f, 0.05f);
@@ -265,6 +296,16 @@ namespace SDVRadiance
                 () => translate("config.weather.aurora.name"), () => translate("config.weather.aurora.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().AuroraStrength, value => config().AuroraStrength = value,
                 () => translate("config.weather.aurorastrength.name"), () => translate("config.weather.aurorastrength.tooltip"), 0f, 2f, 0.1f);
+            configMenu.AddBoolOption(manifest, () => config().MilkyWayEnabled, value => config().MilkyWayEnabled = value,
+                () => translate("config.weather.milkyway.name"), () => translate("config.weather.milkyway.tooltip"));
+            configMenu.AddNumberOption(manifest, () => config().MilkyWayStrength, value => config().MilkyWayStrength = value,
+                () => translate("config.weather.milkywaystrength.name"), () => translate("config.weather.milkywaystrength.tooltip"), 0f, 2f, 0.1f);
+            configMenu.AddNumberOption(manifest, () => config().MilkyWayColour, value => config().MilkyWayColour = value,
+                () => translate("config.weather.milkywaycolour.name"), () => translate("config.weather.milkywaycolour.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().SpringMeteorShowers, value => config().SpringMeteorShowers = value,
+                () => translate("config.weather.springmeteors.name"), () => translate("config.weather.springmeteors.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().HarvestMoon, value => config().HarvestMoon = value,
+                () => translate("config.weather.harvestmoon.name"), () => translate("config.weather.harvestmoon.tooltip"));
             configMenu.AddBoolOption(manifest, () => config().ShootingStarsEnabled, value => config().ShootingStarsEnabled = value,
                 () => translate("config.weather.shootingstars.name"), () => translate("config.weather.shootingstars.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().ShootingStarFrequency, value => config().ShootingStarFrequency = value,
@@ -446,6 +487,26 @@ namespace SDVRadiance
                 () => config().ParticleFootDust, value => config().ParticleFootDust = value,
                 () => config().ParticleFootDustAmount, value => config().ParticleFootDustAmount = value,
                 () => config().ParticleFootDustSize, value => config().ParticleFootDustSize = value);
+            AddParticleEmitter(configMenu, manifest, translate, "footleaves",
+                () => config().ParticleFootLeaves, value => config().ParticleFootLeaves = value,
+                () => config().ParticleFootLeavesAmount, value => config().ParticleFootLeavesAmount = value,
+                () => config().ParticleFootLeavesSize, value => config().ParticleFootLeavesSize = value);
+            configMenu.AddTextOption(manifest, () => config().ParticleFootLeavesLook.ToString(),
+                value => config().ParticleFootLeavesLook = Enum.TryParse(value, out FootLeafLook chosen) ? chosen : FootLeafLook.LikeOtherLeaves,
+                () => translate("config.particles.footleaveslook.name"), () => translate("config.particles.footleaveslook.tooltip"),
+                [nameof(FootLeafLook.LikeOtherLeaves), nameof(FootLeafLook.Realistic), nameof(FootLeafLook.Pixel)],
+                choice => translate(choice == nameof(FootLeafLook.Pixel) ? "tuner.particleleaflook.pixel"
+                    : choice == nameof(FootLeafLook.Realistic) ? "tuner.particleleaflook.realistic" : "tuner.particlefootleaveslook.likeother"));
+            configMenu.AddBoolOption(manifest, () => config().ParticleFootLeavesEveryone, value => config().ParticleFootLeavesEveryone = value,
+                () => translate("tuner.particlefootleaveseveryone"), () => translate("help.particlefootleaveseveryone"));
+            configMenu.AddBoolOption(manifest, () => config().Footprints, value => config().Footprints = value,
+                () => translate("tuner.footprints"), () => translate("help.footprints"));
+            configMenu.AddNumberOption(manifest, () => config().FootprintsStrength, value => config().FootprintsStrength = value,
+                () => translate("tuner.footprintsstrength"), () => translate("help.footprintsstrength"), 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().FootprintsLasting, value => config().FootprintsLasting = value,
+                () => translate("tuner.footprintslasting"), () => translate("help.footprintslasting"), 0.25f, 3f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().FootprintsEveryone, value => config().FootprintsEveryone = value,
+                () => translate("tuner.footprintseveryone"), () => translate("help.footprintseveryone"));
             AddParticleEmitter(configMenu, manifest, translate, "festivelights",
                 () => config().ParticleFestiveLights, value => config().ParticleFestiveLights = value,
                 () => config().ParticleFestiveLightsAmount, value => config().ParticleFestiveLightsAmount = value,
@@ -806,6 +867,8 @@ namespace SDVRadiance
                 () => translate("config.lighting.windoweffects.name"), () => translate("config.lighting.windoweffects.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().WindowGlowOpensNight, value => config().WindowGlowOpensNight = value,
                 () => translate("config.lighting.windowopensnight.name"), () => translate("config.lighting.windowopensnight.tooltip"), 0f, 1f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().LampLightFromBulb, value => config().LampLightFromBulb = value,
+                () => translate("tuner.lamplightfrombulb"), () => translate("help.lamplightfrombulb"));
             configMenu.AddNumberOption(manifest, () => config().LampHalo, value => config().LampHalo = value,
                 () => translate("config.lighting.lamphalo.name"), () => translate("config.lighting.lamphalo.tooltip"), 0f, 1f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().AquariumRipple, value => config().AquariumRipple = value,
@@ -836,6 +899,8 @@ namespace SDVRadiance
                 () => translate("config.lighting.windowglassrayspread.name"), () => translate("config.lighting.windowglassrayspread.tooltip"), 0f, 8f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().WindowGlassFloor, value => config().WindowGlassFloor = value,
                 () => translate("config.lighting.windowglassfloor.name"), () => translate("config.lighting.windowglassfloor.tooltip"), 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().WindowLightBlockedByPeople, value => config().WindowLightBlockedByPeople = value,
+                () => translate("tuner.windowlightblockedbypeople"), () => translate("help.windowlightblockedbypeople"), 0f, 1f, 0.05f);
             configMenu.AddNumberOption(manifest, () => config().WindowGlassPane, value => config().WindowGlassPane = value,
                 () => translate("config.lighting.windowglasspane.name"), () => translate("config.lighting.windowglasspane.tooltip"), 0f, 2f, 0.05f);
             if (LabelStore.CurtainWindowsInstalled)
@@ -936,6 +1001,9 @@ namespace SDVRadiance
             configMenu.AddNumberOption(manifest, () => config().ShadowSunBearing, value => config().ShadowSunBearing = value,
                 () => translate("config.shadows.sunbearing.name"),
                 () => translate("config.shadows.sunbearing.tooltip"), 0f, 359f, 5f);
+            configMenu.AddBoolOption(manifest, () => config().ShadowSunPathMirrored, value => config().ShadowSunPathMirrored = value,
+                () => translate("config.shadows.sunpathmirrored.name"),
+                () => translate("config.shadows.sunpathmirrored.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().SunlightBearing, value => config().SunlightBearing = value,
                 () => translate("config.shadows.sunlightbearing.name"),
                 () => translate("config.shadows.sunlightbearing.tooltip"), 0f, 359f, 5f);
@@ -958,6 +1026,16 @@ namespace SDVRadiance
                 () => translate("config.shadows.farmanimals.name"), () => translate("config.shadows.farmanimals.tooltip"));
             configMenu.AddBoolOption(manifest, () => config().DirectionalShadowCreatures, value => config().DirectionalShadowCreatures = value,
                 () => translate("config.shadows.creatures.name"), () => translate("config.shadows.creatures.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().SunYieldsToWeatherMods, value => config().SunYieldsToWeatherMods = value,
+                () => translate("tuner.sunyieldstoweathermods"), () => translate("help.sunyieldstoweathermods"));
+            configMenu.AddBoolOption(manifest, () => config().SeasonDrift, value => config().SeasonDrift = value,
+                () => translate("tuner.seasondrift"), () => translate("help.seasondrift"));
+            configMenu.AddNumberOption(manifest, () => config().SeasonDriftStrength, value => config().SeasonDriftStrength = value,
+                () => translate("tuner.seasondriftstrength"), () => translate("help.seasondriftstrength"), 0f, 1f, 0.05f);
+            configMenu.AddBoolOption(manifest, () => config().ShadowsClimbOntoThings, value => config().ShadowsClimbOntoThings = value,
+                () => translate("tuner.shadowsclimb"), () => translate("help.shadowsclimb"));
+            configMenu.AddBoolOption(manifest, () => config().CharactersKeepGameShadowToo, value => config().CharactersKeepGameShadowToo = value,
+                () => translate("tuner.shadowkeepgameshadow"), () => translate("help.shadowkeepgameshadow"));
             configMenu.AddBoolOption(manifest, () => config().CharactersSwitchedOffUseGameShadow, value => config().CharactersSwitchedOffUseGameShadow = value,
                 () => translate("tuner.shadowgameshadowwhenoff"), () => translate("help.shadowgameshadowwhenoff"));
             configMenu.AddNumberOption(manifest, () => config().ShadowCreatureLength, value => config().ShadowCreatureLength = value,
@@ -968,6 +1046,12 @@ namespace SDVRadiance
                 () => translate("config.shadows.junimolength.name"), () => translate("config.shadows.junimolength.tooltip"), 0.1f, 2f, 0.05f);
             configMenu.AddBoolOption(manifest, () => config().DirectionalShadowObjects, value => config().DirectionalShadowObjects = value,
                 () => translate("config.shadows.objects.name"), () => translate("config.shadows.objects.tooltip"));
+            configMenu.AddBoolOption(manifest, () => config().SunDapples, value => config().SunDapples = value,
+                () => translate("tuner.sundapples"), () => translate("help.sundapples"));
+            configMenu.AddNumberOption(manifest, () => config().SunDapplesStrength, value => config().SunDapplesStrength = value,
+                () => translate("tuner.sundapplesstrength"), () => translate("help.sundapplesstrength"), 0f, 2f, 0.05f);
+            configMenu.AddNumberOption(manifest, () => config().SunDapplesAmount, value => config().SunDapplesAmount = value,
+                () => translate("tuner.sundapplesamount"), () => translate("help.sundapplesamount"), 0f, 2f, 0.05f);
             configMenu.AddBoolOption(manifest, () => config().DirectionalShadowFences, value => config().DirectionalShadowFences = value,
                 () => translate("config.shadows.fences.name"), () => translate("config.shadows.fences.tooltip"));
             configMenu.AddNumberOption(manifest, () => config().ContactShadowStrength, value => config().ContactShadowStrength = value,
@@ -1071,6 +1155,8 @@ namespace SDVRadiance
                 choice => translate($"tuner.lightersofteffects.{choice.ToLowerInvariant()}"));
             configMenu.AddNumberOption(manifest, () => config().RenderSharpness, value => config().RenderSharpness = value,
                 () => translate("config.rendersharpness.name"), () => translate("config.rendersharpness.tooltip"), 0f, 2f, 0.1f);
+            configMenu.AddBoolOption(manifest, () => config().PowerSaver, value => config().PowerSaver = value,
+                () => translate("config.powersaver.name"), () => translate("config.powersaver.tooltip"));
             configMenu.AddBoolOption(manifest, () => config().LimitSamplerSlots, value => config().LimitSamplerSlots = value,
                 () => translate("config.limitsamplerslots.name"), () => translate("config.limitsamplerslots.tooltip"));
 

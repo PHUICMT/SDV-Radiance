@@ -87,6 +87,7 @@ namespace SDVRadiance
             ("ShootingStarsEnabled",       "shooting stars"),
             ("GoldenHourStrength",         "golden hour"),
             ("BloomEmissiveBoost",         "emissive glow"),
+            ("BloomWideGlow",              "wide glow"),
         ];
 
         internal static bool EffectCostRunning;
@@ -126,6 +127,12 @@ namespace SDVRadiance
         private bool _effectCostSavedProbe;
         private float _effectCostSavedScale;
         private readonly List<(string Label, double Cost, bool MeasuredByTurningOn)> _effectCostResults = [];
+        /// <summary>The same results by setting name, for the tuner's cost tags.</summary>
+        private readonly Dictionary<string, double> _effectCostByKey = [];
+        /// <summary>How far through the list a run is, 0 to 1, for the tuner's progress line.</summary>
+        internal static float EffectCostProgress;
+        /// <summary>Called once a run finishes with each setting's cost and where it was measured.</summary>
+        internal static Action<Dictionary<string, double>, string>? EffectCostFinished;
 
         /// <summary>Arm the per-effect sweep.</summary>
         public void StartEffectCost(ModConfig config, int amplify = 6)
@@ -149,6 +156,8 @@ namespace SDVRadiance
             _effectCostAccumulator = _effectCostPendingBase = 0;
             _effectCostSavedValue = null;
             _effectCostResults.Clear();
+            _effectCostByKey.Clear();
+            EffectCostProgress = 0f;
             EffectCostSummary.Clear();
             _monitor.Log($"Pricing {EffectCostKeys.Length} effects at {Game1.currentLocation?.Name} by amplified slope - "
                 + "about thirty seconds. The picture will stutter and flicker; that is the measurement, not a fault. "
@@ -252,6 +261,7 @@ namespace SDVRadiance
             // Positive always means "running this effect makes the frame longer by this much".
             double delta = _effectCostFlipTurnedOn ? avg - _effectCostPendingBase : _effectCostPendingBase - avg;
             _effectCostResults.Add((EffectCostKeys[_effectCostIndex].Label, delta / (BenchAmplify + 1), _effectCostFlipTurnedOn));
+            _effectCostByKey[key] = delta / (BenchAmplify + 1);
             NextEffect(config, key);
         }
 
@@ -263,6 +273,7 @@ namespace SDVRadiance
             _effectCostSavedValue = null;
             _effectCostFlipTurnedOn = false;
             _effectCostIndex++;
+            EffectCostProgress = (float)_effectCostIndex / EffectCostKeys.Length;
             _effectCostHalf = 0;
             _effectCostFrame = 0;
             _effectCostAccumulator = 0;
@@ -280,6 +291,9 @@ namespace SDVRadiance
             // meter would make the next report lie for five seconds.
             FrameCost.Reset();
 
+            EffectCostProgress = 1f;
+            EffectCostFinished?.Invoke(new Dictionary<string, double>(_effectCostByKey),
+                $"{Game1.currentLocation?.DisplayName ?? Game1.currentLocation?.Name}, {Game1.getTimeOfDayString(Game1.timeOfDay)}");
             _effectCostResults.Sort((a, b) => b.Cost.CompareTo(a.Cost));
             EffectCostSummary.Clear();
             EffectCostSummary.Add($"Per-effect GPU cost at {Game1.currentLocation?.Name}, "

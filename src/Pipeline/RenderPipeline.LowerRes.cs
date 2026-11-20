@@ -1,5 +1,7 @@
 using System;
+using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using StardewValley;
 
 namespace SDVRadiance
 {
@@ -72,13 +74,46 @@ namespace SDVRadiance
             if (_floodApply == null)
                 return false;
             EnsureSoftEffectTargets(destination.Width, destination.Height, destination.Format);
-            DrawFull(spriteBatch, source, _floodHalfScene!, null!);
+            // The copy's texels stay fixed on the world. On the screen's grid an odd camera position
+            // blends other art pixels into each texel, and the ratio moved the edges of the light by a
+            // little for that one frame: too little to see alone, plain once the glow had grown it.
+            Vector2 pastGrid = PixelsPastWorldGrid(source, _floodHalfScene!);
+            DrawFullReadBack(spriteBatch, source, _floodHalfScene!, pastGrid);
             DrawFull(spriteBatch, _floodHalfScene!, _floodHalfLit!, effect);
             _floodApply.Parameters["LitHalfTexture"]?.SetValue(_floodHalfLit);
             _floodApply.Parameters["SceneHalfTexture"]?.SetValue(_floodHalfScene);
+            _floodApply.Parameters["HalfGridShift"]?.SetValue(new Vector2(pastGrid.X / source.Width, pastGrid.Y / source.Height));
             _floodApply.CurrentTechnique = _floodApply.Techniques["Apply"];
             DrawFull(spriteBatch, source, destination, _floodApply);
             return true;
+        }
+
+        /// <summary>How many source pixels the camera sits past the last texel of a smaller copy of the
+        /// frame. A copy that reads the frame this much further back keeps its texels fixed on the
+        /// world, and whatever reads the copy reads this much further on. Nothing while a map picture
+        /// is taken, which moves the camera its own way.</summary>
+        private static Vector2 PixelsPastWorldGrid(Texture2D source, Texture2D smaller)
+        {
+            if (MapScreenshotEffects.Active || Game1.viewport.Width <= 0)
+                return Vector2.Zero;
+            float sourcePixelsPerViewPixel = source.Width / (float)Game1.viewport.Width;
+            float sourcePixelsPerTexel = source.Width / (float)smaller.Width;
+            return new Vector2(
+                PastLastStep(Game1.viewport.X * sourcePixelsPerViewPixel, sourcePixelsPerTexel),
+                PastLastStep(Game1.viewport.Y * sourcePixelsPerViewPixel, sourcePixelsPerTexel));
+        }
+
+        private static float PastLastStep(float position, float step) => position - MathF.Floor(position / step) * step;
+
+        /// <summary>A plain copy of <paramref name="source"/> that starts this many pixels before its
+        /// top left corner, the edge pixels standing in for what lies off the frame.</summary>
+        private void DrawFullReadBack(SpriteBatch spriteBatch, Texture2D source, RenderTarget2D destination, Vector2 pixels)
+        {
+            _device.SetRenderTarget(destination);
+            spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone);
+            spriteBatch.Draw(source, new Rectangle(0, 0, destination.Width, destination.Height),
+                new Rectangle(-(int)pixels.X, -(int)pixels.Y, source.Width, source.Height), Color.White);
+            spriteBatch.End();
         }
 
         /// <summary>The classic lighting at half size: the light alone into a half-size target, then
@@ -148,6 +183,7 @@ namespace SDVRadiance
             _quarterScratchA?.Dispose(); _quarterScratchB?.Dispose();
             _floodHalfScene?.Dispose(); _floodHalfLit?.Dispose(); _classicHalfLight?.Dispose();
             _quarterScratchA = _quarterScratchB = _floodHalfScene = _floodHalfLit = _classicHalfLight = null;
+            ReleaseWideGlowLevels();
         }
     }
 }

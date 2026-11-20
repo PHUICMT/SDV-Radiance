@@ -34,8 +34,9 @@ namespace SDVRadiance
         /// </summary>
         internal static bool FreezeGameWater;
 
-        /// <summary>When true, the game draws a street lamp's glow into its lightmap at the bulb
-        /// rather than at the foot of the post (see <see cref="LightSourceDraw_Prefix"/>).</summary>
+        /// <summary>When true (ModConfig.LampLightFromBulb with the mod on), the game draws a street
+        /// lamp's glow into its lightmap at the bulb rather than at the foot of the post (see
+        /// <see cref="LightSourceDraw_Prefix"/>).</summary>
         internal static bool LampGlowFromBulb;
 
         private static IMonitor? _monitor;

@@ -100,6 +100,14 @@ sampler2D SurfaceClassSampler = sampler_state
     AddressU = Clamp; AddressV = Clamp;
 };
 float2 MapTiles;          // the location's size in tiles, the extent of SurfaceClassTexture
+// The Milky Way's haze (tools/make-milkyway.py), sampled in world space: it tiles, so Wrap.
+texture MilkyWayTexture;
+sampler2D MilkyWaySampler = sampler_state
+{
+    Texture = <MilkyWayTexture>;
+    MinFilter = Linear; MagFilter = Linear; MipFilter = None;
+    AddressU = Wrap; AddressV = Wrap;
+};
 
 // The caustic net, baked offline (tools/make-caustics.py): a tileable Voronoi ridge. Wrap
 // addressing because it is sampled in world space - the net is painted on the bed and the
@@ -157,6 +165,7 @@ float2 MaskOrigin;      // mask window origin in world tiles — the window is P
                         // floor(WorldTileOffset); the CPU passes the true origin.
 float WaterKind;        // 0 = still (pond/river), 1 = ocean/beach (big directional swell)
 float ReflectStrength;  // 0 = off; screen-space reflection of the scene above the surface
+float ReflectTopEase;  // share of the screen at the top where reflections ease in from nothing, 0 = off
 float SparkleDensity;   // ~0.2–2: glint count per area; glint size follows inversely
 float SunWarm;          // 0–1 golden-hour factor: sparkle + sheen turn warm at low sun
 // THE SUN HAS A DIRECTION, AND THE GLITTER FOLLOWS IT. Every glint on real water is the sun
@@ -174,6 +183,7 @@ float NightStars;       // 0–1 the stars' own switch, eased: the dots alone, m
 float NightStarsFloor;  // a cell whose hash is above this holds a star: 0.81 at the default dial,
                         // lower for more stars (the dial is eased and turned into this on the CPU)
 float MoonGlow;         // 0–1 lunar phase × season × clouds: moonlit swell shimmer
+float3 MoonColour = float3(0.55, 0.68, 0.95);   // the moonlight's colour: cool, or amber under a harvest moon
 float RainAmount;
 float RainRingDensity;  // how many strikes, against the amount the rain brings on its own
 float RainRingSize;     // how wide one ring grows before it dies
@@ -285,6 +295,9 @@ float PlayerInWater;    // 0..1 eased: the player's feet are on water pixels (wa
 float TintAmount;          // depth-tint amount (0 when the shimmer toggle is off; reflection may still run)
 float3 SkyColour;        // synthesised sky tint: day/golden-hour/night/overcast, ambient-scaled (C#)
 float AuroraAmount;        // 0..1 eased: aurora curtains in the reflected sky (clear winter nights)
+float MilkyWayAmount;      // eased, dial and brightness folded in on the CPU: the Milky Way in the reflected sky (clear summer nights)
+float3 MilkyWayEdgeTint;   // the band's colour at its faint edges and at its bright core, from the colour dial:
+float3 MilkyWayCoreTint;   // near white for the naked eye, violet arms and a warm core for a photograph
 float DebugSky;         // 1 = paint the sky glow's own inputs instead of the scene (radiance_debug sky)
 // Up to three streaks at once, because one at a time reads as a scripted event rather than a
 // sky. Each slot is independent: its own clock, path, length and weight, so a faint quick one
@@ -574,9 +587,27 @@ float StandingSwell(float2 tile, float t)
 float3 SkyGlow(float2 uv)
 {
     float3 glow = 0.0;
-    [branch] if (AuroraAmount < 0.004 && MeteorAny < 0.004)
+    [branch] if (AuroraAmount < 0.004 && MeteorAny < 0.004 && MilkyWayAmount < 0.004)
         return glow;
     float2 worldTile = uv * TilesPerScreen + WorldTileOffset;
+    // The Milky Way: a pale band across a summer sky, thick with small stars, with a dark lane
+    // down one side of its middle. World-anchored like the aurora, so it stays where it is while
+    // the camera walks. The haze is a tiling texture made by tools/make-milkyway.py (this shader
+    // has no constant registers left for the noise it takes); the stars are drawn here, many
+    // times denser where the haze is bright, because a star has to stay a few pixels wide.
+    [branch] if (MilkyWayAmount >= 0.004)
+    {
+        float3 milkyHaze = tex2Dlod(MilkyWaySampler, float4(worldTile * 0.0111803, 0.0, 0.0)).rgb;   // 1 / (40 sqrt 5) tiles
+        float2 dustGrid = worldTile * 9.0;
+        float2 dustCell = floor(dustGrid);
+        float dustHash = Hash(dustCell);
+        float holdsDust = saturate((dustHash - (0.986 - 0.12 * milkyHaze.g)) * 60.0);
+        float2 dustCentre = 0.25 + 0.5 * float2(Hash(dustCell + 3.1), Hash(dustCell + 7.7));
+        float dust = smoothstep(0.16, 0.0, length(frac(dustGrid) - dustCentre)) * holdsDust;
+        dust *= 0.75 + 0.25 * sin(Time * 1.3 + dustHash * 40.0);
+        float3 milkyTint = lerp(MilkyWayEdgeTint, MilkyWayCoreTint, saturate(milkyHaze.g * 2.0));
+        glow += (milkyHaze * milkyTint * 0.30 + dust * 0.95) * MilkyWayAmount;   // the overall brightness is MilkyWayBrightness, on the CPU
+    }
     [branch] if (AuroraAmount >= 0.004)
     {
         // An aurora is a RIBBON: narrow across, long along, snaking, crisp at its lower edge and
@@ -1543,7 +1574,8 @@ float4 WaterPS(PixelInput input) : SV_TARGET
                       + dot(tex2D(SourceSampler, uv + float2(0.0,  0.35 * oneTileV)).rgb, float3(0.299, 0.587, 0.114))
                       + dot(tex2D(SourceSampler, uv + float2(-0.35 * oneTileV, 0.0)).rgb, float3(0.299, 0.587, 0.114))
                       + dot(tex2D(SourceSampler, uv + float2( 0.35 * oneTileV, 0.0)).rgb, float3(0.299, 0.587, 0.114))) * 0.2;
-        float mirrorAmount = saturate(ReflectStrength) * water * fade * onScreen
+        float topEase = ReflectTopEase > 0.0 ? smoothstep(0.0, ReflectTopEase, uv.y) : 1.0;
+        float mirrorAmount = saturate(ReflectStrength) * water * fade * onScreen * topEase
                   * saturate(max(sceneLuminance, lumAvg) * 3.2) * lerp(0.5, 1.0, mirrorness) * reflectance;
         colour.rgb = lerp(colour.rgb, reflectionColour, mirrorAmount);
         // The aurora and the shooting star go on AFTER that mix, and deliberately not through
@@ -1598,7 +1630,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
             float4 entityMask = tex2D(MaskSampler, (entityWorldTile - MaskOrigin) / MaskSize);
             float entityWater = max(entityMask.g, entityMask.r * step(0.9, entityMask.a));
             // A body standing in the plunge loses most of its reflection to the same churn.
-            float entityAmount = saturate(ReflectStrength) * entityWater * entity.a * (1.0 - inSprite) * (1.0 - churn * 0.7);
+            float entityAmount = saturate(ReflectStrength) * (ReflectTopEase > 0.0 ? smoothstep(0.0, ReflectTopEase, uv.y) : 1.0) * entityWater * entity.a * (1.0 - inSprite) * (1.0 - churn * 0.7);
             // Opacity walked in two reports: 0.85 read as "too clear" (denser than the bushes
             // mirrored beside it), 0.66 as "a bit too faint" once the feet->head fade landed on
             // top of it. 0.74 with that fade puts the near-feet band back at the old presence
@@ -1779,7 +1811,7 @@ float4 WaterPS(PixelInput input) : SV_TARGET
         float swellA = sin(worldTile.y * 1.3 - t * 0.5) * 0.5 + 0.5;
         float swellB = sin(worldTile.x * 0.7 + worldTile.y * 0.9 + t * 0.35) * 0.5 + 0.5;
         float moonSheen = swellA * swellB;
-        colour.rgb += (moonSheen * moonSheen * 0.14 + 0.03) * MoonGlow * NightGlow * water * float3(0.55, 0.68, 0.95);
+        colour.rgb += (moonSheen * moonSheen * 0.14 + 0.03) * MoonGlow * NightGlow * water * MoonColour;
     }
 
     // ---- Night: warm lamp light shimmering down the water below each light ----

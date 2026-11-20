@@ -28,6 +28,7 @@ namespace SDVRadiance
         private void CaptureCasterSwitches(ModConfig config)
         {
             _castPlayer = config.DirectionalShadowPlayer;
+            _charactersClimb = config.ShadowsClimbOntoThings;
             _castVillagers = config.DirectionalShadowVillagers;
             _castFarmAnimals = config.DirectionalShadowFarmAnimals;
             _castCreatures = config.DirectionalShadowCreatures;
@@ -35,6 +36,9 @@ namespace SDVRadiance
             _creatureSoftness = config.ShadowCreatureSoftness;
             _junimoLength = config.ShadowJunimoLength;
         }
+
+        /// <summary>ModConfig.ShadowsClimbOntoThings, for this frame's sun pass.</summary>
+        private bool _charactersClimb;
 
         /// <summary>Junimos' own length, times the creatures' (see ModConfig.ShadowJunimoLength).</summary>
         private float _junimoLength = 1f;
@@ -113,6 +117,8 @@ namespace SDVRadiance
                 DiagnosticMonitor.Log($"[shadow] sun: npcs={location.characters.Count}, time={Game1.timeOfDay}, rot={rotation:0.00}, stretch={stretch:0.00}, alpha={alpha:0.00}, blur={blur:0.0}", LogLevel.Debug);
             }
 
+            // People and animals climb what they stand beside; objects, below, keep their strips.
+            _climbThisCast = _charactersClimb;
             foreach (NPC npc in CharactersIn(location))
             {
                 if (npc == null || npc.IsInvisible || ShadowHiddenFor(npc) || npc.swimming.Value || npc.Sprite?.Texture == null
@@ -151,10 +157,13 @@ namespace SDVRadiance
                 DrawPlayerShadow(spriteBatch, location, rotation, stretch, alpha, blur);
                 DrawOtherFarmerSunShadows(spriteBatch, location, rotation, stretch, alpha, blur);
             }
+            _climbThisCast = false;
 
             if (config.DirectionalShadowObjects)
             {
+                BeginDapples(config, alpha);
                 DrawObjectShadows(spriteBatch, location, rotation, stretch, alpha, blur);
+                _dapplesThisCast = false;
 
                 // Farm building ENTITIES (coop/barn/house) get their grounding pool here. Their
                 // SHAPE is cast somewhere else entirely, through the effect chain, for reasons
@@ -255,6 +264,8 @@ namespace SDVRadiance
             float nightBoost = location.IsOutdoors ? GameClock.RampAt(TrulyDark()) : 0f;
             float castStrength = strength * MathHelper.Lerp(1.0f, 1.9f, nightBoost);
 
+            // Under the lamps as under the sun: people and animals climb what stands in their way.
+            _climbThisCast = _charactersClimb;
             CastNpcShadows(spriteBatch, location, castStrength, lenCfg, ambAlpha, blur);
             CastAnimalShadows(spriteBatch, location, castStrength, lenCfg, ambAlpha, blur);
             DrawFlierShadowsUnderLamps(spriteBatch, location, castStrength, lenCfg, blur);
@@ -266,6 +277,7 @@ namespace SDVRadiance
                 // caster list this class walks, which is why nobody but you ever cast indoors.
                 DrawOtherFarmerLightShadows(spriteBatch, location, castStrength, lenCfg, ambAlpha, blur);
             }
+            _climbThisCast = false;
 
             // Furniture / big craftables / forage get a light ambient contact pool too (no per-light
             // silhouette — a room full of overlapping cast copies reads as clutter).
@@ -568,7 +580,7 @@ namespace SDVRadiance
                     && !IsSeated(who))
                 {
                     Vector2 feet = Game1.GlobalToLocal(Game1.viewport,
-                        new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift));
+                        new Vector2(who.GetBoundingBox().Center.X, who.GetBoundingBox().Bottom - FeetLift - FarmerFeetRaise));
                     float depth = MathHelper.Clamp(who.StandingPixel.Y / 10000f - ShadowDepthBias, 0f, 1f);
                     GatherCasts(feet, castStrength, lenCfg);
                     DrawContactBlob(spriteBatch, feet, 22f, 11f, ambAlpha * GroundingPoolShare(), depth, blur);
@@ -1005,7 +1017,7 @@ namespace SDVRadiance
             // bulb is: it is the tile it swaps for a lit one at night (NightTiles). So a light with
             // such a tile in its own column a little above it lights from that tile's centre, in
             // any map that lights its lamps the game's way, and a light with none stays where it is.
-            if (location.IsOutdoors)
+            if (LampLightFromBulb && location.IsOutdoors)
             {
                 int column = (int)MathF.Floor(lightPosition.X / 64f);
                 int row = (int)MathF.Floor(lightPosition.Y / 64f);
@@ -1018,6 +1030,10 @@ namespace SDVRadiance
             }
             return Vector2.Zero;
         }
+
+        /// <summary>Whether a street lamp lights from its bulb (ModConfig.LampLightFromBulb with the
+        /// mod on), set by the update tick.</summary>
+        internal static bool LampLightFromBulb;
 
         /// <summary>How far above a map light its lit bulb may be, in tiles: a lamp post is two to
         /// three tiles tall.</summary>

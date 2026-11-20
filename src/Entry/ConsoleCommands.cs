@@ -695,6 +695,25 @@ namespace SDVRadiance
                         + "check the sky: line of radiance_report if nothing shows.", LogLevel.Info);
                 });
 
+            helper.ConsoleCommands.Add("radiance_shower",
+                "Force tonight's spring meteor shower on or off, or hand it back to the nightly roll: "
+                + "radiance_shower on|off|auto. About one clear spring night in three has one, for two to "
+                + "four hours, so waiting for it is a lottery. 'on' holds it at its peak. It still needs "
+                + "Meteor showers in spring, shooting stars, spring and a clear night outdoors. Not saved.",
+                (_, arguments) =>
+                {
+                    string wanted = arguments.Length > 0 ? arguments[0].ToLowerInvariant() : "";
+                    if (wanted is not ("on" or "off" or "auto"))
+                    {
+                        monitor.Log("usage: radiance_shower on|off|auto (now: "
+                            + (RenderPipeline.ShowerForce > 0 ? "on" : RenderPipeline.ShowerForce < 0 ? "off" : "auto")
+                            + ")", LogLevel.Info);
+                        return;
+                    }
+                    RenderPipeline.ShowerForce = wanted == "on" ? 1 : wanted == "off" ? -1 : 0;
+                    monitor.Log($"spring meteor shower: {wanted}.", LogLevel.Info);
+                });
+
             helper.ConsoleCommands.Add("radiance_wet",
                 "Set how wet the ground is where you stand, to look at it without waiting out the rain: "
                 + "'radiance_wet <wetness 0-1> [puddles 0-1]'. No arguments prints the wet-ground line. "
@@ -2464,7 +2483,10 @@ namespace SDVRadiance
                     + $"{Clock(RenderPipeline.SkyAuroraShowStart)}-{Clock(RenderPipeline.SkyAuroraShowEnd)} "
                     + $"force={(RenderPipeline.AuroraForce > 0 ? "on" : RenderPipeline.AuroraForce < 0 ? "off" : "auto")}) star: "
                     + $"envelope={pipeline.SkyMeteorEnvelope:0.000} burning={pipeline.SkyMeteorBurning}/3 (toggle={config.ShootingStarsEnabled} "
-                    + $"nextIn={(pipeline.SkyMeteorSecondsToNext < 0 ? "n/a" : pipeline.SkyMeteorSecondsToNext.ToString("0") + "s")}) "
+                    + $"nextIn={(pipeline.SkyMeteorSecondsToNext < 0 ? "n/a" : pipeline.SkyMeteorSecondsToNext.ToString("0") + "s")} "
+                    + $"lit={pipeline.SkyMeteorsLit} shower={pipeline.SkyShowerNow:0.00} (toggle={config.SpringMeteorShowers} "
+                    + $"force={(RenderPipeline.ShowerForce > 0 ? "on" : RenderPipeline.ShowerForce < 0 ? "off" : "auto")})) "
+                    + $"milkyway={pipeline.SkyMilkyWayUploaded:0.00} (toggle={config.MilkyWayEnabled} summer={Game1.IsSummer}) "
                     + $"gate: clearNight={pipeline.SkyClearNight} outdoors={location.IsOutdoors} "
                     + $"weather={weather} reflection={config.WaterReflection}");
             // The window pass, spelled out the same way and for the same reason. A street where

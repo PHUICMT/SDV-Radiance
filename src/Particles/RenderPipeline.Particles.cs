@@ -417,7 +417,7 @@ namespace SDVRadiance
                  + $"mistFeet={_mistFeet.Count}{MistFeetTiles()} steamTiles={_steamTiles.Count} lavaTiles={_lavaTiles.Count} "
                  + $"fireflies={(_firefliesFlying ? "flying" : "not tonight")} "
                  + $"blossom={(_blossomFalling ? "falling" : "not today")} "
-                 + $"ringSparkles={(_ringSparkling ? "on" : "no ring")} footDustLifted={_footDustPuffs} onGround={GroundParticlesDrawn} glowLights={ParticleGlowLights} (strongest weight {ParticleGlowStrongestWeight:0.0} opening {ParticleGlowStrongestAmount:0.000}) chimneys={ChimneysFound} {ChimneyTilesText} festiveBulbs={ParticleFestiveLightsLit} carried[{ParticleCarriedFlame}] "
+                 + $"ringSparkles={(_ringSparkling ? "on" : "no ring")} footDustLifted={_footDustPuffs} footLeavesKicked={_footLeavesKicked} footprints={_footprintCount} live of {_footprintsStamped} stamped onGround={GroundParticlesDrawn} glowLights={ParticleGlowLights} (strongest weight {ParticleGlowStrongestWeight:0.0} opening {ParticleGlowStrongestAmount:0.000}) chimneys={ChimneysFound} {ChimneyTilesText} festiveBulbs={ParticleFestiveLightsLit} carried[{ParticleCarriedFlame}] "
                  + $"emissiveHost={host} test={(_particles.TestFountainRunning ? "running" : "off")} "
                  + $"night: gameLighting={Game1.drawLighting} outdoorLight={Game1.outdoorLight} ambientLight={Game1.ambientLight} "
                  + $"takenAway={_ambientParticleLight.TakenAway.X:0.000},{_ambientParticleLight.TakenAway.Y:0.000},{_ambientParticleLight.TakenAway.Z:0.000} "

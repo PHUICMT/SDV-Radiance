@@ -91,5 +91,11 @@ Copyright 2014 The Nunito Project Authors (https://github.com/googlefonts/nunito
 picture (`assets/tuner-font.png`) under the SIL Open Font License 1.1, whose full text ships beside
 it as `assets/tuner-font-OFL.txt`.
 
+## Sarabun (the F6 menu's Thai text on the glass panel)
+
+Copyright 2018 The Sarabun Project Authors (https://github.com/cadsondemak/Sarabun). Used as glyph
+pictures in the same atlas (`assets/tuner-font.png`) under the SIL Open Font License 1.1, whose full
+text ships beside it as `assets/tuner-font-thai-OFL.txt`.
+
 ---
 *If you believe your work is used here without proper attribution, please open an issue.*

@@ -1635,8 +1635,19 @@ namespace SDVRadiance
             return towardViewer ? near : far + step * 0.5f;
         }
 
+        /// <summary>Whether the cast being drawn climbs onto what stands in its way (a person's or
+        /// an animal's sun shadow with ModConfig.ShadowsClimbOntoThings on): every piece of it up
+        /// the screen from the feet sorts at the feet, so a bush or a fence standing on the shadow
+        /// between the caster and the piece is drawn first and the shadow lies over it, instead of
+        /// the piece sorting at its own floor row, under the bush, and the shadow looking cut off
+        /// where the bush begins. Pieces down the screen keep their rows: there the near face of
+        /// whatever stands on the shadow is in its own shade, and the shadow belongs under it.</summary>
+        private static bool _climbThisCast;
+
         private static float GroundedPieceDepth(float anchorWorldY, float upScreenPixels, float feetWorldX, float sidewaysPixels)
         {
+            if (upScreenPixels > 0f && _climbThisCast)
+                return ShadowPieceDepth(anchorWorldY, 0f);
             if (upScreenPixels > 0f && BuildingFootprints.Count > 0)
             {
                 int worldX = (int)(feetWorldX + sidewaysPixels);
@@ -1904,6 +1915,9 @@ namespace SDVRadiance
         /// <summary>The sun-follows-the-season dial, captured once per frame like the golden hour
         /// and for the same reason: everything that asks where the sun is, is static.</summary>
         internal static float SunSeasonStrengthNow;
+        /// <summary>Which way the sun crosses: 1 as it always has, -1 the other way round (see
+        /// <see cref="ModConfig.ShadowSunPathMirrored"/>), eased between the two.</summary>
+        internal static float SunPathDirectionNow = 1f;
 
         /// <summary>Half the day's length in minutes, by season: the real figures for the fortieth
         /// parallel north (summer 05:30 to 19:30, spring and autumn 06:00 to 18:00, winter 07:20
@@ -1920,7 +1934,7 @@ namespace SDVRadiance
         /// season moves the shadows, their colour, the shafts through the trees, the light
         /// through a window and the mist together, and never one without the others.</summary>
         internal static float SunSkyOffsetAt(float minutesNow)
-            => MathHelper.Clamp((minutesNow - 720f) / HalfDayMinutesNow(), -1f, 1f);
+            => MathHelper.Clamp((minutesNow - 720f) / HalfDayMinutesNow(), -1f, 1f) * SunPathDirectionNow;
 
         /// <summary>
         /// Shadow length per unit of caster height for a sun this far through its day, before the
@@ -1971,7 +1985,7 @@ namespace SDVRadiance
                 // Ease in over the first half hour: the sun fade reaches zero AT dark, and
                 // the moon used to arrive at full (phase) strength on the very same tick.
                 float moonProgress = MathHelper.Clamp((minutesNow - trulyDarkMinutes) / Math.Max(1f, 1560f - trulyDarkMinutes), 0f, 1f);
-                float moonSkyOffset = moonProgress * 2f - 1f;
+                float moonSkyOffset = (moonProgress * 2f - 1f) * SunPathDirectionNow;
                 rotation = SunSwingRadians * moonSkyOffset;
                 stretch = MathHelper.Lerp(0.3f, 1.1f, Math.Abs(moonSkyOffset));
                 alpha = 0.9f * 0.35f * MoonStrength() * MathHelper.Clamp((minutesNow - trulyDarkMinutes) / 30f, 0f, 1f);
